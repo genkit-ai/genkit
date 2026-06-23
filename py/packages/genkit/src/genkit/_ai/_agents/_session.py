@@ -343,7 +343,7 @@ class Session(Generic[StateT]):
         async with self._lock:
             return list(self._state.artifacts or [])
 
-    async def add_artifacts(self, *artifacts: Artifact, _suppress_events: bool = False) -> None:
+    async def add_artifacts(self, *artifacts: Artifact) -> None:
         """Append artifacts; replace by name if artifact.name already exists."""
         changed: list[Artifact] = []
         async with self._lock:
@@ -361,9 +361,8 @@ class Session(Generic[StateT]):
                     self._state.artifacts.append(art)
                 changed.append(art)
             self.version += 1
-        if not _suppress_events:
-            for art in changed:
-                await self._notify_artifact_changed(art)
+        for art in changed:
+            await self._notify_artifact_changed(art)
 
     async def update_artifacts(self, fn: Callable[[list[Artifact]], list[Artifact]]) -> None:
         async with self._lock:

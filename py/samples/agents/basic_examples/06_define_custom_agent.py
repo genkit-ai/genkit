@@ -24,13 +24,13 @@ from uuid import uuid4
 from genkit import ActionRunContext, FinishReason, Genkit, Message
 from genkit.agent import (
     AgentFinishReason,
+    AgentInit,
     AgentInput,
     AgentResult,
     AgentStreamChunk,
     InMemoryLatestStateStore,
     SessionRunner,
     TurnResult,
-    AgentInit,
 )
 from genkit.plugins.google_genai import GoogleAI
 
@@ -67,7 +67,7 @@ agent = ai.define_custom_agent(name='customCoder', fn=custom_coder_fn, store=sto
 
 async def main() -> None:
     session = agent.connect(AgentInit(session_id=str(uuid4())))
-    print("--- SENDING TURN ---")
+    print('--- SENDING TURN ---')
     turn = session.send('What is a Python list comprehension?')
     async for chunk in turn.stream:
         print('chunk:', chunk)

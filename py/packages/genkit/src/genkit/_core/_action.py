@@ -17,7 +17,6 @@
 """Action module for defining and managing remotely callable functions."""
 
 import asyncio
-import logging
 import inspect
 import json
 import re

@@ -66,7 +66,12 @@ class ProgrammableModel:
         self.request_count += 1
 
         if self.response_cb is not None:
-            response = self.response_cb(request)
+            res = self.response_cb(request)
+            import inspect
+            if inspect.isawaitable(res):
+                response = await res
+            else:
+                response = res
         else:
             response = self.responses[self._request_idx]
         if self.chunks and self._request_idx < len(self.chunks):

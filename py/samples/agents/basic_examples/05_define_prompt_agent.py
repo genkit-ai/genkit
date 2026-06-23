@@ -22,7 +22,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from genkit import Genkit
-from genkit.agent import InMemoryLatestStateStore, AgentInit
+from genkit.agent import AgentInit, InMemoryLatestStateStore
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -38,7 +38,7 @@ agent = ai.define_prompt_agent(name='greeterPrompt', store=store)
 
 async def main() -> None:
     session = agent.connect(AgentInit(session_id=str(uuid4())))
-    print("--- SENDING TURN ---")
+    print('--- SENDING TURN ---')
     turn = session.send('Hello!')
     async for chunk in turn.stream:
         print('chunk:', chunk)

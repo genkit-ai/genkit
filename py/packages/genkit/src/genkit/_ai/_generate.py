@@ -28,6 +28,7 @@ from typing import Any, cast
 from pydantic import BaseModel
 from typing_extensions import Never
 
+from genkit._ai._agents._session import get_current_session
 from genkit._ai._formats._types import FormatDef, Formatter
 from genkit._ai._messages import inject_instructions
 from genkit._ai._model import (
@@ -38,7 +39,6 @@ from genkit._ai._model import (
     text_from_content,
 )
 from genkit._ai._resource import ResourceArgument, ResourceInput, find_matching_resource, resolve_resources
-from genkit._ai._session import get_current_session
 from genkit._ai._tools import Interrupt, Tool, run_tool_after_restart
 from genkit._core._action import (
     GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR,
@@ -1240,7 +1240,24 @@ async def _resolve_tool_request(
     ``BaseMiddleware.wrap_tool``: responses are return values, interrupts
     are exceptions.
     """
-    tool_response = (await tool.run(tool_request_part.tool_request.input, abort_signal=abort_signal)).response
+    tool_task = asyncio.create_task(tool.run(tool_request_part.tool_request.input, abort_signal=abort_signal))
+
+    async def watch_abort() -> None:
+        await abort_signal.wait()
+        if not tool_task.done():
+            tool_task.cancel()
+
+    watcher_task = asyncio.create_task(watch_abort())
+    try:
+        res = await tool_task
+        tool_response = res.response
+    except asyncio.CancelledError:
+        if abort_signal.is_set():
+            raise GenkitError(status='ABORTED', message='Task aborted') from None
+        raise
+    finally:
+        watcher_task.cancel()
+
     return MultipartToolResponse(
         output=tool_response.model_dump() if isinstance(tool_response, BaseModel) else tool_response,
     )

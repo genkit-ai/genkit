@@ -18,9 +18,9 @@ import asyncio
 
 import pytest
 
-from genkit._ai._agent import _AgentRuntime
+from genkit._ai._agents._base import AgentRuntime
 from genkit._ai._json_patch import diff_json
-from genkit._ai._session import Session
+from genkit._ai._agents._session import Session
 from genkit._core._typing import AgentStreamChunk, ModelResponseChunk, Part, SessionState, TextPart
 
 
@@ -41,7 +41,7 @@ def test_diff_array_append() -> None:
 async def test_runtime_emits_custom_patch() -> None:
     out_queue: asyncio.Queue = asyncio.Queue()
     session = Session(SessionState(custom={'status': 'idle'}))
-    _AgentRuntime(
+    AgentRuntime(
         name='test',
         session=session,
         parent_snapshot=None,
@@ -65,7 +65,7 @@ async def test_runtime_emits_custom_patch() -> None:
 async def test_runtime_incremental_custom_patch_within_turn() -> None:
     out_queue: asyncio.Queue = asyncio.Queue()
     session = Session(SessionState(custom={'status': 'idle'}))
-    rt = _AgentRuntime(
+    rt = AgentRuntime(
         name='test',
         session=session,
         parent_snapshot=None,
@@ -103,7 +103,7 @@ async def test_runtime_custom_patch_honors_state_transform() -> None:
         custom.pop('secret', None)
         return state.model_copy(update={'custom': custom})
 
-    _AgentRuntime(
+    AgentRuntime(
         name='test',
         session=session,
         parent_snapshot=None,
@@ -123,7 +123,7 @@ async def test_runtime_custom_patch_honors_state_transform() -> None:
 async def test_runtime_chunk_transform_can_drop_chunks() -> None:
     out_queue: asyncio.Queue = asyncio.Queue()
     session = Session()
-    rt = _AgentRuntime(
+    rt = AgentRuntime(
         name='test',
         session=session,
         parent_snapshot=None,
@@ -141,7 +141,7 @@ async def test_runtime_chunk_transform_can_drop_chunks() -> None:
 async def test_runtime_chunk_transform_can_redact_model_chunks() -> None:
     out_queue: asyncio.Queue = asyncio.Queue()
     session = Session()
-    rt = _AgentRuntime(
+    rt = AgentRuntime(
         name='test',
         session=session,
         parent_snapshot=None,

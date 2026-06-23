@@ -24,12 +24,12 @@ from uuid import uuid4
 from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, TextPart
 from genkit.agent import (
     AgentFinishReason,
+    AgentInit,
     AgentInput,
     AgentResult,
     InMemoryLinearSessionStore,
     SessionRunner,
     TurnResult,
-    AgentInit,
 )
 from genkit.plugins.google_genai import GoogleAI
 
@@ -63,14 +63,14 @@ async def main() -> None:
 
     session = agent.connect(AgentInit(session_id=session_id))
     try:
-        print("--- SENDING TURN 1 (OK) ---")
+        print('--- SENDING TURN 1 (OK) ---')
         turn1 = session.send('hello')
         async for chunk in turn1.stream:
             print('ok chunk:', chunk)
         out_ok = await turn1.output
         print('ok turn output:', out_ok)
 
-        print("\n--- SENDING TURN 2 (FAIL) ---")
+        print('\n--- SENDING TURN 2 (FAIL) ---')
         turn2 = session.send('please fail now')
         async for chunk in turn2.stream:
             print('fail chunk:', chunk)

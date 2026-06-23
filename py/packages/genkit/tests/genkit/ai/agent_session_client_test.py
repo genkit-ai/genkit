@@ -15,52 +15,44 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterable, AsyncIterator
-from typing import Any, Awaitable
+from collections.abc import AsyncIterable, Awaitable
+from typing import Any
 
 import pytest
 
-from genkit._ai._agent_client import (
-    AgentAPI,
-    AgentChunk,
-    AgentInterrupt,
+from genkit._ai._agents._client import (
     AgentSession,
     AgentTransport,
-    AgentTurn,
 )
 from genkit._ai._aio import Genkit
+from genkit._ai._json_patch import apply_json_patch
 from genkit._ai._testing import define_programmable_model
 from genkit._core._model import Message, ModelResponse
-from genkit._core._typing import FinishReason, Role
-from genkit._ai._json_patch import apply_json_patch
 from genkit._core._typing import (
     AgentFinishReason,
     AgentInit,
     AgentInput,
     AgentOutput,
     AgentStreamChunk,
-    Artifact,
-    Error,
+    FinishReason,
     JsonPatch,
     JsonPatchOperation,
     MessageData,
     ModelResponseChunk,
     Part,
+    Role,
     SessionSnapshot,
-    SessionState,
     SnapshotStatus,
     TextPart,
     ToolRequest,
     ToolRequestPart,
-    ToolResponse,
-    ToolResponsePart,
     TurnEnd,
 )
-
 
 # ---------------------------------------------------------------------------
 # Unit tests for JSON patch application
 # ---------------------------------------------------------------------------
+
 
 def test_apply_json_patch_root_replace() -> None:
     patch = [JsonPatchOperation(op='replace', path='', value={'status': 'idle', 'score': 10})]
@@ -92,6 +84,7 @@ def test_apply_json_patch_array_remove() -> None:
 # ---------------------------------------------------------------------------
 # Mock Transport for Testing Stateful Connections
 # ---------------------------------------------------------------------------
+
 
 class MockAgentTransport(AgentTransport[dict[str, Any], str]):
     def __init__(self) -> None:
@@ -141,124 +134,130 @@ class MockAgentTransport(AgentTransport[dict[str, Any], str]):
 # Turn and Session Tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_session_sends_input_and_aggregates_state() -> None:
     transport = MockAgentTransport()
-    
+
     # Configure final output the transport will resolve with
     transport.final_output = AgentOutput(
-        snapshot_id="snapshot_1",
-        message=MessageData(role="model", content=[Part(root=TextPart(text="Final output!"))]),
-        finish_reason=AgentFinishReason.STOP
+        snapshot_id='snapshot_1',
+        message=MessageData(role='model', content=[Part(root=TextPart(text='Final output!'))]),
+        finish_reason=AgentFinishReason.STOP,
     )
-    
+
     session = AgentSession(transport)
-    turn = session.send("Weather in Tokyo?")
-    
+    turn = session.send('Weather in Tokyo?')
+
     # Queue up chunks to simulate streaming
-    transport.push_chunk(AgentStreamChunk(
-        model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text="Weather is "))])
-    ))
-    transport.push_chunk(AgentStreamChunk(
-        model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text="Sunny."))])
-    ))
-    transport.push_chunk(AgentStreamChunk(
-        custom_patch=JsonPatch(root=[JsonPatchOperation(op='replace', path='', value={'unit': 'celsius'})])
-    ))
-    transport.push_chunk(AgentStreamChunk(
-        turn_end=TurnEnd(snapshot_id="snapshot_1", finish_reason=AgentFinishReason.STOP)
-    ))
-    
+    transport.push_chunk(
+        AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='Weather is '))]))
+    )
+    transport.push_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='Sunny.'))])))
+    transport.push_chunk(
+        AgentStreamChunk(
+            custom_patch=JsonPatch(root=[JsonPatchOperation(op='replace', path='', value={'unit': 'celsius'})])
+        )
+    )
+    transport.push_chunk(
+        AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.STOP))
+    )
+
     # Consume stream chunks
     chunks = []
     async for chunk in turn.stream:
         chunks.append(chunk)
-        
+
     assert len(chunks) == 4
-    assert chunks[0].text == "Weather is "
-    assert chunks[1].text == "Sunny."
+    assert chunks[0].text == 'Weather is '
+    assert chunks[1].text == 'Sunny.'
     assert chunks[2].text is None
-    
+
     # Verify custom state patch applied
     assert session.state == {'unit': 'celsius'}
-    
+
     # Await output to verify final response resolved correctly
     output = await turn.output
     assert output.finish_reason == AgentFinishReason.STOP
-    assert output.message.content[0].root.text == "Final output!"
-    
+    assert output.message.content[0].root.text == 'Final output!'
+
     # Verify session fields are updated after turn completion
-    assert session.snapshot_id == "snapshot_1"
+    assert session.snapshot_id == 'snapshot_1'
     assert len(session.messages) == 2  # Turn 1 User input + model final output
-    assert session.messages[0].content[0].root.text == "Weather in Tokyo?"
-    assert session.messages[1].content[0].root.text == "Final output!"
+    assert session.messages[0].content[0].root.text == 'Weather in Tokyo?'
+    assert session.messages[1].content[0].root.text == 'Final output!'
 
 
 @pytest.mark.asyncio
 async def test_session_handling_tool_interrupt() -> None:
     transport = MockAgentTransport()
-    
-    transport.final_output = AgentOutput(
-        snapshot_id="snapshot_1",
-        finish_reason=AgentFinishReason.STOP
-    )
-    
+
+    transport.final_output = AgentOutput(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.STOP)
+
     session = AgentSession(transport)
-    turn = session.send("Approve $500 transfer")
-    
+    turn = session.send('Approve $500 transfer')
+
     # Queue up a tool request chunk representing an interrupt
-    transport.push_chunk(AgentStreamChunk(
-        model_chunk=ModelResponseChunk(content=[
-            Part(root=ToolRequestPart(tool_request=ToolRequest(name="userApproval", ref="call_1", input={"amount": 500})))
-        ])
-    ))
-    transport.push_chunk(AgentStreamChunk(
-        turn_end=TurnEnd(snapshot_id="snapshot_1", finish_reason=AgentFinishReason.STOP)
-    ))
-    
-    async for chunk in turn.stream:
+    transport.push_chunk(
+        AgentStreamChunk(
+            model_chunk=ModelResponseChunk(
+                content=[
+                    Part(
+                        root=ToolRequestPart(
+                            tool_request=ToolRequest(name='userApproval', ref='call_1', input={'amount': 500})
+                        )
+                    )
+                ]
+            )
+        )
+    )
+    transport.push_chunk(
+        AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.STOP))
+    )
+
+    async for _chunk in turn.stream:
         pass
-        
+
     # Verify interrupt is caught on the turn
     assert turn.interrupt is not None
-    assert turn.interrupt.name == "userApproval"
-    assert turn.interrupt.ref == "call_1"
-    assert turn.interrupt.input == {"amount": 500}
-    
+    assert turn.interrupt.name == 'userApproval'
+    assert turn.interrupt.ref == 'call_1'
+    assert turn.interrupt.input == {'amount': 500}
+
     # Acknowledge the interrupt and trigger response turn
     # This mock resume expects sending tool response to transport
     transport.final_output = AgentOutput(
-        snapshot_id="snapshot_2",
-        message=MessageData(role="model", content=[Part(root=TextPart(text="Transfer done."))]),
-        finish_reason=AgentFinishReason.STOP
+        snapshot_id='snapshot_2',
+        message=MessageData(role='model', content=[Part(root=TextPart(text='Transfer done.'))]),
+        finish_reason=AgentFinishReason.STOP,
     )
-    
-    resume_turn = turn.interrupt.respond({"approved": True})
-    
+
+    resume_turn = turn.interrupt.respond({'approved': True})
+
     # Queue up turn_end for the resume turn
-    transport.push_chunk(AgentStreamChunk(
-        turn_end=TurnEnd(snapshot_id="snapshot_2", finish_reason=AgentFinishReason.STOP)
-    ))
-    
+    transport.push_chunk(
+        AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_2', finish_reason=AgentFinishReason.STOP))
+    )
+
     # Consume resume turn stream to trigger execution
-    async for chunk in resume_turn.stream:
+    async for _chunk in resume_turn.stream:
         pass
-        
+
     # Verify transport received the ToolResponse payload
     assert len(transport.send_payloads) == 2
     sent_resume = transport.send_payloads[1].resume
     assert sent_resume is not None
-    assert sent_resume.respond[0].tool_response.name == "userApproval"
-    assert sent_resume.respond[0].tool_response.output == {"approved": True}
+    assert sent_resume.respond[0].tool_response.name == 'userApproval'
+    assert sent_resume.respond[0].tool_response.output == {'approved': True}
 
 
 @pytest.mark.asyncio
 async def test_session_context_manager_autocloses() -> None:
     transport = MockAgentTransport()
-    
-    async with AgentSession(transport) as session:
+
+    async with AgentSession(transport):
         assert not transport.close_called
-        
+
     assert transport.close_called
 
 
@@ -268,6 +267,7 @@ async def test_in_process_persistent_connection() -> None:
     pm, _ = define_programmable_model(ai)
 
     from genkit.agent import InMemorySessionStore
+
     store = InMemorySessionStore()
 
     ai.define_prompt(name='testEchoAgent', model='programmableModel', system='You echo things.')
@@ -288,20 +288,20 @@ async def test_in_process_persistent_connection() -> None:
 
     async with agent.connect() as session:
         # Turn 1
-        turn1 = session.send("Hello")
+        turn1 = session.send('Hello')
         chunks1 = []
         async for chunk in turn1.stream:
             chunks1.append(chunk)
         res1 = await turn1.output
-        assert res1.message.content[0].root.text == "Echo 1"
-        
+        assert res1.message.content[0].root.text == 'Echo 1'
+
         # Turn 2
-        turn2 = session.send("World")
+        turn2 = session.send('World')
         chunks2 = []
         async for chunk in turn2.stream:
             chunks2.append(chunk)
         res2 = await turn2.output
-        assert res2.message.content[0].root.text == "Echo 2"
+        assert res2.message.content[0].root.text == 'Echo 2'
 
 
 @pytest.mark.asyncio
@@ -310,9 +310,60 @@ async def test_attached_turn_abort() -> None:
     pm, _ = define_programmable_model(ai)
 
     from genkit.agent import InMemorySessionStore
+
     store = InMemorySessionStore()
 
-    # Define a slow tool that blocks until we cancel it
+    # Define a simple agent
+    ai.define_prompt(name='abortAgent', model='programmableModel', system='Hello')
+    agent = ai.define_prompt_agent(name='abortAgent', store=store)
+
+    # We make the mock model sleep to simulate a slow response
+    async def slow_response(*args, **kwargs):
+        await asyncio.sleep(5)
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Slow response finished'))]),
+        )
+
+    pm.response_cb = slow_response
+
+    async with agent.connect() as session:
+        turn = session.send('Hello')
+
+        # Let it run a bit
+        await asyncio.sleep(0.1)
+
+        # Abort the turn client-side (stops reading the stream)
+        await turn.abort()
+
+        # Verify turn.output raises CancelledError
+        with pytest.raises(asyncio.CancelledError):
+            await turn.output
+
+        # Restore normal fast response for the second turn
+        pm.response_cb = None
+        pm.responses.append(
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Second turn echo'))]),
+            )
+        )
+
+        # We should be able to cleanly send a new turn and continue the conversation!
+        turn2 = session.send('Continue conversation')
+        res2 = await turn2.output
+        assert res2.message.content[0].root.text == 'Second turn echo'
+
+
+@pytest.mark.asyncio
+async def test_session_abort() -> None:
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    from genkit.agent import InMemorySessionStore
+
+    store = InMemorySessionStore()
+
     tool_executed = False
     tool_cancelled = False
 
@@ -321,17 +372,18 @@ async def test_attached_turn_abort() -> None:
         nonlocal tool_executed, tool_cancelled
         tool_executed = True
         try:
-            # Sleep indefinitely until task gets cancelled
             await asyncio.sleep(10)
-            return "Slow tool complete"
+            return 'Slow tool complete'
         except asyncio.CancelledError:
             tool_cancelled = True
             raise
 
-    ai.define_prompt(name='abortAgent', model='programmableModel', system='Use the slow tool.', tools=[slow_tool])
-    agent = ai.define_prompt_agent(name='abortAgent', store=store)
+    # Define a simple agent that uses this tool
+    ai.define_prompt(
+        name='sessionAbortAgent', model='programmableModel', system='Use the slow tool.', tools=[slow_tool]
+    )
+    agent = ai.define_prompt_agent(name='sessionAbortAgent', store=store)
 
-    # Model returns tool call
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -339,63 +391,63 @@ async def test_attached_turn_abort() -> None:
                 role=Role.MODEL,
                 content=[
                     Part(
-                        ToolRequestPart(
-                            tool_request=ToolRequest(
-                                name="slow_tool",
-                                ref="call_1",
-                                input="blocking",
-                            )
+                        root=ToolRequestPart(
+                            tool_request=ToolRequest(name='slow_tool', ref='call_1', input='blocking')
                         )
                     )
-                ]
+                ],
             ),
         )
     )
 
     async with agent.connect() as session:
-        turn = session.send("Trigger slow action")
+        # Start a detached turn to get a snapshot ID on the server
+        task = await session.run_detached('Trigger slow action')
+        assert task.snapshot_id is not None
 
-        # Start draining the stream in the background to drive execution
-        async def drain_stream():
-            try:
-                async for _ in turn.stream:
-                    pass
-            except Exception:
-                pass
+        # Give it a tiny moment to start execution
+        await asyncio.sleep(0.2)
 
-        drain_task = asyncio.create_task(drain_stream())
+        # Abort the running snapshot on the server (requires a store)
+        status = await session.abort()
+        assert status == SnapshotStatus.ABORTED
 
-        # Wait a short moment to let the model run and tool start executing
+        # Give the background task a moment to process cancellation
         await asyncio.sleep(0.5)
-        
-        # Abort the active turn and wait for cancellation
-        await turn.abort()
 
-        # Wait for the background drain task to finish
-        try:
-            await drain_task
-        except BaseException:
-            pass
-
-        # Verify that the tool was started AND it was successfully cancelled!
+        # Verify the tool was started and successfully cancelled by the server abort!
         assert tool_executed
         assert tool_cancelled
 
-        # Queue a second response on the mock model for the second turn
-        pm.responses.append(
-            ModelResponse(
-                finish_reason=FinishReason.STOP,
-                message=Message(
-                    role=Role.MODEL,
-                    content=[Part(root=TextPart(text="Second turn echo"))]
-                ),
-            )
-        )
 
-        # We should be able to cleanly send a new turn and continue the conversation!
-        turn2 = session.send("Continue conversation")
-        chunks2 = []
-        async for chunk in turn2.stream:
-            chunks2.append(chunk)
-        res2 = await turn2.output
-        assert res2.message.content[0].root.text == "Second turn echo"
+@pytest.mark.asyncio
+async def test_external_abort_signal() -> None:
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    from genkit.agent import InMemorySessionStore
+
+    store = InMemorySessionStore()
+
+    ai.define_prompt(name='signalAgent', model='programmableModel', system='Hello')
+    agent = ai.define_prompt_agent(name='signalAgent', store=store)
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Response'))]),
+        )
+    )
+
+    async with agent.connect() as session:
+        abort_signal = asyncio.Event()
+
+        # Send a turn passing the external abort_signal in opts
+        turn = session.send('Hello', opts={'abort_signal': abort_signal})
+
+        # Trigger the external signal immediately
+        abort_signal.set()
+
+        # Verify the turn is aborted and raises CancelledError
+        with pytest.raises(asyncio.CancelledError):
+            await turn.output

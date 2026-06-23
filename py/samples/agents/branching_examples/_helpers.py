@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 from genkit import Genkit, Message, Part, TextPart
-from genkit._ai._agent import SessionRunner, TurnResult
+from genkit._ai._agents._base import SessionRunner, TurnResult
 from genkit._core._action import ActionRunContext
 from genkit.agent import (
     Agent,
@@ -29,8 +29,6 @@ from genkit.agent import (
     AgentOutput,
     AgentResult,
     InMemoryBranchingSessionStore,
-    InProcessAgentTransport,
-    AgentAPI,
 )
 
 
@@ -48,16 +46,13 @@ def model_text(out: AgentOutput) -> str:
 
 
 async def run_turn(agent: Agent, init: AgentInit, text: str) -> AgentOutput:
-    transport = InProcessAgentTransport(agent, store_configured=True)
-    api = AgentAPI(transport)
-    
     session_id = None
     if init.state and init.state.session_id:
         session_id = init.state.session_id
     elif init.session_id:
         session_id = init.session_id
 
-    async with api.connect(AgentInit(session_id=session_id, snapshot_id=init.snapshot_id)) as session:
+    async with agent.connect(AgentInit(session_id=session_id, snapshot_id=init.snapshot_id)) as session:
         turn = session.send(text)
         async for _chunk in turn.stream:
             pass

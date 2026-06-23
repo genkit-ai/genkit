@@ -16,9 +16,8 @@
 
 """Agent types for defining and running bidirectional streaming agents."""
 
-from genkit._ai._agent import (
+from genkit._ai._agents._base import (
     Agent,
-    AgentConnection,
     AgentFn,
     ChunkTransform,
     ClientTransform,
@@ -26,18 +25,19 @@ from genkit._ai._agent import (
     StateTransform,
     TurnResult,
 )
-from genkit._ai._agent_client import (
+from genkit._ai._agents._client import (
     AgentAPI,
     AgentChunk,
+    AgentResponse,
+    AgentClient,
     AgentInterrupt,
     AgentSession,
     AgentTransport,
     AgentTurn,
     DetachedTask,
-    InProcessAgentTransport,
-    WebSocketAgentTransport,
 )
-from genkit._ai._session import (
+from genkit._ai._agents._transports._websocket import WebSocketAgentTransport
+from genkit._ai._agents._session import (
     InMemorySessionStore,
     Session,
     SessionStore,
@@ -45,16 +45,16 @@ from genkit._ai._session import (
     SnapshotCallback,
     SnapshotContext,
 )
-from genkit._ai._session_stores import (
-    LatestStateStore,
-    InMemoryLatestStateStore,
-    FileLatestStateStore,
-    LinearSessionStore,
-    InMemoryLinearSessionStore,
-    FileLinearSessionStore,
+from genkit._ai._agents._session_stores import (
     BranchingSessionStore,
-    InMemoryBranchingSessionStore,
     FileBranchingSessionStore,
+    FileLatestStateStore,
+    FileLinearSessionStore,
+    InMemoryBranchingSessionStore,
+    InMemoryLatestStateStore,
+    InMemoryLinearSessionStore,
+    LatestStateStore,
+    LinearSessionStore,
 )
 from genkit._core._action import ActionRunContext
 from genkit._core._typing import (
@@ -75,16 +75,16 @@ from genkit._core._typing import (
 
 __all__ = [
     'Agent',
-    'AgentConnection',
-    # Agent Client APIs
     'AgentAPI',
+    'AgentClient',
+    # Agent Client APIs
     'AgentSession',
     'AgentTurn',
     'AgentChunk',
     'AgentInterrupt',
+    'AgentResponse',
     'DetachedTask',
     'AgentTransport',
-    'InProcessAgentTransport',
     'WebSocketAgentTransport',
     # Agent function protocol
     'ActionRunContext',
@@ -126,4 +126,3 @@ __all__ = [
     'SnapshotStatus',
     'TurnEnd',
 ]
-

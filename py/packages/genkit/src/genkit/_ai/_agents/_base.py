@@ -17,18 +17,26 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import copy
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Generic, TypedDict, TypeVar, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from genkit._ai._agent_client import AgentSession
+from typing import Any, Generic, TypedDict, TypeVar
 
 from opentelemetry import trace as trace_api
 
+from genkit._ai._agents._client import AgentSession
+from genkit._ai._agents._session import (
+    Session,
+    SessionStore,
+    SnapshotAborter,
+    SnapshotCallback,
+    SnapshotContext,
+    StateT,
+    _assert_valid_session_id,
+    run_with_session,
+)
+from genkit._ai._agents._transports._inprocess import InProcessTransport
 from genkit._ai._generate import generate_action
 from genkit._ai._json_patch import _deep_equal, diff_json
 from genkit._ai._model import ModelResponseChunk as StreamModelResponseChunk
@@ -39,16 +47,6 @@ from genkit._ai._prompt import (
     lookup_prompt,
     register_prompt_actions,
 )
-from genkit._ai._session import (
-    Session,
-    SessionStore,
-    SnapshotAborter,
-    SnapshotCallback,
-    SnapshotContext,
-    StateT,
-    _assert_valid_session_id,
-    run_with_session,
-)
 from genkit._ai._tools import Tool
 from genkit._core._action import (
     QUEUE_SENTINEL,
@@ -56,9 +54,7 @@ from genkit._core._action import (
     ActionKind,
     ActionRunContext,
     BidiAction,
-    BidiConnection,
     QueueSentinel,
-    define_bidi_action,
     get_current_context,
 )
 from genkit._core._error import GenkitError
@@ -88,7 +84,6 @@ from genkit._core._typing import (
     SessionState,
     SnapshotEvent,
     SnapshotStatus,
-    TextPart,
     ToolRequestPart,
     TurnEnd,
 )
@@ -309,23 +304,6 @@ async def _persist_turn_messages(
     await sess.set_messages(clean_history)
 
 
-# ---------------------------------------------------------------------------
-# AgentFnArg (runtime-only, not a wire type)
-# ---------------------------------------------------------------------------
-
-
-class AgentFnArg(Generic[StreamT]):
-    """Second argument to AgentFn: stream sender + abort signal."""
-
-    def __init__(
-        self,
-        send_chunk: Callable[[AgentStreamChunk], None],
-        abort_signal: asyncio.Event,
-    ) -> None:
-        self.send_chunk = send_chunk
-        self.abort_signal = abort_signal
-
-
 # StateTransform — redact or reshape session state before it leaves the server.
 StateTransform = Callable[[SessionState], SessionState | None]
 
@@ -366,7 +344,7 @@ BidiFunc = Callable[
 ]
 
 # ---------------------------------------------------------------------------
-# _AgentRuntime
+# AgentRuntime
 # ---------------------------------------------------------------------------
 
 
@@ -436,7 +414,7 @@ async def _load_session(
     return Session(), None
 
 
-class _AgentRuntime:
+class AgentRuntime:
     """Drives the agent fn to completion; owns session, router, and intake."""
 
     def __init__(
@@ -642,15 +620,9 @@ class _AgentRuntime:
                 return
 
     def _send_chunk(self, chunk: object) -> None:
-        """Forward chunk to client and apply artifact side effects inline.
-
-        Post-detach: side effects still apply (artifacts land in session)
-        but wire forwarding is suppressed (client is gone).
-        """
+        """Forward chunk to client."""
         if not isinstance(chunk, AgentStreamChunk):
             return
-        if chunk.artifact is not None:
-            asyncio.get_event_loop().create_task(self._session.add_artifacts(chunk.artifact, _suppress_events=True))
         if self._detached:
             return
         wire_chunk = self._transform_chunk(chunk)
@@ -744,7 +716,7 @@ class _AgentRuntime:
             while True:
                 item = await in_queue.get()
                 if isinstance(item, QueueSentinel):
-                    fn_task.cancel()
+                    # Clean Close (Half-Close). Let the active turn finish!
                     await self._intake.put(QUEUE_SENTINEL)
                     return
                 if getattr(item, 'detach', False):
@@ -861,54 +833,6 @@ class _AgentRuntime:
             out.state = self._transform_state(state)
 
         return out
-
-
-# ---------------------------------------------------------------------------
-# AgentConnection
-# ---------------------------------------------------------------------------
-
-
-class AgentConnection(Generic[StreamT, StateT]):
-    """Public handle for an active agent session.
-
-    Wraps the bidi connection with send helpers so callers need not build
-    ``AgentInput`` by hand.
-    """
-
-    def __init__(
-        self,
-        conn: BidiConnection[AgentInput, AgentStreamChunk, AgentOutput],
-    ) -> None:
-        self._conn = conn
-
-    async def send(self, input: AgentInput) -> None:  # noqa: A002
-        """Send a raw AgentInput."""
-        await self._conn.send(input)
-
-    async def send_text(self, text: str) -> None:
-        """Send a user text message for one turn."""
-        await self._conn.send(AgentInput(messages=[MessageData(role='user', content=[Part(root=TextPart(text=text))])]))
-
-    async def send_resume(self, resume: Resume) -> None:
-        """Send a resume payload to continue an interrupted tool call."""
-        await self._conn.send(AgentInput(resume=resume))
-
-    async def detach(self) -> None:
-        """v2: ask the server to background the invocation and close the connection."""
-        await self._conn.send(AgentInput(detach=True))
-
-    async def close(self) -> None:
-        """Signal no more inputs will be sent."""
-        await self._conn.close()
-
-    async def receive(self) -> AsyncIterator[AgentStreamChunk]:
-        """Async iterator of AgentStreamChunk from the server."""
-        async for chunk in self._conn.receive():
-            yield chunk
-
-    async def output(self) -> AgentOutput:
-        """Await the final AgentOutput."""
-        return await self._conn.output()
 
 
 def _agent_input_has_payload(inp: AgentInput) -> bool:
@@ -1051,39 +975,66 @@ class SessionRunner(Generic[StateT]):
 
 
 # ---------------------------------------------------------------------------
-# Agent + define_custom_agent + define_agent
+# Agent — in-process registered agent; extends BidiAction + implements AgentAPI
 # ---------------------------------------------------------------------------
 
 
-class Agent:
-    """Registered bidi agent — call ``stream_bidi()`` for an ``AgentConnection``."""
+class Agent(BidiAction, Generic[StateT, StreamT]):
+    """In-process agent: registered in the registry, implements AgentAPI.
 
-    _store: SessionStore | None = None
+    Created by ``define_agent`` / ``define_custom_agent``. Extends BidiAction
+    so it lives in the registry and can be served over HTTP. Also implements
+    AgentAPI so it can be used as a client directly without a separate handle.
+    """
 
-    def __init__(self, bidi_action: BidiAction) -> None:
-        self._action = bidi_action
-
-    @property
-    def name(self) -> str:
-        return self._action.name
-
-    async def stream_bidi(
+    def __init__(
         self,
-        init: AgentInit | None = None,
-        context: dict[str, object] | None = None,
-    ) -> AgentConnection[Any, Any]:
-        """Start a new agent session. Returns an AgentConnection."""
-        conn = await self._action.stream_bidi(init or AgentInit(), context=context)
-        return AgentConnection(conn)
+        *,
+        name: str,
+        bidi_fn: Callable[..., Awaitable[Any]],  # noqa: ANN401
+        store: SessionStore | None = None,
+        description: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        """Initialise Agent; transport is inferred from the action + store."""
+        super().__init__(
+            kind=ActionKind.AGENT,
+            name=name,
+            bidi_fn=bidi_fn,
+            description=description,
+            metadata={**(metadata or {}), 'agent': {'stateManagement': 'server' if store is not None else 'client'}},
+        )
+        self._transport = InProcessTransport(self, store)
 
-    def connect(
-        self,
-        init: AgentInit | None = None,
-    ) -> AgentSession[Any, Any]:
+    # ------------------------------------------------------------------
+    # AgentAPI implementation
+    # ------------------------------------------------------------------
+
+    def connect(self, init: AgentInit[StateT] | None = None) -> AgentSession[StateT, StreamT]:
         """Starts a new in-process session, or attaches to one via init."""
-        from genkit._ai._agent_client import InProcessAgentTransport, AgentAPI
-        transport = InProcessAgentTransport(self, store_configured=(self._store is not None))
-        return AgentAPI(transport).connect(init)
+        return AgentSession(self._transport, init)
+
+    async def resume(self, snapshot_id: str) -> AgentSession[StateT, StreamT]:
+        """Loads a server snapshot and returns a session with history restored."""
+        snapshot = await self._transport.get_snapshot(snapshot_id)
+        if snapshot is None:
+            raise ValueError(f'Snapshot {snapshot_id} not found.')
+        session = AgentSession(self._transport)
+        session._load_from_snapshot(snapshot)
+        return session
+
+    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot[StateT] | None:
+        """Reads a snapshot without starting a session."""
+        return await self._transport.get_snapshot(snapshot_id)
+
+    async def abort(self, snapshot_id: str) -> SnapshotStatus | None:
+        """Aborts a running snapshot."""
+        return await self._transport.abort_snapshot(snapshot_id)
+
+
+# ---------------------------------------------------------------------------
+# define_custom_agent + define_agent
+# ---------------------------------------------------------------------------
 
 
 def define_custom_agent(
@@ -1116,7 +1067,7 @@ def define_custom_agent(
             if span.is_recording():
                 span.set_attribute('genkit:metadata:agent:sessionId', state.session_id)
 
-        rt = _AgentRuntime(
+        rt = AgentRuntime(
             name=name,
             session=session,
             parent_snapshot=parent,
@@ -1128,14 +1079,14 @@ def define_custom_agent(
         await rt._sess.seed_last_good_state()
         return await rt.run(fn, in_queue)
 
-    action = define_bidi_action(
-        registry=registry,
-        kind=ActionKind.AGENT,
+    agent = Agent(
         name=name,
         bidi_fn=_bidi_fn,
         description=description,
-        metadata={**(metadata or {}), 'agent': {'stateManagement': 'server' if store is not None else 'client'}},
+        metadata=metadata,
+        store=store,
     )
+    registry.register_action_from_instance(agent)
 
     if store is not None:
 
@@ -1147,7 +1098,7 @@ def define_custom_agent(
             snapshot_id = data.get('snapshotId') or data.get('snapshot_id')
             if not isinstance(snapshot_id, str):
                 raise ValueError('snapshotId required and must be a string')
-            snap = await store.get_snapshot(snapshot_id=snapshot_id)
+            snap = await agent.get_snapshot(snapshot_id)
             if snap is None:
                 raise ValueError(f'Snapshot {snapshot_id} not found')
             return snap
@@ -1159,9 +1110,6 @@ def define_custom_agent(
         )
         registry.register_action_from_instance(snapshot_action)
 
-    agent = Agent(action)
-    if store is not None:
-        agent._store = store
     return agent
 
 
@@ -1232,7 +1180,7 @@ def define_agent(
 ) -> Agent:
     """Register a prompt-backed agent.
 
-    Conversation input arrives via ``AgentConnection.send_text`` (or ``send``);
+    Conversation input arrives via ``AgentSession.send``;
     ``system`` is the only static preamble re-rendered each turn alongside
     session history. For template variables, few-shot messages, RAG docs, or
     prompt variants, use ``define_prompt`` + ``define_prompt_agent`` instead.

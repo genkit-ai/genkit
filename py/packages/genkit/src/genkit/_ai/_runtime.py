@@ -23,10 +23,10 @@ import json
 import os
 import signal
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Callable
 
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._logger import get_logger
@@ -46,7 +46,7 @@ def setup_signal_handlers() -> None:
     if _SIGNALS_REGISTERED:
         return
 
-    def handle_signal(signum, frame):
+    def handle_signal(signum, frame) -> None:
         cleanups = list(_ACTIVE_CLEANUPS)
         for cleanup_fn in cleanups:
             try:
