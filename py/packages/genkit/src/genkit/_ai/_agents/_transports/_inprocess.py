@@ -54,6 +54,7 @@ class InProcessTransport:
         await conn.send(input)
 
         output_future = asyncio.get_event_loop().create_future()
+        stream_queue = asyncio.Queue()
 
         async def watch_abort() -> None:
             if abort_event is not None:
@@ -70,7 +71,7 @@ class InProcessTransport:
         abort_task = asyncio.create_task(watch_abort())
         output_future.add_done_callback(lambda _: abort_task.cancel())
 
-        async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
+        async def drain_connection() -> None:
             try:
                 async for chunk in conn.receive():
                     if chunk.turn_end:
@@ -97,7 +98,8 @@ class InProcessTransport:
                         )
                         if not output_future.done():
                             output_future.set_result(output)
-                    yield chunk
+
+                    stream_queue.put_nowait(chunk)
                     if chunk.turn_end:
                         break
 
@@ -107,7 +109,20 @@ class InProcessTransport:
             except BaseException as e:
                 if not output_future.done():
                     output_future.set_exception(e)
-                raise e
+                stream_queue.put_nowait(e)
+            finally:
+                stream_queue.put_nowait(None)
+
+        drain_task = asyncio.create_task(drain_connection())
+
+        async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
+            while True:
+                item = await stream_queue.get()
+                if item is None:
+                    break
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
 
         return stream_generator(), output_future
 

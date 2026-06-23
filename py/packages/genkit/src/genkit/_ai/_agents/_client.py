@@ -348,8 +348,7 @@ class AgentSession(Generic[StateT, StreamT]):
             external_signal = opts.abort_signal
 
         turn_output_future = asyncio.get_event_loop().create_future()
-        accumulated_text = ''
-        accumulated_artifacts: list[Artifact] = []
+        stream_queue = asyncio.Queue()
 
         watch_sig_task = None
         if external_signal is not None:
@@ -367,129 +366,82 @@ class AgentSession(Generic[StateT, StreamT]):
 
             watch_sig_task = asyncio.create_task(_watch_external())
 
-        async def _run() -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput[StateT]]]:
-            return await self._transport.run_turn(
-                inp,
-                init,
-                abort_event=cancelled_event,
-            )
-
-        run_task = asyncio.create_task(_run())
-
         def cleanup_sig_task(_: object) -> None:
             if watch_sig_task:
                 watch_sig_task.cancel()
 
         turn_output_future.add_done_callback(cleanup_sig_task)
 
-        stream_queue = asyncio.Queue()
-
-        async def drive_turn() -> None:
+        async def run_and_watch() -> None:
             try:
-                stream, output_awaitable = await run_task
+                # 1. Start the turn on the transport (which runs actively in the background!)
+                stream, output_awaitable = await self._transport.run_turn(
+                    inp,
+                    init,
+                    abort_event=cancelled_event,
+                )
+
+                # 2. Spawn a background task to watch the transport's output
+                async def watch_output() -> None:
+                    try:
+                        res = await output_awaitable
+                        self._apply_output(res)
+                        if not turn_output_future.done():
+                            turn_output_future.set_result(
+                                AgentResponse(
+                                    raw=res,
+                                    messages=list(self.messages),
+                                    state=self.state,
+                                )
+                            )
+                    except BaseException as e:
+                        if not turn_output_future.done():
+                            turn_output_future.set_exception(e)
+
+                watch_task = asyncio.create_task(watch_output())
+                turn_output_future.add_done_callback(lambda _: watch_task.cancel())
+
+                # 3. Stream chunks to the developer's stream, applying patches in real-time
+                async for chunk in stream:
+                    if chunk.custom_patch:
+                        self._apply_custom_patch(chunk.custom_patch)
+
+                    text = _get_chunk_text(chunk.model_chunk)
+                    reasoning = getattr(chunk.model_chunk, 'reasoning', None) if chunk.model_chunk else None
+                    tool_request = _get_chunk_tool_request(chunk.model_chunk)
+                    tool_response = _get_chunk_tool_response(chunk.model_chunk)
+                    artifact = getattr(chunk, 'artifact', None)
+
+                    c = AgentChunk(
+                        text=text,
+                        reasoning=reasoning,
+                        tool_request=tool_request,
+                        tool_response=tool_response,
+                        artifact=artifact,
+                        custom=self.state if chunk.custom_patch else None,
+                        raw=chunk,
+                    )
+
+                    if tool_request:
+                        turn._interrupt = AgentInterrupt(
+                            name=tool_request.tool_request.name,
+                            ref=tool_request.tool_request.ref,
+                            input_data=tool_request.tool_request.input,
+                            session=self,
+                        )
+
+                    stream_queue.put_nowait(c)
+                    if chunk.turn_end:
+                        break
+
             except BaseException as e:
                 if not turn_output_future.done():
                     turn_output_future.set_exception(e)
                 stream_queue.put_nowait(e)
-                if watch_sig_task:
-                    watch_sig_task.cancel()
-                return
-
-            async def watch_output() -> None:
-                try:
-                    res = await output_awaitable
-                    if not res.message and accumulated_text:
-                        res.message = MessageData(role='model', content=[Part(root=TextPart(text=accumulated_text))])
-                    if not res.artifacts and accumulated_artifacts:
-                        res.artifacts = list(accumulated_artifacts)
-                    self._apply_output(res)
-                    if not turn_output_future.done():
-                        turn_output_future.set_result(
-                            AgentResponse(
-                                raw=res,
-                                messages=list(self.messages),
-                                state=self.state,
-                            )
-                        )
-                except BaseException as e:
-                    if not turn_output_future.done():
-                        turn_output_future.set_exception(e)
-                    raise
-
-            watch_output_task = asyncio.create_task(watch_output())
-
-            try:
-                nonlocal accumulated_text, accumulated_artifacts
-                stream_iter = stream.__aiter__()
-
-                while not cancelled_event.is_set():
-                    next_chunk_task = asyncio.create_task(stream_iter.__anext__())
-                    wait_cancelled_task = asyncio.create_task(cancelled_event.wait())
-
-                    done, pending = await asyncio.wait(
-                        {next_chunk_task, wait_cancelled_task}, return_when=asyncio.FIRST_COMPLETED
-                    )
-
-                    for t in pending:
-                        t.cancel()
-
-                    if cancelled_event.is_set():
-                        next_chunk_task.cancel()
-                        if not turn_output_future.done():
-                            turn_output_future.cancel()
-                        break
-
-                    if next_chunk_task in done:
-                        try:
-                            chunk = next_chunk_task.result()
-
-                            text = _get_chunk_text(chunk.model_chunk)
-                            if text:
-                                accumulated_text += text
-                            if chunk.artifact:
-                                accumulated_artifacts.append(chunk.artifact)
-                            if chunk.custom_patch:
-                                self._apply_custom_patch(chunk.custom_patch)
-
-                            reasoning = getattr(chunk.model_chunk, 'reasoning', None) if chunk.model_chunk else None
-                            tool_request = _get_chunk_tool_request(chunk.model_chunk)
-                            tool_response = _get_chunk_tool_response(chunk.model_chunk)
-                            artifact = getattr(chunk, 'artifact', None)
-
-                            c = AgentChunk(
-                                text=text,
-                                reasoning=reasoning,
-                                tool_request=tool_request,
-                                tool_response=tool_response,
-                                artifact=artifact,
-                                custom=self.state if chunk.custom_patch else None,
-                                raw=chunk,
-                            )
-
-                            if tool_request:
-                                turn._interrupt = AgentInterrupt(
-                                    name=tool_request.tool_request.name,
-                                    ref=tool_request.tool_request.ref,
-                                    input_data=tool_request.tool_request.input,
-                                    session=self,
-                                )
-
-                            stream_queue.put_nowait(c)
-                            if chunk.turn_end:
-                                break
-                        except StopAsyncIteration:
-                            break
-                        except BaseException as e:
-                            if not turn_output_future.done():
-                                turn_output_future.set_exception(e)
-                            stream_queue.put_nowait(e)
-                            raise e
             finally:
                 stream_queue.put_nowait(None)
-                if 'watch_output_task' in locals() and not watch_output_task.done():
-                    watch_output_task.cancel()
 
-        driver_task = asyncio.create_task(drive_turn())
+        run_task = asyncio.create_task(run_and_watch())
 
         async def stream_generator() -> AsyncIterator[AgentChunk[StreamT]]:
             while True:
@@ -506,8 +458,6 @@ class AgentSession(Generic[StateT, StreamT]):
                 turn_output_future.cancel()
             if not run_task.done():
                 run_task.cancel()
-            if not driver_task.done():
-                driver_task.cancel()
 
         turn = AgentTurn(
             stream=stream_generator(),

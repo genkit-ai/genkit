@@ -39,23 +39,47 @@ class WebSocketAgentTransport(AgentTransport[StateT, StreamT]):
         )
 
         output_future = asyncio.get_event_loop().create_future()
+        stream_queue = asyncio.Queue()
 
-        async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
+        async def watch_abort() -> None:
+            if abort_event is not None:
+                await abort_event.wait()
+                await self.close()
+                if not output_future.done():
+                    output_future.set_exception(asyncio.CancelledError())
+
+        abort_task = asyncio.create_task(watch_abort())
+        output_future.add_done_callback(lambda _: abort_task.cancel())
+
+        async def drain_ws() -> None:
             try:
                 async for message in ws:
                     data = json.loads(message)
                     if 'chunk' in data:
                         chunk = AgentStreamChunk.model_validate(data['chunk'])
-                        yield chunk
+                        stream_queue.put_nowait(chunk)
                     if 'output' in data:
                         output = AgentOutput.model_validate(data['output'])
                         if not output_future.done():
                             output_future.set_result(output)
                         break
-            except Exception as e:
+            except BaseException as e:
                 if not output_future.done():
                     output_future.set_exception(e)
-                raise e
+                stream_queue.put_nowait(e)
+            finally:
+                stream_queue.put_nowait(None)
+
+        drain_task = asyncio.create_task(drain_ws())
+
+        async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
+            while True:
+                item = await stream_queue.get()
+                if item is None:
+                    break
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
 
         return stream_generator(), output_future
 
