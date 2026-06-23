@@ -130,6 +130,36 @@ describe('fastifyHandler', async () => {
       }
     );
 
+    // A flow that echoes back the init data to verify it was received.
+    const flowWithInit = ai.defineFlow(
+      {
+        name: 'flowWithInit',
+        inputSchema: z.string(),
+      },
+      async (input) => {
+        return `input: ${input}`;
+      }
+    );
+    // Monkey-patch the run method to capture and return init data.
+    const originalRun = flowWithInit.run.bind(flowWithInit);
+    flowWithInit.run = async (input: any, options: any) => {
+      const result = await originalRun(input, options);
+      // Embed init in the result so we can verify it was passed through.
+      result.result = `input: ${input}, init: ${JSON.stringify(options?.init)}`;
+      return result;
+    };
+
+    // A flow with an initSchema to exercise real init validation.
+    const flowWithInitSchema = ai.defineFlow(
+      {
+        name: 'flowWithInitSchema',
+        inputSchema: z.string(),
+        initSchema: z.object({ sessionId: z.string() }),
+      },
+      async (input, { init }) =>
+        `input: ${input}, sessionId: ${(init as { sessionId: string }).sessionId}`
+    );
+
     const abortableFlow = ai.defineFlow(
       {
         name: 'abortableFlow',
@@ -181,6 +211,8 @@ describe('fastifyHandler', async () => {
       '/echoModelWithAuth',
       fastifyHandler(echoModel, { contextProvider })
     );
+    app.post('/flowWithInit', fastifyHandler(flowWithInit));
+    app.post('/flowWithInitSchema', fastifyHandler(flowWithInitSchema));
     app.post('/abortableFlow', fastifyHandler(abortableFlow));
     // A stream manager whose open() rejects, to exercise the error path after
     // reply.hijack() (the response must still be closed, not leaked).
@@ -331,6 +363,47 @@ describe('fastifyHandler', async () => {
         headers: { 'Content-Type': 'application/json' },
       });
       assert.strictEqual(response.status, 400);
+    });
+
+    it('should pass init data to the action', async () => {
+      const result = await runFlow<string>({
+        url: `http://localhost:${port}/flowWithInit`,
+        input: 'hello',
+        init: { sessionId: 'abc123', temperature: 0.7 },
+      });
+      assert.strictEqual(
+        result,
+        'input: hello, init: {"sessionId":"abc123","temperature":0.7}'
+      );
+    });
+
+    it('should pass undefined init when not provided', async () => {
+      const result = await runFlow<string>({
+        url: `http://localhost:${port}/flowWithInit`,
+        input: 'hello',
+      });
+      assert.strictEqual(result, 'input: hello, init: undefined');
+    });
+
+    it('should validate init against initSchema and pass it to the action', async () => {
+      const result = await runFlow<string>({
+        url: `http://localhost:${port}/flowWithInitSchema`,
+        input: 'hello',
+        init: { sessionId: 'abc123' },
+      });
+      assert.strictEqual(result, 'input: hello, sessionId: abc123');
+    });
+
+    it('should reject init that does not conform to initSchema', async () => {
+      const result = runFlow<string>({
+        url: `http://localhost:${port}/flowWithInitSchema`,
+        input: 'hello',
+        // sessionId should be a string, not a number.
+        init: { sessionId: 123 },
+      });
+      await assert.rejects(result, (err: Error) => {
+        return err.message.includes('INVALID_ARGUMENT');
+      });
     });
 
     // TODO: This test is flaky, skipping until fixed (mirrors the express plugin).
