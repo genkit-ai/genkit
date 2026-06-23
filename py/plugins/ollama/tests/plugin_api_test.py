@@ -18,14 +18,16 @@
 
 import unittest
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from pydantic import BaseModel
 
-from genkit import ActionKind
+from genkit import ActionKind, Message, ModelRequest, Part, Role, TextPart
 from genkit.plugin_api import to_json_schema
-from genkit.plugins.ollama import Ollama, ollama_name
+from genkit.plugins.ollama import Ollama, OllamaConnectionError, ollama_name
+from genkit.plugins.ollama._errors import wrap_connection_errors
 from genkit.plugins.ollama.constants import OllamaAPITypes
 from genkit.plugins.ollama.embedders import EmbeddingDefinition
 from genkit.plugins.ollama.models import ModelDefinition, OllamaConfig, OllamaSupports
@@ -223,3 +225,183 @@ async def test_list_actions(ollama_plugin_instance: Ollama) -> None:
             break
 
     assert has_embedder
+
+
+def test_timeout_stored() -> None:
+    """A timeout kwarg is stored on the plugin."""
+    plugin = Ollama(timeout=30.0)
+
+    assert plugin.timeout == 30.0
+
+
+def test_make_client_forwards_host_headers_and_timeout() -> None:
+    """_make_client forwards host, headers, and a non-None timeout to AsyncClient."""
+    plugin = Ollama(
+        server_address='http://example:11434',
+        request_headers={'Authorization': 'Bearer x'},
+        timeout=30.0,
+    )
+
+    with patch('ollama.AsyncClient') as async_client:
+        plugin._make_client()
+
+    async_client.assert_called_once_with(
+        host='http://example:11434',
+        headers={'Authorization': 'Bearer x'},
+        timeout=30.0,
+    )
+
+
+def test_make_client_omits_timeout_when_none() -> None:
+    """With the default timeout (None) the timeout kwarg is omitted entirely."""
+    plugin = Ollama(server_address='http://example:11434')
+
+    with patch('ollama.AsyncClient') as async_client:
+        plugin._make_client()
+
+    _, kwargs = async_client.call_args
+    assert 'timeout' not in kwargs
+    assert kwargs == {'host': 'http://example:11434', 'headers': {}}
+
+
+def test_make_client_propagates_static_headers() -> None:
+    """A static-dict plugin propagates its headers through _make_client."""
+    headers = {'X-Token': 'abc'}
+    plugin = Ollama(request_headers=headers)
+
+    with patch('ollama.AsyncClient') as async_client:
+        plugin._make_client()
+
+    _, kwargs = async_client.call_args
+    assert kwargs['headers'] == headers
+
+
+@pytest.mark.asyncio
+async def test_init_resolves_sync_callable_headers() -> None:
+    """A sync callable for request_headers is resolved during init()."""
+    plugin = Ollama(request_headers=lambda: {'A': '1'})
+
+    actions = await plugin.init()
+
+    assert actions == []
+    assert plugin.request_headers == {'A': '1'}
+
+
+@pytest.mark.asyncio
+async def test_init_resolves_async_callable_headers() -> None:
+    """An async callable for request_headers is awaited during init()."""
+
+    async def headers() -> dict[str, str]:
+        return {'B': '2'}
+
+    plugin = Ollama(request_headers=headers)
+
+    actions = await plugin.init()
+
+    assert actions == []
+    assert plugin.request_headers == {'B': '2'}
+
+
+@pytest.mark.asyncio
+async def test_list_actions_wraps_connection_error(ollama_plugin_instance: Ollama) -> None:
+    """list_actions surfaces transport failures as OllamaConnectionError."""
+    client_mock = MagicMock()
+    client_mock.list = AsyncMock(side_effect=httpx.ConnectError('refused'))
+    ollama_plugin_instance.client = lambda: client_mock
+
+    with pytest.raises(OllamaConnectionError):
+        await ollama_plugin_instance.list_actions()
+
+
+@pytest.mark.asyncio
+async def test_list_actions_does_not_wrap_http_status_error(ollama_plugin_instance: Ollama) -> None:
+    """A genuine HTTP status response is not masked as a connection error."""
+    request = httpx.Request('GET', 'http://localhost:11434/api/tags')
+    response = httpx.Response(500, request=request)
+    client_mock = MagicMock()
+    client_mock.list = AsyncMock(side_effect=httpx.HTTPStatusError('boom', request=request, response=response))
+    ollama_plugin_instance.client = lambda: client_mock
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await ollama_plugin_instance.list_actions()
+
+
+@pytest.mark.asyncio
+async def test_model_action_wraps_connection_error() -> None:
+    """The model action callable surfaces a down server as OllamaConnectionError.
+
+    The ollama SDK converts ``httpx.ConnectError`` into a builtin
+    ``ConnectionError`` before our wrapper sees it, so that is what we simulate.
+    """
+    plugin = Ollama(models=[ModelDefinition(name='m', api_type=OllamaAPITypes.CHAT)])
+
+    client_mock = MagicMock()
+    client_mock.chat = AsyncMock(side_effect=ConnectionError('Failed to connect to Ollama.'))
+    # The model captures the client factory when the action is built, so swap it
+    # in before resolving the action.
+    plugin.client = lambda: client_mock
+
+    action = plugin._create_model_action(ollama_name('m'))
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])])
+
+    with pytest.raises(OllamaConnectionError):
+        await action._fn(request, None)
+
+
+@pytest.mark.asyncio
+async def test_model_action_wraps_transport_timeout() -> None:
+    """Timeouts the SDK does not intercept (httpx.TransportError) are also wrapped."""
+    plugin = Ollama(models=[ModelDefinition(name='m', api_type=OllamaAPITypes.CHAT)])
+
+    client_mock = MagicMock()
+    client_mock.chat = AsyncMock(side_effect=httpx.ReadTimeout('timed out'))
+    plugin.client = lambda: client_mock
+
+    action = plugin._create_model_action(ollama_name('m'))
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])])
+
+    with pytest.raises(OllamaConnectionError):
+        await action._fn(request, None)
+
+
+@pytest.mark.asyncio
+async def test_wrap_connection_errors_translates_transport_error() -> None:
+    """wrap_connection_errors turns an httpx TransportError into OllamaConnectionError."""
+    with pytest.raises(OllamaConnectionError) as exc_info:
+        async with wrap_connection_errors('http://localhost:11434'):
+            raise httpx.ConnectError('refused')
+
+    assert 'http://localhost:11434' in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_wrap_connection_errors_translates_builtin_connection_error() -> None:
+    """wrap_connection_errors turns the SDK's builtin ConnectionError into ours."""
+    with pytest.raises(OllamaConnectionError) as exc_info:
+        async with wrap_connection_errors('http://localhost:11434'):
+            raise ConnectionError('Failed to connect to Ollama.')
+
+    assert 'http://localhost:11434' in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_wrap_connection_errors_does_not_double_wrap() -> None:
+    """An already-actionable OllamaConnectionError passes through unchanged."""
+    original = OllamaConnectionError('already wrapped')
+
+    with pytest.raises(OllamaConnectionError) as exc_info:
+        async with wrap_connection_errors('http://localhost:11434'):
+            raise original
+
+    assert exc_info.value is original
+
+
+@pytest.mark.asyncio
+async def test_wrap_connection_errors_passes_through_http_status_error() -> None:
+    """wrap_connection_errors leaves HTTPStatusError untouched."""
+    request = httpx.Request('GET', 'http://localhost:11434/api/tags')
+    response = httpx.Response(500, request=request)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        async with wrap_connection_errors('http://localhost:11434'):
+            raise httpx.HTTPStatusError('boom', request=request, response=response)

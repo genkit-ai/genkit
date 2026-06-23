@@ -155,6 +155,7 @@ See Also:
     - Genkit documentation: https://genkit.dev/
 """
 
+from genkit.plugins.ollama._errors import OllamaConnectionError
 from genkit.plugins.ollama.models import ModelDefinition, OllamaConfig, OllamaSupports
 from genkit.plugins.ollama.plugin_api import Ollama, ollama_name
 

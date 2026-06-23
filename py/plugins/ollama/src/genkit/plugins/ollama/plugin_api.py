@@ -16,22 +16,32 @@
 
 """Ollama Plugin for Genkit."""
 
-from functools import partial
+import inspect
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 import structlog
 
 import ollama as ollama_api
-from genkit import Constrained, ModelInfo, Supports
-from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
+from genkit import Constrained, ModelInfo, ModelRequest, ModelResponse, Supports
+from genkit.embedder import (
+    EmbedderOptions,
+    EmbedderSupports,
+    EmbedRequest,
+    EmbedResponse,
+    embedder_action_metadata,
+)
 from genkit.model import model_action_metadata
 from genkit.plugin_api import (
     Action,
     ActionKind,
     ActionMetadata,
+    ActionRunContext,
     Plugin,
     loop_local_client,
     to_json_schema,
 )
+from genkit.plugins.ollama._errors import wrap_connection_errors
 from genkit.plugins.ollama.constants import (
     DEFAULT_OLLAMA_SERVER_URL,
     OllamaAPITypes,
@@ -115,7 +125,11 @@ class Ollama(Plugin):
         models: list[ModelDefinition] | None = None,
         embedders: list[EmbeddingDefinition] | None = None,
         server_address: str | None = None,
-        request_headers: dict[str, str] | None = None,
+        request_headers: dict[str, str]
+        | Callable[[], dict[str, str]]
+        | Callable[[], Awaitable[dict[str, str]]]
+        | None = None,
+        timeout: float | None = None,
     ) -> None:
         """Initialize the Ollama plugin.
 
@@ -126,14 +140,49 @@ class Ollama(Plugin):
             server_address: The URL of the Ollama server. Defaults to a predefined
                 Ollama server URL if not provided.
             request_headers: Optional HTTP headers to include with requests to the
-                Ollama server.
+                Ollama server. May be a static dict, or a sync/async callable that
+                returns a dict (resolved once during ``init()``).
+            timeout: Optional request timeout (seconds) forwarded to the underlying
+                httpx client.
         """
         self.models = models or []
         self.embedders = embedders or []
         self.server_address = server_address or DEFAULT_OLLAMA_SERVER_URL
-        self.request_headers = request_headers or {}
 
-        self.client = loop_local_client(partial(ollama_api.AsyncClient, host=self.server_address))
+        self._request_headers_source = request_headers
+        # Static dicts are usable immediately; callables resolve during init().
+        self.request_headers = dict(request_headers) if isinstance(request_headers, dict) else {}
+        self.timeout = timeout
+        self.client = loop_local_client(self._make_client)
+
+    def _make_client(self) -> ollama_api.AsyncClient:
+        """Build an Ollama AsyncClient with the resolved headers and timeout.
+
+        Returns:
+            A new ``ollama.AsyncClient`` targeting the configured server.
+        """
+        kwargs: dict[str, Any] = {'host': self.server_address, 'headers': self.request_headers}
+        if self.timeout is not None:
+            kwargs['timeout'] = self.timeout
+        return ollama_api.AsyncClient(**kwargs)
+
+    async def _resolve_request_headers(self) -> dict[str, str]:
+        """Resolve the configured request headers to a plain dict.
+
+        Static dicts pass through; sync/async callables are invoked once.
+
+        Returns:
+            The resolved HTTP headers.
+        """
+        source = self._request_headers_source
+        if source is None:
+            return {}
+        if isinstance(source, dict):
+            return dict(source)
+        result = source()
+        if inspect.isawaitable(result):
+            result = await result
+        return dict(cast(dict[str, str], result))
 
     async def init(self) -> list:
         """Initialize the Ollama plugin.
@@ -143,6 +192,10 @@ class Ollama(Plugin):
         Returns:
             List of Action objects for pre-configured models and embedders.
         """
+        # Resolve callable headers before any client is built. Clients are
+        # created lazily per request, so they pick up the resolved headers.
+        self.request_headers = await self._resolve_request_headers()
+
         actions = []
 
         # Register pre-configured models
@@ -211,10 +264,16 @@ class Ollama(Plugin):
             info=ollama_model_info(model_ref, f'Ollama - {clean_name}'),
         )
 
+        server_address = self.server_address
+
+        async def _run(request: ModelRequest, ctx: ActionRunContext | None = None) -> ModelResponse:
+            async with wrap_connection_errors(server_address):
+                return await model.generate(request, ctx)
+
         action = Action(
             kind=ActionKind.MODEL,
             name=name,
-            fn=model.generate,
+            fn=_run,
             metadata=action_metadata.metadata,
         )
 
@@ -242,10 +301,16 @@ class Ollama(Plugin):
             embedding_definition=embedder_ref,
         )
 
+        server_address = self.server_address
+
+        async def _run(request: EmbedRequest) -> EmbedResponse:
+            async with wrap_connection_errors(server_address):
+                return await embedder.embed(request)
+
         return Action(
             kind=ActionKind.EMBEDDER,
             name=name,
-            fn=embedder.embed,
+            fn=_run,
             metadata={
                 'embedder': {
                     'label': f'Ollama Embedding - {clean_name}',
@@ -267,7 +332,8 @@ class Ollama(Plugin):
                 - config_schema (type): The schema class used for validating the model's configuration.
         """
         client = self.client()
-        response = await client.list()
+        async with wrap_connection_errors(self.server_address):
+            response = await client.list()
 
         actions = []
         for model in response.models:
