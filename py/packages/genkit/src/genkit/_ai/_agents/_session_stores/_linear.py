@@ -33,7 +33,14 @@ from pydantic import BaseModel
 from genkit._ai._agents._session import SessionStore, SnapshotAborter
 from genkit._ai._json_patch import apply_json_patch, diff_json
 from genkit._core._error import GenkitError
-from genkit._core._typing import AgentFinishReason, JsonPatchOperation, SessionSnapshot, SessionState, SnapshotEvent, SnapshotStatus
+from genkit._core._typing import (
+    AgentFinishReason,
+    JsonPatchOperation,
+    SessionSnapshot,
+    SessionState,
+    SnapshotEvent,
+    SnapshotStatus,
+)
 
 StateT = TypeVar('StateT')
 
@@ -366,9 +373,9 @@ class FileLinearSessionStore(LinearSessionStore):
         if leaf_seq is None:
             return
 
-        def sync_op() -> None:
+        def sync_op(curr_leaf_seq: int) -> None:
             # Delete turns and index pointers from seq + 1 to leaf_seq
-            for s in range(seq + 1, leaf_seq + 1):
+            for s in range(seq + 1, curr_leaf_seq + 1):
                 t_path = self._turn_path(session_id, s)
                 if os.path.exists(t_path):
                     # read snapshot_id to clean its pointer file
@@ -383,7 +390,7 @@ class FileLinearSessionStore(LinearSessionStore):
             with open(self._leaf_path(session_id), 'w', encoding='utf-8') as f:
                 f.write(str(seq))
 
-        await asyncio.to_thread(sync_op)
+        await asyncio.to_thread(sync_op, leaf_seq)
 
     async def _update_turn(self, session_id: str, seq: int, record: TurnRecord) -> None:
         def sync_op() -> None:

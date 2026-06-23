@@ -21,7 +21,7 @@ import copy
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Generic, TypedDict, TypeVar, cast
+from typing import Any, Generic, TypedDict, TypeVar
 
 from opentelemetry import trace as trace_api
 
@@ -1090,7 +1090,7 @@ def define_custom_agent(
 
     if store is not None:
 
-        async def _snapshot_fn(input_dict: Any) -> SessionSnapshot:
+        async def _snapshot_fn(input_dict: Any) -> SessionSnapshot:  # noqa: ANN401
             if isinstance(input_dict, dict):
                 snapshot_id = input_dict.get('snapshotId') or input_dict.get('snapshot_id')
             else:

@@ -88,19 +88,19 @@ def test_apply_json_patch_array_remove() -> None:
 
 class MockAgentTransport(AgentTransport[dict[str, Any], str]):
     def __init__(self) -> None:
-        self.connect_init = None
-        self.send_payloads = []
-        self.final_output = None
-        self.close_called = False
-        self.abort_snapshot_id = None
-        self._receive_queue = asyncio.Queue()
+        self.connect_init: AgentInit | None = None
+        self.send_payloads: list[AgentInput] = []
+        self.final_output: AgentOutput | None = None
+        self.close_called: bool = False
+        self.abort_snapshot_id: str | None = None
+        self._receive_queue: asyncio.Queue[AgentStreamChunk | None] = asyncio.Queue()
 
     async def run_turn(
         self,
         input: AgentInput,
-        init: AgentInit[dict[str, Any]],
+        init: AgentInit,
         abort_event: asyncio.Event | None = None,
-    ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput[dict[str, Any]]]]:
+    ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
         self.connect_init = init
         self.send_payloads.append(input)
 
@@ -111,12 +111,13 @@ class MockAgentTransport(AgentTransport[dict[str, Any], str]):
                     break
                 yield chunk
 
-        async def _output_waiter() -> AgentOutput[dict[str, Any]]:
+        async def _output_waiter() -> AgentOutput:
+            assert self.final_output is not None
             return self.final_output
 
         return _generator(), _output_waiter()
 
-    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot[dict[str, Any]] | None:
+    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot | None:
         return None
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
@@ -179,6 +180,8 @@ async def test_session_sends_input_and_aggregates_state() -> None:
     # Await output to verify final response resolved correctly
     output = await turn.output
     assert output.finish_reason == AgentFinishReason.STOP
+    assert output.message is not None
+    assert output.message.content is not None
     assert output.message.content[0].root.text == 'Final output!'
 
     # Verify session fields are updated after turn completion
@@ -247,6 +250,7 @@ async def test_session_handling_tool_interrupt() -> None:
     assert len(transport.send_payloads) == 2
     sent_resume = transport.send_payloads[1].resume
     assert sent_resume is not None
+    assert sent_resume.respond is not None
     assert sent_resume.respond[0].tool_response.name == 'userApproval'
     assert sent_resume.respond[0].tool_response.output == {'approved': True}
 
@@ -293,6 +297,8 @@ async def test_in_process_persistent_connection() -> None:
         async for chunk in turn1.stream:
             chunks1.append(chunk)
         res1 = await turn1.output
+        assert res1.message is not None
+        assert res1.message.content is not None
         assert res1.message.content[0].root.text == 'Echo 1'
 
         # Turn 2
@@ -301,6 +307,8 @@ async def test_in_process_persistent_connection() -> None:
         async for chunk in turn2.stream:
             chunks2.append(chunk)
         res2 = await turn2.output
+        assert res2.message is not None
+        assert res2.message.content is not None
         assert res2.message.content[0].root.text == 'Echo 2'
 
 
@@ -352,6 +360,8 @@ async def test_attached_turn_abort() -> None:
         # We should be able to cleanly send a new turn and continue the conversation!
         turn2 = session.send('Continue conversation')
         res2 = await turn2.output
+        assert res2.message is not None
+        assert res2.message.content is not None
         assert res2.message.content[0].root.text == 'Second turn echo'
 
 
@@ -391,9 +401,7 @@ async def test_session_abort() -> None:
                 role=Role.MODEL,
                 content=[
                     Part(
-                        root=ToolRequestPart(
-                            tool_request=ToolRequest(name='slow_tool', ref='call_1', input='blocking')
-                        )
+                        root=ToolRequestPart(tool_request=ToolRequest(name='slow_tool', ref='call_1', input='blocking'))
                     )
                 ],
             ),

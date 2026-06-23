@@ -555,7 +555,8 @@ class ReflectionServerV2:
         """
         try:
             agent_meta = (action.metadata or {}).get('agent')
-            has_store = isinstance(agent_meta, dict) and agent_meta.get('stateManagement') == 'server'
+            agent_dict = cast(dict[str, Any], agent_meta) if isinstance(agent_meta, dict) else {}
+            has_store = agent_dict.get('stateManagement') == 'server'
 
             init = AgentInit.model_validate(p.init) if isinstance(p.init, dict) else AgentInit()
 

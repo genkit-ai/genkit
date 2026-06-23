@@ -100,7 +100,8 @@ class ActionRunner:
             )
             if isinstance(self.action, BidiAction):
                 agent_meta = (self.action.metadata or {}).get('agent')
-                has_store = isinstance(agent_meta, dict) and cast(dict[str, Any], agent_meta).get('stateManagement') == 'server'
+                agent_dict = cast(dict[str, Any], agent_meta) if isinstance(agent_meta, dict) else {}
+                has_store = agent_dict.get('stateManagement') == 'server'
                 init_val = self.payload.get('init')
                 if init_val is not None:
                     init = AgentInit.model_validate(init_val)
@@ -114,7 +115,8 @@ class ActionRunner:
                 if has_store and not init.session_id and not init.snapshot_id:
                     init.session_id = str(uuid4())
 
-                conn = await self.action.stream_bidi(
+                action = cast(BidiAction[Any, Any, Any], self.action)
+                conn = await action.stream_bidi(
                     input=init,
                     context=self.payload.get('context', {}),
                     on_trace_start=self.on_trace_start,
@@ -137,7 +139,7 @@ class ActionRunner:
                         on_chunk(chunk)
 
                 resp = await conn.output()
-                output = ActionResponse(response=resp, trace_id=conn.trace_id or "", span_id=self.span_id or "")
+                output = ActionResponse(response=resp, trace_id=conn.trace_id or '', span_id=self.span_id or '')
             else:
                 output = await self.action.run(
                     input=self.payload.get('input'),

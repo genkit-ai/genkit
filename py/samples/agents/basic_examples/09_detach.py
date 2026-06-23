@@ -23,8 +23,8 @@ import asyncio
 from uuid import uuid4
 
 from genkit import Genkit, GenkitError, ToolRunContext
-from genkit.agent import AgentInit, InMemoryLatestStateStore
 from genkit._core._typing import SnapshotStatus
+from genkit.agent import AgentInit, InMemoryLatestStateStore
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])

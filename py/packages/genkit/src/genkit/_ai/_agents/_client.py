@@ -1,10 +1,26 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import asyncio
 import inspect
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Generic, Protocol, TypeVar, cast, runtime_checkable
+from typing import Any, Generic, Protocol, TypeVar, runtime_checkable
 
 from genkit._ai._json_patch import apply_json_patch
 from genkit._core._typing import (
@@ -14,7 +30,6 @@ from genkit._core._typing import (
     AgentOutput,
     AgentStreamChunk,
     Artifact,
-    JsonPatchOperation,
     MessageData,
     ModelResponseChunk,
     Part,
@@ -320,7 +335,7 @@ class AgentSession(Generic[StateT, StreamT]):
     def send(
         self,
         input: str | AgentInput,
-        opts: Any = None,
+        opts: Any = None,  # noqa: ANN401
     ) -> AgentTurn[StateT, StreamT]:
         """Sends a message to the agent for a new turn."""
         if isinstance(input, str):
@@ -530,7 +545,7 @@ class AgentSession(Generic[StateT, StreamT]):
         if final is not None and final.state is not None:
             self._apply_output(final)
 
-    def _apply_custom_patch(self, patch: Any) -> None:
+    def _apply_custom_patch(self, patch: Any) -> None:  # noqa: ANN401
         patch_list = patch.root if hasattr(patch, 'root') else patch
         self.state = apply_json_patch(self.state, patch_list)
 

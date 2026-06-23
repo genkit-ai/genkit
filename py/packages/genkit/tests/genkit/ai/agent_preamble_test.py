@@ -179,11 +179,15 @@ async def test_prompt_agent_explicit_history_tag_preamble() -> None:
     req_msgs = pm.last_request.messages
     assert len(req_msgs) == 3
     assert req_msgs[0].role == Role.SYSTEM
-    assert 'Prefix' in req_msgs[0].content[0].root.text
+    t0 = req_msgs[0].content[0].root.text
+    assert t0 is not None
+    assert 'Prefix' in t0
     assert req_msgs[1].role == Role.USER
     assert req_msgs[1].content[0].root.text == 'turn 1'
     assert req_msgs[2].role == Role.USER
-    assert 'Suffix' in req_msgs[2].content[0].root.text
+    t2 = req_msgs[2].content[0].root.text
+    assert t2 is not None
+    assert 'Suffix' in t2
 
     # Verify that ONLY history and model response are stored (Prefix & Suffix are filtered out)
     roles = [m.role for m in session.messages]
@@ -237,8 +241,12 @@ async def test_prompt_agent_few_shot_preamble() -> None:
     assert pm.last_request is not None
     req_msgs = pm.last_request.messages
     assert len(req_msgs) == 4
-    assert 'Q: 1+1' in req_msgs[1].content[0].root.text
-    assert 'A: 2' in req_msgs[2].content[0].root.text
+    t1 = req_msgs[1].content[0].root.text
+    assert t1 is not None
+    assert 'Q: 1+1' in t1
+    t2 = req_msgs[2].content[0].root.text
+    assert t2 is not None
+    assert 'A: 2' in t2
 
     # Verify few-shots are stripped, and only runtime history & response are saved
     assert len(session.messages) == 2

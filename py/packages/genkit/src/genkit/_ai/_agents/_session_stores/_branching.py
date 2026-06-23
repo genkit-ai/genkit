@@ -33,7 +33,14 @@ from pydantic import BaseModel
 from genkit._ai._agents._session import SessionStore, SnapshotAborter
 from genkit._ai._json_patch import apply_json_patch, diff_json
 from genkit._core._error import GenkitError
-from genkit._core._typing import AgentFinishReason, JsonPatchOperation, SessionSnapshot, SessionState, SnapshotEvent, SnapshotStatus
+from genkit._core._typing import (
+    AgentFinishReason,
+    JsonPatchOperation,
+    SessionSnapshot,
+    SessionState,
+    SnapshotEvent,
+    SnapshotStatus,
+)
 
 StateT = TypeVar('StateT')
 
@@ -207,7 +214,7 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
 
                 session_id = next_snap.state.session_id
                 parent_id = next_snap.parent_id
-
+                parent_rec = None
                 if not parent_id:
                     depth = 0
                 else:
@@ -287,7 +294,7 @@ class InMemoryBranchingSessionStore(BranchingSessionStore):
         self._records[record.snapshot_id] = record.model_copy(deep=True)
 
         leaves = self._leaves.setdefault(session_id, [])
-        if parent_id in leaves:
+        if parent_id is not None and parent_id in leaves:
             leaves.remove(parent_id)
         leaves.append(record.snapshot_id)
 
@@ -329,7 +336,7 @@ class FileBranchingSessionStore(BranchingSessionStore):
 
             # Update leaves file
             os.makedirs(os.path.dirname(self._leaves_path(session_id)), exist_ok=True)
-            if parent_id in leaves:
+            if parent_id is not None and parent_id in leaves:
                 leaves.remove(parent_id)
             leaves.append(record.snapshot_id)
 

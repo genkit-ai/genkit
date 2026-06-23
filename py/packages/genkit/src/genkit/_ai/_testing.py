@@ -17,7 +17,7 @@
 """Internal testing utilities for Genkit AI (mock models, test_models)."""
 
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from typing import Any, TypedDict, cast
 
@@ -47,7 +47,9 @@ class ProgrammableModel:
         self.responses: list[ModelResponse] = []
         self.chunks: list[list[ModelResponseChunk]] | None = None
         self.last_request: ModelRequest | None = None
-        self.response_cb: Callable[[ModelRequest], ModelResponse] | None = None
+        self.response_cb: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]] | ModelResponse[Any]] | None = (
+            None
+        )
 
     def reset(self) -> None:
         self._request_idx = 0
@@ -68,6 +70,7 @@ class ProgrammableModel:
         if self.response_cb is not None:
             res = self.response_cb(request)
             import inspect
+
             if inspect.isawaitable(res):
                 response = await res
             else:
