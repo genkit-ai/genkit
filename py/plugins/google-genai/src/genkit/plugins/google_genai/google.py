@@ -64,7 +64,7 @@ Key Concepts:
     |                    | used, avoiding upfront initialization overhead.       |
     +--------------------+-------------------------------------------------------+
     | Namespacing        | Models are prefixed with plugin name (e.g.,           |
-    |                    | 'googleai/gemini-2.0-flash-001').                     |
+    |                    | 'googleai/gemini-flash-latest').                      |
     +--------------------+-------------------------------------------------------+
 
 Supported Model Types:
@@ -82,7 +82,7 @@ Example:
     >>>
     >>> # Use any available model - no pre-registration needed
     >>> response = await ai.generate(
-    ...     model='googleai/gemini-2.0-flash-001',
+    ...     model='googleai/gemini-flash-latest',
     ...     prompt='Hello, world!',
     ... )
 
@@ -173,15 +173,24 @@ class GenaiModels:
 def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
     """Discover and categorize available models from the Google GenAI API.
 
-    This function queries the API for all available models and categorizes them
-    based on their supported_actions field. Models marked as deprecated are
-    excluded.
+    This function queries the API for all available models and categorizes them.
+    Models marked as deprecated are excluded.
 
-    The categorization logic:
+    Two categorization strategies are used depending on the backend:
+
+    - Google AI populates each model's ``supported_actions`` field, so models
+      are categorized by action:
         - 'embedContent' action → embedders
-        - 'predict' + 'imagen' in name → imagen (Vertex AI)
+        - 'predict' + 'imagen' in name → imagen
         - 'generateVideos' or 'veo' in name → veo
         - 'generateContent' + 'gemini'/'gemma' in name → gemini
+    - Vertex AI returns ``supported_actions = None`` for every publisher model,
+      so categorizing by action would skip them all. The Vertex path instead
+      categorizes by model name (mirroring the JS plugin's ``listActions``):
+        - 'embedding' in name → embedders
+        - 'imagen' in name → imagen
+        - 'veo' in name → veo
+        - 'gemini'/'gemma' in name (and not an embedding) → gemini
 
     Args:
         client: The Google GenAI client instance.
@@ -211,6 +220,20 @@ def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
 
         description = (m.description or '').lower()
         if 'deprecated' in description:
+            continue
+
+        # Vertex AI returns supported_actions=None for every publisher model, so
+        # categorize by name
+        if is_vertex:
+            lower_name = name.lower()
+            if 'embedding' in lower_name:
+                models.embedders.append(name)
+            elif 'imagen' in lower_name:
+                models.imagen.append(name)
+            elif 'veo' in lower_name:
+                models.veo.append(name)
+            elif 'gemini' in lower_name or 'gemma' in lower_name:
+                models.gemini.append(name)
             continue
 
         if not m.supported_actions:
@@ -325,7 +348,7 @@ class GoogleAI(Plugin):
         +------------------+-------------------+--------------------------------+
         | Type             | Action Kind       | Example                        |
         +------------------+-------------------+--------------------------------+
-        | Gemini/Gemma     | MODEL             | googleai/gemini-2.0-flash-001  |
+        | Gemini/Gemma     | MODEL             | googleai/gemini-flash-latest   |
         | Imagen           | MODEL             | googleai/imagen-3.0-generate   |
         | Embedders        | EMBEDDER          | googleai/gemini-embedding-001  |
         | Veo (video)      | BACKGROUND_MODEL  | googleai/veo-2.0-generate-001  |
@@ -339,7 +362,7 @@ class GoogleAI(Plugin):
         >>>
         >>> # Text generation
         >>> response = await ai.generate(
-        ...     model='googleai/gemini-2.0-flash-001',
+        ...     model='googleai/gemini-flash-latest',
         ...     prompt='Explain quantum computing',
         ... )
         >>>
@@ -688,7 +711,7 @@ class VertexAI(Plugin):
         +------------------+-------------------+--------------------------------+
         | Type             | Action Kind       | Example                        |
         +------------------+-------------------+--------------------------------+
-        | Gemini/Gemma     | MODEL             | vertexai/gemini-2.0-flash-001  |
+        | Gemini/Gemma     | MODEL             | vertexai/gemini-flash-latest   |
         | Imagen           | MODEL             | vertexai/imagen-3.0-generate   |
         | Veo (video)      | MODEL             | vertexai/veo-2.0-generate-001  |
         | Embedders        | EMBEDDER          | vertexai/text-embedding-005    |
@@ -702,7 +725,7 @@ class VertexAI(Plugin):
         >>>
         >>> # Text generation
         >>> response = await ai.generate(
-        ...     model='vertexai/gemini-2.0-flash-001',
+        ...     model='vertexai/gemini-flash-latest',
         ...     prompt='Explain quantum computing',
         ... )
         >>>

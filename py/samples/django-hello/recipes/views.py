@@ -27,11 +27,10 @@ from genkit._core._action import ActionRunContext
 from genkit.plugin_api import RequestData
 from genkit.plugins.django import genkit_django_handler
 from genkit.plugins.google_genai import GoogleAI
-from genkit.plugins.google_genai.models.gemini import GoogleAIGeminiVersion
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model=f'googleai/{GoogleAIGeminiVersion.GEMINI_3_FLASH_PREVIEW}',
+    model='googleai/gemini-flash-latest',
 )
 
 

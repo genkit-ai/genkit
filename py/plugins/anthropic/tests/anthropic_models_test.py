@@ -631,10 +631,11 @@ def test_pdf_with_cache_control() -> None:
     assert blocks[0]['cache_control'] == {'type': 'ephemeral'}
 
 
-def test_structured_output_uses_native_output_config() -> None:
+@pytest.mark.parametrize('model_name', ['claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8'])
+def test_structured_output_uses_native_output_config(model_name: str) -> None:
     """Test that JSON schema uses native output_config when model supports it."""
     mock_client = MagicMock()
-    model = AnthropicModel(model_name='claude-opus-4-6', client=mock_client)
+    model = AnthropicModel(model_name=model_name, client=mock_client)
 
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
