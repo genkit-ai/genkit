@@ -12,18 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This sample demonstrates Genkit's agent APIs by defining three agents in
-// three different styles and exposing all of them through a single CLI:
+// This sample demonstrates Genkit's agent APIs by defining four agents and
+// exposing all of them through a single CLI. Each agent lives in its own file:
 //
-//   - "pirate" uses DefineAgent + aix.FromInline. The prompt is declared
-//     inline next to the agent.
-//   - "chef" uses DefineAgent + aix.FromPrompt. The prompt is loaded from
-//     ./prompts/chef.prompt by the agent's name.
-//   - "coder" uses DefineCustomAgent. The per-turn loop (model selection,
-//     history management, streaming) is wired by hand.
+//   - "pirate" (pirate.go) uses DefineAgent + aix.FromInline. The prompt is
+//     declared inline next to the agent.
+//   - "chef" (chef.go) uses DefineAgent + aix.FromPrompt. The prompt is loaded
+//     from ./prompts/chef.prompt by the agent's name.
+//   - "coder" (coder.go) uses DefineCustomAgent. The per-turn loop (model
+//     selection, history management, streaming) is wired by hand.
+//   - "orchestrator" (orchestrator.go) uses the experimental Agents middleware
+//     to delegate to specialized sub-agents.
 //
-// All three agents persist their conversation state to a per-agent
-// FileSessionStore under ./.genkit/snapshots/<agent>/.
+// The first three persist their conversation state to a per-agent
+// FileSessionStore under ./.genkit/snapshots/<agent>/; the orchestrator does
+// too, while its sub-agents run statelessly per delegation.
 //
 // To run:
 //
@@ -57,7 +60,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
 	"github.com/firebase/genkit/go/genkit"
@@ -65,30 +67,24 @@ import (
 	"google.golang.org/genai"
 )
 
-// ChatPromptInput is the input schema referenced by ./prompts/chef.prompt.
-// Registering it via DefineSchemaFor lets the .prompt file refer to it by
-// name in its YAML frontmatter.
-type ChatPromptInput struct {
-	Personality string `json:"personality"`
-}
-
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	genkit.DefineSchemaFor[ChatPromptInput](g)
+	genkit.DefineSchemaFor[ChatPromptInput](g) // input schema for ./prompts/chef.prompt (see chef.go)
 
-	// Each define function registers an agent and returns it. The CLI
-	// drives all three through the same surface: a.Name() and
-	// a.Desc().Description for the list view, a.StreamBidi(...) to chat,
-	// and a.Store() for snapshot reads. Nothing the CLI does is tied to a
-	// concrete store type, so swapping in a different SessionStore would
-	// not touch a line of it.
+	// Each define function (in its own file) registers an agent and returns
+	// it. The CLI drives all of them through the same surface: a.Name() and
+	// a.Desc().Description for the list view, a.StreamBidi(...) to chat, and
+	// a.Store() for snapshot reads. Nothing the CLI does is tied to a concrete
+	// store type, so swapping in a different SessionStore would not touch a
+	// line of it.
 	agents := []*aix.Agent[any]{
 		defineInlineAgent(g),
 		definePromptAgent(g),
 		defineCustomAgent(g),
+		defineOrchestratorAgent(g),
 	}
 
 	if err := runCLI(ctx, agents); err != nil {
@@ -97,93 +93,13 @@ func main() {
 	}
 }
 
-// defineInlineAgent demonstrates DefineAgent with aix.FromInline. The
-// prompt is declared right next to the agent definition; the registered
-// prompt and the agent share a name. Each turn the framework renders the
-// prompt, appends the conversation history, calls the model, and updates
-// session state. This is the shortest path from "I want a chat agent" to
-// a working one.
-func defineInlineAgent(g *genkit.Genkit) *aix.Agent[any] {
-	const name = "pirate"
-	return genkit.DefineAgent(g, name,
-		aix.FromInline(
-			ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
-				ThinkingConfig: &genai.ThinkingConfig{
-					ThinkingBudget: genai.Ptr[int32](0),
-				},
-			})),
-			ai.WithSystem("You are a sarcastic pirate. Keep responses concise."),
-		),
-		aix.WithSessionStore(mustStore(name)),
-		aix.WithDescription[any]("Sarcastic pirate (inline-defined prompt)"),
-	)
-}
-
-// definePromptAgent demonstrates DefineAgent with aix.FromPrompt. The
-// prompt is loaded from ./prompts/<agent-name>.prompt by genkit's prompt
-// registry. Defining the prompt in a file lets you tune model, config,
-// schema, and template independently of the Go code — useful when prompt
-// authors are not the same people writing the agent wiring.
-//
-// FromPrompt's argument is the default input passed to the prompt's
-// Render on every turn; the inline-prompt variant has no per-turn input
-// of its own.
-func definePromptAgent(g *genkit.Genkit) *aix.Agent[any] {
-	const name = "chef"
-	return genkit.DefineAgent(g, name,
-		aix.FromPrompt(ChatPromptInput{Personality: "a Michelin-starred chef who loves explaining technique"}),
-		aix.WithSessionStore(mustStore(name)),
-		aix.WithDescription[any]("Michelin-starred chef (prompt loaded from ./prompts/chef.prompt)"),
-	)
-}
-
-// defineCustomAgent demonstrates DefineCustomAgent. The per-turn function
-// is fully under your control: it picks the model, manages the message
-// list, streams chunks back to the client, and decides what to put in the
-// final result. Use this form when the prompt-backed agent loop doesn't
-// fit (e.g. you want to pre/post-process every turn, swap models
-// dynamically, or wire up custom tool plumbing).
-//
-// Even with full control over the loop, the framework still owns session
-// state, snapshot writes, and the detach lifecycle.
-func defineCustomAgent(g *genkit.Genkit) *aix.Agent[any] {
-	const name = "coder"
-	return genkit.DefineCustomAgent(g, name,
-		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
-			if err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
-				for chunk, err := range genkit.GenerateStream(ctx, g,
-					ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
-						ThinkingConfig: &genai.ThinkingConfig{
-							ThinkingBudget: genai.Ptr[int32](0),
-						},
-					})),
-					ai.WithSystem("You are a senior software engineer. Answer briefly. Use fenced code blocks when showing code."),
-					ai.WithMessages(sess.Messages()...),
-				) {
-					if err != nil {
-						return nil, err
-					}
-					if chunk.Done {
-						sess.AddMessages(chunk.Response.Message)
-						// Report how the turn ended so the framework can
-						// forward it on the TurnEnd chunk and persist it
-						// on the snapshot.
-						return &aix.TurnResult{
-							FinishReason: aix.AgentFinishReason(chunk.Response.FinishReason),
-						}, nil
-					}
-					resp.SendModelChunk(chunk.Chunk)
-				}
-				return nil, nil
-			}); err != nil {
-				return nil, err
-			}
-			return sess.Result(), nil
-		},
-		aix.WithSessionStore(mustStore(name)),
-		aix.WithDescription[any]("Concise code helper (custom per-turn loop)"),
-	)
-}
+// flashModel is the model shared by the agents in this sample:
+// gemini-flash-latest with thinking disabled for snappy, low-cost turns.
+// genkit copies request config per call rather than mutating it, so one shared
+// reference is safe across all the agents.
+var flashModel = googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
+	ThinkingConfig: &genai.ThinkingConfig{ThinkingBudget: genai.Ptr[int32](0)},
+})
 
 // mustStore creates a FileSessionStore rooted at the per-agent dir under
 // ./.genkit/snapshots/, or exits the process on failure. Used during

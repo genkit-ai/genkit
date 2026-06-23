@@ -475,3 +475,26 @@ func SessionFromContext[State any](ctx context.Context) *Session[State] {
 	session, _ := sessionCtxKey.FromContext(ctx).(*Session[State])
 	return session
 }
+
+// ArtifactStore is the State-agnostic view of a session's artifact collection.
+// Every [Session] satisfies it regardless of its State type, since artifact
+// operations do not touch custom state. Middleware and tools that work with
+// artifacts without knowing the agent's State type use it via
+// [ArtifactStoreFromContext], where [SessionFromContext] cannot help because it
+// requires the concrete State.
+type ArtifactStore interface {
+	// Artifacts returns a snapshot of the session's current artifacts.
+	Artifacts() []*Artifact
+	// AddArtifacts adds artifacts, replacing any existing artifact of the same
+	// name.
+	AddArtifacts(artifacts ...*Artifact)
+}
+
+// ArtifactStoreFromContext returns the active session's artifacts as a
+// State-agnostic [ArtifactStore], or nil if there is no active session in ctx.
+// Unlike [SessionFromContext] it does not require knowing the session's State
+// type, so it is the accessor for middleware and tools.
+func ArtifactStoreFromContext(ctx context.Context) ArtifactStore {
+	store, _ := sessionCtxKey.FromContext(ctx).(ArtifactStore)
+	return store
+}

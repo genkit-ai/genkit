@@ -46,6 +46,7 @@ type agentOptions[State any] struct {
 	store       SessionStore[State]
 	transform   StateTransform[State]
 	description string
+	contextFunc func(context.Context) context.Context
 }
 
 func (o *agentOptions[State]) applyAgent(opts *agentOptions[State]) error {
@@ -66,6 +67,18 @@ func (o *agentOptions[State]) applyAgent(opts *agentOptions[State]) error {
 			return errors.New("cannot set description more than once (WithDescription)")
 		}
 		opts.description = o.description
+	}
+	if o.contextFunc != nil {
+		// Context decorators compose rather than conflict: each WithContextFunc
+		// adds a layer applied in registration order. This lets the genkit
+		// package seed its instance (see genkit.DefineAgent) while applications
+		// add their own decorators on the same agent.
+		if prev := opts.contextFunc; prev != nil {
+			next := o.contextFunc
+			opts.contextFunc = func(ctx context.Context) context.Context { return next(prev(ctx)) }
+		} else {
+			opts.contextFunc = o.contextFunc
+		}
 	}
 	return nil
 }
@@ -89,6 +102,19 @@ func WithStateTransform[State any](transform StateTransform[State]) AgentOption[
 // action descriptor (read back via [Agent.Desc] and shown in the Dev UI).
 func WithDescription[State any](description string) AgentOption[State] {
 	return &agentOptions[State]{description: description}
+}
+
+// WithContextFunc registers a function that decorates the context for each
+// agent invocation, applied once before the turn loop runs so the returned
+// context flows to the prompt, tools, and middleware of every turn.
+//
+// The genkit package uses it to seed the [genkit.Genkit] instance (retrievable
+// with genkit.FromContext) so middleware can resolve and run other actions
+// without direct registry access. Applications may also use it to attach
+// invocation-scoped values (e.g. request identity). Multiple decorators compose
+// in registration order.
+func WithContextFunc[State any](fn func(context.Context) context.Context) AgentOption[State] {
+	return &agentOptions[State]{contextFunc: fn}
 }
 
 // --- InvocationOption ---

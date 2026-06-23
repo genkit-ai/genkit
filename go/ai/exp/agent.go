@@ -603,6 +603,12 @@ func NewCustomAgent[State any](
 			outCh chan<- *AgentStreamChunk,
 		) (*AgentOutput[State], error) {
 			ctx = core.WithFlowContext(ctx, name)
+			// Apply any context decorators (e.g. the genkit package seeding its
+			// instance) before the runtime derives the per-turn work context, so
+			// the decorated values reach each turn's prompt, tools, and middleware.
+			if cfg.contextFunc != nil {
+				ctx = cfg.contextFunc(ctx)
+			}
 			rt, err := newAgentRuntime(ctx, name, cfg, in, inCh, outCh)
 			if err != nil {
 				// Init failures (a rejected init payload, a failed

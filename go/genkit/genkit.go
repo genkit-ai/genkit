@@ -41,11 +41,23 @@ import (
 var genkitCtxKey = base.NewContextKey[*Genkit]()
 
 // FromContext returns the [*Genkit] instance stored in the context.
-// This is set automatically by [Generate] and related functions.
+// This is set automatically by [Generate] and related functions, and by
+// agents defined via [DefineAgent] / [DefineCustomAgent] for each turn.
 // Middleware implementations can use this to access the Genkit instance
 // during generation.
 func FromContext(ctx context.Context) *Genkit {
 	return genkitCtxKey.FromContext(ctx)
+}
+
+// seedGenkitContext returns an agent option that seeds g into each agent
+// invocation's context, so middleware and other code can retrieve it via
+// [FromContext] during the agent's turns, just as [Generate] seeds it. Agents
+// run below the genkit layer (on the registry alone), so without this the
+// instance would be absent from an agent's turn context.
+func seedGenkitContext[State any](g *Genkit) aix.AgentOption[State] {
+	return aix.WithContextFunc[State](func(ctx context.Context) context.Context {
+		return genkitCtxKey.NewContext(ctx, g)
+	})
 }
 
 // Genkit encapsulates a Genkit instance, providing access to its registry,
@@ -469,6 +481,7 @@ func DefineAgent[State any](
 	source aix.AgentSource,
 	opts ...aix.AgentOption[State],
 ) *aix.Agent[State] {
+	opts = append(opts, seedGenkitContext[State](g))
 	return aix.DefineAgent(g.reg, name, source, opts...)
 }
 
@@ -538,6 +551,7 @@ func DefineCustomAgent[State any](
 	fn aix.AgentFunc[State],
 	opts ...aix.AgentOption[State],
 ) *aix.Agent[State] {
+	opts = append(opts, seedGenkitContext[State](g))
 	return aix.DefineCustomAgent(g.reg, name, fn, opts...)
 }
 
