@@ -269,4 +269,160 @@ describe('FileSessionStore', () => {
     assert.ok(await store.getSnapshot({ snapshotId: b }));
     assert.strictEqual(await store.getSnapshot({ snapshotId: a }), undefined);
   });
+
+  describe('onSnapshotStateChange', () => {
+    /**
+     * Resolves once `callback` observes a snapshot matching `predicate`, or
+     * rejects after `timeoutMs`. Always unsubscribes before settling.
+     */
+    function waitForSnapshot(
+      store: FileSessionStore,
+      snapshotId: string,
+      predicate: (snap: SessionSnapshot) => boolean,
+      options?: { context?: any },
+      timeoutMs = 5000
+    ): Promise<SessionSnapshot> {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          if (typeof unsubscribe === 'function') unsubscribe();
+          reject(
+            new Error(
+              `Timed out waiting for snapshot ${snapshotId} to match predicate`
+            )
+          );
+        }, timeoutMs);
+        const unsubscribe = store.onSnapshotStateChange(
+          snapshotId,
+          (snap) => {
+            if (predicate(snap)) {
+              clearTimeout(timer);
+              if (typeof unsubscribe === 'function') unsubscribe();
+              resolve(snap);
+            }
+          },
+          options
+        );
+      });
+    }
+
+    it('fires the callback when the snapshot file changes', async () => {
+      const dir = tmpDir();
+      // Use a fast poll interval so the test does not depend on fs.watch
+      // delivering events on the host filesystem.
+      const store = new FileSessionStore(dir, {
+        snapshotWatchPollIntervalMs: 25,
+      });
+      const sessionId = globalThis.crypto.randomUUID();
+      const snapshotId = reserveSnapshotId();
+
+      await store.saveSnapshot(snapshotId, () => ({
+        ...makeSnapshot(snapshotId, sessionId),
+        status: 'pending',
+      }));
+
+      const done = waitForSnapshot(
+        store,
+        snapshotId,
+        (snap) => snap.status === 'aborted'
+      );
+
+      // Simulate another process flipping the status to aborted.
+      await store.saveSnapshot(snapshotId, (current) => ({
+        ...current!,
+        status: 'aborted',
+      }));
+
+      const snap = await done;
+      assert.strictEqual(snap.status, 'aborted');
+    });
+
+    it('surfaces the current state immediately on subscribe', async () => {
+      const dir = tmpDir();
+      const store = new FileSessionStore(dir, {
+        snapshotWatchPollIntervalMs: 25,
+      });
+      const sessionId = globalThis.crypto.randomUUID();
+      const snapshotId = reserveSnapshotId();
+
+      await store.saveSnapshot(snapshotId, () => ({
+        ...makeSnapshot(snapshotId, sessionId),
+        status: 'completed',
+      }));
+
+      const snap = await waitForSnapshot(
+        store,
+        snapshotId,
+        (s) => s.status === 'completed'
+      );
+      assert.strictEqual(snap.snapshotId, snapshotId);
+    });
+
+    it('stops firing after unsubscribe', async () => {
+      const dir = tmpDir();
+      const store = new FileSessionStore(dir, {
+        snapshotWatchPollIntervalMs: 25,
+      });
+      const sessionId = globalThis.crypto.randomUUID();
+      const snapshotId = reserveSnapshotId();
+
+      await store.saveSnapshot(snapshotId, () =>
+        makeSnapshot(snapshotId, sessionId)
+      );
+
+      let calls = 0;
+      const unsubscribe = store.onSnapshotStateChange(snapshotId, () => {
+        calls++;
+      });
+      // Wait for the initial emit, then unsubscribe.
+      await new Promise((r) => setTimeout(r, 100));
+      if (typeof unsubscribe === 'function') unsubscribe();
+      const callsAfterUnsubscribe = calls;
+
+      // Further writes must not trigger the callback.
+      await store.saveSnapshot(snapshotId, (current) => ({
+        ...current!,
+        status: 'aborted',
+      }));
+      await new Promise((r) => setTimeout(r, 200));
+
+      assert.strictEqual(calls, callsAfterUnsubscribe);
+    });
+
+    it('scopes the watch to the per-tenant prefix', async () => {
+      const dir = tmpDir();
+      const store = new FileSessionStore(dir, {
+        snapshotWatchPollIntervalMs: 25,
+        snapshotPathPrefix: (options) =>
+          (options?.context?.auth as any)?.uid ?? 'anon',
+      });
+      const sessionId = globalThis.crypto.randomUUID();
+      const snapshotId = reserveSnapshotId();
+      const aliceCtx = { context: { auth: { uid: 'alice' } } };
+
+      await store.saveSnapshot(
+        snapshotId,
+        () => ({
+          ...makeSnapshot(snapshotId, sessionId),
+          status: 'pending',
+        }),
+        aliceCtx
+      );
+
+      const done = waitForSnapshot(
+        store,
+        snapshotId,
+        (snap) => snap.status === 'aborted',
+        aliceCtx
+      );
+
+      await store.saveSnapshot(
+        snapshotId,
+        (current) => ({ ...current!, status: 'aborted' }),
+        aliceCtx
+      );
+
+      const snap = await done;
+      assert.strictEqual(snap.status, 'aborted');
+    });
+  });
 });
