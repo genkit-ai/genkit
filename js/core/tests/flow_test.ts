@@ -142,6 +142,98 @@ describe('flow', () => {
         }
       );
     });
+
+    it('should parse schema in parse schemaMode', async () => {
+      const testFlow = defineFlow(
+        registry,
+        {
+          name: 'testFlow',
+          inputSchema: z.object({
+            foo: z.string().default('default foo'),
+          }),
+          outputSchema: z.object({
+            input: z
+              .object({
+                foo: z.string().optional(),
+              })
+              .optional(),
+            bar: z.string().transform((val) => `${val}-transformed`),
+          }),
+          schemaMode: 'parse',
+        },
+        async (input) => {
+          return { input, bar: 'bar' };
+        }
+      );
+
+      const result = await testFlow({} as any);
+
+      assert.deepStrictEqual(result, {
+        bar: 'bar-transformed',
+        input: {
+          foo: 'default foo',
+        },
+      });
+    });
+
+    it('should only-validate schema in validate schemaMode', async () => {
+      const testFlow = defineFlow(
+        registry,
+        {
+          name: 'testFlow',
+          inputSchema: z.object({
+            foo: z.string().default('default foo'),
+          }),
+          outputSchema: z.object({
+            input: z
+              .object({
+                foo: z.string().optional(),
+              })
+              .optional(),
+            bar: z.string().transform((val) => `${val}-transformed`),
+          }),
+          schemaMode: 'validate',
+        },
+        async (input) => {
+          return { input, bar: 'bar' };
+        }
+      );
+
+      const result = await testFlow({} as any);
+
+      assert.deepStrictEqual(result, {
+        bar: 'bar',
+        input: {},
+      });
+    });
+
+    it('should ignore schema in none schemaMode', async () => {
+      const testFlow = defineFlow(
+        registry,
+        {
+          name: 'testFlow',
+          inputSchema: z.object({
+            foo: z.string().transform((val) => `${val}-transformed`),
+          }),
+          outputSchema: z.object({
+            bar: z.string().transform((val) => `${val}-transformed`),
+          }),
+          schemaMode: 'none',
+        },
+        async (input) => {
+          return { seriously: 'banana', input } as any;
+        }
+      );
+
+      const result = await testFlow({ banana: 'yeah' } as any);
+
+      assert.deepStrictEqual(result, {
+        input: {
+          banana: 'yeah',
+        },
+        seriously: 'banana',
+      });
+    });
   });
 
   describe('getContext', () => {

@@ -190,6 +190,8 @@ export type Action<
   stream(input?: z.infer<I>, opts?: RunOptions): StreamingResponse<O, S>;
 };
 
+export type ActionSchemaMode = 'none' | 'validate' | 'parse';
+
 /**
  * Action factory params.
  */
@@ -198,6 +200,7 @@ export type ActionParams<
   O extends z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
 > = {
+  /** Name of the action. */
   name:
     | string
     | {
@@ -213,6 +216,7 @@ export type ActionParams<
   use?: Middleware<z.infer<I>, z.infer<O>, z.infer<S>>[];
   streamSchema?: S;
   actionType: ActionType;
+  schemaMode?: ActionSchemaMode;
 };
 
 export type ActionAsyncParams<
@@ -346,10 +350,15 @@ export function action<
     input: z.infer<I>,
     options?: ActionRunOptions<z.infer<S>>
   ): Promise<ActionResult<z.infer<O>>> => {
-    input = parseSchema(input, {
-      schema: config.inputSchema,
-      jsonSchema: config.inputJsonSchema,
-    });
+    if (!config.schemaMode || config.schemaMode === 'validate') {
+      parseSchema(input, {
+        schema: config.inputSchema,
+        jsonSchema: config.inputJsonSchema,
+      });
+    } else if (config.schemaMode === 'parse' && config.inputSchema) {
+      console.log(' - - - - - - - parsing....', input);
+      input = config.inputSchema.parse(input);
+    }
     let traceId;
     let spanId;
     const genkitKey = actionFn.__action.key;
@@ -405,7 +414,15 @@ export function action<
             });
           // if context is explicitly passed in, we run action with the provided context,
           // otherwise we let upstream context carry through.
-          const output = await runWithContext(options?.context, actFn);
+          let output = await runWithContext(options?.context, actFn);
+          if (!config.schemaMode || config.schemaMode === 'validate') {
+            parseSchema(output, {
+              schema: config.outputSchema,
+              jsonSchema: config.outputJsonSchema,
+            });
+          } else if (config.schemaMode === 'parse' && config.outputSchema) {
+            output = config.outputSchema.parse(output);
+          }
 
           metadata.output = JSON.stringify(output);
           return output;
@@ -417,10 +434,6 @@ export function action<
         }
       }
     );
-    output = parseSchema(output, {
-      schema: config.outputSchema,
-      jsonSchema: config.outputJsonSchema,
-    });
     return {
       result: output,
       telemetry: {
