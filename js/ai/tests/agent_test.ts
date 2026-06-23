@@ -601,25 +601,66 @@ describe('Agent', () => {
       assert.strictEqual(artChunks[1].artifact?.parts[0].text, 'v2');
     });
 
-    it('records the turn\u2019s streamed chunks on the turn span', async () => {
+    it('records the snapshotId and state on the turn span (server-managed)', async () => {
       spanExporter.exportedSpans = [];
-      const registry = new Registry();
+      const store = new InMemorySessionStore<{ count: number }>();
 
-      const flow = defineCustomAgent(
-        registry,
-        { name: 'chunkTraceTest' },
-        async (sess, { sendChunk }) => {
+      const flow = defineCustomAgent<{ count: number }>(
+        new Registry(),
+        { name: 'turnSpanServerTest', store },
+        async (sess) => {
           await sess.run(async () => {
-            sendChunk({
-              modelChunk: { role: 'model', content: [{ text: 'hello ' }] },
-            });
-            sendChunk({
-              modelChunk: { role: 'model', content: [{ text: 'world' }] },
-            });
+            sess.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
             return { finishReason: 'stop' as const };
           });
           return {
-            message: { role: 'model', content: [{ text: 'hello world' }] },
+            message: { role: 'model', content: [{ text: 'done' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+      assert.ok(output.snapshotId);
+
+      const turnSpan = spanExporter.exportedSpans.find(
+        (s) => s.displayName === 'runTurn-1'
+      );
+      assert.ok(turnSpan, 'expected a runTurn-1 span to be exported');
+
+      // The turn span carries the snapshotId this turn persisted under.
+      assert.strictEqual(
+        turnSpan.attributes['genkit:metadata:agent:snapshotId'],
+        output.snapshotId
+      );
+
+      // The turn span's output is the session state this turn produced.
+      const out = JSON.parse(turnSpan.attributes['genkit:output']);
+      assert.deepStrictEqual(out.state.custom, { count: 1 });
+    });
+
+    it('records state on the turn span for a client-managed agent', async () => {
+      spanExporter.exportedSpans = [];
+      const registry = new Registry();
+
+      const flow = defineCustomAgent<{ count: number }>(
+        registry,
+        { name: 'turnSpanClientTest' },
+        async (sess) => {
+          await sess.run(async () => {
+            sess.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'done' }] },
             finishReason: 'stop' as const,
           };
         }
@@ -635,22 +676,15 @@ describe('Agent', () => {
       }
       await session.output;
 
-      // The per-turn span ('runTurn-1') should carry the streamed chunks,
-      // serialized as a JSON array, under the 'agent:chunks' metadata key.
       const turnSpan = spanExporter.exportedSpans.find(
         (s) => s.displayName === 'runTurn-1'
       );
       assert.ok(turnSpan, 'expected a runTurn-1 span to be exported');
-      const raw = turnSpan.attributes['genkit:metadata:agent:chunks'];
-      assert.ok(raw, 'expected agent:chunks metadata on the turn span');
 
-      const recorded = JSON.parse(raw) as AgentStreamChunk[];
-      const modelChunks = recorded.filter((c) => !!c.modelChunk);
-      assert.strictEqual(modelChunks.length, 2);
-      assert.strictEqual(modelChunks[0].modelChunk?.content[0].text, 'hello ');
-      assert.strictEqual(modelChunks[1].modelChunk?.content[0].text, 'world');
-      // The auto-emitted turnEnd chunk is captured too.
-      assert.ok(recorded.some((c) => !!c.turnEnd));
+      // The turn span's output carries the session state this turn produced,
+      // for client-managed agents too.
+      const out = JSON.parse(turnSpan.attributes['genkit:output']);
+      assert.deepStrictEqual(out.state.custom, { count: 1 });
     });
   });
 
