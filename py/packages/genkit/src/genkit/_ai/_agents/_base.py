@@ -1010,7 +1010,7 @@ class Agent(BidiAction, Generic[StateT, StreamT]):
     # AgentAPI implementation
     # ------------------------------------------------------------------
 
-    def chat(self, init: AgentInit[StateT] | None = None) -> AgentSession[StateT, StreamT]:
+    def chat(self, init: AgentInit | None = None) -> AgentSession[StateT, StreamT]:
         """Starts a new in-process session, or attaches to one via init."""
         return AgentSession(self._transport, init)
 
@@ -1023,7 +1023,7 @@ class Agent(BidiAction, Generic[StateT, StreamT]):
         session._load_from_snapshot(snapshot)
         return session
 
-    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot[StateT] | None:
+    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot | None:
         """Reads a snapshot without starting a session."""
         return await self._transport.get_snapshot(snapshot_id)
 

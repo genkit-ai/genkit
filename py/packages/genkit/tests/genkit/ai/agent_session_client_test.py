@@ -402,7 +402,7 @@ async def test_session_abort() -> None:
 
     async with agent.chat() as session:
         # Start a detached turn to get a snapshot ID on the server
-        task = await session.run_detached('Trigger slow action')
+        task = await session.detach('Trigger slow action')
         assert task.snapshot_id is not None
 
         # Give it a tiny moment to start execution

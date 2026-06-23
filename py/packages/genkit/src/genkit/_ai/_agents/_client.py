@@ -41,13 +41,13 @@ class AgentTransport(Protocol, Generic[StateT, StreamT]):
     async def run_turn(
         self,
         input: AgentInput,
-        init: AgentInit[StateT],
+        init: AgentInit,
         abort_event: asyncio.Event | None = None,
-    ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput[StateT]]]:
+    ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
         """Runs a single turn and returns the stream and output awaitables."""
         ...
 
-    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot[StateT] | None:
+    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot | None:
         """Retrieves a session snapshot from the server store."""
         ...
 
@@ -123,7 +123,7 @@ class AgentInterrupt(Generic[InputT, OutputT]):
 class AgentResponse(Generic[StateT]):
     """Completed turn result — client-side wrapper around AgentOutput with rich accessors."""
 
-    raw: AgentOutput[StateT]
+    raw: AgentOutput
     messages: list[MessageData]
     state: StateT | None = None
 
@@ -215,7 +215,7 @@ class AgentTurn(Generic[StateT, StreamT]):
 class AgentAPI(Protocol, Generic[StateT, StreamT]):
     """Implemented by both Agent (in-process) and AgentClient (remote)."""
 
-    def chat(self, init: AgentInit[StateT] | None = None) -> AgentSession[StateT, StreamT]:
+    def chat(self, init: AgentInit | None = None) -> AgentSession[StateT, StreamT]:
         """Starts a new session, or attaches to one via init."""
         ...
 
@@ -223,7 +223,7 @@ class AgentAPI(Protocol, Generic[StateT, StreamT]):
         """Loads a server snapshot and returns a session with history restored."""
         ...
 
-    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot[StateT] | None:
+    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot | None:
         """Reads a snapshot without starting a session."""
         ...
 
@@ -239,7 +239,7 @@ class AgentClient(Generic[StateT, StreamT]):
         self._transport = transport
         self.info = info
 
-    def chat(self, init: AgentInit[StateT] | None = None) -> AgentSession[StateT, StreamT]:
+    def chat(self, init: AgentInit | None = None) -> AgentSession[StateT, StreamT]:
         """Starts a new session, or attaches to one via init."""
         return AgentSession(self._transport, init)
 
@@ -252,7 +252,7 @@ class AgentClient(Generic[StateT, StreamT]):
         session._load_from_snapshot(snapshot)
         return session
 
-    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot[StateT] | None:
+    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot | None:
         """Reads a snapshot without starting a session."""
         return await self._transport.get_snapshot(snapshot_id)
 
@@ -267,7 +267,7 @@ class AgentSession(Generic[StateT, StreamT]):
     def __init__(
         self,
         transport: AgentTransport[StateT, StreamT],
-        connect_init: AgentInit[StateT] | None = None,
+        connect_init: AgentInit | None = None,
     ) -> None:
         self._transport = transport
         self._connect_init = connect_init
@@ -293,16 +293,16 @@ class AgentSession(Generic[StateT, StreamT]):
     ) -> None:
         await self.close()
 
-    def _hydrate_from_state(self, state: SessionState[StateT]) -> None:
+    def _hydrate_from_state(self, state: SessionState) -> None:
         self.state = state.custom
         self.messages = list(state.messages) if state.messages else []
         self.artifacts = list(state.artifacts) if state.artifacts else []
 
-    def _load_from_snapshot(self, snapshot: SessionSnapshot[StateT]) -> None:
+    def _load_from_snapshot(self, snapshot: SessionSnapshot) -> None:
         self.snapshot_id = snapshot.snapshot_id
         self._hydrate_from_state(snapshot.state)
 
-    def _build_init(self) -> AgentInit[StateT]:
+    def _build_init(self) -> AgentInit:
         if self.snapshot_id:
             return AgentInit(snapshot_id=self.snapshot_id)
         if self.state is not None:
@@ -471,12 +471,12 @@ class AgentSession(Generic[StateT, StreamT]):
         inp = AgentInput(resume=resume)
         return self.send(inp)
 
-    async def get_snapshot(self) -> SessionSnapshot[StateT] | None:
+    async def get_snapshot(self) -> SessionSnapshot | None:
         if not self.snapshot_id:
             return None
         return await self._transport.get_snapshot(self.snapshot_id)
 
-    async def run_detached(self, input: str | AgentInput) -> DetachedTask[StateT]:
+    async def detach(self, input: str | AgentInput) -> DetachedTask[StateT]:
         if isinstance(input, str):
             inp = AgentInput(
                 messages=[
@@ -532,7 +532,7 @@ class AgentSession(Generic[StateT, StreamT]):
         patch_list = patch.root if hasattr(patch, 'root') else patch
         self.state = apply_json_patch(self.state, patch_list)
 
-    def _apply_output(self, raw: AgentOutput[StateT]) -> None:
+    def _apply_output(self, raw: AgentOutput) -> None:
         if raw.snapshot_id is not None:
             self.snapshot_id = raw.snapshot_id
         if raw.state is not None:
@@ -555,7 +555,7 @@ class DetachedTask(Generic[StateT]):
         self.snapshot_id = snapshot_id
         self._transport = transport
 
-    async def poll(self) -> SessionSnapshot[StateT] | None:
+    async def poll(self) -> SessionSnapshot | None:
         """Query the server for the current task status/snapshot."""
         return await self._transport.get_snapshot(self.snapshot_id)
 

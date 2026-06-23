@@ -476,7 +476,7 @@ project_includes = [
 ]
 
 # Search path for first-party code import resolution.
-search-path = [".", "samples/agents/src/examples/branching_samples"]
+search-path = [".", "samples/agents/branching_examples"]
 # Ignore missing imports for namespace packages - pyrefly can't resolve PEP 420
 # namespace packages but these imports work at runtime.
 # model_performance_test is local to sample-test (excluded from workspace).

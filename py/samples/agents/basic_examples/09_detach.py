@@ -53,7 +53,7 @@ agent = ai.define_agent(
 async def main() -> None:
     session = agent.chat(AgentInit(session_id=str(uuid4())))
     print('--- SUBMITTING DETACHED TASK ---')
-    task = await session.run_detached('Please run a long task using slowWork.')
+    task = await session.detach('Please run a long task using slowWork.')
     print(f'Task detached! Snapshot ID: {task.snapshot_id}')
 
     # We can poll or wait for the task to complete

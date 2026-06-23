@@ -24,9 +24,9 @@ class WebSocketAgentTransport(AgentTransport[StateT, StreamT]):
     async def run_turn(
         self,
         input: AgentInput,
-        init: AgentInit[StateT],
+        init: AgentInit,
         abort_event: asyncio.Event | None = None,
-    ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput[StateT]]]:
+    ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
         if self._ws is None:
             self._ws = await websockets.connect(self.url)
         ws = self._ws
@@ -83,7 +83,7 @@ class WebSocketAgentTransport(AgentTransport[StateT, StreamT]):
 
         return stream_generator(), output_future
 
-    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot[StateT] | None:
+    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot | None:
         return None
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:

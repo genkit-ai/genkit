@@ -43,9 +43,9 @@ class InProcessTransport:
     async def run_turn(
         self,
         input: AgentInput,  # noqa: A002
-        init: AgentInit[StateT],
+        init: AgentInit,
         abort_event: asyncio.Event | None = None,
-    ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput[StateT]]]:
+    ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
         """Run a single turn and return the stream and output awaitables."""
         if self._conn is None:
             self._conn = await self._action.stream_bidi(init)
@@ -126,7 +126,7 @@ class InProcessTransport:
 
         return stream_generator(), output_future
 
-    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot[Any] | None:
+    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot | None:
         """Retrieve a session snapshot via the store captured at construction."""
         if self._store is None:
             return None
