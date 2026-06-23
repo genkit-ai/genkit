@@ -52,7 +52,7 @@ async def run_turn(agent: Agent, init: AgentInit, text: str) -> AgentOutput:
     elif init.session_id:
         session_id = init.session_id
 
-    async with agent.connect(AgentInit(session_id=session_id, snapshot_id=init.snapshot_id)) as session:
+    async with agent.chat(AgentInit(session_id=session_id, snapshot_id=init.snapshot_id)) as session:
         turn = session.send(text)
         async for _chunk in turn.stream:
             pass

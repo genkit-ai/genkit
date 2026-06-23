@@ -66,7 +66,7 @@ agent = ai.define_custom_agent(name='customCoder', fn=custom_coder_fn, store=sto
 
 
 async def main() -> None:
-    session = agent.connect(AgentInit(session_id=str(uuid4())))
+    session = agent.chat(AgentInit(session_id=str(uuid4())))
     print('--- SENDING TURN ---')
     turn = session.send('What is a Python list comprehension?')
     async for chunk in turn.stream:

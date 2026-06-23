@@ -316,40 +316,53 @@ class FileBranchingSessionStore(BranchingSessionStore):
         return os.path.join(self.directory, 'sessions', session_id, 'leaves.json')
 
     async def _append_child(self, session_id: str, parent_id: str | None, record: BranchRecord) -> None:
-        # Write record
-        temp_path = self._snapshot_path(record.snapshot_id) + '.tmp'
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            f.write(record.model_dump_json(indent=2))
-        os.replace(temp_path, self._snapshot_path(record.snapshot_id))
-
-        # Update leaves file
-        os.makedirs(os.path.dirname(self._leaves_path(session_id)), exist_ok=True)
         leaves = await self._read_leaves(session_id)
-        if parent_id in leaves:
-            leaves.remove(parent_id)
-        leaves.append(record.snapshot_id)
 
-        leaves_temp = self._leaves_path(session_id) + '.tmp'
-        with open(leaves_temp, 'w', encoding='utf-8') as f:
-            json.dump(leaves, f, indent=2)
-        os.replace(leaves_temp, self._leaves_path(session_id))
+        def sync_op() -> None:
+            # Write record
+            temp_path = self._snapshot_path(record.snapshot_id) + '.tmp'
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                f.write(record.model_dump_json(indent=2))
+            os.replace(temp_path, self._snapshot_path(record.snapshot_id))
+
+            # Update leaves file
+            os.makedirs(os.path.dirname(self._leaves_path(session_id)), exist_ok=True)
+            if parent_id in leaves:
+                leaves.remove(parent_id)
+            leaves.append(record.snapshot_id)
+
+            leaves_temp = self._leaves_path(session_id) + '.tmp'
+            with open(leaves_temp, 'w', encoding='utf-8') as f:
+                json.dump(leaves, f, indent=2)
+            os.replace(leaves_temp, self._leaves_path(session_id))
+
+        await asyncio.to_thread(sync_op)
 
     async def _update_record(self, snapshot_id: str, record: BranchRecord) -> None:
-        temp_path = self._snapshot_path(snapshot_id) + '.tmp'
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            f.write(record.model_dump_json(indent=2))
-        os.replace(temp_path, self._snapshot_path(snapshot_id))
+        def sync_op() -> None:
+            temp_path = self._snapshot_path(snapshot_id) + '.tmp'
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                f.write(record.model_dump_json(indent=2))
+            os.replace(temp_path, self._snapshot_path(snapshot_id))
+
+        await asyncio.to_thread(sync_op)
 
     async def _read_record(self, snapshot_id: str) -> BranchRecord | None:
-        path = self._snapshot_path(snapshot_id)
-        if not os.path.exists(path):
-            return None
-        with open(path, encoding='utf-8') as f:
-            return BranchRecord.model_validate(json.load(f))
+        def sync_op() -> BranchRecord | None:
+            path = self._snapshot_path(snapshot_id)
+            if not os.path.exists(path):
+                return None
+            with open(path, encoding='utf-8') as f:
+                return BranchRecord.model_validate(json.load(f))
+
+        return await asyncio.to_thread(sync_op)
 
     async def _read_leaves(self, session_id: str) -> list[str]:
-        path = self._leaves_path(session_id)
-        if not os.path.exists(path):
-            return []
-        with open(path, encoding='utf-8') as f:
-            return list(json.load(f))
+        def sync_op() -> list[str]:
+            path = self._leaves_path(session_id)
+            if not os.path.exists(path):
+                return []
+            with open(path, encoding='utf-8') as f:
+                return list(json.load(f))
+
+        return await asyncio.to_thread(sync_op)

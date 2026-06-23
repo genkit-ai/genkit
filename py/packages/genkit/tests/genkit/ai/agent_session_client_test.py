@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterable, Awaitable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable
 from typing import Any
 
 import pytest
@@ -104,14 +104,14 @@ class MockAgentTransport(AgentTransport[dict[str, Any], str]):
         self.connect_init = init
         self.send_payloads.append(input)
 
-        async def _generator():
+        async def _generator() -> AsyncIterator[AgentStreamChunk]:
             while True:
                 chunk = await self._receive_queue.get()
                 if chunk is None:
                     break
                 yield chunk
 
-        async def _output_waiter():
+        async def _output_waiter() -> AgentOutput[dict[str, Any]]:
             return self.final_output
 
         return _generator(), _output_waiter()
@@ -286,7 +286,7 @@ async def test_in_process_persistent_connection() -> None:
         )
     )
 
-    async with agent.connect() as session:
+    async with agent.chat() as session:
         # Turn 1
         turn1 = session.send('Hello')
         chunks1 = []
@@ -318,7 +318,7 @@ async def test_attached_turn_abort() -> None:
     agent = ai.define_prompt_agent(name='abortAgent', store=store)
 
     # We make the mock model sleep to simulate a slow response
-    async def slow_response(*args, **kwargs):
+    async def slow_response(*args: Any, **kwargs: Any) -> ModelResponse:
         await asyncio.sleep(5)
         return ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -327,7 +327,7 @@ async def test_attached_turn_abort() -> None:
 
     pm.response_cb = slow_response
 
-    async with agent.connect() as session:
+    async with agent.chat() as session:
         turn = session.send('Hello')
 
         # Let it run a bit
@@ -400,7 +400,7 @@ async def test_session_abort() -> None:
         )
     )
 
-    async with agent.connect() as session:
+    async with agent.chat() as session:
         # Start a detached turn to get a snapshot ID on the server
         task = await session.run_detached('Trigger slow action')
         assert task.snapshot_id is not None
@@ -439,7 +439,7 @@ async def test_external_abort_signal() -> None:
         )
     )
 
-    async with agent.connect() as session:
+    async with agent.chat() as session:
         abort_signal = asyncio.Event()
 
         # Send a turn passing the external abort_signal in opts

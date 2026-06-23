@@ -87,7 +87,12 @@ class ActionRunner:
             on_chunk = (
                 (
                     lambda c: self.queue.put_nowait(
-                        f'{c.model_dump_json(by_alias=True, exclude_none=True) if isinstance(c, BaseModel) else json.dumps(c)}\n'
+                        (
+                            c.model_dump_json(by_alias=True, exclude_none=True)
+                            if isinstance(c, BaseModel)
+                            else json.dumps(c)
+                        )
+                        + '\n'
                     )
                 )
                 if self.stream

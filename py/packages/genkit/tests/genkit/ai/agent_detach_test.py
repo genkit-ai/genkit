@@ -18,10 +18,10 @@ import asyncio
 
 import pytest
 
-from genkit._ai._agents._base import SessionRunner, _agent_input_has_payload, AgentRuntime
+from genkit._ai._agents._base import AgentRuntime, SessionRunner, _agent_input_has_payload
+from genkit._ai._agents._session import InMemorySessionStore, Session
 from genkit._ai._aio import Genkit
 from genkit._ai._generate import generate_action
-from genkit._ai._agents._session import InMemorySessionStore, Session
 from genkit._ai._testing import define_programmable_model
 from genkit._ai._tools import ToolRunContext
 from genkit._core._action import _SENTINEL as _BIDI_SENTINEL, ActionRunContext

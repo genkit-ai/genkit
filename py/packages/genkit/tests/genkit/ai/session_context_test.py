@@ -18,7 +18,7 @@ import asyncio
 
 import pytest
 
-from genkit._ai._agents._base import SessionRunner, AgentRuntime
+from genkit._ai._agents._base import AgentRuntime, SessionRunner
 from genkit._ai._agents._session import Session, get_current_session, run_with_session
 from genkit._core._action import _SENTINEL as _BIDI_SENTINEL, ActionRunContext
 from genkit._core._registry import Registry

@@ -14,12 +14,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
+from genkit._ai._agents._session import LatestStateStore
+from genkit._ai._agents._session_stores._branching import BranchingSessionStore
+from genkit._ai._agents._session_stores._linear import LinearSessionStore
 from genkit._core._error import GenkitError
 from genkit._core._typing import (
     MessageData,
@@ -69,18 +71,18 @@ async def test_latest_state_store_in_memory() -> None:
 
 
 @pytest.mark.asyncio
-async def test_latest_state_store_file(tmp_path) -> None:
+async def test_latest_state_store_file(tmp_path: Path) -> None:
     store = FileLatestStateStore(str(tmp_path))
     await run_latest_state_store_test(store)
 
 
-async def run_latest_state_store_test(store) -> None:
+async def run_latest_state_store_test(store: LatestStateStore) -> None:
     session_id = 'sess-123'
 
     # 1. Save a new PENDING snapshot
     pending = make_snapshot(session_id, 'Hello', SnapshotStatus.PENDING)
 
-    def _save_pending(_):
+    def _save_pending(_: object) -> SessionSnapshot:
         return pending
 
     saved_pending = await store.save_snapshot(None, _save_pending)
@@ -101,7 +103,7 @@ async def run_latest_state_store_test(store) -> None:
     good = make_snapshot(session_id, 'Hello Response', SnapshotStatus.DONE)
     good.snapshot_id = pending.snapshot_id
 
-    def _finalize(_):
+    def _finalize(_: object) -> SessionSnapshot:
         return good
 
     await store.save_snapshot(pending.snapshot_id, _finalize)
@@ -120,7 +122,7 @@ async def run_latest_state_store_test(store) -> None:
     # 6. Save a new turn
     new_good = make_snapshot(session_id, 'Hello again', SnapshotStatus.DONE)
 
-    def _save_new(_):
+    def _save_new(_: object) -> SessionSnapshot:
         return new_good
 
     saved_new = await store.save_snapshot(None, _save_new)
@@ -141,12 +143,12 @@ async def test_linear_session_store_in_memory() -> None:
 
 
 @pytest.mark.asyncio
-async def test_linear_session_store_file(tmp_path) -> None:
+async def test_linear_session_store_file(tmp_path: Path) -> None:
     store = FileLinearSessionStore(str(tmp_path), checkpoint_interval=2)
     await run_linear_session_store_test(store)
 
 
-async def run_linear_session_store_test(store) -> None:
+async def run_linear_session_store_test(store: LinearSessionStore) -> None:
     session_id = 'sess-456'
 
     # Turn 0: Checkpoint (full state)
@@ -218,12 +220,12 @@ async def test_branching_session_store_in_memory() -> None:
 
 
 @pytest.mark.asyncio
-async def test_branching_session_store_file(tmp_path) -> None:
+async def test_branching_session_store_file(tmp_path: Path) -> None:
     store = FileBranchingSessionStore(str(tmp_path), checkpoint_interval=2)
     await run_branching_session_store_test(store)
 
 
-async def run_branching_session_store_test(store) -> None:
+async def run_branching_session_store_test(store: BranchingSessionStore) -> None:
     session_id = 'sess-789'
 
     # Root Checkpoint

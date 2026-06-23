@@ -26,7 +26,7 @@ import sys
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from types import TracebackType
+from types import FrameType, TracebackType
 
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._logger import get_logger
@@ -46,12 +46,12 @@ def setup_signal_handlers() -> None:
     if _SIGNALS_REGISTERED:
         return
 
-    def handle_signal(signum, frame) -> None:
+    def handle_signal(signum: int, frame: FrameType | None) -> None:
         cleanups = list(_ACTIVE_CLEANUPS)
         for cleanup_fn in cleanups:
             try:
                 cleanup_fn()
-            except Exception:
+            except Exception:  # noqa: S110
                 pass
         sys.exit(128 + signum)
 

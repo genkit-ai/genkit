@@ -207,7 +207,7 @@ class AgentTurn(Generic[StateT, StreamT]):
                 await res
         try:
             await self._output
-        except (asyncio.CancelledError, Exception):
+        except (asyncio.CancelledError, Exception):  # noqa: S110
             pass
 
 
@@ -215,11 +215,11 @@ class AgentTurn(Generic[StateT, StreamT]):
 class AgentAPI(Protocol, Generic[StateT, StreamT]):
     """Implemented by both Agent (in-process) and AgentClient (remote)."""
 
-    def connect(self, init: AgentInit[StateT] | None = None) -> AgentSession[StateT, StreamT]:
+    def chat(self, init: AgentInit[StateT] | None = None) -> AgentSession[StateT, StreamT]:
         """Starts a new session, or attaches to one via init."""
         ...
 
-    async def resume(self, snapshot_id: str) -> AgentSession[StateT, StreamT]:
+    async def load_chat(self, snapshot_id: str) -> AgentSession[StateT, StreamT]:
         """Loads a server snapshot and returns a session with history restored."""
         ...
 
@@ -235,15 +235,15 @@ class AgentAPI(Protocol, Generic[StateT, StreamT]):
 class AgentClient(Generic[StateT, StreamT]):
     """Remote/transport-backed agent — wraps any AgentTransport. Implements AgentAPI."""
 
-    def __init__(self, transport: AgentTransport[StateT, StreamT], info: Any = None) -> None:
+    def __init__(self, transport: AgentTransport[StateT, StreamT], info: object = None) -> None:
         self._transport = transport
         self.info = info
 
-    def connect(self, init: AgentInit[StateT] | None = None) -> AgentSession[StateT, StreamT]:
+    def chat(self, init: AgentInit[StateT] | None = None) -> AgentSession[StateT, StreamT]:
         """Starts a new session, or attaches to one via init."""
         return AgentSession(self._transport, init)
 
-    async def resume(self, snapshot_id: str) -> AgentSession[StateT, StreamT]:
+    async def load_chat(self, snapshot_id: str) -> AgentSession[StateT, StreamT]:
         """Loads a server snapshot and returns a session with history restored."""
         snapshot = await self._transport.get_snapshot(snapshot_id)
         if snapshot is None:
@@ -285,7 +285,12 @@ class AgentSession(Generic[StateT, StreamT]):
     async def __aenter__(self) -> AgentSession[StateT, StreamT]:
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
         await self.close()
 
     def _hydrate_from_state(self, state: SessionState[StateT]) -> None:
@@ -314,7 +319,7 @@ class AgentSession(Generic[StateT, StreamT]):
     def send(
         self,
         input: str | AgentInput,
-        opts: Any = None,
+        opts: object = None,
     ) -> AgentTurn[StateT, StreamT]:
         """Sends a message to the agent for a new turn."""
         if isinstance(input, str):
@@ -371,7 +376,7 @@ class AgentSession(Generic[StateT, StreamT]):
 
         run_task = asyncio.create_task(_run())
 
-        def cleanup_sig_task(_) -> None:
+        def cleanup_sig_task(_: object) -> None:
             if watch_sig_task:
                 watch_sig_task.cancel()
 
@@ -543,7 +548,7 @@ class AgentSession(Generic[StateT, StreamT]):
             try:
                 async for _ in stream:
                     pass
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         drive_task = asyncio.create_task(drive_stream())
@@ -573,7 +578,7 @@ class AgentSession(Generic[StateT, StreamT]):
         if final is not None and final.state is not None:
             self._apply_output(final)
 
-    def _apply_custom_patch(self, patch: Any) -> None:
+    def _apply_custom_patch(self, patch: object) -> None:
         patch_list = patch.root if hasattr(patch, 'root') else patch
         self.state = apply_json_patch(self.state, patch_list)
 

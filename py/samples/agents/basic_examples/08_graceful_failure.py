@@ -61,7 +61,7 @@ agent = ai.define_custom_agent(name='flakyAgent', fn=flaky_fn, store=store)
 async def main() -> None:
     session_id = str(uuid4())
 
-    session = agent.connect(AgentInit(session_id=session_id))
+    session = agent.chat(AgentInit(session_id=session_id))
     try:
         print('--- SENDING TURN 1 (OK) ---')
         turn1 = session.send('hello')

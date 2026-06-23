@@ -340,70 +340,90 @@ class FileLinearSessionStore(LinearSessionStore):
         return os.path.join(self.directory, f'{snapshot_id}.ptr')
 
     async def _append_turn(self, session_id: str, seq: int, record: TurnRecord) -> None:
-        os.makedirs(self._session_dir(session_id), exist_ok=True)
+        def sync_op() -> None:
+            os.makedirs(self._session_dir(session_id), exist_ok=True)
 
-        # Write turn file
-        temp_path = self._turn_path(session_id, seq) + '.tmp'
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            f.write(record.model_dump_json(indent=2))
-        os.replace(temp_path, self._turn_path(session_id, seq))
+            # Write turn file
+            temp_path = self._turn_path(session_id, seq) + '.tmp'
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                f.write(record.model_dump_json(indent=2))
+            os.replace(temp_path, self._turn_path(session_id, seq))
 
-        # Write index pointer snapshot_id -> session_id:seq
-        with open(self._pointer_path(record.snapshot_id), 'w', encoding='utf-8') as f:
-            f.write(f'{session_id}:{seq}')
+            # Write index pointer snapshot_id -> session_id:seq
+            with open(self._pointer_path(record.snapshot_id), 'w', encoding='utf-8') as f:
+                f.write(f'{session_id}:{seq}')
 
-        # Update leaf sequence pointer
-        leaf_temp = self._leaf_path(session_id) + '.tmp'
-        with open(leaf_temp, 'w', encoding='utf-8') as f:
-            f.write(str(seq))
-        os.replace(leaf_temp, self._leaf_path(session_id))
+            # Update leaf sequence pointer
+            leaf_temp = self._leaf_path(session_id) + '.tmp'
+            with open(leaf_temp, 'w', encoding='utf-8') as f:
+                f.write(str(seq))
+            os.replace(leaf_temp, self._leaf_path(session_id))
+
+        await asyncio.to_thread(sync_op)
 
     async def _truncate_to(self, session_id: str, seq: int) -> None:
         leaf_seq = await self._read_leaf_seq(session_id)
         if leaf_seq is None:
             return
 
-        # Delete turns and index pointers from seq + 1 to leaf_seq
-        for s in range(seq + 1, leaf_seq + 1):
-            t_path = self._turn_path(session_id, s)
-            if os.path.exists(t_path):
-                # read snapshot_id to clean its pointer file
-                with open(t_path, encoding='utf-8') as f:
-                    rec = json.load(f)
-                ptr_path = self._pointer_path(rec['snapshot_id'])
-                if os.path.exists(ptr_path):
-                    os.remove(ptr_path)
-                os.remove(t_path)
+        def sync_op() -> None:
+            # Delete turns and index pointers from seq + 1 to leaf_seq
+            for s in range(seq + 1, leaf_seq + 1):
+                t_path = self._turn_path(session_id, s)
+                if os.path.exists(t_path):
+                    # read snapshot_id to clean its pointer file
+                    with open(t_path, encoding='utf-8') as f:
+                        rec = json.load(f)
+                    ptr_path = self._pointer_path(rec['snapshot_id'])
+                    if os.path.exists(ptr_path):
+                        os.remove(ptr_path)
+                    os.remove(t_path)
 
-        # Update leaf pointer
-        with open(self._leaf_path(session_id), 'w', encoding='utf-8') as f:
-            f.write(str(seq))
+            # Update leaf pointer
+            with open(self._leaf_path(session_id), 'w', encoding='utf-8') as f:
+                f.write(str(seq))
+
+        await asyncio.to_thread(sync_op)
 
     async def _update_turn(self, session_id: str, seq: int, record: TurnRecord) -> None:
-        temp_path = self._turn_path(session_id, seq) + '.tmp'
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            f.write(record.model_dump_json(indent=2))
-        os.replace(temp_path, self._turn_path(session_id, seq))
+        def sync_op() -> None:
+            temp_path = self._turn_path(session_id, seq) + '.tmp'
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                f.write(record.model_dump_json(indent=2))
+            os.replace(temp_path, self._turn_path(session_id, seq))
+
+        await asyncio.to_thread(sync_op)
 
     async def _read_leaf_seq(self, session_id: str) -> int | None:
-        path = self._leaf_path(session_id)
-        if not os.path.exists(path):
-            return None
-        with open(path, encoding='utf-8') as f:
-            return int(f.read().strip())
+        def sync_op() -> int | None:
+            path = self._leaf_path(session_id)
+            if not os.path.exists(path):
+                return None
+            with open(path, encoding='utf-8') as f:
+                return int(f.read().strip())
+
+        return await asyncio.to_thread(sync_op)
 
     async def _read_turn(self, session_id: str, seq: int) -> TurnRecord | None:
-        path = self._turn_path(session_id, seq)
-        if not os.path.exists(path):
-            return None
-        with open(path, encoding='utf-8') as f:
-            return TurnRecord.model_validate(json.load(f))
+        def sync_op() -> TurnRecord | None:
+            path = self._turn_path(session_id, seq)
+            if not os.path.exists(path):
+                return None
+            with open(path, encoding='utf-8') as f:
+                return TurnRecord.model_validate(json.load(f))
+
+        return await asyncio.to_thread(sync_op)
 
     async def _read_turn_by_snapshot(self, snapshot_id: str) -> TurnRecord | None:
-        ptr_path = self._pointer_path(snapshot_id)
-        if not os.path.exists(ptr_path):
+        def sync_op() -> str | None:
+            ptr_path = self._pointer_path(snapshot_id)
+            if not os.path.exists(ptr_path):
+                return None
+            with open(ptr_path, encoding='utf-8') as f:
+                return f.read().strip()
+
+        ref = await asyncio.to_thread(sync_op)
+        if ref is None:
             return None
-        with open(ptr_path, encoding='utf-8') as f:
-            ref = f.read().strip()
         session_id, seq_str = ref.split(':')
         return await self._read_turn(session_id, int(seq_str))

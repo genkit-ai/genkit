@@ -63,7 +63,7 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    session = agent.connect()
+    session = agent.chat()
     # --- Turn 1: user message → stream until interrupted ---
     print('--- SENDING TURN 1 ---')
     turn1 = session.send('Transfer $100 to account 999 for lunch.')

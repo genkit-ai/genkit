@@ -253,57 +253,73 @@ class FileLatestStateStore(LatestStateStore):
         # Save pointer paths first, then write the main record
         # Note: Delete old pointers first to avoid leakage
         old_record = await self._read_record_by_session(record.session_id)
-        if old_record:
-            if old_record.last_good:
-                old_good_ptr = self._pointer_path(old_record.last_good.snapshot_id)
-                if os.path.exists(old_good_ptr):
-                    os.remove(old_good_ptr)
-            if old_record.pending:
-                old_pending_ptr = self._pointer_path(old_record.pending.snapshot_id)
-                if os.path.exists(old_pending_ptr):
-                    os.remove(old_pending_ptr)
 
-        # Write new pointer files
-        if record.last_good:
-            with open(self._pointer_path(record.last_good.snapshot_id), 'w', encoding='utf-8') as f:
-                f.write(record.session_id)
-        if record.pending:
-            with open(self._pointer_path(record.pending.snapshot_id), 'w', encoding='utf-8') as f:
-                f.write(record.session_id)
+        def sync_op() -> None:
+            if old_record:
+                if old_record.last_good:
+                    old_good_ptr = self._pointer_path(old_record.last_good.snapshot_id)
+                    if os.path.exists(old_good_ptr):
+                        os.remove(old_good_ptr)
+                if old_record.pending:
+                    old_pending_ptr = self._pointer_path(old_record.pending.snapshot_id)
+                    if os.path.exists(old_pending_ptr):
+                        os.remove(old_pending_ptr)
 
-        # Write JSON record
-        temp_path = self._session_path(record.session_id) + '.tmp'
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            f.write(record.model_dump_json(indent=2))
-        os.replace(temp_path, self._session_path(record.session_id))
+            # Write new pointer files
+            if record.last_good:
+                with open(self._pointer_path(record.last_good.snapshot_id), 'w', encoding='utf-8') as f:
+                    f.write(record.session_id)
+            if record.pending:
+                with open(self._pointer_path(record.pending.snapshot_id), 'w', encoding='utf-8') as f:
+                    f.write(record.session_id)
+
+            # Write JSON record
+            temp_path = self._session_path(record.session_id) + '.tmp'
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                f.write(record.model_dump_json(indent=2))
+            os.replace(temp_path, self._session_path(record.session_id))
+
+        await asyncio.to_thread(sync_op)
 
     async def _read_record_by_session(self, session_id: str) -> LatestRecord | None:
-        path = self._session_path(session_id)
-        if not os.path.exists(path):
-            return None
-        with open(path, encoding='utf-8') as f:
-            data = json.load(f)
-        return LatestRecord.model_validate(data)
+        def sync_op() -> LatestRecord | None:
+            path = self._session_path(session_id)
+            if not os.path.exists(path):
+                return None
+            with open(path, encoding='utf-8') as f:
+                data = json.load(f)
+            return LatestRecord.model_validate(data)
+
+        return await asyncio.to_thread(sync_op)
 
     async def _read_record_by_snapshot(self, snapshot_id: str) -> LatestRecord | None:
-        ptr_path = self._pointer_path(snapshot_id)
-        if not os.path.exists(ptr_path):
+        def sync_op() -> str | None:
+            ptr_path = self._pointer_path(snapshot_id)
+            if not os.path.exists(ptr_path):
+                return None
+            with open(ptr_path, encoding='utf-8') as f:
+                return f.read().strip()
+
+        session_id = await asyncio.to_thread(sync_op)
+        if session_id is None:
             return None
-        with open(ptr_path, encoding='utf-8') as f:
-            session_id = f.read().strip()
         return await self._read_record_by_session(session_id)
 
     async def _delete_record(self, session_id: str) -> None:
         record = await self._read_record_by_session(session_id)
-        if record:
-            if record.last_good:
-                good_ptr = self._pointer_path(record.last_good.snapshot_id)
-                if os.path.exists(good_ptr):
-                    os.remove(good_ptr)
-            if record.pending:
-                pending_ptr = self._pointer_path(record.pending.snapshot_id)
-                if os.path.exists(pending_ptr):
-                    os.remove(pending_ptr)
-        path = self._session_path(session_id)
-        if os.path.exists(path):
-            os.remove(path)
+
+        def sync_op() -> None:
+            if record:
+                if record.last_good:
+                    good_ptr = self._pointer_path(record.last_good.snapshot_id)
+                    if os.path.exists(good_ptr):
+                        os.remove(good_ptr)
+                if record.pending:
+                    pending_ptr = self._pointer_path(record.pending.snapshot_id)
+                    if os.path.exists(pending_ptr):
+                        os.remove(pending_ptr)
+            path = self._session_path(session_id)
+            if os.path.exists(path):
+                os.remove(path)
+
+        await asyncio.to_thread(sync_op)

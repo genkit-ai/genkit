@@ -55,7 +55,7 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    session = agent.connect(AgentInit(session_id=str(uuid4())))
+    session = agent.chat(AgentInit(session_id=str(uuid4())))
     print('--- SUBMITTING DETACHED TASK ---')
     task = await session.detach('Please run a long task using slowWork.')
     print(f'Task detached! Snapshot ID: {task.snapshot_id}')
