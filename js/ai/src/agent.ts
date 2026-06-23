@@ -37,7 +37,10 @@ import {
 } from './agent-core.js';
 
 import { parseSchema, toJsonSchema } from '@genkit-ai/core/schema';
-import { setCustomMetadataAttributes } from '@genkit-ai/core/tracing';
+import {
+  setCustomMetadataAttribute,
+  setCustomMetadataAttributes,
+} from '@genkit-ai/core/tracing';
 import { generateStream } from './generate.js';
 import { diff, type JsonPatch } from './json-patch.js';
 import {
@@ -436,6 +439,12 @@ export class SessionRunner<State = unknown> {
    * `true` at the start of each turn.
    */
   public firstCustomPatchInTurn: boolean = true;
+  /**
+   * Buffer of stream chunks emitted during the current turn. Reset at the start
+   * of every turn and recorded onto the turn's trace span (serialized as a JSON
+   * array) at turn end so a trace captures everything that was streamed.
+   */
+  public currentTurnChunks: AgentStreamChunk[] = [];
 
   constructor(
     session: Session<State>,
@@ -523,6 +532,27 @@ export class SessionRunner<State = unknown> {
   }
 
   /**
+   * Records the chunks streamed during the current turn onto the active turn
+   * span (serialized as a JSON array), so a trace captures everything that was
+   * streamed. No-ops when no chunks were emitted. Best-effort: serialization or
+   * span-context failures are absorbed so they can't fail an otherwise-good
+   * turn.
+   */
+  private recordTurnChunks(): void {
+    if (!this.currentTurnChunks.length) {
+      return;
+    }
+    try {
+      setCustomMetadataAttribute(
+        'agent:chunks',
+        JSON.stringify(this.currentTurnChunks)
+      );
+    } catch {
+      // Best-effort: never let trace bookkeeping fail a turn.
+    }
+  }
+
+  /**
    * Executes the flow handler against incoming input messages sequentially.
    *
    * The handler receives the turn's {@link AgentInput} and a {@link TurnContext}
@@ -547,6 +577,10 @@ export class SessionRunner<State = unknown> {
       // re-bases clients which may not share the server's baseline.
       this.firstCustomPatchInTurn = true;
 
+      // Start a fresh per-turn chunk buffer; it is stamped onto the turn span
+      // at turn end so the trace captures everything streamed during the turn.
+      this.currentTurnChunks = [];
+
       const parentSnapshotId = this.lastSnapshot?.snapshotId;
 
       // Reserve the turn's snapshotId up front (when a store is configured) so
@@ -569,30 +603,37 @@ export class SessionRunner<State = unknown> {
 
       try {
         await run(`runTurn-${this.turnIndex + 1}`, input, async () => {
-          const turnResult = await fn(input, turnContext);
-          const finishReason = turnResult?.finishReason;
-          this.lastTurnFinishReason = finishReason;
-          this.lastTurnError = undefined;
+          try {
+            const turnResult = await fn(input, turnContext);
+            const finishReason = turnResult?.finishReason;
+            this.lastTurnFinishReason = finishReason;
+            this.lastTurnError = undefined;
 
-          const snapshotId = await this.maybeSnapshot(
-            'turnEnd',
-            'completed',
-            undefined,
-            turnSnapshotId,
-            finishReason
-          );
+            const snapshotId = await this.maybeSnapshot(
+              'turnEnd',
+              'completed',
+              undefined,
+              turnSnapshotId,
+              finishReason
+            );
 
-          // Capture the state this successful turn produced. This becomes the
-          // last-good state to fall back to if a later turn fails, and its
-          // snapshotId is the last-good snapshot a failed turn resumes from.
-          this.lastGoodState = this.session.getState();
-          this.lastGoodSnapshotId = snapshotId;
+            // Capture the state this successful turn produced. This becomes the
+            // last-good state to fall back to if a later turn fails, and its
+            // snapshotId is the last-good snapshot a failed turn resumes from.
+            this.lastGoodState = this.session.getState();
+            this.lastGoodSnapshotId = snapshotId;
 
-          this.notifyEndTurn(snapshotId, finishReason);
+            this.notifyEndTurn(snapshotId, finishReason);
 
-          return {
-            lastSnapshot: this.lastSnapshot,
-          };
+            return {
+              lastSnapshot: this.lastSnapshot,
+            };
+          } finally {
+            // Record everything streamed during this turn onto the turn's span
+            // (serialized as a JSON array) before the span ends. Runs on both
+            // success and failure so failed turns still capture their stream.
+            this.recordTurnChunks();
+          }
         });
         this.turnIndex++;
       } catch (e: any) {
@@ -1206,6 +1247,10 @@ export function defineCustomAgent<State = unknown>(
             toSend = config.clientTransform.chunk(chunk);
           }
           if (!toSend) return;
+          // Buffer the (post-transform) chunk so it can be recorded on the
+          // turn's trace span at turn end. This captures exactly what the
+          // client saw, including `turnEnd`.
+          runner?.currentTurnChunks?.push(toSend);
           arg.sendChunk(toSend);
         } catch {
           // Stream was closed (or the transform threw); absorb the exception.
