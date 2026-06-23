@@ -612,51 +612,87 @@ func (a *Agent[State]) ConnectJSON(ctx context.Context, opts *api.BidiJSONOption
 	return a.action.ConnectJSON(ctx, opts)
 }
 
-// DefineAgent defines a prompt-backed agent and registers it. Each turn
-// renders the agent's prompt, appends conversation history, calls the
-// model with streaming, and updates session state.
+// DefineAgent defines an agent backed by an inline prompt and registers it. The
+// prompt is defined from prompt's [ai.PromptOption] values and registered under
+// the agent's name; each turn renders it, appends conversation history, calls
+// the model with streaming, and updates session state.
 //
-// source selects how the prompt is backed:
+// The prompt is an [InlinePrompt], a list of [ai.PromptOption] values:
 //
-//   - [InlinePrompt] defines the prompt inline from a set of
-//     [ai.PromptOption] values; the prompt is registered under name.
-//   - [SameNamedPrompt] references an existing prompt registered under name
-//     (e.g. one defined via [ai.DefinePrompt] or loaded from a .prompt file).
-//   - [NamedPrompt] references any registered prompt by name with an input
-//     supplied from code, so a single prompt can back many agents.
+//	agent := DefineAgent(r, "pirate",
+//		InlinePrompt{
+//			ai.WithModelName("googleai/gemini-flash-latest"),
+//			ai.WithSystem("You are a sarcastic pirate."),
+//		},
+//		WithSessionStore(store),
+//	)
 //
-// State is inferred from the typed agent options (e.g.
-// [WithSessionStore], [WithStateTransform]); pass an explicit [State] only
-// when no typed option is provided. A typed option that disagrees with
-// the inferred State fails at compile time.
+// State is inferred from the typed agent options (e.g. [WithSessionStore],
+// [WithStateTransform]); pass an explicit [State] only when no typed option is
+// provided. A typed option that disagrees with the inferred State fails at
+// compile time.
 //
-// For full control over the per-turn loop, use [DefineCustomAgent].
+// To back an agent with a prompt already in the registry (e.g. one from a
+// .prompt file), use [DefinePromptAgent]. For full control over the per-turn
+// loop, use [DefineCustomAgent].
 func DefineAgent[State any](
 	r api.Registry,
 	name string,
-	source AgentSource,
+	prompt InlinePrompt,
 	opts ...AgentOption[State],
 ) *Agent[State] {
-	switch s := source.(type) {
-	case inlineSource:
-		prompt := ai.DefinePrompt(r, name, s.opts...)
-		return DefineCustomAgent(r, name, agentLoop[State](r, prompt, nil), opts...)
-	case existingSource:
-		promptName := s.name
-		if promptName == "" {
-			promptName = name // SameNamedPrompt: resolve by the agent's own name
+	p := ai.DefinePrompt(r, name, prompt...)
+	return DefineCustomAgent(r, name, agentLoop[State](r, p, nil), opts...)
+}
+
+// DefinePromptAgent defines a prompt-backed agent and registers it, sourcing
+// its prompt from the registry by name. Each turn renders the prompt, appends
+// conversation history, calls the model with streaming, and updates session
+// state, exactly like [DefineAgent].
+//
+// By default the agent uses the prompt registered under its own name (e.g. one
+// defined via [ai.DefinePrompt] or loaded from a .prompt file), so no source
+// option is required. Pass [WithNamedPrompt] to reference a differently named
+// prompt and supply its render input from code, so a single prompt can back
+// many agents.
+//
+// It is the registry-backed counterpart of [DefineAgent]: where [DefineAgent]
+// defines the prompt inline, DefinePromptAgent points at a prompt already in
+// the registry. The prompt source is a typed option ([WithNamedPrompt]) rather
+// than a positional argument, so it composes with the other agent options
+// ([WithSessionStore], [WithStateTransform], [WithDescription]) in a single
+// variadic. For full control over the per-turn loop, use [DefineCustomAgent].
+//
+// State is inferred from the typed agent options; pass an explicit [State] only
+// when no typed option provides it (e.g. only [WithNamedPrompt] and
+// [WithDescription], whose State cannot be deduced from their arguments).
+func DefinePromptAgent[State any](
+	r api.Registry,
+	name string,
+	opts ...PromptAgentOption[State],
+) *Agent[State] {
+	cfg := &promptAgentOptions[State]{}
+	for _, opt := range opts {
+		if err := opt.applyPromptAgent(cfg); err != nil {
+			panic(fmt.Errorf("DefinePromptAgent %q: %w", name, err))
 		}
-		prompt := ai.LookupPrompt(r, promptName)
-		if prompt == nil {
-			panic(fmt.Sprintf("DefineAgent %q: prompt %q not found", name, promptName))
-		}
-		if _, err := prompt.Render(context.Background(), s.input); err != nil {
-			panic(fmt.Sprintf("DefineAgent %q: prompt input does not satisfy prompt schema: %v", name, err))
-		}
-		return DefineCustomAgent(r, name, agentLoop[State](r, prompt, s.input), opts...)
-	default:
-		panic(fmt.Sprintf("DefineAgent %q: unknown source type %T", name, source))
 	}
+
+	promptName := cfg.promptName
+	if promptName == "" {
+		promptName = name // default: the prompt registered under the agent's own name
+	}
+	prompt := ai.LookupPrompt(r, promptName)
+	if prompt == nil {
+		panic(fmt.Sprintf("DefinePromptAgent %q: prompt %q not found", name, promptName))
+	}
+	if _, err := prompt.Render(context.Background(), cfg.promptInput); err != nil {
+		panic(fmt.Sprintf("DefinePromptAgent %q: prompt input does not satisfy prompt schema: %v", name, err))
+	}
+
+	a := newCustomAgent(name, agentLoop[State](r, prompt, cfg.promptInput), &cfg.agentOptions)
+	a.Register(r)
+	return a
 }
 
 // NewCustomAgent creates an agent with full control over the conversation
@@ -686,7 +722,18 @@ func NewCustomAgent[State any](
 			panic(fmt.Errorf("NewCustomAgent %q: %w", name, err))
 		}
 	}
+	return newCustomAgent(name, fn, cfg)
+}
 
+// newCustomAgent builds (without registering) an agent from already-applied
+// base options. It is the shared core of [NewCustomAgent] and the prompt-backed
+// [DefinePromptAgent], which resolve their prompt source into an agentLoop fn
+// and reuse the same base option set.
+func newCustomAgent[State any](
+	name string,
+	fn AgentFunc[State],
+	cfg *agentOptions[State],
+) *Agent[State] {
 	// Typed under ActionTypeAgent so agents surface as their own action
 	// kind rather than as flows (genkit.ListAgents vs ListFlows). Built on
 	// NewBidiAction so the agent capability metadata is set at construction

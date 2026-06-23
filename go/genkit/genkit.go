@@ -406,8 +406,8 @@ func NewStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In
 	return core.NewStreamingFlow(name, fn)
 }
 
-// DefineAgent defines a prompt-backed agent and registers it as an
-// action on the registry. Returns an [aix.Agent].
+// DefineAgent defines an agent backed by an inline prompt and registers it as
+// an action on the registry. Returns an [aix.Agent].
 //
 // Experimental: This API is under active development and may change in any
 // minor version release.
@@ -418,15 +418,9 @@ func NewStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In
 // handles session state, conversation history, and optional snapshot
 // persistence automatically.
 //
-// source selects how the prompt is backed:
-//
-//   - [aix.InlinePrompt] defines the prompt inline from a set of
-//     [ai.PromptOption] values; the prompt is registered under name.
-//   - [aix.SameNamedPrompt] references an existing prompt registered under
-//     name (e.g. one defined via [DefinePrompt] or loaded from a .prompt
-//     file).
-//   - [aix.NamedPrompt] references any registered prompt by name with an
-//     input supplied from code, so a single prompt can back many agents.
+// The prompt is defined inline via [aix.InlinePrompt] and registered under the
+// agent's name. To back the agent with a prompt already in the registry (e.g.
+// one from a .prompt file), use [DefinePromptAgent] instead.
 //
 // The State type parameter is inferred from the typed agent options
 // (e.g. [aix.WithSessionStore], [aix.WithStateTransform]); pass an explicit
@@ -445,33 +439,69 @@ func NewStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In
 //   - [aix.WithSessionStore]: Enable snapshot persistence
 //   - [aix.WithStateTransform]: Rewrite session state on its way out to the client
 //
-// Example (inline prompt):
+// Example:
 //
 //	chatAgent := genkit.DefineAgent(g, "chat",
-//		aix.InlinePrompt(
+//		aix.InlinePrompt{
 //			ai.WithModelName("googleai/gemini-flash-latest"),
 //			ai.WithSystem("You are a helpful assistant."),
-//		),
-//		aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
-//	)
-//
-// Example (a shared .prompt file, parameterized per agent):
-//
-//	type ChatInput struct {
-//		Personality string `json:"personality"`
-//	}
-//
-//	pirate := genkit.DefineAgent(g, "pirate",
-//		aix.NamedPrompt("chat", ChatInput{Personality: "a sarcastic pirate"}),
+//		},
 //		aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
 //	)
 func DefineAgent[State any](
 	g *Genkit,
 	name string,
-	source aix.AgentSource,
+	prompt aix.InlinePrompt,
 	opts ...aix.AgentOption[State],
 ) *aix.Agent[State] {
-	return aix.DefineAgent(g.reg, name, source, opts...)
+	return aix.DefineAgent(g.reg, name, prompt, opts...)
+}
+
+// DefinePromptAgent defines a prompt-backed agent sourced from the registry by
+// name and registers it as an action. Returns an [aix.Agent].
+//
+// Experimental: This API is under active development and may change in any
+// minor version release.
+//
+// By default the agent uses the prompt registered under its own name (e.g. one
+// defined via [DefinePrompt] or loaded from a .prompt file), so no source
+// option is required. Pass [aix.WithNamedPrompt] to reference a differently
+// named prompt and supply its render input from code, so a single prompt can
+// back many agents.
+//
+// It is the registry-backed counterpart of [DefineAgent]: where [DefineAgent]
+// defines the prompt inline, DefinePromptAgent points at a prompt already in
+// the registry. The prompt source is a typed option ([aix.WithNamedPrompt])
+// rather than a positional argument, so it composes with the other agent
+// options in one variadic. For full control over the per-turn loop, use
+// [DefineCustomAgent].
+//
+// The State type parameter is inferred from the typed agent options; pass an
+// explicit [State] only when no typed option provides it.
+//
+// # Options
+//
+//   - [aix.WithNamedPrompt]: Source from a differently named prompt with a code-supplied input
+//   - [aix.WithSessionStore]: Enable snapshot persistence
+//   - [aix.WithStateTransform]: Rewrite session state on its way out to the client
+//
+// Example (same-named prompt loaded from ./prompts/chef.prompt):
+//
+//	chef := genkit.DefinePromptAgent(g, "chef",
+//		aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+//	)
+//
+// Example (a shared prompt, parameterized per agent):
+//
+//	pirate := genkit.DefinePromptAgent(g, "pirate",
+//		aix.WithNamedPrompt[any]("chat", ChatInput{Personality: "a sarcastic pirate"}),
+//	)
+func DefinePromptAgent[State any](
+	g *Genkit,
+	name string,
+	opts ...aix.PromptAgentOption[State],
+) *aix.Agent[State] {
+	return aix.DefinePromptAgent(g.reg, name, opts...)
 }
 
 // DefineCustomAgent defines an agent with full control over the conversation
@@ -490,9 +520,8 @@ func DefineAgent[State any](
 // via [Handler], with companion actions on [aix.Agent.GetSnapshotAction]
 // and [aix.Agent.AbortSnapshotAction].
 //
-// For agents backed by a prompt, use [DefineAgent] with [aix.InlinePrompt]
-// (inline prompt), [aix.SameNamedPrompt], or [aix.NamedPrompt] (existing
-// prompt) instead.
+// For agents backed by a prompt, use [DefineAgent] (inline prompt) or
+// [DefinePromptAgent] (a prompt already in the registry) instead.
 //
 // # Options
 //

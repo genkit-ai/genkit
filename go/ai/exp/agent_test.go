@@ -1522,7 +1522,7 @@ type personaInput struct {
 	Personality string `json:"personality"`
 }
 
-// TestPromptAgent_NamedPromptSharedAcrossAgents verifies that NamedPrompt
+// TestPromptAgent_NamedPromptSharedAcrossAgents verifies that WithNamedPrompt
 // backs several agents with a single prompt, rendering each with its own
 // input, and that an agent's name is independent of the prompt it references.
 func TestPromptAgent_NamedPromptSharedAcrossAgents(t *testing.T) {
@@ -1555,10 +1555,10 @@ func TestPromptAgent_NamedPromptSharedAcrossAgents(t *testing.T) {
 	)
 
 	// Two agents, different names, the one prompt, different inputs.
-	pirate := DefineAgent[testState](reg, "pirate",
-		NamedPrompt("sharedChat", personaInput{Personality: "a pirate"}))
-	chef := DefineAgent[testState](reg, "chef",
-		NamedPrompt("sharedChat", personaInput{Personality: "a chef"}))
+	pirate := DefinePromptAgent[testState](reg, "pirate",
+		WithNamedPrompt[testState]("sharedChat", personaInput{Personality: "a pirate"}))
+	chef := DefinePromptAgent[testState](reg, "chef",
+		WithNamedPrompt[testState]("sharedChat", personaInput{Personality: "a chef"}))
 
 	// The agents register under their own names, not the prompt's.
 	if pirate.Name() != "pirate" {
@@ -1585,6 +1585,101 @@ func TestPromptAgent_NamedPromptSharedAcrossAgents(t *testing.T) {
 	}
 }
 
+// TestDefinePromptAgent_DefaultAndNamed exercises the option-configured prompt
+// agent: the default same-named lookup (no source option), the WithNamedPrompt
+// override sourcing a shared prompt with a code-supplied input, and that the
+// shared agent options (WithDescription) compose alongside the prompt source.
+func TestDefinePromptAgent_DefaultAndNamed(t *testing.T) {
+	ctx := context.Background()
+	reg := registry.New()
+	ai.ConfigureFormats(reg)
+
+	var mu sync.Mutex
+	var renderedSystems []string
+	ai.DefineModel(reg, "test/capture", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			mu.Lock()
+			for _, m := range req.Messages {
+				if m.Role == ai.RoleSystem {
+					renderedSystems = append(renderedSystems, m.Text())
+				}
+			}
+			mu.Unlock()
+			return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("ok")}, nil
+		},
+	)
+	ai.DefineGenerateAction(ctx, reg)
+
+	// A same-named prompt for the default lookup, and a shared parameterized
+	// prompt for the WithNamedPrompt override.
+	ai.DefinePrompt(reg, "chef",
+		ai.WithModelName("test/capture"),
+		ai.WithSystem("You are a chef."),
+	)
+	ai.DefinePrompt(reg, "sharedChat",
+		ai.WithModelName("test/capture"),
+		ai.WithInputType(personaInput{}),
+		ai.WithSystem("You are {{personality}}."),
+	)
+
+	// Default: no source option resolves the prompt named after the agent.
+	chef := DefinePromptAgent[testState](reg, "chef",
+		WithDescription[testState]("a chef agent"))
+	if chef.Name() != "chef" {
+		t.Fatalf("chef.Name() = %q, want %q", chef.Name(), "chef")
+	}
+	if got := chef.Desc().Description; got != "a chef agent" {
+		t.Errorf("chef description = %q, want %q", got, "a chef agent")
+	}
+
+	// Override: source the shared prompt with a code-supplied input. The agent
+	// name ("pirate") is independent of the referenced prompt ("sharedChat").
+	pirate := DefinePromptAgent[testState](reg, "pirate",
+		WithNamedPrompt[testState]("sharedChat", personaInput{Personality: "a pirate"}))
+
+	if _, err := chef.RunText(ctx, "hi"); err != nil {
+		t.Fatalf("chef RunText: %v", err)
+	}
+	if _, err := pirate.RunText(ctx, "hi"); err != nil {
+		t.Fatalf("pirate RunText: %v", err)
+	}
+
+	joined := strings.Join(renderedSystems, " | ")
+	if !strings.Contains(joined, "You are a chef.") {
+		t.Errorf("default same-named prompt not rendered; systems = %q", joined)
+	}
+	if !strings.Contains(joined, "You are a pirate.") {
+		t.Errorf("WithNamedPrompt input not rendered; systems = %q", joined)
+	}
+}
+
+// TestDefinePromptAgent_Panics covers the definition-time failures: a prompt
+// that is not registered, and setting the prompt source more than once.
+func TestDefinePromptAgent_Panics(t *testing.T) {
+	reg := setupPromptTestRegistry(t)
+	ai.DefinePrompt(reg, "present", ai.WithModelName("test/echo"))
+
+	t.Run("missing prompt", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected panic for missing prompt")
+			}
+		}()
+		DefinePromptAgent[testState](reg, "absent")
+	})
+
+	t.Run("duplicate prompt source", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected panic for duplicate WithNamedPrompt")
+			}
+		}()
+		DefinePromptAgent[testState](reg, "present",
+			WithNamedPrompt[testState]("present", nil),
+			WithNamedPrompt[testState]("present", nil))
+	})
+}
+
 func TestPromptAgent_Basic(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
@@ -1594,7 +1689,7 @@ func TestPromptAgent_Basic(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefineAgent[testState](reg, "testPrompt", SameNamedPrompt())
+	af := DefinePromptAgent[testState](reg, "testPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -1669,7 +1764,7 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 		ai.WithSystem("system prompt"),
 	)
 
-	af := DefineAgent[testState](reg, "historyPrompt", SameNamedPrompt())
+	af := DefinePromptAgent[testState](reg, "historyPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -1743,7 +1838,7 @@ func TestPromptAgent_SnapshotResumePreservesHistory(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefineAgent[testState](reg, "snapPrompt", SameNamedPrompt(),
+	af := DefinePromptAgent[testState](reg, "snapPrompt",
 		WithSessionStore(store),
 	)
 
@@ -1868,7 +1963,7 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 		ai.WithTools(ai.ToolName("greet"), ai.ToolName("farewell")),
 	)
 
-	af := DefineAgent[testState](reg, "toolPrompt", SameNamedPrompt())
+	af := DefinePromptAgent[testState](reg, "toolPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -2073,7 +2168,7 @@ func TestPromptAgent_RunText(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefineAgent[testState](reg, "runTextPrompt", SameNamedPrompt())
+	af := DefinePromptAgent[testState](reg, "runTextPrompt")
 
 	response, err := af.RunText(ctx, "hello")
 	if err != nil {
@@ -2098,7 +2193,7 @@ func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
 	ai.DefinePrompt(reg, "rejectPrompt", ai.WithModelName("test/echo"))
-	af := DefineAgent[testState](reg, "rejectPrompt", SameNamedPrompt())
+	af := DefinePromptAgent[testState](reg, "rejectPrompt")
 
 	tests := []struct {
 		name    string
@@ -2257,7 +2352,7 @@ func TestPromptAgent_RejectsResumeForUnrequestedTool(t *testing.T) {
 	ai.DefineGenerateAction(ctx, reg)
 	ai.DefinePrompt(reg, "plainPrompt", ai.WithModelName("test/plain"))
 
-	af := DefineAgent[testState](reg, "plainPrompt", SameNamedPrompt())
+	af := DefinePromptAgent[testState](reg, "plainPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -5111,7 +5206,7 @@ func TestPromptAgent_ForwardsFinishReason(t *testing.T) {
 	ai.DefineGenerateAction(ctx, reg)
 	ai.DefinePrompt(reg, "lengthPrompt", ai.WithModelName("test/length"))
 
-	af := DefineAgent[testState](reg, "lengthPrompt", SameNamedPrompt())
+	af := DefinePromptAgent[testState](reg, "lengthPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -5514,7 +5609,7 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 		ai.WithTools(interruptTool),
 	)
 
-	af := DefineAgent[testState](reg, "interruptPrompt", SameNamedPrompt())
+	af := DefinePromptAgent[testState](reg, "interruptPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -6482,10 +6577,10 @@ func TestPromptAgent_InlineMessages_DoesNotMutateSharedMetadata(t *testing.T) {
 	shared := ai.NewModelTextMessage("inline context message")
 	shared.Metadata = map[string]any{"origin": "config"}
 
-	af := DefineAgent[testState](reg, "inlineMetaPrompt", InlinePrompt(
+	af := DefineAgent[testState](reg, "inlineMetaPrompt", InlinePrompt{
 		ai.WithModelName("test/echo"),
 		ai.WithMessages(shared),
-	))
+	})
 
 	response, err := af.RunText(ctx, "hello")
 	if err != nil {
@@ -6515,10 +6610,10 @@ func TestPromptAgent_InlineMessages_ConcurrentInvocations(t *testing.T) {
 	shared := ai.NewModelTextMessage("inline context message")
 	shared.Metadata = map[string]any{"origin": "config"}
 
-	af := DefineAgent[testState](reg, "inlineConcurrentPrompt", InlinePrompt(
+	af := DefineAgent[testState](reg, "inlineConcurrentPrompt", InlinePrompt{
 		ai.WithModelName("test/echo"),
 		ai.WithMessages(shared),
-	))
+	})
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 8)

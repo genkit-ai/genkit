@@ -758,13 +758,13 @@ func TestHandlerAgent(t *testing.T) {
 			}, nil
 		})
 
-	DefineAgent[any](g, "agentClient", aix.InlinePrompt(ai.WithModelName("test/echo")))
+	DefineAgent[any](g, "agentClient", aix.InlinePrompt{ai.WithModelName("test/echo")})
 
 	store, err := localstore.NewFileSessionStore[any](t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	DefineAgent(g, "agentServer", aix.InlinePrompt(ai.WithModelName("test/echo")),
+	DefineAgent(g, "agentServer", aix.InlinePrompt{ai.WithModelName("test/echo")},
 		aix.WithSessionStore(store),
 	)
 
@@ -969,7 +969,7 @@ func TestHandlerAgentRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	agent := DefineAgent(g, "agentRef", aix.InlinePrompt(ai.WithModelName("test/echo")),
+	agent := DefineAgent(g, "agentRef", aix.InlinePrompt{ai.WithModelName("test/echo")},
 		aix.WithSessionStore(store),
 	)
 
