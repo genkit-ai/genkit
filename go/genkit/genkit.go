@@ -420,11 +420,13 @@ func NewStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In
 //
 // source selects how the prompt is backed:
 //
-//   - [aix.FromInline] defines the prompt inline from a set of
+//   - [aix.InlinePrompt] defines the prompt inline from a set of
 //     [ai.PromptOption] values; the prompt is registered under name.
-//   - [aix.FromPrompt] references an existing prompt registered with
-//     the registry under name (e.g. one defined via [DefinePrompt] or
-//     loaded from a .prompt file).
+//   - [aix.SameNamedPrompt] references an existing prompt registered under
+//     name (e.g. one defined via [DefinePrompt] or loaded from a .prompt
+//     file).
+//   - [aix.NamedPrompt] references any registered prompt by name with an
+//     input supplied from code, so a single prompt can back many agents.
 //
 // The State type parameter is inferred from the typed agent options
 // (e.g. [aix.WithSessionStore], [aix.WithStateTransform]); pass an explicit
@@ -446,21 +448,21 @@ func NewStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In
 // Example (inline prompt):
 //
 //	chatAgent := genkit.DefineAgent(g, "chat",
-//		aix.FromInline(
-//			ai.WithModelName("googleai/gemini-3-flash-preview"),
+//		aix.InlinePrompt(
+//			ai.WithModelName("googleai/gemini-flash-latest"),
 //			ai.WithSystem("You are a helpful assistant."),
 //		),
 //		aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
 //	)
 //
-// Example (existing prompt):
+// Example (a shared .prompt file, parameterized per agent):
 //
 //	type ChatInput struct {
 //		Personality string `json:"personality"`
 //	}
 //
-//	chatAgent := genkit.DefineAgent(g, "chat",
-//		aix.FromPrompt(ChatInput{Personality: "a sarcastic pirate"}),
+//	pirate := genkit.DefineAgent(g, "pirate",
+//		aix.NamedPrompt("chat", ChatInput{Personality: "a sarcastic pirate"}),
 //		aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
 //	)
 func DefineAgent[State any](
@@ -488,8 +490,9 @@ func DefineAgent[State any](
 // via [Handler], with companion actions on [aix.Agent.GetSnapshotAction]
 // and [aix.Agent.AbortSnapshotAction].
 //
-// For agents backed by a prompt, use [DefineAgent] with [aix.FromInline]
-// (inline prompt) or [aix.FromPrompt] (existing prompt) instead.
+// For agents backed by a prompt, use [DefineAgent] with [aix.InlinePrompt]
+// (inline prompt), [aix.SameNamedPrompt], or [aix.NamedPrompt] (existing
+// prompt) instead.
 //
 // # Options
 //

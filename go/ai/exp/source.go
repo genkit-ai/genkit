@@ -19,19 +19,21 @@ package exp
 import "github.com/firebase/genkit/go/ai"
 
 // AgentSource selects the prompt backing a prompt-based agent. Pass an
-// AgentSource as the third argument to [DefineAgent]. There are two
+// AgentSource as the third argument to [DefineAgent]. There are three
 // forms:
 //
-//   - [FromInline] defines the prompt inline from a set of
+//   - [InlinePrompt] defines the prompt inline from a set of
 //     [ai.PromptOption] values; the prompt is registered with the
 //     registry under the agent's name.
-//   - [FromPrompt] references an existing prompt registered with the
-//     registry under the same name as the agent (e.g. one defined via
-//     [ai.DefinePrompt] or loaded from a .prompt file).
+//   - [SameNamedPrompt] references the prompt already registered under the
+//     agent's own name (e.g. one defined via [ai.DefinePrompt] or loaded
+//     from a .prompt file).
+//   - [NamedPrompt] references any registered prompt by name and renders it
+//     with an input supplied from code, so a single prompt can back many
+//     agents with different inputs.
 //
-// The agent and its backing prompt always share a name; if you need
-// the lookup name to differ from the agent name, define a custom agent
-// via [DefineCustomAgent] instead.
+// For full control over the per-turn loop, define a custom agent via
+// [DefineCustomAgent] instead.
 type AgentSource interface {
 	isAgentSource()
 }
@@ -42,30 +44,37 @@ type inlineSource struct {
 
 func (inlineSource) isAgentSource() {}
 
-// FromInline defines the agent's prompt inline from the given options.
-// The prompt is registered with the registry under the agent's name.
-func FromInline(opts ...ai.PromptOption) AgentSource {
+// InlinePrompt defines the agent's prompt inline from the given options.
+// The prompt is registered with the registry under the agent's name. To
+// give the template a default render input, include [ai.WithInputType]
+// among the options.
+func InlinePrompt(opts ...ai.PromptOption) AgentSource {
 	return inlineSource{opts: opts}
 }
 
-type promptSource struct {
-	defaultInput any
+type existingSource struct {
+	name  string // "" => resolve by the agent's own name
+	input any
 }
 
-func (promptSource) isAgentSource() {}
+func (existingSource) isAgentSource() {}
 
-// FromPrompt references an existing prompt registered with the
-// registry under the same name as the agent (e.g. one defined via
-// [ai.DefinePrompt] or loaded from a .prompt file).
+// SameNamedPrompt references the prompt registered under the agent's own
+// name (e.g. one defined via [ai.DefinePrompt] or loaded from a .prompt
+// file). The prompt renders with its own default input each turn. It is
+// shorthand for NamedPrompt(<agent name>, nil).
+func SameNamedPrompt() AgentSource {
+	return existingSource{}
+}
+
+// NamedPrompt references the prompt registered under name, rendered with
+// input on every turn (pass nil for the prompt's own default input). name
+// need not match the agent's name, so a single prompt can back many agents
+// with different inputs.
 //
-// defaultInput, if provided, is the input passed to the prompt's
-// Render on every turn. Call FromPrompt() with no arguments when the
-// prompt takes no input. Only the first argument is used; any
-// additional arguments are ignored.
-func FromPrompt(defaultInput ...any) AgentSource {
-	var input any
-	if len(defaultInput) > 0 {
-		input = defaultInput[0]
-	}
-	return promptSource{defaultInput: input}
+// input is rendered through the prompt once at definition time as a smoke
+// check, so an input that fails the prompt's schema panics there rather
+// than on the first invocation.
+func NamedPrompt(name string, input any) AgentSource {
+	return existingSource{name: name, input: input}
 }

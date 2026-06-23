@@ -15,10 +15,10 @@
 // This sample demonstrates Genkit's agent APIs by defining three agents in
 // three different styles and exposing all of them through a single CLI:
 //
-//   - "pirate" uses DefineAgent + aix.FromInline. The prompt is declared
+//   - "pirate" uses DefineAgent + aix.InlinePrompt. The prompt is declared
 //     inline next to the agent.
-//   - "chef" uses DefineAgent + aix.FromPrompt. The prompt is loaded from
-//     ./prompts/chef.prompt by the agent's name.
+//   - "chef" uses DefineAgent + aix.SameNamedPrompt. The prompt is loaded
+//     from ./prompts/chef.prompt by the agent's name.
 //   - "coder" uses DefineCustomAgent. The per-turn loop (model selection,
 //     history management, streaming) is wired by hand.
 //
@@ -97,7 +97,7 @@ func main() {
 	}
 }
 
-// defineInlineAgent demonstrates DefineAgent with aix.FromInline. The
+// defineInlineAgent demonstrates DefineAgent with aix.InlinePrompt. The
 // prompt is declared right next to the agent definition; the registered
 // prompt and the agent share a name. Each turn the framework renders the
 // prompt, appends the conversation history, calls the model, and updates
@@ -106,7 +106,7 @@ func main() {
 func defineInlineAgent(g *genkit.Genkit) *aix.Agent[any] {
 	const name = "pirate"
 	return genkit.DefineAgent(g, name,
-		aix.FromInline(
+		aix.InlinePrompt(
 			ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 				ThinkingConfig: &genai.ThinkingConfig{
 					ThinkingBudget: genai.Ptr[int32](0),
@@ -119,19 +119,21 @@ func defineInlineAgent(g *genkit.Genkit) *aix.Agent[any] {
 	)
 }
 
-// definePromptAgent demonstrates DefineAgent with aix.FromPrompt. The
+// definePromptAgent demonstrates DefineAgent with aix.SameNamedPrompt. The
 // prompt is loaded from ./prompts/<agent-name>.prompt by genkit's prompt
 // registry. Defining the prompt in a file lets you tune model, config,
-// schema, and template independently of the Go code — useful when prompt
-// authors are not the same people writing the agent wiring.
+// schema, template, and default input independently of the Go code, which
+// is useful when prompt authors are not the people writing the agent wiring.
 //
-// FromPrompt's argument is the default input passed to the prompt's
-// Render on every turn; the inline-prompt variant has no per-turn input
-// of its own.
+// SameNamedPrompt references the prompt registered under the agent's own
+// name and renders it with the prompt's own default input each turn (here,
+// the personality set in chef.prompt's frontmatter). To supply an input
+// from code, or to back several agents with one shared prompt, use
+// aix.NamedPrompt(name, input) instead.
 func definePromptAgent(g *genkit.Genkit) *aix.Agent[any] {
 	const name = "chef"
 	return genkit.DefineAgent(g, name,
-		aix.FromPrompt(ChatPromptInput{Personality: "a Michelin-starred chef who loves explaining technique"}),
+		aix.SameNamedPrompt(),
 		aix.WithSessionStore(mustStore(name)),
 		aix.WithDescription[any]("Michelin-starred chef (prompt loaded from ./prompts/chef.prompt)"),
 	)

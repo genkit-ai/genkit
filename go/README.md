@@ -85,7 +85,7 @@ The agent API is experimental: it lives in `github.com/firebase/genkit/go/ai/exp
 
 ### Define an Agent
 
-The shortest path is a prompt-backed agent with an inline prompt and a session store. `aix.FromInline` declares the prompt right next to the agent; the store persists each turn so the conversation can resume later:
+The shortest path is a prompt-backed agent with an inline prompt and a session store. `aix.InlinePrompt` declares the prompt right next to the agent; the store persists each turn so the conversation can resume later:
 
 ```go
 import (
@@ -96,7 +96,7 @@ import (
 )
 
 chatAgent := genkit.DefineAgent(g, "chat",
-    aix.FromInline(
+    aix.InlinePrompt(
         ai.WithModelName("googleai/gemini-flash-latest"),
         ai.WithSystem("You are a sarcastic pirate. Keep responses concise."),
     ),
@@ -143,7 +143,7 @@ fmt.Println(out.Message.Text())
 
 ### Load the Prompt from a File
 
-`aix.FromPrompt` backs the agent with a prompt already in the registry, including one loaded from a `.prompt` file. Prompt authors can tune the model, config, and template without touching the Go wiring. The agent and its prompt share a name:
+`aix.SameNamedPrompt` backs the agent with the prompt registered under the agent's name, including one loaded from a `.prompt` file. Prompt authors can tune the model, config, template, and default input without touching the Go wiring:
 
 ```yaml
 # prompts/chat.prompt
@@ -151,6 +151,8 @@ fmt.Println(out.Message.Text())
 model: googleai/gemini-flash-latest
 input:
   schema: ChatInput
+  default:
+    personality: a Michelin-starred chef
 ---
 {{role "system"}}
 You are {{personality}}. Keep responses concise.
@@ -164,11 +166,25 @@ type ChatInput struct {
 // Register the schema so the .prompt file can reference it by name.
 genkit.DefineSchemaFor[ChatInput](g)
 
-// FromPrompt's argument is the default input rendered on every turn.
+// Agent "chat" renders ./prompts/chat.prompt every turn.
 chatAgent := genkit.DefineAgent(g, "chat",
-    aix.FromPrompt(ChatInput{Personality: "a Michelin-starred chef"}),
+    aix.SameNamedPrompt(),
     aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
 )
+```
+
+To back several agents with one shared prompt, reference it by name with `aix.NamedPrompt` and give each its own input. The prompt name need not match the agent name:
+
+```go
+for _, p := range []struct{ name, persona string }{
+    {"pirate", "a sarcastic pirate"},
+    {"chef", "a Michelin-starred chef"},
+} {
+    genkit.DefineAgent(g, p.name,
+        aix.NamedPrompt("chat", ChatInput{Personality: p.persona}),
+        aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+    )
+}
 ```
 
 [See full example](samples/basic-agents)

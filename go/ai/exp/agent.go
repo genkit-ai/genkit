@@ -618,11 +618,12 @@ func (a *Agent[State]) ConnectJSON(ctx context.Context, opts *api.BidiJSONOption
 //
 // source selects how the prompt is backed:
 //
-//   - [FromInline] defines the prompt inline from a set of
+//   - [InlinePrompt] defines the prompt inline from a set of
 //     [ai.PromptOption] values; the prompt is registered under name.
-//   - [FromPrompt] references an existing prompt registered with the
-//     registry under name (e.g. one defined via [ai.DefinePrompt] or
-//     loaded from a .prompt file).
+//   - [SameNamedPrompt] references an existing prompt registered under name
+//     (e.g. one defined via [ai.DefinePrompt] or loaded from a .prompt file).
+//   - [NamedPrompt] references any registered prompt by name with an input
+//     supplied from code, so a single prompt can back many agents.
 //
 // State is inferred from the typed agent options (e.g.
 // [WithSessionStore], [WithStateTransform]); pass an explicit [State] only
@@ -640,15 +641,19 @@ func DefineAgent[State any](
 	case inlineSource:
 		prompt := ai.DefinePrompt(r, name, s.opts...)
 		return DefineCustomAgent(r, name, agentLoop[State](r, prompt, nil), opts...)
-	case promptSource:
-		prompt := ai.LookupPrompt(r, name)
+	case existingSource:
+		promptName := s.name
+		if promptName == "" {
+			promptName = name // SameNamedPrompt: resolve by the agent's own name
+		}
+		prompt := ai.LookupPrompt(r, promptName)
 		if prompt == nil {
-			panic(fmt.Sprintf("DefineAgent %q: prompt %q not found", name, name))
+			panic(fmt.Sprintf("DefineAgent %q: prompt %q not found", name, promptName))
 		}
-		if _, err := prompt.Render(context.Background(), s.defaultInput); err != nil {
-			panic(fmt.Sprintf("DefineAgent %q: defaultInput does not satisfy prompt schema: %v", name, err))
+		if _, err := prompt.Render(context.Background(), s.input); err != nil {
+			panic(fmt.Sprintf("DefineAgent %q: prompt input does not satisfy prompt schema: %v", name, err))
 		}
-		return DefineCustomAgent(r, name, agentLoop[State](r, prompt, s.defaultInput), opts...)
+		return DefineCustomAgent(r, name, agentLoop[State](r, prompt, s.input), opts...)
 	default:
 		panic(fmt.Sprintf("DefineAgent %q: unknown source type %T", name, source))
 	}
@@ -2058,7 +2063,7 @@ func validateUserMessage(m *ai.Message) error {
 // interrupted call. The whole history is searched (every model message), not
 // just the last turn. On a violation it returns an INVALID_ARGUMENT error.
 //
-// The prompt-backed agent loop ([FromPrompt]) calls this automatically. A
+// The prompt-backed agent loop ([DefineAgent]) calls this automatically. A
 // custom agent ([DefineCustomAgent]) that accepts an [AgentInput.Resume] from
 // untrusted callers should call it before forwarding the payload to the model:
 //
@@ -2145,7 +2150,7 @@ func toolRefSuffix(ref string) string {
 // with streaming, and updates the session.
 //
 // defaultInput is the prompt input passed to Render on every turn. It is
-// nil for inline-defined prompts ([FromInline]), which take no per-turn
+// nil for inline-defined prompts ([InlinePrompt]), which take no per-turn
 // input.
 func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) AgentFunc[State] {
 	return func(ctx context.Context, resp Responder, sess *SessionRunner[State]) (*AgentResult, error) {

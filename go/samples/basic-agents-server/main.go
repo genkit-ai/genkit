@@ -135,7 +135,7 @@ func main() {
 		log.Fatalf("creating session store: %v", err)
 	}
 	genkit.DefineAgent(g, "chat",
-		aix.FromInline(
+		aix.InlinePrompt(
 			ai.WithModel(model),
 			ai.WithSystem("You are a helpful travel assistant. Keep responses to a couple of sentences."),
 		),
@@ -146,7 +146,7 @@ func main() {
 	// the full conversation state and the client round-trips it on the next
 	// request. This suits deployments where the server must stay stateless.
 	genkit.DefineAgent[any](g, "statelessChat",
-		aix.FromInline(
+		aix.InlinePrompt(
 			ai.WithModel(model),
 			ai.WithSystem("You are a helpful travel assistant. Keep responses to a couple of sentences."),
 		),

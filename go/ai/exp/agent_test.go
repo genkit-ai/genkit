@@ -1516,6 +1516,75 @@ func setupPromptTestRegistry(t *testing.T) *registry.Registry {
 	return reg
 }
 
+// personaInput is the input schema for the shared prompt exercised by
+// TestPromptAgent_NamedPromptSharedAcrossAgents.
+type personaInput struct {
+	Personality string `json:"personality"`
+}
+
+// TestPromptAgent_NamedPromptSharedAcrossAgents verifies that NamedPrompt
+// backs several agents with a single prompt, rendering each with its own
+// input, and that an agent's name is independent of the prompt it references.
+func TestPromptAgent_NamedPromptSharedAcrossAgents(t *testing.T) {
+	ctx := context.Background()
+	reg := registry.New()
+	ai.ConfigureFormats(reg)
+
+	var mu sync.Mutex
+	var renderedSystems []string
+	ai.DefineModel(reg, "test/capture", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			mu.Lock()
+			for _, m := range req.Messages {
+				if m.Role == ai.RoleSystem {
+					renderedSystems = append(renderedSystems, m.Text())
+				}
+			}
+			mu.Unlock()
+			return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("ok")}, nil
+		},
+	)
+	ai.DefineGenerateAction(ctx, reg)
+
+	// One shared prompt with a personality variable, registered under a name
+	// that matches no agent.
+	ai.DefinePrompt(reg, "sharedChat",
+		ai.WithModelName("test/capture"),
+		ai.WithInputType(personaInput{}),
+		ai.WithSystem("You are {{personality}}."),
+	)
+
+	// Two agents, different names, the one prompt, different inputs.
+	pirate := DefineAgent[testState](reg, "pirate",
+		NamedPrompt("sharedChat", personaInput{Personality: "a pirate"}))
+	chef := DefineAgent[testState](reg, "chef",
+		NamedPrompt("sharedChat", personaInput{Personality: "a chef"}))
+
+	// The agents register under their own names, not the prompt's.
+	if pirate.Name() != "pirate" {
+		t.Errorf("pirate.Name() = %q, want %q", pirate.Name(), "pirate")
+	}
+	if chef.Name() != "chef" {
+		t.Errorf("chef.Name() = %q, want %q", chef.Name(), "chef")
+	}
+
+	if _, err := pirate.RunText(ctx, "hi"); err != nil {
+		t.Fatalf("pirate RunText: %v", err)
+	}
+	if _, err := chef.RunText(ctx, "hi"); err != nil {
+		t.Fatalf("chef RunText: %v", err)
+	}
+
+	// Each agent rendered the shared prompt with its own personality input.
+	joined := strings.Join(renderedSystems, " | ")
+	if !strings.Contains(joined, "You are a pirate.") {
+		t.Errorf("pirate personality not rendered; system prompts = %q", joined)
+	}
+	if !strings.Contains(joined, "You are a chef.") {
+		t.Errorf("chef personality not rendered; system prompts = %q", joined)
+	}
+}
+
 func TestPromptAgent_Basic(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
@@ -1525,7 +1594,7 @@ func TestPromptAgent_Basic(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefineAgent[testState](reg, "testPrompt", FromPrompt())
+	af := DefineAgent[testState](reg, "testPrompt", SameNamedPrompt())
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -1600,7 +1669,7 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 		ai.WithSystem("system prompt"),
 	)
 
-	af := DefineAgent[testState](reg, "historyPrompt", FromPrompt())
+	af := DefineAgent[testState](reg, "historyPrompt", SameNamedPrompt())
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -1674,7 +1743,7 @@ func TestPromptAgent_SnapshotResumePreservesHistory(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefineAgent[testState](reg, "snapPrompt", FromPrompt(),
+	af := DefineAgent[testState](reg, "snapPrompt", SameNamedPrompt(),
 		WithSessionStore(store),
 	)
 
@@ -1799,7 +1868,7 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 		ai.WithTools(ai.ToolName("greet"), ai.ToolName("farewell")),
 	)
 
-	af := DefineAgent[testState](reg, "toolPrompt", FromPrompt())
+	af := DefineAgent[testState](reg, "toolPrompt", SameNamedPrompt())
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -2004,7 +2073,7 @@ func TestPromptAgent_RunText(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefineAgent[testState](reg, "runTextPrompt", FromPrompt())
+	af := DefineAgent[testState](reg, "runTextPrompt", SameNamedPrompt())
 
 	response, err := af.RunText(ctx, "hello")
 	if err != nil {
@@ -2029,7 +2098,7 @@ func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
 	ai.DefinePrompt(reg, "rejectPrompt", ai.WithModelName("test/echo"))
-	af := DefineAgent[testState](reg, "rejectPrompt", FromPrompt())
+	af := DefineAgent[testState](reg, "rejectPrompt", SameNamedPrompt())
 
 	tests := []struct {
 		name    string
@@ -2188,7 +2257,7 @@ func TestPromptAgent_RejectsResumeForUnrequestedTool(t *testing.T) {
 	ai.DefineGenerateAction(ctx, reg)
 	ai.DefinePrompt(reg, "plainPrompt", ai.WithModelName("test/plain"))
 
-	af := DefineAgent[testState](reg, "plainPrompt", FromPrompt())
+	af := DefineAgent[testState](reg, "plainPrompt", SameNamedPrompt())
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -5042,7 +5111,7 @@ func TestPromptAgent_ForwardsFinishReason(t *testing.T) {
 	ai.DefineGenerateAction(ctx, reg)
 	ai.DefinePrompt(reg, "lengthPrompt", ai.WithModelName("test/length"))
 
-	af := DefineAgent[testState](reg, "lengthPrompt", FromPrompt())
+	af := DefineAgent[testState](reg, "lengthPrompt", SameNamedPrompt())
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -5445,7 +5514,7 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 		ai.WithTools(interruptTool),
 	)
 
-	af := DefineAgent[testState](reg, "interruptPrompt", FromPrompt())
+	af := DefineAgent[testState](reg, "interruptPrompt", SameNamedPrompt())
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -6413,7 +6482,7 @@ func TestPromptAgent_InlineMessages_DoesNotMutateSharedMetadata(t *testing.T) {
 	shared := ai.NewModelTextMessage("inline context message")
 	shared.Metadata = map[string]any{"origin": "config"}
 
-	af := DefineAgent[testState](reg, "inlineMetaPrompt", FromInline(
+	af := DefineAgent[testState](reg, "inlineMetaPrompt", InlinePrompt(
 		ai.WithModelName("test/echo"),
 		ai.WithMessages(shared),
 	))
@@ -6446,7 +6515,7 @@ func TestPromptAgent_InlineMessages_ConcurrentInvocations(t *testing.T) {
 	shared := ai.NewModelTextMessage("inline context message")
 	shared.Metadata = map[string]any{"origin": "config"}
 
-	af := DefineAgent[testState](reg, "inlineConcurrentPrompt", FromInline(
+	af := DefineAgent[testState](reg, "inlineConcurrentPrompt", InlinePrompt(
 		ai.WithModelName("test/echo"),
 		ai.WithMessages(shared),
 	))
