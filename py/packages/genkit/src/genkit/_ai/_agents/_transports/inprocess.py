@@ -1,12 +1,11 @@
-"""In-process agent transport: executes the agent action directly in the same process."""
+"""In-process agent transport factory: executes the agent action directly in the same process."""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable
-from typing import TypeVar
+from typing import Any, TypeVar
 
-from genkit._ai._agents._client import AgentTransport
 from genkit._ai._session import SessionStore
 from genkit._core._action import BidiAction, BidiConnection
 from genkit._core._typing import (
@@ -22,26 +21,34 @@ StateT = TypeVar('StateT')
 StreamT = TypeVar('StreamT')
 
 
-class InProcessAgentTransport(AgentTransport[StateT, StreamT]):
-    """Local, in-process agent transport that executes the agent action directly."""
+class InProcessTransport:
+    """In-process transport representing the trivial case where there is no physical transport.
 
-    def __init__(self, action: BidiAction, store_configured: bool, store: SessionStore | None = None) -> None:
-        """Initialise with a BidiAction and optional session store."""
+    This runs the agent's bidirectional action directly in the same process and interacts
+    directly with the session store that the agent writes to. The store is encapsulated
+    and not exposed as a public field.
+    """
+
+    def __init__(
+        self,
+        action: BidiAction,
+        store: SessionStore | None,
+    ) -> None:
+        """Initialise; store is captured privately and not exposed as a public field."""
         self._action = action
-        self._store = store
-        self.state_management = 'server' if store_configured else 'client'
         self._conn: BidiConnection[AgentInput, AgentStreamChunk, AgentOutput] | None = None
         self._final_output: AgentOutput | None = None
+        self._store = store
 
     async def run_turn(
         self,
-        input: AgentInput,
+        input: AgentInput,  # noqa: A002
         init: AgentInit[StateT],
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput[StateT]]]:
         """Run a single turn and return the stream and output awaitables."""
         if self._conn is None:
             self._conn = await self._action.stream_bidi(init)
-        conn = self._conn  # noqa: SIM108 (keep local var for clarity)
+        conn = self._conn
 
         await conn.send(input)
 
@@ -84,14 +91,14 @@ class InProcessAgentTransport(AgentTransport[StateT, StreamT]):
 
         return stream_generator(), output_future
 
-    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot[StateT] | None:
-        """Retrieve a session snapshot from the store."""
+    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot[Any] | None:
+        """Retrieve a session snapshot via the store captured at construction."""
         if self._store is None:
             return None
         return await self._store.get_snapshot(snapshot_id=snapshot_id)
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
-        """Abort the specified snapshot on the server."""
+        """Abort a snapshot via the store captured at construction."""
         if self._store is None or not hasattr(self._store, 'abort_snapshot'):
             return None
         return await self._store.abort_snapshot(snapshot_id)
@@ -105,3 +112,4 @@ class InProcessAgentTransport(AgentTransport[StateT, StreamT]):
             except Exception:  # noqa: BLE001
                 self._final_output = None
             self._conn = None
+

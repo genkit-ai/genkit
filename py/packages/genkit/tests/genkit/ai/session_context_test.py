@@ -18,7 +18,7 @@ import asyncio
 
 import pytest
 
-from genkit._ai._agents._base import SessionRunner, _AgentRuntime
+from genkit._ai._agents._base import SessionRunner, AgentRuntime
 from genkit._ai._session import Session, get_current_session, run_with_session
 from genkit._core._action import _SENTINEL as _BIDI_SENTINEL, ActionRunContext
 from genkit._core._registry import Registry
@@ -83,10 +83,10 @@ async def test_run_with_session_nested_bind() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_runtime_binds_session_during_handler() -> None:
-    """_AgentRuntime.run wraps the agent fn in run_with_session."""
+    """AgentRuntime.run wraps the agent fn in run_with_session."""
     out_queue: asyncio.Queue = asyncio.Queue()
     session = Session(SessionState(custom={'seen': False}))
-    rt = _AgentRuntime(
+    rt = AgentRuntime(
         name='test',
         session=session,
         parent_snapshot=None,

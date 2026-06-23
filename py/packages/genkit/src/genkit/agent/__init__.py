@@ -17,6 +17,7 @@
 """Agent types for defining and running bidirectional streaming agents."""
 
 from genkit._ai._agents._base import (
+    Agent,
     AgentFn,
     ChunkTransform,
     ClientTransform,
@@ -25,15 +26,16 @@ from genkit._ai._agents._base import (
     TurnResult,
 )
 from genkit._ai._agents._client import (
-    Agent,
+    AgentAPI,
     AgentChunk,
+    AgentResponse,
+    AgentClient,
     AgentInterrupt,
     AgentSession,
     AgentTransport,
     AgentTurn,
     DetachedTask,
 )
-from genkit._ai._agents._transports.inprocess import InProcessAgentTransport
 from genkit._ai._agents._transports._websocket import WebSocketAgentTransport
 from genkit._ai._session import (
     InMemorySessionStore,
@@ -73,14 +75,16 @@ from genkit._core._typing import (
 
 __all__ = [
     'Agent',
+    'AgentAPI',
+    'AgentClient',
     # Agent Client APIs
     'AgentSession',
     'AgentTurn',
     'AgentChunk',
     'AgentInterrupt',
+    'AgentResponse',
     'DetachedTask',
     'AgentTransport',
-    'InProcessAgentTransport',
     'WebSocketAgentTransport',
     # Agent function protocol
     'ActionRunContext',

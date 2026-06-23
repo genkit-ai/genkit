@@ -8,6 +8,7 @@ from typing import Any, Generic, Protocol, TypeVar, runtime_checkable
 
 from genkit._ai._json_patch import apply_json_patch
 from genkit._core._typing import (
+    AgentFinishReason,
     AgentInit,
     AgentInput,
     AgentOutput,
@@ -64,11 +65,10 @@ class AgentChunk(Generic[StreamT]):
 
     text: str | None = None
     reasoning: str | None = None
-    accumulated_text: str | None = None
     tool_request: ToolRequestPart | None = None
     tool_response: ToolResponsePart | None = None
     artifact: Artifact | None = None
-    status: StreamT | None = None
+    custom: StreamT | None = None  # post-patch resolved custom state; set when custom_patch is present
     raw: AgentStreamChunk | None = None
 
 
@@ -118,13 +118,66 @@ class AgentInterrupt(Generic[InputT, OutputT]):
         return self._session.resume(resume_payload)
 
 
+@dataclass
+class AgentResponse(Generic[StateT]):
+    """Completed turn result — client-side wrapper around AgentOutput with rich accessors."""
+
+    raw: AgentOutput[StateT]
+    messages: list[MessageData]
+    state: StateT | None = None
+
+    @property
+    def text(self) -> str:
+        """Full text content of the response message."""
+        if self.raw.message is None:
+            return ''
+        texts: list[str] = []
+        for part in self.raw.message.content or []:
+            p = part if isinstance(part, Part) else Part.model_validate(part)
+            if isinstance(p.root, TextPart):
+                texts.append(p.root.text)
+        return ''.join(texts)
+
+    @property
+    def finish_reason(self) -> AgentFinishReason | None:
+        """Why the turn ended."""
+        return self.raw.finish_reason
+
+    @property
+    def snapshot_id(self) -> str | None:
+        """Server snapshot id after this turn, if store-backed."""
+        return self.raw.snapshot_id
+
+    @property
+    def artifacts(self) -> list[Artifact]:
+        """Artifacts emitted during this turn."""
+        return self.raw.artifacts or []
+
+    @property
+    def message(self) -> MessageData | None:
+        """The response message (raw)."""
+        return self.raw.message
+
+    @property
+    def tool_requests(self) -> list[ToolRequestPart]:
+        """Tool requests in the response message."""
+        if self.raw.message is None:
+            return []
+        result: list[ToolRequestPart] = []
+        for part in self.raw.message.content or []:
+            p = part if isinstance(part, Part) else Part.model_validate(part)
+            if isinstance(p.root, ToolRequestPart):
+                result.append(p.root)
+        return result
+
+
 class AgentTurn(Generic[StateT, StreamT]):
     """Represents a single active in-flight turn."""
 
     def __init__(
         self,
         stream: AsyncIterable[AgentChunk[StreamT]],
-        output: Awaitable[AgentOutput[StateT]],
+        output: Awaitable[AgentResponse[StateT]],
         abort_fn: Callable[[], None] | None = None,
     ) -> None:
         self._stream = stream
@@ -137,7 +190,7 @@ class AgentTurn(Generic[StateT, StreamT]):
         return self._stream
 
     @property
-    def output(self) -> Awaitable[AgentOutput[StateT]]:
+    def output(self) -> Awaitable[AgentResponse[StateT]]:
         return self._output
 
     @property
@@ -157,8 +210,29 @@ class AgentTurn(Generic[StateT, StreamT]):
             pass
 
 
-class Agent(Generic[StateT, StreamT]):
-    """Transport-backed agent — call ``connect()`` for an ``AgentSession``."""
+@runtime_checkable
+class AgentAPI(Protocol, Generic[StateT, StreamT]):
+    """Implemented by both Agent (in-process) and AgentClient (remote)."""
+
+    def connect(self, init: AgentInit[StateT] | None = None) -> AgentSession[StateT, StreamT]:
+        """Starts a new session, or attaches to one via init."""
+        ...
+
+    async def resume(self, snapshot_id: str) -> AgentSession[StateT, StreamT]:
+        """Loads a server snapshot and returns a session with history restored."""
+        ...
+
+    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot[StateT] | None:
+        """Reads a snapshot without starting a session."""
+        ...
+
+    async def abort(self, snapshot_id: str) -> SnapshotStatus | None:
+        """Aborts a running snapshot."""
+        ...
+
+
+class AgentClient(Generic[StateT, StreamT]):
+    """Remote/transport-backed agent — wraps any AgentTransport. Implements AgentAPI."""
 
     def __init__(self, transport: AgentTransport[StateT, StreamT], info: Any = None) -> None:
         self._transport = transport
@@ -320,7 +394,13 @@ class AgentSession(Generic[StateT, StreamT]):
                         res.artifacts = list(accumulated_artifacts)
                     self._apply_output(res)
                     if not turn_output_future.done():
-                        turn_output_future.set_result(res)
+                        turn_output_future.set_result(
+                            AgentResponse(
+                                raw=res,
+                                messages=list(self.messages),
+                                state=self.state,
+                            )
+                        )
                 except BaseException as e:
                     if not turn_output_future.done():
                         turn_output_future.set_exception(e)
@@ -367,7 +447,6 @@ class AgentSession(Generic[StateT, StreamT]):
                             tool_request = _get_chunk_tool_request(chunk.model_chunk)
                             tool_response = _get_chunk_tool_response(chunk.model_chunk)
                             artifact = getattr(chunk, 'artifact', None)
-                            status = getattr(chunk, 'status', None)
 
                             c = AgentChunk(
                                 text=text,
@@ -375,7 +454,7 @@ class AgentSession(Generic[StateT, StreamT]):
                                 tool_request=tool_request,
                                 tool_response=tool_response,
                                 artifact=artifact,
-                                status=status,
+                                custom=self.state if chunk.custom_patch else None,
                                 raw=chunk,
                             )
 

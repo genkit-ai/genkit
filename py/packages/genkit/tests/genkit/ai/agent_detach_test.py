@@ -18,7 +18,7 @@ import asyncio
 
 import pytest
 
-from genkit._ai._agents._base import SessionRunner, _agent_input_has_payload, _AgentRuntime
+from genkit._ai._agents._base import SessionRunner, _agent_input_has_payload, AgentRuntime
 from genkit._ai._aio import Genkit
 from genkit._ai._generate import generate_action
 from genkit._ai._session import InMemorySessionStore, Session
@@ -60,9 +60,9 @@ async def _wait_for_snapshot_status(
     raise AssertionError(f'snapshot {snapshot_id!r} never reached status {status!r}')
 
 
-def _runtime(session: Session, store: InMemorySessionStore | None) -> tuple[_AgentRuntime, asyncio.Queue]:
+def _runtime(session: Session, store: InMemorySessionStore | None) -> tuple[AgentRuntime, asyncio.Queue]:
     out_queue: asyncio.Queue = asyncio.Queue()
-    rt = _AgentRuntime(
+    rt = AgentRuntime(
         name='detachAudit',
         session=session,
         parent_snapshot=None,
