@@ -955,6 +955,80 @@ describe('Agent', () => {
       assert.strictEqual(output.message?.role, 'model');
     });
 
+    it('should pass promptInput to the prompt template', async () => {
+      const registry = new Registry();
+      defineEchoModel(registry);
+      definePrompt(registry, {
+        name: 'personaAgentPrompt',
+        model: 'echoModel',
+        input: { schema: z.object({ persona: z.string() }) },
+        system: 'You are a {{persona}}.',
+      });
+
+      const flow = definePromptAgent<unknown, z.ZodTypeAny>(registry, {
+        promptName: 'personaAgentPrompt',
+        promptInput: { persona: 'pirate' },
+      });
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+        // drain
+      }
+
+      const output = await session.output;
+      // The echo model echoes the rendered system message, which interpolated
+      // the supplied promptInput.
+      assert.ok(
+        output.message?.content[0].text?.includes('You are a pirate.'),
+        `expected rendered prompt to include the promptInput, got: ${output.message?.content[0].text}`
+      );
+    });
+
+    it('should let agents in separate registries reuse one prompt definition with different promptInput', async () => {
+      // The same prompt definition (config) reused to build two differently
+      // customized agents. Each lives in its own registry because an agent is
+      // keyed by its promptName.
+      const promptConfig = {
+        name: 'sharedPersonaPrompt',
+        model: 'echoModel',
+        input: { schema: z.object({ persona: z.string() }) },
+        system: 'You are a {{persona}}.',
+      };
+
+      const buildAgent = (persona: string) => {
+        const registry = new Registry();
+        defineEchoModel(registry);
+        definePrompt(registry, promptConfig);
+        return definePromptAgent<unknown, z.ZodTypeAny>(registry, {
+          promptName: 'sharedPersonaPrompt',
+          promptInput: { persona },
+        });
+      };
+
+      const runAgent = async (flow: ReturnType<typeof buildAgent>) => {
+        const session = flow.streamBidi({});
+        session.send({
+          message: { role: 'user' as const, content: [{ text: 'hi' }] },
+        });
+        session.close();
+        for await (const _ of session.stream) {
+          // drain
+        }
+        return session.output;
+      };
+
+      const pirateOut = await runAgent(buildAgent('pirate'));
+      const ninjaOut = await runAgent(buildAgent('ninja'));
+
+      assert.ok(pirateOut.message?.content[0].text?.includes('pirate'));
+      assert.ok(ninjaOut.message?.content[0].text?.includes('ninja'));
+    });
+
     it('should detach asynchronously and continue execution in the background', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
       let resolvePromise: () => void = () => {};

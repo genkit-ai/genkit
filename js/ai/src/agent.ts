@@ -1583,11 +1583,25 @@ export function defineCustomAgent<State = unknown>(
 
 /**
  * Registers an agent from an existing PromptAction.
+ *
+ * The `promptInput` option supplies values for the referenced prompt's input
+ * variables, so a single prompt can be reused and customized by multiple
+ * agents. Provide the prompt's input schema as the `I` type parameter to get
+ * a type-checked `promptInput`.
  */
-export function definePromptAgent<State = unknown>(
+export function definePromptAgent<
+  State = unknown,
+  I extends z.ZodTypeAny = z.ZodTypeAny,
+>(
   registry: Registry,
   config: {
     promptName: string;
+    /**
+     * Input values for the referenced prompt's input variables. Lets a single
+     * prompt be reused/customized across multiple agents (e.g. supplying a
+     * different `role` or `tone` to a shared dotprompt template).
+     */
+    promptInput?: z.infer<I>;
     stateSchema?: z.ZodType<State>;
     store?: SessionStore<State>;
     clientTransform?: ClientTransform<State>;
@@ -1597,7 +1611,7 @@ export function definePromptAgent<State = unknown>(
 
   const fn: AgentFn<State> = async (sess, { sendChunk, abortSignal }) => {
     await sess.run(async (input) => {
-      const promptInput = {};
+      const promptInput = config.promptInput ?? {};
 
       if (!cachedPromptAction) {
         cachedPromptAction = (await registry.lookupAction(
@@ -1825,7 +1839,10 @@ export function validateResumeAgainstHistory(
  * Configuration for `defineAgent`, which combines prompt definition and agent
  * registration into a single call.
  */
-export interface AgentConfig<State = unknown> extends PromptConfig {
+export interface AgentConfig<
+  State = unknown,
+  I extends z.ZodTypeAny = z.ZodTypeAny,
+> extends PromptConfig<I> {
   /**
    * Optional Zod schema describing the shape of the custom session state.
    *
@@ -1839,6 +1856,12 @@ export interface AgentConfig<State = unknown> extends PromptConfig {
   stateSchema?: z.ZodType<State>;
   store?: SessionStore<State>;
   clientTransform?: ClientTransform<State>;
+  /**
+   * Input values for the prompt's input variables. Lets the same prompt
+   * definition power differently-customized agents (e.g. supplying a different
+   * `role` or `tone`). Type-checked against the prompt's `input.schema`.
+   */
+  promptInput?: z.infer<I>;
 }
 
 /**
@@ -1852,20 +1875,22 @@ export interface AgentConfig<State = unknown> extends PromptConfig {
  * definePromptAgent(registry, { promptName: promptConfig.name, ... });
  * ```
  */
-export function defineAgent<State = unknown>(
-  registry: Registry,
-  config: AgentConfig<State>
-): Agent<State> {
+export function defineAgent<
+  State = unknown,
+  I extends z.ZodTypeAny = z.ZodTypeAny,
+>(registry: Registry, config: AgentConfig<State, I>): Agent<State> {
   // Extract agent-specific fields from the combined config; the rest is
   // forwarded to definePrompt.
-  const { stateSchema, store, clientTransform, ...promptConfig } = config;
+  const { stateSchema, store, clientTransform, promptInput, ...promptConfig } =
+    config;
 
   // Register the prompt.
   definePrompt(registry, promptConfig);
 
   // Wire it into a prompt agent.
-  return definePromptAgent<State>(registry, {
+  return definePromptAgent<State, I>(registry, {
     promptName: promptConfig.name,
+    promptInput,
     stateSchema,
     store,
     clientTransform,
