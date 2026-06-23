@@ -96,10 +96,10 @@ import (
 )
 
 chatAgent := genkit.DefineAgent(g, "chat",
-    aix.InlinePrompt(
+    aix.InlinePrompt{
         ai.WithModelName("googleai/gemini-flash-latest"),
         ai.WithSystem("You are a sarcastic pirate. Keep responses concise."),
-    ),
+    },
     aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
 )
 
@@ -143,7 +143,7 @@ fmt.Println(out.Message.Text())
 
 ### Load the Prompt from a File
 
-`aix.SameNamedPrompt` backs the agent with the prompt registered under the agent's name, including one loaded from a `.prompt` file. Prompt authors can tune the model, config, template, and default input without touching the Go wiring:
+`genkit.DefinePromptAgent` backs the agent with a prompt from the registry instead of an inline one. By default it uses the prompt registered under the agent's own name, including one loaded from a `.prompt` file, so prompt authors can tune the model, config, template, and default input without touching the Go wiring:
 
 ```yaml
 # prompts/chat.prompt
@@ -166,22 +166,21 @@ type ChatInput struct {
 // Register the schema so the .prompt file can reference it by name.
 genkit.DefineSchemaFor[ChatInput](g)
 
-// Agent "chat" renders ./prompts/chat.prompt every turn.
-chatAgent := genkit.DefineAgent(g, "chat",
-    aix.SameNamedPrompt(),
+// Agent "chat" renders ./prompts/chat.prompt every turn (no source option needed).
+chatAgent := genkit.DefinePromptAgent(g, "chat",
     aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
 )
 ```
 
-To back several agents with one shared prompt, reference it by name with `aix.NamedPrompt` and give each its own input. The prompt name need not match the agent name:
+To back several agents with one shared prompt, point each at it with `aix.WithNamedPrompt` and give each its own input. The prompt name need not match the agent name:
 
 ```go
 for _, p := range []struct{ name, persona string }{
     {"pirate", "a sarcastic pirate"},
     {"chef", "a Michelin-starred chef"},
 } {
-    genkit.DefineAgent(g, p.name,
-        aix.NamedPrompt("chat", ChatInput{Personality: p.persona}),
+    genkit.DefinePromptAgent(g, p.name,
+        aix.WithNamedPrompt[any]("chat", ChatInput{Personality: p.persona}),
         aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
     )
 }
