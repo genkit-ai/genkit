@@ -16,10 +16,13 @@
 
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
+import { enableTelemetry } from '@genkit-ai/core/tracing';
+import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
 
 import { z } from '@genkit-ai/core';
+import { TestSpanExporter } from '../../core/tests/utils.js';
 import { AgentError } from '../src/agent-core.js';
 import {
   AgentStreamChunk,
@@ -43,6 +46,11 @@ import {
 } from './helpers.js';
 
 initNodeFeatures();
+
+const spanExporter = new TestSpanExporter();
+enableTelemetry({
+  spanProcessors: [new SimpleSpanProcessor(spanExporter)],
+});
 
 /**
  * Returns a Promise that resolves once the given snapshotId reaches targetStatus
@@ -591,6 +599,58 @@ describe('Agent', () => {
       assert.strictEqual(artChunks.length, 2);
       assert.strictEqual(artChunks[0].artifact?.parts[0].text, 'v1');
       assert.strictEqual(artChunks[1].artifact?.parts[0].text, 'v2');
+    });
+
+    it('records the turn\u2019s streamed chunks on the turn span', async () => {
+      spanExporter.exportedSpans = [];
+      const registry = new Registry();
+
+      const flow = defineCustomAgent(
+        registry,
+        { name: 'chunkTraceTest' },
+        async (sess, { sendChunk }) => {
+          await sess.run(async () => {
+            sendChunk({
+              modelChunk: { role: 'model', content: [{ text: 'hello ' }] },
+            });
+            sendChunk({
+              modelChunk: { role: 'model', content: [{ text: 'world' }] },
+            });
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'hello world' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+      }
+      await session.output;
+
+      // The per-turn span ('runTurn-1') should carry the streamed chunks,
+      // serialized as a JSON array, under the 'agent:chunks' metadata key.
+      const turnSpan = spanExporter.exportedSpans.find(
+        (s) => s.displayName === 'runTurn-1'
+      );
+      assert.ok(turnSpan, 'expected a runTurn-1 span to be exported');
+      const raw = turnSpan.attributes['genkit:metadata:agent:chunks'];
+      assert.ok(raw, 'expected agent:chunks metadata on the turn span');
+
+      const recorded = JSON.parse(raw) as AgentStreamChunk[];
+      const modelChunks = recorded.filter((c) => !!c.modelChunk);
+      assert.strictEqual(modelChunks.length, 2);
+      assert.strictEqual(modelChunks[0].modelChunk?.content[0].text, 'hello ');
+      assert.strictEqual(modelChunks[1].modelChunk?.content[0].text, 'world');
+      // The auto-emitted turnEnd chunk is captured too.
+      assert.ok(recorded.some((c) => !!c.turnEnd));
     });
   });
 
