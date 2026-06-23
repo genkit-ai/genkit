@@ -392,6 +392,100 @@ func TestFileSessionStore(t *testing.T) {
 	})
 }
 
+// recvStatus waits up to timeout for the next status on ch, failing the test on
+// a timeout or an unexpectedly closed channel.
+func recvStatus(t *testing.T, ch <-chan exp.SnapshotStatus, timeout time.Duration) exp.SnapshotStatus {
+	t.Helper()
+	select {
+	case s, ok := <-ch:
+		if !ok {
+			t.Fatal("status channel closed unexpectedly")
+		}
+		return s
+	case <-time.After(timeout):
+		t.Fatal("timeout waiting for status")
+		return ""
+	}
+}
+
+// TestFileSessionStore_CrossProcessStatusChange verifies that a status change
+// written through one store instance is observed by a subscriber on a separate
+// instance over the same directory - the cross-process case that backs aborting
+// a detached turn from a different process. A second *FileSessionStore stands in
+// for the other process.
+func TestFileSessionStore_CrossProcessStatusChange(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := NewFileSessionStore[testState](dir)
+	if err != nil {
+		t.Fatalf("NewFileSessionStore (writer): %v", err)
+	}
+	// A short poll interval keeps the test fast without changing the behavior.
+	watcher, err := NewFileSessionStore[testState](dir, WithPollInterval(5*time.Millisecond))
+	if err != nil {
+		t.Fatalf("NewFileSessionStore (watcher): %v", err)
+	}
+
+	if _, err := writer.SaveSnapshot(context.Background(), "snap-1",
+		func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+			return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusPending}, nil
+		}); err != nil {
+		t.Fatalf("seed pending: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := watcher.OnSnapshotStatusChange(ctx, "snap-1")
+
+	if got := recvStatus(t, ch, time.Second); got != exp.SnapshotStatusPending {
+		t.Fatalf("initial status = %q, want %q", got, exp.SnapshotStatusPending)
+	}
+
+	// Abort through the writer instance; the watcher must see it via polling.
+	if status := abortViaSave(t, writer, "snap-1"); status != exp.SnapshotStatusAborted {
+		t.Fatalf("abort via writer: status = %q, want %q", status, exp.SnapshotStatusAborted)
+	}
+	if got := recvStatus(t, ch, 2*time.Second); got != exp.SnapshotStatusAborted {
+		t.Fatalf("cross-process status = %q, want %q", got, exp.SnapshotStatusAborted)
+	}
+}
+
+// TestFileSessionStore_PollIntervalDisabled verifies that WithPollInterval(0)
+// turns off cross-process polling: the subscriber still gets the seed value but
+// never sees a change written through another instance.
+func TestFileSessionStore_PollIntervalDisabled(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := NewFileSessionStore[testState](dir)
+	if err != nil {
+		t.Fatalf("NewFileSessionStore (writer): %v", err)
+	}
+	watcher, err := NewFileSessionStore[testState](dir, WithPollInterval(0))
+	if err != nil {
+		t.Fatalf("NewFileSessionStore (watcher): %v", err)
+	}
+
+	if _, err := writer.SaveSnapshot(context.Background(), "snap-1",
+		func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+			return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusPending}, nil
+		}); err != nil {
+		t.Fatalf("seed pending: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := watcher.OnSnapshotStatusChange(ctx, "snap-1")
+
+	if got := recvStatus(t, ch, time.Second); got != exp.SnapshotStatusPending {
+		t.Fatalf("initial status = %q, want %q", got, exp.SnapshotStatusPending)
+	}
+
+	abortViaSave(t, writer, "snap-1")
+	select {
+	case got := <-ch:
+		t.Fatalf("with polling disabled, unexpectedly observed status %q", got)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
 // TestFileSessionStore_FinishReasonPersistsAcrossReopen verifies that a
 // snapshot's finish reason survives the disk round-trip: a second store
 // opened on the same directory (as after a process restart) reads it back.

@@ -19,12 +19,14 @@ package localstore
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // fileStoreOptions holds the optional settings for a [FileSessionStore].
 type fileStoreOptions struct {
 	maxChain *int                         // Retention window (>= 1) when set; nil means unset.
 	prefixFn func(context.Context) string // Derives the per-call subdirectory.
+	poll     *time.Duration               // Cross-process poll interval when set; nil means unset.
 }
 
 // FileStoreOption configures a [FileSessionStore] at construction.
@@ -50,6 +52,13 @@ func (o *fileStoreOptions) applyFileStore(opts *fileStoreOptions) error {
 			return errors.New("cannot set snapshot path prefix more than once (WithSnapshotPathPrefix)")
 		}
 		opts.prefixFn = o.prefixFn
+	}
+
+	if o.poll != nil {
+		if opts.poll != nil {
+			return errors.New("cannot set poll interval more than once (WithPollInterval)")
+		}
+		opts.poll = o.poll
 	}
 
 	return nil
@@ -89,4 +98,18 @@ func WithMaxPersistedChainLength(n int) FileStoreOption {
 // rejected at call time.
 func WithSnapshotPathPrefix(fn func(ctx context.Context) string) FileStoreOption {
 	return &fileStoreOptions{prefixFn: fn}
+}
+
+// WithPollInterval sets how often the store re-reads subscribed snapshot files
+// to surface status changes that other processes (or other store instances)
+// sharing the directory write through [FileSessionStore.OnSnapshotStatusChange].
+// That cross-process visibility is what lets one process observe an abort (or
+// any status change) another process commits, for example to stop a detached
+// turn it is running.
+//
+// The default is one second. A value <= 0 disables cross-process polling:
+// subscriptions then observe only changes written through this same store
+// instance.
+func WithPollInterval(d time.Duration) FileStoreOption {
+	return &fileStoreOptions{poll: &d}
 }

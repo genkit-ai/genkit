@@ -47,11 +47,14 @@ import (
 // caller does not have. That is why snapshots are grouped by prefix and kept
 // flat within it rather than nested under a per-session directory.
 //
-// The store is safe for concurrent use within a single process, but does NOT
-// coordinate with other processes sharing the directory: the last successful
-// rename wins, and a reader may briefly observe a snapshot another process is
-// still writing. [FileSessionStore.OnSnapshotStatusChange] likewise reflects
-// only status changes made through this instance.
+// The store is safe for concurrent use, and [FileSessionStore.OnSnapshotStatusChange]
+// surfaces status changes written by other processes (or other store instances)
+// sharing the directory by polling the snapshot files on an interval (see
+// [WithPollInterval]); that cross-process visibility is what lets one process
+// abort a detached turn another process is running. The store still does not
+// provide cross-process transactions: the last successful rename wins. Each
+// write is atomic (temp file + rename), so a concurrent reader sees either the
+// old file or the new one, never a torn write.
 type FileSessionStore[State any] struct {
 	// mu serializes the read-modify-write paths and the subscriber bookkeeping.
 	// File I/O happens under the lock; this matches the simplicity of
@@ -65,8 +68,35 @@ type FileSessionStore[State any] struct {
 	// prefixFn, when set, derives the per-call subdirectory from context; see
 	// [WithSnapshotPathPrefix].
 	prefixFn func(context.Context) string
-	subs     map[string][]chan exp.SnapshotStatus
+	// poll is the interval at which the background poller re-reads subscribed
+	// snapshot files to detect cross-process status changes; <= 0 disables it.
+	poll time.Duration
+	subs map[string]*snapshotSubs
+	// pollCancel stops the background poller. It is non-nil exactly while the
+	// poller runs: while at least one subscription is active and poll > 0.
+	pollCancel context.CancelFunc
 }
+
+// snapshotSubs holds the live subscribers to one snapshot plus the state the
+// poller needs to surface its status changes.
+type snapshotSubs struct {
+	chans []chan exp.SnapshotStatus
+	// path is the file the poller re-reads, captured at subscription time
+	// because the snapshot's prefix is derived from the subscriber's context
+	// and is not otherwise known on a by-poll re-read.
+	path string
+	// last is the status most recently delivered to chans (seeded at the first
+	// subscription). It is the single dedup gate shared by the in-process write
+	// path and the poller, so a change is delivered once regardless of which
+	// observes it first.
+	last exp.SnapshotStatus
+}
+
+// defaultPollInterval is how often the poller re-reads subscribed snapshot
+// files when no interval is configured. It sits well below the agent heartbeat
+// interval so an operator-driven abort propagates promptly while the idle I/O
+// cost stays negligible.
+const defaultPollInterval = time.Second * 2
 
 // NewFileSessionStore creates a file-based snapshot store rooted at dir.
 // The directory is created (mode 0o700) if it does not already exist.
@@ -90,11 +120,16 @@ func NewFileSessionStore[State any](dir string, opts ...FileStoreOption) (*FileS
 	if resolved.maxChain != nil {
 		maxChain = *resolved.maxChain
 	}
+	poll := defaultPollInterval
+	if resolved.poll != nil {
+		poll = *resolved.poll
+	}
 	return &FileSessionStore[State]{
 		dir:      dir,
 		maxChain: maxChain,
 		prefixFn: resolved.prefixFn,
-		subs:     make(map[string][]chan exp.SnapshotStatus),
+		poll:     poll,
+		subs:     make(map[string]*snapshotSubs),
 	}, nil
 }
 
@@ -159,9 +194,7 @@ func (s *FileSessionStore[State]) SaveSnapshot(
 	if err := s.writeAt(prefix, next); err != nil {
 		return nil, err
 	}
-	if existing == nil || existing.Status != next.Status {
-		s.notifyLocked(id, next.Status)
-	}
+	s.maybeNotifyLocked(id, next.Status)
 	if s.maxChain > 0 {
 		s.pruneLocked(prefix, next)
 	}
@@ -265,10 +298,18 @@ func (s *FileSessionStore[State]) snapshotFileNames(dir string) ([]string, error
 }
 
 // OnSnapshotStatusChange subscribes to status changes for a snapshot. The
-// returned channel yields the current status (if any) and any subsequent
-// changes triggered by calls on this store instance, until ctx is cancelled.
-// Changes made by other processes writing to the same directory are not
-// observed.
+// returned channel yields the status at subscription time and every subsequent
+// change until ctx is cancelled. A change is surfaced immediately when written
+// through this store instance, and within one poll interval when written by
+// another process sharing the directory (see [WithPollInterval]); polling
+// re-reads the file the snapshot was found under at subscription time. If the
+// snapshot does not exist at subscription time, the channel is closed without
+// yielding a value.
+//
+// Values are level-triggered: the latest status is always delivered, but a slow
+// reader may skip intermediate values, and a subscriber that joins concurrently
+// with a change may observe that status twice. Treat a received value as "the
+// status is now X", not "X just happened once".
 func (s *FileSessionStore[State]) OnSnapshotStatusChange(ctx context.Context, snapshotID string) <-chan exp.SnapshotStatus {
 	ch := make(chan exp.SnapshotStatus, 1)
 	if err := validateSnapshotID(snapshotID); err != nil {
@@ -280,16 +321,25 @@ func (s *FileSessionStore[State]) OnSnapshotStatusChange(ctx context.Context, sn
 		close(ch)
 		return ch
 	}
+	path := s.pathFor(prefix, snapshotID)
 
 	s.mu.Lock()
-	snap, err := s.readAt(s.pathFor(prefix, snapshotID))
+	snap, err := s.readAt(path)
 	if err != nil || snap == nil {
 		s.mu.Unlock()
 		close(ch)
 		return ch
 	}
 	ch <- snap.Status
-	s.subs[snapshotID] = append(s.subs[snapshotID], ch)
+	sub := s.subs[snapshotID]
+	if sub == nil {
+		// First subscriber: seed the dedup baseline with the current status and
+		// remember the path so the poller can re-read it.
+		sub = &snapshotSubs{path: path, last: snap.Status}
+		s.subs[snapshotID] = sub
+	}
+	sub.chans = append(sub.chans, ch)
+	s.startPollerLocked()
 	s.mu.Unlock()
 
 	context.AfterFunc(ctx, func() { s.removeSub(snapshotID, ch) })
@@ -396,30 +446,107 @@ func (s *FileSessionStore[State]) pathFor(prefix, snapshotID string) string {
 	return filepath.Join(s.dir, prefix, snapshotID+".json")
 }
 
-// removeSub detaches a subscriber and closes its channel.
+// removeSub detaches a subscriber and closes its channel, dropping the
+// snapshot's bookkeeping (and stopping the poller) once no subscribers remain.
 func (s *FileSessionStore[State]) removeSub(snapshotID string, ch chan exp.SnapshotStatus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	subs := s.subs[snapshotID]
-	i := slices.Index(subs, ch)
+	sub := s.subs[snapshotID]
+	if sub == nil {
+		return
+	}
+	i := slices.Index(sub.chans, ch)
 	if i < 0 {
 		return
 	}
-	subs = slices.Delete(subs, i, i+1)
-	if len(subs) == 0 {
+	sub.chans = slices.Delete(sub.chans, i, i+1)
+	if len(sub.chans) == 0 {
 		delete(s.subs, snapshotID)
-	} else {
-		s.subs[snapshotID] = subs
+	}
+	if len(s.subs) == 0 {
+		s.stopPollerLocked()
 	}
 	close(ch)
 }
 
-// notifyLocked publishes status to all live subscribers of snapshotID.
-// Caller must hold s.mu. A slow subscriber may miss intermediate values, but
-// the latest value is always delivered (see [coalesceSend]).
-func (s *FileSessionStore[State]) notifyLocked(snapshotID string, status exp.SnapshotStatus) {
-	for _, ch := range s.subs[snapshotID] {
+// maybeNotifyLocked fans status out to snapshotID's subscribers, but only when
+// it differs from the value they last saw. It is the shared dedup gate for both
+// the in-process write path ([SaveSnapshot]) and the cross-process poller, so
+// whichever observes a change first delivers it once and the other is a no-op.
+// Caller must hold s.mu. A slow subscriber may miss intermediate values, but the
+// latest is always delivered (see [coalesceSend]).
+func (s *FileSessionStore[State]) maybeNotifyLocked(snapshotID string, status exp.SnapshotStatus) {
+	sub := s.subs[snapshotID]
+	if sub == nil || sub.last == status {
+		return
+	}
+	sub.last = status
+	for _, ch := range sub.chans {
 		coalesceSend(ch, status)
+	}
+}
+
+// startPollerLocked launches the background poller if it is not already running
+// and polling is enabled. Caller must hold s.mu.
+func (s *FileSessionStore[State]) startPollerLocked() {
+	if s.pollCancel != nil || s.poll <= 0 {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.pollCancel = cancel
+	go s.pollLoop(ctx, s.poll)
+}
+
+// stopPollerLocked signals the poller to exit. Caller must hold s.mu. It does
+// not wait: the goroutine observes the cancellation and returns promptly, and
+// the shared dedup gate keeps a briefly-overlapping successor poller correct.
+func (s *FileSessionStore[State]) stopPollerLocked() {
+	if s.pollCancel == nil {
+		return
+	}
+	s.pollCancel()
+	s.pollCancel = nil
+}
+
+// pollLoop re-reads every subscribed snapshot on each tick until ctx is
+// cancelled, delivering status changes written by other processes (or other
+// store instances) sharing the directory - the only way such changes reach
+// subscribers, since a cross-process write never runs this instance's
+// in-process notification.
+func (s *FileSessionStore[State]) pollLoop(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.pollOnce()
+		}
+	}
+}
+
+// pollOnce re-reads each subscribed snapshot's file and delivers any status
+// change through the shared dedup gate. It snapshots the subscription set under
+// the lock, then reads each file under its own lock acquisition, so a tick never
+// blocks a write for longer than a single file read and the read pairs
+// atomically with the dedup check (ruling out delivering a status the file no
+// longer holds). A read error or vanished file is skipped.
+func (s *FileSessionStore[State]) pollOnce() {
+	type target struct{ id, path string }
+	s.mu.Lock()
+	targets := make([]target, 0, len(s.subs))
+	for id, sub := range s.subs {
+		targets = append(targets, target{id: id, path: sub.path})
+	}
+	s.mu.Unlock()
+
+	for _, t := range targets {
+		s.mu.Lock()
+		if snap, err := s.readAt(t.path); err == nil && snap != nil {
+			s.maybeNotifyLocked(t.id, snap.Status)
+		}
+		s.mu.Unlock()
 	}
 }
 
