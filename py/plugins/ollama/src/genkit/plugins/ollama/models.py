@@ -83,12 +83,13 @@ behavioral divergence from the JS plugin.
 """
 
 import mimetypes
+import re
 from collections.abc import Callable
 from typing import Any, Literal, cast
 
 import structlog
-from pydantic import BaseModel
-from pydantic.alias_generators import to_snake
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel, to_snake
 
 import ollama as ollama_api
 from genkit import (
@@ -101,6 +102,7 @@ from genkit import (
     ModelResponseChunk,
     ModelUsage,
     Part,
+    ReasoningPart,
     Role,
     TextPart,
     ToolRequest,
@@ -115,11 +117,57 @@ from genkit.plugins.ollama.constants import (
 
 logger = structlog.get_logger(__name__)
 
+# Matches <think>/<thinking> blocks case-insensitively (``i``) across newlines
+# (``s``), non-greedy (``.*?``) so multiple blocks in one response are captured
+# individually. Mirrors the Go plugin's ``thinkingRegex``.
+_THINKING_RE = re.compile(r'(?is)<(?:think|thinking)>(.*?)</(?:think|thinking)>')
+
+
+def _parse_thinking(content: str) -> tuple[str, str]:
+    """Split inline ``<think>``/``<thinking>`` blocks out of model content.
+
+    Mirrors the Go plugin's ``parseThinking``: returns the joined reasoning text
+    and the remaining content with the thinking blocks removed (both stripped).
+
+    Args:
+        content: The raw model content possibly containing thinking tags.
+
+    Returns:
+        A ``(reasoning, rest)`` tuple. ``reasoning`` is empty when no tags match,
+        in which case ``rest`` is the original content unchanged.
+    """
+    blocks = _THINKING_RE.findall(content)
+    if not blocks:
+        return '', content
+    reasoning = '\n\n'.join(block.strip() for block in blocks)
+    rest = _THINKING_RE.sub('', content).strip()
+    return reasoning, rest
+
+
+class OllamaConfig(ModelConfig):
+    """Configuration schema for Ollama models.
+
+    Extends the shared :class:`ModelConfig` with Ollama-specific sampler
+    knobs and the ``think`` chain-of-thought control. Unknown keys are
+    accepted (``extra='allow'``) and forwarded to the Ollama server's
+    ``options`` so newer sampler parameters work without an SDK bump.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+
+    think: bool | Literal['low', 'medium', 'high'] | None = None
+    keep_alive: float | str | None = None
+    num_ctx: int | None = None
+    min_p: float | None = None
+    seed: int | None = None
+    num_predict: int | None = None
+
 
 class OllamaSupports(BaseModel):
     """Supports for Ollama models."""
 
     tools: bool = True
+    media: bool = False
 
 
 class ModelDefinition(BaseModel):
@@ -195,6 +243,7 @@ class OllamaModel:
                 )
                 content = self._build_multimodal_chat_response(
                     chat_response=api_response,
+                    thinking_enabled=self._thinking_requested(request.config),
                 )
         elif self.model_definition.api_type == OllamaAPITypes.GENERATE:
             api_response = await self._generate_ollama_response(request=request, ctx=ctx)
@@ -204,7 +253,10 @@ class OllamaModel:
                     model=self.model_definition.name,
                     response=str(api_response.response)[:500],
                 )
-                content = [Part(root=TextPart(text=api_response.response))]
+                content = self._build_generate_response(
+                    generate_response=api_response,
+                    thinking_enabled=self._thinking_requested(request.config),
+                )
         else:
             raise ValueError(f'Unresolved API type: {self.model_definition.api_type}')
 
@@ -270,6 +322,7 @@ class OllamaModel:
             for tool in request.tools or []
         ]
         options = self.build_request_options(config=request.config)
+        extra_kwargs = self.build_request_kwargs(config=request.config)
 
         if streaming_request:
             # Streaming call with literal stream=True for proper overload resolution
@@ -280,11 +333,12 @@ class OllamaModel:
                 options=options,
                 format=fmt,
                 stream=True,
+                **extra_kwargs,
             )
             idx = 0
             async for chunk in chat_response:
                 idx += 1
-                role = Role.TOOL if chunk.message.role == 'tool' else Role.MODEL
+                role = self._from_ollama_role(chunk.message.role)
                 if ctx:
                     ctx.send_chunk(
                         chunk=ModelResponseChunk(
@@ -306,6 +360,7 @@ class OllamaModel:
                 options=options,
                 format=fmt,
                 stream=False,
+                **extra_kwargs,
             )
             return chat_response
 
@@ -324,6 +379,7 @@ class OllamaModel:
         prompt = self.build_prompt(request)
         streaming_request = self.is_streaming_request(ctx=ctx)
         options = self.build_request_options(config=request.config)
+        extra_kwargs = self.build_request_kwargs(config=request.config)
 
         if streaming_request:
             # Streaming call with literal stream=True for proper overload resolution
@@ -332,6 +388,7 @@ class OllamaModel:
                 prompt=prompt,
                 options=options,
                 stream=True,
+                **extra_kwargs,
             )
             idx = 0
             async for chunk in generate_response:
@@ -341,7 +398,7 @@ class OllamaModel:
                         chunk=ModelResponseChunk(
                             role=Role.MODEL,
                             index=idx,
-                            content=[Part(root=TextPart(text=chunk.response))],
+                            content=self._build_generate_response(generate_response=chunk),
                         )
                     )
             # For streaming requests, we return None because the response chunks
@@ -355,25 +412,46 @@ class OllamaModel:
                 prompt=prompt,
                 options=options,
                 stream=False,
+                **extra_kwargs,
             )
             return generate_response
 
     @staticmethod
     def _build_multimodal_chat_response(
         chat_response: ollama_api.ChatResponse,
+        thinking_enabled: bool = False,
     ) -> list[Part]:
         """Build the multimodal chat response.
 
         Args:
             chat_response: The chat response to build the multimodal response for.
+            thinking_enabled: Whether the request explicitly enabled thinking. When
+                the model returns no dedicated ``thinking`` field, this allows the
+                ``<think>``/``<thinking>`` content fallback to run (matching the Go
+                plugin). It is only applied to complete (non-streaming) responses,
+                never to partial streamed chunks where a tag may be split.
 
         Returns:
             The multimodal chat response.
         """
         content = []
         chat_response_message = chat_response.message
-        if chat_response_message.content:
-            content.append(Part(root=TextPart(text=chat_response.message.content or '')))
+        text = chat_response_message.content or ''
+        # ``think`` chain-of-thought arrives on ``message.thinking``; surface it
+        # as a leading ReasoningPart so the Dev UI renders it separately from
+        # the answer text. Covers both streaming deltas and the final message.
+        thinking = getattr(chat_response_message, 'thinking', None)
+        if thinking:
+            content.append(Part(root=ReasoningPart(reasoning=thinking)))
+        elif thinking_enabled and text:
+            # Fallback for models that inline <think>…</think> in content instead
+            # of populating the dedicated field. Gated on an explicit think request
+            # so ordinary text containing these tags is never hijacked.
+            reasoning, text = _parse_thinking(text)
+            if reasoning:
+                content.append(Part(root=ReasoningPart(reasoning=reasoning)))
+        if text:
+            content.append(Part(root=TextPart(text=text)))
         if chat_response_message.images:
             for image in chat_response_message.images:
                 content.append(
@@ -402,33 +480,172 @@ class OllamaModel:
         return content
 
     @staticmethod
+    def _build_generate_response(
+        generate_response: ollama_api.GenerateResponse,
+        thinking_enabled: bool = False,
+    ) -> list[Part]:
+        """Build the response parts for a ``generate`` endpoint response.
+
+        Mirrors :meth:`_build_multimodal_chat_response` for the ``generate`` API,
+        which returns plain text (no media/tool calls): ``think`` reasoning is
+        surfaced as a leading ReasoningPart so the Dev UI renders it separately
+        from the answer text.
+
+        Args:
+            generate_response: A complete generate response or a streamed chunk.
+            thinking_enabled: Whether the request explicitly enabled thinking. When
+                the model returns no dedicated ``thinking`` field, this allows the
+                ``<think>``/``<thinking>`` content fallback to run (matching the Go
+                plugin). It is only applied to complete (non-streaming) responses,
+                never to partial streamed chunks where a tag may be split.
+
+        Returns:
+            The reasoning/text parts for the response.
+        """
+        content: list[Part] = []
+        text = generate_response.response or ''
+        thinking = getattr(generate_response, 'thinking', None)
+        if thinking:
+            content.append(Part(root=ReasoningPart(reasoning=thinking)))
+        elif thinking_enabled and text:
+            reasoning, text = _parse_thinking(text)
+            if reasoning:
+                content.append(Part(root=ReasoningPart(reasoning=reasoning)))
+        if text:
+            content.append(Part(root=TextPart(text=text)))
+        return content
+
+    @staticmethod
     def build_request_options(
         config: ModelConfig | ollama_api.Options | dict[str, object] | None,
-    ) -> ollama_api.Options:
-        """Build request options for the generate API.
+    ) -> dict[str, Any]:
+        """Build the sampler ``options`` mapping for the chat/generate APIs.
+
+        Accepts an :class:`OllamaConfig`/:class:`ModelConfig` instance, a raw
+        ``Options``, or a plain dict (e.g. a config already dumped to JSON by
+        the framework — see :meth:`build_request_kwargs`). All inputs are
+        normalised to snake-cased Ollama option fields:
+
+        - ``think``/``keep_alive`` are stripped — they are top-level request
+          kwargs, not sampler options (Ollama rejects them inside ``options``).
+        - Genkit's ``max_output_tokens`` maps to Ollama's ``num_predict``; an
+          explicit ``num_predict`` wins when both are present.
+        - ``stop_sequences`` maps to ``stop``; ``version``/``api_key`` (genkit
+          bookkeeping) are dropped.
+        - ``OllamaConfig`` extras (e.g. ``repeatPenalty``) are forwarded
+          snake-cased so newer sampler knobs pass through untouched.
+
+        Known knobs are routed through ``ollama_api.Options`` purely for type
+        coercion (genkit types ``max_output_tokens``/``top_k`` as floats, but
+        Ollama's ``num_predict``/``top_k`` are integers). The result is then
+        returned as a plain mapping — *not* an ``Options`` — and any knob the
+        installed ``Options`` model doesn't yet field (e.g. ``min_p``) is merged
+        back in, so newer sampler parameters still reach the server.
 
         Args:
             config: The configuration to build the request options for.
 
         Returns:
-            The request options for the generate API.
+            A mapping of snake-cased Ollama sampler options.
         """
         if config is None:
-            return ollama_api.Options()
-        if isinstance(config, ModelConfig):
-            config = dict(
-                top_k=config.top_k,
-                top_p=config.top_p,
-                stop=config.stop_sequences,
-                temperature=config.temperature,
-                num_predict=config.max_output_tokens,
-            )
-        if isinstance(config, dict):
-            # Snake-case keys so camelCase knobs (e.g. ``topP``) map to the
-            # server field instead of being silently dropped by Options.
-            config = ollama_api.Options(**{to_snake(k): v for k, v in cast(dict[str, Any], config).items()})
+            return {}
+        if isinstance(config, ollama_api.Options):
+            return config.model_dump(exclude_none=True)
 
-        return config
+        if isinstance(config, ModelConfig):
+            # Covers OllamaConfig (a ModelConfig subclass) and plain ModelConfig.
+            # model_dump defaults to by_alias=False, so declared fields come out
+            # snake_cased; only extras keep the key they were supplied with.
+            # to_snake below normalises both.
+            raw: dict[str, Any] = config.model_dump(exclude_none=True)
+        else:
+            raw = {k: v for k, v in cast(dict[str, Any], config).items() if v is not None}
+
+        # Snake-case so camelCase knobs (e.g. ``topP``) hit the server field
+        # instead of being silently dropped.
+        knobs = {to_snake(k): v for k, v in raw.items()}
+
+        # Top-level request kwargs, not sampler options.
+        knobs.pop('think', None)
+        knobs.pop('keep_alive', None)
+        # Genkit bookkeeping that Ollama does not understand.
+        knobs.pop('version', None)
+        knobs.pop('api_key', None)
+
+        if 'stop_sequences' in knobs:
+            knobs['stop'] = knobs.pop('stop_sequences')
+
+        max_tokens = knobs.pop('max_output_tokens', None)
+        if max_tokens is not None and knobs.get('num_predict') is None:
+            knobs['num_predict'] = max_tokens
+
+        # Coerce the knobs Options models (int num_predict/top_k, etc.), then
+        # merge back any it drops (e.g. min_p) so they still reach the server.
+        options: dict[str, Any] = ollama_api.Options(**knobs).model_dump(exclude_none=True)
+        for key, value in knobs.items():
+            options.setdefault(key, value)
+        return options
+
+    @staticmethod
+    def build_request_kwargs(
+        config: ModelConfig | ollama_api.Options | dict[str, object] | None,
+    ) -> dict[str, Any]:
+        """Extract top-level chat/generate kwargs from the config.
+
+        ``think`` and ``keep_alive`` are top-level parameters of the Ollama
+        ``chat``/``generate`` calls — not sampler ``options``. The framework
+        dumps a ``BaseModel`` config to a dict before the model fn sees it, so
+        this reads them from either an :class:`OllamaConfig` instance *or* a
+        dumped dict (whose declared keys arrive camelCased, hence the
+        snake-casing) and returns only the values that are set.
+
+        Args:
+            config: The configuration to extract request kwargs from.
+
+        Returns:
+            A dict with ``think``/``keep_alive`` entries that are not ``None``.
+        """
+        if isinstance(config, OllamaConfig):
+            think: Any = config.think
+            keep_alive: Any = config.keep_alive
+        elif isinstance(config, dict):
+            snake = {to_snake(k): v for k, v in cast(dict[str, Any], config).items()}
+            think = snake.get('think')
+            keep_alive = snake.get('keep_alive')
+        else:
+            return {}
+
+        kwargs: dict[str, Any] = {}
+        if think is not None:
+            kwargs['think'] = think
+        if keep_alive is not None:
+            kwargs['keep_alive'] = keep_alive
+        return kwargs
+
+    @staticmethod
+    def _thinking_requested(
+        config: ModelConfig | ollama_api.Options | dict[str, object] | None,
+    ) -> bool:
+        """Whether the request explicitly enabled thinking.
+
+        Mirrors the Go plugin's ``ThinkOption.IsEnabled``: a boolean ``think`` is
+        taken as-is, a non-empty effort string (``low``/``medium``/``high``) counts
+        as enabled, and anything else is disabled. Used to gate the ``<think>`` tag
+        content fallback in :meth:`_build_multimodal_chat_response`.
+
+        Args:
+            config: The request configuration.
+
+        Returns:
+            ``True`` when thinking was explicitly requested, ``False`` otherwise.
+        """
+        think = OllamaModel.build_request_kwargs(config).get('think')
+        if isinstance(think, bool):
+            return think
+        if isinstance(think, str):
+            return think != ''
+        return False
 
     @staticmethod
     def build_prompt(request: ModelRequest) -> str:
@@ -532,6 +749,37 @@ class OllamaModel:
 
         # Local file path or raw base64 — pass through to Image.
         return url
+
+    @staticmethod
+    def _from_ollama_role(role: str | None) -> Role:
+        """Map an Ollama message role onto a Genkit :class:`Role`.
+
+        Ollama streams deltas with an empty role and labels the rest as
+        ``assistant``/``tool``/``user``/``system``. Anything unexpected falls
+        back to ``MODEL`` (with a warning) so an unknown role never aborts a
+        stream.
+
+        Args:
+            role: The role string from an Ollama message, possibly empty.
+
+        Returns:
+            The corresponding Genkit role.
+        """
+        match role:
+            case 'assistant':
+                return Role.MODEL
+            case 'tool':
+                return Role.TOOL
+            case 'user':
+                return Role.USER
+            case 'system':
+                return Role.SYSTEM
+            case '' | None:
+                # Ollama commonly sends an empty role on streamed deltas.
+                return Role.MODEL
+            case _:
+                logger.warning('Unknown Ollama role; defaulting to MODEL', role=role)
+                return Role.MODEL
 
     @staticmethod
     def _to_ollama_role(

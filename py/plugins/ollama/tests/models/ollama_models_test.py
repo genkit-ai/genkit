@@ -35,12 +35,13 @@ from genkit import (
     ModelResponseChunk,
     ModelUsage,
     Part,
+    ReasoningPart,
     Role,
     TextPart,
     ToolRequestPart,
 )
 from genkit.plugins.ollama.constants import OllamaAPITypes
-from genkit.plugins.ollama.models import ModelDefinition, OllamaModel, _convert_parameters
+from genkit.plugins.ollama.models import ModelDefinition, OllamaConfig, OllamaModel, _convert_parameters
 
 
 class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
@@ -102,7 +103,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         cast(AsyncMock, ollama_model._generate_ollama_response).assert_not_awaited()
         cast(MagicMock, self.ctx.send_chunk).assert_not_called()
         cast(MagicMock, ollama_model._build_multimodal_chat_response).assert_called_once_with(
-            chat_response=mock_chat_response
+            chat_response=mock_chat_response, thinking_enabled=False
         )
         cast(MagicMock, ollama_model.is_streaming_request).assert_called_with(ctx=self.ctx)
         cast(MagicMock, ollama_model.get_usage_info).assert_called_once()
@@ -728,22 +729,409 @@ def test_convert_parameters_untyped_property_falls_back_to_none() -> None:
 
 
 class TestBuildRequestOptions:
-    """Tests for OllamaModel.build_request_options."""
+    """Tests for OllamaModel.build_request_options.
 
-    def test_none_returns_empty_options(self) -> None:
-        """None config produces empty Options."""
-        options = OllamaModel.build_request_options(None)
-        assert options.model_dump(exclude_none=True) == {}
+    The method returns a plain mapping (not ``ollama_api.Options``) so that
+    sampler knobs the installed ``Options`` model doesn't field — e.g.
+    ``min_p`` on ollama 0.6.1 — still reach the server.
+    """
+
+    def test_none_returns_empty_mapping(self) -> None:
+        """None config produces an empty options mapping."""
+        assert OllamaModel.build_request_options(None) == {}
+
+    def test_options_input_is_normalised_to_dict(self) -> None:
+        """A raw Options input is returned as a plain mapping."""
+        options = OllamaModel.build_request_options(ollama_api.Options(num_ctx=512))
+        assert options == {'num_ctx': 512}
 
     def test_model_config_top_p(self) -> None:
-        """ModelConfig.top_p maps to the Options.top_p server field."""
+        """ModelConfig.top_p maps to the top_p server field."""
         options = OllamaModel.build_request_options(ModelConfig(top_p=0.9))
-        assert options.top_p == 0.9
+        assert options['top_p'] == 0.9
+
+    def test_model_config_max_output_tokens_maps_to_int_num_predict(self) -> None:
+        """max_output_tokens (float in genkit) maps to an int num_predict."""
+        options = OllamaModel.build_request_options(ModelConfig(max_output_tokens=128))
+        assert options['num_predict'] == 128
+        assert isinstance(options['num_predict'], int)
 
     def test_raw_dict_camel_case_top_p(self) -> None:
-        """A camelCase ``topP`` knob is snake-cased onto Options.top_p."""
+        """A camelCase ``topP`` knob is snake-cased onto top_p."""
         options = OllamaModel.build_request_options({'topP': 0.9})
-        assert options.top_p == 0.9
+        assert options['top_p'] == 0.9
+
+    def test_ollama_config_instance_forwards_knobs(self) -> None:
+        """An OllamaConfig instance forwards Ollama-only sampler knobs."""
+        options = OllamaModel.build_request_options(OllamaConfig(num_ctx=4096, seed=42, temperature=0.5))
+        assert options['num_ctx'] == 4096
+        assert options['seed'] == 42
+        assert options['temperature'] == 0.5
+
+    def test_min_p_is_preserved(self) -> None:
+        """min_p survives even though ollama 0.6.1's Options model drops it."""
+        options = OllamaModel.build_request_options(OllamaConfig(min_p=0.05))
+        assert options['min_p'] == 0.05
+
+    def test_ollama_config_extras_snake_cased(self) -> None:
+        """Unknown OllamaConfig knobs are forwarded snake-cased (instance + camel)."""
+        snake = OllamaModel.build_request_options(OllamaConfig(repeat_penalty=1.1))
+        assert snake['repeat_penalty'] == 1.1
+        camel = OllamaModel.build_request_options(OllamaConfig(repeatPenalty=1.2))
+        assert camel['repeat_penalty'] == 1.2
+
+    def test_num_predict_wins_over_max_output_tokens(self) -> None:
+        """An explicit num_predict beats the inherited max_output_tokens."""
+        options = OllamaModel.build_request_options(OllamaConfig(num_predict=10, max_output_tokens=99))
+        assert options['num_predict'] == 10
+
+    def test_think_and_keep_alive_excluded_from_options(self) -> None:
+        """think/keep_alive are request kwargs, never sampler options."""
+        options = OllamaModel.build_request_options(OllamaConfig(think=True, keep_alive='5m', num_ctx=2048))
+        assert 'think' not in options
+        assert 'keep_alive' not in options
+        assert options['num_ctx'] == 2048
+
+    def test_dumped_dict_path_matches_instance(self) -> None:
+        """A dumped OllamaConfig (dict) yields the same options as the instance."""
+        cfg = OllamaConfig(think=True, keep_alive='5m', num_ctx=4096, temperature=0.5, max_output_tokens=100)
+        dumped = cfg.model_dump(exclude_none=True, mode='json')
+
+        from_dict = OllamaModel.build_request_options(dumped)
+        from_instance = OllamaModel.build_request_options(cfg)
+
+        assert from_dict == from_instance
+        assert from_dict == {'num_ctx': 4096, 'num_predict': 100, 'temperature': 0.5}
+
+
+class TestBuildRequestKwargs:
+    """Tests for OllamaModel.build_request_kwargs."""
+
+    def test_instance_surfaces_think_and_keep_alive(self) -> None:
+        """An OllamaConfig instance surfaces think/keep_alive as top-level kwargs."""
+        kwargs = OllamaModel.build_request_kwargs(OllamaConfig(think=True, keep_alive='5m'))
+        assert kwargs == {'think': True, 'keep_alive': '5m'}
+
+    def test_dumped_dict_surfaces_think_and_keep_alive(self) -> None:
+        """A dumped OllamaConfig (camelCased keys) still surfaces think/keep_alive."""
+        dumped = OllamaConfig(think='low', keep_alive='10m').model_dump(exclude_none=True, mode='json')
+        # The dumped dict carries the camelCase alias for keep_alive.
+        assert 'keepAlive' in dumped
+        kwargs = OllamaModel.build_request_kwargs(dumped)
+        assert kwargs == {'think': 'low', 'keep_alive': '10m'}
+
+    def test_absent_knobs_yield_empty_kwargs(self) -> None:
+        """Configs without think/keep_alive produce no extra kwargs."""
+        assert OllamaModel.build_request_kwargs(OllamaConfig(num_ctx=2048)) == {}
+        assert OllamaModel.build_request_kwargs(None) == {}
+        assert OllamaModel.build_request_kwargs(ModelConfig(top_p=0.9)) == {}
+
+
+class TestFromOllamaRole:
+    """Tests for OllamaModel._from_ollama_role."""
+
+    def test_known_roles(self) -> None:
+        """Each known Ollama role maps to its Genkit counterpart."""
+        assert OllamaModel._from_ollama_role('assistant') == Role.MODEL
+        assert OllamaModel._from_ollama_role('tool') == Role.TOOL
+        assert OllamaModel._from_ollama_role('user') == Role.USER
+        assert OllamaModel._from_ollama_role('system') == Role.SYSTEM
+
+    def test_empty_role_defaults_to_model(self) -> None:
+        """An empty/None role (common on streamed deltas) defaults to MODEL."""
+        assert OllamaModel._from_ollama_role('') == Role.MODEL
+        assert OllamaModel._from_ollama_role(None) == Role.MODEL
+
+    def test_unknown_role_warns_and_defaults_to_model(self) -> None:
+        """An unrecognized role warns and falls back to MODEL."""
+        with patch('genkit.plugins.ollama.models.logger') as mock_logger:
+            assert OllamaModel._from_ollama_role('wizard') == Role.MODEL
+            cast(MagicMock, mock_logger.warning).assert_called_once()
+
+
+class TestReasoning:
+    """Tests for surfacing message.thinking as a leading ReasoningPart."""
+
+    def test_thinking_yields_leading_reasoning_part(self) -> None:
+        """A message with ``thinking`` prepends a ReasoningPart before text."""
+        response = ollama_api.ChatResponse(
+            message=ollama_api.Message(role='assistant', content='The answer is 4.', thinking='2+2 is 4'),
+        )
+        content = OllamaModel._build_multimodal_chat_response(chat_response=response)
+
+        assert isinstance(content[0].root, ReasoningPart)
+        assert content[0].root.reasoning == '2+2 is 4'
+        assert isinstance(content[1].root, TextPart)
+        assert content[1].root.text == 'The answer is 4.'
+
+    def test_no_thinking_has_no_reasoning_part(self) -> None:
+        """Without ``thinking`` no ReasoningPart is emitted."""
+        response = ollama_api.ChatResponse(
+            message=ollama_api.Message(role='assistant', content='Hi'),
+        )
+        content = OllamaModel._build_multimodal_chat_response(chat_response=response)
+
+        assert all(not isinstance(part.root, ReasoningPart) for part in content)
+
+    def test_think_tag_fallback_extracts_reasoning(self) -> None:
+        """With thinking requested and no dedicated field, inline <think> tags are
+        surfaced as reasoning and stripped from the text (Go parseThinking parity)."""
+        response = ollama_api.ChatResponse(
+            message=ollama_api.Message(role='assistant', content='<think>2+2 is 4</think>The answer is 4.'),
+        )
+        content = OllamaModel._build_multimodal_chat_response(chat_response=response, thinking_enabled=True)
+
+        assert isinstance(content[0].root, ReasoningPart)
+        assert content[0].root.reasoning == '2+2 is 4'
+        assert isinstance(content[1].root, TextPart)
+        assert content[1].root.text == 'The answer is 4.'
+
+    def test_think_tag_not_parsed_when_thinking_disabled(self) -> None:
+        """Without an explicit think request, <think> tags stay verbatim in the text."""
+        response = ollama_api.ChatResponse(
+            message=ollama_api.Message(role='assistant', content='<think>hidden</think>visible'),
+        )
+        content = OllamaModel._build_multimodal_chat_response(chat_response=response, thinking_enabled=False)
+
+        assert all(not isinstance(part.root, ReasoningPart) for part in content)
+        assert content[0].root.text == '<think>hidden</think>visible'
+
+    def test_dedicated_thinking_field_wins_over_tags(self) -> None:
+        """The dedicated thinking field takes precedence; content tags are left intact."""
+        response = ollama_api.ChatResponse(
+            message=ollama_api.Message(role='assistant', content='<think>inline</think>answer', thinking='structured'),
+        )
+        content = OllamaModel._build_multimodal_chat_response(chat_response=response, thinking_enabled=True)
+
+        assert isinstance(content[0].root, ReasoningPart)
+        assert content[0].root.reasoning == 'structured'
+        # The content tags are not double-processed when the dedicated field exists.
+        assert content[1].root.text == '<think>inline</think>answer'
+
+    def test_multiple_think_blocks_joined_and_stripped(self) -> None:
+        """Multiple <think>/<thinking> blocks are joined with blank lines and removed."""
+        response = ollama_api.ChatResponse(
+            message=ollama_api.Message(
+                role='assistant',
+                content='<think>first</think>mid<thinking>second</thinking>end',
+            ),
+        )
+        content = OllamaModel._build_multimodal_chat_response(chat_response=response, thinking_enabled=True)
+
+        assert content[0].root.reasoning == 'first\n\nsecond'
+        assert content[1].root.text == 'midend'
+
+    def test_think_only_content_yields_no_text_part(self) -> None:
+        """Content that is entirely a think block produces reasoning but no text."""
+        response = ollama_api.ChatResponse(
+            message=ollama_api.Message(role='assistant', content='<think>just reasoning</think>'),
+        )
+        content = OllamaModel._build_multimodal_chat_response(chat_response=response, thinking_enabled=True)
+
+        assert len(content) == 1
+        assert isinstance(content[0].root, ReasoningPart)
+        assert content[0].root.reasoning == 'just reasoning'
+
+
+class TestReasoningStreaming(unittest.IsolatedAsyncioTestCase):
+    """Reasoning is also surfaced on streamed chunks (same builder path)."""
+
+    async def test_streaming_chunk_yields_reasoning_part(self) -> None:
+        """A streamed chunk carrying ``thinking`` emits a leading ReasoningPart."""
+        client_instance = AsyncMock()
+        factory = MagicMock(return_value=client_instance)
+        model = OllamaModel(
+            client=factory,
+            model_definition=ModelDefinition(name='m', api_type=OllamaAPITypes.CHAT),
+        )
+
+        async def chunks() -> AsyncIterator[ollama_api.ChatResponse]:
+            yield ollama_api.ChatResponse(
+                message=ollama_api.Message(role='assistant', content='4', thinking='2+2'),
+            )
+
+        client_instance.chat.return_value = chunks()
+
+        ctx = ActionRunContext(streaming_callback=MagicMock())
+        sent: list[ModelResponseChunk] = []
+        cast(Any, ctx).send_chunk = MagicMock(side_effect=lambda chunk: sent.append(chunk))
+
+        request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])])
+        with patch.object(model, 'build_chat_messages', new_callable=AsyncMock, return_value=[]):
+            await model._chat_with_ollama(request=request, ctx=ctx)
+
+        assert len(sent) == 1
+        first_part = sent[0].content[0]
+        assert isinstance(first_part.root, ReasoningPart)
+        assert first_part.root.reasoning == '2+2'
+
+    async def test_streaming_chunk_does_not_parse_think_tags(self) -> None:
+        """Inline <think> tags in a streamed chunk are left untouched even when think
+        is enabled — a tag may be split across chunks, so only the dedicated field is
+        surfaced mid-stream. Matches the Go plugin's translateChatChunk."""
+        client_instance = AsyncMock()
+        factory = MagicMock(return_value=client_instance)
+        model = OllamaModel(
+            client=factory,
+            model_definition=ModelDefinition(name='m', api_type=OllamaAPITypes.CHAT),
+        )
+
+        async def chunks() -> AsyncIterator[ollama_api.ChatResponse]:
+            yield ollama_api.ChatResponse(
+                message=ollama_api.Message(role='assistant', content='<think>partial'),
+            )
+
+        client_instance.chat.return_value = chunks()
+
+        ctx = ActionRunContext(streaming_callback=MagicMock())
+        sent: list[ModelResponseChunk] = []
+        cast(Any, ctx).send_chunk = MagicMock(side_effect=lambda chunk: sent.append(chunk))
+
+        request = ModelRequest(
+            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+            config=OllamaConfig(think=True),
+        )
+        with patch.object(model, 'build_chat_messages', new_callable=AsyncMock, return_value=[]):
+            await model._chat_with_ollama(request=request, ctx=ctx)
+
+        assert len(sent) == 1
+        parts = sent[0].content
+        assert all(not isinstance(part.root, ReasoningPart) for part in parts)
+        assert parts[0].root.text == '<think>partial'
+
+
+class TestReasoningGenerate:
+    """Tests for surfacing GenerateResponse.thinking as a leading ReasoningPart."""
+
+    def test_thinking_yields_leading_reasoning_part(self) -> None:
+        """A generate response with ``thinking`` prepends a ReasoningPart before text."""
+        response = ollama_api.GenerateResponse(response='The answer is 4.', thinking='2+2 is 4')
+        content = OllamaModel._build_generate_response(generate_response=response)
+
+        assert isinstance(content[0].root, ReasoningPart)
+        assert content[0].root.reasoning == '2+2 is 4'
+        assert isinstance(content[1].root, TextPart)
+        assert content[1].root.text == 'The answer is 4.'
+
+    def test_no_thinking_has_no_reasoning_part(self) -> None:
+        """Without ``thinking`` no ReasoningPart is emitted."""
+        response = ollama_api.GenerateResponse(response='Hi')
+        content = OllamaModel._build_generate_response(generate_response=response)
+
+        assert all(not isinstance(part.root, ReasoningPart) for part in content)
+
+    def test_think_tag_fallback_extracts_reasoning(self) -> None:
+        """With thinking requested and no dedicated field, inline <think> tags are
+        surfaced as reasoning and stripped from the text (Go parseThinking parity)."""
+        response = ollama_api.GenerateResponse(response='<think>2+2 is 4</think>The answer is 4.')
+        content = OllamaModel._build_generate_response(generate_response=response, thinking_enabled=True)
+
+        assert isinstance(content[0].root, ReasoningPart)
+        assert content[0].root.reasoning == '2+2 is 4'
+        assert isinstance(content[1].root, TextPart)
+        assert content[1].root.text == 'The answer is 4.'
+
+    def test_think_tag_not_parsed_when_thinking_disabled(self) -> None:
+        """Without an explicit think request, <think> tags stay verbatim in the text."""
+        response = ollama_api.GenerateResponse(response='<think>hidden</think>visible')
+        content = OllamaModel._build_generate_response(generate_response=response, thinking_enabled=False)
+
+        assert all(not isinstance(part.root, ReasoningPart) for part in content)
+        assert content[0].root.text == '<think>hidden</think>visible'
+
+    def test_dedicated_thinking_field_wins_over_tags(self) -> None:
+        """The dedicated thinking field takes precedence; content tags are left intact."""
+        response = ollama_api.GenerateResponse(response='<think>inline</think>answer', thinking='structured')
+        content = OllamaModel._build_generate_response(generate_response=response, thinking_enabled=True)
+
+        assert isinstance(content[0].root, ReasoningPart)
+        assert content[0].root.reasoning == 'structured'
+        assert content[1].root.text == '<think>inline</think>answer'
+
+
+class TestReasoningGenerateStreaming(unittest.IsolatedAsyncioTestCase):
+    """Reasoning is also surfaced on streamed generate chunks (same builder path)."""
+
+    async def test_streaming_chunk_yields_reasoning_part(self) -> None:
+        """A streamed generate chunk carrying ``thinking`` emits a leading ReasoningPart."""
+        client_instance = AsyncMock()
+        factory = MagicMock(return_value=client_instance)
+        model = OllamaModel(
+            client=factory,
+            model_definition=ModelDefinition(name='m', api_type=OllamaAPITypes.GENERATE),
+        )
+
+        async def chunks() -> AsyncIterator[ollama_api.GenerateResponse]:
+            yield ollama_api.GenerateResponse(response='4', thinking='2+2')
+
+        client_instance.generate.return_value = chunks()
+
+        ctx = ActionRunContext(streaming_callback=MagicMock())
+        sent: list[ModelResponseChunk] = []
+        cast(Any, ctx).send_chunk = MagicMock(side_effect=lambda chunk: sent.append(chunk))
+
+        request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])])
+        with patch.object(model, 'build_prompt', return_value='hi'):
+            await model._generate_ollama_response(request=request, ctx=ctx)
+
+        assert len(sent) == 1
+        first_part = sent[0].content[0]
+        assert isinstance(first_part.root, ReasoningPart)
+        assert first_part.root.reasoning == '2+2'
+
+    async def test_streaming_chunk_does_not_parse_think_tags(self) -> None:
+        """Inline <think> tags in a streamed generate chunk are left untouched even when
+        think is enabled — a tag may be split across chunks, so only the dedicated field
+        is surfaced mid-stream. Matches the Go plugin's translateChatChunk."""
+        client_instance = AsyncMock()
+        factory = MagicMock(return_value=client_instance)
+        model = OllamaModel(
+            client=factory,
+            model_definition=ModelDefinition(name='m', api_type=OllamaAPITypes.GENERATE),
+        )
+
+        async def chunks() -> AsyncIterator[ollama_api.GenerateResponse]:
+            yield ollama_api.GenerateResponse(response='<think>partial')
+
+        client_instance.generate.return_value = chunks()
+
+        ctx = ActionRunContext(streaming_callback=MagicMock())
+        sent: list[ModelResponseChunk] = []
+        cast(Any, ctx).send_chunk = MagicMock(side_effect=lambda chunk: sent.append(chunk))
+
+        request = ModelRequest(
+            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+            config=OllamaConfig(think=True),
+        )
+        with patch.object(model, 'build_prompt', return_value='hi'):
+            await model._generate_ollama_response(request=request, ctx=ctx)
+
+        assert len(sent) == 1
+        parts = sent[0].content
+        assert all(not isinstance(part.root, ReasoningPart) for part in parts)
+        assert parts[0].root.text == '<think>partial'
+
+
+class TestThinkingRequested:
+    """Tests for OllamaModel._thinking_requested (mirrors Go ThinkOption.IsEnabled)."""
+
+    def test_bool_true_enables(self) -> None:
+        """think=True enables the fallback."""
+        assert OllamaModel._thinking_requested(OllamaConfig(think=True)) is True
+
+    def test_bool_false_disables(self) -> None:
+        """think=False disables the fallback."""
+        assert OllamaModel._thinking_requested(OllamaConfig(think=False)) is False
+
+    def test_effort_string_enables(self) -> None:
+        """A non-empty effort string (low/medium/high) enables the fallback."""
+        assert OllamaModel._thinking_requested(OllamaConfig(think='high')) is True
+
+    def test_absent_or_none_disables(self) -> None:
+        """Configs without think, and None, do not enable the fallback."""
+        assert OllamaModel._thinking_requested(OllamaConfig(num_ctx=8)) is False
+        assert OllamaModel._thinking_requested(None) is False
+        assert OllamaModel._thinking_requested({'think': 'low'}) is True
 
 
 class TestResolveImage(unittest.IsolatedAsyncioTestCase):
