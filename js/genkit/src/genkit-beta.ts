@@ -128,12 +128,20 @@ export class GenkitBeta extends Genkit {
    *
    * @beta
    */
-  definePromptAgent<State = unknown>(config: {
+  definePromptAgent<
+    State = unknown,
+    I extends z.ZodTypeAny = z.ZodTypeAny,
+  >(config: {
     promptName: string;
+    /**
+     * Input values for the referenced prompt's input variables. Lets a single
+     * prompt be reused/customized across multiple agents.
+     */
+    promptInput?: z.infer<I>;
     stateSchema?: z.ZodType<State>;
     store?: SessionStore<State>;
   }) {
-    return definePromptAgent<State>(this.registry, config);
+    return definePromptAgent<State, I>(this.registry, config);
   }
 
   /**
@@ -155,8 +163,10 @@ export class GenkitBeta extends Genkit {
    *
    * @beta
    */
-  defineAgent<State = unknown>(config: AgentConfig<State>) {
-    return defineAgent<State>(this.registry, config);
+  defineAgent<State = unknown, I extends z.ZodTypeAny = z.ZodTypeAny>(
+    config: AgentConfig<State, I>
+  ) {
+    return defineAgent<State, I>(this.registry, config);
   }
 
   /**
