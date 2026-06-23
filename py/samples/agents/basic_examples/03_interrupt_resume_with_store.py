@@ -24,7 +24,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from genkit import Genkit, restart_tool
-from genkit._core._typing import ToolRequest, ToolRequestPart
+from genkit._core._typing import AgentFinishReason, ToolRequest, ToolRequestPart
 from genkit.agent import AgentInit, InMemoryLinearSessionStore, Resume
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Middleware, ToolApproval
@@ -90,39 +90,41 @@ async def main() -> None:
     print('--- SENDING TURN 1 ---')
     turn1 = session.send('Transfer $500 to account 12345 for rent and check the balance in account 12345.')
     async for chunk in turn1.stream:
-        if chunk.content:
-            print('turn 1 content chunk:', chunk.content)
-        if chunk.request:
-            print('turn 1 tool request chunk:', chunk.request)
+        if chunk.text:
+            print('turn 1 content chunk:', chunk.text)
+        if chunk.tool_request:
+            print('turn 1 tool request chunk:', chunk.tool_request)
 
     out1 = await turn1.output
-    if out1.finish_reason != 'interrupted':
-        raise RuntimeError(f'expected interrupted, got {out1.finish_reason}')
+    assert out1.finish_reason == AgentFinishReason.INTERRUPTED
+    assert len(session.messages) == 2  # User input + tool request message from model
 
-    # Inspect the interrupt to approve
-    if turn1.interrupt:
-        print(f'client would show approval UI for: {turn1.interrupt.name}')
+    assert turn1.interrupt is not None
+    assert turn1.interrupt.name == 'request_transfer'
 
-        trp = ToolRequestPart(
-            tool_request=ToolRequest(
-                name=turn1.interrupt.name,
-                input=turn1.interrupt.input_data,
-                ref=turn1.interrupt.ref,
+    print('--- RESUMING WITH APPROVAL ---')
+    restarts = [
+        restart_tool(
+            interrupt=ToolRequestPart(
+                tool_request=ToolRequest(
+                    name=turn1.interrupt.name,
+                    input=turn1.interrupt.input,
+                    ref=turn1.interrupt.ref,
+                )
             )
         )
-        restarts = [restart_tool(interrupt=trp, resumed_metadata={'tool_approved': True})]
+    ]
 
-        # --- Turn 2: resume within same session ---
-        print('\n--- SENDING TURN 2 (RESUME) ---')
-        turn2 = session.resume(Resume(restart=restarts))
-        async for chunk in turn2.stream:
-            if chunk.content:
-                print('turn 2 content chunk:', chunk.content)
-            if chunk.request:
-                print('turn 2 tool request chunk:', chunk.request)
+    # Resume the turn
+    turn2 = session.resume(Resume(restart=restarts))
+    async for chunk in turn2.stream:
+        if chunk.text:
+            print('turn 2 content chunk:', chunk.text)
+        if chunk.tool_request:
+            print('turn 2 tool request chunk:', chunk.tool_request)
 
-        out2 = await turn2.output
-        print('turn 2 output:', out2)
+    out2 = await turn2.output
+    print('turn 2 output:', out2)
     await session.close()
 
 

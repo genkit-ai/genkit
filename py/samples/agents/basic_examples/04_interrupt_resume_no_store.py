@@ -81,7 +81,7 @@ async def main() -> None:
         trp = ToolRequestPart(
             tool_request=ToolRequest(
                 name=turn1.interrupt.name,
-                input=turn1.interrupt.input_data,
+                input=turn1.interrupt.input,
                 ref=turn1.interrupt.ref,
             )
         )

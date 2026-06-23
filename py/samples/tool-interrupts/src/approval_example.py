@@ -158,7 +158,7 @@ async def interactive_restart_cli() -> None:
 
         if ans in ('y', 'yes'):
             restart = restart_tool(
-                tool=request_transfer, interrupt=interrupt, resumed_metadata={'via': 'cli', 'path': 'restart'}
+                interrupt=interrupt, resumed_metadata={'via': 'cli', 'path': 'restart'}
             )
             response = await ai.generate(
                 messages=messages,

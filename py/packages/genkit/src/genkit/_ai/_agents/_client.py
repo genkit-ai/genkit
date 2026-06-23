@@ -559,6 +559,10 @@ class DetachedTask(Generic[StateT]):
         """Query the server for the current task status/snapshot."""
         return await self._transport.get_snapshot(self.snapshot_id)
 
+    async def abort(self) -> SnapshotStatus | None:
+        """Aborts the detached task on the server."""
+        return await self._transport.abort_snapshot(self.snapshot_id)
+
 
 def _get_chunk_text(model_chunk: ModelResponseChunk | None) -> str | None:
     if not model_chunk or not model_chunk.content:

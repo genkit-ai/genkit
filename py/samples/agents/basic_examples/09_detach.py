@@ -24,6 +24,7 @@ from uuid import uuid4
 
 from genkit import Genkit, GenkitError, ToolRunContext
 from genkit.agent import AgentInit, InMemoryLatestStateStore
+from genkit._core._typing import SnapshotStatus
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -52,13 +53,17 @@ agent = ai.define_agent(
 async def main() -> None:
     session = agent.chat(AgentInit(session_id=str(uuid4())))
     print('--- SUBMITTING DETACHED TASK ---')
-    task = await session.detach('Please run a long task using slowWork.')
+    task = await session.run_detached('Please run a long task using slowWork.')
     print(f'Task detached! Snapshot ID: {task.snapshot_id}')
 
     # We can poll or wait for the task to complete
-    print('\n--- POLLING TASK STATUS ---')
-    async for snap in task.poll(interval_ms=1000):
-        print(f'Task Status: {snap.status}, Messages: {len(snap.state.messages or [])}')
+    while True:
+        snap = await task.poll()
+        if snap and snap.state:
+            print(f'Task Status: {snap.status}, Messages: {len(snap.state.messages or [])}')
+            if snap.status in (SnapshotStatus.DONE, SnapshotStatus.FAILED, SnapshotStatus.ABORTED):
+                break
+        await asyncio.sleep(1.0)
 
     print('Finished!')
     await session.close()

@@ -56,7 +56,7 @@ async def run_turn(agent: Agent, init: AgentInit, text: str) -> AgentOutput:
         turn = session.send(text)
         async for _chunk in turn.stream:
             pass
-        return await turn.output
+        return (await turn.output).raw
 
 
 def define_echo_agent(

@@ -73,8 +73,8 @@ async def main() -> None:
     print('--- SENDING TURN ---')
     turn = session.send('Go')
     async for chunk in turn.stream:
-        if chunk.content:
-            print('content chunk:', chunk.content)
+        if chunk.text:
+            print('content chunk:', chunk.text)
         if chunk.custom:
             print('state patch chunk:', chunk.custom)
             print('current session state:', session.state)
