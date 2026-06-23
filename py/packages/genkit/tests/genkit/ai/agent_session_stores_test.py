@@ -19,7 +19,7 @@ from uuid import uuid4
 
 import pytest
 
-from genkit._ai._agents._session import LatestStateStore
+from genkit._ai._agents._session_stores._latest_state import LatestStateStore
 from genkit._ai._agents._session_stores._branching import BranchingSessionStore
 from genkit._ai._agents._session_stores._linear import LinearSessionStore
 from genkit._core._error import GenkitError
