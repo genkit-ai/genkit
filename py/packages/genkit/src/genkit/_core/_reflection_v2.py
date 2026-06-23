@@ -31,7 +31,7 @@ import os
 import traceback
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 import websockets
 from opentelemetry import trace as trace_api

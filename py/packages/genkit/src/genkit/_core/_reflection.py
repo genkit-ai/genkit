@@ -26,7 +26,7 @@ import threading
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import uvicorn
@@ -100,7 +100,7 @@ class ActionRunner:
             )
             if isinstance(self.action, BidiAction):
                 agent_meta = (self.action.metadata or {}).get('agent')
-                has_store = isinstance(agent_meta, dict) and agent_meta.get('stateManagement') == 'server'
+                has_store = isinstance(agent_meta, dict) and cast(dict[str, Any], agent_meta).get('stateManagement') == 'server'
                 init_val = self.payload.get('init')
                 if init_val is not None:
                     init = AgentInit.model_validate(init_val)
@@ -137,7 +137,7 @@ class ActionRunner:
                         on_chunk(chunk)
 
                 resp = await conn.output()
-                output = ActionResponse(response=resp, trace_id=conn.trace_id, span_id=self.span_id)
+                output = ActionResponse(response=resp, trace_id=conn.trace_id or "", span_id=self.span_id or "")
             else:
                 output = await self.action.run(
                     input=self.payload.get('input'),

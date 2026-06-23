@@ -135,7 +135,7 @@ class LatestStateStore(SessionStore, SnapshotAborter):
                     record.last_good = next_snap
 
                 await self._put_record(record)
-                self._notify_locked(snapshot_id, next_snap.status)
+                self._notify_locked(snapshot_id, next_snap.status or SnapshotStatus.DONE)
                 return next_snap
             else:
                 sid = str(uuid4())

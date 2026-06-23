@@ -33,7 +33,7 @@ from pydantic import BaseModel
 from genkit._ai._agents._session import SessionStore, SnapshotAborter
 from genkit._ai._json_patch import apply_json_patch, diff_json
 from genkit._core._error import GenkitError
-from genkit._core._typing import JsonPatchOperation, SessionSnapshot, SessionState, SnapshotEvent, SnapshotStatus
+from genkit._core._typing import AgentFinishReason, JsonPatchOperation, SessionSnapshot, SessionState, SnapshotEvent, SnapshotStatus
 
 StateT = TypeVar('StateT')
 
@@ -109,10 +109,10 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
             snapshot_id=record.snapshot_id,
             parent_id=record.parent_id,
             created_at=record.created_at,
-            event=SnapshotEvent.TURNEND if record.depth > 0 else SnapshotEvent.RUNSTART,
+            event=SnapshotEvent.TURNEND,
             state=state,
             status=record.status,
-            finish_reason=record.finish_reason,
+            finish_reason=AgentFinishReason(record.finish_reason) if record.finish_reason else None,
             error=record.error,
         )
 
@@ -179,6 +179,7 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
                 if record.depth == 0 or record.depth % self.checkpoint_interval == 0:
                     record.state_or_patch = next_snap.state.model_dump(by_alias=True)
                 else:
+                    assert record.parent_id is not None
                     parent_rec = await self._read_record(record.parent_id)
                     assert parent_rec is not None
                     parent_state = await self._reconstruct_state(parent_rec)
@@ -216,6 +217,7 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
                     session_id = parent_rec.session_id
                     depth = parent_rec.depth + 1
 
+                assert session_id is not None
                 if depth == 0 or depth % self.checkpoint_interval == 0:
                     kind = 'checkpoint'
                     state_or_patch = next_snap.state.model_dump(by_alias=True)

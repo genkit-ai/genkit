@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
-from genkit._ai._agents._session import SessionStore
+from genkit._ai._agents._session import SessionStore, SnapshotAborter
 from genkit._core._action import BidiAction, BidiConnection
 from genkit._core._typing import (
     AgentInit,
@@ -134,7 +134,7 @@ class InProcessTransport:
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
         """Abort a snapshot via the store captured at construction."""
-        if self._store is None or not hasattr(self._store, 'abort_snapshot'):
+        if not isinstance(self._store, SnapshotAborter):
             return None
         return await self._store.abort_snapshot(snapshot_id)
 

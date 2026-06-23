@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import websockets
 
@@ -19,7 +19,7 @@ class WebSocketAgentTransport(AgentTransport[StateT, StreamT]):
 
     def __init__(self, url: str) -> None:
         self.url = url
-        self._ws: websockets.WebSocketClientProtocol | None = None
+        self._ws: Any | None = None
 
     async def run_turn(
         self,

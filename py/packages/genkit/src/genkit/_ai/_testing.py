@@ -19,7 +19,7 @@
 import json
 from collections.abc import Callable
 from copy import deepcopy
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 from pydantic import BaseModel, Field
 
@@ -78,7 +78,7 @@ class ProgrammableModel:
             for chunk in self.chunks[self._request_idx]:
                 ctx.send_chunk(chunk)
         self._request_idx += 1
-        return response
+        return cast(ModelResponse[object], response)
 
 
 def define_programmable_model(

@@ -4,7 +4,7 @@ import asyncio
 import inspect
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Generic, Protocol, TypeVar, runtime_checkable
+from typing import Any, Generic, Protocol, TypeVar, cast, runtime_checkable
 
 from genkit._ai._json_patch import apply_json_patch
 from genkit._core._typing import (
@@ -14,6 +14,7 @@ from genkit._core._typing import (
     AgentOutput,
     AgentStreamChunk,
     Artifact,
+    JsonPatchOperation,
     MessageData,
     ModelResponseChunk,
     Part,
@@ -179,7 +180,7 @@ class AgentTurn(Generic[StateT, StreamT]):
         self,
         stream: AsyncIterable[AgentChunk[StreamT]],
         output: Awaitable[AgentResponse[StateT]],
-        abort_fn: Callable[[], None] | None = None,
+        abort_fn: Callable[[], Awaitable[None] | None] | None = None,
     ) -> None:
         self._stream = stream
         self._output = output
@@ -319,7 +320,7 @@ class AgentSession(Generic[StateT, StreamT]):
     def send(
         self,
         input: str | AgentInput,
-        opts: object = None,
+        opts: Any = None,
     ) -> AgentTurn[StateT, StreamT]:
         """Sends a message to the agent for a new turn."""
         if isinstance(input, str):
@@ -355,7 +356,8 @@ class AgentSession(Generic[StateT, StreamT]):
 
             async def _watch_external() -> None:
                 try:
-                    await external_signal.wait()
+                    if external_signal is not None and hasattr(external_signal, 'wait'):
+                        await external_signal.wait()
                     cancelled_event.set()
                     if not turn_output_future.done():
                         turn_output_future.cancel()
@@ -528,7 +530,7 @@ class AgentSession(Generic[StateT, StreamT]):
         if final is not None and final.state is not None:
             self._apply_output(final)
 
-    def _apply_custom_patch(self, patch: object) -> None:
+    def _apply_custom_patch(self, patch: Any) -> None:
         patch_list = patch.root if hasattr(patch, 'root') else patch
         self.state = apply_json_patch(self.state, patch_list)
 
