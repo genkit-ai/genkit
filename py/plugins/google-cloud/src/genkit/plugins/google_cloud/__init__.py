@@ -140,6 +140,11 @@ See Also:
     - Genkit documentation: https://genkit.dev/
 """
 
+from .session_store import (
+    FirestoreBranchingSessionStore,
+    FirestoreLatestStateStore,
+    FirestoreLinearSessionStore,
+)
 from .telemetry import add_gcp_telemetry
 
 
@@ -152,4 +157,10 @@ def package_name() -> str:
     return 'genkit.plugins.google_cloud'
 
 
-__all__ = ['add_gcp_telemetry', 'package_name']
+__all__ = [
+    'FirestoreBranchingSessionStore',
+    'FirestoreLatestStateStore',
+    'FirestoreLinearSessionStore',
+    'add_gcp_telemetry',
+    'package_name',
+]

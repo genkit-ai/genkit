@@ -52,22 +52,22 @@ class LatestStateStore(SessionStore, SnapshotAborter):
         self._subs: dict[str, list[asyncio.Queue[SnapshotStatus | None]]] = {}
 
     @abstractmethod
-    async def _put_record(self, record: LatestRecord) -> None:
+    async def put_record(self, record: LatestRecord) -> None:
         """Atomically persist or update a LatestRecord."""
         ...
 
     @abstractmethod
-    async def _read_record_by_session(self, session_id: str) -> LatestRecord | None:
+    async def read_record_by_session(self, session_id: str) -> LatestRecord | None:
         """Lookup a LatestRecord by session_id."""
         ...
 
     @abstractmethod
-    async def _read_record_by_snapshot(self, snapshot_id: str) -> LatestRecord | None:
+    async def read_record_by_snapshot(self, snapshot_id: str) -> LatestRecord | None:
         """Lookup a LatestRecord by snapshot_id (checking both slots)."""
         ...
 
     @abstractmethod
-    async def _delete_record(self, session_id: str) -> None:
+    async def delete_record(self, session_id: str) -> None:
         """Delete a LatestRecord by session_id."""
         ...
 
@@ -89,7 +89,7 @@ class LatestStateStore(SessionStore, SnapshotAborter):
 
         async with self._lock:
             if snapshot_id is not None:
-                record = await self._read_record_by_snapshot(snapshot_id)
+                record = await self.read_record_by_snapshot(snapshot_id)
                 if record is None:
                     return None
                 if record.last_good and record.last_good.snapshot_id == snapshot_id:
@@ -99,7 +99,7 @@ class LatestStateStore(SessionStore, SnapshotAborter):
                 return None
 
             assert session_id is not None
-            record = await self._read_record_by_session(session_id)
+            record = await self.read_record_by_session(session_id)
             if record is None or record.last_good is None:
                 return None
             return record.last_good.model_copy(deep=True)
@@ -111,7 +111,7 @@ class LatestStateStore(SessionStore, SnapshotAborter):
     ) -> SessionSnapshot | None:
         async with self._lock:
             if snapshot_id is not None:
-                record = await self._read_record_by_snapshot(snapshot_id)
+                record = await self.read_record_by_snapshot(snapshot_id)
                 if record is None:
                     return None
 
@@ -134,7 +134,7 @@ class LatestStateStore(SessionStore, SnapshotAborter):
                 else:
                     record.last_good = next_snap
 
-                await self._put_record(record)
+                await self.put_record(record)
                 self._notify_locked(snapshot_id, next_snap.status or SnapshotStatus.COMPLETED)
                 return next_snap
             else:
@@ -154,7 +154,7 @@ class LatestStateStore(SessionStore, SnapshotAborter):
                 if not session_id:
                     raise ValueError('session_id must be populated on new snapshot')
 
-                record = await self._read_record_by_session(session_id)
+                record = await self.read_record_by_session(session_id)
                 if record is None:
                     record = LatestRecord(session_id=session_id)
 
@@ -164,13 +164,13 @@ class LatestStateStore(SessionStore, SnapshotAborter):
                     record.last_good = next_snap
                     record.pending = None
 
-                await self._put_record(record)
+                await self.put_record(record)
                 self._notify_locked(sid, next_snap.status)
                 return next_snap
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
         async with self._lock:
-            record = await self._read_record_by_snapshot(snapshot_id)
+            record = await self.read_record_by_snapshot(snapshot_id)
             if record is None:
                 return None
 
@@ -178,7 +178,7 @@ class LatestStateStore(SessionStore, SnapshotAborter):
             if record.pending and record.pending.snapshot_id == snapshot_id:
                 if record.pending.status == SnapshotStatus.PENDING:
                     record.pending.status = SnapshotStatus.ABORTED
-                    await self._put_record(record)
+                    await self.put_record(record)
                     self._notify_locked(snapshot_id, record.pending.status)
                     return record.pending.status
                 return record.pending.status
@@ -187,7 +187,7 @@ class LatestStateStore(SessionStore, SnapshotAborter):
     async def on_snapshot_status_change(self, snapshot_id: str) -> asyncio.Queue[SnapshotStatus | None]:
         q: asyncio.Queue[SnapshotStatus | None] = asyncio.Queue()
         async with self._lock:
-            record = await self._read_record_by_snapshot(snapshot_id)
+            record = await self.read_record_by_snapshot(snapshot_id)
             if record is None:
                 await q.put(None)
                 return q
@@ -217,14 +217,14 @@ class InMemoryLatestStateStore(LatestStateStore):
         super().__init__()
         self._records: dict[str, LatestRecord] = {}
 
-    async def _put_record(self, record: LatestRecord) -> None:
+    async def put_record(self, record: LatestRecord) -> None:
         self._records[record.session_id] = record.model_copy(deep=True)
 
-    async def _read_record_by_session(self, session_id: str) -> LatestRecord | None:
+    async def read_record_by_session(self, session_id: str) -> LatestRecord | None:
         rec = self._records.get(session_id)
         return rec.model_copy(deep=True) if rec is not None else None
 
-    async def _read_record_by_snapshot(self, snapshot_id: str) -> LatestRecord | None:
+    async def read_record_by_snapshot(self, snapshot_id: str) -> LatestRecord | None:
         for rec in self._records.values():
             if rec.last_good and rec.last_good.snapshot_id == snapshot_id:
                 return rec.model_copy(deep=True)
@@ -232,7 +232,7 @@ class InMemoryLatestStateStore(LatestStateStore):
                 return rec.model_copy(deep=True)
         return None
 
-    async def _delete_record(self, session_id: str) -> None:
+    async def delete_record(self, session_id: str) -> None:
         self._records.pop(session_id, None)
 
 
@@ -250,10 +250,10 @@ class FileLatestStateStore(LatestStateStore):
     def _pointer_path(self, snapshot_id: str) -> str:
         return os.path.join(self.directory, f'{snapshot_id}.ptr')
 
-    async def _put_record(self, record: LatestRecord) -> None:
+    async def put_record(self, record: LatestRecord) -> None:
         # Save pointer paths first, then write the main record
         # Note: Delete old pointers first to avoid leakage
-        old_record = await self._read_record_by_session(record.session_id)
+        old_record = await self.read_record_by_session(record.session_id)
 
         def sync_op() -> None:
             if old_record:
@@ -282,7 +282,7 @@ class FileLatestStateStore(LatestStateStore):
 
         await asyncio.to_thread(sync_op)
 
-    async def _read_record_by_session(self, session_id: str) -> LatestRecord | None:
+    async def read_record_by_session(self, session_id: str) -> LatestRecord | None:
         def sync_op() -> LatestRecord | None:
             path = self._session_path(session_id)
             if not os.path.exists(path):
@@ -293,7 +293,7 @@ class FileLatestStateStore(LatestStateStore):
 
         return await asyncio.to_thread(sync_op)
 
-    async def _read_record_by_snapshot(self, snapshot_id: str) -> LatestRecord | None:
+    async def read_record_by_snapshot(self, snapshot_id: str) -> LatestRecord | None:
         def sync_op() -> str | None:
             ptr_path = self._pointer_path(snapshot_id)
             if not os.path.exists(ptr_path):
@@ -304,10 +304,10 @@ class FileLatestStateStore(LatestStateStore):
         session_id = await asyncio.to_thread(sync_op)
         if session_id is None:
             return None
-        return await self._read_record_by_session(session_id)
+        return await self.read_record_by_session(session_id)
 
-    async def _delete_record(self, session_id: str) -> None:
-        record = await self._read_record_by_session(session_id)
+    async def delete_record(self, session_id: str) -> None:
+        record = await self.read_record_by_session(session_id)
 
         def sync_op() -> None:
             if record:
