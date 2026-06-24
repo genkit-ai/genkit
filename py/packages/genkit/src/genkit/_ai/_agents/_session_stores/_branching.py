@@ -159,7 +159,7 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
                 message=(
                     f"Session '{session_id}' has branching snapshots ({len(leaves)} "
                     'leaves), so there is no single latest snapshot. Resume by '
-                    'snapshotId instead.'
+                    'snapshot_id instead.'
                 ),
             )
 

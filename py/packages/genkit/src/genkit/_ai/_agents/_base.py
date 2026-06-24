@@ -364,10 +364,10 @@ async def load_session(
     if init.snapshot_id and init.session_id:
         raise GenkitError(
             status='INVALID_ARGUMENT',
-            message=(f"Cannot send both 'snapshotId' and 'sessionId' to agent '{name}'. Provide exactly one."),
+            message=(f"Cannot send both 'snapshot_id' and 'session_id' to agent '{name}'. Provide exactly one."),
         )
     if (init.snapshot_id or init.session_id) and store is None:
-        field = 'snapshotId' if init.snapshot_id else 'sessionId'
+        field = 'snapshot_id' if init.snapshot_id else 'session_id'
         raise GenkitError(
             status='FAILED_PRECONDITION',
             message=(
@@ -380,7 +380,7 @@ async def load_session(
             status='FAILED_PRECONDITION',
             message=(
                 f"Cannot send 'state' to agent '{name}': this agent uses a "
-                "server-managed store. Send 'snapshotId' or 'sessionId' instead."
+                "server-managed store. Send 'snapshot_id' or 'session_id' instead."
             ),
         )
 
@@ -1094,7 +1094,7 @@ def define_custom_agent(
             else:
                 snapshot_id = getattr(input_dict, 'snapshotId', None) or getattr(input_dict, 'snapshot_id', None)
             if not isinstance(snapshot_id, str):
-                raise ValueError('snapshotId required and must be a string')
+                raise ValueError('snapshot_id required and must be a string')
             snap = await agent.get_snapshot(snapshot_id)
             if snap is None:
                 raise ValueError(f'Snapshot {snapshot_id} not found')

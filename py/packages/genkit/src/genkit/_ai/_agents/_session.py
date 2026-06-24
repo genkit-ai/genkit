@@ -138,7 +138,7 @@ def select_leaf_snapshot(
             status='FAILED_PRECONDITION',
             message=(
                 f"Session '{session_id}' has no leaf snapshot (corrupt or cyclic "
-                'history). Resume by snapshotId instead.'
+                'history). Resume by snapshot_id instead.'
             ),
         )
 
@@ -147,7 +147,7 @@ def select_leaf_snapshot(
         message=(
             f"Session '{session_id}' has branching snapshots ({len(leaves)} "
             'leaves), so there is no single latest snapshot. Resume by '
-            'snapshotId instead.'
+            'snapshot_id instead.'
         ),
     )
 
