@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import Protocol
 
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError
@@ -37,8 +37,10 @@ from genkit._core._typing import (
     ToolRequestPart,
 )
 
-if TYPE_CHECKING:
-    from genkit._ai._agents._runtime import SessionRunner
+
+class MessagePersister(Protocol):
+    async def set_messages(self, messages: list[MessageData]) -> None: ...
+
 
 HISTORY_TAG = '_genkit_history'
 PREAMBLE_KEY = '_genkit_agent_preamble'
@@ -120,7 +122,7 @@ def apply_preamble_tags(messages: Sequence[MessageData]) -> list[Message]:
 
 
 async def persist_turn_messages(
-    sess: SessionRunner,
+    sess: MessagePersister,
     history: list[MessageData],
     response_message: MessageData | Message | None,
     *,
