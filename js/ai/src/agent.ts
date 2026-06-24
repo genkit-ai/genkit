@@ -41,19 +41,23 @@ import {
   setCustomMetadataAttribute,
   setCustomMetadataAttributes,
 } from '@genkit-ai/core/tracing';
+import {
+  AgentAbortRequestSchema,
+  AgentAbortResponseSchema,
+  AgentInitSchema,
+  AgentInputSchema,
+  AgentOutputSchema,
+  AgentStreamChunkSchema,
+  GetSnapshotRequestSchema,
+  type AgentInit,
+  type AgentInput,
+  type AgentResult,
+  type AgentStreamChunk,
+} from './agent-types.js';
 import { generateStream } from './generate.js';
 import { diff, type JsonPatch } from './json-patch.js';
-import {
-  MessageData,
-  MessageSchema,
-  ModelResponseChunkSchema,
-} from './model-types.js';
-import {
-  ToolRequestPartSchema,
-  ToolResponsePartSchema,
-  type ToolRequestPart,
-  type ToolResponsePart,
-} from './parts.js';
+import { MessageData } from './model-types.js';
+import { type ToolRequestPart, type ToolResponsePart } from './parts.js';
 import {
   definePrompt,
   type PromptAction,
@@ -61,21 +65,40 @@ import {
 } from './prompt.js';
 import { InMemorySessionStore } from './session-stores.js';
 import {
-  AgentFinishReasonSchema,
-  Artifact,
-  ArtifactSchema,
   Session,
   SessionSnapshot,
   SessionSnapshotSchema,
   SessionState,
-  SessionStateSchema,
   SessionStore,
   reserveSnapshotId,
   runWithSession,
   type AgentFinishReason,
+  type Artifact,
   type SessionSnapshotInput,
   type SessionStoreOptions,
 } from './session.js';
+
+// Re-export the shared agent/session wire schemas + types from their canonical
+// home (./agent-types.ts) so existing imports from './agent.js' (and the
+// package barrel) keep working.
+export {
+  AgentAbortRequestSchema,
+  AgentAbortResponseSchema,
+  AgentInitSchema,
+  AgentInputSchema,
+  AgentOutputSchema,
+  AgentResultSchema,
+  AgentStreamChunkSchema,
+  GetSnapshotRequestSchema,
+  JsonPatchOperationSchema,
+  JsonPatchSchema,
+  TurnEndSchema,
+  type AgentInit,
+  type AgentInput,
+  type AgentResult,
+  type AgentStreamChunk,
+  type TurnEnd,
+} from './agent-types.js';
 
 /**
  * Default interval (ms) at which a detached (background) turn refreshes its
@@ -112,105 +135,6 @@ function isHeartbeatExpired(
 }
 
 /**
- * Schema for initializing an agent turn.
- */
-export const AgentInitSchema = z.object({
-  snapshotId: z.string().optional(),
-  sessionId: z.string().optional(),
-  state: SessionStateSchema.optional(),
-});
-
-/**
- * Initialization options for an agent turn.
- *
- * For server-managed agents (with a `store`) provide a `snapshotId` (resume an
- * exact snapshot, required for branching/snapshotting clients) and/or a
- * `sessionId` (resume the session's latest snapshot - the simple case used by
- * `useChat`-style clients). When both are provided, `snapshotId` selects the
- * snapshot to resume and `sessionId` acts as an ownership guard: the snapshot
- * must belong to that session. For client-managed agents (no store) provide
- * the full `state`.
- */
-export interface AgentInit<S = unknown> {
-  snapshotId?: string;
-  sessionId?: string;
-  state?: SessionState<S>;
-}
-
-/**
- * Schema for agent input messages and commands.
- */
-export const AgentInputSchema = z.object({
-  message: MessageSchema.optional(),
-  /** Options for resuming an interrupted generation. */
-  resume: z
-    .object({
-      respond: z.array(ToolResponsePartSchema).optional(),
-      restart: z.array(ToolRequestPartSchema).optional(),
-    })
-    .optional(),
-  detach: z.boolean().optional(),
-});
-
-/**
- * Input received by an agent turn.
- */
-export type AgentInput = z.infer<typeof AgentInputSchema>;
-
-/**
- * Schema identifying a turn termination event.
- */
-export const TurnEndSchema = z.object({
-  snapshotId: z.string().optional(),
-  /** The reason this turn finished (e.g. `stop`, `interrupted`). */
-  finishReason: AgentFinishReasonSchema.optional(),
-});
-
-/**
- * Identifies a turn termination event.
- */
-export type TurnEnd = z.infer<typeof TurnEndSchema>;
-
-/**
- * Schema for a single RFC 6902 (JSON Patch) operation.
- */
-export const JsonPatchOperationSchema = z.object({
-  op: z.enum(['add', 'remove', 'replace', 'move', 'copy', 'test']),
-  /** A JSON Pointer (RFC 6901) to the target location, e.g. `"/agentStatus"`. */
-  path: z.string(),
-  /** Source pointer; required for `move` and `copy`. */
-  from: z.string().optional(),
-  /** New value; required for `add`, `replace`, and `test`. */
-  value: z.any().optional(),
-});
-
-/**
- * Schema for an RFC 6902 JSON Patch: an ordered list of operations.
- */
-export const JsonPatchSchema = z.array(JsonPatchOperationSchema);
-
-/**
- * Schema for stream chunks emitted during agent execution.
- */
-export const AgentStreamChunkSchema = z.object({
-  modelChunk: ModelResponseChunkSchema.optional(),
-  /**
-   * An RFC 6902 JSON Patch describing a delta applied to the session's
-   * `custom` state. The runtime auto-emits these whenever custom state is
-   * mutated during a turn; clients apply them to keep their tracked custom
-   * state live mid-stream.
-   */
-  customPatch: JsonPatchSchema.optional(),
-  artifact: ArtifactSchema.optional(),
-  turnEnd: TurnEndSchema.optional(),
-});
-
-/**
- * Streamed chunk emitted during agent execution.
- */
-export type AgentStreamChunk = z.infer<typeof AgentStreamChunkSchema>;
-
-/**
  * Result returned by a single turn handler passed to {@link SessionRunner.run}.
  *
  * Returning a `finishReason` lets a custom agent explicitly state why the turn
@@ -244,51 +168,6 @@ export interface TurnContext {
   /** Zero-based index of this turn within the current invocation. */
   turnIndex: number;
 }
-
-/**
- * Schema for final results of an agent execution.
- */
-export const AgentResultSchema = z.object({
-  message: MessageSchema.optional(),
-  artifacts: z.array(ArtifactSchema).optional(),
-  /** The reason the whole invocation finished (e.g. `stop`, `interrupted`). */
-  finishReason: AgentFinishReasonSchema.optional(),
-});
-
-/**
- * Result returned upon completing an agent execution.
- */
-export type AgentResult = z.infer<typeof AgentResultSchema>;
-
-/**
- * Schema for output returned at turn completion.
- */
-export const AgentOutputSchema = z.object({
-  /**
-   * ID of the session this invocation belongs to, assigned by the framework
-   * when the invocation starts.
-   */
-  sessionId: z.string().optional(),
-  snapshotId: z.string().optional(),
-  state: SessionStateSchema.optional(),
-  message: MessageSchema.optional(),
-  artifacts: z.array(ArtifactSchema).optional(),
-  /** The reason the invocation finished (e.g. `stop`, `interrupted`). */
-  finishReason: AgentFinishReasonSchema.optional(),
-  /**
-   * Present when `finishReason` is `failed`. Carries the original error
-   * details (RuntimeError shape; the runtime resolves gracefully instead of
-   * throwing). The accompanying `state`/`snapshotId` hold the last-good state -
-   * the state the failed turn started with.
-   */
-  error: z
-    .object({
-      status: z.string().optional(),
-      message: z.string(),
-      details: z.any().optional(),
-    })
-    .optional(),
-});
 
 /**
  * Output returned at turn completion.
@@ -679,6 +558,9 @@ export class SessionRunner<State = unknown> {
       ...(snapshotId || this.newSnapshotId
         ? { snapshotId: (snapshotId || this.newSnapshotId)! }
         : {}),
+      // Stamp the session id onto every snapshot in the chain so callers can
+      // resolve a snapshot's session without reaching into its state.
+      sessionId: this.session.sessionId,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       state: currentState as SessionState<State>,
@@ -775,32 +657,6 @@ export type AgentFn<State> = (
 export const GetSnapshotDataInputSchema = z.object({
   snapshotId: z.string().optional(),
   sessionId: z.string().optional(),
-});
-
-/**
- * Schema for the input of the `getSnapshot` companion action. Provide exactly
- * one of `snapshotId` or `sessionId`.
- */
-export const GetSnapshotRequestSchema = z.object({
-  sessionId: z.string().optional(),
-  snapshotId: z.string().optional(),
-});
-
-/**
- * Schema for the input of the `abort` companion action.
- */
-export const AgentAbortRequestSchema = z.object({
-  snapshotId: z.string(),
-});
-
-/**
- * Schema for the output of the `abort` companion action.
- */
-export const AgentAbortResponseSchema = z.object({
-  snapshotId: z.string(),
-  status: z
-    .enum(['pending', 'completed', 'aborted', 'failed', 'expired'])
-    .optional(),
 });
 
 /**
@@ -930,13 +786,16 @@ async function resolveSession<State>(
     // the snapshot must belong to that session. A mismatch is API misuse, so it
     // propagates as a thrown error (AgentInitError) rather than being absorbed
     // into a graceful failure.
-    if (init.sessionId && snapshot.state?.sessionId !== init.sessionId) {
+    // Prefer the snapshot's top-level `sessionId`; fall back to the id carried
+    // in its state for rows written before snapshot-level ids existed.
+    const snapshotSessionId = snapshot.sessionId ?? snapshot.state?.sessionId;
+    if (init.sessionId && snapshotSessionId !== init.sessionId) {
       throw new AgentInitError({
         status: 'INVALID_ARGUMENT',
         message:
           `Snapshot ${init.snapshotId} does not belong to session ` +
           `${init.sessionId} (it belongs to ` +
-          `${snapshot.state?.sessionId ?? 'an unknown session'}).`,
+          `${snapshotSessionId ?? 'an unknown session'}).`,
       });
     }
 
@@ -1454,7 +1313,7 @@ export function defineCustomAgent<State = unknown>(
   const toClientSnapshot = (
     snapshot: SessionSnapshot<State>
   ): SessionSnapshot => {
-    if (!config.clientTransform?.state) {
+    if (!config.clientTransform?.state || !snapshot.state) {
       return snapshot as SessionSnapshot;
     }
     return {
@@ -1866,7 +1725,6 @@ export interface AgentConfig<
 
 /**
  * Defines and registers an agent by creating a prompt and wiring it into a
-
  * multi-turn agent in one step.
  *
  * This is a convenience shortcut for:
