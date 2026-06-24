@@ -705,8 +705,8 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
 
     def __init__(
         self,
-        in_queue: CloseableQueue[Any],
-        out_queue: CloseableQueue[Any],
+        in_queue: CloseableQueue[StreamInT],
+        out_queue: CloseableQueue[StreamOutT_co],
         result: asyncio.Future[BidiOutT_co],
     ) -> None:
         self.in_queue = in_queue
