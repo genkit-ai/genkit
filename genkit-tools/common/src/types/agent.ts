@@ -445,6 +445,8 @@ export type AbortSnapshotRequest = z.infer<typeof AbortSnapshotRequestSchema>;
  * Zod schema for the output of the `abortSnapshot` companion action.
  */
 export const AbortSnapshotResponseSchema = z.object({
+  /** Identifies the snapshot the abort attempt targeted. */
+  snapshotId: z.string(),
   /**
    * Snapshot's status after the abort attempt. For a pending snapshot
    * this is `aborted`. For an already-terminal snapshot this is the

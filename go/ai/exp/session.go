@@ -316,7 +316,7 @@ func newSnapshotActions[State any](
 			if status == "" {
 				return nil, core.NewError(core.NOT_FOUND, "abortSnapshot: snapshot %q not found", req.SnapshotID)
 			}
-			return &AbortSnapshotResponse{Status: status}, nil
+			return &AbortSnapshotResponse{SnapshotID: req.SnapshotID, Status: status}, nil
 		})
 	return getSnapshotAction, abortSnapshotAction
 }
