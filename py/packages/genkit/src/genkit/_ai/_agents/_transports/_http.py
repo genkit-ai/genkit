@@ -73,10 +73,10 @@ class HttpAgentTransport(AgentTransport[StateT, StreamT]):
         if self.agent_name:
             payload['key'] = self.agent_name
 
-        output_future = asyncio.get_event_loop().create_future()
+        output_future: asyncio.Future[AgentOutput] = asyncio.Future()
         stream_queue = CloseableQueue[AgentStreamChunk | BaseException]()
 
-        async def execute_request() -> None:
+        async def fetch_stream() -> None:
             try:
                 # We append ?stream=true to signal streaming mode to the Genkit server
                 request_url = f'{self.url}?stream=true' if 'stream=true' not in self.url else self.url
@@ -124,7 +124,7 @@ class HttpAgentTransport(AgentTransport[StateT, StreamT]):
                     output_future.set_exception(e)
                 stream_queue.put_nowait(e)
 
-        request_task = asyncio.create_task(execute_request())
+        request_task = asyncio.create_task(fetch_stream())
 
         # Handle abort event
         event = abort_event
@@ -140,10 +140,10 @@ class HttpAgentTransport(AgentTransport[StateT, StreamT]):
             output_future.add_done_callback(lambda _: abort_task.cancel())
 
         async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
-            async for item in stream_queue:
-                if isinstance(item, BaseException):
-                    raise item
-                yield item
+            async for chunk in stream_queue:
+                if isinstance(chunk, BaseException):
+                    raise chunk
+                yield chunk
 
         return stream_generator(), output_future
 
