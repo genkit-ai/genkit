@@ -14,10 +14,18 @@
  * limitations under the License.
  */
 
-export { agents } from './agents.js';
-export { artifacts } from './artifacts.js';
-export { fallback } from './fallback.js';
-export { filesystem } from './filesystem.js';
-export { retry } from './retry.js';
-export { skills } from './skills.js';
-export { toolApproval } from './tool-approval.js';
+import react from '@vitejs/plugin-react';
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+    },
+  },
+});
