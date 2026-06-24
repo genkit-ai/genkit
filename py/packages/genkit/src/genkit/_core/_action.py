@@ -775,35 +775,26 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
             # Close input immediately — no streaming inputs via one-shot path.
             in_queue.close()
 
-            result_holder: list[Any] = []
-            err_holder: list[BaseException] = []
-            done = asyncio.Event()
-
-            async def _run() -> None:
+            async def _run() -> OutputT:
                 try:
-                    result_holder.append(await bidi_fn(input, in_queue, out_queue))
-                except Exception as e:  # noqa: BLE001
-                    err_holder.append(e)
+                    return await bidi_fn(input, in_queue, out_queue)
                 finally:
                     out_queue.close()
-                    done.set()
 
             run_task = asyncio.create_task(_run())
             try:
                 # Forward chunks to Action's streaming callback.
                 async for chunk in out_queue:
                     ctx.send_chunk(chunk)
-                await done.wait()
-            finally:
+                return await run_task
+            except Exception:
                 if not run_task.done():
                     run_task.cancel()
                     try:
                         await run_task
                     except asyncio.CancelledError:
                         pass
-            if err_holder:
-                raise err_holder[0]
-            return result_holder[0] if result_holder else cast(OutputT, None)  # type: ignore[return-value]
+                raise
 
         super().__init__(
             kind=kind,
@@ -840,7 +831,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
         # managed at the agent runtime intake layer.
         in_queue = CloseableQueue()
         out_queue = CloseableQueue()
-        result_future: asyncio.Future[OutputT] = asyncio.get_event_loop().create_future()
+        result_future: asyncio.Future[OutputT] = asyncio.Future()
         conn = BidiConnection(in_queue, out_queue, result_future)
 
         token = None
@@ -878,8 +869,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
                 result_future.set_exception(e)
             finally:
                 # Close out_queue to signal the end of the streaming iterator.
-                if hasattr(out_queue, 'close'):
-                    out_queue.close()
+                out_queue.close()
 
         try:
             asyncio.create_task(_run())
