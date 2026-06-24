@@ -803,7 +803,12 @@ class AgentRuntime:
 
         # --- Normal completion path ---
         await fn_task
-        await forward_task
+        if not forward_task.done():
+            forward_task.cancel()
+            try:
+                await forward_task
+            except asyncio.CancelledError:
+                pass
 
         result = result_holder[0] if result_holder else None
 

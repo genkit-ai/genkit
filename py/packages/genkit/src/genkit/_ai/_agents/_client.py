@@ -346,7 +346,7 @@ class AgentSession(Generic[StateT, StreamT]):
                     artifacts=self.artifacts,
                 )
             )
-        return self._connect_init or AgentInit(session_id=self.session_id)
+        return self._connect_init or AgentInit()
 
     def send(
         self,

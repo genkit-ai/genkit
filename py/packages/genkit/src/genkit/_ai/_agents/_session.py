@@ -44,6 +44,13 @@ class SessionErrorType(str, Enum):
     AMBIGUOUS_BRANCH = 'ambiguousBranch'
 
 
+class StoreRecordKind(str, Enum):
+    """The storage kind of a session store record."""
+
+    CHECKPOINT = 'checkpoint'
+    DIFF = 'diff'
+
+
 # Bare RFC-4122 UUID — session ids from useChat must match this shape.
 SESSION_ID_PATTERN = re.compile(
     r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
