@@ -715,7 +715,8 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
    */
   private buildResponse(
     output: Promise<AgentOutput>,
-    isAborted: () => boolean
+    isAborted: () => boolean,
+    messageCountBeforeTurn: number
   ): Promise<AgentResponse<State>> {
     return (async (): Promise<AgentResponse<State>> => {
       let raw: AgentOutput<State>;
@@ -727,6 +728,18 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
         } else {
           throw this.toAgentError(e);
         }
+      }
+      // A failed/aborted turn that returns no authoritative messages leaves the
+      // eagerly-pushed user message (see `sendStream`) orphaned in `this.messages`
+      // with no reply. Roll it back so it isn't re-sent on the next turn. When the
+      // turn returns authoritative `state.messages`, `applyOutput` replaces the
+      // array wholesale, so this rollback is a no-op for the success path.
+      if (
+        (raw.finishReason === 'failed' || raw.finishReason === 'aborted') &&
+        raw.state?.messages === undefined &&
+        !raw.message
+      ) {
+        this.messages.length = messageCountBeforeTurn;
       }
       this.applyOutput(raw);
       const response = new AgentResponseImpl<State>(
@@ -777,6 +790,32 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
     opts?: { abortSignal?: AbortSignal }
   ): AgentTurn<State> {
     const agentInput = toAgentInput(input);
+
+    // Bail before pushing the message or dispatching the turn if the caller's
+    // signal is already aborted: there's no point starting work, and we must
+    // not leave an orphaned user message in `this.messages`.
+    if (opts?.abortSignal?.aborted) {
+      const aborted = (async (): Promise<AgentResponse<State>> => {
+        return new AgentResponseImpl<State>(
+          { finishReason: 'aborted' as AgentFinishReason },
+          [...this.messages],
+          () => this.state
+        );
+      })();
+      aborted.catch(() => {});
+      return {
+        stream: (async function* (): AsyncIterable<AgentChunk<State>> {})(),
+        response: aborted as Promise<AgentResponse<State, unknown>>,
+        abort() {},
+      };
+    }
+
+    // Remember the message count so a failed/aborted turn that returns no
+    // authoritative messages can roll back the eager push below (see
+    // `buildResponse`). Note: turns are assumed single-flight - this client
+    // does not guard against overlapping `send`/`sendStream` calls on the same
+    // chat (they would race on `messages`/`snapshotId`/`clientState`).
+    const messageCountBeforeTurn = this.messages.length;
     if (agentInput.message) {
       this.messages.push(agentInput.message);
     }
@@ -790,7 +829,11 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
       { abortSignal: controller.signal }
     );
 
-    const responsePromise = this.buildResponse(output, isAborted);
+    const responsePromise = this.buildResponse(
+      output,
+      isAborted,
+      messageCountBeforeTurn
+    );
     // Avoid unhandled-rejection warnings when only the stream is consumed.
     responsePromise.catch(() => {});
 
@@ -852,6 +895,13 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
    * state, keeping {@link state} live as the turn streams. The first patch of
    * a turn is a whole-document replace (rooted at `""`) that re-bases the
    * client onto the server's current baseline.
+   *
+   * Transport requirement: `customPatch` chunks carry no sequence number and
+   * are applied positionally, so the transport MUST deliver them in order with
+   * no loss. The in-order SSE channel used today satisfies this; a lossy or
+   * reordering transport would yield silently-wrong state (each turn does begin
+   * with a whole-document replace, so corruption cannot persist past a turn
+   * boundary).
    */
   private applyCustomPatch(patch: JsonPatch): void {
     const current = this.clientState?.custom;

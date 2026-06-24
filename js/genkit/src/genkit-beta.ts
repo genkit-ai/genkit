@@ -39,9 +39,6 @@ import {
 
 import { defineFormat } from '@genkit-ai/ai/formats';
 import {
-  Session,
-  SessionError,
-  getCurrentSession,
   type SessionSnapshot,
   type SessionSnapshotInput,
   type SessionState,
@@ -167,19 +164,6 @@ export class GenkitBeta extends Genkit {
     config: AgentConfig<State, I>
   ) {
     return defineAgent<State, I>(this.registry, config);
-  }
-
-  /**
-   * Gets the current session from async local storage.
-   *
-   * @beta
-   */
-  currentSession<S = any>(): Session<S> {
-    const currentSession = getCurrentSession(this.registry);
-    if (!currentSession) {
-      throw new SessionError('not running within a session');
-    }
-    return currentSession as any as Session<S>;
   }
 
   /**

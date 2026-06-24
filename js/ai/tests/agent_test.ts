@@ -1224,7 +1224,6 @@ describe('Agent', () => {
         createdAt: stale,
         updatedAt: stale,
         heartbeatAt: stale,
-        event: 'turnEnd',
         status: 'pending',
         state: { sessionId: 'sess-expired', custom: { foo: 'bar' } },
       }));
@@ -1259,7 +1258,6 @@ describe('Agent', () => {
         createdAt: now,
         updatedAt: now,
         heartbeatAt: now,
-        event: 'turnEnd',
         status: 'pending',
         state: { sessionId: 'sess-fresh', custom: { foo: 'bar' } },
       }));
@@ -1288,7 +1286,6 @@ describe('Agent', () => {
       const snapshotId = await store.saveSnapshot(undefined, () => ({
         createdAt: old,
         updatedAt: old,
-        event: 'turnEnd',
         status: 'pending',
         state: { sessionId: 'sess-noheartbeat', custom: { foo: 'bar' } },
       }));

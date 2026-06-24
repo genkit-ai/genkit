@@ -64,16 +64,34 @@ function unescapeToken(token: string): string {
 }
 
 /**
+ * Reference tokens that could be used to pollute `Object.prototype` (or an
+ * object's constructor) when walking into an existing object. We reject these
+ * outright since patches may originate from untrusted, server-sent data.
+ */
+const FORBIDDEN_TOKENS = new Set(['__proto__', 'prototype', 'constructor']);
+
+/**
  * Parses a JSON Pointer string into its reference tokens.
  *
  * The root pointer (`""`) parses to an empty array.
+ *
+ * Reference tokens that could lead to prototype pollution (`__proto__`,
+ * `prototype`, `constructor`) are rejected.
  */
 function parsePointer(pointer: string): string[] {
   if (pointer === '') return [];
   if (pointer[0] !== '/') {
     throw new Error(`Invalid JSON Pointer: "${pointer}" must start with "/".`);
   }
-  return pointer.slice(1).split('/').map(unescapeToken);
+  const tokens = pointer.slice(1).split('/').map(unescapeToken);
+  for (const token of tokens) {
+    if (FORBIDDEN_TOKENS.has(token)) {
+      throw new Error(
+        `Invalid JSON Pointer: "${pointer}" contains forbidden token "${token}".`
+      );
+    }
+  }
+  return tokens;
 }
 
 /**
