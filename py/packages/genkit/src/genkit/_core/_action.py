@@ -789,8 +789,8 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
         # Wrap bidi_fn as a standard Action fn (closes in_queue immediately,
         # forwards out_queue chunks to on_chunk callback) so Action.run() works.
         async def _as_streaming_fn(input: InputT, ctx: ActionRunContext) -> OutputT:  # noqa: A002
-            in_queue = CloseableQueue(maxsize=1)
-            out_queue = CloseableQueue(maxsize=1)
+            in_queue = CloseableQueue()
+            out_queue = CloseableQueue()
             # Close input immediately — no streaming inputs via one-shot path.
             in_queue.close()
 
@@ -855,10 +855,9 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
             )
         input = validated
 
-        # in_queue is size 1 (backpressure: caller blocks between sends).
-        # out_queue is unbounded: agent fn emits multiple chunks per turn
-        # and the caller may not be consuming yet — put_nowait must not block.
-        in_queue = CloseableQueue(maxsize=1)
+        # in_queue and out_queue are unbounded. Turn-level backpressure is
+        # managed at the agent runtime intake layer.
+        in_queue = CloseableQueue()
         out_queue = CloseableQueue()
         result_future: asyncio.Future[OutputT] = asyncio.get_event_loop().create_future()
         conn = BidiConnection(in_queue, out_queue, result_future)
