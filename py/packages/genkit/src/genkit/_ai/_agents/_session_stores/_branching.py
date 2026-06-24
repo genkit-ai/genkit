@@ -161,6 +161,11 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
                     'leaves), so there is no single latest snapshot. Resume by '
                     'snapshot_id instead.'
                 ),
+                details={
+                    'type': 'ambiguous_branch',
+                    'sessionId': session_id,
+                    'leaves': list(leaves),
+                },
             )
 
     async def save_snapshot(

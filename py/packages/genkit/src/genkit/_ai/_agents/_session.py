@@ -149,6 +149,11 @@ def select_leaf_snapshot(
             'leaves), so there is no single latest snapshot. Resume by '
             'snapshot_id instead.'
         ),
+        details={
+            'type': 'ambiguous_branch',
+            'sessionId': session_id,
+            'leaves': [snap.snapshot_id for snap in leaves],
+        },
     )
 
 
