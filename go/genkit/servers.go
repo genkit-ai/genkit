@@ -166,12 +166,28 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 
 		var body struct {
 			Data json.RawMessage `json:"data"`
+			Init json.RawMessage `json:"init,omitempty"` // Per-session init for bidi actions; rejected otherwise.
 		}
 		if r.Body != nil && r.ContentLength > 0 {
 			defer r.Body.Close()
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				return core.NewPublicError(core.INVALID_ARGUMENT, err.Error(), nil)
 			}
+		}
+
+		// Rejected before the streaming branch commits to SSE headers, so a
+		// non-bidi action receiving init fails with a proper HTTP 400 on
+		// every path rather than an in-band SSE error event on a 200.
+		if err := checkInitSupported(a, body.Init); err != nil {
+			return err
+		}
+
+		run := func(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (json.RawMessage, error) {
+			r, err := runActionWithOptionalInit(ctx, a, input, body.Init, cb)
+			if err != nil {
+				return nil, err
+			}
+			return r.Result, nil
 		}
 
 		stream, err := parseBoolQueryParam(r, "stream")
@@ -219,14 +235,14 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 			w.Header().Set("Transfer-Encoding", "chunked")
 
 			if opts.StreamManager != nil {
-				return runWithDurableStreaming(ctx, w, a, opts.StreamManager, body.Data)
+				return runWithDurableStreaming(ctx, w, run, opts.StreamManager, body.Data)
 			}
 
-			return runWithStreaming(ctx, w, a, body.Data)
+			return runWithStreaming(ctx, w, run, body.Data)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		out, err := a.RunJSON(ctx, body.Data, nil)
+		out, err := run(ctx, body.Data, nil)
 		if err != nil {
 			return err
 		}
@@ -234,8 +250,12 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 	}
 }
 
+// runJSONFunc abstracts over RunJSON and RunBidiJSON for the handler's
+// execution paths.
+type runJSONFunc = func(context.Context, json.RawMessage, func(context.Context, json.RawMessage) error) (json.RawMessage, error)
+
 // runWithStreaming executes the action with standard HTTP streaming (no durability).
-func runWithStreaming(ctx context.Context, w http.ResponseWriter, a api.Action, input json.RawMessage) error {
+func runWithStreaming(ctx context.Context, w http.ResponseWriter, run runJSONFunc, input json.RawMessage) error {
 	callback := func(ctx context.Context, msg json.RawMessage) error {
 		if err := writeSSEMessage(w, msg); err != nil {
 			return err
@@ -246,7 +266,7 @@ func runWithStreaming(ctx context.Context, w http.ResponseWriter, a api.Action, 
 		return nil
 	}
 
-	out, err := a.RunJSON(ctx, input, callback)
+	out, err := run(ctx, input, callback)
 	if err != nil {
 		if werr := writeSSEError(w, err); werr != nil {
 			return werr
@@ -263,7 +283,7 @@ func runWithStreaming(ctx context.Context, w http.ResponseWriter, a api.Action, 
 // original client disconnects, the flow continues running and writing to durable
 // storage. This allows other clients to subscribe to the stream and receive the
 // remaining chunks and final result.
-func runWithDurableStreaming(ctx context.Context, w http.ResponseWriter, a api.Action, sm streaming.StreamManager, input json.RawMessage) error {
+func runWithDurableStreaming(ctx context.Context, w http.ResponseWriter, run runJSONFunc, sm streaming.StreamManager, input json.RawMessage) error {
 	streamID := uuid.New().String()
 
 	durableStream, err := sm.Open(ctx, streamID)
@@ -301,7 +321,7 @@ func runWithDurableStreaming(ctx context.Context, w http.ResponseWriter, a api.A
 		return nil
 	}
 
-	out, err := a.RunJSON(durableCtx, input, callback)
+	out, err := run(durableCtx, input, callback)
 	if err != nil {
 		durableStream.Error(durableCtx, err)
 		select {

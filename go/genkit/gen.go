@@ -80,7 +80,7 @@ type ReflectionRunActionParams struct {
 	// Additional runtime context data (ex. auth context data).
 	Context json.RawMessage `json:"context,omitempty"`
 	// Initialization parameters to establish long running session states.
-	Init any `json:"init,omitempty"`
+	Init json.RawMessage `json:"init,omitempty"`
 	// An input with the type that this action expects.
 	Input json.RawMessage `json:"input,omitempty"`
 	// Action key that consists of the action type and ID.
@@ -112,17 +112,18 @@ type ReflectionRunActionStateParamsState struct {
 }
 
 // ReflectionSendInputStreamChunkParams is the payload for the
-// "sendInputStreamChunk" notification (bidirectional streaming, not yet implemented).
+// "sendInputStreamChunk" notification used to deliver one inbound chunk
+// to a running bidirectional action.
 type ReflectionSendInputStreamChunkParams struct {
-	Chunk     any    `json:"chunk,omitempty"`
-	RequestID string `json:"requestId,omitempty"`
+	Chunk     json.RawMessage `json:"chunk,omitempty"`
+	RequestID string          `json:"requestId,omitempty"`
 }
 
 // ReflectionStreamChunkParams is the payload for the "streamChunk"
 // notification sent by the runtime during a streaming runAction request.
 type ReflectionStreamChunkParams struct {
 	// The streamed data chunk.
-	Chunk any `json:"chunk,omitempty"`
+	Chunk json.RawMessage `json:"chunk,omitempty"`
 	// ID of the JSON-RPC request this chunk belongs to.
 	RequestID string `json:"requestId,omitempty"`
 }
