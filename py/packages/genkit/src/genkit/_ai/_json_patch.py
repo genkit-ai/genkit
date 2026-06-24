@@ -20,7 +20,20 @@ import copy
 import json
 from typing import Any
 
-from genkit._core._typing import JsonPatchOp, JsonPatchOperation
+from genkit._core._compat import StrEnum
+from genkit._core._typing import JsonPatchOperation
+
+
+class JsonPatchOp(StrEnum):
+    """Supported RFC 6902 operation types."""
+
+    ADD = 'add'
+    REMOVE = 'remove'
+    REPLACE = 'replace'
+    MOVE = 'move'
+    COPY = 'copy'
+    TEST = 'test'
+
 
 
 def _escape_token(token: str) -> str:
@@ -74,9 +87,9 @@ def _diff_recursive(from_value: Any, to_value: Any, pointer: str, patch: list[Js
             in_from = key in from_value
             in_to = key in to_value
             if in_from and not in_to:
-                patch.append(JsonPatchOperation(op=JsonPatchOp.REMOVE, path=child_pointer))
+                patch.append(JsonPatchOperation(op=JsonPatchOp.REMOVE.value, path=child_pointer))
             elif not in_from and in_to:
-                patch.append(JsonPatchOperation(op=JsonPatchOp.ADD, path=child_pointer, value=_clone(to_value[key])))
+                patch.append(JsonPatchOperation(op=JsonPatchOp.ADD.value, path=child_pointer, value=_clone(to_value[key])))
             else:
                 _diff_recursive(from_value[key], to_value[key], child_pointer, patch)
         return
@@ -87,13 +100,13 @@ def _diff_recursive(from_value: Any, to_value: Any, pointer: str, patch: list[Js
             _diff_recursive(from_value[i], to_value[i], f'{pointer}/{i}', patch)
         if len(to_value) > len(from_value):
             for i in range(len(from_value), len(to_value)):
-                patch.append(JsonPatchOperation(op=JsonPatchOp.ADD, path=f'{pointer}/-', value=_clone(to_value[i])))
+                patch.append(JsonPatchOperation(op=JsonPatchOp.ADD.value, path=f'{pointer}/-', value=_clone(to_value[i])))
         elif len(from_value) > len(to_value):
             for i in range(len(from_value) - 1, len(to_value) - 1, -1):
-                patch.append(JsonPatchOperation(op=JsonPatchOp.REMOVE, path=f'{pointer}/{i}'))
+                patch.append(JsonPatchOperation(op=JsonPatchOp.REMOVE.value, path=f'{pointer}/{i}'))
         return
 
-    patch.append(JsonPatchOperation(op=JsonPatchOp.REPLACE, path=pointer, value=_clone(to_value)))
+    patch.append(JsonPatchOperation(op=JsonPatchOp.REPLACE.value, path=pointer, value=_clone(to_value)))
 
 
 def apply_json_patch(doc: Any, patch: list[JsonPatchOperation]) -> Any:
