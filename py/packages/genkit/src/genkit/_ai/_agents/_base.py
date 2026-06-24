@@ -33,7 +33,7 @@ from genkit._ai._agents._session import (
     SnapshotCallback,
     SnapshotContext,
     StateT,
-    _assert_valid_session_id,
+    assert_valid_session_id,
     run_with_session,
 )
 from genkit._ai._agents._transports._inprocess import InProcessTransport
@@ -98,12 +98,12 @@ StreamOutT = TypeVar('StreamOutT')
 StreamInT = TypeVar('StreamInT')
 
 # Bidi/intake queue items include a sentinel marking stream end.
-_BidiInQueueItem = AgentInput | QueueSentinel
-_StreamQueueItem = AgentStreamChunk | QueueSentinel
-_IntakeQueueItem = AgentInput | QueueSentinel
+BidiInQueueItem = AgentInput | QueueSentinel
+StreamQueueItem = AgentStreamChunk | QueueSentinel
+IntakeQueueItem = AgentInput | QueueSentinel
 
 
-class _ToolRequestRecord(TypedDict, total=False):
+class ToolRequestRecord(TypedDict, total=False):
     """Normalized tool-request fields extracted from session history."""
 
     name: str | None
@@ -123,7 +123,7 @@ class TurnResult:
     finish_reason: AgentFinishReason | None = None
 
 
-def _to_agent_finish_reason(fr: FinishReason | None) -> AgentFinishReason | None:
+def to_agent_finish_reason(fr: FinishReason | None) -> AgentFinishReason | None:
     if fr is None:
         return None
     for reason in AgentFinishReason:
@@ -132,7 +132,7 @@ def _to_agent_finish_reason(fr: FinishReason | None) -> AgentFinishReason | None
     return AgentFinishReason.UNKNOWN
 
 
-def _tool_request_parts(message: MessageData | None) -> list[Part]:
+def tool_request_parts(message: MessageData | None) -> list[Part]:
     parts: list[Part] = []
     if message is None:
         return parts
@@ -143,7 +143,7 @@ def _tool_request_parts(message: MessageData | None) -> list[Part]:
     return parts
 
 
-def _to_error_details(exc: BaseException) -> GenkitRuntimeError:
+def to_error_details(exc: BaseException) -> GenkitRuntimeError:
     status = getattr(exc, 'status', None) or 'INTERNAL'
     message = str(exc) or 'Internal failure'
     details = getattr(exc, 'detail', None) or getattr(exc, 'details', None)
@@ -152,8 +152,8 @@ def _to_error_details(exc: BaseException) -> GenkitRuntimeError:
     return GenkitRuntimeError(status=str(status), message=message, details=details)
 
 
-def _collect_tool_requests_from_history(history: list[MessageData]) -> list[_ToolRequestRecord]:
-    found: list[_ToolRequestRecord] = []
+def collect_tool_requests_from_history(history: list[MessageData]) -> list[ToolRequestRecord]:
+    found: list[ToolRequestRecord] = []
     for msg in history:
         role = getattr(msg, 'role', None)
         if role not in (Role.MODEL, 'model'):
@@ -166,11 +166,11 @@ def _collect_tool_requests_from_history(history: list[MessageData]) -> list[_Too
             if tr is None:
                 continue
             if hasattr(tr, 'model_dump'):
-                tr_dict: _ToolRequestRecord = tr.model_dump(by_alias=True, exclude_none=True)
+                tr_dict: ToolRequestRecord = tr.model_dump(by_alias=True, exclude_none=True)
             elif isinstance(tr, dict):
                 tr_dict = tr  # type: ignore[assignment]
             else:
-                tr_record: _ToolRequestRecord = {
+                tr_record: ToolRequestRecord = {
                     'name': getattr(tr, 'name', None),
                     'ref': getattr(tr, 'ref', None),
                     'input': getattr(tr, 'input', None),
@@ -182,7 +182,7 @@ def _collect_tool_requests_from_history(history: list[MessageData]) -> list[_Too
 
 def validate_resume_against_history(resume: Resume, history: list[MessageData]) -> None:
     """Ensure resume entries reference tool requests present in session history."""
-    all_tool_requests = _collect_tool_requests_from_history(history)
+    all_tool_requests = collect_tool_requests_from_history(history)
 
     for restart in resume.restart or []:
         tr = restart.tool_request
@@ -220,7 +220,7 @@ def validate_resume_against_history(resume: Resume, history: list[MessageData]) 
 
 
 def _emit_interrupt_tool_chunk(ctx: ActionRunContext, response: ModelResponse) -> None:
-    parts = _tool_request_parts(response.message)
+    parts = tool_request_parts(response.message)
     if not parts:
         return
     ctx.send_chunk(
@@ -274,7 +274,7 @@ def apply_preamble_tags(messages: Sequence[MessageData]) -> list[Message]:
 
 
 async def _persist_turn_messages(
-    sess: SessionRunner,
+    sess: 'SessionRunner',
     history: list[MessageData],
     response_message: MessageData | Message | None,
     *,
@@ -317,7 +317,7 @@ class ClientTransform(TypedDict, total=False):
     chunk: ChunkTransform
 
 
-def _resolve_client_transform(
+def resolve_client_transform(
     *,
     client_transform: ClientTransform | None = None,
     transform: StateTransform | None = None,
@@ -347,7 +347,7 @@ BidiFunc = Callable[
 # ---------------------------------------------------------------------------
 
 
-async def _load_session(
+async def load_session(
     init: AgentInit,
     store: SessionStore | None,
     *,
@@ -393,7 +393,7 @@ async def _load_session(
         return Session(initial_state=snap.state), snap
 
     if store is not None and init.session_id:
-        _assert_valid_session_id(init.session_id)
+        assert_valid_session_id(init.session_id)
         snap = await store.get_snapshot(session_id=init.session_id)
         if snap is not None:
             return Session(initial_state=snap.state), snap
@@ -424,7 +424,7 @@ class AgentRuntime:
         store: SessionStore | None,
         snapshot_callback: SnapshotCallback | None,
         client_transform: ClientTransform | None,
-        out_queue: asyncio.Queue[_StreamQueueItem],
+        out_queue: asyncio.Queue[StreamQueueItem],
     ) -> None:
         self._name = name
         self._session = session
@@ -441,7 +441,7 @@ class AgentRuntime:
 
         # Separate intake queue: runtime controls its lifecycle,
         # BidiAction's in_queue is forwarded here by run().
-        self._intake: asyncio.Queue[_IntakeQueueItem] = asyncio.Queue(maxsize=1)
+        self._intake: asyncio.Queue[IntakeQueueItem] = asyncio.Queue(maxsize=1)
 
         self._sess = SessionRunner(
             session,
@@ -687,7 +687,7 @@ class AgentRuntime:
         except Exception:  # noqa: BLE001, S110
             pass  # best-effort; log in production
 
-    async def run(self, fn: AgentFn, in_queue: asyncio.Queue[_BidiInQueueItem]) -> AgentOutput:
+    async def run(self, fn: AgentFn, in_queue: asyncio.Queue[BidiInQueueItem]) -> AgentOutput:
         """Drive fn to completion, return AgentOutput.
 
         Two terminal paths (v1):
@@ -854,7 +854,7 @@ class SessionRunner(Generic[StateT]):
     def __init__(
         self,
         session: Session[StateT],
-        intake: asyncio.Queue[_IntakeQueueItem],
+        intake: asyncio.Queue[IntakeQueueItem],
         on_begin_turn: Callable[[], Awaitable[None]] | None = None,
         on_end_turn: Callable[[AgentFinishReason | None], Awaitable[None]] | None = None,
     ) -> None:
@@ -922,9 +922,8 @@ class SessionRunner(Generic[StateT]):
                 self._last_good_state_version = self._session.version
                 self._last_good_finish_reason = self._last_turn_finish_reason
                 self.turn_index += 1
-            except Exception as exc:  # noqa: BLE001
-                self._last_turn_finish_reason = AgentFinishReason.FAILED
-                self._last_turn_error = _to_error_details(exc)
+            except BaseException as exc:
+                self._last_turn_error = to_error_details(exc)
 
                 if self._on_end_turn is not None:
                     await self._on_end_turn(AgentFinishReason.FAILED)
@@ -1042,17 +1041,17 @@ def define_custom_agent(
     metadata: dict[str, object] | None = None,
 ) -> Agent:
     """Register a custom agent; ``fn`` owns the turn loop via ``sess.run``."""
-    resolved_transform = _resolve_client_transform(
+    resolved_transform = resolve_client_transform(
         client_transform=client_transform,
         transform=transform,
     )
 
-    async def _bidi_fn(
+    async def bidi_fn(
         init: AgentInit,
-        in_queue: asyncio.Queue[_BidiInQueueItem],
-        out_queue: asyncio.Queue[_StreamQueueItem],
+        in_queue: asyncio.Queue[BidiInQueueItem],
+        out_queue: asyncio.Queue[StreamQueueItem],
     ) -> AgentOutput:
-        session, parent = await _load_session(init, store, agent_name=name)
+        session, parent = await load_session(init, store, agent_name=name)
         state = await session.state()
         if state.session_id:
             span = trace_api.get_current_span()
@@ -1073,7 +1072,7 @@ def define_custom_agent(
 
     agent = Agent(
         name=name,
-        bidi_fn=_bidi_fn,
+        bidi_fn=bidi_fn,
         description=description,
         metadata=metadata,
         store=store,
@@ -1082,7 +1081,7 @@ def define_custom_agent(
 
     if store is not None:
 
-        async def _snapshot_fn(input_dict: Any) -> SessionSnapshot:  # noqa: ANN401
+        async def snapshot_fn(input_dict: Any) -> SessionSnapshot:  # noqa: ANN401
             if isinstance(input_dict, dict):
                 snapshot_id = input_dict.get('snapshotId') or input_dict.get('snapshot_id')
             else:
@@ -1097,7 +1096,7 @@ def define_custom_agent(
         snapshot_action = Action(
             kind=ActionKind.AGENT_SNAPSHOT,
             name=name,
-            fn=_snapshot_fn,
+            fn=snapshot_fn,
         )
         registry.register_action_from_instance(snapshot_action)
 
@@ -1149,7 +1148,8 @@ async def _generate_prompt_agent_turn(
             response=response,
         )
 
-    return TurnResult(finish_reason=_to_agent_finish_reason(response.finish_reason))
+    # Return the turn result wrapping the model finish reason
+    return TurnResult(finish_reason=to_agent_finish_reason(response.finish_reason))
 
 
 def define_agent(

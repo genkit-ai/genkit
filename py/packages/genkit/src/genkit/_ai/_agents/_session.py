@@ -37,7 +37,7 @@ from genkit._core._typing import (
 )
 
 # Bare RFC-4122 UUID — session ids from useChat must match this shape.
-_SESSION_ID_PATTERN = re.compile(
+SESSION_ID_PATTERN = re.compile(
     r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
     re.IGNORECASE,
 )
@@ -112,15 +112,15 @@ def supports_abort(store: SessionStore) -> bool:
     return isinstance(store, SnapshotAborter)
 
 
-def _assert_valid_session_id(session_id: str) -> None:
-    if not _SESSION_ID_PATTERN.match(session_id):
+def assert_valid_session_id(session_id: str) -> None:
+    if not SESSION_ID_PATTERN.match(session_id):
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=(f"Invalid sessionId '{session_id}': must be a bare UUID (e.g. from crypto.randomUUID())."),
         )
 
 
-def _select_leaf_snapshot(
+def select_leaf_snapshot(
     snapshots: list[SessionSnapshot],
     session_id: str,
 ) -> SessionSnapshot | None:
@@ -185,13 +185,13 @@ class InMemorySessionStore:
                 return snap.model_copy(deep=True) if snap is not None else None
 
             assert session_id is not None
-            _assert_valid_session_id(session_id)
+            assert_valid_session_id(session_id)
             owned = [
                 snap
                 for snap in self._snapshots.values()
                 if snap.state is not None and snap.state.session_id == session_id
             ]
-            leaf = _select_leaf_snapshot(owned, session_id)
+            leaf = select_leaf_snapshot(owned, session_id)
             return leaf.model_copy(deep=True) if leaf is not None else None
 
     async def latest_snapshot(self) -> SessionSnapshot | None:
@@ -231,7 +231,7 @@ class InMemorySessionStore:
             self._snapshots[sid] = next_snap.model_copy(deep=True)
 
             if existing is None or existing.status != next_snap.status:
-                self._notify_locked(sid, next_snap.status or SnapshotStatus.COMPLETED)
+                self.notify_locked(sid, next_snap.status or SnapshotStatus.COMPLETED)
 
             return next_snap
 
@@ -242,7 +242,7 @@ class InMemorySessionStore:
                 return None
             if snap.status == SnapshotStatus.PENDING:
                 snap.status = SnapshotStatus.ABORTED
-                self._notify_locked(snapshot_id, snap.status)
+                self.notify_locked(snapshot_id, snap.status)
             return snap.status
 
     async def on_snapshot_status_change(self, snapshot_id: str) -> asyncio.Queue[SnapshotStatus | None]:
@@ -256,7 +256,7 @@ class InMemorySessionStore:
             self._subs.setdefault(snapshot_id, []).append(q)
         return q
 
-    def _notify_locked(self, snapshot_id: str, status: SnapshotStatus) -> None:
+    def notify_locked(self, snapshot_id: str, status: SnapshotStatus) -> None:
         for q in self._subs.get(snapshot_id, []):
             try:
                 q.put_nowait(status)
@@ -294,11 +294,11 @@ class Session(Generic[StateT]):
         """Register a callback invoked after ``add_artifacts`` mutates state."""
         self._artifact_changed_listeners.append(listener)
 
-    async def _notify_custom_changed(self) -> None:
+    async def notify_custom_changed(self) -> None:
         for listener in self._custom_changed_listeners:
             await listener()
 
-    async def _notify_artifact_changed(self, artifact: Artifact) -> None:
+    async def notify_artifact_changed(self, artifact: Artifact) -> None:
         for listener in self._artifact_changed_listeners:
             await listener(artifact)
 
@@ -339,7 +339,7 @@ class Session(Generic[StateT]):
         async with self._lock:
             self._state.custom = fn(cast(StateT | None, self._state.custom))
             self.version += 1
-        await self._notify_custom_changed()
+        await self.notify_custom_changed()
 
     async def get_artifacts(self) -> list[Artifact]:
         async with self._lock:
@@ -364,7 +364,7 @@ class Session(Generic[StateT]):
                 changed.append(art)
             self.version += 1
         for art in changed:
-            await self._notify_artifact_changed(art)
+            await self.notify_artifact_changed(art)
 
     async def update_artifacts(self, fn: Callable[[list[Artifact]], list[Artifact]]) -> None:
         async with self._lock:
@@ -376,12 +376,12 @@ class Session(Generic[StateT]):
 # Session context (async-local binding for middleware and tools)
 # ---------------------------------------------------------------------------
 
-_current_session: ContextVar[Session[Any] | None] = ContextVar('genkit.session', default=None)
+current_session: ContextVar[Session[Any] | None] = ContextVar('genkit.session', default=None)
 
 
 def get_current_session() -> Session[Any] | None:
     """Return the session bound by :func:`run_with_session`, if any."""
-    return _current_session.get()
+    return current_session.get()
 
 
 async def run_with_session(
@@ -389,8 +389,8 @@ async def run_with_session(
     coro: Awaitable[SessionContextT],
 ) -> SessionContextT:
     """Run ``coro`` with ``session`` available via :func:`get_current_session`."""
-    token = _current_session.set(session)
+    token = current_session.set(session)
     try:
         return await coro
     finally:
-        _current_session.reset(token)
+        current_session.reset(token)

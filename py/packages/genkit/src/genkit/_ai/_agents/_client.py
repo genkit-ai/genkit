@@ -272,7 +272,7 @@ class AgentClient(Generic[StateT, StreamT]):
             raise ValueError(f'Snapshot {snapshot_id} not found.')
         session_transport = copy.copy(self._transport)
         session = AgentSession(session_transport)
-        session._load_from_snapshot(snapshot)
+        session.load_from_snapshot(snapshot)
         return session
 
     async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot | None:
@@ -303,7 +303,7 @@ class AgentSession(Generic[StateT, StreamT]):
             if connect_init.snapshot_id:
                 self.snapshot_id = connect_init.snapshot_id
             if connect_init.state:
-                self._hydrate_from_state(connect_init.state)
+                self.hydrate_from_state(connect_init.state)
 
     async def __aenter__(self) -> AgentSession[StateT, StreamT]:
         return self
@@ -316,17 +316,17 @@ class AgentSession(Generic[StateT, StreamT]):
     ) -> None:
         await self.close()
 
-    def _hydrate_from_state(self, state: SessionState) -> None:
+    def hydrate_from_state(self, state: SessionState) -> None:
         self.state = state.custom
         self.messages = list(state.messages) if state.messages else []
         self.artifacts = list(state.artifacts) if state.artifacts else []
 
-    def _load_from_snapshot(self, snapshot: SessionSnapshot) -> None:
+    def load_from_snapshot(self, snapshot: SessionSnapshot) -> None:
         self.snapshot_id = snapshot.snapshot_id
         if snapshot.state is not None:
-            self._hydrate_from_state(snapshot.state)
+            self.hydrate_from_state(snapshot.state)
 
-    def _build_init(self) -> AgentInit:
+    def build_init(self) -> AgentInit:
         if self.snapshot_id:
             return AgentInit(snapshot_id=self.snapshot_id)
         if self.state is not None:
@@ -359,7 +359,7 @@ class AgentSession(Generic[StateT, StreamT]):
         if inp.message:
             self.messages.append(inp.message)
 
-        init = self._build_init()
+        init = self.build_init()
         cancelled_event = asyncio.Event()
 
         # Check for external abort_signal in opts
@@ -375,7 +375,7 @@ class AgentSession(Generic[StateT, StreamT]):
         watch_sig_task = None
         if external_signal is not None:
 
-            async def _watch_external() -> None:
+            async def watch_external() -> None:
                 try:
                     if external_signal is not None and hasattr(external_signal, 'wait'):
                         await external_signal.wait()
@@ -387,7 +387,7 @@ class AgentSession(Generic[StateT, StreamT]):
                 except asyncio.CancelledError:
                     pass
 
-            watch_sig_task = asyncio.create_task(_watch_external())
+            watch_sig_task = asyncio.create_task(watch_external())
 
         def cleanup_sig_task(_: object) -> None:
             if watch_sig_task:
@@ -408,7 +408,7 @@ class AgentSession(Generic[StateT, StreamT]):
                 async def watch_output() -> None:
                     try:
                         res = await output_awaitable
-                        self._apply_output(res)
+                        self.apply_output(res)
                         if not turn_output_future.done():
                             turn_output_future.set_result(
                                 AgentResponse(
@@ -427,12 +427,12 @@ class AgentSession(Generic[StateT, StreamT]):
                 # 3. Stream chunks to the developer's stream, applying patches in real-time
                 async for chunk in stream:
                     if chunk.custom_patch:
-                        self._apply_custom_patch(chunk.custom_patch)
+                        self.apply_custom_patch(chunk.custom_patch)
 
-                    text = _get_chunk_text(chunk.model_chunk)
+                    text = get_chunk_text(chunk.model_chunk)
                     reasoning = getattr(chunk.model_chunk, 'reasoning', None) if chunk.model_chunk else None
-                    tool_request = _get_chunk_tool_request(chunk.model_chunk)
-                    tool_response = _get_chunk_tool_response(chunk.model_chunk)
+                    tool_request = get_chunk_tool_request(chunk.model_chunk)
+                    tool_response = get_chunk_tool_response(chunk.model_chunk)
                     artifact = getattr(chunk, 'artifact', None)
 
                     c = AgentChunk(
@@ -511,7 +511,7 @@ class AgentSession(Generic[StateT, StreamT]):
             inp = input
 
         inp.detach = True
-        init = self._build_init()
+        init = self.build_init()
 
         stream, output_awaitable = await self._transport.run_turn(inp, init)
 
@@ -528,7 +528,7 @@ class AgentSession(Generic[StateT, StreamT]):
         finally:
             drive_task.cancel()
 
-        self._apply_output(raw_output)
+        self.apply_output(raw_output)
 
         if not raw_output.snapshot_id:
             raise ValueError('detach did not return a snapshot_id.')
@@ -547,13 +547,13 @@ class AgentSession(Generic[StateT, StreamT]):
         # is only available after the invocation completes.  Capture it here.
         final = getattr(self._transport, '_final_output', None)
         if final is not None and final.state is not None:
-            self._apply_output(final)
+            self.apply_output(final)
 
-    def _apply_custom_patch(self, patch: Any) -> None:  # noqa: ANN401
+    def apply_custom_patch(self, patch: Any) -> None:  # noqa: ANN401
         patch_list = patch.root if hasattr(patch, 'root') else patch
         self.state = apply_json_patch(self.state, patch_list)
 
-    def _apply_output(self, raw: AgentOutput) -> None:
+    def apply_output(self, raw: AgentOutput) -> None:
         if raw.snapshot_id is not None:
             self.snapshot_id = raw.snapshot_id
         if raw.state is not None:
@@ -585,7 +585,7 @@ class DetachedTask(Generic[StateT]):
         return await self._transport.abort_snapshot(self.snapshot_id)
 
 
-def _get_chunk_text(model_chunk: ModelResponseChunk | None) -> str | None:
+def get_chunk_text(model_chunk: ModelResponseChunk | None) -> str | None:
     if not model_chunk or not model_chunk.content:
         return None
     texts = []
@@ -596,7 +596,7 @@ def _get_chunk_text(model_chunk: ModelResponseChunk | None) -> str | None:
     return ''.join(texts) if texts else None
 
 
-def _get_chunk_tool_request(model_chunk: ModelResponseChunk | None) -> ToolRequestPart | None:
+def get_chunk_tool_request(model_chunk: ModelResponseChunk | None) -> ToolRequestPart | None:
     if not model_chunk or not model_chunk.content:
         return None
     for part in model_chunk.content:
@@ -606,7 +606,7 @@ def _get_chunk_tool_request(model_chunk: ModelResponseChunk | None) -> ToolReque
     return None
 
 
-def _get_chunk_tool_response(model_chunk: ModelResponseChunk | None) -> ToolResponsePart | None:
+def get_chunk_tool_response(model_chunk: ModelResponseChunk | None) -> ToolResponsePart | None:
     if not model_chunk or not model_chunk.content:
         return None
     for part in model_chunk.content:
