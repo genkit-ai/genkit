@@ -86,7 +86,7 @@ async def test_runtime_incremental_custom_patch_within_turn() -> None:
     assert ops[0].path == '/status'
     assert ops[0].value == 'done'
 
-    await rt._reset_custom_patch_turn()
+    await rt.reset_custom_patch_turn()
     await session.update_custom(lambda c: {**(c or {}), 'status': 'idle'})
     chunk = out_queue.get_nowait()
     ops = chunk.custom_patch.root if chunk.custom_patch else []
@@ -133,7 +133,7 @@ async def test_runtime_chunk_transform_can_drop_chunks() -> None:
         out_queue=out_queue,
     )
 
-    rt._send_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='hi'))])))
+    rt.send_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='hi'))])))
     assert out_queue.empty()
 
 
@@ -163,7 +163,7 @@ async def test_runtime_chunk_transform_can_redact_model_chunks() -> None:
         out_queue=out_queue,
     )
 
-    rt._send_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='secret'))])))
+    rt.send_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='secret'))])))
     chunk = out_queue.get_nowait()
     assert chunk.model_chunk is not None
     assert chunk.model_chunk.content[0].root.text == '[redacted]'

@@ -274,7 +274,7 @@ def apply_preamble_tags(messages: Sequence[MessageData]) -> list[Message]:
 
 
 async def _persist_turn_messages(
-    sess: 'SessionRunner',
+    sess: SessionRunner,
     history: list[MessageData],
     response_message: MessageData | Message | None,
     *,
@@ -446,39 +446,39 @@ class AgentRuntime:
         self._sess = SessionRunner(
             session,
             self._intake,
-            on_begin_turn=self._reset_custom_patch_turn,
-            on_end_turn=self._emit_turn_end,
+            on_begin_turn=self.reset_custom_patch_turn,
+            on_end_turn=self.emit_turn_end,
         )
 
-        session.on_custom_changed(self._emit_custom_patch)
-        session.on_artifact_changed(self._emit_artifact)
+        session.on_custom_changed(self.emit_custom_patch)
+        session.on_artifact_changed(self.emit_artifact)
 
-    async def _reset_custom_patch_turn(self) -> None:
+    async def reset_custom_patch_turn(self) -> None:
         # Re-base clients that may not share the server's custom-state baseline.
         self._first_custom_patch_in_turn = True
 
-    def _transform_state(self, state: SessionState) -> SessionState | None:
+    def transform_state(self, state: SessionState) -> SessionState | None:
         state_fn = self._client_transform.get('state') if self._client_transform else None
         if state_fn is None:
             return state
         return state_fn(state)
 
-    def _transform_chunk(self, chunk: AgentStreamChunk) -> AgentStreamChunk | None:
+    def transform_chunk(self, chunk: AgentStreamChunk) -> AgentStreamChunk | None:
         chunk_fn = self._client_transform.get('chunk') if self._client_transform else None
         if chunk_fn is None:
             return chunk
         return chunk_fn(chunk)
 
-    async def _client_custom(self) -> object | None:
+    async def client_custom(self) -> object | None:
         state = await self._session.state()
-        client_state = self._transform_state(state)
+        client_state = self.transform_state(state)
         return client_state.custom if client_state is not None else None
 
-    async def _emit_custom_patch(self) -> None:
+    async def emit_custom_patch(self) -> None:
         if self._detached:
             return
 
-        transformed = await self._client_custom()
+        transformed = await self.client_custom()
         if self._first_custom_patch_in_turn:
             ops: list[JsonPatchOperation] = [
                 JsonPatchOperation(op='replace', path='', value=copy.deepcopy(transformed))
@@ -491,14 +491,14 @@ class AgentRuntime:
         if not ops:
             return
 
-        self._send_chunk(AgentStreamChunk(custom_patch=JsonPatch(root=ops)))
+        self.send_chunk(AgentStreamChunk(custom_patch=JsonPatch(root=ops)))
 
-    async def _emit_artifact(self, artifact: Artifact) -> None:
+    async def emit_artifact(self, artifact: Artifact) -> None:
         if self._detached:
             return
-        self._send_chunk(AgentStreamChunk(artifact=artifact))
+        self.send_chunk(AgentStreamChunk(artifact=artifact))
 
-    async def _maybe_snapshot(
+    async def maybe_snapshot(
         self,
         *,
         finish_reason: AgentFinishReason | None = None,
@@ -549,7 +549,7 @@ class AgentRuntime:
             return snap.snapshot_id
         return self._last_snapshot.snapshot_id if self._last_snapshot else ''
 
-    async def _ensure_recovery_snapshot(self) -> str | None:
+    async def ensure_recovery_snapshot(self) -> str | None:
         """Persist last-good state after a failed turn when the callback skipped it."""
         if self._store is None or self._sess._last_good_state is None:
             return self._last_snapshot.snapshot_id if self._last_snapshot else None
@@ -587,7 +587,7 @@ class AgentRuntime:
             return snap.snapshot_id
         return self._last_snapshot.snapshot_id if self._last_snapshot else None
 
-    async def _failed_agent_output(self, result: AgentResult | None) -> AgentOutput:
+    async def failed_agent_output(self, result: AgentResult | None) -> AgentOutput:
         last_good = self._sess._last_good_state or await self._session.state()
         msgs = list(last_good.messages or [])
         out = AgentOutput(
@@ -597,12 +597,12 @@ class AgentRuntime:
             artifacts=list(last_good.artifacts or []) if last_good.artifacts else (result.artifacts if result else []),
         )
         if self._store is not None:
-            out.snapshot_id = await self._ensure_recovery_snapshot()
+            out.snapshot_id = await self.ensure_recovery_snapshot()
         else:
-            out.state = self._transform_state(last_good)
+            out.state = self.transform_state(last_good)
         return out
 
-    async def _watch_snapshot_abort(self, snapshot_id: str, abort_signal: asyncio.Event) -> None:
+    async def watch_snapshot_abort(self, snapshot_id: str, abort_signal: asyncio.Event) -> None:
         if self._store is None or not isinstance(self._store, SnapshotAborter):
             return
         q = await self._store.on_snapshot_status_change(snapshot_id)
@@ -614,29 +614,29 @@ class AgentRuntime:
                 abort_signal.set()
                 return
 
-    def _send_chunk(self, chunk: object) -> None:
+    def send_chunk(self, chunk: object) -> None:
         """Forward chunk to client."""
         if not isinstance(chunk, AgentStreamChunk):
             return
         if self._detached:
             return
-        wire_chunk = self._transform_chunk(chunk)
+        wire_chunk = self.transform_chunk(chunk)
         if wire_chunk is None:
             return
         self._out_queue.put_nowait(wire_chunk)
 
-    async def _emit_turn_end(self, finish_reason: AgentFinishReason | None = None) -> None:
+    async def emit_turn_end(self, finish_reason: AgentFinishReason | None = None) -> None:
         """Called by SessionRunner after each turn: snapshot + TurnEnd chunk."""
         if self._detached:
             return
         is_failed = finish_reason == AgentFinishReason.FAILED
-        snapshot_id = await self._maybe_snapshot(
+        snapshot_id = await self.maybe_snapshot(
             finish_reason=finish_reason,
             status=SnapshotStatus.FAILED if is_failed else SnapshotStatus.COMPLETED,
             error=self._sess._last_turn_error if is_failed else None,
             force=is_failed,
         )
-        self._send_chunk(
+        self.send_chunk(
             AgentStreamChunk(
                 turn_end=TurnEnd(
                     snapshot_id=snapshot_id or None,
@@ -645,7 +645,7 @@ class AgentRuntime:
             )
         )
 
-    async def _finalize_detach(
+    async def finalize_detach(
         self,
         pending_snap: SessionSnapshot,
         fn_task: asyncio.Task,
@@ -699,7 +699,7 @@ class AgentRuntime:
         abort_signal = asyncio.Event()
         action_ctx = ActionRunContext(
             context=get_current_context(),
-            streaming_callback=self._send_chunk,
+            streaming_callback=self.send_chunk,
             abort_signal=abort_signal,
         )
 
@@ -789,8 +789,8 @@ class AgentRuntime:
             # Stop sending chunks to the (now-gone) client.
             # Background task finalizes snapshot when fn finishes.
             self._detached = True
-            asyncio.create_task(self._watch_snapshot_abort(pending_snap.snapshot_id, abort_signal))
-            asyncio.create_task(self._finalize_detach(pending_snap, fn_task, forward_task, err_holder, result_holder))
+            asyncio.create_task(self.watch_snapshot_abort(pending_snap.snapshot_id, abort_signal))
+            asyncio.create_task(self.finalize_detach(pending_snap, fn_task, forward_task, err_holder, result_holder))
             return AgentOutput(
                 snapshot_id=pending_snap.snapshot_id,
                 finish_reason=AgentFinishReason.DETACHED,
@@ -803,12 +803,12 @@ class AgentRuntime:
         result = result_holder[0] if result_holder else None
 
         if self._sess._last_turn_finish_reason == AgentFinishReason.FAILED and self._sess._last_turn_error:
-            return await self._failed_agent_output(result)
+            return await self.failed_agent_output(result)
 
         if err_holder:
             raise err_holder[0]
 
-        snapshot_id = await self._maybe_snapshot()
+        snapshot_id = await self.maybe_snapshot()
         if not snapshot_id and self._last_snapshot is not None:
             snapshot_id = self._last_snapshot.snapshot_id
 
@@ -822,7 +822,7 @@ class AgentRuntime:
 
         if self._store is None:
             state = await self._session.state()
-            out.state = self._transform_state(state)
+            out.state = self.transform_state(state)
 
         return out
 
