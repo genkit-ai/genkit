@@ -17,7 +17,7 @@
 import { Firestore } from '@google-cloud/firestore';
 import { afterEach, beforeEach, describe, it } from '@jest/globals';
 import * as assert from 'assert';
-import type { SessionSnapshotInput } from 'genkit/beta';
+import { AgentAPI, genkit, type SessionSnapshotInput } from 'genkit/beta';
 import {
   FirestoreSessionStore,
   type FirestoreSessionStoreOptions,
@@ -36,7 +36,6 @@ function snapshot(
 ): SessionSnapshotInput<Custom> {
   return {
     createdAt: new Date().toISOString(),
-    event: 'turnEnd',
     status: 'completed',
     ...overrides,
   };
@@ -592,7 +591,6 @@ describe('FirestoreSessionStore', () => {
     await store.saveSnapshot('f1', () => ({
       snapshotId: 'f1',
       createdAt,
-      event: 'turnEnd',
       status: 'pending',
       finishReason: 'interrupted',
       heartbeatAt,
@@ -800,6 +798,121 @@ describe('FirestoreSessionStore', () => {
         .doc('doc-1')
         .get();
       assert.strictEqual(global.exists, false);
+    });
+  });
+
+  describe('agent integration (defineAgent + echo model)', () => {
+    /**
+     * Creates a Firestore-backed store on a fresh collection and registers it
+     * for cleanup. Returns the untyped store (State = unknown) suitable for
+     * wiring into an agent.
+     */
+    function makeAgentStore(): FirestoreSessionStore {
+      const collection = `agent-sessions-${Date.now()}-${Math.floor(
+        Math.random() * 1e6
+      )}`;
+      createdCollections.push(
+        collection,
+        `${collection}-pointers`,
+        `${collection}-shards`
+      );
+      return new FirestoreSessionStore({ db, collection });
+    }
+
+    /**
+     * Defines a genkit/beta instance with a simple echo model that replies
+     * with "echo: <last user text>".
+     */
+    function makeAi() {
+      const ai = genkit({});
+      ai.defineModel({ name: 'echo' }, async (request) => {
+        const lastUser = [...request.messages]
+          .reverse()
+          .find((m) => m.role === 'user');
+        const text =
+          lastUser?.content.map((p) => (p as any).text ?? '').join('') ?? '';
+        return {
+          message: { role: 'model', content: [{ text: `echo: ${text}` }] },
+          finishReason: 'stop',
+        };
+      });
+      return ai;
+    }
+
+    /** Drives a single agent turn to completion and returns its output. */
+    async function runTurn(
+      agent: AgentAPI,
+      input: { message: { role: 'user'; content: { text: string }[] } },
+      init: Record<string, unknown> = {}
+    ) {
+      const session = agent.chat(init);
+      const { stream, response } = session.sendStream(input);
+      for await (const _ of stream) {
+        // drain the stream
+      }
+      return {
+        response: await response,
+        snapshotId: session.snapshotId,
+        sessionId: session.sessionId,
+      };
+    }
+
+    it('persists a multi-turn conversation through Firestore via the agent API', async () => {
+      const agentStore = makeAgentStore();
+      const ai = makeAi();
+      const agent = ai.defineAgent({
+        name: 'echoAgent',
+        model: 'echo',
+        system: 'You are an echo bot.',
+        store: agentStore,
+      });
+
+      // Turn 1: a fresh, server-managed session.
+      const { snapshotId: snapshotId1, sessionId } = await runTurn(agent, {
+        message: { role: 'user', content: [{ text: 'hello' }] },
+      });
+      assert.ok(sessionId, 'turn 1 should mint a sessionId');
+      assert.ok(snapshotId1, 'turn 1 should persist a snapshot');
+
+      // The snapshot is readable straight from Firestore and contains the
+      // accumulated [user, model] history with the echoed reply.
+      const snap1 = await agentStore.getSnapshot({ snapshotId: snapshotId1 });
+      assert.ok(snap1, 'turn 1 snapshot should exist in Firestore');
+      assert.strictEqual(snap1!.state.sessionId, sessionId);
+      const msgs1 = snap1!.state.messages ?? [];
+      assert.strictEqual(msgs1.length, 2);
+      assert.strictEqual(msgs1[0].role, 'user');
+      assert.strictEqual(msgs1[0].content[0].text, 'hello');
+      assert.strictEqual(msgs1[1].role, 'model');
+      assert.strictEqual(msgs1[1].content[0].text, 'echo: hello');
+
+      // Turn 2: resume from the persisted snapshot. History should accumulate.
+      const { response: out2 } = await runTurn(
+        agent,
+        { message: { role: 'user', content: [{ text: 'world' }] } },
+        { snapshotId: snapshotId1 }
+      );
+      assert.strictEqual(
+        out2.sessionId,
+        sessionId,
+        'turn 2 should preserve the sessionId across turns'
+      );
+
+      // Resolving the latest leaf by sessionId reflects the full conversation.
+      const leaf = await agentStore.getSnapshot({ sessionId });
+      assert.ok(leaf, 'a leaf snapshot should be resolvable by sessionId');
+      const msgs2 = leaf!.state.messages ?? [];
+      assert.strictEqual(msgs2.length, 4, 'history should accumulate to 4');
+      assert.deepStrictEqual(
+        msgs2.map((m) => m.content.map((p: any) => p.text).join('')),
+        ['hello', 'echo: hello', 'world', 'echo: world']
+      );
+      // System messages are not persisted into stored history.
+      assert.strictEqual(
+        msgs2.filter((m) => m.role === 'system').length,
+        0,
+        'system messages should not be persisted'
+      );
     });
   });
 });
