@@ -769,19 +769,19 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
     ) -> None:
         # Wrap bidi_fn as a standard Action fn (closes in_queue immediately,
         # forwards out_queue chunks to on_chunk callback) so Action.run() works.
-        async def _as_streaming_fn(input: InputT, ctx: ActionRunContext) -> OutputT:  # noqa: A002
+        async def as_streaming_fn(input: InputT, ctx: ActionRunContext) -> OutputT:  # noqa: A002
             in_queue = CloseableQueue()
             out_queue = CloseableQueue()
             # Close input immediately — no streaming inputs via one-shot path.
             in_queue.close()
 
-            async def _run() -> OutputT:
+            async def run() -> OutputT:
                 try:
                     return await bidi_fn(input, in_queue, out_queue)
                 finally:
                     out_queue.close()
 
-            run_task = asyncio.create_task(_run())
+            run_task = asyncio.create_task(run())
             try:
                 # Forward chunks to Action's streaming callback.
                 async for chunk in out_queue:
@@ -799,7 +799,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
         super().__init__(
             kind=kind,
             name=name,
-            fn=_as_streaming_fn,
+            fn=as_streaming_fn,
             metadata_fn=metadata_fn,
             description=description,
             metadata={**(metadata or {}), 'bidi': True},
@@ -838,17 +838,17 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
         if context:
             token = _action_context.set(context)
 
-        async def _on_trace_start(trace_id: str, span_id: str) -> None:
+        async def trace_start_cb(trace_id: str, span_id: str) -> None:
             conn.trace_id = trace_id
             if on_trace_start is not None:
                 await on_trace_start(trace_id, span_id)
 
-        async def _run() -> None:
+        async def run() -> None:
             try:
                 response = await self._run_with_telemetry(
                     input,
                     ActionRunContext(context=_action_context.get(None)),
-                    _on_trace_start,
+                    trace_start_cb,
                     telemetry_labels,
                     execute=lambda: self.bidi_fn(input, in_queue, out_queue),
                 )
@@ -868,7 +868,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
                 out_queue.close()
 
         try:
-            asyncio.create_task(_run())
+            asyncio.create_task(run())
             return conn
         finally:
             if token is not None:
