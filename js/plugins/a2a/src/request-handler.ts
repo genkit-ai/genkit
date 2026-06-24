@@ -15,13 +15,13 @@
  */
 
 import type {
+  Message as A2AMessage,
+  Part as A2APart,
   AgentCard,
   DeleteTaskPushNotificationConfigParams,
   GetTaskPushNotificationConfigParams,
   ListTaskPushNotificationConfigParams,
-  Message as A2AMessage,
   MessageSendParams,
-  Part as A2APart,
   Task,
   TaskArtifactUpdateEvent,
   TaskIdParams,
@@ -440,9 +440,7 @@ function userFacingParts(
 ): NonNullable<AgentResponse['message']>['content'] {
   return (content ?? []).filter(
     (p) =>
-      typeof p.text === 'string' ||
-      typeof p.reasoning === 'string' ||
-      !!p.media
+      typeof p.text === 'string' || typeof p.reasoning === 'string' || !!p.media
   );
 }
 

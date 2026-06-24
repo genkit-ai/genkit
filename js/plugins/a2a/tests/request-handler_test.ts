@@ -177,7 +177,9 @@ describe('GenkitA2ARequestHandler.sendMessageStream', () => {
     });
 
     const events = await collect(
-      handler.sendMessageStream(userMessage([{ kind: 'text', text: 'weather?' }]))
+      handler.sendMessageStream(
+        userMessage([{ kind: 'text', text: 'weather?' }])
+      )
     );
 
     const artifacts = events.filter(

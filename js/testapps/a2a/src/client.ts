@@ -28,7 +28,6 @@
  * Start the server first (`pnpm server`), then run `pnpm client`.
  */
 
-import { A2AClient } from '@a2a-js/sdk/client';
 import type {
   DataPart,
   Message,
@@ -38,6 +37,7 @@ import type {
   TaskArtifactUpdateEvent,
   TaskStatusUpdateEvent,
 } from '@a2a-js/sdk';
+import { A2AClient } from '@a2a-js/sdk/client';
 
 const SERVER_URL = process.env.A2A_URL ?? 'http://localhost:4000';
 
