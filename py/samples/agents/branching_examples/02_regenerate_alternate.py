@@ -25,40 +25,58 @@ you don't want to overwrite what they already saw.
 
 from __future__ import annotations
 
-from uuid import uuid4
-
-from _helpers import define_echo_agent, model_text, run_turn
-
 from genkit import Genkit
-from genkit.agent import AgentInit, InMemoryBranchingSessionStore
+from genkit.agent import InMemoryBranchingSessionStore
+from genkit.plugins.google_genai import GoogleAI
 
-ai = Genkit()
+# Initialize Genkit with GoogleAI plugin and the purpose-built branching store
+ai = Genkit(plugins=[GoogleAI()])
 store = InMemoryBranchingSessionStore()
-agent = define_echo_agent(ai, store)
+
+# Define the agent natively using Gemini Flash
+agent = ai.define_agent(
+    name='branchEcho',
+    model='googleai/gemini-flash-latest',
+    store=store,
+)
 
 
 async def main() -> None:
-    session_id = str(uuid4())
-
-    turn1 = await run_turn(agent, AgentInit(session_id=session_id), 'Plan a landing page')
-    snap1 = turn1.snapshot_id
+    # 1. Run Turn 1 (Checkpoint Root)
+    print('--- TURN 1 ---')
+    session = agent.chat()
+    async for chunk in session.send('Plan a landing page'):
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+    print()
+    snap1 = session.snapshot_id
     assert snap1
-    print('turn 1 snapshot:', snap1)
+    print(f'Turn 1 Snapshot Saved: {snap1}\n')
 
-    # Main line: user continues linearly on the session.
-    main_turn2 = await run_turn(agent, AgentInit(session_id=session_id), 'Make it minimal')
-    snap2 = main_turn2.snapshot_id
-    print('main line turn 2:', snap2, '→', model_text(main_turn2))
+    # 2. Main Line: Continue linearly on the same session
+    print('--- TURN 2 (MAIN LINE) ---')
+    async for chunk in session.send('Make it minimal'):
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+    print()
+    snap2 = session.snapshot_id
+    print(f'Main Line Turn 2 Snapshot: {snap2}\n')
 
-    # Regenerate: fork from *before* turn 2 and send alternate user text.
-    alt_turn2 = await run_turn(agent, AgentInit(snapshot_id=snap1), 'Make it bold instead')
-    snap2_alt = alt_turn2.snapshot_id
-    assert snap2_alt and snap2_alt != snap2
+    # 3. Regenerate: Fork from before turn 2 and send alternate input
+    print('--- TURN 2 (ALTERNATE BRANCH) ---')
+    session_alt = await agent.load_chat(snap1)
+    async for chunk in session_alt.send('Make it bold instead'):
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+    print()
+    snap2_alt = session_alt.snapshot_id
+    print(f'Alternate Turn 2 Snapshot: {snap2_alt}\n')
+
+    # 4. Verify parentage
+    assert snap2_alt != snap2
     alt_snap = await store.get_snapshot(snapshot_id=snap2_alt)
     assert alt_snap and alt_snap.parent_id == snap1
-
-    print('regenerated turn 2:', snap2_alt, '→', model_text(alt_turn2))
-    print('sibling branches from snap₁:', snap2, snap2_alt)
+    print(' Parent validation succeeded: Both turns branch from Turn 1!')
 
 
 if __name__ == '__main__':

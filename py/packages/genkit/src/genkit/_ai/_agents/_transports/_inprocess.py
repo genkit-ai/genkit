@@ -56,6 +56,13 @@ class InProcessTransport:
         self._final_output: AgentOutput | None = None
         self._store = store
 
+    def __copy__(self) -> InProcessTransport:
+        """Create a shallow copy of the transport, resetting connection state to None."""
+        return InProcessTransport(
+            action=self._action,
+            store=self._store,
+        )
+
     async def run_turn(
         self,
         input: AgentInput,  # noqa: A002

@@ -22,6 +22,7 @@ import inspect
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Generic, Protocol, TypeVar, runtime_checkable
+from uuid import uuid4
 
 from genkit._ai._json_patch import apply_json_patch
 from genkit._core._typing import (
@@ -295,6 +296,11 @@ class AgentSession(Generic[StateT, StreamT]):
         self._transport = transport
         self._connect_init = connect_init
         self.snapshot_id: str | None = None
+        self.session_id: str = (
+            (connect_init.session_id if connect_init else None)
+            or (connect_init.state.session_id if connect_init and connect_init.state else None)
+            or str(uuid4())
+        )
         self.state: StateT | None = None
         self.messages: list[MessageData] = []
         self.artifacts: list[Artifact] = []
@@ -318,6 +324,8 @@ class AgentSession(Generic[StateT, StreamT]):
 
     def hydrate_from_state(self, state: SessionState) -> None:
         self.state = state.custom
+        if state.session_id:
+            self.session_id = state.session_id
         self.messages = list(state.messages) if state.messages else []
         self.artifacts = list(state.artifacts) if state.artifacts else []
 
@@ -332,13 +340,13 @@ class AgentSession(Generic[StateT, StreamT]):
         if self.state is not None:
             return AgentInit(
                 state=SessionState(
-                    session_id=self.snapshot_id,
+                    session_id=self.session_id,
                     messages=self.messages,
                     custom=self.state,
                     artifacts=self.artifacts,
                 )
             )
-        return self._connect_init or AgentInit()
+        return self._connect_init or AgentInit(session_id=self.session_id)
 
     def send(
         self,

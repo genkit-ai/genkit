@@ -28,45 +28,71 @@ needs to track snapshotId per path.
 
 from __future__ import annotations
 
-from uuid import uuid4
-
-from _helpers import define_echo_agent, model_text, run_turn
-
 from genkit import Genkit, GenkitError
-from genkit.agent import AgentInit, InMemoryBranchingSessionStore
+from genkit.agent import InMemoryBranchingSessionStore
+from genkit.plugins.google_genai import GoogleAI
 
-ai = Genkit()
+# Initialize Genkit with GoogleAI plugin and the purpose-built branching store
+ai = Genkit(plugins=[GoogleAI()])
 store = InMemoryBranchingSessionStore()
-agent = define_echo_agent(ai, store)
+
+# Define the agent natively using Gemini Flash
+agent = ai.define_agent(
+    name='branchEcho',
+    model='googleai/gemini-flash-latest',
+    store=store,
+)
 
 
 async def main() -> None:
-    session_id = str(uuid4())
-    root = await run_turn(agent, AgentInit(session_id=session_id), 'Plan a landing page')
-    root_snap = root.snapshot_id
+    # 1. Run the initial setup turn normally
+    print('--- TURN 1 (ROOT SETUP) ---')
+    session = agent.chat()
+    async for chunk in session.send('Plan a landing page'):
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+    print()
+
+    root_snap = session.snapshot_id
+    session_id = session.session_id
     assert root_snap
-    print('root snapshot:', root_snap)
-    print('root reply:', model_text(root))
+    print(f'Root Snapshot Saved: {root_snap}\n')
 
-    minimal = await run_turn(agent, AgentInit(snapshot_id=root_snap), 'Direction: minimal')
-    bold = await run_turn(agent, AgentInit(snapshot_id=root_snap), 'Direction: bold')
-    assert minimal.snapshot_id and bold.snapshot_id and minimal.snapshot_id != bold.snapshot_id
+    # 2. Fork Path A (Minimal) from the root checkpoint
+    print('--- TURN 2 (PATH A: MINIMAL) ---')
+    session_minimal = await agent.load_chat(root_snap)
+    async for chunk in session_minimal.send('Direction: minimal'):
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+    print()
+    min_snap_id = session_minimal.snapshot_id
+    print(f'Minimal Branch Snapshot: {min_snap_id}\n')
 
-    min_snap = await store.get_snapshot(snapshot_id=minimal.snapshot_id)
-    bold_snap = await store.get_snapshot(snapshot_id=bold.snapshot_id)
+    # 3. Fork Path B (Bold) from the exact same root checkpoint
+    print('--- TURN 2 (PATH B: BOLD) ---')
+    session_bold = await agent.load_chat(root_snap)
+    async for chunk in session_bold.send('Direction: bold'):
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+    print()
+    bold_snap_id = session_bold.snapshot_id
+    print(f'Bold Branch Snapshot: {bold_snap_id}\n')
+
+    # 4. Verify parentage relationships in the database
+    min_snap = await store.get_snapshot(snapshot_id=min_snap_id)
+    bold_snap = await store.get_snapshot(snapshot_id=bold_snap_id)
     assert min_snap and bold_snap
     assert min_snap.parent_id == root_snap
     assert bold_snap.parent_id == root_snap
+    print(' Parent validation succeeded: Both branches fork from root_snap!')
 
-    print('minimal branch:', minimal.snapshot_id, '→', model_text(minimal))
-    print('bold branch:', bold.snapshot_id, '→', model_text(bold))
-
+    # 5. Verify that looking up by sessionId is now ambiguous
     try:
         await store.get_snapshot(session_id=session_id)
     except GenkitError as exc:
-        print('sessionId lookup after fork (expected failure):', exc)
+        print(f' sessionId lookup (expected failure): {exc}')
     else:
-        raise AssertionError('expected sessionId lookup to fail once the session has branched')
+        raise AssertionError('Expected sessionId lookup to fail once the session has branched')
 
 
 if __name__ == '__main__':

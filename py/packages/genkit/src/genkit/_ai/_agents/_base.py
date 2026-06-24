@@ -22,6 +22,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Generic, TypedDict, TypeVar
+from uuid import uuid4
 
 from opentelemetry import trace as trace_api
 
@@ -392,15 +393,19 @@ async def load_session(
             )
         return Session(initial_state=snap.state), snap
 
-    if store is not None and init.session_id:
-        assert_valid_session_id(init.session_id)
-        snap = await store.get_snapshot(session_id=init.session_id)
+    session_id = init.session_id
+    if store is not None and not session_id:
+        session_id = str(uuid4())
+
+    if store is not None and session_id:
+        assert_valid_session_id(session_id)
+        snap = await store.get_snapshot(session_id=session_id)
         if snap is not None:
             return Session(initial_state=snap.state), snap
         return (
             Session(
                 initial_state=SessionState(
-                    session_id=init.session_id,
+                    session_id=session_id,
                     messages=[],
                     artifacts=[],
                 )
@@ -1003,15 +1008,17 @@ class Agent(BidiAction, Generic[StateT, StreamT]):
 
     def chat(self, init: AgentInit | None = None) -> AgentSession[StateT, StreamT]:
         """Starts a new in-process session, or attaches to one via init."""
-        return AgentSession(self._transport, init)
+        session_transport = copy.copy(self._transport)
+        return AgentSession(session_transport, init)
 
     async def load_chat(self, snapshot_id: str) -> AgentSession[StateT, StreamT]:
         """Loads a server snapshot and returns a session with history restored."""
         snapshot = await self._transport.get_snapshot(snapshot_id)
         if snapshot is None:
             raise ValueError(f'Snapshot {snapshot_id} not found.')
-        session = AgentSession(self._transport)
-        session._load_from_snapshot(snapshot)
+        session_transport = copy.copy(self._transport)
+        session = AgentSession(session_transport)
+        session.load_from_snapshot(snapshot)
         return session
 
     async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot | None:

@@ -27,39 +27,58 @@ timeline.
 
 from __future__ import annotations
 
-from uuid import uuid4
-
-from _helpers import define_echo_agent, model_text, run_turn
-
 from genkit import Genkit
-from genkit.agent import AgentInit, InMemoryBranchingSessionStore
+from genkit.agent import InMemoryBranchingSessionStore
+from genkit.plugins.google_genai import GoogleAI
 
-ai = Genkit()
+# Initialize Genkit with GoogleAI plugin and the purpose-built branching store
+ai = Genkit(plugins=[GoogleAI()])
 store = InMemoryBranchingSessionStore()
-agent = define_echo_agent(ai, store)
+
+# Define the agent natively using Gemini Flash
+agent = ai.define_agent(
+    name='branchEcho',
+    model='googleai/gemini-flash-latest',
+    store=store,
+)
 
 
 async def main() -> None:
-    session_id = str(uuid4())
-    root = await run_turn(agent, AgentInit(session_id=session_id), 'Design a hero section')
-    root_snap = root.snapshot_id
+    # 1. Run the shared starting point
+    print('--- TURN 1 (SHARED BRIEF) ---')
+    session = agent.chat()
+    async for chunk in session.send('Design a hero section'):
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+    print()
+    root_snap = session.snapshot_id
     assert root_snap
-    print('shared checkpoint:', root_snap)
+    print(f'Shared Checkpoint Saved: {root_snap}\n')
 
+    # 2. Explore multiple directions in parallel from that checkpoint
     directions = ['Direction: minimal', 'Direction: bold', 'Direction: corporate']
     branches = []
+
     for label in directions:
-        out = await run_turn(agent, AgentInit(snapshot_id=root_snap), label)
-        snap = await store.get_snapshot(snapshot_id=out.snapshot_id)
+        print(f'--- EXPLORING BRANCH [{label}] ---')
+        session_branch = await agent.load_chat(root_snap)
+        async for chunk in session_branch.send(label):
+            if chunk.text:
+                print(chunk.text, end='', flush=True)
+        print()
+        snap_id = session_branch.snapshot_id
+
+        # Verify parentage in database
+        snap = await store.get_snapshot(snapshot_id=snap_id)
         assert snap and snap.parent_id == root_snap
-        branches.append((label, out.snapshot_id, model_text(out)))
 
-    print(f'explored {len(branches)} parallel branches:')
-    for label, snap_id, reply in branches:
-        print(f'  [{label}] snapshot={snap_id} reply={reply!r}')
+        branches.append((label, snap_id))
+        print(f'Branch Saved: {snap_id}\n')
 
-    leaf_ids = {snap_id for _, snap_id, _ in branches}
-    assert len(leaf_ids) == len(directions)
+    # 3. Print the resulting tree leaves
+    print(f'Explored {len(branches)} parallel branches successfully:')
+    for label, snap_id in branches:
+        print(f'  - [{label}] snapshot={snap_id}')
 
 
 if __name__ == '__main__':

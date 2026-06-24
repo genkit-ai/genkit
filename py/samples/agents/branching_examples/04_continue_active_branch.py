@@ -24,42 +24,64 @@ back to a normal linear chat on the path they picked.
 
 from __future__ import annotations
 
-from uuid import uuid4
-
-from _helpers import define_echo_agent, model_text, run_turn
-
 from genkit import Genkit
-from genkit.agent import AgentInit, InMemoryBranchingSessionStore
+from genkit.agent import InMemoryBranchingSessionStore
+from genkit.plugins.google_genai import GoogleAI
 
-ai = Genkit()
+# Initialize Genkit with GoogleAI plugin and the purpose-built branching store
+ai = Genkit(plugins=[GoogleAI()])
 store = InMemoryBranchingSessionStore()
-agent = define_echo_agent(ai, store)
+
+# Define the agent natively using Gemini Flash
+agent = ai.define_agent(
+    name='branchEcho',
+    model='googleai/gemini-flash-latest',
+    store=store,
+)
 
 
 async def main() -> None:
-    session_id = str(uuid4())
-    root = await run_turn(agent, AgentInit(session_id=session_id), 'Start workspace')
-    root_snap = root.snapshot_id
+    # 1. Run the initial root turn
+    print('--- TURN 1 (ROOT SETUP) ---')
+    session = agent.chat()
+    async for chunk in session.send('Start workspace'):
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+    print()
+    root_snap = session.snapshot_id
     assert root_snap
 
-    minimal = await run_turn(agent, AgentInit(snapshot_id=root_snap), 'Direction: minimal')
-    await run_turn(agent, AgentInit(snapshot_id=root_snap), 'Direction: bold')
-
-    # User chose the minimal branch; continue from its leaf snapshot.
-    active_leaf = minimal.snapshot_id
+    # 2. Fork sibling branches: Minimal and Bold
+    print('--- TURN 2 (PATH A: MINIMAL) ---')
+    session_minimal = await agent.load_chat(root_snap)
+    async for chunk in session_minimal.send('Direction: minimal'):
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+    print()
+    active_leaf = session_minimal.snapshot_id
     assert active_leaf
-    print('active branch (minimal):', active_leaf, '→', model_text(minimal))
 
-    turn3 = await run_turn(
-        agent,
-        AgentInit(snapshot_id=active_leaf),
-        'Add a pricing section',
-    )
-    turn3_snap = await store.get_snapshot(snapshot_id=turn3.snapshot_id)
+    print('--- TURN 2 (PATH B: BOLD) ---')
+    session_bold = await agent.load_chat(root_snap)
+    async for chunk in session_bold.send('Direction: bold'):
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+    print()
+
+    # 3. User chose the minimal branch; continue linearly from its leaf snapshot
+    print('--- TURN 3 (CONTINUE CHOSEN MINIMAL BRANCH) ---')
+    session_turn3 = await agent.load_chat(active_leaf)
+    async for chunk in session_turn3.send('Add a pricing section'):
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+    print()
+    turn3_snap_id = session_turn3.snapshot_id
+
+    # 4. Verify parentage chain (root → minimal → turn 3)
+    turn3_snap = await store.get_snapshot(snapshot_id=turn3_snap_id)
     assert turn3_snap and turn3_snap.parent_id == active_leaf
-
-    print('continued on chosen branch:', turn3.snapshot_id, '→', model_text(turn3))
-    print('parent chain: root → minimal → turn 3')
+    print('\n Parent chain validation succeeded: turn 3 parent is minimal branch!')
+    print(' Complete path: root → minimal → turn 3')
 
 
 if __name__ == '__main__':
