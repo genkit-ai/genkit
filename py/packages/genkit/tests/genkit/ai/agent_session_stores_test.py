@@ -180,17 +180,17 @@ async def run_linear_session_store_test(store: LinearSessionStore) -> None:
     t2_id = t2_saved.snapshot_id
 
     # Verify turn kinds
-    rec0 = await store._read_turn_by_snapshot(t0_id)
+    rec0 = await store.read_turn_by_snapshot(t0_id)
     assert rec0 is not None
     assert rec0.kind == 'checkpoint'
 
-    rec1 = await store._read_turn_by_snapshot(t1_id)
+    rec1 = await store.read_turn_by_snapshot(t1_id)
     assert rec1 is not None
     assert rec1.kind == 'diff'
     # Should store JSON Patch diff, not full state
     assert isinstance(rec1.state_or_patch, list)
 
-    rec2 = await store._read_turn_by_snapshot(t2_id)
+    rec2 = await store.read_turn_by_snapshot(t2_id)
     assert rec2 is not None
     assert rec2.kind == 'checkpoint'
 
@@ -224,8 +224,8 @@ async def run_linear_session_store_test(store: LinearSessionStore) -> None:
     t1_alt_id = t1_alt_saved.snapshot_id
 
     # Check that Turn 1 and Turn 2 were deleted from index & storage
-    assert await store._read_turn_by_snapshot(t1_id) is None
-    assert await store._read_turn_by_snapshot(t2_id) is None
+    assert await store.read_turn_by_snapshot(t1_id) is None
+    assert await store.read_turn_by_snapshot(t2_id) is None
 
     # Latest leaf is now Turn 1 Alt
     latest = await store.get_snapshot(session_id=session_id)

@@ -296,10 +296,8 @@ class AgentSession(Generic[StateT, StreamT]):
         self._transport = transport
         self._connect_init = connect_init
         self.snapshot_id: str | None = None
-        self.session_id: str = (
-            (connect_init.session_id if connect_init else None)
-            or (connect_init.state.session_id if connect_init and connect_init.state else None)
-            or str(uuid4())
+        self.session_id: str | None = (connect_init.session_id if connect_init else None) or (
+            connect_init.state.session_id if connect_init and connect_init.state else None
         )
         self.state: StateT | None = None
         self.messages: list[MessageData] = []
@@ -338,6 +336,8 @@ class AgentSession(Generic[StateT, StreamT]):
         if self.snapshot_id:
             return AgentInit(snapshot_id=self.snapshot_id)
         if self.state is not None:
+            if self.session_id is None:
+                self.session_id = str(uuid4())
             return AgentInit(
                 state=SessionState(
                     session_id=self.session_id,
