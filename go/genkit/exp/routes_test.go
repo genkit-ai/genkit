@@ -65,10 +65,10 @@ func newRouteTestGenkit(t *testing.T) *genkit.Genkit {
 	if err != nil {
 		t.Fatal(err)
 	}
-	genkit.DefineAgent(g, "serverChat", aix.InlinePrompt{ai.WithModelName("test/echo")},
+	DefineAgent(g, "serverChat", aix.InlinePrompt{ai.WithModelName("test/echo")},
 		aix.WithSessionStore(store),
 	)
-	genkit.DefineAgent[any](g, "clientChat", aix.InlinePrompt{ai.WithModelName("test/echo")})
+	DefineAgent[any](g, "clientChat", aix.InlinePrompt{ai.WithModelName("test/echo")})
 	genkit.DefineFlow(g, "greet", func(ctx context.Context, name string) (string, error) {
 		return "hi " + name, nil
 	})
@@ -112,8 +112,8 @@ func TestAgentRoutes_PicksOneAgentAndMirrorsCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := genkit.DefineAgent(g, "srv", aix.InlinePrompt{ai.WithModelName("test/echo")}, aix.WithSessionStore(store))
-	client := genkit.DefineAgent[any](g, "cli", aix.InlinePrompt{ai.WithModelName("test/echo")})
+	server := DefineAgent(g, "srv", aix.InlinePrompt{ai.WithModelName("test/echo")}, aix.WithSessionStore(store))
+	client := DefineAgent[any](g, "cli", aix.InlinePrompt{ai.WithModelName("test/echo")})
 
 	if got, want := routeKeys(AgentRoutes(server)), []string{
 		"POST /agents/srv",

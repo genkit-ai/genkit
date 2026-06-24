@@ -81,7 +81,7 @@ Beyond a plain chat loop, agents give you:
 - **Background execution** via `Detach`: hand a long-running turn to the server, walk away, and poll, resume, or abort it later.
 - **One definition, many transports**: the same agent runs in-process (`RunText`, `Connect`) or over HTTP, one turn per request.
 
-The agent API is experimental: it lives in `github.com/firebase/genkit/go/ai/exp` (aliased `aix` in the snippets below) and may change in a minor release.
+The agent API is experimental and may change in a minor release. The constructors (`DefineAgent`, `DefinePromptAgent`, `DefineCustomAgent`) live in `github.com/firebase/genkit/go/genkit/exp` (aliased `genkitx` below); the agent types and options live in `github.com/firebase/genkit/go/ai/exp` (aliased `aix`).
 
 ### Define an Agent
 
@@ -93,9 +93,10 @@ import (
     aix "github.com/firebase/genkit/go/ai/exp"
     "github.com/firebase/genkit/go/ai/exp/localstore"
     "github.com/firebase/genkit/go/genkit"
+    genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
 
-chatAgent := genkit.DefineAgent(g, "chat",
+chatAgent := genkitx.DefineAgent(g, "chat",
     aix.InlinePrompt{
         ai.WithModelName("googleai/gemini-flash-latest"),
         ai.WithSystem("You are a sarcastic pirate. Keep responses concise."),
@@ -108,7 +109,7 @@ out, _ := chatAgent.RunText(ctx, "What's the best way to learn Go?")
 fmt.Println(out.Message.Text())
 ```
 
-The `State` type parameter is inferred from the typed options (`aix.WithSessionStore`, `aix.WithStateTransform`), so the explicit `DefineAgent[State]` is only needed when no typed option is supplied.
+The `State` type parameter is inferred from the typed options (`aix.WithSessionStore`, `aix.WithStateTransform`), so the explicit `genkitx.DefineAgent[State]` is only needed when no typed option is supplied.
 
 [See full example](samples/basic-agents)
 
@@ -143,7 +144,7 @@ fmt.Println(out.Message.Text())
 
 ### Load the Prompt from a File
 
-`genkit.DefinePromptAgent` backs the agent with a prompt from the registry instead of an inline one. By default it uses the prompt registered under the agent's own name, including one loaded from a `.prompt` file, so prompt authors can tune the model, config, template, and default input without touching the Go wiring:
+`genkitx.DefinePromptAgent` backs the agent with a prompt from the registry instead of an inline one. By default it uses the prompt registered under the agent's own name, including one loaded from a `.prompt` file, so prompt authors can tune the model, config, template, and default input without touching the Go wiring:
 
 ```yaml
 # prompts/chat.prompt
@@ -167,7 +168,7 @@ type ChatInput struct {
 genkit.DefineSchemaFor[ChatInput](g)
 
 // Agent "chat" renders ./prompts/chat.prompt every turn (no source option needed).
-chatAgent := genkit.DefinePromptAgent(g, "chat",
+chatAgent := genkitx.DefinePromptAgent(g, "chat",
     aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
 )
 ```
@@ -179,7 +180,7 @@ for _, p := range []struct{ name, persona string }{
     {"pirate", "a sarcastic pirate"},
     {"chef", "a Michelin-starred chef"},
 } {
-    genkit.DefinePromptAgent(g, p.name,
+    genkitx.DefinePromptAgent(g, p.name,
         aix.WithNamedPrompt[any]("chat", ChatInput{Personality: p.persona}),
         aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
     )
@@ -197,7 +198,7 @@ type ChatState struct {
     TopicsDiscussed []string `json:"topicsDiscussed"`
 }
 
-chatAgent := genkit.DefineCustomAgent(g, "chat",
+chatAgent := genkitx.DefineCustomAgent(g, "chat",
     func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[ChatState]) (*aix.AgentResult, error) {
         err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
             for chunk, err := range genkit.GenerateStream(ctx, g,
@@ -258,7 +259,7 @@ Resume from one specific point in history with `aix.WithSnapshotID`, or skip the
 `WithStateTransform` rewrites session state as it leaves the server, on `GetSnapshot` reads, on a client-managed `out.State`, and on the streamed `CustomPatch` diffs, while the persisted snapshot and the state your agent function sees stay raw:
 
 ```go
-chatAgent := genkit.DefineAgent(g, "chat",
+chatAgent := genkitx.DefineAgent(g, "chat",
     aix.InlinePrompt{ai.WithModelName("googleai/gemini-flash-latest")},
     aix.WithSessionStore(store),
     aix.WithStateTransform[ChatState](func(ctx context.Context, s *aix.SessionState[ChatState]) (*aix.SessionState[ChatState], error) {

@@ -134,7 +134,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("creating session store: %v", err)
 	}
-	genkit.DefineAgent(g, "chat",
+	genkitx.DefineAgent(g, "chat",
 		aix.InlinePrompt{
 			ai.WithModel(model),
 			ai.WithSystem("You are a helpful travel assistant. Keep responses to a couple of sentences."),
@@ -145,7 +145,7 @@ func main() {
 	// "statelessChat" keeps no state on the server: each response carries
 	// the full conversation state and the client round-trips it on the next
 	// request. This suits deployments where the server must stay stateless.
-	genkit.DefineAgent[any](g, "statelessChat",
+	genkitx.DefineAgent[any](g, "statelessChat",
 		aix.InlinePrompt{
 			ai.WithModel(model),
 			ai.WithSystem("You are a helpful travel assistant. Keep responses to a couple of sentences."),

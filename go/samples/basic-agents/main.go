@@ -73,6 +73,7 @@ import (
 	"github.com/firebase/genkit/go/ai/exp/localstore"
 	"github.com/firebase/genkit/go/ai/exp/tool"
 	"github.com/firebase/genkit/go/genkit"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"google.golang.org/genai"
 )
@@ -123,7 +124,7 @@ func main() {
 // a working one.
 func defineInlineAgent(g *genkit.Genkit) *aix.Agent[any] {
 	const name = "pirate"
-	return genkit.DefineAgent(g, name,
+	return genkitx.DefineAgent(g, name,
 		aix.InlinePrompt{
 			ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 				ThinkingConfig: &genai.ThinkingConfig{
@@ -151,7 +152,7 @@ func defineInlineAgent(g *genkit.Genkit) *aix.Agent[any] {
 // with one shared prompt, add aix.WithNamedPrompt(name, input).
 func definePromptAgent(g *genkit.Genkit) *aix.Agent[any] {
 	const name = "chef"
-	return genkit.DefinePromptAgent(g, name,
+	return genkitx.DefinePromptAgent(g, name,
 		aix.WithSessionStore(mustStore(name)),
 		aix.WithDescription[any]("Michelin-starred chef (prompt loaded from ./prompts/chef.prompt)"),
 	)
@@ -168,7 +169,7 @@ func definePromptAgent(g *genkit.Genkit) *aix.Agent[any] {
 // state, snapshot writes, and the detach lifecycle.
 func defineCustomAgent(g *genkit.Genkit) *aix.Agent[any] {
 	const name = "coder"
-	return genkit.DefineCustomAgent(g, name,
+	return genkitx.DefineCustomAgent(g, name,
 		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 			if err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
 				for chunk, err := range genkit.GenerateStream(ctx, g,
@@ -282,7 +283,7 @@ func defineBankerAgent(g *genkit.Genkit) *aix.Agent[any] {
 	// result, it can pause (tool.Interrupt) to get the user's approval. Its
 	// third parameter (*Confirmation) is the resume payload — nil on the
 	// first call, populated when the client resumes.
-	genkit.DefineInterruptibleTool(g, "transferMoney",
+	genkitx.DefineInterruptibleTool(g, "transferMoney",
 		"Transfers money to another account. Use when the user wants to send money.",
 		func(ctx context.Context, input TransferInput, confirm *Confirmation) (*TransferOutput, error) {
 			if confirm != nil {
@@ -321,7 +322,7 @@ func defineBankerAgent(g *genkit.Genkit) *aix.Agent[any] {
 			}, nil
 		})
 
-	return genkit.DefinePromptAgent[any](g, name,
+	return genkitx.DefinePromptAgent[any](g, name,
 		aix.WithSessionStore(mustStore(name)),
 		aix.WithDescription[any]("Money transfer assistant (interruptible tool + human approval)"),
 	)

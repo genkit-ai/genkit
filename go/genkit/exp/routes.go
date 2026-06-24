@@ -69,7 +69,7 @@ func (r Route) Handler(opts ...genkit.HandlerOption) http.HandlerFunc {
 // contributes.
 func AllAgentRoutes(g *genkit.Genkit) []Route {
 	var routes []Route
-	for _, act := range genkit.ListAgents(g) {
+	for _, act := range ListAgents(g) {
 		name := act.Name()
 		// The snapshot-lifecycle companions register independently under
 		// their own action types, keyed by the agent's name (see the agent

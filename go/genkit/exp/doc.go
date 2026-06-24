@@ -15,8 +15,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
-Package exp holds experimental genkit helpers that are still taking shape.
-It currently provides:
+Package exp holds experimental Genkit concepts that are still taking shape.
+Each constructor takes a *[genkit.Genkit] and registers on its registry, just
+like the stable genkit constructors; the experimental surface lives here so it
+can churn without touching genkit's stable namespace. It currently provides:
+
+  - Agent constructors: [DefineAgent] (inline prompt), [DefinePromptAgent] (a
+    prompt sourced from the registry), and [DefineCustomAgent] (full control
+    over the per-turn loop), plus [ListAgents] for introspection. An agent is a
+    stateful, multi-turn conversational action built on bidirectional streaming;
+    serve one with [genkit.Handler] or the route builders below.
+
+  - Tool constructors with a plain context.Context signature: [DefineTool] and
+    [DefineInterruptibleTool] (typed interrupt/resume). These complement the
+    stable [genkit.DefineTool], whose function instead receives an ai.ToolContext.
 
   - An HTTP route layout for serving agents and flows: the [Route] value and
     the [AgentRoutes] / [AllAgentRoutes] / [FlowRoutes] / [AllFlowRoutes]
