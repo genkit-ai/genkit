@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -75,6 +75,11 @@ func DefineTool[In, Out any](g *genkit.Genkit, name, description string, fn aix.
 // and send data to the caller. The caller can inspect the interrupt with
 // [tool.InterruptAs] and resume the tool with [tool.Resume] or the typed
 // [aix.InterruptibleTool.Resume] method.
+//
+// The interrupt and resume payloads (the Resume type parameter and the value
+// passed to [tool.Interrupt]) must each serialize to a JSON object, i.e. a
+// struct or a map, since they travel as structured metadata on the tool
+// request.
 //
 // For tools that don't need to be registered (e.g., dynamically created tools),
 // use [aix.NewInterruptibleTool] instead.

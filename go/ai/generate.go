@@ -24,6 +24,7 @@ import (
 	"iter"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
@@ -966,6 +967,25 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 	toolMsg := &Message{Role: RoleTool}
 	revisedMsg := clone(resp.Message)
 
+	// Tools run concurrently (one goroutine each, below), and tool.SendPartial /
+	// tool.SendChunk let a tool stream through cb from inside its goroutine. cb
+	// (the wrapped stream callback) mutates shared role/index state and writes
+	// the single stream sink, neither of which is safe for concurrent use, so
+	// serialize every tool-originated send under one mutex. Streaming is
+	// best-effort, so a sink error is logged and dropped rather than failing the
+	// tool's authoritative return value.
+	var streamMu sync.Mutex
+	streamChunk := func(sendCtx context.Context, chunk *ModelResponseChunk) {
+		if cb == nil {
+			return
+		}
+		streamMu.Lock()
+		defer streamMu.Unlock()
+		if err := cb(sendCtx, chunk); err != nil {
+			logger.FromContext(sendCtx).Debug("tool stream callback failed", "error", err)
+		}
+	}
+
 	for i, part := range revisedMsg.Content {
 		if !part.IsToolRequest() {
 			continue
@@ -981,11 +1001,12 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 
 			// Inject per-tool streaming senders so tools can stream via
 			// tool.SendPartial (wrapped partial responses) and
-			// tool.SendChunk (raw model response chunks).
+			// tool.SendChunk (raw model response chunks). Both route through
+			// streamChunk, which serializes sends across the concurrent tools.
 			toolCtx := ctx
 			if cb != nil {
 				toolCtx = base.ToolPartialSenderKey.NewContext(ctx, func(sendCtx context.Context, output any) {
-					cb(sendCtx, &ModelResponseChunk{
+					streamChunk(sendCtx, &ModelResponseChunk{
 						Role: RoleTool,
 						Content: []*Part{NewPartialToolResponsePart(&ToolResponse{
 							Name:   toolReq.Name,
@@ -995,7 +1016,9 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 					})
 				})
 				toolCtx = base.ToolChunkSenderKey.NewContext(toolCtx, func(sendCtx context.Context, chunk any) {
-					cb(sendCtx, chunk.(*ModelResponseChunk))
+					if c, ok := chunk.(*ModelResponseChunk); ok {
+						streamChunk(sendCtx, c)
+					}
 				})
 			}
 

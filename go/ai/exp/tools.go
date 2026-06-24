@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -90,6 +90,9 @@ type InterruptibleTool[In, Out, Res any] struct {
 // Resume creates a restart part for resuming this interrupted tool with typed data.
 // The data will be deserialized into the *Res parameter of the tool function
 // when it is re-executed.
+//
+// Res must serialize to a JSON object (a struct or a map), since it is carried
+// as structured metadata on the restart part; see [tool.Interrupt].
 //
 // Unlike [tool.Resume], this method also validates that the interrupted part
 // belongs to this tool.
@@ -240,7 +243,7 @@ func convertInterruptError(tc *ai.ToolContext, err error) error {
 	if errors.As(err, &ie) {
 		m, mapErr := toMap(ie.Data)
 		if mapErr != nil {
-			return fmt.Errorf("tool.Interrupt: failed to convert data: %w", mapErr)
+			return fmt.Errorf("tool.Interrupt: interrupt data must serialize to a JSON object (a struct or map), got %T: %w", ie.Data, mapErr)
 		}
 		return tc.Interrupt(&ai.InterruptOptions{Metadata: m})
 	}

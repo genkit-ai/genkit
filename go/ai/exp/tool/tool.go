@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -43,6 +43,12 @@ func (e *InterruptError) Error() string {
 // Interrupt interrupts tool execution and sends data to the caller.
 // The caller can read this data with [InterruptAs] and resume the tool
 // with [Resume].
+//
+// data must serialize to a JSON object (a struct or a map), since it is
+// carried as structured metadata on the interrupted tool request. A value
+// that serializes to a JSON scalar or array (e.g. a string, number, or
+// slice) makes the tool fail when it returns; wrap such values in a struct
+// or map field instead.
 func Interrupt(data any) error {
 	return &InterruptError{Data: data}
 }
@@ -60,6 +66,10 @@ func InterruptAs[T any](p *ai.Part) (T, bool) {
 //
 // This is a convenience alternative to [aix.InterruptibleTool.Resume] that
 // does not require access to the tool definition.
+//
+// data must serialize to a JSON object (a struct or a map); see [Interrupt]
+// for the rationale. A value that serializes to a JSON scalar or array
+// returns an error.
 func Resume[Res any](interruptedPart *ai.Part, data Res) (*ai.Part, error) {
 	if interruptedPart == nil || !interruptedPart.IsInterrupt() {
 		return nil, fmt.Errorf("tool.Resume: part is not an interrupted tool request")
@@ -67,7 +77,7 @@ func Resume[Res any](interruptedPart *ai.Part, data Res) (*ai.Part, error) {
 
 	m, err := base.StructToMap(data)
 	if err != nil {
-		return nil, fmt.Errorf("tool.Resume: %w", err)
+		return nil, fmt.Errorf("tool.Resume: resume data must serialize to a JSON object (a struct or map), got %T: %w", data, err)
 	}
 
 	newMeta := maps.Clone(interruptedPart.Metadata)
