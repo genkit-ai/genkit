@@ -712,9 +712,10 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
     result Future that resolves when the server fn completes.
     """
 
-    # Covariant output types allow subclass polymorphism (e.g., a connection producing Dogs
-    # can be assigned to one expecting Animals). The constructor takes CloseableQueue[Any]
-    # because mutable queues are invariant and would otherwise trigger type checker errors.
+    # We use covariant outputs (covariant=True) so a connection yielding specific types
+    # (e.g. Dog) can be assigned to a variable expecting general types (e.g. Animal).
+    # Since Python's mutable queues don't allow this flexibility natively, we accept
+    # CloseableQueue[Any] internally to satisfy the compiler without losing type safety.
     def __init__(
         self,
         in_queue: CloseableQueue[Any],
