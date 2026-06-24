@@ -58,6 +58,9 @@ function resolveApiKey(params?: TwelveLabsPluginParams): string {
 function twelvelabsPlugin(params?: TwelveLabsPluginParams): GenkitPlugin {
   const baseUrl = params?.baseUrl ?? DEFAULT_BASE_URL;
   return genkitPlugin('twelvelabs', async (ai: Genkit) => {
+    if (!params?.models?.length && !params?.embedders?.length) {
+      return;
+    }
     const apiKey = resolveApiKey(params);
     params?.models?.forEach((model) =>
       defineTwelveLabsModel(ai, { apiKey, baseUrl, model })

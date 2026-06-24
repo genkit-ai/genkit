@@ -20,11 +20,30 @@ import { defineTwelveLabsModel } from '../src/models.js';
 
 let lastBody: any;
 
-// Mock fetch to simulate the TwelveLabs /analyze endpoint (stream: false).
+// When set, the next /analyze call returns this string as the SSE response
+// body instead of a JSON (stream: false) response.
+let nextSseBody: string | undefined;
+
+function sseStream(text: string): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(text));
+      controller.close();
+    },
+  });
+}
+
+// Mock fetch to simulate the TwelveLabs /analyze endpoint.
 global.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === 'string' ? input : input.toString();
   if (url.includes('/analyze')) {
     lastBody = JSON.parse(init!.body as string);
+    if (nextSseBody !== undefined) {
+      const body = sseStream(nextSseBody);
+      nextSseBody = undefined;
+      return { ok: true, body } as unknown as Response;
+    }
     return {
       ok: true,
       body: {},
@@ -75,6 +94,57 @@ describe('defineTwelveLabsModel', () => {
     });
     assert.strictEqual(lastBody.prompt, 'Describe this video.');
     assert.strictEqual(lastBody.model_name, 'pegasus1.5');
+  });
+
+  it('parses SSE-framed streaming events and recomputes totalTokens', async () => {
+    // Real SSE framing: `data:` prefix, blank separator lines, a keepalive
+    // comment, and a terminal [DONE] sentinel.
+    nextSseBody = [
+      ': keepalive',
+      'data: {"event_type":"text_generation","text":"A short "}',
+      '',
+      'data: {"event_type":"text_generation","text":"clip."}',
+      '',
+      'data: {"event_type":"stream_end","metadata":{"usage":{"output_tokens":7}}}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n');
+
+    const model = defineTwelveLabsModel(ai, {
+      apiKey: 'test-key',
+      baseUrl: 'https://api.twelvelabs.io/v1.3',
+      model: { name: 'pegasus1.5' },
+    });
+
+    const chunks: string[] = [];
+    const { text, usage } = await ai.generate({
+      model,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { text: 'Describe this video.' },
+            {
+              media: {
+                url: 'https://example.com/v.mp4',
+                contentType: 'video/mp4',
+              },
+            },
+          ],
+        },
+      ],
+      onChunk: (c) => chunks.push(c.text),
+    });
+
+    assert.strictEqual(lastBody.stream, true);
+    assert.strictEqual(text, 'A short clip.');
+    assert.deepStrictEqual(chunks, ['A short ', 'clip.']);
+    assert.strictEqual(usage?.outputTokens, 7);
+    assert.strictEqual(
+      usage?.totalTokens,
+      (usage?.inputTokens ?? 0) + 7
+    );
   });
 
   it('errors when no video is provided', async () => {

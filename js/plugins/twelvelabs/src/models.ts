@@ -122,10 +122,16 @@ export function defineTwelveLabsModel(
         content: [{ text }],
       };
 
+      const usage = getBasicUsageStats(input.messages, message);
+      if (outputTokens !== undefined) {
+        usage.outputTokens = outputTokens;
+        usage.totalTokens = (usage.inputTokens ?? 0) + outputTokens;
+      }
+
       return {
         message,
         finishReason: 'stop',
-        usage: { ...getBasicUsageStats(input.messages, message), outputTokens },
+        usage,
       } as GenerateResponseData;
     }
   );
@@ -159,8 +165,10 @@ interface SseEvent {
 }
 
 /**
- * Parses the newline-delimited JSON stream returned by `/analyze` when
- * `stream: true`. Each line is a JSON object with an `event_type`.
+ * Parses the Server-Sent Events stream returned by `/analyze` when
+ * `stream: true`. Each event is framed as a `data: {json}` line; blank lines,
+ * keepalive comments (`:` ...) and other SSE fields (`event:`, `id:`) are
+ * ignored, and the terminal `data: [DONE]` sentinel ends the stream.
  */
 async function* readSseEvents(
   body: ReadableStream<Uint8Array>
@@ -175,16 +183,30 @@ async function* readSseEvents(
       buffer += decoder.decode(value, { stream: true });
       let newlineIndex: number;
       while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, newlineIndex).trim();
+        const line = buffer.slice(0, newlineIndex);
         buffer = buffer.slice(newlineIndex + 1);
-        if (line) yield JSON.parse(line) as SseEvent;
+        const event = parseSseLine(line);
+        if (event) yield event;
       }
     }
-    const tail = buffer.trim();
-    if (tail) yield JSON.parse(tail) as SseEvent;
+    const event = parseSseLine(buffer);
+    if (event) yield event;
   } finally {
     reader.cancel().catch(() => {});
   }
+}
+
+/**
+ * Extracts a JSON event from a single SSE line. Returns `undefined` for lines
+ * that carry no event data (blank lines, comments, non-`data` fields, or the
+ * `[DONE]` sentinel).
+ */
+function parseSseLine(line: string): SseEvent | undefined {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('data:')) return undefined;
+  const data = trimmed.slice('data:'.length).trim();
+  if (!data || data === '[DONE]') return undefined;
+  return JSON.parse(data) as SseEvent;
 }
 
 async function safeErrorMessage(response: Response): Promise<string> {
