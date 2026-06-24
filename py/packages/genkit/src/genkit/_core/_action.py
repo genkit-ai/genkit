@@ -692,18 +692,6 @@ class Action(Generic[InputT, OutputT, ChunkT]):
 # =============================================================================
 
 
-class QueueSentinel:
-    """Singleton marker for end-of-stream on bidi asyncio queues."""
-
-    __slots__ = ()
-
-    def __repr__(self) -> str:
-        return '<queue-sentinel>'
-
-
-QUEUE_SENTINEL = QueueSentinel()
-_SENTINEL = QUEUE_SENTINEL  # module-local alias; tests may import as _SENTINEL
-
 StreamInT = TypeVar('StreamInT', default=Any)
 StreamOutT_co = TypeVar('StreamOutT_co', covariant=True, default=Any)
 BidiOutT_co = TypeVar('BidiOutT_co', covariant=True, default=Any)
