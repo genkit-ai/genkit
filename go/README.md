@@ -70,6 +70,259 @@ go run main.go
 
 ---
 
+## Agents
+
+Agents are Genkit's primitive for multi-turn, stateful conversations. An agent owns the per-turn loop (render the prompt, append history, call the model, stream the reply) and the conversation's session state, so your code sends messages and reads results instead of re-threading history on every call.
+
+Beyond a plain chat loop, agents give you:
+
+- **Managed session state** that persists across turns, with typed custom state of your own.
+- **Snapshots** written at the end of every successful turn, so a conversation can be resumed later by session or snapshot ID.
+- **Background execution** via `Detach`: hand a long-running turn to the server, walk away, and poll, resume, or abort it later.
+- **One definition, many transports**: the same agent runs in-process (`RunText`, `Connect`) or over HTTP, one turn per request.
+
+The agent API is experimental: it lives in `github.com/firebase/genkit/go/ai/exp` (aliased `aix` in the snippets below) and may change in a minor release.
+
+### Define an Agent
+
+The shortest path is a prompt-backed agent with an inline prompt and a session store. `aix.InlinePrompt` declares the prompt right next to the agent; the store persists each turn so the conversation can resume later:
+
+```go
+import (
+    "github.com/firebase/genkit/go/ai"
+    aix "github.com/firebase/genkit/go/ai/exp"
+    "github.com/firebase/genkit/go/ai/exp/localstore"
+    "github.com/firebase/genkit/go/genkit"
+)
+
+chatAgent := genkit.DefineAgent(g, "chat",
+    aix.InlinePrompt{
+        ai.WithModelName("googleai/gemini-flash-latest"),
+        ai.WithSystem("You are a sarcastic pirate. Keep responses concise."),
+    },
+    aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+)
+
+// Single turn: RunText drives the whole connection lifecycle for you.
+out, _ := chatAgent.RunText(ctx, "What's the best way to learn Go?")
+fmt.Println(out.Message.Text())
+```
+
+The `State` type parameter is inferred from the typed options (`aix.WithSessionStore`, `aix.WithStateTransform`), so the explicit `DefineAgent[State]` is only needed when no typed option is supplied.
+
+[See full example](samples/basic-agents)
+
+### Multi-Turn Conversations
+
+`Connect` opens a streaming session you drive turn by turn: send a message, iterate chunks until `TurnEnd`, then send the next one. The agent carries the history between turns. `Output` ends the conversation and returns the final result:
+
+```go
+conn, _ := chatAgent.Connect(ctx)
+
+conn.SendText("What is Go's concurrency model?")
+for chunk, err := range conn.Receive() {
+    if err != nil {
+        log.Fatal(err)
+    }
+    if chunk.ModelChunk != nil {
+        fmt.Print(chunk.ModelChunk.Text()) // stream tokens as they arrive
+    }
+    if chunk.TurnEnd != nil {
+        break // turn complete, ready for the next input
+    }
+}
+
+conn.SendText("Show me an example with goroutines.")
+// ... iterate conn.Receive() again ...
+
+out, _ := conn.Output() // closes input, drains, returns the final AgentOutput
+fmt.Println(out.Message.Text())
+```
+
+[See full example](samples/basic-agents)
+
+### Load the Prompt from a File
+
+`genkit.DefinePromptAgent` backs the agent with a prompt from the registry instead of an inline one. By default it uses the prompt registered under the agent's own name, including one loaded from a `.prompt` file, so prompt authors can tune the model, config, template, and default input without touching the Go wiring:
+
+```yaml
+# prompts/chat.prompt
+---
+model: googleai/gemini-flash-latest
+input:
+  schema: ChatInput
+  default:
+    personality: a Michelin-starred chef
+---
+{{role "system"}}
+You are {{personality}}. Keep responses concise.
+```
+
+```go
+type ChatInput struct {
+    Personality string `json:"personality"`
+}
+
+// Register the schema so the .prompt file can reference it by name.
+genkit.DefineSchemaFor[ChatInput](g)
+
+// Agent "chat" renders ./prompts/chat.prompt every turn (no source option needed).
+chatAgent := genkit.DefinePromptAgent(g, "chat",
+    aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+)
+```
+
+To back several agents with one shared prompt, point each at it with `aix.WithNamedPrompt` and give each its own input. The prompt name need not match the agent name:
+
+```go
+for _, p := range []struct{ name, persona string }{
+    {"pirate", "a sarcastic pirate"},
+    {"chef", "a Michelin-starred chef"},
+} {
+    genkit.DefinePromptAgent(g, p.name,
+        aix.WithNamedPrompt[any]("chat", ChatInput{Personality: p.persona}),
+        aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+    )
+}
+```
+
+[See full example](samples/basic-agents)
+
+### Custom Turn Loops
+
+When the prompt-backed loop isn't enough (custom models per turn, pre/post processing, bespoke tool plumbing), `DefineCustomAgent` hands you the turn body. You still get managed session state, snapshots, and the detach lifecycle for free. A typed `State` parameter carries structured state across turns, and mutating it with `UpdateCustom` streams the delta to the client automatically:
+
+```go
+type ChatState struct {
+    TopicsDiscussed []string `json:"topicsDiscussed"`
+}
+
+chatAgent := genkit.DefineCustomAgent(g, "chat",
+    func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[ChatState]) (*aix.AgentResult, error) {
+        err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+            for chunk, err := range genkit.GenerateStream(ctx, g,
+                ai.WithModelName("googleai/gemini-flash-latest"),
+                ai.WithMessages(sess.Messages()...), // the history is yours to manage
+            ) {
+                if err != nil {
+                    return nil, err
+                }
+                if chunk.Done {
+                    sess.AddMessages(chunk.Response.Message)
+                    if input.Message != nil {
+                        sess.UpdateCustom(func(s ChatState) ChatState {
+                            s.TopicsDiscussed = append(s.TopicsDiscussed, input.Message.Text())
+                            return s
+                        })
+                    }
+                    // Report how the turn ended so the framework can forward it
+                    // on the TurnEnd chunk and persist it on the snapshot.
+                    return &aix.TurnResult{
+                        FinishReason: aix.AgentFinishReason(chunk.Response.FinishReason),
+                    }, nil
+                }
+                resp.SendModelChunk(chunk.Chunk) // stream tokens to the client
+            }
+            return nil, nil
+        })
+        if err != nil {
+            return nil, err
+        }
+        return sess.Result(), nil
+    },
+    aix.WithSessionStore(localstore.NewInMemorySessionStore[ChatState]()),
+)
+```
+
+[See full example](samples/basic-agents)
+
+### Persist and Resume
+
+With a session store configured, every successful turn writes a snapshot. The caller only needs the `SessionID` from a previous result to pick the conversation back up:
+
+```go
+first, _ := chatAgent.RunText(ctx, "My name is Alex and I'm planning a trip to Japan.")
+
+// Later, in another request or process: resume from the latest snapshot.
+second, _ := chatAgent.RunText(ctx, "What is my name?",
+    aix.WithSessionID[any](first.SessionID))
+fmt.Println(second.Message.Text()) // "Your name is Alex."
+```
+
+Resume from one specific point in history with `aix.WithSnapshotID`, or skip the server store entirely and round-trip the state yourself with `aix.WithState` (the conversation's identity travels inside the state object).
+
+[See full example](samples/basic-agents)
+
+### Redact on the Way Out
+
+`WithStateTransform` rewrites session state as it leaves the server, on `GetSnapshot` reads, on a client-managed `out.State`, and on the streamed `CustomPatch` diffs, while the persisted snapshot and the state your agent function sees stay raw:
+
+```go
+chatAgent := genkit.DefineAgent(g, "chat",
+    aix.InlinePrompt{ai.WithModelName("googleai/gemini-flash-latest")},
+    aix.WithSessionStore(store),
+    aix.WithStateTransform[ChatState](func(ctx context.Context, s *aix.SessionState[ChatState]) (*aix.SessionState[ChatState], error) {
+        return redactPII(ctx, s) // ctx carries caller identity for RBAC-aware redaction
+    }),
+)
+```
+
+`WithStreamTransform[State]` is the stream-side counterpart, rewriting each `AgentStreamChunk` (model tokens, artifacts, custom patches, turn-end) on its way to the client. Both transforms own a fresh deep copy: mutate it in place, return a new value, or return `nil` to omit that state (or drop that chunk) from the client's view. A non-nil error fails closed, so the read or invocation fails with the transform's status (e.g. `PERMISSION_DENIED`) instead of leaking unredacted data.
+
+### Background Agents
+
+`Detach` hands the rest of the work to the server and closes the connection promptly with a pending snapshot ID. The agent keeps processing in the background on a context decoupled from the client's, so a long task survives the caller walking away:
+
+```go
+conn, _ := chatAgent.Connect(ctx)
+conn.SendText("Draft a detailed two-week Japan itinerary.")
+conn.Detach() // server takes ownership of the remaining work
+
+out, _ := conn.Output() // returns immediately; FinishReason is "detached"
+snapshotID := out.SnapshotID
+
+// Later: poll the snapshot, then resume once it has finalized.
+snap, _ := chatAgent.GetSnapshot(ctx, snapshotID)
+switch snap.Status {
+case aix.SnapshotStatusPending:   // still working
+case aix.SnapshotStatusCompleted: // snap.State holds the final state; resume it
+case aix.SnapshotStatusFailed:    // snap.Error holds the structured failure
+}
+
+// Or stop it early; the runtime observes the abort and cancels the work.
+chatAgent.Abort(ctx, snapshotID)
+```
+
+Detach requires a store that implements `SnapshotSubscriber` (both bundled local stores do). A detached turn refreshes a heartbeat while it runs, so a crashed worker surfaces as `expired` instead of orphaning the conversation forever.
+
+[See full example](samples/basic-agents)
+
+### Serve Agents over HTTP
+
+An `Agent` is an `api.BidiAction`, so it serves over HTTP one turn per request. The `genkit/exp` package lays out a default route surface for every registered agent, including the snapshot companion endpoints for store-backed agents:
+
+```go
+import (
+    genkitx "github.com/firebase/genkit/go/genkit/exp"
+    "github.com/firebase/genkit/go/plugins/server"
+)
+
+mux := http.NewServeMux()
+for _, r := range genkitx.AllAgentRoutes(g) {
+    mux.HandleFunc(r.Pattern(), r.Handler())
+}
+// POST /agents/chat                one turn per request (?stream=true for SSE)
+// POST /agents/chat/getSnapshot    read a snapshot by ID
+// POST /agents/chat/abort          abort background work
+log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
+```
+
+A client starts a conversation by POSTing a turn, then continues it by sending the returned `sessionId` in the request's `init` field. Agents with no store return the full state instead and the client round-trips it, so stateless and store-backed agents deploy side by side.
+
+[See full example](samples/basic-agents-server)
+
+---
+
 ## Features
 
 Genkit Go gives you everything you need to build AI applications with confidence.
@@ -676,37 +929,6 @@ Clients receive a stream ID in the `X-Genkit-Stream-Id` header and can reconnect
 
 [See full example](samples/durable-streaming)
 
-### Sessions
-
-Maintain typed state across multiple requests and throughout generation including tools:
-
-```go
-import "github.com/firebase/genkit/go/core/x/session"
-
-type CartState struct {
-    Items []string `json:"items"`
-}
-
-store := session.NewInMemoryStore[CartState]()
-
-genkit.DefineFlow(g, "manageCart", func(ctx context.Context, input string) (string, error) {
-    sess, err := session.Load(ctx, store, "session-id")
-    if err != nil {
-        sess, _ = session.New(ctx,
-            session.WithID[CartState]("session-id"),
-            session.WithStore(store),
-            session.WithInitialState(CartState{}),
-        )
-    }
-    ctx = session.NewContext(ctx, sess)
-
-    // Tools can now access session state via session.FromContext[CartState](ctx)
-    return genkit.GenerateText(ctx, g, ai.WithPrompt(input), ai.WithTools(myTools...))
-})
-```
-
-[See full example](samples/session)
-
 ---
 
 ## Samples
@@ -718,13 +940,14 @@ Explore working examples to see Genkit in action:
 | [basic](samples/basic) | Simple text generation with streaming |
 | [basic-structured](samples/basic-structured) | Typed JSON output with `GenerateData` and `GenerateDataStream` |
 | [basic-prompts](samples/basic-prompts) | Prompt templates with Handlebars and `.prompt` files |
+| [basic-agents](samples/basic-agents) | Multi-turn agents (inline, prompt-file, and custom-loop) with snapshots and background detach |
+| [basic-agents-server](samples/basic-agents-server) | Serving store-backed and stateless agents over HTTP |
 | [intermediate-interrupts](samples/intermediate-interrupts) | Human-in-the-loop with tool interrupts |
 | [basic-middleware/retry-fallback](samples/basic-middleware/retry-fallback) | Composing `Retry` and `Fallback` middleware |
 | [basic-middleware/filesystem](samples/basic-middleware/filesystem) | Scoped filesystem tools for the model |
 | [basic-middleware/skills](samples/basic-middleware/skills) | On-demand loadable `SKILL.md` personas |
 | [prompts-embed](samples/prompts-embed) | Embed prompts in your binary |
 | [durable-streaming](samples/durable-streaming) | Reconnectable streams with replay |
-| [session](samples/session) | Stateful flows with typed session data |
 
 ---
 

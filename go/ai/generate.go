@@ -1016,7 +1016,10 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 		}(i, part)
 	}
 
-	var toolResps []*Part
+	// Tools run concurrently, so resultChan delivers responses in completion
+	// order. Collect them keyed by the request's position in the model message
+	// so they can be re-emitted in request order below.
+	toolRespByIndex := make(map[int]*Part, toolCount)
 	hasInterrupts := false
 	for range toolCount {
 		res := <-resultChan
@@ -1038,11 +1041,21 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 			Content: res.value.Content,
 		})
 		newToolResp.Metadata = res.value.Metadata
-		toolResps = append(toolResps, newToolResp)
+		toolRespByIndex[res.index] = newToolResp
 	}
 
 	if hasInterrupts {
 		return nil, revisedMsg, nil
+	}
+
+	// Emit tool responses in the order their requests appear in the model
+	// message, not the order the goroutines happened to finish, so the recorded
+	// tool message is deterministic across runs.
+	toolResps := make([]*Part, 0, len(toolRespByIndex))
+	for i := range revisedMsg.Content {
+		if part, ok := toolRespByIndex[i]; ok {
+			toolResps = append(toolResps, part)
+		}
 	}
 
 	toolMsg.Content = toolResps
@@ -1202,6 +1215,17 @@ func (c *ModelResponseChunk) Reasoning() string {
 	return sb.String()
 }
 
+// Interrupts returns the interrupted tool request parts from the chunk.
+func (c *ModelResponseChunk) Interrupts() []*Part {
+	var parts []*Part
+	for _, p := range c.Content {
+		if p.IsInterrupt() {
+			parts = append(parts, p)
+		}
+	}
+	return parts
+}
+
 // Output parses the chunk using the format handler and unmarshals the result into v.
 // Returns an error if the format handler is not set or does not support parsing chunks.
 func (c *ModelResponseChunk) Output(v any) error {
@@ -1283,6 +1307,17 @@ func (m *Message) Text() string {
 		}
 	}
 	return sb.String()
+}
+
+// NewResume constructs a [GenerateActionResume] from Part slices.
+// This is useful when building [GenerateActionOptions] directly (e.g., from a
+// rendered prompt) and need to set the Resume field from [*Part] values
+// produced by [ToolDef.RestartWith] or [ToolDef.RespondWith].
+func NewResume(restarts, responds []*Part) *GenerateActionResume {
+	return &GenerateActionResume{
+		Restart: restarts,
+		Respond: responds,
+	}
 }
 
 // NewModelRef creates a new ModelRef with the given name and configuration.

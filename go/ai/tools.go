@@ -267,8 +267,7 @@ func ResumedValue[T any](ctx context.Context, key string) (T, bool) {
 	if !ok {
 		return zero, false
 	}
-	typed, ok := v.(T)
-	return typed, ok
+	return base.ConvertTo[T](v)
 }
 
 // OriginalInputAs returns the original input typed appropriately.
@@ -278,19 +277,7 @@ func OriginalInputAs[T any](tc *ToolContext) (T, bool) {
 	if tc.OriginalInput == nil {
 		return zero, false
 	}
-	// Try direct type assertion first (for when input is already typed)
-	if typed, ok := tc.OriginalInput.(T); ok {
-		return typed, ok
-	}
-	// Otherwise try to convert from map[string]any (common case from JSON)
-	if m, ok := tc.OriginalInput.(map[string]any); ok {
-		result, err := base.MapToStruct[T](m)
-		if err != nil {
-			return zero, false
-		}
-		return result, true
-	}
-	return zero, false
+	return base.ConvertTo[T](tc.OriginalInput)
 }
 
 // toolStrictKey is the metadata key under metadata["tool"] used to carry the
