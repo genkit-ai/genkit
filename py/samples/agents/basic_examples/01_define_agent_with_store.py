@@ -60,8 +60,18 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
+    # --- STARTING A SESSION (TWO WAYS) ---
+    #
+    # Way 1: Standard / Automatic (Recommended)
+    # Genkit automatically generates a unique session ID on the server, and the
+    # client session automatically tracks the conversation state under the hood.
+    #
+    # session = agent.chat()
+    #
+    # Way 2: Custom Thread ID Override (Optional)
+    # Use this if you already have a unique thread ID from your own database
+    # (e.g. Firebase Auth) and want the Genkit session store to use the same ID.
     session_id = str(uuid4())
-
     session = agent.chat(AgentInit(session_id=session_id))
     # Turn 1
     print('--- SENDING TURN 1 ---')
