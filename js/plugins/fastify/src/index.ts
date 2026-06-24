@@ -79,8 +79,9 @@ export function fastifyHandler<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
-  action: Action<I, O, S>,
+  action: Action<I, O, S, any, Init>,
   opts?: FastifyHandlerOptions<C, I>
 ): RouteHandlerMethod {
   return async (
@@ -104,6 +105,9 @@ export function fastifyHandler<
     }
 
     const input = (request.body as { data?: z.infer<I> }).data as z.infer<I>;
+    const init = (request.body as { init?: z.infer<Init> }).init as
+      | z.infer<Init>
+      | undefined;
     let context: Record<string, any>;
 
     try {
@@ -184,6 +188,7 @@ export function fastifyHandler<
           streamManager,
           streamIdToUse,
           input,
+          init,
           context,
           raw,
           abortController.signal
@@ -213,6 +218,7 @@ export function fastifyHandler<
         const result = await action.run(input, {
           context,
           abortSignal: abortController.signal,
+          init,
         });
         // Responses for non-streaming flows are passed back with the flow result stored in a field called "result."
         reply
@@ -235,11 +241,13 @@ async function runActionWithDurableStreaming<
   I extends z.ZodTypeAny,
   O extends z.ZodTypeAny,
   S extends z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
-  action: Action<I, O, S>,
+  action: Action<I, O, S, any, Init>,
   streamManager: StreamManager | undefined,
   streamId: string,
   input: z.infer<I>,
+  init: z.infer<Init> | undefined,
   context: ActionContext,
   response: ServerResponse,
   abortSignal: AbortSignal
@@ -270,6 +278,7 @@ async function runActionWithDurableStreaming<
       onChunk,
       context,
       abortSignal,
+      init,
     });
     if (streamManager) {
       taskQueue!.enqueue(() => durableStream!.done(result.result));
@@ -380,8 +389,9 @@ export type FlowWithContextProvider<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 > = {
-  flow: Flow<I, O, S>;
+  flow: Flow<I, O, S, Init>;
   context: ContextProvider<C, I>;
 };
 
@@ -392,8 +402,9 @@ export type FlowWithOptions<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 > = {
-  flow: Flow<I, O, S>;
+  flow: Flow<I, O, S, Init>;
   options: {
     contextProvider?: ContextProvider<any, I>;
     streamManager?: StreamManager;
@@ -410,10 +421,11 @@ export function withContextProvider<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
-  flow: Flow<I, O, S>,
+  flow: Flow<I, O, S, Init>,
   context: ContextProvider<C, I>
-): FlowWithContextProvider<C, I, O, S> {
+): FlowWithContextProvider<C, I, O, S, Init> {
   return {
     flow,
     context,
@@ -428,14 +440,15 @@ export function withFlowOptions<
   I extends z.ZodTypeAny,
   O extends z.ZodTypeAny,
   S extends z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
-  flow: Flow<I, O, S>,
+  flow: Flow<I, O, S, Init>,
   options: {
     contextProvider?: ContextProvider<any, I>;
     streamManager?: StreamManager;
     path?: string;
   }
-): FlowWithOptions<I, O, S> {
+): FlowWithOptions<I, O, S, Init> {
   return {
     flow,
     options,
@@ -448,9 +461,9 @@ export function withFlowOptions<
 export interface GenkitFastifyOptions {
   /** Flows (or flows wrapped with {@link withFlowOptions}) to expose as routes. */
   flows: (
-    | Flow<any, any, any>
-    | FlowWithContextProvider<any, any, any>
-    | FlowWithOptions<any, any, any>
+    | Flow<any, any, any, any>
+    | FlowWithContextProvider<any, any, any, any, any>
+    | FlowWithOptions<any, any, any, any>
   )[];
   /** HTTP path prefix prepended to each exposed flow (e.g. `/api`). */
   pathPrefix?: string;

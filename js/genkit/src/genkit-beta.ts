@@ -15,35 +15,71 @@
  */
 
 import {
-  defineInterrupt,
-  defineResource,
-  generateOperation,
   GenerateOptions,
   GenerateResponseData,
   GenerationCommonConfigSchema,
-  isExecutablePrompt,
-  ResourceAction,
-  ResourceFn,
-  ResourceOptions,
-  type ExecutablePrompt,
+  SessionRunner,
+  defineAgent,
+  defineCustomAgent,
+  defineInterrupt,
+  definePromptAgent,
+  defineResource,
+  generateOperation,
+  type Agent,
+  type AgentConfig,
+  type AgentFn,
+  type AgentStreamChunk,
+  type ClientTransform,
   type InterruptConfig,
+  type PromptConfig,
+  type ResourceAction,
+  type ResourceFn,
+  type ResourceOptions,
   type ToolAction,
 } from '@genkit-ai/ai';
-import type { Chat, ChatOptions } from '@genkit-ai/ai/chat';
+
 import { defineFormat } from '@genkit-ai/ai/formats';
+
 import {
-  getCurrentSession,
-  Session,
-  SessionError,
-  type SessionData,
-  type SessionOptions,
+  type SessionSnapshot,
+  type SessionSnapshotInput,
+  type SessionState,
+  type SessionStore,
+  type SessionStoreOptions,
+  type SnapshotMutator,
 } from '@genkit-ai/ai/session';
-import type { Operation, z } from '@genkit-ai/core';
-import { v4 as uuidv4 } from 'uuid';
+import {
+  FileSessionStore,
+  InMemorySessionStore,
+} from '@genkit-ai/ai/session-stores';
+
+import { applyPatch, diff } from '@genkit-ai/ai/json-patch';
+import { type Operation, type z } from '@genkit-ai/core';
 import type { Formatter } from './formats.js';
 import { Genkit, type GenkitOptions } from './genkit.js';
 
-export type { GenkitOptions as GenkitBetaOptions }; // in case they drift later
+export type { JsonPatch, JsonPatchOperation } from '@genkit-ai/ai/json-patch';
+export {
+  FileSessionStore,
+  InMemorySessionStore,
+  SessionRunner,
+  applyPatch,
+  diff,
+};
+export type {
+  Agent,
+  AgentFn,
+  AgentStreamChunk,
+  ClientTransform,
+  GenkitOptions as GenkitBetaOptions,
+  PromptConfig,
+  SessionSnapshot,
+  SessionSnapshotInput,
+  SessionState,
+  SessionStore,
+  SessionStoreOptions,
+  SnapshotMutator,
+};
 
 /**
  * WARNING: these APIs are considered unstable and subject to frequent breaking changes that may not honor semver.
@@ -71,120 +107,66 @@ export class GenkitBeta extends Genkit {
   }
 
   /**
-   * Create a chat session with the provided options.
+   * Defines and registers a custom agent with a custom handler function.
+   *
+   * @beta
+   */
+  defineCustomAgent<State = unknown>(
+    config: {
+      name: string;
+      description?: string;
+      stateSchema?: z.ZodType<State>;
+      store?: SessionStore<State>;
+    },
+    fn: AgentFn<State>
+  ) {
+    return defineCustomAgent<State>(this.registry, config, fn);
+  }
+
+  /**
+   * Defines and registers an agent from an existing Prompt template.
+   *
+   * @beta
+   */
+  definePromptAgent<
+    State = unknown,
+    I extends z.ZodTypeAny = z.ZodTypeAny,
+  >(config: {
+    promptName: string;
+    /**
+     * Input values for the referenced prompt's input variables. Lets a single
+     * prompt be reused/customized across multiple agents.
+     */
+    promptInput?: z.infer<I>;
+    stateSchema?: z.ZodType<State>;
+    store?: SessionStore<State>;
+  }) {
+    return definePromptAgent<State, I>(this.registry, config);
+  }
+
+  /**
+   * Defines and registers an agent by creating a prompt and wiring it into a
+   * multi-turn agent in one step.
+   *
+   * This is a convenience shortcut that combines `definePrompt` and
+   * `definePromptAgent` into a single call.
    *
    * ```ts
-   * const chat = ai.chat({
-   *   system: 'talk like a pirate',
-   * })
-   * let response = await chat.send('tell me a joke')
-   * response = await chat.send('another one')
+   * const myAgent = ai.defineAgent({
+   *   name: 'myAgent',
+   *   model: 'googleai/gemini-2.5-flash',
+   *   system: 'Talk like a pirate.',
+   *   tools: [weatherTool],
+   *   store: new FileSessionStore('./.snapshots'),
+   * });
    * ```
    *
    * @beta
    */
-  chat<I>(options?: ChatOptions<I>): Chat;
-
-  /**
-   * Create a chat session with the provided preamble.
-   *
-   * ```ts
-   * const triageAgent = ai.definePrompt({
-   *   system: 'help the user triage a problem',
-   * })
-   * const chat = ai.chat(triageAgent)
-   * const { text } = await chat.send('my phone feels hot');
-   * ```
-   *
-   * @beta
-   */
-  chat<I>(preamble: ExecutablePrompt<I>, options?: ChatOptions<I>): Chat;
-
-  /**
-   * Create a chat session with the provided options.
-   *
-   * ```ts
-   * const chat = ai.chat({
-   *   system: 'talk like a pirate',
-   * })
-   * let response = await chat.send('tell me a joke')
-   * response = await chat.send('another one')
-   * ```
-   *
-   * @beta
-   */
-  chat<I>(
-    preambleOrOptions?: ChatOptions<I> | ExecutablePrompt<I>,
-    maybeOptions?: ChatOptions<I>
-  ): Chat {
-    let options: ChatOptions<I> | undefined;
-    let preamble: ExecutablePrompt<I> | undefined;
-    if (maybeOptions) {
-      options = maybeOptions;
-    }
-    if (preambleOrOptions) {
-      if (isExecutablePrompt(preambleOrOptions)) {
-        preamble = preambleOrOptions as ExecutablePrompt<I>;
-      } else {
-        options = preambleOrOptions as ChatOptions<I>;
-      }
-    }
-
-    const session = this.createSession();
-    if (preamble) {
-      return session.chat(preamble, options);
-    }
-    return session.chat(options);
-  }
-
-  /**
-   * Create a session for this environment.
-   */
-  createSession<S = any>(options?: SessionOptions<S>): Session<S> {
-    const sessionId = options?.sessionId?.trim() || uuidv4();
-    const sessionData: SessionData = {
-      id: sessionId,
-      state: options?.initialState,
-    };
-    return new Session(this.registry, {
-      id: sessionId,
-      sessionData,
-      store: options?.store,
-    });
-  }
-
-  /**
-   * Loads a session from the store.
-   *
-   * @beta
-   */
-  async loadSession(
-    sessionId: string,
-    options: SessionOptions
-  ): Promise<Session> {
-    if (!options.store) {
-      throw new Error('options.store is required');
-    }
-    const sessionData = await options.store.get(sessionId);
-
-    return new Session(this.registry, {
-      id: sessionId,
-      sessionData,
-      store: options.store,
-    });
-  }
-
-  /**
-   * Gets the current session from async local storage.
-   *
-   * @beta
-   */
-  currentSession<S = any>(): Session<S> {
-    const currentSession = getCurrentSession(this.registry);
-    if (!currentSession) {
-      throw new SessionError('not running within a session');
-    }
-    return currentSession as Session;
+  defineAgent<State = unknown, I extends z.ZodTypeAny = z.ZodTypeAny>(
+    config: AgentConfig<State, I>
+  ) {
+    return defineAgent<State, I>(this.registry, config);
   }
 
   /**
@@ -285,6 +267,7 @@ export class GenkitBeta extends Genkit {
    * await ai.generate({
    *   prompt: [{ resource: 'my://resource/value' }]
    * })
+   * ```
    */
   defineResource(opts: ResourceOptions, fn: ResourceFn): ResourceAction {
     return defineResource(this.registry, opts, fn);

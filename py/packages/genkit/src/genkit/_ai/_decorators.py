@@ -39,14 +39,19 @@ class _FlowDecorator:
         self._name = name
         self._description = description
 
+    # Overload order matters: pyright picks the first matching overload, and a
+    # flow with a defaulted input arg (`async def f(x: str = '...') -> ...`)
+    # is structurally callable as both 1-arg and 0-arg. We list the most
+    # specific shapes first so the input type stays as the caller wrote it
+    # instead of collapsing to `None`.
     @overload
-    def __call__(self, func: Callable[[], Awaitable[OutputT]]) -> Action[None, OutputT]: ...
+    def __call__(self, func: Callable[[InputT, ActionRunContext], Awaitable[OutputT]]) -> Action[InputT, OutputT]: ...
 
     @overload
     def __call__(self, func: Callable[[InputT], Awaitable[OutputT]]) -> Action[InputT, OutputT]: ...
 
     @overload
-    def __call__(self, func: Callable[[InputT, ActionRunContext], Awaitable[OutputT]]) -> Action[InputT, OutputT]: ...
+    def __call__(self, func: Callable[[], Awaitable[OutputT]]) -> Action[None, OutputT]: ...
 
     def __call__(self, func: Callable[..., Awaitable[Any]]) -> Action[Any, Any]:
         return define_flow(self._registry, func, self._name, self._description)
@@ -62,15 +67,15 @@ class _FlowDecoratorWithChunk(Generic[ChunkT]):
         self._chunk_type = chunk_type
 
     @overload
-    def __call__(self, func: Callable[[], Awaitable[OutputT]]) -> Action[None, OutputT, ChunkT]: ...
+    def __call__(
+        self, func: Callable[[InputT, ActionRunContext], Awaitable[OutputT]]
+    ) -> Action[InputT, OutputT, ChunkT]: ...
 
     @overload
     def __call__(self, func: Callable[[InputT], Awaitable[OutputT]]) -> Action[InputT, OutputT, ChunkT]: ...
 
     @overload
-    def __call__(
-        self, func: Callable[[InputT, ActionRunContext], Awaitable[OutputT]]
-    ) -> Action[InputT, OutputT, ChunkT]: ...
+    def __call__(self, func: Callable[[], Awaitable[OutputT]]) -> Action[None, OutputT, ChunkT]: ...
 
     def __call__(self, func: Callable[..., Awaitable[Any]]) -> Action[Any, Any, ChunkT]:
         # Cast is safe: chunk_type is purely for static typing, runtime behavior is identical
