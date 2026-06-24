@@ -1593,6 +1593,8 @@ export function definePromptAgent<
   registry: Registry,
   config: {
     promptName: string;
+    /** Human-readable description, surfaced on the agent action's metadata. */
+    description?: string;
     /**
      * Input values for the referenced prompt's input variables. Lets a single
      * prompt be reused/customized across multiple agents (e.g. supplying a
@@ -1729,6 +1731,7 @@ export function definePromptAgent<
     registry,
     {
       name: config.promptName,
+      description: config.description,
       stateSchema: config.stateSchema,
       store: config.store,
       clientTransform: config.clientTransform,
@@ -1887,6 +1890,7 @@ export function defineAgent<
   // Wire it into a prompt agent.
   return definePromptAgent<State, I>(registry, {
     promptName: promptConfig.name,
+    description: promptConfig.description,
     promptInput,
     stateSchema,
     store,
