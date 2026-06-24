@@ -17,6 +17,7 @@
 package base
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,13 @@ import (
 
 	"github.com/invopop/jsonschema"
 )
+
+// HasJSONValue reports whether raw carries an actual JSON value: it is
+// non-empty and not the JSON null literal, ignoring surrounding whitespace.
+func HasJSONValue(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
+}
 
 // JSONString returns json.Marshal(x) as a string. If json.Marshal returns
 // an error, jsonString returns the error text as a JSON string beginning "ERROR:".

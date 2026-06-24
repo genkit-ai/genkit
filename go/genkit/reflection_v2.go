@@ -31,6 +31,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal"
 )
@@ -120,6 +121,13 @@ type reflectionServerV2 struct {
 	pendingMu  sync.Mutex
 	pending    map[string]chan pendingResponse
 	requestSeq atomic.Uint64
+
+	// bidiSessions tracks in-flight bidi runAction calls so that
+	// sendInputStreamChunk/endInputStream notifications can be routed to them.
+	// Sessions are pre-registered in readLoop so that chunks arriving before
+	// the action has finished initializing are buffered rather than dropped.
+	bidiMu       sync.Mutex
+	bidiSessions map[string]*bidiSession
 }
 
 // reflectionServerV2Options configures the V2 reflection client.
@@ -148,6 +156,7 @@ func startReflectionServerV2(ctx context.Context, g *Genkit, opts reflectionServ
 		activeActions: newActiveActionsMap(),
 		runtimeID:     runtimeID,
 		pending:       map[string]chan pendingResponse{},
+		bidiSessions:  map[string]*bidiSession{},
 	}
 
 	// Initial connect so startup errors surface via errCh. Reconnects after
@@ -169,7 +178,12 @@ func (s *reflectionServerV2) connect(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Handler goroutines (and bidi runs surviving a disconnect) read s.conn
+	// through send while the session goroutine reconnects; synchronize the
+	// swap with the same lock send holds.
+	s.writeMu.Lock()
 	s.conn = conn
+	s.writeMu.Unlock()
 	slog.Debug("reflection V2: connected", "url", s.opts.URL)
 	return nil
 }
@@ -252,6 +266,10 @@ func (s *reflectionServerV2) register(ctx context.Context) {
 // readLoop reads and dispatches JSON-RPC messages until the context is
 // cancelled or the connection is closed.
 func (s *reflectionServerV2) readLoop(ctx context.Context) {
+	// If the client disconnects mid-stream without sending endInputStream,
+	// end the input of any in-flight bidi sessions so action bodies awaiting
+	// input can terminate instead of hanging (matching the JS runtime).
+	defer s.closeBidiSessions()
 	for {
 		var msg jsonRPCMessage
 		if err := wsjson.Read(ctx, s.conn, &msg); err != nil {
@@ -264,7 +282,32 @@ func (s *reflectionServerV2) readLoop(ctx context.Context) {
 			continue
 		}
 		if msg.Method != "" {
-			go s.handleRequest(ctx, &msg)
+			switch msg.Method {
+			case "runAction":
+				// Pre-register a bidi session before dispatching the handler
+				// so that later sendInputStreamChunk / endInputStream
+				// notifications (which run in their own goroutines) always
+				// find it.
+				if msg.ID != "" {
+					var peek struct {
+						StreamInput bool `json:"streamInput"`
+					}
+					if len(msg.Params) > 0 {
+						_ = json.Unmarshal(msg.Params, &peek)
+					}
+					if peek.StreamInput {
+						s.registerBidiSession(msg.ID, newBidiSession())
+					}
+				}
+				go s.handleRequest(ctx, &msg)
+			case "sendInputStreamChunk", "endInputStream":
+				// Dispatch synchronously to preserve wire ordering when
+				// enqueueing onto the per-session event queue. Enqueueing
+				// never blocks, so this cannot stall the read loop.
+				s.handleRequest(ctx, &msg)
+			default:
+				go s.handleRequest(ctx, &msg)
+			}
 		} else if msg.ID != "" {
 			s.deliverResponse(&msg)
 		}
@@ -287,9 +330,10 @@ func (s *reflectionServerV2) handleRequest(ctx context.Context, req *jsonRPCMess
 		s.handleCancelAction(req)
 	case "configure":
 		s.handleConfigure(req)
-	case "sendInputStreamChunk", "endInputStream":
-		// Bidirectional input streaming is not yet implemented.
-		slog.Debug("reflection V2: method not implemented", "method", req.Method)
+	case "sendInputStreamChunk":
+		s.handleSendInputStreamChunk(req)
+	case "endInputStream":
+		s.handleEndInputStream(req)
 	default:
 		if req.ID != "" {
 			s.sendErrorResponse(req.ID, jsonRPCMethodNotFound, "method not found: "+req.Method, nil)
@@ -340,44 +384,36 @@ func (s *reflectionServerV2) handleRunAction(ctx context.Context, req *jsonRPCMe
 	if req.ID == "" {
 		return
 	}
+	// Owns cleanup for any bidi session pre-registered by readLoop, including
+	// early-return paths. The session is captured up front and unregistration
+	// is ownership-checked: a long-lived handler must not tear down a newer
+	// session registered under a reused request id (the manager's id counter
+	// restarts when the CLI restarts and reconnects).
+	session := s.lookupBidiSession(req.ID)
+	defer s.unregisterBidiSession(req.ID, session)
+
 	var params ReflectionRunActionParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		s.sendErrorResponse(req.ID, jsonRPCInvalidParams, "invalid params: "+err.Error(), nil)
 		return
 	}
 
-	slog.Debug("reflection V2: running action", "key", params.Key, "stream", params.Stream)
+	slog.Debug("reflection V2: running action", "key", params.Key, "stream", params.Stream, "streamInput", params.StreamInput)
+
+	if params.StreamInput {
+		s.handleRunActionBidi(ctx, req, &params, session)
+		return
+	}
 
 	actionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var traceIDMu sync.Mutex
-	var traceID string
-
-	telemetryCb := func(tid, _ string) {
-		traceIDMu.Lock()
-		traceID = tid
-		traceIDMu.Unlock()
-
-		s.activeActions.Set(tid, &activeAction{
-			cancel:    cancel,
-			startTime: time.Now(),
-			traceID:   tid,
-		})
-
-		s.sendNotification("runActionState", &ReflectionRunActionStateParams{
-			RequestID: req.ID,
-			State:     &ReflectionRunActionStateParamsState{TraceID: tid},
-		})
-	}
+	rt := s.newRunActionTelemetry(req.ID, cancel)
 
 	var streamCb streamingCallback[json.RawMessage]
 	if params.Stream {
 		streamCb = func(_ context.Context, chunk json.RawMessage) error {
-			return s.sendNotification("streamChunk", &ReflectionStreamChunkParams{
-				RequestID: req.ID,
-				Chunk:     chunk,
-			})
+			return s.sendStreamChunk(req.ID, chunk)
 		}
 	}
 
@@ -389,15 +425,10 @@ func (s *reflectionServerV2) handleRunAction(ctx context.Context, req *jsonRPCMe
 		}
 	}
 
-	actionCtx = tracing.WithTelemetryCallback(actionCtx, telemetryCb)
-	resp, err := runAction(actionCtx, s.g, params.Key, params.Input, params.TelemetryLabels, streamCb, contextMap)
+	actionCtx = tracing.WithTelemetryCallback(actionCtx, rt.callback)
+	resp, err := runAction(actionCtx, s.g, params.Key, params.Input, params.Init, params.TelemetryLabels, streamCb, contextMap)
 
-	traceIDMu.Lock()
-	capturedTraceID := traceID
-	traceIDMu.Unlock()
-	if capturedTraceID != "" {
-		s.activeActions.Delete(capturedTraceID)
-	}
+	capturedTraceID := rt.finish()
 
 	if err != nil {
 		s.sendRunActionError(req.ID, err, capturedTraceID)
@@ -408,6 +439,340 @@ func (s *reflectionServerV2) handleRunAction(ctx context.Context, req *jsonRPCMe
 		Result:    resp.Result,
 		Telemetry: telemetry{TraceID: resp.Telemetry.TraceID},
 	})
+}
+
+// runActionTelemetry tracks the trace ID for one in-flight runAction request:
+// the span-start callback records the id, registers the run as a cancellable
+// active action, and notifies the client. finish marks the request complete
+// and returns the captured trace ID; callbacks firing after finish are
+// ignored, since a bidi session's span is created asynchronously and can
+// start after the handler has already responded.
+type runActionTelemetry struct {
+	s      *reflectionServerV2
+	reqID  string
+	cancel context.CancelFunc
+
+	mu       sync.Mutex
+	traceID  string
+	finished bool
+}
+
+func (s *reflectionServerV2) newRunActionTelemetry(reqID string, cancel context.CancelFunc) *runActionTelemetry {
+	return &runActionTelemetry{s: s, reqID: reqID, cancel: cancel}
+}
+
+// callback is the tracing telemetry callback for the run's root span.
+func (rt *runActionTelemetry) callback(tid, _ string) {
+	rt.mu.Lock()
+	if rt.finished {
+		rt.mu.Unlock()
+		return
+	}
+	rt.traceID = tid
+	// Registered under the lock so finish either sees the id (and deletes
+	// the entry) or this callback sees finished (and never registers).
+	rt.s.activeActions.Set(tid, &activeAction{
+		cancel:    rt.cancel,
+		startTime: time.Now(),
+		traceID:   tid,
+	})
+	rt.mu.Unlock()
+
+	rt.s.sendNotification("runActionState", &ReflectionRunActionStateParams{
+		RequestID: rt.reqID,
+		State:     &ReflectionRunActionStateParamsState{TraceID: tid},
+	})
+}
+
+// finish marks the request complete, removes the active-action entry, and
+// returns the trace ID captured for the run (empty if the span never started).
+func (rt *runActionTelemetry) finish() string {
+	rt.mu.Lock()
+	rt.finished = true
+	tid := rt.traceID
+	rt.mu.Unlock()
+	if tid != "" {
+		rt.s.activeActions.Delete(tid)
+	}
+	return tid
+}
+
+// sendStreamChunk forwards one output chunk to the client as a streamChunk
+// notification.
+func (s *reflectionServerV2) sendStreamChunk(requestID string, chunk json.RawMessage) error {
+	return s.sendNotification("streamChunk", &ReflectionStreamChunkParams{
+		RequestID: requestID,
+		Chunk:     chunk,
+	})
+}
+
+// handleRunActionBidi handles a runAction request with streamInput=true.
+// It resolves the action as a bidi action, wires its input/output streams to
+// the JSON-RPC connection, and waits for the final result. The session has
+// already been pre-registered by readLoop.
+func (s *reflectionServerV2) handleRunActionBidi(ctx context.Context, req *jsonRPCMessage, params *ReflectionRunActionParams, session *bidiSession) {
+	if session == nil {
+		// readLoop pre-registers a session for every streamInput run, so a
+		// missing one means it was already torn down (e.g. a reused request
+		// id); fail loud rather than dereference it below.
+		s.sendErrorResponse(req.ID, jsonRPCServerError, "bidi session unavailable for request "+req.ID, nil)
+		return
+	}
+
+	action := s.g.reg.ResolveAction(params.Key)
+	if action == nil {
+		s.sendErrorResponse(req.ID, jsonRPCInvalidParams, fmt.Sprintf("action not found: %s", params.Key), nil)
+		return
+	}
+	bidi, ok := action.(api.BidiAction)
+	if !ok {
+		s.sendErrorResponse(req.ID, jsonRPCInvalidParams, fmt.Sprintf("action %s does not support bidirectional streaming", params.Key), nil)
+		return
+	}
+
+	actionCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	rt := s.newRunActionTelemetry(req.ID, cancel)
+	actionCtx = tracing.WithTelemetryCallback(actionCtx, rt.callback)
+
+	if params.Context != nil {
+		contextMap := core.ActionContext{}
+		if err := json.Unmarshal(params.Context, &contextMap); err != nil {
+			s.sendErrorResponse(req.ID, jsonRPCInvalidParams, "invalid context: "+err.Error(), nil)
+			return
+		}
+		actionCtx = core.WithActionContext(actionCtx, contextMap)
+	}
+
+	conn, err := bidi.ConnectJSON(actionCtx, &api.BidiJSONOptions{Init: params.Init})
+	if err != nil {
+		s.sendErrorResponse(req.ID, jsonRPCServerError, err.Error(), nil)
+		return
+	}
+
+	// Start consuming outgoing stream chunks before replaying buffered
+	// inputs, so the action's outbound channel can drain while we feed
+	// inbound chunks. Chunks are forwarded to the client only when output
+	// streaming was requested (matching the JS runtime), but the stream is
+	// always drained since the connection applies backpressure to the action.
+	forwardDone := make(chan struct{})
+	go func() {
+		defer close(forwardDone)
+		forward := params.Stream
+		for chunk, rerr := range conn.Receive() {
+			if rerr != nil {
+				return
+			}
+			if !forward {
+				continue
+			}
+			if err := s.sendStreamChunk(req.ID, chunk); err != nil {
+				slog.Debug("reflection V2: streamChunk send failed", "err", err)
+				forward = false
+			}
+		}
+	}()
+
+	// Hand the real connection to the pre-registered session. Any chunks
+	// that arrived while we were resolving the action are replayed now.
+	go session.run(conn)
+
+	output, runErr := conn.Output()
+	<-forwardDone
+
+	capturedTraceID := rt.finish()
+
+	if runErr != nil {
+		s.sendRunActionError(req.ID, runErr, capturedTraceID)
+		return
+	}
+
+	s.sendResponse(req.ID, &reflectionRunActionResponse{
+		Result:    output,
+		Telemetry: telemetry{TraceID: capturedTraceID},
+	})
+}
+
+// handleSendInputStreamChunk routes an inbound chunk to the bidi session
+// identified by RequestID. If the session has not yet attached its underlying
+// connection, the chunk is buffered and replayed when it does.
+func (s *reflectionServerV2) handleSendInputStreamChunk(req *jsonRPCMessage) {
+	var params ReflectionSendInputStreamChunkParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		slog.Debug("reflection V2: invalid sendInputStreamChunk params", "err", err)
+		return
+	}
+	session := s.lookupBidiSession(params.RequestID)
+	if session == nil {
+		slog.Debug("reflection V2: sendInputStreamChunk for unknown session", "requestId", params.RequestID)
+		return
+	}
+	session.Send(params.Chunk)
+}
+
+// handleEndInputStream closes the input stream of the bidi session identified
+// by RequestID. If the session has not yet attached its connection, the end
+// signal is buffered.
+func (s *reflectionServerV2) handleEndInputStream(req *jsonRPCMessage) {
+	var params ReflectionEndInputStreamParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		slog.Debug("reflection V2: invalid endInputStream params", "err", err)
+		return
+	}
+	session := s.lookupBidiSession(params.RequestID)
+	if session == nil {
+		slog.Debug("reflection V2: endInputStream for unknown session", "requestId", params.RequestID)
+		return
+	}
+	session.Close()
+}
+
+func (s *reflectionServerV2) registerBidiSession(id string, session *bidiSession) {
+	s.bidiMu.Lock()
+	old := s.bidiSessions[id]
+	s.bidiSessions[id] = session
+	s.bidiMu.Unlock()
+	// A reused request id orphans the previous session; stop its worker so
+	// it cannot linger blocked on an empty queue.
+	if old != nil {
+		old.stop()
+	}
+}
+
+// closeBidiSessions enqueues an end-of-input marker for every in-flight bidi
+// session. Used when the connection drops, since the client can no longer
+// send endInputStream; ending the input lets actions finish gracefully.
+func (s *reflectionServerV2) closeBidiSessions() {
+	s.bidiMu.Lock()
+	sessions := make([]*bidiSession, 0, len(s.bidiSessions))
+	for _, session := range s.bidiSessions {
+		sessions = append(sessions, session)
+	}
+	s.bidiMu.Unlock()
+	for _, session := range sessions {
+		session.Close()
+	}
+}
+
+// unregisterBidiSession removes session from the map, unless a newer session
+// has been registered under the same id, and stops its worker goroutine. A
+// nil session is a no-op. Safe to call multiple times for the same session.
+func (s *reflectionServerV2) unregisterBidiSession(id string, session *bidiSession) {
+	if session == nil {
+		return
+	}
+	s.bidiMu.Lock()
+	if s.bidiSessions[id] == session {
+		delete(s.bidiSessions, id)
+	}
+	s.bidiMu.Unlock()
+	session.stop()
+}
+
+func (s *reflectionServerV2) lookupBidiSession(id string) *bidiSession {
+	s.bidiMu.Lock()
+	defer s.bidiMu.Unlock()
+	return s.bidiSessions[id]
+}
+
+// bidiSession is the runtime-side handle for an in-flight bidi runAction call.
+// All input events (chunks plus a terminating close) are queued in arrival
+// order from the read loop. The session is pre-registered before the action
+// starts initializing, so events that arrive early simply accumulate; once
+// the handler has created the underlying api.BidiJSONConnection it starts a
+// run worker goroutine that drains the queue into the connection in order.
+//
+// The queue is unbounded so that enqueueing never blocks the WebSocket read
+// loop, which must stay responsive to process cancelAction (the escape hatch
+// for a stuck action). Memory is bounded by the client, which is the trusted
+// dev tooling; the JS runtime makes the same trade.
+type bidiSession struct {
+	mu      sync.Mutex
+	cond    *sync.Cond
+	events  []bidiEvent
+	stopped bool
+}
+
+// bidiEvent is one item delivered to the worker. close=true is a terminal
+// marker; any chunks queued after it are dropped.
+type bidiEvent struct {
+	chunk json.RawMessage
+	close bool
+}
+
+func newBidiSession() *bidiSession {
+	s := &bidiSession{}
+	s.cond = sync.NewCond(&s.mu)
+	return s
+}
+
+// run forwards queued events to the connection in order. Returns after a
+// close event or when the session is stopped.
+func (s *bidiSession) run(conn api.BidiJSONConnection) {
+	for {
+		ev, ok := s.next()
+		if !ok {
+			return
+		}
+		if ev.close {
+			_ = conn.Close()
+			return
+		}
+		if err := conn.Send(ev.chunk); err != nil {
+			slog.Debug("reflection V2: bidi Send failed", "err", err)
+		}
+	}
+}
+
+// next blocks until an event is queued or the session is stopped. Returns
+// ok=false when stopped; events still queued at that point are dropped, as
+// the session is being torn down.
+func (s *bidiSession) next() (bidiEvent, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for len(s.events) == 0 && !s.stopped {
+		s.cond.Wait()
+	}
+	if s.stopped {
+		return bidiEvent{}, false
+	}
+	ev := s.events[0]
+	s.events[0] = bidiEvent{} // Release the chunk for GC.
+	s.events = s.events[1:]
+	if len(s.events) == 0 {
+		s.events = nil // Release the backing array.
+	}
+	return ev, true
+}
+
+// Send enqueues a chunk for delivery to the action. It never blocks.
+func (s *bidiSession) Send(chunk json.RawMessage) {
+	s.enqueue(bidiEvent{chunk: chunk})
+}
+
+// Close enqueues a terminal end-of-input marker. It never blocks.
+func (s *bidiSession) Close() {
+	s.enqueue(bidiEvent{close: true})
+}
+
+func (s *bidiSession) enqueue(ev bidiEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return
+	}
+	s.events = append(s.events, ev)
+	s.cond.Signal()
+}
+
+// stop terminates the worker and drops any queued events. Safe to call
+// multiple times.
+func (s *bidiSession) stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopped = true
+	s.cond.Broadcast()
 }
 
 // sendRunActionError maps a runAction error to a JSON-RPC error response
