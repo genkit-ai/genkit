@@ -91,17 +91,17 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
     store = InMemorySessionStore()
     session = Session(SessionState(messages=[]))
     rt, _ = _runtime(session, store)
-    await rt.sess.seed_last_good_state()
+    await rt.session_runner.seed_last_good_state()
 
     seen_inputs: list[AgentInput] = []
 
-    async def agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(inp: AgentInput) -> None:
             seen_inputs.append(inp)
             return None
 
-        await sess.run(handle_turn)
-        return await sess.result()
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
 
     in_queue = CloseableQueue()
     await in_queue.put(
@@ -137,12 +137,12 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
     store = InMemorySessionStore()
     session = Session(SessionState(messages=[]))
     rt, out_queue = _runtime(session, store)
-    await rt.sess.seed_last_good_state()
+    await rt.session_runner.seed_last_good_state()
 
     release = asyncio.Event()
     chunks: list[AgentStreamChunk] = []
 
-    async def agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(_inp: AgentInput) -> None:
             ctx.send_chunk(
                 AgentStreamChunk(
@@ -151,8 +151,8 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
             )
             await release.wait()
 
-        await sess.run(handle_turn)
-        return await sess.result()
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
 
     in_queue = CloseableQueue()
     await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='slow'))])))
@@ -191,14 +191,14 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
 async def test_detach_without_store_raises() -> None:
     session = Session(SessionState(messages=[]))
     rt, _ = _runtime(session, None)
-    await rt.sess.seed_last_good_state()
+    await rt.session_runner.seed_last_good_state()
 
-    async def agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(_inp: AgentInput) -> None:
             await ctx.abort_signal.wait()
 
-        await sess.run(handle_turn)
-        return await sess.result()
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
 
     in_queue = CloseableQueue()
     await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='x'))])))
@@ -214,11 +214,11 @@ async def test_abort_snapshot_stops_detached_work() -> None:
     store = InMemorySessionStore()
     session = Session(SessionState(messages=[]))
     rt, _ = _runtime(session, store)
-    await rt.sess.seed_last_good_state()
+    await rt.session_runner.seed_last_good_state()
 
     aborted = asyncio.Event()
 
-    async def agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(_inp: AgentInput) -> None:
             for _ in range(100):
                 if ctx.abort_signal.is_set():
@@ -226,8 +226,8 @@ async def test_abort_snapshot_stops_detached_work() -> None:
                     return
                 await asyncio.sleep(0.02)
 
-        await sess.run(handle_turn)
-        return await sess.result()
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
 
     in_queue = CloseableQueue()
     await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='long'))])))

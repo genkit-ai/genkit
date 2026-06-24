@@ -58,14 +58,16 @@ async def test_http_transport_integration() -> None:
         )
 
         # Register a simple custom agent
-        async def echo_agent(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+        async def echo_agent(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
             async def handle_turn(inp: AgentInput) -> TurnResult | None:
                 text = inp.message.content[0].root.text if inp.message else ''
-                await sess.add_messages(MessageData(role='model', content=[Part(root=TextPart(text=f'Echo: {text}'))]))
+                await session_runner.add_messages(
+                    MessageData(role='model', content=[Part(root=TextPart(text=f'Echo: {text}'))])
+                )
                 return TurnResult(finish_reason=AgentFinishReason.STOP)
 
-            await sess.run(handle_turn)
-            return await sess.result()
+            await session_runner.run(handle_turn)
+            return await session_runner.result()
 
         ai.define_custom_agent(name='echoAgent', fn=echo_agent, store=InMemoryLatestStateStore())
 

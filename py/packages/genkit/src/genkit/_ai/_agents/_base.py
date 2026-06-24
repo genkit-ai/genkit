@@ -161,7 +161,7 @@ def define_custom_agent(
     description: str | None = None,
     metadata: dict[str, object] | None = None,
 ) -> Agent:
-    """Register a custom agent; ``fn`` owns the turn loop via ``sess.run``."""
+    """Register a custom agent; ``fn`` owns the turn loop via ``session_runner.run``."""
     resolved_transform = resolve_client_transform(
         client_transform=client_transform,
         transform=transform,
@@ -188,7 +188,7 @@ def define_custom_agent(
             client_transform=resolved_transform,
             session_outputs=out_queue,
         )
-        await rt.sess.seed_last_good_state()
+        await rt.session_runner.seed_last_good_state()
         return await rt.run(fn, in_queue)
 
     agent = Agent(
@@ -298,9 +298,9 @@ def define_prompt_agent(
     The agent name and prompt name are the same string.
     """
 
-    async def agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(inp: AgentInput) -> TurnResult | None:
-            history = await sess.get_messages()
+            history = await session_runner.get_messages()
             resume_respond = None
             resume_restart = None
             if inp.resume is not None:
@@ -322,15 +322,15 @@ def define_prompt_agent(
             )
 
             return await generate_prompt_agent_turn(
-                sess=sess,
+                session_runner=session_runner,
                 ctx=ctx,
                 registry=child_registry,
                 gen_options=gen_options,
                 history=history,
             )
 
-        await sess.run(handle_turn)
-        return await sess.result()
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
 
     return define_custom_agent(
         registry=registry,

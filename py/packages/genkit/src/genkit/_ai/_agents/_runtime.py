@@ -93,7 +93,7 @@ StreamQueueItem = AgentStreamChunk
 class SessionRunner(Generic[StateT]):
     """Per-turn input loop for one agent invocation.
 
-    ``AgentFn`` calls ``sess.run(handle_turn)``; after each turn the runtime
+    ``AgentFn`` calls ``session_runner.run(handle_turn)``; after each turn the runtime
     emits snapshots and ``turnEnd`` chunks via ``on_end_turn``.
     """
 
@@ -326,7 +326,7 @@ class AgentRuntime:
         # BidiAction's client_inputs is forwarded here by run().
         self.turn_inputs = CloseableQueue(maxsize=1)
 
-        self.sess = SessionRunner(
+        self.session_runner = SessionRunner(
             session,
             self.turn_inputs,
             on_begin_turn=self.reset_custom_patch_turn,
@@ -404,7 +404,7 @@ class AgentRuntime:
             ctx = SnapshotContext(
                 state=state,
                 prev_state=self.last_snapshot.state if self.last_snapshot else None,
-                turn_index=self.sess.turn_index,
+                turn_index=self.session_runner.turn_index,
             )
             if not self.snapshot_callback(ctx):
                 return self.last_snapshot.snapshot_id if self.last_snapshot else ''
@@ -437,21 +437,21 @@ class AgentRuntime:
 
     async def ensure_recovery_snapshot(self) -> str | None:
         """Persist last-good state after a failed turn when the callback skipped it."""
-        if self.store is None or self.sess.last_good_state is None:
+        if self.store is None or self.session_runner.last_good_state is None:
             return self.last_snapshot.snapshot_id if self.last_snapshot else None
 
         if (
-            self.sess.last_good_state_version is not None
-            and self.sess.last_good_state_version == self.last_snapshot_version
+            self.session_runner.last_good_state_version is not None
+            and self.session_runner.last_good_state_version == self.last_snapshot_version
         ):
             return self.last_snapshot.snapshot_id if self.last_snapshot else None
 
-        if self.sess.turn_index == 0:
+        if self.session_runner.turn_index == 0:
             return None
 
         parent_id = self.last_snapshot.snapshot_id if self.last_snapshot else None
         now = datetime.now(timezone.utc).isoformat()
-        last_good = self.sess.last_good_state
+        last_good = self.session_runner.last_good_state
 
         def recovery(existing: SessionSnapshot | None) -> SessionSnapshot | None:
             if existing is not None and existing.status == SnapshotStatus.ABORTED:
@@ -462,14 +462,14 @@ class AgentRuntime:
                 status=SnapshotStatus.COMPLETED,
                 state=last_good,
                 created_at=now,
-                finish_reason=self.sess.last_good_finish_reason,
+                finish_reason=self.session_runner.last_good_finish_reason,
             )
 
         snap = await self.store.save_snapshot(None, recovery)
         if snap is not None:
             self.last_snapshot = snap
-            if self.sess.last_good_state_version is not None:
-                self.last_snapshot_version = self.sess.last_good_state_version
+            if self.session_runner.last_good_state_version is not None:
+                self.last_snapshot_version = self.session_runner.last_good_state_version
             return snap.snapshot_id
         return self.last_snapshot.snapshot_id if self.last_snapshot else None
 
@@ -481,7 +481,7 @@ class AgentRuntime:
         snapshot_id = await self.maybe_snapshot(
             finish_reason=finish_reason,
             status=SnapshotStatus.FAILED if is_failed else SnapshotStatus.COMPLETED,
-            error=self.sess.last_turn_error if is_failed else None,
+            error=self.session_runner.last_turn_error if is_failed else None,
             force=is_failed,
         )
         self.send_chunk(
@@ -494,11 +494,11 @@ class AgentRuntime:
         )
 
     async def failed_agent_output(self, result: AgentResult | None) -> AgentOutput:
-        last_good = self.sess.last_good_state or await self.session.state()
+        last_good = self.session_runner.last_good_state or await self.session.state()
         msgs = list(last_good.messages or [])
         out = AgentOutput(
             finish_reason=AgentFinishReason.FAILED,
-            error=self.sess.last_turn_error,
+            error=self.session_runner.last_turn_error,
             message=msgs[-1] if msgs else (result.message if result else None),
             artifacts=list(last_good.artifacts or []) if last_good.artifacts else (result.artifacts if result else []),
         )
@@ -540,7 +540,7 @@ class AgentRuntime:
         else:
             result = result_holder[0] if result_holder else None
             finish_reason = (
-                result.finish_reason if result and result.finish_reason else self.sess.last_turn_finish_reason
+                result.finish_reason if result and result.finish_reason else self.session_runner.last_turn_finish_reason
             )
 
         def finalize(existing: SessionSnapshot | None) -> SessionSnapshot | None:
@@ -623,7 +623,7 @@ class AgentRuntime:
             try:
                 result = await run_with_session(
                     self.session,
-                    fn(self.sess, action_ctx),
+                    fn(self.session_runner, action_ctx),
                 )
                 result_holder.append(result)
             except Exception as e:  # noqa: BLE001
@@ -695,7 +695,10 @@ class AgentRuntime:
 
         result = result_holder[0] if result_holder else None
 
-        if self.sess.last_turn_finish_reason == AgentFinishReason.FAILED and self.sess.last_turn_error:
+        if (
+            self.session_runner.last_turn_finish_reason == AgentFinishReason.FAILED
+            and self.session_runner.last_turn_error
+        ):
             return await self.failed_agent_output(result)
 
         if err_holder:
@@ -705,7 +708,7 @@ class AgentRuntime:
         if not snapshot_id and self.last_snapshot is not None:
             snapshot_id = self.last_snapshot.snapshot_id
 
-        finish_reason = result.finish_reason if result else self.sess.last_turn_finish_reason
+        finish_reason = result.finish_reason if result else self.session_runner.last_turn_finish_reason
         out = AgentOutput(
             snapshot_id=snapshot_id or None,
             message=result.message if result else None,
@@ -735,7 +738,7 @@ class AgentRuntime:
 
 async def generate_prompt_agent_turn(
     *,
-    sess: SessionRunner,
+    session_runner: SessionRunner,
     ctx: ActionRunContext,
     registry: Registry,
     gen_options: GenerateActionOptions,
@@ -760,7 +763,7 @@ async def generate_prompt_agent_turn(
     if response.finish_reason == FinishReason.INTERRUPTED:
         emit_interrupt_tool_chunk(ctx, response)
         await persist_turn_messages(
-            sess,
+            session_runner,
             history,
             response.message,
             response=response,
@@ -769,7 +772,7 @@ async def generate_prompt_agent_turn(
 
     if response.message:
         await persist_turn_messages(
-            sess,
+            session_runner,
             history,
             response.message,
             response=response,
@@ -829,7 +832,7 @@ def coerce_message(msg: MessageData) -> Message:
 
 
 async def persist_turn_messages(
-    sess: SessionRunner,
+    session_runner: SessionRunner,
     history: list[MessageData],
     response_message: MessageData | Message | None,
     *,
@@ -844,7 +847,7 @@ async def persist_turn_messages(
             clean.append(coerce_message(m))
         if response_message is not None:
             clean.append(coerce_message(response_message))
-        await sess.set_messages(clean)
+        await session_runner.set_messages(clean)
         return
 
     if response_message is None:
@@ -853,7 +856,7 @@ async def persist_turn_messages(
     clean_history: list[MessageData] = [coerce_message(m) for m in history]
     clean_history = [m for m in clean_history if not (m.metadata or {}).get(PREAMBLE_KEY)]
     clean_history.append(coerce_message(response_message))
-    await sess.set_messages(clean_history)
+    await session_runner.set_messages(clean_history)
 
 
 def agent_input_has_payload(inp: AgentInput) -> bool:
