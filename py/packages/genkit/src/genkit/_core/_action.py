@@ -30,7 +30,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
 from typing_extensions import Never, TypeVar
 
-from genkit._core._channel import Channel
+from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError
 from genkit._core._schema import to_json_schema
@@ -720,8 +720,8 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
 
     def __init__(
         self,
-        in_queue: asyncio.Queue[Any],
-        out_queue: asyncio.Queue[Any],
+        in_queue: CloseableQueue[Any],
+        out_queue: CloseableQueue[Any],
         result: asyncio.Future[BidiOutT_co],
     ) -> None:
         self._in_queue = in_queue
@@ -749,37 +749,15 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
         """
         if not self._closed:
             self._closed = True
-            if self._result.done():
-                return
-
-            # Concurrently race putting the sentinel against the server's completion.
-            # If the server task crashed early (e.g. during session loading), the queue
-            # remains full and the server will never read from it. Racing the queue write
-            # against the server's future ensures we abort instantly if the server completes/fails,
-            # preventing a silent, permanent deadlock during connection close.
-            put_task = asyncio.create_task(self._in_queue.put(_SENTINEL))
-            result_task = asyncio.ensure_future(self._result)
-
-            _, pending = await asyncio.wait(
-                {put_task, result_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            # Clean up the pending queue-put task if the server completed first
-            # to prevent task/resource leaks in the event loop.
-            for t in pending:
-                if t is put_task:
-                    t.cancel()
+            if hasattr(self._in_queue, 'close'):
+                self._in_queue.close()
 
     async def receive(self) -> AsyncIterator[StreamOutT_co]:
         """Async iterator yielding server-side stream chunks.
 
-        Terminates when the server fn finishes (sentinel received).
+        Terminates when the server fn finishes.
         """
-        while True:
-            chunk = await self._out_queue.get()
-            if chunk is _SENTINEL:
-                return
+        async for chunk in self._out_queue:
             yield chunk  # type: ignore[misc]
 
     async def output(self) -> BidiOutT_co:
@@ -815,10 +793,10 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
         # Wrap bidi_fn as a standard Action fn (closes in_queue immediately,
         # forwards out_queue chunks to on_chunk callback) so Action.run() works.
         async def _as_streaming_fn(input: InputT, ctx: ActionRunContext) -> OutputT:  # noqa: A002
-            in_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=1)
-            out_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=1)
+            in_queue = CloseableQueue(maxsize=1)
+            out_queue = CloseableQueue(maxsize=1)
             # Close input immediately — no streaming inputs via one-shot path.
-            await in_queue.put(_SENTINEL)
+            in_queue.close()
 
             result_holder: list[Any] = []
             err_holder: list[BaseException] = []
@@ -830,16 +808,13 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
                 except Exception as e:  # noqa: BLE001
                     err_holder.append(e)
                 finally:
-                    await out_queue.put(_SENTINEL)
+                    out_queue.close()
                     done.set()
 
             run_task = asyncio.create_task(_run())
             try:
                 # Forward chunks to Action's streaming callback.
-                while True:
-                    chunk = await out_queue.get()
-                    if chunk is _SENTINEL:
-                        break
+                async for chunk in out_queue:
                     ctx.send_chunk(chunk)
                 await done.wait()
             finally:
@@ -889,8 +864,8 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
         # in_queue is size 1 (backpressure: caller blocks between sends).
         # out_queue is unbounded: agent fn emits multiple chunks per turn
         # and the caller may not be consuming yet — put_nowait must not block.
-        in_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=1)
-        out_queue: asyncio.Queue[Any] = asyncio.Queue()
+        in_queue = CloseableQueue(maxsize=1)
+        out_queue = CloseableQueue()
         result_future: asyncio.Future[OutputT] = asyncio.get_event_loop().create_future()
         conn = BidiConnection(in_queue, out_queue, result_future)
 
@@ -928,8 +903,9 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
                 # "exception was never retrieved" warnings on the background task.
                 result_future.set_exception(e)
             finally:
-                # Sentinel tells BidiConnection.receive() to stop.
-                await out_queue.put(_SENTINEL)
+                # Close out_queue to signal the end of the streaming iterator.
+                if hasattr(out_queue, 'close'):
+                    out_queue.close()
 
         try:
             asyncio.create_task(_run())

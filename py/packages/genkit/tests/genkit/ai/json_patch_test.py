@@ -14,13 +14,12 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
-from genkit._ai._agents._base import AgentRuntime
+from genkit._ai._agents._runtime import AgentRuntime
 from genkit._ai._agents._session import Session
 from genkit._ai._json_patch import diff_json
+from genkit._core._channel import CloseableQueue
 from genkit._core._typing import AgentStreamChunk, ModelResponseChunk, Part, SessionState, TextPart
 
 
@@ -39,7 +38,7 @@ def test_diff_array_append() -> None:
 
 @pytest.mark.asyncio
 async def test_runtime_emits_custom_patch() -> None:
-    out_queue: asyncio.Queue = asyncio.Queue()
+    out_queue = CloseableQueue()
     session = Session(SessionState(custom={'status': 'idle'}))
     AgentRuntime(
         name='test',
@@ -48,7 +47,7 @@ async def test_runtime_emits_custom_patch() -> None:
         store=None,
         snapshot_callback=None,
         client_transform=None,
-        out_queue=out_queue,
+        session_outputs=out_queue,
     )
 
     await session.update_custom(lambda c: {**(c or {}), 'status': 'working'})
@@ -63,7 +62,7 @@ async def test_runtime_emits_custom_patch() -> None:
 
 @pytest.mark.asyncio
 async def test_runtime_incremental_custom_patch_within_turn() -> None:
-    out_queue: asyncio.Queue = asyncio.Queue()
+    out_queue = CloseableQueue()
     session = Session(SessionState(custom={'status': 'idle'}))
     rt = AgentRuntime(
         name='test',
@@ -72,7 +71,7 @@ async def test_runtime_incremental_custom_patch_within_turn() -> None:
         store=None,
         snapshot_callback=None,
         client_transform=None,
-        out_queue=out_queue,
+        session_outputs=out_queue,
     )
 
     await session.update_custom(lambda c: {**(c or {}), 'status': 'working'})
@@ -95,7 +94,7 @@ async def test_runtime_incremental_custom_patch_within_turn() -> None:
 
 @pytest.mark.asyncio
 async def test_runtime_custom_patch_honors_state_transform() -> None:
-    out_queue: asyncio.Queue = asyncio.Queue()
+    out_queue = CloseableQueue()
     session = Session(SessionState(custom={'public': 'ok', 'secret': 'hidden'}))
 
     def redact(state: SessionState) -> SessionState:
@@ -110,7 +109,7 @@ async def test_runtime_custom_patch_honors_state_transform() -> None:
         store=None,
         snapshot_callback=None,
         client_transform={'state': redact},
-        out_queue=out_queue,
+        session_outputs=out_queue,
     )
 
     await session.update_custom(lambda c: c)
@@ -121,7 +120,7 @@ async def test_runtime_custom_patch_honors_state_transform() -> None:
 
 @pytest.mark.asyncio
 async def test_runtime_chunk_transform_can_drop_chunks() -> None:
-    out_queue: asyncio.Queue = asyncio.Queue()
+    out_queue = CloseableQueue()
     session = Session()
     rt = AgentRuntime(
         name='test',
@@ -130,7 +129,7 @@ async def test_runtime_chunk_transform_can_drop_chunks() -> None:
         store=None,
         snapshot_callback=None,
         client_transform={'chunk': lambda _chunk: None},
-        out_queue=out_queue,
+        session_outputs=out_queue,
     )
 
     rt.send_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='hi'))])))
@@ -139,7 +138,7 @@ async def test_runtime_chunk_transform_can_drop_chunks() -> None:
 
 @pytest.mark.asyncio
 async def test_runtime_chunk_transform_can_redact_model_chunks() -> None:
-    out_queue: asyncio.Queue = asyncio.Queue()
+    out_queue = CloseableQueue()
     session = Session()
     rt = AgentRuntime(
         name='test',
@@ -160,7 +159,7 @@ async def test_runtime_chunk_transform_can_redact_model_chunks() -> None:
                 else chunk
             )
         },
-        out_queue=out_queue,
+        session_outputs=out_queue,
     )
 
     rt.send_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='secret'))])))

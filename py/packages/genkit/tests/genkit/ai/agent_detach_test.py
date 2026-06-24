@@ -18,13 +18,15 @@ import asyncio
 
 import pytest
 
-from genkit._ai._agents._base import AgentRuntime, SessionRunner, _agent_input_has_payload
-from genkit._ai._agents._session import InMemorySessionStore, Session
+from genkit._ai._agents._runtime import AgentRuntime, SessionRunner, agent_input_has_payload
+from genkit._ai._agents._session import Session
+from genkit._ai._agents._session_stores._latest_state import InMemoryLatestStateStore
 from genkit._ai._aio import Genkit
 from genkit._ai._generate import generate_action
 from genkit._ai._testing import define_programmable_model
 from genkit._ai._tools import ToolRunContext
-from genkit._core._action import _SENTINEL as _BIDI_SENTINEL, ActionRunContext
+from genkit._core._action import ActionRunContext
+from genkit._core._channel import CloseableQueue
 from genkit._core._error import GenkitError
 from genkit._core._model import GenerateActionOptions, Message, ModelResponse
 from genkit._core._typing import (
@@ -45,7 +47,7 @@ from genkit._core._typing import (
 
 
 async def _wait_for_snapshot_status(
-    store: InMemorySessionStore,
+    store: InMemoryLatestStateStore,
     snapshot_id: str,
     status: SnapshotStatus,
     *,
@@ -60,8 +62,8 @@ async def _wait_for_snapshot_status(
     raise AssertionError(f'snapshot {snapshot_id!r} never reached status {status!r}')
 
 
-def _runtime(session: Session, store: InMemorySessionStore | None) -> tuple[AgentRuntime, asyncio.Queue]:
-    out_queue: asyncio.Queue = asyncio.Queue()
+def _runtime(session: Session, store: InMemoryLatestStateStore | None) -> tuple[AgentRuntime, CloseableQueue]:
+    out_queue = CloseableQueue()
     rt = AgentRuntime(
         name='detachAudit',
         session=session,
@@ -69,7 +71,7 @@ def _runtime(session: Session, store: InMemorySessionStore | None) -> tuple[Agen
         store=store,
         snapshot_callback=None,
         client_transform=None,
-        out_queue=out_queue,
+        session_outputs=out_queue,
     )
     return rt, out_queue
 
@@ -79,37 +81,37 @@ _NO_ABORT = asyncio.Event()
 
 @pytest.mark.asyncio
 async def test_agent_input_has_payload() -> None:
-    assert _agent_input_has_payload(
+    assert agent_input_has_payload(
         AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='x'))]), detach=True),
     )
-    assert not _agent_input_has_payload(AgentInput(detach=True))
+    assert not agent_input_has_payload(AgentInput(detach=True))
 
 
 @pytest.mark.asyncio
 async def test_detach_forwards_message_payload_in_same_input() -> None:
-    store = InMemorySessionStore()
-    session = Session(SessionState(messages=[]))
+    store = InMemoryLatestStateStore()
+    session = Session(SessionState(session_id='test-session', messages=[]))
     rt, _ = _runtime(session, store)
-    await rt._sess.seed_last_good_state()
+    await rt.session_runner.seed_last_good_state()
 
     seen_inputs: list[AgentInput] = []
 
-    async def agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(inp: AgentInput) -> None:
             seen_inputs.append(inp)
             return None
 
-        await sess.run(handle_turn)
-        return await sess.result()
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
 
-    in_queue: asyncio.Queue = asyncio.Queue()
+    in_queue = CloseableQueue()
     await in_queue.put(
         AgentInput(
             message=MessageData(role=Role.USER, content=[Part(TextPart(text='appended message'))]),
             detach=True,
         )
     )
-    await in_queue.put(_BIDI_SENTINEL)
+    in_queue.close()
 
     out = await rt.run(agent_fn, in_queue)
 
@@ -133,15 +135,15 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
 
 @pytest.mark.asyncio
 async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
-    store = InMemorySessionStore()
-    session = Session(SessionState(messages=[]))
+    store = InMemoryLatestStateStore()
+    session = Session(SessionState(session_id='test-session', messages=[]))
     rt, out_queue = _runtime(session, store)
-    await rt._sess.seed_last_good_state()
+    await rt.session_runner.seed_last_good_state()
 
     release = asyncio.Event()
     chunks: list[AgentStreamChunk] = []
 
-    async def agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(_inp: AgentInput) -> None:
             ctx.send_chunk(
                 AgentStreamChunk(
@@ -150,13 +152,13 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
             )
             await release.wait()
 
-        await sess.run(handle_turn)
-        return await sess.result()
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
 
-    in_queue: asyncio.Queue = asyncio.Queue()
+    in_queue = CloseableQueue()
     await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='slow'))])))
     await in_queue.put(AgentInput(detach=True))
-    await in_queue.put(_BIDI_SENTINEL)
+    in_queue.close()
 
     out = await rt.run(agent_fn, in_queue)
     assert out.finish_reason == AgentFinishReason.DETACHED
@@ -188,21 +190,21 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
 
 @pytest.mark.asyncio
 async def test_detach_without_store_raises() -> None:
-    session = Session(SessionState(messages=[]))
+    session = Session(SessionState(session_id='test-session', messages=[]))
     rt, _ = _runtime(session, None)
-    await rt._sess.seed_last_good_state()
+    await rt.session_runner.seed_last_good_state()
 
-    async def agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(_inp: AgentInput) -> None:
             await ctx.abort_signal.wait()
 
-        await sess.run(handle_turn)
-        return await sess.result()
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
 
-    in_queue: asyncio.Queue = asyncio.Queue()
+    in_queue = CloseableQueue()
     await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='x'))])))
     await in_queue.put(AgentInput(detach=True))
-    await in_queue.put(_BIDI_SENTINEL)
+    in_queue.close()
 
     with pytest.raises(ValueError, match='detach requires a session store'):
         await rt.run(agent_fn, in_queue)
@@ -210,14 +212,14 @@ async def test_detach_without_store_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_abort_snapshot_stops_detached_work() -> None:
-    store = InMemorySessionStore()
-    session = Session(SessionState(messages=[]))
+    store = InMemoryLatestStateStore()
+    session = Session(SessionState(session_id='test-session', messages=[]))
     rt, _ = _runtime(session, store)
-    await rt._sess.seed_last_good_state()
+    await rt.session_runner.seed_last_good_state()
 
     aborted = asyncio.Event()
 
-    async def agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(_inp: AgentInput) -> None:
             for _ in range(100):
                 if ctx.abort_signal.is_set():
@@ -225,13 +227,13 @@ async def test_abort_snapshot_stops_detached_work() -> None:
                     return
                 await asyncio.sleep(0.02)
 
-        await sess.run(handle_turn)
-        return await sess.result()
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
 
-    in_queue: asyncio.Queue = asyncio.Queue()
+    in_queue = CloseableQueue()
     await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='long'))])))
     await in_queue.put(AgentInput(detach=True))
-    await in_queue.put(_BIDI_SENTINEL)
+    in_queue.close()
 
     out = await rt.run(agent_fn, in_queue)
     assert out.snapshot_id is not None

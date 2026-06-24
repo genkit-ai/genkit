@@ -52,6 +52,11 @@ InputT = TypeVar('InputT')
 OutputT = TypeVar('OutputT')
 
 
+# ===========================================================================
+# Client Transport Protocol
+# ===========================================================================
+
+
 @runtime_checkable
 class AgentTransport(Protocol, Generic[StateT, StreamT]):
     """Interface implemented by the transport layer (local or websocket)."""
@@ -76,6 +81,11 @@ class AgentTransport(Protocol, Generic[StateT, StreamT]):
     async def close(self) -> None:
         """Cleanly closes any persistent connections held by this transport."""
         ...
+
+
+# ===========================================================================
+# Client Return Types & Models
+# ===========================================================================
 
 
 @dataclass
@@ -231,6 +241,11 @@ class AgentTurn(Generic[StateT, StreamT]):
             await self._output
         except (asyncio.CancelledError, Exception):  # noqa: S110
             pass
+
+
+# ===========================================================================
+# Client APIs & Session Handles
+# ===========================================================================
 
 
 @runtime_checkable
@@ -553,7 +568,9 @@ class AgentSession(Generic[StateT, StreamT]):
         await self._transport.close()
         # For in-process client-managed agents the full state (preamble stripped)
         # is only available after the invocation completes.  Capture it here.
-        final = getattr(self._transport, '_final_output', None)
+        # TODO: Investigate avoiding getattr here as it is a leaky abstraction.
+        # e.g. transport.close() could return the final output or None.
+        final = getattr(self._transport, 'final_output', None)
         if final is not None and final.state is not None:
             self.apply_output(final)
 
@@ -591,6 +608,11 @@ class DetachedTask(Generic[StateT]):
     async def abort(self) -> SnapshotStatus | None:
         """Aborts the detached task on the server."""
         return await self._transport.abort_snapshot(self.snapshot_id)
+
+
+# ===========================================================================
+# Internal Helper Functions
+# ===========================================================================
 
 
 def get_chunk_text(model_chunk: ModelResponseChunk | None) -> str | None:

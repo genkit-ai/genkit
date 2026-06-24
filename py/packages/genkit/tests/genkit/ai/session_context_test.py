@@ -14,13 +14,12 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
-from genkit._ai._agents._base import AgentRuntime, SessionRunner
+from genkit._ai._agents._runtime import AgentRuntime, SessionRunner
 from genkit._ai._agents._session import Session, get_current_session, run_with_session
-from genkit._core._action import _SENTINEL as _BIDI_SENTINEL, ActionRunContext
+from genkit._core._action import ActionRunContext
+from genkit._core._channel import CloseableQueue
 from genkit._core._registry import Registry
 from genkit._core._typing import AgentInput, AgentResult, SessionState
 from genkit.middleware import GenerateMiddlewareContext
@@ -84,7 +83,7 @@ async def test_run_with_session_nested_bind() -> None:
 @pytest.mark.asyncio
 async def test_agent_runtime_binds_session_during_handler() -> None:
     """AgentRuntime.run wraps the agent fn in run_with_session."""
-    out_queue: asyncio.Queue = asyncio.Queue()
+    out_queue = CloseableQueue()
     session = Session(SessionState(custom={'seen': False}))
     rt = AgentRuntime(
         name='test',
@@ -93,11 +92,11 @@ async def test_agent_runtime_binds_session_during_handler() -> None:
         store=None,
         snapshot_callback=None,
         client_transform=None,
-        out_queue=out_queue,
+        session_outputs=out_queue,
     )
     seen: list[Session | None] = []
 
-    async def agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         seen.append(get_current_session())
 
         async def handle_turn(_inp: AgentInput) -> None:
@@ -106,12 +105,12 @@ async def test_agent_runtime_binds_session_during_handler() -> None:
             assert cur is not None
             await cur.update_custom(lambda c: {**(c or {}), 'seen': True})
 
-        await sess.run(handle_turn)
-        return await sess.result()
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
 
-    in_queue: asyncio.Queue = asyncio.Queue()
+    in_queue = CloseableQueue()
     in_queue.put_nowait(AgentInput())
-    in_queue.put_nowait(_BIDI_SENTINEL)
+    in_queue.close()
 
     await rt.run(agent_fn, in_queue)
 

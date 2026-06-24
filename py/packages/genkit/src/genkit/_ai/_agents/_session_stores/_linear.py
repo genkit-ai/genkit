@@ -32,10 +32,11 @@ from pydantic import BaseModel
 
 from genkit._ai._agents._session import SessionStore, SnapshotAborter, StoreRecordKind
 from genkit._ai._json_patch import apply_json_patch, diff_json
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, StatusCodes
 from genkit._core._typing import (
     AgentFinishReason,
     JsonPatchOperation,
+    RuntimeError as GenkitRuntimeError,
     SessionSnapshot,
     SessionState,
     SnapshotStatus,
@@ -56,7 +57,7 @@ class TurnRecord(BaseModel):
     status: SnapshotStatus
     created_at: str
     finish_reason: str | None = None
-    error: dict[str, Any] | None = None
+    error: GenkitRuntimeError | None = None
 
 
 class LinearSessionStore(SessionStore, SnapshotAborter):
@@ -64,8 +65,8 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
 
     def __init__(self, checkpoint_interval: int = 10) -> None:
         self.checkpoint_interval = checkpoint_interval
-        self._lock = asyncio.Lock()
-        self._subs: dict[str, list[asyncio.Queue[SnapshotStatus | None]]] = {}
+        self.lock = asyncio.Lock()
+        self.subs: dict[str, list[asyncio.Queue[SnapshotStatus | None]]] = {}
 
     @abstractmethod
     async def append_turn(self, session_id: str, seq: int, record: TurnRecord) -> None:
@@ -97,7 +98,7 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
         """Read a turn record by snapshot_id."""
         ...
 
-    async def _reconstruct_state(self, session_id: str, seq: int) -> SessionState:
+    async def reconstruct_state(self, session_id: str, seq: int) -> SessionState:
         turns: list[TurnRecord] = []
         for s in range(seq + 1):
             t = await self.read_turn(session_id, s)
@@ -123,8 +124,8 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
 
         return SessionState.model_validate(state_dict)
 
-    async def _reconstruct_snapshot(self, record: TurnRecord) -> SessionSnapshot:
-        state = await self._reconstruct_state(record.session_id, record.seq)
+    async def reconstruct_snapshot(self, record: TurnRecord) -> SessionSnapshot:
+        state = await self.reconstruct_state(record.session_id, record.seq)
         return SessionSnapshot(
             snapshot_id=record.snapshot_id,
             parent_id=record.parent_id,
@@ -143,7 +144,7 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
     ) -> SessionSnapshot | None:
         if bool(snapshot_id) == bool(session_id):
             raise GenkitError(
-                status='INVALID_ARGUMENT',
+                status=StatusCodes.INVALID_ARGUMENT,
                 message=(
                     "get_snapshot requires exactly one of 'snapshot_id' or "
                     f"'session_id' (got {'snapshot_id' if snapshot_id else 'neither'}"
@@ -151,12 +152,12 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
                 ),
             )
 
-        async with self._lock:
+        async with self.lock:
             if snapshot_id is not None:
                 record = await self.read_turn_by_snapshot(snapshot_id)
                 if record is None:
                     return None
-                return await self._reconstruct_snapshot(record)
+                return await self.reconstruct_snapshot(record)
 
             assert session_id is not None
             leaf_seq = await self.read_leaf_seq(session_id)
@@ -165,20 +166,20 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
             record = await self.read_turn(session_id, leaf_seq)
             if record is None:
                 return None
-            return await self._reconstruct_snapshot(record)
+            return await self.reconstruct_snapshot(record)
 
     async def save_snapshot(
         self,
         snapshot_id: str | None,
         fn: Callable[[SessionSnapshot | None], SessionSnapshot | None],
     ) -> SessionSnapshot | None:
-        async with self._lock:
+        async with self.lock:
             if snapshot_id is not None:
                 record = await self.read_turn_by_snapshot(snapshot_id)
                 if record is None:
                     return None
 
-                snap = await self._reconstruct_snapshot(record)
+                snap = await self.reconstruct_snapshot(record)
                 next_snap = fn(snap)
                 if next_snap is None:
                     return None
@@ -190,7 +191,7 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
                 if record.seq == 0 or record.seq % self.checkpoint_interval == 0:
                     record.state_or_patch = next_snap.state.model_dump(by_alias=True)
                 else:
-                    parent_state = await self._reconstruct_state(record.session_id, record.seq - 1)
+                    parent_state = await self.reconstruct_state(record.session_id, record.seq - 1)
                     ops = diff_json(parent_state.model_dump(by_alias=True), next_snap.state.model_dump(by_alias=True))
                     record.state_or_patch = [op.model_dump(by_alias=True) for op in ops]
 
@@ -199,7 +200,7 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
                 record.error = next_snap.error
 
                 await self.update_turn(record.session_id, record.seq, record)
-                self._notify_locked(snapshot_id, record.status)
+                self.notify_locked(snapshot_id, record.status)
                 return next_snap
             else:
                 sid = str(uuid4())
@@ -236,7 +237,7 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
                     kind = StoreRecordKind.CHECKPOINT
                     state_or_patch = next_snap.state.model_dump(by_alias=True)
                 else:
-                    parent_state = await self._reconstruct_state(session_id, seq - 1)
+                    parent_state = await self.reconstruct_state(session_id, seq - 1)
                     ops = diff_json(parent_state.model_dump(by_alias=True), next_snap.state.model_dump(by_alias=True))
                     kind = StoreRecordKind.DIFF
                     state_or_patch = [op.model_dump(by_alias=True) for op in ops]
@@ -255,33 +256,33 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
                 )
 
                 await self.append_turn(session_id, seq, record)
-                self._notify_locked(sid, next_snap.status)
+                self.notify_locked(sid, next_snap.status)
                 return next_snap
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
-        async with self._lock:
+        async with self.lock:
             record = await self.read_turn_by_snapshot(snapshot_id)
             if record is None:
                 return None
             if record.status == SnapshotStatus.PENDING:
                 record.status = SnapshotStatus.ABORTED
                 await self.update_turn(record.session_id, record.seq, record)
-                self._notify_locked(snapshot_id, record.status)
+                self.notify_locked(snapshot_id, record.status)
             return record.status
 
     async def on_snapshot_status_change(self, snapshot_id: str) -> asyncio.Queue[SnapshotStatus | None]:
         q: asyncio.Queue[SnapshotStatus | None] = asyncio.Queue()
-        async with self._lock:
+        async with self.lock:
             record = await self.read_turn_by_snapshot(snapshot_id)
             if record is None:
                 await q.put(None)
                 return q
             await q.put(record.status)
-            self._subs.setdefault(snapshot_id, []).append(q)
+            self.subs.setdefault(snapshot_id, []).append(q)
         return q
 
-    def _notify_locked(self, snapshot_id: str, status: SnapshotStatus) -> None:
-        for q in self._subs.get(snapshot_id, []):
+    def notify_locked(self, snapshot_id: str, status: SnapshotStatus) -> None:
+        for q in self.subs.get(snapshot_id, []):
             try:
                 q.put_nowait(status)
             except asyncio.QueueFull:
@@ -293,32 +294,32 @@ class InMemoryLinearSessionStore(LinearSessionStore):
 
     def __init__(self, checkpoint_interval: int = 10) -> None:
         super().__init__(checkpoint_interval)
-        self._turns: dict[str, dict[int, TurnRecord]] = {}
+        self.turns: dict[str, dict[int, TurnRecord]] = {}
 
     async def append_turn(self, session_id: str, seq: int, record: TurnRecord) -> None:
-        self._turns.setdefault(session_id, {})[seq] = record.model_copy(deep=True)
+        self.turns.setdefault(session_id, {})[seq] = record.model_copy(deep=True)
 
     async def truncate_to(self, session_id: str, seq: int) -> None:
-        turns = self._turns.get(session_id, {})
+        turns = self.turns.get(session_id, {})
         for s in list(turns.keys()):
             if s > seq:
                 turns.pop(s)
 
     async def update_turn(self, session_id: str, seq: int, record: TurnRecord) -> None:
-        self._turns.setdefault(session_id, {})[seq] = record.model_copy(deep=True)
+        self.turns.setdefault(session_id, {})[seq] = record.model_copy(deep=True)
 
     async def read_leaf_seq(self, session_id: str) -> int | None:
-        turns = self._turns.get(session_id)
+        turns = self.turns.get(session_id)
         if not turns:
             return None
         return max(turns.keys())
 
     async def read_turn(self, session_id: str, seq: int) -> TurnRecord | None:
-        rec = self._turns.get(session_id, {}).get(seq)
+        rec = self.turns.get(session_id, {}).get(seq)
         return rec.model_copy(deep=True) if rec is not None else None
 
     async def read_turn_by_snapshot(self, snapshot_id: str) -> TurnRecord | None:
-        for session_turns in self._turns.values():
+        for session_turns in self.turns.values():
             for turn in session_turns.values():
                 if turn.snapshot_id == snapshot_id:
                     return turn.model_copy(deep=True)
@@ -333,37 +334,37 @@ class FileLinearSessionStore(LinearSessionStore):
         self.directory = directory
         os.makedirs(directory, exist_ok=True)
 
-    def _session_dir(self, session_id: str) -> str:
+    def session_dir(self, session_id: str) -> str:
         return os.path.join(self.directory, session_id)
 
-    def _turn_path(self, session_id: str, seq: int) -> str:
-        return os.path.join(self._session_dir(session_id), f'{seq}.json')
+    def turn_path(self, session_id: str, seq: int) -> str:
+        return os.path.join(self.session_dir(session_id), f'{seq}.json')
 
-    def _leaf_path(self, session_id: str) -> str:
-        return os.path.join(self._session_dir(session_id), 'leaf.ptr')
+    def leaf_path(self, session_id: str) -> str:
+        return os.path.join(self.session_dir(session_id), 'leaf.ptr')
 
-    def _pointer_path(self, snapshot_id: str) -> str:
+    def pointer_path(self, snapshot_id: str) -> str:
         return os.path.join(self.directory, f'{snapshot_id}.ptr')
 
     async def append_turn(self, session_id: str, seq: int, record: TurnRecord) -> None:
         def sync_op() -> None:
-            os.makedirs(self._session_dir(session_id), exist_ok=True)
+            os.makedirs(self.session_dir(session_id), exist_ok=True)
 
             # Write turn file
-            temp_path = self._turn_path(session_id, seq) + '.tmp'
+            temp_path = self.turn_path(session_id, seq) + '.tmp'
             with open(temp_path, 'w', encoding='utf-8') as f:
                 f.write(record.model_dump_json(indent=2))
-            os.replace(temp_path, self._turn_path(session_id, seq))
+            os.replace(temp_path, self.turn_path(session_id, seq))
 
             # Write index pointer snapshot_id -> session_id:seq
-            with open(self._pointer_path(record.snapshot_id), 'w', encoding='utf-8') as f:
+            with open(self.pointer_path(record.snapshot_id), 'w', encoding='utf-8') as f:
                 f.write(f'{session_id}:{seq}')
 
             # Update leaf sequence pointer
-            leaf_temp = self._leaf_path(session_id) + '.tmp'
+            leaf_temp = self.leaf_path(session_id) + '.tmp'
             with open(leaf_temp, 'w', encoding='utf-8') as f:
                 f.write(str(seq))
-            os.replace(leaf_temp, self._leaf_path(session_id))
+            os.replace(leaf_temp, self.leaf_path(session_id))
 
         await asyncio.to_thread(sync_op)
 
@@ -375,34 +376,34 @@ class FileLinearSessionStore(LinearSessionStore):
         def sync_op(curr_leaf_seq: int) -> None:
             # Delete turns and index pointers from seq + 1 to leaf_seq
             for s in range(seq + 1, curr_leaf_seq + 1):
-                t_path = self._turn_path(session_id, s)
+                t_path = self.turn_path(session_id, s)
                 if os.path.exists(t_path):
                     # read snapshot_id to clean its pointer file
                     with open(t_path, encoding='utf-8') as f:
                         rec = json.load(f)
-                    ptr_path = self._pointer_path(rec['snapshot_id'])
+                    ptr_path = self.pointer_path(rec['snapshot_id'])
                     if os.path.exists(ptr_path):
                         os.remove(ptr_path)
                     os.remove(t_path)
 
             # Update leaf pointer
-            with open(self._leaf_path(session_id), 'w', encoding='utf-8') as f:
+            with open(self.leaf_path(session_id), 'w', encoding='utf-8') as f:
                 f.write(str(seq))
 
         await asyncio.to_thread(sync_op, leaf_seq)
 
     async def update_turn(self, session_id: str, seq: int, record: TurnRecord) -> None:
         def sync_op() -> None:
-            temp_path = self._turn_path(session_id, seq) + '.tmp'
+            temp_path = self.turn_path(session_id, seq) + '.tmp'
             with open(temp_path, 'w', encoding='utf-8') as f:
                 f.write(record.model_dump_json(indent=2))
-            os.replace(temp_path, self._turn_path(session_id, seq))
+            os.replace(temp_path, self.turn_path(session_id, seq))
 
         await asyncio.to_thread(sync_op)
 
     async def read_leaf_seq(self, session_id: str) -> int | None:
         def sync_op() -> int | None:
-            path = self._leaf_path(session_id)
+            path = self.leaf_path(session_id)
             if not os.path.exists(path):
                 return None
             with open(path, encoding='utf-8') as f:
@@ -412,7 +413,7 @@ class FileLinearSessionStore(LinearSessionStore):
 
     async def read_turn(self, session_id: str, seq: int) -> TurnRecord | None:
         def sync_op() -> TurnRecord | None:
-            path = self._turn_path(session_id, seq)
+            path = self.turn_path(session_id, seq)
             if not os.path.exists(path):
                 return None
             with open(path, encoding='utf-8') as f:
@@ -422,7 +423,7 @@ class FileLinearSessionStore(LinearSessionStore):
 
     async def read_turn_by_snapshot(self, snapshot_id: str) -> TurnRecord | None:
         def sync_op() -> str | None:
-            ptr_path = self._pointer_path(snapshot_id)
+            ptr_path = self.pointer_path(snapshot_id)
             if not os.path.exists(ptr_path):
                 return None
             with open(ptr_path, encoding='utf-8') as f:

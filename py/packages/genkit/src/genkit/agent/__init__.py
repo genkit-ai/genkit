@@ -16,15 +16,7 @@
 
 """Agent types for defining and running bidirectional streaming agents."""
 
-from genkit._ai._agents._base import (
-    Agent,
-    AgentFn,
-    ChunkTransform,
-    ClientTransform,
-    SessionRunner,
-    StateTransform,
-    TurnResult,
-)
+from genkit._ai._agents._base import Agent
 from genkit._ai._agents._client import (
     AgentAPI,
     AgentChunk,
@@ -36,27 +28,36 @@ from genkit._ai._agents._client import (
     AgentTurn,
     DetachedTask,
 )
+from genkit._ai._agents._runtime import AgentFn, SessionRunner
 from genkit._ai._agents._session import (
-    InMemorySessionStore,
     Session,
     SessionStore,
     SnapshotAborter,
     SnapshotCallback,
     SnapshotContext,
 )
-from genkit._ai._agents._session_stores import (
+from genkit._ai._agents._session_stores._branching import (
     BranchingSessionStore,
     FileBranchingSessionStore,
-    FileLatestStateStore,
-    FileLinearSessionStore,
     InMemoryBranchingSessionStore,
+)
+from genkit._ai._agents._session_stores._latest_state import (
+    FileLatestStateStore,
     InMemoryLatestStateStore,
-    InMemoryLinearSessionStore,
     LatestStateStore,
+)
+from genkit._ai._agents._session_stores._linear import (
+    FileLinearSessionStore,
+    InMemoryLinearSessionStore,
     LinearSessionStore,
 )
 from genkit._ai._agents._transports._http import HttpAgentTransport
-from genkit._ai._agents._transports._websocket import WebSocketAgentTransport
+from genkit._ai._agents._types import (
+    ChunkTransform,
+    ClientTransform,
+    StateTransform,
+    TurnResult,
+)
 from genkit._core._action import ActionRunContext
 from genkit._core._typing import (
     AgentFinishReason,
@@ -88,7 +89,6 @@ __all__ = [
     'DetachedTask',
     'AgentTransport',
     'HttpAgentTransport',
-    'WebSocketAgentTransport',
     # Agent function protocol
     'ActionRunContext',
     'AgentFn',
@@ -98,7 +98,6 @@ __all__ = [
     'Session',
     'SessionStore',
     'SnapshotAborter',
-    'InMemorySessionStore',
     'LatestStateStore',
     'InMemoryLatestStateStore',
     'FileLatestStateStore',
