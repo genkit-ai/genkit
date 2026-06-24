@@ -459,3 +459,44 @@ async def test_external_abort_signal() -> None:
         # Verify the turn is aborted and raises CancelledError
         with pytest.raises(asyncio.CancelledError):
             await turn.output
+
+
+@pytest.mark.asyncio
+async def test_agent_turn_direct_async_iteration() -> None:
+    """Tests that AgentTurn itself can be directly iterated over to consume stream chunks (DX feature)."""
+    transport = MockAgentTransport()
+
+    # Configure final output
+    transport.final_output = AgentOutput(
+        snapshot_id='snapshot_1',
+        message=MessageData(role='model', content=[Part(root=TextPart(text='Final output!'))]),
+        finish_reason=AgentFinishReason.STOP,
+    )
+
+    session = AgentSession(transport)
+    turn = session.send('Weather in Tokyo?')
+
+    # Queue up chunks
+    transport.push_chunk(
+        AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='Weather is '))]))
+    )
+    transport.push_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='Sunny.'))])))
+    transport.push_chunk(
+        AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.STOP))
+    )
+
+    # Consume chunks by iterating directly over the turn!
+    chunks = []
+    async for chunk in turn:
+        chunks.append(chunk)
+
+    assert len(chunks) == 3
+    assert chunks[0].text == 'Weather is '
+    assert chunks[1].text == 'Sunny.'
+    assert chunks[2].text is None
+
+    # Verify we can still await output
+    output = await turn.output
+    assert output.message is not None
+    assert output.message.content is not None
+    assert output.message.content[0].root.text == 'Final output!'

@@ -23,9 +23,9 @@ from unittest import mock
 import pytest
 
 from genkit import ActionRunContext, Genkit
-from genkit._core._typing import MessageData, Part, TextPart
 from genkit._core._environment import GENKIT_ENV, GenkitEnvironment
 from genkit._core._reflection import ServerSpec
+from genkit._core._typing import MessageData, Part, TextPart
 from genkit.agent import (
     AgentClient,
     AgentFinishReason,

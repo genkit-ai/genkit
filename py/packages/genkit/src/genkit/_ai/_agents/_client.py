@@ -207,6 +207,10 @@ class AgentTurn(Generic[StateT, StreamT]):
     def stream(self) -> AsyncIterable[AgentChunk[StreamT]]:
         return self._stream
 
+    def __aiter__(self) -> AsyncIterator[AgentChunk[StreamT]]:
+        """Allow iterating directly over the turn to stream chunks."""
+        return self._stream.__aiter__()
+
     @property
     def output(self) -> Awaitable[AgentResponse[StateT]]:
         return self._output
