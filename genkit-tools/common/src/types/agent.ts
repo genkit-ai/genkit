@@ -105,13 +105,12 @@ export type AgentInit = z.infer<typeof AgentInitSchema>;
  * Schema for agent input messages and commands.
  */
 export const AgentInputSchema = z.object({
-  messages: z.array(MessageSchema).optional(),
+  message: MessageSchema.optional(),
   /** Options for resuming an interrupted generation. */
   resume: z
     .object({
       respond: z.array(ToolResponsePartSchema).optional(),
       restart: z.array(ToolRequestPartSchema).optional(),
-      metadata: z.record(z.any()).optional(),
     })
     .optional(),
   detach: z.boolean().optional(),
@@ -176,10 +175,18 @@ export const AgentResultSchema = z.object({
 });
 export type AgentResult = z.infer<typeof AgentResultSchema>;
 
+export const RuntimeErrorSchema = z.object({
+  status: z.string().optional(),
+  message: z.string(),
+  details: z.any().optional(),
+});
+export type RuntimeError = z.infer<typeof RuntimeErrorSchema>;
+
 /**
  * Schema for agent output returned at completion.
  */
 export const AgentOutputSchema = z.object({
+  sessionId: z.string().optional(),
   snapshotId: z.string().optional(),
   state: SessionStateSchema.optional(),
   message: MessageSchema.optional(),
@@ -192,13 +199,7 @@ export const AgentOutputSchema = z.object({
    * accompanying `state`/`snapshotId` hold the last-good state — the state
    * the failed turn started with.
    */
-  error: z
-    .object({
-      status: z.string(),
-      message: z.string(),
-      details: z.any().optional(),
-    })
-    .optional(),
+  error: RuntimeErrorSchema.optional(),
 });
 export type AgentOutput = z.infer<typeof AgentOutputSchema>;
 
@@ -214,31 +215,32 @@ export const GetSnapshotDataInputSchema = z.object({
 });
 export type GetSnapshotDataInput = z.infer<typeof GetSnapshotDataInputSchema>;
 
-// ---------------------------------------------------------------------------
-// Snapshot
-// ---------------------------------------------------------------------------
+export const SnapshotStatusSchema = z.enum([
+  'pending',
+  'completed',
+  'aborted',
+  'failed',
+  'expired',
+]);
+export type SnapshotStatus = z.infer<typeof SnapshotStatusSchema>;
 
 /**
  * Schema for a persisted session snapshot.
  */
 export const SessionSnapshotSchema = z.object({
   snapshotId: z.string(),
+  sessionId: z.string().optional(),
   parentId: z.string().optional(),
   createdAt: z.string(),
-  event: SnapshotEventSchema,
+  updatedAt: z.string().optional(),
+  heartbeatAt: z.string().optional(),
   state: SessionStateSchema,
-  status: z.enum(['pending', 'done', 'failed', 'aborted']).optional(),
+  status: SnapshotStatusSchema.optional(),
   /**
    * Semantic reason the turn/invocation finished (e.g. `interrupted`,
    * `stop`). Distinct from `status`, which tracks the persistence lifecycle.
    */
   finishReason: AgentFinishReasonSchema.optional(),
-  error: z
-    .object({
-      status: z.string(),
-      message: z.string(),
-      details: z.any().optional(),
-    })
-    .optional(),
+  error: RuntimeErrorSchema.optional(),
 });
 export type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;

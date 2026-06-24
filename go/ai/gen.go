@@ -18,14 +18,6 @@
 
 package ai
 
-type AbortSnapshotRequest struct {
-	SnapshotID string `json:"snapshotId,omitempty"`
-}
-
-type AbortSnapshotResponse struct {
-	Status SnapshotStatus `json:"status,omitempty"`
-}
-
 type ActionMetadata struct {
 	ActionType  string `json:"actionType,omitempty"`
 	Description string `json:"description,omitempty"`
@@ -47,10 +39,10 @@ const (
 	AgentFinishReasonStop        AgentFinishReason = "stop"
 	AgentFinishReasonLength      AgentFinishReason = "length"
 	AgentFinishReasonBlocked     AgentFinishReason = "blocked"
+	AgentFinishReasonAborted     AgentFinishReason = "aborted"
 	AgentFinishReasonInterrupted AgentFinishReason = "interrupted"
 	AgentFinishReasonOther       AgentFinishReason = "other"
 	AgentFinishReasonUnknown     AgentFinishReason = "unknown"
-	AgentFinishReasonAborted     AgentFinishReason = "aborted"
 	AgentFinishReasonDetached    AgentFinishReason = "detached"
 	AgentFinishReasonFailed      AgentFinishReason = "failed"
 )
@@ -72,12 +64,6 @@ type AgentInputResume struct {
 	Restart []*toolRequestPart  `json:"restart,omitempty"`
 }
 
-type AgentMetadata struct {
-	Abortable       bool                 `json:"abortable,omitempty"`
-	StateManagement AgentStateManagement `json:"stateManagement,omitempty"`
-	StateSchema     map[string]any       `json:"stateSchema,omitempty"`
-}
-
 type AgentOutput struct {
 	Artifacts    []*Artifact       `json:"artifacts,omitempty"`
 	Error        *RuntimeError     `json:"error,omitempty"`
@@ -93,13 +79,6 @@ type AgentResult struct {
 	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
 	Message      *Message          `json:"message,omitempty"`
 }
-
-type AgentStateManagement string
-
-const (
-	AgentStateManagementServer AgentStateManagement = "server"
-	AgentStateManagementClient AgentStateManagement = "client"
-)
 
 type AgentStreamChunk struct {
 	Artifact    *Artifact           `json:"artifact,omitempty"`
@@ -282,30 +261,30 @@ type GenerationUsage struct {
 	TotalTokens int `json:"totalTokens,omitempty"`
 }
 
-type GetSnapshotRequest struct {
+type GetSnapshotDataInput struct {
 	SessionID  string `json:"sessionId,omitempty"`
 	SnapshotID string `json:"snapshotId,omitempty"`
 }
 
 type JsonPatch []*JsonPatchOperation
 
-type JsonPatchOp string
+type JsonPatchOperation struct {
+	From  string               `json:"from,omitempty"`
+	Op    JsonPatchOperationOp `json:"op,omitempty"`
+	Path  string               `json:"path,omitempty"`
+	Value any                  `json:"value,omitempty"`
+}
+
+type JsonPatchOperationOp string
 
 const (
-	JsonPatchOpAdd     JsonPatchOp = "add"
-	JsonPatchOpRemove  JsonPatchOp = "remove"
-	JsonPatchOpReplace JsonPatchOp = "replace"
-	JsonPatchOpMove    JsonPatchOp = "move"
-	JsonPatchOpCopy    JsonPatchOp = "copy"
-	JsonPatchOpTest    JsonPatchOp = "test"
+	JsonPatchOperationOpAdd     JsonPatchOperationOp = "add"
+	JsonPatchOperationOpRemove  JsonPatchOperationOp = "remove"
+	JsonPatchOperationOpReplace JsonPatchOperationOp = "replace"
+	JsonPatchOperationOpMove    JsonPatchOperationOp = "move"
+	JsonPatchOperationOpCopy    JsonPatchOperationOp = "copy"
+	JsonPatchOperationOpTest    JsonPatchOperationOp = "test"
 )
-
-type JsonPatchOperation struct {
-	From  string      `json:"from,omitempty"`
-	Op    JsonPatchOp `json:"op,omitempty"`
-	Path  string      `json:"path,omitempty"`
-	Value any         `json:"value,omitempty"`
-}
 
 // Media represents media content with a URL and content type.
 type Media struct {
@@ -641,6 +620,13 @@ type SessionState struct {
 	Messages  []*Message  `json:"messages,omitempty"`
 	SessionID string      `json:"sessionId,omitempty"`
 }
+
+type SnapshotEvent string
+
+const (
+	SnapshotEventTurnEnd       SnapshotEvent = "turnEnd"
+	SnapshotEventInvocationEnd SnapshotEvent = "invocationEnd"
+)
 
 type SnapshotStatus string
 
