@@ -715,7 +715,7 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
         self.closed = False
         self.trace_id: str | None = None
 
-    async def send(self, input: StreamInT) -> None:  # noqa: A002
+    async def send(self, item: StreamInT) -> None:
         """Send a per-turn input to the server."""
         if self.closed:
             raise GenkitError(
@@ -726,7 +726,7 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
                 ),
                 status=StatusCodes.FAILED_PRECONDITION,
             )
-        await self.in_queue.put(input)
+        await self.in_queue.put(item)
 
     async def close(self) -> None:
         """Signal no more inputs will be sent."""
@@ -738,7 +738,7 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
     async def receive(self) -> AsyncIterator[StreamOutT_co]:
         """Async iterator yielding server-side stream chunks."""
         async for chunk in self.out_queue:
-            yield chunk  # type: ignore[misc]
+            yield chunk
 
     async def output(self) -> BidiOutT_co:
         """Await the final output from the server fn."""
