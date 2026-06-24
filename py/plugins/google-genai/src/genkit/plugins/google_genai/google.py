@@ -173,15 +173,24 @@ class GenaiModels:
 def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
     """Discover and categorize available models from the Google GenAI API.
 
-    This function queries the API for all available models and categorizes them
-    based on their supported_actions field. Models marked as deprecated are
-    excluded.
+    This function queries the API for all available models and categorizes them.
+    Models marked as deprecated are excluded.
 
-    The categorization logic:
+    Two categorization strategies are used depending on the backend:
+
+    - Google AI populates each model's ``supported_actions`` field, so models
+      are categorized by action:
         - 'embedContent' action → embedders
-        - 'predict' + 'imagen' in name → imagen (Vertex AI)
+        - 'predict' + 'imagen' in name → imagen
         - 'generateVideos' or 'veo' in name → veo
         - 'generateContent' + 'gemini'/'gemma' in name → gemini
+    - Vertex AI returns ``supported_actions = None`` for every publisher model,
+      so categorizing by action would skip them all. The Vertex path instead
+      categorizes by model name (mirroring the JS plugin's ``listActions``):
+        - 'embedding' in name → embedders
+        - 'imagen' in name → imagen
+        - 'veo' in name → veo
+        - 'gemini'/'gemma' in name (and not an embedding) → gemini
 
     Args:
         client: The Google GenAI client instance.
@@ -211,6 +220,20 @@ def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
 
         description = (m.description or '').lower()
         if 'deprecated' in description:
+            continue
+
+        # Vertex AI returns supported_actions=None for every publisher model, so
+        # categorize by name
+        if is_vertex:
+            lower_name = name.lower()
+            if 'embedding' in lower_name:
+                models.embedders.append(name)
+            elif 'imagen' in lower_name:
+                models.imagen.append(name)
+            elif 'veo' in lower_name:
+                models.veo.append(name)
+            elif 'gemini' in lower_name or 'gemma' in lower_name:
+                models.gemini.append(name)
             continue
 
         if not m.supported_actions:
