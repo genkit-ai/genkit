@@ -20,12 +20,11 @@
 from __future__ import annotations
 
 import random
-from uuid import uuid4
 
 from pydantic import BaseModel
 
 from genkit import Genkit
-from genkit.agent import AgentInit, InMemoryLinearSessionStore
+from genkit.agent import InMemoryLinearSessionStore
 from genkit.plugins.google_genai import GoogleAI
 
 
@@ -60,35 +59,32 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    # --- STARTING A SESSION (TWO WAYS) ---
-    #
-    # Way 1: Standard / Automatic (Recommended)
-    # Genkit automatically generates a unique session ID on the server, and the
-    # client session automatically tracks the conversation state under the hood.
-    #
-    # session = agent.chat()
-    #
-    # Way 2: Custom Thread ID Override (Optional)
-    # Use this if you already have a unique thread ID from your own database
-    # (e.g. Firebase Auth) and want the Genkit session store to use the same ID.
-    session_id = str(uuid4())
-    session = agent.chat(AgentInit(session_id=session_id))
-    # Turn 1
-    print('--- SENDING TURN 1 ---')
-    turn1 = session.send('Weather in Paris?')
-    async for chunk in turn1:
-        print('turn1 chunk:', chunk)
-    out1 = await turn1.output
-    print('turn1 output:', out1)
+    # --- 1. START A NEW SESSION & RUN TURN 1 ---
+    print('--- STARTING A NEW SESSION ---')
+    session = agent.chat()
 
-    # Turn 2
-    print('--- SENDING TURN 2 ---')
-    turn2 = session.send('What city did I ask about? One word.')
-    async for chunk in turn2:
-        print('turn2 chunk:', chunk)
-    out2 = await turn2.output
-    print('turn2 output:', out2)
+    print('Sending: Weather in Paris?')
+    out1 = await session.send('Weather in Paris?').output
+    print('Response:', out1.message.content if out1.message else '')
+
+    # Capture the snapshot ID to resume this conversation later!
+    saved_snapshot_id = session.snapshot_id
+    assert saved_snapshot_id is not None
+    print(f'[Client] Saving snapshot ID for later: {saved_snapshot_id}')
     await session.close()
+
+    print('\n======================================================')
+    print('   Simulating client disconnect / server restart...   ')
+    print('======================================================\n')
+
+    # --- 2. RESUME THE SESSION LATER & RUN TURN 2 ---
+    print(f'--- RESUMING SESSION: {saved_snapshot_id} ---')
+    resumed_session = await agent.load_chat(saved_snapshot_id)
+
+    print('Sending: What city did I ask about? One word.')
+    out2 = await resumed_session.send('What city did I ask about? One word.').output
+    print('Response:', out2.message.content if out2.message else '')
+    await resumed_session.close()
 
 
 if __name__ == '__main__':
