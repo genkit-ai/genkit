@@ -27,7 +27,7 @@
 //     {"init": {"sessionId": ...}} (or {"snapshotId": ...} to resume from
 //     a specific point in history). The store also gives the agent
 //     snapshot companion actions, served here at
-//     /agents/chat/getSnapshot and /agents/chat/abortSnapshot.
+//     /agents/chat/getSnapshot and /agents/chat/abort.
 //   - "statelessChat" has no store (client-managed state). The response
 //     carries the full conversation state; the client sends it back
 //     verbatim as {"init": {"state": ...}} on the next turn. The server
@@ -84,7 +84,7 @@
 // Or abort the background work instead; an aborted snapshot finalizes
 // with status "aborted":
 //
-//	curl -X POST http://localhost:8080/agents/chat/abortSnapshot \
+//	curl -X POST http://localhost:8080/agents/chat/abort \
 //	  -H "Content-Type: application/json" \
 //	  -d '{"data": {"snapshotId": "SNAPSHOT_ID"}}'
 //
@@ -160,7 +160,7 @@ func main() {
 	//   "chat" (store-backed):
 	//     POST /agents/chat                one turn per request
 	//     POST /agents/chat/getSnapshot    read a snapshot by ID
-	//     POST /agents/chat/abortSnapshot  abort background work
+	//     POST /agents/chat/abort          abort background work
 	//   "statelessChat" (client-managed):
 	//     POST /agents/statelessChat       one turn per request
 	//

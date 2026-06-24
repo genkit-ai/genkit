@@ -83,7 +83,7 @@ func TestAllAgentRoutes(t *testing.T) {
 	want := []string{
 		"POST /agents/clientChat",
 		"POST /agents/serverChat",
-		"POST /agents/serverChat/abortSnapshot",
+		"POST /agents/serverChat/abort",
 		"POST /agents/serverChat/getSnapshot",
 	}
 	if !slices.Equal(got, want) {
@@ -117,7 +117,7 @@ func TestAgentRoutes_PicksOneAgentAndMirrorsCapabilities(t *testing.T) {
 
 	if got, want := routeKeys(AgentRoutes(server)), []string{
 		"POST /agents/srv",
-		"POST /agents/srv/abortSnapshot",
+		"POST /agents/srv/abort",
 		"POST /agents/srv/getSnapshot",
 	}; !slices.Equal(got, want) {
 		t.Errorf("AgentRoutes(server) = %v, want %v", got, want)

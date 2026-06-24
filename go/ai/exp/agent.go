@@ -428,15 +428,15 @@ type AgentFunc[State any] = func(ctx context.Context, resp Responder, sess *Sess
 //
 // Server-managed agents (those with a [SessionStore] configured) also
 // register companion actions for the snapshot lifecycle, available via
-// [Agent.GetSnapshotAction] and [Agent.AbortSnapshotAction] for serving
+// [Agent.GetSnapshotAction] and [Agent.AbortAction] for serving
 // alongside the agent, and expose the store itself via [Agent.Store].
 type Agent[State any] struct {
 	action *core.BidiAction[*AgentInput, *AgentOutput[State], *AgentStreamChunk, *AgentInit[State]]
 	// Companion actions, retained so transports can serve them without a
 	// registry lookup. Nil when the corresponding capability is absent;
 	// see newSnapshotActions.
-	getSnapshot   api.Action
-	abortSnapshot api.Action
+	getSnapshot api.Action
+	abort       api.Action
 	// store is the configured session store, or nil for a client-managed
 	// agent. Retained so callers can reach it via Store without threading
 	// a separate reference.
@@ -450,7 +450,7 @@ type Agent[State any] struct {
 
 // Name returns the agent's registered name. This is also the name under
 // which any inline-defined prompt and companion actions (getSnapshot,
-// abortSnapshot) are registered.
+// abort) are registered.
 func (a *Agent[State]) Name() string {
 	return a.action.Name()
 }
@@ -468,24 +468,24 @@ func (a *Agent[State]) GetSnapshotAction() api.Action {
 	return a.getSnapshot
 }
 
-// AbortSnapshotAction returns the agent's abortSnapshot companion action,
+// AbortAction returns the agent's abort companion action,
 // which asks the background work behind a pending snapshot (e.g. a
-// detached invocation) to stop (input [AbortSnapshotRequest], output
-// [AbortSnapshotResponse]). It returns nil when the agent has no
+// detached invocation) to stop (input [AgentAbortRequest], output
+// [AgentAbortResponse]). It returns nil when the agent has no
 // [SessionStore] or the store does not implement [SnapshotSubscriber].
 //
 // Use it to expose aborting over a transport (e.g. mount it with
 // genkit.Handler next to the agent itself); local Go code aborts with
-// [Agent.AbortSnapshot]; a store-only caller uses this companion action.
-func (a *Agent[State]) AbortSnapshotAction() api.Action {
-	return a.abortSnapshot
+// [Agent.Abort]; a store-only caller uses this companion action.
+func (a *Agent[State]) AbortAction() api.Action {
+	return a.abort
 }
 
 // Store returns the [SessionStore] the agent was configured with via
 // [WithSessionStore], or nil when the agent is client-managed (no store).
 //
 // For reads and aborts prefer the typed facade [Agent.GetSnapshot],
-// [Agent.GetLatestSnapshot], and [Agent.AbortSnapshot]: they apply the
+// [Agent.GetLatestSnapshot], and [Agent.Abort]: they apply the
 // configured [WithStateTransform] and read-time shaping. Store exposes the raw
 // backend for advanced use; a direct [SnapshotReader.GetSnapshot] returns
 // untransformed state.
@@ -533,21 +533,21 @@ func (a *Agent[State]) GetLatestSnapshot(ctx context.Context, sessionID string) 
 	return readSnapshot(ctx, a.store, a.transform, "", sessionID)
 }
 
-// AbortSnapshot aborts the detached invocation behind a pending snapshot by
+// Abort aborts the detached invocation behind a pending snapshot by
 // flipping it to [SnapshotStatusAborted]; the runtime observes the flip and
 // cancels the background work. A caller that has only a store (no agent) aborts
-// through the abortSnapshot companion action instead. It is a no-op on a missing
-// snapshot (returns
-// "") or an already-terminal one (returns the existing status).
+// through the abort companion action instead. It is a no-op on a missing
+// snapshot (returns "") or an already-terminal one (returns the existing
+// status).
 //
 // It returns FAILED_PRECONDITION on a client-managed agent and INVALID_ARGUMENT
 // when snapshotID is empty.
-func (a *Agent[State]) AbortSnapshot(ctx context.Context, snapshotID string) (SnapshotStatus, error) {
+func (a *Agent[State]) Abort(ctx context.Context, snapshotID string) (SnapshotStatus, error) {
 	if a.store == nil {
-		return "", core.NewError(core.FAILED_PRECONDITION, "agent %q: AbortSnapshot requires a session store", a.Name())
+		return "", core.NewError(core.FAILED_PRECONDITION, "agent %q: Abort requires a session store", a.Name())
 	}
 	if snapshotID == "" {
-		return "", core.NewError(core.INVALID_ARGUMENT, "agent %q: AbortSnapshot: snapshotID is required", a.Name())
+		return "", core.NewError(core.INVALID_ARGUMENT, "agent %q: Abort: snapshotID is required", a.Name())
 	}
 	return abortPendingSnapshot(ctx, a.store, snapshotID)
 }
@@ -563,7 +563,7 @@ func (a *Agent[State]) AbortSnapshot(ctx context.Context, snapshotID string) (Sn
 var _ api.BidiAction = (*Agent[any])(nil)
 
 // Register registers the agent's run action and any companion actions
-// (getSnapshot, abortSnapshot) with the registry. Agents defined via
+// (getSnapshot, abort) with the registry. Agents defined via
 // [DefineAgent] or [DefineCustomAgent] are already registered; this
 // exists so an agent can travel to another registry as a unit. An
 // inline-defined prompt does not travel: the agent holds it directly, so
@@ -582,8 +582,8 @@ func (a *Agent[State]) Register(r api.Registry) {
 	if a.getSnapshot != nil {
 		a.getSnapshot.Register(r)
 	}
-	if a.abortSnapshot != nil {
-		a.abortSnapshot.Register(r)
+	if a.abort != nil {
+		a.abort.Register(r)
 	}
 }
 
@@ -780,14 +780,14 @@ func newCustomAgent[State any](
 			return rt.run(ctx, fn)
 		})
 
-	getSnapshot, abortSnapshot := newSnapshotActions(name, cfg.store, cfg.transform)
+	getSnapshot, abort := newSnapshotActions(name, cfg.store, cfg.transform)
 
 	return &Agent[State]{
-		action:        action,
-		getSnapshot:   getSnapshot,
-		abortSnapshot: abortSnapshot,
-		store:         cfg.store,
-		transform:     cfg.transform,
+		action:      action,
+		getSnapshot: getSnapshot,
+		abort:       abort,
+		store:       cfg.store,
+		transform:   cfg.transform,
 	}
 }
 
@@ -1496,7 +1496,7 @@ func beatHeartbeat[State any](ctx context.Context, store SnapshotWriter[State], 
 // atomic read-mutate-write makes the flip safe against a racing terminal write,
 // and the status change drives the runtime's
 // [SnapshotSubscriber.OnSnapshotStatusChange] subscription, so the store needs
-// no dedicated abort method. It backs [Agent.AbortSnapshot] and the abortSnapshot
+// no dedicated abort method. It backs [Agent.Abort] and the abort
 // companion action.
 func abortPendingSnapshot[State any](ctx context.Context, store SnapshotWriter[State], snapshotID string) (SnapshotStatus, error) {
 	now := time.Now()
@@ -1524,7 +1524,7 @@ func abortPendingSnapshot[State any](ctx context.Context, store SnapshotWriter[S
 
 // finalizePendingSnapshot rewrites the pending snapshot row with the
 // terminal state and status. abortedByUser distinguishes a context
-// cancellation from abortSnapshot (status=aborted) from an internal
+// cancellation from abort (status=aborted) from an internal
 // failure (status=failed). The write is funneled through SaveSnapshot
 // so the read-and-rewrite is one atomic step: if the row has already
 // transitioned to aborted (a late abort racing this finalize),
@@ -2627,7 +2627,7 @@ func (c *AgentConnection[State]) SendResume(resume *ToolResume) error {
 // Detach asks the server to write a pending snapshot, close the
 // connection, and continue processing any already-buffered inputs in
 // the background. Output() returns the pending snapshot ID; the client
-// can later call AbortSnapshot to stop the background work or
+// can later call Abort to stop the background work or
 // GetSnapshot to observe its progression. The pending snapshot is
 // finalized with the cumulative final state once the queued inputs
 // are processed.

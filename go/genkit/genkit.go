@@ -430,7 +430,7 @@ func NewStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In
 // serve it over HTTP, one turn per request. Server-managed agents also
 // register companion actions for the snapshot lifecycle; serve them
 // alongside the agent via [aix.Agent.GetSnapshotAction] and
-// [aix.Agent.AbortSnapshotAction].
+// [aix.Agent.AbortAction].
 //
 // For full control over the per-turn loop, use [DefineCustomAgent].
 //
@@ -520,7 +520,7 @@ func DefinePromptAgent[State any](
 //
 // Like [DefineAgent], the returned agent is an [api.BidiAction] servable
 // via [Handler], with companion actions on [aix.Agent.GetSnapshotAction]
-// and [aix.Agent.AbortSnapshotAction].
+// and [aix.Agent.AbortAction].
 //
 // For agents backed by a prompt, use [DefineAgent] (inline prompt) or
 // [DefinePromptAgent] (a prompt already in the registry) instead.

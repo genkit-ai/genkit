@@ -290,7 +290,7 @@ case aix.SnapshotStatusFailed:    // snap.Error holds the structured failure
 }
 
 // Or stop it early; the runtime observes the abort and cancels the work.
-chatAgent.AbortSnapshot(ctx, snapshotID)
+chatAgent.Abort(ctx, snapshotID)
 ```
 
 Detach requires a store that implements `SnapshotSubscriber` (both bundled local stores do). A detached turn refreshes a heartbeat while it runs, so a crashed worker surfaces as `expired` instead of orphaning the conversation forever.
@@ -313,7 +313,7 @@ for _, r := range genkitx.AllAgentRoutes(g) {
 }
 // POST /agents/chat                one turn per request (?stream=true for SSE)
 // POST /agents/chat/getSnapshot    read a snapshot by ID
-// POST /agents/chat/abortSnapshot  abort background work
+// POST /agents/chat/abort          abort background work
 log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
 ```
 

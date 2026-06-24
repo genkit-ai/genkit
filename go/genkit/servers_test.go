@@ -951,7 +951,7 @@ func TestHandlerAgent(t *testing.T) {
 // directly: the ref satisfies api.BidiAction, so Handler routes init
 // through the bidi interface (session resume keeps working), and the
 // companion actions plucked off the ref (GetSnapshotAction,
-// AbortSnapshotAction) serve the snapshot lifecycle on caller-chosen
+// AbortAction) serve the snapshot lifecycle on caller-chosen
 // routes. Together they pin the detach → poll → abort story over plain
 // HTTP.
 func TestHandlerAgentRef(t *testing.T) {
@@ -976,7 +976,7 @@ func TestHandlerAgentRef(t *testing.T) {
 	// Handlers come straight off the ref; no registry iteration involved.
 	runHandler := Handler(agent)
 	getSnapshotHandler := Handler(agent.GetSnapshotAction())
-	abortHandler := Handler(agent.AbortSnapshotAction())
+	abortHandler := Handler(agent.AbortAction())
 
 	post := func(t *testing.T, h http.HandlerFunc, body string) (int, string) {
 		t.Helper()
@@ -1000,7 +1000,7 @@ func TestHandlerAgentRef(t *testing.T) {
 	}
 
 	// snapshotHTTPResult covers both companion responses: getSnapshot
-	// returns the snapshot row, abortSnapshot echoes {snapshotId, status}.
+	// returns the snapshot row, abort echoes {snapshotId, status}.
 	type snapshotHTTPResult struct {
 		SnapshotID string          `json:"snapshotId"`
 		SessionID  string          `json:"sessionId"`
@@ -1076,7 +1076,7 @@ func TestHandlerAgentRef(t *testing.T) {
 		}
 		code, body = post(t, abortHandler, `{"data":{"snapshotId":"nope"}}`)
 		if code != http.StatusNotFound {
-			t.Errorf("abortSnapshot: status = %d, want %d; body = %s", code, http.StatusNotFound, body)
+			t.Errorf("abort: status = %d, want %d; body = %s", code, http.StatusNotFound, body)
 		}
 	})
 
@@ -1089,7 +1089,7 @@ func TestHandlerAgentRef(t *testing.T) {
 
 		code, body = post(t, abortHandler, `{"data":{"snapshotId":"`+res.SnapshotID+`"}}`)
 		if code != http.StatusOK {
-			t.Fatalf("abortSnapshot status = %d, body = %s", code, body)
+			t.Fatalf("abort status = %d, body = %s", code, body)
 		}
 		snap := parseSnapshot(t, body)
 		if snap.Status != "completed" {
