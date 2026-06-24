@@ -32,7 +32,6 @@ from genkit._ai._agents._session import (
     SnapshotCallback,
     SnapshotContext,
     StateT,
-    assert_valid_session_id,
     run_with_session,
 )
 from genkit._ai._agents._types import ClientTransform, TurnResult
@@ -261,7 +260,6 @@ async def load_session(
         session_id = str(uuid4())
 
     if store is not None and session_id:
-        assert_valid_session_id(session_id)
         snap = await store.get_snapshot(session_id=session_id)
         if snap is not None:
             return Session(initial_state=snap.state), snap

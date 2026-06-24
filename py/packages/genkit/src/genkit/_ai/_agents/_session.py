@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import re
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -50,12 +49,6 @@ class StoreRecordKind(str, Enum):
     CHECKPOINT = 'checkpoint'
     DIFF = 'diff'
 
-
-# Bare RFC-4122 UUID — session ids from useChat must match this shape.
-SESSION_ID_PATTERN = re.compile(
-    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-    re.IGNORECASE,
-)
 
 StateT = TypeVar('StateT')
 SessionContextT = TypeVar('SessionContextT')
@@ -125,14 +118,6 @@ class SnapshotAborter(Protocol):
 def supports_abort(store: SessionStore) -> bool:
     """True when the store implements abort + status subscription."""
     return isinstance(store, SnapshotAborter)
-
-
-def assert_valid_session_id(session_id: str) -> None:
-    if not SESSION_ID_PATTERN.match(session_id):
-        raise GenkitError(
-            status='INVALID_ARGUMENT',
-            message=(f"Invalid sessionId '{session_id}': must be a bare UUID (e.g. from crypto.randomUUID())."),
-        )
 
 
 def select_leaf_snapshot(
@@ -206,7 +191,6 @@ class InMemorySessionStore:
                 return snap.model_copy(deep=True) if snap is not None else None
 
             assert session_id is not None
-            assert_valid_session_id(session_id)
             owned = [
                 snap
                 for snap in self._snapshots.values()
