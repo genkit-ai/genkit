@@ -75,20 +75,6 @@ OutT = TypeVar('OutT')
 StreamOutT = TypeVar('StreamOutT')
 StreamInT = TypeVar('StreamInT')
 
-# IntakeQueueItem — incoming payload sent by client (message, resume, or detach).
-IntakeQueueItem = AgentInput
-
-# BidiInQueueItem — raw intake payload received on the low-level BidiAction queue.
-BidiInQueueItem = AgentInput
-
-# StreamQueueItem — outbound streaming chunk (metadata, custom state, message chunk).
-StreamQueueItem = AgentStreamChunk
-
-
-# ---------------------------------------------------------------------------
-# SessionRunner
-# ---------------------------------------------------------------------------
-
 
 class SessionRunner(Generic[StateT]):
     """Per-turn input loop for one agent invocation.
@@ -100,7 +86,7 @@ class SessionRunner(Generic[StateT]):
     def __init__(
         self,
         session: Session[StateT],
-        turn_inputs: CloseableQueue[IntakeQueueItem],
+        turn_inputs: CloseableQueue[AgentInput],
         on_begin_turn: Callable[[], Awaitable[None]] | None = None,
         on_end_turn: Callable[[AgentFinishReason | None], Awaitable[None]] | None = None,
     ) -> None:
@@ -307,7 +293,7 @@ class AgentRuntime:
         store: SessionStore | None,
         snapshot_callback: SnapshotCallback | None,
         client_transform: ClientTransform | None,
-        session_outputs: CloseableQueue[StreamQueueItem],
+        session_outputs: CloseableQueue[AgentStreamChunk],
     ) -> None:
         self.name = name
         self.session = session
@@ -562,7 +548,7 @@ class AgentRuntime:
         except Exception:  # noqa: BLE001, S110
             pass  # best-effort; log in production
 
-    async def run(self, fn: AgentFn, client_inputs: CloseableQueue[BidiInQueueItem]) -> AgentOutput:
+    async def run(self, fn: AgentFn, client_inputs: CloseableQueue[AgentInput]) -> AgentOutput:
         """Drive fn to completion, return AgentOutput.
 
         Two terminal paths (v1):
@@ -722,7 +708,7 @@ class AgentRuntime:
 
         return out
 
-    def send_chunk(self, chunk: StreamQueueItem) -> None:
+    def send_chunk(self, chunk: AgentStreamChunk) -> None:
         transformed = self.transform_chunk(chunk)
         if transformed is not None:
             try:

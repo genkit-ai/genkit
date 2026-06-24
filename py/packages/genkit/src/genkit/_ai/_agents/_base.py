@@ -29,9 +29,7 @@ from genkit._ai._agents._client import AgentSession
 from genkit._ai._agents._runtime import (
     AgentFn,
     AgentRuntime,
-    BidiInQueueItem,
     SessionRunner,
-    StreamQueueItem,
     generate_prompt_agent_turn,
     load_session,
 )
@@ -67,6 +65,7 @@ from genkit._core._typing import (
     AgentInput,
     AgentOutput,
     AgentResult,
+    AgentStreamChunk,
     MessageData,
     MiddlewareRef,
     Part,
@@ -169,8 +168,8 @@ def define_custom_agent(
 
     async def bidi_fn(
         init: AgentInit,
-        in_queue: CloseableQueue[BidiInQueueItem],
-        out_queue: CloseableQueue[StreamQueueItem],
+        in_queue: CloseableQueue[AgentInput],
+        out_queue: CloseableQueue[AgentStreamChunk],
     ) -> AgentOutput:
         session, parent = await load_session(init, store, agent_name=name)
         state = await session.state()
