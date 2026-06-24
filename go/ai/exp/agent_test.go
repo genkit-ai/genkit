@@ -18,6 +18,7 @@ package exp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -30,7 +31,9 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 type testState struct {
@@ -145,7 +148,7 @@ func TestAgent_BasicMultiTurn(t *testing.T) {
 // per-turn whole-document replace (the first patch of a turn re-bases the
 // client) followed by an incremental diff within the same turn, and that the
 // tracking carries across turns. The server-side patch emission is covered by
-// TestAgent_TurnSpanOutput_WithSnapshots; this is its client-side complement.
+// TestAgent_CustomPatchWholeDocumentReplace; this is its client-side complement.
 func TestAgentConnection_Custom_TracksStreamedPatches(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
@@ -255,6 +258,122 @@ func TestAgent_WithSessionStore(t *testing.T) {
 	// Final snapshot at invocation end.
 	if response.SnapshotID == "" {
 		t.Error("expected final snapshot ID")
+	}
+}
+
+// spanCollector is a minimal in-memory sdktrace.SpanExporter that records
+// finished spans so a test can assert on their attributes.
+type spanCollector struct {
+	mu    sync.Mutex
+	spans []sdktrace.ReadOnlySpan
+}
+
+func (c *spanCollector) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.spans = append(c.spans, spans...)
+	return nil
+}
+
+func (c *spanCollector) Shutdown(context.Context) error { return nil }
+
+// byName returns the first recorded span with the given name, or nil.
+func (c *spanCollector) byName(name string) sdktrace.ReadOnlySpan {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, s := range c.spans {
+		if s.Name() == name {
+			return s
+		}
+	}
+	return nil
+}
+
+// collectSpans registers an in-memory exporter on the global tracer provider
+// (the one tracing.RunInNewSpan writes through) for the duration of the test.
+// The SimpleSpanProcessor exports each span synchronously as it ends, so by
+// the time a turn completes its span is already recorded.
+func collectSpans(t *testing.T) *spanCollector {
+	t.Helper()
+	c := &spanCollector{}
+	sp := sdktrace.NewSimpleSpanProcessor(c)
+	tp := tracing.TracerProvider()
+	tp.RegisterSpanProcessor(sp)
+	t.Cleanup(func() { tp.UnregisterSpanProcessor(sp) })
+	return c
+}
+
+// spanAttr returns the string value of the named span attribute, if present.
+func spanAttr(span sdktrace.ReadOnlySpan, key string) (string, bool) {
+	for _, kv := range span.Attributes() {
+		if string(kv.Key) == key {
+			return kv.Value.AsString(), true
+		}
+	}
+	return "", false
+}
+
+// TestAgent_RootSpanCarriesSessionID verifies the agent's root action span is
+// stamped with the invocation's session ID under
+// "genkit:metadata:agent:sessionId", and that the per-turn spans are left
+// untagged. This matches the JS agent, which tags the action span once via
+// setCustomMetadataAttributes({'agent:sessionId': ...}) rather than each turn.
+func TestAgent_RootSpanCarriesSessionID(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	spans := collectSpans(t)
+
+	const agentName = "tracedCounterFlow"
+	af := defineCounterAgent(reg, agentName)
+
+	conn, err := af.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	sendTurn(t, conn, "turn1")
+	sendTurn(t, conn, "turn2")
+	conn.Close()
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output failed: %v", err)
+	}
+	if out.SessionID == "" {
+		t.Fatal("expected a non-empty session ID on the output")
+	}
+
+	const attrKey = "genkit:metadata:agent:sessionId"
+
+	// The root action span (named for the agent) carries the session ID.
+	root := spans.byName(agentName)
+	if root == nil {
+		t.Fatalf("missing root action span %q", agentName)
+	}
+	got, ok := spanAttr(root, attrKey)
+	if !ok {
+		t.Fatalf("root span %q: missing attribute %q", agentName, attrKey)
+	}
+	if got != out.SessionID {
+		t.Errorf("root span %q: %s = %q, want %q", agentName, attrKey, got, out.SessionID)
+	}
+
+	// The per-turn spans are named "runTurn-N" (1-indexed) with type flowStep
+	// and no subtype, matching JS's run(); the session ID lives on the root
+	// span only.
+	for _, turn := range []string{"runTurn-1", "runTurn-2"} {
+		span := spans.byName(turn)
+		if span == nil {
+			t.Fatalf("missing span %q", turn)
+		}
+		if v, ok := spanAttr(span, attrKey); ok {
+			t.Errorf("turn span %q: unexpected attribute %q = %q (want it on the root span only)", turn, attrKey, v)
+		}
+		if v, _ := spanAttr(span, "genkit:type"); v != "flowStep" {
+			t.Errorf("turn span %q: genkit:type = %q, want %q", turn, v, "flowStep")
+		}
+		if v, ok := spanAttr(span, "genkit:metadata:subtype"); ok {
+			t.Errorf("turn span %q: unexpected genkit:metadata:subtype = %q (JS's run() sets no subtype)", turn, v)
+		}
 	}
 }
 
@@ -747,6 +866,117 @@ func TestAgent_ErrorInTurn(t *testing.T) {
 // "reply" message and increments the custom counter: the minimal stateful
 // turn body shared by the snapshot and state-management tests. opts pass
 // through to DefineCustomAgent (e.g. WithSessionStore).
+func TestAgent_TurnContext(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("server-managed reserves the ID and persists under it", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		store := newTestInMemStore[testState]()
+
+		var mu sync.Mutex
+		var seen []TurnContext
+		af := DefineCustomAgent(reg, "turnCtxServer",
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					tc := TurnContextFromContext(ctx)
+					if tc == nil {
+						return nil, fmt.Errorf("TurnContextFromContext returned nil inside the turn")
+					}
+					mu.Lock()
+					seen = append(seen, *tc)
+					mu.Unlock()
+					sess.AddMessages(ai.NewModelTextMessage("reply"))
+					return nil, nil
+				})
+			},
+			WithSessionStore(store),
+		)
+
+		conn, err := af.Connect(ctx)
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		te1 := sendTurn(t, conn, "one")
+		te2 := sendTurn(t, conn, "two")
+		if _, err := conn.Output(); err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+		if len(seen) != 2 {
+			t.Fatalf("got %d turn contexts, want 2", len(seen))
+		}
+
+		// Turn 0: fresh session, a reserved ID, no parent.
+		if seen[0].TurnIndex != 0 {
+			t.Errorf("turn 0 TurnIndex = %d, want 0", seen[0].TurnIndex)
+		}
+		if seen[0].SnapshotID == "" {
+			t.Fatal("turn 0 reserved SnapshotID is empty; want a reserved ID")
+		}
+		if seen[0].ParentSnapshotID != "" {
+			t.Errorf("turn 0 ParentSnapshotID = %q, want empty", seen[0].ParentSnapshotID)
+		}
+		// The whole point: the ID the handler saw up front is the ID the
+		// snapshot persisted under (and the one the TurnEnd chunk reports).
+		if seen[0].SnapshotID != te1.SnapshotID {
+			t.Errorf("turn 0 reserved ID %q != persisted TurnEnd ID %q", seen[0].SnapshotID, te1.SnapshotID)
+		}
+		if snap, err := store.GetSnapshot(ctx, seen[0].SnapshotID); err != nil || snap == nil {
+			t.Errorf("GetSnapshot(reserved %q) = (%v, %v); want a stored row", seen[0].SnapshotID, snap, err)
+		}
+
+		// Turn 1: index advances, parent is turn 0's snapshot, ID is fresh.
+		if seen[1].TurnIndex != 1 {
+			t.Errorf("turn 1 TurnIndex = %d, want 1", seen[1].TurnIndex)
+		}
+		if seen[1].SnapshotID != te2.SnapshotID {
+			t.Errorf("turn 1 reserved ID %q != persisted TurnEnd ID %q", seen[1].SnapshotID, te2.SnapshotID)
+		}
+		if seen[1].ParentSnapshotID != seen[0].SnapshotID {
+			t.Errorf("turn 1 ParentSnapshotID = %q, want turn 0's %q", seen[1].ParentSnapshotID, seen[0].SnapshotID)
+		}
+		if seen[1].SnapshotID == seen[0].SnapshotID {
+			t.Error("turn 1 reused turn 0's reserved ID; each turn must reserve a fresh one")
+		}
+	})
+
+	t.Run("client-managed reserves no ID", func(t *testing.T) {
+		reg := newTestRegistry(t)
+
+		var mu sync.Mutex
+		var seen *TurnContext
+		af := DefineCustomAgent(reg, "turnCtxClient",
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					tc := TurnContextFromContext(ctx)
+					mu.Lock()
+					seen = tc
+					mu.Unlock()
+					return nil, nil
+				})
+			},
+		)
+
+		if _, err := af.RunText(ctx, "hi"); err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+		if seen == nil {
+			t.Fatal("TurnContextFromContext returned nil for a client-managed agent")
+		}
+		if seen.SnapshotID != "" {
+			t.Errorf("client-managed reserved SnapshotID = %q, want empty", seen.SnapshotID)
+		}
+		if seen.ParentSnapshotID != "" {
+			t.Errorf("client-managed ParentSnapshotID = %q, want empty", seen.ParentSnapshotID)
+		}
+	})
+}
+
 func defineCounterAgent(reg api.Registry, name string, opts ...AgentOption[testState]) *Agent[testState] {
 	return DefineCustomAgent(reg, name,
 		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
@@ -1136,6 +1366,63 @@ func TestAgent_InitFailure_FailsActionWithStatus(t *testing.T) {
 	}
 }
 
+// TestAgent_JSONInitRejectsUnknownFields verifies that the agent's JSON init
+// paths reject a payload carrying a field the inferred AgentInit schema does not
+// declare, surfacing INVALID_ARGUMENT rather than silently dropping it and
+// starting a fresh session as if nothing were wrong. This exercises the real
+// inferred init schema end to end (the core mechanism is covered by
+// TestBidiJSONInitRejectsUnknownFields).
+func TestAgent_JSONInitRejectsUnknownFields(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	echo := func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+		return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+			return nil, nil
+		})
+	}
+	af := DefineCustomAgent(reg, "jsonInitUnknownFields", echo)
+
+	assertRejected := func(t *testing.T, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("expected INVALID_ARGUMENT for unknown init field, got nil")
+		}
+		if ge := core.AsGenkitError(err); ge.Status != core.INVALID_ARGUMENT {
+			t.Errorf("status = %q, want %q (err: %v)", ge.Status, core.INVALID_ARGUMENT, err)
+		}
+	}
+
+	badInit := json.RawMessage(`{"bogus":true}`)
+
+	t.Run("ConnectJSON", func(t *testing.T) {
+		_, err := af.ConnectJSON(ctx, &api.BidiJSONOptions{Init: badInit})
+		assertRejected(t, err)
+	})
+
+	t.Run("RunBidiJSON", func(t *testing.T) {
+		input, err := json.Marshal(&AgentInput{Message: ai.NewUserTextMessage("hi")})
+		if err != nil {
+			t.Fatalf("marshal input: %v", err)
+		}
+		_, err = af.RunBidiJSON(ctx, input, nil, &api.BidiJSONOptions{Init: badInit})
+		assertRejected(t, err)
+	})
+
+	// An empty init object declares no fields, so it passes validation and
+	// starts a fresh session.
+	t.Run("empty init accepted", func(t *testing.T) {
+		conn, err := af.ConnectJSON(ctx, &api.BidiJSONOptions{Init: json.RawMessage(`{}`)})
+		if err != nil {
+			t.Fatalf("ConnectJSON with empty init: %v", err)
+		}
+		conn.Close()
+		if _, err := conn.Output(); err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+	})
+}
+
 func TestAgent_SetMessages(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
@@ -1169,22 +1456,36 @@ func TestAgent_SetMessages(t *testing.T) {
 	}
 }
 
+// turnSpanState parses a turn span's genkit:output attribute, which the agent
+// records as {"state": <session state>} (see turnSpanOutput), and returns the
+// embedded state.
+func turnSpanState(t *testing.T, span sdktrace.ReadOnlySpan) *SessionState[testState] {
+	t.Helper()
+	raw, ok := spanAttr(span, "genkit:output")
+	if !ok {
+		t.Fatalf("span %q: missing genkit:output attribute", span.Name())
+	}
+	var out turnSpanOutput[testState]
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatalf("span %q: genkit:output %q is not valid turn output: %v", span.Name(), raw, err)
+	}
+	if out.State == nil {
+		t.Fatalf("span %q: genkit:output %q carries no state", span.Name(), raw)
+	}
+	return out.State
+}
+
+// TestAgent_TurnSpanOutput verifies each turn span's output is the committed
+// session state at turn end, wrapped as {state: ...}. The agent is
+// client-managed (no store), so no turn-end snapshot is written and the
+// per-turn snapshot-ID attribute is absent.
 func TestAgent_TurnSpanOutput(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
-
-	var capturedOutputs []any
+	spans := collectSpans(t)
 
 	af := DefineCustomAgent(reg, "turnOutputFlow",
 		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
-			// Wrap collectTurnOutput to capture what each turn produces.
-			originalCollect := sess.collectTurnOutput
-			sess.collectTurnOutput = func() any {
-				output := originalCollect()
-				capturedOutputs = append(capturedOutputs, output)
-				return output
-			}
-
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
@@ -1214,59 +1515,51 @@ func TestAgent_TurnSpanOutput(t *testing.T) {
 	}
 
 	conn.Close()
-	if _, err := conn.Output(); err != nil {
+	out, err := conn.Output()
+	if err != nil {
 		t.Fatalf("Output failed: %v", err)
 	}
 
-	// Should have captured output for each turn.
-	if len(capturedOutputs) != 2 {
-		t.Fatalf("expected 2 captured outputs, got %d", len(capturedOutputs))
-	}
-
-	for i, output := range capturedOutputs {
-		chunks, ok := output.([]*AgentStreamChunk)
-		if !ok {
-			t.Fatalf("turn %d: expected []*AgentStreamChunk, got %T", i, output)
+	// Each turn span's output carries the cumulative state through that turn:
+	// the running counter and one user message plus one reply per turn.
+	for turn := range 2 {
+		name := fmt.Sprintf("runTurn-%d", turn+1)
+		span := spans.byName(name)
+		if span == nil {
+			t.Fatalf("missing span %q", name)
 		}
-		// 3 content chunks per turn: customPatch + model chunk + artifact.
-		if len(chunks) != 3 {
-			t.Errorf("turn %d: expected 3 chunks, got %d", i, len(chunks))
+		state := turnSpanState(t, span)
+		if state.SessionID != out.SessionID {
+			t.Errorf("%s: state.sessionId = %q, want %q", name, state.SessionID, out.SessionID)
 		}
-		for j, chunk := range chunks {
-			if chunk.TurnEnd != nil {
-				t.Errorf("turn %d, chunk %d: TurnEnd should not be in turn output", i, j)
-			}
+		if want := turn + 1; state.Custom.Counter != want {
+			t.Errorf("%s: state.custom.counter = %d, want %d", name, state.Custom.Counter, want)
+		}
+		if got, want := len(state.Messages), 2*(turn+1); got != want {
+			t.Errorf("%s: len(state.messages) = %d, want %d", name, got, want)
+		}
+		// An artifact added during the turn rides the committed state too.
+		if got := len(state.Artifacts); got != 1 {
+			t.Errorf("%s: len(state.artifacts) = %d, want 1", name, got)
+		}
+		// Client-managed: no snapshot, so no snapshot-ID attribute.
+		if v, ok := spanAttr(span, snapshotIDSpanAttrKey); ok {
+			t.Errorf("%s: unexpected %s = %q (client-managed writes no snapshot)", name, snapshotIDSpanAttrKey, v)
 		}
 	}
 }
 
+// TestAgent_TurnSpanOutput_WithSnapshots verifies that for a server-managed
+// agent the turn span both carries the persisted snapshot's ID under
+// genkit:metadata:agent:snapshotId and records the committed state as its
+// {state: ...} output, agreeing with the snapshot the ID points to.
 func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
+	spans := collectSpans(t)
 
-	var capturedOutputs []any
-
-	af := DefineCustomAgent(reg, "turnOutputSnapshotFlow",
-		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
-			originalCollect := sess.collectTurnOutput
-			sess.collectTurnOutput = func() any {
-				output := originalCollect()
-				capturedOutputs = append(capturedOutputs, output)
-				return output
-			}
-
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
-				sess.UpdateCustom(func(s testState) testState {
-					s.Counter++
-					return s
-				})
-				sess.AddMessages(ai.NewModelTextMessage("reply"))
-				return nil, nil
-			})
-		},
-		WithSessionStore(store),
-	)
+	af := defineCounterAgent(reg, "turnOutputSnapshotFlow", WithSessionStore(store))
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -1274,28 +1567,80 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 	}
 
 	sendText(t, conn, "hello")
-	var sawSnapshot bool
-	if nextTurnEnd(t, conn).SnapshotID != "" {
-		sawSnapshot = true
-	}
-	conn.Close()
-	conn.Output()
-
-	if !sawSnapshot {
+	te := nextTurnEnd(t, conn)
+	if te.SnapshotID == "" {
 		t.Fatal("expected a snapshot ID on the turn-end chunk")
 	}
+	conn.Close()
+	if _, err := conn.Output(); err != nil {
+		t.Fatalf("Output failed: %v", err)
+	}
 
-	// Turn output should contain only the customPatch chunk, not the TurnEnd signal.
-	if len(capturedOutputs) != 1 {
-		t.Fatalf("expected 1 captured output, got %d", len(capturedOutputs))
+	span := spans.byName("runTurn-1")
+	if span == nil {
+		t.Fatal("missing span runTurn-1")
 	}
-	chunks := capturedOutputs[0].([]*AgentStreamChunk)
-	if len(chunks) != 1 {
-		t.Errorf("expected 1 content chunk, got %d", len(chunks))
+
+	// The turn span is tagged with the turn-end snapshot's ID.
+	got, ok := spanAttr(span, snapshotIDSpanAttrKey)
+	if !ok {
+		t.Fatalf("turn span: missing %s", snapshotIDSpanAttrKey)
 	}
-	// The first (and only) patch of the turn is a whole-document replace.
-	if got := chunks[0].CustomPatch; len(got) != 1 || got[0].Op != JSONPatchOpReplace || got[0].Path != "" {
-		t.Errorf("expected a whole-document replace customPatch, got %+v", got)
+	if got != te.SnapshotID {
+		t.Errorf("turn span %s = %q, want %q (the turn-end snapshot)", snapshotIDSpanAttrKey, got, te.SnapshotID)
+	}
+
+	// Its output is the committed state, matching the persisted snapshot.
+	state := turnSpanState(t, span)
+	if state.Custom.Counter != 1 {
+		t.Errorf("turn span state.custom.counter = %d, want 1", state.Custom.Counter)
+	}
+	snap, err := store.GetSnapshot(ctx, te.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if state.SessionID != snap.SessionID {
+		t.Errorf("turn span state.sessionId = %q, want %q (snapshot's session)", state.SessionID, snap.SessionID)
+	}
+	if got, want := state.Custom.Counter, snap.State.Custom.Counter; got != want {
+		t.Errorf("turn span state.custom.counter = %d, want %d (snapshot's counter)", got, want)
+	}
+}
+
+// TestAgent_CustomPatchWholeDocumentReplace verifies the server emits the first
+// custom-state mutation of a turn as a whole-document replace: a single RFC 6902
+// replace at the root pointer, which re-bases a client that may not share the
+// server's baseline. The client-side effect of this re-basing across turns is
+// covered by TestAgentConnection_Custom_TracksStreamedPatches.
+func TestAgent_CustomPatchWholeDocumentReplace(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	af := defineCounterAgent(reg, "wholeDocReplaceFlow")
+
+	conn, err := af.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	sendText(t, conn, "hello")
+
+	var patch JSONPatch
+	for chunk, err := range conn.Receive() {
+		if err != nil {
+			t.Fatalf("Receive: %v", err)
+		}
+		if chunk.CustomPatch != nil {
+			patch = chunk.CustomPatch
+			break
+		}
+		if chunk.TurnEnd != nil {
+			break
+		}
+	}
+	conn.Close()
+
+	if len(patch) != 1 || patch[0].Op != JSONPatchOpReplace || patch[0].Path != "" {
+		t.Errorf("first customPatch = %+v, want a single whole-document replace at root", patch)
 	}
 }
 
@@ -1340,6 +1685,170 @@ func setupPromptTestRegistry(t *testing.T) *registry.Registry {
 	return reg
 }
 
+// personaInput is the input schema for the shared prompt exercised by
+// TestPromptAgent_NamedPromptSharedAcrossAgents.
+type personaInput struct {
+	Personality string `json:"personality"`
+}
+
+// TestPromptAgent_NamedPromptSharedAcrossAgents verifies that WithNamedPrompt
+// backs several agents with a single prompt, rendering each with its own
+// input, and that an agent's name is independent of the prompt it references.
+func TestPromptAgent_NamedPromptSharedAcrossAgents(t *testing.T) {
+	ctx := context.Background()
+	reg := registry.New()
+	ai.ConfigureFormats(reg)
+
+	var mu sync.Mutex
+	var renderedSystems []string
+	ai.DefineModel(reg, "test/capture", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			mu.Lock()
+			for _, m := range req.Messages {
+				if m.Role == ai.RoleSystem {
+					renderedSystems = append(renderedSystems, m.Text())
+				}
+			}
+			mu.Unlock()
+			return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("ok")}, nil
+		},
+	)
+	ai.DefineGenerateAction(ctx, reg)
+
+	// One shared prompt with a personality variable, registered under a name
+	// that matches no agent.
+	ai.DefinePrompt(reg, "sharedChat",
+		ai.WithModelName("test/capture"),
+		ai.WithInputType(personaInput{}),
+		ai.WithSystem("You are {{personality}}."),
+	)
+
+	// Two agents, different names, the one prompt, different inputs.
+	pirate := DefinePromptAgent[testState](reg, "pirate",
+		WithNamedPrompt[testState]("sharedChat", personaInput{Personality: "a pirate"}))
+	chef := DefinePromptAgent[testState](reg, "chef",
+		WithNamedPrompt[testState]("sharedChat", personaInput{Personality: "a chef"}))
+
+	// The agents register under their own names, not the prompt's.
+	if pirate.Name() != "pirate" {
+		t.Errorf("pirate.Name() = %q, want %q", pirate.Name(), "pirate")
+	}
+	if chef.Name() != "chef" {
+		t.Errorf("chef.Name() = %q, want %q", chef.Name(), "chef")
+	}
+
+	if _, err := pirate.RunText(ctx, "hi"); err != nil {
+		t.Fatalf("pirate RunText: %v", err)
+	}
+	if _, err := chef.RunText(ctx, "hi"); err != nil {
+		t.Fatalf("chef RunText: %v", err)
+	}
+
+	// Each agent rendered the shared prompt with its own personality input.
+	joined := strings.Join(renderedSystems, " | ")
+	if !strings.Contains(joined, "You are a pirate.") {
+		t.Errorf("pirate personality not rendered; system prompts = %q", joined)
+	}
+	if !strings.Contains(joined, "You are a chef.") {
+		t.Errorf("chef personality not rendered; system prompts = %q", joined)
+	}
+}
+
+// TestDefinePromptAgent_DefaultAndNamed exercises the option-configured prompt
+// agent: the default same-named lookup (no source option), the WithNamedPrompt
+// override sourcing a shared prompt with a code-supplied input, and that the
+// shared agent options (WithDescription) compose alongside the prompt source.
+func TestDefinePromptAgent_DefaultAndNamed(t *testing.T) {
+	ctx := context.Background()
+	reg := registry.New()
+	ai.ConfigureFormats(reg)
+
+	var mu sync.Mutex
+	var renderedSystems []string
+	ai.DefineModel(reg, "test/capture", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			mu.Lock()
+			for _, m := range req.Messages {
+				if m.Role == ai.RoleSystem {
+					renderedSystems = append(renderedSystems, m.Text())
+				}
+			}
+			mu.Unlock()
+			return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("ok")}, nil
+		},
+	)
+	ai.DefineGenerateAction(ctx, reg)
+
+	// A same-named prompt for the default lookup, and a shared parameterized
+	// prompt for the WithNamedPrompt override.
+	ai.DefinePrompt(reg, "chef",
+		ai.WithModelName("test/capture"),
+		ai.WithSystem("You are a chef."),
+	)
+	ai.DefinePrompt(reg, "sharedChat",
+		ai.WithModelName("test/capture"),
+		ai.WithInputType(personaInput{}),
+		ai.WithSystem("You are {{personality}}."),
+	)
+
+	// Default: no source option resolves the prompt named after the agent.
+	chef := DefinePromptAgent[testState](reg, "chef",
+		WithDescription[testState]("a chef agent"))
+	if chef.Name() != "chef" {
+		t.Fatalf("chef.Name() = %q, want %q", chef.Name(), "chef")
+	}
+	if got := chef.Desc().Description; got != "a chef agent" {
+		t.Errorf("chef description = %q, want %q", got, "a chef agent")
+	}
+
+	// Override: source the shared prompt with a code-supplied input. The agent
+	// name ("pirate") is independent of the referenced prompt ("sharedChat").
+	pirate := DefinePromptAgent[testState](reg, "pirate",
+		WithNamedPrompt[testState]("sharedChat", personaInput{Personality: "a pirate"}))
+
+	if _, err := chef.RunText(ctx, "hi"); err != nil {
+		t.Fatalf("chef RunText: %v", err)
+	}
+	if _, err := pirate.RunText(ctx, "hi"); err != nil {
+		t.Fatalf("pirate RunText: %v", err)
+	}
+
+	joined := strings.Join(renderedSystems, " | ")
+	if !strings.Contains(joined, "You are a chef.") {
+		t.Errorf("default same-named prompt not rendered; systems = %q", joined)
+	}
+	if !strings.Contains(joined, "You are a pirate.") {
+		t.Errorf("WithNamedPrompt input not rendered; systems = %q", joined)
+	}
+}
+
+// TestDefinePromptAgent_Panics covers the definition-time failures: a prompt
+// that is not registered, and setting the prompt source more than once.
+func TestDefinePromptAgent_Panics(t *testing.T) {
+	reg := setupPromptTestRegistry(t)
+	ai.DefinePrompt(reg, "present", ai.WithModelName("test/echo"))
+
+	t.Run("missing prompt", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected panic for missing prompt")
+			}
+		}()
+		DefinePromptAgent[testState](reg, "absent")
+	})
+
+	t.Run("duplicate prompt source", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected panic for duplicate WithNamedPrompt")
+			}
+		}()
+		DefinePromptAgent[testState](reg, "present",
+			WithNamedPrompt[testState]("present", nil),
+			WithNamedPrompt[testState]("present", nil))
+	})
+}
+
 func TestPromptAgent_Basic(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
@@ -1349,7 +1858,7 @@ func TestPromptAgent_Basic(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefineAgent[testState](reg, "testPrompt", FromPrompt())
+	af := DefinePromptAgent[testState](reg, "testPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -1424,7 +1933,7 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 		ai.WithSystem("system prompt"),
 	)
 
-	af := DefineAgent[testState](reg, "historyPrompt", FromPrompt())
+	af := DefinePromptAgent[testState](reg, "historyPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -1498,7 +2007,7 @@ func TestPromptAgent_SnapshotResumePreservesHistory(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefineAgent[testState](reg, "snapPrompt", FromPrompt(),
+	af := DefinePromptAgent[testState](reg, "snapPrompt",
 		WithSessionStore(store),
 	)
 
@@ -1623,7 +2132,7 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 		ai.WithTools(ai.ToolName("greet"), ai.ToolName("farewell")),
 	)
 
-	af := DefineAgent[testState](reg, "toolPrompt", FromPrompt())
+	af := DefinePromptAgent[testState](reg, "toolPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -1828,7 +2337,7 @@ func TestPromptAgent_RunText(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefineAgent[testState](reg, "runTextPrompt", FromPrompt())
+	af := DefinePromptAgent[testState](reg, "runTextPrompt")
 
 	response, err := af.RunText(ctx, "hello")
 	if err != nil {
@@ -1853,7 +2362,7 @@ func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
 	ai.DefinePrompt(reg, "rejectPrompt", ai.WithModelName("test/echo"))
-	af := DefineAgent[testState](reg, "rejectPrompt", FromPrompt())
+	af := DefinePromptAgent[testState](reg, "rejectPrompt")
 
 	tests := []struct {
 		name    string
@@ -2012,7 +2521,7 @@ func TestPromptAgent_RejectsResumeForUnrequestedTool(t *testing.T) {
 	ai.DefineGenerateAction(ctx, reg)
 	ai.DefinePrompt(reg, "plainPrompt", ai.WithModelName("test/plain"))
 
-	af := DefineAgent[testState](reg, "plainPrompt", FromPrompt())
+	af := DefinePromptAgent[testState](reg, "plainPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -3057,7 +3566,7 @@ func TestAgent_Detach_FlowErrorsBecomesError(t *testing.T) {
 	}
 }
 
-func TestAgent_Detach_AbortSnapshotStopsFlow(t *testing.T) {
+func TestAgent_Detach_AbortStopsFlow(t *testing.T) {
 	// Client detaches, then calls abortPendingSnapshot. The store's status
 	// subscriber notifies the runtime, which cancels the work context, and
 	// the finalizer rewrites the snapshot with status=aborted.
@@ -3257,7 +3766,7 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 	// Transform that scrubs a specific word from all messages. It also
 	// (incorrectly) drops the framework-owned session ID, which the
 	// action must re-stamp on the way out.
-	transform := func(_ context.Context, s *SessionState[testState]) *SessionState[testState] {
+	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
 		for _, msg := range s.Messages {
 			for _, p := range msg.Content {
 				if p.Text != "" {
@@ -3266,7 +3775,7 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 			}
 		}
 		s.SessionID = ""
-		return s
+		return s, nil
 	}
 
 	af := DefineCustomAgent(reg, "transformedFlow",
@@ -3362,7 +3871,7 @@ func TestAgent_GetSnapshot_FacadeTransformsRawStoreDoesNot(t *testing.T) {
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 
-	transform := func(_ context.Context, s *SessionState[testState]) *SessionState[testState] {
+	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
 		for _, msg := range s.Messages {
 			for _, p := range msg.Content {
 				if p.Text != "" {
@@ -3370,7 +3879,7 @@ func TestAgent_GetSnapshot_FacadeTransformsRawStoreDoesNot(t *testing.T) {
 				}
 			}
 		}
-		return s
+		return s, nil
 	}
 
 	af := DefineCustomAgent(reg, "facadeTransform",
@@ -3445,7 +3954,7 @@ func TestAgent_SnapshotFacade_Errors(t *testing.T) {
 	assertGenkitStatus(t, e1, core.FAILED_PRECONDITION, "client GetSnapshot")
 	_, e2 := client.GetLatestSnapshot(ctx, "x")
 	assertGenkitStatus(t, e2, core.FAILED_PRECONDITION, "client GetLatestSnapshot")
-	_, e3 := client.AbortSnapshot(ctx, "x")
+	_, e3 := client.Abort(ctx, "x")
 	assertGenkitStatus(t, e3, core.FAILED_PRECONDITION, "client abortPendingSnapshot")
 
 	// Server-managed agent: empty IDs are INVALID_ARGUMENT, missing rows NOT_FOUND.
@@ -3455,16 +3964,16 @@ func TestAgent_SnapshotFacade_Errors(t *testing.T) {
 	assertGenkitStatus(t, e4, core.INVALID_ARGUMENT, "empty GetSnapshot")
 	_, e5 := server.GetLatestSnapshot(ctx, "")
 	assertGenkitStatus(t, e5, core.INVALID_ARGUMENT, "empty GetLatestSnapshot")
-	_, e6 := server.AbortSnapshot(ctx, "")
+	_, e6 := server.Abort(ctx, "")
 	assertGenkitStatus(t, e6, core.INVALID_ARGUMENT, "empty abortPendingSnapshot")
 	_, e7 := server.GetSnapshot(ctx, "missing")
 	assertGenkitStatus(t, e7, core.NOT_FOUND, "missing GetSnapshot")
 }
 
-// TestAgent_AbortSnapshot_Method verifies the in-process convenience flips a
+// TestAgent_Abort_Method verifies the in-process convenience flips a
 // pending row to aborted through the store, mirroring the package-level
-// [abortPendingSnapshot] and the abortSnapshot companion action.
-func TestAgent_AbortSnapshot_Method(t *testing.T) {
+// [abortPendingSnapshot] and the abort companion action.
+func TestAgent_Abort_Method(t *testing.T) {
 	reg := newTestRegistry(t)
 	ctx := context.Background()
 	store := newTestInMemStore[testState]()
@@ -3478,9 +3987,9 @@ func TestAgent_AbortSnapshot_Method(t *testing.T) {
 		t.Fatalf("seed pending: %v", err)
 	}
 
-	status, err := af.AbortSnapshot(ctx, pending.SnapshotID)
+	status, err := af.Abort(ctx, pending.SnapshotID)
 	if err != nil {
-		t.Fatalf("agent.AbortSnapshot: %v", err)
+		t.Fatalf("agent.Abort: %v", err)
 	}
 	if status != SnapshotStatusAborted {
 		t.Errorf("returned status = %q, want aborted", status)
@@ -3651,10 +4160,10 @@ func TestAgent_GetSnapshotAction_NoStore(t *testing.T) {
 	if getAction != nil {
 		t.Error("getSnapshot action should NOT be registered without a store")
 	}
-	abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}](
+	abortAction := core.ResolveActionFor[*AgentAbortRequest, *AgentAbortResponse, struct{}](
 		reg, api.ActionTypeAgentAbort, "noStoreFlow")
 	if abortAction != nil {
-		t.Error("abortSnapshot action should NOT be registered without a store")
+		t.Error("abort action should NOT be registered without a store")
 	}
 }
 
@@ -3995,10 +4504,10 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 		if getAction == nil {
 			t.Error("getSnapshot action should be registered")
 		}
-		abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}](
+		abortAction := core.ResolveActionFor[*AgentAbortRequest, *AgentAbortResponse, struct{}](
 			reg, api.ActionTypeAgentAbort, "fullCaps")
 		if abortAction == nil {
-			t.Error("abortSnapshot action should be registered when store implements SnapshotSubscriber")
+			t.Error("abort action should be registered when store implements SnapshotSubscriber")
 		}
 	})
 
@@ -4015,10 +4524,10 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 		if getAction == nil {
 			t.Error("getSnapshot action should be registered even when store lacks SnapshotSubscriber")
 		}
-		abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}](
+		abortAction := core.ResolveActionFor[*AgentAbortRequest, *AgentAbortResponse, struct{}](
 			reg, api.ActionTypeAgentAbort, "minCaps")
 		if abortAction != nil {
-			t.Error("abortSnapshot action should NOT be registered when store lacks SnapshotSubscriber")
+			t.Error("abort action should NOT be registered when store lacks SnapshotSubscriber")
 		}
 	})
 }
@@ -4039,8 +4548,8 @@ func TestAgent_CompanionActionAccessors(t *testing.T) {
 		if got := af.GetSnapshotAction(); got != nil {
 			t.Errorf("GetSnapshotAction() = %v, want nil", got)
 		}
-		if got := af.AbortSnapshotAction(); got != nil {
-			t.Errorf("AbortSnapshotAction() = %v, want nil", got)
+		if got := af.AbortAction(); got != nil {
+			t.Errorf("AbortAction() = %v, want nil", got)
 		}
 	})
 
@@ -4051,8 +4560,8 @@ func TestAgent_CompanionActionAccessors(t *testing.T) {
 		if af.GetSnapshotAction() == nil {
 			t.Error("GetSnapshotAction() = nil, want action")
 		}
-		if got := af.AbortSnapshotAction(); got != nil {
-			t.Errorf("AbortSnapshotAction() = %v, want nil", got)
+		if got := af.AbortAction(); got != nil {
+			t.Errorf("AbortAction() = %v, want nil", got)
 		}
 	})
 
@@ -4063,8 +4572,8 @@ func TestAgent_CompanionActionAccessors(t *testing.T) {
 		if got, want := af.GetSnapshotAction(), reg.LookupAction("/agent-snapshot/bothCompanions"); got == nil || got != want {
 			t.Errorf("GetSnapshotAction() = %v, want registered action %v", got, want)
 		}
-		if got, want := af.AbortSnapshotAction(), reg.LookupAction("/agent-abort/bothCompanions"); got == nil || got != want {
-			t.Errorf("AbortSnapshotAction() = %v, want registered action %v", got, want)
+		if got, want := af.AbortAction(), reg.LookupAction("/agent-abort/bothCompanions"); got == nil || got != want {
+			t.Errorf("AbortAction() = %v, want registered action %v", got, want)
 		}
 	})
 }
@@ -4198,7 +4707,7 @@ func TestNewCustomAgent_UnregisteredUntilRegister(t *testing.T) {
 	)
 
 	// Companion refs are wired at construction, before any registry.
-	if af.GetSnapshotAction() == nil || af.AbortSnapshotAction() == nil {
+	if af.GetSnapshotAction() == nil || af.AbortAction() == nil {
 		t.Fatal("companion actions should be built by NewCustomAgent before registration")
 	}
 
@@ -4234,13 +4743,13 @@ func TestAgent_AbortAction_NotFound(t *testing.T) {
 		WithSessionStore(newTestInMemStore[testState]()),
 	)
 
-	abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}](
+	abortAction := core.ResolveActionFor[*AgentAbortRequest, *AgentAbortResponse, struct{}](
 		reg, api.ActionTypeAgentAbort, "missingFlow")
 	if abortAction == nil {
-		t.Fatal("abortSnapshot action should be registered")
+		t.Fatal("abort action should be registered")
 	}
 
-	_, err := abortAction.Run(context.Background(), &AbortSnapshotRequest{SnapshotID: "no-such-snap"}, nil)
+	_, err := abortAction.Run(context.Background(), &AgentAbortRequest{SnapshotID: "no-such-snap"}, nil)
 	if err == nil {
 		t.Fatal("expected error for missing snapshot, got nil")
 	}
@@ -4257,10 +4766,10 @@ func TestAgent_StateTransform_ClientManagedState(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	// Client-managed state: transform should be applied to AgentOutput.State.
-	transform := func(_ context.Context, s *SessionState[testState]) *SessionState[testState] {
+	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
 		// Zero out the counter to demonstrate the transform is applied.
 		s.Custom.Counter = -1
-		return s
+		return s, nil
 	}
 
 	af := DefineCustomAgent(reg, "clientXformFlow",
@@ -4285,6 +4794,105 @@ func TestAgent_StateTransform_ClientManagedState(t *testing.T) {
 	}
 	if out.State.Custom.Counter != -1 {
 		t.Errorf("expected transformed counter=-1, got %d", out.State.Custom.Counter)
+	}
+}
+
+// TestAgent_StateTransform_ErrorFailsClientManagedOutputClosed verifies a state
+// transform that returns an error fails the invocation closed: rather than
+// handing back unshaped state, the otherwise-successful client-managed
+// invocation resolves as a failed output, with the transform's status preserved
+// and no state attached.
+func TestAgent_StateTransform_ErrorFailsClientManagedOutputClosed(t *testing.T) {
+	reg := newTestRegistry(t)
+
+	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
+		return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape state")
+	}
+
+	af := DefineCustomAgent(reg, "clientXformErr",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("done"))
+				return nil, nil
+			})
+		},
+		WithStateTransform[testState](transform),
+	)
+
+	out, err := af.RunText(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("expected a graceful failed output, got error: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
+	}
+	if out.Error == nil || out.Error.Status != core.PERMISSION_DENIED {
+		t.Errorf("Error = %+v, want status %q from the transform", out.Error, core.PERMISSION_DENIED)
+	}
+	// failedOutput shapes the last-good state through the same transform, which
+	// errors again here; the runtime omits state rather than leaking it.
+	if out.State != nil {
+		t.Errorf("expected no state on the failed output (transform failed closed), got %+v", out.State)
+	}
+}
+
+// TestAgent_StateTransform_ErrorFailsSnapshotReadClosed verifies a state
+// transform that errors fails a snapshot read closed: both the typed
+// Agent.GetSnapshot facade and the getSnapshot companion action surface the
+// transform's error (status preserved) instead of returning unshaped state.
+func TestAgent_StateTransform_ErrorFailsSnapshotReadClosed(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
+		return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape state")
+	}
+
+	af := DefineCustomAgent(reg, "snapXformErr",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("done"))
+				return nil, nil
+			})
+		},
+		WithSessionStore(store),
+		WithStateTransform[testState](transform),
+	)
+
+	// A successful run persists a snapshot (the run itself does not read state
+	// back through the transform, so it is unaffected).
+	out, err := af.RunText(ctx, "go")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("expected a persisted snapshot ID")
+	}
+
+	// The typed facade fails closed with the transform's status.
+	if _, err := af.GetSnapshot(ctx, out.SnapshotID); err == nil {
+		t.Error("Agent.GetSnapshot: expected the transform error, got nil")
+	} else if core.AsGenkitError(err).Status != core.PERMISSION_DENIED {
+		t.Errorf("Agent.GetSnapshot error status = %q, want %q", core.AsGenkitError(err).Status, core.PERMISSION_DENIED)
+	}
+
+	// The getSnapshot companion action fails the same way for non-Go clients.
+	action := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}](
+		reg, api.ActionTypeAgentSnapshot, "snapXformErr")
+	if action == nil {
+		t.Fatal("getSnapshot action not registered")
+	}
+	if _, err := action.Run(ctx, &GetSnapshotRequest{SnapshotID: out.SnapshotID}, nil); err == nil {
+		t.Error("getSnapshot action: expected the transform error, got nil")
+	} else if core.AsGenkitError(err).Status != core.PERMISSION_DENIED {
+		t.Errorf("getSnapshot action error status = %q, want %q", core.AsGenkitError(err).Status, core.PERMISSION_DENIED)
+	}
+
+	// The stored snapshot itself is untouched: the failure is read-time shaping,
+	// not corruption, so the row is still resumable.
+	if snap, err := store.GetSnapshot(ctx, out.SnapshotID); err != nil || snap == nil {
+		t.Errorf("stored GetSnapshot = (%v, %v), want the intact snapshot", snap, err)
 	}
 }
 
@@ -4539,7 +5147,7 @@ func TestInMemorySessionStore_OnSnapshotStatusChange(t *testing.T) {
 	t.Fatal("channel did not close after subscription ctx cancel")
 }
 
-func TestAgent_AbortSnapshot_NoOpOnTerminal(t *testing.T) {
+func TestAgent_Abort_NoOpOnTerminal(t *testing.T) {
 	// Calling abortPendingSnapshot on an already-terminal snapshot is a no-op
 	// that returns the existing status.
 	reg := newTestRegistry(t)
@@ -4866,7 +5474,7 @@ func TestPromptAgent_ForwardsFinishReason(t *testing.T) {
 	ai.DefineGenerateAction(ctx, reg)
 	ai.DefinePrompt(reg, "lengthPrompt", ai.WithModelName("test/length"))
 
-	af := DefineAgent[testState](reg, "lengthPrompt", FromPrompt())
+	af := DefinePromptAgent[testState](reg, "lengthPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -5269,7 +5877,7 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 		ai.WithTools(interruptTool),
 	)
 
-	af := DefineAgent[testState](reg, "interruptPrompt", FromPrompt())
+	af := DefinePromptAgent[testState](reg, "interruptPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -6237,10 +6845,10 @@ func TestPromptAgent_InlineMessages_DoesNotMutateSharedMetadata(t *testing.T) {
 	shared := ai.NewModelTextMessage("inline context message")
 	shared.Metadata = map[string]any{"origin": "config"}
 
-	af := DefineAgent[testState](reg, "inlineMetaPrompt", FromInline(
+	af := DefineAgent[testState](reg, "inlineMetaPrompt", InlinePrompt{
 		ai.WithModelName("test/echo"),
 		ai.WithMessages(shared),
-	))
+	})
 
 	response, err := af.RunText(ctx, "hello")
 	if err != nil {
@@ -6270,10 +6878,10 @@ func TestPromptAgent_InlineMessages_ConcurrentInvocations(t *testing.T) {
 	shared := ai.NewModelTextMessage("inline context message")
 	shared.Metadata = map[string]any{"origin": "config"}
 
-	af := DefineAgent[testState](reg, "inlineConcurrentPrompt", FromInline(
+	af := DefineAgent[testState](reg, "inlineConcurrentPrompt", InlinePrompt{
 		ai.WithModelName("test/echo"),
 		ai.WithMessages(shared),
-	))
+	})
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 8)

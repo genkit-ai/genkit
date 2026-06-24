@@ -38,7 +38,10 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/tracing"
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // --- Heartbeat ---
@@ -82,10 +85,16 @@ type SessionRunner[State any] struct {
 	// turnIndex is the zero-based index of the current conversation turn,
 	// incremented by Run after each turn completes.
 	turnIndex int
+	// turnSnapshotID is the ID reserved at the start of the current turn that
+	// its turn-end snapshot is saved under (server-managed only; "" for a
+	// client-managed agent). Reserved up front so the per-turn fn can read it
+	// from its [TurnContext]. Written by Run at turn start and read by
+	// snapshotTurnEnd at turn end, both in the fn goroutine, so it needs no
+	// lock (same confinement as turnIndex).
+	turnSnapshotID string
 
-	onStartTurn       func()
-	onEndTurn         func(ctx context.Context)
-	collectTurnOutput func() any
+	onStartTurn func()
+	onEndTurn   func(ctx context.Context)
 
 	// snapMu serializes the turn-end snapshot write (snapshotTurnEnd)
 	// against the detach handler's suspend-and-capture (suspendSnapshots).
@@ -158,6 +167,54 @@ type TurnResult struct {
 	FinishReason AgentFinishReason
 }
 
+// turnCtxKey carries the current turn's [TurnContext] on the per-turn
+// function's context, so a handler reads it via [TurnContextFromContext]
+// instead of the framework threading it through the [SessionRunner.Run]
+// callback signature.
+var turnCtxKey = base.NewContextKey[*TurnContext]()
+
+// TurnContext carries per-turn metadata the runtime exposes to the per-turn
+// function through its context. Retrieve it with [TurnContextFromContext].
+//
+// Its SnapshotID is reserved before the turn runs (for a server-managed agent),
+// so a handler can name external, snapshot-correlated resources (e.g. a git
+// worktree named after the snapshot) up front and have them line up with the
+// snapshot the turn persists at its end.
+type TurnContext struct {
+	// SnapshotID is the ID the turn-end snapshot will be saved under, minted
+	// before the turn runs so the handler knows it in advance. A server-managed
+	// turn persists its snapshot under this ID on success. It is empty for a
+	// client-managed agent (no store, so no snapshot) and is the reserved-but-
+	// unused ID for a turn that writes none (a failed turn, or one whose
+	// snapshots a detach suspended).
+	SnapshotID string
+	// ParentSnapshotID is the ID of the snapshot this turn continues from: the
+	// previous turn's snapshot, or the snapshot the invocation resumed from. It
+	// is empty on the first turn of a fresh conversation and for a
+	// client-managed agent.
+	ParentSnapshotID string
+	// TurnIndex is the zero-based index of this turn within the invocation.
+	TurnIndex int
+}
+
+// TurnContextFromContext returns the [TurnContext] for the turn currently
+// executing, or nil if ctx is not a per-turn context (e.g. it was called
+// outside the [SessionRunner.Run] callback). The returned pointer is read-only;
+// the runtime owns it.
+func TurnContextFromContext(ctx context.Context) *TurnContext {
+	return turnCtxKey.FromContext(ctx)
+}
+
+// turnSpanOutput is the value recorded as a turn span's genkit:output. It
+// wraps the committed session state captured at turn end under a "state" key,
+// so the span output serializes as {"state": <session state>}. The state is
+// raw: a configured [StateTransform] shapes only client-facing surfaces, not
+// telemetry or persisted state, so this matches what a server-managed turn
+// writes to its turn-end snapshot.
+type turnSpanOutput[State any] struct {
+	State *SessionState[State] `json:"state"`
+}
+
 // Run loops over the input channel, calling fn for each turn. Each turn is
 // wrapped in a trace span for observability. Input messages are automatically
 // added to the session before fn is called. After fn returns successfully, a
@@ -188,13 +245,28 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 		if s.onStartTurn != nil {
 			s.onStartTurn()
 		}
+		// Reserve this turn's snapshot ID before the turn runs so the per-turn
+		// fn can read it (with the parent ID and turn index) from its context
+		// via [TurnContextFromContext]; the turn-end write persists under it.
+		// Empty for a client-managed agent, which writes no snapshot.
+		s.turnSnapshotID = s.reserveTurnSnapshotID()
+		turnCtx := &TurnContext{
+			SnapshotID:       s.turnSnapshotID,
+			ParentSnapshotID: s.lastSnapshotID,
+			TurnIndex:        s.turnIndex,
+		}
 		spanMeta := &tracing.SpanMetadata{
-			Name:    fmt.Sprintf("agent/turn/%d", s.turnIndex),
-			Type:    "flowStep",
-			Subtype: "flowStep",
+			// Match the JS agent's turn span so cross-language traces line up:
+			// name "runTurn-N" (1-indexed) and type flowStep with no subtype
+			// (JS's run() sets only genkit:type, no genkit:metadata:subtype).
+			Name: fmt.Sprintf("runTurn-%d", s.turnIndex+1),
+			Type: "flowStep",
 		}
 		_, err := tracing.RunInNewSpan(ctx, spanMeta, input,
 			func(ctx context.Context, input *AgentInput) (any, error) {
+				// Carry the reserved turn context on the per-turn fn's context
+				// rather than threading it through Run's callback signature.
+				ctx = turnCtxKey.NewContext(ctx, turnCtx)
 				if input.Message != nil {
 					// The session owns its history: store a copy so fn's
 					// view of the input stays independent of session state.
@@ -210,10 +282,9 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 					reason = tr.FinishReason
 				}
 				s.endTurn(ctx, reason, false)
-				if s.collectTurnOutput != nil {
-					return s.collectTurnOutput(), nil
-				}
-				return nil, nil
+				// The turn span's output is the committed session state at
+				// turn end, recorded as {state: ...} (see turnSpanOutput).
+				return turnSpanOutput[State]{State: s.State()}, nil
 			},
 		)
 		if err != nil {
@@ -222,6 +293,18 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 		}
 	}
 	return nil
+}
+
+// reserveTurnSnapshotID mints the ID the upcoming turn will persist its
+// snapshot under, or "" for a client-managed agent (no store), which writes
+// none. The runtime mints it here, rather than letting the store mint at write
+// time, so it is known before the turn runs and can ride on the turn's
+// [TurnContext]; snapshotTurnEnd then saves under it.
+func (s *SessionRunner[State]) reserveTurnSnapshotID() string {
+	if s.store == nil {
+		return ""
+	}
+	return uuid.New().String()
 }
 
 // endTurn records how the turn ended and runs the shared turn-end tail:
@@ -288,9 +371,12 @@ func (s *SessionRunner[State]) invocationReason(result *AgentResult) AgentFinish
 
 // snapshotTurnEnd persists a turn-end snapshot capturing the committed
 // session state, chained off the previous snapshot via ParentID, and
-// returns its ID. It is a no-op returning "" when no store is configured
-// or snapshots have been suspended by a detach. finishReason records how
-// the captured turn ended so a resumed task can report it.
+// returns its ID. The row is saved under the turn's pre-reserved ID
+// (turnSnapshotID; see [SessionRunner.Run]), so the ID the per-turn fn read
+// from its [TurnContext] is the ID the snapshot persists under. It is a no-op
+// returning "" when no store is configured or snapshots have been suspended by
+// a detach. finishReason records how the captured turn ended so a resumed task
+// can report it.
 //
 // The turn-end snapshot is the agent's only routine persistence point: a
 // failed turn never writes one (its partial state is not a resume point),
@@ -322,7 +408,7 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 	// Timestamps are caller-managed (the store persists them verbatim); a fresh
 	// turn-end snapshot is created now, so CreatedAt and UpdatedAt are equal.
 	now := time.Now()
-	saved, err := s.store.SaveSnapshot(ctx, "",
+	saved, err := s.store.SaveSnapshot(ctx, s.turnSnapshotID,
 		func(_ *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 			return &SessionSnapshot[State]{
 				SessionID:    sessionID,
@@ -359,8 +445,8 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 type Responder struct {
 	in  chan<- *AgentStreamChunk
 	ctx context.Context
-	// effects applies the chunk's in-process side effects (session
-	// artifact add, turn-chunk accumulation) synchronously in send, in
+	// effects applies the chunk's in-process side effects (adding an
+	// artifact chunk's artifact to the session) synchronously in send, in
 	// the sender's goroutine, so reads and snapshots that follow a Send
 	// cannot miss the chunk.
 	effects func(*AgentStreamChunk)
@@ -416,15 +502,15 @@ type AgentFunc[State any] = func(ctx context.Context, resp Responder, sess *Sess
 //
 // Server-managed agents (those with a [SessionStore] configured) also
 // register companion actions for the snapshot lifecycle, available via
-// [Agent.GetSnapshotAction] and [Agent.AbortSnapshotAction] for serving
+// [Agent.GetSnapshotAction] and [Agent.AbortAction] for serving
 // alongside the agent, and expose the store itself via [Agent.Store].
 type Agent[State any] struct {
 	action *core.BidiAction[*AgentInput, *AgentOutput[State], *AgentStreamChunk, *AgentInit[State]]
 	// Companion actions, retained so transports can serve them without a
 	// registry lookup. Nil when the corresponding capability is absent;
 	// see newSnapshotActions.
-	getSnapshot   api.Action
-	abortSnapshot api.Action
+	getSnapshot api.Action
+	abort       api.Action
 	// store is the configured session store, or nil for a client-managed
 	// agent. Retained so callers can reach it via Store without threading
 	// a separate reference.
@@ -438,7 +524,7 @@ type Agent[State any] struct {
 
 // Name returns the agent's registered name. This is also the name under
 // which any inline-defined prompt and companion actions (getSnapshot,
-// abortSnapshot) are registered.
+// abort) are registered.
 func (a *Agent[State]) Name() string {
 	return a.action.Name()
 }
@@ -456,24 +542,24 @@ func (a *Agent[State]) GetSnapshotAction() api.Action {
 	return a.getSnapshot
 }
 
-// AbortSnapshotAction returns the agent's abortSnapshot companion action,
+// AbortAction returns the agent's abort companion action,
 // which asks the background work behind a pending snapshot (e.g. a
-// detached invocation) to stop (input [AbortSnapshotRequest], output
-// [AbortSnapshotResponse]). It returns nil when the agent has no
+// detached invocation) to stop (input [AgentAbortRequest], output
+// [AgentAbortResponse]). It returns nil when the agent has no
 // [SessionStore] or the store does not implement [SnapshotSubscriber].
 //
 // Use it to expose aborting over a transport (e.g. mount it with
 // genkit.Handler next to the agent itself); local Go code aborts with
-// [Agent.AbortSnapshot]; a store-only caller uses this companion action.
-func (a *Agent[State]) AbortSnapshotAction() api.Action {
-	return a.abortSnapshot
+// [Agent.Abort]; a store-only caller uses this companion action.
+func (a *Agent[State]) AbortAction() api.Action {
+	return a.abort
 }
 
 // Store returns the [SessionStore] the agent was configured with via
 // [WithSessionStore], or nil when the agent is client-managed (no store).
 //
 // For reads and aborts prefer the typed facade [Agent.GetSnapshot],
-// [Agent.GetLatestSnapshot], and [Agent.AbortSnapshot]: they apply the
+// [Agent.GetLatestSnapshot], and [Agent.Abort]: they apply the
 // configured [WithStateTransform] and read-time shaping. Store exposes the raw
 // backend for advanced use; a direct [SnapshotReader.GetSnapshot] returns
 // untransformed state.
@@ -521,21 +607,21 @@ func (a *Agent[State]) GetLatestSnapshot(ctx context.Context, sessionID string) 
 	return readSnapshot(ctx, a.store, a.transform, "", sessionID)
 }
 
-// AbortSnapshot aborts the detached invocation behind a pending snapshot by
+// Abort aborts the detached invocation behind a pending snapshot by
 // flipping it to [SnapshotStatusAborted]; the runtime observes the flip and
 // cancels the background work. A caller that has only a store (no agent) aborts
-// through the abortSnapshot companion action instead. It is a no-op on a missing
-// snapshot (returns
-// "") or an already-terminal one (returns the existing status).
+// through the abort companion action instead. It is a no-op on a missing
+// snapshot (returns "") or an already-terminal one (returns the existing
+// status).
 //
 // It returns FAILED_PRECONDITION on a client-managed agent and INVALID_ARGUMENT
 // when snapshotID is empty.
-func (a *Agent[State]) AbortSnapshot(ctx context.Context, snapshotID string) (SnapshotStatus, error) {
+func (a *Agent[State]) Abort(ctx context.Context, snapshotID string) (SnapshotStatus, error) {
 	if a.store == nil {
-		return "", core.NewError(core.FAILED_PRECONDITION, "agent %q: AbortSnapshot requires a session store", a.Name())
+		return "", core.NewError(core.FAILED_PRECONDITION, "agent %q: Abort requires a session store", a.Name())
 	}
 	if snapshotID == "" {
-		return "", core.NewError(core.INVALID_ARGUMENT, "agent %q: AbortSnapshot: snapshotID is required", a.Name())
+		return "", core.NewError(core.INVALID_ARGUMENT, "agent %q: Abort: snapshotID is required", a.Name())
 	}
 	return abortPendingSnapshot(ctx, a.store, snapshotID)
 }
@@ -551,7 +637,7 @@ func (a *Agent[State]) AbortSnapshot(ctx context.Context, snapshotID string) (Sn
 var _ api.BidiAction = (*Agent[any])(nil)
 
 // Register registers the agent's run action and any companion actions
-// (getSnapshot, abortSnapshot) with the registry. Agents defined via
+// (getSnapshot, abort) with the registry. Agents defined via
 // [DefineAgent] or [DefineCustomAgent] are already registered; this
 // exists so an agent can travel to another registry as a unit. An
 // inline-defined prompt does not travel: the agent holds it directly, so
@@ -570,8 +656,8 @@ func (a *Agent[State]) Register(r api.Registry) {
 	if a.getSnapshot != nil {
 		a.getSnapshot.Register(r)
 	}
-	if a.abortSnapshot != nil {
-		a.abortSnapshot.Register(r)
+	if a.abort != nil {
+		a.abort.Register(r)
 	}
 }
 
@@ -608,46 +694,88 @@ func (a *Agent[State]) ConnectJSON(ctx context.Context, opts *api.BidiJSONOption
 	return a.action.ConnectJSON(ctx, opts)
 }
 
-// DefineAgent defines a prompt-backed agent and registers it. Each turn
-// renders the agent's prompt, appends conversation history, calls the
-// model with streaming, and updates session state.
+// DefineAgent defines an agent backed by an inline prompt and registers it. The
+// prompt is defined from prompt's [ai.PromptOption] values and registered under
+// the agent's name; each turn renders it, appends conversation history, calls
+// the model with streaming, and updates session state.
 //
-// source selects how the prompt is backed:
+// The prompt is an [InlinePrompt], a list of [ai.PromptOption] values:
 //
-//   - [FromInline] defines the prompt inline from a set of
-//     [ai.PromptOption] values; the prompt is registered under name.
-//   - [FromPrompt] references an existing prompt registered with the
-//     registry under name (e.g. one defined via [ai.DefinePrompt] or
-//     loaded from a .prompt file).
+//	agent := DefineAgent(r, "pirate",
+//		InlinePrompt{
+//			ai.WithModelName("googleai/gemini-flash-latest"),
+//			ai.WithSystem("You are a sarcastic pirate."),
+//		},
+//		WithSessionStore(store),
+//	)
 //
-// State is inferred from the typed agent options (e.g.
-// [WithSessionStore], [WithStateTransform]); pass an explicit [State] only
-// when no typed option is provided. A typed option that disagrees with
-// the inferred State fails at compile time.
+// State is inferred from the typed agent options (e.g. [WithSessionStore],
+// [WithStateTransform]); pass an explicit [State] only when no typed option is
+// provided. A typed option that disagrees with the inferred State fails at
+// compile time.
 //
-// For full control over the per-turn loop, use [DefineCustomAgent].
+// To back an agent with a prompt already in the registry (e.g. one from a
+// .prompt file), use [DefinePromptAgent]. For full control over the per-turn
+// loop, use [DefineCustomAgent].
 func DefineAgent[State any](
 	r api.Registry,
 	name string,
-	source AgentSource,
+	prompt InlinePrompt,
 	opts ...AgentOption[State],
 ) *Agent[State] {
-	switch s := source.(type) {
-	case inlineSource:
-		prompt := ai.DefinePrompt(r, name, s.opts...)
-		return DefineCustomAgent(r, name, agentLoop[State](r, prompt, nil), opts...)
-	case promptSource:
-		prompt := ai.LookupPrompt(r, name)
-		if prompt == nil {
-			panic(fmt.Sprintf("DefineAgent %q: prompt %q not found", name, name))
+	p := ai.DefinePrompt(r, name, prompt...)
+	return DefineCustomAgent(r, name, agentLoop[State](r, p, nil), opts...)
+}
+
+// DefinePromptAgent defines a prompt-backed agent and registers it, sourcing
+// its prompt from the registry by name. Each turn renders the prompt, appends
+// conversation history, calls the model with streaming, and updates session
+// state, exactly like [DefineAgent].
+//
+// By default the agent uses the prompt registered under its own name (e.g. one
+// defined via [ai.DefinePrompt] or loaded from a .prompt file), so no source
+// option is required. Pass [WithNamedPrompt] to reference a differently named
+// prompt and supply its render input from code, so a single prompt can back
+// many agents.
+//
+// It is the registry-backed counterpart of [DefineAgent]: where [DefineAgent]
+// defines the prompt inline, DefinePromptAgent points at a prompt already in
+// the registry. The prompt source is a typed option ([WithNamedPrompt]) rather
+// than a positional argument, so it composes with the other agent options
+// ([WithSessionStore], [WithStateTransform], [WithStreamTransform],
+// [WithDescription]) in a single variadic. For full control over the per-turn
+// loop, use [DefineCustomAgent].
+//
+// State is inferred from the typed agent options; pass an explicit [State] only
+// when no typed option provides it (e.g. only [WithNamedPrompt] and
+// [WithDescription], whose State cannot be deduced from their arguments).
+func DefinePromptAgent[State any](
+	r api.Registry,
+	name string,
+	opts ...PromptAgentOption[State],
+) *Agent[State] {
+	cfg := &promptAgentOptions[State]{}
+	for _, opt := range opts {
+		if err := opt.applyPromptAgent(cfg); err != nil {
+			panic(fmt.Errorf("DefinePromptAgent %q: %w", name, err))
 		}
-		if _, err := prompt.Render(context.Background(), s.defaultInput); err != nil {
-			panic(fmt.Sprintf("DefineAgent %q: defaultInput does not satisfy prompt schema: %v", name, err))
-		}
-		return DefineCustomAgent(r, name, agentLoop[State](r, prompt, s.defaultInput), opts...)
-	default:
-		panic(fmt.Sprintf("DefineAgent %q: unknown source type %T", name, source))
 	}
+
+	promptName := cfg.promptName
+	if promptName == "" {
+		promptName = name // default: the prompt registered under the agent's own name
+	}
+	prompt := ai.LookupPrompt(r, promptName)
+	if prompt == nil {
+		panic(fmt.Sprintf("DefinePromptAgent %q: prompt %q not found", name, promptName))
+	}
+	if _, err := prompt.Render(context.Background(), cfg.promptInput); err != nil {
+		panic(fmt.Sprintf("DefinePromptAgent %q: prompt input does not satisfy prompt schema: %v", name, err))
+	}
+
+	a := newCustomAgent(name, agentLoop[State](r, prompt, cfg.promptInput), &cfg.agentOptions)
+	a.Register(r)
+	return a
 }
 
 // NewCustomAgent creates an agent with full control over the conversation
@@ -677,7 +805,18 @@ func NewCustomAgent[State any](
 			panic(fmt.Errorf("NewCustomAgent %q: %w", name, err))
 		}
 	}
+	return newCustomAgent(name, fn, cfg)
+}
 
+// newCustomAgent builds (without registering) an agent from already-applied
+// base options. It is the shared core of [NewCustomAgent] and the prompt-backed
+// [DefinePromptAgent], which resolve their prompt source into an agentLoop fn
+// and reuse the same base option set.
+func newCustomAgent[State any](
+	name string,
+	fn AgentFunc[State],
+	cfg *agentOptions[State],
+) *Agent[State] {
 	// Typed under ActionTypeAgent so agents surface as their own action
 	// kind rather than as flows (genkit.ListAgents vs ListFlows). Built on
 	// NewBidiAction so the agent capability metadata is set at construction
@@ -715,14 +854,14 @@ func NewCustomAgent[State any](
 			return rt.run(ctx, fn)
 		})
 
-	getSnapshot, abortSnapshot := newSnapshotActions(name, cfg.store, cfg.transform)
+	getSnapshot, abort := newSnapshotActions(name, cfg.store, cfg.transform)
 
 	return &Agent[State]{
-		action:        action,
-		getSnapshot:   getSnapshot,
-		abortSnapshot: abortSnapshot,
-		store:         cfg.store,
-		transform:     cfg.transform,
+		action:      action,
+		getSnapshot: getSnapshot,
+		abort:       abort,
+		store:       cfg.store,
+		transform:   cfg.transform,
 	}
 }
 
@@ -797,6 +936,47 @@ type agentRuntime[State any] struct {
 	intake  *detachIntake
 
 	fnDone chan fnDoneResult[State]
+	// fatalErr latches the first fail-closed error from a streaming transform
+	// (the stream transform in the router, or the state transform behind a
+	// custom-state patch). Buffered to one and written non-blocking, so the
+	// producer never blocks and only the first error wins; the run loop drains
+	// it to resolve the invocation as a failed output. See failTransform.
+	fatalErr chan error
+}
+
+// failTransform records a fail-closed error from a streaming transform without
+// blocking the producer that hit it. The buffered, non-blocking send keeps the
+// first error and discards the rest; the run loop observes it (directly via its
+// select arm, or after the fact via handleFnDone) and resolves the invocation
+// as a failed output. Safe to call from the router and the fn goroutines.
+func (rt *agentRuntime[State]) failTransform(err error) {
+	select {
+	case rt.fatalErr <- err:
+	default: // a fatal error is already latched; first one wins
+	}
+}
+
+// takeFatal returns the latched streaming-transform error, or nil if none.
+// Non-blocking, so a terminal path can fold a fatal error that raced fn's
+// completion into a failed output.
+func (rt *agentRuntime[State]) takeFatal() error {
+	select {
+	case err := <-rt.fatalErr:
+		return err
+	default:
+		return nil
+	}
+}
+
+// panicError logs a recovered panic with its stack and returns it as an
+// INTERNAL error; what names the code that panicked (e.g. "agent fn"). Call it
+// from a deferred recover, where the stack still reaches the panic site. It is
+// the shared shape of the runtime's two recover sites: the agent fn and the
+// stream transform, both of which contain a panic in user code rather than let
+// it crash the process.
+func panicError(ctx context.Context, what string, rec any) error {
+	logger.FromContext(ctx).Error(what+" panicked", "panic", rec, "stack", string(debug.Stack()))
+	return core.NewError(core.INTERNAL, "%s panicked: %v", what, rec)
 }
 
 // fnDoneResult carries the user fn's return values across the goroutine
@@ -805,6 +985,18 @@ type fnDoneResult[State any] struct {
 	result *AgentResult
 	err    error
 }
+
+// sessionIDSpanAttrKey and snapshotIDSpanAttrKey are the full span-attribute
+// keys under which an agent records its identifiers: the session ID on the
+// root action span, and the turn-end snapshot ID on each server-managed turn
+// span. They are the "genkit:metadata:"-prefixed forms of the
+// "agent:sessionId" / "agent:snapshotId" custom-metadata keys the JS agent
+// sets via setCustomMetadataAttributes; the prefix is inlined here because
+// Go's tracing package exposes no setCustomMetadataAttributes helper.
+const (
+	sessionIDSpanAttrKey  = "genkit:metadata:agent:sessionId"
+	snapshotIDSpanAttrKey = "genkit:metadata:agent:snapshotId"
+)
 
 func newAgentRuntime[State any](
 	ctx context.Context,
@@ -853,14 +1045,26 @@ func newAgentRuntime[State any](
 		session.state.SessionID = uuid.New().String()
 	}
 
+	// Tag the agent's root action span (the current span here, before any turn
+	// span is opened) with the session ID so traces from the same conversation
+	// can be correlated. Mirrors the JS agent, which calls
+	// setCustomMetadataAttributes({'agent:sessionId': ...}) once at the start of
+	// the action body. trace.SpanFromContext never returns nil (it yields a
+	// no-op span when none is active), so the SetAttributes is always safe.
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String(sessionIDSpanAttrKey, session.state.SessionID))
+
 	rt := &agentRuntime[State]{
-		name:    name,
-		cfg:     cfg,
-		session: session,
-		router:  startChunkRouter(ctx, session, outCh),
-		intake:  startDetachIntake(inCh),
-		fnDone:  make(chan fnDoneResult[State], 1),
+		name:     name,
+		cfg:      cfg,
+		session:  session,
+		intake:   startDetachIntake(inCh),
+		fnDone:   make(chan fnDoneResult[State], 1),
+		fatalErr: make(chan error, 1),
 	}
+	// Started after rt exists so the router can signal a fail-closed stream
+	// transform error back through rt.failTransform.
+	rt.router = startChunkRouter(ctx, session, outCh, cfg.streamTransform, rt.failTransform)
 
 	rt.sess = &SessionRunner[State]{
 		Session: session,
@@ -871,7 +1075,6 @@ func newAgentRuntime[State any](
 		// make it the resume point a first-turn failure falls back to.
 		rt.sess.lastSnapshotID = parent.SnapshotID
 	}
-	rt.sess.collectTurnOutput = func() any { return rt.router.collectTurnChunks() }
 	rt.sess.onEndTurn = rt.emitTurnEnd
 	// Stream custom-state mutations as customPatch chunks. beginTurn is armed
 	// per turn by the runner; the session's onCustomChange hook is wired in
@@ -880,6 +1083,7 @@ func newAgentRuntime[State any](
 		transform:   cfg.transform,
 		session:     session,
 		firstInTurn: true,
+		fail:        rt.failTransform,
 	}
 	rt.sess.onStartTurn = rt.patcher.beginTurn
 	// The initial state (fresh, client-provided, or loaded from a snapshot)
@@ -911,6 +1115,15 @@ func (rt *agentRuntime[State]) emitTurnEnd(ctx context.Context) {
 	if !rt.sess.lastTurnFailed {
 		snapshotID = rt.sess.snapshotTurnEnd(ctx, reason)
 	}
+	// Tag the turn span with the snapshot it persisted, so a server-managed
+	// turn's trace links to its snapshot. ctx is the turn span's context (this
+	// runs inside the runTurn-N span via onEndTurn). The ID is empty, and the
+	// attribute omitted, when client-managed, when the turn failed, or when a
+	// detach suspended snapshots.
+	if snapshotID != "" {
+		trace.SpanFromContext(ctx).SetAttributes(
+			attribute.String(snapshotIDSpanAttrKey, snapshotID))
+	}
 	rt.router.sendChunk(ctx, &AgentStreamChunk{TurnEnd: &TurnEnd{
 		SnapshotID:   snapshotID,
 		FinishReason: reason,
@@ -931,9 +1144,9 @@ func (rt *agentRuntime[State]) run(
 
 	// Wire custom-state streaming now that the work context exists: every
 	// UpdateCustom mutation during the invocation emits a customPatch chunk
-	// through the same responder fn uses (so the chunk is accumulated for the
-	// turn span and forwarded on the wire, dropping post-detach like any
-	// other chunk). The session mutation itself still applies regardless.
+	// through the same responder fn uses (so the chunk is forwarded on the
+	// wire, dropping post-detach like any other chunk). The session mutation
+	// itself still applies regardless.
 	resp := rt.router.responder(workCtx)
 	rt.patcher.bind(workCtx, resp.send)
 	rt.session.onCustomChange = rt.patcher.onChange
@@ -972,8 +1185,7 @@ func (rt *agentRuntime[State]) run(
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					logger.FromContext(workCtx).Error("agent fn panicked", "panic", r, "stack", string(debug.Stack()))
-					fnErr = core.NewError(core.INTERNAL, "agent fn panicked: %v", r)
+					fnErr = panicError(workCtx, "agent fn", r)
 				}
 			}()
 			result, fnErr = fn(workCtx, resp, rt.sess)
@@ -992,6 +1204,9 @@ func (rt *agentRuntime[State]) run(
 	case res := <-rt.fnDone:
 		return rt.handleFnDone(clientCtx, cancelWork, res)
 
+	case cause := <-rt.fatalErr:
+		return rt.handleTransformFailure(clientCtx, cancelWork, cause)
+
 	case <-clientCtx.Done():
 		res := rt.drainAndWait(cancelWork)
 		if res.err != nil {
@@ -999,6 +1214,31 @@ func (rt *agentRuntime[State]) run(
 		}
 		return nil, clientCtx.Err()
 	}
+}
+
+// handleTransformFailure is the fail-closed terminal path for a streaming
+// transform that returned an error (or panicked): the stream transform in the
+// router, or the state transform behind a custom-state patch. It tears the
+// invocation down like a fn error and resolves it as a failed output carrying
+// the transform's cause, so no unshaped chunk reaches the client and the
+// offending chunk's side effects never surface in a completed output.
+//
+// drainAndWait cancels the work context (stopping fn), switches the router to
+// discard mode, and drains fn; the router has typically already stopped writing
+// the moment shape returned the error, but a custom-patch failure trips this
+// path while the router is still forwarding, so the stop here is what halts it.
+func (rt *agentRuntime[State]) handleTransformFailure(
+	clientCtx context.Context,
+	cancelWork context.CancelFunc,
+	cause error,
+) (*AgentOutput[State], error) {
+	rt.drainAndWait(cancelWork)
+	// A disconnect that raced the failure keeps error semantics: there is no
+	// client to hand a graceful failed output to (mirrors handleFnDone).
+	if clientCtx.Err() != nil {
+		return nil, cause
+	}
+	return rt.failedOutput(clientCtx, cause), nil
 }
 
 // checkDetachCapabilities reports whether the configured store is capable
@@ -1060,10 +1300,30 @@ func (rt *agentRuntime[State]) handleFnDone(
 ) (*AgentOutput[State], error) {
 	cancelWork()
 	rt.intake.stopAndWait()
-	if res.err != nil {
+	// A custom-state patch whose transform failed closed latches during fn, so
+	// it is readable now; a failed turn likewise wants its in-flight chunks
+	// dropped. Either way stop router writes before close so it cannot wedge
+	// behind a slow or gone consumer. A stream-transform failure instead puts
+	// the router into discard mode the instant it occurs (forward never parks),
+	// so it needs no stop here and is picked up after close below.
+	fatal := rt.takeFatal()
+	if res.err != nil || fatal != nil {
 		rt.router.stopAndWait()
 	}
 	rt.router.close()
+	if fatal == nil {
+		fatal = rt.takeFatal()
+	}
+
+	// A streaming transform that failed closed resolves the invocation as
+	// failed regardless of what fn returned, so no completed output leaks the
+	// data it refused to shape.
+	if fatal != nil {
+		if ctx.Err() != nil {
+			return nil, fatal
+		}
+		return rt.failedOutput(ctx, fatal), nil
+	}
 
 	if res.err != nil {
 		// A disconnect-driven failure keeps its error semantics: the
@@ -1095,7 +1355,17 @@ func (rt *agentRuntime[State]) handleFnDone(
 		out.Artifacts = cloneArtifacts(res.result.Artifacts)
 	}
 	if rt.cfg.store == nil {
-		out.State = rt.outboundState(ctx, rt.session.State())
+		// A final-output state transform that fails closed turns the otherwise
+		// successful invocation into a failed output, so unshaped state is
+		// never handed back.
+		state, err := rt.outboundState(ctx, rt.session.State())
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, err
+			}
+			return rt.failedOutput(ctx, err), nil
+		}
+		out.State = state
 	}
 	return out, nil
 }
@@ -1103,13 +1373,17 @@ func (rt *agentRuntime[State]) handleFnDone(
 // outboundState applies the configured state transform and re-stamps the
 // framework-owned SessionID, so the state handed to a client-managed
 // caller always carries the conversation's identity even if a transform
-// rewrote or dropped it. Returns nil if state is nil.
-func (rt *agentRuntime[State]) outboundState(ctx context.Context, state *SessionState[State]) *SessionState[State] {
-	out := applyTransform(ctx, rt.cfg.transform, state)
+// rewrote or dropped it. Returns (nil, nil) if state is nil, and a non-nil
+// error if the transform failed closed.
+func (rt *agentRuntime[State]) outboundState(ctx context.Context, state *SessionState[State]) (*SessionState[State], error) {
+	out, err := applyTransform(ctx, rt.cfg.transform, state)
+	if err != nil {
+		return nil, err
+	}
 	if out != nil {
 		out.SessionID = rt.session.SessionID()
 	}
-	return out
+	return out, nil
 }
 
 // failedOutput assembles the output for an invocation that ended in
@@ -1129,7 +1403,17 @@ func (rt *agentRuntime[State]) failedOutput(ctx context.Context, cause error) *A
 		Error:        core.AsGenkitError(cause),
 	}
 	if rt.cfg.store == nil {
-		out.State = rt.outboundState(ctx, rt.sess.lastGoodState)
+		// This is already the failure path, so a transform that also fails
+		// closed while shaping the last-good state cannot escalate further:
+		// omit state (fail closed, no leak) rather than recurse. The original
+		// cause is what the caller needs and is preserved on Error above.
+		if state, err := rt.outboundState(ctx, rt.sess.lastGoodState); err != nil {
+			logger.FromContext(ctx).Error(
+				"agent state transform failed shaping failed-output state; omitting state",
+				"error", err)
+		} else {
+			out.State = state
+		}
 	} else {
 		out.SnapshotID = rt.sess.lastSnapshotID
 	}
@@ -1286,7 +1570,7 @@ func beatHeartbeat[State any](ctx context.Context, store SnapshotWriter[State], 
 // atomic read-mutate-write makes the flip safe against a racing terminal write,
 // and the status change drives the runtime's
 // [SnapshotSubscriber.OnSnapshotStatusChange] subscription, so the store needs
-// no dedicated abort method. It backs [Agent.AbortSnapshot] and the abortSnapshot
+// no dedicated abort method. It backs [Agent.Abort] and the abort
 // companion action.
 func abortPendingSnapshot[State any](ctx context.Context, store SnapshotWriter[State], snapshotID string) (SnapshotStatus, error) {
 	now := time.Now()
@@ -1314,7 +1598,7 @@ func abortPendingSnapshot[State any](ctx context.Context, store SnapshotWriter[S
 
 // finalizePendingSnapshot rewrites the pending snapshot row with the
 // terminal state and status. abortedByUser distinguishes a context
-// cancellation from abortSnapshot (status=aborted) from an internal
+// cancellation from abort (status=aborted) from an internal
 // failure (status=failed). The write is funneled through SaveSnapshot
 // so the read-and-rewrite is one atomic step: if the row has already
 // transitioned to aborted (a late abort racing this finalize),
@@ -1516,13 +1800,13 @@ func resumeSessionFrom[State any](s *Session[State], snap *SessionSnapshot[State
 // --- chunkRouter ---
 //
 // chunkRouter owns the intermediate stream channel that all chunks flow
-// through on their way to outCh. A chunk's in-process side effects
-// (adding artifacts to the session, accumulating turn chunks for span
-// output) are applied synchronously by Responder.send before the chunk
-// enters the router, so every chunk gets them in its sender's goroutine
-// regardless of whether detach has landed; the router owns only the wire
-// forward to outCh, which is the one thing detach suppresses, since the
-// bidi framework closes outCh shortly after bidiFn returns. The router
+// through on their way to outCh. A chunk's in-process side effect (adding
+// an artifact chunk's artifact to the session) is applied synchronously by
+// Responder.send before the chunk enters the router, so every chunk gets it
+// in its sender's goroutine regardless of whether detach has landed; the
+// router owns only the wire forward to outCh, which is the one thing detach
+// suppresses, since the bidi framework closes outCh shortly after bidiFn
+// returns. The router
 // commits to not writing before we return so that close is safe, and
 // keeps draining its input so the user fn never blocks on a responder
 // send.
@@ -1532,9 +1816,13 @@ type chunkRouter[State any] struct {
 	in      chan *AgentStreamChunk
 	out     chan<- *AgentStreamChunk
 	session *Session[State]
-
-	turnMu     sync.Mutex
-	turnChunks []*AgentStreamChunk
+	// transform shapes each chunk on the wire; see [WithStreamTransform]. Nil
+	// forwards chunks verbatim.
+	transform StreamTransform
+	// fail reports a fail-closed transform error (or panic) to the runtime so
+	// the invocation resolves as a failed output. Nil only when no transform is
+	// configured, since that is the only thing that can fail here.
+	fail func(error)
 
 	done          chan struct{}
 	stopWriting   chan struct{}
@@ -1545,12 +1833,16 @@ func startChunkRouter[State any](
 	ctx context.Context,
 	session *Session[State],
 	out chan<- *AgentStreamChunk,
+	transform StreamTransform,
+	fail func(error),
 ) *chunkRouter[State] {
 	r := &chunkRouter[State]{
 		ctx:           ctx,
 		in:            make(chan *AgentStreamChunk),
 		out:           out,
 		session:       session,
+		transform:     transform,
+		fail:          fail,
 		done:          make(chan struct{}),
 		stopWriting:   make(chan struct{}),
 		writerStopped: make(chan struct{}),
@@ -1574,22 +1866,17 @@ func (r *chunkRouter[State]) run() {
 	}
 }
 
-// applySideEffects records the chunk's effect on session state and turn
-// span output. Invoked synchronously from Responder.send, in the
-// sender's goroutine, so the effects are ordered before everything the
-// sender does after Send: a state read, a turn-end snapshot, or
-// [SessionRunner.Result] immediately after SendArtifact observes the
-// artifact. The artifact is deep-copied on its way into the session so
-// the sender's retained pointer (which also rides the wire chunk) cannot
-// alias live session state.
+// applySideEffects records the chunk's effect on session state: an artifact
+// chunk adds its artifact to the session. Invoked synchronously from
+// Responder.send, in the sender's goroutine, so the effect is ordered before
+// everything the sender does after Send: a state read, a turn-end snapshot, or
+// [SessionRunner.Result] immediately after SendArtifact observes the artifact.
+// The artifact is deep-copied on its way into the session so the sender's
+// retained pointer (which also rides the wire chunk) cannot alias live session
+// state.
 func (r *chunkRouter[State]) applySideEffects(chunk *AgentStreamChunk) {
 	if chunk.Artifact != nil {
 		r.session.AddArtifacts(jsonClone(chunk.Artifact))
-	}
-	if chunk.TurnEnd == nil {
-		r.turnMu.Lock()
-		r.turnChunks = append(r.turnChunks, chunk)
-		r.turnMu.Unlock()
 	}
 }
 
@@ -1603,6 +1890,22 @@ func (r *chunkRouter[State]) forward() bool {
 			if !ok {
 				return false
 			}
+			shaped, err := r.shape(chunk)
+			if err != nil {
+				// The stream transform failed closed (returned an error or
+				// panicked). Report it so the invocation resolves as a failed
+				// output, and switch to discard mode so no further chunk
+				// reaches the wire: fail-closed means stop forwarding entirely.
+				r.fail(err)
+				return true
+			}
+			if shaped == nil {
+				// The stream transform dropped the chunk from the wire. Its
+				// side effects already applied at Send time, so there is
+				// nothing else to do; carry on draining the next chunk.
+				continue
+			}
+			chunk = shaped
 			select {
 			case r.out <- chunk:
 			case <-r.stopWriting:
@@ -1620,6 +1923,34 @@ func (r *chunkRouter[State]) forward() bool {
 	}
 }
 
+// shape applies the configured stream transform to chunk, returning the chunk
+// to forward on the wire, nil to drop it, or a non-nil error to fail the
+// invocation closed; with no transform it returns chunk unchanged. The
+// transform receives a fresh deep copy it owns, so mutating it in place cannot
+// disturb the chunk's already-applied side effects (an artifact recorded on the
+// session) or any pointer the sender retained. r.ctx is the action context,
+// which carries the caller's identity for RBAC-aware redaction; the transform
+// only runs on chunks bound for a live client, since forward stops calling it
+// once writes cease.
+//
+// The transform is user code running in the router's own goroutine, which
+// nothing else recovers (unlike the agent fn and the state transform, whose
+// goroutines are covered), so a panic here would crash the process rather than
+// fail just the invocation. Contain it the way the fn path does (log with a
+// stack) and surface it as a fail-closed error, the same outcome as an explicit
+// error return: the invocation fails rather than leaking the unshaped chunk.
+func (r *chunkRouter[State]) shape(chunk *AgentStreamChunk) (out *AgentStreamChunk, err error) {
+	if r.transform == nil {
+		return chunk, nil
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			out, err = nil, panicError(r.ctx, "agent stream transform", rec)
+		}
+	}()
+	return r.transform(r.ctx, jsonClone(chunk))
+}
+
 // responder returns a [Responder] that applies chunk side effects
 // synchronously and sends chunks into the router for the wire forward.
 // The returned Responder's Send methods drop the forward (returning
@@ -1631,23 +1962,13 @@ func (r *chunkRouter[State]) responder(ctx context.Context) Responder {
 // sendChunk delivers chunk to the router for producers other than the
 // user agent function (e.g. the runtime's emitTurnEnd). It skips the
 // in-process side effects (the only runtime-produced chunk is TurnEnd,
-// which has none: no artifact, and TurnEnd is excluded from turn-chunk
-// accumulation) and returns promptly if ctx is cancelled, dropping the
-// chunk.
+// which has none: no artifact) and returns promptly if ctx is cancelled,
+// dropping the chunk.
 func (r *chunkRouter[State]) sendChunk(ctx context.Context, chunk *AgentStreamChunk) {
 	select {
 	case r.in <- chunk:
 	case <-ctx.Done():
 	}
-}
-
-// collectTurnChunks returns and resets accumulated turn chunks.
-func (r *chunkRouter[State]) collectTurnChunks() []*AgentStreamChunk {
-	r.turnMu.Lock()
-	defer r.turnMu.Unlock()
-	result := r.turnChunks
-	r.turnChunks = nil
-	return result
 }
 
 // stopAndWait tells the router to stop writing to out and blocks until it
@@ -1680,9 +2001,13 @@ func (r *chunkRouter[State]) close() {
 type customPatcher[State any] struct {
 	transform StateTransform[State]
 	session   *Session[State]
+	// fail reports a fail-closed transform error to the runtime so the
+	// invocation resolves as a failed output rather than streaming a delta
+	// derived from state the transform refused to shape.
+	fail func(error)
 
 	ctx  context.Context         // invocation work context, for the transform
-	send func(*AgentStreamChunk) // forwards the chunk (accumulate + wire)
+	send func(*AgentStreamChunk) // forwards the chunk (side effects + wire)
 
 	mu          sync.Mutex
 	firstInTurn bool
@@ -1727,8 +2052,17 @@ func (p *customPatcher[State]) onChange() {
 	if p.transform == nil {
 		next = p.session.customJSON()
 	} else {
+		t, err := applyTransform(p.ctx, p.transform, p.session.State())
+		if err != nil {
+			// The state transform failed closed while shaping the streamed
+			// custom delta. Withhold the patch and fail the invocation; the run
+			// loop tears it down as a failed output, the same fail-closed
+			// outcome as a stream-transform error in the router.
+			p.fail(err)
+			return
+		}
 		var custom any
-		if t := applyTransform(p.ctx, p.transform, p.session.State()); t != nil {
+		if t != nil {
 			custom = t.Custom
 		}
 		next = normalizeJSON(custom)
@@ -2038,7 +2372,7 @@ func validateUserMessage(m *ai.Message) error {
 // interrupted call. The whole history is searched (every model message), not
 // just the last turn. On a violation it returns an INVALID_ARGUMENT error.
 //
-// The prompt-backed agent loop ([FromPrompt]) calls this automatically. A
+// The prompt-backed agent loop ([DefineAgent]) calls this automatically. A
 // custom agent ([DefineCustomAgent]) that accepts an [AgentInput.Resume] from
 // untrusted callers should call it before forwarding the payload to the model:
 //
@@ -2125,7 +2459,7 @@ func toolRefSuffix(ref string) string {
 // with streaming, and updates the session.
 //
 // defaultInput is the prompt input passed to Render on every turn. It is
-// nil for inline-defined prompts ([FromInline]), which take no per-turn
+// nil for inline-defined prompts ([InlinePrompt]), which take no per-turn
 // input.
 func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) AgentFunc[State] {
 	return func(ctx context.Context, resp Responder, sess *SessionRunner[State]) (*AgentResult, error) {
@@ -2367,7 +2701,7 @@ func (c *AgentConnection[State]) SendResume(resume *ToolResume) error {
 // Detach asks the server to write a pending snapshot, close the
 // connection, and continue processing any already-buffered inputs in
 // the background. Output() returns the pending snapshot ID; the client
-// can later call AbortSnapshot to stop the background work or
+// can later call Abort to stop the background work or
 // GetSnapshot to observe its progression. The pending snapshot is
 // finalized with the cumulative final state once the queued inputs
 // are processed.

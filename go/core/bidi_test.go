@@ -419,6 +419,120 @@ func TestInitSchemaValidationAcceptsGoodInit(t *testing.T) {
 	}
 }
 
+// TestBidiJSONInitRejectsUnknownFields verifies that the JSON init paths
+// (ConnectJSON, RunBidiJSON) validate the raw init payload against the action's
+// InitSchema before unmarshaling, so a field the schema does not declare is
+// rejected as INVALID_ARGUMENT. Decoding straight into a struct Init would drop
+// the stray field, leaving the post-decode validateInit nothing to catch.
+func TestBidiJSONInitRejectsUnknownFields(t *testing.T) {
+	ctx := context.Background()
+
+	type Config struct {
+		Prefix string `json:"prefix,omitempty"`
+	}
+
+	// additionalProperties:false is what makes a stray field a violation; it is
+	// also what the inferred schema for a struct Init (e.g. an agent's
+	// *AgentInit) carries by default.
+	initSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"prefix": map[string]any{"type": "string"},
+		},
+		"additionalProperties": false,
+	}
+
+	action := NewBidiAction(
+		"json-init-unknown-fields", api.ActionTypeCustom,
+		&BidiActionOptions{InitSchema: initSchema},
+		func(ctx context.Context, cfg *Config, inCh <-chan string, outCh chan<- string) (string, error) {
+			for range inCh {
+			}
+			return "done", nil
+		},
+	)
+
+	assertRejected := func(t *testing.T, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("expected INVALID_ARGUMENT for unknown init field, got nil")
+		}
+		var gerr *GenkitError
+		if !errors.As(err, &gerr) || gerr.Status != INVALID_ARGUMENT {
+			t.Fatalf("err = %v, want INVALID_ARGUMENT GenkitError", err)
+		}
+	}
+
+	badInit := json.RawMessage(`{"prefix":">> ","bogus":true}`)
+
+	t.Run("ConnectJSON", func(t *testing.T) {
+		_, err := action.ConnectJSON(ctx, &api.BidiJSONOptions{Init: badInit})
+		assertRejected(t, err)
+	})
+
+	t.Run("RunBidiJSON", func(t *testing.T) {
+		_, err := action.RunBidiJSON(ctx, json.RawMessage(`"hello"`), nil,
+			&api.BidiJSONOptions{Init: badInit})
+		assertRejected(t, err)
+	})
+
+	// A payload with only declared fields still starts the session.
+	t.Run("known fields accepted", func(t *testing.T) {
+		conn, err := action.ConnectJSON(ctx, &api.BidiJSONOptions{
+			Init: json.RawMessage(`{"prefix":">> "}`)})
+		if err != nil {
+			t.Fatalf("ConnectJSON: %v", err)
+		}
+		conn.Close()
+		if _, err := conn.Output(); err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+	})
+}
+
+// TestBidiJSONInitNormalizedLikeInput verifies that the JSON init path runs the
+// same normalization as the input path: a JSON number for an integer-typed
+// field is widened to int64 rather than left as the float64 a plain decode into
+// an any value would produce. This pins init handling to the input pipeline
+// (base.UnmarshalAndNormalize), not just schema validation.
+func TestBidiJSONInitNormalizedLikeInput(t *testing.T) {
+	ctx := context.Background()
+
+	initSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"count": map[string]any{"type": "integer"},
+		},
+	}
+
+	gotCount := make(chan any, 1)
+	action := NewBidiAction(
+		"json-init-normalized", api.ActionTypeCustom,
+		&BidiActionOptions{InitSchema: initSchema},
+		func(ctx context.Context, cfg any, inCh <-chan string, outCh chan<- string) (string, error) {
+			m, _ := cfg.(map[string]any)
+			gotCount <- m["count"]
+			for range inCh {
+			}
+			return "done", nil
+		},
+	)
+
+	conn, err := action.ConnectJSON(ctx, &api.BidiJSONOptions{
+		Init: json.RawMessage(`{"count":42}`)})
+	if err != nil {
+		t.Fatalf("ConnectJSON: %v", err)
+	}
+	conn.Close()
+	if _, err := conn.Output(); err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+
+	if got := <-gotCount; got != int64(42) {
+		t.Errorf("normalized init count = %T (%v), want int64(42)", got, got)
+	}
+}
+
 // TestBidiNilInitSkipsValidation verifies that a nil init (the zero value of
 // a pointer Init type) bypasses init schema validation on every no-init path.
 // The inferred init schema describes the object form, which JSON null can

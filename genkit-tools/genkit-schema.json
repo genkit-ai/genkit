@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$defs": {
-    "AbortSnapshotRequest": {
+    "AgentAbortRequest": {
       "type": "object",
       "properties": {
         "snapshotId": {
@@ -13,13 +13,19 @@
       ],
       "additionalProperties": false
     },
-    "AbortSnapshotResponse": {
+    "AgentAbortResponse": {
       "type": "object",
       "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
         "status": {
           "$ref": "#/$defs/SnapshotStatus"
         }
       },
+      "required": [
+        "snapshotId"
+      ],
       "additionalProperties": false
     },
     "AgentFinishReason": {

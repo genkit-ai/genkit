@@ -121,17 +121,18 @@ Metadata = dict[str, Any]  # type alias for flexible metadata
 Custom = dict[str, Any]  # type alias for flexible custom data
 
 
-class AbortSnapshotRequest(GenkitModel):
-    """Model for abortsnapshotrequest data."""
+class AgentAbortRequest(GenkitModel):
+    """Model for agentabortrequest data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     snapshot_id: str = Field(...)
 
 
-class AbortSnapshotResponse(GenkitModel):
-    """Model for abortsnapshotresponse data."""
+class AgentAbortResponse(GenkitModel):
+    """Model for agentabortresponse data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str = Field(...)
     status: SnapshotStatus | None = None
 
 

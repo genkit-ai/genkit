@@ -31,10 +31,11 @@ import (
 // --- Snapshot ---
 
 // applyTransform returns the result of applying t to state, or state
-// unchanged if t is nil. A nil state is returned as-is.
-func applyTransform[State any](ctx context.Context, t StateTransform[State], state *SessionState[State]) *SessionState[State] {
+// unchanged if t is nil. A nil state is returned as-is. A non-nil error from
+// the transform is propagated so callers can fail closed.
+func applyTransform[State any](ctx context.Context, t StateTransform[State], state *SessionState[State]) (*SessionState[State], error) {
 	if t == nil || state == nil {
-		return state
+		return state, nil
 	}
 	return t(ctx, state)
 }
@@ -182,7 +183,7 @@ func cloneArtifacts(arts []*Artifact) []*Artifact {
 //     ID) and [SnapshotReader.GetLatestSnapshot] (by session ID) for Dev UI
 //     and non-Go clients. Local Go callers use the store reference directly.
 //
-//   - The agent's name under [api.ActionTypeAgentAbort] — abortSnapshot,
+//   - The agent's name under [api.ActionTypeAgentAbort] — abort,
 //     created only when the store also implements [SnapshotSubscriber], so the
 //     runtime can react to the abort it writes via SaveSnapshot.
 //
@@ -193,7 +194,7 @@ func cloneArtifacts(arts []*Artifact) []*Artifact {
 //
 // The [Agent] retains the returned actions (an absent one is nil) and
 // registers them alongside its run action; see [Agent.Register],
-// [Agent.GetSnapshotAction], and [Agent.AbortSnapshotAction].
+// [Agent.GetSnapshotAction], and [Agent.AbortAction].
 // readSnapshot resolves a snapshot by ID, or by the session's latest when
 // snapshotID is empty, and returns a normalized copy shaped for a client:
 // the documented defaults are applied (empty status means completed, zero
@@ -263,8 +264,13 @@ func readSnapshot[State any](
 	// Clone before transforming: the [StateTransform] contract promises a fresh
 	// deep copy the transform may mutate in place, and the store's row may share
 	// memory with its internal copy, which neither the transform nor the SessionID
-	// re-stamp below may write into.
-	resp.State = applyTransform(ctx, transform, jsonClone(snap.State))
+	// re-stamp below may write into. A transform error fails the read closed,
+	// with the transform's own status (e.g. PERMISSION_DENIED) preserved.
+	transformed, err := applyTransform(ctx, transform, jsonClone(snap.State))
+	if err != nil {
+		return nil, err
+	}
+	resp.State = transformed
 	if resp.State != nil {
 		// SessionID is framework identity, not user data: re-stamp it from the
 		// row after the transform so outbound state always agrees with the
@@ -278,7 +284,7 @@ func newSnapshotActions[State any](
 	agentName string,
 	store SessionStore[State],
 	transform StateTransform[State],
-) (getSnapshot, abortSnapshot api.Action) {
+) (getSnapshot, abort api.Action) {
 	if store == nil {
 		return nil, nil
 	}
@@ -296,23 +302,23 @@ func newSnapshotActions[State any](
 		// abort lifecycle is unsupported; don't surface the action.
 		return getSnapshotAction, nil
 	}
-	abortSnapshotAction := core.NewAction(agentName, api.ActionTypeAgentAbort, nil, nil,
-		func(ctx context.Context, req *AbortSnapshotRequest) (*AbortSnapshotResponse, error) {
+	abortAction := core.NewAction(agentName, api.ActionTypeAgentAbort, nil, nil,
+		func(ctx context.Context, req *AgentAbortRequest) (*AgentAbortResponse, error) {
 			if req == nil || req.SnapshotID == "" {
-				return nil, core.NewError(core.INVALID_ARGUMENT, "abortSnapshot: snapshotId is required")
+				return nil, core.NewError(core.INVALID_ARGUMENT, "abort: snapshotId is required")
 			}
 			// Aborting is an ordinary SaveSnapshot that flips a pending row to
 			// aborted; the store has no dedicated abort method.
 			status, err := abortPendingSnapshot(ctx, store, req.SnapshotID)
 			if err != nil {
-				return nil, core.NewError(core.INTERNAL, "abortSnapshot: %v", err)
+				return nil, core.NewError(core.INTERNAL, "abort: %v", err)
 			}
 			if status == "" {
-				return nil, core.NewError(core.NOT_FOUND, "abortSnapshot: snapshot %q not found", req.SnapshotID)
+				return nil, core.NewError(core.NOT_FOUND, "abort: snapshot %q not found", req.SnapshotID)
 			}
-			return &AbortSnapshotResponse{Status: status}, nil
+			return &AgentAbortResponse{SnapshotID: req.SnapshotID, Status: status}, nil
 		})
-	return getSnapshotAction, abortSnapshotAction
+	return getSnapshotAction, abortAction
 }
 
 // --- Session ---

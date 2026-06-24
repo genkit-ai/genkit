@@ -93,7 +93,7 @@ func AllAgentRoutes(g *genkit.Genkit) []Route {
 //
 //   - POST /agents/{name}                the agent, one turn per request
 //   - POST /agents/{name}/getSnapshot    getSnapshot (store-backed agents)
-//   - POST /agents/{name}/abortSnapshot  abortSnapshot (abortable stores)
+//   - POST /agents/{name}/abort          abort (abortable stores)
 //
 // Each takes the {"data": ...} request envelope and returns {"result":
 // ...}; the snapshot ID rides in the body ({"data": {"snapshotId": ...}}),
@@ -101,7 +101,7 @@ func AllAgentRoutes(g *genkit.Genkit) []Route {
 // capabilities the agent lacks; a client-managed agent contributes only
 // its turn route.
 func AgentRoutes[State any](a *aix.Agent[State]) []Route {
-	return buildAgentRoutes(a.Name(), a, a.GetSnapshotAction(), a.AbortSnapshotAction())
+	return buildAgentRoutes(a.Name(), a, a.GetSnapshotAction(), a.AbortAction())
 }
 
 // buildAgentRoutes builds an agent's route set from its run action and the
@@ -120,7 +120,7 @@ func buildAgentRoutes(name string, run, snapshot, abort api.Action) []Route {
 	if abort != nil {
 		routes = append(routes, Route{
 			Method: http.MethodPost,
-			Path:   agentBasePath + "/" + name + "/abortSnapshot",
+			Path:   agentBasePath + "/" + name + "/abort",
 			Action: abort,
 		})
 	}

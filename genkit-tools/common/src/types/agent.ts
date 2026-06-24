@@ -45,7 +45,7 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
  *   terminal status.
  * - `completed`: the snapshot captures a settled state.
  * - `aborted`: the snapshot's invocation was aborted via the
- *   `abortSnapshot` companion action while detached.
+ *   `abort` companion action while detached.
  * - `failed`: the invocation terminated with an error. The snapshot's `error`
  *   field describes the failure and resume is rejected with that same error.
  * - `expired`: a `pending` snapshot whose detached background worker is
@@ -79,7 +79,7 @@ export type SnapshotStatus = z.infer<typeof SnapshotStatusSchema>;
  * equivalent (they never arise from forwarding a model finish reason):
  *
  * - `aborted`: the turn or invocation was aborted (e.g. a detached
- *   invocation aborted via the `abortSnapshot` companion action).
+ *   invocation aborted via the `abort` companion action).
  * - `detached`: the invocation was moved to the background (the client
  *   detached). The returned output reports `detached`; the persisted
  *   snapshot is later finalized with how the background work actually ended.
@@ -131,7 +131,7 @@ export const AgentInputSchema = z.object({
    * processing any already-buffered inputs in a background context.
    * Streamed chunks emitted after detach are not forwarded over the wire;
    * only the final cumulative state is captured when the snapshot is
-   * finalized (or the snapshot is aborted via `abortSnapshot`).
+   * finalized (or the snapshot is aborted via `abort`).
    */
   detach: z.boolean().optional(),
   /** User's input message for this turn. */
@@ -433,18 +433,20 @@ export const GetSnapshotRequestSchema = z.object({
 export type GetSnapshotRequest = z.infer<typeof GetSnapshotRequestSchema>;
 
 /**
- * Zod schema for the input of the `abortSnapshot` companion action.
+ * Zod schema for the input of the `abort` companion action.
  */
-export const AbortSnapshotRequestSchema = z.object({
+export const AgentAbortRequestSchema = z.object({
   /** Identifies the snapshot whose invocation should be aborted. */
   snapshotId: z.string(),
 });
-export type AbortSnapshotRequest = z.infer<typeof AbortSnapshotRequestSchema>;
+export type AgentAbortRequest = z.infer<typeof AgentAbortRequestSchema>;
 
 /**
- * Zod schema for the output of the `abortSnapshot` companion action.
+ * Zod schema for the output of the `abort` companion action.
  */
-export const AbortSnapshotResponseSchema = z.object({
+export const AgentAbortResponseSchema = z.object({
+  /** Identifies the snapshot the abort attempt targeted. */
+  snapshotId: z.string(),
   /**
    * Snapshot's status after the abort attempt. For a pending snapshot
    * this is `aborted`. For an already-terminal snapshot this is the
@@ -452,7 +454,7 @@ export const AbortSnapshotResponseSchema = z.object({
    */
   status: SnapshotStatusSchema.optional(),
 });
-export type AbortSnapshotResponse = z.infer<typeof AbortSnapshotResponseSchema>;
+export type AgentAbortResponse = z.infer<typeof AgentAbortResponseSchema>;
 
 /**
  * Who owns session state for an agent.

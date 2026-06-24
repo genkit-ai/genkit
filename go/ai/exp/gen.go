@@ -24,14 +24,16 @@ import (
 	"time"
 )
 
-// AbortSnapshotRequest is the input for the abortSnapshot companion action.
-type AbortSnapshotRequest struct {
+// AgentAbortRequest is the input for the abort companion action.
+type AgentAbortRequest struct {
 	// SnapshotID identifies the snapshot whose invocation should be aborted.
 	SnapshotID string `json:"snapshotId"`
 }
 
-// AbortSnapshotResponse is the output of the abortSnapshot companion action.
-type AbortSnapshotResponse struct {
+// AgentAbortResponse is the output of the abort companion action.
+type AgentAbortResponse struct {
+	// SnapshotID identifies the snapshot the abort attempt targeted.
+	SnapshotID string `json:"snapshotId"`
 	// Status is the snapshot's status after the abort attempt. For a
 	// pending snapshot this is [SnapshotStatusAborted]. For an
 	// already-terminal snapshot this is the existing terminal status (the
@@ -69,7 +71,7 @@ const (
 	// AgentFinishReasonUnknown indicates the reason was unspecified.
 	AgentFinishReasonUnknown AgentFinishReason = "unknown"
 	// AgentFinishReasonAborted indicates the turn or invocation was aborted
-	// (e.g. a detached invocation aborted via the abortSnapshot companion action).
+	// (e.g. a detached invocation aborted via the abort companion action).
 	AgentFinishReasonAborted AgentFinishReason = "aborted"
 	// AgentFinishReasonDetached indicates the invocation was moved to the
 	// background because the client detached. The returned [AgentOutput] reports
@@ -392,7 +394,7 @@ type SessionState[State any] struct {
 // ID immediately. Background processing then either rewrites that snapshot
 // with the cumulative final state and [SnapshotStatusCompleted] /
 // [SnapshotStatusFailed] when the agent finishes, or with
-// [SnapshotStatusAborted] if the client called abortSnapshot in the
+// [SnapshotStatusAborted] if the client called abort in the
 // meantime.
 //
 // [SnapshotStatusExpired] is never persisted: it is computed on read for a
@@ -408,7 +410,7 @@ const (
 	// SnapshotStatusCompleted indicates the snapshot captures a settled state.
 	SnapshotStatusCompleted SnapshotStatus = "completed"
 	// SnapshotStatusAborted indicates the snapshot's invocation was aborted
-	// while detached (e.g. via the abortSnapshot companion action).
+	// while detached (e.g. via the abort companion action).
 	SnapshotStatusAborted SnapshotStatus = "aborted"
 	// SnapshotStatusFailed indicates the invocation terminated with an error.
 	// The snapshot's Error field describes the failure and resume is
