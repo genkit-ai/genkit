@@ -32,7 +32,7 @@ from pydantic import BaseModel
 
 from genkit._ai._agents._session import SessionStore, SnapshotAborter
 from genkit._ai._json_patch import apply_json_patch, diff_json
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, StatusCodes
 from genkit._core._typing import (
     AgentFinishReason,
     JsonPatchOperation,
@@ -155,7 +155,7 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
                 return await self._reconstruct_snapshot(record)
 
             raise GenkitError(
-                status='FAILED_PRECONDITION',
+                status=StatusCodes.FAILED_PRECONDITION,
                 message=(
                     f"Session '{session_id}' has branching snapshots ({len(leaves)} "
                     'leaves), so there is no single latest snapshot. Resume by '

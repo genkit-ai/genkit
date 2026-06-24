@@ -169,7 +169,7 @@ class GenkitError(Exception):
         self,
         *,
         message: str,
-        status: StatusName | None = None,
+        status: StatusName | StatusCodes | None = None,
         cause: Exception | None = None,
         details: Any = None,  # noqa: ANN401
         trace_id: str | None = None,
@@ -179,7 +179,7 @@ class GenkitError(Exception):
 
         Args:
             message: The error message.
-            status: The status name for this error.
+            status: The status name or StatusCodes enum for this error.
             cause: The underlying exception that caused this error.
             details: Optional detail information.
             trace_id: A unique identifier for tracing the action execution.
@@ -187,7 +187,10 @@ class GenkitError(Exception):
         """
         temp_status: StatusName
         if status:
-            temp_status = status
+            if isinstance(status, StatusCodes):
+                temp_status = status.name
+            else:
+                temp_status = status
         elif isinstance(cause, GenkitError):
             temp_status = cause.status
         else:

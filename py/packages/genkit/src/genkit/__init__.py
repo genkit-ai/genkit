@@ -31,7 +31,7 @@ from genkit._ai._tools import (
     tool,
 )
 from genkit._core._action import Action, ActionRunContext, StreamResponse
-from genkit._core._error import GenkitError, PublicError
+from genkit._core._error import GenkitError, PublicError, StatusCodes
 from genkit._core._model import Document
 from genkit._core._plugin import Plugin
 from genkit._core._plugins import extend_plugin_namespace
@@ -101,6 +101,7 @@ __all__ = [
     # Errors
     'GenkitError',
     'PublicError',
+    'StatusCodes',
     # Tools
     'Interrupt',
     'Tool',

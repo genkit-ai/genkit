@@ -58,7 +58,7 @@ from genkit._core._action import (
     QueueSentinel,
     get_current_context,
 )
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, StatusCodes
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import GenerateActionOptions, Message, ModelConfig, ModelResponse
 from genkit._core._registry import Registry
@@ -363,13 +363,13 @@ async def load_session(
 
     if init.snapshot_id and init.session_id:
         raise GenkitError(
-            status='INVALID_ARGUMENT',
+            status=StatusCodes.INVALID_ARGUMENT,
             message=(f"Cannot send both 'snapshot_id' and 'session_id' to agent '{name}'. Provide exactly one."),
         )
     if (init.snapshot_id or init.session_id) and store is None:
         field = 'snapshot_id' if init.snapshot_id else 'session_id'
         raise GenkitError(
-            status='FAILED_PRECONDITION',
+            status=StatusCodes.FAILED_PRECONDITION,
             message=(
                 f"Cannot use '{field}' with agent '{name}': this agent has no "
                 "store configured (client-managed state). Send 'state' instead."
@@ -377,7 +377,7 @@ async def load_session(
         )
     if init.state is not None and store is not None:
         raise GenkitError(
-            status='FAILED_PRECONDITION',
+            status=StatusCodes.FAILED_PRECONDITION,
             message=(
                 f"Cannot send 'state' to agent '{name}': this agent uses a "
                 "server-managed store. Send 'snapshot_id' or 'session_id' instead."
@@ -388,7 +388,7 @@ async def load_session(
         snap = await store.get_snapshot(snapshot_id=init.snapshot_id)
         if snap is None:
             raise GenkitError(
-                status='NOT_FOUND',
+                status=StatusCodes.NOT_FOUND,
                 message=f'Snapshot {init.snapshot_id!r} not found',
             )
         return Session(initial_state=snap.state), snap

@@ -27,7 +27,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, StatusCodes
 from genkit._core._typing import (
     Artifact,
     MessageData,
@@ -135,7 +135,7 @@ def select_leaf_snapshot(
 
     if not leaves:
         raise GenkitError(
-            status='FAILED_PRECONDITION',
+            status=StatusCodes.FAILED_PRECONDITION,
             message=(
                 f"Session '{session_id}' has no leaf snapshot (corrupt or cyclic "
                 'history). Resume by snapshot_id instead.'
@@ -143,7 +143,7 @@ def select_leaf_snapshot(
         )
 
     raise GenkitError(
-        status='FAILED_PRECONDITION',
+        status=StatusCodes.FAILED_PRECONDITION,
         message=(
             f"Session '{session_id}' has branching snapshots ({len(leaves)} "
             'leaves), so there is no single latest snapshot. Resume by '
