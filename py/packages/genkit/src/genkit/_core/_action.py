@@ -692,6 +692,14 @@ class Action(Generic[InputT, OutputT, ChunkT]):
 # =============================================================================
 
 
+# Note on Types and Variance:
+# 1. Output types (StreamOutT_co, BidiOutT_co) are covariant (read-only outputs)
+#    to allow natural subclass polymorphism on connection outputs.
+# 2. Constructor takes CloseableQueue[Any] because mutable queues are invariant
+#    in Python; parameterizing them directly with covariant type variables
+#    violates type theory and raises variance checking errors (e.g. Pyright).
+# 3. Interior type erasure (using Any) is used internally, while 100% type
+#    safety is publicly enforced on the send() and receive() methods.
 StreamInT = TypeVar('StreamInT')
 StreamOutT_co = TypeVar('StreamOutT_co', covariant=True)
 BidiOutT_co = TypeVar('BidiOutT_co', covariant=True)
@@ -704,14 +712,9 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
     result Future that resolves when the server fn completes.
     """
 
-    # Note on Types and Variance:
-    # 1. Output types (StreamOutT_co, BidiOutT_co) are covariant (read-only outputs)
-    #    to allow natural subclass polymorphism on connection outputs.
-    # 2. Constructor takes CloseableQueue[Any] because mutable queues are invariant
-    #    in Python; parameterizing them directly with covariant type variables
-    #    violates type theory and raises variance checking errors (e.g. Pyright).
-    # 3. Interior type erasure (using Any) is used internally, while 100% type
-    #    safety is publicly enforced on the send() and receive() methods.
+    # Covariant output types allow subclass polymorphism (e.g., a connection producing Dogs
+    # can be assigned to one expecting Animals). The constructor takes CloseableQueue[Any]
+    # because mutable queues are invariant and would otherwise trigger type checker errors.
     def __init__(
         self,
         in_queue: CloseableQueue[Any],
