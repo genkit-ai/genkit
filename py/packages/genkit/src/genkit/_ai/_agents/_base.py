@@ -50,14 +50,13 @@ from genkit._ai._prompt import (
 )
 from genkit._ai._tools import Tool
 from genkit._core._action import (
-    QUEUE_SENTINEL,
     Action,
     ActionKind,
     ActionRunContext,
     BidiAction,
-    QueueSentinel,
     get_current_context,
 )
+from genkit._core._channel import CloseableQueue, QueueShutDown
 from genkit._core._error import GenkitError, StatusCodes
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import GenerateActionOptions, Message, ModelConfig, ModelResponse
@@ -98,10 +97,10 @@ OutT = TypeVar('OutT')
 StreamOutT = TypeVar('StreamOutT')
 StreamInT = TypeVar('StreamInT')
 
-# Bidi/intake queue items include a sentinel marking stream end.
-BidiInQueueItem = AgentInput | QueueSentinel
-StreamQueueItem = AgentStreamChunk | QueueSentinel
-IntakeQueueItem = AgentInput | QueueSentinel
+# Bidi/intake queue items carry pure payloads; closure is signaled via exceptions.
+BidiInQueueItem = AgentInput
+StreamQueueItem = AgentStreamChunk
+IntakeQueueItem = AgentInput
 
 
 class ToolRequestRecord(TypedDict, total=False):
@@ -429,7 +428,7 @@ class AgentRuntime:
         store: SessionStore | None,
         snapshot_callback: SnapshotCallback | None,
         client_transform: ClientTransform | None,
-        out_queue: asyncio.Queue[StreamQueueItem],
+        out_queue: CloseableQueue[StreamQueueItem],
     ) -> None:
         self._name = name
         self._session = session
@@ -446,7 +445,7 @@ class AgentRuntime:
 
         # Separate intake queue: runtime controls its lifecycle,
         # BidiAction's in_queue is forwarded here by run().
-        self._intake: asyncio.Queue[IntakeQueueItem] = asyncio.Queue(maxsize=1)
+        self._intake = CloseableQueue(maxsize=1)
 
         self._sess = SessionRunner(
             session,
@@ -692,7 +691,7 @@ class AgentRuntime:
         except Exception:  # noqa: BLE001, S110
             pass  # best-effort; log in production
 
-    async def run(self, fn: AgentFn, in_queue: asyncio.Queue[BidiInQueueItem]) -> AgentOutput:
+    async def run(self, fn: AgentFn, in_queue: CloseableQueue[BidiInQueueItem]) -> AgentOutput:
         """Drive fn to completion, return AgentOutput.
 
         Two terminal paths (v1):
@@ -711,31 +710,38 @@ class AgentRuntime:
         # Forward task: BidiAction in_queue → runtime intake.
         # Detects detach=True and signals via detach_future.
         async def _forward() -> None:
-            while True:
-                item = await in_queue.get()
-                if isinstance(item, QueueSentinel):
-                    # Clean Close (Half-Close). Let the active turn finish!
-                    await self._intake.put(QUEUE_SENTINEL)
-                    return
-                if getattr(item, 'detach', False):
-                    if not detach_future.done():
-                        detach_future.set_result(None)
+            is_detached = False
+            try:
+                async for item in in_queue:
+                    if getattr(item, 'detach', False):
+                        is_detached = True
+                        if not detach_future.done():
+                            detach_future.set_result(None)
 
-                    val = item
+                        val = item
 
-                    async def _finish_detach_input(
-                        payload: AgentInput | None = None,
-                        *,
-                        bound_item: AgentInput = val,
-                    ) -> None:
-                        p = payload if payload is not None else bound_item
-                        if _agent_input_has_payload(p):
-                            await self._intake.put(p)
-                        await self._intake.put(QUEUE_SENTINEL)
+                        async def _finish_detach_input(
+                            payload: AgentInput | None = None,
+                            *,
+                            bound_item: AgentInput = val,
+                        ) -> None:
+                            p = payload if payload is not None else bound_item
+                            if _agent_input_has_payload(p):
+                                try:
+                                    await self._intake.put(p)
+                                except QueueShutDown:
+                                    pass
+                            self._intake.close()
 
-                    asyncio.create_task(_finish_detach_input())
-                    return
-                await self._intake.put(item)
+                        asyncio.create_task(_finish_detach_input())
+                        return
+                    await self._intake.put(item)
+            finally:
+                # Synchronously close self._intake when in_queue terminates normally,
+                # ensuring the SessionRunner's active turn loop exits cleanly.
+                # If we are detaching, the background task will close it after writing the payload.
+                if not is_detached:
+                    self._intake.close()
 
         forward_task = asyncio.create_task(_forward())
 
@@ -752,10 +758,9 @@ class AgentRuntime:
             except Exception as e:  # noqa: BLE001
                 err_holder.append(e)
             finally:
-                try:
-                    self._intake.put_nowait(QUEUE_SENTINEL)
-                except asyncio.QueueFull:
-                    pass
+                # Synchronously close self._intake to signal turn completion,
+                # letting SessionRunner stop waiting for more inputs.
+                self._intake.close()
 
         fn_task = asyncio.create_task(_run_fn())
 
@@ -766,7 +771,7 @@ class AgentRuntime:
         )
 
         # --- Detach path ---
-        if detach_future.done() and fn_task not in done:
+        if detach_future.done():
             if self._store is None:
                 # Detach without a store is a config error; signal abort and raise.
                 abort_signal.set()
@@ -864,7 +869,7 @@ class SessionRunner(Generic[StateT]):
     def __init__(
         self,
         session: Session[StateT],
-        intake: asyncio.Queue[IntakeQueueItem],
+        intake: CloseableQueue[IntakeQueueItem],
         on_begin_turn: Callable[[], Awaitable[None]] | None = None,
         on_end_turn: Callable[[AgentFinishReason | None], Awaitable[None]] | None = None,
     ) -> None:
@@ -899,11 +904,7 @@ class SessionRunner(Generic[StateT]):
         ``finish_reason=failed`` and ``error`` on ``AgentOutput``, and the
         turn loop stops.
         """
-        while True:
-            inp = await self._intake.get()
-            if isinstance(inp, QueueSentinel):
-                return
-
+        async for inp in self._intake:
             # Auto-add inbound messages to session history
             if inp.message:
                 await self._session.add_messages(inp.message)
@@ -1060,8 +1061,8 @@ def define_custom_agent(
 
     async def bidi_fn(
         init: AgentInit,
-        in_queue: asyncio.Queue[BidiInQueueItem],
-        out_queue: asyncio.Queue[StreamQueueItem],
+        in_queue: CloseableQueue[BidiInQueueItem],
+        out_queue: CloseableQueue[StreamQueueItem],
     ) -> AgentOutput:
         session, parent = await load_session(init, store, agent_name=name)
         state = await session.state()

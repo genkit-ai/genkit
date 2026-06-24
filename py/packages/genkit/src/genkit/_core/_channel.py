@@ -115,3 +115,83 @@ def run_loop(coro: Coroutine[object, object, T], *, debug: bool | None = None) -
     except ImportError as e:
         logger.debug('Using asyncio (install uvloop for better performance)', error=e)
         return asyncio.run(coro, debug=debug)
+
+
+class QueueShutDown(Exception):  # noqa: N818
+    """Exception raised when attempting to interact with a closed CloseableQueue."""
+
+    pass
+
+
+class CloseableQueue(asyncio.Queue[T]):
+    """An asyncio.Queue subclass that supports native, synchronous close() semantics.
+
+    Compatible with Python 3.10 and 3.11, emulating the Queue.shutdown() feature
+    introduced in Python 3.12. Once closed, put() raises QueueShutDown, and get()
+    raises QueueShutDown once the queue is completely drained. Supports native async iteration.
+    """
+
+    def __init__(self, maxsize: int = 0) -> None:
+        super().__init__(maxsize=maxsize)
+        self._closed = False
+
+    def close(self) -> None:
+        """Synchronously close the queue. Non-blocking and thread-safe on the event loop.
+
+        This method transitions the queue to a closed state. It immediately wakes up
+        all pending getters and putters, raising a QueueShutDown exception inside them.
+        This provides a purely synchronous, non-blocking way to close the queue,
+        which is mathematically guaranteed to prevent deadlocks during teardown.
+        """
+        if self._closed:
+            return
+        self._closed = True
+
+        # Wake up all pending readers/getters with QueueShutDown exception
+        getters = getattr(self, '_getters', None)
+        if getters:
+            while getters:
+                getter = getters.popleft()
+                if not getter.done():
+                    getter.set_exception(QueueShutDown())
+
+        # Wake up all pending writers/putters with QueueShutDown exception
+        putters = getattr(self, '_putters', None)
+        if putters:
+            while putters:
+                putter = putters.popleft()
+                if not putter.done():
+                    putter.set_exception(QueueShutDown())
+
+    def is_closed(self) -> bool:
+        return self._closed
+
+    async def put(self, item: T) -> None:
+        if self._closed:
+            raise QueueShutDown('Queue is closed')
+        await super().put(item)
+
+    def put_nowait(self, item: T) -> None:
+        if self._closed:
+            raise QueueShutDown('Queue is closed')
+        super().put_nowait(item)
+
+    async def get(self) -> T:
+        # If the queue is closed and empty, raise QueueShutDown to signal end of stream
+        if self._closed and self.empty():
+            raise QueueShutDown('Queue is closed and empty')
+        return await super().get()
+
+    def get_nowait(self) -> T:
+        if self._closed and self.empty():
+            raise QueueShutDown('Queue is closed and empty')
+        return super().get_nowait()
+
+    def __aiter__(self) -> AsyncIterator[T]:
+        return self
+
+    async def __anext__(self) -> T:
+        try:
+            return await self.get()
+        except QueueShutDown:
+            raise StopAsyncIteration from None

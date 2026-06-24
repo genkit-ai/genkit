@@ -24,7 +24,8 @@ from genkit._ai._aio import Genkit
 from genkit._ai._generate import generate_action
 from genkit._ai._testing import define_programmable_model
 from genkit._ai._tools import ToolRunContext
-from genkit._core._action import _SENTINEL as _BIDI_SENTINEL, ActionRunContext
+from genkit._core._action import ActionRunContext
+from genkit._core._channel import CloseableQueue
 from genkit._core._error import GenkitError
 from genkit._core._model import GenerateActionOptions, Message, ModelResponse
 from genkit._core._typing import (
@@ -60,8 +61,8 @@ async def _wait_for_snapshot_status(
     raise AssertionError(f'snapshot {snapshot_id!r} never reached status {status!r}')
 
 
-def _runtime(session: Session, store: InMemorySessionStore | None) -> tuple[AgentRuntime, asyncio.Queue]:
-    out_queue: asyncio.Queue = asyncio.Queue()
+def _runtime(session: Session, store: InMemorySessionStore | None) -> tuple[AgentRuntime, CloseableQueue]:
+    out_queue = CloseableQueue()
     rt = AgentRuntime(
         name='detachAudit',
         session=session,
@@ -102,14 +103,14 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
         await sess.run(handle_turn)
         return await sess.result()
 
-    in_queue: asyncio.Queue = asyncio.Queue()
+    in_queue = CloseableQueue()
     await in_queue.put(
         AgentInput(
             message=MessageData(role=Role.USER, content=[Part(TextPart(text='appended message'))]),
             detach=True,
         )
     )
-    await in_queue.put(_BIDI_SENTINEL)
+    in_queue.close()
 
     out = await rt.run(agent_fn, in_queue)
 
@@ -153,10 +154,10 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
         await sess.run(handle_turn)
         return await sess.result()
 
-    in_queue: asyncio.Queue = asyncio.Queue()
+    in_queue = CloseableQueue()
     await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='slow'))])))
     await in_queue.put(AgentInput(detach=True))
-    await in_queue.put(_BIDI_SENTINEL)
+    in_queue.close()
 
     out = await rt.run(agent_fn, in_queue)
     assert out.finish_reason == AgentFinishReason.DETACHED
@@ -199,10 +200,10 @@ async def test_detach_without_store_raises() -> None:
         await sess.run(handle_turn)
         return await sess.result()
 
-    in_queue: asyncio.Queue = asyncio.Queue()
+    in_queue = CloseableQueue()
     await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='x'))])))
     await in_queue.put(AgentInput(detach=True))
-    await in_queue.put(_BIDI_SENTINEL)
+    in_queue.close()
 
     with pytest.raises(ValueError, match='detach requires a session store'):
         await rt.run(agent_fn, in_queue)
@@ -228,10 +229,10 @@ async def test_abort_snapshot_stops_detached_work() -> None:
         await sess.run(handle_turn)
         return await sess.result()
 
-    in_queue: asyncio.Queue = asyncio.Queue()
+    in_queue = CloseableQueue()
     await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='long'))])))
     await in_queue.put(AgentInput(detach=True))
-    await in_queue.put(_BIDI_SENTINEL)
+    in_queue.close()
 
     out = await rt.run(agent_fn, in_queue)
     assert out.snapshot_id is not None

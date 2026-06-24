@@ -36,6 +36,7 @@ from genkit._core._error import GenkitError
 from genkit._core._typing import (
     AgentFinishReason,
     JsonPatchOperation,
+    RuntimeError as GenkitRuntimeError,
     SessionSnapshot,
     SessionState,
     SnapshotStatus,
@@ -56,7 +57,7 @@ class TurnRecord(BaseModel):
     status: SnapshotStatus
     created_at: str
     finish_reason: str | None = None
-    error: dict[str, Any] | None = None
+    error: GenkitRuntimeError | None = None
 
 
 class LinearSessionStore(SessionStore, SnapshotAborter):
