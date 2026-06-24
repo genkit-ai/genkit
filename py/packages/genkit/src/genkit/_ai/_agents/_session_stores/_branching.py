@@ -130,7 +130,7 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
     ) -> SessionSnapshot | None:
         if bool(snapshot_id) == bool(session_id):
             raise GenkitError(
-                status='INVALID_ARGUMENT',
+                status=StatusCodes.INVALID_ARGUMENT,
                 message=(
                     "get_snapshot requires exactly one of 'snapshot_id' or "
                     f"'session_id' (got {'snapshot_id' if snapshot_id else 'neither'}"

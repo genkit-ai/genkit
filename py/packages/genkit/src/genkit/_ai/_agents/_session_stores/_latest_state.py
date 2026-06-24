@@ -30,7 +30,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 from genkit._ai._agents._session import SessionStore, SnapshotAborter
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, StatusCodes
 from genkit._core._typing import SessionSnapshot, SnapshotStatus
 
 StateT = TypeVar('StateT')
@@ -79,7 +79,7 @@ class LatestStateStore(SessionStore, SnapshotAborter):
     ) -> SessionSnapshot | None:
         if bool(snapshot_id) == bool(session_id):
             raise GenkitError(
-                status='INVALID_ARGUMENT',
+                status=StatusCodes.INVALID_ARGUMENT,
                 message=(
                     "get_snapshot requires exactly one of 'snapshot_id' or "
                     f"'session_id' (got {'snapshot_id' if snapshot_id else 'neither'}"

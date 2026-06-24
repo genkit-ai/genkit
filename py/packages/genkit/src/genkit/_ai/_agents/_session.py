@@ -165,9 +165,9 @@ class InMemorySessionStore:
     """
 
     def __init__(self) -> None:
-        self._lock = asyncio.Lock()
-        self._snapshots: dict[str, SessionSnapshot] = {}
-        self._subs: dict[str, list[asyncio.Queue[SnapshotStatus | None]]] = {}
+        self.lock = asyncio.Lock()
+        self.snapshots: dict[str, SessionSnapshot] = {}
+        self.subs: dict[str, list[asyncio.Queue[SnapshotStatus | None]]] = {}
 
     async def get_snapshot(
         self,
@@ -177,7 +177,7 @@ class InMemorySessionStore:
     ) -> SessionSnapshot | None:
         if bool(snapshot_id) == bool(session_id):
             raise GenkitError(
-                status='INVALID_ARGUMENT',
+                status=StatusCodes.INVALID_ARGUMENT,
                 message=(
                     "get_snapshot requires exactly one of 'snapshot_id' or "
                     f"'session_id' (got {'snapshot_id' if snapshot_id else 'neither'}"
@@ -185,15 +185,15 @@ class InMemorySessionStore:
                 ),
             )
 
-        async with self._lock:
+        async with self.lock:
             if snapshot_id is not None:
-                snap = self._snapshots.get(snapshot_id)
+                snap = self.snapshots.get(snapshot_id)
                 return snap.model_copy(deep=True) if snap is not None else None
 
             assert session_id is not None
             owned = [
                 snap
-                for snap in self._snapshots.values()
+                for snap in self.snapshots.values()
                 if snap.state is not None and snap.state.session_id == session_id
             ]
             leaf = select_leaf_snapshot(owned, session_id)
@@ -201,10 +201,10 @@ class InMemorySessionStore:
 
     async def latest_snapshot(self) -> SessionSnapshot | None:
         """Most-recent snapshot by created_at. Not part of SessionStore interface."""
-        async with self._lock:
-            if not self._snapshots:
+        async with self.lock:
+            if not self.snapshots:
                 return None
-            latest = max(self._snapshots.values(), key=lambda s: s.created_at)
+            latest = max(self.snapshots.values(), key=lambda s: s.created_at)
             return latest.model_copy(deep=True)
 
     async def save_snapshot(
@@ -215,9 +215,9 @@ class InMemorySessionStore:
             SessionSnapshot | None,
         ],
     ) -> SessionSnapshot | None:
-        async with self._lock:
+        async with self.lock:
             sid = snapshot_id or str(uuid4())
-            existing = self._snapshots.get(sid)
+            existing = self.snapshots.get(sid)
             existing_copy = existing.model_copy(deep=True) if existing is not None else None
 
             next_snap = fn(existing_copy)
@@ -233,7 +233,7 @@ class InMemorySessionStore:
             if not next_snap.status:
                 next_snap.status = SnapshotStatus.COMPLETED
 
-            self._snapshots[sid] = next_snap.model_copy(deep=True)
+            self.snapshots[sid] = next_snap.model_copy(deep=True)
 
             if existing is None or existing.status != next_snap.status:
                 self.notify_locked(sid, next_snap.status or SnapshotStatus.COMPLETED)
@@ -241,8 +241,8 @@ class InMemorySessionStore:
             return next_snap
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
-        async with self._lock:
-            snap = self._snapshots.get(snapshot_id)
+        async with self.lock:
+            snap = self.snapshots.get(snapshot_id)
             if snap is None:
                 return None
             if snap.status == SnapshotStatus.PENDING:
@@ -252,17 +252,17 @@ class InMemorySessionStore:
 
     async def on_snapshot_status_change(self, snapshot_id: str) -> asyncio.Queue[SnapshotStatus | None]:
         q: asyncio.Queue[SnapshotStatus | None] = asyncio.Queue()
-        async with self._lock:
-            snap = self._snapshots.get(snapshot_id)
+        async with self.lock:
+            snap = self.snapshots.get(snapshot_id)
             if snap is None:
                 await q.put(None)
                 return q
             await q.put(snap.status)
-            self._subs.setdefault(snapshot_id, []).append(q)
+            self.subs.setdefault(snapshot_id, []).append(q)
         return q
 
     def notify_locked(self, snapshot_id: str, status: SnapshotStatus) -> None:
-        for q in self._subs.get(snapshot_id, []):
+        for q in self.subs.get(snapshot_id, []):
             try:
                 q.put_nowait(status)
             except asyncio.QueueFull:
@@ -284,96 +284,96 @@ class Session(Generic[StateT]):
         initial_state: SessionState | None = None,
         store: SessionStore | None = None,
     ) -> None:
-        self._lock = asyncio.Lock()
-        self._state: SessionState = initial_state or SessionState()
-        self._store = store
+        self.lock = asyncio.Lock()
+        self.session_state: SessionState = initial_state or SessionState()
+        self.store = store
         self.version: int = 0
-        self._custom_changed_listeners: list[Callable[[], Awaitable[None]]] = []
-        self._artifact_changed_listeners: list[Callable[[Artifact], Awaitable[None]]] = []
+        self.custom_changed_listeners: list[Callable[[], Awaitable[None]]] = []
+        self.artifact_changed_listeners: list[Callable[[Artifact], Awaitable[None]]] = []
 
     def on_custom_changed(self, listener: Callable[[], Awaitable[None]]) -> None:
         """Register a callback invoked after ``update_custom`` mutates state."""
-        self._custom_changed_listeners.append(listener)
+        self.custom_changed_listeners.append(listener)
 
     def on_artifact_changed(self, listener: Callable[[Artifact], Awaitable[None]]) -> None:
         """Register a callback invoked after ``add_artifacts`` mutates state."""
-        self._artifact_changed_listeners.append(listener)
+        self.artifact_changed_listeners.append(listener)
 
     async def notify_custom_changed(self) -> None:
-        for listener in self._custom_changed_listeners:
+        for listener in self.custom_changed_listeners:
             await listener()
 
     async def notify_artifact_changed(self, artifact: Artifact) -> None:
-        for listener in self._artifact_changed_listeners:
+        for listener in self.artifact_changed_listeners:
             await listener(artifact)
 
     async def state(self) -> SessionState:
         """Deep copy of current state."""
-        async with self._lock:
-            copied = self._state.model_copy(deep=True)
-            if self._state.custom is not None:
-                copied.custom = copy.deepcopy(self._state.custom)
+        async with self.lock:
+            copied = self.session_state.model_copy(deep=True)
+            if self.session_state.custom is not None:
+                copied.custom = copy.deepcopy(self.session_state.custom)
             return copied
 
     async def get_messages(self) -> list[MessageData]:
-        async with self._lock:
-            return list(self._state.messages or [])
+        async with self.lock:
+            return list(self.session_state.messages or [])
 
     async def add_messages(self, *messages: MessageData) -> None:
-        async with self._lock:
-            if self._state.messages is None:
-                self._state.messages = []
-            self._state.messages.extend(messages)
+        async with self.lock:
+            if self.session_state.messages is None:
+                self.session_state.messages = []
+            self.session_state.messages.extend(messages)
             self.version += 1
 
     async def set_messages(self, messages: list[MessageData]) -> None:
-        async with self._lock:
-            self._state.messages = list(messages)
+        async with self.lock:
+            self.session_state.messages = list(messages)
             self.version += 1
 
     async def update_messages(self, fn: Callable[[list[MessageData]], list[MessageData]]) -> None:
-        async with self._lock:
-            self._state.messages = fn(list(self._state.messages or []))
+        async with self.lock:
+            self.session_state.messages = fn(list(self.session_state.messages or []))
             self.version += 1
 
     async def get_custom(self) -> StateT | None:
-        async with self._lock:
-            return cast(StateT | None, self._state.custom)
+        async with self.lock:
+            return cast(StateT | None, self.session_state.custom)
 
     async def update_custom(self, fn: Callable[[StateT | None], StateT]) -> None:
-        async with self._lock:
-            self._state.custom = fn(cast(StateT | None, self._state.custom))
+        async with self.lock:
+            self.session_state.custom = fn(cast(StateT | None, self.session_state.custom))
             self.version += 1
         await self.notify_custom_changed()
 
     async def get_artifacts(self) -> list[Artifact]:
-        async with self._lock:
-            return list(self._state.artifacts or [])
+        async with self.lock:
+            return list(self.session_state.artifacts or [])
 
     async def add_artifacts(self, *artifacts: Artifact) -> None:
         """Append artifacts; replace by name if artifact.name already exists."""
         changed: list[Artifact] = []
-        async with self._lock:
-            if self._state.artifacts is None:
-                self._state.artifacts = []
+        async with self.lock:
+            if self.session_state.artifacts is None:
+                self.session_state.artifacts = []
             for art in artifacts:
                 replaced = False
                 if art.name:
-                    for i, existing in enumerate(self._state.artifacts):
+                    for i, existing in enumerate(self.session_state.artifacts):
                         if existing.name == art.name:
-                            self._state.artifacts[i] = art
+                            self.session_state.artifacts[i] = art
                             replaced = True
                             break
                 if not replaced:
-                    self._state.artifacts.append(art)
+                    self.session_state.artifacts.append(art)
                 changed.append(art)
             self.version += 1
         for art in changed:
             await self.notify_artifact_changed(art)
 
     async def update_artifacts(self, fn: Callable[[list[Artifact]], list[Artifact]]) -> None:
-        async with self._lock:
-            self._state.artifacts = fn(list(self._state.artifacts or []))
+        async with self.lock:
+            self.session_state.artifacts = fn(list(self.session_state.artifacts or []))
             self.version += 1
 
 

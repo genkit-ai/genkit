@@ -536,7 +536,7 @@ class AgentRuntime:
                 parent_id=pending_snap.parent_id or '',
                 status=SnapshotStatus.FAILED if fn_err else SnapshotStatus.COMPLETED,
                 state=state,
-                error=(GenkitRuntimeError(status='INTERNAL', message=str(fn_err)) if fn_err else None),
+                error=(GenkitRuntimeError(status=StatusCodes.INTERNAL, message=str(fn_err)) if fn_err else None),
                 finish_reason=finish_reason,
                 created_at=existing.created_at if existing else now,
             )
