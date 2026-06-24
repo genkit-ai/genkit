@@ -14,160 +14,29 @@
  * limitations under the License.
  */
 
-import { getAsyncContext, z, type ActionContext } from '@genkit-ai/core';
+import { getAsyncContext, type ActionContext } from '@genkit-ai/core';
 
 import { EventEmitter } from '@genkit-ai/core/async';
 import type { Registry } from '@genkit-ai/core/registry';
-import { MessageData, MessageSchema } from './model-types.js';
+import {
+  type Artifact,
+  type SessionSnapshot,
+  type SessionState,
+} from './agent-types.js';
+import { MessageData } from './model-types.js';
 
-import { PartSchema } from './model-types.js';
-
-/**
- * Schema for tracking persistent artifacts generated during a session turn.
- */
-export const ArtifactSchema = z.object({
-  name: z.string().optional(),
-  parts: z.array(PartSchema),
-  metadata: z.record(z.any()).optional(),
-});
-
-/**
- * Artifact generated during a session turn.
- */
-export type Artifact = z.infer<typeof ArtifactSchema>;
-
-/**
- * Reason an agent turn (or whole invocation) finished.
- *
- * The first group mirrors the model-level `FinishReason` so a turn backed by a
- * single `generate` call can forward its reason verbatim. The remaining values
- * are agent-specific outcomes with no `generate`-level equivalent: `aborted`
- * (the turn/invocation was aborted), `detached` (the turn was moved to the
- * background), and `failed` (the turn ended in an error).
- */
-export const AgentFinishReasonSchema = z.enum([
-  // Mirror of generate's FinishReason:
-  'stop',
-  'length',
-  'blocked',
-  'interrupted',
-  'other',
-  'unknown',
-  // Agent-specific additions:
-  'aborted',
-  'detached',
-  'failed',
-]);
-
-/**
- * Reason an agent turn (or whole invocation) finished.
- */
-export type AgentFinishReason = z.infer<typeof AgentFinishReasonSchema>;
-
-/**
- * Schema for session execution state.
- */
-export const SessionStateSchema = z.object({
-  sessionId: z.string().optional(),
-  messages: z.array(MessageSchema).optional(),
-  custom: z.any().optional(),
-  artifacts: z.array(ArtifactSchema).optional(),
-});
-
-/**
- * State persisted for a session across turns.
- */
-export interface SessionState<S = unknown> {
-  sessionId?: string;
-  messages?: MessageData[];
-  custom?: S;
-  artifacts?: Artifact[];
-}
-
-/**
- * Saved snapshot of a session's state at a given event point.
- */
-export interface SessionSnapshot<S = unknown> {
-  snapshotId: string;
-
-  /**
-   * ID of the session this snapshot belongs to. Assigned by the agent
-   * framework when the conversation's first invocation starts and stamped on
-   * every later snapshot in the chain, including across resumed invocations.
-   * Stores preserve it across rewrites; rows written without one (data from
-   * before session IDs existed) belong to no session.
-   */
-  sessionId?: string;
-
-  /**
-   * ID of the previous snapshot in this timeline. Informational lineage (for
-   * debugging and UI history trees); plays no part in resolving a session's
-   * latest snapshot.
-   */
-  parentId?: string;
-  createdAt: string;
-  /** When the snapshot was last written (RFC 3339). Equals `createdAt` until rewritten. */
-  updatedAt?: string;
-
-  /**
-   * Heartbeat timestamp (RFC 3339) refreshed periodically while a detached
-   * (background) turn is in flight. Used to detect a dead background worker:
-   * if a `pending` snapshot's heartbeat goes stale (older than the configured
-   * timeout), reads surface its status as `expired` (the dead process can no
-   * longer persist a terminal status itself).
-   */
-  heartbeatAt?: string;
-  status?: 'pending' | 'completed' | 'failed' | 'aborted' | 'expired';
-
-  /**
-   * Semantic reason the turn/invocation finished (e.g. `interrupted`,
-   * `stop`). Distinct from `status`, which tracks the persistence lifecycle.
-   */
-  finishReason?: AgentFinishReason;
-
-  /**
-   * Structured failure information (RuntimeError shape). `status` is the
-   * canonical error category (e.g. `INTERNAL`, `FAILED_PRECONDITION`).
-   */
-  error?: {
-    status?: string;
-    message: string;
-    details?: any;
-  };
-
-  /**
-   * Conversation state captured at this point. Empty on a pending snapshot
-   * (the live state is not yet committed); populated on terminal snapshots
-   * with the cumulative final state.
-   */
-  state?: SessionState<S>;
-}
-
-/**
- * Zod schema mirroring {@link SessionSnapshot}. Used as the output schema for
- * the `getSnapshot` companion action so the snapshot shape is discoverable in
- * the registry (rather than an opaque `z.any()`).
- */
-export const SessionSnapshotSchema = z.object({
-  snapshotId: z.string(),
-  sessionId: z.string().optional(),
-  parentId: z.string().optional(),
-  createdAt: z.string(),
-  updatedAt: z.string().optional(),
-  heartbeatAt: z.string().optional(),
-  status: z
-    .enum(['pending', 'completed', 'failed', 'aborted', 'expired'])
-    .optional(),
-  finishReason: AgentFinishReasonSchema.optional(),
-  error: z
-    .object({
-      status: z.string().optional(),
-      message: z.string(),
-      details: z.any().optional(),
-    })
-    .optional(),
-  state: SessionStateSchema.optional(),
-});
+// Re-export the shared agent/session wire schemas + types from their canonical
+// home (./agent-types.ts) so existing imports from './session.js' keep working.
+export {
+  AgentFinishReasonSchema,
+  ArtifactSchema,
+  SessionSnapshotSchema,
+  SessionStateSchema,
+  type AgentFinishReason,
+  type Artifact,
+  type SessionSnapshot,
+  type SessionState,
+} from './agent-types.js';
 
 /**
  * Input type for {@link SessionStore.saveSnapshot}.
