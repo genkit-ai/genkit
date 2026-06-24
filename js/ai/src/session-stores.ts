@@ -219,6 +219,31 @@ export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
 const DEFAULT_SNAPSHOT_WATCH_POLL_INTERVAL_MS = 2000;
 
 /**
+ * Validates that a snapshotId is a plain file basename and not a path that
+ * could escape the (per-tenant) prefix directory.
+ *
+ * `snapshotId` can arrive straight off the wire (the abort/getSnapshot actions
+ * accept a bare string), so without this an id like `../../foo` would let a
+ * caller read or write outside the prefix and break per-tenant isolation.
+ */
+function assertSafeSnapshotId(snapshotId: string): void {
+  if (
+    !snapshotId ||
+    snapshotId.includes('/') ||
+    snapshotId.includes('\\') ||
+    snapshotId.includes('\0') ||
+    snapshotId === '.' ||
+    snapshotId === '..' ||
+    path.basename(snapshotId) !== snapshotId
+  ) {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message: `Invalid snapshotId: "${snapshotId}". A snapshotId must be a plain file name (no path separators or "..").`,
+    });
+  }
+}
+
+/**
  * A Node.js file-system backed session snapshot store.
  *
  * Snapshots are stored as flat JSON files keyed by their `snapshotId`, under an
@@ -236,6 +261,17 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
   private snapshotPathPrefix?: (options?: SessionStoreOptions) => string;
   private rejectBranchingSessions: boolean;
   private snapshotWatchPollIntervalMs: number;
+
+  /**
+   * Per-file write locks. The {@link SessionStore} contract (and the
+   * abort-aware mutator that branches on `current.status`) assumes
+   * read-modify-write is atomic, but on the file system a read and the
+   * `writeFile` below it are not. Without a lock two concurrent saves can
+   * read the same `current` and the later write clobbers the earlier one
+   * (e.g. a `completed` write overwriting a concurrent `aborted`). We
+   * serialize saves per resolved file path with a simple promise chain.
+   */
+  private writeLocks = new Map<string, Promise<unknown>>();
 
   /**
    * @param dirPath Directory where snapshot JSON files are stored.
@@ -293,9 +329,53 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
     snapshotId: string,
     options?: SessionStoreOptions
   ): Promise<string> {
+    assertSafeSnapshotId(snapshotId);
     const dir = this.prefixDir(options);
     await this.ensureDir(dir);
-    return path.join(dir, `${snapshotId}.json`);
+    // Defense in depth: even after the basename check, confirm the resolved
+    // path stays inside the prefix directory.
+    const filePath = path.join(dir, `${snapshotId}.json`);
+    const resolvedDir = path.resolve(dir);
+    const resolved = path.resolve(filePath);
+    if (
+      resolved !== path.join(resolvedDir, `${snapshotId}.json`) ||
+      !resolved.startsWith(resolvedDir + path.sep)
+    ) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: `Invalid snapshotId: "${snapshotId}". Resolved path escapes the snapshot directory.`,
+      });
+    }
+    return filePath;
+  }
+
+  /**
+   * Serializes async work per resolved file path so a read-modify-write in
+   * {@link saveSnapshot} is not interleaved with a concurrent one for the same
+   * snapshot (see {@link writeLocks}).
+   */
+  private async withFileLock<T>(
+    filePath: string,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    const prev = this.writeLocks.get(filePath) ?? Promise.resolve();
+    // Wait for any in-flight save of this file, ignoring its result/error so a
+    // prior failure doesn't poison the lock for subsequent callers.
+    const gate = prev.then(
+      () => undefined,
+      () => undefined
+    );
+    this.writeLocks.set(filePath, gate);
+    await gate;
+    try {
+      return await fn();
+    } finally {
+      // If no one chained after us we are the tail; drop the entry to avoid
+      // leaking a map entry per snapshotId.
+      if (this.writeLocks.get(filePath) === gate) {
+        this.writeLocks.delete(filePath);
+      }
+    }
   }
 
   async getSnapshot(
@@ -381,6 +461,24 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
     mutator: SnapshotMutator<S>,
     options?: SessionStoreOptions
   ): Promise<string | null> {
+    // When an ID is supplied the read-modify-write below must be serialized
+    // against concurrent saves of the same snapshot, otherwise a later write
+    // (e.g. `completed`) can clobber an earlier concurrent one (e.g.
+    // `aborted`). New (UUID) snapshots have no contender, so skip the lock.
+    if (snapshotId) {
+      const lockPath = await this.getFilePath(snapshotId, options);
+      return this.withFileLock(lockPath, () =>
+        this.saveSnapshotUnlocked(snapshotId, mutator, options)
+      );
+    }
+    return this.saveSnapshotUnlocked(snapshotId, mutator, options);
+  }
+
+  private async saveSnapshotUnlocked(
+    snapshotId: string | undefined,
+    mutator: SnapshotMutator<S>,
+    options?: SessionStoreOptions
+  ): Promise<string | null> {
     // Read the current snapshot when an ID is provided.
     const current = snapshotId
       ? await this.getSnapshotById(snapshotId, options)
@@ -399,7 +497,7 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
       snapshotId: id,
     };
     const filePath = await this.getFilePath(id, options);
-    await fsp.writeFile(filePath, JSON.stringify(full, null, 2), 'utf-8');
+    await this.atomicWrite(filePath, JSON.stringify(full, null, 2));
 
     if (this.maxPersistedChainLength && this.maxPersistedChainLength > 0) {
       let cur: SessionSnapshot<S> | undefined = full;
@@ -425,6 +523,23 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
     }
 
     return id;
+  }
+
+  /**
+   * Writes `contents` to `filePath` atomically: write to a temp file in the
+   * same directory, then rename over the target. `rename` is atomic on POSIX
+   * and Windows, so a concurrent reader in {@link getSnapshot} never observes a
+   * half-written (torn) file.
+   */
+  private async atomicWrite(filePath: string, contents: string): Promise<void> {
+    const tmpPath = `${filePath}.${process.pid}.${globalThis.crypto.randomUUID()}.tmp`;
+    try {
+      await fsp.writeFile(tmpPath, contents, 'utf-8');
+      await fsp.rename(tmpPath, filePath);
+    } catch (e) {
+      await fsp.unlink(tmpPath).catch(() => {});
+      throw e;
+    }
   }
 
   /**
