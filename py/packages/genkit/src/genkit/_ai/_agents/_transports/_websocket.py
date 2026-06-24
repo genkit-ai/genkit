@@ -141,7 +141,8 @@ class WebSocketAgentTransport(AgentTransport[StateT, StreamT]):
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
         return None
 
-    async def close(self) -> None:
+    async def close(self) -> AgentOutput | None:
         if self._ws is not None:
             await self._ws.close()
             self._ws = None
+        return None

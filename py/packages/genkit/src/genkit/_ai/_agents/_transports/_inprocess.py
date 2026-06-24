@@ -161,7 +161,7 @@ class InProcessTransport:
             return None
         return await self.store.abort_snapshot(snapshot_id)
 
-    async def close(self) -> None:
+    async def close(self) -> AgentOutput | None:
         """Close the underlying bidi connection."""
         if self.conn is not None:
             await self.conn.close()
@@ -170,3 +170,4 @@ class InProcessTransport:
             except Exception:  # noqa: BLE001
                 self.final_output = None
             self.conn = None
+        return self.final_output
