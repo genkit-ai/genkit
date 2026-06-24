@@ -28,7 +28,7 @@ needs to track snapshotId per path.
 
 from __future__ import annotations
 
-from genkit import Genkit, GenkitError
+from genkit import Genkit, GenkitError, SessionErrorType, StatusCodes
 from genkit.agent import InMemoryBranchingSessionStore
 from genkit.plugins.google_genai import GoogleAI
 
@@ -86,11 +86,32 @@ async def main() -> None:
     assert bold_snap.parent_id == root_snap
     print(' Parent validation succeeded: Both branches fork from root_snap!')
 
-    # 5. Verify that looking up by sessionId is now ambiguous
+    # 5. Handle the branching conflict (ambiguousBranch) as a first-class recovery flow
+    print('--- CONFLICT RESOLUTION & RECOVERY ---')
     try:
+        # Looking up by sessionId is ambiguous because the session has branched (two leaf snapshots)
         await store.get_snapshot(session_id=session_id)
     except GenkitError as exc:
-        print(f' sessionId lookup (expected failure): {exc}')
+        # A. Assert that we got the expected precondition failure and structured details
+        assert exc.status == StatusCodes.FAILED_PRECONDITION
+        assert exc.details and exc.details.get('type') == SessionErrorType.AMBIGUOUS_BRANCH
+
+        # B. Extract the conflicting leaves from the structured metadata
+        leaves = exc.details.get('leaves')
+        print(f'⚠️ Detected Ambiguous Branch Conflict for Session: {session_id}')
+        print(f'   Conflicting Leaf Snapshots in DB: {leaves}')
+
+        # C. Programmatically resolve the conflict by choosing one of the branches to resume!
+        # In this case, we choose to resume Path B (the bold branch) by choosing its snapshot ID
+        chosen_leaf = leaves[1] if leaves[1] == bold_snap_id else leaves[0]
+        print(f'✅ Programmatically resolving conflict: Resuming from Bold Branch ({chosen_leaf})...')
+
+        resolved_session = await agent.load_chat(chosen_leaf)
+        async for chunk in resolved_session.send('Add a pricing section to the landing page'):
+            if chunk.text:
+                print(chunk.text, end='', flush=True)
+        print()
+        print(f'🚀 Recovery Flow Completed! New active snapshot: {resolved_session.snapshot_id}')
     else:
         raise AssertionError('Expected sessionId lookup to fail once the session has branched')
 
