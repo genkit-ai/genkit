@@ -405,13 +405,12 @@ describe('remoteAgent', () => {
 
   it('loadChat() loads a snapshot and restores history', async () => {
     mock.onNext((req) => {
-      assert.equal(req.url, '/api/a/state');
+      assert.equal(req.url, '/api/a/getSnapshot');
       assert.deepEqual(req.body.data, { snapshotId: 'snap-9' });
       return jsonResponse({
         result: {
           snapshotId: 'snap-9',
           createdAt: '2026-01-01',
-          event: 'turnEnd',
           state: {
             messages: [{ role: 'user', content: [{ text: 'earlier' }] }],
           },
@@ -427,14 +426,13 @@ describe('remoteAgent', () => {
     assert.equal(chat.messages[0].content[0].text, 'earlier');
   });
 
-  it('getSnapshot reads via the state endpoint', async () => {
+  it('getSnapshot reads via the getSnapshot endpoint', async () => {
     mock.onNext((req) => {
-      assert.equal(req.url, '/api/a/state');
+      assert.equal(req.url, '/api/a/getSnapshot');
       return jsonResponse({
         result: {
           snapshotId: 'snap-1',
           createdAt: '2026',
-          event: 'turnEnd',
           state: {},
           status: 'completed',
         },
@@ -470,13 +468,12 @@ describe('remoteAgent', () => {
     const task = await chat.detach('long job');
     assert.equal(task.snapshotId, 'bg-1');
 
-    // wait() polls /state until terminal.
+    // wait() polls /getSnapshot until terminal.
     mock.onNext(() =>
       jsonResponse({
         result: {
           snapshotId: 'bg-1',
           createdAt: '2026',
-          event: 'turnEnd',
           state: {},
           status: 'completed',
         },
