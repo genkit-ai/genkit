@@ -45,23 +45,43 @@ export async function findProjectRoot(): Promise<string> {
 
   let currentDir = process.cwd();
   while (currentDir !== path.parse(currentDir).root) {
-    try {
-      const checks = projectMarkers.map((file) =>
-        fs
-          .access(path.join(currentDir, file))
-          .then(() => true)
-          .catch(() => false)
-      );
-      const results = await Promise.all(checks);
-      if (results.some((found) => found)) {
-        return currentDir;
-      }
-    } catch {
-      // Continue searching if any errors occur
+    const results = await Promise.all(
+      projectMarkers.map((file) => markerExists(path.join(currentDir, file)))
+    );
+    if (results.some((found) => found)) {
+      return currentDir;
     }
     currentDir = path.dirname(currentDir);
   }
   return process.cwd();
+}
+
+/**
+ * Checks whether a marker file exists. Returns `true` if it exists, `false`
+ * if it definitively does not (ENOENT/ENOTDIR). Transient filesystem errors
+ * (for example EMFILE/ENFILE under heavy parallel load on CI) are retried a
+ * few times so we don't mistakenly conclude that a marker is missing and walk
+ * past the real project root.
+ */
+async function markerExists(filePath: string): Promise<boolean> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.access(filePath);
+      return true;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      // Definitive "not here" answers — no point retrying.
+      if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES') {
+        return false;
+      }
+      // Transient error (e.g. EMFILE/ENFILE/EAGAIN): retry a few times before
+      // giving up and treating the marker as absent.
+      if (attempt >= 5) {
+        return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+    }
+  }
 }
 
 /**

@@ -238,7 +238,7 @@ export class ReflectionServer {
     });
 
     server.post('/api/runAction', async (request, response, next) => {
-      const { key, input, context, telemetryLabels } = request.body;
+      const { key, input, init, context, telemetryLabels } = request.body;
       const { stream } = request.query;
       logger.debug(`Running action \`${key}\` with stream=${stream}...`);
       const abortController = new AbortController();
@@ -285,6 +285,7 @@ export class ReflectionServer {
             };
             const result = await action.run(input, {
               context: context || {},
+              init,
               onChunk: callback,
               telemetryLabels,
               onTraceStart: onTraceStartCallback,
@@ -326,6 +327,7 @@ export class ReflectionServer {
           // Non-streaming: send JSON response
           const result = await action.run(input, {
             context: context || {},
+            init,
             telemetryLabels,
             onTraceStart: onTraceStartCallback,
             abortSignal: abortController.signal,

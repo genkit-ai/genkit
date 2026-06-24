@@ -73,3 +73,29 @@ export function isDevEnv(): boolean {
 export function featureMetadataPrefix(name: string) {
   return `feature:${name}`;
 }
+
+/**
+ * Deep-equality check for plain JSON-serializable values.
+ * Handles objects, arrays, and primitives. Does not handle functions, dates,
+ * or other non-JSON types.
+ */
+export function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return a === b;
+  if (typeof a !== typeof b) return false;
+  if (typeof a !== 'object') return false;
+
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((v, i) => deepEqual(v, b[i]));
+  }
+
+  const aObj = a as Record<string, unknown>;
+  const bObj = b as Record<string, unknown>;
+  const aKeys = Object.keys(aObj).sort();
+  const bKeys = Object.keys(bObj).sort();
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every(
+    (key, i) => key === bKeys[i] && deepEqual(aObj[key], bObj[key])
+  );
+}
