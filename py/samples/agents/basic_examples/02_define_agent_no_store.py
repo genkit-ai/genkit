@@ -35,10 +35,8 @@ async def main() -> None:
     session = agent.chat()
     # Turn 1
     print('--- SENDING TURN 1 ---')
-    turn1 = session.send('My name is Ada. Remember it.')
-    async for chunk in turn1:
+    async for chunk in session.send('My name is Ada. Remember it.'):
         print('turn1 chunk:', chunk)
-    await turn1.output
     print('turn1 state:', session.state)
 
     # Turn 2

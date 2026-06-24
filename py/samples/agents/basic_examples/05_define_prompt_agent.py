@@ -39,12 +39,8 @@ agent = ai.define_prompt_agent(name='greeterPrompt', store=store)
 async def main() -> None:
     session = agent.chat(AgentInit(session_id=str(uuid4())))
     print('--- SENDING TURN ---')
-    turn = session.send('Hello!')
-    async for chunk in turn:
+    async for chunk in session.send('Hello!'):
         print('chunk:', chunk)
-
-    out = await turn.output
-    print('output:', out)
     await session.close()
 
 
