@@ -787,16 +787,16 @@ export const GetSnapshotRequestSchema = z.object({
 });
 
 /**
- * Schema for the input of the `abortSnapshot` companion action.
+ * Schema for the input of the `abort` companion action.
  */
-export const AbortSnapshotRequestSchema = z.object({
+export const AgentAbortRequestSchema = z.object({
   snapshotId: z.string(),
 });
 
 /**
- * Schema for the output of the `abortSnapshot` companion action.
+ * Schema for the output of the `abort` companion action.
  */
-export const AbortSnapshotResponseSchema = z.object({
+export const AgentAbortResponseSchema = z.object({
   snapshotId: z.string(),
   status: z
     .enum(['pending', 'completed', 'aborted', 'failed', 'expired'])
@@ -847,8 +847,8 @@ export interface Agent<State = unknown>
 
   readonly getSnapshotDataAction: GetSnapshotDataAction<State>;
   readonly abortAgentAction: Action<
-    typeof AbortSnapshotRequestSchema,
-    typeof AbortSnapshotResponseSchema
+    typeof AgentAbortRequestSchema,
+    typeof AgentAbortResponseSchema
   >;
 }
 
@@ -1508,8 +1508,8 @@ export function defineCustomAgent<State = unknown>(
       name: config.name,
       description: `Aborts ${config.name} agent by snapshotId. Returns the snapshot id and its status after the abort attempt.`,
       actionType: 'agent-abort',
-      inputSchema: AbortSnapshotRequestSchema,
-      outputSchema: AbortSnapshotResponseSchema,
+      inputSchema: AgentAbortRequestSchema,
+      outputSchema: AgentAbortResponseSchema,
     },
     async ({ snapshotId }) => {
       const status = await runAbort(snapshotId, { context: getContext() });
@@ -1524,8 +1524,8 @@ export function defineCustomAgent<State = unknown>(
     getSnapshotDataAction:
       getSnapshotDataAction as unknown as GetSnapshotDataAction<State>,
     abortAgentAction: abortAgentAction as unknown as Action<
-      typeof AbortSnapshotRequestSchema,
-      typeof AbortSnapshotResponseSchema
+      typeof AgentAbortRequestSchema,
+      typeof AgentAbortResponseSchema
     >,
   });
 
