@@ -19,7 +19,8 @@ import asyncio
 import pytest
 
 from genkit._ai._agents._runtime import AgentRuntime, SessionRunner, agent_input_has_payload
-from genkit._ai._agents._session import InMemorySessionStore, Session
+from genkit._ai._agents._session import Session
+from genkit._ai._agents._session_stores._latest_state import InMemoryLatestStateStore
 from genkit._ai._aio import Genkit
 from genkit._ai._generate import generate_action
 from genkit._ai._testing import define_programmable_model
@@ -46,7 +47,7 @@ from genkit._core._typing import (
 
 
 async def _wait_for_snapshot_status(
-    store: InMemorySessionStore,
+    store: InMemoryLatestStateStore,
     snapshot_id: str,
     status: SnapshotStatus,
     *,
@@ -61,7 +62,7 @@ async def _wait_for_snapshot_status(
     raise AssertionError(f'snapshot {snapshot_id!r} never reached status {status!r}')
 
 
-def _runtime(session: Session, store: InMemorySessionStore | None) -> tuple[AgentRuntime, CloseableQueue]:
+def _runtime(session: Session, store: InMemoryLatestStateStore | None) -> tuple[AgentRuntime, CloseableQueue]:
     out_queue = CloseableQueue()
     rt = AgentRuntime(
         name='detachAudit',
@@ -88,8 +89,8 @@ async def test_agent_input_has_payload() -> None:
 
 @pytest.mark.asyncio
 async def test_detach_forwards_message_payload_in_same_input() -> None:
-    store = InMemorySessionStore()
-    session = Session(SessionState(messages=[]))
+    store = InMemoryLatestStateStore()
+    session = Session(SessionState(session_id='test-session', messages=[]))
     rt, _ = _runtime(session, store)
     await rt.session_runner.seed_last_good_state()
 
@@ -134,8 +135,8 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
 
 @pytest.mark.asyncio
 async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
-    store = InMemorySessionStore()
-    session = Session(SessionState(messages=[]))
+    store = InMemoryLatestStateStore()
+    session = Session(SessionState(session_id='test-session', messages=[]))
     rt, out_queue = _runtime(session, store)
     await rt.session_runner.seed_last_good_state()
 
@@ -189,7 +190,7 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
 
 @pytest.mark.asyncio
 async def test_detach_without_store_raises() -> None:
-    session = Session(SessionState(messages=[]))
+    session = Session(SessionState(session_id='test-session', messages=[]))
     rt, _ = _runtime(session, None)
     await rt.session_runner.seed_last_good_state()
 
@@ -211,8 +212,8 @@ async def test_detach_without_store_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_abort_snapshot_stops_detached_work() -> None:
-    store = InMemorySessionStore()
-    session = Session(SessionState(messages=[]))
+    store = InMemoryLatestStateStore()
+    session = Session(SessionState(session_id='test-session', messages=[]))
     rt, _ = _runtime(session, store)
     await rt.session_runner.seed_last_good_state()
 

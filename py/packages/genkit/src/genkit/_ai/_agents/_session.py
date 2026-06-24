@@ -20,10 +20,8 @@ import asyncio
 import copy
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Generic, Protocol, TypeVar, cast, runtime_checkable
-from uuid import uuid4
 
 from pydantic import BaseModel
 
@@ -156,117 +154,6 @@ def select_leaf_snapshot(
             'leaves': [snap.snapshot_id for snap in leaves],
         },
     )
-
-
-class InMemorySessionStore:
-    """Thread-safe in-memory snapshot store for dev/tests.
-
-    Implements SessionStore + SnapshotAborter. State lost on process exit.
-    """
-
-    def __init__(self) -> None:
-        self.lock = asyncio.Lock()
-        self.snapshots: dict[str, SessionSnapshot] = {}
-        self.subs: dict[str, list[asyncio.Queue[SnapshotStatus | None]]] = {}
-
-    async def get_snapshot(
-        self,
-        *,
-        snapshot_id: str | None = None,
-        session_id: str | None = None,
-    ) -> SessionSnapshot | None:
-        if bool(snapshot_id) == bool(session_id):
-            raise GenkitError(
-                status=StatusCodes.INVALID_ARGUMENT,
-                message=(
-                    "get_snapshot requires exactly one of 'snapshot_id' or "
-                    f"'session_id' (got {'snapshot_id' if snapshot_id else 'neither'}"
-                    f'{" and session_id" if session_id else ""}).'
-                ),
-            )
-
-        async with self.lock:
-            if snapshot_id is not None:
-                snap = self.snapshots.get(snapshot_id)
-                return snap.model_copy(deep=True) if snap is not None else None
-
-            assert session_id is not None
-            owned = [
-                snap
-                for snap in self.snapshots.values()
-                if snap.state is not None and snap.state.session_id == session_id
-            ]
-            leaf = select_leaf_snapshot(owned, session_id)
-            return leaf.model_copy(deep=True) if leaf is not None else None
-
-    async def latest_snapshot(self) -> SessionSnapshot | None:
-        """Most-recent snapshot by created_at. Not part of SessionStore interface."""
-        async with self.lock:
-            if not self.snapshots:
-                return None
-            latest = max(self.snapshots.values(), key=lambda s: s.created_at)
-            return latest.model_copy(deep=True)
-
-    async def save_snapshot(
-        self,
-        snapshot_id: str | None,
-        fn: Callable[
-            [SessionSnapshot | None],
-            SessionSnapshot | None,
-        ],
-    ) -> SessionSnapshot | None:
-        async with self.lock:
-            sid = snapshot_id or str(uuid4())
-            existing = self.snapshots.get(sid)
-            existing_copy = existing.model_copy(deep=True) if existing is not None else None
-
-            next_snap = fn(existing_copy)
-            if next_snap is None:
-                return None
-
-            now = datetime.now(timezone.utc).isoformat()
-            next_snap.snapshot_id = sid
-            if existing is not None:
-                next_snap.created_at = existing.created_at
-            elif not next_snap.created_at:
-                next_snap.created_at = now
-            if not next_snap.status:
-                next_snap.status = SnapshotStatus.COMPLETED
-
-            self.snapshots[sid] = next_snap.model_copy(deep=True)
-
-            if existing is None or existing.status != next_snap.status:
-                self.notify_locked(sid, next_snap.status or SnapshotStatus.COMPLETED)
-
-            return next_snap
-
-    async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
-        async with self.lock:
-            snap = self.snapshots.get(snapshot_id)
-            if snap is None:
-                return None
-            if snap.status == SnapshotStatus.PENDING:
-                snap.status = SnapshotStatus.ABORTED
-                self.notify_locked(snapshot_id, snap.status)
-            return snap.status
-
-    async def on_snapshot_status_change(self, snapshot_id: str) -> asyncio.Queue[SnapshotStatus | None]:
-        q: asyncio.Queue[SnapshotStatus | None] = asyncio.Queue()
-        async with self.lock:
-            snap = self.snapshots.get(snapshot_id)
-            if snap is None:
-                await q.put(None)
-                return q
-            await q.put(snap.status)
-            self.subs.setdefault(snapshot_id, []).append(q)
-        return q
-
-    def notify_locked(self, snapshot_id: str, status: SnapshotStatus) -> None:
-        for q in self.subs.get(snapshot_id, []):
-            try:
-                q.put_nowait(status)
-            except asyncio.QueueFull:
-                pass
 
 
 class Session(Generic[StateT]):

@@ -270,9 +270,9 @@ async def test_in_process_persistent_connection() -> None:
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
 
-    from genkit.agent import InMemorySessionStore
+    from genkit.agent import InMemoryLatestStateStore
 
-    store = InMemorySessionStore()
+    store = InMemoryLatestStateStore()
 
     ai.define_prompt(name='testEchoAgent', model='programmableModel', system='You echo things.')
     agent = ai.define_prompt_agent(name='testEchoAgent', store=store)
@@ -317,9 +317,9 @@ async def test_attached_turn_abort() -> None:
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
 
-    from genkit.agent import InMemorySessionStore
+    from genkit.agent import InMemoryLatestStateStore
 
-    store = InMemorySessionStore()
+    store = InMemoryLatestStateStore()
 
     # Define a simple agent
     ai.define_prompt(name='abortAgent', model='programmableModel', system='Hello')
@@ -370,9 +370,9 @@ async def test_session_abort() -> None:
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
 
-    from genkit.agent import InMemorySessionStore
+    from genkit.agent import InMemoryLatestStateStore
 
-    store = InMemorySessionStore()
+    store = InMemoryLatestStateStore()
 
     tool_executed = False
     tool_cancelled = False
@@ -433,9 +433,9 @@ async def test_external_abort_signal() -> None:
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
 
-    from genkit.agent import InMemorySessionStore
+    from genkit.agent import InMemoryLatestStateStore
 
-    store = InMemorySessionStore()
+    store = InMemoryLatestStateStore()
 
     ai.define_prompt(name='signalAgent', model='programmableModel', system='Hello')
     agent = ai.define_prompt_agent(name='signalAgent', store=store)

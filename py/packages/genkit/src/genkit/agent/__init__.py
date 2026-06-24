@@ -30,7 +30,6 @@ from genkit._ai._agents._client import (
 )
 from genkit._ai._agents._runtime import AgentFn, SessionRunner
 from genkit._ai._agents._session import (
-    InMemorySessionStore,
     Session,
     SessionStore,
     SnapshotAborter,
@@ -101,7 +100,6 @@ __all__ = [
     'Session',
     'SessionStore',
     'SnapshotAborter',
-    'InMemorySessionStore',
     'LatestStateStore',
     'InMemoryLatestStateStore',
     'FileLatestStateStore',
