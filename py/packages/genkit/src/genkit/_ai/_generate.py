@@ -756,7 +756,7 @@ async def _generate_action_turn(
                 response.assert_valid_schema()
             # Persist the threaded conversation, not the augmented request the model saw.
             if response.request is not None:
-                response.request = response.request.model_copy(update={'messages': copy.copy(raw_request.messages)})
+                response.request = response.request.model_copy(update={'messages': list(raw_request.messages)})
             return response
 
         max_iters = raw_request.max_turns if raw_request.max_turns else DEFAULT_MAX_TURNS
