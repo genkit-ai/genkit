@@ -37,16 +37,6 @@ export const ArtifactSchema = z.object({
 export type Artifact = z.infer<typeof ArtifactSchema>;
 
 /**
- * Events signifying a session snapshot persistence point.
- */
-export const SnapshotEventSchema = z.enum(['turnEnd', 'invocationEnd']);
-
-/**
- * Event signifying a session snapshot persistence point.
- */
-export type SnapshotEvent = z.infer<typeof SnapshotEventSchema>;
-
-/**
  * Reason an agent turn (or whole invocation) finished.
  *
  * Mirrors the generate `FinishReason` enum and adds two agent-specific
@@ -74,7 +64,6 @@ export type AgentFinishReason = z.infer<typeof AgentFinishReasonSchema>;
 
 /**
  * Schema for session execution state.
-
  */
 export const SessionStateSchema = z.object({
   sessionId: z.string().optional(),
@@ -102,7 +91,6 @@ export interface SessionSnapshot<S = unknown> {
   createdAt: string;
   /** When the snapshot was last written (RFC 3339). Equals `createdAt` until rewritten. */
   updatedAt?: string;
-  event: 'turnEnd' | 'invocationEnd';
   state: SessionState<S>;
   status?: 'pending' | 'completed' | 'failed' | 'aborted' | 'expired';
 
@@ -131,6 +119,31 @@ export interface SessionSnapshot<S = unknown> {
     details?: any;
   };
 }
+
+/**
+ * Zod schema mirroring {@link SessionSnapshot}. Used as the output schema for
+ * the `getSnapshot` companion action so the snapshot shape is discoverable in
+ * the registry (rather than an opaque `z.any()`).
+ */
+export const SessionSnapshotSchema = z.object({
+  snapshotId: z.string(),
+  parentId: z.string().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string().optional(),
+  state: SessionStateSchema,
+  status: z
+    .enum(['pending', 'completed', 'failed', 'aborted', 'expired'])
+    .optional(),
+  heartbeatAt: z.string().optional(),
+  finishReason: AgentFinishReasonSchema.optional(),
+  error: z
+    .object({
+      status: z.string().optional(),
+      message: z.string(),
+      details: z.any().optional(),
+    })
+    .optional(),
+});
 
 /**
  * Input type for {@link SessionStore.saveSnapshot}.
@@ -252,9 +265,13 @@ export class Session<S = unknown> extends EventEmitter {
 
   constructor(initialState: SessionState<S>) {
     super();
-    this.sessionId = initialState.sessionId || globalThis.crypto.randomUUID();
-    initialState.sessionId = this.sessionId;
-    this.state = initialState;
+    // Clone so we never alias (or mutate) the caller's object: the session
+    // owns its state, and a handler mutating it must not reach back into the
+    // caller's / chat's state.
+    const state = structuredClone(initialState);
+    this.sessionId = state.sessionId || globalThis.crypto.randomUUID();
+    state.sessionId = this.sessionId;
+    this.state = state;
   }
 
   /**
@@ -266,9 +283,12 @@ export class Session<S = unknown> extends EventEmitter {
 
   /**
    * Retrieves all messages associated with the session.
+   *
+   * Returns a copy so callers cannot mutate the session's internal message
+   * array in place.
    */
   getMessages(): MessageData[] {
-    return this.state.messages || [];
+    return structuredClone(this.state.messages || []);
   }
 
   /**

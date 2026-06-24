@@ -35,7 +35,6 @@ describe('InMemorySessionStore', () => {
     const snapshot = {
       snapshotId: 'snap-123',
       createdAt: new Date().toISOString(),
-      event: 'turnEnd' as const,
       state: { custom: { foo: 'bar' } },
     };
     await store.saveSnapshot('snap-123', () => snapshot);
@@ -56,7 +55,6 @@ describe('InMemorySessionStore', () => {
     const snapshot = {
       snapshotId: 'snap-123',
       createdAt: new Date().toISOString(),
-      event: 'turnEnd' as const,
       state: { custom: state },
     };
     await store.saveSnapshot('snap-123', () => snapshot);
@@ -77,7 +75,6 @@ describe('InMemorySessionStore', () => {
     await store.saveSnapshot(first, () => ({
       snapshotId: first,
       createdAt: new Date().toISOString(),
-      event: 'turnEnd' as const,
       status: 'completed' as const,
       state: { sessionId },
     }));
@@ -85,7 +82,6 @@ describe('InMemorySessionStore', () => {
       snapshotId: second,
       parentId: first,
       createdAt: new Date().toISOString(),
-      event: 'turnEnd' as const,
       status: 'completed' as const,
       state: { sessionId },
     }));
@@ -109,7 +105,6 @@ describe('FileSessionStore', () => {
       snapshotId,
       parentId,
       createdAt: new Date().toISOString(),
-      event: 'turnEnd',
       status: 'completed',
       state: { sessionId },
     };
@@ -423,6 +418,78 @@ describe('FileSessionStore', () => {
 
       const snap = await done;
       assert.strictEqual(snap.status, 'aborted');
+    });
+  });
+
+  describe('FileSessionStore snapshotId validation', () => {
+    function tmpDir(): string {
+      return fs.mkdtempSync(path.join(os.tmpdir(), 'genkit-sessions-'));
+    }
+
+    const traversalIds = [
+      '../escape',
+      '../../escape',
+      'foo/bar',
+      'foo\\bar',
+      '..',
+      '.',
+    ];
+
+    for (const badId of traversalIds) {
+      it(`rejects getSnapshot for unsafe snapshotId ${JSON.stringify(badId)}`, async () => {
+        const store = new FileSessionStore(tmpDir());
+        await assert.rejects(
+          () => store.getSnapshot({ snapshotId: badId }),
+          /Invalid snapshotId/
+        );
+      });
+
+      it(`rejects saveSnapshot for unsafe snapshotId ${JSON.stringify(badId)}`, async () => {
+        const store = new FileSessionStore(tmpDir());
+        await assert.rejects(
+          () =>
+            store.saveSnapshot(badId, (current) => ({
+              ...current,
+              snapshotId: badId,
+              createdAt: new Date().toISOString(),
+              state: { custom: {} },
+              status: 'completed' as const,
+            })),
+          /Invalid snapshotId/
+        );
+      });
+    }
+
+    it('does not write outside the store directory for a traversal id', async () => {
+      const dir = tmpDir();
+      const store = new FileSessionStore(dir);
+      await assert.rejects(
+        () =>
+          store.saveSnapshot('../../escaped', (current) => ({
+            ...current,
+            snapshotId: '../../escaped',
+            createdAt: new Date().toISOString(),
+            state: { custom: {} },
+            status: 'completed' as const,
+          })),
+        /Invalid snapshotId/
+      );
+      // Nothing escaped to the parent of the store dir.
+      assert.ok(!fs.existsSync(path.join(dir, '..', 'escaped.json')));
+    });
+
+    it('accepts a plain basename snapshotId', async () => {
+      const store = new FileSessionStore(tmpDir());
+      const id = reserveSnapshotId();
+      const saved = await store.saveSnapshot(id, () => ({
+        snapshotId: id,
+        createdAt: new Date().toISOString(),
+        state: { custom: { ok: true } },
+        status: 'completed' as const,
+      }));
+      assert.strictEqual(saved, id);
+      const snap = await store.getSnapshot({ snapshotId: id });
+      assert.deepStrictEqual(snap?.state.custom, { ok: true });
     });
   });
 });

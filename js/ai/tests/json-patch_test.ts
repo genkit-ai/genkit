@@ -198,4 +198,45 @@ describe('json-patch', () => {
       );
     });
   });
+
+  describe('prototype pollution', () => {
+    for (const token of ['__proto__', 'prototype', 'constructor']) {
+      it(`rejects "${token}" in an add/replace path`, () => {
+        assert.throws(
+          () => applyPatch({}, [{ op: 'add', path: `/${token}/x`, value: 1 }]),
+          /forbidden token/
+        );
+        // Object.prototype was not polluted.
+        assert.strictEqual(({} as any).x, undefined);
+      });
+
+      it(`rejects "${token}" as a leaf token`, () => {
+        assert.throws(
+          () => applyPatch({}, [{ op: 'add', path: `/${token}`, value: 1 }]),
+          /forbidden token/
+        );
+      });
+
+      it(`rejects "${token}" in a move 'from' pointer`, () => {
+        assert.throws(
+          () =>
+            applyPatch({ a: 1 }, [
+              { op: 'move', from: `/${token}`, path: '/b' },
+            ]),
+          /forbidden token/
+        );
+      });
+    }
+
+    it('does not pollute Object.prototype via a /__proto__/polluted patch', () => {
+      assert.throws(
+        () =>
+          applyPatch({}, [
+            { op: 'add', path: '/__proto__/polluted', value: 'yes' },
+          ]),
+        /forbidden token/
+      );
+      assert.strictEqual(({} as any).polluted, undefined);
+    });
+  });
 });

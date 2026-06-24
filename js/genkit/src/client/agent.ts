@@ -53,8 +53,8 @@ export { applyPatch, type JsonPatch } from '@genkit-ai/ai/json-patch';
 export interface RemoteAgentOptions {
   /** Required. The agent endpoint. */
   url: string;
-  /** Optional. Defaults to `${url}/state`. */
-  stateUrl?: string;
+  /** Optional. Defaults to `${url}/getSnapshot`. */
+  getSnapshotUrl?: string;
   /** Optional. Defaults to `${url}/abort`. */
   abortUrl?: string;
   /** Optional. Static headers, or a function called per request. */
@@ -87,7 +87,7 @@ export function remoteAgent<State = unknown>(
   options: RemoteAgentOptions
 ): AgentAPI<State> {
   const { url } = options;
-  const stateUrl = options.stateUrl ?? `${url}/state`;
+  const getSnapshotUrl = options.getSnapshotUrl ?? `${url}/getSnapshot`;
   const abortUrl = options.abortUrl ?? `${url}/abort`;
 
   const resolveHeaders = async (): Promise<
@@ -136,7 +136,7 @@ export function remoteAgent<State = unknown>(
     async getSnapshot(lookup: SnapshotLookup) {
       const headers = await resolveHeaders();
       return runFlow<SessionSnapshot<State> | undefined>({
-        url: stateUrl,
+        url: getSnapshotUrl,
         input: lookup,
         headers,
       });
