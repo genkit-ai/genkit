@@ -113,7 +113,6 @@ class Agent(BidiAction, Generic[StateT, StreamT]):
             metadata={**(metadata or {}), 'agent': {'stateManagement': 'server' if store is not None else 'client'}},
         )
         self.store = store
-        self.transport = InProcessTransport(self, store)
 
     # ------------------------------------------------------------------
     # AgentAPI implementation
@@ -126,21 +125,21 @@ class Agent(BidiAction, Generic[StateT, StreamT]):
 
     async def load_chat(self, snapshot_id: str) -> AgentSession[StateT, StreamT]:
         """Loads a server snapshot and returns a session with history restored."""
-        snapshot = await self.transport.get_snapshot(snapshot_id)
+        session_transport = InProcessTransport(self, self.store)
+        snapshot = await session_transport.get_snapshot(snapshot_id)
         if snapshot is None:
             raise ValueError(f"Failed to load chat: Snapshot with ID '{snapshot_id}' not found.")
-        session_transport = InProcessTransport(self, self.store)
         session = AgentSession(session_transport)
         session.load_from_snapshot(snapshot)
         return session
 
     async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot | None:
         """Reads a snapshot without starting a session."""
-        return await self.transport.get_snapshot(snapshot_id)
+        return await InProcessTransport(self, self.store).get_snapshot(snapshot_id)
 
     async def abort(self, snapshot_id: str) -> SnapshotStatus | None:
         """Aborts a running snapshot."""
-        return await self.transport.abort_snapshot(snapshot_id)
+        return await InProcessTransport(self, self.store).abort_snapshot(snapshot_id)
 
 
 # ---------------------------------------------------------------------------
