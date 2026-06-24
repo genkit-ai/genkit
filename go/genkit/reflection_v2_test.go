@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -541,6 +542,370 @@ func TestReflectionServerV2_CancelAction(t *testing.T) {
 	}
 }
 
+func TestReflectionServerV2_BidiRunAction(t *testing.T) {
+	m := newFakeManager(t)
+	defer m.close()
+
+	g := Init(context.Background())
+
+	type initConfig struct {
+		Prefix string `json:"prefix"`
+	}
+
+	core.DefineBidiAction(g.reg, "test/bidi-echo", api.ActionTypeCustom, nil,
+		func(ctx context.Context, cfg initConfig, inCh <-chan string, outCh chan<- string) (string, error) {
+			var n int
+			for chunk := range inCh {
+				n++
+				outCh <- cfg.Prefix + chunk
+			}
+			return "processed", nil
+		})
+
+	ctx, cancel := startRuntime(t, g, m)
+	defer cancel()
+
+	conn := m.waitForConnection(t)
+	m.ackRegister(t, ctx, conn)
+
+	// Start the bidi run. `init` carries the per-session configuration;
+	// streamInput signals that chunks will be sent via sendInputStreamChunk;
+	// stream requests that output chunks be forwarded back (chunks are not
+	// forwarded without it, matching the JS runtime).
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "runAction",
+		"params": map[string]any{
+			"key":         "/custom/test/bidi-echo",
+			"init":        map[string]any{"prefix": "> "},
+			"stream":      true,
+			"streamInput": true,
+		},
+		"id": "bidi-1",
+	})
+
+	// Send two chunks and end the input stream.
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "sendInputStreamChunk",
+		"params":  map[string]any{"requestId": "bidi-1", "chunk": "hello"},
+	})
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "sendInputStreamChunk",
+		"params":  map[string]any{"requestId": "bidi-1", "chunk": "world"},
+	})
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "endInputStream",
+		"params":  map[string]any{"requestId": "bidi-1"},
+	})
+
+	var chunks []string
+	var final map[string]any
+	deadline := time.After(5 * time.Second)
+loop:
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out; chunks=%v final=%v", chunks, final)
+		default:
+		}
+		msg := m.read(t, ctx, conn)
+		switch msg["method"] {
+		case "streamChunk":
+			params := msg["params"].(map[string]any)
+			if params["requestId"] != "bidi-1" {
+				t.Errorf("streamChunk requestId = %v, want bidi-1", params["requestId"])
+			}
+			chunks = append(chunks, params["chunk"].(string))
+		case "runActionState":
+			// early trace-id notification; ignore
+		default:
+			final = msg
+			break loop
+		}
+	}
+
+	if got, want := chunks, []string{"> hello", "> world"}; !slices.Equal(got, want) {
+		t.Errorf("chunks = %v, want %v", got, want)
+	}
+	result, ok := final["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result object, got %v", final)
+	}
+	var out string
+	if err := json.Unmarshal([]byte(toJSON(t, result["result"])), &out); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if out != "processed" {
+		t.Errorf("result = %q, want %q", out, "processed")
+	}
+}
+
+func toJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return string(b)
+}
+
+// TestReflectionServerV2_BidiRunActionDropsAfterEnd verifies that chunks
+// arriving after endInputStream are not delivered to the action, even when
+// they queue up before the underlying connection has been attached.
+func TestReflectionServerV2_BidiRunActionDropsAfterEnd(t *testing.T) {
+	m := newFakeManager(t)
+	defer m.close()
+
+	g := Init(context.Background())
+
+	// The action records every chunk it sees so the test can assert that
+	// chunks after endInputStream were dropped.
+	var seenMu sync.Mutex
+	var seen []string
+
+	core.DefineBidiAction(g.reg, "test/bidi-record", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			for chunk := range inCh {
+				seenMu.Lock()
+				seen = append(seen, chunk)
+				seenMu.Unlock()
+			}
+			return "done", nil
+		})
+
+	ctx, cancel := startRuntime(t, g, m)
+	defer cancel()
+
+	conn := m.waitForConnection(t)
+	m.ackRegister(t, ctx, conn)
+
+	// Pipeline runAction + chunks + end + extra chunk back-to-back. All
+	// arrive before the handler goroutine is likely to have started the
+	// session worker, so they queue inside the bidi session. The "extra"
+	// chunk is enqueued after the close marker and must be dropped by the
+	// worker.
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "runAction",
+		"params": map[string]any{
+			"key":         "/custom/test/bidi-record",
+			"streamInput": true,
+		},
+		"id": "drop-1",
+	})
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "sendInputStreamChunk",
+		"params":  map[string]any{"requestId": "drop-1", "chunk": "a"},
+	})
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "sendInputStreamChunk",
+		"params":  map[string]any{"requestId": "drop-1", "chunk": "b"},
+	})
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "endInputStream",
+		"params":  map[string]any{"requestId": "drop-1"},
+	})
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "sendInputStreamChunk",
+		"params":  map[string]any{"requestId": "drop-1", "chunk": "after-end"},
+	})
+
+	// Drain notifications until the final response.
+	deadline := time.After(5 * time.Second)
+loop:
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for response")
+		default:
+		}
+		msg := m.read(t, ctx, conn)
+		if _, hasResult := msg["result"]; hasResult {
+			break loop
+		}
+		if _, hasErr := msg["error"]; hasErr {
+			t.Fatalf("unexpected error response: %v", msg)
+		}
+	}
+
+	seenMu.Lock()
+	defer seenMu.Unlock()
+	if want := []string{"a", "b"}; !slices.Equal(seen, want) {
+		t.Errorf("action received %v, want %v (chunk after endInputStream should be dropped)", seen, want)
+	}
+}
+
+// TestReflectionServerV2_BidiRunActionErrors verifies that an error returned
+// from a bidi action surfaces as a JSON-RPC error response.
+func TestReflectionServerV2_BidiRunActionErrors(t *testing.T) {
+	m := newFakeManager(t)
+	defer m.close()
+
+	g := Init(context.Background())
+
+	core.DefineBidiAction(g.reg, "test/bidi-fail", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			for range inCh {
+			}
+			return "", core.NewError(core.INVALID_ARGUMENT, "boom")
+		})
+
+	ctx, cancel := startRuntime(t, g, m)
+	defer cancel()
+
+	conn := m.waitForConnection(t)
+	m.ackRegister(t, ctx, conn)
+
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "runAction",
+		"params": map[string]any{
+			"key":         "/custom/test/bidi-fail",
+			"streamInput": true,
+		},
+		"id": "err-1",
+	})
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "endInputStream",
+		"params":  map[string]any{"requestId": "err-1"},
+	})
+
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for error response")
+		default:
+		}
+		msg := m.read(t, ctx, conn)
+		if _, hasResult := msg["result"]; hasResult {
+			t.Fatalf("expected error, got result: %v", msg)
+		}
+		errObj, ok := msg["error"].(map[string]any)
+		if !ok {
+			continue // ignore notifications (e.g., runActionState)
+		}
+		if !strings.Contains(errObj["message"].(string), "boom") {
+			t.Errorf("error message = %q, want substring %q", errObj["message"], "boom")
+		}
+		return
+	}
+}
+
+// TestReflectionServerV2_BidiInvalidChunkFailsRun verifies that a chunk
+// failing input-schema validation fails the whole run with the validation
+// error (matching the JS runtime) rather than being silently dropped.
+func TestReflectionServerV2_BidiInvalidChunkFailsRun(t *testing.T) {
+	m := newFakeManager(t)
+	defer m.close()
+
+	g := Init(context.Background())
+
+	core.DefineBidiAction(g.reg, "test/bidi-strict", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			for {
+				select {
+				case _, ok := <-inCh:
+					if !ok {
+						return "done", nil
+					}
+				case <-ctx.Done():
+					return "", ctx.Err()
+				}
+			}
+		})
+
+	ctx, cancel := startRuntime(t, g, m)
+	defer cancel()
+
+	conn := m.waitForConnection(t)
+	m.ackRegister(t, ctx, conn)
+
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "runAction",
+		"params": map[string]any{
+			"key":         "/custom/test/bidi-strict",
+			"streamInput": true,
+		},
+		"id": "invalid-chunk-1",
+	})
+	// A number where the action expects a string: fails validation and must
+	// fail the run.
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "sendInputStreamChunk",
+		"params":  map[string]any{"requestId": "invalid-chunk-1", "chunk": 123},
+	})
+
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for error response")
+		default:
+		}
+		msg := m.read(t, ctx, conn)
+		if _, hasResult := msg["result"]; hasResult {
+			t.Fatalf("expected error, got result: %v", msg)
+		}
+		errObj, ok := msg["error"].(map[string]any)
+		if !ok {
+			continue // ignore notifications (e.g., runActionState)
+		}
+		if !strings.Contains(errObj["message"].(string), "invalid stream chunk") {
+			t.Errorf("error message = %q, want substring %q", errObj["message"], "invalid stream chunk")
+		}
+		return
+	}
+}
+
+// TestReflectionServerV2_BidiSessionOwnership verifies the ownership rules
+// that protect bidi sessions against request-id reuse: a reused id stops the
+// orphaned session, a stale handler's unregister cannot tear down a newer
+// session under the same id, and the owner's unregister removes and stops its
+// own session.
+func TestReflectionServerV2_BidiSessionOwnership(t *testing.T) {
+	s := &reflectionServerV2{bidiSessions: map[string]*bidiSession{}}
+
+	s1 := newBidiSession()
+	s.registerBidiSession("1", s1)
+
+	// A reused id orphans and stops the previous session.
+	s2 := newBidiSession()
+	s.registerBidiSession("1", s2)
+	if _, ok := s1.next(); ok {
+		t.Error("orphaned session worker not stopped on id reuse")
+	}
+
+	// A stale handler unregistering with its old session must not touch the
+	// newer one.
+	s.unregisterBidiSession("1", s1)
+	if got := s.lookupBidiSession("1"); got != s2 {
+		t.Errorf("stale unregister removed the new session; lookup = %v, want s2", got)
+	}
+
+	// The owner's unregister removes and stops its session.
+	s.unregisterBidiSession("1", s2)
+	if got := s.lookupBidiSession("1"); got != nil {
+		t.Error("session still registered after owner unregister")
+	}
+	if _, ok := s2.next(); ok {
+		t.Error("session worker not stopped after owner unregister")
+	}
+
+	// A nil session is a no-op.
+	s.unregisterBidiSession("1", nil)
+}
+
 func TestReflectionServerV2_MethodNotFound(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
@@ -565,5 +930,134 @@ func TestReflectionServerV2_MethodNotFound(t *testing.T) {
 	}
 	if code := errObj["code"].(float64); code != float64(jsonRPCMethodNotFound) {
 		t.Errorf("code = %v, want %d", code, jsonRPCMethodNotFound)
+	}
+}
+
+// TestReflectionServerV2_BidiRunActionNoStream verifies that output chunks
+// are not forwarded when the request does not ask for output streaming
+// (matching the JS runtime), while the final result still arrives.
+func TestReflectionServerV2_BidiRunActionNoStream(t *testing.T) {
+	m := newFakeManager(t)
+	defer m.close()
+
+	g := Init(context.Background())
+
+	core.DefineBidiAction(g.reg, "test/bidi-quiet", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			var last string
+			for chunk := range inCh {
+				last = chunk
+				outCh <- chunk
+			}
+			return "got " + last, nil
+		})
+
+	ctx, cancel := startRuntime(t, g, m)
+	defer cancel()
+
+	conn := m.waitForConnection(t)
+	m.ackRegister(t, ctx, conn)
+
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "runAction",
+		"params": map[string]any{
+			"key":         "/custom/test/bidi-quiet",
+			"streamInput": true,
+		},
+		"id": "quiet-1",
+	})
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "sendInputStreamChunk",
+		"params":  map[string]any{"requestId": "quiet-1", "chunk": "hello"},
+	})
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "endInputStream",
+		"params":  map[string]any{"requestId": "quiet-1"},
+	})
+
+	var final map[string]any
+	deadline := time.After(5 * time.Second)
+loop:
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for final response")
+		default:
+		}
+		msg := m.read(t, ctx, conn)
+		switch msg["method"] {
+		case "streamChunk":
+			t.Errorf("unexpected streamChunk without stream=true: %v", msg)
+		case "runActionState":
+			// early trace-id notification; ignore
+		default:
+			final = msg
+			break loop
+		}
+	}
+
+	result, ok := final["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result object, got %v", final)
+	}
+	var out string
+	if err := json.Unmarshal([]byte(toJSON(t, result["result"])), &out); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if out != "got hello" {
+		t.Errorf("result = %q, want %q", out, "got hello")
+	}
+}
+
+// TestReflectionServerV2_BidiInputClosedOnDisconnect verifies that when the
+// manager connection drops mid-stream, in-flight bidi actions see their input
+// stream end instead of hanging forever awaiting chunks.
+func TestReflectionServerV2_BidiInputClosedOnDisconnect(t *testing.T) {
+	m := newFakeManager(t)
+	defer m.close()
+
+	g := Init(context.Background())
+
+	inputEnded := make(chan struct{})
+	core.DefineBidiAction(g.reg, "test/bidi-hang", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			for range inCh {
+			}
+			close(inputEnded)
+			return "done", nil
+		})
+
+	ctx, cancel := startRuntime(t, g, m)
+	defer cancel()
+
+	conn := m.waitForConnection(t)
+	m.ackRegister(t, ctx, conn)
+
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "runAction",
+		"params": map[string]any{
+			"key":         "/custom/test/bidi-hang",
+			"streamInput": true,
+		},
+		"id": "hang-1",
+	})
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "sendInputStreamChunk",
+		"params":  map[string]any{"requestId": "hang-1", "chunk": "hello"},
+	})
+
+	// Drop the connection without sending endInputStream. The runtime must
+	// end the action's input stream so it can finish.
+	m.close()
+
+	select {
+	case <-inputEnded:
+	case <-time.After(5 * time.Second):
+		t.Fatal("bidi action input stream was not closed on disconnect")
 	}
 }

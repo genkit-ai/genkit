@@ -40,7 +40,7 @@ type Retriever interface {
 
 // retriever is an action with functions specific to document retrieval such as Retrieve().
 type retriever struct {
-	core.ActionDef[*RetrieverRequest, *RetrieverResponse, struct{}]
+	core.Action[*RetrieverRequest, *RetrieverResponse, struct{}]
 }
 
 // RetrieverArg is the interface for retriever arguments. It can either be the retriever action itself or a reference to be looked up.
@@ -121,7 +121,7 @@ func NewRetriever(name string, opts *RetrieverOptions, fn RetrieverFunc) Retriev
 	}
 
 	return &retriever{
-		ActionDef: *core.NewAction(name, api.ActionTypeRetriever, metadata, inputSchema, fn),
+		Action: *core.NewAction(name, api.ActionTypeRetriever, metadata, inputSchema, fn),
 	}
 }
 
@@ -141,7 +141,7 @@ func LookupRetriever(r api.Registry, name string) Retriever {
 		return nil
 	}
 	return &retriever{
-		ActionDef: *action,
+		Action: *action,
 	}
 }
 

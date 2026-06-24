@@ -72,7 +72,7 @@ func (e EvaluatorRef) Config() any {
 
 // evaluator is an action with functions specific to evaluating a dataset.
 type evaluator struct {
-	core.ActionDef[*EvaluatorRequest, *EvaluatorResponse, struct{}]
+	core.Action[*EvaluatorRequest, *EvaluatorResponse, struct{}]
 }
 
 // Example is a single example that requires evaluation
@@ -190,7 +190,7 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 	}
 
 	return &evaluator{
-		ActionDef: *core.NewAction(name, api.ActionTypeEvaluator, metadata, inputSchema, func(ctx context.Context, req *EvaluatorRequest) (output *EvaluatorResponse, err error) {
+		Action: *core.NewAction(name, api.ActionTypeEvaluator, metadata, inputSchema, func(ctx context.Context, req *EvaluatorRequest) (output *EvaluatorResponse, err error) {
 			var results []EvaluationResult
 			for _, datapoint := range req.Dataset {
 				if datapoint.TestCaseId == "" {
@@ -275,7 +275,7 @@ func NewBatchEvaluator(name string, opts *EvaluatorOptions, fn BatchEvaluatorFun
 	}
 
 	return &evaluator{
-		ActionDef: *core.NewAction(name, api.ActionTypeEvaluator, metadata, nil, fn),
+		Action: *core.NewAction(name, api.ActionTypeEvaluator, metadata, nil, fn),
 	}
 }
 
@@ -296,7 +296,7 @@ func LookupEvaluator(r api.Registry, name string) Evaluator {
 		return nil
 	}
 	return &evaluator{
-		ActionDef: *action,
+		Action: *action,
 	}
 }
 
