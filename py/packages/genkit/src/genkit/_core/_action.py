@@ -769,7 +769,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
     ) -> None:
         # Wrap bidi_fn as a standard Action fn (closes in_queue immediately,
         # forwards out_queue chunks to on_chunk callback) so Action.run() works.
-        async def as_streaming_fn(input: InputT, ctx: ActionRunContext) -> OutputT:  # noqa: A002
+        async def as_action_fn(input: InputT, ctx: ActionRunContext) -> OutputT:  # noqa: A002
             in_queue = CloseableQueue()
             out_queue = CloseableQueue()
             # Close input immediately — no streaming inputs via one-shot path.
@@ -799,7 +799,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
         super().__init__(
             kind=kind,
             name=name,
-            fn=as_streaming_fn,
+            fn=as_action_fn,
             metadata_fn=metadata_fn,
             description=description,
             metadata={**(metadata or {}), 'bidi': True},
