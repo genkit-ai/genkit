@@ -732,8 +732,7 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
         """Signal no more inputs will be sent."""
         if not self.closed:
             self.closed = True
-            if hasattr(self.in_queue, 'close'):
-                self.in_queue.close()
+            self.in_queue.close()
 
     async def receive(self) -> AsyncIterator[StreamOutT_co]:
         """Async iterator yielding server-side stream chunks."""
