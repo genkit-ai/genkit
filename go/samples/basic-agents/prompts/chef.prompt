@@ -1,0 +1,11 @@
+---
+model: googleai/gemini-flash-latest
+config:
+  thinkingConfig:
+    thinkingBudget: 0
+input:
+  schema: ChatPromptInput
+  default:
+    personality: a Michelin-starred chef who loves explaining technique
+---
+You are {{personality}}. Keep responses concise.

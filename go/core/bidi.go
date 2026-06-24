@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -217,10 +217,18 @@ func (b *BidiAction[In, Out, Stream, Init]) RunBidi(ctx context.Context, init In
 // RunBidiJSON runs the bidi action as a single one-shot call: input is
 // delivered as the only chunk on the input stream, outgoing chunks are
 // forwarded to cb, and opts carries the session init. Returns an error if
-// init fails to decode or validate.
+// input is absent or init fails to decode or validate.
 //
 // Experimental: bidirectional streaming is experimental and subject to change.
 func (b *BidiAction[In, Out, Stream, Init]) RunBidiJSON(ctx context.Context, input json.RawMessage, cb StreamCallback[json.RawMessage], opts *api.BidiJSONOptions) (*api.ActionRunResult[json.RawMessage], error) {
+	// A one-shot run with no input would start the function and run zero
+	// turns, so reject it with a clearer message than the schema failure
+	// it would otherwise hit (JSON null never satisfies an object input
+	// schema). Deferring input past startup is a streaming session
+	// capability; see ConnectJSON.
+	if !base.HasJSONValue(input) {
+		return nil, NewError(INVALID_ARGUMENT, "action %q requires input for a one-shot run; open a streaming session to defer input", b.desc.Key)
+	}
 	init, hasInit, err := b.decodeInit(opts)
 	if err != nil {
 		return nil, err
@@ -285,15 +293,31 @@ func (b *BidiAction[In, Out, Stream, Init]) ConnectJSON(ctx context.Context, opt
 }
 
 // decodeInit decodes the JSON init payload from opts into the action's Init
-// type. Returns hasInit=false when opts is nil or the payload is empty or
-// JSON null, so transports can pass the request's init field through
-// unconditionally.
+// type through the same validate-and-normalize pipeline the unary input path
+// uses (base.UnmarshalAndNormalize against the resolved schema): the raw
+// payload is validated before it is unmarshaled, and JSON values are normalized
+// to the schema (e.g. number widening) exactly as input chunks are. Validating
+// the raw payload is what rejects a field the InitSchema does not declare;
+// decoding straight into a struct Init would drop it silently, leaving the
+// typed-value validateInit that follows nothing to catch (by then the unknown
+// field is already gone).
+//
+// Returns hasInit=false when opts is nil or the payload is empty or JSON null,
+// so transports can pass the request's init field through unconditionally. An
+// action with no InitSchema (e.g. a struct{} Init) resolves to a nil schema,
+// which UnmarshalAndNormalize accepts and normalizes structurally, matching the
+// input path's handling of a schemaless action.
 func (b *BidiAction[In, Out, Stream, Init]) decodeInit(opts *api.BidiJSONOptions) (Init, bool, error) {
 	var init Init
 	if opts == nil || !base.HasJSONValue(opts.Init) {
 		return init, false, nil
 	}
-	if err := json.Unmarshal(opts.Init, &init); err != nil {
+	schema, err := ResolveSchema(b.registry, b.desc.InitSchema)
+	if err != nil {
+		return init, false, NewError(INVALID_ARGUMENT, "invalid init schema for action %q: %v", b.desc.Key, err)
+	}
+	init, err = base.UnmarshalAndNormalize[Init](opts.Init, schema)
+	if err != nil {
 		return init, false, NewError(INVALID_ARGUMENT, "invalid init for action %q: %v", b.desc.Key, err)
 	}
 	return init, true, nil
@@ -301,10 +325,18 @@ func (b *BidiAction[In, Out, Stream, Init]) decodeInit(opts *api.BidiJSONOptions
 
 // validateInit checks an init value against the action's InitSchema (if any),
 // resolving schema $refs through the registry first. Validation runs whenever
-// InitSchema is present, even for the zero init value, so a required field
-// surfaces as INVALID_ARGUMENT rather than silently defaulting.
+// InitSchema is present, even for the zero init value, so a struct Init with
+// required fields surfaces as INVALID_ARGUMENT rather than silently
+// defaulting. A nil init carries no value to validate and is skipped: it is
+// the zero value of a pointer Init type, produced whenever the action runs
+// without init (the unary surface, a JSON transport request with no init
+// field), and would otherwise always fail the inferred object schema as JSON
+// null. The action function receives the nil and applies its defaults.
 func (b *BidiAction[In, Out, Stream, Init]) validateInit(init Init) error {
 	if b.desc.InitSchema == nil {
+		return nil
+	}
+	if isNilValue(init) {
 		return nil
 	}
 	schema, err := ResolveSchema(b.registry, b.desc.InitSchema)
@@ -488,9 +520,20 @@ func (c *BidiConnection[In, Out, Stream]) run(name string, fn func(context.Conte
 	c.mu.Unlock()
 }
 
+// ErrConnectionClosed indicates a Send on a connection whose input side
+// was closed with [BidiConnection.Close]. Test with [errors.Is].
+var ErrConnectionClosed = errors.New("connection is closed")
+
+// ErrActionCompleted indicates a Send on a connection whose action has
+// already returned. Test with [errors.Is]; the action's result is
+// available via [BidiConnection.Output].
+var ErrActionCompleted = errors.New("action has completed")
+
 // Send sends an input message to the bidi action. It blocks until the action
 // reads the message (backpressure), the connection is cancelled, or the
-// action completes. Returns an error if the connection is closed or the
+// action completes. It fails with an error matching [ErrConnectionClosed]
+// after [BidiConnection.Close], with one matching [ErrActionCompleted] once
+// the action has returned, or with the context's error if the connection's
 // context is cancelled. Typed inputs are not re-validated against the
 // action's InputSchema; the JSON transport path is.
 func (c *BidiConnection[In, Out, Stream]) Send(input In) (err error) {
@@ -499,7 +542,7 @@ func (c *BidiConnection[In, Out, Stream]) Send(input In) (err error) {
 	// "connection is closed" error a pre-checked Send would return.
 	defer func() {
 		if r := recover(); r != nil {
-			err = NewError(FAILED_PRECONDITION, "connection is closed")
+			err = NewError(FAILED_PRECONDITION, "%v", ErrConnectionClosed)
 		}
 	}()
 
@@ -511,7 +554,7 @@ func (c *BidiConnection[In, Out, Stream]) Send(input In) (err error) {
 	// cancellation.
 	select {
 	case <-c.doneCh:
-		return NewError(FAILED_PRECONDITION, "action has completed")
+		return NewError(FAILED_PRECONDITION, "%v", ErrActionCompleted)
 	default:
 	}
 	select {
@@ -526,11 +569,14 @@ func (c *BidiConnection[In, Out, Stream]) Send(input In) (err error) {
 	case <-c.ctx.Done():
 		return c.ctxErr()
 	case <-c.doneCh:
-		return NewError(FAILED_PRECONDITION, "action has completed")
+		return NewError(FAILED_PRECONDITION, "%v", ErrActionCompleted)
 	}
 }
 
-// Close signals that no more inputs will be sent.
+// Close signals that no more inputs will be sent. It does not terminate
+// the session: the action keeps running until it returns on its own,
+// typically after observing the closed input stream. To abort the session
+// and the work behind it, use [BidiConnection.Cancel].
 func (c *BidiConnection[In, Out, Stream]) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

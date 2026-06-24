@@ -374,6 +374,70 @@ func TestReflectionServerV2_RunAction(t *testing.T) {
 	}
 }
 
+// TestReflectionServerV2_HandlerPanicRecovered verifies that a panicking
+// action surfaces as a JSON-RPC error instead of crashing the process:
+// handlers run action functions on dispatch goroutines, so without recovery
+// one bad action would take the whole dev runtime down.
+func TestReflectionServerV2_HandlerPanicRecovered(t *testing.T) {
+	m := newFakeManager(t)
+	defer m.close()
+
+	g := Init(context.Background())
+	DefineFlow(g, "panicky", func(ctx context.Context, _ string) (string, error) {
+		panic("boom")
+	})
+
+	ctx, cancel := startRuntime(t, g, m)
+	defer cancel()
+
+	conn := m.waitForConnection(t)
+	m.ackRegister(t, ctx, conn)
+
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "runAction",
+		"params": map[string]any{
+			"key":   "/flow/panicky",
+			"input": "x",
+		},
+		"id": "p1",
+	})
+
+	var resp map[string]any
+	for {
+		msg := m.read(t, ctx, conn)
+		if msg["method"] == "runActionState" {
+			continue
+		}
+		resp = msg
+		break
+	}
+	if resp["id"] != "p1" {
+		t.Fatalf("id = %v, want p1", resp["id"])
+	}
+	errObj, ok := resp["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected error response for panicking action, got %v", resp)
+	}
+	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "panicked") {
+		t.Errorf("error message = %q, want it to mention the panic", msg)
+	}
+
+	// The runtime survived: a follow-up request still gets a response.
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "listActions",
+		"id":      "p2",
+	})
+	resp2 := m.read(t, ctx, conn)
+	if resp2["id"] != "p2" {
+		t.Fatalf("follow-up id = %v, want p2", resp2["id"])
+	}
+	if resp2["result"] == nil {
+		t.Errorf("follow-up result missing: %v", resp2)
+	}
+}
+
 func TestReflectionServerV2_StreamingRunAction(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()

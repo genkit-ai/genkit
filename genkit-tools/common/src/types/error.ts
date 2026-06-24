@@ -16,23 +16,6 @@
 
 import { z } from 'zod';
 
-export const GenkitErrorSchema = z.object({
-  message: z.string(),
-  stack: z.string().optional(),
-  details: z.any().optional(),
-  data: z
-    .object({
-      genkitErrorMessage: z.string().optional(),
-      genkitErrorDetails: z
-        .object({
-          stack: z.string().optional(),
-          traceId: z.string(),
-        })
-        .optional(),
-    })
-    .optional(),
-});
-
 /**
  * Zod schema for the canonical Genkit error wire shape
  * (`{status, message, details}`). This is the form runtimes use when an
@@ -52,5 +35,29 @@ export const RuntimeErrorSchema = z.object({
   details: z.any().optional(),
 });
 export type RuntimeError = z.infer<typeof RuntimeErrorSchema>;
+
+/**
+ * Zod schema for the error envelope returned by a runtime's reflection
+ * API on failed HTTP requests, including debugging context (stack,
+ * trace ID) that the dev UI surfaces. Despite the name, this is a
+ * transport-layer shape; errors carried as data inside values use
+ * {@link RuntimeErrorSchema}.
+ */
+export const GenkitErrorSchema = z.object({
+  message: z.string(),
+  stack: z.string().optional(),
+  details: z.any().optional(),
+  data: z
+    .object({
+      genkitErrorMessage: z.string().optional(),
+      genkitErrorDetails: z
+        .object({
+          stack: z.string().optional(),
+          traceId: z.string(),
+        })
+        .optional(),
+    })
+    .optional(),
+});
 
 export type GenkitError = z.infer<typeof GenkitErrorSchema>;

@@ -56,11 +56,6 @@ func (o *firestoreOptions) applyStreamManager(opts *streamManagerOptions) error 
 	return o.applyFirestore(&opts.firestoreOptions)
 }
 
-// applySessionStore implements SessionStoreOption for firestoreOptions.
-func (o *firestoreOptions) applySessionStore(opts *sessionStoreOptions) error {
-	return o.applyFirestore(&opts.firestoreOptions)
-}
-
 // WithCollection sets the Firestore collection name where documents are stored.
 // This option is required for all Firestore-based services.
 func WithCollection(collection string) *firestoreOptions {

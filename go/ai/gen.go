@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,15 +18,6 @@
 
 package ai
 
-type AbortSnapshotRequest struct {
-	SnapshotID string `json:"snapshotId,omitempty"`
-}
-
-type AbortSnapshotResponse struct {
-	SnapshotID string         `json:"snapshotId,omitempty"`
-	Status     SnapshotStatus `json:"status,omitempty"`
-}
-
 type ActionMetadata struct {
 	ActionType  string `json:"actionType,omitempty"`
 	Description string `json:"description,omitempty"`
@@ -40,78 +31,6 @@ type ActionMetadata struct {
 	OutputJsonSchema any `json:"outputJsonSchema,omitempty"`
 	OutputSchema     any `json:"outputSchema,omitempty"`
 	StreamSchema     any `json:"streamSchema,omitempty"`
-}
-
-type AgentFinishReason string
-
-const (
-	AgentFinishReasonStop        AgentFinishReason = "stop"
-	AgentFinishReasonLength      AgentFinishReason = "length"
-	AgentFinishReasonBlocked     AgentFinishReason = "blocked"
-	AgentFinishReasonAborted     AgentFinishReason = "aborted"
-	AgentFinishReasonInterrupted AgentFinishReason = "interrupted"
-	AgentFinishReasonOther       AgentFinishReason = "other"
-	AgentFinishReasonUnknown     AgentFinishReason = "unknown"
-	AgentFinishReasonDetached    AgentFinishReason = "detached"
-	AgentFinishReasonFailed      AgentFinishReason = "failed"
-)
-
-type AgentInit struct {
-	SessionID  string        `json:"sessionId,omitempty"`
-	SnapshotID string        `json:"snapshotId,omitempty"`
-	State      *SessionState `json:"state,omitempty"`
-}
-
-type AgentInput struct {
-	Detach  bool              `json:"detach,omitempty"`
-	Message *Message          `json:"message,omitempty"`
-	Resume  *AgentInputResume `json:"resume,omitempty"`
-}
-
-type AgentInputResume struct {
-	Respond []*toolResponsePart `json:"respond,omitempty"`
-	Restart []*toolRequestPart  `json:"restart,omitempty"`
-}
-
-type AgentMetadata struct {
-	Abortable       bool                 `json:"abortable,omitempty"`
-	StateManagement AgentStateManagement `json:"stateManagement,omitempty"`
-}
-
-type AgentOutput struct {
-	Artifacts    []*Artifact       `json:"artifacts,omitempty"`
-	Error        *RuntimeError     `json:"error,omitempty"`
-	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
-	Message      *Message          `json:"message,omitempty"`
-	SessionID    string            `json:"sessionId,omitempty"`
-	SnapshotID   string            `json:"snapshotId,omitempty"`
-	State        *SessionState     `json:"state,omitempty"`
-}
-
-type AgentResult struct {
-	Artifacts    []*Artifact       `json:"artifacts,omitempty"`
-	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
-	Message      *Message          `json:"message,omitempty"`
-}
-
-type AgentStateManagement string
-
-const (
-	AgentStateManagementServer AgentStateManagement = "server"
-	AgentStateManagementClient AgentStateManagement = "client"
-)
-
-type AgentStreamChunk struct {
-	Artifact    *Artifact           `json:"artifact,omitempty"`
-	CustomPatch *JsonPatch          `json:"customPatch,omitempty"`
-	ModelChunk  *ModelResponseChunk `json:"modelChunk,omitempty"`
-	TurnEnd     *TurnEnd            `json:"turnEnd,omitempty"`
-}
-
-type Artifact struct {
-	Metadata map[string]any `json:"metadata,omitempty"`
-	Name     string         `json:"name,omitempty"`
-	Parts    []*Part        `json:"parts,omitempty"`
 }
 
 type customPart struct {
@@ -281,36 +200,6 @@ type GenerationUsage struct {
 	// TotalTokens is the sum of input and output tokens.
 	TotalTokens int `json:"totalTokens,omitempty"`
 }
-
-type GetSnapshotDataInput struct {
-	SessionID  string `json:"sessionId,omitempty"`
-	SnapshotID string `json:"snapshotId,omitempty"`
-}
-
-type GetSnapshotRequest struct {
-	SessionID  string `json:"sessionId,omitempty"`
-	SnapshotID string `json:"snapshotId,omitempty"`
-}
-
-type JsonPatch []*JsonPatchOperation
-
-type JsonPatchOperation struct {
-	From  string               `json:"from,omitempty"`
-	Op    JsonPatchOperationOp `json:"op,omitempty"`
-	Path  string               `json:"path,omitempty"`
-	Value any                  `json:"value,omitempty"`
-}
-
-type JsonPatchOperationOp string
-
-const (
-	JsonPatchOperationOpAdd     JsonPatchOperationOp = "add"
-	JsonPatchOperationOpRemove  JsonPatchOperationOp = "remove"
-	JsonPatchOperationOpReplace JsonPatchOperationOp = "replace"
-	JsonPatchOperationOpMove    JsonPatchOperationOp = "move"
-	JsonPatchOperationOpCopy    JsonPatchOperationOp = "copy"
-	JsonPatchOperationOpTest    JsonPatchOperationOp = "test"
-)
 
 // Media represents media content with a URL and content type.
 type Media struct {
@@ -615,47 +504,11 @@ const (
 	RoleTool Role = "tool"
 )
 
-type RuntimeError struct {
-	Details any    `json:"details,omitempty"`
-	Message string `json:"message,omitempty"`
-	Status  string `json:"status,omitempty"`
-}
-
 // ScoreDetails provides additional context and explanation for an evaluation score.
 type ScoreDetails struct {
 	// Reasoning explains the rationale behind the score.
 	Reasoning string `json:"reasoning,omitempty"`
 }
-
-type SessionSnapshot struct {
-	CreatedAt    string            `json:"createdAt,omitempty"`
-	Error        *RuntimeError     `json:"error,omitempty"`
-	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
-	HeartbeatAt  string            `json:"heartbeatAt,omitempty"`
-	ParentID     string            `json:"parentId,omitempty"`
-	SessionID    string            `json:"sessionId,omitempty"`
-	SnapshotID   string            `json:"snapshotId,omitempty"`
-	State        *SessionState     `json:"state,omitempty"`
-	Status       SnapshotStatus    `json:"status,omitempty"`
-	UpdatedAt    string            `json:"updatedAt,omitempty"`
-}
-
-type SessionState struct {
-	Artifacts []*Artifact `json:"artifacts,omitempty"`
-	Custom    any         `json:"custom,omitempty"`
-	Messages  []*Message  `json:"messages,omitempty"`
-	SessionID string      `json:"sessionId,omitempty"`
-}
-
-type SnapshotStatus string
-
-const (
-	SnapshotStatusPending   SnapshotStatus = "pending"
-	SnapshotStatusCompleted SnapshotStatus = "completed"
-	SnapshotStatusAborted   SnapshotStatus = "aborted"
-	SnapshotStatusFailed    SnapshotStatus = "failed"
-	SnapshotStatusExpired   SnapshotStatus = "expired"
-)
 
 type textPart struct {
 	// Metadata contains arbitrary key-value data for this part.
@@ -731,9 +584,4 @@ type TraceMetadata struct {
 	Paths []*PathMetadata `json:"paths,omitempty"`
 	// Timestamp is when the trace was created.
 	Timestamp float64 `json:"timestamp,omitempty"`
-}
-
-type TurnEnd struct {
-	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
-	SnapshotID   string            `json:"snapshotId,omitempty"`
 }

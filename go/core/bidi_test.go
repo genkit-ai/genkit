@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -268,6 +269,48 @@ func TestRunBidiJSONInvalidInit(t *testing.T) {
 	}
 }
 
+// TestRunBidiJSONRequiresInput verifies that a one-shot run with absent input
+// is rejected up front with a message pointing at streaming sessions, rather
+// than falling through to a schema validation failure. Only a streaming
+// session can start up and defer its first input.
+func TestRunBidiJSONRequiresInput(t *testing.T) {
+	ctx := context.Background()
+
+	type Config struct {
+		Prefix string `json:"prefix"`
+	}
+	action := NewBidiAction(
+		"input-required", api.ActionTypeCustom, nil,
+		func(ctx context.Context, cfg Config, inCh <-chan string, outCh chan<- string) (string, error) {
+			return "ran", nil
+		},
+	)
+
+	for name, input := range map[string]json.RawMessage{
+		"nil input":       nil,
+		"empty input":     json.RawMessage(``),
+		"JSON null input": json.RawMessage(`null`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := action.RunBidiJSON(ctx, input, nil,
+				&api.BidiJSONOptions{Init: json.RawMessage(`{"prefix":">> "}`)})
+			if err == nil {
+				t.Fatal("expected error for absent input, got nil")
+			}
+			gerr, ok := err.(*GenkitError)
+			if !ok {
+				t.Fatalf("expected *GenkitError, got %T: %v", err, err)
+			}
+			if gerr.Status != INVALID_ARGUMENT {
+				t.Errorf("status = %v, want %v", gerr.Status, INVALID_ARGUMENT)
+			}
+			if !strings.Contains(gerr.Message, "streaming session") {
+				t.Errorf("message %q should point the caller at streaming sessions", gerr.Message)
+			}
+		})
+	}
+}
+
 // TestConnectJSONNullInit verifies that nil options and a JSON-null init
 // payload are both treated as no init (the zero Init value).
 func TestConnectJSONNullInit(t *testing.T) {
@@ -376,12 +419,269 @@ func TestInitSchemaValidationAcceptsGoodInit(t *testing.T) {
 	}
 }
 
+// TestBidiJSONInitRejectsUnknownFields verifies that the JSON init paths
+// (ConnectJSON, RunBidiJSON) validate the raw init payload against the action's
+// InitSchema before unmarshaling, so a field the schema does not declare is
+// rejected as INVALID_ARGUMENT. Decoding straight into a struct Init would drop
+// the stray field, leaving the post-decode validateInit nothing to catch.
+func TestBidiJSONInitRejectsUnknownFields(t *testing.T) {
+	ctx := context.Background()
+
+	type Config struct {
+		Prefix string `json:"prefix,omitempty"`
+	}
+
+	// additionalProperties:false is what makes a stray field a violation; it is
+	// also what the inferred schema for a struct Init (e.g. an agent's
+	// *AgentInit) carries by default.
+	initSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"prefix": map[string]any{"type": "string"},
+		},
+		"additionalProperties": false,
+	}
+
+	action := NewBidiAction(
+		"json-init-unknown-fields", api.ActionTypeCustom,
+		&BidiActionOptions{InitSchema: initSchema},
+		func(ctx context.Context, cfg *Config, inCh <-chan string, outCh chan<- string) (string, error) {
+			for range inCh {
+			}
+			return "done", nil
+		},
+	)
+
+	assertRejected := func(t *testing.T, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("expected INVALID_ARGUMENT for unknown init field, got nil")
+		}
+		var gerr *GenkitError
+		if !errors.As(err, &gerr) || gerr.Status != INVALID_ARGUMENT {
+			t.Fatalf("err = %v, want INVALID_ARGUMENT GenkitError", err)
+		}
+	}
+
+	badInit := json.RawMessage(`{"prefix":">> ","bogus":true}`)
+
+	t.Run("ConnectJSON", func(t *testing.T) {
+		_, err := action.ConnectJSON(ctx, &api.BidiJSONOptions{Init: badInit})
+		assertRejected(t, err)
+	})
+
+	t.Run("RunBidiJSON", func(t *testing.T) {
+		_, err := action.RunBidiJSON(ctx, json.RawMessage(`"hello"`), nil,
+			&api.BidiJSONOptions{Init: badInit})
+		assertRejected(t, err)
+	})
+
+	// A payload with only declared fields still starts the session.
+	t.Run("known fields accepted", func(t *testing.T) {
+		conn, err := action.ConnectJSON(ctx, &api.BidiJSONOptions{
+			Init: json.RawMessage(`{"prefix":">> "}`)})
+		if err != nil {
+			t.Fatalf("ConnectJSON: %v", err)
+		}
+		conn.Close()
+		if _, err := conn.Output(); err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+	})
+}
+
+// TestBidiJSONInitNormalizedLikeInput verifies that the JSON init path runs the
+// same normalization as the input path: a JSON number for an integer-typed
+// field is widened to int64 rather than left as the float64 a plain decode into
+// an any value would produce. This pins init handling to the input pipeline
+// (base.UnmarshalAndNormalize), not just schema validation.
+func TestBidiJSONInitNormalizedLikeInput(t *testing.T) {
+	ctx := context.Background()
+
+	initSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"count": map[string]any{"type": "integer"},
+		},
+	}
+
+	gotCount := make(chan any, 1)
+	action := NewBidiAction(
+		"json-init-normalized", api.ActionTypeCustom,
+		&BidiActionOptions{InitSchema: initSchema},
+		func(ctx context.Context, cfg any, inCh <-chan string, outCh chan<- string) (string, error) {
+			m, _ := cfg.(map[string]any)
+			gotCount <- m["count"]
+			for range inCh {
+			}
+			return "done", nil
+		},
+	)
+
+	conn, err := action.ConnectJSON(ctx, &api.BidiJSONOptions{
+		Init: json.RawMessage(`{"count":42}`)})
+	if err != nil {
+		t.Fatalf("ConnectJSON: %v", err)
+	}
+	conn.Close()
+	if _, err := conn.Output(); err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+
+	if got := <-gotCount; got != int64(42) {
+		t.Errorf("normalized init count = %T (%v), want int64(42)", got, got)
+	}
+}
+
+// TestBidiNilInitSkipsValidation verifies that a nil init (the zero value of
+// a pointer Init type) bypasses init schema validation on every no-init path.
+// The inferred init schema describes the object form, which JSON null can
+// never satisfy, so without the bypass an action with a pointer Init (e.g. an
+// agent's *AgentInit) could not run at all through the unary surface or a
+// JSON transport request that omits init.
+func TestBidiNilInitSkipsValidation(t *testing.T) {
+	ctx := context.Background()
+
+	type Config struct{ Prefix string }
+
+	r := registry.New()
+	action := DefineBidiAction(r, "nil-init", api.ActionTypeCustom, nil,
+		func(ctx context.Context, cfg *Config, inCh <-chan string, outCh chan<- string) (string, error) {
+			prefix := "default: "
+			if cfg != nil {
+				prefix = cfg.Prefix
+			}
+			var out string
+			for in := range inCh {
+				out = prefix + in
+			}
+			return out, nil
+		})
+
+	t.Run("unary surface runs with nil init", func(t *testing.T) {
+		out, err := action.RunJSON(ctx, json.RawMessage(`"hello"`), nil)
+		if err != nil {
+			t.Fatalf("RunJSON: %v", err)
+		}
+		if string(out) != `"default: hello"` {
+			t.Errorf("output = %s, want %q", out, "default: hello")
+		}
+	})
+
+	t.Run("JSON one-shot without init", func(t *testing.T) {
+		res, err := action.RunBidiJSON(ctx, json.RawMessage(`"hello"`), nil, nil)
+		if err != nil {
+			t.Fatalf("RunBidiJSON: %v", err)
+		}
+		if string(res.Result) != `"default: hello"` {
+			t.Errorf("output = %s, want %q", res.Result, "default: hello")
+		}
+	})
+
+	t.Run("JSON session without init", func(t *testing.T) {
+		conn, err := action.ConnectJSON(ctx, nil)
+		if err != nil {
+			t.Fatalf("ConnectJSON: %v", err)
+		}
+		if err := conn.Send(json.RawMessage(`"hello"`)); err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+		conn.Close()
+		for _, err := range conn.Receive() {
+			if err != nil {
+				t.Fatalf("Receive: %v", err)
+			}
+		}
+		out, err := conn.Output()
+		if err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+		if string(out) != `"default: hello"` {
+			t.Errorf("output = %s, want %q", out, "default: hello")
+		}
+	})
+
+	t.Run("typed session with explicit nil init", func(t *testing.T) {
+		conn, err := action.Connect(ctx, nil)
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		conn.Close()
+		for _, err := range conn.Receive() {
+			if err != nil {
+				t.Fatalf("Receive: %v", err)
+			}
+		}
+		if _, err := conn.Output(); err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+	})
+
+	t.Run("provided init still validates", func(t *testing.T) {
+		_, err := action.RunBidiJSON(ctx, json.RawMessage(`"hello"`), nil,
+			&api.BidiJSONOptions{Init: json.RawMessage(`{"Prefix": 42}`)})
+		if err == nil {
+			t.Fatal("expected error for mistyped init, got nil")
+		}
+	})
+}
+
+// TestBidiZeroStructInitValidatedWithoutInit pins the struct-Init half of the
+// no-init contract: running without init still validates the zero init value,
+// so an init schema the zero value cannot satisfy surfaces as
+// INVALID_ARGUMENT rather than silently defaulting. Authors opt into
+// omissible init by choosing a pointer Init type.
+func TestBidiZeroStructInitValidatedWithoutInit(t *testing.T) {
+	ctx := context.Background()
+
+	type Config struct{ Prefix string }
+
+	initSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"Prefix": map[string]any{"type": "string", "minLength": 1},
+		},
+		"required": []any{"Prefix"},
+	}
+
+	action := NewBidiAction(
+		"required-init", api.ActionTypeCustom,
+		&BidiActionOptions{InitSchema: initSchema},
+		func(ctx context.Context, cfg Config, inCh <-chan string, outCh chan<- string) (string, error) {
+			for range inCh {
+			}
+			return cfg.Prefix, nil
+		},
+	)
+
+	_, err := action.RunJSON(ctx, json.RawMessage(`"hello"`), nil)
+	if err == nil {
+		t.Fatal("expected validation error for zero init, got nil")
+	}
+	var gerr *GenkitError
+	if !errors.As(err, &gerr) || gerr.Status != INVALID_ARGUMENT {
+		t.Errorf("err = %v, want INVALID_ARGUMENT GenkitError", err)
+	}
+
+	got, err := action.RunBidi(ctx, Config{Prefix: ">> "}, "ignored", nil)
+	if err != nil {
+		t.Fatalf("RunBidi: %v", err)
+	}
+	if got != ">> " {
+		t.Errorf("output = %q, want %q", got, ">> ")
+	}
+}
+
 func TestBidiConnectionSendAfterClose(t *testing.T) {
 	ctx := context.Background()
 
+	// Hold the action open so the only Send failure mode is the closed
+	// input side (a completed action would race in ErrActionCompleted).
+	release := make(chan struct{})
 	action := NewBidiAction(
 		"test", api.ActionTypeCustom, nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			<-release
 			for range inCh {
 			}
 			return "", nil
@@ -394,12 +694,12 @@ func TestBidiConnectionSendAfterClose(t *testing.T) {
 	}
 
 	conn.Close()
-	// Wait for completion so we know the state is settled.
-	<-conn.Done()
-
-	if err := conn.Send("after close"); err == nil {
-		t.Error("expected error sending after close")
+	if err := conn.Send("after close"); !errors.Is(err, ErrConnectionClosed) {
+		t.Errorf("expected error matching ErrConnectionClosed, got %v", err)
 	}
+
+	close(release)
+	<-conn.Done()
 }
 
 func TestBidiConnectionContextCancellation(t *testing.T) {
@@ -687,6 +987,132 @@ func TestBidiOutputAfterCompletionNotCancelled(t *testing.T) {
 	}
 }
 
+// TestBidiConnectionCompletionReleasesContext verifies that completion
+// cancels the connection's derived context so the connection releases its
+// registration on the parent context (a long-lived parent would otherwise
+// accumulate one child per invocation).
+func TestBidiConnectionCompletionReleasesContext(t *testing.T) {
+	ctx := context.Background()
+
+	// Capture the context the action runs under.
+	ctxCh := make(chan context.Context, 1)
+	action := NewBidiAction(
+		"capture", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			ctxCh <- ctx
+			return "done", nil
+		},
+	)
+
+	conn, err := action.Connect(ctx, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-conn.Done()
+	fnCtx := <-ctxCh
+
+	// The cancel fires just after doneCh closes; poll briefly.
+	deadline := time.Now().Add(5 * time.Second)
+	for fnCtx.Err() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("connection context was not cancelled after completion")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// TestBidiConnectionNoSpuriousErrorAfterCompletion verifies that a chunk
+// still buffered when the action returns is delivered rather than lost:
+// completion cancels the connection context, so the stream-closed and
+// ctx-done select arms are both ready, and Receive and Output must prefer
+// the stream's own terminal state over a spurious cancellation error.
+func TestBidiConnectionNoSpuriousErrorAfterCompletion(t *testing.T) {
+	ctx := context.Background()
+
+	action := NewBidiAction(
+		"clean", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			outCh <- "chunk"
+			return "done", nil
+		},
+	)
+
+	conn, err := action.Connect(ctx, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-conn.Done()
+
+	// Iterate to defeat select randomness.
+	for range 30 {
+		for chunk, err := range conn.Receive() {
+			if err != nil {
+				t.Fatalf("Receive yielded error on completed connection: %v", err)
+			}
+			if chunk != "chunk" {
+				t.Fatalf("unexpected chunk %q", chunk)
+			}
+		}
+		output, err := conn.Output()
+		if err != nil {
+			t.Fatalf("Output errored on completed connection: %v", err)
+		}
+		if output != "done" {
+			t.Fatalf("expected output 'done', got %q", output)
+		}
+	}
+}
+
+// TestBidiConnectionReceiveResumesAfterBreak verifies the canonical
+// multi-turn pattern: send, receive one batch, break, send again. Breaking
+// out of Receive must not terminate the connection, and a later Receive
+// must pick up where the previous one left off.
+func TestBidiConnectionReceiveResumesAfterBreak(t *testing.T) {
+	ctx := context.Background()
+
+	action := NewBidiAction(
+		"echo", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			for input := range inCh {
+				outCh <- "echo: " + input
+			}
+			return "done", nil
+		},
+	)
+
+	conn, err := action.Connect(ctx, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var chunks []string
+	for _, input := range []string{"one", "two"} {
+		if err := conn.Send(input); err != nil {
+			t.Fatalf("Send(%q) failed: %v", input, err)
+		}
+		for chunk, err := range conn.Receive() {
+			if err != nil {
+				t.Fatalf("Receive error: %v", err)
+			}
+			chunks = append(chunks, chunk)
+			break
+		}
+	}
+	conn.Close()
+
+	output, err := conn.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "done" {
+		t.Errorf("expected output 'done', got %q", output)
+	}
+	want := []string{"echo: one", "echo: two"}
+	if !slices.Equal(chunks, want) {
+		t.Errorf("expected chunks %v, got %v", want, chunks)
+	}
+}
+
 // TestBidiJSONConnSendValidatesChunks verifies that the JSON transport path
 // validates every inbound chunk against the action's input schema and that an
 // invalid chunk fails the session, matching the JS runtime and the one-shot
@@ -889,8 +1315,8 @@ func TestBidiSendAfterCompletionFails(t *testing.T) {
 	// buffer slot against the closed done/ctx channels and ~1/3 of sends
 	// would report success for a message nothing will ever read.
 	for i := range 25 {
-		if err := conn.Send("late"); err == nil {
-			t.Fatalf("Send %d after completion returned nil, want error", i)
+		if err := conn.Send("late"); !errors.Is(err, ErrActionCompleted) {
+			t.Fatalf("Send %d after completion = %v, want error matching ErrActionCompleted", i, err)
 		}
 	}
 }
