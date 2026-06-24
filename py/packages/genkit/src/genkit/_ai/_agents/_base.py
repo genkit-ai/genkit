@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import copy
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, Generic, TypeVar
 
@@ -113,7 +112,8 @@ class Agent(BidiAction, Generic[StateT, StreamT]):
             description=description,
             metadata={**(metadata or {}), 'agent': {'stateManagement': 'server' if store is not None else 'client'}},
         )
-        self._transport = InProcessTransport(self, store)
+        self.store = store
+        self.transport = InProcessTransport(self, store)
 
     # ------------------------------------------------------------------
     # AgentAPI implementation
@@ -121,26 +121,26 @@ class Agent(BidiAction, Generic[StateT, StreamT]):
 
     def chat(self, init: AgentInit | None = None) -> AgentSession[StateT, StreamT]:
         """Starts a new in-process session, or attaches to one via init."""
-        session_transport = copy.copy(self._transport)
+        session_transport = InProcessTransport(self, self.store)
         return AgentSession(session_transport, init)
 
     async def load_chat(self, snapshot_id: str) -> AgentSession[StateT, StreamT]:
         """Loads a server snapshot and returns a session with history restored."""
-        snapshot = await self._transport.get_snapshot(snapshot_id)
+        snapshot = await self.transport.get_snapshot(snapshot_id)
         if snapshot is None:
             raise ValueError(f"Failed to load chat: Snapshot with ID '{snapshot_id}' not found.")
-        session_transport = copy.copy(self._transport)
+        session_transport = InProcessTransport(self, self.store)
         session = AgentSession(session_transport)
         session.load_from_snapshot(snapshot)
         return session
 
     async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot | None:
         """Reads a snapshot without starting a session."""
-        return await self._transport.get_snapshot(snapshot_id)
+        return await self.transport.get_snapshot(snapshot_id)
 
     async def abort(self, snapshot_id: str) -> SnapshotStatus | None:
         """Aborts a running snapshot."""
-        return await self._transport.abort_snapshot(snapshot_id)
+        return await self.transport.abort_snapshot(snapshot_id)
 
 
 # ---------------------------------------------------------------------------
