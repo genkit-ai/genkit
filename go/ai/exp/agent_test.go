@@ -148,7 +148,7 @@ func TestAgent_BasicMultiTurn(t *testing.T) {
 // per-turn whole-document replace (the first patch of a turn re-bases the
 // client) followed by an incremental diff within the same turn, and that the
 // tracking carries across turns. The server-side patch emission is covered by
-// TestAgent_TurnSpanOutput_WithSnapshots; this is its client-side complement.
+// TestAgent_CustomPatchWholeDocumentReplace; this is its client-side complement.
 func TestAgentConnection_Custom_TracksStreamedPatches(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
@@ -1345,22 +1345,36 @@ func TestAgent_SetMessages(t *testing.T) {
 	}
 }
 
+// turnSpanState parses a turn span's genkit:output attribute, which the agent
+// records as {"state": <session state>} (see turnSpanOutput), and returns the
+// embedded state.
+func turnSpanState(t *testing.T, span sdktrace.ReadOnlySpan) *SessionState[testState] {
+	t.Helper()
+	raw, ok := spanAttr(span, "genkit:output")
+	if !ok {
+		t.Fatalf("span %q: missing genkit:output attribute", span.Name())
+	}
+	var out turnSpanOutput[testState]
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatalf("span %q: genkit:output %q is not valid turn output: %v", span.Name(), raw, err)
+	}
+	if out.State == nil {
+		t.Fatalf("span %q: genkit:output %q carries no state", span.Name(), raw)
+	}
+	return out.State
+}
+
+// TestAgent_TurnSpanOutput verifies each turn span's output is the committed
+// session state at turn end, wrapped as {state: ...}. The agent is
+// client-managed (no store), so no turn-end snapshot is written and the
+// per-turn snapshot-ID attribute is absent.
 func TestAgent_TurnSpanOutput(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
-
-	var capturedOutputs []any
+	spans := collectSpans(t)
 
 	af := DefineCustomAgent(reg, "turnOutputFlow",
 		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
-			// Wrap collectTurnOutput to capture what each turn produces.
-			originalCollect := sess.collectTurnOutput
-			sess.collectTurnOutput = func() any {
-				output := originalCollect()
-				capturedOutputs = append(capturedOutputs, output)
-				return output
-			}
-
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
@@ -1390,59 +1404,51 @@ func TestAgent_TurnSpanOutput(t *testing.T) {
 	}
 
 	conn.Close()
-	if _, err := conn.Output(); err != nil {
+	out, err := conn.Output()
+	if err != nil {
 		t.Fatalf("Output failed: %v", err)
 	}
 
-	// Should have captured output for each turn.
-	if len(capturedOutputs) != 2 {
-		t.Fatalf("expected 2 captured outputs, got %d", len(capturedOutputs))
-	}
-
-	for i, output := range capturedOutputs {
-		chunks, ok := output.([]*AgentStreamChunk)
-		if !ok {
-			t.Fatalf("turn %d: expected []*AgentStreamChunk, got %T", i, output)
+	// Each turn span's output carries the cumulative state through that turn:
+	// the running counter and one user message plus one reply per turn.
+	for turn := range 2 {
+		name := fmt.Sprintf("runTurn-%d", turn+1)
+		span := spans.byName(name)
+		if span == nil {
+			t.Fatalf("missing span %q", name)
 		}
-		// 3 content chunks per turn: customPatch + model chunk + artifact.
-		if len(chunks) != 3 {
-			t.Errorf("turn %d: expected 3 chunks, got %d", i, len(chunks))
+		state := turnSpanState(t, span)
+		if state.SessionID != out.SessionID {
+			t.Errorf("%s: state.sessionId = %q, want %q", name, state.SessionID, out.SessionID)
 		}
-		for j, chunk := range chunks {
-			if chunk.TurnEnd != nil {
-				t.Errorf("turn %d, chunk %d: TurnEnd should not be in turn output", i, j)
-			}
+		if want := turn + 1; state.Custom.Counter != want {
+			t.Errorf("%s: state.custom.counter = %d, want %d", name, state.Custom.Counter, want)
+		}
+		if got, want := len(state.Messages), 2*(turn+1); got != want {
+			t.Errorf("%s: len(state.messages) = %d, want %d", name, got, want)
+		}
+		// An artifact added during the turn rides the committed state too.
+		if got := len(state.Artifacts); got != 1 {
+			t.Errorf("%s: len(state.artifacts) = %d, want 1", name, got)
+		}
+		// Client-managed: no snapshot, so no snapshot-ID attribute.
+		if v, ok := spanAttr(span, snapshotIDSpanAttrKey); ok {
+			t.Errorf("%s: unexpected %s = %q (client-managed writes no snapshot)", name, snapshotIDSpanAttrKey, v)
 		}
 	}
 }
 
+// TestAgent_TurnSpanOutput_WithSnapshots verifies that for a server-managed
+// agent the turn span both carries the persisted snapshot's ID under
+// genkit:metadata:agent:snapshotId and records the committed state as its
+// {state: ...} output, agreeing with the snapshot the ID points to.
 func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
+	spans := collectSpans(t)
 
-	var capturedOutputs []any
-
-	af := DefineCustomAgent(reg, "turnOutputSnapshotFlow",
-		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
-			originalCollect := sess.collectTurnOutput
-			sess.collectTurnOutput = func() any {
-				output := originalCollect()
-				capturedOutputs = append(capturedOutputs, output)
-				return output
-			}
-
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
-				sess.UpdateCustom(func(s testState) testState {
-					s.Counter++
-					return s
-				})
-				sess.AddMessages(ai.NewModelTextMessage("reply"))
-				return nil, nil
-			})
-		},
-		WithSessionStore(store),
-	)
+	af := defineCounterAgent(reg, "turnOutputSnapshotFlow", WithSessionStore(store))
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -1450,28 +1456,80 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 	}
 
 	sendText(t, conn, "hello")
-	var sawSnapshot bool
-	if nextTurnEnd(t, conn).SnapshotID != "" {
-		sawSnapshot = true
-	}
-	conn.Close()
-	conn.Output()
-
-	if !sawSnapshot {
+	te := nextTurnEnd(t, conn)
+	if te.SnapshotID == "" {
 		t.Fatal("expected a snapshot ID on the turn-end chunk")
 	}
+	conn.Close()
+	if _, err := conn.Output(); err != nil {
+		t.Fatalf("Output failed: %v", err)
+	}
 
-	// Turn output should contain only the customPatch chunk, not the TurnEnd signal.
-	if len(capturedOutputs) != 1 {
-		t.Fatalf("expected 1 captured output, got %d", len(capturedOutputs))
+	span := spans.byName("runTurn-1")
+	if span == nil {
+		t.Fatal("missing span runTurn-1")
 	}
-	chunks := capturedOutputs[0].([]*AgentStreamChunk)
-	if len(chunks) != 1 {
-		t.Errorf("expected 1 content chunk, got %d", len(chunks))
+
+	// The turn span is tagged with the turn-end snapshot's ID.
+	got, ok := spanAttr(span, snapshotIDSpanAttrKey)
+	if !ok {
+		t.Fatalf("turn span: missing %s", snapshotIDSpanAttrKey)
 	}
-	// The first (and only) patch of the turn is a whole-document replace.
-	if got := chunks[0].CustomPatch; len(got) != 1 || got[0].Op != JSONPatchOpReplace || got[0].Path != "" {
-		t.Errorf("expected a whole-document replace customPatch, got %+v", got)
+	if got != te.SnapshotID {
+		t.Errorf("turn span %s = %q, want %q (the turn-end snapshot)", snapshotIDSpanAttrKey, got, te.SnapshotID)
+	}
+
+	// Its output is the committed state, matching the persisted snapshot.
+	state := turnSpanState(t, span)
+	if state.Custom.Counter != 1 {
+		t.Errorf("turn span state.custom.counter = %d, want 1", state.Custom.Counter)
+	}
+	snap, err := store.GetSnapshot(ctx, te.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if state.SessionID != snap.SessionID {
+		t.Errorf("turn span state.sessionId = %q, want %q (snapshot's session)", state.SessionID, snap.SessionID)
+	}
+	if got, want := state.Custom.Counter, snap.State.Custom.Counter; got != want {
+		t.Errorf("turn span state.custom.counter = %d, want %d (snapshot's counter)", got, want)
+	}
+}
+
+// TestAgent_CustomPatchWholeDocumentReplace verifies the server emits the first
+// custom-state mutation of a turn as a whole-document replace: a single RFC 6902
+// replace at the root pointer, which re-bases a client that may not share the
+// server's baseline. The client-side effect of this re-basing across turns is
+// covered by TestAgentConnection_Custom_TracksStreamedPatches.
+func TestAgent_CustomPatchWholeDocumentReplace(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	af := defineCounterAgent(reg, "wholeDocReplaceFlow")
+
+	conn, err := af.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	sendText(t, conn, "hello")
+
+	var patch JSONPatch
+	for chunk, err := range conn.Receive() {
+		if err != nil {
+			t.Fatalf("Receive: %v", err)
+		}
+		if chunk.CustomPatch != nil {
+			patch = chunk.CustomPatch
+			break
+		}
+		if chunk.TurnEnd != nil {
+			break
+		}
+	}
+	conn.Close()
+
+	if len(patch) != 1 || patch[0].Op != JSONPatchOpReplace || patch[0].Path != "" {
+		t.Errorf("first customPatch = %+v, want a single whole-document replace at root", patch)
 	}
 }
 
@@ -1516,6 +1574,170 @@ func setupPromptTestRegistry(t *testing.T) *registry.Registry {
 	return reg
 }
 
+// personaInput is the input schema for the shared prompt exercised by
+// TestPromptAgent_NamedPromptSharedAcrossAgents.
+type personaInput struct {
+	Personality string `json:"personality"`
+}
+
+// TestPromptAgent_NamedPromptSharedAcrossAgents verifies that WithNamedPrompt
+// backs several agents with a single prompt, rendering each with its own
+// input, and that an agent's name is independent of the prompt it references.
+func TestPromptAgent_NamedPromptSharedAcrossAgents(t *testing.T) {
+	ctx := context.Background()
+	reg := registry.New()
+	ai.ConfigureFormats(reg)
+
+	var mu sync.Mutex
+	var renderedSystems []string
+	ai.DefineModel(reg, "test/capture", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			mu.Lock()
+			for _, m := range req.Messages {
+				if m.Role == ai.RoleSystem {
+					renderedSystems = append(renderedSystems, m.Text())
+				}
+			}
+			mu.Unlock()
+			return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("ok")}, nil
+		},
+	)
+	ai.DefineGenerateAction(ctx, reg)
+
+	// One shared prompt with a personality variable, registered under a name
+	// that matches no agent.
+	ai.DefinePrompt(reg, "sharedChat",
+		ai.WithModelName("test/capture"),
+		ai.WithInputType(personaInput{}),
+		ai.WithSystem("You are {{personality}}."),
+	)
+
+	// Two agents, different names, the one prompt, different inputs.
+	pirate := DefinePromptAgent[testState](reg, "pirate",
+		WithNamedPrompt[testState]("sharedChat", personaInput{Personality: "a pirate"}))
+	chef := DefinePromptAgent[testState](reg, "chef",
+		WithNamedPrompt[testState]("sharedChat", personaInput{Personality: "a chef"}))
+
+	// The agents register under their own names, not the prompt's.
+	if pirate.Name() != "pirate" {
+		t.Errorf("pirate.Name() = %q, want %q", pirate.Name(), "pirate")
+	}
+	if chef.Name() != "chef" {
+		t.Errorf("chef.Name() = %q, want %q", chef.Name(), "chef")
+	}
+
+	if _, err := pirate.RunText(ctx, "hi"); err != nil {
+		t.Fatalf("pirate RunText: %v", err)
+	}
+	if _, err := chef.RunText(ctx, "hi"); err != nil {
+		t.Fatalf("chef RunText: %v", err)
+	}
+
+	// Each agent rendered the shared prompt with its own personality input.
+	joined := strings.Join(renderedSystems, " | ")
+	if !strings.Contains(joined, "You are a pirate.") {
+		t.Errorf("pirate personality not rendered; system prompts = %q", joined)
+	}
+	if !strings.Contains(joined, "You are a chef.") {
+		t.Errorf("chef personality not rendered; system prompts = %q", joined)
+	}
+}
+
+// TestDefinePromptAgent_DefaultAndNamed exercises the option-configured prompt
+// agent: the default same-named lookup (no source option), the WithNamedPrompt
+// override sourcing a shared prompt with a code-supplied input, and that the
+// shared agent options (WithDescription) compose alongside the prompt source.
+func TestDefinePromptAgent_DefaultAndNamed(t *testing.T) {
+	ctx := context.Background()
+	reg := registry.New()
+	ai.ConfigureFormats(reg)
+
+	var mu sync.Mutex
+	var renderedSystems []string
+	ai.DefineModel(reg, "test/capture", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			mu.Lock()
+			for _, m := range req.Messages {
+				if m.Role == ai.RoleSystem {
+					renderedSystems = append(renderedSystems, m.Text())
+				}
+			}
+			mu.Unlock()
+			return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("ok")}, nil
+		},
+	)
+	ai.DefineGenerateAction(ctx, reg)
+
+	// A same-named prompt for the default lookup, and a shared parameterized
+	// prompt for the WithNamedPrompt override.
+	ai.DefinePrompt(reg, "chef",
+		ai.WithModelName("test/capture"),
+		ai.WithSystem("You are a chef."),
+	)
+	ai.DefinePrompt(reg, "sharedChat",
+		ai.WithModelName("test/capture"),
+		ai.WithInputType(personaInput{}),
+		ai.WithSystem("You are {{personality}}."),
+	)
+
+	// Default: no source option resolves the prompt named after the agent.
+	chef := DefinePromptAgent[testState](reg, "chef",
+		WithDescription[testState]("a chef agent"))
+	if chef.Name() != "chef" {
+		t.Fatalf("chef.Name() = %q, want %q", chef.Name(), "chef")
+	}
+	if got := chef.Desc().Description; got != "a chef agent" {
+		t.Errorf("chef description = %q, want %q", got, "a chef agent")
+	}
+
+	// Override: source the shared prompt with a code-supplied input. The agent
+	// name ("pirate") is independent of the referenced prompt ("sharedChat").
+	pirate := DefinePromptAgent[testState](reg, "pirate",
+		WithNamedPrompt[testState]("sharedChat", personaInput{Personality: "a pirate"}))
+
+	if _, err := chef.RunText(ctx, "hi"); err != nil {
+		t.Fatalf("chef RunText: %v", err)
+	}
+	if _, err := pirate.RunText(ctx, "hi"); err != nil {
+		t.Fatalf("pirate RunText: %v", err)
+	}
+
+	joined := strings.Join(renderedSystems, " | ")
+	if !strings.Contains(joined, "You are a chef.") {
+		t.Errorf("default same-named prompt not rendered; systems = %q", joined)
+	}
+	if !strings.Contains(joined, "You are a pirate.") {
+		t.Errorf("WithNamedPrompt input not rendered; systems = %q", joined)
+	}
+}
+
+// TestDefinePromptAgent_Panics covers the definition-time failures: a prompt
+// that is not registered, and setting the prompt source more than once.
+func TestDefinePromptAgent_Panics(t *testing.T) {
+	reg := setupPromptTestRegistry(t)
+	ai.DefinePrompt(reg, "present", ai.WithModelName("test/echo"))
+
+	t.Run("missing prompt", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected panic for missing prompt")
+			}
+		}()
+		DefinePromptAgent[testState](reg, "absent")
+	})
+
+	t.Run("duplicate prompt source", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected panic for duplicate WithNamedPrompt")
+			}
+		}()
+		DefinePromptAgent[testState](reg, "present",
+			WithNamedPrompt[testState]("present", nil),
+			WithNamedPrompt[testState]("present", nil))
+	})
+}
+
 func TestPromptAgent_Basic(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
@@ -1525,7 +1747,7 @@ func TestPromptAgent_Basic(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefineAgent[testState](reg, "testPrompt", FromPrompt())
+	af := DefinePromptAgent[testState](reg, "testPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -1600,7 +1822,7 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 		ai.WithSystem("system prompt"),
 	)
 
-	af := DefineAgent[testState](reg, "historyPrompt", FromPrompt())
+	af := DefinePromptAgent[testState](reg, "historyPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -1674,7 +1896,7 @@ func TestPromptAgent_SnapshotResumePreservesHistory(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefineAgent[testState](reg, "snapPrompt", FromPrompt(),
+	af := DefinePromptAgent[testState](reg, "snapPrompt",
 		WithSessionStore(store),
 	)
 
@@ -1799,7 +2021,7 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 		ai.WithTools(ai.ToolName("greet"), ai.ToolName("farewell")),
 	)
 
-	af := DefineAgent[testState](reg, "toolPrompt", FromPrompt())
+	af := DefinePromptAgent[testState](reg, "toolPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -2004,7 +2226,7 @@ func TestPromptAgent_RunText(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefineAgent[testState](reg, "runTextPrompt", FromPrompt())
+	af := DefinePromptAgent[testState](reg, "runTextPrompt")
 
 	response, err := af.RunText(ctx, "hello")
 	if err != nil {
@@ -2029,7 +2251,7 @@ func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
 	ai.DefinePrompt(reg, "rejectPrompt", ai.WithModelName("test/echo"))
-	af := DefineAgent[testState](reg, "rejectPrompt", FromPrompt())
+	af := DefinePromptAgent[testState](reg, "rejectPrompt")
 
 	tests := []struct {
 		name    string
@@ -2188,7 +2410,7 @@ func TestPromptAgent_RejectsResumeForUnrequestedTool(t *testing.T) {
 	ai.DefineGenerateAction(ctx, reg)
 	ai.DefinePrompt(reg, "plainPrompt", ai.WithModelName("test/plain"))
 
-	af := DefineAgent[testState](reg, "plainPrompt", FromPrompt())
+	af := DefinePromptAgent[testState](reg, "plainPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -3433,7 +3655,7 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 	// Transform that scrubs a specific word from all messages. It also
 	// (incorrectly) drops the framework-owned session ID, which the
 	// action must re-stamp on the way out.
-	transform := func(_ context.Context, s *SessionState[testState]) *SessionState[testState] {
+	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
 		for _, msg := range s.Messages {
 			for _, p := range msg.Content {
 				if p.Text != "" {
@@ -3442,7 +3664,7 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 			}
 		}
 		s.SessionID = ""
-		return s
+		return s, nil
 	}
 
 	af := DefineCustomAgent(reg, "transformedFlow",
@@ -3538,7 +3760,7 @@ func TestAgent_GetSnapshot_FacadeTransformsRawStoreDoesNot(t *testing.T) {
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 
-	transform := func(_ context.Context, s *SessionState[testState]) *SessionState[testState] {
+	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
 		for _, msg := range s.Messages {
 			for _, p := range msg.Content {
 				if p.Text != "" {
@@ -3546,7 +3768,7 @@ func TestAgent_GetSnapshot_FacadeTransformsRawStoreDoesNot(t *testing.T) {
 				}
 			}
 		}
-		return s
+		return s, nil
 	}
 
 	af := DefineCustomAgent(reg, "facadeTransform",
@@ -4433,10 +4655,10 @@ func TestAgent_StateTransform_ClientManagedState(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	// Client-managed state: transform should be applied to AgentOutput.State.
-	transform := func(_ context.Context, s *SessionState[testState]) *SessionState[testState] {
+	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
 		// Zero out the counter to demonstrate the transform is applied.
 		s.Custom.Counter = -1
-		return s
+		return s, nil
 	}
 
 	af := DefineCustomAgent(reg, "clientXformFlow",
@@ -4461,6 +4683,105 @@ func TestAgent_StateTransform_ClientManagedState(t *testing.T) {
 	}
 	if out.State.Custom.Counter != -1 {
 		t.Errorf("expected transformed counter=-1, got %d", out.State.Custom.Counter)
+	}
+}
+
+// TestAgent_StateTransform_ErrorFailsClientManagedOutputClosed verifies a state
+// transform that returns an error fails the invocation closed: rather than
+// handing back unshaped state, the otherwise-successful client-managed
+// invocation resolves as a failed output, with the transform's status preserved
+// and no state attached.
+func TestAgent_StateTransform_ErrorFailsClientManagedOutputClosed(t *testing.T) {
+	reg := newTestRegistry(t)
+
+	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
+		return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape state")
+	}
+
+	af := DefineCustomAgent(reg, "clientXformErr",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("done"))
+				return nil, nil
+			})
+		},
+		WithStateTransform[testState](transform),
+	)
+
+	out, err := af.RunText(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("expected a graceful failed output, got error: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
+	}
+	if out.Error == nil || out.Error.Status != core.PERMISSION_DENIED {
+		t.Errorf("Error = %+v, want status %q from the transform", out.Error, core.PERMISSION_DENIED)
+	}
+	// failedOutput shapes the last-good state through the same transform, which
+	// errors again here; the runtime omits state rather than leaking it.
+	if out.State != nil {
+		t.Errorf("expected no state on the failed output (transform failed closed), got %+v", out.State)
+	}
+}
+
+// TestAgent_StateTransform_ErrorFailsSnapshotReadClosed verifies a state
+// transform that errors fails a snapshot read closed: both the typed
+// Agent.GetSnapshot facade and the getSnapshot companion action surface the
+// transform's error (status preserved) instead of returning unshaped state.
+func TestAgent_StateTransform_ErrorFailsSnapshotReadClosed(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
+		return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape state")
+	}
+
+	af := DefineCustomAgent(reg, "snapXformErr",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("done"))
+				return nil, nil
+			})
+		},
+		WithSessionStore(store),
+		WithStateTransform[testState](transform),
+	)
+
+	// A successful run persists a snapshot (the run itself does not read state
+	// back through the transform, so it is unaffected).
+	out, err := af.RunText(ctx, "go")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("expected a persisted snapshot ID")
+	}
+
+	// The typed facade fails closed with the transform's status.
+	if _, err := af.GetSnapshot(ctx, out.SnapshotID); err == nil {
+		t.Error("Agent.GetSnapshot: expected the transform error, got nil")
+	} else if core.AsGenkitError(err).Status != core.PERMISSION_DENIED {
+		t.Errorf("Agent.GetSnapshot error status = %q, want %q", core.AsGenkitError(err).Status, core.PERMISSION_DENIED)
+	}
+
+	// The getSnapshot companion action fails the same way for non-Go clients.
+	action := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}](
+		reg, api.ActionTypeAgentSnapshot, "snapXformErr")
+	if action == nil {
+		t.Fatal("getSnapshot action not registered")
+	}
+	if _, err := action.Run(ctx, &GetSnapshotRequest{SnapshotID: out.SnapshotID}, nil); err == nil {
+		t.Error("getSnapshot action: expected the transform error, got nil")
+	} else if core.AsGenkitError(err).Status != core.PERMISSION_DENIED {
+		t.Errorf("getSnapshot action error status = %q, want %q", core.AsGenkitError(err).Status, core.PERMISSION_DENIED)
+	}
+
+	// The stored snapshot itself is untouched: the failure is read-time shaping,
+	// not corruption, so the row is still resumable.
+	if snap, err := store.GetSnapshot(ctx, out.SnapshotID); err != nil || snap == nil {
+		t.Errorf("stored GetSnapshot = (%v, %v), want the intact snapshot", snap, err)
 	}
 }
 
@@ -5042,7 +5363,7 @@ func TestPromptAgent_ForwardsFinishReason(t *testing.T) {
 	ai.DefineGenerateAction(ctx, reg)
 	ai.DefinePrompt(reg, "lengthPrompt", ai.WithModelName("test/length"))
 
-	af := DefineAgent[testState](reg, "lengthPrompt", FromPrompt())
+	af := DefinePromptAgent[testState](reg, "lengthPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -5445,7 +5766,7 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 		ai.WithTools(interruptTool),
 	)
 
-	af := DefineAgent[testState](reg, "interruptPrompt", FromPrompt())
+	af := DefinePromptAgent[testState](reg, "interruptPrompt")
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -6413,10 +6734,10 @@ func TestPromptAgent_InlineMessages_DoesNotMutateSharedMetadata(t *testing.T) {
 	shared := ai.NewModelTextMessage("inline context message")
 	shared.Metadata = map[string]any{"origin": "config"}
 
-	af := DefineAgent[testState](reg, "inlineMetaPrompt", FromInline(
+	af := DefineAgent[testState](reg, "inlineMetaPrompt", InlinePrompt{
 		ai.WithModelName("test/echo"),
 		ai.WithMessages(shared),
-	))
+	})
 
 	response, err := af.RunText(ctx, "hello")
 	if err != nil {
@@ -6446,10 +6767,10 @@ func TestPromptAgent_InlineMessages_ConcurrentInvocations(t *testing.T) {
 	shared := ai.NewModelTextMessage("inline context message")
 	shared.Metadata = map[string]any{"origin": "config"}
 
-	af := DefineAgent[testState](reg, "inlineConcurrentPrompt", FromInline(
+	af := DefineAgent[testState](reg, "inlineConcurrentPrompt", InlinePrompt{
 		ai.WithModelName("test/echo"),
 		ai.WithMessages(shared),
-	))
+	})
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 8)

@@ -16,10 +16,16 @@
     "AbortSnapshotResponse": {
       "type": "object",
       "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
         "status": {
           "$ref": "#/$defs/SnapshotStatus"
         }
       },
+      "required": [
+        "snapshotId"
+      ],
       "additionalProperties": false
     },
     "AgentFinishReason": {

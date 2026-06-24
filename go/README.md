@@ -85,7 +85,7 @@ The agent API is experimental: it lives in `github.com/firebase/genkit/go/ai/exp
 
 ### Define an Agent
 
-The shortest path is a prompt-backed agent with an inline prompt and a session store. `aix.FromInline` declares the prompt right next to the agent; the store persists each turn so the conversation can resume later:
+The shortest path is a prompt-backed agent with an inline prompt and a session store. `aix.InlinePrompt` declares the prompt right next to the agent; the store persists each turn so the conversation can resume later:
 
 ```go
 import (
@@ -96,10 +96,10 @@ import (
 )
 
 chatAgent := genkit.DefineAgent(g, "chat",
-    aix.FromInline(
+    aix.InlinePrompt{
         ai.WithModelName("googleai/gemini-flash-latest"),
         ai.WithSystem("You are a sarcastic pirate. Keep responses concise."),
-    ),
+    },
     aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
 )
 
@@ -143,7 +143,7 @@ fmt.Println(out.Message.Text())
 
 ### Load the Prompt from a File
 
-`aix.FromPrompt` backs the agent with a prompt already in the registry, including one loaded from a `.prompt` file. Prompt authors can tune the model, config, and template without touching the Go wiring. The agent and its prompt share a name:
+`genkit.DefinePromptAgent` backs the agent with a prompt from the registry instead of an inline one. By default it uses the prompt registered under the agent's own name, including one loaded from a `.prompt` file, so prompt authors can tune the model, config, template, and default input without touching the Go wiring:
 
 ```yaml
 # prompts/chat.prompt
@@ -151,6 +151,8 @@ fmt.Println(out.Message.Text())
 model: googleai/gemini-flash-latest
 input:
   schema: ChatInput
+  default:
+    personality: a Michelin-starred chef
 ---
 {{role "system"}}
 You are {{personality}}. Keep responses concise.
@@ -164,11 +166,24 @@ type ChatInput struct {
 // Register the schema so the .prompt file can reference it by name.
 genkit.DefineSchemaFor[ChatInput](g)
 
-// FromPrompt's argument is the default input rendered on every turn.
-chatAgent := genkit.DefineAgent(g, "chat",
-    aix.FromPrompt(ChatInput{Personality: "a Michelin-starred chef"}),
+// Agent "chat" renders ./prompts/chat.prompt every turn (no source option needed).
+chatAgent := genkit.DefinePromptAgent(g, "chat",
     aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
 )
+```
+
+To back several agents with one shared prompt, point each at it with `aix.WithNamedPrompt` and give each its own input. The prompt name need not match the agent name:
+
+```go
+for _, p := range []struct{ name, persona string }{
+    {"pirate", "a sarcastic pirate"},
+    {"chef", "a Michelin-starred chef"},
+} {
+    genkit.DefinePromptAgent(g, p.name,
+        aix.WithNamedPrompt[any]("chat", ChatInput{Personality: p.persona}),
+        aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+    )
+}
 ```
 
 [See full example](samples/basic-agents)
@@ -237,6 +252,22 @@ fmt.Println(second.Message.Text()) // "Your name is Alex."
 Resume from one specific point in history with `aix.WithSnapshotID`, or skip the server store entirely and round-trip the state yourself with `aix.WithState` (the conversation's identity travels inside the state object).
 
 [See full example](samples/basic-agents)
+
+### Redact on the Way Out
+
+`WithStateTransform` rewrites session state as it leaves the server, on `GetSnapshot` reads, on a client-managed `out.State`, and on the streamed `CustomPatch` diffs, while the persisted snapshot and the state your agent function sees stay raw:
+
+```go
+chatAgent := genkit.DefineAgent(g, "chat",
+    aix.InlinePrompt{ai.WithModelName("googleai/gemini-flash-latest")},
+    aix.WithSessionStore(store),
+    aix.WithStateTransform[ChatState](func(ctx context.Context, s *aix.SessionState[ChatState]) (*aix.SessionState[ChatState], error) {
+        return redactPII(ctx, s) // ctx carries caller identity for RBAC-aware redaction
+    }),
+)
+```
+
+`WithStreamTransform[State]` is the stream-side counterpart, rewriting each `AgentStreamChunk` (model tokens, artifacts, custom patches, turn-end) on its way to the client. Both transforms own a fresh deep copy: mutate it in place, return a new value, or return `nil` to omit that state (or drop that chunk) from the client's view. A non-nil error fails closed, so the read or invocation fails with the transform's status (e.g. `PERMISSION_DENIED`) instead of leaking unredacted data.
 
 ### Background Agents
 

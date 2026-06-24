@@ -58,11 +58,11 @@ const artifactsMarker = "artifacts-listing"
 // Usage:
 //
 //	builder := genkit.DefineAgent(g, "builder",
-//	    aix.FromInline(
+//	    aix.InlinePrompt{
 //	        ai.WithModelName("googleai/gemini-flash-latest"),
 //	        ai.WithSystem("You are a code generator. Use write_artifact to create files."),
 //	        ai.WithUse(&middleware.Artifacts{}),
-//	    ),
+//	    },
 //	)
 type Artifacts struct {
 	// Readonly, when true, provides only the read_artifact tool; the model

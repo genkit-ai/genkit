@@ -15,10 +15,11 @@
 // This sample demonstrates Genkit's agent APIs by defining four agents and
 // exposing all of them through a single CLI. Each agent lives in its own file:
 //
-//   - "pirate" (pirate.go) uses DefineAgent + aix.FromInline. The prompt is
+//   - "pirate" (pirate.go) uses DefineAgent + aix.InlinePrompt. The prompt is
 //     declared inline next to the agent.
-//   - "chef" (chef.go) uses DefineAgent + aix.FromPrompt. The prompt is loaded
-//     from ./prompts/chef.prompt by the agent's name.
+//   - "chef" (chef.go) uses DefinePromptAgent. With no source option it defaults
+//     to the prompt registered under the agent's name, loaded from
+//     ./prompts/chef.prompt.
 //   - "coder" (coder.go) uses DefineCustomAgent. The per-turn loop (model
 //     selection, history management, streaming) is wired by hand.
 //   - "orchestrator" (orchestrator.go) uses the experimental Agents middleware

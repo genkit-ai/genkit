@@ -38,34 +38,34 @@ import (
 // tool to review them before answering.
 func defineOrchestratorAgent(g *genkit.Genkit) *aix.Agent[any] {
 	researcher := genkit.DefineAgent(g, "researcher",
-		aix.FromInline(
+		aix.InlinePrompt{
 			ai.WithModel(flashModel),
-			ai.WithSystem("You are a thorough research assistant. Answer the question "+
-				"concisely, then call write_artifact to save your findings as a named "+
+			ai.WithSystem("You are a thorough research assistant. Answer the question " +
+				"concisely, then call write_artifact to save your findings as a named " +
 				"markdown artifact (for example \"findings.md\")."),
 			ai.WithUse(&middlewarex.Artifacts{}),
-		),
+		},
 		aix.WithDescription[any]("Researches a topic and summarizes well-sourced findings."),
 	)
 
 	engineer := genkit.DefineAgent(g, "engineer",
-		aix.FromInline(
+		aix.InlinePrompt{
 			ai.WithModel(flashModel),
-			ai.WithSystem("You are an expert programmer. Write clean, well-commented code, "+
-				"then call write_artifact to save it as a named file artifact (for "+
+			ai.WithSystem("You are an expert programmer. Write clean, well-commented code, " +
+				"then call write_artifact to save it as a named file artifact (for " +
 				"example \"main.go\")."),
 			ai.WithUse(&middlewarex.Artifacts{}),
-		),
+		},
 		aix.WithDescription[any]("Writes and explains code, producing file artifacts."),
 	)
 
 	return genkit.DefineAgent(g, "orchestrator",
-		aix.FromInline(
+		aix.InlinePrompt{
 			ai.WithModel(flashModel),
-			ai.WithSystem("You are a project coordinator. Analyze the user's request and "+
-				"delegate to the appropriate sub-agent using its delegation tool. If a "+
-				"request needs both research and code, delegate to each in turn. After "+
-				"the sub-agents respond you may call read_artifact to review their work, "+
+			ai.WithSystem("You are a project coordinator. Analyze the user's request and " +
+				"delegate to the appropriate sub-agent using its delegation tool. If a " +
+				"request needs both research and code, delegate to each in turn. After " +
+				"the sub-agents respond you may call read_artifact to review their work, " +
 				"then synthesize a final answer for the user."),
 			ai.WithUse(
 				// One delegation tool per sub-agent. Descriptions are
@@ -83,7 +83,7 @@ func defineOrchestratorAgent(g *genkit.Genkit) *aix.Agent[any] {
 				// artifacts but does not produce its own.
 				&middlewarex.Artifacts{Readonly: true},
 			),
-		),
+		},
 		aix.WithSessionStore(mustStore("orchestrator")),
 		aix.WithDescription[any]("Coordinates research and coding sub-agents via the agents middleware"),
 	)

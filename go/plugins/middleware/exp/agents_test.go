@@ -131,9 +131,9 @@ func TestAgentsInjectsSystemPrompt(t *testing.T) {
 
 	// researcher's description is auto-discovered from its action descriptor.
 	genkit.DefineAgent[any](g, "researcher",
-		aix.FromInline(ai.WithModel(toolModel(t, g, "test/researcher", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/researcher", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return textResp(req, "researched"), nil
-		}))),
+		}))},
 		aix.WithDescription[any]("Searches the web and summarizes findings."),
 	)
 
@@ -171,9 +171,9 @@ func TestAgentsDelegationRunsSubAgent(t *testing.T) {
 	g := newTestGenkit(t)
 
 	genkit.DefineAgent[any](g, "researcher",
-		aix.FromInline(ai.WithModel(toolModel(t, g, "test/researcher", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/researcher", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return textResp(req, "research complete"), nil
-		}))),
+		}))},
 	)
 
 	orch := delegateOnceModel(t, g, "test/orch", "delegate_to_researcher", "look into X")
@@ -225,9 +225,9 @@ func TestAgentsToolPrefix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			g := newTestGenkit(t)
 			genkit.DefineAgent[any](g, "researcher",
-				aix.FromInline(ai.WithModel(toolModel(t, g, "test/sub-"+tc.name, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+				aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/sub-"+tc.name, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 					return textResp(req, "ok"), nil
-				}))),
+				}))},
 			)
 			orch := delegateOnceModel(t, g, "test/orch-"+tc.name, tc.want, "task")
 			mw := &Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, ToolPrefix: tc.prefix}
@@ -247,9 +247,9 @@ func TestAgentsMaxDelegations(t *testing.T) {
 	g := newTestGenkit(t)
 
 	genkit.DefineAgent[any](g, "researcher",
-		aix.FromInline(ai.WithModel(toolModel(t, g, "test/researcher", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/researcher", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return textResp(req, "did work"), nil
-		}))),
+		}))},
 	)
 
 	// Issue two delegations in a single turn; with MaxDelegations=1 exactly one
@@ -296,10 +296,10 @@ func TestAgentsForwardsHistory(t *testing.T) {
 	// The sub-agent records the messages its model receives.
 	var subMessages []*ai.Message
 	genkit.DefineAgent[any](g, "researcher",
-		aix.FromInline(ai.WithModel(toolModel(t, g, "test/researcher", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/researcher", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			subMessages = req.Messages
 			return textResp(req, "noted"), nil
-		}))),
+		}))},
 	)
 
 	orch := delegateOnceModel(t, g, "test/orch", "delegate_to_researcher", "summarize the discussion")
@@ -447,9 +447,9 @@ func TestAgentsArtifactStrategies(t *testing.T) {
 func TestAgentRefCapturesNameAndDescription(t *testing.T) {
 	g := newTestGenkit(t)
 	a := genkit.DefineAgent[any](g, "writer",
-		aix.FromInline(ai.WithModel(toolModel(t, g, "test/writer", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/writer", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return textResp(req, "x"), nil
-		}))),
+		}))},
 		aix.WithDescription[any]("Writes things."),
 	)
 
@@ -465,9 +465,9 @@ func TestAgentRefCapturesNameAndDescription(t *testing.T) {
 func TestAgentsDelegatesViaRef(t *testing.T) {
 	g := newTestGenkit(t)
 	researcher := genkit.DefineAgent[any](g, "researcher",
-		aix.FromInline(ai.WithModel(toolModel(t, g, "test/researcher", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/researcher", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return textResp(req, "ref result"), nil
-		}))),
+		}))},
 	)
 
 	orch := delegateOnceModel(t, g, "test/orch", "delegate_to_researcher", "go")
@@ -486,9 +486,9 @@ func TestAgentsDelegatesViaRef(t *testing.T) {
 func TestAgentsRefDescriptionTakesPrecedence(t *testing.T) {
 	g := newTestGenkit(t)
 	a := genkit.DefineAgent[any](g, "writer",
-		aix.FromInline(ai.WithModel(toolModel(t, g, "test/writer", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/writer", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return textResp(req, "x"), nil
-		}))),
+		}))},
 		aix.WithDescription[any]("Original description."),
 	)
 

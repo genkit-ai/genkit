@@ -26,19 +26,21 @@ type ChatPromptInput struct {
 	Personality string `json:"personality"`
 }
 
-// definePromptAgent demonstrates DefineAgent with aix.FromPrompt. The
-// prompt is loaded from ./prompts/<agent-name>.prompt by genkit's prompt
-// registry. Defining the prompt in a file lets you tune model, config,
-// schema, and template independently of the Go code — useful when prompt
-// authors are not the same people writing the agent wiring.
+// definePromptAgent demonstrates DefinePromptAgent. The prompt is loaded from
+// ./prompts/<agent-name>.prompt by genkit's prompt registry. Defining the
+// prompt in a file lets you tune model, config, schema, template, and default
+// input independently of the Go code, which is useful when prompt authors are
+// not the same people writing the agent wiring.
 //
-// FromPrompt's argument is the default input passed to the prompt's
-// Render on every turn; the inline-prompt variant has no per-turn input
-// of its own.
+// With no source option, DefinePromptAgent defaults to the prompt registered
+// under the agent's own name and renders it with the prompt's own default
+// input each turn (here, the personality set in chef.prompt's frontmatter).
+// The prompt source is a typed option, so it sits in the same variadic as the
+// other agent options. To supply an input from code, or to back several agents
+// with one shared prompt, add aix.WithNamedPrompt(name, input).
 func definePromptAgent(g *genkit.Genkit) *aix.Agent[any] {
 	const name = "chef"
-	return genkit.DefineAgent(g, name,
-		aix.FromPrompt(ChatPromptInput{Personality: "a Michelin-starred chef who loves explaining technique"}),
+	return genkit.DefinePromptAgent(g, name,
 		aix.WithSessionStore(mustStore(name)),
 		aix.WithDescription[any]("Michelin-starred chef (prompt loaded from ./prompts/chef.prompt)"),
 	)

@@ -31,10 +31,11 @@ import (
 // --- Snapshot ---
 
 // applyTransform returns the result of applying t to state, or state
-// unchanged if t is nil. A nil state is returned as-is.
-func applyTransform[State any](ctx context.Context, t StateTransform[State], state *SessionState[State]) *SessionState[State] {
+// unchanged if t is nil. A nil state is returned as-is. A non-nil error from
+// the transform is propagated so callers can fail closed.
+func applyTransform[State any](ctx context.Context, t StateTransform[State], state *SessionState[State]) (*SessionState[State], error) {
 	if t == nil || state == nil {
-		return state
+		return state, nil
 	}
 	return t(ctx, state)
 }
@@ -263,8 +264,13 @@ func readSnapshot[State any](
 	// Clone before transforming: the [StateTransform] contract promises a fresh
 	// deep copy the transform may mutate in place, and the store's row may share
 	// memory with its internal copy, which neither the transform nor the SessionID
-	// re-stamp below may write into.
-	resp.State = applyTransform(ctx, transform, jsonClone(snap.State))
+	// re-stamp below may write into. A transform error fails the read closed,
+	// with the transform's own status (e.g. PERMISSION_DENIED) preserved.
+	transformed, err := applyTransform(ctx, transform, jsonClone(snap.State))
+	if err != nil {
+		return nil, err
+	}
+	resp.State = transformed
 	if resp.State != nil {
 		// SessionID is framework identity, not user data: re-stamp it from the
 		// row after the transform so outbound state always agrees with the
@@ -310,7 +316,7 @@ func newSnapshotActions[State any](
 			if status == "" {
 				return nil, core.NewError(core.NOT_FOUND, "abortSnapshot: snapshot %q not found", req.SnapshotID)
 			}
-			return &AbortSnapshotResponse{Status: status}, nil
+			return &AbortSnapshotResponse{SnapshotID: req.SnapshotID, Status: status}, nil
 		})
 	return getSnapshotAction, abortSnapshotAction
 }

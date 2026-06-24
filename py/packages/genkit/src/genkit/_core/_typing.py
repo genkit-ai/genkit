@@ -132,6 +132,7 @@ class AbortSnapshotResponse(GenkitModel):
     """Model for abortsnapshotresponse data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str = Field(...)
     status: SnapshotStatus | None = None
 
 

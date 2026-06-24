@@ -32,6 +32,8 @@ type AbortSnapshotRequest struct {
 
 // AbortSnapshotResponse is the output of the abortSnapshot companion action.
 type AbortSnapshotResponse struct {
+	// SnapshotID identifies the snapshot the abort attempt targeted.
+	SnapshotID string `json:"snapshotId"`
 	// Status is the snapshot's status after the abort attempt. For a
 	// pending snapshot this is [SnapshotStatusAborted]. For an
 	// already-terminal snapshot this is the existing terminal status (the

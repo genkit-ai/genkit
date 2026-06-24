@@ -103,7 +103,7 @@ func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (api.BidiAction, error) {
 // Usage:
 //
 //	orchestrator := genkit.DefineAgent(g, "orchestrator",
-//	    aix.FromInline(
+//	    aix.InlinePrompt{
 //	        ai.WithModelName("googleai/gemini-flash-latest"),
 //	        ai.WithSystem("You are a helpful project assistant."),
 //	        ai.WithUse(
@@ -118,7 +118,7 @@ func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (api.BidiAction, error) {
 //	            },
 //	            &middleware.Artifacts{},
 //	        ),
-//	    ),
+//	    },
 //	)
 type Agents struct {
 	// Agents lists the sub-agents available for delegation: by name

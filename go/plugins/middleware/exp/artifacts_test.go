@@ -100,7 +100,7 @@ func TestArtifactsWriteThenRead(t *testing.T) {
 	})
 
 	builder := genkit.DefineAgent[any](g, "builder",
-		aix.FromInline(ai.WithModel(model), ai.WithSystem("be a builder"), ai.WithUse(&Artifacts{})),
+		aix.InlinePrompt{ai.WithModel(model), ai.WithSystem("be a builder"), ai.WithUse(&Artifacts{})},
 	)
 
 	out, err := builder.RunText(ctx, "make a report")

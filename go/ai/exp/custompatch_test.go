@@ -20,8 +20,10 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core"
 )
 
 // collectTurnPatches consumes one turn's chunks, returning the customPatch from
@@ -173,9 +175,9 @@ func TestCustomPatch_HonorsStateTransform(t *testing.T) {
 			})
 		},
 		// Redact Topics on the way out to the client.
-		WithStateTransform(func(ctx context.Context, st *SessionState[testState]) *SessionState[testState] {
+		WithStateTransform(func(ctx context.Context, st *SessionState[testState]) (*SessionState[testState], error) {
 			st.Custom.Topics = nil
-			return st
+			return st, nil
 		}),
 	)
 
@@ -197,6 +199,53 @@ func TestCustomPatch_HonorsStateTransform(t *testing.T) {
 	}
 	if len(got.Topics) != 0 {
 		t.Errorf("topics should be redacted on the wire, got %v", got.Topics)
+	}
+}
+
+// TestCustomPatch_StateTransformErrorFailsInvocationClosed verifies a state
+// transform that errors while shaping a streamed custom delta fails the
+// invocation closed: the patch is withheld (no delta reaches the wire) and the
+// invocation resolves as a failed output carrying the transform's status.
+func TestCustomPatch_StateTransformErrorFailsInvocationClosed(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	af := DefineCustomAgent(reg, "cp",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter = 5
+					return s
+				})
+				return nil, nil
+			})
+		},
+		WithStateTransform(func(_ context.Context, st *SessionState[testState]) (*SessionState[testState], error) {
+			return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape custom state")
+		}),
+	)
+
+	conn, err := af.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	conn.SendText("go")
+	// The transform errors before any delta is emitted, so no customPatch
+	// reaches the wire; the stream ends as the invocation fails.
+	if patches := collectTurnPatches(t, conn); len(patches) != 0 {
+		t.Errorf("customPatches on the wire = %d, want 0 (withheld, fail-closed)", len(patches))
+	}
+
+	out, err := outputWithin(t, conn, 2*time.Second)
+	if err != nil {
+		t.Fatalf("expected a graceful failed output, got error: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
+	}
+	if out.Error == nil || out.Error.Status != core.PERMISSION_DENIED {
+		t.Errorf("Error = %+v, want status %q from the transform", out.Error, core.PERMISSION_DENIED)
 	}
 }
 

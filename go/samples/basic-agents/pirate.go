@@ -20,7 +20,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 )
 
-// defineInlineAgent demonstrates DefineAgent with aix.FromInline. The
+// defineInlineAgent demonstrates DefineAgent with aix.InlinePrompt. The
 // prompt is declared right next to the agent definition; the registered
 // prompt and the agent share a name. Each turn the framework renders the
 // prompt, appends the conversation history, calls the model, and updates
@@ -29,10 +29,10 @@ import (
 func defineInlineAgent(g *genkit.Genkit) *aix.Agent[any] {
 	const name = "pirate"
 	return genkit.DefineAgent(g, name,
-		aix.FromInline(
+		aix.InlinePrompt{
 			ai.WithModel(flashModel),
 			ai.WithSystem("You are a sarcastic pirate. Keep responses concise."),
-		),
+		},
 		aix.WithSessionStore(mustStore(name)),
 		aix.WithDescription[any]("Sarcastic pirate (inline-defined prompt)"),
 	)
