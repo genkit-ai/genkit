@@ -716,13 +716,14 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
         self.trace_id: str | None = None
 
     async def send(self, input: StreamInT) -> None:  # noqa: A002
-        """Send a per-turn input to the server.
-
-        Raises GenkitError if the connection is already closed.
-        """
+        """Send a per-turn input to the server."""
         if self.closed:
             raise GenkitError(
-                message='Cannot send input: the BidiConnection is already closed.',
+                message=(
+                    'Cannot send input on BidiConnection because the connection has '
+                    'already been closed. No further inputs can be sent after close() '
+                    'is called.'
+                ),
                 status=StatusCodes.FAILED_PRECONDITION,
             )
         await self.in_queue.put(input)
