@@ -68,7 +68,6 @@ from genkit._core._typing import (
     Resume,
     SessionSnapshot,
     SessionState,
-    SnapshotEvent,
     SnapshotStatus,
     TurnEnd,
 )
@@ -122,7 +121,6 @@ __all__ = [
     'Resume',
     'SessionSnapshot',
     'SessionState',
-    'SnapshotEvent',
     'SnapshotStatus',
     'TurnEnd',
 ]

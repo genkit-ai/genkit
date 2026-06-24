@@ -67,7 +67,7 @@ def define_echo_agent(
 ) -> Agent:
     async def echo_fn(sess: SessionRunner, _ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(inp: AgentInput) -> TurnResult | None:
-            user_text = text_from_parts(inp.messages[-1].content if inp.messages else None)
+            user_text = text_from_parts(inp.message.content if inp.message else None)
             await sess.add_messages(Message(role='model', content=[Part(root=TextPart(text=f'Echo: {user_text}'))]))
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 

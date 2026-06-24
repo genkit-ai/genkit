@@ -316,7 +316,8 @@ class AgentSession(Generic[StateT, StreamT]):
 
     def _load_from_snapshot(self, snapshot: SessionSnapshot) -> None:
         self.snapshot_id = snapshot.snapshot_id
-        self._hydrate_from_state(snapshot.state)
+        if snapshot.state is not None:
+            self._hydrate_from_state(snapshot.state)
 
     def _build_init(self) -> AgentInit:
         if self.snapshot_id:
@@ -340,18 +341,16 @@ class AgentSession(Generic[StateT, StreamT]):
         """Sends a message to the agent for a new turn."""
         if isinstance(input, str):
             inp = AgentInput(
-                messages=[
-                    MessageData(
-                        role='user',
-                        content=[Part(root=TextPart(text=input))],
-                    )
-                ]
+                message=MessageData(
+                    role='user',
+                    content=[Part(root=TextPart(text=input))],
+                )
             )
         else:
             inp = input
 
-        if inp.messages:
-            self.messages.extend(inp.messages)
+        if inp.message:
+            self.messages.append(inp.message)
 
         init = self._build_init()
         cancelled_event = asyncio.Event()
@@ -496,12 +495,10 @@ class AgentSession(Generic[StateT, StreamT]):
     async def detach(self, input: str | AgentInput) -> DetachedTask[StateT]:
         if isinstance(input, str):
             inp = AgentInput(
-                messages=[
-                    MessageData(
-                        role='user',
-                        content=[Part(root=TextPart(text=input))],
-                    )
-                ]
+                message=MessageData(
+                    role='user',
+                    content=[Part(root=TextPart(text=input))],
+                )
             )
         else:
             inp = input

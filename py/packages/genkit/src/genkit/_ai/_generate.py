@@ -1348,13 +1348,7 @@ async def _resolve_resume_options(
     tool_message = Message(
         role=Role.TOOL,
         content=tool_responses,
-        metadata={
-            'resumed': (
-                raw_request.resume.metadata
-                if raw_request.resume and getattr(raw_request.resume, 'metadata', None)
-                else True
-            )
-        },
+        metadata={'resumed': True},
     )
 
     revised_request = raw_request.model_copy(deep=True)

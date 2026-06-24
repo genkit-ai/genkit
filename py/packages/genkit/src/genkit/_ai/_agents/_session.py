@@ -33,7 +33,6 @@ from genkit._core._typing import (
     MessageData,
     SessionSnapshot,
     SessionState,
-    SnapshotEvent,
     SnapshotStatus,
 )
 
@@ -50,7 +49,6 @@ SessionContextT = TypeVar('SessionContextT')
 class SnapshotContext(BaseModel):
     """Passed to SnapshotCallback to decide whether to snapshot."""
 
-    event: SnapshotEvent
     state: SessionState
     prev_state: SessionState | None = None
     turn_index: int = 0
@@ -188,7 +186,11 @@ class InMemorySessionStore:
 
             assert session_id is not None
             _assert_valid_session_id(session_id)
-            owned = [snap for snap in self._snapshots.values() if snap.state.session_id == session_id]
+            owned = [
+                snap
+                for snap in self._snapshots.values()
+                if snap.state is not None and snap.state.session_id == session_id
+            ]
             leaf = _select_leaf_snapshot(owned, session_id)
             return leaf.model_copy(deep=True) if leaf is not None else None
 
@@ -224,12 +226,12 @@ class InMemorySessionStore:
             elif not next_snap.created_at:
                 next_snap.created_at = now
             if not next_snap.status:
-                next_snap.status = SnapshotStatus.DONE
+                next_snap.status = SnapshotStatus.COMPLETED
 
             self._snapshots[sid] = next_snap.model_copy(deep=True)
 
             if existing is None or existing.status != next_snap.status:
-                self._notify_locked(sid, next_snap.status)
+                self._notify_locked(sid, next_snap.status or SnapshotStatus.COMPLETED)
 
             return next_snap
 

@@ -36,6 +36,7 @@ from genkit._core._typing import (
     AgentStreamChunk,
     FinishReason,
     JsonPatch,
+    JsonPatchOp,
     JsonPatchOperation,
     MessageData,
     ModelResponseChunk,
@@ -55,28 +56,28 @@ from genkit._core._typing import (
 
 
 def test_apply_json_patch_root_replace() -> None:
-    patch = [JsonPatchOperation(op='replace', path='', value={'status': 'idle', 'score': 10})]
+    patch = [JsonPatchOperation(op=JsonPatchOp.REPLACE, path='', value={'status': 'idle', 'score': 10})]
     res = apply_json_patch(None, patch)
     assert res == {'status': 'idle', 'score': 10}
 
 
 def test_apply_json_patch_nested_replace() -> None:
     doc = {'status': 'idle', 'nested': {'value': 1}}
-    patch = [JsonPatchOperation(op='replace', path='/nested/value', value=2)]
+    patch = [JsonPatchOperation(op=JsonPatchOp.REPLACE, path='/nested/value', value=2)]
     res = apply_json_patch(doc, patch)
     assert res == {'status': 'idle', 'nested': {'value': 2}}
 
 
 def test_apply_json_patch_array_add() -> None:
     doc = {'items': [1, 2]}
-    patch = [JsonPatchOperation(op='add', path='/items/-', value=3)]
+    patch = [JsonPatchOperation(op=JsonPatchOp.ADD, path='/items/-', value=3)]
     res = apply_json_patch(doc, patch)
     assert res == {'items': [1, 2, 3]}
 
 
 def test_apply_json_patch_array_remove() -> None:
     doc = {'items': [1, 2, 3]}
-    patch = [JsonPatchOperation(op='remove', path='/items/1')]
+    patch = [JsonPatchOperation(op=JsonPatchOp.REMOVE, path='/items/1')]
     res = apply_json_patch(doc, patch)
     assert res == {'items': [1, 3]}
 
@@ -157,7 +158,9 @@ async def test_session_sends_input_and_aggregates_state() -> None:
     transport.push_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='Sunny.'))])))
     transport.push_chunk(
         AgentStreamChunk(
-            custom_patch=JsonPatch(root=[JsonPatchOperation(op='replace', path='', value={'unit': 'celsius'})])
+            custom_patch=JsonPatch(
+                root=[JsonPatchOperation(op=JsonPatchOp.REPLACE, path='', value={'unit': 'celsius'})]
+            )
         )
     )
     transport.push_chunk(

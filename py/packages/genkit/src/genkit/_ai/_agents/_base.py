@@ -70,9 +70,9 @@ from genkit._core._typing import (
     AgentResult,
     AgentStreamChunk,
     Artifact,
-    Error,
     FinishReason,
     JsonPatch,
+    JsonPatchOp,
     JsonPatchOperation,
     MessageData,
     MiddlewareRef,
@@ -80,9 +80,9 @@ from genkit._core._typing import (
     Part,
     Resume,
     Role,
+    RuntimeError as GenkitRuntimeError,
     SessionSnapshot,
     SessionState,
-    SnapshotEvent,
     SnapshotStatus,
     ToolRequestPart,
     TurnEnd,
@@ -144,13 +144,13 @@ def _tool_request_parts(message: MessageData | None) -> list[Part]:
     return parts
 
 
-def _to_error_details(exc: BaseException) -> Error:
+def _to_error_details(exc: BaseException) -> GenkitRuntimeError:
     status = getattr(exc, 'status', None) or 'INTERNAL'
     message = str(exc) or 'Internal failure'
     details = getattr(exc, 'detail', None) or getattr(exc, 'details', None)
     if details is None and not isinstance(exc, GenkitError):
         details = str(exc)
-    return Error(status=str(status), message=message, details=details)
+    return GenkitRuntimeError(status=str(status), message=message, details=details)
 
 
 def _collect_tool_requests_from_history(history: list[MessageData]) -> list[_ToolRequestRecord]:
@@ -482,7 +482,7 @@ class AgentRuntime:
         transformed = await self._client_custom()
         if self._first_custom_patch_in_turn:
             ops: list[JsonPatchOperation] = [
-                JsonPatchOperation(op='replace', path='', value=copy.deepcopy(transformed))
+                JsonPatchOperation(op=JsonPatchOp.REPLACE, path='', value=copy.deepcopy(transformed))
             ]
             self._first_custom_patch_in_turn = False
         else:
@@ -501,11 +501,10 @@ class AgentRuntime:
 
     async def _maybe_snapshot(
         self,
-        event: SnapshotEvent,
         *,
         finish_reason: AgentFinishReason | None = None,
         status: SnapshotStatus | None = None,
-        error: Error | None = None,
+        error: GenkitRuntimeError | None = None,
         force: bool = False,
     ) -> str:
         """Save snapshot if store configured + callback approves + state changed."""
@@ -518,7 +517,6 @@ class AgentRuntime:
 
         if self._snapshot_callback is not None and status != SnapshotStatus.FAILED:
             ctx = SnapshotContext(
-                event=event,
                 state=state,
                 prev_state=self._last_snapshot.state if self._last_snapshot else None,
                 turn_index=self._sess.turn_index,
@@ -528,7 +526,7 @@ class AgentRuntime:
 
         parent_id = self._last_snapshot.snapshot_id if self._last_snapshot else None
         now = datetime.now(timezone.utc).isoformat()
-        snap_status = status or SnapshotStatus.DONE
+        snap_status = status or SnapshotStatus.COMPLETED
 
         def _make_snap(
             existing: SessionSnapshot | None,
@@ -538,7 +536,6 @@ class AgentRuntime:
             return SessionSnapshot(
                 snapshot_id=existing.snapshot_id if existing else '',
                 parent_id=parent_id or '',
-                event=event,
                 status=snap_status,
                 state=state,
                 created_at=existing.created_at if existing and existing.created_at else now,
@@ -577,8 +574,7 @@ class AgentRuntime:
             return SessionSnapshot(
                 snapshot_id='',
                 parent_id=parent_id or '',
-                event=SnapshotEvent.TURNEND,
-                status=SnapshotStatus.DONE,
+                status=SnapshotStatus.COMPLETED,
                 state=last_good,
                 created_at=now,
                 finish_reason=self._sess._last_good_finish_reason,
@@ -636,9 +632,8 @@ class AgentRuntime:
             return
         is_failed = finish_reason == AgentFinishReason.FAILED
         snapshot_id = await self._maybe_snapshot(
-            SnapshotEvent.TURNEND,
             finish_reason=finish_reason,
-            status=SnapshotStatus.FAILED if is_failed else SnapshotStatus.DONE,
+            status=SnapshotStatus.FAILED if is_failed else SnapshotStatus.COMPLETED,
             error=self._sess._last_turn_error if is_failed else None,
             force=is_failed,
         )
@@ -681,10 +676,9 @@ class AgentRuntime:
             return SessionSnapshot(
                 snapshot_id=existing.snapshot_id if existing else '',
                 parent_id=pending_snap.parent_id or '',
-                event=SnapshotEvent.TURNEND,
-                status=SnapshotStatus.FAILED if fn_err else SnapshotStatus.DONE,
+                status=SnapshotStatus.FAILED if fn_err else SnapshotStatus.COMPLETED,
                 state=state,
-                error=(Error(status='INTERNAL', message=str(fn_err)) if fn_err else None),
+                error=(GenkitRuntimeError(status='INTERNAL', message=str(fn_err)) if fn_err else None),
                 finish_reason=finish_reason,
                 created_at=existing.created_at if existing else now,
             )
@@ -784,7 +778,6 @@ class AgentRuntime:
                 return SessionSnapshot(
                     snapshot_id='',
                     parent_id=parent_id or '',
-                    event=SnapshotEvent.TURNEND,
                     status=SnapshotStatus.PENDING,
                     state=state,
                     created_at=now,
@@ -816,7 +809,7 @@ class AgentRuntime:
         if err_holder:
             raise err_holder[0]
 
-        snapshot_id = await self._maybe_snapshot(SnapshotEvent.INVOCATIONEND)
+        snapshot_id = await self._maybe_snapshot()
         if not snapshot_id and self._last_snapshot is not None:
             snapshot_id = self._last_snapshot.snapshot_id
 
@@ -837,7 +830,7 @@ class AgentRuntime:
 
 def _agent_input_has_payload(inp: AgentInput) -> bool:
     """True when ``AgentInput`` carries turn data beyond a detach directive."""
-    if inp.messages:
+    if inp.message:
         return True
     if inp.resume is not None:
         if inp.resume.restart:
@@ -872,7 +865,7 @@ class SessionRunner(Generic[StateT]):
         self._on_end_turn = on_end_turn
         self.turn_index: int = 0
         self._last_turn_finish_reason: AgentFinishReason | None = None
-        self._last_turn_error: Error | None = None
+        self._last_turn_error: GenkitRuntimeError | None = None
         self._last_good_state: SessionState | None = None
         self._last_good_state_version: int | None = None
         self._last_good_finish_reason: AgentFinishReason | None = None
@@ -903,8 +896,8 @@ class SessionRunner(Generic[StateT]):
                 return
 
             # Auto-add inbound messages to session history
-            if inp.messages:
-                await self._session.add_messages(*inp.messages)
+            if inp.message:
+                await self._session.add_messages(inp.message)
 
             if self._on_begin_turn is not None:
                 await self._on_begin_turn()

@@ -40,8 +40,8 @@ store = InMemoryLinearSessionStore()
 async def flaky_fn(sess: SessionRunner, _ctx: ActionRunContext) -> AgentResult:
     async def handle_turn(inp: AgentInput) -> TurnResult | None:
         text = ''
-        if inp.messages:
-            for part in inp.messages[-1].content or []:
+        if inp.message:
+            for part in inp.message.content or []:
                 root = getattr(part, 'root', part)
                 if isinstance(root, TextPart) and root.text:
                     text += root.text

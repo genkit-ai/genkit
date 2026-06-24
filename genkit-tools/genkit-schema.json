@@ -1,16 +1,37 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$defs": {
+    "AbortSnapshotRequest": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "snapshotId"
+      ],
+      "additionalProperties": false
+    },
+    "AbortSnapshotResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/SnapshotStatus"
+        }
+      },
+      "additionalProperties": false
+    },
     "AgentFinishReason": {
       "type": "string",
       "enum": [
         "stop",
         "length",
         "blocked",
-        "aborted",
         "interrupted",
         "other",
         "unknown",
+        "aborted",
         "detached",
         "failed"
       ]
@@ -18,10 +39,10 @@
     "AgentInit": {
       "type": "object",
       "properties": {
-        "snapshotId": {
+        "sessionId": {
           "type": "string"
         },
-        "sessionId": {
+        "snapshotId": {
           "type": "string"
         },
         "state": {
@@ -33,11 +54,11 @@
     "AgentInput": {
       "type": "object",
       "properties": {
-        "messages": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Message"
-          }
+        "detach": {
+          "type": "boolean"
+        },
+        "message": {
+          "$ref": "#/$defs/Message"
         },
         "resume": {
           "type": "object",
@@ -53,23 +74,39 @@
               "items": {
                 "$ref": "#/$defs/ToolRequestPart"
               }
-            },
-            "metadata": {
-              "type": "object",
-              "additionalProperties": {}
             }
           },
           "additionalProperties": false
-        },
-        "detach": {
-          "type": "boolean"
         }
       },
+      "additionalProperties": false
+    },
+    "AgentMetadata": {
+      "type": "object",
+      "properties": {
+        "stateManagement": {
+          "$ref": "#/$defs/AgentStateManagement"
+        },
+        "abortable": {
+          "type": "boolean"
+        },
+        "stateSchema": {
+          "type": "object",
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "stateManagement",
+        "abortable"
+      ],
       "additionalProperties": false
     },
     "AgentOutput": {
       "type": "object",
       "properties": {
+        "sessionId": {
+          "type": "string"
+        },
         "snapshotId": {
           "type": "string"
         },
@@ -89,21 +126,7 @@
           "$ref": "#/$defs/AgentFinishReason"
         },
         "error": {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string"
-            },
-            "message": {
-              "type": "string"
-            },
-            "details": {}
-          },
-          "required": [
-            "status",
-            "message"
-          ],
-          "additionalProperties": false
+          "$ref": "#/$defs/RuntimeError"
         }
       },
       "additionalProperties": false
@@ -125,6 +148,13 @@
         }
       },
       "additionalProperties": false
+    },
+    "AgentStateManagement": {
+      "type": "string",
+      "enum": [
+        "server",
+        "client"
+      ]
     },
     "AgentStreamChunk": {
       "type": "object",
@@ -166,7 +196,7 @@
       ],
       "additionalProperties": false
     },
-    "GetSnapshotDataInput": {
+    "GetSnapshotRequest": {
       "type": "object",
       "properties": {
         "snapshotId": {
@@ -178,19 +208,22 @@
       },
       "additionalProperties": false
     },
+    "JsonPatchOp": {
+      "type": "string",
+      "enum": [
+        "add",
+        "remove",
+        "replace",
+        "move",
+        "copy",
+        "test"
+      ]
+    },
     "JsonPatchOperation": {
       "type": "object",
       "properties": {
         "op": {
-          "type": "string",
-          "enum": [
-            "add",
-            "remove",
-            "replace",
-            "move",
-            "copy",
-            "test"
-          ]
+          "$ref": "#/$defs/JsonPatchOp"
         },
         "path": {
           "type": "string"
@@ -218,53 +251,37 @@
         "snapshotId": {
           "type": "string"
         },
+        "sessionId": {
+          "type": "string"
+        },
         "parentId": {
           "type": "string"
         },
         "createdAt": {
           "type": "string"
         },
-        "event": {
-          "$ref": "#/$defs/SnapshotEvent"
+        "updatedAt": {
+          "type": "string"
         },
-        "state": {
-          "$ref": "#/$defs/SessionState"
+        "heartbeatAt": {
+          "type": "string"
         },
         "status": {
-          "type": "string",
-          "enum": [
-            "pending",
-            "done",
-            "failed",
-            "aborted"
-          ]
+          "$ref": "#/$defs/SnapshotStatus"
         },
         "finishReason": {
           "$ref": "#/$defs/AgentFinishReason"
         },
         "error": {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string"
-            },
-            "message": {
-              "type": "string"
-            },
-            "details": {}
-          },
-          "required": [
-            "status",
-            "message"
-          ],
-          "additionalProperties": false
+          "$ref": "#/$defs/RuntimeError"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
         }
       },
       "required": [
         "snapshotId",
-        "createdAt",
-        "event",
-        "state"
+        "createdAt"
       ],
       "additionalProperties": false
     },
@@ -290,11 +307,14 @@
       },
       "additionalProperties": false
     },
-    "SnapshotEvent": {
+    "SnapshotStatus": {
       "type": "string",
       "enum": [
-        "turnEnd",
-        "invocationEnd"
+        "pending",
+        "completed",
+        "aborted",
+        "failed",
+        "expired"
       ]
     },
     "TurnEnd": {
@@ -572,6 +592,22 @@
           },
           "additionalProperties": false
         }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "RuntimeError": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {}
       },
       "required": [
         "message"
@@ -2272,6 +2308,7 @@
         },
         "input": {},
         "output": {},
+        "init": {},
         "isRoot": {
           "type": "boolean"
         },

@@ -80,7 +80,7 @@ _NO_ABORT = asyncio.Event()
 @pytest.mark.asyncio
 async def test_agent_input_has_payload() -> None:
     assert _agent_input_has_payload(
-        AgentInput(messages=[MessageData(role=Role.USER, content=[Part(TextPart(text='x'))])], detach=True),
+        AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='x'))]), detach=True),
     )
     assert not _agent_input_has_payload(AgentInput(detach=True))
 
@@ -105,7 +105,7 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
     in_queue: asyncio.Queue = asyncio.Queue()
     await in_queue.put(
         AgentInput(
-            messages=[MessageData(role=Role.USER, content=[Part(TextPart(text='appended message'))])],
+            message=MessageData(role=Role.USER, content=[Part(TextPart(text='appended message'))]),
             detach=True,
         )
     )
@@ -116,16 +116,17 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
     assert out.finish_reason == AgentFinishReason.DETACHED
     assert out.snapshot_id is not None
     assert len(seen_inputs) == 1
-    assert seen_inputs[0].messages is not None
-    assert seen_inputs[0].messages[0].content[0].root.text == 'appended message'
+    assert seen_inputs[0].message is not None
+    assert seen_inputs[0].message.content[0].root.text == 'appended message'
 
     msgs = await session.get_messages()
     assert len(msgs) == 1
     assert msgs[0].content[0].root.text == 'appended message'
 
-    await _wait_for_snapshot_status(store, out.snapshot_id, SnapshotStatus.DONE)
+    await _wait_for_snapshot_status(store, out.snapshot_id, SnapshotStatus.COMPLETED)
     snap = await store.get_snapshot(snapshot_id=out.snapshot_id)
     assert snap is not None
+    assert snap.state is not None
     assert snap.state.messages is not None
     assert len(snap.state.messages) == 1
 
@@ -153,7 +154,7 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
         return await sess.result()
 
     in_queue: asyncio.Queue = asyncio.Queue()
-    await in_queue.put(AgentInput(messages=[MessageData(role=Role.USER, content=[Part(TextPart(text='slow'))])]))
+    await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='slow'))])))
     await in_queue.put(AgentInput(detach=True))
     await in_queue.put(_BIDI_SENTINEL)
 
@@ -169,11 +170,12 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
         chunks.append(out_queue.get_nowait())
 
     release.set()
-    await _wait_for_snapshot_status(store, out.snapshot_id, SnapshotStatus.DONE)
+    await _wait_for_snapshot_status(store, out.snapshot_id, SnapshotStatus.COMPLETED)
 
     snap_done = await store.get_snapshot(snapshot_id=out.snapshot_id)
     assert snap_done is not None
-    assert snap_done.finish_reason is None or snap_done.status == SnapshotStatus.DONE
+    assert snap_done.finish_reason is None or snap_done.status == SnapshotStatus.COMPLETED
+    assert snap_done.state is not None
     assert snap_done.state.messages is not None
     assert len(snap_done.state.messages) == 1
 
@@ -198,7 +200,7 @@ async def test_detach_without_store_raises() -> None:
         return await sess.result()
 
     in_queue: asyncio.Queue = asyncio.Queue()
-    await in_queue.put(AgentInput(messages=[MessageData(role=Role.USER, content=[Part(TextPart(text='x'))])]))
+    await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='x'))])))
     await in_queue.put(AgentInput(detach=True))
     await in_queue.put(_BIDI_SENTINEL)
 
@@ -227,7 +229,7 @@ async def test_abort_snapshot_stops_detached_work() -> None:
         return await sess.result()
 
     in_queue: asyncio.Queue = asyncio.Queue()
-    await in_queue.put(AgentInput(messages=[MessageData(role=Role.USER, content=[Part(TextPart(text='long'))])]))
+    await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='long'))])))
     await in_queue.put(AgentInput(detach=True))
     await in_queue.put(_BIDI_SENTINEL)
 

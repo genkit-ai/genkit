@@ -28,7 +28,6 @@ from genkit._core._typing import (
     Part,
     SessionSnapshot,
     SessionState,
-    SnapshotEvent,
     SnapshotStatus,
     TextPart,
 )
@@ -43,13 +42,12 @@ from genkit.agent import (
 
 
 def make_snapshot(
-    session_id: str, text: str, status: SnapshotStatus = SnapshotStatus.DONE, parent_id: str | None = None
+    session_id: str, text: str, status: SnapshotStatus = SnapshotStatus.COMPLETED, parent_id: str | None = None
 ) -> SessionSnapshot:
     return SessionSnapshot(
         snapshot_id=str(uuid4()),
         parent_id=parent_id,
         created_at='2026-06-18T12:00:00Z',
-        event=SnapshotEvent.TURNEND,
         status=status,
         state=SessionState(
             session_id=session_id,
@@ -102,7 +100,7 @@ async def run_latest_state_store_test(store: LatestStateStore) -> None:
     assert snap_good is None
 
     # 3. Finalize pending snapshot (promote to lastGood)
-    good = make_snapshot(session_id, 'Hello Response', SnapshotStatus.DONE)
+    good = make_snapshot(session_id, 'Hello Response', SnapshotStatus.COMPLETED)
     good.snapshot_id = pending.snapshot_id
 
     def _finalize(_: object) -> SessionSnapshot:
@@ -113,7 +111,7 @@ async def run_latest_state_store_test(store: LatestStateStore) -> None:
     # 4. Get good snapshot by sessionId
     snap_good = await store.get_snapshot(session_id=session_id)
     assert snap_good is not None
-    assert snap_good.status == SnapshotStatus.DONE
+    assert snap_good.status == SnapshotStatus.COMPLETED
     assert snap_good.state is not None
     assert snap_good.state.messages is not None
     assert snap_good.state.messages[0].content[0].root.text == 'Hello Response'
@@ -121,10 +119,10 @@ async def run_latest_state_store_test(store: LatestStateStore) -> None:
     # 5. Get pending by snapshotId now returns good (since promoted)
     snap_promoted = await store.get_snapshot(snapshot_id=pending.snapshot_id)
     assert snap_promoted is not None
-    assert snap_promoted.status == SnapshotStatus.DONE
+    assert snap_promoted.status == SnapshotStatus.COMPLETED
 
     # 6. Save a new turn
-    new_good = make_snapshot(session_id, 'Hello again', SnapshotStatus.DONE)
+    new_good = make_snapshot(session_id, 'Hello again', SnapshotStatus.COMPLETED)
 
     def _save_new(_: object) -> SessionSnapshot:
         return new_good
@@ -165,6 +163,8 @@ async def run_linear_session_store_test(store: LinearSessionStore) -> None:
 
     # Turn 1: Diff
     t1 = make_snapshot(session_id, 'Turn 1', parent_id=t0_id)
+    assert t0.state is not None
+    assert t1.state is not None
     # Append message to Turn 0 messages
     t1.state.messages = (t0.state.messages or []) + (t1.state.messages or [])
     t1_saved = await store.save_snapshot(None, lambda _: t1)
@@ -173,6 +173,7 @@ async def run_linear_session_store_test(store: LinearSessionStore) -> None:
 
     # Turn 2: Checkpoint (since checkpoint_interval is 2)
     t2 = make_snapshot(session_id, 'Turn 2', parent_id=t1_id)
+    assert t2.state is not None
     t2.state.messages = (t1.state.messages or []) + (t2.state.messages or [])
     t2_saved = await store.save_snapshot(None, lambda _: t2)
     assert t2_saved is not None
@@ -216,6 +217,7 @@ async def run_linear_session_store_test(store: LinearSessionStore) -> None:
 
     # Truncate / Rollback to Turn 0
     t1_alt = make_snapshot(session_id, 'Turn 1 Alt', parent_id=t0_id)
+    assert t1_alt.state is not None
     t1_alt.state.messages = (t0.state.messages or []) + (t1_alt.state.messages or [])
     t1_alt_saved = await store.save_snapshot(None, lambda _: t1_alt)
     assert t1_alt_saved is not None
@@ -258,6 +260,8 @@ async def run_branching_session_store_test(store: BranchingSessionStore) -> None
 
     # Branch 1 (Minimal)
     b1_t1 = make_snapshot(session_id, 'Minimal Direction', parent_id=root_id)
+    assert root.state is not None
+    assert b1_t1.state is not None
     b1_t1.state.messages = (root.state.messages or []) + (b1_t1.state.messages or [])
     b1_t1_saved = await store.save_snapshot(None, lambda _: b1_t1)
     assert b1_t1_saved is not None
@@ -265,6 +269,7 @@ async def run_branching_session_store_test(store: BranchingSessionStore) -> None
 
     # Branch 2 (Bold)
     b2_t1 = make_snapshot(session_id, 'Bold Direction', parent_id=root_id)
+    assert b2_t1.state is not None
     b2_t1.state.messages = (root.state.messages or []) + (b2_t1.state.messages or [])
     b2_t1_saved = await store.save_snapshot(None, lambda _: b2_t1)
     assert b2_t1_saved is not None

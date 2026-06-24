@@ -135,7 +135,7 @@ class LatestStateStore(SessionStore, SnapshotAborter):
                     record.last_good = next_snap
 
                 await self._put_record(record)
-                self._notify_locked(snapshot_id, next_snap.status or SnapshotStatus.DONE)
+                self._notify_locked(snapshot_id, next_snap.status or SnapshotStatus.COMPLETED)
                 return next_snap
             else:
                 sid = str(uuid4())
@@ -147,8 +147,9 @@ class LatestStateStore(SessionStore, SnapshotAborter):
                 if not next_snap.created_at:
                     next_snap.created_at = datetime.now(timezone.utc).isoformat()
                 if not next_snap.status:
-                    next_snap.status = SnapshotStatus.DONE
+                    next_snap.status = SnapshotStatus.COMPLETED
 
+                assert next_snap.state is not None
                 session_id = next_snap.state.session_id
                 if not session_id:
                     raise ValueError('session_id must be populated on new snapshot')

@@ -61,7 +61,7 @@ async def main() -> None:
         snap = await task.poll()
         if snap and snap.state:
             print(f'Task Status: {snap.status}, Messages: {len(snap.state.messages or [])}')
-            if snap.status in (SnapshotStatus.DONE, SnapshotStatus.FAILED, SnapshotStatus.ABORTED):
+            if snap.status in (SnapshotStatus.COMPLETED, SnapshotStatus.FAILED, SnapshotStatus.ABORTED):
                 break
         await asyncio.sleep(1.0)
 

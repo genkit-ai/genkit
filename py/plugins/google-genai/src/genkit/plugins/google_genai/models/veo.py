@@ -235,7 +235,7 @@ def _from_veo_operation(api_op: dict[str, Any]) -> Operation:
 
     # Handle error
     if api_op.get('error'):
-        op.error = Error(status='INTERNAL', message=api_op['error'].get('message', 'Unknown error'))
+        op.error = Error(message=api_op['error'].get('message', 'Unknown error'))
         return op
 
     # Handle response with generated videos.

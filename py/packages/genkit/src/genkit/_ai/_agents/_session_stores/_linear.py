@@ -38,7 +38,6 @@ from genkit._core._typing import (
     JsonPatchOperation,
     SessionSnapshot,
     SessionState,
-    SnapshotEvent,
     SnapshotStatus,
 )
 
@@ -130,7 +129,6 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
             snapshot_id=record.snapshot_id,
             parent_id=record.parent_id,
             created_at=record.created_at,
-            event=SnapshotEvent.TURNEND,
             state=state,
             status=record.status,
             finish_reason=AgentFinishReason(record.finish_reason) if record.finish_reason else None,
@@ -188,6 +186,7 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
                 next_snap.snapshot_id = snapshot_id
 
                 # Update the record in place
+                assert next_snap.state is not None
                 if record.seq == 0 or record.seq % self.checkpoint_interval == 0:
                     record.state_or_patch = next_snap.state.model_dump(by_alias=True)
                 else:
@@ -195,7 +194,7 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
                     ops = diff_json(parent_state.model_dump(by_alias=True), next_snap.state.model_dump(by_alias=True))
                     record.state_or_patch = [op.model_dump(by_alias=True) for op in ops]
 
-                record.status = next_snap.status or SnapshotStatus.DONE
+                record.status = next_snap.status or SnapshotStatus.COMPLETED
                 record.finish_reason = next_snap.finish_reason
                 record.error = next_snap.error
 
@@ -212,8 +211,8 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
                 if not next_snap.created_at:
                     next_snap.created_at = datetime.now(timezone.utc).isoformat()
                 if not next_snap.status:
-                    next_snap.status = SnapshotStatus.DONE
-
+                    next_snap.status = SnapshotStatus.COMPLETED
+                assert next_snap.state is not None
                 session_id = next_snap.state.session_id
                 parent_id = next_snap.parent_id
 
