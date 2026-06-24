@@ -131,6 +131,8 @@ export interface AgentChat<State = unknown> {
   abort(): Promise<SessionSnapshot['status'] | undefined>;
 
   readonly snapshotId?: string;
+  /** Stable identifier correlating snapshots/turns of this conversation. */
+  readonly sessionId?: string;
   readonly state?: State;
   readonly messages: MessageData[];
   readonly artifacts: Artifact[];
@@ -170,6 +172,8 @@ export interface AgentResponse<State = unknown, O = unknown> {
   assertValid(): void;
 
   readonly snapshotId?: string;
+  /** Stable identifier correlating snapshots/turns of this conversation. */
+  readonly sessionId?: string;
   readonly state?: State;
   readonly artifacts: Artifact[];
 }
@@ -400,7 +404,13 @@ class AgentResponseImpl<State = unknown, O = unknown>
      * case `_raw.state` is undefined, so we fall back to the chat's tracked
      * custom state here, ensuring `res.state` matches `chat.state` as documented.
      */
-    private readonly _fallbackState?: () => State | undefined
+    private readonly _fallbackState?: () => State | undefined,
+    /**
+     * Fallback sessionId getter. Server-managed agents may not echo `sessionId`
+     * on every wire frame; fall back to the chat's tracked sessionId so
+     * `res.sessionId` matches `chat.sessionId` as documented.
+     */
+    private readonly _fallbackSessionId?: () => string | undefined
   ) {}
 
   get message(): MessageData | undefined {
@@ -451,6 +461,10 @@ class AgentResponseImpl<State = unknown, O = unknown>
 
   get snapshotId(): string | undefined {
     return this._raw.snapshotId;
+  }
+
+  get sessionId(): string | undefined {
+    return this._raw.sessionId ?? this._fallbackSessionId?.();
   }
 
   get state(): State | undefined {
@@ -592,6 +606,7 @@ class DetachedTaskImpl<State = unknown> implements DetachedTask<State> {
 
 export class AgentChatImpl<State = unknown> implements AgentChat<State> {
   snapshotId?: string;
+  sessionId?: string;
   messages: MessageData[] = [];
   artifacts: Artifact[] = [];
 
@@ -603,6 +618,9 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
   ) {
     if (connectInit?.snapshotId) {
       this.snapshotId = connectInit.snapshotId;
+    }
+    if (connectInit?.sessionId) {
+      this.sessionId = connectInit.sessionId;
     }
     if (connectInit?.state) {
       this.hydrateFromState(connectInit.state);
@@ -621,6 +639,9 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
     this.clientState = state;
     this.messages = state?.messages ? [...state.messages] : [];
     this.artifacts = state?.artifacts ? [...state.artifacts] : [];
+    if (state?.sessionId) {
+      this.sessionId = state.sessionId;
+    }
   }
 
   /** Loads aggregates from a server snapshot (used by `loadChat`). */
@@ -649,6 +670,10 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
     if (raw.snapshotId !== undefined) {
       this.snapshotId = raw.snapshotId;
     }
+    if (raw.sessionId !== undefined) {
+      this.sessionId = raw.sessionId;
+    }
+
     if (raw.state !== undefined) {
       this.clientState = raw.state;
     }
@@ -745,7 +770,8 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
       const response = new AgentResponseImpl<State>(
         raw,
         [...this.messages],
-        () => this.state
+        () => this.state,
+        () => this.sessionId
       );
       if (raw.finishReason === 'failed') {
         throw new AgentError<State>({
@@ -799,7 +825,8 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
         return new AgentResponseImpl<State>(
           { finishReason: 'aborted' as AgentFinishReason },
           [...this.messages],
-          () => this.state
+          () => this.state,
+          () => this.sessionId
         );
       })();
       aborted.catch(() => {});
@@ -949,7 +976,12 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
       finishReason: 'failed' as AgentFinishReason,
       error: { status, message },
     };
-    const response = new AgentResponseImpl<State>(raw, [...this.messages]);
+    const response = new AgentResponseImpl<State>(
+      raw,
+      [...this.messages],
+      () => this.clientState?.custom as State | undefined,
+      () => this.sessionId
+    );
     return new AgentError<State>({
       message,
       status,
