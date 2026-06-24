@@ -30,7 +30,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from genkit._ai._agents._session import SessionStore, SnapshotAborter
+from genkit._ai._agents._session import SessionErrorType, SessionStore, SnapshotAborter
 from genkit._ai._json_patch import apply_json_patch, diff_json
 from genkit._core._error import GenkitError, StatusCodes
 from genkit._core._typing import (
@@ -163,7 +163,7 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
                     'snapshot_id instead.'
                 ),
                 details={
-                    'type': 'ambiguous_branch',
+                    'type': SessionErrorType.AMBIGUOUS_BRANCH,
                     'sessionId': session_id,
                     'leaves': list(leaves),
                 },

@@ -22,6 +22,7 @@ import re
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Generic, Protocol, TypeVar, cast, runtime_checkable
 from uuid import uuid4
 
@@ -35,6 +36,13 @@ from genkit._core._typing import (
     SessionState,
     SnapshotStatus,
 )
+
+
+class SessionErrorType(str, Enum):
+    """Types of session-related errors returned in GenkitError details."""
+
+    AMBIGUOUS_BRANCH = 'ambiguousBranch'
+
 
 # Bare RFC-4122 UUID — session ids from useChat must match this shape.
 SESSION_ID_PATTERN = re.compile(
@@ -151,7 +159,7 @@ def select_leaf_snapshot(
             'snapshot_id instead.'
         ),
         details={
-            'type': 'ambiguous_branch',
+            'type': SessionErrorType.AMBIGUOUS_BRANCH,
             'sessionId': session_id,
             'leaves': [snap.snapshot_id for snap in leaves],
         },
