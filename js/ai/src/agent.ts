@@ -66,6 +66,7 @@ import {
   ArtifactSchema,
   Session,
   SessionSnapshot,
+  SessionSnapshotSchema,
   SessionState,
   SessionStateSchema,
   SessionStore,
@@ -433,6 +434,13 @@ export class SessionRunner<State = unknown> {
   private store?: SessionStore<State>;
   public isDetached: boolean = false;
   /**
+   * Aborts in-flight turns. When set and aborted, a turn that rejects out of
+   * `generate` is reported as `aborted` (not `failed`) and its failed snapshot
+   * write is skipped (the abort path already persisted the `aborted` status).
+   */
+  private abortSignal?: AbortSignal;
+
+  /**
    * True until the first `customPatch` chunk of the current turn has been
    * emitted. The first patch of every turn is a whole-document replace
    * (re-basing clients that may not share the server's baseline); reset to
@@ -446,6 +454,7 @@ export class SessionRunner<State = unknown> {
     options?: {
       lastSnapshot?: SessionSnapshot<State>;
       store?: SessionStore<State>;
+      abortSignal?: AbortSignal;
       onEndTurn?: (
         snapshotId?: string,
         finishReason?: AgentFinishReason
@@ -458,6 +467,7 @@ export class SessionRunner<State = unknown> {
 
     this.lastSnapshot = options?.lastSnapshot;
     this.store = options?.store;
+    this.abortSignal = options?.abortSignal;
     this.onEndTurn = options?.onEndTurn;
     this.onDetach = options?.onDetach;
 
@@ -578,7 +588,6 @@ export class SessionRunner<State = unknown> {
           this.lastTurnError = undefined;
 
           const snapshotId = await this.maybeSnapshot(
-            'turnEnd',
             'completed',
             undefined,
             turnSnapshotId,
@@ -606,10 +615,21 @@ export class SessionRunner<State = unknown> {
         });
         this.turnIndex++;
       } catch (e: any) {
+        // An aborted turn rejects out of `generate` and lands here. Treat it as
+        // `aborted` rather than `failed`: the abort path already persisted the
+        // `aborted` status (the abort-aware mutator would skip a `failed` write
+        // anyway), so we record the finish reason and skip the failed snapshot
+        // write entirely instead of reporting a spurious error.
+        if (this.abortSignal?.aborted) {
+          this.lastTurnFinishReason = 'aborted';
+          this.lastTurnError = undefined;
+          this.notifyEndTurn(this.lastSnapshot?.snapshotId, 'aborted');
+          break;
+        }
+
         this.lastTurnFinishReason = 'failed';
         this.lastTurnError = toErrorDetails(e);
         const snapshotId = await this.maybeSnapshot(
-          'turnEnd',
           'failed',
           this.lastTurnError,
           turnSnapshotId,
@@ -637,7 +657,6 @@ export class SessionRunner<State = unknown> {
    * "aborted" status.
    */
   async maybeSnapshot(
-    event: 'turnEnd' | 'invocationEnd',
     status?: 'pending' | 'completed' | 'failed',
     error?: { status?: string; message: string; details?: any },
     snapshotId?: string,
@@ -662,11 +681,10 @@ export class SessionRunner<State = unknown> {
         : {}),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      event: event,
       state: currentState as SessionState<State>,
       parentId: this.lastSnapshot?.snapshotId,
       // Default to a resumable `completed` status. The only caller that omits a
-      // status is the `invocationEnd` write (which fires when the handler
+      // status is the post-invocation write (which fires when the handler
       // mutates state after the last turn); persisting it as `completed` keeps
       // it a valid resume target under the "only `completed` is resumable" rule.
       status: status ?? 'completed',
@@ -769,16 +787,16 @@ export const GetSnapshotRequestSchema = z.object({
 });
 
 /**
- * Schema for the input of the `abortSnapshot` companion action.
+ * Schema for the input of the `abort` companion action.
  */
-export const AbortSnapshotRequestSchema = z.object({
+export const AgentAbortRequestSchema = z.object({
   snapshotId: z.string(),
 });
 
 /**
- * Schema for the output of the `abortSnapshot` companion action.
+ * Schema for the output of the `abort` companion action.
  */
-export const AbortSnapshotResponseSchema = z.object({
+export const AgentAbortResponseSchema = z.object({
   snapshotId: z.string(),
   status: z
     .enum(['pending', 'completed', 'aborted', 'failed', 'expired'])
@@ -829,8 +847,8 @@ export interface Agent<State = unknown>
 
   readonly getSnapshotDataAction: GetSnapshotDataAction<State>;
   readonly abortAgentAction: Action<
-    typeof AbortSnapshotRequestSchema,
-    typeof AbortSnapshotResponseSchema
+    typeof AgentAbortRequestSchema,
+    typeof AgentAbortResponseSchema
   >;
 }
 
@@ -953,7 +971,22 @@ async function resolveSession<State>(
       sessionId: init.sessionId,
       context: getContext(),
     });
+    // Walk back over non-resumable leaves to the last-good (`completed`)
+    // snapshot. Guard against a self-referential or cyclic `parentId` chain
+    // (corrupt history) with a visited set so we fail fast with
+    // `FAILED_PRECONDITION` instead of looping forever on store reads.
+    const visited = new Set<string>();
     while (snapshot && snapshot.status !== 'completed') {
+      if (visited.has(snapshot.snapshotId)) {
+        throw new GenkitError({
+          status: 'FAILED_PRECONDITION',
+          message:
+            `Session '${init.sessionId}' has a cyclic snapshot parent chain ` +
+            `(snapshot '${snapshot.snapshotId}' was visited twice). Resume by ` +
+            `snapshotId instead.`,
+        });
+      }
+      visited.add(snapshot.snapshotId);
       snapshot = snapshot.parentId
         ? await store.getSnapshot({
             snapshotId: snapshot.parentId,
@@ -1028,12 +1061,7 @@ function pipeInputWithDetach<State>(
             // snapshot and any handler-named external resources share one id.
             const turnSnapshotId = runner.newSnapshotId || reserveSnapshotId();
             runner.newSnapshotId = turnSnapshotId;
-            await runner.maybeSnapshot(
-              'turnEnd',
-              'pending',
-              undefined,
-              turnSnapshotId
-            );
+            await runner.maybeSnapshot('pending', undefined, turnSnapshotId);
             runner.isDetached = true;
 
             if (runner.onDetach) {
@@ -1238,6 +1266,7 @@ export function defineCustomAgent<State = unknown>(
       runner = new SessionRunner<State>(session, runnerInputChannel, {
         store,
         lastSnapshot: snapshot,
+        abortSignal: abortController.signal,
 
         onDetach: (snapshotId) => {
           detachedSnapshotId = snapshotId;
@@ -1345,7 +1374,10 @@ export function defineCustomAgent<State = unknown>(
               context: getContext(),
             })
           );
-          const finalSnapshotId = await runner.maybeSnapshot('invocationEnd');
+          // After the handler resolves, persist any state it mutated after the
+          // last turn. Omitting a status defaults to a resumable `completed`
+          // write, which the version guard skips when nothing changed.
+          const finalSnapshotId = await runner.maybeSnapshot();
           return { result, finalSnapshotId };
         } finally {
           // The turn has settled (the snapshot reached a terminal status), so
@@ -1465,7 +1497,7 @@ export function defineCustomAgent<State = unknown>(
       description: `Gets snapshot data for ${config.name} by snapshotId or sessionId`,
       actionType: 'agent-snapshot',
       inputSchema: GetSnapshotRequestSchema,
-      outputSchema: z.any(), // SessionSnapshot Schema
+      outputSchema: SessionSnapshotSchema.optional(),
     },
     async (lookup) => resolveSnapshot({ ...lookup, context: getContext() })
   );
@@ -1476,8 +1508,8 @@ export function defineCustomAgent<State = unknown>(
       name: config.name,
       description: `Aborts ${config.name} agent by snapshotId. Returns the snapshot id and its status after the abort attempt.`,
       actionType: 'agent-abort',
-      inputSchema: AbortSnapshotRequestSchema,
-      outputSchema: AbortSnapshotResponseSchema,
+      inputSchema: AgentAbortRequestSchema,
+      outputSchema: AgentAbortResponseSchema,
     },
     async ({ snapshotId }) => {
       const status = await runAbort(snapshotId, { context: getContext() });
@@ -1492,8 +1524,8 @@ export function defineCustomAgent<State = unknown>(
     getSnapshotDataAction:
       getSnapshotDataAction as unknown as GetSnapshotDataAction<State>,
     abortAgentAction: abortAgentAction as unknown as Action<
-      typeof AbortSnapshotRequestSchema,
-      typeof AbortSnapshotResponseSchema
+      typeof AgentAbortRequestSchema,
+      typeof AgentAbortResponseSchema
     >,
   });
 
