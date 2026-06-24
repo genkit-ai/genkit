@@ -178,22 +178,7 @@ func NewInterruptibleTool[In, Out, Res any](
 // conversion would all be unnecessary.
 func wrapSimpleFunc[In, Out any](fn ToolFunc[In, Out]) ai.MultipartToolFunc[In] {
 	return func(tc *ai.ToolContext, input In) (*ai.MultipartToolResponse, error) {
-		ctx := tc.Context
-		ctx, collector := tool.NewPartsContext(ctx)
-		if tc.OriginalInput != nil {
-			ctx = tool.SetOriginalInput(ctx, tc.OriginalInput)
-		}
-
-		output, err := fn(ctx, input)
-		if err != nil {
-			return nil, convertInterruptError(tc, err)
-		}
-
-		resp := &ai.MultipartToolResponse{Output: output}
-		if parts := collector(); len(parts) > 0 {
-			resp.Content = parts
-		}
-		return resp, nil
+		return runToolFunc(tc, input, fn)
 	}
 }
 
@@ -201,34 +186,49 @@ func wrapSimpleFunc[In, Out any](fn ToolFunc[In, Out]) ai.MultipartToolFunc[In] 
 // the new function signature and ai.MultipartToolFunc/ai.ToolContext.
 func wrapInterruptibleFunc[In, Out, Resume any](fn InterruptibleToolFunc[In, Out, Resume]) ai.MultipartToolFunc[In] {
 	return func(tc *ai.ToolContext, input In) (*ai.MultipartToolResponse, error) {
-		ctx := tc.Context
-		ctx, collector := tool.NewPartsContext(ctx)
-		if tc.OriginalInput != nil {
-			ctx = tool.SetOriginalInput(ctx, tc.OriginalInput)
-		}
-
-		// DEPRECATED(breaking): Resumed data would come from context keys set by
-		// the generate loop directly, not from ai.ToolContext.Resumed.
-		var res *Resume
-		if tc.Resumed != nil {
-			r, err := base.MapToStruct[Resume](tc.Resumed)
-			if err != nil {
-				return nil, fmt.Errorf("aix.wrapInterruptibleFunc: failed to convert resumed data: %w", err)
+		return runToolFunc(tc, input, func(ctx context.Context, input In) (Out, error) {
+			// DEPRECATED(breaking): Resumed data would come from context keys set by
+			// the generate loop directly, not from ai.ToolContext.Resumed.
+			var res *Resume
+			if tc.Resumed != nil {
+				r, err := base.MapToStruct[Resume](tc.Resumed)
+				if err != nil {
+					var zero Out
+					return zero, fmt.Errorf("aix.wrapInterruptibleFunc: failed to convert resumed data: %w", err)
+				}
+				res = &r
 			}
-			res = &r
-		}
-
-		output, err := fn(ctx, input, res)
-		if err != nil {
-			return nil, convertInterruptError(tc, err)
-		}
-
-		resp := &ai.MultipartToolResponse{Output: output}
-		if parts := collector(); len(parts) > 0 {
-			resp.Content = parts
-		}
-		return resp, nil
+			return fn(ctx, input, res)
+		})
 	}
+}
+
+// runToolFunc adapts a plain func(context.Context, In) (Out, error) to one
+// ai.MultipartToolFunc invocation: it sets up the per-call context (parts
+// collector and, on resume, the original input), runs invoke, converts a
+// tool.InterruptError into ai's interrupt signal, and folds any parts attached
+// via tool.AttachParts into the response. The simple and interruptible wrappers
+// differ only in how they build invoke, so they share this body.
+//
+// DEPRECATED(breaking): This bridging disappears once core.DefineAction accepts
+// the plain function signature directly (see wrapSimpleFunc).
+func runToolFunc[In, Out any](tc *ai.ToolContext, input In, invoke ToolFunc[In, Out]) (*ai.MultipartToolResponse, error) {
+	ctx := tc.Context
+	ctx, collector := tool.NewPartsContext(ctx)
+	if tc.OriginalInput != nil {
+		ctx = tool.SetOriginalInput(ctx, tc.OriginalInput)
+	}
+
+	output, err := invoke(ctx, input)
+	if err != nil {
+		return nil, convertInterruptError(tc, err)
+	}
+
+	resp := &ai.MultipartToolResponse{Output: output}
+	if parts := collector(); len(parts) > 0 {
+		resp.Content = parts
+	}
+	return resp, nil
 }
 
 // DEPRECATED(breaking): convertInterruptError exists because tool.InterruptError
