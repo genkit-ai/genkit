@@ -722,7 +722,7 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
         """
         if self.closed:
             raise GenkitError(
-                message='BidiConnection: send on closed connection',
+                message='Cannot send input: the BidiConnection is already closed.',
                 status=StatusCodes.FAILED_PRECONDITION,
             )
         await self.in_queue.put(input)
