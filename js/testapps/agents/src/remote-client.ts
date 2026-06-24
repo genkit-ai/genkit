@@ -33,7 +33,7 @@ async function main() {
   // ── A server-managed agent (weatherAgent has a FileSessionStore). ────────
   const weather = remoteAgent({
     url: `${BASE}/api/weatherAgent`,
-    stateUrl: `${BASE}/api/weatherAgent/state`,
+    getSnapshotUrl: `${BASE}/api/weatherAgent/state`,
     abortUrl: `${BASE}/api/weatherAgent/abort`,
   });
 
