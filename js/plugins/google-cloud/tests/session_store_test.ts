@@ -122,8 +122,8 @@ describe('FirestoreSessionStore', () => {
     const read = await store.getSnapshot({ snapshotId: 'snap-1' });
     assert.ok(read);
     assert.strictEqual(read.snapshotId, 'snap-1');
-    assert.strictEqual(read.state.sessionId, 'sess-1');
-    assert.deepStrictEqual(read.state.custom, { counter: 1 });
+    assert.strictEqual(read.state?.sessionId, 'sess-1');
+    assert.deepStrictEqual(read.state?.custom, { counter: 1 });
   });
 
   it('returns undefined for missing snapshot/session', async () => {
@@ -155,7 +155,7 @@ describe('FirestoreSessionStore', () => {
     const leaf = await store.getSnapshot({ sessionId: 'sess-2' });
     assert.ok(leaf);
     assert.strictEqual(leaf.snapshotId, 's2');
-    assert.deepStrictEqual(leaf.state.custom, { counter: 2 });
+    assert.deepStrictEqual(leaf.state?.custom, { counter: 2 });
   });
 
   it('reconstructs full state from a chain of diffs', async () => {
@@ -191,14 +191,14 @@ describe('FirestoreSessionStore', () => {
 
     // Middle snapshot reconstructs correctly.
     const mid = await store.getSnapshot({ snapshotId: 'c2' });
-    assert.deepStrictEqual(mid?.state.custom, {
+    assert.deepStrictEqual(mid?.state?.custom, {
       counter: 2,
       notes: ['a', 'b'],
     });
 
     // Leaf reconstructs correctly via sessionId.
     const leaf = await store.getSnapshot({ sessionId: 'sess-3' });
-    assert.deepStrictEqual(leaf?.state.custom, {
+    assert.deepStrictEqual(leaf?.state?.custom, {
       counter: 3,
       notes: ['a', 'b', 'c'],
     });
@@ -270,7 +270,7 @@ describe('FirestoreSessionStore', () => {
 
     // Both branches remain independently addressable.
     const a = await store.getSnapshot({ snapshotId: 'b2a' });
-    assert.deepStrictEqual(a?.state.custom, { counter: 20 });
+    assert.deepStrictEqual(a?.state?.custom, { counter: 20 });
   });
 
   it('aborting an existing snapshot does not move the leaf pointer', async () => {
@@ -345,13 +345,13 @@ describe('FirestoreSessionStore', () => {
     // Leaf reconstructs the full accumulated state.
     const leaf = await cpStore.getSnapshot({ sessionId: 'long' });
     assert.strictEqual(leaf?.snapshotId, `t${turns - 1}`);
-    assert.strictEqual(leaf?.state.custom?.counter, turns - 1);
-    assert.strictEqual(leaf?.state.custom?.notes?.length, turns);
+    assert.strictEqual(leaf?.state?.custom?.counter, turns - 1);
+    assert.strictEqual(leaf?.state?.custom?.notes?.length, turns);
 
     // An arbitrary middle snapshot reconstructs correctly across a checkpoint.
     const mid = await cpStore.getSnapshot({ snapshotId: 't12' });
-    assert.strictEqual(mid?.state.custom?.counter, 12);
-    assert.strictEqual(mid?.state.custom?.notes?.length, 13);
+    assert.strictEqual(mid?.state?.custom?.counter, 12);
+    assert.strictEqual(mid?.state?.custom?.notes?.length, 13);
 
     // Several documents were promoted to checkpoints (root + every 5 turns).
     const all = await snapshotsCol(cpStore)
@@ -377,7 +377,7 @@ describe('FirestoreSessionStore', () => {
 
     // Round-trips correctly despite being split into many shards.
     const read = await shardStore.getSnapshot({ snapshotId: 'big' });
-    assert.deepStrictEqual(read?.state.custom?.notes, notes);
+    assert.deepStrictEqual(read?.state?.custom?.notes, notes);
 
     // The state really was sharded across more than one document.
     const shards = await shardsCol(shardStore).get();
@@ -417,12 +417,12 @@ describe('FirestoreSessionStore', () => {
     await assert.rejects(store.getSnapshot({ snapshotId: '' }), /exactly one/);
   });
 
-  it('rejects saveSnapshot when state.sessionId is missing', async () => {
+  it('rejects saveSnapshot when sessionId is missing', async () => {
     await assert.rejects(
       store.saveSnapshot('no-sess', () =>
         snapshot({ snapshotId: 'no-sess', state: { custom: { counter: 1 } } })
       ),
-      /state\.sessionId/
+      /sessionId/
     );
   });
 
@@ -438,7 +438,7 @@ describe('FirestoreSessionStore', () => {
     );
 
     const read = await store.getSnapshot({ snapshotId: id! });
-    assert.strictEqual(read?.state.custom?.counter, 1);
+    assert.strictEqual(read?.state?.custom?.counter, 1);
   });
 
   it('promotes an oversized diff to a sharded checkpoint', async () => {
@@ -469,7 +469,7 @@ describe('FirestoreSessionStore', () => {
 
     // Round-trips correctly.
     const read = await promoteStore.getSnapshot({ snapshotId: 'd2' });
-    assert.deepStrictEqual(read?.state.custom?.notes, bigNotes);
+    assert.deepStrictEqual(read?.state?.custom?.notes, bigNotes);
 
     // The promoted document is a checkpoint with no statePatch.
     const raw = await snapshotsCol(promoteStore).doc('d2').get();
@@ -518,8 +518,8 @@ describe('FirestoreSessionStore', () => {
 
     // Round-trips correctly.
     const read = await promoteStore.getSnapshot({ snapshotId: 'e2' });
-    assert.deepStrictEqual(read?.state.custom?.notes, bigNotes);
-    assert.strictEqual(read?.state.custom?.counter, 2);
+    assert.deepStrictEqual(read?.state?.custom?.notes, bigNotes);
+    assert.strictEqual(read?.state?.custom?.counter, 2);
 
     // The promoted document is now a checkpoint with no statePatch, and its
     // state was sharded across more than one document.
@@ -564,8 +564,8 @@ describe('FirestoreSessionStore', () => {
 
     // And it still reads back correctly with no leftover/corrupt shards.
     const read = await shrinkStore.getSnapshot({ snapshotId: 'k1' });
-    assert.strictEqual(read?.state.custom?.counter, 2);
-    assert.strictEqual(read?.state.custom?.notes, undefined);
+    assert.strictEqual(read?.state?.custom?.counter, 2);
+    assert.strictEqual(read?.state?.custom?.notes, undefined);
   });
 
   it('treats a snapshot with an orphaned parent as a fresh checkpoint', async () => {
@@ -578,7 +578,7 @@ describe('FirestoreSessionStore', () => {
     );
 
     const read = await store.getSnapshot({ snapshotId: 'o1' });
-    assert.strictEqual(read?.state.custom?.counter, 7);
+    assert.strictEqual(read?.state?.custom?.counter, 7);
 
     // It was stored as a checkpoint (root of a new chain), not a diff.
     const raw = await snapshotsCol(store).doc('o1').get();
@@ -655,10 +655,10 @@ describe('FirestoreSessionStore', () => {
     );
 
     const leaf = await store.getSnapshot({ sessionId: 'sess-msgs' });
-    assert.strictEqual(leaf?.state.messages?.length, 2);
-    assert.strictEqual(leaf?.state.messages?.[1].role, 'model');
-    assert.strictEqual(leaf?.state.artifacts?.length, 2);
-    assert.strictEqual(leaf?.state.artifacts?.[1].name, 'b');
+    assert.strictEqual(leaf?.state?.messages?.length, 2);
+    assert.strictEqual(leaf?.state?.messages?.[1].role, 'model');
+    assert.strictEqual(leaf?.state?.artifacts?.length, 2);
+    assert.strictEqual(leaf?.state?.artifacts?.[1].name, 'b');
 
     // The child stored only a diff, not the full message array.
     const raw = await snapshotsCol(store).doc('m2').get();
@@ -700,7 +700,7 @@ describe('FirestoreSessionStore', () => {
     }
 
     const leaf = await cp1Store.getSnapshot({ sessionId: 'sess-cp1' });
-    assert.strictEqual(leaf?.state.custom?.counter, 3);
+    assert.strictEqual(leaf?.state?.custom?.counter, 3);
 
     // Every document is a checkpoint; none is a diff.
     const diffs = await snapshotsCol(cp1Store)
@@ -735,7 +735,7 @@ describe('FirestoreSessionStore', () => {
         snapshotId: 'shared-id',
         context: ctx('alice').context,
       });
-      assert.strictEqual(asAlice?.state.custom?.counter, 1);
+      assert.strictEqual(asAlice?.state?.custom?.counter, 1);
 
       // Bob, with the very same snapshotId, sees nothing.
       const asBob = await tenantStore.getSnapshot({
@@ -771,7 +771,7 @@ describe('FirestoreSessionStore', () => {
         context: ctx('alice').context,
       });
       assert.strictEqual(asAlice?.snapshotId, 'a1');
-      assert.strictEqual(asAlice?.state.custom?.counter, 11);
+      assert.strictEqual(asAlice?.state?.custom?.counter, 11);
     });
 
     it('writes documents under the tenant-scoped subcollection', async () => {
@@ -878,8 +878,8 @@ describe('FirestoreSessionStore', () => {
       // accumulated [user, model] history with the echoed reply.
       const snap1 = await agentStore.getSnapshot({ snapshotId: snapshotId1 });
       assert.ok(snap1, 'turn 1 snapshot should exist in Firestore');
-      assert.strictEqual(snap1!.state.sessionId, sessionId);
-      const msgs1 = snap1!.state.messages ?? [];
+      assert.strictEqual(snap1!.state?.sessionId, sessionId);
+      const msgs1 = snap1!.state?.messages ?? [];
       assert.strictEqual(msgs1.length, 2);
       assert.strictEqual(msgs1[0].role, 'user');
       assert.strictEqual(msgs1[0].content[0].text, 'hello');
@@ -901,7 +901,7 @@ describe('FirestoreSessionStore', () => {
       // Resolving the latest leaf by sessionId reflects the full conversation.
       const leaf = await agentStore.getSnapshot({ sessionId });
       assert.ok(leaf, 'a leaf snapshot should be resolvable by sessionId');
-      const msgs2 = leaf!.state.messages ?? [];
+      const msgs2 = leaf!.state?.messages ?? [];
       assert.strictEqual(msgs2.length, 4, 'history should accumulate to 4');
       assert.deepStrictEqual(
         msgs2.map((m) => m.content.map((p: any) => p.text).join('')),

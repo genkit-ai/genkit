@@ -194,6 +194,21 @@ func isUnitType[T any]() bool {
 	return reflect.TypeFor[T]() == reflect.TypeFor[struct{}]()
 }
 
+// isNilValue reports whether v is nil or a nil pointer, map, slice, or
+// interface: a value that marshals to JSON null and carries nothing to
+// validate against a schema.
+func isNilValue(v any) bool {
+	if v == nil {
+		return true
+	}
+	switch rv := reflect.ValueOf(v); rv.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Interface:
+		return rv.IsNil()
+	default:
+		return false
+	}
+}
+
 // inferSchema returns the JSON schema inferred from T's zero value, or nil
 // for interface types, whose zero value carries no type information to infer
 // from.

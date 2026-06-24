@@ -152,7 +152,7 @@ export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
     // resolve the single leaf (latest) snapshot.
     const owned: SessionSnapshot<S>[] = [];
     for (const snap of this.snapshots.values()) {
-      if (snap.state?.sessionId === sessionId) {
+      if ((snap.sessionId ?? snap.state?.sessionId) === sessionId) {
         owned.push(snap);
       }
     }
@@ -440,7 +440,7 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
       try {
         const contents = await fsp.readFile(path.join(dir, file), 'utf-8');
         const snap = JSON.parse(contents) as SessionSnapshot<S>;
-        if (snap.state?.sessionId === sessionId) {
+        if ((snap.sessionId ?? snap.state?.sessionId) === sessionId) {
           snapshots.push(snap);
         }
       } catch (e: unknown) {

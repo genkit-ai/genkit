@@ -336,22 +336,24 @@ func TestEarlyTraceIDTransmission(t *testing.T) {
 	tc := tracing.NewTestOnlyTelemetryClient()
 	tracing.WriteTelemetryImmediate(tc)
 
-	actionStarted := make(chan struct{})
-	actionCanProceed := make(chan struct{})
-
-	// Action that waits for permission to complete - this lets us check headers while it's running
-	core.DefineAction(g.reg, "test/slow", api.ActionTypeCustom, nil, nil,
-		func(ctx context.Context, input any) (any, error) {
-			close(actionStarted) // Signal we've started
-			<-actionCanProceed   // Wait for test to say we can finish
-			return "completed", nil
-		})
-
 	s := &reflectionServer{Server: &http.Server{}, activeActions: newActiveActionsMap()}
 	ts := httptest.NewServer(serveMux(g, s))
 	defer ts.Close()
 
 	t.Run("headers arrive before body completes", func(t *testing.T) {
+		// Subtest-local channels and action so the server goroutine for
+		// this subtest doesn't read variables that the next subtest is
+		// about to reassign. The previous shared-state setup raced under
+		// -race because t.Run only synchronizes with the subtest
+		// goroutine, not with the httptest server's request goroutine.
+		actionStarted := make(chan struct{})
+		actionCanProceed := make(chan struct{})
+		core.DefineAction(g.reg, "test/slow", api.ActionTypeCustom, nil, nil,
+			func(ctx context.Context, input any) (any, error) {
+				close(actionStarted)
+				<-actionCanProceed
+				return "completed", nil
+			})
 		// Channel to receive headers as soon as they arrive
 		type headerResult struct {
 			traceID string
@@ -409,13 +411,10 @@ func TestEarlyTraceIDTransmission(t *testing.T) {
 
 	// Backwards compatability
 	t.Run("trace ID in headers matches body", func(t *testing.T) {
-		// Fresh channels for this subtest. Reassigning the outer variables
-		// would race with the first subtest's action closure, which captures
-		// them by reference and may still be running.
+		// Subtest-local channels and action; see the comment on the
+		// previous subtest.
 		actionStarted := make(chan struct{})
 		actionCanProceed := make(chan struct{})
-
-		// Re-register action for this subtest
 		core.DefineAction(g.reg, "test/slow2", api.ActionTypeCustom, nil, nil,
 			func(ctx context.Context, input any) (any, error) {
 				close(actionStarted)

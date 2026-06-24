@@ -65,7 +65,8 @@ type BidiAction interface {
 	Action
 	// RunBidiJSON runs the bidi action as a single one-shot call: input is
 	// delivered as the only chunk on the input stream, outgoing chunks are
-	// forwarded to cb, and opts carries the session init.
+	// forwarded to cb, and opts carries the session init. Input is required;
+	// only a streaming session can defer it past startup.
 	RunBidiJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error, opts *BidiJSONOptions) (*ActionRunResult[json.RawMessage], error)
 	// ConnectJSON starts a bidirectional streaming session using
 	// JSON-encoded messages.
@@ -117,8 +118,11 @@ const (
 	ActionTypeToolV2           ActionType = "tool.v2"
 	ActionTypeUtil             ActionType = "util"
 	ActionTypeCustom           ActionType = "custom"
+	ActionTypeAgentSnapshot    ActionType = "agent-snapshot"
+	ActionTypeAgentAbort       ActionType = "agent-abort"
 	ActionTypeCheckOperation   ActionType = "check-operation"
 	ActionTypeCancelOperation  ActionType = "cancel-operation"
+	ActionTypeAgent            ActionType = "agent"
 )
 
 // ActionDesc is a descriptor of an action.

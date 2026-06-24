@@ -14,14 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package x provides experimental Genkit APIs.
-//
-// APIs in this package are under active development and may change in any
-// minor version release. Use with caution in production environments.
-//
-// When these APIs stabilize, they will be moved to the genkit package
-// and these exports will be deprecated.
-package x
+package exp
 
 import (
 	"context"
@@ -59,7 +52,7 @@ type StreamingFunc[In, Out, Stream any] = func(ctx context.Context, input In, st
 //
 // Example:
 //
-//	countdown := x.DefineStreamingFlow(g, "countdown",
+//	countdown := exp.DefineStreamingFlow(g, "countdown",
 //	    func(ctx context.Context, start int, streamCh chan<- int) (string, error) {
 //	        for i := start; i > 0; i-- {
 //	            select {

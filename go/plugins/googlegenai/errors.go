@@ -27,9 +27,8 @@ import (
 // matches the one the server reported so status-aware middleware (retry,
 // fallback, ...) can reason about it. Non-APIError values pass through.
 //
-// The SDK's Status string is a canonical Google / gRPC status name which,
-// by design, already matches the string value of every [core.StatusName]
-// constant except INTERNAL (our constant spells it "INTERNAL_SERVER_ERROR").
+// The SDK's Status string is a canonical Google / gRPC status name and so
+// matches the string value of each [core.StatusName] constant directly.
 // When Status is missing or unrecognised the HTTP Code is the fallback.
 func wrapAPIError(err error) error {
 	if err == nil {
@@ -43,9 +42,6 @@ func wrapAPIError(err error) error {
 }
 
 func statusForAPIError(e genai.APIError) core.StatusName {
-	if e.Status == "INTERNAL" {
-		return core.INTERNAL
-	}
 	s := core.StatusName(e.Status)
 	if _, ok := core.StatusNameToCode[s]; ok {
 		return s

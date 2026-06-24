@@ -36,35 +36,15 @@ EXCLUDED = frozenset({
 })
 PRIM = {'string': 'str', 'number': 'float', 'integer': 'int', 'boolean': 'bool'}
 # Schema type transformations: rename and/or omit fields before emission.
-# Keys: schema type name OR 'Parent.prop' for an inline object property. Values:
-# {'output_name': str} and/or {'suffix': str, 'omit': [str]}.
+# Keys: schema type name. Values: {'output_name': str} and/or {'suffix': str, 'omit': [str]}.
 # - output_name: emit and reference as this name (e.g. Message -> MessageData)
 # - suffix: emit as {name}{suffix}, omit listed fields (hand-written subclass adds them back)
-# - 'Parent.prop' keys rename an extracted inline class to disambiguate collisions
-#   (e.g. AgentInput.resume vs GenerateActionOptions.resume both yield 'Resume').
-#   The parent name is the *output* name (after any type-level transformation).
 TRANSFORMATIONS = {
     'Message': {'output_name': 'MessageData'},
     'GenerateActionOptions': {'suffix': 'Data', 'omit': ['messages']},
-    # Disambiguate the two inline `resume` objects: keep the richer
-    # GenerateActionOptions.resume (with `metadata`) as `Resume`, and rename the
-    # AgentInput.resume (without `metadata`) to `AgentInputResume`.
-    'AgentInput.resume': {'output_name': 'AgentInputResume'},
+    # RuntimeError would shadow Python's builtin exception.
+    'RuntimeError': {'output_name': 'GenkitRuntimeError'},
 }
-
-# Inline property names that intentionally collapse to a single dict alias across many
-# parents (see _py_type / Metadata & Custom handling); exempt from collision checks.
-EXEMPT_INLINE_COLLISIONS = frozenset({'Metadata', 'Custom'})
-
-
-def _inline_override(parent: str, prop: str) -> str | None:
-    """Return the overridden output name for an inline ``Parent.prop`` class, if any."""
-    cfg = TRANSFORMATIONS.get(f'{parent}.{prop}')
-    if isinstance(cfg, dict):
-        out = cfg.get('output_name')
-        if isinstance(out, str):
-            return out
-    return None
 
 
 def _output_name(name: str) -> str:
@@ -184,40 +164,28 @@ def _typed_map_aliases(defs: dict) -> dict[str, str]:
 def _extract_inline_classes(schema: dict) -> dict[str, dict]:
     """Extract inline object schemas to named classes (e.g. Score.details -> Details).
 
-    Raises ``ValueError`` if two different inline schemas would collapse to the same
-    class name (e.g. ``AgentInput.resume`` vs ``GenerateActionOptions.resume``). To
-    resolve, add a ``TRANSFORMATIONS['Parent.prop'] = {'output_name': '...'}`` override
-    for one of them. Names in ``EXEMPT_INLINE_COLLISIONS`` intentionally collapse to a
-    single dict alias (see ``_py_type``) and are skipped.
+    When two inline schemas across different parents share a derived class
+    name (e.g. ``resume`` on both ``AgentInput`` and ``GenerateActionOptions``),
+    keep the one with the larger property set so the generated dataclass
+    captures the superset of fields.
     """
     result = {}
-    sources: dict[str, str] = {}  # class_name -> 'Parent.prop' that first defined it
     defs = schema.get('$defs') or {}
 
-    def walk(parent: str, props: dict) -> None:
+    def walk(props: dict) -> None:
         for prop_name, prop_schema in (props or {}).items():
             if isinstance(prop_schema, dict) and prop_schema.get('type') == 'object' and '$ref' not in prop_schema:
-                class_name = _inline_override(parent, prop_name) or _pascal(prop_name)
-                source = f'{parent}.{prop_name}'
+                class_name = _pascal(prop_name)
                 if class_name not in defs:
                     existing = result.get(class_name)
-                    if existing is None:
+                    new_props = prop_schema.get('properties') or {}
+                    if existing is None or len(existing.get('properties') or {}) < len(new_props):
                         result[class_name] = prop_schema
-                        sources[class_name] = source
-                    elif existing != prop_schema and class_name not in EXEMPT_INLINE_COLLISIONS:
-                        # EXEMPT names (Metadata/Custom) intentionally collapse to a dict
-                        # alias across many parents, so differing schemas are fine for them.
-                        raise ValueError(
-                            f'Inline class name collision: {class_name!r} generated from '
-                            f'{sources[class_name]!r} and {source!r} have different schemas. '
-                            f"Add TRANSFORMATIONS['{source}'] = {{'output_name': '...'}} "
-                            f'(or for the other source) to disambiguate.'
-                        )
-                walk(class_name, prop_schema.get('properties', {}))
+                walk(prop_schema.get('properties', {}))
 
-    for name, defn in defs.items():
+    for defn in defs.values():
         if isinstance(defn, dict):
-            walk(_output_name(name), defn.get('properties', {}))
+            walk(defn.get('properties', {}))
     return result
 
 
@@ -272,10 +240,8 @@ def _py_type(prop: dict, schema: dict, defs: dict, class_name: str, field_name: 
         # Flexible custom field (additionalProperties) -> use Custom (type alias for dict)
         if field_name in ('custom',) and prop.get('additionalProperties') is not None:
             return 'Custom'
-        # Honor inline-class overrides (e.g. AgentInput.resume -> AgentInputResume).
-        cand = _inline_override(class_name, field_name) or _pascal(field_name)
-        if cand in defs:
-            return cand
+        if _pascal(field_name) in defs:
+            return _pascal(field_name)
         return 'dict[str, Any]'
     if 'enum' in prop:
         vals = prop['enum']
@@ -320,6 +286,7 @@ def _emit_model(
     for k, v in props.items():
         # Use schema_ for OutputConfig.schema to avoid shadowing GenkitModel.schema
         snake = _camel_to_snake(k)
+        force_field = False
         if name == 'OutputConfig' and snake == 'schema':
             field_name = 'schema_'
             alias_extra = ", alias='schema'"
@@ -327,10 +294,16 @@ def _emit_model(
             field_name = 'schema' if name != 'OutputConfig' else 'schema_'
             alias_extra = ", alias='schema'" if name == 'OutputConfig' else ''
         elif keyword.iskeyword(snake):
-            # Python reserved word (e.g. JsonPatchOperation.from): suffix with _ and
-            # alias back to the original schema key so JSON (de)serialization is unchanged.
+            # Field name is a Python reserved word (e.g. JSON Patch's `from`),
+            # which is a keyword only in Python. Suffix the Python attribute
+            # and pin the wire alias to the original key so the JSON shape is
+            # unchanged. to_camel cannot recover the original name from the
+            # suffixed one, so the alias must be explicit and emitted even for
+            # plain scalar fields (where the default would otherwise be a bare
+            # None that drops the alias).
             field_name = snake + '_'
-            alias_extra = f", alias='{k}'"
+            alias_extra = f', alias={k!r}'
+            force_field = True
         else:
             field_name = snake
             alias_extra = ''
@@ -350,7 +323,7 @@ def _emit_model(
         else:
             default_val = (
                 f'Field(default=None{desc_extra}{alias_extra})'
-                if '|' in py_type_str or py_type_str == 'Any' or desc_extra or alias_extra
+                if '|' in py_type_str or py_type_str == 'Any' or force_field
                 else 'None'
             )
             lines.append(f'    {field_name}: {py_type_str} | None = {default_val}')

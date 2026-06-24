@@ -58,6 +58,9 @@ bump_version js/plugins/express @genkit-ai/express express-v
 bump_version js/plugins/cloud-sql-pg genkitx-cloud-sql-pg
 bump_version js/plugins/compat-oai @genkit-ai/compat-oai compat-oai-v
 bump_version js/plugins/google-genai @genkit-ai/google-genai google-genai-v
+bump_version js/plugins/middleware @genkit-ai/middleware middleware-v
+bump_version js/plugins/fetch @genkit-ai/fetch fetch-v
+bump_version js/plugins/fastify @genkit-ai/fastify fastify-v
 
 echo TAGS "${TAGS[*]}"
 

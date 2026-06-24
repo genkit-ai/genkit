@@ -63,7 +63,7 @@ describe('FirestoreSessionStore (Firebase wrapper)', () => {
     assert.strictEqual(id, 'snap-1');
 
     const bySnapshot = await store.getSnapshot({ snapshotId: 'snap-1' });
-    assert.strictEqual(bySnapshot?.state.custom?.counter, 1);
+    assert.strictEqual(bySnapshot?.state?.custom?.counter, 1);
 
     const bySession = await store.getSnapshot({ sessionId: 'sess-1' });
     assert.strictEqual(bySession?.snapshotId, 'snap-1');
@@ -84,6 +84,6 @@ describe('FirestoreSessionStore (Firebase wrapper)', () => {
     }));
 
     const read = await store.getSnapshot({ snapshotId: 'snap-2' });
-    assert.strictEqual(read?.state.custom?.counter, 2);
+    assert.strictEqual(read?.state?.custom?.counter, 2);
   });
 });
