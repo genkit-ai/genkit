@@ -714,8 +714,6 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
 
     Returned by BidiAction.stream_bidi(). Wraps two asyncio.Queues and a
     result Future that resolves when the server fn completes.
-
-    Reference: go/core/action.go BidiConnection
     """
 
     def __init__(
@@ -776,8 +774,6 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
     The underlying fn still runs through Action.run() for one-shot calls.
     stream_bidi() wires up two asyncio.Queues and launches the bidi fn as
     a background task.
-
-    Reference: go/core/action.go NewBidiAction / StreamBidi
     """
 
     def __init__(
@@ -850,8 +846,6 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
 
         Launches the bidi fn as a background asyncio task and returns a
         BidiConnection the caller uses to send inputs and receive chunks.
-
-        Reference: go/core/action.go Action.StreamBidi
         """
         validated = self._validate_input(input)
         if validated is None:
@@ -924,10 +918,7 @@ def define_bidi_action(
     description: str | None = None,
     metadata: dict[str, object] | None = None,
 ) -> BidiAction:
-    """Create and register a BidiAction.
-
-    Reference: go/core/action.go DefineBidiAction
-    """
+    """Create and register a BidiAction."""
     action = BidiAction(
         kind=kind,
         name=name,
