@@ -428,28 +428,28 @@ class AgentRuntime:
         store: SessionStore | None,
         snapshot_callback: SnapshotCallback | None,
         client_transform: ClientTransform | None,
-        out_queue: CloseableQueue[StreamQueueItem],
+        session_outputs: CloseableQueue[StreamQueueItem],
     ) -> None:
-        self._name = name
-        self._session = session
-        self._store = store
-        self._snapshot_callback = snapshot_callback
-        self._client_transform = client_transform
-        self._last_snapshot: SessionSnapshot | None = parent_snapshot
-        self._last_snapshot_version: int = self._session.version if parent_snapshot is not None else -1
-        self._detached: bool = False
-        self._first_custom_patch_in_turn: bool = True
-        self._last_sent_custom: object | None = None
+        self.name = name
+        self.session = session
+        self.store = store
+        self.snapshot_callback = snapshot_callback
+        self.client_transform = client_transform
+        self.last_snapshot: SessionSnapshot | None = parent_snapshot
+        self.last_snapshot_version: int = self.session.version if parent_snapshot is not None else -1
+        self.detached: bool = False
+        self.first_custom_patch_in_turn: bool = True
+        self.last_sent_custom: object | None = None
 
-        self._out_queue = out_queue
+        self.session_outputs = session_outputs
 
-        # Separate intake queue: runtime controls its lifecycle,
-        # BidiAction's in_queue is forwarded here by run().
-        self._intake = CloseableQueue(maxsize=1)
+        # Separate turn inputs queue: runtime controls its lifecycle,
+        # BidiAction's client_inputs is forwarded here by run().
+        self.turn_inputs = CloseableQueue(maxsize=1)
 
-        self._sess = SessionRunner(
+        self.sess = SessionRunner(
             session,
-            self._intake,
+            self.turn_inputs,
             on_begin_turn=self.reset_custom_patch_turn,
             on_end_turn=self.emit_turn_end,
         )
@@ -459,46 +459,46 @@ class AgentRuntime:
 
     async def reset_custom_patch_turn(self) -> None:
         # Re-base clients that may not share the server's custom-state baseline.
-        self._first_custom_patch_in_turn = True
+        self.first_custom_patch_in_turn = True
 
     def transform_state(self, state: SessionState) -> SessionState | None:
-        state_fn = self._client_transform.get('state') if self._client_transform else None
+        state_fn = self.client_transform.get('state') if self.client_transform else None
         if state_fn is None:
             return state
         return state_fn(state)
 
     def transform_chunk(self, chunk: AgentStreamChunk) -> AgentStreamChunk | None:
-        chunk_fn = self._client_transform.get('chunk') if self._client_transform else None
+        chunk_fn = self.client_transform.get('chunk') if self.client_transform else None
         if chunk_fn is None:
             return chunk
         return chunk_fn(chunk)
 
     async def client_custom(self) -> object | None:
-        state = await self._session.state()
+        state = await self.session.state()
         client_state = self.transform_state(state)
         return client_state.custom if client_state is not None else None
 
     async def emit_custom_patch(self) -> None:
-        if self._detached:
+        if self.detached:
             return
 
         transformed = await self.client_custom()
-        if self._first_custom_patch_in_turn:
+        if self.first_custom_patch_in_turn:
             ops: list[JsonPatchOperation] = [
                 JsonPatchOperation(op='replace', path='', value=copy.deepcopy(transformed))
             ]
-            self._first_custom_patch_in_turn = False
+            self.first_custom_patch_in_turn = False
         else:
-            ops = diff_json(self._last_sent_custom, transformed)
+            ops = diff_json(self.last_sent_custom, transformed)
 
-        self._last_sent_custom = copy.deepcopy(transformed)
+        self.last_sent_custom = copy.deepcopy(transformed)
         if not ops:
             return
 
         self.send_chunk(AgentStreamChunk(custom_patch=JsonPatch(root=ops)))
 
     async def emit_artifact(self, artifact: Artifact) -> None:
-        if self._detached:
+        if self.detached:
             return
         self.send_chunk(AgentStreamChunk(artifact=artifact))
 
@@ -511,23 +511,23 @@ class AgentRuntime:
         force: bool = False,
     ) -> str:
         """Save snapshot if store configured + callback approves + state changed."""
-        if self._store is None:
+        if self.store is None:
             return ''
-        if not force and self._last_snapshot is not None and self._session.version == self._last_snapshot_version:
-            return self._last_snapshot.snapshot_id
+        if not force and self.last_snapshot is not None and self.session.version == self.last_snapshot_version:
+            return self.last_snapshot.snapshot_id
 
-        state = await self._session.state()
+        state = await self.session.state()
 
-        if self._snapshot_callback is not None and status != SnapshotStatus.FAILED:
+        if self.snapshot_callback is not None and status != SnapshotStatus.FAILED:
             ctx = SnapshotContext(
                 state=state,
-                prev_state=self._last_snapshot.state if self._last_snapshot else None,
-                turn_index=self._sess.turn_index,
+                prev_state=self.last_snapshot.state if self.last_snapshot else None,
+                turn_index=self.sess.turn_index,
             )
-            if not self._snapshot_callback(ctx):
-                return self._last_snapshot.snapshot_id if self._last_snapshot else ''
+            if not self.snapshot_callback(ctx):
+                return self.last_snapshot.snapshot_id if self.last_snapshot else ''
 
-        parent_id = self._last_snapshot.snapshot_id if self._last_snapshot else None
+        parent_id = self.last_snapshot.snapshot_id if self.last_snapshot else None
         now = datetime.now(timezone.utc).isoformat()
         snap_status = status or SnapshotStatus.COMPLETED
 
@@ -546,30 +546,30 @@ class AgentRuntime:
                 error=error,
             )
 
-        snap = await self._store.save_snapshot(None, _make_snap)
+        snap = await self.store.save_snapshot(None, _make_snap)
         if snap is not None:
-            self._last_snapshot = snap
-            self._last_snapshot_version = self._session.version
+            self.last_snapshot = snap
+            self.last_snapshot_version = self.session.version
             return snap.snapshot_id
-        return self._last_snapshot.snapshot_id if self._last_snapshot else ''
+        return self.last_snapshot.snapshot_id if self.last_snapshot else ''
 
     async def ensure_recovery_snapshot(self) -> str | None:
         """Persist last-good state after a failed turn when the callback skipped it."""
-        if self._store is None or self._sess._last_good_state is None:
-            return self._last_snapshot.snapshot_id if self._last_snapshot else None
+        if self.store is None or self.sess.last_good_state is None:
+            return self.last_snapshot.snapshot_id if self.last_snapshot else None
 
         if (
-            self._sess._last_good_state_version is not None
-            and self._sess._last_good_state_version == self._last_snapshot_version
+            self.sess.last_good_state_version is not None
+            and self.sess.last_good_state_version == self.last_snapshot_version
         ):
-            return self._last_snapshot.snapshot_id if self._last_snapshot else None
+            return self.last_snapshot.snapshot_id if self.last_snapshot else None
 
-        if self._sess.turn_index == 0:
+        if self.sess.turn_index == 0:
             return None
 
-        parent_id = self._last_snapshot.snapshot_id if self._last_snapshot else None
+        parent_id = self.last_snapshot.snapshot_id if self.last_snapshot else None
         now = datetime.now(timezone.utc).isoformat()
-        last_good = self._sess._last_good_state
+        last_good = self.sess.last_good_state
 
         def _recovery(existing: SessionSnapshot | None) -> SessionSnapshot | None:
             if existing is not None and existing.status == SnapshotStatus.ABORTED:
@@ -580,36 +580,36 @@ class AgentRuntime:
                 status=SnapshotStatus.COMPLETED,
                 state=last_good,
                 created_at=now,
-                finish_reason=self._sess._last_good_finish_reason,
+                finish_reason=self.sess.last_good_finish_reason,
             )
 
-        snap = await self._store.save_snapshot(None, _recovery)
+        snap = await self.store.save_snapshot(None, _recovery)
         if snap is not None:
-            self._last_snapshot = snap
-            if self._sess._last_good_state_version is not None:
-                self._last_snapshot_version = self._sess._last_good_state_version
+            self.last_snapshot = snap
+            if self.sess.last_good_state_version is not None:
+                self.last_snapshot_version = self.sess.last_good_state_version
             return snap.snapshot_id
-        return self._last_snapshot.snapshot_id if self._last_snapshot else None
+        return self.last_snapshot.snapshot_id if self.last_snapshot else None
 
     async def failed_agent_output(self, result: AgentResult | None) -> AgentOutput:
-        last_good = self._sess._last_good_state or await self._session.state()
+        last_good = self.sess.last_good_state or await self.session.state()
         msgs = list(last_good.messages or [])
         out = AgentOutput(
             finish_reason=AgentFinishReason.FAILED,
-            error=self._sess._last_turn_error,
+            error=self.sess.last_turn_error,
             message=msgs[-1] if msgs else (result.message if result else None),
             artifacts=list(last_good.artifacts or []) if last_good.artifacts else (result.artifacts if result else []),
         )
-        if self._store is not None:
+        if self.store is not None:
             out.snapshot_id = await self.ensure_recovery_snapshot()
         else:
             out.state = self.transform_state(last_good)
         return out
 
     async def watch_snapshot_abort(self, snapshot_id: str, abort_signal: asyncio.Event) -> None:
-        if self._store is None or not isinstance(self._store, SnapshotAborter):
+        if self.store is None or not isinstance(self.store, SnapshotAborter):
             return
-        q = await self._store.on_snapshot_status_change(snapshot_id)
+        q = await self.store.on_snapshot_status_change(snapshot_id)
         while True:
             status = await q.get()
             if status is None:
@@ -622,22 +622,22 @@ class AgentRuntime:
         """Forward chunk to client."""
         if not isinstance(chunk, AgentStreamChunk):
             return
-        if self._detached:
+        if self.detached:
             return
         wire_chunk = self.transform_chunk(chunk)
         if wire_chunk is None:
             return
-        self._out_queue.put_nowait(wire_chunk)
+        self.session_outputs.put_nowait(wire_chunk)
 
     async def emit_turn_end(self, finish_reason: AgentFinishReason | None = None) -> None:
         """Called by SessionRunner after each turn: snapshot + TurnEnd chunk."""
-        if self._detached:
+        if self.detached:
             return
         is_failed = finish_reason == AgentFinishReason.FAILED
         snapshot_id = await self.maybe_snapshot(
             finish_reason=finish_reason,
             status=SnapshotStatus.FAILED if is_failed else SnapshotStatus.COMPLETED,
-            error=self._sess._last_turn_error if is_failed else None,
+            error=self.sess.last_turn_error if is_failed else None,
             force=is_failed,
         )
         self.send_chunk(
@@ -661,7 +661,7 @@ class AgentRuntime:
         await fn_task
         await forward_task
 
-        state = await self._session.state()
+        state = await self.session.state()
         now = datetime.now(timezone.utc).isoformat()
         fn_err = err_holder[0] if err_holder else None
         if fn_err:
@@ -669,7 +669,7 @@ class AgentRuntime:
         else:
             result = result_holder[0] if result_holder else None
             finish_reason = (
-                result.finish_reason if result and result.finish_reason else self._sess._last_turn_finish_reason
+                result.finish_reason if result and result.finish_reason else self.sess.last_turn_finish_reason
             )
 
         def _finalize(existing: SessionSnapshot | None) -> SessionSnapshot | None:
@@ -687,11 +687,11 @@ class AgentRuntime:
             )
 
         try:
-            await self._store.save_snapshot(pending_snap.snapshot_id, _finalize)  # type: ignore[union-attr]
+            await self.store.save_snapshot(pending_snap.snapshot_id, _finalize)  # type: ignore[union-attr]
         except Exception:  # noqa: BLE001, S110
             pass  # best-effort; log in production
 
-    async def run(self, fn: AgentFn, in_queue: CloseableQueue[BidiInQueueItem]) -> AgentOutput:
+    async def run(self, fn: AgentFn, client_inputs: CloseableQueue[BidiInQueueItem]) -> AgentOutput:
         """Drive fn to completion, return AgentOutput.
 
         Two terminal paths (v1):
@@ -707,12 +707,12 @@ class AgentRuntime:
             abort_signal=abort_signal,
         )
 
-        # Forward task: BidiAction in_queue → runtime intake.
+        # Forward task: BidiAction client_inputs → runtime intake.
         # Detects detach=True and signals via detach_future.
-        async def _forward() -> None:
+        async def forward_inbound_stream() -> None:
             is_detached = False
             try:
-                async for item in in_queue:
+                async for item in client_inputs:
                     if getattr(item, 'detach', False):
                         is_detached = True
                         if not detach_future.done():
@@ -728,41 +728,41 @@ class AgentRuntime:
                             p = payload if payload is not None else bound_item
                             if _agent_input_has_payload(p):
                                 try:
-                                    await self._intake.put(p)
+                                    await self.turn_inputs.put(p)
                                 except QueueShutDown:
                                     pass
-                            self._intake.close()
+                            self.turn_inputs.close()
 
                         asyncio.create_task(_finish_detach_input())
                         return
-                    await self._intake.put(item)
+                    await self.turn_inputs.put(item)
             finally:
-                # Synchronously close self._intake when in_queue terminates normally,
+                # Synchronously close self.turn_inputs when client_inputs terminates normally,
                 # ensuring the SessionRunner's active turn loop exits cleanly.
                 # If we are detaching, the background task will close it after writing the payload.
                 if not is_detached:
-                    self._intake.close()
+                    self.turn_inputs.close()
 
-        forward_task = asyncio.create_task(_forward())
+        forward_task = asyncio.create_task(forward_inbound_stream())
 
         result_holder: list[AgentResult] = []
         err_holder: list[BaseException] = []
 
-        async def _run_fn() -> None:
+        async def run_agent_loop() -> None:
             try:
                 result = await run_with_session(
-                    self._session,
-                    fn(self._sess, action_ctx),
+                    self.session,
+                    fn(self.sess, action_ctx),
                 )
                 result_holder.append(result)
             except Exception as e:  # noqa: BLE001
                 err_holder.append(e)
             finally:
-                # Synchronously close self._intake to signal turn completion,
+                # Synchronously close self.turn_inputs to signal turn completion,
                 # letting SessionRunner stop waiting for more inputs.
-                self._intake.close()
+                self.turn_inputs.close()
 
-        fn_task = asyncio.create_task(_run_fn())
+        fn_task = asyncio.create_task(run_agent_loop())
 
         # Wait for fn completion OR detach signal, whichever comes first.
         done, _ = await asyncio.wait(
@@ -772,16 +772,16 @@ class AgentRuntime:
 
         # --- Detach path ---
         if detach_future.done():
-            if self._store is None:
+            if self.store is None:
                 # Detach without a store is a config error; signal abort and raise.
                 abort_signal.set()
                 await fn_task
                 await forward_task
-                raise ValueError(f'agent {self._name!r}: detach requires a session store')
+                raise ValueError(f'agent {self.name!r}: detach requires a session store')
 
-            parent_id = self._last_snapshot.snapshot_id if self._last_snapshot else None
+            parent_id = self.last_snapshot.snapshot_id if self.last_snapshot else None
             now = datetime.now(timezone.utc).isoformat()
-            state = await self._session.state()
+            state = await self.session.state()
 
             def _pending(_: SessionSnapshot | None) -> SessionSnapshot | None:
                 return SessionSnapshot(
@@ -792,13 +792,13 @@ class AgentRuntime:
                     created_at=now,
                 )
 
-            pending_snap = await self._store.save_snapshot(None, _pending)
+            pending_snap = await self.store.save_snapshot(None, _pending)
             if pending_snap is None:
                 raise ValueError('detach: failed to save pending snapshot')
 
             # Stop sending chunks to the (now-gone) client.
             # Background task finalizes snapshot when fn finishes.
-            self._detached = True
+            self.detached = True
             asyncio.create_task(self.watch_snapshot_abort(pending_snap.snapshot_id, abort_signal))
             asyncio.create_task(self.finalize_detach(pending_snap, fn_task, forward_task, err_holder, result_holder))
             return AgentOutput(
@@ -817,17 +817,17 @@ class AgentRuntime:
 
         result = result_holder[0] if result_holder else None
 
-        if self._sess._last_turn_finish_reason == AgentFinishReason.FAILED and self._sess._last_turn_error:
+        if self.sess.last_turn_finish_reason == AgentFinishReason.FAILED and self.sess.last_turn_error:
             return await self.failed_agent_output(result)
 
         if err_holder:
             raise err_holder[0]
 
         snapshot_id = await self.maybe_snapshot()
-        if not snapshot_id and self._last_snapshot is not None:
-            snapshot_id = self._last_snapshot.snapshot_id
+        if not snapshot_id and self.last_snapshot is not None:
+            snapshot_id = self.last_snapshot.snapshot_id
 
-        finish_reason = result.finish_reason if result else self._sess._last_turn_finish_reason
+        finish_reason = result.finish_reason if result else self.sess.last_turn_finish_reason
         out = AgentOutput(
             snapshot_id=snapshot_id or None,
             message=result.message if result else None,
@@ -835,8 +835,8 @@ class AgentRuntime:
             finish_reason=finish_reason,
         )
 
-        if self._store is None:
-            state = await self._session.state()
+        if self.store is None:
+            state = await self.session.state()
             out.state = self.transform_state(state)
 
         return out
@@ -869,25 +869,25 @@ class SessionRunner(Generic[StateT]):
     def __init__(
         self,
         session: Session[StateT],
-        intake: CloseableQueue[IntakeQueueItem],
+        turn_inputs: CloseableQueue[IntakeQueueItem],
         on_begin_turn: Callable[[], Awaitable[None]] | None = None,
         on_end_turn: Callable[[AgentFinishReason | None], Awaitable[None]] | None = None,
     ) -> None:
-        self._session = session
-        self._intake = intake
-        self._on_begin_turn = on_begin_turn
-        self._on_end_turn = on_end_turn
+        self.session = session
+        self.turn_inputs = turn_inputs
+        self.on_begin_turn = on_begin_turn
+        self.on_end_turn = on_end_turn
         self.turn_index: int = 0
-        self._last_turn_finish_reason: AgentFinishReason | None = None
-        self._last_turn_error: GenkitRuntimeError | None = None
-        self._last_good_state: SessionState | None = None
-        self._last_good_state_version: int | None = None
-        self._last_good_finish_reason: AgentFinishReason | None = None
+        self.last_turn_finish_reason: AgentFinishReason | None = None
+        self.last_turn_error: GenkitRuntimeError | None = None
+        self.last_good_state: SessionState | None = None
+        self.last_good_state_version: int | None = None
+        self.last_good_finish_reason: AgentFinishReason | None = None
 
     async def seed_last_good_state(self) -> None:
         """Capture initial session state as the fallback for first-turn failures."""
-        self._last_good_state = await self._session.state()
-        self._last_good_state_version = self._session.version
+        self.last_good_state = await self.session.state()
+        self.last_good_state_version = self.session.version
 
     async def run(
         self,
@@ -904,13 +904,13 @@ class SessionRunner(Generic[StateT]):
         ``finish_reason=failed`` and ``error`` on ``AgentOutput``, and the
         turn loop stops.
         """
-        async for inp in self._intake:
+        async for inp in self.turn_inputs:
             # Auto-add inbound messages to session history
             if inp.message:
-                await self._session.add_messages(inp.message)
+                await self.session.add_messages(inp.message)
 
-            if self._on_begin_turn is not None:
-                await self._on_begin_turn()
+            if self.on_begin_turn is not None:
+                await self.on_begin_turn()
 
             span_meta = SpanMetadata(
                 name=f'runTurn-{self.turn_index + 1}',
@@ -921,59 +921,59 @@ class SessionRunner(Generic[StateT]):
                 with run_in_new_span(span_meta):
                     turn_result = await fn(inp)
                     finish_reason = turn_result.finish_reason if turn_result else None
-                    self._last_turn_finish_reason = finish_reason
-                    self._last_turn_error = None
+                    self.last_turn_finish_reason = finish_reason
+                    self.last_turn_error = None
 
-                    if self._on_end_turn is not None:
-                        await self._on_end_turn(finish_reason)
+                    if self.on_end_turn is not None:
+                        await self.on_end_turn(finish_reason)
 
                     span_meta.output = {'finishReason': finish_reason}
 
-                self._last_good_state = await self._session.state()
-                self._last_good_state_version = self._session.version
-                self._last_good_finish_reason = self._last_turn_finish_reason
+                self.last_good_state = await self.session.state()
+                self.last_good_state_version = self.session.version
+                self.last_good_finish_reason = self.last_turn_finish_reason
                 self.turn_index += 1
             except BaseException as exc:
-                self._last_turn_error = to_error_details(exc)
+                self.last_turn_error = to_error_details(exc)
 
-                if self._on_end_turn is not None:
-                    await self._on_end_turn(AgentFinishReason.FAILED)
+                if self.on_end_turn is not None:
+                    await self.on_end_turn(AgentFinishReason.FAILED)
 
                 break
 
     async def result(self) -> AgentResult:
         """Last message, artifacts, and finish reason from the current session."""
-        state = await self._session.state()
+        state = await self.session.state()
         msg = state.messages[-1] if state.messages else None
         arts = list(state.artifacts) if state.artifacts else []
         return AgentResult(
             message=msg,
             artifacts=arts,
-            finish_reason=self._last_turn_finish_reason,
+            finish_reason=self.last_turn_finish_reason,
         )
 
     # --- Session passthrough helpers ---
 
     async def get_messages(self) -> list[MessageData]:
-        return await self._session.get_messages()
+        return await self.session.get_messages()
 
     async def set_messages(self, messages: list[MessageData]) -> None:
-        await self._session.set_messages(messages)
+        await self.session.set_messages(messages)
 
     async def add_messages(self, *messages: MessageData) -> None:
-        await self._session.add_messages(*messages)
+        await self.session.add_messages(*messages)
 
     async def get_artifacts(self) -> list[Artifact]:
-        return await self._session.get_artifacts()
+        return await self.session.get_artifacts()
 
     async def add_artifacts(self, *artifacts: Artifact) -> None:
-        await self._session.add_artifacts(*artifacts)
+        await self.session.add_artifacts(*artifacts)
 
     async def get_custom(self) -> StateT | None:
-        return await self._session.get_custom()
+        return await self.session.get_custom()
 
     async def update_custom(self, fn: Callable[[StateT | None], StateT]) -> None:
-        await self._session.update_custom(fn)
+        await self.session.update_custom(fn)
 
 
 # ---------------------------------------------------------------------------
@@ -1078,9 +1078,9 @@ def define_custom_agent(
             store=store,
             snapshot_callback=snapshot_callback,
             client_transform=resolved_transform,
-            out_queue=out_queue,
+            session_outputs=out_queue,
         )
-        await rt._sess.seed_last_good_state()
+        await rt.sess.seed_last_good_state()
         return await rt.run(fn, in_queue)
 
     agent = Agent(

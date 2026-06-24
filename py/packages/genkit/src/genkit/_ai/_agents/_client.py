@@ -553,7 +553,7 @@ class AgentSession(Generic[StateT, StreamT]):
         await self._transport.close()
         # For in-process client-managed agents the full state (preamble stripped)
         # is only available after the invocation completes.  Capture it here.
-        final = getattr(self._transport, '_final_output', None)
+        final = getattr(self._transport, 'final_output', None)
         if final is not None and final.state is not None:
             self.apply_output(final)
 

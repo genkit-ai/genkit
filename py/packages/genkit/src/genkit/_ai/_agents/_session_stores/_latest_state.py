@@ -48,8 +48,8 @@ class LatestStateStore(SessionStore, SnapshotAborter):
     """Abstract SessionStore variant that keeps only the latest state (+ 1 pending slot)."""
 
     def __init__(self) -> None:
-        self._lock = asyncio.Lock()
-        self._subs: dict[str, list[asyncio.Queue[SnapshotStatus | None]]] = {}
+        self.lock = asyncio.Lock()
+        self.subs: dict[str, list[asyncio.Queue[SnapshotStatus | None]]] = {}
 
     @abstractmethod
     async def put_record(self, record: LatestRecord) -> None:
@@ -87,7 +87,7 @@ class LatestStateStore(SessionStore, SnapshotAborter):
                 ),
             )
 
-        async with self._lock:
+        async with self.lock:
             if snapshot_id is not None:
                 record = await self.read_record_by_snapshot(snapshot_id)
                 if record is None:
@@ -109,7 +109,7 @@ class LatestStateStore(SessionStore, SnapshotAborter):
         snapshot_id: str | None,
         fn: Callable[[SessionSnapshot | None], SessionSnapshot | None],
     ) -> SessionSnapshot | None:
-        async with self._lock:
+        async with self.lock:
             if snapshot_id is not None:
                 record = await self.read_record_by_snapshot(snapshot_id)
                 if record is None:
@@ -135,7 +135,7 @@ class LatestStateStore(SessionStore, SnapshotAborter):
                     record.last_good = next_snap
 
                 await self.put_record(record)
-                self._notify_locked(snapshot_id, next_snap.status or SnapshotStatus.COMPLETED)
+                self.notify_locked(snapshot_id, next_snap.status or SnapshotStatus.COMPLETED)
                 return next_snap
             else:
                 sid = str(uuid4())
@@ -165,11 +165,11 @@ class LatestStateStore(SessionStore, SnapshotAborter):
                     record.pending = None
 
                 await self.put_record(record)
-                self._notify_locked(sid, next_snap.status)
+                self.notify_locked(sid, next_snap.status)
                 return next_snap
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
-        async with self._lock:
+        async with self.lock:
             record = await self.read_record_by_snapshot(snapshot_id)
             if record is None:
                 return None
@@ -179,14 +179,14 @@ class LatestStateStore(SessionStore, SnapshotAborter):
                 if record.pending.status == SnapshotStatus.PENDING:
                     record.pending.status = SnapshotStatus.ABORTED
                     await self.put_record(record)
-                    self._notify_locked(snapshot_id, record.pending.status)
+                    self.notify_locked(snapshot_id, record.pending.status)
                     return record.pending.status
                 return record.pending.status
             return record.last_good.status if record.last_good else None
 
     async def on_snapshot_status_change(self, snapshot_id: str) -> asyncio.Queue[SnapshotStatus | None]:
         q: asyncio.Queue[SnapshotStatus | None] = asyncio.Queue()
-        async with self._lock:
+        async with self.lock:
             record = await self.read_record_by_snapshot(snapshot_id)
             if record is None:
                 await q.put(None)
@@ -199,11 +199,11 @@ class LatestStateStore(SessionStore, SnapshotAborter):
                 status = record.pending.status
 
             await q.put(status)
-            self._subs.setdefault(snapshot_id, []).append(q)
+            self.subs.setdefault(snapshot_id, []).append(q)
         return q
 
-    def _notify_locked(self, snapshot_id: str, status: SnapshotStatus) -> None:
-        for q in self._subs.get(snapshot_id, []):
+    def notify_locked(self, snapshot_id: str, status: SnapshotStatus) -> None:
+        for q in self.subs.get(snapshot_id, []):
             try:
                 q.put_nowait(status)
             except asyncio.QueueFull:
@@ -215,17 +215,17 @@ class InMemoryLatestStateStore(LatestStateStore):
 
     def __init__(self) -> None:
         super().__init__()
-        self._records: dict[str, LatestRecord] = {}
+        self.records: dict[str, LatestRecord] = {}
 
     async def put_record(self, record: LatestRecord) -> None:
-        self._records[record.session_id] = record.model_copy(deep=True)
+        self.records[record.session_id] = record.model_copy(deep=True)
 
     async def read_record_by_session(self, session_id: str) -> LatestRecord | None:
-        rec = self._records.get(session_id)
+        rec = self.records.get(session_id)
         return rec.model_copy(deep=True) if rec is not None else None
 
     async def read_record_by_snapshot(self, snapshot_id: str) -> LatestRecord | None:
-        for rec in self._records.values():
+        for rec in self.records.values():
             if rec.last_good and rec.last_good.snapshot_id == snapshot_id:
                 return rec.model_copy(deep=True)
             if rec.pending and rec.pending.snapshot_id == snapshot_id:
@@ -233,7 +233,7 @@ class InMemoryLatestStateStore(LatestStateStore):
         return None
 
     async def delete_record(self, session_id: str) -> None:
-        self._records.pop(session_id, None)
+        self.records.pop(session_id, None)
 
 
 class FileLatestStateStore(LatestStateStore):
@@ -247,7 +247,7 @@ class FileLatestStateStore(LatestStateStore):
     def _session_path(self, session_id: str) -> str:
         return os.path.join(self.directory, f'{session_id}.json')
 
-    def _pointer_path(self, snapshot_id: str) -> str:
+    def pointer_path(self, snapshot_id: str) -> str:
         return os.path.join(self.directory, f'{snapshot_id}.ptr')
 
     async def put_record(self, record: LatestRecord) -> None:
@@ -258,20 +258,20 @@ class FileLatestStateStore(LatestStateStore):
         def sync_op() -> None:
             if old_record:
                 if old_record.last_good:
-                    old_good_ptr = self._pointer_path(old_record.last_good.snapshot_id)
+                    old_good_ptr = self.pointer_path(old_record.last_good.snapshot_id)
                     if os.path.exists(old_good_ptr):
                         os.remove(old_good_ptr)
                 if old_record.pending:
-                    old_pending_ptr = self._pointer_path(old_record.pending.snapshot_id)
+                    old_pending_ptr = self.pointer_path(old_record.pending.snapshot_id)
                     if os.path.exists(old_pending_ptr):
                         os.remove(old_pending_ptr)
 
             # Write new pointer files
             if record.last_good:
-                with open(self._pointer_path(record.last_good.snapshot_id), 'w', encoding='utf-8') as f:
+                with open(self.pointer_path(record.last_good.snapshot_id), 'w', encoding='utf-8') as f:
                     f.write(record.session_id)
             if record.pending:
-                with open(self._pointer_path(record.pending.snapshot_id), 'w', encoding='utf-8') as f:
+                with open(self.pointer_path(record.pending.snapshot_id), 'w', encoding='utf-8') as f:
                     f.write(record.session_id)
 
             # Write JSON record
@@ -295,7 +295,7 @@ class FileLatestStateStore(LatestStateStore):
 
     async def read_record_by_snapshot(self, snapshot_id: str) -> LatestRecord | None:
         def sync_op() -> str | None:
-            ptr_path = self._pointer_path(snapshot_id)
+            ptr_path = self.pointer_path(snapshot_id)
             if not os.path.exists(ptr_path):
                 return None
             with open(ptr_path, encoding='utf-8') as f:
@@ -312,11 +312,11 @@ class FileLatestStateStore(LatestStateStore):
         def sync_op() -> None:
             if record:
                 if record.last_good:
-                    good_ptr = self._pointer_path(record.last_good.snapshot_id)
+                    good_ptr = self.pointer_path(record.last_good.snapshot_id)
                     if os.path.exists(good_ptr):
                         os.remove(good_ptr)
                 if record.pending:
-                    pending_ptr = self._pointer_path(record.pending.snapshot_id)
+                    pending_ptr = self.pointer_path(record.pending.snapshot_id)
                     if os.path.exists(pending_ptr):
                         os.remove(pending_ptr)
             path = self._session_path(session_id)

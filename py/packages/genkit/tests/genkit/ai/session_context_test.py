@@ -92,7 +92,7 @@ async def test_agent_runtime_binds_session_during_handler() -> None:
         store=None,
         snapshot_callback=None,
         client_transform=None,
-        out_queue=out_queue,
+        session_outputs=out_queue,
     )
     seen: list[Session | None] = []
 

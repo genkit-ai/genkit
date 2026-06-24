@@ -51,16 +51,16 @@ class InProcessTransport:
         store: SessionStore | None,
     ) -> None:
         """Initialise; store is captured privately and not exposed as a public field."""
-        self._action = action
-        self._conn: BidiConnection[AgentInput, AgentStreamChunk, AgentOutput] | None = None
-        self._final_output: AgentOutput | None = None
-        self._store = store
+        self.action = action
+        self.conn: BidiConnection[AgentInput, AgentStreamChunk, AgentOutput] | None = None
+        self.final_output: AgentOutput | None = None
+        self.store = store
 
     def __copy__(self) -> InProcessTransport:
         """Create a shallow copy of the transport, resetting connection state to None."""
         return InProcessTransport(
-            action=self._action,
-            store=self._store,
+            action=self.action,
+            store=self.store,
         )
 
     async def run_turn(
@@ -70,9 +70,9 @@ class InProcessTransport:
         abort_event: asyncio.Event | None = None,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
         """Run a single turn and return the stream and output awaitables."""
-        if self._conn is None:
-            self._conn = await self._action.stream_bidi(init)
-        conn = self._conn
+        if self.conn is None:
+            self.conn = await self.action.stream_bidi(init)
+        conn = self.conn
 
         await conn.send(input)
 
@@ -82,7 +82,7 @@ class InProcessTransport:
         async def watch_abort() -> None:
             if abort_event is not None:
                 await abort_event.wait()
-                self._conn = None
+                self.conn = None
                 await conn.close()
                 try:
                     await conn.output()
@@ -151,22 +151,22 @@ class InProcessTransport:
 
     async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot | None:
         """Retrieve a session snapshot via the store captured at construction."""
-        if self._store is None:
+        if self.store is None:
             return None
-        return await self._store.get_snapshot(snapshot_id=snapshot_id)
+        return await self.store.get_snapshot(snapshot_id=snapshot_id)
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
         """Abort a snapshot via the store captured at construction."""
-        if not isinstance(self._store, SnapshotAborter):
+        if not isinstance(self.store, SnapshotAborter):
             return None
-        return await self._store.abort_snapshot(snapshot_id)
+        return await self.store.abort_snapshot(snapshot_id)
 
     async def close(self) -> None:
         """Close the underlying bidi connection."""
-        if self._conn is not None:
-            await self._conn.close()
+        if self.conn is not None:
+            await self.conn.close()
             try:
-                self._final_output = await self._conn.output()
+                self.final_output = await self.conn.output()
             except Exception:  # noqa: BLE001
-                self._final_output = None
-            self._conn = None
+                self.final_output = None
+            self.conn = None

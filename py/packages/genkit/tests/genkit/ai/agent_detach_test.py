@@ -70,7 +70,7 @@ def _runtime(session: Session, store: InMemorySessionStore | None) -> tuple[Agen
         store=store,
         snapshot_callback=None,
         client_transform=None,
-        out_queue=out_queue,
+        session_outputs=out_queue,
     )
     return rt, out_queue
 
@@ -91,7 +91,7 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
     store = InMemorySessionStore()
     session = Session(SessionState(messages=[]))
     rt, _ = _runtime(session, store)
-    await rt._sess.seed_last_good_state()
+    await rt.sess.seed_last_good_state()
 
     seen_inputs: list[AgentInput] = []
 
@@ -137,7 +137,7 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
     store = InMemorySessionStore()
     session = Session(SessionState(messages=[]))
     rt, out_queue = _runtime(session, store)
-    await rt._sess.seed_last_good_state()
+    await rt.sess.seed_last_good_state()
 
     release = asyncio.Event()
     chunks: list[AgentStreamChunk] = []
@@ -191,7 +191,7 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
 async def test_detach_without_store_raises() -> None:
     session = Session(SessionState(messages=[]))
     rt, _ = _runtime(session, None)
-    await rt._sess.seed_last_good_state()
+    await rt.sess.seed_last_good_state()
 
     async def agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(_inp: AgentInput) -> None:
@@ -214,7 +214,7 @@ async def test_abort_snapshot_stops_detached_work() -> None:
     store = InMemorySessionStore()
     session = Session(SessionState(messages=[]))
     rt, _ = _runtime(session, store)
-    await rt._sess.seed_last_good_state()
+    await rt.sess.seed_last_good_state()
 
     aborted = asyncio.Event()
 

@@ -65,8 +65,8 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
 
     def __init__(self, checkpoint_interval: int = 10) -> None:
         self.checkpoint_interval = checkpoint_interval
-        self._lock = asyncio.Lock()
-        self._subs: dict[str, list[asyncio.Queue[SnapshotStatus | None]]] = {}
+        self.lock = asyncio.Lock()
+        self.subs: dict[str, list[asyncio.Queue[SnapshotStatus | None]]] = {}
 
     @abstractmethod
     async def append_child(self, session_id: str, parent_id: str | None, record: BranchRecord) -> None:
@@ -88,7 +88,7 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
         """Read list of active leaf snapshot IDs for a session."""
         ...
 
-    async def _reconstruct_state(self, record: BranchRecord) -> SessionState:
+    async def reconstruct_state(self, record: BranchRecord) -> SessionState:
         path = [record]
         curr = record
         while curr.kind != StoreRecordKind.CHECKPOINT and curr.parent_id:
@@ -110,8 +110,8 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
 
         return SessionState.model_validate(state_dict)
 
-    async def _reconstruct_snapshot(self, record: BranchRecord) -> SessionSnapshot:
-        state = await self._reconstruct_state(record)
+    async def reconstruct_snapshot(self, record: BranchRecord) -> SessionSnapshot:
+        state = await self.reconstruct_state(record)
         return SessionSnapshot(
             snapshot_id=record.snapshot_id,
             parent_id=record.parent_id,
@@ -138,12 +138,12 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
                 ),
             )
 
-        async with self._lock:
+        async with self.lock:
             if snapshot_id is not None:
                 record = await self.read_record(snapshot_id)
                 if record is None:
                     return None
-                return await self._reconstruct_snapshot(record)
+                return await self.reconstruct_snapshot(record)
 
             assert session_id is not None
             leaves = await self.read_leaves(session_id)
@@ -153,7 +153,7 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
                 record = await self.read_record(leaves[0])
                 if record is None:
                     return None
-                return await self._reconstruct_snapshot(record)
+                return await self.reconstruct_snapshot(record)
 
             raise GenkitError(
                 status=StatusCodes.FAILED_PRECONDITION,
@@ -175,13 +175,13 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
         snapshot_id: str | None,
         fn: Callable[[SessionSnapshot | None], SessionSnapshot | None],
     ) -> SessionSnapshot | None:
-        async with self._lock:
+        async with self.lock:
             if snapshot_id is not None:
                 record = await self.read_record(snapshot_id)
                 if record is None:
                     return None
 
-                snap = await self._reconstruct_snapshot(record)
+                snap = await self.reconstruct_snapshot(record)
                 next_snap = fn(snap)
                 if next_snap is None:
                     return None
@@ -195,7 +195,7 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
                     assert record.parent_id is not None
                     parent_rec = await self.read_record(record.parent_id)
                     assert parent_rec is not None
-                    parent_state = await self._reconstruct_state(parent_rec)
+                    parent_state = await self.reconstruct_state(parent_rec)
                     ops = diff_json(parent_state.model_dump(by_alias=True), next_snap.state.model_dump(by_alias=True))
                     record.state_or_patch = [op.model_dump(by_alias=True) for op in ops]
 
@@ -204,7 +204,7 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
                 record.error = next_snap.error
 
                 await self.update_record(snapshot_id, record)
-                self._notify_locked(snapshot_id, record.status)
+                self.notify_locked(snapshot_id, record.status)
                 return next_snap
             else:
                 sid = str(uuid4())
@@ -236,7 +236,7 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
                     state_or_patch = next_snap.state.model_dump(by_alias=True)
                 else:
                     assert parent_rec is not None
-                    parent_state = await self._reconstruct_state(parent_rec)
+                    parent_state = await self.reconstruct_state(parent_rec)
                     ops = diff_json(parent_state.model_dump(by_alias=True), next_snap.state.model_dump(by_alias=True))
                     kind = StoreRecordKind.DIFF
                     state_or_patch = [op.model_dump(by_alias=True) for op in ops]
@@ -255,33 +255,33 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
                 )
 
                 await self.append_child(session_id, parent_id, record)
-                self._notify_locked(sid, next_snap.status)
+                self.notify_locked(sid, next_snap.status)
                 return next_snap
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
-        async with self._lock:
+        async with self.lock:
             record = await self.read_record(snapshot_id)
             if record is None:
                 return None
             if record.status == SnapshotStatus.PENDING:
                 record.status = SnapshotStatus.ABORTED
                 await self.update_record(snapshot_id, record)
-                self._notify_locked(snapshot_id, record.status)
+                self.notify_locked(snapshot_id, record.status)
             return record.status
 
     async def on_snapshot_status_change(self, snapshot_id: str) -> asyncio.Queue[SnapshotStatus | None]:
         q: asyncio.Queue[SnapshotStatus | None] = asyncio.Queue()
-        async with self._lock:
+        async with self.lock:
             record = await self.read_record(snapshot_id)
             if record is None:
                 await q.put(None)
                 return q
             await q.put(record.status)
-            self._subs.setdefault(snapshot_id, []).append(q)
+            self.subs.setdefault(snapshot_id, []).append(q)
         return q
 
-    def _notify_locked(self, snapshot_id: str, status: SnapshotStatus) -> None:
-        for q in self._subs.get(snapshot_id, []):
+    def notify_locked(self, snapshot_id: str, status: SnapshotStatus) -> None:
+        for q in self.subs.get(snapshot_id, []):
             try:
                 q.put_nowait(status)
             except asyncio.QueueFull:
@@ -293,26 +293,26 @@ class InMemoryBranchingSessionStore(BranchingSessionStore):
 
     def __init__(self, checkpoint_interval: int = 10) -> None:
         super().__init__(checkpoint_interval)
-        self._records: dict[str, BranchRecord] = {}
-        self._leaves: dict[str, list[str]] = {}  # session_id -> list of leaf snapshot_ids
+        self.records: dict[str, BranchRecord] = {}
+        self.leaves: dict[str, list[str]] = {}  # session_id -> list of leaf snapshot_ids
 
     async def append_child(self, session_id: str, parent_id: str | None, record: BranchRecord) -> None:
-        self._records[record.snapshot_id] = record.model_copy(deep=True)
+        self.records[record.snapshot_id] = record.model_copy(deep=True)
 
-        leaves = self._leaves.setdefault(session_id, [])
+        leaves = self.leaves.setdefault(session_id, [])
         if parent_id is not None and parent_id in leaves:
             leaves.remove(parent_id)
         leaves.append(record.snapshot_id)
 
     async def update_record(self, snapshot_id: str, record: BranchRecord) -> None:
-        self._records[snapshot_id] = record.model_copy(deep=True)
+        self.records[snapshot_id] = record.model_copy(deep=True)
 
     async def read_record(self, snapshot_id: str) -> BranchRecord | None:
-        rec = self._records.get(snapshot_id)
+        rec = self.records.get(snapshot_id)
         return rec.model_copy(deep=True) if rec is not None else None
 
     async def read_leaves(self, session_id: str) -> list[str]:
-        return list(self._leaves.get(session_id, []))
+        return list(self.leaves.get(session_id, []))
 
 
 class FileBranchingSessionStore(BranchingSessionStore):
@@ -324,10 +324,10 @@ class FileBranchingSessionStore(BranchingSessionStore):
         os.makedirs(os.path.join(directory, 'snapshots'), exist_ok=True)
         os.makedirs(os.path.join(directory, 'sessions'), exist_ok=True)
 
-    def _snapshot_path(self, snapshot_id: str) -> str:
+    def snapshot_path(self, snapshot_id: str) -> str:
         return os.path.join(self.directory, 'snapshots', f'{snapshot_id}.json')
 
-    def _leaves_path(self, session_id: str) -> str:
+    def leaves_path(self, session_id: str) -> str:
         return os.path.join(self.directory, 'sessions', session_id, 'leaves.json')
 
     async def append_child(self, session_id: str, parent_id: str | None, record: BranchRecord) -> None:
@@ -335,36 +335,36 @@ class FileBranchingSessionStore(BranchingSessionStore):
 
         def sync_op() -> None:
             # Write record
-            temp_path = self._snapshot_path(record.snapshot_id) + '.tmp'
+            temp_path = self.snapshot_path(record.snapshot_id) + '.tmp'
             with open(temp_path, 'w', encoding='utf-8') as f:
                 f.write(record.model_dump_json(indent=2))
-            os.replace(temp_path, self._snapshot_path(record.snapshot_id))
+            os.replace(temp_path, self.snapshot_path(record.snapshot_id))
 
             # Update leaves file
-            os.makedirs(os.path.dirname(self._leaves_path(session_id)), exist_ok=True)
+            os.makedirs(os.path.dirname(self.leaves_path(session_id)), exist_ok=True)
             if parent_id is not None and parent_id in leaves:
                 leaves.remove(parent_id)
             leaves.append(record.snapshot_id)
 
-            leaves_temp = self._leaves_path(session_id) + '.tmp'
+            leaves_temp = self.leaves_path(session_id) + '.tmp'
             with open(leaves_temp, 'w', encoding='utf-8') as f:
                 json.dump(leaves, f, indent=2)
-            os.replace(leaves_temp, self._leaves_path(session_id))
+            os.replace(leaves_temp, self.leaves_path(session_id))
 
         await asyncio.to_thread(sync_op)
 
     async def update_record(self, snapshot_id: str, record: BranchRecord) -> None:
         def sync_op() -> None:
-            temp_path = self._snapshot_path(snapshot_id) + '.tmp'
+            temp_path = self.snapshot_path(snapshot_id) + '.tmp'
             with open(temp_path, 'w', encoding='utf-8') as f:
                 f.write(record.model_dump_json(indent=2))
-            os.replace(temp_path, self._snapshot_path(snapshot_id))
+            os.replace(temp_path, self.snapshot_path(snapshot_id))
 
         await asyncio.to_thread(sync_op)
 
     async def read_record(self, snapshot_id: str) -> BranchRecord | None:
         def sync_op() -> BranchRecord | None:
-            path = self._snapshot_path(snapshot_id)
+            path = self.snapshot_path(snapshot_id)
             if not os.path.exists(path):
                 return None
             with open(path, encoding='utf-8') as f:
@@ -374,7 +374,7 @@ class FileBranchingSessionStore(BranchingSessionStore):
 
     async def read_leaves(self, session_id: str) -> list[str]:
         def sync_op() -> list[str]:
-            path = self._leaves_path(session_id)
+            path = self.leaves_path(session_id)
             if not os.path.exists(path):
                 return []
             with open(path, encoding='utf-8') as f:
