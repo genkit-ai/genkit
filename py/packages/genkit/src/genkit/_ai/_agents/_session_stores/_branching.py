@@ -158,7 +158,8 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
                 status=StatusCodes.FAILED_PRECONDITION,
                 message=(
                     f"Session '{session_id}' has branching snapshots ({len(leaves)} "
-                    'leaves), so there is no single latest snapshot. Resume by '
+                    'leaves), so there is no single latest snapshot. This happens when a '
+                    'conversation is branched (e.g. regenerate). Resume by '
                     'snapshot_id instead.'
                 ),
                 details={
