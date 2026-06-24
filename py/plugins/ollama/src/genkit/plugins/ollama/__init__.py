@@ -168,7 +168,7 @@ def package_name() -> str:
 
 
 __all__ = [
-    package_name.__name__,
-    Ollama.__name__,
-    ollama_name.__name__,
+    'Ollama',
+    'ollama_name',
+    'package_name',
 ]
