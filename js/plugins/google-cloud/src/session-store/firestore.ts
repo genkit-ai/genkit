@@ -377,11 +377,13 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
 
       const id =
         snapshotId || result.snapshotId || globalThis.crypto.randomUUID();
-      const sessionId = result.state?.sessionId;
+      // Prefer the snapshot's top-level `sessionId`; fall back to the id carried
+      // in its state for rows written before snapshot-level ids existed.
+      const sessionId = result.sessionId ?? result.state?.sessionId;
       if (!sessionId) {
         throw new GenkitError({
           status: 'INVALID_ARGUMENT',
-          message: `FirestoreSessionStore requires 'state.sessionId' to be set on the snapshot.`,
+          message: `FirestoreSessionStore requires 'sessionId' to be set on the snapshot.`,
         });
       }
       const newState = (result.state ?? {}) as SessionState<S>;
@@ -848,11 +850,13 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
   ): SessionSnapshot<S> {
     const snapshot: SessionSnapshot<S> = {
       snapshotId: doc.snapshotId,
+      sessionId: doc.sessionId,
       createdAt: doc.createdAt,
       // Normalize to plain objects: values reconstructed from Firestore
       // documents (e.g. patch operands) can carry non-plain prototypes.
       state: sanitize(state),
     };
+
     if (doc.parentId !== undefined) snapshot.parentId = doc.parentId;
     if (doc.updatedAt !== undefined) snapshot.updatedAt = doc.updatedAt;
     if (doc.status !== undefined) snapshot.status = doc.status;
