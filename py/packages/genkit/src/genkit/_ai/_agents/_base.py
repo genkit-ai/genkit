@@ -278,10 +278,9 @@ async def persist_turn_messages(
     history: list[MessageData],
     response_message: MessageData | Message | None,
     *,
-    strip_preamble: bool = False,
     response: ModelResponse | None = None,
 ) -> None:
-    if strip_preamble and response is not None and response.request is not None and response.request.messages:
+    if response is not None and response.request is not None and response.request.messages:
         clean: list[MessageData] = []
         for m in response.request.messages:
             meta = getattr(m, 'metadata', None) or {}
@@ -297,8 +296,7 @@ async def persist_turn_messages(
         return
 
     clean_history: list[MessageData] = [coerce_message(m) for m in history]
-    if strip_preamble:
-        clean_history = [m for m in clean_history if not (m.metadata or {}).get(PREAMBLE_KEY)]
+    clean_history = [m for m in clean_history if not (m.metadata or {}).get(PREAMBLE_KEY)]
     clean_history.append(coerce_message(response_message))
     await sess.set_messages(clean_history)
 
@@ -1123,7 +1121,6 @@ async def generate_prompt_agent_turn(
     child_registry: Registry,
     gen_options: GenerateActionOptions,
     history: list[MessageData],
-    strip_preamble: bool,
 ) -> TurnResult | None:
     """Run generate for one agent turn and persist session messages."""
 
@@ -1147,7 +1144,6 @@ async def generate_prompt_agent_turn(
             sess,
             history,
             response.message,
-            strip_preamble=strip_preamble,
             response=response,
         )
         return TurnResult(finish_reason=AgentFinishReason.INTERRUPTED)
@@ -1157,7 +1153,6 @@ async def generate_prompt_agent_turn(
             sess,
             history,
             response.message,
-            strip_preamble=strip_preamble,
             response=response,
         )
 
@@ -1262,7 +1257,6 @@ def define_prompt_agent(
                 child_registry=child_registry,
                 gen_options=gen_options,
                 history=history,
-                strip_preamble=True,
             )
 
         await sess.run(handle_turn)
