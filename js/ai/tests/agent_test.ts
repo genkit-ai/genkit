@@ -3932,6 +3932,38 @@ Now respond to the latest message.`,
       assert.notStrictEqual(chat.snapshotId, firstSnapshotId);
     });
 
+    it('exposes a stable sessionId across multi-turn (server-managed)', async () => {
+      const store = new InMemorySessionStore<{}>();
+      const agent = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'apiSession', store },
+        async (sess) => {
+          await sess.run(async () => {
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'ok' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      // No sessionId before the first turn (a fresh, unsent chat).
+      assert.strictEqual(chat.sessionId, undefined);
+
+      const res1 = await chat.send('one');
+      const sessionId = chat.sessionId;
+      assert.ok(sessionId, 'sessionId should be set after the first turn');
+      // res.sessionId mirrors chat.sessionId.
+      assert.strictEqual(res1.sessionId, sessionId);
+
+      // The sessionId is stable across subsequent turns (the snapshotId is not).
+      const res2 = await chat.send('two');
+      assert.strictEqual(chat.sessionId, sessionId);
+      assert.strictEqual(res2.sessionId, sessionId);
+    });
+
     it('keeps chat.state/res.state live across a non-streaming send() (server-managed)', async () => {
       // Server-managed agents return only a snapshotId on the wire (no custom
       // `state`); custom state reaches the client via streamed customPatch
