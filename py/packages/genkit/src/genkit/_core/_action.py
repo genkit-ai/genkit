@@ -752,6 +752,11 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
             if self._result.done():
                 return
 
+            # Concurrently race putting the sentinel against the server's completion.
+            # If the server task crashed early (e.g. during session loading), the queue
+            # remains full and the server will never read from it. Racing the queue write
+            # against the server's future ensures we abort instantly if the server completes/fails,
+            # preventing a silent, permanent deadlock during connection close.
             put_task = asyncio.create_task(self._in_queue.put(_SENTINEL))
             result_task = asyncio.ensure_future(self._result)
 
@@ -760,6 +765,8 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
+            # Clean up the pending queue-put task if the server completed first
+            # to prevent task/resource leaks in the event loop.
             for t in pending:
                 if t is put_task:
                     t.cancel()
