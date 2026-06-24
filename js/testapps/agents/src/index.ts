@@ -39,6 +39,7 @@ import {
   testFileStoreChainPruningAgent,
 } from './file-store-agent.js';
 
+import { Agent } from 'genkit/beta';
 import { backgroundAgent, testBackgroundAgent } from './background-agent.js';
 import { bankingAgent, testBankingAgent } from './banking-agent.js';
 import {
@@ -120,60 +121,44 @@ app.use((_req, res, next) => {
   next();
 });
 
+// Register an agent at `/api/<name>`, optionally wiring up its companion
+// `/getSnapshot` and `/abort` sub-actions.
+function exposeAgent(
+  name: string,
+  agent: Agent,
+  opts: { snapshot?: boolean; abort?: boolean } = {}
+) {
+  app.post(`/api/${name}`, expressHandler(agent));
+  if (opts.snapshot) {
+    app.post(
+      `/api/${name}/getSnapshot`,
+      expressHandler(agent.getSnapshotDataAction)
+    );
+  }
+  if (opts.abort) {
+    app.post(`/api/${name}/abort`, expressHandler(agent.abortAgentAction));
+  }
+}
+
 // Expose agents
-app.post('/api/researchAgent', expressHandler(researchAgent));
-app.post('/api/weatherAgent', expressHandler(weatherAgent));
-app.post(
-  '/api/weatherAgent/state',
-  expressHandler(weatherAgent.getSnapshotDataAction)
-);
-app.post('/api/weatherAgentStateless', expressHandler(weatherAgentStateless));
-app.post('/api/bankingAgent', expressHandler(bankingAgent));
-app.post('/api/workspaceAgent', expressHandler(workspaceAgent));
-app.post('/api/backgroundAgent', expressHandler(backgroundAgent));
-app.post(
-  '/api/backgroundAgent/state',
-  expressHandler(backgroundAgent.getSnapshotDataAction)
-);
-app.post(
-  '/api/backgroundAgent/abort',
-  expressHandler(backgroundAgent.abortAgentAction)
-);
-app.post('/api/branchingAgent', expressHandler(branchingAgent));
-app.post(
-  '/api/branchingAgent/state',
-  expressHandler(branchingAgent.getSnapshotDataAction)
-);
-app.post('/api/taskAgent', expressHandler(taskAgent));
-app.post('/api/orchestratorAgent', expressHandler(orchestratorAgent));
-app.post('/api/tripPlannerAgent', expressHandler(tripPlannerAgent));
-app.post(
-  '/api/tripPlannerAgent/state',
-  expressHandler(tripPlannerAgent.getSnapshotDataAction)
-);
-app.post('/api/codingAgent', expressHandler(codingAgent));
-app.post(
-  '/api/codingAgent/state',
-  expressHandler(codingAgent.getSnapshotDataAction)
-);
-app.post('/api/testCodingAgent', expressHandler(testCodingAgent));
+exposeAgent('researchAgent', researchAgent);
+exposeAgent('weatherAgent', weatherAgent, { snapshot: true });
+exposeAgent('weatherAgentStateless', weatherAgentStateless);
+exposeAgent('bankingAgent', bankingAgent);
+exposeAgent('workspaceAgent', workspaceAgent);
+exposeAgent('backgroundAgent', backgroundAgent, {
+  snapshot: true,
+  abort: true,
+});
+exposeAgent('branchingAgent', branchingAgent, { snapshot: true });
+exposeAgent('taskAgent', taskAgent);
+exposeAgent('orchestratorAgent', orchestratorAgent);
+exposeAgent('tripPlannerAgent', tripPlannerAgent, { snapshot: true });
+exposeAgent('codingAgent', codingAgent, { snapshot: true });
 
 // Workspace browser — exposed as Genkit flows via expressHandler
 app.post('/api/workspace/files', expressHandler(listWorkspaceFiles));
 app.post('/api/workspace/file', expressHandler(readWorkspaceFile));
-
-// Also expose the test flows for programmatic testing
-app.post('/api/testResearchAgent', expressHandler(testResearchAgent));
-app.post('/api/testWeatherAgent', expressHandler(testWeatherAgent));
-app.post(
-  '/api/testWeatherAgentStateless',
-  expressHandler(testWeatherAgentStateless)
-);
-app.post('/api/testBankingAgent', expressHandler(testBankingAgent));
-app.post('/api/testWorkspaceAgent', expressHandler(testWorkspaceAgent));
-app.post('/api/testBackgroundAgent', expressHandler(testBackgroundAgent));
-app.post('/api/testTaskAgent', expressHandler(testTaskAgent));
-app.post('/api/testTripPlannerAgent', expressHandler(testTripPlannerAgent));
 
 // ---------------------------------------------------------------------------
 // Static web UI — serve the compiled Vite app (web/dist) so the whole demo

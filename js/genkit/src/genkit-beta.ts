@@ -25,6 +25,7 @@ import {
   definePromptAgent,
   defineResource,
   generateOperation,
+  type Agent,
   type AgentConfig,
   type AgentFn,
   type AgentStreamChunk,
@@ -66,6 +67,7 @@ export {
   diff,
 };
 export type {
+  Agent,
   AgentFn,
   AgentStreamChunk,
   ClientTransform,

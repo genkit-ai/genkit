@@ -69,6 +69,7 @@ export {
   applyPatch,
   diff,
   genkit,
+  type Agent,
   type AgentFn,
   type AgentStreamChunk,
   type ClientTransform,
