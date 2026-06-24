@@ -18,8 +18,7 @@ import asyncio
 
 import pytest
 
-from genkit._ai._agents._helpers import agent_input_has_payload
-from genkit._ai._agents._runtime import AgentRuntime, SessionRunner
+from genkit._ai._agents._runtime import AgentRuntime, SessionRunner, agent_input_has_payload
 from genkit._ai._agents._session import InMemorySessionStore, Session
 from genkit._ai._aio import Genkit
 from genkit._ai._generate import generate_action

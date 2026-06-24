@@ -25,13 +25,6 @@ from datetime import datetime, timezone
 from typing import Any, Generic, TypeVar
 from uuid import uuid4
 
-from genkit._ai._agents._helpers import (
-    agent_input_has_payload,
-    emit_interrupt_tool_chunk,
-    persist_turn_messages,
-    to_agent_finish_reason,
-    to_error_details,
-)
 from genkit._ai._agents._session import (
     Session,
     SessionStore,
@@ -49,7 +42,7 @@ from genkit._ai._model import ModelResponseChunk as StreamModelResponseChunk
 from genkit._core._action import ActionRunContext, get_current_context
 from genkit._core._channel import CloseableQueue, QueueShutDown
 from genkit._core._error import GenkitError, StatusCodes
-from genkit._core._model import GenerateActionOptions, ModelResponseChunk
+from genkit._core._model import GenerateActionOptions, Message, ModelResponse, ModelResponseChunk
 from genkit._core._registry import Registry
 from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
@@ -64,12 +57,17 @@ from genkit._core._typing import (
     JsonPatch,
     JsonPatchOperation,
     MessageData,
+    Part,
+    Role,
     RuntimeError as GenkitRuntimeError,
     SessionSnapshot,
     SessionState,
     SnapshotStatus,
+    ToolRequestPart,
     TurnEnd,
 )
+
+PREAMBLE_KEY = '_genkit_agent_preamble'
 
 StreamT = TypeVar('StreamT')
 InT = TypeVar('InT')
@@ -779,3 +777,92 @@ async def generate_prompt_agent_turn(
 
     # Return the turn result wrapping the model finish reason
     return TurnResult(finish_reason=to_agent_finish_reason(response.finish_reason))
+
+
+# ---------------------------------------------------------------------------
+# Internal Helper Functions
+# ---------------------------------------------------------------------------
+
+
+def to_error_details(exc: BaseException) -> GenkitRuntimeError:
+    status = getattr(exc, 'status', None) or 'INTERNAL'
+    message = str(exc) or 'Internal failure'
+    details = getattr(exc, 'detail', None) or getattr(exc, 'details', None)
+    if details is None and not isinstance(exc, GenkitError):
+        details = str(exc)
+    return GenkitRuntimeError(status=str(status), message=message, details=details)
+
+
+def to_agent_finish_reason(fr: FinishReason | None) -> AgentFinishReason | None:
+    if fr is None:
+        return None
+    for reason in AgentFinishReason:
+        if reason.value == fr.value:
+            return reason
+    return AgentFinishReason.UNKNOWN
+
+
+def tool_request_parts(msg: MessageData | None) -> list[Part]:
+    if not msg or not msg.content:
+        return []
+    parts = []
+    for part in msg.content:
+        p = part if isinstance(part, Part) else Part.model_validate(part)
+        if isinstance(p.root, ToolRequestPart):
+            parts.append(p)
+    return parts
+
+
+def emit_interrupt_tool_chunk(ctx: ActionRunContext, response: ModelResponse) -> None:
+    parts = tool_request_parts(response.message)
+    if not parts:
+        return
+    ctx.send_chunk(
+        AgentStreamChunk(
+            model_chunk=ModelResponseChunk(role=Role.TOOL, content=parts),
+        )
+    )
+
+
+def coerce_message(msg: MessageData) -> Message:
+    return msg if isinstance(msg, Message) else Message.model_validate(msg.model_dump())
+
+
+async def persist_turn_messages(
+    sess: SessionRunner,
+    history: list[MessageData],
+    response_message: MessageData | Message | None,
+    *,
+    response: ModelResponse | None = None,
+) -> None:
+    if response is not None and response.request is not None and response.request.messages:
+        clean: list[MessageData] = []
+        for m in response.request.messages:
+            meta = getattr(m, 'metadata', None) or {}
+            if meta.get(PREAMBLE_KEY):
+                continue
+            clean.append(coerce_message(m))
+        if response_message is not None:
+            clean.append(coerce_message(response_message))
+        await sess.set_messages(clean)
+        return
+
+    if response_message is None:
+        return
+
+    clean_history: list[MessageData] = [coerce_message(m) for m in history]
+    clean_history = [m for m in clean_history if not (m.metadata or {}).get(PREAMBLE_KEY)]
+    clean_history.append(coerce_message(response_message))
+    await sess.set_messages(clean_history)
+
+
+def agent_input_has_payload(inp: AgentInput) -> bool:
+    """True when ``AgentInput`` carries turn data beyond a detach directive."""
+    if inp.message:
+        return True
+    if inp.resume is not None:
+        if inp.resume.restart:
+            return True
+        if inp.resume.respond:
+            return True
+    return False

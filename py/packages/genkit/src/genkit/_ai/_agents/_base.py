@@ -26,10 +26,6 @@ from opentelemetry import trace as trace_api
 
 # Internal imports from sibling modules
 from genkit._ai._agents._client import AgentSession
-from genkit._ai._agents._helpers import (
-    apply_preamble_tags,
-    tag_history_for_render,
-)
 from genkit._ai._agents._runtime import (
     AgentFn,
     AgentRuntime,
@@ -64,7 +60,7 @@ from genkit._ai._tools import Tool
 from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction
 from genkit._core._channel import CloseableQueue
 from genkit._core._middleware import BaseMiddleware
-from genkit._core._model import ModelConfig
+from genkit._core._model import Message, ModelConfig
 from genkit._core._registry import Registry
 from genkit._core._typing import (
     AgentInit,
@@ -352,3 +348,46 @@ def define_prompt_agent(
 # Inline helper to prevent circular imports for validate_resume_against_history
 def validate_resume_against_history(resume: Any, history: list[MessageData]) -> None:  # noqa: ANN401
     pass
+
+
+# ---------------------------------------------------------------------------
+# Internal Prompt Preamble Tagging Helpers
+# ---------------------------------------------------------------------------
+
+HISTORY_TAG = '_genkit_history'
+PREAMBLE_KEY = '_genkit_agent_preamble'
+
+
+def coerce_message(msg: MessageData) -> Message:
+    return msg if isinstance(msg, Message) else Message.model_validate(msg.model_dump())
+
+
+def message_with_metadata(msg: MessageData, metadata: dict[str, object]) -> Message:
+    base = coerce_message(msg)
+    merged = {**(base.metadata or {}), **metadata}
+    return base.model_copy(update={'metadata': merged})
+
+
+def message_without_metadata_key(msg: MessageData, key: str) -> Message:
+    base = coerce_message(msg)
+    if not base.metadata or key not in base.metadata:
+        return base
+    remaining = {k: v for k, v in base.metadata.items() if k != key}
+    return base.model_copy(update={'metadata': remaining or None})
+
+
+def tag_history_for_render(messages: list[MessageData]) -> list[Message]:
+    """Mark session messages so prompt render can tell them apart from template output."""
+    return [message_with_metadata(m, {HISTORY_TAG: True}) for m in messages]
+
+
+def apply_preamble_tags(messages: Sequence[MessageData]) -> list[Message]:
+    """After render: tag prompt-template messages and strip the internal history marker."""
+    tagged: list[Message] = []
+    for msg in messages:
+        meta = getattr(msg, 'metadata', None) or {}
+        if meta.get(HISTORY_TAG):
+            tagged.append(message_without_metadata_key(msg, HISTORY_TAG))
+        else:
+            tagged.append(message_with_metadata(msg, {PREAMBLE_KEY: True}))
+    return tagged
