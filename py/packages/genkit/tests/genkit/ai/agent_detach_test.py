@@ -18,7 +18,7 @@ import asyncio
 
 import pytest
 
-from genkit._ai._agents._base import AgentRuntime, SessionRunner, _agent_input_has_payload
+from genkit._ai._agents._base import AgentRuntime, SessionRunner, agent_input_has_payload
 from genkit._ai._agents._session import InMemorySessionStore, Session
 from genkit._ai._aio import Genkit
 from genkit._ai._generate import generate_action
@@ -80,10 +80,10 @@ _NO_ABORT = asyncio.Event()
 
 @pytest.mark.asyncio
 async def test_agent_input_has_payload() -> None:
-    assert _agent_input_has_payload(
+    assert agent_input_has_payload(
         AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='x'))]), detach=True),
     )
-    assert not _agent_input_has_payload(AgentInput(detach=True))
+    assert not agent_input_has_payload(AgentInput(detach=True))
 
 
 @pytest.mark.asyncio

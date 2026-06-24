@@ -219,7 +219,7 @@ def validate_resume_against_history(resume: Resume, history: list[MessageData]) 
             )
 
 
-def _emit_interrupt_tool_chunk(ctx: ActionRunContext, response: ModelResponse) -> None:
+def emit_interrupt_tool_chunk(ctx: ActionRunContext, response: ModelResponse) -> None:
     parts = tool_request_parts(response.message)
     if not parts:
         return
@@ -230,26 +230,26 @@ def _emit_interrupt_tool_chunk(ctx: ActionRunContext, response: ModelResponse) -
     )
 
 
-_HISTORY_TAG = '_genkit_history'
+HISTORY_TAG = '_genkit_history'
 # Intra-turn scratch tag only — stripped before anything persists or
 # crosses the wire, so it's free to be snake_case. Distinct from the
 # chat/session path's `preamble` marker so the two preamble systems
 # can't strip each other's messages.
-_PREAMBLE_KEY = 'agent_preamble'
+PREAMBLE_KEY = 'agent_preamble'
 
 
-def _coerce_message(msg: MessageData) -> Message:
+def coerce_message(msg: MessageData) -> Message:
     return msg if isinstance(msg, Message) else Message.model_validate(msg.model_dump())
 
 
-def _message_with_metadata(msg: MessageData, metadata: dict[str, object]) -> Message:
-    base = _coerce_message(msg)
+def message_with_metadata(msg: MessageData, metadata: dict[str, object]) -> Message:
+    base = coerce_message(msg)
     merged = {**(base.metadata or {}), **metadata}
     return base.model_copy(update={'metadata': merged})
 
 
-def _message_without_metadata_key(msg: MessageData, key: str) -> Message:
-    base = _coerce_message(msg)
+def message_without_metadata_key(msg: MessageData, key: str) -> Message:
+    base = coerce_message(msg)
     if not base.metadata or key not in base.metadata:
         return base
     remaining = {k: v for k, v in base.metadata.items() if k != key}
@@ -258,7 +258,7 @@ def _message_without_metadata_key(msg: MessageData, key: str) -> Message:
 
 def tag_history_for_render(messages: list[MessageData]) -> list[Message]:
     """Mark session messages so prompt render can tell them apart from template output."""
-    return [_message_with_metadata(m, {_HISTORY_TAG: True}) for m in messages]
+    return [message_with_metadata(m, {HISTORY_TAG: True}) for m in messages]
 
 
 def apply_preamble_tags(messages: Sequence[MessageData]) -> list[Message]:
@@ -266,14 +266,14 @@ def apply_preamble_tags(messages: Sequence[MessageData]) -> list[Message]:
     tagged: list[Message] = []
     for msg in messages:
         meta = getattr(msg, 'metadata', None) or {}
-        if meta.get(_HISTORY_TAG):
-            tagged.append(_message_without_metadata_key(msg, _HISTORY_TAG))
+        if meta.get(HISTORY_TAG):
+            tagged.append(message_without_metadata_key(msg, HISTORY_TAG))
         else:
-            tagged.append(_message_with_metadata(msg, {_PREAMBLE_KEY: True}))
+            tagged.append(message_with_metadata(msg, {PREAMBLE_KEY: True}))
     return tagged
 
 
-async def _persist_turn_messages(
+async def persist_turn_messages(
     sess: SessionRunner,
     history: list[MessageData],
     response_message: MessageData | Message | None,
@@ -285,21 +285,21 @@ async def _persist_turn_messages(
         clean: list[MessageData] = []
         for m in response.request.messages:
             meta = getattr(m, 'metadata', None) or {}
-            if meta.get(_PREAMBLE_KEY):
+            if meta.get(PREAMBLE_KEY):
                 continue
-            clean.append(_coerce_message(m))
+            clean.append(coerce_message(m))
         if response_message is not None:
-            clean.append(_coerce_message(response_message))
+            clean.append(coerce_message(response_message))
         await sess.set_messages(clean)
         return
 
     if response_message is None:
         return
 
-    clean_history: list[MessageData] = [_coerce_message(m) for m in history]
+    clean_history: list[MessageData] = [coerce_message(m) for m in history]
     if strip_preamble:
-        clean_history = [m for m in clean_history if not (m.metadata or {}).get(_PREAMBLE_KEY)]
-    clean_history.append(_coerce_message(response_message))
+        clean_history = [m for m in clean_history if not (m.metadata or {}).get(PREAMBLE_KEY)]
+    clean_history.append(coerce_message(response_message))
     await sess.set_messages(clean_history)
 
 
@@ -531,7 +531,7 @@ class AgentRuntime:
         now = datetime.now(timezone.utc).isoformat()
         snap_status = status or SnapshotStatus.COMPLETED
 
-        def _make_snap(
+        def make_snap(
             existing: SessionSnapshot | None,
         ) -> SessionSnapshot | None:
             if existing is not None and existing.status == SnapshotStatus.ABORTED:
@@ -546,7 +546,7 @@ class AgentRuntime:
                 error=error,
             )
 
-        snap = await self.store.save_snapshot(None, _make_snap)
+        snap = await self.store.save_snapshot(None, make_snap)
         if snap is not None:
             self.last_snapshot = snap
             self.last_snapshot_version = self.session.version
@@ -571,7 +571,7 @@ class AgentRuntime:
         now = datetime.now(timezone.utc).isoformat()
         last_good = self.sess.last_good_state
 
-        def _recovery(existing: SessionSnapshot | None) -> SessionSnapshot | None:
+        def recovery(existing: SessionSnapshot | None) -> SessionSnapshot | None:
             if existing is not None and existing.status == SnapshotStatus.ABORTED:
                 return None
             return SessionSnapshot(
@@ -583,7 +583,7 @@ class AgentRuntime:
                 finish_reason=self.sess.last_good_finish_reason,
             )
 
-        snap = await self.store.save_snapshot(None, _recovery)
+        snap = await self.store.save_snapshot(None, recovery)
         if snap is not None:
             self.last_snapshot = snap
             if self.sess.last_good_state_version is not None:
@@ -672,7 +672,7 @@ class AgentRuntime:
                 result.finish_reason if result and result.finish_reason else self.sess.last_turn_finish_reason
             )
 
-        def _finalize(existing: SessionSnapshot | None) -> SessionSnapshot | None:
+        def finalize(existing: SessionSnapshot | None) -> SessionSnapshot | None:
             # If already aborted by user, leave it.
             if existing is not None and existing.status == SnapshotStatus.ABORTED:
                 return None
@@ -687,7 +687,7 @@ class AgentRuntime:
             )
 
         try:
-            await self.store.save_snapshot(pending_snap.snapshot_id, _finalize)  # type: ignore[union-attr]
+            await self.store.save_snapshot(pending_snap.snapshot_id, finalize)  # type: ignore[union-attr]
         except Exception:  # noqa: BLE001, S110
             pass  # best-effort; log in production
 
@@ -720,20 +720,20 @@ class AgentRuntime:
 
                         val = item
 
-                        async def _finish_detach_input(
+                        async def finish_detach_input(
                             payload: AgentInput | None = None,
                             *,
                             bound_item: AgentInput = val,
                         ) -> None:
                             p = payload if payload is not None else bound_item
-                            if _agent_input_has_payload(p):
+                            if agent_input_has_payload(p):
                                 try:
                                     await self.turn_inputs.put(p)
                                 except QueueShutDown:
                                     pass
                             self.turn_inputs.close()
 
-                        asyncio.create_task(_finish_detach_input())
+                        asyncio.create_task(finish_detach_input())
                         return
                     await self.turn_inputs.put(item)
             finally:
@@ -783,7 +783,7 @@ class AgentRuntime:
             now = datetime.now(timezone.utc).isoformat()
             state = await self.session.state()
 
-            def _pending(_: SessionSnapshot | None) -> SessionSnapshot | None:
+            def pending(_: SessionSnapshot | None) -> SessionSnapshot | None:
                 return SessionSnapshot(
                     snapshot_id='',
                     parent_id=parent_id or '',
@@ -792,7 +792,7 @@ class AgentRuntime:
                     created_at=now,
                 )
 
-            pending_snap = await self.store.save_snapshot(None, _pending)
+            pending_snap = await self.store.save_snapshot(None, pending)
             if pending_snap is None:
                 raise ValueError('detach: failed to save pending snapshot')
 
@@ -842,7 +842,7 @@ class AgentRuntime:
         return out
 
 
-def _agent_input_has_payload(inp: AgentInput) -> bool:
+def agent_input_has_payload(inp: AgentInput) -> bool:
     """True when ``AgentInput`` carries turn data beyond a detach directive."""
     if inp.message:
         return True
@@ -1116,7 +1116,7 @@ def define_custom_agent(
     return agent
 
 
-async def _generate_prompt_agent_turn(
+async def generate_prompt_agent_turn(
     sess: SessionRunner,
     ctx: ActionRunContext,
     *,
@@ -1127,7 +1127,7 @@ async def _generate_prompt_agent_turn(
 ) -> TurnResult | None:
     """Run generate for one agent turn and persist session messages."""
 
-    def _on_chunk(chunk: StreamModelResponseChunk) -> None:
+    def on_chunk(chunk: StreamModelResponseChunk) -> None:
         wire_chunk = (
             chunk if isinstance(chunk, ModelResponseChunk) else ModelResponseChunk.model_validate(chunk.model_dump())
         )
@@ -1136,14 +1136,14 @@ async def _generate_prompt_agent_turn(
     response = await generate_action(
         child_registry,
         gen_options,
-        on_chunk=_on_chunk,
+        on_chunk=on_chunk,
         abort_signal=ctx.abort_signal,
         context=ctx.context,
     )
 
     if response.finish_reason == FinishReason.INTERRUPTED:
-        _emit_interrupt_tool_chunk(ctx, response)
-        await _persist_turn_messages(
+        emit_interrupt_tool_chunk(ctx, response)
+        await persist_turn_messages(
             sess,
             history,
             response.message,
@@ -1153,7 +1153,7 @@ async def _generate_prompt_agent_turn(
         return TurnResult(finish_reason=AgentFinishReason.INTERRUPTED)
 
     if response.message:
-        await _persist_turn_messages(
+        await persist_turn_messages(
             sess,
             history,
             response.message,
@@ -1233,7 +1233,7 @@ def define_prompt_agent(
     The agent name and prompt name are the same string.
     """
 
-    async def _agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(inp: AgentInput) -> TurnResult | None:
             history = await sess.get_messages()
             resume_respond = None
@@ -1256,7 +1256,7 @@ def define_prompt_agent(
                 update={'messages': apply_preamble_tags(rendered_messages)},
             )
 
-            return await _generate_prompt_agent_turn(
+            return await generate_prompt_agent_turn(
                 sess,
                 ctx,
                 child_registry=child_registry,
@@ -1271,7 +1271,7 @@ def define_prompt_agent(
     return define_custom_agent(
         registry=registry,
         name=name,
-        fn=_agent_fn,
+        fn=agent_fn,
         store=store,
         snapshot_callback=snapshot_callback,
         client_transform=client_transform,

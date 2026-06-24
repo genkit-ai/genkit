@@ -17,8 +17,8 @@ from __future__ import annotations
 import pytest
 
 from genkit._ai._agents._base import (
-    _HISTORY_TAG,
-    _PREAMBLE_KEY,
+    HISTORY_TAG,
+    PREAMBLE_KEY,
     apply_preamble_tags,
     tag_history_for_render,
 )
@@ -45,18 +45,18 @@ def test_tag_history_for_render_copies_messages() -> None:
     tagged = tag_history_for_render([original])[0]
 
     assert tagged.metadata is not None
-    assert tagged.metadata[_HISTORY_TAG] is True
+    assert tagged.metadata[HISTORY_TAG] is True
     assert tagged.metadata['keep'] is True
     assert original.metadata == {'keep': True}
 
 
 def test_apply_preamble_tags_tags_template_messages_and_strips_history_marker() -> None:
-    history = Message(role=Role.USER, content=[Part(TextPart(text='turn 1'))], metadata={_HISTORY_TAG: True})
+    history = Message(role=Role.USER, content=[Part(TextPart(text='turn 1'))], metadata={HISTORY_TAG: True})
     system = Message(role=Role.SYSTEM, content=[Part(TextPart(text='be helpful'))])
 
     tagged = apply_preamble_tags([system, history])
 
-    assert tagged[0].metadata == {_PREAMBLE_KEY: True}
+    assert tagged[0].metadata == {PREAMBLE_KEY: True}
     assert tagged[1].metadata is None
 
 
@@ -64,7 +64,7 @@ def test_apply_preamble_tags_does_not_mutate_shared_prompt_messages() -> None:
     shared = Message(role=Role.SYSTEM, content=[Part(TextPart(text='static system'))])
     tagged = apply_preamble_tags([shared])[0]
 
-    assert tagged.metadata == {_PREAMBLE_KEY: True}
+    assert tagged.metadata == {PREAMBLE_KEY: True}
     assert shared.metadata is None
 
 
