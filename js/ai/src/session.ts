@@ -39,20 +39,22 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
 /**
  * Reason an agent turn (or whole invocation) finished.
  *
- * Mirrors the generate `FinishReason` enum and adds two agent-specific
- * states: `detached` (the turn was moved to the background) and `failed`
- * (the turn ended in an error).
+ * The first group mirrors the model-level `FinishReason` so a turn backed by a
+ * single `generate` call can forward its reason verbatim. The remaining values
+ * are agent-specific outcomes with no `generate`-level equivalent: `aborted`
+ * (the turn/invocation was aborted), `detached` (the turn was moved to the
+ * background), and `failed` (the turn ended in an error).
  */
 export const AgentFinishReasonSchema = z.enum([
-  // From generate's FinishReason:
+  // Mirror of generate's FinishReason:
   'stop',
   'length',
   'blocked',
-  'aborted',
   'interrupted',
   'other',
   'unknown',
-  // Agent additions:
+  // Agent-specific additions:
+  'aborted',
   'detached',
   'failed',
 ]);
@@ -87,12 +89,25 @@ export interface SessionState<S = unknown> {
  */
 export interface SessionSnapshot<S = unknown> {
   snapshotId: string;
+
+  /**
+   * ID of the session this snapshot belongs to. Assigned by the agent
+   * framework when the conversation's first invocation starts and stamped on
+   * every later snapshot in the chain, including across resumed invocations.
+   * Stores preserve it across rewrites; rows written without one (data from
+   * before session IDs existed) belong to no session.
+   */
+  sessionId?: string;
+
+  /**
+   * ID of the previous snapshot in this timeline. Informational lineage (for
+   * debugging and UI history trees); plays no part in resolving a session's
+   * latest snapshot.
+   */
   parentId?: string;
   createdAt: string;
   /** When the snapshot was last written (RFC 3339). Equals `createdAt` until rewritten. */
   updatedAt?: string;
-  state: SessionState<S>;
-  status?: 'pending' | 'completed' | 'failed' | 'aborted' | 'expired';
 
   /**
    * Heartbeat timestamp (RFC 3339) refreshed periodically while a detached
@@ -102,6 +117,7 @@ export interface SessionSnapshot<S = unknown> {
    * longer persist a terminal status itself).
    */
   heartbeatAt?: string;
+  status?: 'pending' | 'completed' | 'failed' | 'aborted' | 'expired';
 
   /**
    * Semantic reason the turn/invocation finished (e.g. `interrupted`,
@@ -118,6 +134,13 @@ export interface SessionSnapshot<S = unknown> {
     message: string;
     details?: any;
   };
+
+  /**
+   * Conversation state captured at this point. Empty on a pending snapshot
+   * (the live state is not yet committed); populated on terminal snapshots
+   * with the cumulative final state.
+   */
+  state?: SessionState<S>;
 }
 
 /**
@@ -127,14 +150,14 @@ export interface SessionSnapshot<S = unknown> {
  */
 export const SessionSnapshotSchema = z.object({
   snapshotId: z.string(),
+  sessionId: z.string().optional(),
   parentId: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string().optional(),
-  state: SessionStateSchema,
+  heartbeatAt: z.string().optional(),
   status: z
     .enum(['pending', 'completed', 'failed', 'aborted', 'expired'])
     .optional(),
-  heartbeatAt: z.string().optional(),
   finishReason: AgentFinishReasonSchema.optional(),
   error: z
     .object({
@@ -143,6 +166,7 @@ export const SessionSnapshotSchema = z.object({
       details: z.any().optional(),
     })
     .optional(),
+  state: SessionStateSchema.optional(),
 });
 
 /**

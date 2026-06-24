@@ -679,6 +679,9 @@ export class SessionRunner<State = unknown> {
       ...(snapshotId || this.newSnapshotId
         ? { snapshotId: (snapshotId || this.newSnapshotId)! }
         : {}),
+      // Stamp the session id onto every snapshot in the chain so callers can
+      // resolve a snapshot's session without reaching into its state.
+      sessionId: this.session.sessionId,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       state: currentState as SessionState<State>,
@@ -930,13 +933,16 @@ async function resolveSession<State>(
     // the snapshot must belong to that session. A mismatch is API misuse, so it
     // propagates as a thrown error (AgentInitError) rather than being absorbed
     // into a graceful failure.
-    if (init.sessionId && snapshot.state?.sessionId !== init.sessionId) {
+    // Prefer the snapshot's top-level `sessionId`; fall back to the id carried
+    // in its state for rows written before snapshot-level ids existed.
+    const snapshotSessionId = snapshot.sessionId ?? snapshot.state?.sessionId;
+    if (init.sessionId && snapshotSessionId !== init.sessionId) {
       throw new AgentInitError({
         status: 'INVALID_ARGUMENT',
         message:
           `Snapshot ${init.snapshotId} does not belong to session ` +
           `${init.sessionId} (it belongs to ` +
-          `${snapshot.state?.sessionId ?? 'an unknown session'}).`,
+          `${snapshotSessionId ?? 'an unknown session'}).`,
       });
     }
 
@@ -1454,7 +1460,7 @@ export function defineCustomAgent<State = unknown>(
   const toClientSnapshot = (
     snapshot: SessionSnapshot<State>
   ): SessionSnapshot => {
-    if (!config.clientTransform?.state) {
+    if (!config.clientTransform?.state || !snapshot.state) {
       return snapshot as SessionSnapshot;
     }
     return {
