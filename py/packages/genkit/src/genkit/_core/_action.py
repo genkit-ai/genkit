@@ -833,7 +833,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
             metadata={**(metadata or {}), 'bidi': True},
             span_metadata=span_metadata,
         )
-        self._bidi_fn = bidi_fn
+        self.bidi_fn = bidi_fn
 
     async def stream_bidi(
         self,
@@ -875,7 +875,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
             try:
 
                 async def _execute_bidi() -> OutputT:
-                    return await self._bidi_fn(input, in_queue, out_queue)
+                    return await self.bidi_fn(input, in_queue, out_queue)
 
                 response = await self._run_with_telemetry(
                     input,
