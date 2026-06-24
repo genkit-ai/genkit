@@ -709,10 +709,10 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
         out_queue: CloseableQueue[Any],
         result: asyncio.Future[BidiOutT_co],
     ) -> None:
-        self._in_queue = in_queue
-        self._out_queue = out_queue
-        self._result = result
-        self._closed = False
+        self.in_queue = in_queue
+        self.out_queue = out_queue
+        self.result = result
+        self.closed = False
         self.trace_id: str | None = None
 
     async def send(self, input: StreamInT) -> None:  # noqa: A002
@@ -720,31 +720,28 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
 
         Raises GenkitError if the connection is already closed.
         """
-        if self._closed:
+        if self.closed:
             raise GenkitError(
                 message='BidiConnection: send on closed connection',
                 status=StatusCodes.FAILED_PRECONDITION,
             )
-        await self._in_queue.put(input)
+        await self.in_queue.put(input)
 
     async def close(self) -> None:
         """Signal no more inputs will be sent."""
-        if not self._closed:
-            self._closed = True
-            if hasattr(self._in_queue, 'close'):
-                self._in_queue.close()
+        if not self.closed:
+            self.closed = True
+            if hasattr(self.in_queue, 'close'):
+                self.in_queue.close()
 
     async def receive(self) -> AsyncIterator[StreamOutT_co]:
-        """Async iterator yielding server-side stream chunks.
-
-        Terminates when the server fn finishes.
-        """
-        async for chunk in self._out_queue:
+        """Async iterator yielding server-side stream chunks."""
+        async for chunk in self.out_queue:
             yield chunk  # type: ignore[misc]
 
     async def output(self) -> BidiOutT_co:
         """Await the final output from the server fn."""
-        return await self._result
+        return await self.result
 
 
 # =============================================================================
