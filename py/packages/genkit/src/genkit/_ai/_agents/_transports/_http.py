@@ -167,6 +167,6 @@ class HttpAgentTransport(AgentTransport[StateT, StreamT]):
         status_val = data.get('status') if isinstance(data, dict) else None
         return cast(SnapshotStatus, SnapshotStatus(status_val)) if status_val else None
 
-    async def close(self) -> AgentOutput | None:
+    async def close(self) -> None:
         """Cleanly closes the transport. No-op for HTTP."""
-        return None
+        pass

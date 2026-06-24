@@ -73,7 +73,7 @@ class AgentTransport(Protocol, Generic[StateT, StreamT]):
         """Aborts the specified snapshot on the server."""
         ...
 
-    async def close(self) -> AgentOutput | None:
+    async def close(self) -> None:
         """Cleanly closes any persistent connections held by this transport."""
         ...
 
@@ -550,7 +550,10 @@ class AgentSession(Generic[StateT, StreamT]):
 
     async def close(self) -> None:
         """Cleanly closes the underlying transport."""
-        final = await self._transport.close()
+        await self._transport.close()
+        # For in-process client-managed agents the full state (preamble stripped)
+        # is only available after the invocation completes.  Capture it here.
+        final = getattr(self._transport, 'final_output', None)
         if final is not None and final.state is not None:
             self.apply_output(final)
 
