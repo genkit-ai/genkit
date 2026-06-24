@@ -1020,6 +1020,31 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  plugins/twelvelabs:
+    dependencies:
+      genkit:
+        specifier: workspace:^
+        version: link:../../genkit
+    devDependencies:
+      '@types/node':
+        specifier: ^20.11.16
+        version: 20.19.37
+      npm-run-all:
+        specifier: ^4.1.5
+        version: 4.1.5
+      rimraf:
+        specifier: ^6.0.1
+        version: 6.1.3
+      tsup:
+        specifier: ^8.3.5
+        version: 8.5.1(postcss@8.5.15)(tsx@4.20.3)(typescript@5.9.3)(yaml@2.8.2)
+      tsx:
+        specifier: ^4.19.2
+        version: 4.20.3
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   plugins/vertexai:
     dependencies:
       '@anthropic-ai/sdk':

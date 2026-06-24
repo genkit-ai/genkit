@@ -55,6 +55,7 @@ This reference documents the following packages:
 | **[@genkit-ai/mcp](modules/_genkit-ai_mcp.html)**                                     | Model Context Protocol (MCP) plugin.                                     |
 | **[@genkit-ai/anthropic](modules/_genkit-ai_anthropic.html)**                         | Anthropic (Claude) model plugin.                                         |
 | **[@genkit-ai/compat-oai](modules/_genkit-ai_compat-oai.html)**                       | OpenAI-compatible model plugin.                                          |
+| **[genkitx-twelvelabs](modules/genkitx-twelvelabs.html)**                             | TwelveLabs video AI plugin (Pegasus models, Marengo embedders).          |
 | **[@genkit-ai/fetch](modules/_genkit-ai_fetch.html)**                                 | HTTP fetch utilities for plugins.                                        |
 | **[@genkit-ai/middleware](modules/_genkit-ai_middleware.html)**                       | Model middleware plugin (retry, caching, etc.).                          |
 
