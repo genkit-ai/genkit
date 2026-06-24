@@ -55,6 +55,7 @@ from genkit._ai._agents._session_stores import (
     LatestStateStore,
     LinearSessionStore,
 )
+from genkit._ai._agents._transports._http import HttpAgentTransport
 from genkit._ai._agents._transports._websocket import WebSocketAgentTransport
 from genkit._core._action import ActionRunContext
 from genkit._core._typing import (
@@ -84,6 +85,7 @@ __all__ = [
     'AgentResponse',
     'DetachedTask',
     'AgentTransport',
+    'HttpAgentTransport',
     'WebSocketAgentTransport',
     # Agent function protocol
     'ActionRunContext',

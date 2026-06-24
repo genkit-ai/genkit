@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -257,14 +258,16 @@ class AgentClient(Generic[StateT, StreamT]):
 
     def chat(self, init: AgentInit | None = None) -> AgentSession[StateT, StreamT]:
         """Starts a new session, or attaches to one via init."""
-        return AgentSession(self._transport, init)
+        session_transport = copy.copy(self._transport)
+        return AgentSession(session_transport, init)
 
     async def load_chat(self, snapshot_id: str) -> AgentSession[StateT, StreamT]:
         """Loads a server snapshot and returns a session with history restored."""
         snapshot = await self._transport.get_snapshot(snapshot_id)
         if snapshot is None:
             raise ValueError(f'Snapshot {snapshot_id} not found.')
-        session = AgentSession(self._transport)
+        session_transport = copy.copy(self._transport)
+        session = AgentSession(session_transport)
         session._load_from_snapshot(snapshot)
         return session
 

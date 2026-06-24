@@ -19,11 +19,13 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import websockets
+from websockets.protocol import State
 
 from genkit._ai._agents._client import AgentTransport
+from genkit._core._http_client import get_cached_client
 from genkit._core._typing import AgentInit, AgentInput, AgentOutput, AgentStreamChunk, SessionSnapshot, SnapshotStatus
 
 StateT = TypeVar('StateT')
@@ -35,10 +37,15 @@ _SENTINEL = object()
 class WebSocketAgentTransport(AgentTransport[StateT, StreamT]):
     """Client-side agent transport that talks to a remote agent over WebSockets."""
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, state_url: str | None = None, abort_url: str | None = None) -> None:
         self.url = url
         self._ws: Any = None
         self._lock = asyncio.Lock()  # Guarantees sequential turn execution over the shared socket
+
+        # Automatically derive HTTP control plane endpoints from the WebSocket URL
+        http_base = url.replace('wss://', 'https://').replace('ws://', 'http://')
+        self.state_url = state_url or f'{http_base}/state'
+        self.abort_url = abort_url or f'{http_base}/abort'
 
     async def run_turn(
         self,
@@ -60,7 +67,7 @@ class WebSocketAgentTransport(AgentTransport[StateT, StreamT]):
 
         try:
             # 2. Check for closed socket and reconnect if needed
-            if self._ws is None or self._ws.closed:
+            if self._ws is None or self._ws.state is not State.OPEN:
                 self._ws = await websockets.connect(self.url)
             ws = self._ws
             if ws is None:
@@ -136,10 +143,22 @@ class WebSocketAgentTransport(AgentTransport[StateT, StreamT]):
             raise e
 
     async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot | None:
-        return None
+        """Retrieves a session snapshot from the server store over HTTP."""
+        client = get_cached_client('agent_transport')
+        response = await client.post(self.state_url, json={'snapshotId': snapshot_id})
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return SessionSnapshot.model_validate(response.json())
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
-        return None
+        """Aborts the specified snapshot on the server over HTTP."""
+        client = get_cached_client('agent_transport')
+        response = await client.post(self.abort_url, json={'snapshotId': snapshot_id})
+        response.raise_for_status()
+        data = response.json()
+        status_val = data.get('status') if isinstance(data, dict) else None
+        return cast(SnapshotStatus, SnapshotStatus(status_val)) if status_val else None
 
     async def close(self) -> None:
         if self._ws is not None:
