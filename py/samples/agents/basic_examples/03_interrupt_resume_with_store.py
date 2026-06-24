@@ -24,8 +24,13 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from genkit import Genkit, restart_tool
-from genkit._core._typing import AgentFinishReason, ToolRequest, ToolRequestPart
-from genkit.agent import InMemoryLinearSessionStore, Resume
+from genkit.agent import (
+    AgentFinishReason,
+    InMemoryLinearSessionStore,
+    Resume,
+    ToolRequest,
+    ToolRequestPart,
+)
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Middleware, ToolApproval
 

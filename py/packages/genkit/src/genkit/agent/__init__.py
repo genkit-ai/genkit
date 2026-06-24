@@ -70,6 +70,8 @@ from genkit._core._typing import (
     SessionSnapshot,
     SessionState,
     SnapshotStatus,
+    ToolRequest,
+    ToolRequestPart,
     TurnEnd,
 )
 
@@ -124,5 +126,7 @@ __all__ = [
     'SessionSnapshot',
     'SessionState',
     'SnapshotStatus',
+    'ToolRequest',
+    'ToolRequestPart',
     'TurnEnd',
 ]
