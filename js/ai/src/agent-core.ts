@@ -635,7 +635,7 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
    * Replaces the tracked `clientState`/`messages`/`artifacts` aggregates with
    * (copies of) those carried by a session state.
    */
-  private hydrateFromState(state: SessionState<State>): void {
+  private hydrateFromState(state: SessionState<State> | undefined): void {
     this.clientState = state;
     this.messages = state?.messages ? [...state.messages] : [];
     this.artifacts = state?.artifacts ? [...state.artifacts] : [];
