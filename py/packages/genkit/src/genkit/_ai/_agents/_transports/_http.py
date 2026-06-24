@@ -24,13 +24,13 @@ from collections.abc import AsyncIterable, AsyncIterator, Awaitable
 from typing import Any, TypeVar, cast
 
 from genkit._ai._agents._client import AgentTransport
+from genkit._core._channel import CloseableQueue
+from genkit._core._error import GenkitRuntimeError
 from genkit._core._http_client import get_cached_client
 from genkit._core._typing import AgentInit, AgentInput, AgentOutput, AgentStreamChunk, SessionSnapshot, SnapshotStatus
 
 StateT = TypeVar('StateT')
 StreamT = TypeVar('StreamT')
-
-_SENTINEL = object()
 
 
 class HttpAgentTransport(AgentTransport[StateT, StreamT]):
@@ -58,7 +58,7 @@ class HttpAgentTransport(AgentTransport[StateT, StreamT]):
 
     async def run_turn(
         self,
-        input: AgentInput,  # noqa: A002
+        agent_input: AgentInput,
         init: AgentInit,
         abort_event: asyncio.Event | None = None,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
@@ -67,14 +67,14 @@ class HttpAgentTransport(AgentTransport[StateT, StreamT]):
 
         # Construct the REST payload
         payload: dict[str, Any] = {
-            'input': input.model_dump(by_alias=True, exclude_none=True),
+            'input': agent_input.model_dump(by_alias=True, exclude_none=True),
             'init': init.model_dump(by_alias=True, exclude_none=True),
         }
         if self.agent_name:
             payload['key'] = self.agent_name
 
         output_future = asyncio.get_event_loop().create_future()
-        stream_queue: asyncio.Queue[Any] = asyncio.Queue()
+        stream_queue = CloseableQueue[AgentStreamChunk | BaseException]()
 
         async def execute_request() -> None:
             try:
@@ -104,7 +104,7 @@ class HttpAgentTransport(AgentTransport[StateT, StreamT]):
                             output_val = AgentOutput.model_validate(data['result'])
                             if not output_future.done():
                                 output_future.set_result(output_val)
-                            stream_queue.put_nowait(_SENTINEL)
+                            stream_queue.close()
                             break
                         elif 'error' in data:
                             # Server returned an execution error
@@ -115,9 +115,10 @@ class HttpAgentTransport(AgentTransport[StateT, StreamT]):
                             stream_queue.put_nowait(chunk)
                     else:
                         # Premature end of HTTP stream without finding 'result'
+                        err = GenkitRuntimeError('HTTP stream ended prematurely before agent turn completed')
                         if not output_future.done():
-                            output_future.set_exception(RuntimeError('HTTP stream ended prematurely without output.'))
-                        stream_queue.put_nowait(RuntimeError('HTTP stream ended prematurely without output.'))
+                            output_future.set_exception(err)
+                        stream_queue.put_nowait(err)
             except BaseException as e:
                 if not output_future.done():
                     output_future.set_exception(e)
@@ -139,10 +140,7 @@ class HttpAgentTransport(AgentTransport[StateT, StreamT]):
             output_future.add_done_callback(lambda _: abort_task.cancel())
 
         async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
-            while True:
-                item = await stream_queue.get()
-                if item is _SENTINEL:
-                    break
+            async for item in stream_queue:
                 if isinstance(item, BaseException):
                     raise item
                 yield item

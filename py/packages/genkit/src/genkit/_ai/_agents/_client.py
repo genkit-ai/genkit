@@ -63,7 +63,7 @@ class AgentTransport(Protocol, Generic[StateT, StreamT]):
 
     async def run_turn(
         self,
-        input: AgentInput,
+        agent_input: AgentInput,
         init: AgentInit,
         abort_event: asyncio.Event | None = None,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
