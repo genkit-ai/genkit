@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from genkit._ai._agents._base import (
+from genkit._ai._agents._helpers import (
     HISTORY_TAG,
     PREAMBLE_KEY,
     apply_preamble_tags,

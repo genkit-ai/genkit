@@ -36,14 +36,13 @@ from pydantic import BaseModel
 
 from genkit._ai._agents._base import (
     Agent,
-    AgentFn,
-    ClientTransform,
-    StateTransform,
     define_agent,
     define_custom_agent,
     define_prompt_agent,
 )
+from genkit._ai._agents._runtime import AgentFn
 from genkit._ai._agents._session import SessionStore, SnapshotCallback
+from genkit._ai._agents._types import ClientTransform, StateTransform
 from genkit._ai._embedding import EmbedderFn, EmbedderOptions, EmbedderRef, define_embedder
 from genkit._ai._evaluator import (
     BatchEvaluatorFn,

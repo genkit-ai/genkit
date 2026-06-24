@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from genkit._ai._agents._base import AgentRuntime, SessionRunner
+from genkit._ai._agents._runtime import AgentRuntime, SessionRunner
 from genkit._ai._agents._session import Session, get_current_session, run_with_session
 from genkit._core._action import ActionRunContext
 from genkit._core._channel import CloseableQueue

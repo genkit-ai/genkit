@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from genkit._ai._agents._base import AgentRuntime
+from genkit._ai._agents._runtime import AgentRuntime
 from genkit._ai._agents._session import Session
 from genkit._ai._json_patch import diff_json
 from genkit._core._channel import CloseableQueue
