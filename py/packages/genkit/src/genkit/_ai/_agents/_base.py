@@ -86,7 +86,6 @@ from genkit._core._typing import (
     ToolRequestPart,
     TurnEnd,
 )
-from genkit._ai._json_patch import JsonPatchOp
 
 # ---------------------------------------------------------------------------
 # TypeVars
@@ -482,7 +481,7 @@ class AgentRuntime:
         transformed = await self._client_custom()
         if self._first_custom_patch_in_turn:
             ops: list[JsonPatchOperation] = [
-                JsonPatchOperation(op=JsonPatchOp.REPLACE.value, path='', value=copy.deepcopy(transformed))
+                JsonPatchOperation(op='replace', path='', value=copy.deepcopy(transformed))
             ]
             self._first_custom_patch_in_turn = False
         else:
