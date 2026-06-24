@@ -692,9 +692,9 @@ class Action(Generic[InputT, OutputT, ChunkT]):
 # =============================================================================
 
 
-StreamInT = TypeVar('StreamInT', default=Any)
-StreamOutT_co = TypeVar('StreamOutT_co', covariant=True, default=Any)
-BidiOutT_co = TypeVar('BidiOutT_co', covariant=True, default=Any)
+StreamInT = TypeVar('StreamInT')
+StreamOutT_co = TypeVar('StreamOutT_co', covariant=True)
+BidiOutT_co = TypeVar('BidiOutT_co', covariant=True)
 
 
 class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
