@@ -45,6 +45,10 @@ async def main() -> None:
             print(chunk.text, end='', flush=True)
     print()
 
+    # Verify that there is indeed no server-managed snapshot ID!
+    print(f'[Client] Verify snapshot ID is None: {session.snapshot_id}')
+    assert session.snapshot_id is None
+
     # Capture the entire session state on the client side!
     # In a client-managed model, you must save the messages and custom state yourself.
     saved_state = SessionState(
