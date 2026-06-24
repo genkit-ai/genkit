@@ -52,7 +52,6 @@ from genkit._ai._agents._session_stores._linear import (
     LinearSessionStore,
 )
 from genkit._ai._agents._transports._http import HttpAgentTransport
-from genkit._ai._agents._transports._websocket import WebSocketAgentTransport
 from genkit._ai._agents._types import (
     ChunkTransform,
     ClientTransform,
@@ -90,7 +89,6 @@ __all__ = [
     'DetachedTask',
     'AgentTransport',
     'HttpAgentTransport',
-    'WebSocketAgentTransport',
     # Agent function protocol
     'ActionRunContext',
     'AgentFn',
