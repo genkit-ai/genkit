@@ -845,16 +845,12 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
 
         async def _run() -> None:
             try:
-
-                async def _execute_bidi() -> OutputT:
-                    return await self.bidi_fn(input, in_queue, out_queue)
-
                 response = await self._run_with_telemetry(
                     input,
                     ActionRunContext(context=_action_context.get(None)),
                     _on_trace_start,
                     telemetry_labels,
-                    execute=_execute_bidi,
+                    execute=lambda: self.bidi_fn(input, in_queue, out_queue),
                 )
                 result_future.set_result(response.response)
             except asyncio.CancelledError as e:
