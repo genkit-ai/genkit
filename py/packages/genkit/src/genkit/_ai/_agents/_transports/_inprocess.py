@@ -24,6 +24,7 @@ from typing import TypeVar
 
 from genkit._ai._agents._session import SessionStore, SnapshotAborter
 from genkit._core._action import BidiAction, BidiConnection
+from genkit._core._channel import CloseableQueue
 from genkit._core._typing import (
     AgentInit,
     AgentInput,
@@ -65,7 +66,7 @@ class InProcessTransport:
 
     async def run_turn(
         self,
-        input: AgentInput,  # noqa: A002
+        agent_input: AgentInput,
         init: AgentInit,
         abort_event: asyncio.Event | None = None,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
@@ -74,10 +75,10 @@ class InProcessTransport:
             self.conn = await self.action.stream_bidi(init)
         conn = self.conn
 
-        await conn.send(input)
+        await conn.send(agent_input)
 
-        output_future = asyncio.get_event_loop().create_future()
-        stream_queue = asyncio.Queue()
+        output_future: asyncio.Future[AgentOutput] = asyncio.Future()
+        stream_queue = CloseableQueue[AgentStreamChunk | BaseException]()
 
         async def watch_abort() -> None:
             if abort_event is not None:
@@ -134,18 +135,15 @@ class InProcessTransport:
                     output_future.set_exception(e)
                 stream_queue.put_nowait(e)
             finally:
-                stream_queue.put_nowait(None)
+                stream_queue.close()
 
         asyncio.create_task(drain_connection())
 
         async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
-            while True:
-                item = await stream_queue.get()
-                if item is None:
-                    break
-                if isinstance(item, BaseException):
-                    raise item
-                yield item
+            async for chunk in stream_queue:
+                if isinstance(chunk, BaseException):
+                    raise chunk
+                yield chunk
 
         return stream_generator(), output_future
 
