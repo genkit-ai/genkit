@@ -37,6 +37,7 @@ import (
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
 type streamingCallback[Stream any] = func(context.Context, Stream) error
@@ -349,6 +350,7 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 		var body struct {
 			Key             string          `json:"key"`
 			Input           json.RawMessage `json:"input"`
+			Init            json.RawMessage `json:"init"`
 			Context         json.RawMessage `json:"context"`
 			TelemetryLabels json.RawMessage `json:"telemetryLabels"`
 		}
@@ -431,7 +433,7 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 
 		// Attach telemetry callback to context so action can invoke it when span is created
 		actionCtx = tracing.WithTelemetryCallback(actionCtx, telemetryCb)
-		resp, err := runAction(actionCtx, g, body.Key, body.Input, body.TelemetryLabels, cb, contextMap)
+		resp, err := runAction(actionCtx, g, body.Key, body.Input, body.Init, body.TelemetryLabels, cb, contextMap)
 
 		// Clean up active action using the trace ID from response
 		if resp != nil && resp.Telemetry.TraceID != "" {
@@ -710,7 +712,7 @@ type errorResponse struct {
 	Error core.ReflectionError `json:"error"`
 }
 
-func runAction(ctx context.Context, g *Genkit, key string, input json.RawMessage, telemetryLabels json.RawMessage, cb streamingCallback[json.RawMessage], runtimeContext map[string]any) (*runActionResponse, error) {
+func runAction(ctx context.Context, g *Genkit, key string, input, init json.RawMessage, telemetryLabels json.RawMessage, cb streamingCallback[json.RawMessage], runtimeContext map[string]any) (*runActionResponse, error) {
 	action := g.reg.ResolveAction(key)
 	if action == nil {
 		return nil, core.NewError(core.NOT_FOUND, "action %q not found", key)
@@ -729,7 +731,7 @@ func runAction(ctx context.Context, g *Genkit, key string, input json.RawMessage
 	// Run the action and capture trace ID. We need to ensure there's a valid trace context.
 	var traceID string
 	output, err := func() (json.RawMessage, error) {
-		r, err := action.RunJSONWithTelemetry(ctx, input, cb)
+		r, err := runActionWithOptionalInit(ctx, action, input, init, cb)
 		if r != nil {
 			traceID = r.TraceId
 		}
@@ -748,6 +750,35 @@ func runAction(ctx context.Context, g *Genkit, key string, input json.RawMessage
 		Result:    output,
 		Telemetry: telemetry{TraceID: traceID},
 	}, nil
+}
+
+// checkInitSupported rejects an init payload aimed at an action that cannot
+// accept one: it returns INVALID_ARGUMENT when init carries a value and the
+// action is not bidi, and nil otherwise. Transports call it before committing
+// to a response shape (e.g. before writing SSE headers) so the rejection
+// surfaces as a proper request error on every path.
+func checkInitSupported(a api.Action, init json.RawMessage) error {
+	if base.HasJSONValue(init) {
+		if _, ok := a.(api.BidiAction); !ok {
+			return core.NewError(core.INVALID_ARGUMENT, "action %q does not accept init", a.Name())
+		}
+	}
+	return nil
+}
+
+// runActionWithOptionalInit runs an action through its JSON surface,
+// dispatching to the bidi one-shot path when init carries a value. Init on a
+// non-bidi action is rejected with INVALID_ARGUMENT. Shared by the reflection
+// servers and the HTTP action handler so the init-acceptance contract stays
+// in one place.
+func runActionWithOptionalInit(ctx context.Context, a api.Action, input, init json.RawMessage, cb streamingCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	if err := checkInitSupported(a, init); err != nil {
+		return nil, err
+	}
+	if bidi, ok := a.(api.BidiAction); ok && base.HasJSONValue(init) {
+		return bidi.RunBidiJSON(ctx, input, cb, &api.BidiJSONOptions{Init: init})
+	}
+	return a.RunJSONWithTelemetry(ctx, input, cb)
 }
 
 // writeJSON writes a JSON-marshaled value to the response writer.
