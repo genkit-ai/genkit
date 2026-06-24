@@ -157,9 +157,7 @@ async def test_session_sends_input_and_aggregates_state() -> None:
     transport.push_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='Sunny.'))])))
     transport.push_chunk(
         AgentStreamChunk(
-            custom_patch=JsonPatch(
-                root=[JsonPatchOperation(op='replace', path='', value={'unit': 'celsius'})]
-            )
+            custom_patch=JsonPatch(root=[JsonPatchOperation(op='replace', path='', value={'unit': 'celsius'})])
         )
     )
     transport.push_chunk(
