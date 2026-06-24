@@ -38,6 +38,7 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/tracing"
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -84,6 +85,13 @@ type SessionRunner[State any] struct {
 	// turnIndex is the zero-based index of the current conversation turn,
 	// incremented by Run after each turn completes.
 	turnIndex int
+	// turnSnapshotID is the ID reserved at the start of the current turn that
+	// its turn-end snapshot is saved under (server-managed only; "" for a
+	// client-managed agent). Reserved up front so the per-turn fn can read it
+	// from its [TurnContext]. Written by Run at turn start and read by
+	// snapshotTurnEnd at turn end, both in the fn goroutine, so it needs no
+	// lock (same confinement as turnIndex).
+	turnSnapshotID string
 
 	onStartTurn func()
 	onEndTurn   func(ctx context.Context)
@@ -159,6 +167,44 @@ type TurnResult struct {
 	FinishReason AgentFinishReason
 }
 
+// turnCtxKey carries the current turn's [TurnContext] on the per-turn
+// function's context, so a handler reads it via [TurnContextFromContext]
+// instead of the framework threading it through the [SessionRunner.Run]
+// callback signature.
+var turnCtxKey = base.NewContextKey[*TurnContext]()
+
+// TurnContext carries per-turn metadata the runtime exposes to the per-turn
+// function through its context. Retrieve it with [TurnContextFromContext].
+//
+// Its SnapshotID is reserved before the turn runs (for a server-managed agent),
+// so a handler can name external, snapshot-correlated resources (e.g. a git
+// worktree named after the snapshot) up front and have them line up with the
+// snapshot the turn persists at its end.
+type TurnContext struct {
+	// SnapshotID is the ID the turn-end snapshot will be saved under, minted
+	// before the turn runs so the handler knows it in advance. A server-managed
+	// turn persists its snapshot under this ID on success. It is empty for a
+	// client-managed agent (no store, so no snapshot) and is the reserved-but-
+	// unused ID for a turn that writes none (a failed turn, or one whose
+	// snapshots a detach suspended).
+	SnapshotID string
+	// ParentSnapshotID is the ID of the snapshot this turn continues from: the
+	// previous turn's snapshot, or the snapshot the invocation resumed from. It
+	// is empty on the first turn of a fresh conversation and for a
+	// client-managed agent.
+	ParentSnapshotID string
+	// TurnIndex is the zero-based index of this turn within the invocation.
+	TurnIndex int
+}
+
+// TurnContextFromContext returns the [TurnContext] for the turn currently
+// executing, or nil if ctx is not a per-turn context (e.g. it was called
+// outside the [SessionRunner.Run] callback). The returned pointer is read-only;
+// the runtime owns it.
+func TurnContextFromContext(ctx context.Context) *TurnContext {
+	return turnCtxKey.FromContext(ctx)
+}
+
 // turnSpanOutput is the value recorded as a turn span's genkit:output. It
 // wraps the committed session state captured at turn end under a "state" key,
 // so the span output serializes as {"state": <session state>}. The state is
@@ -199,6 +245,16 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 		if s.onStartTurn != nil {
 			s.onStartTurn()
 		}
+		// Reserve this turn's snapshot ID before the turn runs so the per-turn
+		// fn can read it (with the parent ID and turn index) from its context
+		// via [TurnContextFromContext]; the turn-end write persists under it.
+		// Empty for a client-managed agent, which writes no snapshot.
+		s.turnSnapshotID = s.reserveTurnSnapshotID()
+		turnCtx := &TurnContext{
+			SnapshotID:       s.turnSnapshotID,
+			ParentSnapshotID: s.lastSnapshotID,
+			TurnIndex:        s.turnIndex,
+		}
 		spanMeta := &tracing.SpanMetadata{
 			// Match the JS agent's turn span so cross-language traces line up:
 			// name "runTurn-N" (1-indexed) and type flowStep with no subtype
@@ -208,6 +264,9 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 		}
 		_, err := tracing.RunInNewSpan(ctx, spanMeta, input,
 			func(ctx context.Context, input *AgentInput) (any, error) {
+				// Carry the reserved turn context on the per-turn fn's context
+				// rather than threading it through Run's callback signature.
+				ctx = turnCtxKey.NewContext(ctx, turnCtx)
 				if input.Message != nil {
 					// The session owns its history: store a copy so fn's
 					// view of the input stays independent of session state.
@@ -234,6 +293,18 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 		}
 	}
 	return nil
+}
+
+// reserveTurnSnapshotID mints the ID the upcoming turn will persist its
+// snapshot under, or "" for a client-managed agent (no store), which writes
+// none. The runtime mints it here, rather than letting the store mint at write
+// time, so it is known before the turn runs and can ride on the turn's
+// [TurnContext]; snapshotTurnEnd then saves under it.
+func (s *SessionRunner[State]) reserveTurnSnapshotID() string {
+	if s.store == nil {
+		return ""
+	}
+	return uuid.New().String()
 }
 
 // endTurn records how the turn ended and runs the shared turn-end tail:
@@ -300,9 +371,12 @@ func (s *SessionRunner[State]) invocationReason(result *AgentResult) AgentFinish
 
 // snapshotTurnEnd persists a turn-end snapshot capturing the committed
 // session state, chained off the previous snapshot via ParentID, and
-// returns its ID. It is a no-op returning "" when no store is configured
-// or snapshots have been suspended by a detach. finishReason records how
-// the captured turn ended so a resumed task can report it.
+// returns its ID. The row is saved under the turn's pre-reserved ID
+// (turnSnapshotID; see [SessionRunner.Run]), so the ID the per-turn fn read
+// from its [TurnContext] is the ID the snapshot persists under. It is a no-op
+// returning "" when no store is configured or snapshots have been suspended by
+// a detach. finishReason records how the captured turn ended so a resumed task
+// can report it.
 //
 // The turn-end snapshot is the agent's only routine persistence point: a
 // failed turn never writes one (its partial state is not a resume point),
@@ -334,7 +408,7 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 	// Timestamps are caller-managed (the store persists them verbatim); a fresh
 	// turn-end snapshot is created now, so CreatedAt and UpdatedAt are equal.
 	now := time.Now()
-	saved, err := s.store.SaveSnapshot(ctx, "",
+	saved, err := s.store.SaveSnapshot(ctx, s.turnSnapshotID,
 		func(_ *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 			return &SessionSnapshot[State]{
 				SessionID:    sessionID,
