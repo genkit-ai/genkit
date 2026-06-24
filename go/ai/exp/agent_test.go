@@ -3655,7 +3655,7 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 	// Transform that scrubs a specific word from all messages. It also
 	// (incorrectly) drops the framework-owned session ID, which the
 	// action must re-stamp on the way out.
-	transform := func(_ context.Context, s *SessionState[testState]) *SessionState[testState] {
+	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
 		for _, msg := range s.Messages {
 			for _, p := range msg.Content {
 				if p.Text != "" {
@@ -3664,7 +3664,7 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 			}
 		}
 		s.SessionID = ""
-		return s
+		return s, nil
 	}
 
 	af := DefineCustomAgent(reg, "transformedFlow",
@@ -3760,7 +3760,7 @@ func TestAgent_GetSnapshot_FacadeTransformsRawStoreDoesNot(t *testing.T) {
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 
-	transform := func(_ context.Context, s *SessionState[testState]) *SessionState[testState] {
+	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
 		for _, msg := range s.Messages {
 			for _, p := range msg.Content {
 				if p.Text != "" {
@@ -3768,7 +3768,7 @@ func TestAgent_GetSnapshot_FacadeTransformsRawStoreDoesNot(t *testing.T) {
 				}
 			}
 		}
-		return s
+		return s, nil
 	}
 
 	af := DefineCustomAgent(reg, "facadeTransform",
@@ -4655,10 +4655,10 @@ func TestAgent_StateTransform_ClientManagedState(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	// Client-managed state: transform should be applied to AgentOutput.State.
-	transform := func(_ context.Context, s *SessionState[testState]) *SessionState[testState] {
+	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
 		// Zero out the counter to demonstrate the transform is applied.
 		s.Custom.Counter = -1
-		return s
+		return s, nil
 	}
 
 	af := DefineCustomAgent(reg, "clientXformFlow",
@@ -4683,6 +4683,105 @@ func TestAgent_StateTransform_ClientManagedState(t *testing.T) {
 	}
 	if out.State.Custom.Counter != -1 {
 		t.Errorf("expected transformed counter=-1, got %d", out.State.Custom.Counter)
+	}
+}
+
+// TestAgent_StateTransform_ErrorFailsClientManagedOutputClosed verifies a state
+// transform that returns an error fails the invocation closed: rather than
+// handing back unshaped state, the otherwise-successful client-managed
+// invocation resolves as a failed output, with the transform's status preserved
+// and no state attached.
+func TestAgent_StateTransform_ErrorFailsClientManagedOutputClosed(t *testing.T) {
+	reg := newTestRegistry(t)
+
+	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
+		return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape state")
+	}
+
+	af := DefineCustomAgent(reg, "clientXformErr",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("done"))
+				return nil, nil
+			})
+		},
+		WithStateTransform[testState](transform),
+	)
+
+	out, err := af.RunText(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("expected a graceful failed output, got error: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
+	}
+	if out.Error == nil || out.Error.Status != core.PERMISSION_DENIED {
+		t.Errorf("Error = %+v, want status %q from the transform", out.Error, core.PERMISSION_DENIED)
+	}
+	// failedOutput shapes the last-good state through the same transform, which
+	// errors again here; the runtime omits state rather than leaking it.
+	if out.State != nil {
+		t.Errorf("expected no state on the failed output (transform failed closed), got %+v", out.State)
+	}
+}
+
+// TestAgent_StateTransform_ErrorFailsSnapshotReadClosed verifies a state
+// transform that errors fails a snapshot read closed: both the typed
+// Agent.GetSnapshot facade and the getSnapshot companion action surface the
+// transform's error (status preserved) instead of returning unshaped state.
+func TestAgent_StateTransform_ErrorFailsSnapshotReadClosed(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
+		return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape state")
+	}
+
+	af := DefineCustomAgent(reg, "snapXformErr",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("done"))
+				return nil, nil
+			})
+		},
+		WithSessionStore(store),
+		WithStateTransform[testState](transform),
+	)
+
+	// A successful run persists a snapshot (the run itself does not read state
+	// back through the transform, so it is unaffected).
+	out, err := af.RunText(ctx, "go")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("expected a persisted snapshot ID")
+	}
+
+	// The typed facade fails closed with the transform's status.
+	if _, err := af.GetSnapshot(ctx, out.SnapshotID); err == nil {
+		t.Error("Agent.GetSnapshot: expected the transform error, got nil")
+	} else if core.AsGenkitError(err).Status != core.PERMISSION_DENIED {
+		t.Errorf("Agent.GetSnapshot error status = %q, want %q", core.AsGenkitError(err).Status, core.PERMISSION_DENIED)
+	}
+
+	// The getSnapshot companion action fails the same way for non-Go clients.
+	action := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}](
+		reg, api.ActionTypeAgentSnapshot, "snapXformErr")
+	if action == nil {
+		t.Fatal("getSnapshot action not registered")
+	}
+	if _, err := action.Run(ctx, &GetSnapshotRequest{SnapshotID: out.SnapshotID}, nil); err == nil {
+		t.Error("getSnapshot action: expected the transform error, got nil")
+	} else if core.AsGenkitError(err).Status != core.PERMISSION_DENIED {
+		t.Errorf("getSnapshot action error status = %q, want %q", core.AsGenkitError(err).Status, core.PERMISSION_DENIED)
+	}
+
+	// The stored snapshot itself is untouched: the failure is read-time shaping,
+	// not corruption, so the row is still resumable.
+	if snap, err := store.GetSnapshot(ctx, out.SnapshotID); err != nil || snap == nil {
+		t.Errorf("stored GetSnapshot = (%v, %v), want the intact snapshot", snap, err)
 	}
 }
 

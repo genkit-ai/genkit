@@ -438,6 +438,7 @@ func NewStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In
 //
 //   - [aix.WithSessionStore]: Enable snapshot persistence
 //   - [aix.WithStateTransform]: Rewrite session state on its way out to the client
+//   - [aix.WithStreamTransform]: Rewrite stream chunks on their way out to the client
 //
 // Example:
 //
@@ -484,6 +485,7 @@ func DefineAgent[State any](
 //   - [aix.WithNamedPrompt]: Source from a differently named prompt with a code-supplied input
 //   - [aix.WithSessionStore]: Enable snapshot persistence
 //   - [aix.WithStateTransform]: Rewrite session state on its way out to the client
+//   - [aix.WithStreamTransform]: Rewrite stream chunks on their way out to the client
 //
 // Example (same-named prompt loaded from ./prompts/chef.prompt):
 //
@@ -527,6 +529,7 @@ func DefinePromptAgent[State any](
 //
 //   - [aix.WithSessionStore]: Enable snapshot persistence
 //   - [aix.WithStateTransform]: Rewrite session state on its way out to the client
+//   - [aix.WithStreamTransform]: Rewrite stream chunks on their way out to the client
 //
 // The State type parameter is the shape of the conversation's custom state
 // ([aix.SessionState.Custom]); mutating it via [aix.Session.UpdateCustom]

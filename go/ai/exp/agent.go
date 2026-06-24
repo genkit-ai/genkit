@@ -668,8 +668,9 @@ func DefineAgent[State any](
 // defines the prompt inline, DefinePromptAgent points at a prompt already in
 // the registry. The prompt source is a typed option ([WithNamedPrompt]) rather
 // than a positional argument, so it composes with the other agent options
-// ([WithSessionStore], [WithStateTransform], [WithDescription]) in a single
-// variadic. For full control over the per-turn loop, use [DefineCustomAgent].
+// ([WithSessionStore], [WithStateTransform], [WithStreamTransform],
+// [WithDescription]) in a single variadic. For full control over the per-turn
+// loop, use [DefineCustomAgent].
 //
 // State is inferred from the typed agent options; pass an explicit [State] only
 // when no typed option provides it (e.g. only [WithNamedPrompt] and
@@ -861,6 +862,47 @@ type agentRuntime[State any] struct {
 	intake  *detachIntake
 
 	fnDone chan fnDoneResult[State]
+	// fatalErr latches the first fail-closed error from a streaming transform
+	// (the stream transform in the router, or the state transform behind a
+	// custom-state patch). Buffered to one and written non-blocking, so the
+	// producer never blocks and only the first error wins; the run loop drains
+	// it to resolve the invocation as a failed output. See failTransform.
+	fatalErr chan error
+}
+
+// failTransform records a fail-closed error from a streaming transform without
+// blocking the producer that hit it. The buffered, non-blocking send keeps the
+// first error and discards the rest; the run loop observes it (directly via its
+// select arm, or after the fact via handleFnDone) and resolves the invocation
+// as a failed output. Safe to call from the router and the fn goroutines.
+func (rt *agentRuntime[State]) failTransform(err error) {
+	select {
+	case rt.fatalErr <- err:
+	default: // a fatal error is already latched; first one wins
+	}
+}
+
+// takeFatal returns the latched streaming-transform error, or nil if none.
+// Non-blocking, so a terminal path can fold a fatal error that raced fn's
+// completion into a failed output.
+func (rt *agentRuntime[State]) takeFatal() error {
+	select {
+	case err := <-rt.fatalErr:
+		return err
+	default:
+		return nil
+	}
+}
+
+// panicError logs a recovered panic with its stack and returns it as an
+// INTERNAL error; what names the code that panicked (e.g. "agent fn"). Call it
+// from a deferred recover, where the stack still reaches the panic site. It is
+// the shared shape of the runtime's two recover sites: the agent fn and the
+// stream transform, both of which contain a panic in user code rather than let
+// it crash the process.
+func panicError(ctx context.Context, what string, rec any) error {
+	logger.FromContext(ctx).Error(what+" panicked", "panic", rec, "stack", string(debug.Stack()))
+	return core.NewError(core.INTERNAL, "%s panicked: %v", what, rec)
 }
 
 // fnDoneResult carries the user fn's return values across the goroutine
@@ -939,13 +981,16 @@ func newAgentRuntime[State any](
 		attribute.String(sessionIDSpanAttrKey, session.state.SessionID))
 
 	rt := &agentRuntime[State]{
-		name:    name,
-		cfg:     cfg,
-		session: session,
-		router:  startChunkRouter(ctx, session, outCh),
-		intake:  startDetachIntake(inCh),
-		fnDone:  make(chan fnDoneResult[State], 1),
+		name:     name,
+		cfg:      cfg,
+		session:  session,
+		intake:   startDetachIntake(inCh),
+		fnDone:   make(chan fnDoneResult[State], 1),
+		fatalErr: make(chan error, 1),
 	}
+	// Started after rt exists so the router can signal a fail-closed stream
+	// transform error back through rt.failTransform.
+	rt.router = startChunkRouter(ctx, session, outCh, cfg.streamTransform, rt.failTransform)
 
 	rt.sess = &SessionRunner[State]{
 		Session: session,
@@ -964,6 +1009,7 @@ func newAgentRuntime[State any](
 		transform:   cfg.transform,
 		session:     session,
 		firstInTurn: true,
+		fail:        rt.failTransform,
 	}
 	rt.sess.onStartTurn = rt.patcher.beginTurn
 	// The initial state (fresh, client-provided, or loaded from a snapshot)
@@ -1065,8 +1111,7 @@ func (rt *agentRuntime[State]) run(
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					logger.FromContext(workCtx).Error("agent fn panicked", "panic", r, "stack", string(debug.Stack()))
-					fnErr = core.NewError(core.INTERNAL, "agent fn panicked: %v", r)
+					fnErr = panicError(workCtx, "agent fn", r)
 				}
 			}()
 			result, fnErr = fn(workCtx, resp, rt.sess)
@@ -1085,6 +1130,9 @@ func (rt *agentRuntime[State]) run(
 	case res := <-rt.fnDone:
 		return rt.handleFnDone(clientCtx, cancelWork, res)
 
+	case cause := <-rt.fatalErr:
+		return rt.handleTransformFailure(clientCtx, cancelWork, cause)
+
 	case <-clientCtx.Done():
 		res := rt.drainAndWait(cancelWork)
 		if res.err != nil {
@@ -1092,6 +1140,31 @@ func (rt *agentRuntime[State]) run(
 		}
 		return nil, clientCtx.Err()
 	}
+}
+
+// handleTransformFailure is the fail-closed terminal path for a streaming
+// transform that returned an error (or panicked): the stream transform in the
+// router, or the state transform behind a custom-state patch. It tears the
+// invocation down like a fn error and resolves it as a failed output carrying
+// the transform's cause, so no unshaped chunk reaches the client and the
+// offending chunk's side effects never surface in a completed output.
+//
+// drainAndWait cancels the work context (stopping fn), switches the router to
+// discard mode, and drains fn; the router has typically already stopped writing
+// the moment shape returned the error, but a custom-patch failure trips this
+// path while the router is still forwarding, so the stop here is what halts it.
+func (rt *agentRuntime[State]) handleTransformFailure(
+	clientCtx context.Context,
+	cancelWork context.CancelFunc,
+	cause error,
+) (*AgentOutput[State], error) {
+	rt.drainAndWait(cancelWork)
+	// A disconnect that raced the failure keeps error semantics: there is no
+	// client to hand a graceful failed output to (mirrors handleFnDone).
+	if clientCtx.Err() != nil {
+		return nil, cause
+	}
+	return rt.failedOutput(clientCtx, cause), nil
 }
 
 // checkDetachCapabilities reports whether the configured store is capable
@@ -1153,10 +1226,30 @@ func (rt *agentRuntime[State]) handleFnDone(
 ) (*AgentOutput[State], error) {
 	cancelWork()
 	rt.intake.stopAndWait()
-	if res.err != nil {
+	// A custom-state patch whose transform failed closed latches during fn, so
+	// it is readable now; a failed turn likewise wants its in-flight chunks
+	// dropped. Either way stop router writes before close so it cannot wedge
+	// behind a slow or gone consumer. A stream-transform failure instead puts
+	// the router into discard mode the instant it occurs (forward never parks),
+	// so it needs no stop here and is picked up after close below.
+	fatal := rt.takeFatal()
+	if res.err != nil || fatal != nil {
 		rt.router.stopAndWait()
 	}
 	rt.router.close()
+	if fatal == nil {
+		fatal = rt.takeFatal()
+	}
+
+	// A streaming transform that failed closed resolves the invocation as
+	// failed regardless of what fn returned, so no completed output leaks the
+	// data it refused to shape.
+	if fatal != nil {
+		if ctx.Err() != nil {
+			return nil, fatal
+		}
+		return rt.failedOutput(ctx, fatal), nil
+	}
 
 	if res.err != nil {
 		// A disconnect-driven failure keeps its error semantics: the
@@ -1188,7 +1281,17 @@ func (rt *agentRuntime[State]) handleFnDone(
 		out.Artifacts = cloneArtifacts(res.result.Artifacts)
 	}
 	if rt.cfg.store == nil {
-		out.State = rt.outboundState(ctx, rt.session.State())
+		// A final-output state transform that fails closed turns the otherwise
+		// successful invocation into a failed output, so unshaped state is
+		// never handed back.
+		state, err := rt.outboundState(ctx, rt.session.State())
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, err
+			}
+			return rt.failedOutput(ctx, err), nil
+		}
+		out.State = state
 	}
 	return out, nil
 }
@@ -1196,13 +1299,17 @@ func (rt *agentRuntime[State]) handleFnDone(
 // outboundState applies the configured state transform and re-stamps the
 // framework-owned SessionID, so the state handed to a client-managed
 // caller always carries the conversation's identity even if a transform
-// rewrote or dropped it. Returns nil if state is nil.
-func (rt *agentRuntime[State]) outboundState(ctx context.Context, state *SessionState[State]) *SessionState[State] {
-	out := applyTransform(ctx, rt.cfg.transform, state)
+// rewrote or dropped it. Returns (nil, nil) if state is nil, and a non-nil
+// error if the transform failed closed.
+func (rt *agentRuntime[State]) outboundState(ctx context.Context, state *SessionState[State]) (*SessionState[State], error) {
+	out, err := applyTransform(ctx, rt.cfg.transform, state)
+	if err != nil {
+		return nil, err
+	}
 	if out != nil {
 		out.SessionID = rt.session.SessionID()
 	}
-	return out
+	return out, nil
 }
 
 // failedOutput assembles the output for an invocation that ended in
@@ -1222,7 +1329,17 @@ func (rt *agentRuntime[State]) failedOutput(ctx context.Context, cause error) *A
 		Error:        core.AsGenkitError(cause),
 	}
 	if rt.cfg.store == nil {
-		out.State = rt.outboundState(ctx, rt.sess.lastGoodState)
+		// This is already the failure path, so a transform that also fails
+		// closed while shaping the last-good state cannot escalate further:
+		// omit state (fail closed, no leak) rather than recurse. The original
+		// cause is what the caller needs and is preserved on Error above.
+		if state, err := rt.outboundState(ctx, rt.sess.lastGoodState); err != nil {
+			logger.FromContext(ctx).Error(
+				"agent state transform failed shaping failed-output state; omitting state",
+				"error", err)
+		} else {
+			out.State = state
+		}
 	} else {
 		out.SnapshotID = rt.sess.lastSnapshotID
 	}
@@ -1625,6 +1742,13 @@ type chunkRouter[State any] struct {
 	in      chan *AgentStreamChunk
 	out     chan<- *AgentStreamChunk
 	session *Session[State]
+	// transform shapes each chunk on the wire; see [WithStreamTransform]. Nil
+	// forwards chunks verbatim.
+	transform StreamTransform
+	// fail reports a fail-closed transform error (or panic) to the runtime so
+	// the invocation resolves as a failed output. Nil only when no transform is
+	// configured, since that is the only thing that can fail here.
+	fail func(error)
 
 	done          chan struct{}
 	stopWriting   chan struct{}
@@ -1635,12 +1759,16 @@ func startChunkRouter[State any](
 	ctx context.Context,
 	session *Session[State],
 	out chan<- *AgentStreamChunk,
+	transform StreamTransform,
+	fail func(error),
 ) *chunkRouter[State] {
 	r := &chunkRouter[State]{
 		ctx:           ctx,
 		in:            make(chan *AgentStreamChunk),
 		out:           out,
 		session:       session,
+		transform:     transform,
+		fail:          fail,
 		done:          make(chan struct{}),
 		stopWriting:   make(chan struct{}),
 		writerStopped: make(chan struct{}),
@@ -1688,6 +1816,22 @@ func (r *chunkRouter[State]) forward() bool {
 			if !ok {
 				return false
 			}
+			shaped, err := r.shape(chunk)
+			if err != nil {
+				// The stream transform failed closed (returned an error or
+				// panicked). Report it so the invocation resolves as a failed
+				// output, and switch to discard mode so no further chunk
+				// reaches the wire: fail-closed means stop forwarding entirely.
+				r.fail(err)
+				return true
+			}
+			if shaped == nil {
+				// The stream transform dropped the chunk from the wire. Its
+				// side effects already applied at Send time, so there is
+				// nothing else to do; carry on draining the next chunk.
+				continue
+			}
+			chunk = shaped
 			select {
 			case r.out <- chunk:
 			case <-r.stopWriting:
@@ -1703,6 +1847,34 @@ func (r *chunkRouter[State]) forward() bool {
 			return true
 		}
 	}
+}
+
+// shape applies the configured stream transform to chunk, returning the chunk
+// to forward on the wire, nil to drop it, or a non-nil error to fail the
+// invocation closed; with no transform it returns chunk unchanged. The
+// transform receives a fresh deep copy it owns, so mutating it in place cannot
+// disturb the chunk's already-applied side effects (an artifact recorded on the
+// session) or any pointer the sender retained. r.ctx is the action context,
+// which carries the caller's identity for RBAC-aware redaction; the transform
+// only runs on chunks bound for a live client, since forward stops calling it
+// once writes cease.
+//
+// The transform is user code running in the router's own goroutine, which
+// nothing else recovers (unlike the agent fn and the state transform, whose
+// goroutines are covered), so a panic here would crash the process rather than
+// fail just the invocation. Contain it the way the fn path does (log with a
+// stack) and surface it as a fail-closed error, the same outcome as an explicit
+// error return: the invocation fails rather than leaking the unshaped chunk.
+func (r *chunkRouter[State]) shape(chunk *AgentStreamChunk) (out *AgentStreamChunk, err error) {
+	if r.transform == nil {
+		return chunk, nil
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			out, err = nil, panicError(r.ctx, "agent stream transform", rec)
+		}
+	}()
+	return r.transform(r.ctx, jsonClone(chunk))
 }
 
 // responder returns a [Responder] that applies chunk side effects
@@ -1755,6 +1927,10 @@ func (r *chunkRouter[State]) close() {
 type customPatcher[State any] struct {
 	transform StateTransform[State]
 	session   *Session[State]
+	// fail reports a fail-closed transform error to the runtime so the
+	// invocation resolves as a failed output rather than streaming a delta
+	// derived from state the transform refused to shape.
+	fail func(error)
 
 	ctx  context.Context         // invocation work context, for the transform
 	send func(*AgentStreamChunk) // forwards the chunk (side effects + wire)
@@ -1802,8 +1978,17 @@ func (p *customPatcher[State]) onChange() {
 	if p.transform == nil {
 		next = p.session.customJSON()
 	} else {
+		t, err := applyTransform(p.ctx, p.transform, p.session.State())
+		if err != nil {
+			// The state transform failed closed while shaping the streamed
+			// custom delta. Withhold the patch and fail the invocation; the run
+			// loop tears it down as a failed output, the same fail-closed
+			// outcome as a stream-transform error in the router.
+			p.fail(err)
+			return
+		}
 		var custom any
-		if t := applyTransform(p.ctx, p.transform, p.session.State()); t != nil {
+		if t != nil {
 			custom = t.Custom
 		}
 		next = normalizeJSON(custom)

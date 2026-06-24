@@ -28,10 +28,11 @@ import (
 // variadic, so a State mismatch fails at compile time.
 //
 // Every AgentOption is also a [PromptAgentOption]: the shared options
-// ([WithSessionStore], [WithStateTransform], [WithDescription]) configure all
-// three constructors. The converse does not hold. A prompt-source option such
-// as [WithNamedPrompt] is a [PromptAgentOption] but not an AgentOption, so
-// passing it to [DefineAgent] or [DefineCustomAgent] is a compile-time error.
+// ([WithSessionStore], [WithStateTransform], [WithStreamTransform],
+// [WithDescription]) configure all three constructors. The converse does not
+// hold. A prompt-source option such as [WithNamedPrompt] is a
+// [PromptAgentOption] but not an AgentOption, so passing it to [DefineAgent] or
+// [DefineCustomAgent] is a compile-time error.
 type AgentOption[State any] interface {
 	applyAgent(*agentOptions[State]) error
 	applyPromptAgent(*promptAgentOptions[State]) error
@@ -51,16 +52,65 @@ type PromptAgentOption[State any] interface {
 // the store or passed to the agent function. Typical uses are PII redaction and
 // stripping secrets.
 //
-// state is a fresh deep copy the transform owns: it may mutate in place, return
-// a new pointer, or return nil to omit state from the response. ctx is the
-// request or invocation context, carrying deadlines and values such as the
+// state is a fresh deep copy the transform owns. It returns the state to expose
+// and a nil error, with two special outcomes:
+//
+//   - A nil state omits state from the response. This is an intentional,
+//     successful outcome: the stored snapshot and the agent's own view keep the
+//     data, only the outbound copy is dropped.
+//   - A non-nil error fails closed: the operation being shaped aborts rather
+//     than exposing anything. A snapshot read returns the error; the final
+//     [AgentOutput] of an invocation resolves as a failed output carrying it.
+//     Use it when redaction cannot be performed safely (e.g. an RBAC policy
+//     lookup failed), where omitting (nil) would be a silent under-redaction
+//     and returning raw state would leak. The error's status code (such as
+//     PERMISSION_DENIED) propagates to the caller.
+//
+// ctx is the request or invocation context, carrying deadlines and values such
+// as the caller's identity for RBAC-aware redaction.
+type StateTransform[State any] = func(ctx context.Context, state *SessionState[State]) (*SessionState[State], error)
+
+// StreamTransform rewrites an [AgentStreamChunk] on its way out to a client: it
+// runs at the wire boundary on every chunk the runtime forwards (model chunks,
+// artifacts, custom-state patches, and turn-end signals), after the chunk's
+// in-process side effects have already been applied. So, like [StateTransform],
+// it shapes only what the client sees, not session state, persisted snapshots,
+// or anything passed to the agent function. It also leaves the final
+// [AgentOutput] untouched; it is a stream-only hook. Typical uses are redacting
+// streamed model tokens and stripping fields a client should not receive.
+//
+// chunk is a fresh deep copy the transform owns. It returns the chunk to
+// forward and a nil error, with two special outcomes:
+//
+//   - A nil chunk drops it from the stream. This is an intentional, successful
+//     outcome and is wire-only: the chunk's side effects (an artifact recorded
+//     on the session) and the final [AgentOutput] keep the underlying data.
+//     Dropping a chunk whose [AgentStreamChunk.TurnEnd] is set withholds the
+//     turn-end signal a client uses to pace the conversation, so reshape such a
+//     chunk rather than dropping it.
+//   - A non-nil error fails closed: the whole invocation fails, so no unshaped
+//     chunk reaches the client and the offending chunk's side effects do not
+//     surface in the final output either. Use it when a chunk cannot be shaped
+//     safely; a panic in the transform is treated the same way.
+//
+// ctx is the request context, carrying deadlines and values such as the
 // caller's identity for RBAC-aware redaction.
-type StateTransform[State any] = func(ctx context.Context, state *SessionState[State]) *SessionState[State]
+//
+// To redact custom state, prefer [WithStateTransform]: the runtime applies it
+// before diffing, so the custom-patch stream stays internally consistent.
+// Rewriting an [AgentStreamChunk.CustomPatch] delta here can desync a client
+// that reconstructs custom state from the patch sequence.
+//
+// Unlike [StateTransform] it is not parameterized by State: a chunk carries no
+// state type, so [WithStreamTransform] cannot infer State from the transform
+// and takes it as an explicit type argument.
+type StreamTransform = func(ctx context.Context, chunk *AgentStreamChunk) (*AgentStreamChunk, error)
 
 type agentOptions[State any] struct {
-	store       SessionStore[State]
-	transform   StateTransform[State]
-	description string
+	store           SessionStore[State]
+	transform       StateTransform[State]
+	streamTransform StreamTransform
+	description     string
 }
 
 func (o *agentOptions[State]) applyAgent(opts *agentOptions[State]) error {
@@ -75,6 +125,12 @@ func (o *agentOptions[State]) applyAgent(opts *agentOptions[State]) error {
 			return errors.New("cannot set state transform more than once (WithStateTransform)")
 		}
 		opts.transform = o.transform
+	}
+	if o.streamTransform != nil {
+		if opts.streamTransform != nil {
+			return errors.New("cannot set stream transform more than once (WithStreamTransform)")
+		}
+		opts.streamTransform = o.streamTransform
 	}
 	if o.description != "" {
 		if opts.description != "" {
@@ -135,6 +191,18 @@ func WithSessionStore[State any](store SessionStore[State]) AgentOption[State] {
 // [AgentOutput.State]). Typical uses are PII redaction and stripping secrets.
 func WithStateTransform[State any](transform StateTransform[State]) AgentOption[State] {
 	return &agentOptions[State]{transform: transform}
+}
+
+// WithStreamTransform registers a [StreamTransform] applied to every
+// [AgentStreamChunk] on its way out to a client. Typical uses are redacting
+// streamed model tokens and stripping fields a client should not receive; it is
+// the stream-side counterpart to [WithStateTransform].
+//
+// A chunk is not parameterized by the state type, so State cannot be inferred
+// from the transform and must be supplied explicitly to match the agent's, e.g.
+// WithStreamTransform[MyState](fn).
+func WithStreamTransform[State any](transform StreamTransform) AgentOption[State] {
+	return &agentOptions[State]{streamTransform: transform}
 }
 
 // WithDescription sets a human-readable description of the agent, stored on its
