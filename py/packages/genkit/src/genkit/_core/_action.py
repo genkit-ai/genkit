@@ -691,15 +691,6 @@ class Action(Generic[InputT, OutputT, ChunkT]):
 # BidiConnection
 # =============================================================================
 
-
-# Note on Types and Variance:
-# 1. Output types (StreamOutT_co, BidiOutT_co) are covariant (read-only outputs)
-#    to allow natural subclass polymorphism on connection outputs.
-# 2. Constructor takes CloseableQueue[Any] because mutable queues are invariant
-#    in Python; parameterizing them directly with covariant type variables
-#    violates type theory and raises variance checking errors (e.g. Pyright).
-# 3. Interior type erasure (using Any) is used internally, while 100% type
-#    safety is publicly enforced on the send() and receive() methods.
 StreamInT = TypeVar('StreamInT')
 StreamOutT_co = TypeVar('StreamOutT_co', covariant=True)
 BidiOutT_co = TypeVar('BidiOutT_co', covariant=True)
@@ -712,10 +703,6 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
     result Future that resolves when the server fn completes.
     """
 
-    # We use covariant outputs (covariant=True) so a connection yielding specific types
-    # (e.g. Dog) can be assigned to a variable expecting general types (e.g. Animal).
-    # Since Python's mutable queues don't allow this flexibility natively, we accept
-    # CloseableQueue[Any] internally to satisfy the compiler without losing type safety.
     def __init__(
         self,
         in_queue: CloseableQueue[Any],
@@ -741,10 +728,7 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
         await self._in_queue.put(input)
 
     async def close(self) -> None:
-        """Signal no more inputs will be sent.
-
-        Idempotent — safe to call more than once.
-        """
+        """Signal no more inputs will be sent."""
         if not self._closed:
             self._closed = True
             if hasattr(self._in_queue, 'close'):
