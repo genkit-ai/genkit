@@ -21,22 +21,12 @@
 from __future__ import annotations
 
 import warnings
+from typing import Any, ClassVar, Literal
+
 from pydantic import ConfigDict, Field, RootModel
 from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitModel
-
-from typing import Any, ClassVar, Literal
-
-
-class RuntimeError(GenkitModel):
-    """Model for runtimeerror data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    status: str | None = None
-    message: str = Field(...)
-    details: Any | None = Field(default=None)
-
 from genkit._core._compat import StrEnum
 
 warnings.filterwarnings(
@@ -129,6 +119,15 @@ class ConfigSchema(GenkitModel):
 Metadata = dict[str, Any]  # type alias for flexible metadata
 
 Custom = dict[str, Any]  # type alias for flexible custom data
+
+
+class RuntimeError(GenkitModel):
+    """Model for runtimeerror data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    status: str | None = None
+    message: str = Field(...)
+    details: Any | None = Field(default=None)
 
 
 class AbortSnapshotRequest(GenkitModel):
@@ -359,7 +358,6 @@ class GenkitError(GenkitModel):
     stack: str | None = None
     details: Any | None = Field(default=None)
     data: Data | None = None
-
 
 
 class MiddlewareDesc(GenkitModel):

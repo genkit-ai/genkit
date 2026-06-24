@@ -68,7 +68,7 @@ def _output_name(name: str) -> str:
 
 
 # Emit early to avoid Pydantic forward-ref issues (Schema/ConfigSchema for OutputConfig; Metadata for MessageData etc.)
-PREFERRED_FIRST = ('Schema', 'ConfigSchema', 'Metadata', 'Custom')
+PREFERRED_FIRST = ('Schema', 'ConfigSchema', 'Metadata', 'Custom', 'RuntimeError')
 # anyOf/oneOf defs emitted as RootModel (have .root) so Part(root=TextPart(...)) works
 ROOT_MODEL_UNIONS = frozenset({'Part', 'DocumentPart', 'TraceEvent'})
 HEADER = '''# Copyright {year} Google LLC
