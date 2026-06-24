@@ -82,8 +82,8 @@ class InProcessTransport:
         async def watch_abort() -> None:
             if abort_event is not None:
                 await abort_event.wait()
-                await conn.close()
                 self._conn = None
+                await conn.close()
                 try:
                     await conn.output()
                 except asyncio.CancelledError:

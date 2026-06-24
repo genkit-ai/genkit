@@ -749,7 +749,20 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
         """
         if not self._closed:
             self._closed = True
-            await self._in_queue.put(_SENTINEL)
+            if self._result.done():
+                return
+
+            put_task = asyncio.create_task(self._in_queue.put(_SENTINEL))
+            result_task = asyncio.ensure_future(self._result)
+
+            _, pending = await asyncio.wait(
+                {put_task, result_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            for t in pending:
+                if t is put_task:
+                    t.cancel()
 
     async def receive(self) -> AsyncIterator[StreamOutT_co]:
         """Async iterator yielding server-side stream chunks.
