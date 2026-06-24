@@ -802,6 +802,8 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
             fn=as_action_fn,
             metadata_fn=metadata_fn,
             description=description,
+            # The 'bidi': True metadata flag is used by the Genkit Dev UI and Reflection API
+            # to identify this as a bidirectional action and render the interactive chat interface.
             metadata={**(metadata or {}), 'bidi': True},
             span_metadata=span_metadata,
         )
