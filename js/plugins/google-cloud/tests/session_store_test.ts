@@ -586,21 +586,24 @@ describe('FirestoreSessionStore', () => {
     assert.strictEqual(raw.data()?.kind, 'checkpoint');
   });
 
-  it('persists and round-trips finishReason, error, and updatedAt', async () => {
+  it('persists and round-trips finishReason, error, heartbeatAt, and updatedAt', async () => {
     const createdAt = new Date('2026-01-01T00:00:00.000Z').toISOString();
+    const heartbeatAt = new Date('2026-01-01T00:00:05.000Z').toISOString();
     await store.saveSnapshot('f1', () => ({
       snapshotId: 'f1',
       createdAt,
       event: 'turnEnd',
-      status: 'failed',
+      status: 'pending',
       finishReason: 'interrupted',
+      heartbeatAt,
       error: { status: 'INTERNAL', message: 'boom', details: { code: 42 } },
       state: { sessionId: 'sess-fields', custom: { counter: 1 } },
     }));
 
     const read = await store.getSnapshot({ snapshotId: 'f1' });
-    assert.strictEqual(read?.status, 'failed');
+    assert.strictEqual(read?.status, 'pending');
     assert.strictEqual(read?.finishReason, 'interrupted');
+    assert.strictEqual(read?.heartbeatAt, heartbeatAt);
     assert.deepStrictEqual(read?.error, {
       status: 'INTERNAL',
       message: 'boom',
@@ -609,16 +612,19 @@ describe('FirestoreSessionStore', () => {
     // updatedAt defaults to createdAt until the snapshot is rewritten.
     assert.strictEqual(read?.updatedAt, createdAt);
 
-    // Upsert with an explicit, later updatedAt.
+    // Upsert with an explicit, later updatedAt and a refreshed heartbeat.
     const updatedAt = new Date('2026-01-02T00:00:00.000Z').toISOString();
+    const heartbeatAt2 = new Date('2026-01-02T00:00:05.000Z').toISOString();
     await store.saveSnapshot('f1', (current) => ({
       ...current!,
       updatedAt,
+      heartbeatAt: heartbeatAt2,
       status: 'completed',
     }));
     const read2 = await store.getSnapshot({ snapshotId: 'f1' });
     assert.strictEqual(read2?.updatedAt, updatedAt);
     assert.strictEqual(read2?.createdAt, createdAt);
+    assert.strictEqual(read2?.heartbeatAt, heartbeatAt2);
   });
 
   it('diffs and reconstructs messages and artifacts across a chain', async () => {

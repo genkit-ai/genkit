@@ -148,8 +148,9 @@ interface SnapshotDoc {
   parentId?: string;
   createdAt: string;
   updatedAt?: string;
-  event: SessionSnapshot['event'];
   status?: SessionSnapshot['status'];
+  /** Heartbeat timestamp (RFC 3339) for an in-flight detached turn. */
+  heartbeatAt?: SessionSnapshot['heartbeatAt'];
   finishReason?: SessionSnapshot['finishReason'];
   error?: SessionSnapshot['error'];
   /** `checkpoint` stores full state in shards; `diff` stores `statePatch`. */
@@ -517,8 +518,8 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
         parentId: result.parentId,
         createdAt: result.createdAt,
         updatedAt: result.updatedAt ?? result.createdAt,
-        event: result.event,
         status: result.status,
+        heartbeatAt: result.heartbeatAt,
         finishReason: result.finishReason,
         error: result.error,
         kind,
@@ -848,7 +849,6 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
     const snapshot: SessionSnapshot<S> = {
       snapshotId: doc.snapshotId,
       createdAt: doc.createdAt,
-      event: doc.event,
       // Normalize to plain objects: values reconstructed from Firestore
       // documents (e.g. patch operands) can carry non-plain prototypes.
       state: sanitize(state),
@@ -856,6 +856,7 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
     if (doc.parentId !== undefined) snapshot.parentId = doc.parentId;
     if (doc.updatedAt !== undefined) snapshot.updatedAt = doc.updatedAt;
     if (doc.status !== undefined) snapshot.status = doc.status;
+    if (doc.heartbeatAt !== undefined) snapshot.heartbeatAt = doc.heartbeatAt;
     if (doc.finishReason !== undefined)
       snapshot.finishReason = doc.finishReason;
     if (doc.error !== undefined) snapshot.error = doc.error;
