@@ -19,12 +19,9 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
-
 from genkit import ActionRunContext, FinishReason, Genkit, Message
 from genkit.agent import (
     AgentFinishReason,
-    AgentInit,
     AgentInput,
     AgentResult,
     AgentStreamChunk,
@@ -66,7 +63,7 @@ agent = ai.define_custom_agent(name='customCoder', fn=custom_coder_fn, store=sto
 
 
 async def main() -> None:
-    session = agent.chat(AgentInit(session_id=str(uuid4())))
+    session = agent.chat()
     print('--- SENDING TURN ---')
     turn = session.send('What is a Python list comprehension?')
     async for chunk in turn:

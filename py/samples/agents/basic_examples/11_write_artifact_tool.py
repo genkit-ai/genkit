@@ -19,10 +19,8 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
-
 from genkit import Genkit
-from genkit.agent import AgentInit, InMemoryLatestStateStore
+from genkit.agent import InMemoryLatestStateStore
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Artifacts, Middleware
 
@@ -38,7 +36,7 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    session = agent.chat(AgentInit(session_id=str(uuid4())))
+    session = agent.chat()
     print('--- SENDING TURN ---')
     turn = session.send('Write poem.txt with a short poem about Python agents.')
     async for chunk in turn:

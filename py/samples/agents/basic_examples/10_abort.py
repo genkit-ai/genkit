@@ -20,10 +20,9 @@
 from __future__ import annotations
 
 import asyncio
-from uuid import uuid4
 
 from genkit import Genkit, GenkitError, ToolRunContext
-from genkit.agent import AgentInit, InMemoryLatestStateStore
+from genkit.agent import InMemoryLatestStateStore
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -55,7 +54,7 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    session = agent.chat(AgentInit(session_id=str(uuid4())))
+    session = agent.chat()
     print('--- SUBMITTING DETACHED TASK ---')
     task = await session.detach('Please run a long task using slowWork.')
     print(f'Task detached! Snapshot ID: {task.snapshot_id}')

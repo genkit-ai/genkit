@@ -19,12 +19,9 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
-
 from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, TextPart
 from genkit.agent import (
     AgentFinishReason,
-    AgentInit,
     AgentInput,
     AgentResult,
     InMemoryLinearSessionStore,
@@ -37,7 +34,7 @@ ai = Genkit(plugins=[GoogleAI()])
 store = InMemoryLinearSessionStore()
 
 
-async def flaky_fn(sess: SessionRunner, _ctx: ActionRunContext) -> AgentResult:
+async def flaky_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
     async def handle_turn(inp: AgentInput) -> TurnResult | None:
         text = ''
         if inp.message:
@@ -59,9 +56,7 @@ agent = ai.define_custom_agent(name='flakyAgent', fn=flaky_fn, store=store)
 
 
 async def main() -> None:
-    session_id = str(uuid4())
-
-    session = agent.chat(AgentInit(session_id=session_id))
+    session = agent.chat()
     try:
         print('--- SENDING TURN 1 (OK) ---')
         turn1 = session.send('hello')

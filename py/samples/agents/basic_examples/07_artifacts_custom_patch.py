@@ -19,12 +19,9 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
-
 from genkit import ActionRunContext, FinishReason, Genkit, Message, Part, TextPart
 from genkit.agent import (
     AgentFinishReason,
-    AgentInit,
     AgentInput,
     AgentResult,
     AgentStreamChunk,
@@ -69,7 +66,7 @@ agent = ai.define_custom_agent(name='statefulAgent', fn=stateful_fn, store=store
 
 
 async def main() -> None:
-    session = agent.chat(AgentInit(session_id=str(uuid4())))
+    session = agent.chat()
     print('--- SENDING TURN ---')
     turn = session.send('Go')
     async for chunk in turn:

@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from genkit import Genkit, restart_tool
 from genkit._core._typing import AgentFinishReason, ToolRequest, ToolRequestPart
-from genkit.agent import AgentInit, InMemoryLinearSessionStore, Resume
+from genkit.agent import InMemoryLinearSessionStore, Resume
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Middleware, ToolApproval
 
@@ -83,9 +83,7 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    session_id = str(uuid4())
-
-    session = agent.chat(AgentInit(session_id=session_id))
+    session = agent.chat()
     # --- Turn 1: user message → stream until interrupted ---
     print('--- SENDING TURN 1 ---')
     turn1 = session.send('Transfer $500 to account 12345 for rent and check the balance in account 12345.')
