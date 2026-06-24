@@ -60,24 +60,4 @@ export const GenkitErrorSchema = z.object({
     .optional(),
 });
 
-/**
- * Zod schema for the canonical Genkit error wire shape
- * (`{status, message, details}`). This is the form runtimes use when an
- * error travels as data inside another value (e.g. agent outputs and
- * session snapshots), matching `HttpErrorWireFormat` in the JS runtime
- * and `GenkitError`'s wire form in the Go runtime.
- *
- * Not to be confused with {@link GenkitErrorSchema} below, which is the
- * reflection API's HTTP error envelope.
- */
-export const RuntimeErrorSchema = z.object({
-  /** Canonical status name (e.g. `INTERNAL`, `FAILED_PRECONDITION`). */
-  status: z.string().optional(),
-  /** Human-readable error message. */
-  message: z.string(),
-  /** Optional structured details describing the failure. */
-  details: z.any().optional(),
-});
-export type RuntimeError = z.infer<typeof RuntimeErrorSchema>;
-
 export type GenkitError = z.infer<typeof GenkitErrorSchema>;
