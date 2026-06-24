@@ -67,7 +67,7 @@ async def main() -> None:
     # --- Turn 1: user message → stream until interrupted ---
     print('--- SENDING TURN 1 ---')
     turn1 = session.send('Transfer $100 to account 999 for lunch.')
-    async for chunk in turn1.stream:
+    async for chunk in turn1:
         print('turn 1 chunk:', chunk)
 
     out1 = await turn1.output
@@ -90,7 +90,7 @@ async def main() -> None:
         # --- Turn 2: resume within same session ---
         print('\n--- SENDING TURN 2 (RESUME) ---')
         turn2 = session.resume(Resume(restart=restarts))
-        async for chunk in turn2.stream:
+        async for chunk in turn2:
             print('turn 2 chunk:', chunk)
 
         out2 = await turn2.output

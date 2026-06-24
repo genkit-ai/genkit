@@ -40,7 +40,7 @@ async def main() -> None:
     session = agent.chat(AgentInit(session_id=str(uuid4())))
     print('--- SENDING TURN ---')
     turn = session.send('Hello!')
-    async for chunk in turn.stream:
+    async for chunk in turn:
         print('chunk:', chunk)
 
     out = await turn.output

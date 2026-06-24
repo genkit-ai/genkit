@@ -66,7 +66,7 @@ async def main() -> None:
     # Turn 1
     print('--- SENDING TURN 1 ---')
     turn1 = session.send('Weather in Paris?')
-    async for chunk in turn1.stream:
+    async for chunk in turn1:
         print('turn1 chunk:', chunk)
     out1 = await turn1.output
     print('turn1 output:', out1)
@@ -74,7 +74,7 @@ async def main() -> None:
     # Turn 2
     print('--- SENDING TURN 2 ---')
     turn2 = session.send('What city did I ask about? One word.')
-    async for chunk in turn2.stream:
+    async for chunk in turn2:
         print('turn2 chunk:', chunk)
     out2 = await turn2.output
     print('turn2 output:', out2)

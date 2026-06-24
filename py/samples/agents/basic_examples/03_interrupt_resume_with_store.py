@@ -89,7 +89,7 @@ async def main() -> None:
     # --- Turn 1: user message → stream until interrupted ---
     print('--- SENDING TURN 1 ---')
     turn1 = session.send('Transfer $500 to account 12345 for rent and check the balance in account 12345.')
-    async for chunk in turn1.stream:
+    async for chunk in turn1:
         if chunk.text:
             print('turn 1 content chunk:', chunk.text)
         if chunk.tool_request:
@@ -117,7 +117,7 @@ async def main() -> None:
 
     # Resume the turn
     turn2 = session.resume(Resume(restart=restarts))
-    async for chunk in turn2.stream:
+    async for chunk in turn2:
         if chunk.text:
             print('turn 2 content chunk:', chunk.text)
         if chunk.tool_request:

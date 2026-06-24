@@ -72,7 +72,7 @@ async def main() -> None:
     session = agent.chat(AgentInit(session_id=str(uuid4())))
     print('--- SENDING TURN ---')
     turn = session.send('Go')
-    async for chunk in turn.stream:
+    async for chunk in turn:
         if chunk.text:
             print('content chunk:', chunk.text)
         if chunk.custom:

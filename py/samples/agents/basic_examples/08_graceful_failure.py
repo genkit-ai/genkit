@@ -65,14 +65,14 @@ async def main() -> None:
     try:
         print('--- SENDING TURN 1 (OK) ---')
         turn1 = session.send('hello')
-        async for chunk in turn1.stream:
+        async for chunk in turn1:
             print('ok chunk:', chunk)
         out_ok = await turn1.output
         print('ok turn output:', out_ok)
 
         print('\n--- SENDING TURN 2 (FAIL) ---')
         turn2 = session.send('please fail now')
-        async for chunk in turn2.stream:
+        async for chunk in turn2:
             print('fail chunk:', chunk)
         out_fail = await turn2.output
         print('fail turn output:', out_fail)

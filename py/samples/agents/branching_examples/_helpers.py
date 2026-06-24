@@ -54,7 +54,7 @@ async def run_turn(agent: Agent, init: AgentInit, text: str) -> AgentOutput:
 
     async with agent.chat(AgentInit(session_id=session_id, snapshot_id=init.snapshot_id)) as session:
         turn = session.send(text)
-        async for _chunk in turn.stream:
+        async for _chunk in turn:
             pass
         return (await turn.output).raw
 
