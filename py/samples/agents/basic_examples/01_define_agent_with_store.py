@@ -64,8 +64,12 @@ async def main() -> None:
     session = agent.chat()
 
     print('Sending: Weather in Paris?')
-    out1 = await session.send('Weather in Paris?').output
-    print('Response:', out1.message.content if out1.message else '')
+    turn1 = session.send('Weather in Paris?')
+    print('Response: ', end='', flush=True)
+    async for chunk in turn1:
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+    print()  # Newline after stream finishes
 
     # Capture the snapshot ID to resume this conversation later!
     saved_snapshot_id = session.snapshot_id
@@ -82,8 +86,12 @@ async def main() -> None:
     resumed_session = await agent.load_chat(saved_snapshot_id)
 
     print('Sending: What city did I ask about? One word.')
-    out2 = await resumed_session.send('What city did I ask about? One word.').output
-    print('Response:', out2.message.content if out2.message else '')
+    turn2 = resumed_session.send('What city did I ask about? One word.')
+    print('Response: ', end='', flush=True)
+    async for chunk in turn2:
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+    print()
     await resumed_session.close()
 
 

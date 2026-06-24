@@ -38,8 +38,12 @@ async def main() -> None:
     session = agent.chat()
 
     print('Sending: My name is Ada. Remember it.')
-    out1 = await session.send('My name is Ada. Remember it.').output
-    print('Response:', out1.message.content if out1.message else '')
+    print('Response: ', end='', flush=True)
+    # Showcase the ultimate variable-free streaming loop!
+    async for chunk in session.send('My name is Ada. Remember it.'):
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+    print()
 
     # Capture the entire session state on the client side!
     # In a client-managed model, you must save the messages and custom state yourself.
@@ -61,8 +65,12 @@ async def main() -> None:
     resumed_session = agent.chat(AgentInit(state=saved_state))
 
     print('Sending: What is my name? One word.')
-    out2 = await resumed_session.send('What is my name? One word.').output
-    print('Response:', out2.message.content if out2.message else '')
+    turn2 = resumed_session.send('What is my name? One word.')
+    print('Response: ', end='', flush=True)
+    async for chunk in turn2:
+        if chunk.text:
+            print(chunk.text, end='', flush=True)
+    print()
     await resumed_session.close()
 
 
