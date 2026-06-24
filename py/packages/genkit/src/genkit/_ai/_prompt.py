@@ -20,7 +20,7 @@
 import asyncio
 import os
 import weakref
-from collections.abc import AsyncIterable, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypedDict, TypeVar, cast
@@ -186,6 +186,13 @@ class ModelStreamResponse(Generic[OutputT]):
             - Any tool calls or interrupts from the response
         """
         return self._response_future
+
+    # The natural Python expectation is `async for chunk in ai.generate_stream(...)`.
+    # Delegating to the underlying channel lets that work without forcing the
+    # caller to remember the extra `.stream` hop, while `.stream` and `.response`
+    # remain available for cases where you want both halves explicitly.
+    def __aiter__(self) -> AsyncIterator[ModelResponseChunk]:
+        return self._channel.__aiter__()
 
 
 @dataclass

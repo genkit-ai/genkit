@@ -959,7 +959,7 @@ async def test_gemini_model__retrieve_cached_content(
             'GenerationCommonConfig with alias-form extra',
             GenerationCommonConfig.model_validate({'codeExecution': True}),
         ),
-        ('GeminiConfigSchema instance', GeminiConfigSchema(code_execution=True)),
+        ('GeminiConfigSchema instance', GeminiConfigSchema.model_validate({'code_execution': True})),
     ],
 )
 def test_gemini_model__normalize_config_canonicalizes_aliases(
