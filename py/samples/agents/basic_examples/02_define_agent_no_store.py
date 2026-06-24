@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 from genkit import Genkit
+from genkit.agent import AgentInit, SessionState
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -32,21 +33,37 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
+    # --- 1. START A NEW SESSION & RUN TURN 1 ---
+    print('--- STARTING A NEW SESSION (CLIENT-MANAGED) ---')
     session = agent.chat()
-    # Turn 1
-    print('--- SENDING TURN 1 ---')
-    async for chunk in session.send('My name is Ada. Remember it.'):
-        print('turn1 chunk:', chunk)
-    print('turn1 state:', session.state)
 
-    # Turn 2
-    print('--- SENDING TURN 2 ---')
-    turn2 = session.send('What is my name? One word.')
-    async for chunk in turn2:
-        print('turn2 chunk:', chunk)
-    out2 = await turn2.output
-    print('turn2 output:', out2)
+    print('Sending: My name is Ada. Remember it.')
+    out1 = await session.send('My name is Ada. Remember it.').output
+    print('Response:', out1.message.content if out1.message else '')
+
+    # Capture the entire session state on the client side!
+    # In a client-managed model, you must save the messages and custom state yourself.
+    saved_state = SessionState(
+        messages=session.messages,
+        custom=session.state,
+        artifacts=session.artifacts,
+    )
+    print(f'[Client] Saved {len(session.messages)} messages and custom state.')
     await session.close()
+
+    print('\n======================================================')
+    print('   Simulating client disconnect / server restart...   ')
+    print('======================================================\n')
+
+    # --- 2. RESUME THE SESSION BY PASSING THE STATE ---
+    # We pass the saved state back into agent.chat() to restore the conversation!
+    print('--- RESUMING SESSION WITH SAVED STATE ---')
+    resumed_session = agent.chat(AgentInit(state=saved_state))
+
+    print('Sending: What is my name? One word.')
+    out2 = await resumed_session.send('What is my name? One word.').output
+    print('Response:', out2.message.content if out2.message else '')
+    await resumed_session.close()
 
 
 if __name__ == '__main__':
