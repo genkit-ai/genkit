@@ -38,6 +38,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -164,7 +165,10 @@ func resolveFirestoreClient(ctx context.Context, g *genkit.Genkit) (*firestore.C
 	if !ok {
 		return nil, fmt.Errorf("unexpected plugin type %T for provider \"firebase\"", plugin)
 	}
-	return f.Firestore(ctx)
+	// The Firestore client is long-lived and cached by the plugin, so it must not
+	// be bound to this (possibly request-scoped) construction context: a later
+	// token refresh or connection maintenance would fail once it is cancelled.
+	return f.Firestore(context.WithoutCancel(ctx))
 }
 
 // --- Persisted document shapes ---
@@ -247,13 +251,22 @@ type writePlan struct {
 
 // --- Document references ---
 
-func (s *FirestoreSessionStore[State]) prefixFor(ctx context.Context) string {
+func (s *FirestoreSessionStore[State]) prefixFor(ctx context.Context) (string, error) {
+	prefix := defaultPrefix
 	if s.prefixFn != nil {
 		if p := s.prefixFn(ctx); p != "" {
-			return p
+			prefix = p
 		}
 	}
-	return defaultPrefix
+	// The prefix is used directly as a Firestore document ID (see snapshotRef et
+	// al.), so it must be a single valid path segment. Reject the realistic
+	// mistakes up front rather than letting them surface as an opaque Firestore
+	// path error deep in a transaction; for a tenant-isolation prefix, failing
+	// fast and loud is the safe default.
+	if strings.ContainsRune(prefix, '/') || prefix == "." || prefix == ".." {
+		return "", fmt.Errorf("invalid snapshot path prefix %q: must be a single Firestore document ID with no '/' separators", prefix)
+	}
+	return prefix, nil
 }
 
 func (s *FirestoreSessionStore[State]) snapshotRef(prefix, id string) *firestore.DocumentRef {
@@ -278,9 +291,12 @@ func (s *FirestoreSessionStore[State]) GetSnapshot(ctx context.Context, snapshot
 	if snapshotID == "" {
 		return nil, nil
 	}
-	prefix := s.prefixFor(ctx)
+	prefix, err := s.prefixFor(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("firebase: FirestoreSessionStore.GetSnapshot: %w", err)
+	}
 	var result *aix.SessionSnapshot[State]
-	err := s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+	err = s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
 		result = nil
 		doc, state, ok, err := s.reconstruct(tx, prefix, snapshotID)
 		if err != nil {
@@ -311,9 +327,12 @@ func (s *FirestoreSessionStore[State]) GetLatestSnapshot(ctx context.Context, se
 	if sessionID == "" {
 		return nil, errors.New("firebase: FirestoreSessionStore.GetLatestSnapshot: session ID is empty")
 	}
-	prefix := s.prefixFor(ctx)
+	prefix, err := s.prefixFor(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("firebase: FirestoreSessionStore.GetLatestSnapshot: %w", err)
+	}
 	var result *aix.SessionSnapshot[State]
-	err := s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+	err = s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
 		result = nil
 		pointer, err := s.readPointer(tx, prefix, sessionID)
 		if err != nil {
@@ -502,10 +521,13 @@ func (s *FirestoreSessionStore[State]) SaveSnapshot(
 	if id == "" {
 		id = uuid.New().String()
 	}
-	prefix := s.prefixFor(ctx)
+	prefix, err := s.prefixFor(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("firebase: FirestoreSessionStore.SaveSnapshot: %w", err)
+	}
 
 	var persisted *aix.SessionSnapshot[State]
-	err := s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+	err = s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
 		// Reset on every (re-)run: a prior attempt may have set this before the
 		// transaction was retried under contention.
 		persisted = nil
@@ -812,7 +834,12 @@ func (s *FirestoreSessionStore[State]) OnSnapshotStatusChange(ctx context.Contex
 		close(ch)
 		return ch
 	}
-	ref := s.snapshotRef(s.prefixFor(ctx), snapshotID)
+	prefix, err := s.prefixFor(ctx)
+	if err != nil {
+		close(ch)
+		return ch
+	}
+	ref := s.snapshotRef(prefix, snapshotID)
 
 	go func() {
 		defer close(ch)

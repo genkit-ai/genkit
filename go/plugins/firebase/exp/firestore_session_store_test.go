@@ -203,6 +203,34 @@ func TestOptionValidation(t *testing.T) {
 	})
 }
 
+// TestInvalidPrefixRejected verifies every operation rejects a prefix that is
+// not a valid single Firestore document ID before touching Firestore (the store
+// has a nil client; the check runs first), rather than failing with an opaque
+// path error deep in a transaction.
+func TestInvalidPrefixRejected(t *testing.T) {
+	ctx := context.Background()
+	store := &FirestoreSessionStore[testState]{
+		collection: "c",
+		prefixFn:   func(context.Context) string { return "tenant/evil" },
+	}
+
+	if _, err := store.GetSnapshot(ctx, "snap"); err == nil {
+		t.Error("GetSnapshot: expected error for prefix containing '/'")
+	}
+	if _, err := store.GetLatestSnapshot(ctx, "sess"); err == nil {
+		t.Error("GetLatestSnapshot: expected error for prefix containing '/'")
+	}
+	if _, err := store.SaveSnapshot(ctx, "snap",
+		func(_ *aix.SessionSnapshot[testState]) (*aix.SessionSnapshot[testState], error) {
+			return &aix.SessionSnapshot[testState]{SessionID: "s"}, nil
+		}); err == nil {
+		t.Error("SaveSnapshot: expected error for prefix containing '/'")
+	}
+	if _, ok := <-store.OnSnapshotStatusChange(ctx, "snap"); ok {
+		t.Error("OnSnapshotStatusChange: expected a closed channel for prefix containing '/'")
+	}
+}
+
 // --- SessionID rules (mirrors the shared conformance suite) ---
 
 func TestSessionIDRules(t *testing.T) {
