@@ -119,7 +119,7 @@ func main() {
 	// Config parameter, the Google AI plugin will get the API key from the
 	// GEMINI_API_KEY or GOOGLE_API_KEY environment variable, which is the
 	// recommended practice.
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}), genkit.WithExperimental())
 
 	model := googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 		ThinkingConfig: &genai.ThinkingConfig{

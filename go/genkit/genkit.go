@@ -63,6 +63,7 @@ type genkitOptions struct {
 	PromptDir    string       // Directory where dotprompts are stored. Will be loaded automatically on initialization.
 	PromptFS     fs.FS        // Embedded filesystem containing prompts (alternative to PromptDir).
 	Plugins      []api.Plugin // Plugin to initialize automatically.
+	Experimental bool         // Whether the experimental genkit/exp surface is allowed to be used.
 }
 
 type GenkitOption interface {
@@ -97,6 +98,12 @@ func (o *genkitOptions) apply(gOpts *genkitOptions) error {
 			return errors.New("cannot set plugins more than once (WithPlugins)")
 		}
 		gOpts.Plugins = o.Plugins
+	}
+
+	// Experimental is a pure opt-in toggle, so applying it more than once is
+	// harmless and idempotent rather than an error.
+	if o.Experimental {
+		gOpts.Experimental = true
 	}
 
 	return nil
@@ -158,6 +165,20 @@ func WithPromptDir(dir string) GenkitOption {
 // while valid files that define invalid prompts will cause [Init] to panic.
 func WithPromptFS(fsys fs.FS) GenkitOption {
 	return &genkitOptions{PromptFS: fsys}
+}
+
+// WithExperimental opts the Genkit instance into its experimental surface: the
+// constructors in the genkit/exp package, such as DefineAgent, DefineTool, and
+// DefineStreamingFlow. Without this option, calling any of those constructors
+// panics with a message pointing back here.
+//
+// These features are in preview and/or under active development. Their APIs are
+// still taking shape, so opting in means accepting that they may have breaking
+// or backward-incompatible changes between minor releases, without the
+// source-stability guarantees that apply to the rest of Genkit. Pin your Genkit
+// version if you build on them.
+func WithExperimental() GenkitOption {
+	return &genkitOptions{Experimental: true}
 }
 
 // Init creates and initializes a new [Genkit] instance with the provided options.
@@ -260,6 +281,7 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 
 	r.RegisterValue(api.DefaultModelKey, gOpts.DefaultModel)
 	r.RegisterValue(api.PromptDirKey, gOpts.PromptDir)
+	r.RegisterValue(api.ExperimentalKey, gOpts.Experimental)
 
 	if api.CurrentEnvironment() == api.EnvironmentDev {
 		errCh := make(chan error, 1)

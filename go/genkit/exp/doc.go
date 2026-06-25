@@ -42,7 +42,10 @@ can churn without touching genkit's stable namespace. It currently provides:
     alternative to the callback-based [genkit.DefineStreamingFlow] for logic
     that is more naturally expressed by writing chunks to a channel.
 
-APIs in this package are under active development and may change in any minor
-version release.
+Every constructor here requires opting in: initialize Genkit with
+[genkit.WithExperimental], or the constructors panic with a message explaining
+how to enable them. The opt-in is the acknowledgement that these features are in
+preview and/or under active development, with APIs that may have breaking or
+backward-incompatible changes in any minor version release.
 */
 package exp

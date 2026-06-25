@@ -62,6 +62,7 @@ import (
 //	}
 //	fmt.Println(resp.Text())
 func DefineTool[In, Out any](g *genkit.Genkit, name, description string, fn aix.ToolFunc[In, Out], opts ...ai.ToolOption) *aix.Tool[In, Out] {
+	requireExperimental(g, "DefineTool")
 	return aix.DefineTool(genkitbridge.RegistryOf(g), name, description, fn, opts...)
 }
 
@@ -144,5 +145,6 @@ func DefineTool[In, Out any](g *genkit.Genkit, name, description string, fn aix.
 //		}
 //	}
 func DefineInterruptibleTool[In, Out, Resume any](g *genkit.Genkit, name, description string, fn aix.InterruptibleToolFunc[In, Out, Resume], opts ...ai.ToolOption) *aix.InterruptibleTool[In, Out, Resume] {
+	requireExperimental(g, "DefineInterruptibleTool")
 	return aix.DefineInterruptibleTool(genkitbridge.RegistryOf(g), name, description, fn, opts...)
 }

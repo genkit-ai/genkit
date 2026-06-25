@@ -71,6 +71,7 @@ func DefineAgent[State any](
 	prompt aix.InlinePrompt,
 	opts ...aix.AgentOption[State],
 ) *aix.Agent[State] {
+	requireExperimental(g, "DefineAgent")
 	return aix.DefineAgent(genkitbridge.RegistryOf(g), name, prompt, opts...)
 }
 
@@ -116,6 +117,7 @@ func DefinePromptAgent[State any](
 	name string,
 	opts ...aix.PromptAgentOption[State],
 ) *aix.Agent[State] {
+	requireExperimental(g, "DefinePromptAgent")
 	return aix.DefinePromptAgent(genkitbridge.RegistryOf(g), name, opts...)
 }
 
@@ -183,6 +185,7 @@ func DefineCustomAgent[State any](
 	fn aix.AgentFunc[State],
 	opts ...aix.AgentOption[State],
 ) *aix.Agent[State] {
+	requireExperimental(g, "DefineCustomAgent")
 	return aix.DefineCustomAgent(genkitbridge.RegistryOf(g), name, fn, opts...)
 }
 

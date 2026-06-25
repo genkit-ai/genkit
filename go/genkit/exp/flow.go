@@ -76,6 +76,7 @@ type StreamingFunc[In, Out, Stream any] = func(ctx context.Context, input In, st
 //	    }
 //	}
 func DefineStreamingFlow[In, Out, Stream any](g *genkit.Genkit, name string, fn StreamingFunc[In, Out, Stream]) *core.Flow[In, Out, Stream] {
+	requireExperimental(g, "DefineStreamingFlow")
 	// Wrap the channel-based function to work with the callback-based API
 	wrappedFn := func(ctx context.Context, input In, sendChunk core.StreamCallback[Stream]) (Out, error) {
 		if sendChunk == nil {

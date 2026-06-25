@@ -30,7 +30,7 @@ import (
 func TestDefineStreamingFlow(t *testing.T) {
 	t.Run("streams values via channel", func(t *testing.T) {
 		ctx := context.Background()
-		g := genkit.Init(ctx)
+		g := genkit.Init(ctx, genkit.WithExperimental())
 
 		flow := DefineStreamingFlow(g, "test/counter", func(ctx context.Context, n int, stream chan<- int) (string, error) {
 			for i := 0; i < n; i++ {
@@ -68,7 +68,7 @@ func TestDefineStreamingFlow(t *testing.T) {
 
 	t.Run("runs without streaming", func(t *testing.T) {
 		ctx := context.Background()
-		g := genkit.Init(ctx)
+		g := genkit.Init(ctx, genkit.WithExperimental())
 
 		flow := DefineStreamingFlow(g, "test/nostream", func(ctx context.Context, n int, stream chan<- int) (string, error) {
 			for i := 0; i < n; i++ {
@@ -88,7 +88,7 @@ func TestDefineStreamingFlow(t *testing.T) {
 
 	t.Run("handles errors", func(t *testing.T) {
 		ctx := context.Background()
-		g := genkit.Init(ctx)
+		g := genkit.Init(ctx, genkit.WithExperimental())
 
 		expectedErr := errors.New("flow failed")
 		flow := DefineStreamingFlow(g, "test/failing", func(ctx context.Context, _ int, stream chan<- int) (string, error) {
@@ -109,7 +109,7 @@ func TestDefineStreamingFlow(t *testing.T) {
 
 	t.Run("handles context cancellation", func(t *testing.T) {
 		ctx := context.Background()
-		g := genkit.Init(ctx)
+		g := genkit.Init(ctx, genkit.WithExperimental())
 
 		flow := DefineStreamingFlow(g, "test/cancel", func(ctx context.Context, n int, stream chan<- int) (int, error) {
 			for i := 0; i < n; i++ {
@@ -139,7 +139,7 @@ func TestDefineStreamingFlow(t *testing.T) {
 
 	t.Run("handles empty stream", func(t *testing.T) {
 		ctx := context.Background()
-		g := genkit.Init(ctx)
+		g := genkit.Init(ctx, genkit.WithExperimental())
 
 		flow := DefineStreamingFlow(g, "test/empty", func(ctx context.Context, _ struct{}, stream chan<- int) (string, error) {
 			return "empty", nil
@@ -169,7 +169,7 @@ func TestDefineStreamingFlow(t *testing.T) {
 
 	t.Run("handles consumer breaking early", func(t *testing.T) {
 		ctx := context.Background()
-		g := genkit.Init(ctx)
+		g := genkit.Init(ctx, genkit.WithExperimental())
 
 		var produced atomic.Int32
 		flow := DefineStreamingFlow(g, "test/earlybreak", func(ctx context.Context, n int, stream chan<- int) (string, error) {

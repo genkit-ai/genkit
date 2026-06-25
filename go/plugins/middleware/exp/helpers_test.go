@@ -29,7 +29,7 @@ var ctx = context.Background()
 // newTestGenkit returns a fresh Genkit instance for a test.
 func newTestGenkit(t *testing.T) *genkit.Genkit {
 	t.Helper()
-	return genkit.Init(context.Background())
+	return genkit.Init(context.Background(), genkit.WithExperimental())
 }
 
 // findSystem returns the first system message, or nil.

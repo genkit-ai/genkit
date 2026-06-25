@@ -51,7 +51,7 @@ func routeKeys(routes []Route) []string {
 // distinguish.
 func newRouteTestGenkit(t *testing.T) *genkit.Genkit {
 	t.Helper()
-	g := genkit.Init(context.Background())
+	g := genkit.Init(context.Background(), genkit.WithExperimental())
 
 	genkit.DefineModel(g, "test/echo", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
@@ -103,7 +103,7 @@ func TestAllAgentRoutes(t *testing.T) {
 }
 
 func TestAgentRoutes_PicksOneAgentAndMirrorsCapabilities(t *testing.T) {
-	g := genkit.Init(context.Background())
+	g := genkit.Init(context.Background(), genkit.WithExperimental())
 	genkit.DefineModel(g, "test/echo", &ai.ModelOptions{},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return &ai.ModelResponse{Message: ai.NewModelTextMessage("ok"), FinishReason: ai.FinishReasonStop}, nil
