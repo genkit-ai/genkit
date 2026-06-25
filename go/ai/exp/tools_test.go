@@ -18,6 +18,7 @@ package exp
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -115,6 +116,57 @@ func TestTool_AttachParts(t *testing.T) {
 	}
 	if len(resp.Content) != 1 || !resp.Content[0].IsMedia() {
 		t.Fatalf("expected one attached media part, got %+v", resp.Content)
+	}
+}
+
+type reportItem struct {
+	Name string `json:"name"`
+}
+
+type reportOut struct {
+	Title string       `json:"title"`
+	Items []reportItem `json:"items"`
+}
+
+// TestTool_OutputSchemaMatchesClassic guards against the multipart envelope
+// leaking into the tool definition. aix.NewTool wraps ai.NewMultipartTool, whose
+// function returns *MultipartToolResponse; without Definition restoring the real
+// output schema, the model and Dev UI would see the envelope ({content, output,
+// metadata}) instead of the actual Out type. The exp tool must advertise the
+// same output schema ai.NewTool would, including for the interruptible variant
+// (which embeds Tool) and for a nested struct that exercises schema inlining.
+func TestTool_OutputSchemaMatchesClassic(t *testing.T) {
+	classic := ai.NewTool("classic", "d",
+		func(tc *ai.ToolContext, _ weatherIn) (reportOut, error) { return reportOut{}, nil })
+	want := classic.Definition().OutputSchema
+	if want == nil {
+		t.Fatal("ai.NewTool unexpectedly produced a nil output schema")
+	}
+
+	simple := NewTool("exp-simple", "d",
+		func(ctx context.Context, _ weatherIn) (reportOut, error) { return reportOut{}, nil })
+	interruptible := NewInterruptibleTool("exp-interruptible", "d",
+		func(ctx context.Context, _ weatherIn, _ *confirmation) (reportOut, error) { return reportOut{}, nil })
+
+	for _, tc := range []struct {
+		name string
+		got  any
+	}{
+		{"NewTool", simple.Definition().OutputSchema},
+		{"NewInterruptibleTool", interruptible.Definition().OutputSchema},
+	} {
+		if !reflect.DeepEqual(tc.got, want) {
+			t.Errorf("%s output schema = %#v\nwant %#v (matching ai.NewTool)", tc.name, tc.got, want)
+		}
+		// Explicit guard on intent: the real Out fields are present and the
+		// MultipartToolResponse envelope fields are not.
+		props, _ := tc.got.(map[string]any)["properties"].(map[string]any)
+		if _, ok := props["title"]; !ok {
+			t.Errorf("%s output schema missing the real %q field: %#v", tc.name, "title", tc.got)
+		}
+		if _, ok := props["content"]; ok {
+			t.Errorf("%s output schema leaked the multipart envelope (has %q): %#v", tc.name, "content", tc.got)
+		}
 	}
 }
 

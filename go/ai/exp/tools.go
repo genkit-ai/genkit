@@ -20,9 +20,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/ai/exp/tool"
+	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/base"
 )
@@ -45,15 +47,42 @@ type Tool[In, Out any] struct {
 	inner *ai.ToolDef[In, *ai.MultipartToolResponse] // DEPRECATED(breaking): remove wrapper; Tool owns the action directly.
 }
 
-// DEPRECATED(breaking): All methods below exist only to implement ai.Tool by
-// delegating to the wrapped ai.ToolDef. With breaking changes, Tool would own
-// the action directly and implement these natively without delegation.
+// DEPRECATED(breaking): The methods below exist to implement ai.Tool on top of
+// the wrapped ai.ToolDef. Most are pure delegation; Definition additionally
+// restores the real output schema (see its comment). With breaking changes, Tool
+// would own the action directly and implement these natively, inferring the
+// output schema from Out without the override.
 
 // Name returns the name of the tool.
 func (t *Tool[In, Out]) Name() string { return t.inner.Name() }
 
 // Definition returns the [ai.ToolDefinition] for this tool.
-func (t *Tool[In, Out]) Definition() *ai.ToolDefinition { return t.inner.Definition() }
+//
+// The inner tool is built on [ai.NewMultipartTool], whose function returns
+// *[ai.MultipartToolResponse], so the inner definition would advertise that
+// envelope as the output schema. We override OutputSchema with the schema
+// inferred from the Out type parameter, making the definition equivalent to what
+// [ai.NewTool] exposes (the real output type) rather than leaking the multipart
+// envelope to the model and Dev UI. Genkit infers schemas with DoNotReference,
+// so the result is fully inlined and needs no registry resolution.
+func (t *Tool[In, Out]) Definition() *ai.ToolDefinition {
+	def := t.inner.Definition()
+	if schema := inferOutputSchema[Out](); schema != nil {
+		def.OutputSchema = schema
+	}
+	return def
+}
+
+// inferOutputSchema returns the inlined JSON schema for the Out type parameter,
+// or nil when Out carries no schema (e.g. any), mirroring how [ai.NewTool]
+// derives its output schema from the output type.
+func inferOutputSchema[Out any]() map[string]any {
+	var zero Out
+	if reflect.TypeOf(zero) == nil {
+		return nil
+	}
+	return core.InferSchemaMap(zero)
+}
 
 // RunRaw runs the tool with raw input.
 func (t *Tool[In, Out]) RunRaw(ctx context.Context, input any) (any, error) {
