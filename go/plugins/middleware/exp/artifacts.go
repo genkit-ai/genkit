@@ -107,11 +107,11 @@ type readArtifactOutput struct {
 }
 
 func newReadArtifactTool() ai.Tool {
-	return ai.NewTool("read_artifact",
+	return aix.NewTool("read_artifact",
 		"Reads the content of a named artifact from the session. Use this to "+
 			"inspect artifacts produced by sub-agents or previously created artifacts.",
-		func(tc *ai.ToolContext, in readArtifactInput) (readArtifactOutput, error) {
-			store := aix.ArtifactStoreFromContext(tc)
+		func(ctx context.Context, in readArtifactInput) (readArtifactOutput, error) {
+			store := aix.ArtifactStoreFromContext(ctx)
 			if store == nil {
 				return readArtifactOutput{Name: in.Name, Content: "Error: no active session.", Found: false}, nil
 			}
@@ -134,12 +134,12 @@ type writeArtifactOutput struct {
 }
 
 func newWriteArtifactTool() ai.Tool {
-	return ai.NewTool("write_artifact",
+	return aix.NewTool("write_artifact",
 		"Creates or updates a named artifact in the session. If an artifact with "+
 			"the same name already exists, it is replaced. Use this to produce "+
 			"files, reports, code, or other deliverables.",
-		func(tc *ai.ToolContext, in writeArtifactInput) (writeArtifactOutput, error) {
-			store := aix.ArtifactStoreFromContext(tc)
+		func(ctx context.Context, in writeArtifactInput) (writeArtifactOutput, error) {
+			store := aix.ArtifactStoreFromContext(ctx)
 			if store == nil {
 				return writeArtifactOutput{Status: "Error: no active session."}, nil
 			}

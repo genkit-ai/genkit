@@ -180,7 +180,7 @@ func (a *Agents) New(ctx context.Context) (*ai.Hooks, error) {
 		if desc == "" {
 			desc = fmt.Sprintf("Delegates a task to the %q sub-agent.", ref.Name)
 		}
-		tools = append(tools, ai.NewTool(makeToolName(prefix, ref.Name), desc, a.delegate(ref, st)))
+		tools = append(tools, aix.NewTool(makeToolName(prefix, ref.Name), desc, a.delegate(ref, st)))
 	}
 
 	wrapGenerate := func(ctx context.Context, params *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
@@ -222,9 +222,12 @@ type delegatedArtifact struct {
 	Content string `json:"content,omitempty"`
 }
 
-// delegate builds the delegation tool function for one sub-agent.
-func (a *Agents) delegate(ref aix.AgentRef, st *agentsState) func(*ai.ToolContext, delegateInput) (delegationResult, error) {
-	return func(tc *ai.ToolContext, in delegateInput) (delegationResult, error) {
+// delegate builds the delegation tool function for one sub-agent. The function
+// uses the experimental [aix.NewTool] signature: a plain [context.Context]
+// rather than an [ai.ToolContext], since delegation needs only the context for
+// agent resolution, sub-agent execution, and artifact merging.
+func (a *Agents) delegate(ref aix.AgentRef, st *agentsState) func(context.Context, delegateInput) (delegationResult, error) {
+	return func(ctx context.Context, in delegateInput) (delegationResult, error) {
 		// Guard rail: enforce the delegation cap and reserve this delegation's
 		// number, atomically, before doing any work.
 		st.mu.Lock()
@@ -239,7 +242,7 @@ func (a *Agents) delegate(ref aix.AgentRef, st *agentsState) func(*ai.ToolContex
 		history := recentTextHistory(st.conversation, a.HistoryLength)
 		st.mu.Unlock()
 
-		agent, err := resolveAgent(genkit.FromContext(tc), ref)
+		agent, err := resolveAgent(genkit.FromContext(ctx), ref)
 		if err != nil {
 			return delegationResult{Response: "Error: " + err.Error()}, nil
 		}
@@ -250,7 +253,7 @@ func (a *Agents) delegate(ref aix.AgentRef, st *agentsState) func(*ai.ToolContex
 			history = nil
 		}
 
-		out, err := runSubAgent(tc, agent, in.Task, history)
+		out, err := runSubAgent(ctx, agent, in.Task, history)
 		if err != nil {
 			// The agent runtime resolves failures and interrupts gracefully (see
 			// below), so this only fires for exceptions outside that handling
@@ -284,7 +287,7 @@ func (a *Agents) delegate(ref aix.AgentRef, st *agentsState) func(*ai.ToolContex
 			invocationID := fmt.Sprintf("%s_%d", ref.Name, invocationNum)
 			// Merge into the parent session under both strategies (no-op if there
 			// is no active session, e.g. a plain genkit.Generate call).
-			mergeArtifacts(tc, ref.Name, invocationID, subArtifacts)
+			mergeArtifacts(ctx, ref.Name, invocationID, subArtifacts)
 			result.Artifacts = delegatedArtifacts(invocationID, subArtifacts, a.strategy())
 		}
 		return result, nil
