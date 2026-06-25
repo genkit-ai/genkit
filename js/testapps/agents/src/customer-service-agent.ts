@@ -42,7 +42,7 @@
  *       → triage transfers to billing.
  */
 
-import { handoff } from '@genkit-ai/middleware';
+import { handoff, retry } from '@genkit-ai/middleware';
 import { z } from 'genkit';
 import { ai, defaultModel } from './genkit.js';
 
@@ -130,6 +130,9 @@ export const customerServiceAgent = ai.defineAgent({
     'You are Acme Corp customer support. Always be warm, concise, and helpful.',
   maxTurns: 10,
   use: [
+    // Retry transient model errors (e.g. rate limits / unavailability) with
+    // exponential backoff before they bubble up to the user.
+    retry({ maxRetries: 3 }),
     handoff({
       personas: [
         {
