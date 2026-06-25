@@ -403,20 +403,20 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
   /**
    * Reads the per-session {@link PointerDoc}, or `undefined` when it is missing
    * (legacy store / not yet written) or unreadable / corrupt - callers fall
-   * back to a full directory scan in that case. Best-effort: any error reading
-   * the pointer resolves to `undefined` so the optimization can never make a
-   * lookup (or save) fail where the scan-only baseline would have succeeded.
+   * back to a full directory scan in that case. Best-effort: any IO/parse error
+   * resolves to `undefined` so the optimization can never make a lookup (or
+   * save) fail where the scan-only baseline would have succeeded. An invalid
+   * `sessionId` still throws (path validation is resolved outside the try) so it
+   * fails fast rather than silently being ignored.
    */
   private async readPointer(
     sessionId: string,
     options?: SessionStoreOptions
   ): Promise<PointerDoc | undefined> {
+    const filePath = this.getPointerPath(sessionId, options);
     let contents: string;
     try {
-      contents = await fsp.readFile(
-        this.getPointerPath(sessionId, options),
-        'utf-8'
-      );
+      contents = await fsp.readFile(filePath, 'utf-8');
     } catch {
       // Missing / unreadable pointer: fall back to the scan.
       return undefined;
@@ -433,16 +433,19 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
   /**
    * Atomically writes the per-session {@link PointerDoc}. Best-effort: a
    * pointer write failure is swallowed since the pointer is only an
-   * optimization - `sessionId` lookups still self-heal via the full scan.
+   * optimization - `sessionId` lookups still self-heal via the full scan. An
+   * invalid `sessionId` still throws (path validation is resolved outside the
+   * try) so it fails fast rather than silently being ignored.
    */
   private async writePointer(
     sessionId: string,
     currentSnapshotId: string,
     options?: SessionStoreOptions
   ): Promise<void> {
+    const filePath = this.getPointerPath(sessionId, options);
+    const dir = this.pointersDir(options);
     try {
-      const filePath = this.getPointerPath(sessionId, options);
-      await this.ensureDir(this.pointersDir(options));
+      await this.ensureDir(dir);
       const pointer: PointerDoc = {
         currentSnapshotId,
         updatedAt: new Date().toISOString(),
@@ -532,6 +535,18 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
    * snapshot file in the prefix directory, keep those whose `sessionId`
    * matches, select the single leaf, and refresh the pointer so later lookups
    * take the fast path.
+   *
+   * Known limitation: the fast path trusts the pointer when the snapshot it
+   * names still exists and belongs to the session - it does not re-verify that
+   * it is the actual leaf. So if a save succeeds but the subsequent (best-effort)
+   * `writePointer` does not (crash/disk error), or two new saves for the same
+   * session race and the older one writes the pointer last, the pointer can
+   * linger on a valid-but-older same-session snapshot and lookups return it
+   * until the next save advances the pointer. This is the accepted trade-off for
+   * a best-effort cache: verifying leaf-ness on every read would reintroduce the
+   * full scan the pointer exists to avoid. Callers needing strict guarantees can
+   * resume by `snapshotId`, or set `rejectBranchingSessions` (which always
+   * scans).
    */
   private async getLatestSnapshotForSession(
     sessionId: string,
