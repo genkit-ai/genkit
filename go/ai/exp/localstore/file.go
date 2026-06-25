@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/core"
 	"github.com/google/uuid"
 )
 
@@ -186,6 +187,12 @@ func (s *FileSessionStore[State]) SaveSnapshot(
 	// UpdatedAt, and HeartbeatAt are caller-managed and persisted verbatim.
 	if existing != nil && existing.SessionID != "" {
 		next.SessionID = existing.SessionID
+	}
+	if next.SessionID == "" {
+		// A snapshot must belong to a session; stores never mint or infer one. The
+		// runtime stamps a session ID on every row it writes, so an empty one
+		// indicates misuse.
+		return nil, core.NewError(core.INVALID_ARGUMENT, "FileSessionStore requires sessionId to be set on the snapshot")
 	}
 	if next.Status == "" {
 		next.Status = exp.SnapshotStatusCompleted

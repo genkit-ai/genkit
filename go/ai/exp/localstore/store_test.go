@@ -105,15 +105,26 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 		}
 	})
 
-	t.Run("NoSessionWithoutID", func(t *testing.T) {
-		// Stores never mint or infer session IDs (the agent runtime assigns
-		// them at invocation start and stamps every row it writes); a row
-		// written without one is session-less even when its parent has one.
+	t.Run("RejectsRowWithoutSessionID", func(t *testing.T) {
+		// A snapshot must belong to a session; stores never mint or infer one (the
+		// agent runtime assigns the session ID at invocation start and stamps every
+		// row it writes). A row written without one, even when its parent has one,
+		// is rejected.
 		store := newStore(t)
 		saveRow(t, store, "parent", "sess-1", "", exp.SnapshotStatusCompleted)
-		child := saveRow(t, store, "child", "", "parent", exp.SnapshotStatusCompleted)
-		if child.SessionID != "" {
-			t.Errorf("expected session-less row, got SessionID %q", child.SessionID)
+		now := time.Now()
+		_, err := store.SaveSnapshot(ctx, "child",
+			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+				return &exp.SessionSnapshot[testState]{
+					ParentID:  "parent",
+					Status:    exp.SnapshotStatusCompleted,
+					State:     &exp.SessionState[testState]{Custom: testState{Counter: 1}},
+					CreatedAt: now,
+					UpdatedAt: now,
+				}, nil
+			})
+		if err == nil {
+			t.Error("expected error for a row without a session ID")
 		}
 	})
 

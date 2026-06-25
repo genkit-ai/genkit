@@ -73,6 +73,7 @@ func TestFileSessionStore(t *testing.T) {
 					t.Errorf("expected nil existing on first save, got %+v", existing)
 				}
 				return &exp.SessionSnapshot[testState]{
+					SessionID: "sess-1",
 					Status:    exp.SnapshotStatusCompleted,
 					State:     &exp.SessionState[testState]{Custom: testState{Counter: 1}},
 					CreatedAt: now,
@@ -96,7 +97,7 @@ func TestFileSessionStore(t *testing.T) {
 		store := newFileStore(t)
 		saved, err := store.SaveSnapshot(context.Background(), "",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusCompleted}, nil
+				return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusCompleted}, nil
 			})
 		if err != nil {
 			t.Fatalf("SaveSnapshot: %v", err)
@@ -111,8 +112,9 @@ func TestFileSessionStore(t *testing.T) {
 		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
 				return &exp.SessionSnapshot[testState]{
-					Status: exp.SnapshotStatusCompleted,
-					State:  &exp.SessionState[testState]{Custom: testState{Counter: 1}},
+					SessionID: "sess-1",
+					Status:    exp.SnapshotStatusCompleted,
+					State:     &exp.SessionState[testState]{Custom: testState{Counter: 1}},
 				}, nil
 			}); err != nil {
 			t.Fatalf("SaveSnapshot: %v", err)
@@ -129,7 +131,7 @@ func TestFileSessionStore(t *testing.T) {
 		store := newFileStore(t)
 		saved, err := store.SaveSnapshot(context.Background(), "",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{}, nil
+				return &exp.SessionSnapshot[testState]{SessionID: "sess-1"}, nil
 			})
 		if err != nil {
 			t.Fatalf("SaveSnapshot: %v", err)
@@ -143,7 +145,7 @@ func TestFileSessionStore(t *testing.T) {
 		store := newFileStore(t)
 		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusCompleted}, nil
+				return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusCompleted}, nil
 			}); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
@@ -172,7 +174,7 @@ func TestFileSessionStore(t *testing.T) {
 		created := time.Now()
 		saved, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusCompleted, CreatedAt: created, UpdatedAt: created}, nil
+				return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusCompleted, CreatedAt: created, UpdatedAt: created}, nil
 			})
 		if err != nil {
 			t.Fatalf("seed: %v", err)
@@ -206,7 +208,7 @@ func TestFileSessionStore(t *testing.T) {
 		store := newFileStore(t)
 		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusPending}, nil
+				return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusPending}, nil
 			}); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
@@ -223,7 +225,7 @@ func TestFileSessionStore(t *testing.T) {
 		store := newFileStore(t)
 		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusCompleted}, nil
+				return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusCompleted}, nil
 			}); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
@@ -243,7 +245,7 @@ func TestFileSessionStore(t *testing.T) {
 		store := newFileStore(t)
 		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusPending}, nil
+				return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusPending}, nil
 			}); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
@@ -288,7 +290,7 @@ func TestFileSessionStore(t *testing.T) {
 		store := newFileStore(t)
 		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusPending}, nil
+				return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusPending}, nil
 			}); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
@@ -322,8 +324,9 @@ func TestFileSessionStore(t *testing.T) {
 		if _, err := store1.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
 				return &exp.SessionSnapshot[testState]{
-					Status: exp.SnapshotStatusCompleted,
-					State:  &exp.SessionState[testState]{Custom: testState{Counter: 42}},
+					SessionID: "sess-1",
+					Status:    exp.SnapshotStatusCompleted,
+					State:     &exp.SessionState[testState]{Custom: testState{Counter: 42}},
 				}, nil
 			}); err != nil {
 			t.Fatalf("SaveSnapshot: %v", err)
@@ -377,7 +380,7 @@ func TestFileSessionStore(t *testing.T) {
 		}
 		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusCompleted}, nil
+				return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusCompleted}, nil
 			}); err != nil {
 			t.Fatalf("SaveSnapshot: %v", err)
 		}
@@ -427,7 +430,7 @@ func TestFileSessionStore_CrossProcessStatusChange(t *testing.T) {
 
 	if _, err := writer.SaveSnapshot(context.Background(), "snap-1",
 		func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-			return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusPending}, nil
+			return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusPending}, nil
 		}); err != nil {
 		t.Fatalf("seed pending: %v", err)
 	}
@@ -465,7 +468,7 @@ func TestFileSessionStore_PollIntervalDisabled(t *testing.T) {
 
 	if _, err := writer.SaveSnapshot(context.Background(), "snap-1",
 		func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-			return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusPending}, nil
+			return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusPending}, nil
 		}); err != nil {
 		t.Fatalf("seed pending: %v", err)
 	}
@@ -498,6 +501,7 @@ func TestFileSessionStore_FinishReasonPersistsAcrossReopen(t *testing.T) {
 	saved, err := store.SaveSnapshot(context.Background(), "",
 		func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
 			return &exp.SessionSnapshot[testState]{
+				SessionID:    "sess-1",
 				Status:       exp.SnapshotStatusCompleted,
 				FinishReason: exp.AgentFinishReasonInterrupted,
 				State:        &exp.SessionState[testState]{Custom: testState{Counter: 1}},

@@ -45,6 +45,7 @@ func TestInMemorySessionStore(t *testing.T) {
 					t.Errorf("expected nil existing on first save, got %+v", existing)
 				}
 				return &exp.SessionSnapshot[testState]{
+					SessionID: "sess-1",
 					Status:    exp.SnapshotStatusCompleted,
 					State:     &exp.SessionState[testState]{Custom: testState{Counter: 1}},
 					CreatedAt: now,
@@ -69,8 +70,9 @@ func TestInMemorySessionStore(t *testing.T) {
 		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
 				return &exp.SessionSnapshot[testState]{
-					Status: exp.SnapshotStatusCompleted,
-					State:  &exp.SessionState[testState]{Custom: testState{Counter: 1}},
+					SessionID: "sess-1",
+					Status:    exp.SnapshotStatusCompleted,
+					State:     &exp.SessionState[testState]{Custom: testState{Counter: 1}},
 				}, nil
 			}); err != nil {
 			t.Fatalf("SaveSnapshot: %v", err)
@@ -87,7 +89,7 @@ func TestInMemorySessionStore(t *testing.T) {
 		store := NewInMemorySessionStore[testState]()
 		saved, err := store.SaveSnapshot(context.Background(), "",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{}, nil
+				return &exp.SessionSnapshot[testState]{SessionID: "sess-1"}, nil
 			})
 		if err != nil {
 			t.Fatalf("SaveSnapshot: %v", err)
@@ -104,7 +106,7 @@ func TestInMemorySessionStore(t *testing.T) {
 		store := NewInMemorySessionStore[testState]()
 		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusCompleted}, nil
+				return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusCompleted}, nil
 			}); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
@@ -133,7 +135,7 @@ func TestInMemorySessionStore(t *testing.T) {
 		created := time.Now()
 		saved, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusCompleted, CreatedAt: created, UpdatedAt: created}, nil
+				return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusCompleted, CreatedAt: created, UpdatedAt: created}, nil
 			})
 		if err != nil {
 			t.Fatalf("seed: %v", err)
