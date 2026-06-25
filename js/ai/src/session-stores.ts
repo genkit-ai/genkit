@@ -219,29 +219,57 @@ export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
 const DEFAULT_SNAPSHOT_WATCH_POLL_INTERVAL_MS = 2000;
 
 /**
- * Validates that a snapshotId is a plain file basename and not a path that
- * could escape the (per-tenant) prefix directory.
+ * Validates that an id is a plain file basename and not a path that could
+ * escape the (per-tenant) prefix directory.
  *
- * `snapshotId` can arrive straight off the wire (the abort/getSnapshot actions
- * accept a bare string), so without this an id like `../../foo` would let a
- * caller read or write outside the prefix and break per-tenant isolation.
+ * Ids (`snapshotId`, `sessionId`) can arrive straight off the wire (the
+ * abort/getSnapshot actions accept a bare string), so without this an id like
+ * `../../foo` would let a caller read or write outside the prefix and break
+ * per-tenant isolation.
  */
-function assertSafeSnapshotId(snapshotId: string): void {
+function assertSafeId(id: string, label: string): void {
   if (
-    !snapshotId ||
-    snapshotId.includes('/') ||
-    snapshotId.includes('\\') ||
-    snapshotId.includes('\0') ||
-    snapshotId === '.' ||
-    snapshotId === '..' ||
-    path.basename(snapshotId) !== snapshotId
+    !id ||
+    id.includes('/') ||
+    id.includes('\\') ||
+    id.includes('\0') ||
+    id === '.' ||
+    id === '..' ||
+    path.basename(id) !== id
   ) {
     throw new GenkitError({
       status: 'INVALID_ARGUMENT',
-      message: `Invalid snapshotId: "${snapshotId}". A snapshotId must be a plain file name (no path separators or "..").`,
+      message: `Invalid ${label}: "${id}". A ${label} must be a plain file name (no path separators or "..").`,
     });
   }
 }
+
+/**
+ * Validates that a snapshotId is a plain file basename and not a path that
+ * could escape the (per-tenant) prefix directory.
+ */
+function assertSafeSnapshotId(snapshotId: string): void {
+  assertSafeId(snapshotId, 'snapshotId');
+}
+
+/**
+ * The per-session pointer file. Records the current leaf snapshot id for a
+ * session so a `getSnapshot({ sessionId })` lookup is a single pointer read
+ * followed by one snapshot read, instead of scanning and parsing every snapshot
+ * file in the prefix directory.
+ */
+interface PointerDoc {
+  currentSnapshotId: string;
+  updatedAt: string;
+}
+
+/**
+ * Hidden sub-directory (within each prefix) holding the per-session
+ * {@link PointerDoc} files. It is a directory, so the snapshot scan in
+ * {@link FileSessionStore.getLatestSnapshotForSession} - which only considers
+ * `*.json` *files* - naturally skips it.
+ */
+const POINTERS_SUBDIR = '.pointers';
 
 /**
  * A Node.js file-system backed session snapshot store.
@@ -251,9 +279,13 @@ function assertSafeSnapshotId(snapshotId: string): void {
  *
  * File layout: `dirPath/<prefix>/<snapshotId>.json`
  *
- * `getSnapshot({ sessionId })` scans the prefix directory and selects the
- * single leaf snapshot whose `state.sessionId` matches - there is no separate
- * grouping directory, the `sessionId` lives in each snapshot's state.
+ * `getSnapshot({ sessionId })` resolves the session's current leaf via a tiny
+ * per-session pointer file (`<prefix>/.pointers/<sessionId>.json`, see
+ * {@link PointerDoc}) - one pointer read plus one snapshot read. When the
+ * pointer is missing (e.g. a legacy store) or stale it transparently falls back
+ * to scanning the prefix directory and selecting the single leaf whose
+ * `sessionId` matches, then rewrites the pointer so subsequent lookups are fast
+ * again.
  */
 export class FileSessionStore<S = unknown> implements SessionStore<S> {
   private dirPath: string;
@@ -349,6 +381,78 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
     return filePath;
   }
 
+  /** Resolves the (per-tenant) directory holding per-session pointer files. */
+  private pointersDir(options?: SessionStoreOptions): string {
+    return path.join(this.prefixDir(options), POINTERS_SUBDIR);
+  }
+
+  /**
+   * Resolves the pointer file path for a session, validating `sessionId` is a
+   * plain basename so it can never escape the pointers directory. Pure: it does
+   * not create the directory, so the read path stays side-effect free. The
+   * write path calls {@link ensureDir} before writing.
+   */
+  private getPointerPath(
+    sessionId: string,
+    options?: SessionStoreOptions
+  ): string {
+    assertSafeId(sessionId, 'sessionId');
+    return path.join(this.pointersDir(options), `${sessionId}.json`);
+  }
+
+  /**
+   * Reads the per-session {@link PointerDoc}, or `undefined` when it is missing
+   * (legacy store / not yet written) or unreadable / corrupt - callers fall
+   * back to a full directory scan in that case. Best-effort: any error reading
+   * the pointer resolves to `undefined` so the optimization can never make a
+   * lookup (or save) fail where the scan-only baseline would have succeeded.
+   */
+  private async readPointer(
+    sessionId: string,
+    options?: SessionStoreOptions
+  ): Promise<PointerDoc | undefined> {
+    let contents: string;
+    try {
+      contents = await fsp.readFile(
+        this.getPointerPath(sessionId, options),
+        'utf-8'
+      );
+    } catch {
+      // Missing / unreadable pointer: fall back to the scan.
+      return undefined;
+    }
+    try {
+      const parsed = JSON.parse(contents) as PointerDoc;
+      return parsed?.currentSnapshotId ? parsed : undefined;
+    } catch {
+      // Partially written / corrupt pointer: treat as absent and rescan.
+      return undefined;
+    }
+  }
+
+  /**
+   * Atomically writes the per-session {@link PointerDoc}. Best-effort: a
+   * pointer write failure is swallowed since the pointer is only an
+   * optimization - `sessionId` lookups still self-heal via the full scan.
+   */
+  private async writePointer(
+    sessionId: string,
+    currentSnapshotId: string,
+    options?: SessionStoreOptions
+  ): Promise<void> {
+    try {
+      const filePath = this.getPointerPath(sessionId, options);
+      await this.ensureDir(this.pointersDir(options));
+      const pointer: PointerDoc = {
+        currentSnapshotId,
+        updatedAt: new Date().toISOString(),
+      };
+      await this.atomicWrite(filePath, JSON.stringify(pointer, null, 2));
+    } catch {
+      // Ignore: the scan fallback keeps `sessionId` lookups correct.
+    }
+  }
+
   /**
    * Serializes async work per resolved file path so a read-modify-write in
    * {@link saveSnapshot} is not interleaved with a concurrent one for the same
@@ -416,14 +520,40 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
   }
 
   /**
-   * Resolves the latest (leaf) snapshot for a session by scanning every
-   * snapshot file in the (per-tenant) prefix directory, keeping those whose
-   * `state.sessionId` matches, and selecting the single leaf.
+   * Resolves the latest (leaf) snapshot for a session.
+   *
+   * Fast path: read the per-session pointer file and load the leaf it names -
+   * one pointer read plus one snapshot read, independent of session count /
+   * length. The pointer is skipped (and the scan used) when
+   * `rejectBranchingSessions` is set, since detecting branches requires seeing
+   * every leaf.
+   *
+   * Fallback (no/stale/corrupt pointer, or branch detection): scan every
+   * snapshot file in the prefix directory, keep those whose `sessionId`
+   * matches, select the single leaf, and refresh the pointer so later lookups
+   * take the fast path.
    */
   private async getLatestSnapshotForSession(
     sessionId: string,
     options?: SessionStoreOptions
   ): Promise<SessionSnapshot<S> | undefined> {
+    // Fast path via the pointer file (skipped when we must detect branching).
+    if (!this.rejectBranchingSessions) {
+      const pointer = await this.readPointer(sessionId, options);
+      if (pointer) {
+        const snap = await this.getSnapshotById(
+          pointer.currentSnapshotId,
+          options
+        );
+        // Honor the pointer only when the leaf still exists and belongs to this
+        // session; otherwise it is stale - fall through to the scan, which also
+        // rewrites the pointer.
+        if (snap && (snap.sessionId ?? snap.state?.sessionId) === sessionId) {
+          return snap;
+        }
+      }
+    }
+
     const dir = this.prefixDir(options);
 
     let files: string[];
@@ -449,11 +579,17 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
       }
     }
 
-    return selectLeafSnapshot(
+    const leaf = selectLeafSnapshot(
       snapshots,
       sessionId,
       this.rejectBranchingSessions
     );
+    if (!leaf) return undefined;
+
+    // Refresh the pointer so subsequent lookups take the fast path.
+    // Best-effort.
+    await this.writePointer(sessionId, leaf.snapshotId, options);
+    return leaf;
   }
 
   async saveSnapshot(
@@ -498,6 +634,24 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
     };
     const filePath = await this.getFilePath(id, options);
     await this.atomicWrite(filePath, JSON.stringify(full, null, 2));
+
+    // Maintain the per-session pointer so `sessionId` lookups stay fast (one
+    // pointer read plus one snapshot read). Advance the pointer for a new leaf,
+    // refresh it when rewriting the current leaf, and leave it untouched when
+    // upserting an older (non-leaf) snapshot. Snapshots without a `sessionId`
+    // are not addressable by session, so skip the pointer.
+    const sessionId = full.sessionId ?? full.state?.sessionId;
+    if (sessionId) {
+      const isNew = !current;
+      const pointer = await this.readPointer(sessionId, options);
+      if (isNew || !pointer || pointer.currentSnapshotId === id) {
+        await this.writePointer(
+          sessionId,
+          isNew || !pointer ? id : pointer.currentSnapshotId,
+          options
+        );
+      }
+    }
 
     if (this.maxPersistedChainLength && this.maxPersistedChainLength > 0) {
       let cur: SessionSnapshot<S> | undefined = full;

@@ -265,6 +265,141 @@ describe('FileSessionStore', () => {
     assert.strictEqual(await store.getSnapshot({ snapshotId: a }), undefined);
   });
 
+  describe('session pointer', () => {
+    it('writes a pointer file tracking the current leaf', async () => {
+      const dir = tmpDir();
+      const store = new FileSessionStore(dir);
+      const sessionId = globalThis.crypto.randomUUID();
+
+      const first = reserveSnapshotId();
+      const second = reserveSnapshotId();
+      await store.saveSnapshot(first, () => makeSnapshot(first, sessionId));
+      await store.saveSnapshot(second, () =>
+        makeSnapshot(second, sessionId, first)
+      );
+
+      const pointerPath = path.join(
+        dir,
+        'global',
+        '.pointers',
+        `${sessionId}.json`
+      );
+      assert.ok(
+        fs.existsSync(pointerPath),
+        `expected pointer file at ${pointerPath}`
+      );
+      const pointer = JSON.parse(fs.readFileSync(pointerPath, 'utf-8'));
+      assert.strictEqual(pointer.currentSnapshotId, second);
+    });
+
+    it('resolves by sessionId via the pointer fast path', async () => {
+      const dir = tmpDir();
+      const store = new FileSessionStore(dir);
+      const sessionId = globalThis.crypto.randomUUID();
+
+      const first = reserveSnapshotId();
+      const second = reserveSnapshotId();
+      await store.saveSnapshot(first, () => makeSnapshot(first, sessionId));
+      await store.saveSnapshot(second, () =>
+        makeSnapshot(second, sessionId, first)
+      );
+
+      // Corrupt a non-leaf snapshot. The pointer fast path reads only the leaf,
+      // so the lookup must still succeed without scanning every file.
+      fs.writeFileSync(
+        path.join(dir, 'global', `${first}.json`),
+        'not json',
+        'utf-8'
+      );
+
+      const leaf = await store.getSnapshot({ sessionId });
+      assert.strictEqual(leaf?.snapshotId, second);
+    });
+
+    it('self-heals a missing pointer via the scan and rewrites it', async () => {
+      const dir = tmpDir();
+      const store = new FileSessionStore(dir);
+      const sessionId = globalThis.crypto.randomUUID();
+
+      const first = reserveSnapshotId();
+      const second = reserveSnapshotId();
+      await store.saveSnapshot(first, () => makeSnapshot(first, sessionId));
+      await store.saveSnapshot(second, () =>
+        makeSnapshot(second, sessionId, first)
+      );
+
+      const pointerPath = path.join(
+        dir,
+        'global',
+        '.pointers',
+        `${sessionId}.json`
+      );
+      fs.rmSync(pointerPath);
+
+      // Lookup still resolves the leaf by scanning...
+      const leaf = await store.getSnapshot({ sessionId });
+      assert.strictEqual(leaf?.snapshotId, second);
+      // ...and the pointer is rewritten for subsequent fast-path lookups.
+      assert.ok(fs.existsSync(pointerPath));
+      const pointer = JSON.parse(fs.readFileSync(pointerPath, 'utf-8'));
+      assert.strictEqual(pointer.currentSnapshotId, second);
+    });
+
+    it('falls back to the scan when the pointer is stale', async () => {
+      const dir = tmpDir();
+      const store = new FileSessionStore(dir);
+      const sessionId = globalThis.crypto.randomUUID();
+
+      const first = reserveSnapshotId();
+      const second = reserveSnapshotId();
+      await store.saveSnapshot(first, () => makeSnapshot(first, sessionId));
+      await store.saveSnapshot(second, () =>
+        makeSnapshot(second, sessionId, first)
+      );
+
+      // Point at a snapshot that no longer exists.
+      const pointerPath = path.join(
+        dir,
+        'global',
+        '.pointers',
+        `${sessionId}.json`
+      );
+      fs.writeFileSync(
+        pointerPath,
+        JSON.stringify({
+          currentSnapshotId: 'does-not-exist',
+          updatedAt: new Date().toISOString(),
+        }),
+        'utf-8'
+      );
+
+      const leaf = await store.getSnapshot({ sessionId });
+      assert.strictEqual(leaf?.snapshotId, second);
+      // The stale pointer is refreshed to the real leaf.
+      const pointer = JSON.parse(fs.readFileSync(pointerPath, 'utf-8'));
+      assert.strictEqual(pointer.currentSnapshotId, second);
+    });
+
+    it('does not write a pointer into the snapshot scan space', async () => {
+      const dir = tmpDir();
+      const store = new FileSessionStore(dir);
+      const sessionId = globalThis.crypto.randomUUID();
+
+      const snapshotId = reserveSnapshotId();
+      await store.saveSnapshot(snapshotId, () =>
+        makeSnapshot(snapshotId, sessionId)
+      );
+
+      // The pointer lives in a hidden sub-directory, not alongside snapshots,
+      // so the leaf scan (which only reads *.json files) never sees it.
+      const files = fs.readdirSync(path.join(dir, 'global'));
+      assert.deepStrictEqual(
+        files.filter((f) => f.endsWith('.json')),
+        [`${snapshotId}.json`]
+      );
+    });
+  });
+
   describe('onSnapshotStateChange', () => {
     /**
      * Resolves once `callback` observes a snapshot matching `predicate`, or
