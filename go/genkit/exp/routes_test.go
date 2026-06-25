@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -65,10 +65,10 @@ func newRouteTestGenkit(t *testing.T) *genkit.Genkit {
 	if err != nil {
 		t.Fatal(err)
 	}
-	genkit.DefineAgent(g, "serverChat", aix.InlinePrompt{ai.WithModelName("test/echo")},
+	DefineAgent(g, "serverChat", aix.InlinePrompt{ai.WithModelName("test/echo")},
 		aix.WithSessionStore(store),
 	)
-	genkit.DefineAgent[any](g, "clientChat", aix.InlinePrompt{ai.WithModelName("test/echo")})
+	DefineAgent[any](g, "clientChat", aix.InlinePrompt{ai.WithModelName("test/echo")})
 	genkit.DefineFlow(g, "greet", func(ctx context.Context, name string) (string, error) {
 		return "hi " + name, nil
 	})
@@ -83,7 +83,7 @@ func TestAllAgentRoutes(t *testing.T) {
 	want := []string{
 		"POST /agents/clientChat",
 		"POST /agents/serverChat",
-		"POST /agents/serverChat/abortSnapshot",
+		"POST /agents/serverChat/abort",
 		"POST /agents/serverChat/getSnapshot",
 	}
 	if !slices.Equal(got, want) {
@@ -112,12 +112,12 @@ func TestAgentRoutes_PicksOneAgentAndMirrorsCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := genkit.DefineAgent(g, "srv", aix.InlinePrompt{ai.WithModelName("test/echo")}, aix.WithSessionStore(store))
-	client := genkit.DefineAgent[any](g, "cli", aix.InlinePrompt{ai.WithModelName("test/echo")})
+	server := DefineAgent(g, "srv", aix.InlinePrompt{ai.WithModelName("test/echo")}, aix.WithSessionStore(store))
+	client := DefineAgent[any](g, "cli", aix.InlinePrompt{ai.WithModelName("test/echo")})
 
 	if got, want := routeKeys(AgentRoutes(server)), []string{
 		"POST /agents/srv",
-		"POST /agents/srv/abortSnapshot",
+		"POST /agents/srv/abort",
 		"POST /agents/srv/getSnapshot",
 	}; !slices.Equal(got, want) {
 		t.Errorf("AgentRoutes(server) = %v, want %v", got, want)

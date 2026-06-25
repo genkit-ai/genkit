@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -38,6 +38,7 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/tracing"
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -84,6 +85,13 @@ type SessionRunner[State any] struct {
 	// turnIndex is the zero-based index of the current conversation turn,
 	// incremented by Run after each turn completes.
 	turnIndex int
+	// turnSnapshotID is the ID reserved at the start of the current turn that
+	// its turn-end snapshot is saved under (server-managed only; "" for a
+	// client-managed agent). Reserved up front so the per-turn fn can read it
+	// from its [TurnContext]. Written by Run at turn start and read by
+	// snapshotTurnEnd at turn end, both in the fn goroutine, so it needs no
+	// lock (same confinement as turnIndex).
+	turnSnapshotID string
 
 	onStartTurn func()
 	onEndTurn   func(ctx context.Context)
@@ -159,6 +167,44 @@ type TurnResult struct {
 	FinishReason AgentFinishReason
 }
 
+// turnCtxKey carries the current turn's [TurnContext] on the per-turn
+// function's context, so a handler reads it via [TurnContextFromContext]
+// instead of the framework threading it through the [SessionRunner.Run]
+// callback signature.
+var turnCtxKey = base.NewContextKey[*TurnContext]()
+
+// TurnContext carries per-turn metadata the runtime exposes to the per-turn
+// function through its context. Retrieve it with [TurnContextFromContext].
+//
+// Its SnapshotID is reserved before the turn runs (for a server-managed agent),
+// so a handler can name external, snapshot-correlated resources (e.g. a git
+// worktree named after the snapshot) up front and have them line up with the
+// snapshot the turn persists at its end.
+type TurnContext struct {
+	// SnapshotID is the ID the turn-end snapshot will be saved under, minted
+	// before the turn runs so the handler knows it in advance. A server-managed
+	// turn persists its snapshot under this ID on success. It is empty for a
+	// client-managed agent (no store, so no snapshot) and is the reserved-but-
+	// unused ID for a turn that writes none (a failed turn, or one whose
+	// snapshots a detach suspended).
+	SnapshotID string
+	// ParentSnapshotID is the ID of the snapshot this turn continues from: the
+	// previous turn's snapshot, or the snapshot the invocation resumed from. It
+	// is empty on the first turn of a fresh conversation and for a
+	// client-managed agent.
+	ParentSnapshotID string
+	// TurnIndex is the zero-based index of this turn within the invocation.
+	TurnIndex int
+}
+
+// TurnContextFromContext returns the [TurnContext] for the turn currently
+// executing, or nil if ctx is not a per-turn context (e.g. it was called
+// outside the [SessionRunner.Run] callback). The returned pointer is read-only;
+// the runtime owns it.
+func TurnContextFromContext(ctx context.Context) *TurnContext {
+	return turnCtxKey.FromContext(ctx)
+}
+
 // turnSpanOutput is the value recorded as a turn span's genkit:output. It
 // wraps the committed session state captured at turn end under a "state" key,
 // so the span output serializes as {"state": <session state>}. The state is
@@ -199,6 +245,16 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 		if s.onStartTurn != nil {
 			s.onStartTurn()
 		}
+		// Reserve this turn's snapshot ID before the turn runs so the per-turn
+		// fn can read it (with the parent ID and turn index) from its context
+		// via [TurnContextFromContext]; the turn-end write persists under it.
+		// Empty for a client-managed agent, which writes no snapshot.
+		s.turnSnapshotID = s.reserveTurnSnapshotID()
+		turnCtx := &TurnContext{
+			SnapshotID:       s.turnSnapshotID,
+			ParentSnapshotID: s.lastSnapshotID,
+			TurnIndex:        s.turnIndex,
+		}
 		spanMeta := &tracing.SpanMetadata{
 			// Match the JS agent's turn span so cross-language traces line up:
 			// name "runTurn-N" (1-indexed) and type flowStep with no subtype
@@ -208,6 +264,9 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 		}
 		_, err := tracing.RunInNewSpan(ctx, spanMeta, input,
 			func(ctx context.Context, input *AgentInput) (any, error) {
+				// Carry the reserved turn context on the per-turn fn's context
+				// rather than threading it through Run's callback signature.
+				ctx = turnCtxKey.NewContext(ctx, turnCtx)
 				if input.Message != nil {
 					// The session owns its history: store a copy so fn's
 					// view of the input stays independent of session state.
@@ -234,6 +293,18 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 		}
 	}
 	return nil
+}
+
+// reserveTurnSnapshotID mints the ID the upcoming turn will persist its
+// snapshot under, or "" for a client-managed agent (no store), which writes
+// none. The runtime mints it here, rather than letting the store mint at write
+// time, so it is known before the turn runs and can ride on the turn's
+// [TurnContext]; snapshotTurnEnd then saves under it.
+func (s *SessionRunner[State]) reserveTurnSnapshotID() string {
+	if s.store == nil {
+		return ""
+	}
+	return uuid.New().String()
 }
 
 // endTurn records how the turn ended and runs the shared turn-end tail:
@@ -300,9 +371,12 @@ func (s *SessionRunner[State]) invocationReason(result *AgentResult) AgentFinish
 
 // snapshotTurnEnd persists a turn-end snapshot capturing the committed
 // session state, chained off the previous snapshot via ParentID, and
-// returns its ID. It is a no-op returning "" when no store is configured
-// or snapshots have been suspended by a detach. finishReason records how
-// the captured turn ended so a resumed task can report it.
+// returns its ID. The row is saved under the turn's pre-reserved ID
+// (turnSnapshotID; see [SessionRunner.Run]), so the ID the per-turn fn read
+// from its [TurnContext] is the ID the snapshot persists under. It is a no-op
+// returning "" when no store is configured or snapshots have been suspended by
+// a detach. finishReason records how the captured turn ended so a resumed task
+// can report it.
 //
 // The turn-end snapshot is the agent's only routine persistence point: a
 // failed turn never writes one (its partial state is not a resume point),
@@ -334,7 +408,7 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 	// Timestamps are caller-managed (the store persists them verbatim); a fresh
 	// turn-end snapshot is created now, so CreatedAt and UpdatedAt are equal.
 	now := time.Now()
-	saved, err := s.store.SaveSnapshot(ctx, "",
+	saved, err := s.store.SaveSnapshot(ctx, s.turnSnapshotID,
 		func(_ *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 			return &SessionSnapshot[State]{
 				SessionID:    sessionID,
@@ -428,15 +502,15 @@ type AgentFunc[State any] = func(ctx context.Context, resp Responder, sess *Sess
 //
 // Server-managed agents (those with a [SessionStore] configured) also
 // register companion actions for the snapshot lifecycle, available via
-// [Agent.GetSnapshotAction] and [Agent.AbortSnapshotAction] for serving
+// [Agent.GetSnapshotAction] and [Agent.AbortAction] for serving
 // alongside the agent, and expose the store itself via [Agent.Store].
 type Agent[State any] struct {
 	action *core.BidiAction[*AgentInput, *AgentOutput[State], *AgentStreamChunk, *AgentInit[State]]
 	// Companion actions, retained so transports can serve them without a
 	// registry lookup. Nil when the corresponding capability is absent;
 	// see newSnapshotActions.
-	getSnapshot   api.Action
-	abortSnapshot api.Action
+	getSnapshot api.Action
+	abort       api.Action
 	// store is the configured session store, or nil for a client-managed
 	// agent. Retained so callers can reach it via Store without threading
 	// a separate reference.
@@ -450,7 +524,7 @@ type Agent[State any] struct {
 
 // Name returns the agent's registered name. This is also the name under
 // which any inline-defined prompt and companion actions (getSnapshot,
-// abortSnapshot) are registered.
+// abort) are registered.
 func (a *Agent[State]) Name() string {
 	return a.action.Name()
 }
@@ -468,24 +542,24 @@ func (a *Agent[State]) GetSnapshotAction() api.Action {
 	return a.getSnapshot
 }
 
-// AbortSnapshotAction returns the agent's abortSnapshot companion action,
+// AbortAction returns the agent's abort companion action,
 // which asks the background work behind a pending snapshot (e.g. a
-// detached invocation) to stop (input [AbortSnapshotRequest], output
-// [AbortSnapshotResponse]). It returns nil when the agent has no
+// detached invocation) to stop (input [AgentAbortRequest], output
+// [AgentAbortResponse]). It returns nil when the agent has no
 // [SessionStore] or the store does not implement [SnapshotSubscriber].
 //
 // Use it to expose aborting over a transport (e.g. mount it with
 // genkit.Handler next to the agent itself); local Go code aborts with
-// [Agent.AbortSnapshot]; a store-only caller uses this companion action.
-func (a *Agent[State]) AbortSnapshotAction() api.Action {
-	return a.abortSnapshot
+// [Agent.Abort]; a store-only caller uses this companion action.
+func (a *Agent[State]) AbortAction() api.Action {
+	return a.abort
 }
 
 // Store returns the [SessionStore] the agent was configured with via
 // [WithSessionStore], or nil when the agent is client-managed (no store).
 //
 // For reads and aborts prefer the typed facade [Agent.GetSnapshot],
-// [Agent.GetLatestSnapshot], and [Agent.AbortSnapshot]: they apply the
+// [Agent.GetLatestSnapshot], and [Agent.Abort]: they apply the
 // configured [WithStateTransform] and read-time shaping. Store exposes the raw
 // backend for advanced use; a direct [SnapshotReader.GetSnapshot] returns
 // untransformed state.
@@ -533,21 +607,21 @@ func (a *Agent[State]) GetLatestSnapshot(ctx context.Context, sessionID string) 
 	return readSnapshot(ctx, a.store, a.transform, "", sessionID)
 }
 
-// AbortSnapshot aborts the detached invocation behind a pending snapshot by
+// Abort aborts the detached invocation behind a pending snapshot by
 // flipping it to [SnapshotStatusAborted]; the runtime observes the flip and
 // cancels the background work. A caller that has only a store (no agent) aborts
-// through the abortSnapshot companion action instead. It is a no-op on a missing
-// snapshot (returns
-// "") or an already-terminal one (returns the existing status).
+// through the abort companion action instead. It is a no-op on a missing
+// snapshot (returns "") or an already-terminal one (returns the existing
+// status).
 //
 // It returns FAILED_PRECONDITION on a client-managed agent and INVALID_ARGUMENT
 // when snapshotID is empty.
-func (a *Agent[State]) AbortSnapshot(ctx context.Context, snapshotID string) (SnapshotStatus, error) {
+func (a *Agent[State]) Abort(ctx context.Context, snapshotID string) (SnapshotStatus, error) {
 	if a.store == nil {
-		return "", core.NewError(core.FAILED_PRECONDITION, "agent %q: AbortSnapshot requires a session store", a.Name())
+		return "", core.NewError(core.FAILED_PRECONDITION, "agent %q: Abort requires a session store", a.Name())
 	}
 	if snapshotID == "" {
-		return "", core.NewError(core.INVALID_ARGUMENT, "agent %q: AbortSnapshot: snapshotID is required", a.Name())
+		return "", core.NewError(core.INVALID_ARGUMENT, "agent %q: Abort: snapshotID is required", a.Name())
 	}
 	return abortPendingSnapshot(ctx, a.store, snapshotID)
 }
@@ -563,7 +637,7 @@ func (a *Agent[State]) AbortSnapshot(ctx context.Context, snapshotID string) (Sn
 var _ api.BidiAction = (*Agent[any])(nil)
 
 // Register registers the agent's run action and any companion actions
-// (getSnapshot, abortSnapshot) with the registry. Agents defined via
+// (getSnapshot, abort) with the registry. Agents defined via
 // [DefineAgent] or [DefineCustomAgent] are already registered; this
 // exists so an agent can travel to another registry as a unit. An
 // inline-defined prompt does not travel: the agent holds it directly, so
@@ -582,8 +656,8 @@ func (a *Agent[State]) Register(r api.Registry) {
 	if a.getSnapshot != nil {
 		a.getSnapshot.Register(r)
 	}
-	if a.abortSnapshot != nil {
-		a.abortSnapshot.Register(r)
+	if a.abort != nil {
+		a.abort.Register(r)
 	}
 }
 
@@ -744,7 +818,7 @@ func newCustomAgent[State any](
 	cfg *agentOptions[State],
 ) *Agent[State] {
 	// Typed under ActionTypeAgent so agents surface as their own action
-	// kind rather than as flows (genkit.ListAgents vs ListFlows). Built on
+	// kind rather than as flows (genkit/exp.ListAgents vs genkit.ListFlows). Built on
 	// NewBidiAction so the agent capability metadata is set at construction
 	// time; actions must be immutable once registered. WithFlowContext
 	// below preserves the flow-context wrapping that makes core.Run work
@@ -786,14 +860,14 @@ func newCustomAgent[State any](
 			return rt.run(ctx, fn)
 		})
 
-	getSnapshot, abortSnapshot := newSnapshotActions(name, cfg.store, cfg.transform)
+	getSnapshot, abort := newSnapshotActions(name, cfg.store, cfg.transform)
 
 	return &Agent[State]{
-		action:        action,
-		getSnapshot:   getSnapshot,
-		abortSnapshot: abortSnapshot,
-		store:         cfg.store,
-		transform:     cfg.transform,
+		action:      action,
+		getSnapshot: getSnapshot,
+		abort:       abort,
+		store:       cfg.store,
+		transform:   cfg.transform,
 	}
 }
 
@@ -1502,7 +1576,7 @@ func beatHeartbeat[State any](ctx context.Context, store SnapshotWriter[State], 
 // atomic read-mutate-write makes the flip safe against a racing terminal write,
 // and the status change drives the runtime's
 // [SnapshotSubscriber.OnSnapshotStatusChange] subscription, so the store needs
-// no dedicated abort method. It backs [Agent.AbortSnapshot] and the abortSnapshot
+// no dedicated abort method. It backs [Agent.Abort] and the abort
 // companion action.
 func abortPendingSnapshot[State any](ctx context.Context, store SnapshotWriter[State], snapshotID string) (SnapshotStatus, error) {
 	now := time.Now()
@@ -1530,7 +1604,7 @@ func abortPendingSnapshot[State any](ctx context.Context, store SnapshotWriter[S
 
 // finalizePendingSnapshot rewrites the pending snapshot row with the
 // terminal state and status. abortedByUser distinguishes a context
-// cancellation from abortSnapshot (status=aborted) from an internal
+// cancellation from abort (status=aborted) from an internal
 // failure (status=failed). The write is funneled through SaveSnapshot
 // so the read-and-rewrite is one atomic step: if the row has already
 // transitioned to aborted (a late abort racing this finalize),
@@ -2633,7 +2707,7 @@ func (c *AgentConnection[State]) SendResume(resume *ToolResume) error {
 // Detach asks the server to write a pending snapshot, close the
 // connection, and continue processing any already-buffered inputs in
 // the background. Output() returns the pending snapshot ID; the client
-// can later call AbortSnapshot to stop the background work or
+// can later call Abort to stop the background work or
 // GetSnapshot to observe its progression. The pending snapshot is
 // finalized with the cumulative final state once the queued inputs
 // are processed.

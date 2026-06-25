@@ -18,8 +18,17 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/genkit"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
 	middlewarex "github.com/firebase/genkit/go/plugins/middleware/exp"
+	"google.golang.org/genai"
 )
+
+// flashModel is the model shared by the orchestrator and its sub-agents:
+// gemini-flash-latest with thinking disabled for snappy, low-cost turns.
+var flashModel = googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
+	ThinkingConfig: &genai.ThinkingConfig{ThinkingBudget: genai.Ptr[int32](0)},
+})
 
 // defineOrchestratorAgent demonstrates the experimental Agents middleware: an
 // orchestrator that delegates to specialized sub-agents through per-agent tools.
@@ -37,7 +46,7 @@ import (
 // session, and Artifacts{Readonly: true} gives the orchestrator a read_artifact
 // tool to review them before answering.
 func defineOrchestratorAgent(g *genkit.Genkit) *aix.Agent[any] {
-	researcher := genkit.DefineAgent(g, "researcher",
+	researcher := genkitx.DefineAgent(g, "researcher",
 		aix.InlinePrompt{
 			ai.WithModel(flashModel),
 			ai.WithSystem("You are a thorough research assistant. Answer the question " +
@@ -48,7 +57,7 @@ func defineOrchestratorAgent(g *genkit.Genkit) *aix.Agent[any] {
 		aix.WithDescription[any]("Researches a topic and summarizes well-sourced findings."),
 	)
 
-	engineer := genkit.DefineAgent(g, "engineer",
+	engineer := genkitx.DefineAgent(g, "engineer",
 		aix.InlinePrompt{
 			ai.WithModel(flashModel),
 			ai.WithSystem("You are an expert programmer. Write clean, well-commented code, " +
@@ -59,7 +68,7 @@ func defineOrchestratorAgent(g *genkit.Genkit) *aix.Agent[any] {
 		aix.WithDescription[any]("Writes and explains code, producing file artifacts."),
 	)
 
-	return genkit.DefineAgent(g, "orchestrator",
+	return genkitx.DefineAgent(g, "orchestrator",
 		aix.InlinePrompt{
 			ai.WithModel(flashModel),
 			ai.WithSystem("You are a project coordinator. Analyze the user's request and " +

@@ -97,12 +97,13 @@ func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (api.BidiAction, error) {
 // interaction is a future feature.
 //
 // The middleware resolves agents through genkit.FromContext, which is seeded by
-// genkit.Generate and by agents defined via genkit.DefineAgent. It is therefore
-// typically attached to an orchestrator agent (or a genkit.Generate call).
+// genkit.Generate and by agents defined via the genkit/exp constructors
+// (genkitx.DefineAgent and friends). It is therefore typically attached to an
+// orchestrator agent (or a genkit.Generate call).
 //
 // Usage:
 //
-//	orchestrator := genkit.DefineAgent(g, "orchestrator",
+//	orchestrator := genkitx.DefineAgent(g, "orchestrator",
 //	    aix.InlinePrompt{
 //	        ai.WithModelName("googleai/gemini-flash-latest"),
 //	        ai.WithSystem("You are a helpful project assistant."),

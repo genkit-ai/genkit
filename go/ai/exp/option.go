@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -141,9 +141,9 @@ func (o *agentOptions[State]) applyAgent(opts *agentOptions[State]) error {
 	}
 	if o.contextFunc != nil {
 		// Context decorators compose rather than conflict: each WithContextFunc
-		// adds a layer applied in registration order. This lets the genkit
-		// package seed its instance (see genkit.DefineAgent) while applications
-		// add their own decorators on the same agent.
+		// adds a layer applied in registration order. This lets the genkit/exp
+		// agent constructors seed the genkit instance while applications add
+		// their own decorators on the same agent.
 		if prev := opts.contextFunc; prev != nil {
 			next := o.contextFunc
 			opts.contextFunc = func(ctx context.Context) context.Context { return next(prev(ctx)) }

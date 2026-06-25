@@ -53,12 +53,12 @@ const artifactsMarker = "artifacts-listing"
 //
 // Artifacts live on the active agent session, so this middleware only has an
 // effect when generation runs inside an agent invocation (see
-// [github.com/firebase/genkit/go/genkit.DefineAgent]). With no active session
-// the tools report that gracefully and the listing is empty.
+// [github.com/firebase/genkit/go/genkit/exp.DefineAgent]). With no active
+// session the tools report that gracefully and the listing is empty.
 //
 // Usage:
 //
-//	builder := genkit.DefineAgent(g, "builder",
+//	builder := genkitx.DefineAgent(g, "builder",
 //	    aix.InlinePrompt{
 //	        ai.WithModelName("googleai/gemini-flash-latest"),
 //	        ai.WithSystem("You are a code generator. Use write_artifact to create files."),

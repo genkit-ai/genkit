@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -69,7 +69,7 @@ func (r Route) Handler(opts ...genkit.HandlerOption) http.HandlerFunc {
 // contributes.
 func AllAgentRoutes(g *genkit.Genkit) []Route {
 	var routes []Route
-	for _, act := range genkit.ListAgents(g) {
+	for _, act := range ListAgents(g) {
 		name := act.Name()
 		// The snapshot-lifecycle companions register independently under
 		// their own action types, keyed by the agent's name (see the agent
@@ -93,7 +93,7 @@ func AllAgentRoutes(g *genkit.Genkit) []Route {
 //
 //   - POST /agents/{name}                the agent, one turn per request
 //   - POST /agents/{name}/getSnapshot    getSnapshot (store-backed agents)
-//   - POST /agents/{name}/abortSnapshot  abortSnapshot (abortable stores)
+//   - POST /agents/{name}/abort          abort (abortable stores)
 //
 // Each takes the {"data": ...} request envelope and returns {"result":
 // ...}; the snapshot ID rides in the body ({"data": {"snapshotId": ...}}),
@@ -101,7 +101,7 @@ func AllAgentRoutes(g *genkit.Genkit) []Route {
 // capabilities the agent lacks; a client-managed agent contributes only
 // its turn route.
 func AgentRoutes[State any](a *aix.Agent[State]) []Route {
-	return buildAgentRoutes(a.Name(), a, a.GetSnapshotAction(), a.AbortSnapshotAction())
+	return buildAgentRoutes(a.Name(), a, a.GetSnapshotAction(), a.AbortAction())
 }
 
 // buildAgentRoutes builds an agent's route set from its run action and the
@@ -120,7 +120,7 @@ func buildAgentRoutes(name string, run, snapshot, abort api.Action) []Route {
 	if abort != nil {
 		routes = append(routes, Route{
 			Method: http.MethodPost,
-			Path:   agentBasePath + "/" + name + "/abortSnapshot",
+			Path:   agentBasePath + "/" + name + "/abort",
 			Action: abort,
 		})
 	}

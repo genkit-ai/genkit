@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -866,6 +866,117 @@ func TestAgent_ErrorInTurn(t *testing.T) {
 // "reply" message and increments the custom counter: the minimal stateful
 // turn body shared by the snapshot and state-management tests. opts pass
 // through to DefineCustomAgent (e.g. WithSessionStore).
+func TestAgent_TurnContext(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("server-managed reserves the ID and persists under it", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		store := newTestInMemStore[testState]()
+
+		var mu sync.Mutex
+		var seen []TurnContext
+		af := DefineCustomAgent(reg, "turnCtxServer",
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					tc := TurnContextFromContext(ctx)
+					if tc == nil {
+						return nil, fmt.Errorf("TurnContextFromContext returned nil inside the turn")
+					}
+					mu.Lock()
+					seen = append(seen, *tc)
+					mu.Unlock()
+					sess.AddMessages(ai.NewModelTextMessage("reply"))
+					return nil, nil
+				})
+			},
+			WithSessionStore(store),
+		)
+
+		conn, err := af.Connect(ctx)
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		te1 := sendTurn(t, conn, "one")
+		te2 := sendTurn(t, conn, "two")
+		if _, err := conn.Output(); err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+		if len(seen) != 2 {
+			t.Fatalf("got %d turn contexts, want 2", len(seen))
+		}
+
+		// Turn 0: fresh session, a reserved ID, no parent.
+		if seen[0].TurnIndex != 0 {
+			t.Errorf("turn 0 TurnIndex = %d, want 0", seen[0].TurnIndex)
+		}
+		if seen[0].SnapshotID == "" {
+			t.Fatal("turn 0 reserved SnapshotID is empty; want a reserved ID")
+		}
+		if seen[0].ParentSnapshotID != "" {
+			t.Errorf("turn 0 ParentSnapshotID = %q, want empty", seen[0].ParentSnapshotID)
+		}
+		// The whole point: the ID the handler saw up front is the ID the
+		// snapshot persisted under (and the one the TurnEnd chunk reports).
+		if seen[0].SnapshotID != te1.SnapshotID {
+			t.Errorf("turn 0 reserved ID %q != persisted TurnEnd ID %q", seen[0].SnapshotID, te1.SnapshotID)
+		}
+		if snap, err := store.GetSnapshot(ctx, seen[0].SnapshotID); err != nil || snap == nil {
+			t.Errorf("GetSnapshot(reserved %q) = (%v, %v); want a stored row", seen[0].SnapshotID, snap, err)
+		}
+
+		// Turn 1: index advances, parent is turn 0's snapshot, ID is fresh.
+		if seen[1].TurnIndex != 1 {
+			t.Errorf("turn 1 TurnIndex = %d, want 1", seen[1].TurnIndex)
+		}
+		if seen[1].SnapshotID != te2.SnapshotID {
+			t.Errorf("turn 1 reserved ID %q != persisted TurnEnd ID %q", seen[1].SnapshotID, te2.SnapshotID)
+		}
+		if seen[1].ParentSnapshotID != seen[0].SnapshotID {
+			t.Errorf("turn 1 ParentSnapshotID = %q, want turn 0's %q", seen[1].ParentSnapshotID, seen[0].SnapshotID)
+		}
+		if seen[1].SnapshotID == seen[0].SnapshotID {
+			t.Error("turn 1 reused turn 0's reserved ID; each turn must reserve a fresh one")
+		}
+	})
+
+	t.Run("client-managed reserves no ID", func(t *testing.T) {
+		reg := newTestRegistry(t)
+
+		var mu sync.Mutex
+		var seen *TurnContext
+		af := DefineCustomAgent(reg, "turnCtxClient",
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					tc := TurnContextFromContext(ctx)
+					mu.Lock()
+					seen = tc
+					mu.Unlock()
+					return nil, nil
+				})
+			},
+		)
+
+		if _, err := af.RunText(ctx, "hi"); err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+		if seen == nil {
+			t.Fatal("TurnContextFromContext returned nil for a client-managed agent")
+		}
+		if seen.SnapshotID != "" {
+			t.Errorf("client-managed reserved SnapshotID = %q, want empty", seen.SnapshotID)
+		}
+		if seen.ParentSnapshotID != "" {
+			t.Errorf("client-managed ParentSnapshotID = %q, want empty", seen.ParentSnapshotID)
+		}
+	})
+}
+
 func defineCounterAgent(reg api.Registry, name string, opts ...AgentOption[testState]) *Agent[testState] {
 	return DefineCustomAgent(reg, name,
 		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
@@ -3455,7 +3566,7 @@ func TestAgent_Detach_FlowErrorsBecomesError(t *testing.T) {
 	}
 }
 
-func TestAgent_Detach_AbortSnapshotStopsFlow(t *testing.T) {
+func TestAgent_Detach_AbortStopsFlow(t *testing.T) {
 	// Client detaches, then calls abortPendingSnapshot. The store's status
 	// subscriber notifies the runtime, which cancels the work context, and
 	// the finalizer rewrites the snapshot with status=aborted.
@@ -3843,7 +3954,7 @@ func TestAgent_SnapshotFacade_Errors(t *testing.T) {
 	assertGenkitStatus(t, e1, core.FAILED_PRECONDITION, "client GetSnapshot")
 	_, e2 := client.GetLatestSnapshot(ctx, "x")
 	assertGenkitStatus(t, e2, core.FAILED_PRECONDITION, "client GetLatestSnapshot")
-	_, e3 := client.AbortSnapshot(ctx, "x")
+	_, e3 := client.Abort(ctx, "x")
 	assertGenkitStatus(t, e3, core.FAILED_PRECONDITION, "client abortPendingSnapshot")
 
 	// Server-managed agent: empty IDs are INVALID_ARGUMENT, missing rows NOT_FOUND.
@@ -3853,16 +3964,16 @@ func TestAgent_SnapshotFacade_Errors(t *testing.T) {
 	assertGenkitStatus(t, e4, core.INVALID_ARGUMENT, "empty GetSnapshot")
 	_, e5 := server.GetLatestSnapshot(ctx, "")
 	assertGenkitStatus(t, e5, core.INVALID_ARGUMENT, "empty GetLatestSnapshot")
-	_, e6 := server.AbortSnapshot(ctx, "")
+	_, e6 := server.Abort(ctx, "")
 	assertGenkitStatus(t, e6, core.INVALID_ARGUMENT, "empty abortPendingSnapshot")
 	_, e7 := server.GetSnapshot(ctx, "missing")
 	assertGenkitStatus(t, e7, core.NOT_FOUND, "missing GetSnapshot")
 }
 
-// TestAgent_AbortSnapshot_Method verifies the in-process convenience flips a
+// TestAgent_Abort_Method verifies the in-process convenience flips a
 // pending row to aborted through the store, mirroring the package-level
-// [abortPendingSnapshot] and the abortSnapshot companion action.
-func TestAgent_AbortSnapshot_Method(t *testing.T) {
+// [abortPendingSnapshot] and the abort companion action.
+func TestAgent_Abort_Method(t *testing.T) {
 	reg := newTestRegistry(t)
 	ctx := context.Background()
 	store := newTestInMemStore[testState]()
@@ -3876,9 +3987,9 @@ func TestAgent_AbortSnapshot_Method(t *testing.T) {
 		t.Fatalf("seed pending: %v", err)
 	}
 
-	status, err := af.AbortSnapshot(ctx, pending.SnapshotID)
+	status, err := af.Abort(ctx, pending.SnapshotID)
 	if err != nil {
-		t.Fatalf("agent.AbortSnapshot: %v", err)
+		t.Fatalf("agent.Abort: %v", err)
 	}
 	if status != SnapshotStatusAborted {
 		t.Errorf("returned status = %q, want aborted", status)
@@ -4049,10 +4160,10 @@ func TestAgent_GetSnapshotAction_NoStore(t *testing.T) {
 	if getAction != nil {
 		t.Error("getSnapshot action should NOT be registered without a store")
 	}
-	abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}](
+	abortAction := core.ResolveActionFor[*AgentAbortRequest, *AgentAbortResponse, struct{}](
 		reg, api.ActionTypeAgentAbort, "noStoreFlow")
 	if abortAction != nil {
-		t.Error("abortSnapshot action should NOT be registered without a store")
+		t.Error("abort action should NOT be registered without a store")
 	}
 }
 
@@ -4393,10 +4504,10 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 		if getAction == nil {
 			t.Error("getSnapshot action should be registered")
 		}
-		abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}](
+		abortAction := core.ResolveActionFor[*AgentAbortRequest, *AgentAbortResponse, struct{}](
 			reg, api.ActionTypeAgentAbort, "fullCaps")
 		if abortAction == nil {
-			t.Error("abortSnapshot action should be registered when store implements SnapshotSubscriber")
+			t.Error("abort action should be registered when store implements SnapshotSubscriber")
 		}
 	})
 
@@ -4413,10 +4524,10 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 		if getAction == nil {
 			t.Error("getSnapshot action should be registered even when store lacks SnapshotSubscriber")
 		}
-		abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}](
+		abortAction := core.ResolveActionFor[*AgentAbortRequest, *AgentAbortResponse, struct{}](
 			reg, api.ActionTypeAgentAbort, "minCaps")
 		if abortAction != nil {
-			t.Error("abortSnapshot action should NOT be registered when store lacks SnapshotSubscriber")
+			t.Error("abort action should NOT be registered when store lacks SnapshotSubscriber")
 		}
 	})
 }
@@ -4437,8 +4548,8 @@ func TestAgent_CompanionActionAccessors(t *testing.T) {
 		if got := af.GetSnapshotAction(); got != nil {
 			t.Errorf("GetSnapshotAction() = %v, want nil", got)
 		}
-		if got := af.AbortSnapshotAction(); got != nil {
-			t.Errorf("AbortSnapshotAction() = %v, want nil", got)
+		if got := af.AbortAction(); got != nil {
+			t.Errorf("AbortAction() = %v, want nil", got)
 		}
 	})
 
@@ -4449,8 +4560,8 @@ func TestAgent_CompanionActionAccessors(t *testing.T) {
 		if af.GetSnapshotAction() == nil {
 			t.Error("GetSnapshotAction() = nil, want action")
 		}
-		if got := af.AbortSnapshotAction(); got != nil {
-			t.Errorf("AbortSnapshotAction() = %v, want nil", got)
+		if got := af.AbortAction(); got != nil {
+			t.Errorf("AbortAction() = %v, want nil", got)
 		}
 	})
 
@@ -4461,8 +4572,8 @@ func TestAgent_CompanionActionAccessors(t *testing.T) {
 		if got, want := af.GetSnapshotAction(), reg.LookupAction("/agent-snapshot/bothCompanions"); got == nil || got != want {
 			t.Errorf("GetSnapshotAction() = %v, want registered action %v", got, want)
 		}
-		if got, want := af.AbortSnapshotAction(), reg.LookupAction("/agent-abort/bothCompanions"); got == nil || got != want {
-			t.Errorf("AbortSnapshotAction() = %v, want registered action %v", got, want)
+		if got, want := af.AbortAction(), reg.LookupAction("/agent-abort/bothCompanions"); got == nil || got != want {
+			t.Errorf("AbortAction() = %v, want registered action %v", got, want)
 		}
 	})
 }
@@ -4596,7 +4707,7 @@ func TestNewCustomAgent_UnregisteredUntilRegister(t *testing.T) {
 	)
 
 	// Companion refs are wired at construction, before any registry.
-	if af.GetSnapshotAction() == nil || af.AbortSnapshotAction() == nil {
+	if af.GetSnapshotAction() == nil || af.AbortAction() == nil {
 		t.Fatal("companion actions should be built by NewCustomAgent before registration")
 	}
 
@@ -4632,13 +4743,13 @@ func TestAgent_AbortAction_NotFound(t *testing.T) {
 		WithSessionStore(newTestInMemStore[testState]()),
 	)
 
-	abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}](
+	abortAction := core.ResolveActionFor[*AgentAbortRequest, *AgentAbortResponse, struct{}](
 		reg, api.ActionTypeAgentAbort, "missingFlow")
 	if abortAction == nil {
-		t.Fatal("abortSnapshot action should be registered")
+		t.Fatal("abort action should be registered")
 	}
 
-	_, err := abortAction.Run(context.Background(), &AbortSnapshotRequest{SnapshotID: "no-such-snap"}, nil)
+	_, err := abortAction.Run(context.Background(), &AgentAbortRequest{SnapshotID: "no-such-snap"}, nil)
 	if err == nil {
 		t.Fatal("expected error for missing snapshot, got nil")
 	}
@@ -5036,7 +5147,7 @@ func TestInMemorySessionStore_OnSnapshotStatusChange(t *testing.T) {
 	t.Fatal("channel did not close after subscription ctx cancel")
 }
 
-func TestAgent_AbortSnapshot_NoOpOnTerminal(t *testing.T) {
+func TestAgent_Abort_NoOpOnTerminal(t *testing.T) {
 	// Calling abortPendingSnapshot on an already-terminal snapshot is a no-op
 	// that returns the existing status.
 	reg := newTestRegistry(t)

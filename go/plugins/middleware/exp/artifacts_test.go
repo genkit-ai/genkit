@@ -25,6 +25,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/genkit"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
 
 func toolResponseByName(t *testing.T, msgs []*ai.Message, name string) (any, bool) {
@@ -99,7 +100,7 @@ func TestArtifactsWriteThenRead(t *testing.T) {
 		}
 	})
 
-	builder := genkit.DefineAgent[any](g, "builder",
+	builder := genkitx.DefineAgent[any](g, "builder",
 		aix.InlinePrompt{ai.WithModel(model), ai.WithSystem("be a builder"), ai.WithUse(&Artifacts{})},
 	)
 
@@ -135,7 +136,7 @@ func TestArtifactsSystemPromptListing(t *testing.T) {
 
 	// A custom agent seeds an artifact, then generates with the Artifacts
 	// middleware so the listing reflects the seeded artifact.
-	lister := genkit.DefineCustomAgent[any](g, "lister",
+	lister := genkitx.DefineCustomAgent[any](g, "lister",
 		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
 				resp.SendArtifact(&aix.Artifact{

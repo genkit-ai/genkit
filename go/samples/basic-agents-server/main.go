@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@
 //     {"init": {"sessionId": ...}} (or {"snapshotId": ...} to resume from
 //     a specific point in history). The store also gives the agent
 //     snapshot companion actions, served here at
-//     /agents/chat/getSnapshot and /agents/chat/abortSnapshot.
+//     /agents/chat/getSnapshot and /agents/chat/abort.
 //   - "statelessChat" has no store (client-managed state). The response
 //     carries the full conversation state; the client sends it back
 //     verbatim as {"init": {"state": ...}} on the next turn. The server
@@ -84,7 +84,7 @@
 // Or abort the background work instead; an aborted snapshot finalizes
 // with status "aborted":
 //
-//	curl -X POST http://localhost:8080/agents/chat/abortSnapshot \
+//	curl -X POST http://localhost:8080/agents/chat/abort \
 //	  -H "Content-Type: application/json" \
 //	  -d '{"data": {"snapshotId": "SNAPSHOT_ID"}}'
 //
@@ -134,7 +134,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("creating session store: %v", err)
 	}
-	genkit.DefineAgent(g, "chat",
+	genkitx.DefineAgent(g, "chat",
 		aix.InlinePrompt{
 			ai.WithModel(model),
 			ai.WithSystem("You are a helpful travel assistant. Keep responses to a couple of sentences."),
@@ -145,7 +145,7 @@ func main() {
 	// "statelessChat" keeps no state on the server: each response carries
 	// the full conversation state and the client round-trips it on the next
 	// request. This suits deployments where the server must stay stateless.
-	genkit.DefineAgent[any](g, "statelessChat",
+	genkitx.DefineAgent[any](g, "statelessChat",
 		aix.InlinePrompt{
 			ai.WithModel(model),
 			ai.WithSystem("You are a helpful travel assistant. Keep responses to a couple of sentences."),
@@ -160,7 +160,7 @@ func main() {
 	//   "chat" (store-backed):
 	//     POST /agents/chat                one turn per request
 	//     POST /agents/chat/getSnapshot    read a snapshot by ID
-	//     POST /agents/chat/abortSnapshot  abort background work
+	//     POST /agents/chat/abort          abort background work
 	//   "statelessChat" (client-managed):
 	//     POST /agents/statelessChat       one turn per request
 	//

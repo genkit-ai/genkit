@@ -26,6 +26,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/genkit"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
 
 // toolModel defines a model with full tool/multiturn support backed by fn.
@@ -130,7 +131,7 @@ func TestAgentsInjectsSystemPrompt(t *testing.T) {
 	g := newTestGenkit(t)
 
 	// researcher's description is auto-discovered from its action descriptor.
-	genkit.DefineAgent[any](g, "researcher",
+	genkitx.DefineAgent[any](g, "researcher",
 		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/researcher", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return textResp(req, "researched"), nil
 		}))},
@@ -170,7 +171,7 @@ func TestAgentsInjectsSystemPrompt(t *testing.T) {
 func TestAgentsDelegationRunsSubAgent(t *testing.T) {
 	g := newTestGenkit(t)
 
-	genkit.DefineAgent[any](g, "researcher",
+	genkitx.DefineAgent[any](g, "researcher",
 		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/researcher", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return textResp(req, "research complete"), nil
 		}))},
@@ -224,7 +225,7 @@ func TestAgentsToolPrefix(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			g := newTestGenkit(t)
-			genkit.DefineAgent[any](g, "researcher",
+			genkitx.DefineAgent[any](g, "researcher",
 				aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/sub-"+tc.name, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 					return textResp(req, "ok"), nil
 				}))},
@@ -246,7 +247,7 @@ func TestAgentsToolPrefix(t *testing.T) {
 func TestAgentsMaxDelegations(t *testing.T) {
 	g := newTestGenkit(t)
 
-	genkit.DefineAgent[any](g, "researcher",
+	genkitx.DefineAgent[any](g, "researcher",
 		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/researcher", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return textResp(req, "did work"), nil
 		}))},
@@ -295,7 +296,7 @@ func TestAgentsForwardsHistory(t *testing.T) {
 
 	// The sub-agent records the messages its model receives.
 	var subMessages []*ai.Message
-	genkit.DefineAgent[any](g, "researcher",
+	genkitx.DefineAgent[any](g, "researcher",
 		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/researcher", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			subMessages = req.Messages
 			return textResp(req, "noted"), nil
@@ -332,7 +333,7 @@ func TestAgentsSubAgentFailureReported(t *testing.T) {
 	g := newTestGenkit(t)
 
 	// A custom sub-agent whose turn fails.
-	genkit.DefineCustomAgent[any](g, "researcher",
+	genkitx.DefineCustomAgent[any](g, "researcher",
 		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
 				return nil, errors.New("kaboom")
@@ -366,7 +367,7 @@ func TestAgentsArtifactStrategies(t *testing.T) {
 			g := newTestGenkit(t)
 
 			// A custom sub-agent that produces an artifact.
-			genkit.DefineCustomAgent[any](g, "writer",
+			genkitx.DefineCustomAgent[any](g, "writer",
 				func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 					err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
 						resp.SendArtifact(&aix.Artifact{
@@ -392,7 +393,7 @@ func TestAgentsArtifactStrategies(t *testing.T) {
 			// a session that artifacts can merge into. Capture the inner generate
 			// history to inspect the delegation tool response.
 			var innerHistory []*ai.Message
-			orchestrator := genkit.DefineCustomAgent[any](g, "orchestrator",
+			orchestrator := genkitx.DefineCustomAgent[any](g, "orchestrator",
 				func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 					var last *ai.Message
 					err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
@@ -446,7 +447,7 @@ func TestAgentsArtifactStrategies(t *testing.T) {
 
 func TestAgentRefCapturesNameAndDescription(t *testing.T) {
 	g := newTestGenkit(t)
-	a := genkit.DefineAgent[any](g, "writer",
+	a := genkitx.DefineAgent[any](g, "writer",
 		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/writer", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return textResp(req, "x"), nil
 		}))},
@@ -464,7 +465,7 @@ func TestAgentRefCapturesNameAndDescription(t *testing.T) {
 
 func TestAgentsDelegatesViaRef(t *testing.T) {
 	g := newTestGenkit(t)
-	researcher := genkit.DefineAgent[any](g, "researcher",
+	researcher := genkitx.DefineAgent[any](g, "researcher",
 		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/researcher", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return textResp(req, "ref result"), nil
 		}))},
@@ -485,7 +486,7 @@ func TestAgentsDelegatesViaRef(t *testing.T) {
 
 func TestAgentsRefDescriptionTakesPrecedence(t *testing.T) {
 	g := newTestGenkit(t)
-	a := genkit.DefineAgent[any](g, "writer",
+	a := genkitx.DefineAgent[any](g, "writer",
 		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/writer", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return textResp(req, "x"), nil
 		}))},
