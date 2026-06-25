@@ -17,7 +17,6 @@
 package exp
 
 import (
-	"context"
 	"sort"
 
 	aix "github.com/firebase/genkit/go/ai/exp"
@@ -25,17 +24,6 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/genkitbridge"
 )
-
-// seedGenkitContext returns an agent option that seeds g into each agent
-// invocation's context, so middleware and other code can retrieve it via
-// [genkit.FromContext] during the agent's turns, just as [genkit.Generate]
-// seeds it. Agents run on the registry alone, so without this the Genkit
-// instance would be absent from an agent's turn context.
-func seedGenkitContext[State any](g *genkit.Genkit) aix.AgentOption[State] {
-	return aix.WithContextFunc[State](func(ctx context.Context) context.Context {
-		return genkitbridge.SeedContext(ctx, g)
-	})
-}
 
 // DefineAgent defines an agent backed by an inline prompt and registers it as
 // an action on the registry. Returns an [aix.Agent].
@@ -83,7 +71,6 @@ func DefineAgent[State any](
 	prompt aix.InlinePrompt,
 	opts ...aix.AgentOption[State],
 ) *aix.Agent[State] {
-	opts = append(opts, seedGenkitContext[State](g))
 	return aix.DefineAgent(genkitbridge.RegistryOf(g), name, prompt, opts...)
 }
 
@@ -129,7 +116,6 @@ func DefinePromptAgent[State any](
 	name string,
 	opts ...aix.PromptAgentOption[State],
 ) *aix.Agent[State] {
-	opts = append(opts, seedGenkitContext[State](g))
 	return aix.DefinePromptAgent(genkitbridge.RegistryOf(g), name, opts...)
 }
 
@@ -197,7 +183,6 @@ func DefineCustomAgent[State any](
 	fn aix.AgentFunc[State],
 	opts ...aix.AgentOption[State],
 ) *aix.Agent[State] {
-	opts = append(opts, seedGenkitContext[State](g))
 	return aix.DefineCustomAgent(genkitbridge.RegistryOf(g), name, fn, opts...)
 }
 

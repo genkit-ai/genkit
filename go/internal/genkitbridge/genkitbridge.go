@@ -38,12 +38,15 @@ import (
 // install the extractor). First-party callers always pass a *genkit.Genkit.
 var RegistryOf func(host any) api.Registry
 
-// SeedContext returns ctx with host (a *genkit.Genkit) attached so it can be
-// retrieved with genkit.FromContext. It is installed by the genkit package's
-// init and used by genkit/exp's agent constructors to seed the Genkit instance
-// into every agent turn, so middleware can resolve and run other actions
-// without direct registry access.
+// SeedContextForRegistry returns ctx with the *genkit.Genkit backing reg
+// attached, so it can be retrieved with genkit.FromContext. It is installed by
+// the genkit package's init and called by ai/exp's agent constructors to seed
+// the Genkit instance into every agent turn, so an agent's prompt, tools, and
+// middleware can resolve and run other actions without direct registry access.
 //
-// As with [RegistryOf], host is typed as any to avoid an import cycle with
-// genkit; first-party callers always pass a *genkit.Genkit.
-var SeedContext func(ctx context.Context, host any) context.Context
+// The Genkit instance is reconstructed from reg (a *genkit.Genkit is a thin
+// wrapper over its registry), so ai/exp need not hold a *genkit.Genkit itself
+// and the registry-level agent constructors stay genkit-agnostic. It is nil
+// until the genkit package is linked into the build; ai/exp treats a nil hook
+// as "no seeding", leaving agents defined on a bare registry untouched.
+var SeedContextForRegistry func(ctx context.Context, reg api.Registry) context.Context

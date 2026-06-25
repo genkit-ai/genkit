@@ -21,17 +21,22 @@ import (
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/genkitbridge"
+	"github.com/firebase/genkit/go/internal/registry"
 )
 
 // Expose first-party hooks into a *Genkit to subpackages (genkit/exp) without
 // adding public accessors. genkitbridge lives under go/internal, so only code
 // inside the Genkit module can read it. See [genkitbridge.RegistryOf] and
-// [genkitbridge.SeedContext].
+// [genkitbridge.SeedContextForRegistry].
 func init() {
 	genkitbridge.RegistryOf = func(host any) api.Registry {
 		return host.(*Genkit).reg
 	}
-	genkitbridge.SeedContext = func(ctx context.Context, host any) context.Context {
-		return genkitCtxKey.NewContext(ctx, host.(*Genkit))
+	genkitbridge.SeedContextForRegistry = func(ctx context.Context, reg api.Registry) context.Context {
+		r, ok := reg.(*registry.Registry)
+		if !ok {
+			return ctx
+		}
+		return genkitCtxKey.NewContext(ctx, &Genkit{reg: r})
 	}
 }

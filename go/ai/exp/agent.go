@@ -39,6 +39,7 @@ import (
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
+	"github.com/firebase/genkit/go/internal/genkitbridge"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -727,6 +728,24 @@ func DefineAgent[State any](
 	return DefineCustomAgent(r, name, agentLoop[State](r, p, nil), opts...)
 }
 
+// genkitContextSeed returns a context decorator that seeds the host Genkit
+// instance into each agent invocation, so the agent's prompt, tools, and
+// middleware can retrieve it via genkit.FromContext and resolve or run other
+// actions. The instance is reconstructed from r by the genkit package through
+// the internal bridge, so the registry-level constructors below wire seeding up
+// themselves and there is no public option for it.
+//
+// It returns nil when the genkit package is not linked into the build, leaving
+// an agent defined directly on a bare registry untouched.
+func genkitContextSeed(r api.Registry) func(context.Context) context.Context {
+	if genkitbridge.SeedContextForRegistry == nil {
+		return nil
+	}
+	return func(ctx context.Context) context.Context {
+		return genkitbridge.SeedContextForRegistry(ctx, r)
+	}
+}
+
 // DefinePromptAgent defines a prompt-backed agent and registers it, sourcing
 // its prompt from the registry by name. Each turn renders the prompt, appends
 // conversation history, calls the model with streaming, and updates session
@@ -754,6 +773,9 @@ func DefinePromptAgent[State any](
 	name string,
 	opts ...PromptAgentOption[State],
 ) *Agent[State] {
+	if seed := genkitContextSeed(r); seed != nil {
+		opts = append(opts, &agentOptions[State]{contextFunc: seed})
+	}
 	cfg := &promptAgentOptions[State]{}
 	for _, opt := range opts {
 		if err := opt.applyPromptAgent(cfg); err != nil {
@@ -886,6 +908,9 @@ func DefineCustomAgent[State any](
 	fn AgentFunc[State],
 	opts ...AgentOption[State],
 ) *Agent[State] {
+	if seed := genkitContextSeed(r); seed != nil {
+		opts = append(opts, &agentOptions[State]{contextFunc: seed})
+	}
 	a := NewCustomAgent(name, fn, opts...)
 	a.Register(r)
 	return a
