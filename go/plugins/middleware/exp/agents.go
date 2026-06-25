@@ -107,16 +107,16 @@ func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (api.BidiAction, error) {
 //	        ai.WithModelName("googleai/gemini-flash-latest"),
 //	        ai.WithSystem("You are a helpful project assistant."),
 //	        ai.WithUse(
-//	            &middleware.Agents{
+//	            &middlewarex.Agents{
 //	                Agents: []aix.AgentRef{
 //	                    {Name: "researcher"}, // by name
 //	                    coderAgent.Ref(),     // by instance (carries its description)
 //	                },
 //	                MaxDelegations:   5,
 //	                HistoryLength:    4,
-//	                ArtifactStrategy: middleware.ArtifactStrategySession,
+//	                ArtifactStrategy: middlewarex.ArtifactStrategySession,
 //	            },
-//	            &middleware.Artifacts{},
+//	            &middlewarex.Artifacts{},
 //	        ),
 //	    },
 //	)
@@ -326,6 +326,13 @@ func runSubAgent(ctx context.Context, agent api.BidiAction, task string, history
 
 // isClientManaged reports whether the agent owns its state on the client (no
 // session store), which is the only case that accepts seeded init state.
+//
+// Unknown or absent agent metadata is treated as not client-managed. That is
+// the safe default: it avoids seeding init state into an agent that might
+// reject it. This is intentionally stricter than the JS middleware, which
+// forwards history unless state management is explicitly "server"; for
+// genkit-defined agents the metadata is always set, so the two agree in
+// practice.
 func isClientManaged(agent api.BidiAction) bool {
 	meta := agent.Desc().Metadata
 	if meta == nil {
@@ -335,7 +342,7 @@ func isClientManaged(agent api.BidiAction) bool {
 	case aix.AgentMetadata:
 		return m.StateManagement == aix.AgentStateManagementClient
 	case *aix.AgentMetadata:
-		return m.StateManagement == aix.AgentStateManagementClient
+		return m != nil && m.StateManagement == aix.AgentStateManagementClient
 	case map[string]any:
 		s, _ := m["stateManagement"].(string)
 		return aix.AgentStateManagement(s) == aix.AgentStateManagementClient

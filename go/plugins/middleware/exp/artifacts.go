@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
@@ -61,7 +62,7 @@ const artifactsMarker = "artifacts-listing"
 //	    aix.InlinePrompt{
 //	        ai.WithModelName("googleai/gemini-flash-latest"),
 //	        ai.WithSystem("You are a code generator. Use write_artifact to create files."),
-//	        ai.WithUse(&middleware.Artifacts{}),
+//	        ai.WithUse(&middlewarex.Artifacts{}),
 //	    },
 //	)
 type Artifacts struct {
@@ -181,13 +182,16 @@ func buildArtifactsListing(arts []*aix.Artifact) string {
 	b.WriteString("The following artifacts are available in the session. ")
 	b.WriteString("Use the read_artifact tool to view their content.\n")
 	for _, a := range arts {
+		if a == nil {
+			continue
+		}
 		name := a.Name
 		if name == "" {
 			name = "(unnamed)"
 		}
 		fmt.Fprintf(&b, "  - %s", name)
 		if text := artifactText(a); len(text) > 0 {
-			fmt.Fprintf(&b, " (%d chars)", len(text))
+			fmt.Fprintf(&b, " (%d chars)", utf8.RuneCountInString(text))
 		}
 		if src := artifactSource(a); src != "" {
 			fmt.Fprintf(&b, " [from: %s]", src)
