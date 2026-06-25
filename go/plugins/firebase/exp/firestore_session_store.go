@@ -105,7 +105,7 @@ type FirestoreSessionStore[State any] struct {
 //
 // The State type parameter is the user-defined custom-state type carried in
 // [aix.SessionState.Custom]; it must be JSON-serializable.
-func NewFirestoreSessionStore[State any](ctx context.Context, g *genkit.Genkit, opts ...FirestoreSessionStoreOption) (*FirestoreSessionStore[State], error) {
+func NewFirestoreSessionStore[State any](ctx context.Context, g *genkit.Genkit, opts ...SessionStoreOption) (*FirestoreSessionStore[State], error) {
 	client, err := resolveFirestoreClient(ctx, g)
 	if err != nil {
 		return nil, fmt.Errorf("firebase.NewFirestoreSessionStore: %w", err)
@@ -120,7 +120,7 @@ func NewFirestoreSessionStore[State any](ctx context.Context, g *genkit.Genkit, 
 // newFirestoreSessionStore builds the store from a resolved Firestore client. It
 // is separated from the public constructor so the store logic can be exercised
 // against the Firestore emulator without standing up the full Firebase plugin.
-func newFirestoreSessionStore[State any](client *firestore.Client, opts ...FirestoreSessionStoreOption) (*FirestoreSessionStore[State], error) {
+func newFirestoreSessionStore[State any](client *firestore.Client, opts ...SessionStoreOption) (*FirestoreSessionStore[State], error) {
 	if client == nil {
 		return nil, errors.New("a Firestore client is required")
 	}
@@ -240,9 +240,9 @@ type writePlan struct {
 	checkpointID  string
 	shardCount    int
 	segmentPath   []string
-	statePatch    aix.JSONPatch // diff only
-	stateBytes    []byte        // checkpoint only: serialized state to shard
-	oldShardCount int           // checkpoint only: prior shard count, to prune stale shards
+	statePatch    []byte // diff only: the JSON-encoded patch (marshaled once)
+	stateBytes    []byte // checkpoint only: serialized state to shard
+	oldShardCount int    // checkpoint only: prior shard count, to prune stale shards
 }
 
 // --- Document references ---
@@ -608,19 +608,7 @@ func (s *FirestoreSessionStore[State]) planWrite(tx *firestore.Transaction, pref
 				parentState = ps
 			}
 		}
-		patch := aix.Diff(parentState, newState)
-		if s.byteLen(patch) > s.shardSize {
-			// Promote an oversized diff to a sharded checkpoint so even an in-place
-			// leaf rewrite can never push the document past the 1 MiB limit.
-			return s.planCheckpoint(id, newState, 0)
-		}
-		return writePlan{
-			kind:         kindDiff,
-			checkpointID: existingDoc.CheckpointID,
-			shardCount:   existingDoc.CheckpointShardCount,
-			segmentPath:  existingDoc.SegmentPath,
-			statePatch:   patch,
-		}, nil
+		return s.planDiff(id, existingDoc.CheckpointID, existingDoc.CheckpointShardCount, existingDoc.SegmentPath, parentState, newState)
 	}
 
 	// New snapshot: resolve the parent's chain metadata (no state) to decide
@@ -647,18 +635,29 @@ func (s *FirestoreSessionStore[State]) planWrite(tx *firestore.Transaction, pref
 	} else if ok {
 		parentState = ps
 	}
-	patch := aix.Diff(parentState, newState)
-	if s.byteLen(patch) > s.shardSize {
-		return s.planCheckpoint(id, newState, 0)
-	}
 	segment := make([]string, 0, len(parentMeta.segmentPath)+1)
 	segment = append(segment, parentMeta.segmentPath...)
 	segment = append(segment, id)
+	return s.planDiff(id, parentMeta.checkpointID, parentMeta.shardCount, segment, parentState, newState)
+}
+
+// planDiff builds a diff plan from parentState to newState, marshaling the patch
+// once. If the patch exceeds the shard size it is promoted to a sharded
+// checkpoint so even an in-place leaf rewrite can never push the document past
+// the 1 MiB limit.
+func (s *FirestoreSessionStore[State]) planDiff(id, checkpointID string, shardCount int, segmentPath []string, parentState any, newState *aix.SessionState[State]) (writePlan, error) {
+	patch, err := json.Marshal(aix.Diff(parentState, newState))
+	if err != nil {
+		return writePlan{}, fmt.Errorf("marshal patch: %w", err)
+	}
+	if len(patch) > s.shardSize {
+		return s.planCheckpoint(id, newState, 0)
+	}
 	return writePlan{
 		kind:         kindDiff,
-		checkpointID: parentMeta.checkpointID,
-		shardCount:   parentMeta.shardCount,
-		segmentPath:  segment,
+		checkpointID: checkpointID,
+		shardCount:   shardCount,
+		segmentPath:  segmentPath,
 		statePatch:   patch,
 	}, nil
 }
@@ -714,11 +713,10 @@ func (s *FirestoreSessionStore[State]) writeShards(tx *firestore.Transaction, pr
 		if end > len(stateBytes) {
 			end = len(stateBytes)
 		}
-		// Copy the slice into its own buffer so each shard document persists only
-		// its own chunk, not a view over the whole state buffer.
-		chunk := make([]byte, end-start)
-		copy(chunk, stateBytes[start:end])
-		if err := tx.Set(s.shardRef(prefix, checkpointID, i), shardDoc{Chunk: chunk}); err != nil {
+		// A sub-slice is sufficient: Firestore serializes only the slice's bytes
+		// (not its backing array), and stateBytes is never mutated for the
+		// transaction's lifetime, so each shard document persists just its chunk.
+		if err := tx.Set(s.shardRef(prefix, checkpointID, i), shardDoc{Chunk: stateBytes[start:end]}); err != nil {
 			return err
 		}
 	}
@@ -931,23 +929,9 @@ func (s *FirestoreSessionStore[State]) toDoc(id string, next *aix.SessionSnapsho
 		doc.Error = b
 	}
 	if plan.kind == kindDiff {
-		b, err := json.Marshal(plan.statePatch)
-		if err != nil {
-			return snapshotDoc{}, fmt.Errorf("marshal patch: %w", err)
-		}
-		doc.StatePatch = b
+		doc.StatePatch = plan.statePatch
 	}
 	return doc, nil
-}
-
-// byteLen reports the JSON byte length of a value, used to decide whether a diff
-// should be promoted to a checkpoint.
-func (s *FirestoreSessionStore[State]) byteLen(v any) int {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return 0
-	}
-	return len(b)
 }
 
 // --- Helpers ---

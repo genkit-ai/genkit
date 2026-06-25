@@ -44,7 +44,7 @@ const testProjectID = "genkit-firestore-session-test"
 // a unique collection per call. It skips the test when FIRESTORE_EMULATOR_HOST
 // is not set. Pass options (e.g. a small shard size or checkpoint interval) to
 // exercise the sharding and checkpoint paths.
-func newEmulatorStore(t *testing.T, opts ...FirestoreSessionStoreOption) *FirestoreSessionStore[testState] {
+func newEmulatorStore(t *testing.T, opts ...SessionStoreOption) *FirestoreSessionStore[testState] {
 	t.Helper()
 	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
 		t.Skip("Skipping: FIRESTORE_EMULATOR_HOST not set (start the Firestore emulator to run these tests)")
@@ -60,7 +60,7 @@ func newEmulatorStore(t *testing.T, opts ...FirestoreSessionStoreOption) *Firest
 	// Tests build directly from a client (the unexported builder) so the store
 	// logic runs against the emulator without standing up the Firebase plugin; the
 	// public genkit-based constructor is covered separately.
-	all := append([]FirestoreSessionStoreOption{WithCollection("sessions-" + uuid.NewString())}, opts...)
+	all := append([]SessionStoreOption{WithCollection("sessions-" + uuid.NewString())}, opts...)
 	store, err := newFirestoreSessionStore[testState](client, all...)
 	if err != nil {
 		t.Fatalf("newFirestoreSessionStore: %v", err)
@@ -137,17 +137,45 @@ func TestNewFirestoreSessionStorePublic(t *testing.T) {
 }
 
 func TestOptionValidation(t *testing.T) {
-	t.Run("rejects invalid values", func(t *testing.T) {
+	// The default for every option is to omit it; an explicit invalid value
+	// (empty/zero/negative/nil) is rejected rather than silently defaulted. Options
+	// scoped to the wrong service are a compile error, not a runtime one: e.g.
+	// WithTTL(...) cannot be passed to NewFirestoreSessionStore, and WithShardSize(...)
+	// cannot be passed to NewFirestoreStreamManager.
+	t.Run("session store rejects invalid values", func(t *testing.T) {
 		cases := []struct {
 			name string
-			opt  FirestoreSessionStoreOption
+			opt  SessionStoreOption
 		}{
+			{"empty collection", WithCollection("")},
+			{"zero checkpoint interval", WithCheckpointInterval(0)},
 			{"negative checkpoint interval", WithCheckpointInterval(-1)},
+			{"zero shard size", WithShardSize(0)},
 			{"negative shard size", WithShardSize(-10)},
+			{"nil prefix fn", WithSnapshotPathPrefix(nil)},
 		}
 		for _, tc := range cases {
 			var cfg sessionStoreOptions
 			if err := tc.opt.applySessionStore(&cfg); err == nil {
+				t.Errorf("%s: expected error", tc.name)
+			}
+		}
+	})
+
+	t.Run("stream manager rejects invalid values", func(t *testing.T) {
+		cases := []struct {
+			name string
+			opt  StreamManagerOption
+		}{
+			{"empty collection", WithCollection("")},
+			{"zero timeout", WithTimeout(0)},
+			{"negative timeout", WithTimeout(-time.Second)},
+			{"zero ttl", WithTTL(0)},
+			{"negative ttl", WithTTL(-time.Second)},
+		}
+		for _, tc := range cases {
+			var cfg streamManagerOptions
+			if err := tc.opt.applyStreamManager(&cfg); err == nil {
 				t.Errorf("%s: expected error", tc.name)
 			}
 		}
@@ -163,15 +191,14 @@ func TestOptionValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("zero means default not error", func(t *testing.T) {
-		// A zero value is treated as unset (the constructor applies the default),
-		// matching the stream manager's option style.
-		var cfg sessionStoreOptions
-		if err := WithShardSize(0).applySessionStore(&cfg); err != nil {
-			t.Errorf("WithShardSize(0) should be a no-op, got %v", err)
+	t.Run("collection applies to both services", func(t *testing.T) {
+		var ss sessionStoreOptions
+		if err := WithCollection("c").applySessionStore(&ss); err != nil || ss.collection != "c" {
+			t.Errorf("session store: collection=%q err=%v", ss.collection, err)
 		}
-		if err := WithCheckpointInterval(0).applySessionStore(&cfg); err != nil {
-			t.Errorf("WithCheckpointInterval(0) should be a no-op, got %v", err)
+		var sm streamManagerOptions
+		if err := WithCollection("c").applyStreamManager(&sm); err != nil || sm.collection != "c" {
+			t.Errorf("stream manager: collection=%q err=%v", sm.collection, err)
 		}
 	})
 }
