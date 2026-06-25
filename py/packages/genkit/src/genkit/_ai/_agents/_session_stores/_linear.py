@@ -128,6 +128,7 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
         state = await self.reconstruct_state(record.session_id, record.seq)
         return SessionSnapshot(
             snapshot_id=record.snapshot_id,
+            session_id=record.session_id,
             parent_id=record.parent_id,
             created_at=record.created_at,
             state=state,

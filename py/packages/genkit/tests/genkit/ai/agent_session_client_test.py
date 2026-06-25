@@ -27,7 +27,7 @@ from genkit._ai._agents._client import (
 from genkit._ai._aio import Genkit
 from genkit._ai._json_patch import apply_json_patch
 from genkit._ai._testing import define_programmable_model
-from genkit._core._model import Message, ModelResponse
+from genkit._core._model import Message, ModelResponse, ModelResponseChunk as ModelResponseChunkModel
 from genkit._core._typing import (
     AgentFinishReason,
     AgentInit,
@@ -97,12 +97,12 @@ class MockAgentTransport(AgentTransport[dict[str, Any], str]):
 
     async def run_turn(
         self,
-        input: AgentInput,
+        agent_input: AgentInput,
         init: AgentInit,
         abort_event: asyncio.Event | None = None,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
         self.connect_init = init
-        self.send_payloads.append(input)
+        self.send_payloads.append(agent_input)
 
         async def _generator() -> AsyncIterator[AgentStreamChunk]:
             while True:
@@ -189,6 +189,57 @@ async def test_session_sends_input_and_aggregates_state() -> None:
     assert len(session.messages) == 2  # Turn 1 User input + model final output
     assert session.messages[0].content[0].root.text == 'Weather in Tokyo?'
     assert session.messages[1].content[0].root.text == 'Final output!'
+
+
+@pytest.mark.asyncio
+async def test_no_store_inprocess_transport_assembles_output_message() -> None:
+    """InProcessTransport must return a complete AgentOutput even without a session store."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    pm.chunks = [
+        [
+            ModelResponseChunkModel(role=Role.MODEL, content=[Part(root=TextPart(text='Hi '))]),
+            ModelResponseChunkModel(role=Role.MODEL, content=[Part(root=TextPart(text='there!'))]),
+        ]
+    ]
+    pm.responses.append(
+        ModelResponse(
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Hi there!'))]),
+            finish_reason=FinishReason.STOP,
+        )
+    )
+
+    agent = ai.define_agent(name='noStoreAgent', model='programmableModel', system='Reply briefly.')
+    session = agent.chat()
+    out = await session.send('Hello').output
+
+    assert out.text == 'Hi there!'
+    assert len(session.messages) == 2
+    assert session.messages[1].content[0].root.text == 'Hi there!'
+
+
+@pytest.mark.asyncio
+async def test_session_id_populated_from_output_state() -> None:
+    """The server assigns the session id on the first turn; the client must adopt it."""
+    transport = MockAgentTransport()
+    transport.final_output = AgentOutput(
+        snapshot_id='snapshot_1',
+        session_id='session_abc',
+        message=MessageData(role='model', content=[Part(root=TextPart(text='Done.'))]),
+        finish_reason=AgentFinishReason.STOP,
+    )
+
+    # Fresh session with no init, so it starts without a session id.
+    session = AgentSession(transport)
+    assert session.session_id is None
+
+    turn = session.send('Hello')
+    transport.push_chunk(
+        AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.STOP))
+    )
+    await turn
+
+    assert session.session_id == 'session_abc'
 
 
 @pytest.mark.asyncio
@@ -497,6 +548,34 @@ async def test_agent_turn_direct_async_iteration() -> None:
 
     # Verify we can still await output
     output = await turn.output
+    assert output.message is not None
+    assert output.message.content is not None
+    assert output.message.content[0].root.text == 'Final output!'
+
+
+@pytest.mark.asyncio
+async def test_agent_turn_direct_await() -> None:
+    """Awaiting the turn itself runs it to completion and returns the final response."""
+    transport = MockAgentTransport()
+    transport.final_output = AgentOutput(
+        snapshot_id='snapshot_1',
+        message=MessageData(role='model', content=[Part(root=TextPart(text='Final output!'))]),
+        finish_reason=AgentFinishReason.STOP,
+    )
+
+    session = AgentSession(transport)
+    turn = session.send('Weather in Tokyo?')
+
+    transport.push_chunk(
+        AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='ignored chunk'))]))
+    )
+    transport.push_chunk(
+        AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.STOP))
+    )
+
+    # Never touch turn.stream — awaiting the turn alone drives it to completion.
+    output = await turn
+
     assert output.message is not None
     assert output.message.content is not None
     assert output.message.content[0].root.text == 'Final output!'

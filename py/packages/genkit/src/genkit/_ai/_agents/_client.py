@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import inspect
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Generator, Iterator
 from dataclasses import dataclass
 from typing import Any, Generic, Protocol, TypeVar, runtime_checkable
 from uuid import uuid4
@@ -50,6 +50,10 @@ StateT = TypeVar('StateT')
 StreamT = TypeVar('StreamT')
 InputT = TypeVar('InputT')
 OutputT = TypeVar('OutputT')
+# The transport protocol only ever hands these types back out (in the sessions it
+# returns), never takes them in, so they're covariant.
+StateT_co = TypeVar('StateT_co', covariant=True)
+StreamT_co = TypeVar('StreamT_co', covariant=True)
 
 
 # ===========================================================================
@@ -58,7 +62,7 @@ OutputT = TypeVar('OutputT')
 
 
 @runtime_checkable
-class AgentTransport(Protocol, Generic[StateT, StreamT]):
+class AgentTransport(Protocol, Generic[StateT_co, StreamT_co]):
     """Interface implemented by the transport layer (local or websocket)."""
 
     async def run_turn(
@@ -67,7 +71,15 @@ class AgentTransport(Protocol, Generic[StateT, StreamT]):
         init: AgentInit,
         abort_event: asyncio.Event | None = None,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
-        """Runs a single turn and returns the stream and output awaitables."""
+        """Run a single turn, returning a (stream, output) pair.
+
+        The transport must drive the turn to completion on its own — the returned
+        output awaitable has to resolve whether or not the caller consumes the
+        stream. The stream is an optional live view of the same turn, never the
+        thing that advances it, so ``await output`` works without draining chunks.
+        Concretely: read your own transport (socket, queue, SSE) to the end in a
+        background task; don't rely on the client to pull the stream for you.
+        """
         ...
 
     async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot | None:
@@ -101,7 +113,7 @@ class AgentChunk(Generic[StreamT]):
     raw: AgentStreamChunk | None = None
 
 
-class AgentInterrupt(Generic[InputT, OutputT]):
+class AgentInterrupt(Generic[InputT, OutputT, StateT, StreamT]):
     """Represents a tool request interrupt that paused the turn."""
 
     def __init__(
@@ -109,14 +121,14 @@ class AgentInterrupt(Generic[InputT, OutputT]):
         name: str,
         ref: str | None,
         input_data: InputT,
-        session: AgentSession[Any, Any],
+        session: AgentSession[StateT, StreamT],
     ) -> None:
         self.name = name
         self.ref = ref
         self.input = input_data
         self._session = session
 
-    def respond(self, output: OutputT) -> AgentTurn[Any, Any]:
+    def respond(self, output: OutputT) -> AgentTurn[StateT, StreamT]:
         """Builds a resume turn to answer the interrupt and continue the session."""
         resume_payload = Resume(
             respond=[
@@ -131,7 +143,7 @@ class AgentInterrupt(Generic[InputT, OutputT]):
         )
         return self._session.resume(resume_payload)
 
-    def restart(self) -> AgentTurn[Any, Any]:
+    def restart(self) -> AgentTurn[StateT, StreamT]:
         """Builds a resume turn that re-issues the tool call unchanged."""
         resume_payload = Resume(
             restart=[
@@ -212,7 +224,7 @@ class AgentTurn(Generic[StateT, StreamT]):
         self._stream = stream
         self._output = output
         self._abort_fn = abort_fn
-        self._interrupt: AgentInterrupt | None = None
+        self._interrupt: AgentInterrupt[Any, Any, StateT, StreamT] | None = None
 
     @property
     def stream(self) -> AsyncIterable[AgentChunk[StreamT]]:
@@ -222,12 +234,20 @@ class AgentTurn(Generic[StateT, StreamT]):
         """Allow iterating directly over the turn to stream chunks."""
         return self._stream.__aiter__()
 
+    def __await__(self) -> Generator[Any, None, AgentResponse[StateT]]:
+        """Allow ``await turn`` to run the turn and return its final response.
+
+        Streaming the chunks is optional — the turn runs in the background either
+        way — so awaiting the turn directly is the same as awaiting ``turn.output``.
+        """
+        return self._output.__await__()
+
     @property
     def output(self) -> Awaitable[AgentResponse[StateT]]:
         return self._output
 
     @property
-    def interrupt(self) -> AgentInterrupt | None:
+    def interrupt(self) -> AgentInterrupt[Any, Any, StateT, StreamT] | None:
         """Returns the interrupt if the turn paused on one, otherwise None."""
         return self._interrupt
 
@@ -300,6 +320,168 @@ class AgentClient(Generic[StateT, StreamT]):
         return await self._transport.abort_snapshot(snapshot_id)
 
 
+def _to_agent_input(input: str | AgentInput) -> AgentInput:  # noqa: A002
+    """Wraps a plain string in an AgentInput; passes an AgentInput through unchanged."""
+    if isinstance(input, str):
+        return AgentInput(message=MessageData(role='user', content=[Part(root=TextPart(text=input))]))
+    return input
+
+
+def _extract_abort_signal(opts: Any) -> Any:  # noqa: ANN401
+    """Pulls a caller-supplied abort_signal out of opts (dict or attribute), if any."""
+    if isinstance(opts, dict):
+        return opts.get('abort_signal')
+    if opts is not None and hasattr(opts, 'abort_signal'):
+        return opts.abort_signal
+    return None
+
+
+class _TurnDriver(Generic[StateT, StreamT]):
+    """Runs one in-flight turn and exposes it as an AgentTurn.
+
+    Everything a turn needs lives here so AgentSession.send stays small: it starts
+    the transport, pumps chunks onto the caller's stream, resolves the final output,
+    surfaces interrupts, and handles abort. Keeping it in one object means a single
+    cancellation path and no closures that reference each other before they exist.
+    """
+
+    def __init__(
+        self,
+        session: AgentSession[StateT, StreamT],
+        inp: AgentInput,
+        init: AgentInit,
+        external_signal: Any = None,  # noqa: ANN401
+    ) -> None:
+        self._session = session
+        self._inp = inp
+        self._init = init
+        self._external_signal = external_signal
+        self._aborted = asyncio.Event()
+        self._output: asyncio.Future[AgentResponse[StateT]] = asyncio.get_event_loop().create_future()
+        self._chunks: asyncio.Queue[AgentChunk[StreamT] | BaseException | None] = asyncio.Queue()
+        self._run_task: asyncio.Task[None] | None = None
+        self._signal_task: asyncio.Task[None] | None = None
+        # Built up front so the pump can record interrupts on it without a forward ref.
+        self._turn: AgentTurn[StateT, StreamT] = AgentTurn(
+            stream=self._stream(),
+            output=self._output,
+            abort_fn=self.abort,
+        )
+
+    def start(self) -> AgentTurn[StateT, StreamT]:
+        """Launches the turn in the background and returns its handle immediately."""
+        self._output.add_done_callback(lambda _: self._cancel_signal_watcher())
+        self._run_task = asyncio.create_task(self._run())
+        if self._external_signal is not None:
+            self._signal_task = asyncio.create_task(self._watch_external_signal())
+        return self._turn
+
+    async def _run(self) -> None:
+        """Pumps chunks to the caller's stream while a sibling task resolves the output.
+
+        Per the transport contract, the ``output`` awaitable is the authoritative
+        "turn is done" signal and settles on its own. We resolve ``self._output`` from a
+        sibling task rather than awaiting ``output`` after the pump loop so the turn's
+        *result* stays decoupled from the *stream's* health.
+
+        - If ``_emit`` chokes on a bad chunk after the transport has already produced a
+          valid output, the resolver has set ``self._output`` from the real result, so the
+          decode error only surfaces on the stream — a good turn isn't poisoned by a
+          plumbing hiccup. Sequencing ``await output`` after the pump would instead dump
+          that exception onto ``self._output``.
+        - The pump and resolver can settle in either order; both guard on
+          ``self._output.done()`` so whoever's first wins and the other is a no-op
+          (including ``abort()`` cancelling ``self._output`` directly).
+        - The done-callback cancels the resolver once ``self._output`` is settled by
+          anyone, so the task never dangles.
+        """
+        try:
+            stream, output = await self._session._transport.run_turn(self._inp, self._init, abort_event=self._aborted)
+            resolve_task = asyncio.create_task(self._resolve_output(output))
+            self._output.add_done_callback(lambda _: resolve_task.cancel())
+
+            async for chunk in stream:
+                self._emit(chunk)
+                if chunk.turn_end:
+                    break
+        except BaseException as e:
+            if not self._output.done():
+                self._output.set_exception(e)
+            self._chunks.put_nowait(e)
+        finally:
+            self._chunks.put_nowait(None)
+
+    async def _resolve_output(self, output: Awaitable[AgentOutput]) -> None:
+        """Awaits the transport's final output and publishes it as the turn's result."""
+        try:
+            raw = await output
+            self._session.update_from_output(raw)
+            if not self._output.done():
+                self._output.set_result(
+                    AgentResponse(raw=raw, messages=list(self._session.messages), state=self._session.state)
+                )
+        except BaseException as e:
+            if not self._output.done():
+                self._output.set_exception(e)
+
+    def _emit(self, chunk: AgentStreamChunk) -> None:
+        """Applies any state patch, transforms the wire chunk, and records an interrupt."""
+        if chunk.custom_patch:
+            self._session.apply_custom_patch(chunk.custom_patch)
+
+        agent_chunk: AgentChunk[Any] = AgentChunk(
+            text=get_chunk_text(chunk.model_chunk),
+            reasoning=getattr(chunk.model_chunk, 'reasoning', None) if chunk.model_chunk else None,
+            tool_request=get_chunk_tool_request(chunk.model_chunk),
+            tool_response=get_chunk_tool_response(chunk.model_chunk),
+            artifact=getattr(chunk, 'artifact', None),
+            custom=self._session.state if chunk.custom_patch else None,
+            raw=chunk,
+        )
+
+        if agent_chunk.tool_request:
+            request = agent_chunk.tool_request.tool_request
+            self._turn._interrupt = AgentInterrupt(
+                name=request.name,
+                ref=request.ref,
+                input_data=request.input,
+                session=self._session,
+            )
+
+        self._chunks.put_nowait(agent_chunk)
+
+    async def _stream(self) -> AsyncIterator[AgentChunk[StreamT]]:
+        """Yields transformed chunks until the turn ends, re-raising any failure."""
+        while True:
+            item = await self._chunks.get()
+            if item is None:
+                break
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+
+    async def _watch_external_signal(self) -> None:
+        """Aborts the turn when the caller's external abort_signal fires."""
+        try:
+            if self._external_signal is not None and hasattr(self._external_signal, 'wait'):
+                await self._external_signal.wait()
+            self.abort()
+        except asyncio.CancelledError:
+            pass
+
+    def _cancel_signal_watcher(self) -> None:
+        if self._signal_task is not None:
+            self._signal_task.cancel()
+
+    def abort(self) -> None:
+        """Tells the transport to stop and cancels the in-flight turn."""
+        self._aborted.set()
+        if not self._output.done():
+            self._output.cancel()
+        if self._run_task is not None and not self._run_task.done():
+            self._run_task.cancel()
+
+
 class AgentSession(Generic[StateT, StreamT]):
     """A stateful conversation session with an agent."""
 
@@ -350,6 +532,17 @@ class AgentSession(Generic[StateT, StreamT]):
     def build_init(self) -> AgentInit:
         if self.snapshot_id:
             return AgentInit(snapshot_id=self.snapshot_id)
+        if self._client_managed():
+            if self.session_id is None:
+                self.session_id = str(uuid4())
+            return AgentInit(
+                state=SessionState(
+                    session_id=self.session_id,
+                    messages=self.messages,
+                    custom=self.state,
+                    artifacts=self.artifacts,
+                )
+            )
         if self.state is not None:
             if self.session_id is None:
                 self.session_id = str(uuid4())
@@ -363,154 +556,29 @@ class AgentSession(Generic[StateT, StreamT]):
             )
         return self._connect_init or AgentInit()
 
+    def _client_managed(self) -> bool:
+        # In-process transport exposes store=None when the agent has no session store.
+        # Other transports (e.g. HTTP) omit the attribute — server owns identity there.
+        return getattr(self._transport, 'store', ...) is None
+
     def send(
         self,
         input: str | AgentInput,
         opts: Any = None,  # noqa: ANN401
     ) -> AgentTurn[StateT, StreamT]:
-        """Sends a message to the agent for a new turn."""
-        if isinstance(input, str):
-            inp = AgentInput(
-                message=MessageData(
-                    role='user',
-                    content=[Part(root=TextPart(text=input))],
-                )
-            )
-        else:
-            inp = input
-
+        """Sends a message to the agent and returns a handle to the in-flight turn."""
+        inp = _to_agent_input(input)
+        init = self.build_init()
         if inp.message:
             self.messages.append(inp.message)
 
-        init = self.build_init()
-        cancelled_event = asyncio.Event()
-
-        # Check for external abort_signal in opts
-        external_signal = None
-        if isinstance(opts, dict):
-            external_signal = opts.get('abort_signal')
-        elif opts and hasattr(opts, 'abort_signal'):
-            external_signal = opts.abort_signal
-
-        turn_output_future = asyncio.get_event_loop().create_future()
-        stream_queue = asyncio.Queue()
-
-        watch_sig_task = None
-        if external_signal is not None:
-
-            async def watch_external() -> None:
-                try:
-                    if external_signal is not None and hasattr(external_signal, 'wait'):
-                        await external_signal.wait()
-                    cancelled_event.set()
-                    if not turn_output_future.done():
-                        turn_output_future.cancel()
-                    if not run_task.done():
-                        run_task.cancel()
-                except asyncio.CancelledError:
-                    pass
-
-            watch_sig_task = asyncio.create_task(watch_external())
-
-        def cleanup_sig_task(_: object) -> None:
-            if watch_sig_task:
-                watch_sig_task.cancel()
-
-        turn_output_future.add_done_callback(cleanup_sig_task)
-
-        async def run_and_watch() -> None:
-            try:
-                # 1. Start the turn on the transport (which runs actively in the background!)
-                stream, output_awaitable = await self._transport.run_turn(
-                    inp,
-                    init,
-                    abort_event=cancelled_event,
-                )
-
-                # 2. Spawn a background task to watch the transport's output
-                async def watch_output() -> None:
-                    try:
-                        res = await output_awaitable
-                        self.apply_output(res)
-                        if not turn_output_future.done():
-                            turn_output_future.set_result(
-                                AgentResponse(
-                                    raw=res,
-                                    messages=list(self.messages),
-                                    state=self.state,
-                                )
-                            )
-                    except BaseException as e:
-                        if not turn_output_future.done():
-                            turn_output_future.set_exception(e)
-
-                watch_task = asyncio.create_task(watch_output())
-                turn_output_future.add_done_callback(lambda _: watch_task.cancel())
-
-                # 3. Stream chunks to the developer's stream, applying patches in real-time
-                async for chunk in stream:
-                    if chunk.custom_patch:
-                        self.apply_custom_patch(chunk.custom_patch)
-
-                    text = get_chunk_text(chunk.model_chunk)
-                    reasoning = getattr(chunk.model_chunk, 'reasoning', None) if chunk.model_chunk else None
-                    tool_request = get_chunk_tool_request(chunk.model_chunk)
-                    tool_response = get_chunk_tool_response(chunk.model_chunk)
-                    artifact = getattr(chunk, 'artifact', None)
-
-                    c = AgentChunk(
-                        text=text,
-                        reasoning=reasoning,
-                        tool_request=tool_request,
-                        tool_response=tool_response,
-                        artifact=artifact,
-                        custom=self.state if chunk.custom_patch else None,
-                        raw=chunk,
-                    )
-
-                    if tool_request:
-                        turn._interrupt = AgentInterrupt(
-                            name=tool_request.tool_request.name,
-                            ref=tool_request.tool_request.ref,
-                            input_data=tool_request.tool_request.input,
-                            session=self,
-                        )
-
-                    stream_queue.put_nowait(c)
-                    if chunk.turn_end:
-                        break
-
-            except BaseException as e:
-                if not turn_output_future.done():
-                    turn_output_future.set_exception(e)
-                stream_queue.put_nowait(e)
-            finally:
-                stream_queue.put_nowait(None)
-
-        run_task = asyncio.create_task(run_and_watch())
-
-        async def stream_generator() -> AsyncIterator[AgentChunk[StreamT]]:
-            while True:
-                item = await stream_queue.get()
-                if item is None:
-                    break
-                if isinstance(item, BaseException):
-                    raise item
-                yield item
-
-        def do_abort() -> None:
-            cancelled_event.set()
-            if not turn_output_future.done():
-                turn_output_future.cancel()
-            if not run_task.done():
-                run_task.cancel()
-
-        turn = AgentTurn(
-            stream=stream_generator(),
-            output=turn_output_future,
-            abort_fn=do_abort,
+        driver = _TurnDriver(
+            session=self,
+            inp=inp,
+            init=init,
+            external_signal=_extract_abort_signal(opts),
         )
-        return turn
+        return driver.start()
 
     def resume(self, resume: Resume) -> AgentTurn[StateT, StreamT]:
         """Continues a conversation from an interrupt."""
@@ -522,36 +590,18 @@ class AgentSession(Generic[StateT, StreamT]):
             return None
         return await self._transport.get_snapshot(self.snapshot_id)
 
-    async def detach(self, input: str | AgentInput) -> DetachedTask[StateT]:
-        if isinstance(input, str):
-            inp = AgentInput(
-                message=MessageData(
-                    role='user',
-                    content=[Part(root=TextPart(text=input))],
-                )
-            )
-        else:
-            inp = input
-
+    async def detach(self, input: str | AgentInput) -> DetachedTask[StateT]:  # noqa: A002
+        inp = _to_agent_input(input)
         inp.detach = True
         init = self.build_init()
 
-        stream, output_awaitable = await self._transport.run_turn(inp, init)
+        # The transport drives the turn to completion on its own (see
+        # AgentTransport.run_turn), so the output resolves whether or not anyone
+        # reads the stream. For detach we only care about the resulting handle.
+        _stream, output_awaitable = await self._transport.run_turn(inp, init)
+        raw_output = await output_awaitable
 
-        async def drive_stream() -> None:
-            try:
-                async for _ in stream:
-                    pass
-            except Exception:  # noqa: BLE001, S110
-                pass
-
-        drive_task = asyncio.create_task(drive_stream())
-        try:
-            raw_output = await output_awaitable
-        finally:
-            drive_task.cancel()
-
-        self.apply_output(raw_output)
+        self.update_from_output(raw_output)
 
         if not raw_output.snapshot_id:
             raise ValueError('detach did not return a snapshot_id.')
@@ -572,15 +622,19 @@ class AgentSession(Generic[StateT, StreamT]):
         # e.g. transport.close() could return the final output or None.
         final = getattr(self._transport, 'final_output', None)
         if final is not None and final.state is not None:
-            self.apply_output(final)
+            self.update_from_output(final)
 
     def apply_custom_patch(self, patch: Any) -> None:  # noqa: ANN401
         patch_list = patch.root if hasattr(patch, 'root') else patch
         self.state = apply_json_patch(self.state, patch_list)
 
-    def apply_output(self, raw: AgentOutput) -> None:
+    def update_from_output(self, raw: AgentOutput) -> None:
+        # session_id and snapshot_id are the output's identity envelope and always
+        # live at the top level; state is just the payload (custom/messages/artifacts).
         if raw.snapshot_id is not None:
             self.snapshot_id = raw.snapshot_id
+        if raw.session_id is not None:
+            self.session_id = raw.session_id
         if raw.state is not None:
             self.state = raw.state.custom
             if raw.state.messages:
@@ -615,32 +669,25 @@ class DetachedTask(Generic[StateT]):
 # ===========================================================================
 
 
-def get_chunk_text(model_chunk: ModelResponseChunk | None) -> str | None:
-    if not model_chunk or not model_chunk.content:
-        return None
-    texts = []
-    for part in model_chunk.content:
+def chunk_part_roots(model_chunk: ModelResponseChunk | None) -> Iterator[object]:
+    """Yields the inner root of each part in a chunk, normalizing dicts to Part."""
+    for part in model_chunk.content if model_chunk and model_chunk.content else []:
         p = part if isinstance(part, Part) else Part.model_validate(part)
-        if isinstance(p.root, TextPart):
-            texts.append(p.root.text)
+        yield p.root
+
+
+def get_chunk_text(model_chunk: ModelResponseChunk | None) -> str | None:
+    texts = [root.text for root in chunk_part_roots(model_chunk) if isinstance(root, TextPart)]
     return ''.join(texts) if texts else None
 
 
 def get_chunk_tool_request(model_chunk: ModelResponseChunk | None) -> ToolRequestPart | None:
-    if not model_chunk or not model_chunk.content:
-        return None
-    for part in model_chunk.content:
-        p = part if isinstance(part, Part) else Part.model_validate(part)
-        if isinstance(p.root, ToolRequestPart):
-            return p.root
-    return None
+    for root in chunk_part_roots(model_chunk):
+        if isinstance(root, ToolRequestPart):
+            return root
 
 
 def get_chunk_tool_response(model_chunk: ModelResponseChunk | None) -> ToolResponsePart | None:
-    if not model_chunk or not model_chunk.content:
-        return None
-    for part in model_chunk.content:
-        p = part if isinstance(part, Part) else Part.model_validate(part)
-        if isinstance(p.root, ToolResponsePart):
-            return p.root
-    return None
+    for root in chunk_part_roots(model_chunk):
+        if isinstance(root, ToolResponsePart):
+            return root

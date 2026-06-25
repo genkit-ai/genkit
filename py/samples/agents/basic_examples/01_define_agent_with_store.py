@@ -15,7 +15,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: define_agent + store — two turns in a persistent session."""
+"""Persist a session, then resume it later from just a snapshot id.
+
+Run a turn, save the snapshot id, and drop the session. Later — after a client
+reconnect or a server restart — rehydrate the whole conversation from that id and
+keep going; the agent still remembers turn 1. The store is the source of truth, so
+your app only has to hold onto a string. With a store, session_id is minted
+server-side and arrives after the first turn completes. Requires GEMINI_API_KEY.
+"""
 
 from __future__ import annotations
 
@@ -59,40 +66,21 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    # --- 1. START A NEW SESSION & RUN TURN 1 ---
-    print('--- STARTING A NEW SESSION ---')
     session = agent.chat()
+    turn = session.send('Weather in Paris?')
+    # session_id is None until this turn finishes — the store mints it server-side
+    await turn.output
+    # → session_id and snapshot_id are both set now
 
-    print('Sending: Weather in Paris?')
-    turn1 = session.send('Weather in Paris?')
-    print('Response: ', end='', flush=True)
-    async for chunk in turn1:
-        if chunk.text:
-            print(chunk.text, end='', flush=True)
-    print()  # Newline after stream finishes
-
-    # Capture the snapshot ID to resume this conversation later!
-    saved_snapshot_id = session.snapshot_id
-    assert saved_snapshot_id is not None
-    print(f'[Client] Saving snapshot ID for later: {saved_snapshot_id}')
+    # Hold onto snapshot_id — it's the resume handle after disconnect/restart.
+    checkpoint = session.snapshot_id
+    assert checkpoint
     await session.close()
 
-    print('\n======================================================')
-    print('   Simulating client disconnect / server restart...   ')
-    print('======================================================\n')
-
-    # --- 2. RESUME THE SESSION LATER & RUN TURN 2 ---
-    print(f'--- RESUMING SESSION: {saved_snapshot_id} ---')
-    resumed_session = await agent.load_chat(saved_snapshot_id)
-
-    print('Sending: What city did I ask about? One word.')
-    turn2 = resumed_session.send('What city did I ask about? One word.')
-    print('Response: ', end='', flush=True)
-    async for chunk in turn2:
-        if chunk.text:
-            print(chunk.text, end='', flush=True)
-    print()
-    await resumed_session.close()
+    # load_chat restores session_id too — it's already there before you send.
+    resumed = await agent.load_chat(checkpoint)
+    # → answers "Paris" — the resumed session still has turn 1's context
+    await resumed.send('What city did I ask about? One word.')
 
 
 if __name__ == '__main__':

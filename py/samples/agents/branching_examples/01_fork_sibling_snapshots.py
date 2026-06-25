@@ -15,105 +15,62 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fork one conversation into two paths from the same checkpoint.
+"""Fork one conversation into two siblings from the same checkpoint.
 
-Run a first turn normally, then start two invocations from that turn's
-snapshotId with different follow-up messages. You get sibling snapshots
-instead of one linear history — handy when someone wants to compare directions
-(e.g. "minimal" vs "bold") without losing the shared setup.
+Run a shared setup turn, then start two branches from that turn's snapshot with
+different follow-ups. You get sibling timelines instead of one linear history —
+the move when someone wants to compare directions without losing the setup.
 
-Once the tree branches, "latest for this session" is ambiguous; the client
-needs to track snapshotId per path.
+Once the tree forks, "the latest turn for this session" is ambiguous, so looking
+the session up by id surfaces a structured, recoverable error instead of guessing.
+Requires GEMINI_API_KEY.
 """
 
 from __future__ import annotations
 
-from genkit import Genkit, GenkitError, SessionErrorType, StatusCodes
+from genkit import Genkit, GenkitError, SessionErrorType
 from genkit.agent import InMemoryBranchingSessionStore
 from genkit.plugins.google_genai import GoogleAI
 
-# Initialize Genkit with GoogleAI plugin and the purpose-built branching store
 ai = Genkit(plugins=[GoogleAI()])
 store = InMemoryBranchingSessionStore()
 
-# Define the agent natively using Gemini Flash
 agent = ai.define_agent(
-    name='branchEcho',
+    name='designer',
     model='googleai/gemini-flash-latest',
+    system='You help design a product landing page. Reply in two or three short sentences.',
     store=store,
 )
 
 
 async def main() -> None:
-    # 1. Run the initial setup turn normally
-    print('--- TURN 1 (ROOT SETUP) ---')
-    session = agent.chat()
-    async for chunk in session.send('Plan a landing page'):
-        if chunk.text:
-            print(chunk.text, end='', flush=True)
-    print()
+    # One shared setup turn. Its snapshot is the fork point for both siblings.
+    root = agent.chat()
+    await root.send('Plan a landing page for a note-taking app.')
+    checkpoint = root.snapshot_id
+    session_id = root.session_id
+    assert checkpoint and session_id
 
-    root_snap = session.snapshot_id
-    session_id = session.session_id
-    assert root_snap
-    print(f'Root Snapshot Saved: {root_snap}\n')
+    # Two branches off the same checkpoint; neither sees the other.
+    # → minimal gets a whitespace-heavy take; bold gets a dark, high-contrast one.
+    minimal = await agent.load_chat(checkpoint)
+    await minimal.send('Direction: minimal.')
+    bold = await agent.load_chat(checkpoint)
+    await bold.send('Direction: bold.')
+    bold_leaf = bold.snapshot_id
+    assert bold_leaf
 
-    # 2. Fork Path A (Minimal) from the root checkpoint
-    print('--- TURN 2 (PATH A: MINIMAL) ---')
-    session_minimal = await agent.load_chat(root_snap)
-    async for chunk in session_minimal.send('Direction: minimal'):
-        if chunk.text:
-            print(chunk.text, end='', flush=True)
-    print()
-    min_snap_id = session_minimal.snapshot_id
-    print(f'Minimal Branch Snapshot: {min_snap_id}\n')
-
-    # 3. Fork Path B (Bold) from the exact same root checkpoint
-    print('--- TURN 2 (PATH B: BOLD) ---')
-    session_bold = await agent.load_chat(root_snap)
-    async for chunk in session_bold.send('Direction: bold'):
-        if chunk.text:
-            print(chunk.text, end='', flush=True)
-    print()
-    bold_snap_id = session_bold.snapshot_id
-    print(f'Bold Branch Snapshot: {bold_snap_id}\n')
-
-    # 4. Verify parentage relationships in the database
-    min_snap = await store.get_snapshot(snapshot_id=min_snap_id)
-    bold_snap = await store.get_snapshot(snapshot_id=bold_snap_id)
-    assert min_snap and bold_snap
-    assert min_snap.parent_id == root_snap
-    assert bold_snap.parent_id == root_snap
-    print(' Parent validation succeeded: Both branches fork from root_snap!')
-
-    # 5. Handle the branching conflict (ambiguousBranch) as a first-class recovery flow
-    print('--- CONFLICT RESOLUTION & RECOVERY ---')
+    # The tree has two leaves now, so a session-id lookup can't pick "the latest"
+    # turn. Genkit raises AMBIGUOUS_BRANCH carrying the conflicting leaves; you
+    # resolve it by continuing from the specific leaf you mean.
     try:
-        # Looking up by sessionId is ambiguous because the session has branched (two leaf snapshots)
         await store.get_snapshot(session_id=session_id)
     except GenkitError as exc:
-        # A. Assert that we got the expected precondition failure and structured details
-        assert exc.status == StatusCodes.FAILED_PRECONDITION
+        # → exc.details holds type=AMBIGUOUS_BRANCH and the conflicting leaves
         assert exc.details and exc.details.get('type') == SessionErrorType.AMBIGUOUS_BRANCH
-
-        # B. Extract the conflicting leaves from the structured metadata
-        leaves = exc.details.get('leaves')
-        print(f'⚠️ Detected Ambiguous Branch Conflict for Session: {session_id}')
-        print(f'   Conflicting Leaf Snapshots in DB: {leaves}')
-
-        # C. Programmatically resolve the conflict by choosing one of the branches to resume!
-        # In this case, we choose to resume Path B (the bold branch) by choosing its snapshot ID
-        chosen_leaf = leaves[1] if leaves[1] == bold_snap_id else leaves[0]
-        print(f'✅ Programmatically resolving conflict: Resuming from Bold Branch ({chosen_leaf})...')
-
-        resolved_session = await agent.load_chat(chosen_leaf)
-        async for chunk in resolved_session.send('Add a pricing section to the landing page'):
-            if chunk.text:
-                print(chunk.text, end='', flush=True)
-        print()
-        print(f'🚀 Recovery Flow Completed! New active snapshot: {resolved_session.snapshot_id}')
-    else:
-        raise AssertionError('Expected sessionId lookup to fail once the session has branched')
+        resumed = await agent.load_chat(bold_leaf)
+        # → continues the bold timeline, extending it with a pricing section
+        await resumed.send('Add a pricing section.')
 
 
 if __name__ == '__main__':

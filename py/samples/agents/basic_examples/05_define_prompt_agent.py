@@ -15,7 +15,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: define_prompt_agent using AgentAPI."""
+"""Turn a named prompt into a multi-turn agent.
+
+Define a reusable prompt once, then wrap it as an agent so it gets sessions,
+streaming, and a store for free — conversational behavior without rewriting the
+prompts you already have. Requires GEMINI_API_KEY.
+"""
 
 from __future__ import annotations
 
@@ -36,10 +41,8 @@ agent = ai.define_prompt_agent(name='greeterPrompt', store=store)
 
 async def main() -> None:
     session = agent.chat()
-    print('--- SENDING TURN ---')
-    async for chunk in session.send('Hello!'):
-        print('chunk:', chunk)
-    await session.close()
+    # → the greeter prompt drives the turn; you get a warm, brief hello back
+    await session.send('Hello!')
 
 
 if __name__ == '__main__':

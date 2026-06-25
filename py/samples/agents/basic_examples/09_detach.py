@@ -15,7 +15,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: session.detach() — early return + poll background execution using AgentAPI."""
+"""Fire a long turn into the background and poll it to completion.
+
+session.detach() submits a turn and returns immediately with a snapshot id instead of
+streaming — the work runs server-side. You poll that snapshot until it reaches a
+terminal status. This is the shape of a job-queue / async-task API on top of an agent.
+Requires GEMINI_API_KEY.
+"""
 
 from __future__ import annotations
 
@@ -31,11 +37,10 @@ store = InMemoryLatestStateStore()
 
 @ai.tool(name='slowWork', description='Simulate long background work.')
 async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
-    for i in range(10):
+    for _i in range(10):
         if ctx.abort_signal.is_set():
             raise GenkitError(status='ABORTED', message='Task aborted')
-        print(f'[slowWork] working step {i + 1}/10...')
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.5)  # pretend each step is real work
     return {'done': True}
 
 
@@ -50,20 +55,18 @@ agent = ai.define_agent(
 
 async def main() -> None:
     session = agent.chat()
-    print('--- SUBMITTING DETACHED TASK ---')
-    task = await session.detach('Please run a long task using slowWork.')
-    print(f'Task detached! Snapshot ID: {task.snapshot_id}')
 
-    # We can poll or wait for the task to complete
+    # Submit the turn and return right away — the work continues in the background.
+    task = await session.detach('Please run a long task using slowWork.')
+    assert task.snapshot_id  # the handle you poll on, hand off, or persist
+
+    # Poll the snapshot until it reaches a terminal status.
     while True:
         snap = await task.poll()
-        if snap and snap.state:
-            print(f'Task Status: {snap.status}, Messages: {len(snap.state.messages or [])}')
-            if snap.status in (SnapshotStatus.COMPLETED, SnapshotStatus.FAILED, SnapshotStatus.ABORTED):
-                break
+        if snap and snap.status in (SnapshotStatus.COMPLETED, SnapshotStatus.FAILED, SnapshotStatus.ABORTED):
+            break  # → settles COMPLETED once slowWork finishes its steps
         await asyncio.sleep(1.0)
 
-    print('Finished!')
     await session.close()
 
 

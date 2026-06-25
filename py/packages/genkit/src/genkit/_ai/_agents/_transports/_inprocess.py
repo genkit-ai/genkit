@@ -30,12 +30,45 @@ from genkit._core._typing import (
     AgentInput,
     AgentOutput,
     AgentStreamChunk,
+    Artifact,
+    MessageData,
+    ModelResponseChunk,
+    Part,
+    Role,
     SessionSnapshot,
     SnapshotStatus,
+    TextPart,
 )
 
 StateT = TypeVar('StateT')
 StreamT = TypeVar('StreamT')
+
+
+def _message_from_model_chunks(chunks: list[ModelResponseChunk]) -> MessageData | None:
+    """Assemble a model message from streamed chunks when there's no snapshot to read."""
+    if not chunks:
+        return None
+    role = chunks[0].role or Role.MODEL
+    content: list[Part] = []
+    text_parts: list[str] = []
+
+    def flush_text() -> None:
+        if text_parts:
+            content.append(Part(root=TextPart(text=''.join(text_parts))))
+            text_parts.clear()
+
+    for chunk in chunks:
+        for part in chunk.content or []:
+            p = part if isinstance(part, Part) else Part.model_validate(part)
+            if isinstance(p.root, TextPart):
+                text_parts.append(p.root.text or '')
+            else:
+                flush_text()
+                content.append(p)
+    flush_text()
+    if not content:
+        return None
+    return MessageData(role=role, content=content)
 
 
 class InProcessTransport:
@@ -89,13 +122,17 @@ class InProcessTransport:
         output_future.add_done_callback(lambda _: abort_task.cancel())
 
         async def drain_connection() -> None:
+            model_chunks: list[ModelResponseChunk] = []
             try:
                 async for chunk in conn.receive():
+                    if chunk.model_chunk is not None:
+                        model_chunks.append(chunk.model_chunk)
                     if chunk.turn_end:
                         snapshot_id = chunk.turn_end.snapshot_id
+                        snap = None
                         state = None
                         message = None
-                        artifacts = []
+                        artifacts: list[Artifact] = []
                         if snapshot_id:
                             snap = await self.get_snapshot(snapshot_id)
                             if snap and snap.state:
@@ -104,8 +141,11 @@ class InProcessTransport:
                                     message = snap.state.messages[-1]
                                 if snap.state.artifacts:
                                     artifacts = list(snap.state.artifacts)
+                        if message is None:
+                            message = _message_from_model_chunks(model_chunks)
 
                         output = AgentOutput(
+                            session_id=snap.session_id if snap else None,
                             snapshot_id=snapshot_id,
                             finish_reason=chunk.turn_end.finish_reason,
                             error=getattr(chunk.turn_end, 'error', None),

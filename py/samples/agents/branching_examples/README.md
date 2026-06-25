@@ -1,30 +1,43 @@
 # Branching samples
 
-These examples show how snapshot forking works in-process. They use a simple
-echo agent so you can run them without `GEMINI_API_KEY` — the interesting
-part is how the client passes `sessionId` vs `snapshotId`.
+Every turn in a store-backed agent is a snapshot you can fork from. These samples
+build up from the core forking mechanics to two end-to-end demos, all in the same
+hero style: `await session.send(...)` drives each turn and inline comments call out
+what each step produces, so the script reads top-to-bottom like a story.
 
-## When to use what
+All of them use `googleai/gemini-flash-latest`, so they require `GEMINI_API_KEY`.
 
-- **First turn in a chat** — `init: { sessionId }`
-- **Fork or regenerate** — `init: { snapshotId: parentSnap }` plus a new user message
-- **Keep going after the user picked a branch** — `init: { snapshotId: activeLeafSnap }`
+## The one idea
 
-After siblings exist, resolving "latest" by `sessionId` alone fails — there
-isn't one leaf anymore. The UI should store a `snapshotId` on each message and
-track which branch is active.
+`session.snapshot_id` bookmarks any turn. `agent.load_chat(snapshot_id)` starts a
+fresh session from that bookmark. Fork the same snapshot twice and you get sibling
+timelines that never see each other — that's the whole primitive.
+
+Once a session has more than one leaf, "the latest turn for this session" is
+ambiguous, so resolve by `snapshot_id` (the branch you mean) rather than
+`session_id` alone.
 
 ## Samples
 
 | File | Pattern |
 |------|---------|
-| `01_fork_sibling_snapshots.py` | Two paths from one checkpoint |
-| `02_regenerate_alternate.py` | Try again without losing the first answer |
-| `03_parallel_explore.py` | Several directions from the same starting point |
-| `04_continue_active_branch.py` | Next turn follows the branch the user chose |
+| `01_fork_sibling_snapshots.py` | Two directions from one checkpoint; resolve the ambiguous-branch lookup |
+| `02_regenerate_alternate.py` | "Try again" without losing the first answer |
+| `03_parallel_explore.py` | Fan a checkpoint out into several branches concurrently (`asyncio.gather`) |
+| `04_continue_active_branch.py` | Resume a normal linear chat on the branch the user picked |
+| `05_time_travel_artifacts.py` | Git for agent state: rewind a build and watch the `Artifacts()` revert too |
+| `06_parallel_deep_research.py` | Fork into parallel grounded research, then synthesize one brief |
+
+The first four are the primitives; the last two combine them into things people
+actually want to build.
+
+## Run
 
 ```bash
 cd py/samples/agents
 uv sync
-genkit start -- uv run branching_examples/01_fork_sibling_snapshots.py
+uv run branching_examples/01_fork_sibling_snapshots.py
 ```
+
+Swap `InMemoryBranchingSessionStore` for `FileBranchingSessionStore('./tree')` in
+any of them to persist the snapshot tree across process restarts.

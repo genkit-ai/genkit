@@ -15,7 +15,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: define_custom_agent using AgentAPI."""
+"""Write the turn loop yourself with define_custom_agent.
+
+When the built-in agent isn't enough, supply a function that owns each turn: read
+history, call the model, stream chunks, and persist the reply. You get full control
+over the loop while sessions, streaming, and the store still work the same from the
+caller's side. Requires GEMINI_API_KEY.
+"""
 
 from __future__ import annotations
 
@@ -64,14 +70,8 @@ agent = ai.define_custom_agent(name='customCoder', fn=custom_coder_fn, store=sto
 
 async def main() -> None:
     session = agent.chat()
-    print('--- SENDING TURN ---')
-    turn = session.send('What is a Python list comprehension?')
-    async for chunk in turn:
-        print('chunk:', chunk)
-
-    out = await turn.output
-    print('output:', out)
-    await session.close()
+    # → the custom fn streams a concise explanation and persists it to history
+    await session.send('What is a Python list comprehension?')
 
 
 if __name__ == '__main__':

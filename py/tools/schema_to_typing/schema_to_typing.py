@@ -169,6 +169,74 @@ def _typed_map_aliases(defs: dict) -> dict[str, str]:
     return result
 
 
+def _top_level_refs(schema: dict) -> set[str]:
+    """Def names referenced via a top-level ``#/$defs/<Name>`` ref (not a nested ``/properties/`` ref)."""
+    found: set[str] = set()
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            ref = node.get('$ref')
+            if isinstance(ref, str) and ref.startswith('#/$defs/') and '/' not in ref[len('#/$defs/') :]:
+                found.add(ref[len('#/$defs/') :])
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(schema)
+    return found
+
+
+def _alias_defs(defs: dict) -> dict[str, str]:
+    """Detect ``$defs`` that are pure aliases of another ``$def`` -> {alias: target}.
+
+    When the source schema declares one type as another (e.g. zod's
+    ``GenerateResponseChunkSchema = ModelResponseChunkSchema``), the exporter
+    emits a def whose every property is a ``$ref`` into a single other def's
+    ``/properties/<sameName>``, with an identical property set, ``required``, and
+    ``additionalProperties``. Materializing both as standalone classes produces
+    look-alike-but-unrelated types: an instance of one fails validation against a
+    field typed as the other, even though they're the same shape. Emitting the
+    alias as ``Alias = Target`` keeps them a single class so values flow freely.
+
+    The check is deliberately strict: defs that merely *share* some fields via
+    ``/properties/`` refs (Part variants, eval data points) keep their own class.
+    """
+    aliases: dict[str, str] = {}
+    for name, defn in defs.items():
+        if name in EXCLUDED or not isinstance(defn, dict) or defn.get('type') != 'object':
+            continue
+        props = defn.get('properties') or {}
+        if not props:
+            continue
+        target: str | None = None
+        for prop_name, prop in props.items():
+            ref = prop.get('$ref') if isinstance(prop, dict) else None
+            suffix = f'/properties/{prop_name}'
+            if not ref or not ref.startswith('#/$defs/') or not ref.endswith(suffix):
+                target = None
+                break
+            this_target = ref[len('#/$defs/') : -len(suffix)]
+            if '/' in this_target or (target is not None and this_target != target):
+                target = None
+                break
+            target = this_target
+        if target is None:
+            continue
+        tgt = defs.get(target)
+        if target in EXCLUDED or not isinstance(tgt, dict) or tgt.get('type') != 'object':
+            continue
+        if set(props) != set(tgt.get('properties') or {}):
+            continue
+        if set(defn.get('required') or []) != set(tgt.get('required') or []):
+            continue
+        if defn.get('additionalProperties') != tgt.get('additionalProperties'):
+            continue
+        aliases[name] = target
+    return aliases
+
+
 def _extract_inline_classes(schema: dict) -> dict[str, dict]:
     """Extract inline object schemas to named classes (e.g. Score.details -> Details)."""
     result = {}
@@ -336,6 +404,21 @@ def generate(schema_path: Path, _out: Path) -> str:
     defs.update({k: v for k, v in _extract_inline_classes(schema).items() if k not in defs})
     allow_extra = _models_allowing_extra(schema)
     typed_map_aliases = _typed_map_aliases(defs)
+    alias_defs = _alias_defs(defs)
+    top_refs = _top_level_refs(schema)
+    # Collapse each pure-alias pair to a single class. The survivor takes whichever
+    # name the rest of the schema actually references, and the redundant name is
+    # dropped so callers only ever see one type. If both names are referenced, keep
+    # `alias = target` so neither dangles.
+    promote: dict[str, str] = {}  # body def name -> output class name to emit it under
+    drop_alias: set[str] = set()  # alias defs fully superseded by a promoted body
+    alias_lines: dict[str, str] = {}  # alias def -> target output name (emit `alias = target`)
+    for alias, body in alias_defs.items():
+        if alias in top_refs and body not in top_refs:
+            promote[body] = _output_name(alias)
+            drop_alias.add(alias)
+        else:
+            alias_lines[alias] = _output_name(body)
     out = [HEADER.format(year=datetime.now().year, schema_name=schema_path.name)]
     emitted = set()
 
@@ -364,7 +447,10 @@ def generate(schema_path: Path, _out: Path) -> str:
         defn = defs.get(name, {})
         if name in EXCLUDED or name in emitted or not isinstance(defn, dict) or defn.get('type') != 'object':
             continue
-        class_name = _output_name(name)
+        # Superseded alias defs are dropped; kept aliases are emitted in Pass 2.4.
+        if name in drop_alias or name in alias_lines:
+            continue
+        class_name = promote.get(name, _output_name(name))
         # Metadata and Custom: type aliases for dict (SDK uses .get(), [], passes dict)
         if name == 'Metadata':
             out.extend([
@@ -389,6 +475,13 @@ def generate(schema_path: Path, _out: Path) -> str:
             emitted.add(name)
         else:
             out.extend(_emit_model(class_name, defn, schema, defs, allow_extra))
+        emitted.add(name)
+
+    # Pass 2.4: kept aliases (target name still referenced elsewhere) -> `Alias = Target`.
+    for name in defs:
+        if name in EXCLUDED or name in emitted or name not in alias_lines:
+            continue
+        out.extend([f'{_output_name(name)} = {alias_lines[name]}', ''])
         emitted.add(name)
 
     # Pass 2.5: union types (anyOf/oneOf)

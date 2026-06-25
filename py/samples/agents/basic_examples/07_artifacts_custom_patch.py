@@ -15,7 +15,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: customPatch + artifact stream chunks using AgentAPI."""
+"""Stream live state patches and accumulate artifacts from a custom agent.
+
+A custom turn bumps a counter and writes an artifact before answering. As it runs you
+receive incremental state-patch chunks, and once it settles the session holds the
+merged custom state plus every artifact the turn produced — the state model behind a
+live-updating agent UI. Requires GEMINI_API_KEY.
+"""
 
 from __future__ import annotations
 
@@ -67,20 +73,15 @@ agent = ai.define_custom_agent(name='statefulAgent', fn=stateful_fn, store=store
 
 async def main() -> None:
     session = agent.chat()
-    print('--- SENDING TURN ---')
-    turn = session.send('Go')
-    async for chunk in turn:
-        if chunk.text:
-            print('content chunk:', chunk.text)
-        if chunk.custom:
-            print('state patch chunk:', chunk.custom)
-            print('current session state:', session.state)
 
-    out = await turn.output
-    print('output:', out)
-    print('accumulated artifacts:', session.artifacts)
-    print('accumulated custom state:', session.state)
-    await session.close()
+    # State patches stream live as the custom turn works.
+    patches = [chunk.custom async for chunk in session.send('Go') if chunk.custom]
+    # → e.g. [{'turns': 1}] — incremental updates you could render as they arrive
+    assert patches
+
+    # Once the turn settles, the session holds the merged state + the turn's artifacts.
+    assert session.state == {'turns': 1}
+    assert any(a.name == 'status' for a in session.artifacts)
 
 
 if __name__ == '__main__':

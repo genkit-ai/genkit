@@ -15,70 +15,49 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Explore several directions from one shared starting point.
+"""Explore several directions from one checkpoint, all at once.
 
-After an initial turn, kick off multiple invocations from the same snapshotId
-with different prompts — minimal, bold, corporate takes on the same brief.
-Each one becomes its own leaf you can show as tabs or side-by-side columns.
-
-Good when you want the user to browse options before committing to a single
-timeline.
+After a shared brief, fork the same snapshot into several branches and run them
+concurrently with different prompts. Each becomes its own leaf you can show as
+tabs or side-by-side columns — the move when you want the user to browse options
+before committing to one timeline. Requires GEMINI_API_KEY.
 """
 
 from __future__ import annotations
+
+import asyncio
 
 from genkit import Genkit
 from genkit.agent import InMemoryBranchingSessionStore
 from genkit.plugins.google_genai import GoogleAI
 
-# Initialize Genkit with GoogleAI plugin and the purpose-built branching store
-ai = Genkit(plugins=[GoogleAI()])
-store = InMemoryBranchingSessionStore()
+DIRECTIONS = ['minimal', 'bold', 'corporate']
 
-# Define the agent natively using Gemini Flash
+ai = Genkit(plugins=[GoogleAI()])
+
 agent = ai.define_agent(
-    name='branchEcho',
+    name='designer',
     model='googleai/gemini-flash-latest',
-    store=store,
+    system='You help design a product landing page. Reply in two or three short sentences.',
+    store=InMemoryBranchingSessionStore(),
 )
 
 
 async def main() -> None:
-    # 1. Run the shared starting point
-    print('--- TURN 1 (SHARED BRIEF) ---')
-    session = agent.chat()
-    async for chunk in session.send('Design a hero section'):
-        if chunk.text:
-            print(chunk.text, end='', flush=True)
-    print()
-    root_snap = session.snapshot_id
-    assert root_snap
-    print(f'Shared Checkpoint Saved: {root_snap}\n')
+    # One shared brief. Its snapshot is the checkpoint every branch forks from.
+    root = agent.chat()
+    await root.send('Design a hero section for a landing page.')
+    checkpoint = root.snapshot_id
+    assert checkpoint
 
-    # 2. Explore multiple directions in parallel from that checkpoint
-    directions = ['Direction: minimal', 'Direction: bold', 'Direction: corporate']
-    branches = []
+    # Fork the checkpoint into independent branches and explore them concurrently.
+    async def explore(snapshot: str, direction: str) -> None:
+        branch = await agent.load_chat(snapshot)
+        await branch.send(f'Take it in a {direction} direction.')
 
-    for label in directions:
-        print(f'--- EXPLORING BRANCH [{label}] ---')
-        session_branch = await agent.load_chat(root_snap)
-        async for chunk in session_branch.send(label):
-            if chunk.text:
-                print(chunk.text, end='', flush=True)
-        print()
-        snap_id = session_branch.snapshot_id
-
-        # Verify parentage in database
-        snap = await store.get_snapshot(snapshot_id=snap_id)
-        assert snap and snap.parent_id == root_snap
-
-        branches.append((label, snap_id))
-        print(f'Branch Saved: {snap_id}\n')
-
-    # 3. Print the resulting tree leaves
-    print(f'Explored {len(branches)} parallel branches successfully:')
-    for label, snap_id in branches:
-        print(f'  - [{label}] snapshot={snap_id}')
+    # → each direction develops its own hero take from the shared brief, in parallel,
+    #   and none of the branches sees the others.
+    await asyncio.gather(*(explore(checkpoint, d) for d in DIRECTIONS))
 
 
 if __name__ == '__main__':

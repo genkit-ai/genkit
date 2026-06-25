@@ -15,7 +15,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: abort a detached invocation via task.abort() using AgentAPI."""
+"""Cancel a long-running detached turn with task.abort().
+
+Detach a turn, let it run for a moment, then abort it. The abort signal reaches the
+running tool so it can stop cleanly, and the snapshot settles in an ABORTED state —
+the cancel button for background agent work. Requires GEMINI_API_KEY.
+"""
 
 from __future__ import annotations
 
@@ -31,17 +36,11 @@ store = InMemoryLatestStateStore()
 
 @ai.tool(name='slowWork', description='Simulate long background work.')
 async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
-    try:
-        for i in range(30):
-            if ctx.abort_signal.is_set():
-                print('[slowWork] Abort signal detected!')
-                raise GenkitError(status='ABORTED', message='Task aborted')
-            print(f'[slowWork] working step {i + 1}/30...')
-            await asyncio.sleep(0.5)
-        return {'done': True}
-    except asyncio.CancelledError:
-        print('[slowWork] cancelled!')
-        raise
+    for _i in range(30):
+        if ctx.abort_signal.is_set():  # the abort propagates here so we can bail out cleanly
+            raise GenkitError(status='ABORTED', message='Task aborted')
+        await asyncio.sleep(0.5)
+    return {'done': True}
 
 
 agent = ai.define_agent(
@@ -55,18 +54,15 @@ agent = ai.define_agent(
 
 async def main() -> None:
     session = agent.chat()
-    print('--- SUBMITTING DETACHED TASK ---')
-    task = await session.detach('Please run a long task using slowWork.')
-    print(f'Task detached! Snapshot ID: {task.snapshot_id}')
 
+    # Kick off the background turn and let it run for a moment.
+    task = await session.detach('Please run a long task using slowWork.')
+    assert task.snapshot_id
     await asyncio.sleep(2.0)
 
-    print('\n--- ABORTING TASK ---')
-    status = await task.abort()
-    print('abort returned status:', status)
-
-    # Wait a little to let the background logs print
-    await asyncio.sleep(1.0)
+    # → abort_signal fires inside slowWork; the snapshot settles as ABORTED
+    await task.abort()
+    await asyncio.sleep(1.0)  # let the background task unwind
     await session.close()
 
 

@@ -15,7 +15,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: model writes session artifacts via the Artifacts middleware using AgentAPI."""
+"""Let the model write files into the session as artifacts.
+
+With the Artifacts middleware the model can create named files (here poem.txt) and
+they land on the session as structured artifacts you can read back — the basis for
+agents that build up a workspace of documents. Requires GEMINI_API_KEY.
+"""
 
 from __future__ import annotations
 
@@ -37,14 +42,11 @@ agent = ai.define_agent(
 
 async def main() -> None:
     session = agent.chat()
-    print('--- SENDING TURN ---')
-    turn = session.send('Write poem.txt with a short poem about Python agents.')
-    async for chunk in turn:
-        print('chunk:', chunk)
 
-    await turn.output
-    print('session artifacts:', session.artifacts)
-    await session.close()
+    # The model writes a named file; the Artifacts middleware captures it on the session.
+    await session.send('Write poem.txt with a short poem about Python agents.')
+    # → session.artifacts now contains poem.txt holding the generated poem
+    assert any(a.name == 'poem.txt' for a in session.artifacts)
 
 
 if __name__ == '__main__':

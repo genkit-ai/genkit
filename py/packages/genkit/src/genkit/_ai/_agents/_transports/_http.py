@@ -25,7 +25,7 @@ from typing import Any, TypeVar, cast
 
 from genkit._ai._agents._client import AgentTransport
 from genkit._core._channel import CloseableQueue
-from genkit._core._error import GenkitRuntimeError
+from genkit._core._error import GenkitError
 from genkit._core._http_client import get_cached_client
 from genkit._core._typing import AgentInit, AgentInput, AgentOutput, AgentStreamChunk, SessionSnapshot, SnapshotStatus
 
@@ -115,7 +115,10 @@ class HttpAgentTransport(AgentTransport[StateT, StreamT]):
                             stream_queue.put_nowait(chunk)
                     else:
                         # Premature end of HTTP stream without finding 'result'
-                        err = GenkitRuntimeError('HTTP stream ended prematurely before agent turn completed')
+                        err = GenkitError(
+                            status='INTERNAL',
+                            message='HTTP stream ended prematurely before agent turn completed',
+                        )
                         if not output_future.done():
                             output_future.set_exception(err)
                         stream_queue.put_nowait(err)

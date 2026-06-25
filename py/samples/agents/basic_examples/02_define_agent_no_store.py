@@ -15,7 +15,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: define_agent without store — client-managed state using AgentAPI."""
+"""No store: you own the conversation state on the client.
+
+Without a store the agent keeps nothing between sessions — snapshot_id stays None.
+You capture messages + custom state yourself, then hand them back through AgentInit
+to resume. session_id is minted client-side on the first send(), so you own the
+identity too. Requires GEMINI_API_KEY.
+"""
 
 from __future__ import annotations
 
@@ -33,49 +39,31 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    # --- 1. START A NEW SESSION & RUN TURN 1 ---
-    print('--- STARTING A NEW SESSION (CLIENT-MANAGED) ---')
     session = agent.chat()
+    turn = session.send('My name is Ada. Remember it.')
 
-    print('Sending: My name is Ada. Remember it.')
-    print('Response: ', end='', flush=True)
-    # Showcase the ultimate variable-free streaming loop!
-    async for chunk in session.send('My name is Ada. Remember it.'):
-        if chunk.text:
-            print(chunk.text, end='', flush=True)
-    print()
+    # Three ways to consume a turn — same as store-backed agents:
+    #   await session.send(msg).output     output only, skip the stream
+    #   async for chunk in turn: ...       stream chunks to a UI
+    #   stream first, then await turn.output   both on the same turn
+    out = await turn.output
+    assert out.text
 
-    # Verify that there is indeed no server-managed snapshot ID!
-    print(f'[Client] Verify snapshot ID is None: {session.snapshot_id}')
+    # → session_id minted client-side on first send — you own the identity
+    # → snapshot_id stays None — no server-managed checkpoint to resume from
+    assert session.session_id
     assert session.snapshot_id is None
 
-    # Capture the entire session state on the client side!
-    # In a client-managed model, you must save the messages and custom state yourself.
-    saved_state = SessionState(
+    saved = SessionState(
+        session_id=session.session_id,
         messages=session.messages,
         custom=session.state,
         artifacts=session.artifacts,
     )
-    print(f'[Client] Saved {len(session.messages)} messages and custom state.')
     await session.close()
 
-    print('\n======================================================')
-    print('   Simulating client disconnect / server restart...   ')
-    print('======================================================\n')
-
-    # --- 2. RESUME THE SESSION BY PASSING THE STATE ---
-    # We pass the saved state back into agent.chat() to restore the conversation!
-    print('--- RESUMING SESSION WITH SAVED STATE ---')
-    resumed_session = agent.chat(AgentInit(state=saved_state))
-
-    print('Sending: What is my name? One word.')
-    turn2 = resumed_session.send('What is my name? One word.')
-    print('Response: ', end='', flush=True)
-    async for chunk in turn2:
-        if chunk.text:
-            print(chunk.text, end='', flush=True)
-    print()
-    await resumed_session.close()
+    resumed = agent.chat(AgentInit(state=saved))
+    await resumed.send('What is my name? One word.')
 
 
 if __name__ == '__main__':

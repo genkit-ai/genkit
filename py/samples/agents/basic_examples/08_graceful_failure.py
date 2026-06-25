@@ -15,7 +15,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: graceful turn failure — using AgentAPI."""
+"""A failing turn fails gracefully instead of crashing the session.
+
+One turn succeeds; the next raises inside the agent. Rather than bubbling up and
+killing the process, the turn resolves with finish_reason FAILED, so your app can
+surface the error and keep the session alive for the next turn.
+"""
 
 from __future__ import annotations
 
@@ -57,22 +62,15 @@ agent = ai.define_custom_agent(name='flakyAgent', fn=flaky_fn, store=store)
 
 async def main() -> None:
     session = agent.chat()
-    try:
-        print('--- SENDING TURN 1 (OK) ---')
-        turn1 = session.send('hello')
-        async for chunk in turn1:
-            print('ok chunk:', chunk)
-        out_ok = await turn1.output
-        print('ok turn output:', out_ok)
 
-        print('\n--- SENDING TURN 2 (FAIL) ---')
-        turn2 = session.send('please fail now')
-        async for chunk in turn2:
-            print('fail chunk:', chunk)
-        out_fail = await turn2.output
-        print('fail turn output:', out_fail)
-    finally:
-        await session.close()
+    # A normal turn succeeds.
+    out_ok = await session.send('hello')
+    assert out_ok.finish_reason == AgentFinishReason.STOP
+
+    # This turn raises inside the agent — but the failure is contained.
+    out_fail = await session.send('please fail now')
+    # → resolves as FAILED instead of throwing; the session stays usable
+    assert out_fail.finish_reason == AgentFinishReason.FAILED
 
 
 if __name__ == '__main__':

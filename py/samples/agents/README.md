@@ -43,6 +43,6 @@ Each example defines its agent inline.
 
 ### 2. Branching Examples — `branching_examples/`
 
-These demonstrate how to manipulate `SessionSnapshots` to fork conversations, try alternative options, or explore different paths in parallel. **No API key is required** (they use a mock echo agent).
+These demonstrate how to fork `SessionSnapshots` to compare directions, regenerate a turn, explore options in parallel, and time-travel a build — building up to two end-to-end demos. They require a `GEMINI_API_KEY`.
 
 See [`branching_examples/README.md`](branching_examples/README.md) for more details.

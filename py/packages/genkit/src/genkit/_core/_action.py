@@ -23,7 +23,7 @@ import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextvars import ContextVar
-from typing import Any, ClassVar, Generic, NamedTuple, cast, get_type_hints
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, cast, get_type_hints
 
 from opentelemetry.util import types as otel_types
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -36,6 +36,11 @@ from genkit._core._error import GenkitError, StatusCodes
 from genkit._core._schema import to_json_schema
 from genkit._core._trace._suppress import suppress_telemetry
 from genkit._core._tracing import SpanMetadata, run_in_new_span
+
+if TYPE_CHECKING:
+    # _protocols imports from this module, so importing it at runtime would cycle;
+    # the annotation only needs to resolve for type checkers.
+    from genkit._core._protocols import RegistryLike
 
 # =============================================================================
 # Span attribute types and tracing helpers
@@ -855,10 +860,13 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
                     execute=lambda: self.bidi_fn(input, in_queue, out_queue),
                 )
                 result_future.set_result(response.response)
-            except asyncio.CancelledError as e:
-                # CancelledError must propagate out of the background task so that
-                # the asyncio loop can correctly mark it as CANCELLED.
-                result_future.set_exception(e)
+            except asyncio.CancelledError:
+                # The connection was torn down (e.g. loop shutdown on a session that
+                # was never closed), not errored. Marking the result future cancelled
+                # dies quietly; set_exception() would instead dump an "exception was
+                # never retrieved" traceback at exit when nobody awaited it.
+                if not result_future.done():
+                    result_future.cancel()
                 raise
             except Exception as e:  # noqa: BLE001
                 # Standard exceptions are forwarded to the client's result_future.
@@ -878,7 +886,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
 
 
 def define_bidi_action(
-    registry: Any,  # noqa: ANN401
+    registry: 'RegistryLike',
     kind: ActionKind,
     name: str,
     bidi_fn: Callable[..., Awaitable[Any]],
@@ -895,6 +903,7 @@ def define_bidi_action(
         description=description,
         metadata=metadata,
     )
+    # pyrefly: ignore[bad-argument-type] - BidiAction is an Action subclass; pyrefly doesn't accept the subtype here
     registry.register_action_from_instance(action)
     return action
 

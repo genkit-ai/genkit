@@ -37,7 +37,6 @@ from genkit._ai._agents._session import (
 from genkit._ai._agents._types import ClientTransform, TurnResult
 from genkit._ai._generate import generate_action
 from genkit._ai._json_patch import diff_json
-from genkit._ai._model import ModelResponseChunk as StreamModelResponseChunk
 from genkit._core._action import ActionRunContext, get_current_context
 from genkit._core._channel import CloseableQueue, QueueShutDown
 from genkit._core._error import GenkitError, StatusCodes
@@ -481,6 +480,7 @@ class AgentRuntime:
         last_good = self.session_runner.last_good_state or await self.session.state()
         msgs = list(last_good.messages or [])
         out = AgentOutput(
+            session_id=last_good.session_id,
             finish_reason=AgentFinishReason.FAILED,
             error=self.session_runner.last_turn_error,
             message=msgs[-1] if msgs else (result.message if result else None),
@@ -693,7 +693,9 @@ class AgentRuntime:
             snapshot_id = self.last_snapshot.snapshot_id
 
         finish_reason = result.finish_reason if result else self.session_runner.last_turn_finish_reason
+        state = await self.session.state()
         out = AgentOutput(
+            session_id=state.session_id,
             snapshot_id=snapshot_id or None,
             message=result.message if result else None,
             artifacts=list(result.artifacts) if result and result.artifacts else [],
@@ -701,7 +703,6 @@ class AgentRuntime:
         )
 
         if self.store is None:
-            state = await self.session.state()
             out.state = self.transform_state(state)
 
         return out
@@ -730,11 +731,8 @@ async def generate_prompt_agent_turn(
 ) -> TurnResult | None:
     """Run generate for one agent turn and persist session messages."""
 
-    def on_chunk(chunk: StreamModelResponseChunk) -> None:
-        wire_chunk = (
-            chunk if isinstance(chunk, ModelResponseChunk) else ModelResponseChunk.model_validate(chunk.model_dump())
-        )
-        ctx.send_chunk(AgentStreamChunk(model_chunk=wire_chunk))
+    def on_chunk(chunk: ModelResponseChunk) -> None:
+        ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
 
     response = await generate_action(
         registry,

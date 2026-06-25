@@ -197,6 +197,7 @@ async def run_linear_session_store_test(store: LinearSessionStore) -> None:
     # Reconstruct Turn 1
     snap1 = await store.get_snapshot(snapshot_id=t1_id)
     assert snap1 is not None
+    assert snap1.session_id == session_id  # top-level id mirrors the state's
     assert snap1.state is not None
     assert snap1.state.messages is not None
     assert len(snap1.state.messages) == 2
@@ -278,6 +279,7 @@ async def run_branching_session_store_test(store: BranchingSessionStore) -> None
     # Verify both branches exist as sibling leaves
     snap_min = await store.get_snapshot(snapshot_id=b1_t1_id)
     assert snap_min is not None
+    assert snap_min.session_id == session_id  # top-level id mirrors the state's
     assert snap_min.state is not None
     assert snap_min.state.messages is not None
     assert snap_min.state.messages[1].content[0].root.text == 'Minimal Direction'

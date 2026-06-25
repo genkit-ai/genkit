@@ -426,8 +426,8 @@ class GenerateActionOutputConfig(GenkitModel):
     schema_type: Any = Field(default=None, exclude=True)
 
 
-class GenerateResponseChunk(GenkitModel):
-    """Model for generateresponsechunk data."""
+class ModelResponseChunk(GenkitModel):
+    """Model for modelresponsechunk data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     role: Role | None = None
@@ -511,17 +511,6 @@ class ModelReference(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     name: str = Field(...)
     config: Any | None = Field(default=None)
-
-
-class ModelResponseChunk(GenkitModel):
-    """Model for modelresponsechunk data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    role: Any | None = Field(default=None)
-    index: float | None = None
-    content: list[Part] = Field(...)
-    custom: Any | None = Field(default=None)
-    aggregated: bool | None = None
 
 
 class MultipartToolResponse(GenkitModel):

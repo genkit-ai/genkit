@@ -15,7 +15,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""ToolApproval interrupt — persistent session turn with Resume."""
+"""Pause a turn for human approval, then resume it.
+
+ToolApproval interrupts the turn before a sensitive tool runs, so it ends with
+finish_reason INTERRUPTED and a pending tool request instead of moving the money.
+A human approves, you resume the same session, and the tool finally executes. The
+store lets the paused turn survive between requests. Requires GEMINI_API_KEY.
+"""
 
 from __future__ import annotations
 
@@ -49,16 +55,8 @@ class TransferOutput(BaseModel):
     model_config = {'populate_by_name': True}
 
 
-class BalanceInput(BaseModel):
-    account: str
-
-
-class BalanceOutput(BaseModel):
-    balance: float
-
-
 ai = Genkit(plugins=[GoogleAI(), Middleware()])
-tool_approval = ToolApproval(allowed_tools=[])
+tool_approval = ToolApproval(allowed_tools=[])  # empty list ⇒ every tool needs approval
 
 
 @ai.tool(name='transferMoney', description='Transfer money between accounts.')
@@ -66,22 +64,13 @@ async def transfer_money(_input: TransferInput) -> TransferOutput:
     return TransferOutput(success=True, transactionId=f'txn-{uuid4().hex[:12]}')
 
 
-@ai.tool(name='checkBalance', description='Check the balance of an account.')
-async def check_balance(_input: BalanceInput) -> BalanceOutput:
-    return BalanceOutput(balance=1_234.56)
-
-
 store = InMemoryLinearSessionStore()
 
 agent = ai.define_agent(
     name='bankingAgent',
     model='googleai/gemini-flash-latest',
-    system=(
-        'Banking assistant. When the user asks to transfer money, call '
-        'transferMoney and checkBalance for the destination account in the '
-        'same turn (both tools).'
-    ),
-    tools=[transfer_money, check_balance],
+    system='Banking assistant. Call transferMoney when the user asks to transfer money.',
+    tools=[transfer_money],
     use=[tool_approval],
     store=store,
 )
@@ -89,45 +78,28 @@ agent = ai.define_agent(
 
 async def main() -> None:
     session = agent.chat()
-    # --- Turn 1: user message → stream until interrupted ---
-    print('--- SENDING TURN 1 ---')
-    turn1 = session.send('Transfer $500 to account 12345 for rent and check the balance in account 12345.')
-    async for chunk in turn1:
-        if chunk.text:
-            print('turn 1 content chunk:', chunk.text)
-        if chunk.tool_request:
-            print('turn 1 tool request chunk:', chunk.tool_request)
 
+    # The model wants to move money, but ToolApproval pauses before the tool runs.
+    turn1 = session.send('Transfer $500 to account 12345 for rent.')
     out1 = await turn1.output
+    # → the turn stops with a pending tool request instead of executing it
     assert out1.finish_reason == AgentFinishReason.INTERRUPTED
-    assert len(session.messages) == 2  # User input + tool request message from model
+    assert turn1.interrupt is not None  # the tool call awaiting a human decision
 
-    assert turn1.interrupt is not None
-    assert turn1.interrupt.name == 'request_transfer'
-
-    print('--- RESUMING WITH APPROVAL ---')
-    restarts = [
-        restart_tool(
-            interrupt=ToolRequestPart(
-                tool_request=ToolRequest(
-                    name=turn1.interrupt.name,
-                    input=turn1.interrupt.input,
-                    ref=turn1.interrupt.ref,
-                )
+    # A human approves: rebuild the pending request, tag it approved, and resume.
+    approved = restart_tool(
+        interrupt=ToolRequestPart(
+            tool_request=ToolRequest(
+                name=turn1.interrupt.name,
+                input=turn1.interrupt.input,
+                ref=turn1.interrupt.ref,
             )
-        )
-    ]
-
-    # Resume the turn
-    turn2 = session.resume(Resume(restart=restarts))
-    async for chunk in turn2:
-        if chunk.text:
-            print('turn 2 content chunk:', chunk.text)
-        if chunk.tool_request:
-            print('turn 2 tool request chunk:', chunk.tool_request)
-
-    out2 = await turn2.output
-    print('turn 2 output:', out2)
+        ),
+        resumed_metadata={'tool_approved': True},
+    )
+    # → resumes, runs transferMoney now that it's cleared, and finishes the turn
+    out2 = await session.resume(Resume(restart=[approved]))
+    assert out2.finish_reason == AgentFinishReason.STOP  # → the transfer runs and the turn completes
     await session.close()
 
 

@@ -15,12 +15,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Regenerate a turn without discarding the original answer.
+"""Regenerate a turn without throwing away the original answer.
 
-The user walks the main line through two turns, then you fork from the snapshot
-after turn 1 and replay turn 2 with different input. Both versions stick around
-as siblings — the flow you'd wire up for "try again" or edit-and-resubmit when
-you don't want to overwrite what they already saw.
+Walk the main line through two turns, then fork from the snapshot after turn 1
+and replay turn 2 with different input. Both answers stick around as siblings —
+the flow behind "try again" or edit-and-resubmit when you don't want to overwrite
+what the user already saw. Requires GEMINI_API_KEY.
 """
 
 from __future__ import annotations
@@ -29,54 +29,28 @@ from genkit import Genkit
 from genkit.agent import InMemoryBranchingSessionStore
 from genkit.plugins.google_genai import GoogleAI
 
-# Initialize Genkit with GoogleAI plugin and the purpose-built branching store
 ai = Genkit(plugins=[GoogleAI()])
-store = InMemoryBranchingSessionStore()
 
-# Define the agent natively using Gemini Flash
 agent = ai.define_agent(
-    name='branchEcho',
+    name='designer',
     model='googleai/gemini-flash-latest',
-    store=store,
+    system='You help design a product landing page. Reply in two or three short sentences.',
+    store=InMemoryBranchingSessionStore(),
 )
 
 
 async def main() -> None:
-    # 1. Run Turn 1 (Checkpoint Root)
-    print('--- TURN 1 ---')
+    # Turn 1 sets the scene; bookmark it, then keep going on the main line.
     session = agent.chat()
-    async for chunk in session.send('Plan a landing page'):
-        if chunk.text:
-            print(chunk.text, end='', flush=True)
-    print()
-    snap1 = session.snapshot_id
-    assert snap1
-    print(f'Turn 1 Snapshot Saved: {snap1}\n')
+    await session.send('Plan a landing page for a note-taking app.')
+    checkpoint = session.snapshot_id
+    assert checkpoint
+    await session.send('Make it minimal.')  # → the original "minimal" answer
 
-    # 2. Main Line: Continue linearly on the same session
-    print('--- TURN 2 (MAIN LINE) ---')
-    async for chunk in session.send('Make it minimal'):
-        if chunk.text:
-            print(chunk.text, end='', flush=True)
-    print()
-    snap2 = session.snapshot_id
-    print(f'Main Line Turn 2 Snapshot: {snap2}\n')
-
-    # 3. Regenerate: Fork from before turn 2 and send alternate input
-    print('--- TURN 2 (ALTERNATE BRANCH) ---')
-    session_alt = await agent.load_chat(snap1)
-    async for chunk in session_alt.send('Make it bold instead'):
-        if chunk.text:
-            print(chunk.text, end='', flush=True)
-    print()
-    snap2_alt = session_alt.snapshot_id
-    print(f'Alternate Turn 2 Snapshot: {snap2_alt}\n')
-
-    # 4. Verify parentage
-    assert snap2_alt != snap2
-    alt_snap = await store.get_snapshot(snapshot_id=snap2_alt)
-    assert alt_snap and alt_snap.parent_id == snap1
-    print(' Parent validation succeeded: Both turns branch from Turn 1!')
+    # Regenerate turn 2 from the bookmark with different input. The original
+    # "minimal" answer is untouched; both versions now coexist as siblings.
+    retry = await agent.load_chat(checkpoint)
+    await retry.send('Make it bold instead.')  # → a "bold" sibling of that same turn
 
 
 if __name__ == '__main__':

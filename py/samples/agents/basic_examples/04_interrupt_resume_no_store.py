@@ -15,7 +15,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: interrupt + resume without store — client-managed state using AgentAPI."""
+"""Interrupt + resume without a store — you carry the paused state.
+
+Same human-in-the-loop approval as the stored version, but with no store the paused
+turn lives only in this process. You inspect the interrupt, attach your approval as
+resume metadata, and continue the same in-memory session. Requires GEMINI_API_KEY.
+"""
 
 from __future__ import annotations
 
@@ -24,7 +29,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from genkit import Genkit, restart_tool
-from genkit.agent import Resume, ToolRequest, ToolRequestPart
+from genkit.agent import AgentFinishReason, Resume, ToolRequest, ToolRequestPart
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Middleware, ToolApproval
 
@@ -63,37 +68,26 @@ agent = ai.define_agent(
 
 async def main() -> None:
     session = agent.chat()
-    # --- Turn 1: user message → stream until interrupted ---
-    print('--- SENDING TURN 1 ---')
+
+    # ToolApproval pauses before transferMoney runs.
     turn1 = session.send('Transfer $100 to account 999 for lunch.')
-    async for chunk in turn1:
-        print('turn 1 chunk:', chunk)
-
     out1 = await turn1.output
-    if out1.finish_reason != 'interrupted':
-        raise RuntimeError(f'expected interrupted, got {out1.finish_reason}')
+    assert out1.finish_reason == AgentFinishReason.INTERRUPTED
+    assert turn1.interrupt is not None  # → the pending request your UI would surface for approval
 
-    # Inspect the interrupt to approve
-    if turn1.interrupt:
-        print(f'client would show approval UI for: {turn1.interrupt.name}')
-
-        trp = ToolRequestPart(
+    # Approve it: rebuild the request, tag it approved, and resume in place.
+    approved = restart_tool(
+        interrupt=ToolRequestPart(
             tool_request=ToolRequest(
                 name=turn1.interrupt.name,
                 input=turn1.interrupt.input,
                 ref=turn1.interrupt.ref,
             )
-        )
-        restarts = [restart_tool(interrupt=trp, resumed_metadata={'tool_approved': True})]
-
-        # --- Turn 2: resume within same session ---
-        print('\n--- SENDING TURN 2 (RESUME) ---')
-        turn2 = session.resume(Resume(restart=restarts))
-        async for chunk in turn2:
-            print('turn 2 chunk:', chunk)
-
-        out2 = await turn2.output
-        print('turn 2 output:', out2)
+        ),
+        resumed_metadata={'tool_approved': True},
+    )
+    # → resumes and runs the transfer to completion
+    await session.resume(Resume(restart=[approved]))
     await session.close()
 
 
