@@ -14,11 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package x contains experimental Firebase features.
-//
-// APIs in this package are under active development and may change in any
-// minor version release. Use with caution in production environments.
-package x
+package exp
 
 import (
 	"context"
@@ -100,12 +96,18 @@ type streamDocument struct {
 }
 
 // streamEntry represents a single entry in the stream array.
+//
+// Chunk and Output are []byte rather than json.RawMessage: Firestore stores
+// either as a Bytes value, but its decoder only sets a Bytes value back into a
+// plain []byte field (decoding into the named json.RawMessage type fails with
+// "cannot set type json.RawMessage to bytes"). The json.RawMessage values from
+// the StreamInput API assign to and from []byte without conversion.
 type streamEntry struct {
-	Type   string          `firestore:"type"`
-	Chunk  json.RawMessage `firestore:"chunk,omitempty"`
-	Output json.RawMessage `firestore:"output,omitempty"`
-	Err    *streamError    `firestore:"err,omitempty"`
-	UUID   string          `firestore:"uuid,omitempty"`
+	Type   string       `firestore:"type"`
+	Chunk  []byte       `firestore:"chunk,omitempty"`
+	Output []byte       `firestore:"output,omitempty"`
+	Err    *streamError `firestore:"err,omitempty"`
+	UUID   string       `firestore:"uuid,omitempty"`
 }
 
 // streamError represents a serializable error for Firestore storage.
@@ -444,6 +446,11 @@ func (s *firestoreStreamInput) Error(ctx context.Context, err error) error {
 	var ufErr *core.UserFacingError
 	if errors.As(err, &ufErr) {
 		streamErr.Status = string(ufErr.Status)
+		// Store the bare message, not err.Error(): a UserFacingError stringifies
+		// as "STATUS: message", and the status is already carried separately. This
+		// keeps the persisted message clean and prevents the Subscribe path (which
+		// rebuilds the error from status + message) from double-prefixing it.
+		streamErr.Message = ufErr.Message
 	}
 
 	expiresAt := time.Now().Add(s.manager.ttl)
