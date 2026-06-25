@@ -298,6 +298,59 @@ Detach requires a store that implements `SnapshotSubscriber` (both bundled local
 
 [See full example](samples/basic-agents)
 
+### Delegate to Sub-Agents
+
+The experimental `Agents` middleware (in `plugins/middleware/exp`) lets one agent delegate to others. It injects one `delegate_to_<name>` tool per sub-agent and a `<sub-agents>` listing into the orchestrator's system prompt, then runs the chosen sub-agent and returns its result when the model calls the tool. Each sub-agent's `aix.WithDescription` (captured by `agent.Ref()`) tells the orchestrator when to reach for it:
+
+```go
+import (
+    "github.com/firebase/genkit/go/ai"
+    aix "github.com/firebase/genkit/go/ai/exp"
+    "github.com/firebase/genkit/go/ai/exp/localstore"
+    genkitx "github.com/firebase/genkit/go/genkit/exp"
+    middlewarex "github.com/firebase/genkit/go/plugins/middleware/exp"
+)
+
+researcher := genkitx.DefineAgent(g, "researcher",
+    aix.InlinePrompt{
+        ai.WithModelName("googleai/gemini-flash-latest"),
+        ai.WithSystem("You are a thorough research assistant. Summarize well-sourced findings."),
+    },
+    aix.WithDescription[any]("Researches a topic and summarizes well-sourced findings."),
+)
+
+engineer := genkitx.DefineAgent(g, "engineer",
+    aix.InlinePrompt{
+        ai.WithModelName("googleai/gemini-flash-latest"),
+        ai.WithSystem("You are an expert programmer. Write clean, well-commented code."),
+    },
+    aix.WithDescription[any]("Writes and explains code."),
+)
+
+// The orchestrator delegates instead of answering directly: the model calls
+// delegate_to_researcher / delegate_to_engineer and the middleware runs them.
+orchestrator := genkitx.DefineAgent(g, "orchestrator",
+    aix.InlinePrompt{
+        ai.WithModelName("googleai/gemini-flash-latest"),
+        ai.WithSystem("You are a project coordinator. Delegate to the right sub-agent, " +
+            "then synthesize a final answer."),
+        ai.WithUse(&middlewarex.Agents{
+            Agents:         []aix.AgentRef{researcher.Ref(), engineer.Ref()},
+            MaxDelegations: 5, // cap delegation tool calls per turn (0 = unlimited)
+            HistoryLength:  4, // recent messages forwarded to client-managed sub-agents
+        }),
+    },
+    aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+)
+
+out, _ := orchestrator.RunText(ctx, "Research goroutine scheduling, then sketch a worker pool.")
+fmt.Println(out.Message.Text())
+```
+
+Sub-agents are named by `aix.AgentRef`, either captured from an agent value with `agent.Ref()` or written by hand (`aix.AgentRef{Name: "researcher"}`). The middleware composes with the `Artifacts` middleware: give the sub-agents `&middlewarex.Artifacts{}` so they can save output, set `ArtifactStrategy: middlewarex.ArtifactStrategySession` to merge those artifacts into the orchestrator's session instead of inlining them in the tool result, and add `&middlewarex.Artifacts{Readonly: true}` on the orchestrator so it can review them before answering.
+
+[See full example](samples/basic-agents)
+
 ### Serve Agents over HTTP
 
 An `Agent` is an `api.BidiAction`, so it serves over HTTP one turn per request. The `genkit/exp` package lays out a default route surface for every registered agent, including the snapshot companion endpoints for store-backed agents:
