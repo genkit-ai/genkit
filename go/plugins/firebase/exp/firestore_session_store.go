@@ -78,6 +78,10 @@ var (
 //     session pointing at its latest snapshot and the metadata needed to
 //     reconstruct it.
 //
+// That default places every session under one shared "global" prefix, so pass
+// [WithSnapshotPathPrefix] to scope them per tenant when identifiers could
+// repeat across users (e.g. per-user session IDs).
+//
 // Reconstruction uses only document-ID lookups (GetAll), so it needs no
 // secondary indexes and is strongly consistent. No single document approaches
 // the 1 MiB limit (state is sharded by shard size), and the number of diff

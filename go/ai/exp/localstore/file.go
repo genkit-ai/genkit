@@ -41,7 +41,10 @@ import (
 //
 // The prefix is derived from each call's context (see [WithSnapshotPathPrefix])
 // and defaults to "global" when none is configured; snapshots therefore always
-// live under a subdirectory, never directly in the store root.
+// live under a subdirectory, never directly in the store root. That default
+// places every session in one shared "global" directory, so pass
+// [WithSnapshotPathPrefix] to scope them per tenant when identifiers could
+// repeat across users (e.g. per-user session IDs).
 //
 // The snapshot ID is the primary key: GetSnapshot, the by-ID SaveSnapshot
 // (heartbeat, abort, finalize), and OnSnapshotStatusChange all open that file
