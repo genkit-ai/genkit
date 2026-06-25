@@ -1,3 +1,4 @@
-# Compiled sample binary produced by `go build ./samples/basic-agents`
-# from this directory. It is a build artifact, not source.
+# Compiled sample binaries produced by `go build ./samples/<name>` from this
+# directory (e.g. ./samples/basic-agents). They are build artifacts, not source.
 /basic-agents
+/basic-agents-server
