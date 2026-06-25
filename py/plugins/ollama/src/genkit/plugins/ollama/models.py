@@ -509,7 +509,9 @@ class OllamaModel:
         """
         if url.startswith('data:'):
             # Strip data URI prefix → raw base64: "data:image/jpeg;base64,ABC" → "ABC"
-            comma_idx = url.index(',')
+            comma_idx = url.find(',')
+            if comma_idx == -1:
+                raise ValueError(f'Malformed data URI (missing comma separator): {url!r}')
             return url[comma_idx + 1 :]
 
         if url.startswith(('http://', 'https://')):
@@ -588,23 +590,24 @@ def _convert_parameters(input_schema: dict[str, object]) -> ollama_api.Tool.Func
     if schema_type is None and 'properties' in input_schema:
         # Infer an object schema when properties are present but ``type`` is omitted.
         schema_type = 'object'
-    if schema_type is None:
-        return None
+    if schema_type != 'object':
+        # JS parity (isValidOllamaTool): Ollama only supports object-typed tool inputs.
+        raise ValueError(f'Unsupported schema type {schema_type!r}: Ollama only supports tools with object inputs')
 
     schema = ollama_api.Tool.Function.Parameters()
+    schema.type = 'object'
+
     required = input_schema.get('required')
     if isinstance(required, list):
         schema.required = cast(list[str], required)
 
-    if schema_type == 'object':
-        schema.type = 'object'
-        schema.properties = {}
-        properties_raw = input_schema.get('properties', {})
-        if isinstance(properties_raw, dict):
-            properties = cast(dict[str, dict[str, Any]], properties_raw)
-            for key in properties:
-                schema.properties[key] = ollama_api.Tool.Function.Parameters.Property(
-                    type=properties[key]['type'], description=properties[key].get('description', '')
-                )
+    schema.properties = {}
+    properties_raw = input_schema.get('properties', {})
+    if isinstance(properties_raw, dict):
+        properties = cast(dict[str, dict[str, Any]], properties_raw)
+        for key in properties:
+            schema.properties[key] = ollama_api.Tool.Function.Parameters.Property(
+                type=properties[key]['type'], description=properties[key].get('description', '')
+            )
 
     return schema

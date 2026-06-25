@@ -37,6 +37,7 @@ from genkit import (
     Part,
     Role,
     TextPart,
+    ToolRequestPart,
 )
 from genkit.plugins.ollama.constants import OllamaAPITypes
 from genkit.plugins.ollama.models import ModelDefinition, OllamaModel, _convert_parameters
@@ -628,93 +629,45 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
         cast(MagicMock, self.ctx.send_chunk).assert_not_called()
 
 
-@pytest.mark.parametrize(
-    'input_schema, expected_output',
-    [
-        ({}, None),
-        (
-            {'type': 'object'},
-            ollama_api.Tool.Function.Parameters(type='object', properties={}),
-        ),
-        (
-            {
-                'type': 'object',
-                'properties': {
-                    'name': {'type': 'string', 'description': 'User name'},
-                    'age': {'type': 'integer', 'description': 'User age'},
-                },
-                'required': ['name'],
-            },
-            ollama_api.Tool.Function.Parameters(
-                type='object',
-                required=['name'],
-                properties={
-                    'name': ollama_api.Tool.Function.Parameters.Property(type='string', description='User name'),
-                    'age': ollama_api.Tool.Function.Parameters.Property(type='integer', description='User age'),
-                },
-            ),
-        ),
-        (
-            {
-                'type': 'object',
-                'properties': {
-                    'city': {'type': 'string', 'description': 'City name'},
-                },
-            },
-            ollama_api.Tool.Function.Parameters(
-                type='object',
-                required=None,
-                properties={
-                    'city': ollama_api.Tool.Function.Parameters.Property(
-                        type='string',
-                        description='City name',
-                    ),
-                },
-            ),
-        ),
-        (
-            {
-                'type': 'object',
-                'properties': {},
-            },
-            ollama_api.Tool.Function.Parameters(
-                type='object',
-                required=None,
-                properties={},
-            ),
-        ),
-        # Test 8: Object schema with nested properties
-        (
-            {
-                'type': 'object',
-                'properties': {
-                    'address': {'type': 'object', 'properties': {'street': {'type': 'string'}}},
-                    'zip': {'type': 'string'},
-                },
-            },
-            ollama_api.Tool.Function.Parameters(
-                type='object',
-                required=None,
-                properties={
-                    'address': ollama_api.Tool.Function.Parameters.Property(type='object', description=''),
-                    'zip': ollama_api.Tool.Function.Parameters.Property(type='string', description=''),
-                },
-            ),
-        ),
-        (
-            {'type': 'object', 'description': 'A general description'},
-            ollama_api.Tool.Function.Parameters(
-                type='object',
-                required=None,
-                properties={},
-            ),
-        ),
-    ],
-)
-def test_convert_parameters(input_schema: dict[str, Any], expected_output: object) -> None:
-    """Unit Tests for _convert_parameters function with various input schemas."""
-    result = _convert_parameters(input_schema)
-    assert result == expected_output
+def test_convert_parameters_empty_schema_returns_none() -> None:
+    """An empty schema produces no parameters (the no-tool-params case)."""
+    assert _convert_parameters({}) is None
+
+
+def test_convert_parameters_non_object_raises() -> None:
+    """JS parity: Ollama only supports object-typed tool inputs."""
+    with pytest.raises(ValueError):
+        _convert_parameters({'type': 'string'})
+
+
+def test_convert_parameters_object_with_properties() -> None:
+    """An object schema maps properties and required without pinning the whole Parameters object."""
+    result = _convert_parameters({
+        'type': 'object',
+        'properties': {
+            'name': {'type': 'string', 'description': 'User name'},
+            'age': {'type': 'integer', 'description': 'User age'},
+        },
+        'required': ['name'],
+    })
+
+    assert result is not None
+    assert result.type == 'object'
+    assert result.required == ['name']
+    assert result.properties is not None
+    assert result.properties['name'].type == 'string'
+    assert result.properties['name'].description == 'User name'
+    assert result.properties['age'].type == 'integer'
+
+
+def test_convert_parameters_object_without_properties() -> None:
+    """An object schema with no properties yields an empty properties dict."""
+    result = _convert_parameters({'type': 'object'})
+
+    assert result is not None
+    assert result.type == 'object'
+    assert result.required is None
+    assert result.properties == {}
 
 
 def test_convert_parameters_infers_object_from_properties() -> None:
@@ -762,6 +715,11 @@ class TestResolveImage(unittest.IsolatedAsyncioTestCase):
         data_uri = 'data:image/png;base64,iVBORw0KGgo='
         result = await OllamaModel._resolve_image(data_uri)
         assert result == 'iVBORw0KGgo='
+
+    async def test_data_uri_without_comma_raises(self) -> None:
+        """A malformed data URI with no comma separator should raise ValueError."""
+        with self.assertRaises(ValueError):
+            await OllamaModel._resolve_image('data:image/png;base64')
 
     async def test_raw_base64_passthrough(self) -> None:
         """Raw base64 strings (not data URIs, not URLs) pass through unchanged."""
@@ -858,3 +816,198 @@ class TestBuildChatMessagesWithMedia(unittest.IsolatedAsyncioTestCase):
         assert len(messages) == 1
         assert messages[0].content == ''
         assert len(messages[0]['images']) == 1
+
+
+class TestToOllamaRole:
+    """Tests for OllamaModel._to_ollama_role.
+
+    Ported from the former converters ``to_ollama_role`` tests — this logic now
+    lives only as the model's static role-mapping helper.
+    """
+
+    def test_user(self) -> None:
+        """USER maps to 'user'."""
+        assert OllamaModel._to_ollama_role(Role.USER) == 'user'
+
+    def test_model(self) -> None:
+        """MODEL maps to 'assistant'."""
+        assert OllamaModel._to_ollama_role(Role.MODEL) == 'assistant'
+
+    def test_system(self) -> None:
+        """SYSTEM maps to 'system'."""
+        assert OllamaModel._to_ollama_role(Role.SYSTEM) == 'system'
+
+    def test_tool(self) -> None:
+        """TOOL maps to 'tool'."""
+        assert OllamaModel._to_ollama_role(Role.TOOL) == 'tool'
+
+    def test_unknown_raises(self) -> None:
+        """An unrecognized role raises ValueError."""
+        with pytest.raises(ValueError):
+            OllamaModel._to_ollama_role(cast(Role, 'not-a-role'))
+
+
+class TestBuildPrompt:
+    """Tests for OllamaModel.build_prompt.
+
+    Ported from the former converters ``build_prompt`` tests. Unlike that copy,
+    the model method takes a ``ModelRequest`` (not ``list[Message]``) and logs
+    when it skips a non-text part.
+    """
+
+    def test_single_message(self) -> None:
+        """A single text message is returned verbatim."""
+        request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])])
+        assert OllamaModel.build_prompt(request) == 'Hello'
+
+    def test_multiple_messages(self) -> None:
+        """Text across messages is concatenated in order."""
+        request = ModelRequest(
+            messages=[
+                Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='System. '))]),
+                Message(role=Role.USER, content=[Part(root=TextPart(text='User.'))]),
+            ]
+        )
+        assert OllamaModel.build_prompt(request) == 'System. User.'
+
+    def test_empty_messages(self) -> None:
+        """No messages yields an empty prompt."""
+        assert OllamaModel.build_prompt(ModelRequest(messages=[])) == ''
+
+    def test_non_text_part_skipped_and_logged(self) -> None:
+        """Non-text parts are skipped (and logged), keeping only text content."""
+        request = ModelRequest(
+            messages=[
+                Message(
+                    role=Role.USER,
+                    content=[
+                        Part(root=TextPart(text='see ')),
+                        Part(root=MediaPart(media=Media(url='data:image/png;base64,AAAA', content_type='image/png'))),
+                    ],
+                )
+            ]
+        )
+
+        with patch('genkit.plugins.ollama.models.logger') as mock_logger:
+            result = OllamaModel.build_prompt(request)
+
+        assert result == 'see '
+        mock_logger.error.assert_called_once()
+
+
+class TestGetUsageInfo:
+    """Tests for OllamaModel.get_usage_info.
+
+    Ported from the former converters ``get_usage_info`` tests. The model method
+    reads token counts off the Ollama API response object rather than from raw
+    integer arguments.
+    """
+
+    def test_with_counts(self) -> None:
+        """Token counts are taken from the API response and summed."""
+        basic = ModelUsage(input_characters=100)
+        api_response = ollama_api.GenerateResponse(response='x', prompt_eval_count=10, eval_count=20)
+
+        got = OllamaModel.get_usage_info(basic_generation_usage=basic, api_response=api_response)
+
+        assert got.input_tokens == 10
+        assert got.output_tokens == 20
+        assert got.total_tokens == 30
+        assert got.input_characters == 100, 'Lost input_characters'
+
+    def test_none_counts_default_to_zero(self) -> None:
+        """Missing counts on the response default to zero."""
+        api_response = ollama_api.GenerateResponse(response='x')
+
+        got = OllamaModel.get_usage_info(basic_generation_usage=ModelUsage(), api_response=api_response)
+
+        assert got.input_tokens == 0
+        assert got.output_tokens == 0
+        assert got.total_tokens == 0
+
+    def test_none_response_passthrough(self) -> None:
+        """A missing API response leaves the basic usage untouched."""
+        basic = ModelUsage(input_characters=5)
+
+        got = OllamaModel.get_usage_info(basic_generation_usage=basic, api_response=None)
+
+        assert got.input_characters == 5
+
+
+class TestBuildMultimodalChatResponse:
+    """Tests for OllamaModel._build_multimodal_chat_response.
+
+    Ported from the former converters ``build_response_parts`` tests. There is no
+    1:1 model method: this is the surviving home for response-part building (text
+    and tool calls), though it consumes an Ollama ``ChatResponse`` rather than
+    raw content/tool-call arguments, and additionally handles image parts.
+    """
+
+    @staticmethod
+    def _response(message: ollama_api.Message) -> ollama_api.ChatResponse:
+        return ollama_api.ChatResponse(message=message)
+
+    def test_text_only(self) -> None:
+        """Text content becomes a single TextPart."""
+        parts = OllamaModel._build_multimodal_chat_response(
+            self._response(ollama_api.Message(role='assistant', content='Hello'))
+        )
+
+        assert len(parts) == 1
+        assert isinstance(parts[0].root, TextPart)
+        assert parts[0].root.text == 'Hello'
+
+    def test_tool_calls(self) -> None:
+        """Tool calls become ToolRequestParts carrying name and input."""
+        message = ollama_api.Message(
+            role='assistant',
+            content='',
+            tool_calls=[
+                ollama_api.Message.ToolCall(
+                    function=ollama_api.Message.ToolCall.Function(name='search', arguments={'q': 'test'})
+                )
+            ],
+        )
+
+        parts = OllamaModel._build_multimodal_chat_response(self._response(message))
+
+        assert len(parts) == 1
+        root = parts[0].root
+        assert isinstance(root, ToolRequestPart)
+        assert root.tool_request.name == 'search'
+        assert root.tool_request.input == {'q': 'test'}
+
+    def test_text_and_tool_calls(self) -> None:
+        """Text plus a tool call yields two parts."""
+        message = ollama_api.Message(
+            role='assistant',
+            content='Thinking...',
+            tool_calls=[
+                ollama_api.Message.ToolCall(function=ollama_api.Message.ToolCall.Function(name='calc', arguments={}))
+            ],
+        )
+
+        parts = OllamaModel._build_multimodal_chat_response(self._response(message))
+
+        assert len(parts) == 2, f'Expected 2 parts, got {len(parts)}'
+
+    def test_empty_content_yields_no_text_part(self) -> None:
+        """Empty content produces no parts."""
+        parts = OllamaModel._build_multimodal_chat_response(
+            self._response(ollama_api.Message(role='assistant', content=''))
+        )
+
+        assert parts == []
+
+    def test_images_become_media_parts(self) -> None:
+        """Image content becomes MediaParts."""
+        message = ollama_api.Message(
+            role='assistant',
+            content='',
+            images=[ollama_api.Image(value='iVBORw0KGgo=')],
+        )
+
+        parts = OllamaModel._build_multimodal_chat_response(self._response(message))
+
+        assert len(parts) == 1
+        assert isinstance(parts[0].root, MediaPart)
