@@ -106,9 +106,10 @@ type snapshotSubs struct {
 const defaultPollInterval = time.Second * 2
 
 // defaultPrefix is the per-call subdirectory snapshots are written under when no
-// [WithSnapshotPathPrefix] is configured, or the configured function yields an
-// empty value, so snapshots always live at least one level below the store root
-// rather than directly in it.
+// [WithSnapshotPathPrefix] is configured, so snapshots always live at least one
+// level below the store root rather than directly in it. A configured function
+// must return a non-empty value: the default is requested by omitting the
+// option, not by returning an empty prefix.
 const defaultPrefix = "global"
 
 // NewFileSessionStore creates a file-based snapshot store rooted at dir.
@@ -365,21 +366,23 @@ func (s *FileSessionStore[State]) OnSnapshotStatusChange(ctx context.Context, sn
 	return ch
 }
 
-// derivePrefix resolves the per-call subdirectory snapshots live under by
-// invoking the configured prefix function (if any) and sanitizing its result.
-// Returns [defaultPrefix] ("global") when no function is configured or it (or
-// its sanitized form) is empty, so snapshots always live under a subdirectory
-// rather than the bare store root.
+// derivePrefix resolves the per-call subdirectory snapshots live under. With no
+// prefix function configured it returns [defaultPrefix] ("global"); otherwise it
+// sanitizes the function's result and requires it to be non-empty. As with every
+// other option, the default is requested by omitting [WithSnapshotPathPrefix],
+// not by returning an empty value from it, so an empty or separator-only result
+// is rejected rather than silently mapped to the default.
 func (s *FileSessionStore[State]) derivePrefix(ctx context.Context) (string, error) {
 	if s.prefixFn == nil {
 		return defaultPrefix, nil
 	}
-	prefix, err := sanitizePrefix(s.prefixFn(ctx))
+	raw := s.prefixFn(ctx)
+	prefix, err := sanitizePrefix(raw)
 	if err != nil {
 		return "", err
 	}
 	if prefix == "" {
-		return defaultPrefix, nil
+		return "", fmt.Errorf("FileSessionStore: WithSnapshotPathPrefix returned %q, which is empty after normalization; omit the option to use the default %q prefix", raw, defaultPrefix)
 	}
 	return prefix, nil
 }

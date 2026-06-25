@@ -256,11 +256,15 @@ type writePlan struct {
 // --- Document references ---
 
 func (s *FirestoreSessionStore[State]) prefixFor(ctx context.Context) (string, error) {
-	prefix := defaultPrefix
-	if s.prefixFn != nil {
-		if p := s.prefixFn(ctx); p != "" {
-			prefix = p
-		}
+	if s.prefixFn == nil {
+		return defaultPrefix, nil
+	}
+	prefix := s.prefixFn(ctx)
+	if prefix == "" {
+		// As with every other option, the default is requested by omitting
+		// WithSnapshotPathPrefix, not by returning an empty value from it; reject
+		// the empty result rather than silently mapping it to the default.
+		return "", fmt.Errorf("snapshot path prefix is empty; omit WithSnapshotPathPrefix to use the default %q prefix", defaultPrefix)
 	}
 	// The prefix is used directly as a Firestore document ID (see snapshotRef et
 	// al.), so it must be a single valid path segment. Reject the realistic

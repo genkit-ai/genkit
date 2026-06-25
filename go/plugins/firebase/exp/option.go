@@ -243,9 +243,10 @@ func (o snapshotPathPrefixOption) applySessionStore(opts *sessionStoreOptions) e
 // authenticated user or org ID) out of ctx.
 //
 // The value must be a valid Firestore document ID (no "/" separators) and stable
-// for a given snapshot's lifetime, since every read recomputes it. An empty
-// result falls back to the "global" prefix. Omitting the option entirely uses
-// the "global" prefix for every call.
+// for a given snapshot's lifetime, since every read recomputes it. It must be
+// non-empty: an empty result is rejected at call time, since the way to request
+// the default "global" prefix is to omit this option entirely, not to return an
+// empty value.
 func WithSnapshotPathPrefix(fn func(ctx context.Context) string) SessionStoreOption {
 	return snapshotPathPrefixOption{fn}
 }

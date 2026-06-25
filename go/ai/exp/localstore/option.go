@@ -90,12 +90,13 @@ func WithMaxPersistedChainLength(n int) FileStoreOption {
 // identity (e.g. an authenticated user or org ID) out of ctx.
 //
 // The returned value may contain "/" to nest several levels
-// (e.g. "org-42/user-7"); empty and separator-only results fall back to the
-// "global" prefix, the same default used when this option is omitted entirely.
-// The value must be stable for a given snapshot's lifetime, since every read
+// (e.g. "org-42/user-7"). It must be non-empty: an empty or separator-only
+// result is rejected at call time, since the way to request the default "global"
+// prefix is to omit this option entirely, not to return an empty value. The
+// value must be stable for a given snapshot's lifetime, since every read
 // recomputes it - derive it from stable identity, not from per-request state. A
 // value that would escape the store directory (contains "..", a backslash, or a
-// segment starting with ".") is rejected at call time.
+// segment starting with ".") is likewise rejected at call time.
 func WithSnapshotPathPrefix(fn func(ctx context.Context) string) FileStoreOption {
 	return &fileStoreOptions{prefixFn: fn}
 }

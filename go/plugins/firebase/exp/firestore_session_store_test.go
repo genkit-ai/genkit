@@ -231,6 +231,34 @@ func TestInvalidPrefixRejected(t *testing.T) {
 	}
 }
 
+// TestEmptyPrefixRejected verifies every operation rejects a configured prefix
+// function that returns an empty value, before touching Firestore (the store has
+// a nil client). The default "global" prefix is requested by omitting
+// WithSnapshotPathPrefix, not by returning an empty value from it.
+func TestEmptyPrefixRejected(t *testing.T) {
+	ctx := context.Background()
+	store := &FirestoreSessionStore[testState]{
+		collection: "c",
+		prefixFn:   func(context.Context) string { return "" },
+	}
+
+	if _, err := store.GetSnapshot(ctx, "snap"); err == nil {
+		t.Error("GetSnapshot: expected error for empty prefix")
+	}
+	if _, err := store.GetLatestSnapshot(ctx, "sess"); err == nil {
+		t.Error("GetLatestSnapshot: expected error for empty prefix")
+	}
+	if _, err := store.SaveSnapshot(ctx, "snap",
+		func(_ *aix.SessionSnapshot[testState]) (*aix.SessionSnapshot[testState], error) {
+			return &aix.SessionSnapshot[testState]{SessionID: "s"}, nil
+		}); err == nil {
+		t.Error("SaveSnapshot: expected error for empty prefix")
+	}
+	if _, ok := <-store.OnSnapshotStatusChange(ctx, "snap"); ok {
+		t.Error("OnSnapshotStatusChange: expected a closed channel for empty prefix")
+	}
+}
+
 // --- SessionID rules (mirrors the shared conformance suite) ---
 
 func TestSessionIDRules(t *testing.T) {

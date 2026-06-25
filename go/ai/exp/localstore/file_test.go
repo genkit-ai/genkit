@@ -771,6 +771,41 @@ func TestFileSessionStore_PathPrefix_Rejected(t *testing.T) {
 	}
 }
 
+// TestFileSessionStore_PathPrefix_EmptyRejected verifies that a configured prefix
+// function returning an empty or separator-only value is rejected at call time.
+// The default "global" prefix is requested by omitting the option, not by
+// returning an empty value from it.
+func TestFileSessionStore_PathPrefix_EmptyRejected(t *testing.T) {
+	cases := []struct{ name, prefix string }{
+		{"empty", ""},
+		{"single slash", "/"},
+		{"multiple slashes", "///"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			store, err := NewFileSessionStore[testState](dir,
+				WithSnapshotPathPrefix(func(context.Context) string { return tc.prefix }))
+			if err != nil {
+				t.Fatalf("NewFileSessionStore: %v", err)
+			}
+			ctx := context.Background()
+			if _, err := store.SaveSnapshot(ctx, "s1",
+				func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+					return &exp.SessionSnapshot[testState]{SessionID: "sess"}, nil
+				}); err == nil {
+				t.Error("SaveSnapshot: expected error for empty prefix, got nil")
+			}
+			if _, err := store.GetSnapshot(ctx, "s1"); err == nil {
+				t.Error("GetSnapshot: expected error for empty prefix, got nil")
+			}
+			if _, err := store.GetLatestSnapshot(ctx, "sess"); err == nil {
+				t.Error("GetLatestSnapshot: expected error for empty prefix, got nil")
+			}
+		})
+	}
+}
+
 // TestFileSessionStore_OptionSetTwice verifies the construction options reject
 // being set more than once, surfacing the error from NewFileSessionStore.
 func TestFileSessionStore_OptionSetTwice(t *testing.T) {
