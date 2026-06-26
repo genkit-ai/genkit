@@ -350,7 +350,8 @@ Agents can be served over HTTP and accessed from the client with `remoteAgent`, 
 ```ts
 import { remoteAgent } from 'genkit/beta/client';
 
-const agent = remoteAgent({ url: 'http://localhost:3500/weatherAgent' });
+const AGENT_URL = 'YOUR_AGENT_URL';
+const agent = remoteAgent({ url: AGENT_URL });
 const chat = agent.chat();
 const res = await chat.send('Weather in Tokyo?');
 console.log(res.text);
