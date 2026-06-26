@@ -37,6 +37,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -47,6 +48,105 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 )
+
+// ANSI styling for the small amount of tasteful color the CLI uses: cyan as
+// the structural accent (prompt, headers, list markers, tool calls), and
+// green/yellow/dim for outcomes and metadata. The user's own typed text is
+// left in the terminal's default color. These are the named 16-color codes,
+// not fixed RGB, so the user's terminal theme maps them to shades that suit
+// its background. Kept inline and dependency-free; on a terminal without ANSI
+// support these degrade to literal escape sequences, which is acceptable for
+// a sample.
+const (
+	ansiReset  = "\033[0m"
+	ansiBold   = "\033[1m"
+	ansiDim    = "\033[2m"
+	ansiCyan   = "\033[36m"
+	ansiGreen  = "\033[32m"
+	ansiYellow = "\033[33m"
+)
+
+// style wraps s in the given ANSI codes followed by a reset. With no codes it
+// returns s unchanged, so it is always safe to call.
+func style(s string, codes ...string) string {
+	if len(codes) == 0 {
+		return s
+	}
+	return strings.Join(codes, "") + s + ansiReset
+}
+
+// chevron is the accent-colored prompt drawn before every interactive read.
+var chevron = style("> ", ansiBold, ansiCyan)
+
+// promptLine prints prompt and reads one line. The prompt carries its own
+// styling (e.g. the accent-colored chevron); the user's typed text is left in
+// the terminal's default color. Routing every interactive read through it
+// keeps prompting consistent across the menus and the chat REPL.
+func promptLine(ctx context.Context, inputCh <-chan string, prompt string) (string, bool) {
+	fmt.Print(prompt)
+	return readLine(ctx, inputCh)
+}
+
+// stdoutIsTerminal reports whether stdout is an interactive terminal, computed
+// once at startup. The spinner only animates when it is; piped or redirected
+// output skips it so logs don't fill up with carriage-return frames.
+var stdoutIsTerminal = func() bool {
+	fi, err := os.Stdout.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}()
+
+// spinner is a single-line "still working" indicator shown while waiting for
+// the model to produce the first output of a generation. It animates in place
+// with a carriage return and erases itself when stopped, so the reply (or tool
+// call) prints on the line the spinner occupied.
+type spinner struct {
+	stopCh chan struct{}
+	done   chan struct{}
+}
+
+// startSpinner draws label with an animated glyph and, after the first second,
+// an elapsed-seconds counter, refreshing the same line ~10x/second on its own
+// goroutine. When stdout is not a terminal it draws nothing. Always pair it
+// with (*spinner).stop.
+func startSpinner(label string) *spinner {
+	s := &spinner{stopCh: make(chan struct{}), done: make(chan struct{})}
+	go func() {
+		defer close(s.done)
+		if !stdoutIsTerminal {
+			<-s.stopCh // nothing to draw, just wait to be released
+			return
+		}
+		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		start := time.Now()
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		draw := func(i int) {
+			line := style(frames[i%len(frames)], ansiCyan) + " " + style(label, ansiDim)
+			if secs := int(time.Since(start).Seconds()); secs >= 1 {
+				line += " " + style(fmt.Sprintf("(%ds)", secs), ansiDim)
+			}
+			fmt.Printf("\r\033[K%s", line)
+		}
+		draw(0)
+		for i := 1; ; i++ {
+			select {
+			case <-s.stopCh:
+				fmt.Print("\r\033[K") // erase the spinner so content takes its line
+				return
+			case <-ticker.C:
+				draw(i)
+			}
+		}
+	}()
+	return s
+}
+
+// stop ends the animation and erases the line, blocking until the goroutine
+// has done so. The streamTurn caller guards against calling it more than once.
+func (s *spinner) stop() {
+	close(s.stopCh)
+	<-s.done
+}
 
 // errQuit signals that the user typed /quit somewhere in the CLI; it
 // bubbles up through openAgent and breaks runCLI's outer loop.
@@ -82,8 +182,8 @@ type InterruptHandler func(p *Prompter, interrupt *ai.Part) (*ai.Part, error)
 // Returning from a chat brings the user back to the agent list. /quit
 // (anywhere) and Ctrl-C both unwind back here and exit cleanly.
 func runCLI(ctx context.Context, agents []agentEntry) error {
-	fmt.Println("Genkit Basic Agents")
-	fmt.Println("===================")
+	fmt.Println(style("Genkit Basic Agents", ansiBold, ansiCyan))
+	fmt.Println(style("===================", ansiDim))
 	fmt.Println()
 	fmt.Println("Pick an agent below, choose to resume the last conversation")
 	fmt.Println("or start a new one, and chat. Inside a chat:")
@@ -133,19 +233,21 @@ func runCLI(ctx context.Context, agents []agentEntry) error {
 func pickAgent(ctx context.Context, inputCh <-chan string, agents []agentEntry, lastSession map[string]string) (int, bool) {
 	for {
 		fmt.Println()
-		fmt.Println("Agents:")
+		fmt.Println(style("Agents:", ansiBold))
 		for i, entry := range agents {
 			a := entry.agent
-			fmt.Printf("  %d. %s — %s\n", i+1, a.Name(), a.Desc().Description)
+			fmt.Printf("  %s %s %s\n",
+				style(fmt.Sprintf("%d.", i+1), ansiCyan),
+				style(a.Name(), ansiBold),
+				style("— "+a.Desc().Description, ansiDim))
 			if summary := summarizeLatest(ctx, a, lastSession[a.Name()]); summary != "" {
-				fmt.Printf("       last: %s\n", summary)
+				fmt.Printf("       %s\n", summary)
 			}
 		}
-		fmt.Println("  q. quit")
+		fmt.Printf("  %s %s\n", style("q.", ansiCyan), style("quit", ansiDim))
 		fmt.Println()
-		fmt.Print("> ")
 
-		line, ok := readLine(ctx, inputCh)
+		line, ok := promptLine(ctx, inputCh, chevron)
 		if !ok {
 			return -1, false
 		}
@@ -222,34 +324,34 @@ func openAgent(ctx context.Context, inputCh <-chan string, entry agentEntry, las
 // would be redundant.
 func handlePending(ctx context.Context, inputCh <-chan string, a *aix.Agent[any], pending *aix.SessionSnapshot[any]) (*aix.SessionSnapshot[any], bool) {
 	for {
-		fmt.Printf("\nThe last %s session is still running in the background (%s).\n", a.Name(), shortID(pending.SnapshotID))
-		fmt.Println("  1. Wait for it to finalize")
-		fmt.Println("  2. Start a new conversation")
-		fmt.Println("  3. Back to agent list")
-		fmt.Print("> ")
+		fmt.Printf("\nThe last %s session is still running in the background (%s).\n",
+			style(a.Name(), ansiBold), style(shortID(pending.SnapshotID), ansiDim))
+		fmt.Printf("  %s Wait for it to finalize\n", style("1.", ansiCyan))
+		fmt.Printf("  %s Start a new conversation\n", style("2.", ansiCyan))
+		fmt.Printf("  %s Back to agent list\n", style("3.", ansiCyan))
 
-		line, ok := readLine(ctx, inputCh)
+		line, ok := promptLine(ctx, inputCh, chevron)
 		if !ok {
 			return nil, false
 		}
 		switch strings.TrimSpace(line) {
 		case "1":
-			fmt.Println("Waiting for it to finalize...")
+			fmt.Println(style("Waiting for it to finalize...", ansiYellow))
 			final, err := waitForFinalize(ctx, a, pending.SnapshotID)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Wait error: %v\n", err)
 				return nil, false
 			}
 			if final == nil {
-				fmt.Println("Snapshot disappeared while waiting. Starting a new conversation.")
+				fmt.Println(style("Snapshot disappeared while waiting. Starting a new conversation.", ansiYellow))
 				return nil, true
 			}
-			fmt.Printf("Done (%s).\n", final.Status)
+			fmt.Println(style(fmt.Sprintf("Done (%s).", final.Status), ansiGreen))
 			if final.Status != aix.SnapshotStatusCompleted {
 				// failed / aborted snapshots aren't resumable; the
 				// agent runtime would reject WithSnapshotID on them.
 				// Fall through to a fresh chat instead.
-				fmt.Println("Cannot resume this snapshot. Starting a new conversation.")
+				fmt.Println(style("Cannot resume this snapshot. Starting a new conversation.", ansiYellow))
 				return nil, true
 			}
 			return final, true
@@ -272,7 +374,7 @@ func handlePending(ctx context.Context, inputCh <-chan string, a *aix.Agent[any]
 // fresh (returns nil).
 func pickSession(ctx context.Context, inputCh <-chan string, a *aix.Agent[any], latest *aix.SessionSnapshot[any]) (*aix.SessionSnapshot[any], bool) {
 	if latest == nil || latest.Status != aix.SnapshotStatusCompleted {
-		fmt.Printf("\nStarting a new conversation with %s.\n", a.Name())
+		fmt.Printf("\nStarting a new conversation with %s.\n", style(a.Name(), ansiBold))
 		return nil, true
 	}
 
@@ -280,12 +382,12 @@ func pickSession(ctx context.Context, inputCh <-chan string, a *aix.Agent[any], 
 	if latest.State != nil {
 		msgs = len(latest.State.Messages)
 	}
-	fmt.Printf("\nLast %s session: %s (%s, %d msgs).\n",
-		a.Name(), shortID(latest.SnapshotID), latest.UpdatedAt.Format(time.RFC822), msgs)
-	fmt.Println("Resume from it? [Y/n] (n = start a new conversation)")
-	fmt.Print("> ")
+	fmt.Printf("\nLast %s session: %s\n",
+		style(a.Name(), ansiBold),
+		style(fmt.Sprintf("%s (%s, %d msgs)", shortID(latest.SnapshotID), latest.UpdatedAt.Format(time.RFC822), msgs), ansiDim))
+	fmt.Println("Resume from it? " + style("[Y/n] (n = start a new conversation)", ansiDim))
 
-	line, ok := readLine(ctx, inputCh)
+	line, ok := promptLine(ctx, inputCh, chevron)
 	if !ok {
 		return nil, false
 	}
@@ -311,7 +413,7 @@ func resumeOption(ctx context.Context, a *aix.Agent[any], resume *aix.SessionSna
 		if err == nil && tip != nil && tip.Status != aix.SnapshotStatusPending {
 			return aix.WithSessionID[any](resume.SessionID)
 		}
-		fmt.Println("(this conversation's session can't be resumed as a whole; continuing from the selected snapshot)")
+		fmt.Println(style("(this conversation's session can't be resumed as a whole; continuing from the selected snapshot)", ansiDim))
 	}
 	return aix.WithSnapshotID[any](resume.SnapshotID)
 }
@@ -327,15 +429,15 @@ func resumeOption(ctx context.Context, a *aix.Agent[any], resume *aix.SessionSna
 func runChat(ctx context.Context, inputCh <-chan string, entry agentEntry, resume *aix.SessionSnapshot[any], prevSessionID string) (string, error) {
 	a := entry.agent
 	prompter := &Prompter{ctx: ctx, inputCh: inputCh}
-	fmt.Printf("\n=== Chatting with %s ===\n", a.Name())
+	fmt.Printf("\n%s\n", style("=== Chatting with "+a.Name()+" ===", ansiBold, ansiCyan))
 	if resume != nil {
-		fmt.Printf("Resumed from %s\n", shortID(resume.SnapshotID))
+		fmt.Println(style("Resumed from "+shortID(resume.SnapshotID), ansiDim))
 	}
-	fmt.Println("Commands: /detach [text], /back, /quit")
+	fmt.Println(style("Commands: /detach [text], /back, /quit", ansiDim))
 
 	if resume != nil && resume.State != nil && len(resume.State.Messages) > 0 {
 		fmt.Println()
-		fmt.Println("(picking up where you left off)")
+		fmt.Println(style("(picking up where you left off)", ansiDim))
 		printHistory(resume.State.Messages)
 	}
 	fmt.Println()
@@ -350,14 +452,14 @@ func runChat(ctx context.Context, inputCh <-chan string, entry agentEntry, resum
 	}
 
 	var (
-		detached bool
-		quit     bool
+		detached   bool
+		quit       bool
+		failedTurn bool
 	)
 
 repl:
 	for {
-		fmt.Print("> ")
-		line, ok := readLine(ctx, inputCh)
+		line, ok := promptLine(ctx, inputCh, chevron)
 		if !ok {
 			break
 		}
@@ -398,25 +500,40 @@ repl:
 			break
 		}
 		fmt.Println()
-		end, ok := streamReply(conn, entry, prompter)
+		end, wrote, ok := streamReply(conn, entry, prompter)
 		if !ok {
 			// The stream errored or closed before the turn settled; the
 			// error was already reported. Output below reports the outcome.
 			break repl
 		}
 		// finishReason rides the turn-end signal, so the client learns how
-		// the turn ended without scanning the message content.
-		if r := end.FinishReason; r != "" {
-			fmt.Printf("\n  [turn: %s]", r)
-		}
-		if end.SnapshotID != "" {
-			fmt.Printf("\n  [snapshot %s]", shortID(end.SnapshotID))
+		// the turn ended without scanning the message content. The dim
+		// turn/snapshot footer sits one blank line below the reply: when the
+		// turn printed something the markers' leading newlines make that
+		// blank, but when it printed nothing (e.g. an immediate failure) the
+		// erased spinner already left a blank line, so the first marker reuses
+		// it rather than stacking more blanks.
+		if end.FinishReason != "" || end.SnapshotID != "" {
+			sep := "  "
+			if wrote {
+				fmt.Println() // close the reply's line
+				sep = "\n  "  // and put a blank line above the footer
+			}
+			if r := end.FinishReason; r != "" {
+				fmt.Printf("%s%s", sep, style(fmt.Sprintf("[turn: %s]", r), ansiDim))
+				sep = "\n  "
+			}
+			if end.SnapshotID != "" {
+				fmt.Printf("%s%s", sep, style(fmt.Sprintf("[snapshot %s]", shortID(end.SnapshotID)), ansiDim))
+			}
 		}
 		fmt.Println()
 		fmt.Println()
 		if end.FinishReason == aix.AgentFinishReasonFailed {
 			// A failed turn ends the invocation; Output below reports the
-			// error and the last-good snapshot.
+			// error and the last-good snapshot. The footer above already
+			// spaced things off, so flag it to skip the pre-outcome blank.
+			failedTurn = true
 			break repl
 		}
 	}
@@ -426,24 +543,32 @@ repl:
 		fmt.Fprintf(os.Stderr, "Output error: %v\n", outErr)
 	}
 
+	// Set the closing status apart from the last input line (e.g. /back or
+	// /detach) with a blank line. A failed turn already printed its footer
+	// with trailing spacing just above, so skip the extra blank there.
+	if out != nil && !failedTurn {
+		fmt.Println()
+	}
 	switch {
 	case detached && out != nil && out.SnapshotID != "":
-		fmt.Printf("Detached. Pending snapshot: %s.\n", shortID(out.SnapshotID))
-		fmt.Println("The agent keeps processing in the background. Pick this")
-		fmt.Println("agent again from the list to wait for it to finalize and")
-		fmt.Println("resume from the cumulative final state.")
+		fmt.Printf("%s Pending snapshot: %s.\n",
+			style("Detached.", ansiYellow), style(shortID(out.SnapshotID), ansiDim))
+		fmt.Println(style("The agent keeps processing in the background. Pick this", ansiDim))
+		fmt.Println(style("agent again from the list to wait for it to finalize and", ansiDim))
+		fmt.Println(style("resume from the cumulative final state.", ansiDim))
 	case out != nil && out.FinishReason == aix.AgentFinishReasonFailed:
 		// A failed invocation resolves with the error and a last-good
 		// snapshot to resume from.
 		if out.Error != nil {
-			fmt.Fprintf(os.Stderr, "Agent failed (%s): %s\n", out.Error.Status, out.Error.Message)
+			fmt.Fprintf(os.Stderr, "%s\n", style(fmt.Sprintf("Agent failed (%s): %s", out.Error.Status, out.Error.Message), ansiYellow))
 		}
 		if out.SnapshotID != "" {
-			fmt.Printf("Last-good snapshot: %s. Pick this agent again to resume from it.\n",
-				shortID(out.SnapshotID))
+			fmt.Printf("%s\n", style(fmt.Sprintf("Last-good snapshot: %s. Pick this agent again to resume from it.", shortID(out.SnapshotID)), ansiDim))
 		}
 	case out != nil && out.SnapshotID != "":
-		fmt.Printf("Done (%s). Final snapshot: %s.\n", out.FinishReason, shortID(out.SnapshotID))
+		fmt.Printf("%s Final snapshot: %s.\n",
+			style(fmt.Sprintf("Done (%s).", out.FinishReason), ansiGreen),
+			style(shortID(out.SnapshotID), ansiDim))
 	}
 
 	// Hand back the session this chat ran under so the caller can offer to
@@ -469,49 +594,125 @@ repl:
 // caller may break on TurnEnd, send the next input (here a resume), and
 // range Receive again for the continuation. A resumed turn can interrupt
 // again, so this loops rather than handling just one round.
-func streamReply(conn *aix.AgentConnection[any], entry agentEntry, p *Prompter) (*aix.TurnEnd, bool) {
+//
+// It also reports whether any visible content (text or a tool call) was
+// printed, so the caller can space the turn footer correctly when a turn
+// produces nothing (e.g. an immediate failure).
+func streamReply(conn *aix.AgentConnection[any], entry agentEntry, p *Prompter) (end *aix.TurnEnd, wrote bool, ok bool) {
 	for {
-		interrupts, end, ok := streamTurn(conn)
-		if !ok {
-			return nil, false
+		interrupts, e, w, sok := streamTurn(conn)
+		wrote = wrote || w
+		if !sok {
+			return nil, wrote, false
 		}
 		if len(interrupts) == 0 {
-			return end, true
+			return e, wrote, true
 		}
 		resume := resolveInterrupts(entry, p, interrupts)
 		if resume == nil {
 			// Nothing could be resolved (no handler, or the handler declined
 			// every interrupt). Surface the interrupted turn as-is rather
 			// than sending an empty resume the agent can't act on.
-			return end, true
+			return e, wrote, true
 		}
 		if err := conn.SendResume(resume); err != nil {
 			fmt.Fprintf(os.Stderr, "\nResume error: %v\n", err)
-			return nil, false
+			return nil, wrote, false
 		}
+		// Blank line so the resumed reply (and its spinner) sits apart from the
+		// interrupt prompt, matching the spacing of a fresh turn.
+		fmt.Println()
 		// The resumed turn streams on the next Receive; loop to consume it.
 	}
 }
 
-// streamTurn streams a single turn's chunks: it prints model text as it
-// arrives and collects any tool interrupts. It returns when the turn ends
-// (end != nil, ok=true) or the stream errors/closes (ok=false).
-func streamTurn(conn *aix.AgentConnection[any]) (interrupts []*ai.Part, end *aix.TurnEnd, ok bool) {
+// streamTurn streams a single turn's chunks: it shows a spinner until the
+// first visible output arrives, prints model text as it streams, renders tool
+// calls inline for feedback, and collects any tool interrupts. It returns when
+// the turn ends (end != nil, ok=true) or the stream errors/closes (ok=false).
+//
+// Tool requests reach the client because the agent forwards the model's raw
+// streaming chunks verbatim, so the function calls the model emits show up
+// here alongside its text. Interrupts (a tool that paused for input) are kept
+// for the agent's handler; every other tool request is printed so the user
+// sees what the agent is doing between bursts of text.
+//
+// The spinner is stopped (and erased) the moment any visible content is about
+// to print, so the reply or tool line takes over the line it occupied.
+func streamTurn(conn *aix.AgentConnection[any]) (interrupts []*ai.Part, end *aix.TurnEnd, wrote bool, ok bool) {
+	sp := startSpinner("Thinking")
+	stopSpinner := func() {
+		if sp != nil {
+			sp.stop()
+			sp = nil
+		}
+	}
+	defer stopSpinner()
+
 	for chunk, err := range conn.Receive() {
 		if err != nil {
+			stopSpinner()
 			fmt.Fprintf(os.Stderr, "\nError: %v\n", err)
-			return nil, nil, false
+			return nil, nil, wrote, false
 		}
-		if chunk.ModelChunk != nil {
-			fmt.Print(chunk.ModelChunk.Text())
-			interrupts = append(interrupts, chunk.ModelChunk.Interrupts()...)
+		if mc := chunk.ModelChunk; mc != nil {
+			if t := mc.Text(); t != "" {
+				stopSpinner()
+				fmt.Print(t)
+				wrote = true
+			}
+			for _, p := range mc.Content {
+				switch {
+				case p.IsInterrupt():
+					interrupts = append(interrupts, p)
+				case p.IsToolRequest() && !p.ToolRequest.Partial:
+					stopSpinner()
+					printToolRequest(p.ToolRequest)
+					wrote = true
+				}
+			}
 		}
 		if chunk.TurnEnd != nil {
-			return interrupts, chunk.TurnEnd, true
+			stopSpinner()
+			return interrupts, chunk.TurnEnd, wrote, true
 		}
 	}
 	// Stream closed without a turn end (e.g. ctx canceled / connection gone).
-	return nil, nil, false
+	stopSpinner()
+	return nil, nil, wrote, false
+}
+
+// printToolRequest renders a single tool call as a compact, colored line so
+// the user gets feedback about what the agent is doing as a turn streams.
+// The tool name is highlighted and its JSON input dimmed. A blank line on
+// each side sets the call apart from the messages before and after it (the
+// agent's "about to do X" note and its follow-up reply).
+func printToolRequest(tr *ai.ToolRequest) {
+	if tr == nil {
+		return
+	}
+	fmt.Printf("\n\n  %s%s⚙ %s%s %s%s%s\n\n",
+		ansiBold, ansiCyan, tr.Name, ansiReset,
+		ansiDim, formatToolInput(tr.Input), ansiReset)
+}
+
+// formatToolInput renders a tool's input as compact single-line JSON,
+// truncated if very long so the feedback line stays readable. It falls back
+// to %v if the input can't be marshaled.
+func formatToolInput(input any) string {
+	if input == nil {
+		return "{}"
+	}
+	b, err := json.Marshal(input)
+	if err != nil {
+		return fmt.Sprintf("%v", input)
+	}
+	const max = 300
+	s := string(b)
+	if r := []rune(s); len(r) > max {
+		s = string(r[:max]) + "…"
+	}
+	return s
 }
 
 // resolveInterrupts turns a batch of tool interrupts into one resume
@@ -529,7 +730,9 @@ func resolveInterrupts(entry agentEntry, p *Prompter, interrupts []*ai.Part) *ai
 			entry.agent.Name(), len(interrupts))
 		return nil
 	}
-	fmt.Println() // separate the streamed reply from the interrupt prompts
+	// No separator needed here: the interrupting tool's request was already
+	// streamed and rendered by printToolRequest, whose trailing blank line
+	// sets the upcoming prompts apart from the reply.
 	resume := &aix.ToolResume{}
 	for _, interrupt := range interrupts {
 		part, err := entry.onInterrupt(p, interrupt)
@@ -554,6 +757,11 @@ func resolveInterrupts(entry agentEntry, p *Prompter, interrupts []*ai.Part) *ai
 // list: the tip of the conversation last run with it this session. Empty
 // when none has run yet, or the session has no resumable snapshot, so a
 // fresh list shows no clutter.
+//
+// It returns the line already styled: dim metadata, with a still-pending
+// detach highlighted in yellow. Each segment carries its own reset so the
+// yellow status doesn't bleed into the surrounding dim text. A pending
+// snapshot has no finalized messages yet, so its count is omitted.
 func summarizeLatest(ctx context.Context, a *aix.Agent[any], sessionID string) string {
 	if sessionID == "" {
 		return ""
@@ -562,12 +770,18 @@ func summarizeLatest(ctx context.Context, a *aix.Agent[any], sessionID string) s
 	if err != nil || latest == nil {
 		return ""
 	}
+	when := latest.UpdatedAt.Format(time.RFC822)
+	if latest.Status == aix.SnapshotStatusPending {
+		return style("last: "+shortID(latest.SnapshotID)+" (", ansiDim) +
+			style("pending", ansiYellow) +
+			style(", "+when+")", ansiDim)
+	}
 	msgs := 0
 	if latest.State != nil {
 		msgs = len(latest.State.Messages)
 	}
-	return fmt.Sprintf("%s (%s, %d msgs, %s)",
-		shortID(latest.SnapshotID), latest.Status, msgs, latest.UpdatedAt.Format(time.RFC822))
+	return style(fmt.Sprintf("last: %s (%s, %d msgs, %s)",
+		shortID(latest.SnapshotID), latest.Status, msgs, when), ansiDim)
 }
 
 // waitForFinalize subscribes to a snapshot's status and blocks until it
@@ -605,24 +819,58 @@ func waitForFinalize(ctx context.Context, a *aix.Agent[any], snapshotID string) 
 	}
 }
 
-// printHistory replays prior turns in the same format the live REPL
-// uses, so a resumed chat reads continuously rather than dumping the
-// user into an empty prompt. Non-user/model roles (e.g. tool messages)
-// and empty content are skipped — they would only be noise here, and
-// the agent's per-turn loop still has the full history under the hood.
+// printHistory replays prior turns in the same format the live REPL uses, so
+// a resumed chat reads continuously rather than dropping the user into an
+// empty prompt. It renders user and model text plus any tool calls the model
+// made — the same ⚙ lines streamTurn shows live — so a delegation or transfer
+// is visible on resume exactly as it happened. Tool result messages
+// (role=tool) are skipped, matching the live stream, which doesn't echo them
+// either; the agent's per-turn loop still has the full history under the hood.
+//
+// The model's tool requests live in the durable snapshot (the agent loop
+// persists modelResp.History(), tool messages included). Earlier this function
+// only printed m.Text(), so those calls were absent on resume even though they
+// were saved — a replay gap here, not a persistence bug in the agent runtime.
 func printHistory(msgs []*ai.Message) {
+	prevToolReq := false
 	for _, m := range msgs {
-		text := strings.TrimSpace(m.Text())
-		if text == "" {
-			continue
-		}
 		switch m.Role {
 		case ai.RoleUser:
+			text := strings.TrimSpace(m.Text())
+			if text == "" {
+				continue
+			}
 			fmt.Println()
-			fmt.Printf("> %s\n", text)
+			fmt.Printf("%s%s\n", chevron, text)
+			prevToolReq = false
 		case ai.RoleModel:
-			fmt.Println()
-			fmt.Println(text)
+			text := strings.TrimSpace(m.Text())
+			var toolReqs []*ai.ToolRequest
+			for _, part := range m.Content {
+				if part.IsToolRequest() {
+					toolReqs = append(toolReqs, part.ToolRequest)
+				}
+			}
+			if text == "" && len(toolReqs) == 0 {
+				continue
+			}
+			// Leading blank unless the previous line was a tool call, whose
+			// printToolRequest already left a trailing blank line.
+			if !prevToolReq {
+				fmt.Println()
+			}
+			// Print text with no trailing newline; the tool call's leading
+			// blank (or the close below) ends the line.
+			if text != "" {
+				fmt.Print(text)
+			}
+			for _, tr := range toolReqs {
+				printToolRequest(tr)
+			}
+			if len(toolReqs) == 0 {
+				fmt.Println()
+			}
+			prevToolReq = len(toolReqs) > 0
 		}
 	}
 }
@@ -658,8 +906,7 @@ func (p *Prompter) Printf(format string, args ...any) {
 // Ask prints prompt and returns the user's trimmed reply. ok=false if the
 // input stream closed or the context was canceled.
 func (p *Prompter) Ask(prompt string) (reply string, ok bool) {
-	fmt.Print(prompt)
-	line, ok := readLine(p.ctx, p.inputCh)
+	line, ok := promptLine(p.ctx, p.inputCh, prompt)
 	if !ok {
 		return "", false
 	}
@@ -669,7 +916,7 @@ func (p *Prompter) Ask(prompt string) (reply string, ok bool) {
 // Confirm asks a yes/no question, defaulting to yes on empty input and
 // returning false on anything else (including a closed input stream).
 func (p *Prompter) Confirm(question string) bool {
-	reply, ok := p.Ask(question + " [Y/n] ")
+	reply, ok := p.Ask(question + style(" [Y/n] ", ansiDim))
 	if !ok {
 		return false
 	}
@@ -690,9 +937,10 @@ func (p *Prompter) Choose(title string, options ...string) int {
 			fmt.Println(title)
 		}
 		for i, opt := range options {
-			fmt.Printf("  %d. %s\n", i+1, opt)
+			fmt.Printf("  %s %s\n", style(fmt.Sprintf("%d.", i+1), ansiCyan), opt)
 		}
-		reply, ok := p.Ask("> ")
+		fmt.Println()
+		reply, ok := p.Ask(chevron)
 		if !ok {
 			return -1
 		}

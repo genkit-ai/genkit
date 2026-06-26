@@ -19,16 +19,8 @@ import (
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
 	middlewarex "github.com/firebase/genkit/go/plugins/middleware/exp"
-	"google.golang.org/genai"
 )
-
-// flashModel is the model shared by the orchestrator and its sub-agents:
-// gemini-flash-latest with thinking disabled for snappy, low-cost turns.
-var flashModel = googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
-	ThinkingConfig: &genai.ThinkingConfig{ThinkingBudget: genai.Ptr[int32](0)},
-})
 
 // defineOrchestratorAgent demonstrates the experimental Agents middleware: an
 // orchestrator that delegates to specialized sub-agents through per-agent tools.
@@ -49,9 +41,10 @@ func defineOrchestratorAgent(g *genkit.Genkit) *aix.Agent[any] {
 	researcher := genkitx.DefineAgent(g, "researcher",
 		aix.InlinePrompt{
 			ai.WithModel(flashModel),
-			ai.WithSystem("You are a thorough research assistant. Answer the question " +
-				"concisely, then call write_artifact to save your findings as a named " +
-				"markdown artifact (for example \"findings.md\")."),
+			ai.WithSystem("You are a research assistant. Be brief. Answer the question " +
+				"concisely. Before saving, send one short sentence saying you're " +
+				"recording your findings, then call write_artifact to store them as a " +
+				"named markdown artifact (for example \"findings.md\")."),
 			ai.WithUse(&middlewarex.Artifacts{}),
 		},
 		aix.WithDescription[any]("Researches a topic and summarizes well-sourced findings."),
@@ -60,9 +53,10 @@ func defineOrchestratorAgent(g *genkit.Genkit) *aix.Agent[any] {
 	engineer := genkitx.DefineAgent(g, "engineer",
 		aix.InlinePrompt{
 			ai.WithModel(flashModel),
-			ai.WithSystem("You are an expert programmer. Write clean, well-commented code, " +
-				"then call write_artifact to save it as a named file artifact (for " +
-				"example \"main.go\")."),
+			ai.WithSystem("You are an expert programmer. Be brief. Write clean, " +
+				"well-commented code. Before saving, send one short sentence saying " +
+				"you're saving the file, then call write_artifact to store it as a " +
+				"named file artifact (for example \"main.go\")."),
 			ai.WithUse(&middlewarex.Artifacts{}),
 		},
 		aix.WithDescription[any]("Writes and explains code, producing file artifacts."),
@@ -71,11 +65,12 @@ func defineOrchestratorAgent(g *genkit.Genkit) *aix.Agent[any] {
 	return genkitx.DefineAgent(g, "orchestrator",
 		aix.InlinePrompt{
 			ai.WithModel(flashModel),
-			ai.WithSystem("You are a project coordinator. Analyze the user's request and " +
-				"delegate to the appropriate sub-agent using its delegation tool. If a " +
-				"request needs both research and code, delegate to each in turn. After " +
-				"the sub-agents respond you may call read_artifact to review their work, " +
-				"then synthesize a final answer for the user."),
+			ai.WithSystem("You are a project coordinator. Be concise. Analyze the user's " +
+				"request and delegate to the appropriate sub-agent using its delegation " +
+				"tool. Before each tool call, send one short sentence saying what you're " +
+				"about to do, then call the tool. If a request needs both research and " +
+				"code, delegate to each in parallel. After the sub-agents respond you may " +
+				"call read_artifact to review their work, then give a brief final answer."),
 			ai.WithUse(
 				// One delegation tool per sub-agent. Descriptions are
 				// auto-discovered from each agent (set via WithDescription and
