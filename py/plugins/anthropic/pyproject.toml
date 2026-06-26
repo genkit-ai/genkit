@@ -42,7 +42,7 @@ classifiers = [
   "Typing :: Typed",
   "License :: OSI Approved :: Apache Software License",
 ]
-dependencies = ["genkit", "anthropic>=0.40.0"]
+dependencies = ["genkit", "anthropic>=0.96.0"]
 description = "Genkit Anthropic Plugin (Community)"
 keywords = [
   "genkit",
