@@ -81,7 +81,10 @@ Beyond a plain chat loop, agents give you:
 - **Background execution** via `Detach`: hand a long-running turn to the server, walk away, and poll, resume, or abort it later.
 - **One definition, many transports**: the same agent runs in-process (`RunText`, `Connect`) or over HTTP, one turn per request.
 
-The agent API is experimental and may change in a minor release. The constructors (`DefineAgent`, `DefinePromptAgent`, `DefineCustomAgent`) live in `github.com/firebase/genkit/go/genkit/exp` (aliased `genkitx` below); the agent types and options live in `github.com/firebase/genkit/go/ai/exp` (aliased `aix`).
+> [!WARNING]
+> This API is in preview and may experience breaking changes in minor releases.
+
+The constructors (`DefineAgent`, `DefinePromptAgent`, `DefineCustomAgent`) live in `github.com/firebase/genkit/go/genkit/exp` (aliased `genkitx` below); the agent types and options live in `github.com/firebase/genkit/go/ai/exp` (aliased `aix`). Initialize Genkit with `genkit.WithExperimental()` to enable the `genkit/exp` surface.
 
 ### Define an Agent
 
@@ -262,13 +265,13 @@ Resume from one specific point in history with `aix.WithSnapshotID`, or skip the
 chatAgent := genkitx.DefineAgent(g, "chat",
     aix.InlinePrompt{ai.WithModelName("googleai/gemini-flash-latest")},
     aix.WithSessionStore(store),
-    aix.WithStateTransform[ChatState](func(ctx context.Context, s *aix.SessionState[ChatState]) (*aix.SessionState[ChatState], error) {
+    aix.WithStateTransform(func(ctx context.Context, s *aix.SessionState[ChatState]) (*aix.SessionState[ChatState], error) {
         return redactPII(ctx, s) // ctx carries caller identity for RBAC-aware redaction
     }),
 )
 ```
 
-`WithStreamTransform[State]` is the stream-side counterpart, rewriting each `AgentStreamChunk` (model tokens, artifacts, custom patches, turn-end) on its way to the client. Both transforms own a fresh deep copy: mutate it in place, return a new value, or return `nil` to omit that state (or drop that chunk) from the client's view. A non-nil error fails closed, so the read or invocation fails with the transform's status (e.g. `PERMISSION_DENIED`) instead of leaking unredacted data.
+`WithStreamTransform[State]` is the stream-side counterpart, rewriting each `AgentStreamChunk` (model tokens, artifacts, custom patches, turn-end) on its way to the client. It takes `State` as an explicit type argument because a chunk carries no state type to infer it from, unlike `WithStateTransform`, whose `State` is derived from the transform's signature. Both transforms own a fresh deep copy: mutate it in place, return a new value, or return `nil` to omit that state (or drop that chunk) from the client's view. A non-nil error fails closed, so the read or invocation fails with the transform's status (e.g. `PERMISSION_DENIED`) instead of leaking unredacted data.
 
 ### Background Agents
 
@@ -300,6 +303,9 @@ Detach requires a store that implements `SnapshotSubscriber` (both bundled local
 
 ### Delegate to Sub-Agents
 
+> [!WARNING]
+> This API is in preview and may experience breaking changes in minor releases.
+
 The experimental `Agents` middleware (in `plugins/middleware/exp`) lets one agent delegate to others. It injects one `delegate_to_<name>` tool per sub-agent and a `<sub-agents>` listing into the orchestrator's system prompt, then runs the chosen sub-agent and returns its result when the model calls the tool. Each sub-agent's `aix.WithDescription` (captured by `agent.Ref()`) tells the orchestrator when to reach for it:
 
 ```go
@@ -319,23 +325,15 @@ researcher := genkitx.DefineAgent(g, "researcher",
     aix.WithDescription[any]("Researches a topic and summarizes well-sourced findings."),
 )
 
-engineer := genkitx.DefineAgent(g, "engineer",
-    aix.InlinePrompt{
-        ai.WithModelName("googleai/gemini-flash-latest"),
-        ai.WithSystem("You are an expert programmer. Write clean, well-commented code."),
-    },
-    aix.WithDescription[any]("Writes and explains code."),
-)
-
 // The orchestrator delegates instead of answering directly: the model calls
-// delegate_to_researcher / delegate_to_engineer and the middleware runs them.
+// delegate_to_researcher and the middleware runs the sub-agent.
 orchestrator := genkitx.DefineAgent(g, "orchestrator",
     aix.InlinePrompt{
         ai.WithModelName("googleai/gemini-flash-latest"),
-        ai.WithSystem("You are a project coordinator. Delegate to the right sub-agent, " +
-            "then synthesize a final answer."),
+        ai.WithSystem("You are a project coordinator. Delegate research to the " +
+            "researcher sub-agent, then synthesize a final answer."),
         ai.WithUse(&middlewarex.Agents{
-            Agents:         []aix.AgentRef{researcher.Ref(), engineer.Ref()},
+            Agents:         []aix.AgentRef{researcher.Ref()},
             MaxDelegations: 5, // cap delegation tool calls per turn (0 = unlimited)
             HistoryLength:  4, // recent messages forwarded to client-managed sub-agents
         }),
@@ -343,11 +341,11 @@ orchestrator := genkitx.DefineAgent(g, "orchestrator",
     aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
 )
 
-out, _ := orchestrator.RunText(ctx, "Research goroutine scheduling, then sketch a worker pool.")
+out, _ := orchestrator.RunText(ctx, "Research goroutine scheduling and summarize the key ideas.")
 fmt.Println(out.Message.Text())
 ```
 
-Sub-agents are named by `aix.AgentRef`, either captured from an agent value with `agent.Ref()` or written by hand (`aix.AgentRef{Name: "researcher"}`). The middleware composes with the `Artifacts` middleware: give the sub-agents `&middlewarex.Artifacts{}` so they can save output, set `ArtifactStrategy: middlewarex.ArtifactStrategySession` to merge those artifacts into the orchestrator's session instead of inlining them in the tool result, and add `&middlewarex.Artifacts{Readonly: true}` on the orchestrator so it can review them before answering.
+Sub-agents are named by `aix.AgentRef`, either captured from an agent value with `agent.Ref()` or written by hand (`aix.AgentRef{Name: "researcher"}`). The middleware composes with the `Artifacts` middleware: give a sub-agent `&middlewarex.Artifacts{}` so it can save output, set `ArtifactStrategy: middlewarex.ArtifactStrategySession` to merge those artifacts into the orchestrator's session instead of inlining them in the tool result, and add `&middlewarex.Artifacts{Readonly: true}` on the orchestrator so it can review them before answering.
 
 [See full example](samples/basic-agents)
 
@@ -555,6 +553,87 @@ if resp.FinishReason == ai.FinishReasonInterrupted {
 
 [See full example](samples/intermediate-interrupts)
 
+### Streaming, Multipart, and Interruptible Tools
+
+> [!WARNING]
+> This API is in preview and may experience breaking changes in minor releases.
+
+The experimental tool constructors in `genkit/exp` (aliased `genkitx`) hand your function a plain `context.Context` instead of `ai.ToolContext`, with helpers in `ai/exp/tool` for streaming progress, attaching media, and typed interrupts. This is a preview of Genkit Go's next-generation tools API: it is slated to replace the current `genkit.DefineTool` (shown above) as the default in the next major version. Initialize Genkit with `genkit.WithExperimental()` to enable them.
+
+`genkitx.DefineTool` infers its input and output types from the function. Inside the tool, `tool.SendPartial` streams partial results mid-execution and `tool.AttachParts` adds extra content parts to the response, neither of which changes the function signature:
+
+```go
+import (
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/ai/exp/tool"
+    genkitx "github.com/firebase/genkit/go/genkit/exp"
+)
+
+type AnalyzeInput struct {
+    Symbol string `json:"symbol"`
+}
+
+analyzeTool := genkitx.DefineTool(g, "analyzeStock",
+    "Analyzes a stock and returns a summary with a chart.",
+    func(ctx context.Context, input AnalyzeInput) (string, error) {
+        // Stream progress to the client while the tool runs. It is a no-op when
+        // the caller isn't streaming; the return value is always authoritative.
+        tool.SendPartial(ctx, map[string]any{"status": "fetching prices", "progress": 50})
+
+        // Attach media to the tool's response without a multipart signature.
+        tool.AttachParts(ctx, ai.NewMediaPart("image/png", chartDataURI))
+
+        return fmt.Sprintf("%s closed up 4%% this week.", input.Symbol), nil
+    },
+)
+```
+
+`genkitx.DefineInterruptibleTool` adds a typed resume parameter: it is `nil` on the first call and carries the caller's decision when the tool resumes. Reusing the `TransferInput`/`TransferInterrupt` types from above, the tool pauses with `tool.Interrupt` and the caller resumes it with typed data via the tool's `Resume`:
+
+```go
+type Confirmation struct {
+    Approved bool `json:"approved"`
+}
+
+// The third parameter (*Confirmation) is the resume payload: nil on the first
+// call, populated when the caller resumes after an interrupt.
+transferTool := genkitx.DefineInterruptibleTool(g, "transfer",
+    "Transfers money to another account.",
+    func(ctx context.Context, input TransferInput, confirm *Confirmation) (string, error) {
+        if confirm == nil && input.Amount > 1000 {
+            // Pause and hand typed data to the caller.
+            return "", tool.Interrupt(TransferInterrupt{Reason: "confirm_large", Amount: input.Amount})
+        }
+        if confirm != nil && !confirm.Approved {
+            return "Transfer cancelled.", nil
+        }
+        return "Transfer completed.", nil
+    },
+)
+
+resp, _ := genkit.Generate(ctx, g,
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("Transfer $5000 to account ABC123"),
+    ai.WithTools(transferTool),
+)
+
+// Interrupts() yields nothing unless the tool paused for input.
+for _, interrupt := range resp.Interrupts() {
+    meta, _ := tool.InterruptAs[TransferInterrupt](interrupt)
+
+    // Use meta to ask the user for a decision, then resume with their answer.
+    // The typed data arrives as the tool's *Confirmation parameter.
+    restart, _ := transferTool.Resume(interrupt, Confirmation{Approved: true})
+    resp, _ = genkit.Generate(ctx, g,
+        ai.WithMessages(resp.History()...),
+        ai.WithTools(transferTool),
+        ai.WithToolRestarts(restart),
+    )
+}
+```
+
+[See the banker example](samples/basic-agents) for an interruptible tool wired into an agent.
+
 ### Middleware
 
 Middleware wraps generation, model calls, and tool execution to add cross-cutting behavior without touching your flows. Register the `middleware` plugin during `Init` to expose the built-ins in the Dev UI, then attach them per call with `ai.WithUse`:
@@ -575,7 +654,7 @@ response, _ := genkit.Generate(ctx, g,
     ai.WithUse(
         &middleware.Retry{MaxRetries: 3},
         &middleware.Fallback{Models: []ai.ModelRef{
-            googlegenai.ModelRef("googleai/gemini-3.1-flash", nil),
+            googlegenai.ModelRef("googleai/gemini-2.5-flash", nil),
         }},
     ),
 )
@@ -882,6 +961,27 @@ e.Start(":8080")
 
 Any error returned by `genkit.HandlerFunc` will be handled by Echo's middleware stack.
 
+### Durable Streaming
+
+> [!WARNING]
+> This API is in preview and may experience breaking changes in minor releases.
+
+Allow clients to reconnect to in-progress or completed streams using a stream ID. The stream manager lives in `core/x/streaming`:
+
+```go
+import "github.com/firebase/genkit/go/core/x/streaming"
+
+mux.HandleFunc("POST /myFlow", genkit.Handler(myStreamingFlow,
+    genkit.WithStreamManager(streaming.NewInMemoryStreamManager(
+        streaming.WithTTL(10*time.Minute),
+    )),
+))
+```
+
+Clients receive a stream ID in the `X-Genkit-Stream-Id` header and can reconnect to replay buffered chunks.
+
+[See full example](samples/durable-streaming)
+
 ---
 
 ## Model Providers
@@ -890,11 +990,11 @@ Genkit provides a unified interface across all major AI providers. Use whichever
 
 | Provider | Plugin | Models |
 |----------|--------|--------|
-| **Google AI** | `googlegenai.GoogleAI` | Gemini 2.5 Flash, Gemini 2.5 Pro, and more |
-| **Vertex AI** | `vertexai.VertexAI` | Gemini models via Google Cloud |
-| **Anthropic** | `anthropic.Anthropic` | Claude 3.5, Claude 3 Opus, and more |
-| **Ollama** | `ollama.Ollama` | Llama, Mistral, and other open models |
-| **OpenAI Compatible** | `compat_oai` | Any OpenAI-compatible API |
+| **Google AI** | `googlegenai.GoogleAI` | Gemini 3.5 Flash, Gemini 3.1 Pro, and more |
+| **Vertex AI** | `vertexai.VertexAI` | Gemini 3.5 Flash, Gemini 3.1 Pro via Google Cloud |
+| **Anthropic** | `anthropic.Anthropic` | Claude Opus 4.8, Claude Sonnet 4.6, Claude Haiku 4.5 |
+| **Ollama** | `ollama.Ollama` | Llama 4, Qwen 3, DeepSeek, and other local models |
+| **OpenAI Compatible** | `compat_oai` | GPT-5.5, and any OpenAI-compatible API |
 
 ```go
 // Google AI
@@ -958,30 +1058,6 @@ The local developer UI lets you:
 - **Inspect traces** to debug complex multi-step operations
 - **Compare models** by switching providers in real-time
 - **Evaluate prompts** against datasets
-
----
-
-## Experimental
-
-These features are available in `core/x` and may change in future releases.
-
-### Durable Streaming
-
-Allow clients to reconnect to in-progress or completed streams using a stream ID:
-
-```go
-import "github.com/firebase/genkit/go/core/x/streaming"
-
-mux.HandleFunc("POST /myFlow", genkit.Handler(myStreamingFlow,
-    genkit.WithStreamManager(streaming.NewInMemoryStreamManager(
-        streaming.WithTTL(10*time.Minute),
-    )),
-))
-```
-
-Clients receive a stream ID in the `X-Genkit-Stream-Id` header and can reconnect to replay buffered chunks.
-
-[See full example](samples/durable-streaming)
 
 ---
 
