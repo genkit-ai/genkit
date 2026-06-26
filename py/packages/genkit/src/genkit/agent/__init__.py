@@ -33,8 +33,6 @@ from genkit._ai._agents._session import (
     Session,
     SessionStore,
     SnapshotAborter,
-    SnapshotCallback,
-    SnapshotContext,
 )
 from genkit._ai._agents._session_stores._branching import (
     BranchingSessionStore,
@@ -51,7 +49,8 @@ from genkit._ai._agents._session_stores._linear import (
     InMemoryLinearSessionStore,
     LinearSessionStore,
 )
-from genkit._ai._agents._transports._http import HttpAgentTransport
+from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
+from genkit._ai._agents._transports._http import HttpAgentTransport, remote_agent
 from genkit._ai._agents._types import (
     ChunkTransform,
     ClientTransform,
@@ -89,6 +88,8 @@ __all__ = [
     'DetachedTask',
     'AgentTransport',
     'HttpAgentTransport',
+    'remote_agent',
+    'parse_snapshot_lookup_kw',
     # Agent function protocol
     'ActionRunContext',
     'AgentFn',
@@ -108,8 +109,6 @@ __all__ = [
     'InMemoryBranchingSessionStore',
     'FileBranchingSessionStore',
     # Callbacks and transforms
-    'SnapshotCallback',
-    'SnapshotContext',
     'StateTransform',
     'ChunkTransform',
     'ClientTransform',

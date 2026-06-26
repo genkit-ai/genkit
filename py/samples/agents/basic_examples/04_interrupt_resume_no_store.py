@@ -18,8 +18,8 @@
 """Interrupt + resume without a store — you carry the paused state.
 
 Same human-in-the-loop approval as the stored version, but with no store the paused
-turn lives only in this process. You inspect the interrupt, attach your approval as
-resume metadata, and continue the same in-memory session. Requires GEMINI_API_KEY.
+turn lives only in this process. Inspect out.interrupts on the paused response, approve
+them in one resume, and continue the same in-memory session. Requires GEMINI_API_KEY.
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from genkit import Genkit, restart_tool
-from genkit.agent import AgentFinishReason, Resume, ToolRequest, ToolRequestPart
+from genkit import Genkit
+from genkit.agent import AgentFinishReason, Resume
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Middleware, ToolApproval
 
@@ -69,25 +69,13 @@ agent = ai.define_agent(
 async def main() -> None:
     session = agent.chat()
 
-    # ToolApproval pauses before transferMoney runs.
-    turn1 = session.send('Transfer $100 to account 999 for lunch.')
-    out1 = await turn1.output
+    out1 = await session.send('Transfer $100 to account 999 for lunch.')
     assert out1.finish_reason == AgentFinishReason.INTERRUPTED
-    assert turn1.interrupt is not None  # → the pending request your UI would surface for approval
 
-    # Approve it: rebuild the request, tag it approved, and resume in place.
-    approved = restart_tool(
-        interrupt=ToolRequestPart(
-            tool_request=ToolRequest(
-                name=turn1.interrupt.name,
-                input=turn1.interrupt.input,
-                ref=turn1.interrupt.ref,
-            )
-        ),
-        resumed_metadata={'tool_approved': True},
-    )
-    # → resumes and runs the transfer to completion
-    await session.resume(Resume(restart=[approved]))
+    # Approve each pending tool call, then one resume continues the turn.
+    restart_parts = [intr.restart_part(resumed_metadata={'tool_approved': True}) for intr in out1.interrupts]
+    out2 = await session.resume(Resume(restart=restart_parts))
+    assert out2.finish_reason == AgentFinishReason.STOP
     await session.close()
 
 

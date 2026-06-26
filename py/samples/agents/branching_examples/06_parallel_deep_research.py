@@ -63,13 +63,13 @@ async def main() -> None:
 
     # Fork the plan into independent investigations and run them concurrently.
     async def investigate(snapshot: str, angle: str) -> str:
-        branch = await analyst.load_chat(snapshot)
+        branch = await analyst.load_chat(snapshot_id=snapshot)
         return (await branch.send(f'Research this angle in depth: {angle}')).text
 
     findings = await asyncio.gather(*(investigate(checkpoint, angle) for angle in ANGLES))
 
     # Fork the plan once more to synthesize the independent findings into one brief.
-    synth = await analyst.load_chat(checkpoint)
+    synth = await analyst.load_chat(snapshot_id=checkpoint)
     # → one tight brief: 3 key takeaways + 1 recommendation, merging every angle
     await synth.send(
         'Here are findings gathered independently from several angles. Synthesize them '

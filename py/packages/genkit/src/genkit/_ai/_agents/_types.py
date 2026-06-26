@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TypedDict, TypeVar
+from typing import Literal, TypedDict, TypeVar
 
 from genkit._core._typing import (
     AgentFinishReason,
@@ -28,6 +28,8 @@ from genkit._core._typing import (
     RuntimeError as GenkitRuntimeError,
     SessionState,
 )
+
+StateManagement = Literal['server', 'client']
 
 StateT = TypeVar('StateT')
 StreamT = TypeVar('StreamT')

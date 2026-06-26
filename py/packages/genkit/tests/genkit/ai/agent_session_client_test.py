@@ -21,9 +21,11 @@ from typing import Any
 import pytest
 
 from genkit._ai._agents._client import (
+    AgentInterrupt,
     AgentSession,
     AgentTransport,
 )
+from genkit._ai._agents._types import StateManagement
 from genkit._ai._aio import Genkit
 from genkit._ai._json_patch import apply_json_patch
 from genkit._ai._testing import define_programmable_model
@@ -40,8 +42,10 @@ from genkit._core._typing import (
     MessageData,
     ModelResponseChunk,
     Part,
+    Resume,
     Role,
     SessionSnapshot,
+    SessionState,
     SnapshotStatus,
     TextPart,
     ToolRequest,
@@ -87,12 +91,13 @@ def test_apply_json_patch_array_remove() -> None:
 
 
 class MockAgentTransport(AgentTransport[dict[str, Any], str]):
-    def __init__(self) -> None:
+    def __init__(self, *, state_management: StateManagement = 'server') -> None:
         self.connect_init: AgentInit | None = None
         self.send_payloads: list[AgentInput] = []
         self.final_output: AgentOutput | None = None
         self.close_called: bool = False
         self.abort_snapshot_id: str | None = None
+        self.state_management: StateManagement = state_management
         self._receive_queue: asyncio.Queue[AgentStreamChunk | None] = asyncio.Queue()
 
     async def run_turn(
@@ -117,7 +122,12 @@ class MockAgentTransport(AgentTransport[dict[str, Any], str]):
 
         return _generator(), _output_waiter()
 
-    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot | None:
+    async def get_snapshot(
+        self,
+        *,
+        snapshot_id: str | None = None,
+        session_id: str | None = None,
+    ) -> SessionSnapshot | None:
         return None
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
@@ -132,6 +142,80 @@ class MockAgentTransport(AgentTransport[dict[str, Any], str]):
 
 
 # ---------------------------------------------------------------------------
+# AgentInterrupt builders
+# ---------------------------------------------------------------------------
+
+
+def test_restart_part_applies_replace_input() -> None:
+    intr = AgentInterrupt('transfer', 'ref-1', {'amount': 100})
+    part = intr.restart_part(replace_input={'amount': 50, 'approved': True})
+
+    assert part.tool_request.input == {'amount': 50, 'approved': True}
+    assert part.metadata is not None
+    assert part.metadata.get('replacedInput') == {'amount': 100}
+    assert part.metadata.get('resumed') is True
+
+
+# ---------------------------------------------------------------------------
+# AgentInit validation
+# ---------------------------------------------------------------------------
+
+
+def test_connect_init_rejects_multiple_resume_fields() -> None:
+    with pytest.raises(ValueError, match='at most one'):
+        AgentSession(
+            MockAgentTransport(),
+            AgentInit(state=SessionState(), snapshot_id='snap-1'),
+        )
+
+
+def test_connect_init_applies_state_only() -> None:
+    state = SessionState(session_id='sess-1', custom={'x': 1})
+    session = AgentSession(MockAgentTransport(), AgentInit(state=state))
+
+    assert session.session_id == 'sess-1'
+    assert session.custom == {'x': 1}
+    assert session.snapshot_id is None
+
+
+def test_connect_init_applies_snapshot_id_only() -> None:
+    session = AgentSession(MockAgentTransport(), AgentInit(snapshot_id='snap-1'))
+
+    assert session.snapshot_id == 'snap-1'
+    assert session.session_id is None
+
+
+def test_connect_init_applies_session_id_only() -> None:
+    session = AgentSession(MockAgentTransport(), AgentInit(session_id='sess-1'))
+
+    assert session.session_id == 'sess-1'
+    assert session.snapshot_id is None
+
+
+@pytest.mark.asyncio
+async def test_wire_init_derives_from_live_session_state() -> None:
+    """The session rebuilds the resume payload from live state each turn, not a stored init."""
+    transport = MockAgentTransport()
+    session = AgentSession(transport, AgentInit(session_id='sess-bootstrap'))
+
+    transport.final_output = AgentOutput(
+        snapshot_id='snap-1',
+        message=MessageData(role='model', content=[Part(root=TextPart(text='Hi'))]),
+        finish_reason=AgentFinishReason.STOP,
+    )
+
+    turn = session.send('Hello')
+    transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-1', finish_reason=AgentFinishReason.STOP)))
+    await turn
+
+    # First turn (no snapshot yet) resumes by the bootstrap session id.
+    assert transport.connect_init == AgentInit(session_id='sess-bootstrap')
+    # Output advanced the live snapshot id, so the next turn would resume by snapshot.
+    assert session.snapshot_id == 'snap-1'
+    assert session._wire_init() == AgentInit(snapshot_id='snap-1')
+
+
+# ---------------------------------------------------------------------------
 # Turn and Session Tests
 # ---------------------------------------------------------------------------
 
@@ -140,10 +224,17 @@ class MockAgentTransport(AgentTransport[dict[str, Any], str]):
 async def test_session_sends_input_and_aggregates_state() -> None:
     transport = MockAgentTransport()
 
-    # Configure final output the transport will resolve with
+    # Every turn ships the whole session back; the client copies it verbatim.
     transport.final_output = AgentOutput(
         snapshot_id='snapshot_1',
         message=MessageData(role='model', content=[Part(root=TextPart(text='Final output!'))]),
+        state=SessionState(
+            messages=[
+                MessageData(role='user', content=[Part(root=TextPart(text='Weather in Tokyo?'))]),
+                MessageData(role='model', content=[Part(root=TextPart(text='Final output!'))]),
+            ],
+            custom={'unit': 'celsius'},
+        ),
         finish_reason=AgentFinishReason.STOP,
     )
 
@@ -166,7 +257,7 @@ async def test_session_sends_input_and_aggregates_state() -> None:
 
     # Consume stream chunks
     chunks = []
-    async for chunk in turn.stream:
+    async for chunk in turn:
         chunks.append(chunk)
 
     assert len(chunks) == 4
@@ -175,10 +266,10 @@ async def test_session_sends_input_and_aggregates_state() -> None:
     assert chunks[2].text is None
 
     # Verify custom state patch applied
-    assert session.state == {'unit': 'celsius'}
+    assert session.custom == {'unit': 'celsius'}
 
     # Await output to verify final response resolved correctly
-    output = await turn.output
+    output = await turn
     assert output.finish_reason == AgentFinishReason.STOP
     assert output.message is not None
     assert output.message.content is not None
@@ -189,6 +280,64 @@ async def test_session_sends_input_and_aggregates_state() -> None:
     assert len(session.messages) == 2  # Turn 1 User input + model final output
     assert session.messages[0].content[0].root.text == 'Weather in Tokyo?'
     assert session.messages[1].content[0].root.text == 'Final output!'
+
+
+@pytest.mark.asyncio
+async def test_server_managed_appends_messages_incrementally() -> None:
+    """Server-managed turns ship only snapshot_id + final reply; the client keeps
+    a running view by appending the user input and the turn's final message."""
+    transport = MockAgentTransport(state_management='server')
+    session = AgentSession(transport)
+
+    transport.final_output = AgentOutput(
+        snapshot_id='snap-1',
+        message=MessageData(role='model', content=[Part(root=TextPart(text='A1'))]),
+        finish_reason=AgentFinishReason.STOP,
+    )
+    turn = session.send('U1')
+    # A turn may emit intermediate tool steps as chunks; they never land in the
+    # local messages view (only the final reply does).
+    transport.push_chunk(
+        AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='thinking...'))]))
+    )
+    transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-1', finish_reason=AgentFinishReason.STOP)))
+    await turn
+
+    assert session.snapshot_id == 'snap-1'
+    assert [m.content[0].root.text for m in session.messages] == ['U1', 'A1']
+
+    transport.final_output = AgentOutput(
+        snapshot_id='snap-2',
+        message=MessageData(role='model', content=[Part(root=TextPart(text='A2'))]),
+        finish_reason=AgentFinishReason.STOP,
+    )
+    turn2 = session.send('U2')
+    transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-2', finish_reason=AgentFinishReason.STOP)))
+    await turn2
+
+    assert session.snapshot_id == 'snap-2'
+    assert [m.content[0].root.text for m in session.messages] == ['U1', 'A1', 'U2', 'A2']
+
+
+@pytest.mark.asyncio
+async def test_server_managed_failed_turn_rolls_back_optimistic_user_message() -> None:
+    """A failed server-managed turn returns no reply; the optimistically appended
+    user message is rolled back so it isn't left stranded in the local view."""
+    transport = MockAgentTransport(state_management='server')
+    session = AgentSession(transport)
+
+    transport.final_output = AgentOutput(
+        snapshot_id='snap-good',
+        finish_reason=AgentFinishReason.FAILED,
+    )
+    turn = session.send('U1')
+    transport.push_chunk(
+        AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-good', finish_reason=AgentFinishReason.FAILED))
+    )
+    await turn
+
+    assert session.messages == []
+    assert session.snapshot_id == 'snap-good'
 
 
 @pytest.mark.asyncio
@@ -211,11 +360,87 @@ async def test_no_store_inprocess_transport_assembles_output_message() -> None:
 
     agent = ai.define_agent(name='noStoreAgent', model='programmableModel', system='Reply briefly.')
     session = agent.chat()
-    out = await session.send('Hello').output
+    out = await session.send('Hello')
 
     assert out.text == 'Hi there!'
     assert len(session.messages) == 2
     assert session.messages[1].content[0].root.text == 'Hi there!'
+    assert session.session_id is None
+    assert session.snapshot_id is None
+
+    saved = session.state
+    assert saved is session.state
+    assert saved.messages == session.messages
+    assert saved.custom is session.custom
+
+
+class _ServerEmulatingClientManagedTransport(AgentTransport[dict[str, Any], str]):
+    """Stateless client-managed transport that mimics the real server round-trip.
+
+    On each turn it loads history from ``init.state``, appends the turn's input
+    message and a model reply, then echoes the full state back — the same path
+    that would duplicate a message if the client also bundled it into ``init``.
+    """
+
+    def __init__(self) -> None:
+        self.state_management: StateManagement = 'client'
+        self.init_histories: list[list[str]] = []
+        self._model_turn = 0
+
+    async def run_turn(
+        self,
+        agent_input: AgentInput,
+        init: AgentInit,
+        abort_event: asyncio.Event | None = None,
+    ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
+        loaded = list(init.state.messages or []) if init.state else []
+        self.init_histories.append([m.content[0].root.text for m in loaded])
+
+        if agent_input.message:
+            loaded.append(agent_input.message)
+        self._model_turn += 1
+        model_msg = MessageData(role='model', content=[Part(root=TextPart(text=f'reply-{self._model_turn}'))])
+        loaded.append(model_msg)
+        server_state = SessionState(messages=loaded)
+
+        async def _gen() -> AsyncIterator[AgentStreamChunk]:
+            yield AgentStreamChunk(turn_end=TurnEnd(finish_reason=AgentFinishReason.STOP))
+
+        async def _out() -> AgentOutput:
+            return AgentOutput(finish_reason=AgentFinishReason.STOP, message=model_msg, state=server_state)
+
+        return _gen(), _out()
+
+    async def get_snapshot(
+        self,
+        *,
+        snapshot_id: str | None = None,
+        session_id: str | None = None,
+    ) -> SessionSnapshot | None:
+        return None
+
+    async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
+        return None
+
+    async def close(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_client_managed_does_not_double_append_messages() -> None:
+    """Client-managed init carries prior history only; the server appends the new message."""
+    transport = _ServerEmulatingClientManagedTransport()
+    session = AgentSession(transport, AgentInit())
+
+    await session.send('hello')
+    # The new message must NOT ride along in init — the server records it from input.
+    assert transport.init_histories[0] == []
+    assert [m.content[0].root.text for m in session.messages] == ['hello', 'reply-1']
+
+    await session.send('again')
+    # Turn 2's init replays the prior two messages, never the message in flight.
+    assert transport.init_histories[1] == ['hello', 'reply-1']
+    assert [m.content[0].root.text for m in session.messages] == ['hello', 'reply-1', 'again', 'reply-2']
 
 
 @pytest.mark.asyncio
@@ -224,8 +449,11 @@ async def test_session_id_populated_from_output_state() -> None:
     transport = MockAgentTransport()
     transport.final_output = AgentOutput(
         snapshot_id='snapshot_1',
-        session_id='session_abc',
         message=MessageData(role='model', content=[Part(root=TextPart(text='Done.'))]),
+        state=SessionState(
+            session_id='session_abc',
+            messages=[MessageData(role='model', content=[Part(root=TextPart(text='Done.'))])],
+        ),
         finish_reason=AgentFinishReason.STOP,
     )
 
@@ -246,7 +474,21 @@ async def test_session_id_populated_from_output_state() -> None:
 async def test_session_handling_tool_interrupt() -> None:
     transport = MockAgentTransport()
 
-    transport.final_output = AgentOutput(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.STOP)
+    transport.final_output = AgentOutput(
+        snapshot_id='snapshot_1',
+        finish_reason=AgentFinishReason.INTERRUPTED,
+        message=MessageData(
+            role='model',
+            content=[
+                Part(
+                    root=ToolRequestPart(
+                        tool_request=ToolRequest(name='userApproval', ref='call_1', input={'amount': 500}),
+                        metadata={'interrupt': True},
+                    )
+                )
+            ],
+        ),
+    )
 
     session = AgentSession(transport)
     turn = session.send('Approve $500 transfer')
@@ -266,17 +508,15 @@ async def test_session_handling_tool_interrupt() -> None:
         )
     )
     transport.push_chunk(
-        AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.STOP))
+        AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.INTERRUPTED))
     )
 
-    async for _chunk in turn.stream:
-        pass
+    out = await turn
 
-    # Verify interrupt is caught on the turn
-    assert turn.interrupt is not None
-    assert turn.interrupt.name == 'userApproval'
-    assert turn.interrupt.ref == 'call_1'
-    assert turn.interrupt.input == {'amount': 500}
+    assert len(out.interrupts) == 1
+    assert out.interrupts[0].name == 'userApproval'
+    assert out.interrupts[0].ref == 'call_1'
+    assert out.interrupts[0].input == {'amount': 500}
 
     # Acknowledge the interrupt and trigger response turn
     # This mock resume expects sending tool response to transport
@@ -286,7 +526,7 @@ async def test_session_handling_tool_interrupt() -> None:
         finish_reason=AgentFinishReason.STOP,
     )
 
-    resume_turn = turn.interrupt.respond({'approved': True})
+    resume_turn = session.resume(Resume(respond=[out.interrupts[0].respond_part({'approved': True})]))
 
     # Queue up turn_end for the resume turn
     transport.push_chunk(
@@ -294,7 +534,7 @@ async def test_session_handling_tool_interrupt() -> None:
     )
 
     # Consume resume turn stream to trigger execution
-    async for _chunk in resume_turn.stream:
+    async for _chunk in resume_turn:
         pass
 
     # Verify transport received the ToolResponse payload
@@ -304,6 +544,79 @@ async def test_session_handling_tool_interrupt() -> None:
     assert sent_resume.respond is not None
     assert sent_resume.respond[0].tool_response.name == 'userApproval'
     assert sent_resume.respond[0].tool_response.output == {'approved': True}
+
+
+@pytest.mark.asyncio
+async def test_session_handling_multiple_tool_interrupts() -> None:
+    transport = MockAgentTransport()
+    transport.final_output = AgentOutput(
+        snapshot_id='snapshot_1',
+        finish_reason=AgentFinishReason.INTERRUPTED,
+        message=MessageData(
+            role='model',
+            content=[
+                Part(
+                    root=ToolRequestPart(
+                        tool_request=ToolRequest(name='transferA', ref='ra', input={'amount': 100}),
+                        metadata={'interrupt': True},
+                    )
+                ),
+                Part(
+                    root=ToolRequestPart(
+                        tool_request=ToolRequest(name='transferB', ref='rb', input={'amount': 200}),
+                        metadata={'interrupt': True},
+                    )
+                ),
+            ],
+        ),
+    )
+
+    session = AgentSession(transport)
+    turn = session.send('Transfer to two accounts')
+
+    transport.push_chunk(
+        AgentStreamChunk(
+            model_chunk=ModelResponseChunk(
+                content=[
+                    Part(
+                        root=ToolRequestPart(
+                            tool_request=ToolRequest(name='transferA', ref='ra', input={'amount': 100})
+                        )
+                    ),
+                    Part(
+                        root=ToolRequestPart(
+                            tool_request=ToolRequest(name='transferB', ref='rb', input={'amount': 200})
+                        )
+                    ),
+                ]
+            )
+        )
+    )
+    transport.push_chunk(
+        AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.INTERRUPTED))
+    )
+
+    out = await turn
+
+    assert len(out.interrupts) == 2
+    assert {i.name for i in out.interrupts} == {'transferA', 'transferB'}
+
+    transport.final_output = AgentOutput(
+        snapshot_id='snapshot_2',
+        finish_reason=AgentFinishReason.STOP,
+    )
+    restart_parts = [intr.restart_part(resumed_metadata={'tool_approved': True}) for intr in out.interrupts]
+    resume_turn = session.resume(Resume(restart=restart_parts))
+    transport.push_chunk(
+        AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_2', finish_reason=AgentFinishReason.STOP))
+    )
+    await resume_turn
+
+    sent_resume = transport.send_payloads[1].resume
+    assert sent_resume is not None
+    assert sent_resume.restart is not None
+    assert len(sent_resume.restart) == 2
+    assert {p.tool_request.name for p in sent_resume.restart} == {'transferA', 'transferB'}
 
 
 @pytest.mark.asyncio
@@ -345,9 +658,9 @@ async def test_in_process_persistent_connection() -> None:
         # Turn 1
         turn1 = session.send('Hello')
         chunks1 = []
-        async for chunk in turn1.stream:
+        async for chunk in turn1:
             chunks1.append(chunk)
-        res1 = await turn1.output
+        res1 = await turn1
         assert res1.message is not None
         assert res1.message.content is not None
         assert res1.message.content[0].root.text == 'Echo 1'
@@ -355,9 +668,9 @@ async def test_in_process_persistent_connection() -> None:
         # Turn 2
         turn2 = session.send('World')
         chunks2 = []
-        async for chunk in turn2.stream:
+        async for chunk in turn2:
             chunks2.append(chunk)
-        res2 = await turn2.output
+        res2 = await turn2
         assert res2.message is not None
         assert res2.message.content is not None
         assert res2.message.content[0].root.text == 'Echo 2'
@@ -395,9 +708,13 @@ async def test_attached_turn_abort() -> None:
         # Abort the turn client-side (stops reading the stream)
         await turn.abort()
 
-        # Verify turn.output raises CancelledError
+        # Verify awaiting the turn raises CancelledError
         with pytest.raises(asyncio.CancelledError):
-            await turn.output
+            await turn
+
+        # The aborted turn's optimistic user message is rolled back, so the
+        # session reads exactly as it did before the send.
+        assert session.messages == []
 
         # Restore normal fast response for the second turn
         pm.response_cb = None
@@ -410,7 +727,13 @@ async def test_attached_turn_abort() -> None:
 
         # We should be able to cleanly send a new turn and continue the conversation!
         turn2 = session.send('Continue conversation')
-        res2 = await turn2.output
+        res2 = await turn2
+
+        # History continues cleanly off the rolled-back state: no stranded
+        # 'Hello' from the aborted turn, just the new exchange.
+        texts = [p.root.text for m in session.messages for p in (m.content or []) if hasattr(p.root, 'text')]
+        assert 'Hello' not in texts
+        assert texts == ['Continue conversation', 'Second turn echo']
         assert res2.message is not None
         assert res2.message.content is not None
         assert res2.message.content[0].root.text == 'Second turn echo'
@@ -480,6 +803,20 @@ async def test_session_abort() -> None:
 
 
 @pytest.mark.asyncio
+async def test_session_abort_without_snapshot_raises() -> None:
+    ai = Genkit()
+    define_programmable_model(ai)
+
+    # No store → client-managed → there's never a server snapshot to abort.
+    ai.define_prompt(name='noStoreAgent', model='programmableModel', system='Hello')
+    agent = ai.define_prompt_agent(name='noStoreAgent')
+
+    session = agent.chat()
+    with pytest.raises(ValueError, match='No active snapshot to abort'):
+        await session.abort()
+
+
+@pytest.mark.asyncio
 async def test_external_abort_signal() -> None:
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
@@ -509,7 +846,7 @@ async def test_external_abort_signal() -> None:
 
         # Verify the turn is aborted and raises CancelledError
         with pytest.raises(asyncio.CancelledError):
-            await turn.output
+            await turn
 
 
 @pytest.mark.asyncio
@@ -546,8 +883,8 @@ async def test_agent_turn_direct_async_iteration() -> None:
     assert chunks[1].text == 'Sunny.'
     assert chunks[2].text is None
 
-    # Verify we can still await output
-    output = await turn.output
+    # Verify we can still await the turn after streaming
+    output = await turn
     assert output.message is not None
     assert output.message.content is not None
     assert output.message.content[0].root.text == 'Final output!'
@@ -573,7 +910,7 @@ async def test_agent_turn_direct_await() -> None:
         AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.STOP))
     )
 
-    # Never touch turn.stream — awaiting the turn alone drives it to completion.
+    # Awaiting the turn alone drives it to completion — no need to iterate first.
     output = await turn
 
     assert output.message is not None

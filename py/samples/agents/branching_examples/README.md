@@ -9,7 +9,7 @@ All of them use `googleai/gemini-flash-latest`, so they require `GEMINI_API_KEY`
 
 ## The one idea
 
-`session.snapshot_id` bookmarks any turn. `agent.load_chat(snapshot_id)` starts a
+`session.snapshot_id` bookmarks any turn. `agent.load_chat(snapshot_id=...)` starts a
 fresh session from that bookmark. Fork the same snapshot twice and you get sibling
 timelines that never see each other — that's the whole primitive.
 

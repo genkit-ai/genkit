@@ -52,7 +52,7 @@ async def main() -> None:
 
     # Fork the checkpoint into independent branches and explore them concurrently.
     async def explore(snapshot: str, direction: str) -> None:
-        branch = await agent.load_chat(snapshot)
+        branch = await agent.load_chat(snapshot_id=snapshot)
         await branch.send(f'Take it in a {direction} direction.')
 
     # → each direction develops its own hero take from the shared brief, in parallel,

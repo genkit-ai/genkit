@@ -41,7 +41,7 @@ from genkit._ai._agents._base import (
     define_prompt_agent,
 )
 from genkit._ai._agents._runtime import AgentFn
-from genkit._ai._agents._session import SessionStore, SnapshotCallback
+from genkit._ai._agents._session import SessionStore
 from genkit._ai._agents._types import ClientTransform, StateTransform
 from genkit._ai._embedding import EmbedderFn, EmbedderOptions, EmbedderRef, define_embedder
 from genkit._ai._evaluator import (
@@ -704,7 +704,6 @@ class Genkit:
         fn: AgentFn,
         *,
         store: SessionStore | None = None,
-        snapshot_callback: SnapshotCallback | None = None,
         client_transform: ClientTransform | None = None,
         transform: StateTransform | None = None,
         description: str | None = None,
@@ -720,7 +719,6 @@ class Genkit:
             name=name,
             fn=fn,
             store=store,
-            snapshot_callback=snapshot_callback,
             client_transform=client_transform,
             transform=transform,
             description=description,
@@ -740,7 +738,6 @@ class Genkit:
         description: str | None = None,
         metadata: dict[str, object] | None = None,
         store: SessionStore | None = None,
-        snapshot_callback: SnapshotCallback | None = None,
         client_transform: ClientTransform | None = None,
         transform: StateTransform | None = None,
     ) -> Agent:
@@ -761,7 +758,6 @@ class Genkit:
             description=description,
             metadata=metadata,
             store=store,
-            snapshot_callback=snapshot_callback,
             client_transform=client_transform,
             transform=transform,
         )
@@ -771,7 +767,6 @@ class Genkit:
         name: str,
         *,
         store: SessionStore | None = None,
-        snapshot_callback: SnapshotCallback | None = None,
         client_transform: ClientTransform | None = None,
         transform: StateTransform | None = None,
         description: str | None = None,
@@ -786,7 +781,6 @@ class Genkit:
             registry=self.registry,
             name=name,
             store=store,
-            snapshot_callback=snapshot_callback,
             client_transform=client_transform,
             transform=transform,
             description=description,

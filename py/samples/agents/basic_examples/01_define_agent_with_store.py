@@ -69,7 +69,7 @@ async def main() -> None:
     session = agent.chat()
     turn = session.send('Weather in Paris?')
     # session_id is None until this turn finishes — the store mints it server-side
-    await turn.output
+    await turn
     # → session_id and snapshot_id are both set now
 
     # Hold onto snapshot_id — it's the resume handle after disconnect/restart.
@@ -78,7 +78,7 @@ async def main() -> None:
     await session.close()
 
     # load_chat restores session_id too — it's already there before you send.
-    resumed = await agent.load_chat(checkpoint)
+    resumed = await agent.load_chat(snapshot_id=checkpoint)
     # → answers "Paris" — the resumed session still has turn 1's context
     await resumed.send('What city did I ask about? One word.')
 

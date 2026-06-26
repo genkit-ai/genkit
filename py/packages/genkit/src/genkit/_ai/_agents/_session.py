@@ -23,8 +23,6 @@ from contextvars import ContextVar
 from enum import Enum
 from typing import Any, Generic, Protocol, TypeVar, cast, runtime_checkable
 
-from pydantic import BaseModel
-
 from genkit._core._error import GenkitError, StatusCodes
 from genkit._core._typing import (
     Artifact,
@@ -50,17 +48,6 @@ class StoreRecordKind(str, Enum):
 
 StateT = TypeVar('StateT')
 SessionContextT = TypeVar('SessionContextT')
-
-
-class SnapshotContext(BaseModel):
-    """Passed to SnapshotCallback to decide whether to snapshot."""
-
-    state: SessionState
-    prev_state: SessionState | None = None
-    turn_index: int = 0
-
-
-SnapshotCallback = Callable[[SnapshotContext], bool]
 
 
 @runtime_checkable

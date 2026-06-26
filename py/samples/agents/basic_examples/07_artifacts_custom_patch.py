@@ -80,7 +80,7 @@ async def main() -> None:
     assert patches
 
     # Once the turn settles, the session holds the merged state + the turn's artifacts.
-    assert session.state == {'turns': 1}
+    assert session.custom == {'turns': 1}
     assert any(a.name == 'status' for a in session.artifacts)
 
 

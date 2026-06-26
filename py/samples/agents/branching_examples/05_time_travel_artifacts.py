@@ -73,7 +73,7 @@ async def main() -> None:
 
     # Don't love that direction? Rewind to the checkpoint. Loading the snapshot
     # restores the whole state — the landing.md artifact reverts with the messages.
-    alt = await writer.load_chat(checkpoint)
+    alt = await writer.load_chat(snapshot_id=checkpoint)
     # → the enterprise edits are gone; alt's landing.md is back to the headline version
     assert page(alt) == headline_page
 

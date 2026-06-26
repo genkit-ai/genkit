@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from typing import Any, Generic, TypeVar
 
 from opentelemetry import trace as trace_api
@@ -34,12 +34,19 @@ from genkit._ai._agents._runtime import (
 )
 from genkit._ai._agents._session import (
     SessionStore,
-    SnapshotCallback,
     StateT,
+)
+from genkit._ai._agents._snapshot import (
+    lookup_label,
+    parse_abort_input,
+    parse_snapshot_lookup_input,
+    resolve_snapshot,
+    run_abort,
 )
 from genkit._ai._agents._transports._inprocess import InProcessTransport
 from genkit._ai._agents._types import (
     ClientTransform,
+    StateManagement,
     StateTransform,
     TurnResult,
     resolve_client_transform,
@@ -54,7 +61,7 @@ from genkit._ai._prompt import (
     register_prompt_actions,
 )
 from genkit._ai._tools import Tool
-from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction
+from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction, BidiFn
 from genkit._core._channel import CloseableQueue
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import Message, ModelConfig
@@ -74,14 +81,6 @@ from genkit._core._typing import (
 
 StreamT = TypeVar('StreamT')
 
-
-__all__ = [
-    'Agent',
-    'define_agent',
-    'define_custom_agent',
-    'define_prompt_agent',
-]
-
 # ---------------------------------------------------------------------------
 # Agent Class
 # ---------------------------------------------------------------------------
@@ -99,8 +98,9 @@ class Agent(BidiAction, Generic[StateT, StreamT]):
         self,
         *,
         name: str,
-        bidi_fn: Callable[..., Awaitable[Any]],  # noqa: ANN401
+        bidi_fn: BidiFn[AgentInit, AgentOutput],
         store: SessionStore | None = None,
+        client_transform: ClientTransform | None = None,
         description: str | None = None,
         metadata: dict[str, object] | None = None,
     ) -> None:
@@ -113,6 +113,40 @@ class Agent(BidiAction, Generic[StateT, StreamT]):
             metadata={**(metadata or {}), 'agent': {'stateManagement': 'server' if store is not None else 'client'}},
         )
         self.store = store
+        self._client_transform = client_transform
+
+    def _in_process_transport(self) -> InProcessTransport:
+        state_management: StateManagement = 'server' if self.store is not None else 'client'
+        if self.store is None:
+            return InProcessTransport(self, state_management=state_management)
+        return InProcessTransport(
+            self,
+            get_snapshot=self.get_snapshot_data,
+            abort_snapshot=self.abort_snapshot_data,
+            state_management=state_management,
+        )
+
+    async def get_snapshot_data(
+        self,
+        *,
+        snapshot_id: str | None = None,
+        session_id: str | None = None,
+    ) -> SessionSnapshot | None:
+        """Read a snapshot by id or latest session leaf (client-visible form)."""
+        if self.store is None:
+            return None
+        return await resolve_snapshot(
+            self.store,
+            snapshot_id=snapshot_id,
+            session_id=session_id,
+            client_transform=self._client_transform,
+        )
+
+    async def abort_snapshot_data(self, snapshot_id: str) -> SnapshotStatus | None:
+        """Abort a running snapshot."""
+        if self.store is None:
+            return None
+        return await run_abort(self.store, snapshot_id)
 
     # ------------------------------------------------------------------
     # AgentAPI implementation
@@ -120,26 +154,37 @@ class Agent(BidiAction, Generic[StateT, StreamT]):
 
     def chat(self, init: AgentInit | None = None) -> AgentSession[StateT, StreamT]:
         """Starts a new in-process session, or attaches to one via init."""
-        session_transport = InProcessTransport(self, self.store)
-        return AgentSession(session_transport, init)
+        return AgentSession(self._in_process_transport(), init)
 
-    async def load_chat(self, snapshot_id: str) -> AgentSession[StateT, StreamT]:
+    async def load_chat(
+        self,
+        *,
+        snapshot_id: str | None = None,
+        session_id: str | None = None,
+    ) -> AgentSession[StateT, StreamT]:
         """Loads a server snapshot and returns a session with history restored."""
-        session_transport = InProcessTransport(self, self.store)
-        snapshot = await session_transport.get_snapshot(snapshot_id)
+        session_transport = self._in_process_transport()
+        snapshot = await session_transport.get_snapshot(snapshot_id=snapshot_id, session_id=session_id)
         if snapshot is None:
-            raise ValueError(f"Failed to load chat: Snapshot with ID '{snapshot_id}' not found.")
+            label = lookup_label(snapshot_id=snapshot_id, session_id=session_id)
+            raise ValueError(f'Failed to load chat: Snapshot {label!r} not found.')
+        session_transport.state_management = 'server'
         session = AgentSession(session_transport)
-        session.load_from_snapshot(snapshot)
+        session._load_from_snapshot(snapshot)
         return session
 
-    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot | None:
+    async def get_snapshot(
+        self,
+        *,
+        snapshot_id: str | None = None,
+        session_id: str | None = None,
+    ) -> SessionSnapshot | None:
         """Reads a snapshot without starting a session."""
-        return await InProcessTransport(self, self.store).get_snapshot(snapshot_id)
+        return await self.get_snapshot_data(snapshot_id=snapshot_id, session_id=session_id)
 
     async def abort(self, snapshot_id: str) -> SnapshotStatus | None:
         """Aborts a running snapshot."""
-        return await InProcessTransport(self, self.store).abort_snapshot(snapshot_id)
+        return await self.abort_snapshot_data(snapshot_id)
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +198,6 @@ def define_custom_agent(
     fn: AgentFn,
     *,
     store: SessionStore | None = None,
-    snapshot_callback: SnapshotCallback | None = None,
     client_transform: ClientTransform | None = None,
     transform: StateTransform | None = None,
     description: str | None = None,
@@ -182,7 +226,6 @@ def define_custom_agent(
             session=session,
             parent_snapshot=parent,
             store=store,
-            snapshot_callback=snapshot_callback,
             client_transform=resolved_transform,
             session_outputs=out_queue,
         )
@@ -195,37 +238,42 @@ def define_custom_agent(
         description=description,
         metadata=metadata,
         store=store,
+        client_transform=resolved_transform,
     )
     registry.register_action_from_instance(agent)
 
     if store is not None:
+        _register_snapshot_actions(registry, name, agent)
 
-        async def snapshot_fn(input_dict: Any) -> SessionSnapshot:  # noqa: ANN401
-            if isinstance(input_dict, dict):
-                snapshot_id = input_dict.get('snapshotId') or input_dict.get('snapshot_id')
-            else:
-                snapshot_id = getattr(input_dict, 'snapshotId', None) or getattr(input_dict, 'snapshot_id', None)
-            if not isinstance(snapshot_id, str):
-                raise ValueError(
-                    f"Failed to retrieve snapshot for agent '{name}': 'snapshot_id' is required "
-                    f'and must be a string, but received type {type(snapshot_id).__name__}.'
-                )
-            snap = await agent.get_snapshot(snapshot_id)
-            if snap is None:
-                raise ValueError(
-                    f"Failed to retrieve snapshot for agent '{name}': Snapshot with ID "
-                    f"'{snapshot_id}' not found in the session store."
-                )
-            return snap
+    return agent
 
-        snapshot_action = Action(
+
+def _register_snapshot_actions(registry: Registry, name: str, agent: Agent) -> None:
+    async def snapshot_fn(input_val: Any) -> SessionSnapshot | None:  # noqa: ANN401
+        sid, sess_id = parse_snapshot_lookup_input(input_val)
+        return await agent.get_snapshot_data(snapshot_id=sid, session_id=sess_id)
+
+    async def abort_fn(input_val: Any) -> dict[str, object]:  # noqa: ANN401
+        snapshot_id = parse_abort_input(input_val)
+        status = await agent.abort_snapshot_data(snapshot_id)
+        return {'snapshotId': snapshot_id, 'status': status}
+
+    registry.register_action_from_instance(
+        Action(
             kind=ActionKind.AGENT_SNAPSHOT,
             name=name,
             fn=snapshot_fn,
+            description=f'Gets snapshot data for {name} by snapshotId or sessionId',
         )
-        registry.register_action_from_instance(snapshot_action)
-
-    return agent
+    )
+    registry.register_action_from_instance(
+        Action(
+            kind=ActionKind.AGENT_ABORT,
+            name=name,
+            fn=abort_fn,
+            description=f'Aborts {name} agent by snapshotId',
+        )
+    )
 
 
 def define_agent(
@@ -241,7 +289,6 @@ def define_agent(
     description: str | None = None,
     metadata: dict[str, object] | None = None,
     store: SessionStore | None = None,
-    snapshot_callback: SnapshotCallback | None = None,
     client_transform: ClientTransform | None = None,
     transform: StateTransform | None = None,
 ) -> Agent:
@@ -268,7 +315,6 @@ def define_agent(
         registry=registry,
         name=name,
         store=store,
-        snapshot_callback=snapshot_callback,
         client_transform=client_transform,
         transform=transform,
         description=description,
@@ -281,7 +327,6 @@ def define_prompt_agent(
     name: str,
     *,
     store: SessionStore | None = None,
-    snapshot_callback: SnapshotCallback | None = None,
     client_transform: ClientTransform | None = None,
     transform: StateTransform | None = None,
     description: str | None = None,
@@ -335,7 +380,6 @@ def define_prompt_agent(
         name=name,
         fn=agent_fn,
         store=store,
-        snapshot_callback=snapshot_callback,
         client_transform=client_transform,
         transform=transform,
         description=description,

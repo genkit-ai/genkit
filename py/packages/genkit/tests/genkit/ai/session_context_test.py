@@ -90,7 +90,6 @@ async def test_agent_runtime_binds_session_during_handler() -> None:
         session=session,
         parent_snapshot=None,
         store=None,
-        snapshot_callback=None,
         client_transform=None,
         session_outputs=out_queue,
     )

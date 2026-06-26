@@ -47,15 +47,15 @@ async def main() -> None:
     assert checkpoint
 
     # Fork two sibling directions. The user will pick one to keep building on.
-    minimal = await agent.load_chat(checkpoint)
+    minimal = await agent.load_chat(snapshot_id=checkpoint)
     await minimal.send('Direction: minimal.')
     chosen_leaf = minimal.snapshot_id
-    bold = await agent.load_chat(checkpoint)
+    bold = await agent.load_chat(snapshot_id=checkpoint)
     await bold.send('Direction: bold.')
     assert chosen_leaf
 
     # User picked minimal — resume a normal linear chat from that leaf snapshot.
-    resumed = await agent.load_chat(chosen_leaf)
+    resumed = await agent.load_chat(snapshot_id=chosen_leaf)
     # → continues the minimal timeline as a plain linear chat, adding pricing
     await resumed.send('Add a pricing section.')
 

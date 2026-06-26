@@ -53,9 +53,9 @@ async def main() -> None:
 
     # Two branches off the same checkpoint; neither sees the other.
     # → minimal gets a whitespace-heavy take; bold gets a dark, high-contrast one.
-    minimal = await agent.load_chat(checkpoint)
+    minimal = await agent.load_chat(snapshot_id=checkpoint)
     await minimal.send('Direction: minimal.')
-    bold = await agent.load_chat(checkpoint)
+    bold = await agent.load_chat(snapshot_id=checkpoint)
     await bold.send('Direction: bold.')
     bold_leaf = bold.snapshot_id
     assert bold_leaf
@@ -68,7 +68,7 @@ async def main() -> None:
     except GenkitError as exc:
         # → exc.details holds type=AMBIGUOUS_BRANCH and the conflicting leaves
         assert exc.details and exc.details.get('type') == SessionErrorType.AMBIGUOUS_BRANCH
-        resumed = await agent.load_chat(bold_leaf)
+        resumed = await agent.load_chat(snapshot_id=bold_leaf)
         # → continues the bold timeline, extending it with a pricing section
         await resumed.send('Add a pricing section.')
 

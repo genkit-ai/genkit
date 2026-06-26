@@ -23,7 +23,7 @@ import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, cast, get_type_hints
+from typing import Any, ClassVar, Generic, NamedTuple, cast, get_type_hints
 
 from opentelemetry.util import types as otel_types
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -36,11 +36,6 @@ from genkit._core._error import GenkitError, StatusCodes
 from genkit._core._schema import to_json_schema
 from genkit._core._trace._suppress import suppress_telemetry
 from genkit._core._tracing import SpanMetadata, run_in_new_span
-
-if TYPE_CHECKING:
-    # _protocols imports from this module, so importing it at runtime would cycle;
-    # the annotation only needs to resolve for type checkers.
-    from genkit._core._protocols import RegistryLike
 
 # =============================================================================
 # Span attribute types and tracing helpers
@@ -117,6 +112,7 @@ class ActionKind(StrEnum):
 
     BACKGROUND_MODEL = 'background-model'
     AGENT = 'agent'
+    AGENT_ABORT = 'agent-abort'
     AGENT_SNAPSHOT = 'agent-snapshot'
     CANCEL_OPERATION = 'cancel-operation'
     CHECK_OPERATION = 'check-operation'
@@ -318,6 +314,11 @@ def create_action_key(kind: ActionKind | str, name: str) -> str:
 InputT = TypeVar('InputT', default=Any)
 OutputT = TypeVar('OutputT', default=Any)
 ChunkT = TypeVar('ChunkT', default=Never)
+
+BidiFn = Callable[
+    [InputT, CloseableQueue[Any], CloseableQueue[Any]],
+    Awaitable[OutputT],
+]
 
 # Generic streaming callback - use Callable[[ChunkT], None] for typed chunks
 # This untyped version is for internal use where chunk type is unknown
@@ -766,7 +767,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
         self,
         kind: ActionKind,
         name: str,
-        bidi_fn: Callable[..., Awaitable[OutputT]],
+        bidi_fn: BidiFn[InputT, OutputT],
         metadata_fn: Callable[..., object] | None = None,
         description: str | None = None,
         metadata: dict[str, object] | None = None,
@@ -883,29 +884,6 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
         finally:
             if token is not None:
                 _action_context.reset(token)
-
-
-def define_bidi_action(
-    registry: 'RegistryLike',
-    kind: ActionKind,
-    name: str,
-    bidi_fn: Callable[..., Awaitable[Any]],
-    metadata_fn: Callable[..., object] | None = None,
-    description: str | None = None,
-    metadata: dict[str, object] | None = None,
-) -> BidiAction:
-    """Create and register a BidiAction."""
-    action = BidiAction(
-        kind=kind,
-        name=name,
-        bidi_fn=bidi_fn,
-        metadata_fn=metadata_fn,
-        description=description,
-        metadata=metadata,
-    )
-    # pyrefly: ignore[bad-argument-type] - BidiAction is an Action subclass; pyrefly doesn't accept the subtype here
-    registry.register_action_from_instance(action)
-    return action
 
 
 def get_current_context() -> dict[str, object] | None:

@@ -45,7 +45,6 @@ async def test_runtime_emits_custom_patch() -> None:
         session=session,
         parent_snapshot=None,
         store=None,
-        snapshot_callback=None,
         client_transform=None,
         session_outputs=out_queue,
     )
@@ -69,7 +68,6 @@ async def test_runtime_incremental_custom_patch_within_turn() -> None:
         session=session,
         parent_snapshot=None,
         store=None,
-        snapshot_callback=None,
         client_transform=None,
         session_outputs=out_queue,
     )
@@ -107,7 +105,6 @@ async def test_runtime_custom_patch_honors_state_transform() -> None:
         session=session,
         parent_snapshot=None,
         store=None,
-        snapshot_callback=None,
         client_transform={'state': redact},
         session_outputs=out_queue,
     )
@@ -127,7 +124,6 @@ async def test_runtime_chunk_transform_can_drop_chunks() -> None:
         session=session,
         parent_snapshot=None,
         store=None,
-        snapshot_callback=None,
         client_transform={'chunk': lambda _chunk: None},
         session_outputs=out_queue,
     )
@@ -145,7 +141,6 @@ async def test_runtime_chunk_transform_can_redact_model_chunks() -> None:
         session=session,
         parent_snapshot=None,
         store=None,
-        snapshot_callback=None,
         client_transform={
             'chunk': lambda chunk: (
                 chunk.model_copy(

@@ -69,7 +69,6 @@ def _runtime(session: Session, store: InMemoryLatestStateStore | None) -> tuple[
         session=session,
         parent_snapshot=None,
         store=store,
-        snapshot_callback=None,
         client_transform=None,
         session_outputs=out_queue,
     )

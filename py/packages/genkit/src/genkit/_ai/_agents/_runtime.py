@@ -29,8 +29,6 @@ from genkit._ai._agents._session import (
     Session,
     SessionStore,
     SnapshotAborter,
-    SnapshotCallback,
-    SnapshotContext,
     StateT,
     run_with_session,
 )
@@ -288,14 +286,12 @@ class AgentRuntime:
         session: Session[Any],
         parent_snapshot: SessionSnapshot | None,
         store: SessionStore | None,
-        snapshot_callback: SnapshotCallback | None,
         client_transform: ClientTransform | None,
         session_outputs: CloseableQueue[AgentStreamChunk],
     ) -> None:
         self.name = name
         self.session = session
         self.store = store
-        self.snapshot_callback = snapshot_callback
         self.client_transform = client_transform
         self.last_snapshot: SessionSnapshot | None = parent_snapshot
         self.last_snapshot_version: int = self.session.version if parent_snapshot is not None else -1
@@ -374,23 +370,18 @@ class AgentRuntime:
         status: SnapshotStatus | None = None,
         error: GenkitRuntimeError | None = None,
         force: bool = False,
-    ) -> str:
-        """Save snapshot if store configured + callback approves + state changed."""
+    ) -> str | None:
+        """Persist a snapshot whenever a store is configured and state changed.
+
+        With a store, every turn is persisted (no opt-out): the durable head
+        always advances so a stateless resume never regresses to an older turn.
+        """
         if self.store is None:
-            return ''
+            return None
         if not force and self.last_snapshot is not None and self.session.version == self.last_snapshot_version:
             return self.last_snapshot.snapshot_id
 
         state = await self.session.state()
-
-        if self.snapshot_callback is not None and status != SnapshotStatus.FAILED:
-            ctx = SnapshotContext(
-                state=state,
-                prev_state=self.last_snapshot.state if self.last_snapshot else None,
-                turn_index=self.session_runner.turn_index,
-            )
-            if not self.snapshot_callback(ctx):
-                return self.last_snapshot.snapshot_id if self.last_snapshot else ''
 
         parent_id = self.last_snapshot.snapshot_id if self.last_snapshot else None
         now = datetime.now(timezone.utc).isoformat()
@@ -416,7 +407,7 @@ class AgentRuntime:
             self.last_snapshot = snap
             self.last_snapshot_version = self.session.version
             return snap.snapshot_id
-        return self.last_snapshot.snapshot_id if self.last_snapshot else ''
+        return self.last_snapshot.snapshot_id if self.last_snapshot else None
 
     async def ensure_recovery_snapshot(self) -> str | None:
         """Persist last-good state after a failed turn when the callback skipped it."""
@@ -467,6 +458,9 @@ class AgentRuntime:
             error=self.session_runner.last_turn_error if is_failed else None,
             force=is_failed,
         )
+        # turnEnd is just the boundary marker. The full session rides home on
+        # the turn's AgentOutput, so a client never has to stitch state off a
+        # mid-stream chunk.
         self.send_chunk(
             AgentStreamChunk(
                 turn_end=TurnEnd(
@@ -486,10 +480,12 @@ class AgentRuntime:
             message=msgs[-1] if msgs else (result.message if result else None),
             artifacts=list(last_good.artifacts or []) if last_good.artifacts else (result.artifacts if result else []),
         )
-        if self.store is not None:
-            out.snapshot_id = await self.ensure_recovery_snapshot()
-        else:
+        # Same split as a successful turn: client-managed gets the last-good state
+        # inline, server-managed resumes by the last-good snapshot.
+        if self.store is None:
             out.state = self.transform_state(last_good)
+        else:
+            out.snapshot_id = await self.ensure_recovery_snapshot()
         return out
 
     async def watch_snapshot_abort(self, snapshot_id: str, abort_signal: asyncio.Event) -> None:
@@ -701,10 +697,12 @@ class AgentRuntime:
             artifacts=list(result.artifacts) if result and result.artifacts else [],
             finish_reason=finish_reason,
         )
-
+        # Client-managed has no store, so the client is the source of truth: ship
+        # the whole session and let it copy verbatim. Server-managed returns only
+        # the snapshot id — the durable store is the real history, and the client
+        # tracks a lightweight running view from the final reply.
         if self.store is None:
             out.state = self.transform_state(state)
-
         return out
 
     def send_chunk(self, chunk: AgentStreamChunk) -> None:

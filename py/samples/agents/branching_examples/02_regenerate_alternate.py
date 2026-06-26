@@ -49,7 +49,7 @@ async def main() -> None:
 
     # Regenerate turn 2 from the bookmark with different input. The original
     # "minimal" answer is untouched; both versions now coexist as siblings.
-    retry = await agent.load_chat(checkpoint)
+    retry = await agent.load_chat(snapshot_id=checkpoint)
     await retry.send('Make it bold instead.')  # → a "bold" sibling of that same turn
 
 

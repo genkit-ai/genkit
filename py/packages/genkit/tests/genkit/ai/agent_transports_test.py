@@ -78,7 +78,11 @@ async def test_http_transport_integration() -> None:
         try:
             # 1. Instantiate the HTTP transport talking to the reflection endpoint
             url = f'http://127.0.0.1:{port}/api/runAction'
-            transport = HttpAgentTransport(url=url, agent_name='/agent/echoAgent')
+            transport = HttpAgentTransport(
+                url=url,
+                agent_name='/agent/echoAgent',
+                state_management='server',
+            )
             client = AgentClient(transport)
 
             # 2. Run a turn and check the stream and output!
@@ -86,11 +90,11 @@ async def test_http_transport_integration() -> None:
             turn = chat.send('Hello Genkit!')
 
             chunks = []
-            async for chunk in turn.stream:
+            async for chunk in turn:
                 if chunk.text:
                     chunks.append(chunk.text)
 
-            res = await turn.output
+            res = await turn
             assert res.text == 'Echo: Hello Genkit!'
             assert res.finish_reason == AgentFinishReason.STOP
             await chat.close()
