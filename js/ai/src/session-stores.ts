@@ -423,7 +423,9 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
     }
     try {
       const parsed = JSON.parse(contents) as PointerDoc;
-      return parsed?.currentSnapshotId ? parsed : undefined;
+      // Guard the type too: a non-string id would later throw in `assertSafeId`
+      // on the fast path instead of falling back to the scan.
+      return typeof parsed?.currentSnapshotId === 'string' ? parsed : undefined;
     } catch {
       // Partially written / corrupt pointer: treat as absent and rescan.
       return undefined;
@@ -651,21 +653,14 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
     await this.atomicWrite(filePath, JSON.stringify(full, null, 2));
 
     // Maintain the per-session pointer so `sessionId` lookups stay fast (one
-    // pointer read plus one snapshot read). Advance the pointer for a new leaf,
-    // refresh it when rewriting the current leaf, and leave it untouched when
-    // upserting an older (non-leaf) snapshot. Snapshots without a `sessionId`
-    // are not addressable by session, so skip the pointer.
+    // pointer read plus one snapshot read). Only a brand-new snapshot (`!current`)
+    // is a new leaf, so only then do we advance the pointer; rewriting an
+    // existing snapshot (heartbeat / status update) never changes leaf-ness, so
+    // we leave the pointer alone. Snapshots without a `sessionId` are not
+    // addressable by session, so skip the pointer.
     const sessionId = full.sessionId ?? full.state?.sessionId;
-    if (sessionId) {
-      const isNew = !current;
-      const pointer = await this.readPointer(sessionId, options);
-      if (isNew || !pointer || pointer.currentSnapshotId === id) {
-        await this.writePointer(
-          sessionId,
-          isNew || !pointer ? id : pointer.currentSnapshotId,
-          options
-        );
-      }
+    if (sessionId && !current) {
+      await this.writePointer(sessionId, id, options);
     }
 
     if (this.maxPersistedChainLength && this.maxPersistedChainLength > 0) {
