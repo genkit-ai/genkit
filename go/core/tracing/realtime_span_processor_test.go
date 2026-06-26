@@ -255,6 +255,36 @@ func TestRunInNewSpanSeedsInputAtStartWhenRealtime(t *testing.T) {
 	}
 }
 
+// TestRealtimeSpanProcessorDropsStartSavesAfterShutdown verifies the guard that
+// keeps Shutdown's drain safe: once Shutdown has begun, a span starting
+// afterward must not enqueue an async start save (which would Add to the
+// WaitGroup wait is draining). The synchronous end save is unaffected.
+func TestRealtimeSpanProcessorDropsStartSavesAfterShutdown(t *testing.T) {
+	tp, rp, client := newRealtimeTestProvider(t)
+
+	if err := rp.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	// Start and end a span after shutdown. OnStart's async save must be dropped;
+	// OnEnd's synchronous save still lands. Neither may panic.
+	_, span := tp.Tracer("test").Start(context.Background(), "root")
+	span.End()
+
+	// A second ForceFlush must return immediately (nothing in flight).
+	if err := rp.ForceFlush(context.Background()); err != nil {
+		t.Fatalf("ForceFlush: %v", err)
+	}
+
+	for _, td := range client.all() {
+		for _, s := range td.Spans {
+			if s.EndTime == 0 {
+				t.Errorf("in-progress (start) save recorded after shutdown; guard did not drop it")
+			}
+		}
+	}
+}
+
 // TestRealtimeSpanProcessorNilClient ensures a processor with no client is a
 // no-op rather than a panic (matches the exporter's nil-client tolerance).
 func TestRealtimeSpanProcessorNilClient(t *testing.T) {

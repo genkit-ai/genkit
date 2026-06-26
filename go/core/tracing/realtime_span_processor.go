@@ -38,6 +38,13 @@ import (
 // which the `genkit start` CLI enables via GENKIT_ENABLE_REALTIME_TELEMETRY.
 type realtimeSpanProcessor struct {
 	client TelemetryClient
+	// mu guards closed and serializes it with the wg.Add in save, so a span
+	// starting concurrently with Shutdown cannot add to the WaitGroup after
+	// draining has begun. Without that ordering, a positive Add from a zero
+	// counter could race wait's wg.Wait and either panic ("WaitGroup is reused
+	// before previous Wait has returned") or let the save be silently dropped.
+	mu     sync.Mutex
+	closed bool
 	// wg tracks in-flight start-of-span saves so ForceFlush/Shutdown can wait
 	// for them; end-of-span saves are synchronous and need no tracking.
 	wg sync.WaitGroup
@@ -91,7 +98,17 @@ func (p *realtimeSpanProcessor) save(s sdktrace.ReadOnlySpan, async bool) {
 		}
 		return
 	}
+	// Track this save so ForceFlush/Shutdown can wait for it, unless Shutdown has
+	// begun: adding to a WaitGroup that wait is already draining is racy, so once
+	// closed we drop the save instead. The lock pairs the closed check with the
+	// Add so it can't interleave with Shutdown setting closed.
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
 	p.wg.Add(1)
+	p.mu.Unlock()
 	go func() {
 		defer p.wg.Done()
 		if err := p.client.Save(context.Background(), td); err != nil {
@@ -101,14 +118,21 @@ func (p *realtimeSpanProcessor) save(s sdktrace.ReadOnlySpan, async bool) {
 }
 
 // ForceFlush waits for in-flight start-of-span saves to complete, or until ctx
-// is done.
+// is done. Unlike Shutdown it keeps accepting new saves; the dev SDK only calls
+// it at flush/teardown points where no new spans are starting, so its wait does
+// not race a fresh save.
 func (p *realtimeSpanProcessor) ForceFlush(ctx context.Context) error {
 	return p.wait(ctx)
 }
 
-// Shutdown waits for in-flight start-of-span saves to complete, or until ctx is
-// done.
+// Shutdown stops accepting new start-of-span saves, then waits for in-flight
+// ones to complete, or until ctx is done. Marking the processor closed before
+// waiting is what makes the wait safe: no new save can Add to the WaitGroup once
+// draining has begun.
 func (p *realtimeSpanProcessor) Shutdown(ctx context.Context) error {
+	p.mu.Lock()
+	p.closed = true
+	p.mu.Unlock()
 	return p.wait(ctx)
 }
 
