@@ -618,16 +618,20 @@ resp, _ := genkit.Generate(ctx, g,
 )
 
 // Interrupts() yields nothing unless the tool paused for input.
+var restarts []*ai.Part
 for _, interrupt := range resp.Interrupts() {
     meta, _ := tool.InterruptAs[TransferInterrupt](interrupt)
 
     // Use meta to ask the user for a decision, then resume with their answer.
     // The typed data arrives as the tool's *Confirmation parameter.
     restart, _ := transferTool.Resume(interrupt, Confirmation{Approved: true})
+    restarts = append(restarts, restart)
+}
+if len(restarts) > 0 {
     resp, _ = genkit.Generate(ctx, g,
         ai.WithMessages(resp.History()...),
         ai.WithTools(transferTool),
-        ai.WithToolRestarts(restart),
+        ai.WithToolRestarts(restarts...),
     )
 }
 ```
