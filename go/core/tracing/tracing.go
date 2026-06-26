@@ -116,7 +116,12 @@ func TracerProvider() *sdktrace.TracerProvider {
 	providerInitOnce.Do(func() {
 		otel.SetTracerProvider(sdktrace.NewTracerProvider())
 		if telemetryURL := os.Getenv("GENKIT_TELEMETRY_SERVER"); telemetryURL != "" {
-			WriteTelemetryImmediate(NewHTTPTelemetryClient(telemetryURL))
+			client := NewHTTPTelemetryClient(telemetryURL)
+			if realtimeTelemetryEnabled() {
+				WriteTelemetryRealtime(client)
+			} else {
+				WriteTelemetryImmediate(client)
+			}
 		}
 	})
 
@@ -148,6 +153,30 @@ func WriteTelemetryBatch(client TelemetryClient) (shutdown func(context.Context)
 	e := newTelemetryServerExporter(client)
 	TracerProvider().RegisterSpanProcessor(sdktrace.NewBatchSpanProcessor(e))
 	return TracerProvider().Shutdown
+}
+
+// WriteTelemetryRealtime adds a telemetry server to the global tracer provider
+// that writes each span both when it starts and when it ends, so a still-running
+// trace appears in the dev UI immediately rather than only once its root span
+// closes. This matters for agents, whose root span stays open for the lifetime
+// of a bidirectional connection. Use this for a fast Save method (such as one
+// that writes to a file or a local server); for an end-only export use
+// [WriteTelemetryImmediate].
+func WriteTelemetryRealtime(client TelemetryClient) {
+	TracerProvider().RegisterSpanProcessor(newRealtimeSpanProcessor(client))
+}
+
+// realtimeTelemetryActive records whether the dev CLI asked runtimes to export
+// live traces, read once at startup. `genkit start` sets
+// GENKIT_ENABLE_REALTIME_TELEMETRY (unless run with --disable-realtime-telemetry);
+// the JS runtime keys its RealtimeSpanProcessor off the same variable. It is
+// read on every span (see RunInNewSpan), so it is cached here rather than read
+// from the environment each time.
+var realtimeTelemetryActive = os.Getenv("GENKIT_ENABLE_REALTIME_TELEMETRY") == "true"
+
+// realtimeTelemetryEnabled reports whether live-trace export is active.
+func realtimeTelemetryEnabled() bool {
+	return realtimeTelemetryActive
 }
 
 const (
@@ -238,8 +267,18 @@ func RunInNewSpan[I, O any](
 		opts = append(opts, trace.WithAttributes(attrs...))
 	}
 
-	if metadata.Type != "" {
-		opts = append(opts, trace.WithAttributes(attribute.String(spanTypeAttr, metadata.Type)))
+	// Seed the start-known genkit attributes (including genkit:type) as span-start
+	// options so a live-trace export taken the moment the span starts already
+	// carries its name, path, type, and subtype. The deferred end write below
+	// reasserts these and adds the run-determined output/state.
+	opts = append(opts, trace.WithAttributes(sm.startAttributes()...))
+	// Input and init are known now too, but JSON-marshaled, so seed them at start
+	// only when a live exporter will read them; otherwise the end write records
+	// them once. Without this an in-flight span (notably an agent's long-lived
+	// root span, whose call data lives entirely in genkit:init) shows no input
+	// until it finishes.
+	if realtimeTelemetryEnabled() {
+		opts = append(opts, trace.WithAttributes(sm.inputAttributes()...))
 	}
 
 	ctx, span := Tracer().Start(ctx, metadata.Name, opts...)
@@ -384,6 +423,54 @@ func (sm *spanMetadata) attributes() []attribute.KeyValue {
 		}
 	}
 
+	return kvs
+}
+
+// startAttributes returns the cheap subset of [spanMetadata.attributes] that is
+// already known when the span begins: its identity and shape (name, path, type,
+// subtype, root flag, and custom metadata). RunInNewSpan always sets these as
+// span-start options so a live-trace exporter, which captures the span the
+// instant it starts (before the deferred end write), still sees a span that
+// renders with its proper type and place in the tree rather than just
+// "genkit:type". State and output are excluded because they are not determined
+// until the span finishes; input and init are excluded here because they are
+// JSON-marshaled (see inputAttributes). These keys and values match attributes()
+// exactly, so the end write simply reasserts them.
+func (sm *spanMetadata) startAttributes() []attribute.KeyValue {
+	kvs := []attribute.KeyValue{
+		attribute.String("genkit:name", sm.Name),
+		attribute.String("genkit:path", sm.Path),
+	}
+	if sm.Type != "" {
+		kvs = append(kvs, attribute.String(spanTypeAttr, sm.Type))
+	}
+	if sm.Subtype != "" {
+		kvs = append(kvs, attribute.String("genkit:metadata:subtype", sm.Subtype))
+	}
+	if sm.IsRoot {
+		kvs = append(kvs, attribute.Bool("genkit:isRoot", sm.IsRoot))
+	}
+	for k, v := range sm.Metadata {
+		kvs = append(kvs, attribute.String(attrPrefix+":metadata:"+k, v))
+	}
+	return kvs
+}
+
+// inputAttributes returns the JSON-marshaled input and init attributes. Both are
+// known when the span begins, but RunInNewSpan only seeds them as span-start
+// options when live-trace export is active: marshaling them is not free, and off
+// the live path the deferred end write is the single place they are recorded.
+// Seeding them at start lets an in-flight span show what it was invoked with,
+// which for a bidi/agent root span (whose input is nil and whose init carries
+// the session) is the only call data it has until it ends. The keys and values
+// match attributes() so the end write reasserts them.
+func (sm *spanMetadata) inputAttributes() []attribute.KeyValue {
+	kvs := []attribute.KeyValue{
+		attribute.String("genkit:input", base.JSONString(sm.Input)),
+	}
+	if sm.Init != nil {
+		kvs = append(kvs, attribute.String("genkit:init", base.JSONString(sm.Init)))
+	}
 	return kvs
 }
 

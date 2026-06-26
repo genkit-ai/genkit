@@ -56,6 +56,67 @@ func TestSpanMetadata(t *testing.T) {
 	}
 }
 
+func TestSpanMetadataStartAttributes(t *testing.T) {
+	sm := &spanMetadata{
+		Name:     "myTool",
+		State:    spanStateSuccess, // run-determined: must be excluded
+		Path:     "/{chatFlow,t:flow}/{myTool,t:action}",
+		Type:     "action",
+		Subtype:  "tool",
+		Input:    "in",  // deferred to end: must be excluded
+		Output:   "out", // run-determined: must be excluded
+		IsRoot:   true,
+		Metadata: map[string]string{"key": "value"},
+	}
+
+	// startAttributes carries only the shape known at span start, in the same
+	// order (and with the same keys/values) as the matching prefix of
+	// attributes(), so the end write reasserts them cleanly.
+	got := sm.startAttributes()
+	want := []attribute.KeyValue{
+		attribute.String("genkit:name", "myTool"),
+		attribute.String("genkit:path", "/{chatFlow,t:flow}/{myTool,t:action}"),
+		attribute.String("genkit:type", "action"),
+		attribute.String("genkit:metadata:subtype", "tool"),
+		attribute.Bool("genkit:isRoot", true),
+		attribute.String("genkit:metadata:key", "value"),
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("\ngot  %v\nwant %v", got, want)
+	}
+
+	// The run-determined attributes must not leak into the start write, and input
+	// and init are seeded separately (see inputAttributes / TestSpanMetadataInputAttributes).
+	for _, kv := range got {
+		switch kv.Key {
+		case "genkit:state", "genkit:input", "genkit:output", "genkit:init":
+			t.Errorf("startAttributes must not include %q", kv.Key)
+		}
+	}
+}
+
+func TestSpanMetadataInputAttributes(t *testing.T) {
+	// With init: both genkit:input and genkit:init, matching attributes().
+	sm := &spanMetadata{Input: "in", Init: map[string]string{"prefix": "PFX:"}}
+	got := sm.inputAttributes()
+	want := []attribute.KeyValue{
+		attribute.String("genkit:input", `"in"`),
+		attribute.String("genkit:init", `{"prefix":"PFX:"}`),
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("with init:\ngot  %v\nwant %v", got, want)
+	}
+
+	// Without init (e.g. a bidi/agent root span has nil input and may have no
+	// init): genkit:input is still present, recorded as JSON null.
+	smNoInit := &spanMetadata{Input: nil}
+	got = smNoInit.inputAttributes()
+	want = []attribute.KeyValue{attribute.String("genkit:input", "null")}
+	if !slices.Equal(got, want) {
+		t.Errorf("without init:\ngot  %v\nwant %v", got, want)
+	}
+}
+
 func TestSpanMetadataInit(t *testing.T) {
 	sm := &spanMetadata{
 		Name:  "name",
