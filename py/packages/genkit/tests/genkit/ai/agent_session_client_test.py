@@ -50,6 +50,8 @@ from genkit._core._typing import (
     TextPart,
     ToolRequest,
     ToolRequestPart,
+    ToolResponse,
+    ToolResponsePart,
     TurnEnd,
 )
 
@@ -295,11 +297,6 @@ async def test_server_managed_appends_messages_incrementally() -> None:
         finish_reason=AgentFinishReason.STOP,
     )
     turn = session.send('U1')
-    # A turn may emit intermediate tool steps as chunks; they never land in the
-    # local messages view (only the final reply does).
-    transport.push_chunk(
-        AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='thinking...'))]))
-    )
     transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-1', finish_reason=AgentFinishReason.STOP)))
     await turn
 
@@ -317,6 +314,221 @@ async def test_server_managed_appends_messages_incrementally() -> None:
 
     assert session.snapshot_id == 'snap-2'
     assert [m.content[0].root.text for m in session.messages] == ['U1', 'A1', 'U2', 'A2']
+
+
+@pytest.mark.asyncio
+async def test_server_managed_reconstructs_intermediate_tool_messages() -> None:
+    """A server-managed turn's tool steps ride home on the chunk stream, not the
+    output, so the running view must stitch them back from the chunks: text
+    deltas merge into the model message, and the tool reply lands in between."""
+    transport = MockAgentTransport(state_management='server')
+    session = AgentSession(transport)
+
+    # The wire returns only the snapshot id + the final reply.
+    transport.final_output = AgentOutput(
+        snapshot_id='snap-1',
+        message=MessageData(role='model', content=[Part(root=TextPart(text='It is 12C in Tokyo.'))]),
+        finish_reason=AgentFinishReason.STOP,
+    )
+    turn = session.send('Weather in Tokyo?')
+
+    # Model message that calls a tool, streamed as text deltas + a tool request.
+    transport.push_chunk(
+        AgentStreamChunk(
+            model_chunk=ModelResponseChunk(
+                role=Role.MODEL,
+                index=0,
+                content=[Part(root=TextPart(text='Let me '))],
+            )
+        )
+    )
+    transport.push_chunk(
+        AgentStreamChunk(
+            model_chunk=ModelResponseChunk(
+                role=Role.MODEL,
+                index=0,
+                content=[
+                    Part(root=TextPart(text='check.')),
+                    Part(
+                        root=ToolRequestPart(
+                            tool_request=ToolRequest(name='weather', ref='c1', input={'city': 'Tokyo'})
+                        )
+                    ),
+                ],
+            )
+        )
+    )
+    # Tool reply, streamed whole.
+    transport.push_chunk(
+        AgentStreamChunk(
+            model_chunk=ModelResponseChunk(
+                role=Role.TOOL,
+                index=1,
+                content=[
+                    Part(root=ToolResponsePart(tool_response=ToolResponse(name='weather', ref='c1', output='12C')))
+                ],
+            )
+        )
+    )
+    # Final model message, streamed as text deltas (superseded by raw.message).
+    transport.push_chunk(
+        AgentStreamChunk(
+            model_chunk=ModelResponseChunk(
+                role=Role.MODEL, index=2, content=[Part(root=TextPart(text='It is 12C in Tokyo.'))]
+            )
+        )
+    )
+    transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-1', finish_reason=AgentFinishReason.STOP)))
+    await turn
+
+    roles = [m.role for m in session.messages]
+    assert roles == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+
+    # User input, the tool-calling model message (deltas merged + tool request),
+    # the tool reply, then the authoritative final reply.
+    user_msg, tool_call_msg, tool_reply_msg, final_msg = session.messages
+    assert user_msg.content[0].root.text == 'Weather in Tokyo?'
+    assert tool_call_msg.content[0].root.text == 'Let me check.'
+    tool_req = tool_call_msg.content[1].root
+    assert isinstance(tool_req, ToolRequestPart)
+    assert tool_req.tool_request.name == 'weather'
+    tool_resp = tool_reply_msg.content[0].root
+    assert isinstance(tool_resp, ToolResponsePart)
+    assert tool_resp.tool_response.output == '12C'
+    assert final_msg.content[0].root.text == 'It is 12C in Tokyo.'
+
+
+@pytest.mark.asyncio
+async def test_client_managed_stitches_tool_messages_from_chunks_not_output_state() -> None:
+    """Client-managed turns build the running view the same way server-managed ones
+    do — from the chunk stream — even though the output round-trips the whole blob.
+    The output state is authoritative only for the non-message bits (custom); the
+    intermediate tool steps come from the chunks, and the full stitched view is what
+    ships back for the next turn's resume."""
+    transport = MockAgentTransport(state_management='client')
+    session = AgentSession(transport)
+
+    # The output round-trips state, but its messages deliberately omit the tool
+    # steps so the test proves the view is stitched from chunks, not raw.state.
+    # A stray session_id here must be ignored: client-managed has no server store
+    # to key a session on, so the id stays None.
+    transport.final_output = AgentOutput(
+        message=MessageData(role='model', content=[Part(root=TextPart(text='It is 12C in Tokyo.'))]),
+        state=SessionState(session_id='ignored', custom={'unit': 'celsius'}),
+        finish_reason=AgentFinishReason.STOP,
+    )
+    turn = session.send('Weather in Tokyo?')
+
+    transport.push_chunk(
+        AgentStreamChunk(
+            model_chunk=ModelResponseChunk(
+                role=Role.MODEL,
+                index=0,
+                content=[
+                    Part(root=TextPart(text='Let me check.')),
+                    Part(root=ToolRequestPart(tool_request=ToolRequest(name='weather', ref='c1', input='Tokyo'))),
+                ],
+            )
+        )
+    )
+    transport.push_chunk(
+        AgentStreamChunk(
+            model_chunk=ModelResponseChunk(
+                role=Role.TOOL,
+                index=1,
+                content=[
+                    Part(root=ToolResponsePart(tool_response=ToolResponse(name='weather', ref='c1', output='12C')))
+                ],
+            )
+        )
+    )
+    transport.push_chunk(
+        AgentStreamChunk(
+            model_chunk=ModelResponseChunk(
+                role=Role.MODEL, index=2, content=[Part(root=TextPart(text='It is 12C in Tokyo.'))]
+            )
+        )
+    )
+    transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(finish_reason=AgentFinishReason.STOP)))
+    await turn
+
+    # Same stitched shape as the server-managed tool loop: the tool steps are
+    # present even though raw.state never carried them.
+    assert [m.role for m in session.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+    tool_req = session.messages[1].content[1].root
+    assert isinstance(tool_req, ToolRequestPart)
+    assert tool_req.tool_request.name == 'weather'
+    assert session.messages[-1].content[0].root.text == 'It is 12C in Tokyo.'
+    # Custom is adopted from the round-tripped output.
+    assert session.custom == {'unit': 'celsius'}
+    # session_id stays None for client-managed, even when the output carries one.
+    assert session.session_id is None
+    # And the full running view is the blob that ships back for resume.
+    assert session.state.messages is session.messages
+
+
+@pytest.mark.asyncio
+async def test_server_managed_running_view_matches_snapshot_over_real_tool_loop() -> None:
+    """Against the real in-process runtime, a server-managed turn's running view
+    rebuilt from chunks must line up with the authoritative store snapshot."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    from genkit.agent import InMemoryLatestStateStore
+
+    store = InMemoryLatestStateStore()
+
+    @ai.tool()
+    async def weather(city: str) -> str:
+        return '12C'
+
+    ai.define_prompt(name='weatherAgent', model='programmableModel', system='Use the weather tool.', tools=[weather])
+    agent = ai.define_prompt_agent(name='weatherAgent', store=store)
+
+    # Turn 1: model calls the tool; turn 2: model answers with the tool result.
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='weather', ref='c1', input='Tokyo')))],
+            ),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='It is 12C in Tokyo.'))]),
+        )
+    )
+    pm.chunks = [
+        [
+            ModelResponseChunkModel(
+                role=Role.MODEL,
+                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='weather', ref='c1', input='Tokyo')))],
+            )
+        ],
+        [ModelResponseChunkModel(role=Role.MODEL, content=[Part(root=TextPart(text='It is 12C in Tokyo.'))])],
+    ]
+
+    async with agent.chat() as session:
+        await session.send('Weather in Tokyo?')
+
+        # The running view carries the whole turn, not just user + final reply.
+        assert [m.role for m in session.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+        call_req = session.messages[1].content[0].root
+        assert isinstance(call_req, ToolRequestPart)
+        assert call_req.tool_request.name == 'weather'
+        reply_resp = session.messages[2].content[0].root
+        assert isinstance(reply_resp, ToolResponsePart)
+        assert reply_resp.tool_response.output == '12C'
+        assert session.messages[3].content[0].root.text == 'It is 12C in Tokyo.'
+
+        # And it matches the durable store snapshot the server actually persisted.
+        snapshot = await session.get_snapshot()
+        assert snapshot is not None
+        assert snapshot.state is not None
+        assert [m.role for m in (snapshot.state.messages or [])] == [m.role for m in session.messages]
 
 
 @pytest.mark.asyncio
@@ -445,15 +657,15 @@ async def test_client_managed_does_not_double_append_messages() -> None:
 
 @pytest.mark.asyncio
 async def test_session_id_populated_from_output_state() -> None:
-    """The server assigns the session id on the first turn; the client must adopt it."""
+    """The server assigns the session id on the first turn; the client must adopt it.
+
+    A server-managed turn carries the id on the output itself, never inside a
+    round-tripped state blob (the store owns the state)."""
     transport = MockAgentTransport()
     transport.final_output = AgentOutput(
         snapshot_id='snapshot_1',
+        session_id='session_abc',
         message=MessageData(role='model', content=[Part(root=TextPart(text='Done.'))]),
-        state=SessionState(
-            session_id='session_abc',
-            messages=[MessageData(role='model', content=[Part(root=TextPart(text='Done.'))])],
-        ),
         finish_reason=AgentFinishReason.STOP,
     )
 

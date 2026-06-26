@@ -53,13 +53,10 @@ from genkit._core._typing import (
     JsonPatch,
     JsonPatchOperation,
     MessageData,
-    Part,
-    Role,
     RuntimeError as GenkitRuntimeError,
     SessionSnapshot,
     SessionState,
     SnapshotStatus,
-    ToolRequestPart,
     TurnEnd,
 )
 
@@ -741,7 +738,6 @@ async def generate_prompt_agent_turn(
     )
 
     if response.finish_reason == FinishReason.INTERRUPTED:
-        emit_interrupt_tool_chunk(ctx, response)
         await persist_turn_messages(
             session_runner,
             history,
@@ -783,28 +779,6 @@ def to_agent_finish_reason(fr: FinishReason | None) -> AgentFinishReason | None:
         if reason.value == fr.value:
             return reason
     return AgentFinishReason.UNKNOWN
-
-
-def tool_request_parts(msg: MessageData | None) -> list[Part]:
-    if not msg or not msg.content:
-        return []
-    parts = []
-    for part in msg.content:
-        p = part if isinstance(part, Part) else Part.model_validate(part)
-        if isinstance(p.root, ToolRequestPart):
-            parts.append(p)
-    return parts
-
-
-def emit_interrupt_tool_chunk(ctx: ActionRunContext, response: ModelResponse) -> None:
-    parts = tool_request_parts(response.message)
-    if not parts:
-        return
-    ctx.send_chunk(
-        AgentStreamChunk(
-            model_chunk=ModelResponseChunk(role=Role.TOOL, content=parts),
-        )
-    )
 
 
 def coerce_message(msg: MessageData) -> Message:

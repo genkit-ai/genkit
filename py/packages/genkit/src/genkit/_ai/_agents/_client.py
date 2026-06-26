@@ -39,6 +39,7 @@ from genkit._core._typing import (
     ModelResponseChunk,
     Part,
     Resume,
+    Role,
     SessionSnapshot,
     SessionState,
     SnapshotStatus,
@@ -401,6 +402,67 @@ def _validate_init(init: AgentInit) -> None:
         )
 
 
+def _as_part(part: Any) -> Part:  # noqa: ANN401
+    return part if isinstance(part, Part) else Part.model_validate(part)
+
+
+class _StreamedMessageAccumulator:
+    """Rebuilds a turn's messages from its chunk stream.
+
+    The chunk stream is the one channel that carries a turn's intermediate
+    tool-request/tool-response steps; nothing else does. We stitch them back the
+    same way the store records them: consecutive model deltas (same role and
+    message index) merge into one message; a ``tool`` chunk arrives whole.
+    """
+
+    def __init__(self) -> None:
+        self._messages: list[MessageData] = []
+        self._role: Role | str | None = None
+        self._index: float | None = None
+        self._parts: list[Part] = []
+
+    def add(self, chunk: AgentStreamChunk) -> None:
+        mc = chunk.model_chunk
+        if mc is None:
+            return
+        role = mc.role if mc.role is not None else Role.MODEL
+        if self._role is not None and (role != self._role or mc.index != self._index):
+            self._flush()
+        self._role = role
+        self._index = mc.index
+        for part in mc.content or []:
+            self._parts.append(_as_part(part))
+
+    def _flush(self) -> None:
+        if self._role is None:
+            return
+        # Merge adjacent text deltas back into a single part while preserving the
+        # order of tool/data/media parts as they streamed.
+        merged: list[Part] = []
+        text_buf: list[str] = []
+        for p in self._parts:
+            root = p.root
+            if isinstance(root, TextPart) and root.text is not None:
+                text_buf.append(root.text)
+                continue
+            if text_buf:
+                merged.append(Part(root=TextPart(text=''.join(text_buf))))
+                text_buf = []
+            merged.append(p)
+        if text_buf:
+            merged.append(Part(root=TextPart(text=''.join(text_buf))))
+        if merged:
+            self._messages.append(MessageData(role=self._role, content=merged))
+        self._role = None
+        self._index = None
+        self._parts = []
+
+    def messages(self) -> list[MessageData]:
+        """The reconstructed messages, finalizing any in-progress message first."""
+        self._flush()
+        return self._messages
+
+
 class _TurnDriver(Generic[StateT, StreamT]):
     """Runs one in-flight turn and exposes it as an AgentTurn.
 
@@ -421,6 +483,7 @@ class _TurnDriver(Generic[StateT, StreamT]):
         ],
         commit_output: Callable[[AgentOutput], AgentResponse[StateT]],
         commit_custom_patch: Callable[[Any], StateT | None],
+        accumulate_chunk: Callable[[AgentStreamChunk], None] | None = None,
         rollback: Callable[[], None] | None = None,
         external_signal: Any = None,  # noqa: ANN401
     ) -> None:
@@ -429,9 +492,13 @@ class _TurnDriver(Generic[StateT, StreamT]):
         self.run_turn = run_turn
         self.commit_output = commit_output
         self.commit_custom_patch = commit_custom_patch
+        self.accumulate_chunk = accumulate_chunk
         self.rollback = rollback
         self.external_signal = external_signal
         self.aborted = asyncio.Event()
+        # Set once the chunk pump has drained the turn's stream, so the result is
+        # committed only after every message chunk has been accumulated.
+        self.pump_complete = asyncio.Event()
         self.output: asyncio.Future[AgentResponse[StateT]] = asyncio.get_event_loop().create_future()
         self.chunks: CloseableQueue[AgentChunk[StreamT] | BaseException] = CloseableQueue()
         self.run_task: asyncio.Task[None] | None = None
@@ -483,6 +550,9 @@ class _TurnDriver(Generic[StateT, StreamT]):
                 self.output.set_exception(e)
             self.chunks.put_nowait(e)
         finally:
+            # The pump has consumed every chunk it will, so the message
+            # accumulator is complete and the result can be committed.
+            self.pump_complete.set()
             # Closing wakes the stream consumer once buffered chunks drain, so the
             # turn ends without a sentinel value threading through the queue.
             self.chunks.close()
@@ -491,6 +561,10 @@ class _TurnDriver(Generic[StateT, StreamT]):
         """Awaits the transport's final output and publishes it as the turn's result."""
         try:
             raw = await output
+            # Wait for the chunk pump to finish so a server-managed turn commits a
+            # complete message history (the intermediate messages are stitched from
+            # chunks, not carried on the output).
+            await self.pump_complete.wait()
             response = self.commit_output(raw)
             if not self.output.done():
                 self.output.set_result(response)
@@ -500,6 +574,8 @@ class _TurnDriver(Generic[StateT, StreamT]):
 
     def emit(self, chunk: AgentStreamChunk) -> None:
         """Applies any state patch, transforms the wire chunk, and enqueues it."""
+        if self.accumulate_chunk is not None:
+            self.accumulate_chunk(chunk)
         custom = self.commit_custom_patch(chunk.custom_patch) if chunk.custom_patch else None
 
         agent_chunk: AgentChunk[Any] = AgentChunk(
@@ -577,6 +653,9 @@ class AgentSession(Generic[StateT, StreamT]):
         self._transport = transport
         self._snapshot_id: str | None = None
         self._state = SessionState()
+        # Rebuilds a server-managed turn's full message history (including
+        # intermediate tool steps) from its chunk stream; created fresh per turn.
+        self._turn_accumulator: _StreamedMessageAccumulator | None = None
 
         if init is not None:
             _validate_init(init)
@@ -607,13 +686,16 @@ class AgentSession(Generic[StateT, StreamT]):
 
     @property
     def messages(self) -> list[MessageData]:
-        """Running view of the conversation.
+        """Running view of the conversation, built the same way in both modes.
 
-        Server-managed: this is a lightweight view, NOT the source of truth. It
-        holds your inputs plus each turn's final reply, but not the intermediate
-        tool-request/tool-response messages a turn may generate — only the
-        snapshot in the store has those. Use ``get_snapshot()`` / ``load_chat``
-        for the authoritative history. Client-managed: this is the full history.
+        A turn's messages are stitched from its chunk stream — the only channel
+        that carries the in-between tool-request/tool-response steps — with the
+        final reply taken from the turn's output when it's there (it carries the
+        metadata a resume needs). The chunks are identical whether state is server-
+        or client-managed, so there's one path here. For server-managed sessions
+        the durable snapshot in the store stays the source of truth — use
+        ``get_snapshot()`` / ``load_chat`` when you need it (e.g. after a detached
+        turn, whose chunks this session never saw).
         """
         if self._state.messages is None:
             self._state.messages = []
@@ -661,12 +743,14 @@ class AgentSession(Generic[StateT, StreamT]):
         if inp.message:
             self.messages.append(inp.message)
 
+        self._turn_accumulator = _StreamedMessageAccumulator()
         driver = _TurnDriver(
             inp=inp,
             init=init,
             run_turn=self._transport.run_turn,
             commit_output=lambda raw: self._commit_output(raw, message_count_before),
             commit_custom_patch=self._commit_custom_patch,
+            accumulate_chunk=self._turn_accumulator.add,
             rollback=lambda: self._rollback_optimistic(message_count_before),
             external_signal=_extract_abort_signal(opts),
         )
@@ -694,6 +778,11 @@ class AgentSession(Generic[StateT, StreamT]):
         message_count_before = len(self.messages)
         if inp.message:
             self.messages.append(inp.message)
+
+        # This session never sees a detached turn's chunks, so start from an empty
+        # accumulator — otherwise a prior turn's leftover messages would be folded
+        # in when the output settles.
+        self._turn_accumulator = _StreamedMessageAccumulator()
 
         # The transport drives the turn to completion on its own (see
         # AgentTransport.run_turn), so the output resolves whether or not anyone
@@ -798,35 +887,65 @@ class AgentSession(Generic[StateT, StreamT]):
 
     def _update_from_output(self, raw: AgentOutput, message_count_before: int) -> None:
         # message_count_before is the history length captured before this turn's
-        # optimistic user-message push, so a failed server-managed turn can roll
+        # optimistic user-message push, so a turn that lands no reply can roll
         # that push back (see send()).
         if raw.snapshot_id is not None:
             self._snapshot_id = raw.snapshot_id
 
+        if raw.finish_reason in (AgentFinishReason.FAILED, AgentFinishReason.ABORTED):
+            # No reply landed this turn, so drop the optimistic user message
+            # rather than strand it unanswered; the next turn resumes from before
+            # it. The durable snapshot still holds the truth.
+            self._rollback_optimistic(message_count_before)
+        else:
+            self._append_turn_messages(raw)
+
+        self._sync_nonmessage_state(raw)
+
+    def _append_turn_messages(self, raw: AgentOutput) -> None:
+        """Extend the running view with this turn's messages.
+
+        Both modes build history the same way, because the chunk stream is the
+        same in both: the intermediate tool-request/tool-response steps are
+        stitched from the chunks, and the final reply is taken from the turn's
+        output when it's there — it's the one copy that carries the interrupt and
+        output-format metadata a resume depends on, which the model chunks don't.
+        When no output rides home (a long-lived socket only resolves at close) we
+        fall back to the last streamed model group so the reply still shows.
+        """
+        streamed = self._turn_accumulator.messages() if self._turn_accumulator is not None else []
+        if raw.message is not None and streamed and streamed[-1].role == Role.MODEL:
+            streamed = streamed[:-1]
+        self.messages.extend(streamed)
+        if raw.message is not None:
+            self.messages.append(raw.message)
+
+    def _sync_nonmessage_state(self, raw: AgentOutput) -> None:
+        """Refresh the non-message state a turn carries back.
+
+        This is the one place the two modes diverge, and they have to: a
+        client-managed session round-trips the whole blob, so the output is
+        authoritative for the session id, custom state, and artifacts (the
+        last-good values on a failed turn). A server-managed session never puts
+        full state on the wire — custom stays live from streamed patches, and we
+        only fold in whatever session id / artifacts the output reports.
+        """
         if raw.state is not None:
-            # Client-managed: the whole session round-trips, so copy it verbatim
-            # (``state`` carries the session id too). On a failed turn this is the
-            # last-good state, which also discards the optimistic user message.
-            self._set_state(raw.state)
+            # Client-managed: the whole session round-trips, so the output is
+            # authoritative for the custom blob and artifacts. There's no server
+            # store to key a session on, so session_id has no meaning here and is
+            # always None.
+            self._state.session_id = None
+            self._state.custom = copy.deepcopy(raw.state.custom)
+            self._state.artifacts = (
+                [a.model_copy(deep=True) for a in raw.state.artifacts] if raw.state.artifacts is not None else None
+            )
             return
 
-        # Server-managed: the durable store is the source of truth and only sends
-        # back a snapshot id (+ the turn's final reply). We keep a lightweight
-        # running view; custom state stays live via streamed patches.
+        # Server-managed: the store assigns and owns the session id, so adopt it
+        # (and any artifacts) from the output.
         if raw.session_id is not None:
             self._state.session_id = raw.session_id
-
-        if raw.finish_reason in (AgentFinishReason.FAILED, AgentFinishReason.ABORTED):
-            # No durable reply this turn, so drop the optimistic user message
-            # rather than strand it unanswered. The snapshot still holds the truth.
-            self._rollback_optimistic(message_count_before)
-            return
-
-        if raw.message is not None:
-            # Only the final reply comes back, not the turn's intermediate
-            # tool-request/tool-response messages — so messages is a view, not the
-            # source of truth (see the ``messages`` property).
-            self.messages.append(raw.message)
         if raw.artifacts:
             self._merge_artifacts(raw.artifacts)
 
