@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Copyright 2025 Google LLC
+# SPDX-License-Identifier: Apache-2.0
+
+# Generates py/packages/genkit/src/genkit/_core/_typing.py from the JSON schema
+# using our custom generator (py/scripts/schema_to_typing.py).
+#
+# Usage: ./py/scripts/generate_schema_typing [--ci]
+#   --ci  Fail if the generated file differs from the committed one.
+
+set -euo pipefail
+
+. "$(dirname "$0")/_common.sh"
+
+CI_ENABLED=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --ci) CI_ENABLED=true; shift ;;
+    *) echo "Unknown option: $1"; echo "Usage: $0 [--ci]"; exit 1 ;;
+  esac
+done
+
+TOP_DIR=$(git rev-parse --show-toplevel)
+SCHEMA_FILE="${TOP_DIR}/genkit-tools/genkit-schema.json"
+TYPING_FILE="${TOP_DIR}/py/packages/genkit/src/genkit/_core/_typing.py"
+GENERATOR="${TOP_DIR}/py/scripts/schema_to_typing.py"
+
+if [[ $CI_ENABLED == "true" ]] && [[ -f $TYPING_FILE ]]; then
+  BACKUP_FILE="${TYPING_FILE}.backup"
+  cp "$TYPING_FILE" "$BACKUP_FILE"
+fi
+
+python3 "$GENERATOR" "$SCHEMA_FILE" "$TYPING_FILE"
+
+uv run --active --directory "${TOP_DIR}/py" ruff format "$TYPING_FILE"
+uv run --active --directory "${TOP_DIR}/py" ruff check --fix "$TYPING_FILE"
+uv run --active --directory "${TOP_DIR}/py" ruff format "$TYPING_FILE"
+
+if [[ $CI_ENABLED == "true" ]] && [[ -f ${BACKUP_FILE:-} ]]; then
+  if ! diff -q "$BACKUP_FILE" "$TYPING_FILE" >/dev/null; then
+    echo "Error: Generated _typing.py differs from committed version."
+    echo "Run './py/bin/generate_schema_typing' locally and commit the result."
+    rm "$BACKUP_FILE"
+    exit 1
+  fi
+  rm "$BACKUP_FILE"
+fi

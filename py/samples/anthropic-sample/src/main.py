@@ -16,10 +16,10 @@
 
 """Anthropic's Claude Opus models generation samples."""
 
+from genkit_anthropic import Anthropic
 from pydantic import BaseModel, Field
 
 from genkit import Genkit
-from genkit.plugins.anthropic import Anthropic
 
 ai = Genkit(plugins=[Anthropic()], model='anthropic/claude-opus-4-8')
 

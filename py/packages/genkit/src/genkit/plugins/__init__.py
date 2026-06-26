@@ -22,6 +22,6 @@ multiple installed packages. Each plugin can be imported as:
     from genkit.plugins.<plugin_name> import <PluginClass>
 
 For example:
-    from genkit.plugins.google_genai import GoogleGenai
-    from genkit.plugins.anthropic import Anthropic
+    from genkit_googleai import GoogleGenai
+    from genkit_anthropic import Anthropic
 """
