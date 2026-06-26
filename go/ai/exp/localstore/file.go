@@ -48,11 +48,16 @@ import (
 //
 // The snapshot ID is the primary key: GetSnapshot, the by-ID SaveSnapshot
 // (heartbeat, abort, finalize), and OnSnapshotStatusChange all open that file
-// directly. GetLatestSnapshot, the only by-session lookup, scans the prefix
-// directory and selects the most-recently-created row for the session. The
-// prefix is always known on a by-ID call - unlike the session ID, which a by-ID
-// caller does not have. That is why snapshots are grouped by prefix and kept
-// flat within it rather than nested under a per-session directory.
+// directly. GetLatestSnapshot, the only by-session lookup, resolves through a
+// small per-session pointer file ("<prefix>/.pointers/<sessionID>.json") that
+// records the session's current greatest-CreatedAt snapshot - one pointer read
+// plus one snapshot read instead of scanning and parsing every row in the
+// prefix. A missing (legacy store), stale, or unusable pointer transparently
+// falls back to scanning the prefix directory for the most-recently-created row,
+// then rewrites the pointer so later lookups are fast again. The prefix is
+// always known on a by-ID call - unlike the session ID, which a by-ID caller
+// does not have. That is why snapshots are grouped by prefix and kept flat
+// within it rather than nested under a per-session directory.
 //
 // The store is safe for concurrent use, and [FileSessionStore.OnSnapshotStatusChange]
 // surfaces status changes written by other processes (or other store instances)
@@ -111,6 +116,13 @@ const defaultPollInterval = time.Second * 2
 // must return a non-empty value: the default is requested by omitting the
 // option, not by returning an empty prefix.
 const defaultPrefix = "global"
+
+// pointersSubdir is the hidden directory (within each prefix) that holds the
+// per-session pointer files (see [pointerDoc]). It begins with "." so it can
+// never collide with a snapshot ID or prefix segment (both reject a leading
+// ".") and is a directory, so the prefix-dir scan in snapshotFileNames - which
+// keeps only *.json files - skips it.
+const pointersSubdir = ".pointers"
 
 // NewFileSessionStore creates a file-based snapshot store rooted at dir.
 // The directory is created (mode 0o700) if it does not already exist.
@@ -207,12 +219,27 @@ func (s *FileSessionStore[State]) SaveSnapshot(
 		// indicates misuse.
 		return nil, core.NewError(core.INVALID_ARGUMENT, "FileSessionStore requires sessionId to be set on the snapshot")
 	}
+	// The session ID names the per-session pointer file, so it must be a safe
+	// path segment - the same rule snapshot IDs and prefixes obey. Reject up
+	// front, before any write, so a bad ID never leaves a half-written row.
+	if err := validateSessionID(next.SessionID); err != nil {
+		return nil, err
+	}
 	if next.Status == "" {
 		next.Status = exp.SnapshotStatusCompleted
 	}
 
 	if err := s.writeAt(prefix, next); err != nil {
 		return nil, err
+	}
+	// Advance the per-session pointer so by-session lookups stay fast. Only a
+	// brand-new row (existing == nil) can introduce a new greatest-CreatedAt; a
+	// rewrite (heartbeat / abort / finalize) preserves CreatedAt and never
+	// changes which row is latest, so it leaves the pointer alone. The advance
+	// is conditional (a backdated new row does not move the pointer) and
+	// best-effort - the scan self-heals a missed update.
+	if existing == nil {
+		s.advancePointerLocked(prefix, next.SessionID, id, next.CreatedAt)
 	}
 	s.maybeNotifyLocked(id, next.Status)
 	if s.maxChain > 0 {
@@ -229,10 +256,38 @@ type snapshotHeader struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+// pointerDoc is the per-session pointer file. It records the session's current
+// greatest-CreatedAt snapshot - the row [FileSessionStore.GetLatestSnapshot]
+// resolves to - so a by-session lookup is one small pointer read plus one
+// snapshot read instead of a scan of every row in the prefix. It is the file
+// analog of the Firestore store's session pointer.
+//
+// CurrentCreatedAt lets a save decide whether a brand-new row actually sorts
+// ahead of the current pointer by (CreatedAt, snapshotID): a backdated row must
+// not advance it, keeping the fast path in agreement with the scan's
+// greatest-CreatedAt, tie-broken-by-ID ordering.
+type pointerDoc struct {
+	// CurrentSnapshotID is the snapshot the session currently resolves to.
+	CurrentSnapshotID string `json:"currentSnapshotId"`
+	// CurrentCreatedAt is that snapshot's CreatedAt, so a save can rank a new
+	// row against the pointer without re-reading the pointed snapshot.
+	CurrentCreatedAt time.Time `json:"currentCreatedAt"`
+	// UpdatedAt is when this pointer was last written (diagnostic only; it plays
+	// no part in resolution).
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
 // GetLatestSnapshot returns the session's most recently created snapshot
 // regardless of status, per the [exp.SnapshotReader.GetLatestSnapshot]
-// contract. It scans the call's prefix directory (see [WithSnapshotPathPrefix]),
-// so a session is only resolvable under the prefix it was written with.
+// contract. It resolves under the call's prefix directory (see
+// [WithSnapshotPathPrefix]), so a session is only resolvable under the prefix it
+// was written with.
+//
+// The fast path reads the session's pointer file ([pointerDoc]) and loads the
+// row it names - one pointer read plus one snapshot read. When the pointer is
+// missing, stale (names a row that no longer exists or belongs to another
+// session), or corrupt, it falls back to scanning the prefix directory and then
+// rewrites the pointer for next time.
 //
 // Recency is judged by the [exp.SessionSnapshot.CreatedAt] field (not file
 // mtime), so a later rewrite of an older row - which preserves CreatedAt - does
@@ -243,10 +298,35 @@ func (s *FileSessionStore[State]) GetLatestSnapshot(ctx context.Context, session
 	if sessionID == "" {
 		return nil, errors.New("FileSessionStore: session ID is empty")
 	}
+	// The session ID names the per-session pointer file, so it must be a safe
+	// path segment - the same rule snapshot IDs and prefixes obey.
+	if err := validateSessionID(sessionID); err != nil {
+		return nil, err
+	}
 	prefix, err := s.derivePrefix(ctx)
 	if err != nil {
 		return nil, err
 	}
+
+	// Fast path: resolve through the per-session pointer (one pointer read plus
+	// one snapshot read). Honor it only when the row it names still exists and
+	// belongs to this session; a missing, stale, or corrupt pointer falls
+	// through to the scan below, which rewrites it. The pointer is trusted as
+	// the latest row without re-verifying it against every sibling - that is the
+	// whole point of avoiding the scan - so a pointer left behind by a lost update
+	// (crash or out-of-band write between the snapshot and pointer writes) can
+	// briefly resolve to a valid-but-older same-session row until the next save
+	// advances it or a pointer-less lookup rescans.
+	s.mu.Lock()
+	var fast *exp.SessionSnapshot[State]
+	if ptr := s.loadPointerLocked(prefix, sessionID); ptr != nil && validateSnapshotID(ptr.CurrentSnapshotID) == nil {
+		fast, _ = s.readAt(s.pathFor(prefix, ptr.CurrentSnapshotID))
+	}
+	s.mu.Unlock()
+	if fast != nil && fast.SessionID == sessionID {
+		return fast, nil
+	}
+
 	dir := s.prefixDir(prefix)
 	names, err := s.snapshotFileNames(dir)
 	if err != nil {
@@ -254,6 +334,7 @@ func (s *FileSessionStore[State]) GetLatestSnapshot(ctx context.Context, session
 	}
 	var (
 		bestName string
+		bestID   string
 		bestAt   time.Time
 		found    bool
 	)
@@ -271,11 +352,15 @@ func (s *FileSessionStore[State]) GetLatestSnapshot(ctx context.Context, session
 		if h.SessionID != sessionID {
 			continue
 		}
-		// Most recently created wins; the file name is "<snapshotId>.json", so
-		// a name compare is a deterministic SnapshotID tie-break.
+		// Most recently created wins, ties broken by snapshot ID. Compare the
+		// bare ID (not the "<id>.json" file name) so this matches the
+		// (CreatedAt, snapshotID) order advancePointerLocked uses - otherwise the
+		// scan and the pointer fast path could pick different leaves on an exact
+		// CreatedAt tie (e.g. ids "a" vs "a-", where "a-.json" < "a.json").
+		id := strings.TrimSuffix(name, ".json")
 		if !found || h.CreatedAt.After(bestAt) ||
-			(h.CreatedAt.Equal(bestAt) && name > bestName) {
-			bestName, bestAt, found = name, h.CreatedAt, true
+			(h.CreatedAt.Equal(bestAt) && id > bestID) {
+			bestName, bestID, bestAt, found = name, id, h.CreatedAt, true
 		}
 	}
 	if !found {
@@ -287,6 +372,11 @@ func (s *FileSessionStore[State]) GetLatestSnapshot(ctx context.Context, session
 	// treated like a vanished row: report no tip rather than erroring.
 	s.mu.Lock()
 	snap, _ := s.readAt(filepath.Join(dir, bestName))
+	if snap != nil {
+		// Refresh the pointer to the scanned winner so later lookups take the fast
+		// path. Best-effort: a write failure leaves the next lookup to rescan.
+		s.writePointerLocked(prefix, sessionID, snap.SnapshotID, snap.CreatedAt)
+	}
 	s.mu.Unlock()
 	if snap == nil {
 		return nil, nil
@@ -295,8 +385,9 @@ func (s *FileSessionStore[State]) GetLatestSnapshot(ctx context.Context, session
 }
 
 // snapshotFileNames returns the names of dir's snapshot files (non-directory
-// *.json entries; writeAt's "<id>.*.tmp" temp files never match). Returns nil if
-// the directory does not exist. The listing is not atomic with respect to
+// *.json entries; the ".tmp" temp files an atomic write leaves never match, and
+// the ".pointers" sub-directory is skipped as a directory). Returns nil if the
+// directory does not exist. The listing is not atomic with respect to
 // concurrent writes; a snapshot that appears or disappears mid-scan may or may
 // not be observed.
 func (s *FileSessionStore[State]) snapshotFileNames(dir string) ([]string, error) {
@@ -407,17 +498,37 @@ func (s *FileSessionStore[State]) readAt(path string) (*exp.SessionSnapshot[Stat
 // writeAt atomically writes snap to <prefix>/<id>.json via a temp file +
 // rename, creating the prefix directory as needed. Caller must hold s.mu.
 func (s *FileSessionStore[State]) writeAt(prefix string, snap *exp.SessionSnapshot[State]) error {
-	dir := s.prefixDir(prefix)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("FileSessionStore: create dir: %w", err)
-	}
 	data, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
 		return fmt.Errorf("FileSessionStore: marshal: %w", err)
 	}
-	f, err := os.CreateTemp(dir, snap.SnapshotID+".*.tmp")
+	// Snapshot data is the source of truth, so flush it to disk (fsync) before
+	// the rename; a lost snapshot is real data loss.
+	if err := atomicWriteFile(s.pathFor(prefix, snap.SnapshotID), data, true); err != nil {
+		return fmt.Errorf("FileSessionStore: %w", err)
+	}
+	return nil
+}
+
+// atomicWriteFile writes data to path atomically: it writes to a temp file in
+// the same directory, then renames over path (atomic on POSIX and Windows), so
+// a concurrent reader sees either the old file or the new one, never a torn
+// write. The parent directory is created (mode 0o700) if needed, and the temp
+// file is removed if anything fails before the rename.
+//
+// When fsync is true the temp file is flushed before the rename, so the new
+// contents survive a crash. Pass false for a best-effort cache that can be
+// rebuilt (the session pointer, which GetLatestSnapshot self-heals via the
+// scan), trading durability for one fewer fsync on the write path - a torn or
+// lost pointer just sends the next lookup to the scan.
+func atomicWriteFile(path string, data []byte, fsync bool) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create dir: %w", err)
+	}
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
 	if err != nil {
-		return fmt.Errorf("FileSessionStore: create temp: %w", err)
+		return fmt.Errorf("create temp: %w", err)
 	}
 	tmpName := f.Name()
 	// Best-effort cleanup if anything fails before the rename succeeds.
@@ -426,17 +537,19 @@ func (s *FileSessionStore[State]) writeAt(prefix string, snap *exp.SessionSnapsh
 
 	if _, err := f.Write(data); err != nil {
 		f.Close()
-		return fmt.Errorf("FileSessionStore: write: %w", err)
+		return fmt.Errorf("write: %w", err)
 	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return fmt.Errorf("FileSessionStore: sync: %w", err)
+	if fsync {
+		if err := f.Sync(); err != nil {
+			f.Close()
+			return fmt.Errorf("sync: %w", err)
+		}
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("FileSessionStore: close: %w", err)
+		return fmt.Errorf("close: %w", err)
 	}
-	if err := os.Rename(tmpName, s.pathFor(prefix, snap.SnapshotID)); err != nil {
-		return fmt.Errorf("FileSessionStore: rename: %w", err)
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("rename: %w", err)
 	}
 	return nil
 }
@@ -474,6 +587,64 @@ func (s *FileSessionStore[State]) prefixDir(prefix string) string {
 // assumed validated (by validateSnapshotID and sanitizePrefix).
 func (s *FileSessionStore[State]) pathFor(prefix, snapshotID string) string {
 	return filepath.Join(s.dir, prefix, snapshotID+".json")
+}
+
+// pointerPathFor returns the on-disk path of a session's pointer file under
+// prefix. Both are assumed validated (by validateSessionID and sanitizePrefix),
+// like pathFor.
+func (s *FileSessionStore[State]) pointerPathFor(prefix, sessionID string) string {
+	return filepath.Join(s.dir, prefix, pointersSubdir, sessionID+".json")
+}
+
+// loadPointerLocked reads and parses a session's pointer file. It returns nil
+// when the pointer is absent (legacy store / never written) or the file is
+// unreadable or corrupt - every case sends the caller to the scan fallback.
+// Best-effort by design: the pointer can never make a by-session lookup fail
+// where the scan-only baseline would have succeeded. Caller must hold s.mu.
+func (s *FileSessionStore[State]) loadPointerLocked(prefix, sessionID string) *pointerDoc {
+	data, err := os.ReadFile(s.pointerPathFor(prefix, sessionID))
+	if err != nil {
+		return nil
+	}
+	var doc pointerDoc
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil
+	}
+	return &doc
+}
+
+// writePointerLocked atomically (re)writes a session's pointer to name
+// snapshotID / createdAt. Best-effort: any write error is ignored, since
+// GetLatestSnapshot self-heals the pointer via the scan. Caller must hold s.mu.
+func (s *FileSessionStore[State]) writePointerLocked(prefix, sessionID, snapshotID string, createdAt time.Time) {
+	data, err := json.MarshalIndent(&pointerDoc{
+		CurrentSnapshotID: snapshotID,
+		CurrentCreatedAt:  createdAt,
+		UpdatedAt:         time.Now().UTC(),
+	}, "", "  ")
+	if err != nil {
+		return
+	}
+	// No fsync: the pointer is a best-effort cache the scan rebuilds, so a
+	// crash-lost write costs at most one extra scan, not correctness.
+	_ = atomicWriteFile(s.pointerPathFor(prefix, sessionID), data, false)
+}
+
+// advancePointerLocked moves the session pointer to (snapshotID, createdAt) when
+// that row sorts to the front of the session by (CreatedAt, snapshotID) - i.e.
+// it is the new greatest-CreatedAt row, matching GetLatestSnapshot's contract. A
+// backdated new row (created before the current pointer target) does not move
+// the pointer; a missing or corrupt pointer is treated as "no pointer" and
+// replaced. This mirrors the Firestore store's pointer-advance rule, keeping the
+// two stores' by-session resolution behaviorally aligned. Caller must hold s.mu.
+func (s *FileSessionStore[State]) advancePointerLocked(prefix, sessionID, snapshotID string, createdAt time.Time) {
+	cur := s.loadPointerLocked(prefix, sessionID)
+	sortsAhead := cur == nil ||
+		createdAt.After(cur.CurrentCreatedAt) ||
+		(createdAt.Equal(cur.CurrentCreatedAt) && snapshotID > cur.CurrentSnapshotID)
+	if sortsAhead {
+		s.writePointerLocked(prefix, sessionID, snapshotID, createdAt)
+	}
 }
 
 // removeSub detaches a subscriber and closes its channel, dropping the
@@ -606,6 +777,19 @@ func sanitizePrefix(raw string) (string, error) {
 func validateSnapshotID(id string) error {
 	if err := validatePathSegment(id); err != nil {
 		return fmt.Errorf("FileSessionStore: invalid snapshot ID %q: %w", id, err)
+	}
+	return nil
+}
+
+// validateSessionID rejects session IDs that cannot serve as a safe on-disk path
+// component, since each session's pointer file is named "<sessionID>.json". This
+// holds the session ID to the same rule as snapshot IDs and prefixes; unlike the
+// scan (which compares the session ID as a stored field), the pointer makes it a
+// path, so an unchecked "../x" could escape the store. Framework-minted session
+// IDs are UUIDs, which pass trivially.
+func validateSessionID(id string) error {
+	if err := validatePathSegment(id); err != nil {
+		return fmt.Errorf("FileSessionStore: invalid session ID %q: %w", id, err)
 	}
 	return nil
 }

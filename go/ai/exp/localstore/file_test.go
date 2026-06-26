@@ -18,6 +18,7 @@ package localstore
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -860,5 +861,273 @@ func TestFileSessionStore_MaxPersistedChainLength_One(t *testing.T) {
 	}
 	if snap, _ := store.GetSnapshot(ctx, "s1"); snap == nil {
 		t.Error("expected tip s1 retained with window 1")
+	}
+}
+
+// saveCompletedAt saves a completed snapshot with an explicit CreatedAt so a
+// test controls recency directly rather than racing the wall clock.
+func saveCompletedAt(t *testing.T, store *FileSessionStore[testState], id, sessionID, parentID string, createdAt time.Time) *exp.SessionSnapshot[testState] {
+	t.Helper()
+	saved, err := store.SaveSnapshot(context.Background(), id,
+		func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+			return &exp.SessionSnapshot[testState]{
+				SessionID: sessionID,
+				ParentID:  parentID,
+				Status:    exp.SnapshotStatusCompleted,
+				State:     &exp.SessionState[testState]{Custom: testState{Counter: 1}},
+				CreatedAt: createdAt,
+				UpdatedAt: createdAt,
+			}, nil
+		})
+	if err != nil {
+		t.Fatalf("SaveSnapshot(%q): %v", id, err)
+	}
+	return saved
+}
+
+// pointerFilePath is the on-disk path of a session's pointer file under the
+// default "global" prefix.
+func pointerFilePath(dir, sessionID string) string {
+	return filepath.Join(dir, "global", pointersSubdir, sessionID+".json")
+}
+
+// readPointerFile reads and decodes a session's pointer file, failing the test
+// if it is missing or unparseable.
+func readPointerFile(t *testing.T, dir, sessionID string) pointerDoc {
+	t.Helper()
+	data, err := os.ReadFile(pointerFilePath(dir, sessionID))
+	if err != nil {
+		t.Fatalf("read pointer file: %v", err)
+	}
+	var doc pointerDoc
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("decode pointer file: %v", err)
+	}
+	return doc
+}
+
+// TestFileSessionStore_SessionPointer_WrittenTracksLatest verifies that saving a
+// chain advances the per-session pointer to the newest row, recording both its
+// ID and CreatedAt.
+func TestFileSessionStore_SessionPointer_WrittenTracksLatest(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileSessionStore[testState](dir)
+	if err != nil {
+		t.Fatalf("NewFileSessionStore: %v", err)
+	}
+	base := time.Now()
+	saveCompletedAt(t, store, "first", "sess-1", "", base)
+	second := saveCompletedAt(t, store, "second", "sess-1", "first", base.Add(time.Second))
+
+	doc := readPointerFile(t, dir, "sess-1")
+	if doc.CurrentSnapshotID != "second" {
+		t.Errorf("pointer CurrentSnapshotID = %q, want %q", doc.CurrentSnapshotID, "second")
+	}
+	if !doc.CurrentCreatedAt.Equal(second.CreatedAt) {
+		t.Errorf("pointer CurrentCreatedAt = %v, want %v", doc.CurrentCreatedAt, second.CreatedAt)
+	}
+}
+
+// TestFileSessionStore_SessionPointer_FastPathTrustsPointer rigs the pointer and
+// the scan to disagree, proving GetLatestSnapshot resolves through the pointer
+// (the fast path) rather than scanning. A newer same-session row is written
+// straight to disk, bypassing SaveSnapshot so the pointer is never advanced to
+// it; the fast path must still return the pointer's (older) target. This is the
+// documented best-effort trade-off: a pointer left behind by a lost update
+// resolves to a valid-but-older row until a save advances it or a pointer-less
+// lookup rescans.
+func TestFileSessionStore_SessionPointer_FastPathTrustsPointer(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileSessionStore[testState](dir)
+	if err != nil {
+		t.Fatalf("NewFileSessionStore: %v", err)
+	}
+	base := time.Now()
+	saveCompletedAt(t, store, "pointed", "sess-1", "", base)
+
+	// A newer row written out-of-band: the scan would prefer it (greater
+	// CreatedAt), but the pointer does not know about it.
+	newer := &exp.SessionSnapshot[testState]{
+		SnapshotID: "newer",
+		SessionID:  "sess-1",
+		ParentID:   "pointed",
+		Status:     exp.SnapshotStatusCompleted,
+		State:      &exp.SessionState[testState]{Custom: testState{Counter: 2}},
+		CreatedAt:  base.Add(time.Hour),
+		UpdatedAt:  base.Add(time.Hour),
+	}
+	data, err := json.MarshalIndent(newer, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "global", "newer.json"), data, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	latest, err := store.GetLatestSnapshot(context.Background(), "sess-1")
+	if err != nil {
+		t.Fatalf("GetLatestSnapshot: %v", err)
+	}
+	if latest == nil || latest.SnapshotID != "pointed" {
+		t.Errorf("latest = %+v, want pointer target %q (fast path must not scan)", latest, "pointed")
+	}
+}
+
+// TestFileSessionStore_SessionPointer_SelfHealsMissingPointer verifies that a
+// lookup with no pointer file (e.g. a legacy store) still resolves the latest
+// row via the scan and rewrites the pointer for next time.
+func TestFileSessionStore_SessionPointer_SelfHealsMissingPointer(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileSessionStore[testState](dir)
+	if err != nil {
+		t.Fatalf("NewFileSessionStore: %v", err)
+	}
+	base := time.Now()
+	saveCompletedAt(t, store, "first", "sess-1", "", base)
+	saveCompletedAt(t, store, "second", "sess-1", "first", base.Add(time.Second))
+
+	if err := os.Remove(pointerFilePath(dir, "sess-1")); err != nil {
+		t.Fatalf("remove pointer: %v", err)
+	}
+
+	latest, err := store.GetLatestSnapshot(context.Background(), "sess-1")
+	if err != nil {
+		t.Fatalf("GetLatestSnapshot: %v", err)
+	}
+	if latest == nil || latest.SnapshotID != "second" {
+		t.Fatalf("latest = %+v, want second (resolved via scan)", latest)
+	}
+	// The scan rewrote the pointer so the next lookup is fast again.
+	if doc := readPointerFile(t, dir, "sess-1"); doc.CurrentSnapshotID != "second" {
+		t.Errorf("rewritten pointer CurrentSnapshotID = %q, want %q", doc.CurrentSnapshotID, "second")
+	}
+}
+
+// TestFileSessionStore_SessionPointer_StaleFallsBackToScan verifies that a
+// pointer naming a snapshot that no longer exists falls back to the scan and is
+// refreshed to the real latest row.
+func TestFileSessionStore_SessionPointer_StaleFallsBackToScan(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileSessionStore[testState](dir)
+	if err != nil {
+		t.Fatalf("NewFileSessionStore: %v", err)
+	}
+	base := time.Now()
+	saveCompletedAt(t, store, "first", "sess-1", "", base)
+	saveCompletedAt(t, store, "second", "sess-1", "first", base.Add(time.Second))
+
+	// Point at a snapshot that does not exist.
+	stale, err := json.MarshalIndent(&pointerDoc{
+		CurrentSnapshotID: "does-not-exist",
+		CurrentCreatedAt:  base.Add(time.Hour),
+		UpdatedAt:         base.Add(time.Hour),
+	}, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(pointerFilePath(dir, "sess-1"), stale, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	latest, err := store.GetLatestSnapshot(context.Background(), "sess-1")
+	if err != nil {
+		t.Fatalf("GetLatestSnapshot: %v", err)
+	}
+	if latest == nil || latest.SnapshotID != "second" {
+		t.Fatalf("latest = %+v, want second (resolved via scan)", latest)
+	}
+	if doc := readPointerFile(t, dir, "sess-1"); doc.CurrentSnapshotID != "second" {
+		t.Errorf("refreshed pointer CurrentSnapshotID = %q, want %q", doc.CurrentSnapshotID, "second")
+	}
+}
+
+// TestFileSessionStore_SessionPointer_NotInScanSpace verifies the pointer lives
+// in the hidden ".pointers" sub-directory, so the snapshot scan (which reads
+// only *.json files directly under the prefix) never sees it.
+func TestFileSessionStore_SessionPointer_NotInScanSpace(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileSessionStore[testState](dir)
+	if err != nil {
+		t.Fatalf("NewFileSessionStore: %v", err)
+	}
+	saveCompletedAt(t, store, "only", "sess-1", "", time.Now())
+
+	entries, err := os.ReadDir(filepath.Join(dir, "global"))
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	var jsonFiles []string
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".json" {
+			jsonFiles = append(jsonFiles, e.Name())
+		}
+	}
+	if len(jsonFiles) != 1 || jsonFiles[0] != "only.json" {
+		t.Errorf("prefix-dir *.json files = %v, want [only.json] (pointer must live under %q)", jsonFiles, pointersSubdir)
+	}
+}
+
+// TestFileSessionStore_SessionPointer_BackdatedNewRowDoesNotAdvance verifies the
+// Go-specific advance rule: a brand-new row created *before* the current pointer
+// target does not move the pointer, so the fast path keeps agreeing with the
+// scan's greatest-CreatedAt ordering. (A naive "advance on every new row" port
+// from JS would regress this.)
+func TestFileSessionStore_SessionPointer_BackdatedNewRowDoesNotAdvance(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileSessionStore[testState](dir)
+	if err != nil {
+		t.Fatalf("NewFileSessionStore: %v", err)
+	}
+	base := time.Now()
+	saveCompletedAt(t, store, "newest", "sess-1", "", base.Add(time.Hour))
+	// A second brand-new row for the same session, but backdated well before the
+	// first - so it is the newest *save*, yet not the greatest-CreatedAt row.
+	saveCompletedAt(t, store, "backdated", "sess-1", "", base)
+
+	if doc := readPointerFile(t, dir, "sess-1"); doc.CurrentSnapshotID != "newest" {
+		t.Errorf("pointer CurrentSnapshotID = %q, want %q (backdated row must not advance it)", doc.CurrentSnapshotID, "newest")
+	}
+	latest, err := store.GetLatestSnapshot(context.Background(), "sess-1")
+	if err != nil {
+		t.Fatalf("GetLatestSnapshot: %v", err)
+	}
+	if latest == nil || latest.SnapshotID != "newest" {
+		t.Errorf("latest = %+v, want newest (greatest CreatedAt)", latest)
+	}
+}
+
+// TestFileSessionStore_PathUnsafeSessionIDRejected verifies that a session ID
+// which cannot be a safe path segment is rejected on both the save and the
+// lookup path - the session ID names the pointer file, so it is held to the same
+// rule as snapshot IDs and prefixes. The save is rejected before any file is
+// written, so a bad ID never leaves a half-written row.
+func TestFileSessionStore_PathUnsafeSessionIDRejected(t *testing.T) {
+	store := newFileStore(t)
+	ctx := context.Background()
+
+	for _, sessionID := range []string{"a/b", "../evil", ".hidden", `a\b`, "foo..bar"} {
+		t.Run(sessionID, func(t *testing.T) {
+			// SaveSnapshot rejects the path-unsafe session ID...
+			if _, err := store.SaveSnapshot(ctx, "fixed-id",
+				func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+					return &exp.SessionSnapshot[testState]{
+						SessionID: sessionID,
+						Status:    exp.SnapshotStatusCompleted,
+						State:     &exp.SessionState[testState]{Custom: testState{Counter: 7}},
+						CreatedAt: time.Now(),
+						UpdatedAt: time.Now(),
+					}, nil
+				}); err == nil {
+				t.Errorf("SaveSnapshot(sessionID=%q): expected error, got nil", sessionID)
+			}
+			// ...before writing anything: no partial row is left behind.
+			if snap, _ := store.GetSnapshot(ctx, "fixed-id"); snap != nil {
+				t.Errorf("rejected save left a row on disk: %+v", snap)
+			}
+			// GetLatestSnapshot rejects it too.
+			if _, err := store.GetLatestSnapshot(ctx, sessionID); err == nil {
+				t.Errorf("GetLatestSnapshot(%q): expected error, got nil", sessionID)
+			}
+		})
 	}
 }
