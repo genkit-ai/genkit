@@ -66,7 +66,6 @@ See Also:
     - JS implementation: js/plugins/google-genai/src/googleai/veo.ts
 """
 
-import asyncio
 import sys
 from typing import Any, cast
 

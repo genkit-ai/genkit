@@ -67,6 +67,7 @@ lint = [
   "pysentry-rs>=0.3.14",
   "ruff>=0.9",
   "ty>=0.0.1",
+  "strenum>=0.4.15",
 ]
 
 [tool.hatch.build.targets.wheel]
