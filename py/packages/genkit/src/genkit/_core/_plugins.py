@@ -40,7 +40,7 @@ def extend_plugin_namespace() -> None:
     Example:
         After this runs, the following imports work for any installed plugin:
 
-        >>> from genkit.plugins.anthropic import Anthropic
+        >>> from genkit_anthropic import Anthropic
         >>> from genkit.plugins.firebase import Firebase
         >>> from genkit.plugins.my_custom_plugin import MyPlugin
     """
