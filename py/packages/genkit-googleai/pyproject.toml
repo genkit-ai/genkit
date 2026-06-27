@@ -70,7 +70,7 @@ version = "0.7.0"
 
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"
-Changelog       = "https://github.com/genkit-ai/genkit/blob/main/py/plugins/google-genai/CHANGELOG.md"
+Changelog       = "https://github.com/genkit-ai/genkit/blob/main/py/packages/genkit-googleai/CHANGELOG.md"
 "Documentation" = "https://firebase.google.com/docs/genkit"
 "Homepage"      = "https://github.com/genkit-ai/genkit"
 "Repository"    = "https://github.com/genkit-ai/genkit/tree/main/py"

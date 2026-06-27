@@ -188,7 +188,7 @@ def genkit_django_handler(
                             {'error': get_callable_json(_unwrap_cause(e))},
                             separators=_JSON_SEPARATORS,
                         )
-                        yield f'error: {err_payload}'
+                        yield f'error: {err_payload}\n\n'
 
                 return StreamingHttpResponse(event_stream(), content_type='text/event-stream')
 
