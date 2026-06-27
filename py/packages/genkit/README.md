@@ -19,7 +19,7 @@ pip install genkit-plugin-google-genai
 ```python
 from pydantic import BaseModel, Field
 from genkit import Genkit
-from genkit.plugins.google_genai import GoogleAI
+from genkit_googleai import GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],

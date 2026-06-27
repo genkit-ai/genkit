@@ -53,32 +53,24 @@ fmt:
 
 # Run all Python tests.
 test:
-    "{{ py_dir }}/bin/run_python_tests"
+    "{{ py_dir }}/scripts/run_python_tests"
 
 # Watch mode for tests (re-run on file changes).
 test-watch:
-    "{{ py_dir }}/bin/watch_python_tests"
-
-# Run tests with nox (multi-version).
-test-nox:
-    "{{ py_dir }}/bin/run_python_tests_with_nox"
-
-# Run tests with tox (multi-version).
-test-tox:
-    "{{ py_dir }}/bin/run_python_tests_with_tox"
+    "{{ py_dir }}/scripts/watch_python_tests"
 
 # Run security checks (bandit, pip-audit).
 security:
-    "{{ py_dir }}/bin/run_python_security_checks"
+    "{{ py_dir }}/scripts/run_python_security_checks"
 
 # Sync workspace and verify all packages install.
 sync:
     uv sync --directory "{{ py_dir }}"
     uv pip check --directory "{{ py_dir }}"
 
-# Check workspace consistency (versions, naming, deps).
+# Check workspace consistency (versions, naming, metadata).
 check:
-    "{{ py_dir }}/bin/check_consistency"
+    python3 "{{ py_dir }}/scripts/check_consistency.py"
 
 # Check lockfile is up to date.
 check-lock:
@@ -86,50 +78,48 @@ check-lock:
 
 # Clean build artifacts and caches.
 clean:
-    "{{ py_dir }}/bin/cleanup"
+    "{{ py_dir }}/scripts/cleanup"
 
 # --- Samples -----------------------------------------------------------
 
 # Run a sample (interactive picker or by name).
 sample NAME="":
-    "{{ py_dir }}/bin/run_sample" {{ NAME }}
+    "{{ py_dir }}/scripts/run_sample" {{ NAME }}
 
 # Test flows in a sample.
 test-sample NAME="":
-    "{{ py_dir }}/bin/test_sample_flows" {{ NAME }}
+    "{{ py_dir }}/scripts/test_sample_flows" {{ NAME }}
 
 # --- Code Generation ---------------------------------------------------
 
 # Regenerate typing.py from JSON schema.
 generate-schema:
-    "{{ py_dir }}/bin/generate_schema_typing"
+    "{{ py_dir }}/scripts/generate_schema_typing"
 
 # --- Release -----------------------------------------------------------
 
 # Bump version in all packages.
 bump-version VERSION:
-    "{{ py_dir }}/bin/bump_version" {{ VERSION }}
+    "{{ py_dir }}/scripts/bump_version" {{ VERSION }}
 
 # Pre-release validation suite.
 release-check:
-    "{{ py_dir }}/bin/release_check"
+    just py check
+    just py lint
+    just py test
 
 # Build wheel/sdist packages.
 build:
-    "{{ py_dir }}/bin/build_dists"
+    "{{ py_dir }}/scripts/build_dists"
 
 # Create a GitHub release.
 create-release:
-    "{{ py_dir }}/bin/create_release"
+    "{{ py_dir }}/scripts/create_release"
 
 # Publish to PyPI.
 publish:
-    "{{ py_dir }}/bin/publish_pypi.sh"
-
-# Check version consistency across packages.
-check-versions:
-    "{{ py_dir }}/bin/check_versions"
+    "{{ py_dir }}/scripts/publish_pypi.sh"
 
 # Validate release documentation.
 validate-docs:
-    "{{ py_dir }}/bin/validate_release_docs"
+    "{{ py_dir }}/scripts/validate_release_docs"

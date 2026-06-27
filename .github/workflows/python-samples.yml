@@ -34,7 +34,6 @@ on:
   #   paths:
   #     - "py/samples/**"
   #     - "py/packages/**"
-  #     - "py/plugins/**"
   #     - ".github/workflows/python-samples.yml"
 
 concurrency:
