@@ -209,7 +209,7 @@ def build_and_publish(mapping, dist_dir, publish=False) -> None:
         new_files = after_files - before_files
         wheel_files = [f for f in new_files if f.endswith('.whl')]
         if not wheel_files:
-            raise FileNotFoundError(f"No wheel file found in {dist_dir} after building {old_dist}")
+            raise FileNotFoundError(f'No wheel file found in {dist_dir} after building {old_dist}')
         wheel_file = os.path.join(dist_dir, wheel_files[0])
 
         # 5. Publish package if requested
