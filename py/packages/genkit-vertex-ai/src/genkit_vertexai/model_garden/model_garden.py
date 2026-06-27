@@ -33,7 +33,7 @@ from genkit_openai.models import (
     get_default_model_info,
 )
 from genkit_openai.models.model import OpenAIModel
-from genkit_vertex_ai.model_garden.client import OpenAIClient
+from genkit_vertexai.model_garden.client import OpenAIClient
 
 MODELGARDEN_PLUGIN_NAME = 'modelgarden'
 

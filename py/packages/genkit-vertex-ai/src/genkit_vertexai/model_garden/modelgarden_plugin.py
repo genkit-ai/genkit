@@ -21,7 +21,7 @@ from typing import cast
 
 from genkit_openai.models import SUPPORTED_OPENAI_COMPAT_MODELS
 from genkit_openai.typing import OpenAIConfig
-from genkit_vertex_ai import constants as const
+from genkit_vertexai import constants as const
 
 from genkit.model import model_action_metadata
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, to_json_schema

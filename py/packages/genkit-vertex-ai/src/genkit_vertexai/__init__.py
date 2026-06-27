@@ -113,7 +113,7 @@ Key Components:
 Example:
     ```python
     from genkit import Genkit
-    from genkit_vertex_ai import (
+    from genkit_vertexai import (
         ModelGardenPlugin,
         define_vertex_vector_search_firestore,
     )
@@ -143,7 +143,7 @@ See Also:
     - Genkit documentation: https://genkit.dev/
 """
 
-from genkit_vertex_ai.model_garden.modelgarden_plugin import (
+from genkit_vertexai.model_garden.modelgarden_plugin import (
     ModelGardenPlugin,
 )
 
@@ -154,7 +154,7 @@ def package_name() -> str:
     Returns:
         The fully qualified package name as a string.
     """
-    return 'genkit_vertex_ai'
+    return 'genkit_vertexai'
 
 
 __all__ = [

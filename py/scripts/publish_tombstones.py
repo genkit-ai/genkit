@@ -91,7 +91,7 @@ PLUGINS_MAPPING = [
         'old_dist': 'genkit-plugin-vertex-ai',
         'new_dist': 'genkit-vertex-ai',
         'old_import': 'vertex_ai',
-        'new_import': 'genkit_vertex_ai',
+        'new_import': 'genkit_vertexai',
     },
 ]
 

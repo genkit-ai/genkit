@@ -20,11 +20,11 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from genkit_vertex_ai.model_garden.model_garden import ModelGarden
+from genkit_vertexai.model_garden.model_garden import ModelGarden
 
 
 @pytest.fixture
-@patch('genkit_vertex_ai.model_garden.model_garden.OpenAIClient')
+@patch('genkit_vertexai.model_garden.model_garden.OpenAIClient')
 def model_garden_instance(client: MagicMock) -> ModelGarden:
     """Model Garden fixture."""
     return ModelGarden(model='test', location='us-central1', project_id='project')
