@@ -404,7 +404,7 @@ extraPaths = [
   "packages/genkit-openai/src",
   "packages/genkit-vertex-ai/src"
 ]
-pythonVersion = "3.11"
+pythonVersion = "3.10"
 reportMissingImports = true
 reportMissingTypeStubs = false
 reportPrivateImportUsage = false
