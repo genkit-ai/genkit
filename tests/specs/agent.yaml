@@ -1,0 +1,1396 @@
+# Copyright 2025 Google LLC
+# SPDX-License-Identifier: Apache-2.0
+
+# This file describes the behavioral specification for the Agent API.
+# It is designed to be consumed by conformance test harnesses in any
+# language (JS, Go, Dart, Python, etc.) to ensure cross-language
+# compatibility of the Agent abstraction.
+#
+# See docs/agents-conformance-testing.md for harness requirements and
+# full spec format reference.
+
+tests:
+  # ---------------------------------------------------------------------------
+  # Basic single-turn
+  # ---------------------------------------------------------------------------
+  - name: simple single turn - client managed
+    description: >
+      A single user message is sent to a client-managed agent.
+      The agent generates one model response and returns it along with
+      the accumulated session state. A sessionId must be generated.
+    agent: promptAgent
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: hi }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: hello back }] }
+            finishReason: stop
+        expectChunks:
+          # A normal completion carries the model's finishReason on turnEnd.
+          - turnEnd: { finishReason: stop }
+        expectOutput:
+          message: { role: model, content: [{ text: hello back }] }
+          # A normal completion surfaces finishReason 'stop' on the output.
+          finishReason: stop
+          hasSessionId: true
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: hi }] }
+              - { role: model, content: [{ text: hello back }] }
+
+  - name: simple single turn - server managed
+    description: >
+      A single user message is sent to a server-managed agent.
+      The output should contain a snapshotId and no inline state.
+      The snapshot state must contain a generated sessionId.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: hi }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: hello back }] }
+            finishReason: stop
+        expectChunks:
+          - turnEnd: { finishReason: stop }
+        expectOutput:
+          message: { role: model, content: [{ text: hello back }] }
+          finishReason: stop
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: completed
+          hasSessionId: true
+
+  # ---------------------------------------------------------------------------
+  # Streaming
+  # ---------------------------------------------------------------------------
+  - name: streaming model chunks
+    description: >
+      Model emits streaming chunks during generation. They should be
+      forwarded as modelChunk stream events, followed by a turnEnd.
+    agent: promptAgent
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: hi }] }
+        streamChunks:
+          - [
+              { index: 0, role: model, content: [{ text: 'hel' }] },
+              { index: 0, role: model, content: [{ text: 'lo' }] },
+            ]
+        modelResponses:
+          - message: { role: model, content: [{ text: hello }] }
+            finishReason: stop
+        expectChunks:
+          - modelChunk: { index: 0, role: model, content: [{ text: 'hel' }] }
+          - modelChunk: { index: 0, role: model, content: [{ text: 'lo' }] }
+          - turnEnd: { finishReason: stop }
+        expectOutput:
+          message: { role: model, content: [{ text: hello }] }
+          finishReason: stop
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: hi }] }
+              - { role: model, content: [{ text: hello }] }
+
+  # ---------------------------------------------------------------------------
+  # Multi-turn in one invocation
+  # ---------------------------------------------------------------------------
+  - name: multi-turn in one invocation
+    description: >
+      Two user messages are sent sequentially in one invocation.
+      Both should be processed as separate turns. History must
+      accumulate so the second model call sees the first exchange.
+    agent: promptAgent
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: turn1 }] }
+          - message: { role: user, content: [{ text: turn2 }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
+        expectChunks:
+          # Each turn ends with the model's finishReason.
+          - turnEnd: { finishReason: stop }
+          - turnEnd: { finishReason: stop }
+        expectOutput:
+          message: { role: model, content: [{ text: reply2 }] }
+          finishReason: stop
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: turn1 }] }
+              - { role: model, content: [{ text: reply1 }] }
+              - { role: user, content: [{ text: turn2 }] }
+              - { role: model, content: [{ text: reply2 }] }
+
+  # ---------------------------------------------------------------------------
+  # Tool calling
+  # ---------------------------------------------------------------------------
+  - name: agent calls tools
+    description: >
+      Model issues a tool request, tool executes automatically, and
+      the tool response is fed back to the model which then produces
+      a final text response.
+    agent: promptAgentWithTools
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: do it }] }
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest: { name: testTool, input: {}, ref: ref1 }
+            finishReason: stop
+          - message: { role: model, content: [{ text: done }] }
+            finishReason: stop
+        expectChunks:
+          - modelChunk:
+              role: tool
+              content:
+                - toolResponse:
+                    { name: testTool, ref: ref1, output: 'tool called' }
+          - turnEnd: {}
+        expectOutput:
+          message: { role: model, content: [{ text: done }] }
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: do it }] }
+              - role: model
+                content:
+                  - toolRequest: { name: testTool, input: {}, ref: ref1 }
+              - role: tool
+                content:
+                  - toolResponse:
+                      { name: testTool, output: 'tool called', ref: ref1 }
+              - { role: model, content: [{ text: done }] }
+
+  # ---------------------------------------------------------------------------
+  # Interrupt and resume (multi-invocation)
+  # ---------------------------------------------------------------------------
+  - name: interrupt and resume
+    description: >
+      Model returns an interrupt tool request. The agent saves state
+      and returns the tool request as the output message. The client
+      then resumes with a new invocation providing the tool response
+      via snapshotId. The model receives the full history including
+      the tool response and produces a final answer.
+    agent: promptAgentWithInterrupt
+    steps:
+      # Phase 1: model interrupts
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: hello }] }
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest:
+                    {
+                      name: interruptTool,
+                      input: { query: 'yes?' },
+                      ref: '123',
+                    }
+            finishReason: stop
+        # A tool interrupt pauses the turn — finishReason is 'interrupted'.
+        expectOutput:
+          message:
+            content:
+              - toolRequest:
+                  { name: interruptTool, input: { query: 'yes?' }, ref: '123' }
+          finishReason: interrupted
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      # Phase 2: client resumes with resume.respond
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - resume:
+              respond:
+                - toolResponse:
+                    {
+                      name: interruptTool,
+                      ref: '123',
+                      output: { answer: 'yes indeed' },
+                    }
+        modelResponses:
+          - message: { role: model, content: [{ text: completed }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: completed }] }
+
+  # ---------------------------------------------------------------------------
+  # Interrupt and restart (resume.restart)
+  # ---------------------------------------------------------------------------
+  - name: interrupt and restart
+    description: >
+      Model requests a tool that throws ToolInterruptError on first call.
+      The agent saves state and returns the tool request as output. The
+      client resumes with resume.restart (same input + metadata). The
+      tool re-executes successfully with the resumed metadata and the
+      model produces a final answer.
+    agent: promptAgentWithRestartTool
+    steps:
+      # Phase 1: model requests restartTool, tool interrupts
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: do it }] }
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest:
+                    {
+                      name: restartTool,
+                      input: { action: 'delete' },
+                      ref: 'r1',
+                    }
+            finishReason: stop
+        # ToolInterruptError pauses the turn — finishReason is 'interrupted'.
+        expectOutput:
+          message:
+            content:
+              - toolRequest:
+                  { name: restartTool, input: { action: 'delete' }, ref: 'r1' }
+          finishReason: interrupted
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      # Phase 2: client resumes with resume.restart
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - resume:
+              restart:
+                - toolRequest:
+                    {
+                      name: restartTool,
+                      input: { action: 'delete' },
+                      ref: 'r1',
+                    }
+                  metadata: { resumed: { approved: true } }
+        modelResponses:
+          - message: { role: model, content: [{ text: deleted }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: deleted }] }
+
+  # ---------------------------------------------------------------------------
+  # Resume validation — forged restart rejected
+  # ---------------------------------------------------------------------------
+  - name: restart with forged inputs rejected
+    description: >
+      A malicious client attempts to restart a tool with modified inputs.
+      The agent must reject the restart because the input does not match
+      the original tool request in session history.
+    agent: promptAgentWithRestartTool
+    steps:
+      # Phase 1: model requests restartTool with safe input
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: do it }] }
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest:
+                    {
+                      name: restartTool,
+                      input: { action: 'safe-op' },
+                      ref: 'r1',
+                    }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      # Phase 2: client forges restart with different input
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - resume:
+              restart:
+                - toolRequest:
+                    {
+                      name: restartTool,
+                      input: { action: '/etc/passwd' },
+                      ref: 'r1',
+                    }
+                  metadata: { resumed: { approved: true } }
+        modelResponses:
+          - message: { role: model, content: [{ text: should not reach }] }
+            finishReason: stop
+        # The agent does not throw — it resolves gracefully with
+        # finishReason 'failed', preserving the original error status.
+        expectOutput:
+          finishReason: failed
+          errorContains:
+            status: INVALID_ARGUMENT
+            message: modified inputs
+
+  # ---------------------------------------------------------------------------
+  # Resume validation — respond referencing non-existent tool
+  # ---------------------------------------------------------------------------
+  - name: respond referencing non-existent tool rejected
+    description: >
+      A client attempts to respond with a tool name/ref that does not
+      match any tool request in the session history. The agent must
+      reject with INVALID_ARGUMENT.
+    agent: promptAgentWithInterrupt
+    steps:
+      # Phase 1: model requests interruptTool
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: hello }] }
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest:
+                    {
+                      name: interruptTool,
+                      input: { query: 'confirm?' },
+                      ref: 'i1',
+                    }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      # Phase 2: client responds with a fabricated tool name
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - resume:
+              respond:
+                - toolResponse:
+                    {
+                      name: fakeTool,
+                      ref: 'fake-ref',
+                      output: { answer: 'hacked' },
+                    }
+        modelResponses:
+          - message: { role: model, content: [{ text: should not reach }] }
+            finishReason: stop
+        # Resolves gracefully with finishReason 'failed' and INVALID_ARGUMENT.
+        expectOutput:
+          finishReason: failed
+          errorContains:
+            status: INVALID_ARGUMENT
+            message: not found in session history
+
+  # ---------------------------------------------------------------------------
+  # Snapshot chaining
+  # ---------------------------------------------------------------------------
+  - name: snapshot chaining across invocations
+    description: >
+      Two sequential invocations against a server-managed agent.
+      The second invocation resumes from the first snapshot. After
+      both complete, getSnapshotData verifies the parent chain,
+      accumulated history, and that a sessionId is present.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: first }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - message: { role: user, content: [{ text: second }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
+        captureSnapshotId: snap2
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2}}'
+        expectSnapshot:
+          parentId: '{{snap1}}'
+          status: completed
+          hasSessionId: true
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: model, content: [{ text: reply1 }] }
+              - { role: user, content: [{ text: second }] }
+              - { role: model, content: [{ text: reply2 }] }
+
+  # ---------------------------------------------------------------------------
+  # Client-managed state across invocations
+  # ---------------------------------------------------------------------------
+  - name: client-managed state across invocations
+    description: >
+      Two sequential invocations against a client-managed agent.
+      The second invocation seeds session state from the first
+      invocation's output state. History should accumulate and the
+      sessionId must be preserved across invocations.
+    agent: promptAgent
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: first }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+        captureState: state1
+        captureSessionId: sid1
+
+      - type: send
+        init: { state: '{{state1}}' }
+        inputs:
+          - message: { role: user, content: [{ text: second }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: reply2 }] }
+          stateContains:
+            sessionId: '{{sid1}}'
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: model, content: [{ text: reply1 }] }
+              - { role: user, content: [{ text: second }] }
+              - { role: model, content: [{ text: reply2 }] }
+
+  # ===========================================================================
+  # Phase 2: Detach, Abort, Artifacts, Custom State
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # Detach & background execution
+  # ---------------------------------------------------------------------------
+  - name: detach and background completion
+    description: >
+      A detach flag causes the agent to return immediately with a
+      pending snapshot. The background continues processing and
+      eventually the snapshot reaches "done" status with accumulated
+      state.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: process this }] }
+            detach: true
+        modelResponses:
+          - message: { role: model, content: [{ text: done in background }] }
+            finishReason: stop
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: waitUntilCompleted
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: completed
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: process this }] }
+              - { role: model, content: [{ text: done in background }] }
+
+  - name: detach with background failure
+    description: >
+      When a detached agent fails in the background, the snapshot
+      status should be set to "failed".
+    agent: customAgentFailing
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: fail }] }
+            detach: true
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: waitUntilCompleted
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: failed
+          # A failed run records finishReason 'failed' on the snapshot,
+          # distinct from the snapshot status.
+          finishReason: failed
+
+  # ---------------------------------------------------------------------------
+  # Abort
+  # ---------------------------------------------------------------------------
+  - name: abort pending agent
+    description: >
+      Abort a detached agent that is still processing. The abort
+      should return "pending" as the previous status and the snapshot
+      should be set to "aborted".
+    agent: customAgentBlocking
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: do work }] }
+            detach: true
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: abort
+        snapshotId: '{{snap1}}'
+        expectPreviousStatus: pending
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: aborted
+
+  - name: abort completed agent
+    description: >
+      Abort an agent that has already finished. The abort returns
+      "done" as previous status but the snapshot remains "done"
+      because terminal states (done, failed, aborted) cannot be
+      overridden — only "pending" can transition to "aborted".
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: hi }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: hello }] }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      - type: abort
+        snapshotId: '{{snap1}}'
+        expectPreviousStatus: completed
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: completed
+
+  - name: server-managed agent rejects init state
+    description: >
+      When a server-managed agent receives init.state, it must throw a
+      FAILED_PRECONDITION error (mapped to an HTTP status by the server
+      handler). Server-managed agents expect a snapshotId, not the full state
+      blob. This is API misuse, so it is a thrown error rather than a graceful
+      'failed' output.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init:
+          state:
+            messages:
+              - { role: user, content: [{ text: stale history }] }
+            custom: { shouldBeIgnored: true }
+            artifacts: []
+        inputs:
+          - message: { role: user, content: [{ text: fresh message }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply }] }
+            finishReason: stop
+        # API misuse: the turn throws rather than resolving with a graceful
+        # 'failed' output.
+        expectError:
+          status: FAILED_PRECONDITION
+          message: Cannot send 'state' to agent
+
+  - name: pure detach without payload
+    description: >
+      A detach-only message (no messages or resume payloads) sent as a
+      separate input should detach immediately without processing an
+      extra turn. The agent should return a pending snapshot.
+    agent: customAgentBlocking
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: work }] }
+          - detach: true
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: pending
+
+      - type: abort
+        snapshotId: '{{snap1}}'
+        expectPreviousStatus: pending
+
+  - name: failed snapshot includes error details
+    description: >
+      When a detached agent fails in the background, the snapshot
+      should include error details with the failure message.
+    agent: customAgentFailing
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: fail }] }
+            detach: true
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: waitUntilCompleted
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: failed
+          finishReason: failed
+          errorContains:
+            message: intentional failure
+
+  - name: abort non-existent snapshot
+    description: >
+      Aborting a snapshot that does not exist should not throw and
+      should return no previous status.
+    agent: promptAgentWithStore
+    steps:
+      - type: abort
+        snapshotId: non-existent-id
+        expectPreviousStatus: ~
+
+  # ---------------------------------------------------------------------------
+  # Artifacts
+  # ---------------------------------------------------------------------------
+  - name: artifacts streamed and deduplicated
+    description: >
+      Custom agent adds artifacts during execution. Artifact chunks
+      are streamed in order. Same-named artifacts are deduplicated
+      (updated) so the final output contains only the latest version.
+    agent: customAgentWithArtifacts
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: go }] }
+        expectChunks:
+          - artifact: { name: doc1, parts: [{ text: v1 }] }
+          - artifact: { name: doc1, parts: [{ text: v2 }] }
+          - artifact: { name: doc2, parts: [{ text: other }] }
+          - turnEnd: {}
+        expectOutput:
+          message: { role: model, content: [{ text: done }] }
+          artifactsContain:
+            - name: doc1
+              parts: [{ text: v2 }]
+            - name: doc2
+              parts: [{ text: other }]
+
+  # ---------------------------------------------------------------------------
+  # Custom state
+  # ---------------------------------------------------------------------------
+  - name: custom state updated during execution
+    description: >
+      Custom agent updates custom state during processing. The output
+      state should contain the updated custom data.
+    agent: customAgentWithCustomState
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: go }] }
+        expectOutput:
+          message: { role: model, content: [{ text: done }] }
+          stateContains:
+            custom: { counter: 1 }
+
+  - name: custom state persisted across invocations
+    description: >
+      Custom state is preserved when seeded from a previous
+      invocation's output. The counter should increment across
+      invocations.
+    agent: customAgentWithCustomState
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: first }] }
+        expectOutput:
+          stateContains:
+            custom: { counter: 1 }
+        captureState: state1
+
+      - type: send
+        init: { state: '{{state1}}' }
+        inputs:
+          - message: { role: user, content: [{ text: second }] }
+        expectOutput:
+          stateContains:
+            custom: { counter: 2 }
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: user, content: [{ text: second }] }
+
+  # ---------------------------------------------------------------------------
+  # Custom state streamed live as customPatch chunks
+  # ---------------------------------------------------------------------------
+  - name: custom state streamed as customPatch chunk
+    description: >
+      A single custom-state mutation during a turn is auto-emitted to the
+      client as a `customPatch` stream chunk. The first (and here only) patch
+      of a turn is a whole-document replace at the root pointer ('') carrying
+      the full transformed custom state. The final output state still reflects
+      the same custom data.
+    agent: customAgentWithCustomState
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: go }] }
+        expectChunks:
+          - customPatch:
+              - { op: replace, path: '', value: { counter: 1 } }
+          - turnEnd: {}
+        expectOutput:
+          message: { role: model, content: [{ text: done }] }
+          stateContains:
+            custom: { counter: 1 }
+
+  - name: customPatch first chunk is whole-document replace then incremental
+    description: >
+      Multiple custom-state mutations within a single turn produce multiple
+      `customPatch` chunks. The first patch is a whole-document replace at the
+      root pointer ('') re-basing the client with the full custom state.
+      Subsequent patches are incremental RFC 6902 diffs targeting only the
+      changed members (matched on op + path; values are partially asserted).
+      The final output state contains the fully accumulated custom data.
+    agent: customAgentWithMultiCustomState
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: go }] }
+        expectChunks:
+          # First mutation -> whole-document replace at root.
+          - customPatch:
+              - op: replace
+                path: ''
+                value: { counter: 1, status: working }
+          # Second mutation -> incremental replace of /counter.
+          - customPatch:
+              - op: replace
+                path: /counter
+                value: 2
+          # Third mutation -> incremental replace of /status.
+          - customPatch:
+              - op: replace
+                path: /status
+                value: done
+          - turnEnd: {}
+        expectOutput:
+          message: { role: model, content: [{ text: done }] }
+          stateContains:
+            custom: { counter: 2, status: done }
+
+  - name: detached run emits no customPatch chunks
+    description: >
+      A detached run streams no chunks to the connection (it returns a pending
+      snapshot immediately and continues in the background). In particular no
+      `customPatch` chunks are emitted even though the agent mutates custom
+      state. The mutation is still persisted and observable on the completed
+      snapshot.
+    agent: customAgentWithCustomStateStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: go }] }
+            detach: true
+        # No customPatch (or any) chunks are streamed for a detached run.
+        expectChunks: []
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: waitUntilCompleted
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: completed
+          stateContains:
+            custom: { counter: 1 }
+
+  # ===========================================================================
+  # Phase 3: Additional API Coverage
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # Snapshot branching
+  # ---------------------------------------------------------------------------
+  - name: snapshot branching across invocations
+    description: >
+      Two different continuations from the same snapshot produce
+      independent histories. Each child snapshot must have the same
+      parentId but divergent message histories after the branch point.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: root }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: rootReply }] }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - message: { role: user, content: [{ text: branch-a }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply-a }] }
+            finishReason: stop
+        captureSnapshotId: snap2a
+
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - message: { role: user, content: [{ text: branch-b }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply-b }] }
+            finishReason: stop
+        captureSnapshotId: snap2b
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2a}}'
+        expectSnapshot:
+          parentId: '{{snap1}}'
+          status: completed
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: root }] }
+              - { role: model, content: [{ text: rootReply }] }
+              - { role: user, content: [{ text: branch-a }] }
+              - { role: model, content: [{ text: reply-a }] }
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2b}}'
+        expectSnapshot:
+          parentId: '{{snap1}}'
+          status: completed
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: root }] }
+              - { role: model, content: [{ text: rootReply }] }
+              - { role: user, content: [{ text: branch-b }] }
+              - { role: model, content: [{ text: reply-b }] }
+
+  # ---------------------------------------------------------------------------
+  # Multiple tool calls in one model response
+  # ---------------------------------------------------------------------------
+  - name: multiple tool calls in one model response
+    description: >
+      Model issues two tool requests in a single message. Both tools
+      execute automatically and their responses are fed back to the
+      model which then produces a final text response.
+    agent: promptAgentWithTools
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: do both }] }
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest: { name: testTool, input: {}, ref: ref1 }
+                - toolRequest: { name: testTool, input: {}, ref: ref2 }
+            finishReason: stop
+          - message: { role: model, content: [{ text: all done }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: all done }] }
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: do both }] }
+              - role: model
+                content:
+                  - toolRequest: { name: testTool, input: {}, ref: ref1 }
+                  - toolRequest: { name: testTool, input: {}, ref: ref2 }
+              - role: tool
+                content:
+                  - toolResponse:
+                      { name: testTool, output: 'tool called', ref: ref1 }
+                  - toolResponse:
+                      { name: testTool, output: 'tool called', ref: ref2 }
+              - { role: model, content: [{ text: all done }] }
+
+  # ---------------------------------------------------------------------------
+  # Multiple interrupt tool requests
+  # ---------------------------------------------------------------------------
+  - name: interrupt with multiple tool requests
+    description: >
+      Model returns two interrupt tool requests in a single message.
+      The agent returns both tool requests to the client as the output
+      message. The client resumes by providing responses for both tools.
+    agent: promptAgentWithInterrupt
+    steps:
+      # Phase 1: model returns two interrupt requests
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: confirm both }] }
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest:
+                    { name: interruptTool, input: { query: 'q1?' }, ref: 'i1' }
+                - toolRequest:
+                    { name: interruptTool, input: { query: 'q2?' }, ref: 'i2' }
+            finishReason: stop
+        expectOutput:
+          message:
+            content:
+              - toolRequest:
+                  { name: interruptTool, input: { query: 'q1?' }, ref: 'i1' }
+              - toolRequest:
+                  { name: interruptTool, input: { query: 'q2?' }, ref: 'i2' }
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      # Phase 2: client responds to both
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - resume:
+              respond:
+                - toolResponse:
+                    {
+                      name: interruptTool,
+                      ref: 'i1',
+                      output: { answer: 'yes1' },
+                    }
+                - toolResponse:
+                    {
+                      name: interruptTool,
+                      ref: 'i2',
+                      output: { answer: 'yes2' },
+                    }
+        modelResponses:
+          - message: { role: model, content: [{ text: both confirmed }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: both confirmed }] }
+
+  # ---------------------------------------------------------------------------
+  # Interrupt resume — full state accumulation
+  # ---------------------------------------------------------------------------
+  - name: interrupt resume state accumulation
+    description: >
+      After interrupt and resume, the accumulated state must contain
+      the full exchange: user message, model tool request, client
+      tool response, and the final model response.
+    agent: promptAgentWithInterrupt
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: check }] }
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest:
+                    { name: interruptTool, input: { query: 'ok?' }, ref: 't1' }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - resume:
+              respond:
+                - toolResponse:
+                    {
+                      name: interruptTool,
+                      ref: 't1',
+                      output: { answer: 'confirmed' },
+                    }
+        modelResponses:
+          - message: { role: model, content: [{ text: done }] }
+            finishReason: stop
+        captureSnapshotId: snap2
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2}}'
+        expectSnapshot:
+          status: completed
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: check }] }
+              - role: model
+                content:
+                  - toolRequest:
+                      {
+                        name: interruptTool,
+                        input: { query: 'ok?' },
+                        ref: 't1',
+                      }
+              - role: tool
+                content:
+                  - toolResponse:
+                      {
+                        name: interruptTool,
+                        ref: 't1',
+                        output: { answer: 'confirmed' },
+                      }
+              - { role: model, content: [{ text: done }] }
+
+  # ---------------------------------------------------------------------------
+  # Artifacts across invocations (server-managed)
+  # ---------------------------------------------------------------------------
+  - name: artifacts persisted across invocations
+    description: >
+      Artifacts added in the first invocation persist in the server-managed
+      snapshot. The second invocation loads the snapshot, adds a new artifact,
+      and the output contains both the original and new artifacts.
+    agent: customAgentWithArtifactsStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: first }] }
+        expectOutput:
+          hasSnapshotId: true
+          artifactsContain:
+            - name: doc1
+              parts: [{ text: content1 }]
+        captureSnapshotId: snap1
+
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - message: { role: user, content: [{ text: second }] }
+        expectOutput:
+          artifactsContain:
+            - name: doc1
+              parts: [{ text: content1 }]
+            - name: doc2
+              parts: [{ text: content2 }]
+
+  # ---------------------------------------------------------------------------
+  # Custom state via server-managed store
+  # ---------------------------------------------------------------------------
+  - name: custom state persisted via server-managed store
+    description: >
+      Custom state is preserved when resuming from a server-managed
+      snapshot. The counter should increment across invocations and
+      be visible in the snapshot state.
+    agent: customAgentWithCustomStateStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: first }] }
+        captureSnapshotId: snap1
+
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - message: { role: user, content: [{ text: second }] }
+        captureSnapshotId: snap2
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2}}'
+        expectSnapshot:
+          status: completed
+          stateContains:
+            custom: { counter: 2 }
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: user, content: [{ text: second }] }
+
+  # ---------------------------------------------------------------------------
+  # Abort terminal states — failed and aborted
+  # ---------------------------------------------------------------------------
+  - name: abort failed agent
+    description: >
+      Abort an agent that has already failed. The abort returns "failed"
+      as the previous status but the snapshot remains "failed" because
+      terminal states cannot be overridden.
+    agent: customAgentFailing
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: fail }] }
+            detach: true
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: waitUntilCompleted
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: failed
+          finishReason: failed
+
+      - type: abort
+        snapshotId: '{{snap1}}'
+        expectPreviousStatus: failed
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: failed
+
+  - name: abort already aborted agent
+    description: >
+      Abort an agent that was already aborted. The abort returns
+      "aborted" as previous status and the snapshot remains "aborted".
+    agent: customAgentBlocking
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: work }] }
+            detach: true
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: abort
+        snapshotId: '{{snap1}}'
+        expectPreviousStatus: pending
+
+      - type: abort
+        snapshotId: '{{snap1}}'
+        expectPreviousStatus: aborted
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: aborted
+
+  # ===========================================================================
+  # Phase 4: Server-managed sessions by sessionId
+  # ===========================================================================
+  #
+  # Server-managed agents can be resumed by a bare `sessionId` (a UUID) in
+  # addition to an exact `snapshotId`. This is the simple case used by
+  # `useChat`-style clients: the client tracks only a stable session id and the
+  # store resolves the session's latest (leaf) snapshot on each turn.
+
+  # ---------------------------------------------------------------------------
+  # Resume a server-managed session by sessionId
+  # ---------------------------------------------------------------------------
+  - name: resume server-managed session by sessionId
+    description: >
+      A server-managed agent is invoked twice using the same caller-provided
+      sessionId (a UUID). The first turn seeds a fresh session bound to that
+      sessionId; the second turn resumes the session's latest snapshot without a
+      snapshotId. History must accumulate and the resulting snapshot must carry
+      the same sessionId and chain to the first snapshot.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: { sessionId: 11111111-1111-4111-8111-111111111111 }
+        inputs:
+          - message: { role: user, content: [{ text: first }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: send
+        init: { sessionId: 11111111-1111-4111-8111-111111111111 }
+        inputs:
+          - message: { role: user, content: [{ text: second }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
+        captureSnapshotId: snap2
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2}}'
+        expectSnapshot:
+          parentId: '{{snap1}}'
+          status: completed
+          stateContains:
+            sessionId: 11111111-1111-4111-8111-111111111111
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: model, content: [{ text: reply1 }] }
+              - { role: user, content: [{ text: second }] }
+              - { role: model, content: [{ text: reply2 }] }
+
+  # ---------------------------------------------------------------------------
+  # Fetch the latest snapshot by sessionId
+  # ---------------------------------------------------------------------------
+  - name: fetch latest snapshot by sessionId
+    description: >
+      getSnapshotData can resolve a snapshot by sessionId, returning the
+      session's latest (leaf) snapshot. After two linear turns the leaf is the
+      second snapshot, whose parent is the first.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: { sessionId: 22222222-2222-4222-8222-222222222222 }
+        inputs:
+          - message: { role: user, content: [{ text: first }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      - type: send
+        init: { sessionId: 22222222-2222-4222-8222-222222222222 }
+        inputs:
+          - message: { role: user, content: [{ text: second }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
+
+      - type: getSnapshotData
+        sessionId: 22222222-2222-4222-8222-222222222222
+        expectSnapshot:
+          parentId: '{{snap1}}'
+          status: completed
+          hasSessionId: true
+          stateContains:
+            sessionId: 22222222-2222-4222-8222-222222222222
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: model, content: [{ text: reply1 }] }
+              - { role: user, content: [{ text: second }] }
+              - { role: model, content: [{ text: reply2 }] }
+
+  # ---------------------------------------------------------------------------
+  # Non-UUID sessionId accepted
+  # ---------------------------------------------------------------------------
+  - name: non-UUID sessionId accepted
+    description: >
+      A sessionId can be any non-empty string (not necessarily a UUID).
+      Sending an application-specific (non-UUID) sessionId to a server-managed
+      agent is accepted; the session is bound to that id and is resumable by it.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: { sessionId: my-app-session-123 }
+        inputs:
+          - message: { role: user, content: [{ text: first }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+        expectOutput:
+          finishReason: stop
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: getSnapshotData
+        sessionId: my-app-session-123
+        expectSnapshot:
+          status: completed
+          stateContains:
+            sessionId: my-app-session-123
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: model, content: [{ text: reply1 }] }
+
+  # ---------------------------------------------------------------------------
+  # Client-managed agent rejects sessionId
+  # ---------------------------------------------------------------------------
+  - name: client-managed agent rejects sessionId
+    description: >
+      A client-managed agent (no store) cannot resume by sessionId because it
+      has nowhere to load the session from. Sending init.sessionId must be
+      rejected with FAILED_PRECONDITION.
+    agent: promptAgent
+    steps:
+      - type: send
+        init: { sessionId: 44444444-4444-4444-8444-444444444444 }
+        inputs:
+          - message: { role: user, content: [{ text: hi }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: hello }] }
+            finishReason: stop
+        # API misuse: the turn throws with the original FAILED_PRECONDITION
+        # status rather than resolving with a graceful 'failed' output.
+        expectError:
+          status: FAILED_PRECONDITION
+          message: "Cannot use 'sessionId'"
+
+  # ---------------------------------------------------------------------------
+  # snapshotId + sessionId: snapshotId selects, sessionId guards ownership
+  # ---------------------------------------------------------------------------
+  - name: snapshotId and matching sessionId together resume
+    description: >
+      init may carry both a snapshotId (the exact snapshot to resume) and a
+      sessionId. When the snapshot belongs to that session, the sessionId acts
+      as an ownership guard and the resume proceeds normally.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: { sessionId: 55555555-5555-4555-8555-555555555555 }
+        inputs:
+          - message: { role: user, content: [{ text: first }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      - type: send
+        init:
+          snapshotId: '{{snap1}}'
+          sessionId: 55555555-5555-4555-8555-555555555555
+        inputs:
+          - message: { role: user, content: [{ text: second }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
+        expectOutput:
+          finishReason: stop
+
+  - name: snapshotId with mismatched sessionId rejected
+    description: >
+      When init carries both a snapshotId and a sessionId, the snapshot must
+      belong to that session. A mismatch is rejected.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: { sessionId: 55555555-5555-4555-8555-555555555555 }
+        inputs:
+          - message: { role: user, content: [{ text: first }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      - type: send
+        init:
+          snapshotId: '{{snap1}}'
+          sessionId: 99999999-9999-4999-8999-999999999999
+        inputs:
+          - message: { role: user, content: [{ text: second }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
+        # API misuse: the turn throws with the original INVALID_ARGUMENT status
+        # rather than resolving with a graceful 'failed' output.
+        expectError:
+          status: INVALID_ARGUMENT
+          message: 'does not belong to session'

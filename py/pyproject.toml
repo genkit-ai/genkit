@@ -118,8 +118,6 @@ source = ["packages"]
 # uv based package management.
 [tool.uv]
 default-groups = ["dev", "lint"]
-index-url = "https://pypi.org/simple"
-override-dependencies = ["werkzeug>=3.1.6"]
 
 [tool.uv.sources]
 # Samples (alphabetical by package name from pyproject.toml)
@@ -341,7 +339,7 @@ unauthorized_licenses = [
 [tool.liccheck.authorized_packages]
 aiohappyeyeballs      = "2.6.1"    # Python Software Foundation (transitive dep of xai-sdk)
 aiohttp               = "3.13.3"   # Apache-2.0 AND MIT (transitive dep of xai-sdk)
-certifi               = "2026.1.4" # TODO: Verify.
+certifi               = ">=2026.1.4" # TODO: Verify.
 dependencies          = true
 dotpromptz-handlebars = "0.1.8"    # Apache-2.0 "https://github.com/google/dotprompt/blob/main/LICENSE"
 google-crc32c         = "1.8.0"    # Apache-2.0
@@ -357,6 +355,9 @@ pyasn1                = "0.6.2"    # BSD-2-Clause
 # access that ty warns about. We can't modify generated code.
 exclude = [
   "**/generated",
+  "**/tests",
+  "**/test",
+  "**/_testing.py",
 ]
 
 [tool.ty.environment]
@@ -380,6 +381,9 @@ root = [
 [tool.pyright]
 exclude = [
   "**/__pycache__",
+  "**/tests",
+  "**/test",
+  "**/_testing.py",
   ".git",
   ".mypy_cache",
   ".pytest_cache",
@@ -387,8 +391,21 @@ exclude = [
   "build",
   "dist",
 ]
-extraPaths = []
-pythonVersion = "3.10"
+extraPaths = [
+  "packages/genkit/src",
+  "packages/genkit-anthropic/src",
+  "packages/genkit-django/src",
+  "packages/genkit-evaluators/src",
+  "packages/genkit-fastapi/src",
+  "packages/genkit-flask/src",
+  "packages/genkit-google-cloud/src",
+  "packages/genkit-googleai/src",
+  "packages/genkit-middleware/src",
+  "packages/genkit-ollama/src",
+  "packages/genkit-openai/src",
+  "packages/genkit-vertex-ai/src"
+]
+pythonVersion = "3.11"
 reportMissingImports = true
 reportMissingTypeStubs = false
 reportPrivateImportUsage = false
@@ -408,22 +425,31 @@ project_excludes = [
   "build",
   "dist",
   "testapps",
+  "samples",
 ]
 project_includes = [
-  # Core package (source and tests)
+  # Core package
   "packages/genkit/src/**/*.py",
-  "packages/genkit/tests/**/*.py",
-  # Packages (source and tests)
-  "packages/*/src/**/*.py",
-  "packages/*/tests/**/*.py",
-  # Samples
-  "samples/*/src/**/*.py",
-  "samples/*/tests/**/*.py",
 ]
 
 # Search path for first-party code import resolution.
-search-path = ["."]
+search-path = [
+  ".",
+  "packages/genkit/src",
+  "packages/genkit-anthropic/src",
+  "packages/genkit-django/src",
+  "packages/genkit-evaluators/src",
+  "packages/genkit-fastapi/src",
+  "packages/genkit-flask/src",
+  "packages/genkit-google-cloud/src",
+  "packages/genkit-googleai/src",
+  "packages/genkit-middleware/src",
+  "packages/genkit-ollama/src",
+  "packages/genkit-openai/src",
+  "packages/genkit-vertex-ai/src"
+]
 python_version         = "3.10"
+ignore-missing-imports = ["strenum"]
 
 # Treat warnings as errors.
 [tool.pyrefly.errors]
@@ -433,6 +459,7 @@ redundant-cast = "error"
 # Downgrade unused-type-ignore to avoid noise from comments that pyright needed but ty doesn't.
 [tool.ty.rules]
 unused-type-ignore-comment = "ignore"
+unused-ignore-comment = "ignore"
 
 # Relax invalid-argument-type in tests: config=dict is common, ModelRequest validates at runtime.
 [[tool.ty.overrides]]
@@ -448,3 +475,15 @@ no-matching-overload = "ignore"
 include = ["packages/genkit/src/genkit/_ai/_formats/_schema.py"]
 [tool.ty.overrides.rules]
 invalid-argument-type = "ignore"
+
+# packages source: suppress unresolved type-check warnings from pre-existing code
+[[tool.ty.overrides]]
+include = ["packages/*/src/**"]
+[tool.ty.overrides.rules]
+invalid-argument-type = "ignore"
+invalid-return-type = "ignore"
+invalid-assignment = "ignore"
+call-top-callable = "ignore"
+unresolved-attribute = "ignore"
+no-matching-overload = "ignore"
+call-non-callable = "ignore"

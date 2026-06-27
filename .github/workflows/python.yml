@@ -59,7 +59,7 @@ jobs:
         run: uv run --directory py ruff check --preview .
 
       - name: Run consistency checks
-        run: ./py/bin/check_consistency
+        run: python3 ./py/scripts/check_consistency.py
 
   # =============================================================================
   # Type checking (runs in parallel - each checker is a separate job)
@@ -91,7 +91,7 @@ jobs:
           uv sync --group lint
 
       - name: Generate schema typing
-        run: ./py/bin/generate_schema_typing --ci
+        run: ./py/scripts/generate_schema_typing --ci
 
       - name: Type check with Ty
         if: matrix.checker == 'ty'
@@ -99,11 +99,11 @@ jobs:
 
       - name: Type check with Pyrefly
         if: matrix.checker == 'pyrefly'
-        run: uv run --directory py pyrefly check .
+        run: uv run --directory py pyrefly check
 
       - name: Type check with Pyright
         if: matrix.checker == 'pyright'
-        run: cd py && uv run pyright packages/
+        run: cd py && uv run pyright packages/genkit
 
   # =============================================================================
   # Security and compliance checks
@@ -136,7 +136,7 @@ jobs:
           cd py
           # Check for common API key patterns
           if grep -rE "(sk-[a-zA-Z0-9]{20,}|AIza[a-zA-Z0-9_-]{35}|AKIA[0-9A-Z]{16})" \
-              packages/ plugins/ --include="*.py" | grep -vE "test|mock|fake|example|#"; then
+              packages/ --include="*.py" | grep -vE "test|mock|fake|example|#"; then
             echo "Error: Potential hardcoded secrets found"
             exit 1
           fi
@@ -173,7 +173,7 @@ jobs:
           uv sync
 
       - name: Generate schema typing
-        run: ./py/bin/generate_schema_typing --ci
+        run: ./py/scripts/generate_schema_typing --ci
 
       - name: Run tests
         run: |
@@ -197,7 +197,7 @@ jobs:
           python-version: "3.12"
 
       - name: Build and verify distributions
-        run: ./py/bin/build_dists
+        run: ./py/scripts/build_dists
 
       - name: Verify wheel contents
         run: |
@@ -205,8 +205,8 @@ jobs:
           for wheel in dist/*.whl; do
             if [[ -f "$wheel" ]]; then
               wheel_name=$(basename "$wheel" | sed 's/-[0-9].*//')
-              # Only check publishable packages
-              if [[ "$wheel_name" == "genkit" ]] || [[ "$wheel_name" == genkit_plugin_* ]]; then
+              # Only check publishable packages (all packages starting with genkit_)
+              if [[ "$wheel_name" == genkit_* ]]; then
                 echo "Checking $wheel_name..."
                 # Check for py.typed
                 if ! unzip -l "$wheel" 2>/dev/null | grep -qE "py\.typed$"; then

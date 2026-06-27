@@ -183,6 +183,21 @@ func (p *Part) IsInterrupt() bool {
 	return p != nil && p.IsToolRequest() && p.Metadata != nil && p.Metadata["interrupt"] != nil
 }
 
+// IsPartial reports whether the [Part] contains a partial tool response
+// streamed during tool execution (e.g., a progress update).
+func (p *Part) IsPartial() bool {
+	return p != nil && p.IsToolResponse() && p.Metadata != nil && p.Metadata["partial"] == true
+}
+
+// NewPartialToolResponsePart returns a [Part] containing a partial tool response.
+// Partial tool responses are streamed during tool execution for client-side
+// display (e.g., progress indicators) and are not included in conversation history.
+func NewPartialToolResponsePart(r *ToolResponse) *Part {
+	p := NewToolResponsePart(r)
+	p.Metadata = map[string]any{"partial": true}
+	return p
+}
+
 // IsCustom reports whether the [Part] contains custom plugin-specific data.
 func (p *Part) IsCustom() bool {
 	return p != nil && p.Kind == PartCustom

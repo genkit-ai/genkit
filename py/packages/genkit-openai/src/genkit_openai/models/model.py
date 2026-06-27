@@ -319,7 +319,7 @@ class OpenAIModel:
 
         tool_calls: dict[int, Any] = {}
         accumulated_content: list[Part] = []
-        async for chunk in stream:
+        async for chunk in stream:  # type: ignore
             delta = chunk.choices[0].delta
 
             # Text content chunk

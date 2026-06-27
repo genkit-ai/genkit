@@ -59,7 +59,7 @@ var sleepFunc = func(ctx context.Context, d time.Duration) error {
 //
 // By default, retries occur for non-[core.GenkitError] errors (e.g. network failures)
 // and for [core.GenkitError] errors whose status is one of UNAVAILABLE, DEADLINE_EXCEEDED,
-// RESOURCE_EXHAUSTED, ABORTED, or INTERNAL_SERVER_ERROR.
+// RESOURCE_EXHAUSTED, ABORTED, or INTERNAL.
 //
 // Usage:
 //

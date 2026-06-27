@@ -44,7 +44,7 @@ classifiers = [
 ]
 dependencies = [
   "genkit",
-  "genkit-plugin-google-genai",
+  "genkit-googleai",
   "pydantic>=2.10.5",
   "flask>=3.1.3",
 ]
