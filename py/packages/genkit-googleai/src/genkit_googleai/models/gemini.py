@@ -1782,11 +1782,7 @@ class GeminiModel:
 
     @cached_property
     def metadata(self) -> dict:
-        """Get model metadata.
-
-        Returns:
-            model metadata.
-        """
+        """Model metadata."""
         if self._version in SUPPORTED_MODELS:
             supports = SUPPORTED_MODELS[self._version].supports.model_dump(by_alias=True, exclude_none=True)
         else:

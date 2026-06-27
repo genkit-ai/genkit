@@ -340,12 +340,12 @@ class ActionRunContext:
 
     @property
     def is_streaming(self) -> bool:
-        """Returns True if a streaming callback is registered."""
+        """True if a streaming callback is registered."""
         return self._streaming_callback is not None
 
     @property
     def streaming_callback(self) -> StreamingCallback | None:
-        """Returns the streaming callback, if any.
+        """The streaming callback, if any.
 
         Use this when you need to pass the callback to another action.
         For sending chunks directly, use send_chunk() instead.

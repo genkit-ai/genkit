@@ -230,38 +230,22 @@ class DictMessageAdapter:
 
     @property
     def content(self) -> str | None:
-        """Returns the 'content' of the message if available.
-
-        Returns:
-            The message content or None.
-        """
+        """The 'content' of the message if available."""
         return self._data.get('content', None)
 
     @property
     def tool_calls(self) -> list | None:
-        """Returns the 'tool_calls' list if present in the message.
-
-        Returns:
-            A list of tool calls or None.
-        """
+        """The 'tool_calls' list if present in the message."""
         return self._data.get('tool_calls', None)
 
     @property
     def role(self) -> str | None:
-        """Returns the role of the message.
-
-        Returns:
-            The role string or None.
-        """
+        """The role of the message."""
         return self._data.get('role', None)
 
     @property
     def reasoning_content(self) -> str | None:
-        """Returns the 'reasoning_content' if present in the message.
-
-        Returns:
-            The reasoning content string or None.
-        """
+        """The 'reasoning_content' if present in the message."""
         return self._data.get('reasoning_content', None)
 
 
@@ -278,34 +262,22 @@ class MessageAdapter:
 
     @property
     def content(self) -> str | None:
-        """Returns the 'content' attribute of the message if available.
-
-        Returns:
-            The message content or None.
-        """
+        """The 'content' attribute of the message if available."""
         return getattr(self._data, 'content', None)
 
     @property
     def tool_calls(self) -> list | None:
-        """Returns the 'tool_calls' attribute of the message if available.
-
-        Returns:
-            A list of tool calls or None.
-        """
+        """The 'tool_calls' attribute of the message if available."""
         return getattr(self._data, 'tool_calls', None)
 
     @property
     def role(self) -> str | None:
-        """Returns the 'role' attribute of the message if available.
-
-        Returns:
-            The role string or None.
-        """
+        """The 'role' attribute of the message if available."""
         return getattr(self._data, 'role', None)
 
     @property
     def reasoning_content(self) -> str | None:
-        """Returns the 'reasoning_content' attribute if available.
+        """The 'reasoning_content' attribute if available.
 
         DeepSeek R1/reasoner models return chain-of-thought reasoning
         in this separate field alongside the regular content.
@@ -313,9 +285,6 @@ class MessageAdapter:
         Note: Pydantic models (like openai's ChatCompletionMessage) raise
         AttributeError in __getattr__ for unknown fields, so getattr()
         with a default doesn't work. We must catch the exception.
-
-        Returns:
-            The reasoning content string or None.
         """
         try:
             return self._data.reasoning_content  # type: ignore[union-attr]

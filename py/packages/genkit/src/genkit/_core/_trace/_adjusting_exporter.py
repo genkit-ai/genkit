@@ -48,7 +48,7 @@ class RedactedSpan(ReadableSpan):
 
     @property
     def attributes(self) -> dict[str, Any]:
-        """Return the modified attributes."""
+        """The modified attributes."""
         # pyrefly: ignore[bad-return] - dict[str, Any] is compatible with Mapping at runtime
         return self._attributes
 
