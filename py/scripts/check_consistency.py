@@ -88,7 +88,7 @@ def main() -> None:
             print(f'  {RED}✗{NC} {pkg_name}: missing LICENSE')
             errors += 1
             pkg_errors += 1
-        
+
         if pkg_errors == 0:
             print(f'  {GREEN}✓{NC} {pkg_name} ({pkg_version})')
 
