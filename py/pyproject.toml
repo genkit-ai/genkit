@@ -388,6 +388,7 @@ exclude = [
   ".ruff_cache",
   "build",
   "dist",
+  "noxfile.py",
 ]
 extraPaths = [
   "packages/genkit/src",
