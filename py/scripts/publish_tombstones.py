@@ -189,6 +189,7 @@ def build_and_publish(mapping, dist_dir, publish=False) -> None:
             f.write(init_content)
 
         # 4. Build package using uv build with public PyPI registry and no workspace config
+        before_files = set(os.listdir(dist_dir))
         subprocess.run(
             [
                 'uv',
@@ -204,9 +205,15 @@ def build_and_publish(mapping, dist_dir, publish=False) -> None:
             check=True,
         )
 
+        after_files = set(os.listdir(dist_dir))
+        new_files = after_files - before_files
+        wheel_files = [f for f in new_files if f.endswith('.whl')]
+        if not wheel_files:
+            raise FileNotFoundError(f"No wheel file found in {dist_dir} after building {old_dist}")
+        wheel_file = os.path.join(dist_dir, wheel_files[0])
+
         # 5. Publish package if requested
         if publish:
-            wheel_file = os.path.join(dist_dir, f'{old_dist.replace("-", "_")}-0.8.0-py3-none-any.whl')
             # Using uv publish or twine depending on environment setup
             subprocess.run(
                 ['uv', 'publish', wheel_file],
