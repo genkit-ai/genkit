@@ -233,8 +233,6 @@ ignore = [
   "S105", # hardcoded password string - false positives in tests
   "S106", # hardcoded password func arg - false positives in tests
   "S311", # random not for security - we don't use random for crypto
-  "DOC",  # docstring style checks (preview) - noisy
-  "D421", # property-docstring-starts-with-verb (preview) - noisy
 ]
 select = [
   "E",     # pycodestyle (errors)
