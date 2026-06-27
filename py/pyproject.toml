@@ -486,3 +486,9 @@ call-top-callable = "ignore"
 unresolved-attribute = "ignore"
 no-matching-overload = "ignore"
 call-non-callable = "ignore"
+
+# noxfile: local test automation helper with unresolved external imports
+[[tool.ty.overrides]]
+include = ["noxfile.py"]
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
