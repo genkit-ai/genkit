@@ -70,22 +70,26 @@ def main() -> None:
         pkg_version = get_toml_value(toml_path, 'version')
         pkg_python = get_toml_value(toml_path, 'requires-python')
 
-        # Validate version
+        # Validate version and requirements
+        pkg_errors = 0
         if pkg_version != core_version:
             print(f"  {RED}✗{NC} {pkg_name}: version '{pkg_version}' (expected '{core_version}')")
             errors += 1
-        # Validate python version
-        elif pkg_python != EXPECTED_PYTHON:
+            pkg_errors += 1
+        if pkg_python != EXPECTED_PYTHON:
             print(f"  {RED}✗{NC} {pkg_name}: requires-python '{pkg_python}' (expected '{EXPECTED_PYTHON}')")
             errors += 1
-        # Validate metadata files
-        elif not os.path.exists(os.path.join(pkg_path, 'README.md')):
+            pkg_errors += 1
+        if not os.path.exists(os.path.join(pkg_path, 'README.md')):
             print(f'  {RED}✗{NC} {pkg_name}: missing README.md')
             errors += 1
-        elif not os.path.exists(os.path.join(pkg_path, 'LICENSE')):
+            pkg_errors += 1
+        if not os.path.exists(os.path.join(pkg_path, 'LICENSE')):
             print(f'  {RED}✗{NC} {pkg_name}: missing LICENSE')
             errors += 1
-        else:
+            pkg_errors += 1
+        
+        if pkg_errors == 0:
             print(f'  {GREEN}✓{NC} {pkg_name} ({pkg_version})')
 
     # 3. Check samples under samples/* (Non-Publishable)

@@ -53,7 +53,7 @@ dependencies = [
   "sse-starlette>=2.2.1",
   "pillow>=12.1.1",
   "typing_extensions>=4.0",
-  "strenum>=0.4.15",
+  "strenum>=0.4.15; python_version < '3.11'",
 
   "dotpromptz>=0.1.5",
   "uvicorn>=0.34.0",
