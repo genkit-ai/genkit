@@ -218,7 +218,7 @@ def build_and_publish(mapping, dist_dir, publish=False) -> None:
         if publish:
             # Using uv publish or twine depending on environment setup
             subprocess.run(
-                ['uv', 'publish', wheel_file],
+                ['uv', 'run', 'twine', 'upload', wheel_file],
                 check=True,
             )
 

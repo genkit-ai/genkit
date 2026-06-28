@@ -99,7 +99,7 @@ filterwarnings = [
 norecursedirs = ["testapps", ".git", ".venv", "build", "dist"]
 python_files = ["*_test.py"]
 pythonpath = ["."]
-testpaths = ["packages", "samples"]
+testpaths = ["packages", "samples", "tests"]
 #asyncio_mode = "auto"
 asyncio_mode = "strict"
 
