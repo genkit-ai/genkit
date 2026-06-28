@@ -367,15 +367,10 @@ def generate(schema_path: Path, _out: Path) -> str:
         if name in EXCLUDED or name in emitted or not isinstance(defn, dict) or defn.get('type') != 'object':
             continue
         class_name = _output_name(name)
-        # Metadata and Custom: type aliases for dict (SDK uses .get(), [], passes dict)
-        if name == 'Metadata':
+        # Metadata, Custom, ConfigSchema, Schema: type aliases for dict (SDK uses .get(), [], passes dict)
+        if name in ('Metadata', 'Custom', 'ConfigSchema', 'Schema'):
             out.extend([
-                'Metadata = dict[str, Any]  # type alias for flexible metadata',
-                '',
-            ])
-        elif name == 'Custom':
-            out.extend([
-                'Custom = dict[str, Any]  # type alias for flexible custom data',
+                f'{name} = dict[str, Any]  # type alias for flexible JSON schema / dictionary data',
                 '',
             ])
         elif name in typed_map_aliases:
