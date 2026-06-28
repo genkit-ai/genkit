@@ -179,8 +179,10 @@ def _extract_inline_classes(schema: dict) -> dict[str, dict]:
                 if class_name not in defs:
                     existing = result.get(class_name)
                     new_props = prop_schema.get('properties') or {}
-                    if existing is None or len(existing.get('properties') or {}) < len(new_props):
-                        result[class_name] = prop_schema
+                    if existing is None:
+                        result[class_name] = {'type': 'object', 'properties': dict(new_props)}
+                    else:
+                        existing.setdefault('properties', {}).update(new_props)
                 walk(prop_schema.get('properties', {}))
 
     for defn in defs.values():
@@ -261,7 +263,7 @@ def _py_type(prop: dict, schema: dict, defs: dict, class_name: str, field_name: 
 def _emit_enum(name: str, d: dict) -> list[str]:
     lines = [f'class {name}(StrEnum):', f'    """{name} data type class."""', '']
     for v in d.get('enum', []):
-        m = str(v).upper().replace('-', '_')
+        m = re.sub(r'[^A-Z0-9_]', '_', str(v).upper())
         if m and m[0].isdigit():
             m = '_' + m
         lines.append(f'    {m} = {repr(v)}')
@@ -395,11 +397,20 @@ def generate(schema_path: Path, _out: Path) -> str:
             if key not in defn:
                 continue
             opts = defn[key]
-            refs = [(o.get('$ref') or '').split('/')[-1] for o in opts if isinstance(o, dict) and o.get('$ref')]
-            if not refs:
+            types = set()
+            for o in opts:
+                if not isinstance(o, dict):
+                    continue
+                if '$ref' in o:
+                    types.add(_output_name(o['$ref'].split('/')[-1]))
+                else:
+                    t = _py_type(o, schema, defs, _output_name(name), '')
+                    if t:
+                        types.add(t)
+            if not types:
                 continue
             class_name = _output_name(name)
-            union_str = ' | '.join(_output_name(r) for r in refs)
+            union_str = ' | '.join(sorted(types))
             if name in ROOT_MODEL_UNIONS:
                 out.extend([
                     f'class {class_name}(RootModel[{union_str}]):',
