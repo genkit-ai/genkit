@@ -367,7 +367,7 @@ class MiddlewareDesc(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     name: str = Field(...)
     description: str | None = None
-    config_schema: Any | ConfigSchema | None = Field(default=None)
+    config_schema: ConfigSchema | Any | None = Field(default=None)
     metadata: Metadata | None = None
 
 
@@ -644,10 +644,10 @@ class ToolDefinition(GenkitModel):
     name: str = Field(...)
     key: str | None = None
     description: str = Field(...)
-    input_schema: Any | dict[str, Any] | None = Field(
+    input_schema: dict[str, Any] | Any | None = Field(
         default=None, description='Valid JSON Schema representing the input of the tool.'
     )
-    output_schema: Any | dict[str, Any] | None = Field(
+    output_schema: dict[str, Any] | Any | None = Field(
         default=None, description='Valid JSON Schema describing the output of the tool.'
     )
     metadata: Metadata | None = None
@@ -720,7 +720,7 @@ class ActionMetadata(GenkitModel):
     name: str = Field(...)
     description: str | None = None
     input_schema: Any | None = Field(default=None)
-    input_json_schema: Any | dict[str, Any] | None = Field(
+    input_json_schema: dict[str, Any] | Any | None = Field(
         default=None, description='A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object.'
     )
     output_schema: Any | None = Field(default=None)
@@ -1078,19 +1078,19 @@ class Spans(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
 
 
-class DocumentPart(RootModel[MediaPart | TextPart]):
+class DocumentPart(RootModel[TextPart | MediaPart]):
     """Root model for DocumentPart union (Part(root=X), DocumentPart(root=X))."""
 
 
 class Part(
     RootModel[
-        CustomPart | DataPart | MediaPart | ReasoningPart | ResourcePart | TextPart | ToolRequestPart | ToolResponsePart
+        TextPart | MediaPart | ToolRequestPart | ToolResponsePart | DataPart | CustomPart | ReasoningPart | ResourcePart
     ]
 ):
     """Root model for Part union (Part(root=X), DocumentPart(root=X))."""
 
 
-TraceEvent = SpanEndEvent | SpanStartEvent
+TraceEvent = SpanStartEvent | SpanEndEvent
 
 
 class JsonPatch(RootModel[list[JsonPatchOperation]]):
