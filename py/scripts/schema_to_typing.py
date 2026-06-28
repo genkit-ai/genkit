@@ -118,11 +118,11 @@ def _resolve_ref(schema: dict, ref: str) -> dict:
 
 
 def _models_allowing_extra(schema: dict) -> set[str]:
-    """Names of models with additionalProperties: true (extra='allow')."""
+    """Names of models with additionalProperties enabled (extra='allow')."""
     result = set()
     defs = schema.get('$defs') or {}
     for name, defn in defs.items():
-        if isinstance(defn, dict) and defn.get('additionalProperties') is True:
+        if isinstance(defn, dict) and defn.get('additionalProperties') not in (False, None):
             result.add(name)
         if not isinstance(defn, dict):
             continue
@@ -130,7 +130,7 @@ def _models_allowing_extra(schema: dict) -> set[str]:
             if (
                 isinstance(prop_def, dict)
                 and prop_def.get('type') == 'object'
-                and prop_def.get('additionalProperties') is True
+                and prop_def.get('additionalProperties') not in (False, None)
             ):
                 result.add(_pascal(prop_name))
     return result
@@ -180,7 +180,7 @@ def _extract_inline_classes(schema: dict) -> dict[str, dict]:
                     existing = result.get(class_name)
                     new_props = prop_schema.get('properties') or {}
                     if existing is None:
-                        result[class_name] = {'type': 'object', 'properties': dict(new_props)}
+                        result[class_name] = dict(prop_schema)
                     else:
                         existing.setdefault('properties', {}).update(new_props)
                 walk(prop_schema.get('properties', {}))
