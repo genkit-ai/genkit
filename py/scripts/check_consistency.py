@@ -39,6 +39,7 @@ def get_toml_value(filepath: str, key: str) -> str:
         return ''
     try:
         import tomllib
+
         with open(filepath, 'rb') as f:
             data = tomllib.load(f)
             if key == 'version':
