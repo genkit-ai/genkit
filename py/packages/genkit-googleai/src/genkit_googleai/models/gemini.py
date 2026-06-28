@@ -134,8 +134,8 @@ The following models are currently supported by VertexAI API:
 import sys
 from datetime import datetime, timedelta, timezone
 
-from genkit_googleai.models.context_caching.constants import DEFAULT_TTL
-from genkit_googleai.models.context_caching.utils import generate_cache_key, validate_context_cache_request
+from genkit.plugins.google_genai.models.context_caching.constants import DEFAULT_TTL
+from genkit.plugins.google_genai.models.context_caching.utils import generate_cache_key, validate_context_cache_request
 
 if sys.version_info < (3, 11):
     from strenum import StrEnum
@@ -179,10 +179,10 @@ def _to_dict(obj: JsonAny) -> JsonAny:  # noqa: ANN401
     return obj.model_dump() if isinstance(obj, BaseModel) else obj
 
 
-from genkit_googleai.models._deprecations import (  # noqa: E402
+from genkit.plugins.google_genai.models._deprecations import (  # noqa: E402
     deprecated_enum_metafactory,
 )
-from genkit_googleai.models.utils import PartConverter  # noqa: E402
+from genkit.plugins.google_genai.models.utils import PartConverter  # noqa: E402
 
 
 class HarmCategory(StrEnum):
@@ -1782,7 +1782,11 @@ class GeminiModel:
 
     @cached_property
     def metadata(self) -> dict:
-        """Model metadata."""
+        """Model metadata.
+
+        Returns:
+            model metadata.
+        """
         if self._version in SUPPORTED_MODELS:
             supports = SUPPORTED_MODELS[self._version].supports.model_dump(by_alias=True, exclude_none=True)
         else:

@@ -336,7 +336,7 @@ def _emit_model(
 
 
 def generate(schema_path: Path, _out: Path) -> str:
-    schema = json.loads(schema_path.read_text())
+    schema = json.loads(schema_path.read_text(encoding='utf-8'))
     defs = dict(schema.get('$defs', {}))
     defs.update({k: v for k, v in _extract_inline_classes(schema).items() if k not in defs})
     allow_extra = _models_allowing_extra(schema)

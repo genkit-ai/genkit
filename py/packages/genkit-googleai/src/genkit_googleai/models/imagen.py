@@ -239,7 +239,11 @@ class ImagenModel:
 
     @cached_property
     def metadata(self) -> dict:
-        """Model metadata."""
+        """Model metadata.
+
+        Returns:
+            model metadata.
+        """
         supports = {}
         if self._version in SUPPORTED_MODELS:
             model_supports = SUPPORTED_MODELS[self._version].supports  # pyrefly: ignore[bad-index]

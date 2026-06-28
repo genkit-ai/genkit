@@ -41,8 +41,8 @@ def extend_plugin_namespace() -> None:
         After this runs, the following imports work for any installed plugin:
 
         >>> from genkit_anthropic import Anthropic
-        >>> from genkit.plugins.firebase import Firebase
-        >>> from genkit.plugins.my_custom_plugin import MyPlugin
+        >>> from genkit_firebase import Firebase
+        >>> from genkit_my_custom_plugin import MyPlugin
     """
     # Import genkit.plugins to initialize the namespace if needed
     if 'genkit.plugins' not in sys.modules:
