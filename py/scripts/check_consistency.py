@@ -57,40 +57,46 @@ def main() -> None:
 
     errors = 0
 
-    # 2. Check packages under packages/* (Publishable Packages)
-    packages_dir = os.path.join(PY_DIR, 'packages')
-    print(f'{YELLOW}Checking SDK Packages (Publishable)...{NC}')
-    for pkg in sorted(os.listdir(packages_dir)):
-        pkg_path = os.path.join(packages_dir, pkg)
-        toml_path = os.path.join(pkg_path, 'pyproject.toml')
-        if not os.path.isdir(pkg_path) or not os.path.exists(toml_path):
+    # 2. Check packages under packages/* and plugins/* (Publishable Packages)
+    publishable_dirs = [
+        ('SDK Packages', os.path.join(PY_DIR, 'packages')),
+        ('Plugins', os.path.join(PY_DIR, 'plugins')),
+    ]
+    for label, directory in publishable_dirs:
+        if not os.path.exists(directory):
             continue
+        print(f'\n{YELLOW}Checking {label} (Publishable)...{NC}')
+        for pkg in sorted(os.listdir(directory)):
+            pkg_path = os.path.join(directory, pkg)
+            toml_path = os.path.join(pkg_path, 'pyproject.toml')
+            if not os.path.isdir(pkg_path) or not os.path.exists(toml_path):
+                continue
 
-        pkg_name = get_toml_value(toml_path, 'name')
-        pkg_version = get_toml_value(toml_path, 'version')
-        pkg_python = get_toml_value(toml_path, 'requires-python')
+            pkg_name = get_toml_value(toml_path, 'name')
+            pkg_version = get_toml_value(toml_path, 'version')
+            pkg_python = get_toml_value(toml_path, 'requires-python')
 
-        # Validate version and requirements
-        pkg_errors = 0
-        if pkg_version != core_version:
-            print(f"  {RED}✗{NC} {pkg_name}: version '{pkg_version}' (expected '{core_version}')")
-            errors += 1
-            pkg_errors += 1
-        if pkg_python != EXPECTED_PYTHON:
-            print(f"  {RED}✗{NC} {pkg_name}: requires-python '{pkg_python}' (expected '{EXPECTED_PYTHON}')")
-            errors += 1
-            pkg_errors += 1
-        if not os.path.exists(os.path.join(pkg_path, 'README.md')):
-            print(f'  {RED}✗{NC} {pkg_name}: missing README.md')
-            errors += 1
-            pkg_errors += 1
-        if not os.path.exists(os.path.join(pkg_path, 'LICENSE')):
-            print(f'  {RED}✗{NC} {pkg_name}: missing LICENSE')
-            errors += 1
-            pkg_errors += 1
+            # Validate version and requirements
+            pkg_errors = 0
+            if pkg_version != core_version:
+                print(f"  {RED}✗{NC} {pkg_name}: version '{pkg_version}' (expected '{core_version}')")
+                errors += 1
+                pkg_errors += 1
+            if pkg_python != EXPECTED_PYTHON:
+                print(f"  {RED}✗{NC} {pkg_name}: requires-python '{pkg_python}' (expected '{EXPECTED_PYTHON}')")
+                errors += 1
+                pkg_errors += 1
+            if not os.path.exists(os.path.join(pkg_path, 'README.md')):
+                print(f'  {RED}✗{NC} {pkg_name}: missing README.md')
+                errors += 1
+                pkg_errors += 1
+            if not os.path.exists(os.path.join(pkg_path, 'LICENSE')):
+                print(f'  {RED}✗{NC} {pkg_name}: missing LICENSE')
+                errors += 1
+                pkg_errors += 1
 
-        if pkg_errors == 0:
-            print(f'  {GREEN}✓{NC} {pkg_name} ({pkg_version})')
+            if pkg_errors == 0:
+                print(f'  {GREEN}✓{NC} {pkg_name} ({pkg_version})')
 
     # 3. Check samples under samples/* (Non-Publishable)
     samples_dir = os.path.join(PY_DIR, 'samples')

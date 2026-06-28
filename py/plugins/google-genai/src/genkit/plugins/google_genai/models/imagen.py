@@ -239,7 +239,7 @@ class ImagenModel:
 
     @cached_property
     def metadata(self) -> dict:
-        """Get model metadata.
+        """Model metadata.
 
         Returns:
             model metadata.
