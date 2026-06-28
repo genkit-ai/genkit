@@ -37,18 +37,19 @@ def get_toml_value(filepath: str, key: str) -> str:
     """Extract a key value from a TOML file."""
     if not os.path.exists(filepath):
         return ''
-    try:
-        import tomllib
+    if sys.version_info >= (3, 11):
+        try:
+            import tomllib
 
-        with open(filepath, 'rb') as f:
-            data = tomllib.load(f)
-            if key == 'version':
-                return data.get('project', {}).get('version') or data.get('version', '')
-            elif key == 'requires-python':
-                return data.get('project', {}).get('requires-python') or data.get('requires-python', '')
-            return str(data.get('project', {}).get(key) or data.get(key, ''))
-    except Exception:
-        pass
+            with open(filepath, 'rb') as f:
+                data = tomllib.load(f)
+                if key == 'version':
+                    return data.get('project', {}).get('version') or data.get('version', '')
+                elif key == 'requires-python':
+                    return data.get('project', {}).get('requires-python') or data.get('requires-python', '')
+                return str(data.get('project', {}).get(key) or data.get(key, ''))
+        except Exception:
+            pass
 
     with open(filepath, 'r', encoding='utf-8') as f:
         content = f.read()
