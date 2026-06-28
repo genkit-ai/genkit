@@ -34,6 +34,7 @@ from genkit._core._action import Action, ActionRunContext, StreamResponse
 from genkit._core._error import GenkitError, PublicError
 from genkit._core._model import Document
 from genkit._core._plugin import Plugin
+from genkit._core._plugins import extend_plugin_namespace
 from genkit._core._typing import (
     CustomPart,
     DocumentPart,
@@ -78,8 +79,9 @@ from genkit.model import (
     ToolDefinition,
 )
 
-# Flow is an alias for Action (used in samples for flow type hints)
 Flow = Action
+
+extend_plugin_namespace()
 
 __all__ = [
     # Main class
