@@ -53,7 +53,7 @@ fmt:
 
 # Run all Python tests.
 test:
-    "{{ py_dir }}/scripts/run_python_tests"
+    uv run --directory "{{ py_dir }}" pytest
 
 # Watch mode for tests (re-run on file changes).
 test-watch:

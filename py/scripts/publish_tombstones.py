@@ -221,8 +221,6 @@ def build_and_publish(mapping, dist_dir, publish=False) -> None:
                 ['uv', 'publish', wheel_file],
                 check=True,
             )
-        else:
-            pass
 
 
 def main() -> None:
@@ -241,9 +239,6 @@ def main() -> None:
 
     dist_dir = os.path.abspath(args.dist_dir)
     os.makedirs(dist_dir, exist_ok=True)
-
-    if args.publish:
-        pass
 
     for mapping in PLUGINS_MAPPING:
         build_and_publish(mapping, dist_dir, publish=args.publish)

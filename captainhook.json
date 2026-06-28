@@ -44,7 +44,7 @@
           "run": "bin/lint"
         },
         {
-          "run": "py/scripts/run_python_tests_with_tox p"
+          "run": "uv run --directory py pytest"
         },
         {
           "run": "echo 'disabled' || uv run --directory py mkdocs build"
@@ -90,7 +90,7 @@
           "run": "bin/lint"
         },
         {
-          "run": "py/scripts/run_python_tests_with_tox p"
+          "run": "uv run --directory py pytest"
         },
         {
           "run": "echo 'disabled' || uv run --directory py mkdocs build"
