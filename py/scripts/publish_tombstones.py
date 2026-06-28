@@ -21,6 +21,7 @@ tombstone packages to PyPI at version 0.8.0.
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -189,7 +190,7 @@ def build_and_publish(mapping, dist_dir, publish=False) -> None:
             f.write(init_content)
 
         # 4. Build package using uv build with public PyPI registry and no workspace config
-        before_files = set(os.listdir(dist_dir))
+        build_out_dir = os.path.join(tmpdir, 'dist')
         subprocess.run(
             [
                 'uv',
@@ -199,18 +200,19 @@ def build_and_publish(mapping, dist_dir, publish=False) -> None:
                 '--default-index',
                 'https://pypi.org/simple',
                 '--out-dir',
-                dist_dir,
+                build_out_dir,
             ],
             cwd=tmpdir,
             check=True,
         )
 
-        after_files = set(os.listdir(dist_dir))
-        new_files = after_files - before_files
-        wheel_files = [f for f in new_files if f.endswith('.whl')]
+        wheel_files = [f for f in os.listdir(build_out_dir) if f.endswith('.whl')]
         if not wheel_files:
-            raise FileNotFoundError(f'No wheel file found in {dist_dir} after building {old_dist}')
-        wheel_file = os.path.join(dist_dir, wheel_files[0])
+            raise FileNotFoundError(f'No wheel file found after building {old_dist}')
+
+        wheel_name = wheel_files[0]
+        shutil.copy(os.path.join(build_out_dir, wheel_name), os.path.join(dist_dir, wheel_name))
+        wheel_file = os.path.join(dist_dir, wheel_name)
 
         # 5. Publish package if requested
         if publish:
@@ -243,11 +245,8 @@ def main() -> None:
     if args.publish:
         pass
 
-    try:
-        for mapping in PLUGINS_MAPPING:
-            build_and_publish(mapping, dist_dir, publish=args.publish)
-    except Exception:
-        sys.exit(1)
+    for mapping in PLUGINS_MAPPING:
+        build_and_publish(mapping, dist_dir, publish=args.publish)
 
 
 if __name__ == '__main__':

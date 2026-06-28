@@ -66,6 +66,7 @@ See Also:
     - JS implementation: js/plugins/google-genai/src/googleai/veo.ts
 """
 
+import asyncio
 import sys
 from typing import Any, cast
 
@@ -323,7 +324,14 @@ class VeoModel:
             # Handling LRO. Using cast(Any) to avoid strict type definition issues for operation.result()
             op = cast(Any, operation)
             if hasattr(op, 'result'):
-                response = await op.result()
+                if asyncio.iscoroutinefunction(op.result):
+                    response = await op.result()
+                else:
+                    res = await asyncio.to_thread(op.result)
+                    if asyncio.iscoroutine(res) or hasattr(res, '__await__'):
+                        response = await res
+                    else:
+                        response = res
             else:
                 response = op
 
