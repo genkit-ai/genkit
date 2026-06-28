@@ -231,10 +231,15 @@ def _py_type(prop: dict, schema: dict, defs: dict, class_name: str, field_name: 
     for key in ('anyOf', 'oneOf'):
         if key in prop:
             opts = prop[key]
-            refs = [o.get('$ref', '').split('/')[-1] for o in opts if o.get('$ref')]
+            refs = [_output_name(o.get('$ref', '').split('/')[-1]) for o in opts if o.get('$ref')]
             if refs:
-                return ' | '.join(_output_name(r) for r in refs)
-            types = sorted({_py_type(o, schema, defs, class_name, field_name) for o in opts} - {''})
+                # Preserve exact order without duplicates
+                return ' | '.join(dict.fromkeys(refs))
+            types = []
+            for o in opts:
+                t = _py_type(o, schema, defs, class_name, field_name)
+                if t and t not in types:
+                    types.append(t)
             return ' | '.join(types) if types else 'Any'
     if prop.get('type') == 'array':
         return f'list[{_py_type(prop.get("items", {}), schema, defs, class_name, field_name) or "Any"}]'
@@ -397,20 +402,17 @@ def generate(schema_path: Path, _out: Path) -> str:
             if key not in defn:
                 continue
             opts = defn[key]
-            types = set()
+            types = []
             for o in opts:
                 if not isinstance(o, dict):
                     continue
-                if '$ref' in o:
-                    types.add(_output_name(o['$ref'].split('/')[-1]))
-                else:
-                    t = _py_type(o, schema, defs, _output_name(name), '')
-                    if t:
-                        types.add(t)
+                t = _output_name(o['$ref'].split('/')[-1]) if '$ref' in o else _py_type(o, schema, defs, _output_name(name), '')
+                if t and t not in types:
+                    types.append(t)
             if not types:
                 continue
             class_name = _output_name(name)
-            union_str = ' | '.join(sorted(types))
+            union_str = ' | '.join(types)
             if name in ROOT_MODEL_UNIONS:
                 out.extend([
                     f'class {class_name}(RootModel[{union_str}]):',
