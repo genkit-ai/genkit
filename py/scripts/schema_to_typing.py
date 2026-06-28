@@ -62,7 +62,7 @@ def _output_name(name: str) -> str:
 # Emit early to avoid Pydantic forward-ref issues (Schema/ConfigSchema for OutputConfig; Metadata for MessageData etc.)
 PREFERRED_FIRST = ('Schema', 'ConfigSchema', 'Metadata', 'Custom')
 # anyOf/oneOf defs emitted as RootModel (have .root) so Part(root=TextPart(...)) works
-ROOT_MODEL_UNIONS = frozenset({'Part', 'DocumentPart', 'TraceEvent'})
+ROOT_MODEL_UNIONS = frozenset({'Part', 'DocumentPart'})
 HEADER = '''# Copyright {year} Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -388,7 +388,6 @@ def generate(schema_path: Path, _out: Path) -> str:
 
     # Pass 2.5: union types (anyOf/oneOf)
     # Part and DocumentPart need RootModel so Part(root=TextPart(...)) works; others get type aliases
-    ROOT_MODEL_UNIONS = frozenset({'Part', 'DocumentPart'})
     for name, defn in defs.items():
         if name in EXCLUDED or name in emitted or not isinstance(defn, dict):
             continue
