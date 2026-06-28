@@ -32,9 +32,9 @@ fi
 
 python3 "$GENERATOR" "$SCHEMA_FILE" "$TYPING_FILE"
 
-uv run --active --directory "${TOP_DIR}/py" ruff format "$TYPING_FILE"
-uv run --active --directory "${TOP_DIR}/py" ruff check --fix "$TYPING_FILE"
-uv run --active --directory "${TOP_DIR}/py" ruff format "$TYPING_FILE"
+uv run --no-sync --active --directory "${TOP_DIR}/py" ruff format "$TYPING_FILE"
+uv run --no-sync --active --directory "${TOP_DIR}/py" ruff check --fix "$TYPING_FILE"
+uv run --no-sync --active --directory "${TOP_DIR}/py" ruff format "$TYPING_FILE"
 
 if [[ $CI_ENABLED == "true" ]] && [[ -f ${BACKUP_FILE:-} ]]; then
   if ! diff -q "$BACKUP_FILE" "$TYPING_FILE" >/dev/null; then
