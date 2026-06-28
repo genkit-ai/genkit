@@ -32,9 +32,15 @@ fi
 
 python3 "$GENERATOR" "$SCHEMA_FILE" "$TYPING_FILE"
 
-uv run --no-sync --active --directory "${TOP_DIR}/py" ruff format "$TYPING_FILE"
-uv run --no-sync --active --directory "${TOP_DIR}/py" ruff check --fix "$TYPING_FILE"
-uv run --no-sync --active --directory "${TOP_DIR}/py" ruff format "$TYPING_FILE"
+if [[ -x "${TOP_DIR}/py/.venv/bin/ruff" ]]; then
+  RUFF="${TOP_DIR}/py/.venv/bin/ruff"
+else
+  RUFF="uv run --directory ${TOP_DIR}/py ruff"
+fi
+
+$RUFF format "$TYPING_FILE"
+$RUFF check --fix "$TYPING_FILE"
+$RUFF format "$TYPING_FILE"
 
 if [[ $CI_ENABLED == "true" ]] && [[ -f ${BACKUP_FILE:-} ]]; then
   if ! diff -q "$BACKUP_FILE" "$TYPING_FILE" >/dev/null; then
