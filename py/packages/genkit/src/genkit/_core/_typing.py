@@ -104,21 +104,13 @@ class Role(StrEnum):
     TOOL = 'tool'
 
 
-class Schema(GenkitModel):
-    """Model for schema data."""
+Schema = dict[str, Any]  # type alias for flexible JSON schema / dictionary data
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+ConfigSchema = dict[str, Any]  # type alias for flexible JSON schema / dictionary data
 
+Metadata = dict[str, Any]  # type alias for flexible JSON schema / dictionary data
 
-class ConfigSchema(GenkitModel):
-    """Model for configschema data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
-
-
-Metadata = dict[str, Any]  # type alias for flexible metadata
-
-Custom = dict[str, Any]  # type alias for flexible custom data
+Custom = dict[str, Any]  # type alias for flexible JSON schema / dictionary data
 
 
 class AgentAbortRequest(GenkitModel):
