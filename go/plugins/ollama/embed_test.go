@@ -228,6 +228,12 @@ func TestDefineEmbedderRequestOptionsHandling(t *testing.T) {
 			wantHTTPCalls: 1,
 		},
 		{
+			name:          "typed nil options use bound model",
+			options:       (*EmbedOptions)(nil),
+			wantModel:     model,
+			wantHTTPCalls: 1,
+		},
+		{
 			name:          "empty model uses bound model without mutating caller options",
 			options:       &EmbedOptions{},
 			wantModel:     model,
