@@ -71,6 +71,7 @@ class CommonModelConfigDict(TypedDict, total=False):
     stop_sequences: list[str]
 
 
+CommonModelConfigDict.__pydantic_config__ = ConfigDict(extra='allow')  # pyright: ignore[reportAttributeAccessIssue]
 ModelConfigDict = CommonModelConfigDict
 ModelConfig = GenerationCommonConfig  # public name for GenerationCommonConfig
 ModelUsage = GenerationUsage  # public name for GenerationUsage
