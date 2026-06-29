@@ -161,7 +161,7 @@ class ModelStreamResponse(Generic[OutputT]):
 
     @property
     def stream(self) -> AsyncIterable[ModelResponseChunk]:
-        """Get the async iterable of response chunks.
+        """The async iterable of response chunks.
 
         Returns:
             An async iterable that yields ModelResponseChunk objects
@@ -174,7 +174,7 @@ class ModelStreamResponse(Generic[OutputT]):
 
     @property
     def response(self) -> Awaitable[ModelResponse[OutputT]]:
-        """Get the awaitable for the complete response.
+        """The awaitable for the complete response.
 
         Returns:
             An awaitable that resolves to a ModelResponse containing:
@@ -215,17 +215,26 @@ class PromptConfig(BaseModel):
 
     @model_validator(mode='before')
     @classmethod
-    def _normalize_model_ref(cls, data: Any) -> Any:
+    def _normalize_model_ref(cls, data: Any) -> Any:  # noqa: ANN401
         if isinstance(data, dict):
             m = data.get('model')
             if isinstance(m, ModelRef):
                 data['model'] = m.name
                 if m.config is not None:
-                    mcfg = dict(m.config) if isinstance(m.config, dict) else (m.config.model_dump(exclude_none=True) if hasattr(m.config, 'model_dump') else {})
+                    mcfg = (
+                        dict(m.config)
+                        if isinstance(m.config, dict)
+                        else (m.config.model_dump(exclude_none=True) if hasattr(m.config, 'model_dump') else {})
+                    )
                     ccfg = data.get('config')
-                    ccfg_dict = dict(ccfg) if isinstance(ccfg, dict) else (ccfg.model_dump(exclude_none=True) if hasattr(ccfg, 'model_dump') else (ccfg or {}))
+                    ccfg_dict = (
+                        dict(ccfg)
+                        if isinstance(ccfg, dict)
+                        else (ccfg.model_dump(exclude_none=True) if hasattr(ccfg, 'model_dump') else (ccfg or {}))
+                    )
                     data['config'] = {**mcfg, **ccfg_dict}
         return data
+
     description: str | None = None
     input_schema: type | dict[str, Any] | str | None = None
     system: str | list[Part] | None = None
@@ -257,7 +266,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         registry: Registry,
         variant: str | None = None,
         model: str | ModelRef[Any] | None = None,
-        config: ModelConfigDict | Any | None = None,
+        config: ModelConfigDict | Any | None = None,  # noqa: ANN401
         description: str | None = None,
         input_schema: type | dict[str, Any] | str | None = None,
         system: str | list[Part] | None = None,
@@ -284,8 +293,16 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         self._variant = variant
         if isinstance(model, ModelRef):
             if model.config is not None:
-                mcfg = dict(model.config) if isinstance(model.config, dict) else (model.config.model_dump(exclude_none=True) if hasattr(model.config, 'model_dump') else {})
-                ccfg = dict(config) if isinstance(config, dict) else (config.model_dump(exclude_none=True) if hasattr(config, 'model_dump') else (config or {}))
+                mcfg = (
+                    dict(model.config)
+                    if isinstance(model.config, dict)
+                    else (model.config.model_dump(exclude_none=True) if hasattr(model.config, 'model_dump') else {})
+                )
+                ccfg = (
+                    dict(config)
+                    if isinstance(config, dict)
+                    else (config.model_dump(exclude_none=True) if hasattr(config, 'model_dump') else (config or {}))
+                )
                 config = {**mcfg, **ccfg}
             model = model.name
         self._model = model

@@ -1357,7 +1357,9 @@ class Genkit:
     ) -> Operation:
         """Generate content using a long-running model, returning an Operation to poll."""
         # Resolve the model and check for long_running support
-        resolved_model = (model.name if isinstance(model, ModelRef) else model) or cast(str | None, self.registry.lookup_value('defaultModel', 'defaultModel'))
+        resolved_model = (model.name if isinstance(model, ModelRef) else model) or cast(
+            str | None, self.registry.lookup_value('defaultModel', 'defaultModel')
+        )
         if not resolved_model:
             raise GenkitError(
                 status='INVALID_ARGUMENT',

@@ -31,8 +31,8 @@ from genkit._core._action import (
 )
 from genkit._core._model import (
     CommonModelConfigDict,
-    Message,
     ConfigT,
+    Message,
     ModelConfigDict,
     ModelRef,
     ModelRequest,
@@ -72,7 +72,7 @@ def model_ref(
     namespace: str | None = None,
     info: ModelInfo | None = None,
     version: str | None = None,
-    config: ConfigT | Any = None,
+    config: ConfigT | Any = None,  # noqa: ANN401
 ) -> ModelRef[ConfigT]:
     """Create a ModelRef, optionally prefixing name with namespace."""
     # Logic: if (options.namespace && !name.startsWith(options.namespace + '/'))
