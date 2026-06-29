@@ -14,6 +14,7 @@ A code example in a docstring is not just documentation—it is a developer's fi
 - **Action-Oriented Steps**: Guide the reader through numbered comments (`# 1. ...`, `# 2. ...`, `# 3. ...`).
 - **Inline Shapes (`# =>`)**: Show the exact shape of returned data or side effects inline, so the reader understands what happens without executing the code.
 - **Clean Multi-Line Outputs**: Never use raw string escapes like `\n` in inline output comments. Format multi-line output cleanly across indented `#` lines so it is human-readable at a glance.
+- **Upgrade Existing Only**: Only upgrade or format code examples in docstrings that already have one or where explicitly requested. Do not add code examples to modules, classes, or functions that did not originally have a code block.
 - **Model Standard**: Always use `googleai/gemini-flash-latest` or `googleai/gemini-pro-latest` (or `vertexai/...` equivalents) for Gemini examples.
 
 ## Code Example Pattern (Generation)

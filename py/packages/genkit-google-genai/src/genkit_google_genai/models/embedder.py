@@ -14,27 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Google-Genai embedder model.
-
-Example:
-    ```python
-    from genkit import Genkit
-    from genkit_google_genai import GoogleAI
-
-    # 1. Initialize Genkit with GoogleAI plugin
-    ai = Genkit(plugins=[GoogleAI()])
-
-    # 2. Convert documents into vector embedding arrays
-    res = await ai.embed(
-        embedder='googleai/text-embedding-004',
-        content='Genkit provides advanced agentic AI capabilities.',
-    )
-
-    # 3. Inspect generated embedding vector dimensions
-    print(len(res[0].embedding))
-    # => 768
-    ```
-"""
+"""Google-Genai embedder model."""
 
 import json
 import sys
