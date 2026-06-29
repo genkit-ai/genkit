@@ -197,22 +197,34 @@ class Embedder:
         return EmbedResponse(embeddings=embeddings)
 
     def _build_multimodal_instance(self, doc: DocumentData) -> dict[str, Any]:
-        """Build a Vertex multimodal embedding instance from a Genkit document."""
+        """Build a Vertex multimodal embedding instance from a Genkit document.
+
+        A Vertex instance accepts at most one text, one image and one video
+        field (the three may be combined in a single instance). Multiple text
+        parts are concatenated, matching ``Document.text``; multiple images or
+        multiple videos raise, since the API would otherwise silently keep only
+        the last of each.
+        """
         if not isinstance(doc, DocumentData):
             doc = DocumentData.model_validate(doc)
 
         instance: dict[str, Any] = {}
+        text_parts: list[str] = []
         for p in doc.content:
             part = p if isinstance(p, DocumentPart) else DocumentPart.model_validate(p)
             root = part.root
             if isinstance(root, TextPart):
                 if root.text:
-                    instance['text'] = root.text
+                    text_parts.append(root.text)
             elif isinstance(root, MediaPart):
                 content_type = root.media.content_type or ''
                 if content_type.startswith('image/'):
+                    if 'image' in instance:
+                        raise ValueError('Multimodal embed document cannot contain more than one image.')
                     instance['image'] = self._media_reference(root.media.url, content_type)
                 elif content_type.startswith('video/'):
+                    if 'video' in instance:
+                        raise ValueError('Multimodal embed document cannot contain more than one video.')
                     video = self._media_reference(root.media.url, content_type, include_mime_type=False)
                     segment_config = (doc.metadata or {}).get('video_segment_config') or (doc.metadata or {}).get(
                         'videoSegmentConfig'
@@ -223,15 +235,28 @@ class Embedder:
                 else:
                     raise ValueError(f'Unsupported contentType for multimodal embedding: {content_type!r}')
 
+        if text_parts:
+            instance['text'] = ''.join(text_parts)
+
         if not instance:
             raise ValueError('Multimodal embed document has no text, image, or video content.')
         return instance
 
     @staticmethod
     def _media_reference(url: str, content_type: str, include_mime_type: bool = True) -> dict[str, str]:
-        """Map a media URL to a Vertex image/video reference (gcsUri or base64)."""
-        if url.startswith('gs://') or url.startswith('http'):
+        """Map a media URL to a Vertex image/video reference (gcsUri or base64).
+
+        Unlike the JS plugin, http(s) URLs raise instead of being forwarded as a
+        ``gcsUri``: Vertex only accepts ``gs://`` URIs there, so passing an
+        http(s) URL produces an opaque API error. Failing fast is clearer.
+        """
+        if url.startswith('gs://'):
             ref: dict[str, str] = {'gcsUri': url}
+        elif url.startswith('http'):
+            raise ValueError(
+                'Vertex multimodal embedding does not accept http(s) media URLs. '
+                'Upload the file to Cloud Storage and pass a gs:// URI, or inline it as a data: URL.'
+            )
         elif url.startswith('data:'):
             ref = {'bytesBase64Encoded': url.split(',', 1)[1]}
         else:
