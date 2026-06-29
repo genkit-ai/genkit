@@ -136,6 +136,10 @@ func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, 
 		panic("ollama.Init not called")
 	}
 
+	if dimensions <= 0 {
+		panic("ollama.DefineEmbedder: dimensions must be greater than 0")
+	}
+
 	meta := &ai.EmbedderOptions{}
 
 	if embedOpts != nil {
