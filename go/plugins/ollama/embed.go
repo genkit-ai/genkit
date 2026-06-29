@@ -160,14 +160,21 @@ func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, 
 	meta.Dimensions = dimensions
 
 	return genkit.DefineEmbedder(g, api.NewName(provider, model), meta, func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
+		normalizedReq := *req
+
 		if req.Options == nil {
-			req.Options = &EmbedOptions{Model: model}
+			normalizedReq.Options = &EmbedOptions{Model: model}
 		} else if opts, ok := req.Options.(*EmbedOptions); ok {
-			if opts.Model == "" {
-				opts.Model = model
+			normalisedOpts := *opts
+			if normalisedOpts.Model == "" {
+				normalisedOpts.Model = model
+			} else if normalisedOpts.Model != model {
+				return nil, fmt.Errorf("invalid embedding model: embedder bound to model %q, got %q", model, opts.Model)
 			}
+			normalizedReq.Options = &normalisedOpts
 		}
-		return embed(ctx, o.ServerAddress, req)
+
+		return embed(ctx, o.ServerAddress, &normalizedReq)
 	})
 }
 
