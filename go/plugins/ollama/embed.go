@@ -135,7 +135,31 @@ func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, 
 	if !o.initted {
 		panic("ollama.Init not called")
 	}
-	return genkit.DefineEmbedder(g, api.NewName(provider, model), embedOpts, func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
+
+	meta := &ai.EmbedderOptions{}
+
+	if embedOpts != nil {
+		*meta = *embedOpts
+	}
+
+	if embedOpts != nil && embedOpts.Supports != nil {
+		supports := *embedOpts.Supports
+		meta.Supports = &supports
+	}
+
+	if meta.Label == "" {
+		meta.Label = "Ollama Embedding - " + model
+	}
+	if meta.Supports == nil {
+		meta.Supports = &ai.EmbedderSupports{}
+	}
+	if len(meta.Supports.Input) == 0 {
+		meta.Supports.Input = []string{"text"}
+	}
+
+	meta.Dimensions = dimensions
+
+	return genkit.DefineEmbedder(g, api.NewName(provider, model), meta, func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
 		if req.Options == nil {
 			req.Options = &EmbedOptions{Model: model}
 		} else if opts, ok := req.Options.(*EmbedOptions); ok {
