@@ -197,8 +197,6 @@ def build_and_publish(mapping, dist_dir, publish=False) -> None:
                 '--no-config',
                 'build',
                 '--wheel',
-                '--default-index',
-                'https://pypi.org/simple',
                 '--out-dir',
                 build_out_dir,
             ],
