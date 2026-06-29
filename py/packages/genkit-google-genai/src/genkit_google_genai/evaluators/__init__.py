@@ -21,29 +21,31 @@ These evaluators assess model outputs for quality metrics like BLEU, ROUGE,
 fluency, safety, groundedness, and summarization quality.
 
 Example:
-    >>> from genkit import Genkit
-    >>> from genkit_google_genai import VertexAI
-    >>>
-    >>> # 1. Initialize Genkit with VertexAI plugin
-    >>> ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
-    >>>
-    >>> # 2. Prepare dataset with input and model output
-    >>> dataset = [
-    ...     {
-    ...         'input': 'What is the capital of France?',
-    ...         'output': 'Paris is the capital of France.',
-    ...     }
-    ... ]
-    >>>
-    >>> # 3. Evaluate output fluency using Vertex AI Evaluators
-    >>> results = await ai.evaluate(
-    ...     evaluator='vertexai/fluency',
-    ...     dataset=dataset,
-    ... )
-    >>>
-    >>> # 4. Inspect evaluation score directly
-    >>> print(results[0].score)
+    ```python
+    from genkit import Genkit
+    from genkit_google_genai import VertexAI
+
+    # 1. Initialize Genkit with VertexAI plugin
+    ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
+
+    # 2. Prepare dataset with input and model output
+    dataset = [
+        {
+            'input': 'What is the capital of France?',
+            'output': 'Paris is the capital of France.',
+        }
+    ]
+
+    # 3. Evaluate output fluency using Vertex AI Evaluators
+    results = await ai.evaluate(
+        evaluator='vertexai/fluency',
+        dataset=dataset,
+    )
+
+    # 4. Inspect evaluation score directly
+    print(results[0].score)
     # => 5.0
+    ```
 """
 
 from genkit_google_genai.evaluators.evaluation import (

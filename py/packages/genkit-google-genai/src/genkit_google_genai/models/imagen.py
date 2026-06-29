@@ -14,7 +14,27 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Imagen model implementation for Google GenAI plugin."""
+"""Imagen model implementation for Google GenAI plugin.
+
+Example:
+    ```python
+    from genkit import Genkit
+    from genkit_googleai import VertexAI
+
+    # 1. Initialize Genkit with VertexAI plugin
+    ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
+
+    # 2. Generate an image from a text prompt
+    res = await ai.generate(
+        model='vertexai/imagen-3.0-generate-002',
+        prompt='A futuristic city at sunset in cyberpunk style',
+    )
+
+    # 3. Inspect generated image media URL
+    print(res.message.content[0].url[:30])
+    # => "data:image/png;base64,iVBORw0..."
+    ```
+"""
 
 import base64
 import sys
