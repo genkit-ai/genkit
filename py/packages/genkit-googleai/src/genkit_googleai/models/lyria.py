@@ -34,7 +34,7 @@ Example:
     )
 
     # 3. Inspect generated audio media part shape
-    print(res.message.content[0].url[:30])
+    print(res.message.content[0].media.url[:30])
     # => "data:audio/wav;base64,UklGRiQ..."
     ```
 """

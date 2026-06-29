@@ -41,7 +41,7 @@ Example:
         op = await ai.check_operation(op)
 
     # 4. Inspect generated video media part shape
-    print(op.output.message.content[0].url[:30])
+    print(op.output['message']['content'][0]['media']['url'][:30])
     # => "data:video/mp4;base64,AAAAIGZ..."
     ```
 """

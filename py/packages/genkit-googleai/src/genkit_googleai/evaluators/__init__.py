@@ -43,7 +43,7 @@ Example:
     )
 
     # 4. Inspect evaluation score directly
-    print(results[0].score)
+    print(results[0].evaluation.score)
     # => 5.0
     ```
 """
