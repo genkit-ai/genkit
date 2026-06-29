@@ -1,33 +1,31 @@
 #!/usr/bin/env python3
 # ruff: noqa
 # Copyright 2026 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
-"""Script to dynamically generate and publish the 11 deprecated genkit-plugin-*.
+"""Generates deprecated genkit-plugin-* tombstone wheels into dist/ for PyPI publishing."""
 
-tombstone packages to PyPI at version 0.8.0.
-"""
-
-import argparse
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 
-# Mapping of deprecated plugin names to their new package names and import namespaces
-PLUGINS_MAPPING = [
+
+def get_version() -> str:
+    ref = os.environ.get('GITHUB_REF_NAME', '')
+    if ref.startswith('py/v'):
+        return ref[4:]
+    core_toml = os.path.join(os.path.dirname(__file__), '..', 'packages', 'genkit', 'pyproject.toml')
+    if os.path.exists(core_toml):
+        with open(core_toml) as f:
+            for line in f:
+                if line.startswith('version = '):
+                    return line.split('"')[1]
+    return '0.8.0'
+
+
+PLUGINS = [
     {
         'old_dist': 'genkit-plugin-anthropic',
         'new_dist': 'genkit-anthropic',
@@ -96,37 +94,35 @@ PLUGINS_MAPPING = [
     },
 ]
 
-PYPROJECT_TEMPLATE = """[build-system]
+PYPROJECT = """[build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
 name = "{old_dist}"
-version = "0.8.0"
+version = "{version}"
 description = "Deprecated: This package has been renamed to {new_dist}."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {{ text = "Apache-2.0" }}
-dependencies = [
-    "{new_dist}==0.8.0"
-]
+dependencies = ["{new_dist}=={version}"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/genkit"]
 """
 
-README_TEMPLATE = """# Deprecated Package: {old_dist}
+README = """# Deprecated Package: {old_dist}
 
-**IMPORTANT**: This package has been renamed to **[{new_dist}](https://pypi.org/project/{new_dist}/)** as part of the Genkit Python SDK reorganization.
+**IMPORTANT**: This package has been renamed to **[{new_dist}](https://pypi.org/project/{new_dist}/)**.
 
 ### Migration
 
 1. Update your dependencies:
    ```bash
-   pip uninstall {old_dist}
-   pip install {new_dist}
+   uv remove {old_dist}
+   uv add {new_dist}
    ```
-2. Update your import statements in code:
+2. Update your imports:
    ```python
    # Old
    from genkit.plugins import {old_import}
@@ -135,111 +131,45 @@ README_TEMPLATE = """# Deprecated Package: {old_dist}
    import {new_import}
    ```
 
-This package `{old_dist}` is no longer maintained and will not receive further updates. Importing from this package will raise an `ImportError`.
+Importing from `genkit.plugins.{old_import}` raises an `ImportError`.
 """
 
-INIT_TEMPLATE = """# Copyright 2026 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-raise ImportError(
+INIT = """raise ImportError(
     "The '{old_dist}' package has been renamed to '{new_dist}'. "
-    "Please update your requirements to '{new_dist}' and your imports to 'import {new_import}'."
+    "Please update your dependencies to '{new_dist}' and swap your imports "
+    "from 'genkit.plugins.{old_import}' to '{new_import}'."
 )
 """
 
 
-def build_and_publish(mapping, dist_dir, publish=False) -> None:
-    old_dist = mapping['old_dist']
-    new_dist = mapping['new_dist']
-    old_import = mapping['old_import']
-    new_import = mapping['new_import']
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # 1. Write pyproject.toml
-        pyproject_content = PYPROJECT_TEMPLATE.format(old_dist=old_dist, new_dist=new_dist)
-        with open(os.path.join(tmpdir, 'pyproject.toml'), 'w') as f:
-            f.write(pyproject_content)
-
-        # 2. Write README.md
-        readme_content = README_TEMPLATE.format(
-            old_dist=old_dist,
-            new_dist=new_dist,
-            old_import=old_import,
-            new_import=new_import,
-        )
-        with open(os.path.join(tmpdir, 'README.md'), 'w') as f:
-            f.write(readme_content)
-
-        # 3. Write src/genkit/plugins/{old_import}/__init__.py
-        shim_dir = os.path.join(tmpdir, 'src', 'genkit', 'plugins', old_import)
-        os.makedirs(shim_dir, exist_ok=True)
-
-        init_content = INIT_TEMPLATE.format(old_dist=old_dist, new_dist=new_dist, new_import=new_import)
-        with open(os.path.join(shim_dir, '__init__.py'), 'w') as f:
-            f.write(init_content)
-
-        # 4. Build package using uv build with public PyPI registry and no workspace config
-        build_out_dir = os.path.join(tmpdir, 'dist')
-        subprocess.run(
-            [
-                'uv',
-                '--no-config',
-                'build',
-                '--wheel',
-                '--out-dir',
-                build_out_dir,
-            ],
-            cwd=tmpdir,
-            check=True,
-        )
-
-        wheel_files = [f for f in os.listdir(build_out_dir) if f.endswith('.whl')]
-        if not wheel_files:
-            raise FileNotFoundError(f'No wheel file found after building {old_dist}')
-
-        wheel_name = wheel_files[0]
-        shutil.copy(os.path.join(build_out_dir, wheel_name), os.path.join(dist_dir, wheel_name))
-        wheel_file = os.path.join(dist_dir, wheel_name)
-
-        # 5. Publish package if requested
-        if publish:
-            # Using uv publish or twine depending on environment setup
-            subprocess.run(
-                ['uv', 'run', 'twine', 'upload', wheel_file],
-                check=True,
-            )
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Build and publish Genkit Python tombstone packages.')
-    parser.add_argument(
-        '--publish',
-        action='store_true',
-        help="Actually publish the built wheels to PyPI using 'uv publish'.",
+    version = get_version()
+    dist_dir = os.path.abspath(
+        sys.argv[2]
+        if len(sys.argv) > 2 and sys.argv[1] == '--dist-dir'
+        else (sys.argv[1] if len(sys.argv) > 1 else 'dist/')
     )
-    parser.add_argument(
-        '--dist-dir',
-        default='./dist-tombstones',
-        help='Directory to save the built wheel artifacts.',
-    )
-    args = parser.parse_args()
-
-    dist_dir = os.path.abspath(args.dist_dir)
     os.makedirs(dist_dir, exist_ok=True)
 
-    for mapping in PLUGINS_MAPPING:
-        build_and_publish(mapping, dist_dir, publish=args.publish)
+    for p in PLUGINS:
+        old_dist, new_dist, old_import, new_import = p['old_dist'], p['new_dist'], p['old_import'], p['new_import']
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with open(f'{tmpdir}/pyproject.toml', 'w') as f:
+                f.write(PYPROJECT.format(old_dist=old_dist, new_dist=new_dist, version=version))
+            with open(f'{tmpdir}/README.md', 'w') as f:
+                f.write(
+                    README.format(old_dist=old_dist, new_dist=new_dist, old_import=old_import, new_import=new_import)
+                )
+
+            mod_dir = f'{tmpdir}/src/genkit/plugins/{old_import}'
+            os.makedirs(mod_dir, exist_ok=True)
+            with open(f'{mod_dir}/__init__.py', 'w') as f:
+                f.write(INIT.format(old_dist=old_dist, new_dist=new_dist, old_import=old_import, new_import=new_import))
+
+            subprocess.run(['uv', '--no-config', 'build', '--wheel', '--out-dir', 'out'], cwd=tmpdir, check=True)
+            whl = [w for w in os.listdir(f'{tmpdir}/out') if w.endswith('.whl')][0]
+            shutil.copy(f'{tmpdir}/out/{whl}', f'{dist_dir}/{whl}')
+            print(f'Built tombstone: {whl}')
 
 
 if __name__ == '__main__':
