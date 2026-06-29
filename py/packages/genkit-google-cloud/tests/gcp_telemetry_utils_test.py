@@ -321,3 +321,22 @@ class TestToDisplayPath:
         """Plain segments without type annotations are not extracted."""
         # The regex only matches {name,t:type} patterns
         assert to_display_path('foo/bar') == ''
+
+
+# ---------------------------------------------------------------------------
+# _to_part_log_content()
+# ---------------------------------------------------------------------------
+class TestToPartLogContent:
+    """Tests for part content extraction in generate telemetry logs."""
+
+    def test_reasoning_part(self) -> None:
+        from genkit_googlecloud.telemetry.generate import generate_telemetry
+
+        result = generate_telemetry._to_part_log_content({'reasoning': 'Thinking step 1...'})
+        assert result == 'Thinking step 1...'
+
+    def test_resource_part(self) -> None:
+        from genkit_googlecloud.telemetry.generate import generate_telemetry
+
+        result = generate_telemetry._to_part_log_content({'resource': {'uri': 'gs://bucket/file'}})
+        assert result == '{"uri": "gs://bucket/file"}'
