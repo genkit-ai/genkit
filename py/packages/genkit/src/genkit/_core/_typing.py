@@ -434,7 +434,7 @@ class GenerateActionOptionsData(GenkitModel):
     """Model for generateactionoptionsdata data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    model: Any | None = None
+    model: str | None = None
     docs: list[DocumentData] | None = None
     tools: list[str] | None = None
     resources: list[str] | None = None
