@@ -27,19 +27,26 @@ Example:
     from genkit_flask import genkit_flask_handler
     from genkit_googleai import GoogleAI
 
+    # 1. Initialize Flask app and Genkit with GoogleAI
     app = Flask(__name__)
     ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
 
 
+    # 2. Define an asynchronous Genkit flow
     @ai.flow()
-    async def my_flow(prompt: str) -> str:
-        response = await ai.generate(prompt=prompt)
-        return response.text
+    async def greet_user(name: str) -> str:
+        res = await ai.generate(prompt=f'Say hello to {name} in one sentence.')
+        return res.text
 
 
-    @app.route('/api/flow', methods=['POST'])
-    def handle_flow():
-        return genkit_flask_handler(ai, my_flow)
+    # 3. Expose flow as an HTTP endpoint
+    @app.route('/api/greet', methods=['POST'])
+    def greet_endpoint():
+        return genkit_flask_handler(ai, greet_user)
+
+
+    # POST /api/greet {"data": "Alice"}
+    # => {"result": "Hello Alice! Welcome to our AI community."}
     ```
 
 Requirements:

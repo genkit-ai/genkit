@@ -29,12 +29,18 @@ Example:
     from genkit import Genkit
     from genkit_ollama import Ollama
 
-    ai = Genkit(
-        plugins=[Ollama(models=['llama3.2'])],
+    # 1. Initialize Genkit with local Ollama plugin
+    ai = Genkit(plugins=[Ollama(models=['llama3.2'])])
+
+    # 2. Generate content entirely on local hardware
+    res = await ai.generate(
         model='ollama/llama3.2',
+        prompt='Why run AI models locally in 10 words?',
     )
-    response = await ai.generate(prompt='Hello, Llama!')
-    print(response.text)
+
+    # 3. Inspect output shapes directly
+    print(res.text)
+    # => Complete data privacy with zero cloud latency or API costs.
     ```
 
 See Also:

@@ -14,7 +14,30 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Genkit built-in evaluators: regex, deep_equal, jsonata."""
+r"""Genkit built-in evaluators: regex, deep_equal, jsonata.
+
+Example:
+    ```python
+    from genkit import Genkit
+    from genkit_evaluators import register_genkit_evaluators
+
+    # 1. Initialize Genkit and register built-in evaluators
+    ai = Genkit()
+    register_genkit_evaluators(ai)
+
+    # 2. Evaluate regex pattern matching on model outputs
+    dataset = [{'output': 'Order #12345 confirmed.', 'testCaseId': 'tc1'}]
+    results = await ai.evaluate(
+        evaluator='genkit/regex',
+        dataset=dataset,
+        options={'pattern': r'Order #\d+'},
+    )
+
+    # 3. Inspect evaluation score
+    print(results[0].score)
+    # => 1.0
+    ```
+"""
 
 from genkit_evaluators.plugin import genkit_eval_name, register_genkit_evaluators
 

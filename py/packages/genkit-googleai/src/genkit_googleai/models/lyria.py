@@ -23,11 +23,18 @@ Example:
     >>> from genkit import Genkit
     >>> from genkit_googleai import VertexAI
     >>>
-    >>> ai = Genkit(plugins=[VertexAI(project='my-project')])
-    >>> response = await ai.generate(
+    >>> # 1. Initialize Genkit with VertexAI plugin
+    >>> ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
+    >>>
+    >>> # 2. Generate music or audio from a descriptive text prompt
+    >>> res = await ai.generate(
     ...     model='vertexai/lyria-002',
     ...     prompt='A peaceful piano melody with gentle rain sounds',
     ... )
+    >>>
+    >>> # 3. Inspect generated audio media part shape
+    >>> print(res.message.content[0].url[:30])
+    # => "data:audio/wav;base64,UklGRiQ..."
 """
 
 import sys

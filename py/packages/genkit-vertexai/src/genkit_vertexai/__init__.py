@@ -29,21 +29,26 @@ Example:
         define_vertex_vector_search_firestore,
     )
 
+    # 1. Initialize Genkit with VertexAI and Model Garden plugins
     ai = Genkit(
         plugins=[
             VertexAI(project='my-project', location='us-central1'),
             ModelGardenPlugin(project='my-project', location='us-central1'),
         ],
-        model='vertexai/gemini-flash-latest',
     )
 
-    # Vector Search with Firestore
+    # 2. Define Vector Search store backed by Firestore
     store = define_vertex_vector_search_firestore(
         ai,
         name='my_store',
         collection='documents',
         embedder='vertexai/text-embedding-005',
     )
+
+    # 3. Retrieve relevant documents for RAG
+    docs = await store.retrieve(query='How to reset my password', limit=2)
+    print(docs[0].content)
+    # => "To reset your password, navigate to Account Settings..."
     ```
 
 Requirements:

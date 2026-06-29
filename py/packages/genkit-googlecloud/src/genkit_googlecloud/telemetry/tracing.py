@@ -27,11 +27,13 @@ Usage:
     from genkit_googleai import GoogleAI
     from genkit_googlecloud import enable_googlecloud_telemetry
 
-    # Enable telemetry with default settings (PII redaction enabled)
+    # 1. Enable telemetry with default settings (PII redaction enabled)
     enable_googlecloud_telemetry(project_id='my-project')
 
+    # 2. All subsequent Genkit actions automatically export telemetry
     ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
-    response = await ai.generate(prompt='Hello, world!')
+    await ai.generate(prompt='Hello, world!')
+    # => Traces exported asynchronously to Cloud Trace (latency, tokens, status)
     ```
 
 Requirements:
