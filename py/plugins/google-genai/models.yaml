@@ -1,0 +1,13 @@
+default_schema: GeminiConfigSchema
+
+models:
+  - name: googleai/gemini-1.5-flash
+    export: gemini_15_flash
+  - name: googleai/gemini-1.5-pro
+    export: gemini_15_pro
+  - name: googleai/gemini-2.0-flash
+    export: gemini_20_flash
+  - name: googleai/gemini-flash-latest
+    export: gemini_flash_latest
+  - name: googleai/gemini-pro-latest
+    export: gemini_pro_latest

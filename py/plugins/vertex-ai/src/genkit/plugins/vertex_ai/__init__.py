@@ -143,7 +143,7 @@ See Also:
     - Genkit documentation: https://genkit.dev/
 """
 
-from genkit.plugins.vertex_ai.model_garden.anthropic import claude_3_5_haiku, claude_3_5_sonnet
+from genkit.plugins.vertex_ai.model_garden.anthropic import AnthropicConfigDict, claude_3_5_haiku, claude_3_5_sonnet
 from genkit.plugins.vertex_ai.model_garden.modelgarden_plugin import (
     ModelGardenPlugin,
 )
@@ -159,6 +159,7 @@ def package_name() -> str:
 
 
 __all__ = [
+    'AnthropicConfigDict',
     'ModelGardenPlugin',
     'claude_3_5_haiku',
     'claude_3_5_sonnet',

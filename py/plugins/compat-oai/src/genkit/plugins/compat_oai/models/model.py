@@ -20,13 +20,12 @@ import json
 from collections.abc import Callable
 from typing import Any, cast
 
-from genkit._core._typing import GenerationCommonConfig
 import structlog
 from openai import AsyncOpenAI
 from openai.lib._pydantic import _ensure_strict_json_schema
+
 from genkit import (
     Message,
-    ModelConfigDict,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -36,6 +35,7 @@ from genkit import (
     TextPart,
     ToolDefinition,
 )
+from genkit._core._typing import GenerationCommonConfig
 from genkit.plugin_api import ActionRunContext
 from genkit.plugins.compat_oai.models.model_info import SUPPORTED_OPENAI_MODELS
 from genkit.plugins.compat_oai.models.utils import (

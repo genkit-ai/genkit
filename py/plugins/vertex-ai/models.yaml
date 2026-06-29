@@ -1,0 +1,7 @@
+default_schema: AnthropicConfigSchema
+
+models:
+  - name: modelgarden/anthropic/claude-3-5-sonnet-v2@20241022
+    export: claude_3_5_sonnet
+  - name: modelgarden/anthropic/claude-3-5-haiku@20241022
+    export: claude_3_5_haiku

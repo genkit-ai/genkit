@@ -24,7 +24,6 @@ import pytest
 
 from genkit import (
     Message,
-    ModelConfigDict,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,

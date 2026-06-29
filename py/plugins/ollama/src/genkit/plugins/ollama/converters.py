@@ -26,9 +26,8 @@ transformations that can be tested without SDK dependencies.
 See: https://github.com/ollama/ollama/blob/main/docs/api.md
 """
 
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
-from genkit._core._typing import GenerationCommonConfig as ModelConfig
 from genkit import (
     Message,
     ModelConfigDict,
@@ -39,6 +38,7 @@ from genkit import (
     ToolRequest,
     ToolRequestPart,
 )
+from genkit._core._typing import GenerationCommonConfig as ModelConfig
 
 __all__ = [
     'build_prompt',

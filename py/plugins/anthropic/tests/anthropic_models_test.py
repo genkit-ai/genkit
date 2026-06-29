@@ -26,7 +26,6 @@ from genkit import (
     MediaPart,
     Message,
     Metadata,
-    ModelConfigDict,
     ModelRequest,
     ModelResponseChunk,
     Part,

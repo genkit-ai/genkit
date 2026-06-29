@@ -24,8 +24,8 @@ from openai import AsyncOpenAI
 from openai.types import Model
 
 from genkit import Embedding, EmbedRequest, EmbedResponse, ModelInfo, ModelRequest, ModelResponse, Supports
-from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
 from genkit._core._typing import GenerationCommonConfig as ModelConfig
+from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
 from genkit.model import model_action_metadata
 from genkit.plugin_api import (
     Action,

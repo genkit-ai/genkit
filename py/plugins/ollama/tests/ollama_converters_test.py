@@ -26,7 +26,6 @@ import pytest
 
 from genkit import (
     Message,
-    ModelConfigDict,
     ModelUsage,
     Part,
     Role,

@@ -1,0 +1,7 @@
+default_schema: ClaudeConfigSchema
+
+models:
+  - name: anthropic/claude-opus-4-8
+    export: claude_opus_4_8
+  - name: anthropic/claude-opus-4-7
+    export: claude_opus_4_7
