@@ -351,7 +351,7 @@ uv tool install ruff
 
 ```python
 from genkit import Genkit
-from genkit.plugins.google_genai import GoogleGenAI, gemini_2_0_flash
+from genkit_googleai import GoogleGenAI, gemini_2_0_flash
 
 ai = Genkit(
     plugins=[GoogleGenAI()],
