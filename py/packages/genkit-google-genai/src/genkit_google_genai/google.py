@@ -18,78 +18,21 @@
 """Google AI and Vertex AI plugin implementations for Genkit.
 
 This module provides the GoogleAI and VertexAI plugins that enable Genkit to use
-Google's generative AI models. Both plugins use **dynamic model discovery** to
-automatically detect and register available models from the Google GenAI SDK.
+Google's generative AI models. Both plugins use dynamic model discovery via the
+Google GenAI SDK to detect and register available models at runtime.
 
-Architecture:
-    ```
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                        Dynamic Model Discovery                          │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │                                                                         │
-    │   Plugin Init                                                           │
-    │   ┌─────────┐     ┌──────────────┐     ┌─────────────────────────────┐ │
-    │   │ GoogleAI│────►│client.models │────►│ Filter & Categorize         │ │
-    │   │ VertexAI│     │   .list()    │     │ ┌─────────┬───────────────┐ │ │
-    │   └─────────┘     └──────────────┘     │ │ Action  │ Model Type    │ │ │
-    │                                        │ ├─────────┼───────────────┤ │ │
-    │                                        │ │generate │ gemini, gemma │ │ │
-    │                                        │ │Content  │               │ │ │
-    │                                        │ ├─────────┼───────────────┤ │ │
-    │                                        │ │embed    │ text-embedding│ │ │
-    │                                        │ │Content  │               │ │ │
-    │                                        │ ├─────────┼───────────────┤ │ │
-    │                                        │ │predict  │ imagen        │ │ │
-    │                                        │ ├─────────┼───────────────┤ │ │
-    │                                        │ │generate │ veo           │ │ │
-    │                                        │ │Videos   │               │ │ │
-    │                                        │ └─────────┴───────────────┘ │ │
-    │                                        └─────────────────────────────┘ │
-    │                                                                         │
-    └─────────────────────────────────────────────────────────────────────────┘
-    ```
-
-Key Concepts:
-    +--------------------+-------------------------------------------------------+
-    | Concept            | Description                                           |
-    +--------------------+-------------------------------------------------------+
-    | Dynamic Discovery  | Models are discovered at runtime via the API, not     |
-    |                    | hardcoded. This ensures new models are automatically  |
-    |                    | available without SDK updates.                        |
-    +--------------------+-------------------------------------------------------+
-    | Background Models  | Long-running operations (e.g., Veo video generation)  |
-    |                    | use start/check pattern instead of blocking generate. |
-    +--------------------+-------------------------------------------------------+
-    | Action Resolution  | On-demand model instantiation when a model is first   |
-    |                    | used, avoiding upfront initialization overhead.       |
-    +--------------------+-------------------------------------------------------+
-    | Namespacing        | Models are prefixed with plugin name (e.g.,           |
-    |                    | 'googleai/gemini-flash-latest').                      |
-    +--------------------+-------------------------------------------------------+
-
-Supported Model Types:
-    - **Gemini/Gemma**: Text generation with generateContent action
-    - **Embedders**: Text embeddings with embedContent action
-    - **Imagen**: Image generation with predict action
-    - **Veo**: Video generation with generateVideos action
+Supported capabilities include text generation (Gemini/Gemma), text embeddings,
+image generation (Imagen), and video generation (Veo).
 
 Example:
     >>> from genkit import Genkit
     >>> from genkit_google_genai import GoogleAI
     >>>
-    >>> # Models are discovered automatically
     >>> ai = Genkit(plugins=[GoogleAI()])
-    >>>
-    >>> # Use any available model - no pre-registration needed
     >>> response = await ai.generate(
     ...     model='googleai/gemini-flash-latest',
     ...     prompt='Hello, world!',
     ... )
-
-See Also:
-    - https://ai.google.dev/gemini-api/docs
-    - https://cloud.google.com/vertex-ai/generative-ai/docs
-    - JS implementation: js/plugins/google-genai/src/
 """
 
 import os

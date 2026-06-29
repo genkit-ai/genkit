@@ -17,195 +17,30 @@
 
 """Telemetry and tracing functionality for the Genkit Google Cloud plugin.
 
-This module provides functionality for collecting and exporting telemetry data
-from Genkit operations to Google Cloud. It uses OpenTelemetry for tracing and
-exports span data to Google Cloud Trace for monitoring and debugging purposes.
-
-Architecture Overview:
-    The telemetry system follows a pipeline architecture that processes spans
-    (traces) and metrics before exporting them to Google Cloud:
-
-    ```
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                         TELEMETRY DATA FLOW                             │
-    │                                                                         │
-    │  Genkit Actions (flows, models, tools)                                  │
-    │         │                                                               │
-    │         ▼                                                               │
-    │  ┌─────────────────┐                                                    │
-    │  │ OpenTelemetry   │  Creates spans with genkit:* attributes            │
-    │  │ Tracer          │  (type, name, input, output, state, path, etc.)    │
-    │  └────────┬────────┘                                                    │
-    │           │                                                             │
-    │           ▼                                                             │
-    │  ┌─────────────────────────────────────────────────────────────┐        │
-    │  │           GcpAdjustingTraceExporter                         │        │
-    │  │  ┌─────────────────────────────────────────────────────┐    │        │
-    │  │  │ 1. _tick_telemetry()                                │    │        │
-    │  │  │    - pathsTelemetry.tick()    → Error metrics/logs  │    │        │
-    │  │  │    - featuresTelemetry.tick() → Feature metrics     │    │        │
-    │  │  │    - generateTelemetry.tick() → Model metrics       │    │        │
-    │  │  │    - actionTelemetry.tick()   → Action I/O logs     │    │        │
-    │  │  │    - engagementTelemetry.tick() → Feedback metrics  │    │        │
-    │  │  │    - Sets genkit:rootState for root spans           │    │        │
-    │  │  └─────────────────────────────────────────────────────┘    │        │
-    │  │  ┌─────────────────────────────────────────────────────┐    │        │
-    │  │  │ 2. AdjustingTraceExporter._adjust()                 │    │        │
-    │  │  │    - Redact genkit:input/output → "<redacted>"      │    │        │
-    │  │  │    - Mark error spans with /http/status_code: 599   │    │        │
-    │  │  │    - Mark failed spans with genkit:failedSpan       │    │        │
-    │  │  │    - Mark root spans with genkit:feature            │    │        │
-    │  │  │    - Mark model spans with genkit:model             │    │        │
-    │  │  │    - Normalize labels (: → /) for GCP compatibility │    │        │
-    │  │  └─────────────────────────────────────────────────────┘    │        │
-    │  └────────────────────────┬────────────────────────────────────┘        │
-    │                           │                                             │
-    │           ┌───────────────┴───────────────┐                             │
-    │           ▼                               ▼                             │
-    │  ┌─────────────────┐             ┌─────────────────┐                    │
-    │  │ GenkitGCPExporter│             │ Cloud Logging   │                    │
-    │  │ (Cloud Trace)   │             │ (via structlog) │                    │
-    │  └────────┬────────┘             └─────────────────┘                    │
-    │           │                                                             │
-    │           ▼                                                             │
-    │  ┌─────────────────┐                                                    │
-    │  │ Google Cloud    │                                                    │
-    │  │ Trace API       │                                                    │
-    │  └─────────────────┘                                                    │
-    │                                                                         │
-    │  ─────────────────────── METRICS PIPELINE ────────────────────────      │
-    │                                                                         │
-    │  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐      │
-    │  │ OpenTelemetry   │───▶│ GenkitMetric    │───▶│ Cloud Monitoring│      │
-    │  │ Meter           │    │ Exporter        │    │ API             │      │
-    │  │ (counters,      │    │ (adjusts start  │    │                 │      │
-    │  │  histograms)    │    │  times for      │    │                 │      │
-    │  └─────────────────┘    │  DELTA→CUMUL.)  │    └─────────────────┘      │
-    │                         └─────────────────┘                             │
-    └─────────────────────────────────────────────────────────────────────────┘
-    ```
-
-Key Components:
-    1. **GcpAdjustingTraceExporter**: Extends AdjustingTraceExporter to add
-       GCP-specific telemetry recording before spans are adjusted and exported.
-
-    2. **AdjustingTraceExporter** (from genkit._core._trace): Base class that
-       handles PII redaction, error marking, and label normalization.
-
-    3. **GenkitGCPExporter**: Extends CloudTraceSpanExporter with retry logic
-       for reliable delivery to Google Cloud Trace.
-
-    4. **GenkitMetricExporter**: Wraps CloudMonitoringMetricsExporter and
-       adjusts start times to prevent overlap when GCP converts DELTA to
-       CUMULATIVE aggregation.
-
-    5. **Telemetry Handlers** (in separate modules):
-       - feature.py: Tracks root span requests/latency
-       - path.py: Tracks error paths and failure metrics
-       - generate.py: Tracks model usage (tokens, latency, media)
-       - action.py: Logs tool and action I/O
-       - engagement.py: Tracks user feedback and acceptance
-
-Telemetry Types and When They Fire:
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │ Telemetry Type │ Condition                    │ What It Records         │
-    ├────────────────┼──────────────────────────────┼─────────────────────────┤
-    │ paths          │ Always (for all spans)       │ Error paths, failures   │
-    │ features       │ genkit:isRoot = true         │ Request count, latency  │
-    │ generate       │ type=action, subtype=model   │ Tokens, latency, media  │
-    │ action         │ type in (action,flow,...)    │ Input/output logs       │
-    │ engagement     │ type=userEngagement          │ Feedback, acceptance    │
-    └────────────────┴──────────────────────────────┴─────────────────────────┘
-
-Span Attributes Used:
-    The system reads these genkit:* attributes from spans:
-    - genkit:type - Span type (action, flow, flowStep, util, userEngagement)
-    - genkit:metadata:subtype - Subtype (model, tool, etc.)
-    - genkit:isRoot - Whether this is the root/entry span
-    - genkit:name - Action/flow name
-    - genkit:path - Hierarchical path like /{flow,t:flow}/{step,t:flowStep}
-    - genkit:input - JSON-encoded input data
-    - genkit:output - JSON-encoded output data
-    - genkit:state - Span state (success, error)
-    - genkit:isFailureSource - Whether this span is the source of a failure
-
-Configuration Options (matching JS/Go parity):
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │ Option                      │ Type     │ Default    │ Description       │
-    ├─────────────────────────────┼──────────┼────────────┼───────────────────┤
-    │ project_id                  │ str      │ Auto       │ GCP project ID    │
-    │ credentials                 │ dict     │ ADC        │ Service account   │
-    │ log_input_and_output        │ bool     │ False      │ Disable redaction │
-    │ force_dev_export            │ bool     │ True       │ Export in dev     │
-    │ disable_metrics             │ bool     │ False      │ Skip metrics      │
-    │ disable_traces              │ bool     │ False      │ Skip traces       │
-    │ metric_export_interval_ms   │ int      │ 60000      │ Export interval   │
-    │ metric_export_timeout_ms    │ int      │ None       │ Export timeout    │
-    │ sampler                     │ Sampler  │ AlwaysOn   │ Trace sampler     │
-    └─────────────────────────────┴──────────┴────────────┴───────────────────┘
-
-Project ID Resolution Order:
-    1. Explicit project_id parameter
-    2. FIREBASE_PROJECT_ID environment variable
-    3. GOOGLE_CLOUD_PROJECT environment variable
-    4. GCLOUD_PROJECT environment variable
-    5. project_id from credentials dict
+This module configures OpenTelemetry exporters to send distributed traces to
+Google Cloud Trace and metrics to Google Cloud Monitoring. It includes automatic
+PII redaction and error span adjustment.
 
 Usage:
     ```python
+    from genkit import Genkit
+    from genkit_googleai import GoogleAI
     from genkit_google_cloud import enable_google_cloud_telemetry
 
     # Enable telemetry with default settings (PII redaction enabled)
-    enable_google_cloud_telemetry()
+    enable_google_cloud_telemetry(project_id='my-project')
 
-    # Enable telemetry with input/output logging (disable PII redaction)
-    enable_google_cloud_telemetry(log_input_and_output=True)
-
-    # Force export even in dev environment
-    enable_google_cloud_telemetry(force_dev_export=True)
-
-    # Disable metrics but keep traces
-    enable_google_cloud_telemetry(disable_metrics=True)
-
-    # Custom metric export interval (minimum 5000ms for GCP)
-    enable_google_cloud_telemetry(metric_export_interval_ms=30000)
+    ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
+    response = await ai.generate(prompt='Hello, world!')
     ```
 
-Caveats:
-    - By default, model inputs and outputs are redacted for privacy
-    - Set log_input_and_output=True only in trusted environments
-    - In dev environment, telemetry is skipped unless force_dev_export=True
-    - GCP requires minimum 5000ms metric export interval (see quotas link below)
+Requirements:
+    - Requires Google Cloud Application Default Credentials (ADC) or explicit credentials.
+    - Set ``log_input_and_output=True`` only in trusted environments where prompt/response logging is permitted.
 
-GCP Documentation References:
-    Cloud Trace:
-        - Overview: https://cloud.google.com/trace/docs
-        - IAM Roles: https://cloud.google.com/trace/docs/iam
-        - Required role: roles/cloudtrace.agent (Cloud Trace Agent)
-
-    Cloud Monitoring:
-        - Overview: https://cloud.google.com/monitoring/docs
-        - Quotas & Limits: https://cloud.google.com/monitoring/quotas
-        - Required role: roles/monitoring.metricWriter (Monitoring Metric Writer)
-          or roles/telemetry.metricsWriter (Cloud Telemetry Metrics Writer)
-
-    OpenTelemetry GCP Exporters:
-        - Documentation: https://google-cloud-opentelemetry.readthedocs.io/
-        - Cloud Trace Exporter: https://google-cloud-opentelemetry.readthedocs.io/en/stable/cloud_trace/cloud_trace.html
-        - Cloud Monitoring Exporter: https://google-cloud-opentelemetry.readthedocs.io/en/stable/cloud_monitoring/cloud_monitoring.html
-
-Cross-Language Parity:
-    This implementation maintains parity with:
-    - JavaScript: js/plugins/google-cloud/src/gcpOpenTelemetry.ts
-    - Go: go/plugins/googlecloud/googlecloud.go
-    - Go: go/plugins/firebase/telemetry.go (FirebaseTelemetryOptions)
-
-    Key parity points:
-    - Same configuration options with equivalent semantics
-    - Same telemetry dispatch logic (when each handler fires)
-    - Same metrics names and dimensions
-    - Same span adjustment pipeline (redaction, marking, normalization)
-    - Same project ID resolution order
+See Also:
+    - Cloud Trace: https://cloud.google.com/trace/docs
+    - Cloud Monitoring: https://cloud.google.com/monitoring/docs
 """
 
 import warnings
