@@ -59,6 +59,7 @@ from genkit._core._typing import (
     ToolRequestPart,
 )
 
+
 class CommonModelConfigDict(TypedDict, total=False):
     """Base dictionary configuration for AI models with IDE autocomplete support."""
 
@@ -213,7 +214,7 @@ class Document(DocumentData):
 
     @cached_property
     def media(self) -> list[Media]:
-        """Get all media parts."""
+        """All media parts."""
         return [
             part.root.media for part in self.content if isinstance(part.root, MediaPart) and part.root.media is not None
         ]
