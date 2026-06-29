@@ -17,53 +17,23 @@
 """Veo video generation model for Google GenAI plugin.
 
 Veo is Google's video generation model that creates videos from text prompts.
-It uses the background model pattern because video generation is a long-running
-operation that can take 30 seconds to several minutes.
-
-Architecture:
-    ```
-    ┌──────────────────────────────────────────────────────────────────────┐
-    │                      Veo Video Generation Flow                        │
-    ├──────────────────────────────────────────────────────────────────────┤
-    │                                                                       │
-    │   1. START                 2. POLL                  3. COMPLETE       │
-    │   ┌─────────┐             ┌─────────┐             ┌─────────┐        │
-    │   │ Prompt  │ ─predict──► │Operation│ ─getOp()──► │  Video  │        │
-    │   │  +cfg   │  LongRun    │  (name) │    ...      │  (URI)  │        │
-    │   └─────────┘             └────┬────┘             └─────────┘        │
-    │                                                                       │
-    └──────────────────────────────────────────────────────────────────────┘
-    ```
-
-Note:
-    Veo models are discovered dynamically via the Google GenAI SDK's models.list() API.
-    Any model with 'generateVideos' in supported_actions or 'veo' in the name is treated
-    as a Veo model.
+Because video generation is a long-running asynchronous operation, this model
+implements the background polling operation pattern.
 
 Example:
     >>> from genkit import Genkit
     >>> from genkit_googleai import GoogleAI
     >>>
     >>> ai = Genkit(plugins=[GoogleAI()])
-    >>>
-    >>> # Start video generation
     >>> response = await ai.generate(
     ...     model='googleai/veo-2.0-generate-001',
     ...     prompt='A cat playing piano in a jazz club',
     ... )
-    >>>
-    >>> # Poll until complete
     >>> operation = response.operation
     >>> while not operation.done:
     ...     await asyncio.sleep(5)
     ...     operation = await ai.check_operation(operation)
-    >>>
-    >>> # Get the video URL
     >>> print(operation.output)
-
-See Also:
-    - https://ai.google.dev/gemini-api/docs/video
-    - JS implementation: js/plugins/google-genai/src/googleai/veo.ts
 """
 
 import asyncio
