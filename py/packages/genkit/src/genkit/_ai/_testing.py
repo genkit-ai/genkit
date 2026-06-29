@@ -117,7 +117,7 @@ class EchoModel:
 
         if request.config:
             if hasattr(request.config, 'model_dump_json'):
-                config_json = request.config.model_dump_json()
+                config_json = request.config.model_dump_json()  # pyright: ignore[reportAttributeAccessIssue]
             else:
                 config_json = json.dumps(request.config, separators=(',', ':'))
         else:

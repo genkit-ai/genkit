@@ -230,7 +230,11 @@ class PromptConfig(BaseModel):
                     ccfg_dict = (
                         dict(ccfg)
                         if isinstance(ccfg, dict)
-                        else (ccfg.model_dump(exclude_none=True) if hasattr(ccfg, 'model_dump') else (ccfg or {}))
+                        else (
+                            ccfg.model_dump(exclude_none=True)
+                            if ccfg is not None and hasattr(ccfg, 'model_dump')
+                            else (ccfg or {})
+                        )
                     )
                     data['config'] = {**mcfg, **ccfg_dict}
         return data
@@ -301,7 +305,11 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
                 ccfg = (
                     dict(config)
                     if isinstance(config, dict)
-                    else (config.model_dump(exclude_none=True) if hasattr(config, 'model_dump') else (config or {}))
+                    else (
+                        config.model_dump(exclude_none=True)
+                        if config is not None and hasattr(config, 'model_dump')
+                        else (config or {})
+                    )
                 )
                 config = {**mcfg, **ccfg}
             model = model.name
@@ -660,7 +668,8 @@ async def to_generate_action_options(
     options: PromptConfig,
 ) -> GenerateActionOptions:
     """Render ``PromptConfig`` into `GenerateActionOptions`."""
-    model = options.model or cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
+    raw_model = options.model or registry.lookup_value('defaultModel', 'defaultModel')
+    model = raw_model.name if isinstance(raw_model, ModelRef) else cast(str | None, raw_model)
     if model is None:
         raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')
 
