@@ -25,23 +25,25 @@ Supported capabilities include text generation (Gemini/Gemma), text embeddings,
 image generation (Imagen), and video generation (Veo).
 
 Example:
-    >>> from genkit import Genkit
-    >>> from genkit_googleai import GoogleAI
-    >>>
-    >>> # 1. Initialize Genkit with dynamic model discovery
-    >>> ai = Genkit(plugins=[GoogleAI()])
-    >>>
-    >>> # 2. Generate content using any discovered Gemini model
-    >>> response = await ai.generate(
-    ...     model='googleai/gemini-flash-latest',
-    ...     prompt='Suggest 3 names for a space-themed coffee shop.',
-    ... )
-    >>>
-    >>> # 3. Inspect output shapes directly
-    >>> print(response.text)
+    ```python
+    from genkit import Genkit
+    from genkit_googleai import GoogleAI
+
+    # 1. Initialize Genkit with dynamic model discovery
+    ai = Genkit(plugins=[GoogleAI()])
+
+    # 2. Generate content using any discovered Gemini model
+    response = await ai.generate(
+        model='googleai/gemini-flash-latest',
+        prompt='Suggest 3 names for a space-themed coffee shop.',
+    )
+
+    # 3. Inspect output shapes directly
+    print(response.text)
     # => 1. AstroBrew
     #    2. Nebula Nectar
     #    3. Cosmic Cup
+    ```
 """
 
 import asyncio
@@ -298,35 +300,31 @@ class GoogleAI(Plugin):
     initialization time, ensuring new models are available without SDK updates.
 
     Model Types:
-        +------------------+-------------------+--------------------------------+
-        | Type             | Action Kind       | Example                        |
-        +------------------+-------------------+--------------------------------+
-        | Gemini/Gemma     | MODEL             | googleai/gemini-flash-latest   |
-        | Imagen           | MODEL             | googleai/imagen-3.0-generate   |
-        | Embedders        | EMBEDDER          | googleai/gemini-embedding-001  |
-        | Veo (video)      | BACKGROUND_MODEL  | googleai/veo-2.0-generate-001  |
-        +------------------+-------------------+--------------------------------+
+        | Type | Action Kind | Example |
+        |---|---|---|
+        | Gemini / Gemma | MODEL | ``googleai/gemini-flash-latest`` |
+        | Imagen | MODEL | ``googleai/imagen-3.0-generate-002`` |
+        | Embedders | EMBEDDER | ``googleai/text-embedding-004`` |
+        | Veo (Video) | BACKGROUND_MODEL | ``googleai/veo-2.0-generate-001`` |
 
     Example:
-        >>> from genkit import Genkit
-        >>> from genkit_googleai import GoogleAI
-        >>>
-        >>> ai = Genkit(plugins=[GoogleAI()])
-        >>>
-        >>> # Text generation
-        >>> response = await ai.generate(
-        ...     model='googleai/gemini-flash-latest',
-        ...     prompt='Explain quantum computing',
-        ... )
-        >>>
-        >>> # Video generation (background model)
-        >>> op = await ai.generate(
-        ...     model='googleai/veo-2.0-generate-001',
-        ...     prompt='A sunset over mountains',
-        ... )
-        >>> while not op.done:
-        ...     await asyncio.sleep(5)
-        ...     op = await ai.check_operation(op)
+        ```python
+        from genkit import Genkit
+        from genkit_googleai import GoogleAI
+
+        # 1. Initialize Genkit with dynamic model discovery
+        ai = Genkit(plugins=[GoogleAI()])
+
+        # 2. Generate text using Gemini Flash
+        res = await ai.generate(
+            model='googleai/gemini-flash-latest',
+            prompt='Explain quantum computing in one sentence.',
+        )
+
+        # 3. Inspect output text directly
+        print(res.text)
+        # => Quantum computing utilizes quantum bits to solve complex problems faster...
+        ```
 
     Attributes:
         name: The plugin name ('googleai').
@@ -661,32 +659,31 @@ class VertexAI(Plugin):
         - Imagen image generation models
 
     Model Types:
-        +------------------+-------------------+--------------------------------+
-        | Type             | Action Kind       | Example                        |
-        +------------------+-------------------+--------------------------------+
-        | Gemini/Gemma     | MODEL             | vertexai/gemini-flash-latest   |
-        | Imagen           | MODEL             | vertexai/imagen-3.0-generate   |
-        | Veo (video)      | MODEL             | vertexai/veo-2.0-generate-001  |
-        | Embedders        | EMBEDDER          | vertexai/text-embedding-005    |
-        +------------------+-------------------+--------------------------------+
+        | Type | Action Kind | Example |
+        |---|---|---|
+        | Gemini / Gemma | MODEL | ``vertexai/gemini-flash-latest`` |
+        | Imagen | MODEL | ``vertexai/imagen-3.0-generate-002`` |
+        | Veo (Video) | MODEL | ``vertexai/veo-2.0-generate-001`` |
+        | Embedders | EMBEDDER | ``vertexai/text-embedding-005`` |
 
     Example:
-        >>> from genkit import Genkit
-        >>> from genkit_googleai import VertexAI
-        >>>
-        >>> ai = Genkit(plugins=[VertexAI(project='my-project')])
-        >>>
-        >>> # Text generation
-        >>> response = await ai.generate(
-        ...     model='vertexai/gemini-flash-latest',
-        ...     prompt='Explain quantum computing',
-        ... )
-        >>>
-        >>> # Image generation (Vertex AI only)
-        >>> response = await ai.generate(
-        ...     model='vertexai/imagen-3.0-generate-002',
-        ...     prompt='A serene mountain landscape',
-        ... )
+        ```python
+        from genkit import Genkit
+        from genkit_googleai import VertexAI
+
+        # 1. Initialize Genkit with VertexAI plugin
+        ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
+
+        # 2. Generate text using Gemini on Vertex AI
+        res = await ai.generate(
+            model='vertexai/gemini-flash-latest',
+            prompt='Explain quantum computing in one sentence.',
+        )
+
+        # 3. Inspect output text directly
+        print(res.text)
+        # => Quantum computing utilizes quantum bits to solve complex problems faster...
+        ```
 
     Attributes:
         name: The plugin name ('vertexai').

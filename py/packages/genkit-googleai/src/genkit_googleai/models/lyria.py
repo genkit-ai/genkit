@@ -20,21 +20,23 @@ Lyria is Google's music and audio generation model that creates audio from
 text prompts. It is available exclusively through Vertex AI.
 
 Example:
-    >>> from genkit import Genkit
-    >>> from genkit_googleai import VertexAI
-    >>>
-    >>> # 1. Initialize Genkit with VertexAI plugin
-    >>> ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
-    >>>
-    >>> # 2. Generate music or audio from a descriptive text prompt
-    >>> res = await ai.generate(
-    ...     model='vertexai/lyria-002',
-    ...     prompt='A peaceful piano melody with gentle rain sounds',
-    ... )
-    >>>
-    >>> # 3. Inspect generated audio media part shape
-    >>> print(res.message.content[0].url[:30])
+    ```python
+    from genkit import Genkit
+    from genkit_googleai import VertexAI
+
+    # 1. Initialize Genkit with VertexAI plugin
+    ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
+
+    # 2. Generate music or audio from a descriptive text prompt
+    res = await ai.generate(
+        model='vertexai/lyria-002',
+        prompt='A peaceful piano melody with gentle rain sounds',
+    )
+
+    # 3. Inspect generated audio media part shape
+    print(res.message.content[0].url[:30])
     # => "data:audio/wav;base64,UklGRiQ..."
+    ```
 """
 
 import sys
