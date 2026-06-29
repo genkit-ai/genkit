@@ -63,8 +63,6 @@ from genkit._core._typing import (
 class CommonModelConfigDict(TypedDict, total=False):
     """Base dictionary configuration for AI models with IDE autocomplete support."""
 
-    __pydantic_config__ = ConfigDict(extra='allow')
-
     version: str
     temperature: float
     max_output_tokens: int

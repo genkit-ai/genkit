@@ -126,9 +126,9 @@ from ._runtime import RuntimeManager
 logger = get_logger(__name__)
 
 # TypeVars for generic input/output typing
-InputT = TypeVar('InputT')
-OutputT = TypeVar('OutputT')
-ChunkT = TypeVar('ChunkT')
+InputT = TypeVar('InputT', default=object)
+OutputT = TypeVar('OutputT', default=object)
+ChunkT = TypeVar('ChunkT', default=object)
 
 R = TypeVar('R')
 T = TypeVar('T')
@@ -451,8 +451,8 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: str | None = None,
-        config: ModelConfigDict | None = None,
+        model: str | ModelRef[Any] | None = None,
+        config: ModelConfigDict | dict[str, Any] | Any | None = None,  # noqa: ANN401
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -479,8 +479,8 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: str | None = None,
-        config: ModelConfigDict | None = None,
+        model: str | ModelRef[Any] | None = None,
+        config: ModelConfigDict | dict[str, Any] | Any | None = None,  # noqa: ANN401
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -507,8 +507,8 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: str | None = None,
-        config: ModelConfigDict | None = None,
+        model: str | ModelRef[Any] | None = None,
+        config: ModelConfigDict | dict[str, Any] | Any | None = None,  # noqa: ANN401
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -536,7 +536,7 @@ class Genkit:
         *,
         variant: str | None = None,
         model: str | ModelRef[Any] | None = None,
-        config: ModelConfigDict | None = None,
+        config: ModelConfigDict | dict[str, Any] | Any | None = None,  # noqa: ANN401
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -562,7 +562,7 @@ class Genkit:
         *,
         variant: str | None = None,
         model: str | ModelRef[Any] | None = None,
-        config: ModelConfigDict | None = None,
+        config: ModelConfigDict | dict[str, Any] | Any | None = None,  # noqa: ANN401
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
