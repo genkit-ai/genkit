@@ -28,11 +28,20 @@ Example:
     >>> from genkit import Genkit
     >>> from genkit_google_genai import GoogleAI
     >>>
+    >>> # 1. Initialize Genkit with dynamic model discovery
     >>> ai = Genkit(plugins=[GoogleAI()])
+    >>>
+    >>> # 2. Generate content using any discovered Gemini model
     >>> response = await ai.generate(
     ...     model='googleai/gemini-flash-latest',
-    ...     prompt='Hello, world!',
+    ...     prompt='Suggest 3 names for a space-themed coffee shop.',
     ... )
+    >>>
+    >>> # 3. Inspect output shapes directly
+    >>> print(response.text)
+    # => 1. AstroBrew
+    #    2. Nebula Nectar
+    #    3. Cosmic Cup
 """
 
 import os

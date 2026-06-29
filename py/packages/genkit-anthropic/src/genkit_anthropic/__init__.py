@@ -25,34 +25,18 @@ Example:
     from genkit import Genkit
     from genkit_anthropic import Anthropic, AnthropicConfig
 
-    ai = Genkit(
-        plugins=[Anthropic()],
+    # 1. Initialize Genkit with the Anthropic plugin
+    ai = Genkit(plugins=[Anthropic()])
+
+    # 2. Generate content using Claude Sonnet 4.5
+    res = await ai.generate(
         model='anthropic/claude-sonnet-4-5',
+        prompt='Explain recursion in 10 words.',
     )
-    response = await ai.generate(prompt='Hello, Claude!')
-    print(response.text)
 
-    # With custom configuration
-    response = await ai.generate(
-        model='anthropic/claude-haiku-4-5',
-        prompt='Write a haiku about AI',
-        config=AnthropicConfig(temperature=0.7, max_output_tokens=100),
-    )
-    ```
-
-    With tools:
-
-    ```python
-    @ai.tool()
-    def get_weather(city: str) -> str:
-        return f'Weather in {city}: Sunny, 72°F'
-
-
-    response = await ai.generate(
-        model='anthropic/claude-sonnet-4-5',
-        prompt='What is the weather in Paris?',
-        tools=['get_weather'],
-    )
+    # 3. Inspect output shapes directly
+    print(res.text)
+    # => A function calling itself until reaching a base stopping condition.
     ```
 
 Requirements:

@@ -25,9 +25,20 @@ Example:
     from genkit import Genkit
     from genkit_vertexai.model_garden import ModelGarden
 
+    # 1. Initialize Genkit with the Vertex AI Model Garden plugin
     ai = Genkit(
         plugins=[ModelGarden(project_id='my-project', location='us-central1')]
     )
+
+    # 2. Generate content using a Model Garden model
+    res = await ai.generate(
+        model='vertexai/claude-3-5-sonnet-v2',
+        prompt='Explain recursion in 10 words.',
+    )
+
+    # 3. Inspect output shapes directly
+    print(res.text)
+    # => A function calling itself until reaching a base stopping condition.
     ```
 
 Requirements:

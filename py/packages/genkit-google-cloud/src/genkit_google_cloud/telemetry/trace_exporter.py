@@ -140,11 +140,15 @@ class GcpAdjustingTraceExporter(AdjustingTraceExporter):
 
     Example:
         ```python
+        # 1. Wrap GCP trace exporter with PII redaction and metrics processing
         exporter = GcpAdjustingTraceExporter(
             exporter=GenkitGCPExporter(),
             log_input_and_output=False,
             project_id='my-project',
         )
+
+        # 2. Export spans processed through Genkit telemetry handlers
+        # => Automatically redacts inputs/outputs and records model metrics
         ```
     """
 

@@ -28,9 +28,19 @@ Example:
     from genkit import Genkit
     from genkit_google_genai import GoogleAI
 
-    ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
-    response = await ai.generate(prompt='Hello, world!')
-    print(response.text)
+    # 1. Initialize Genkit with the GoogleAI plugin
+    ai = Genkit(plugins=[GoogleAI()])
+
+    # 2. Generate content using dynamic model discovery
+    res = await ai.generate(
+        model='googleai/gemini-flash-latest',
+        prompt='Suggest 2 catchy names for a space coffee shop.',
+    )
+
+    # 3. Inspect output shapes directly
+    print(res.text)
+    # => 1. AstroBrew
+    #    2. Nebula Nectar
     ```
 
     Using VertexAI (Google Cloud):
@@ -39,12 +49,18 @@ Example:
     from genkit import Genkit
     from genkit_google_genai import VertexAI
 
-    ai = Genkit(
-        plugins=[VertexAI(project='my-project', location='us-central1')],
+    # 1. Initialize with your GCP project and location
+    ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
+
+    # 2. Generate content with Gemini Pro on Vertex AI
+    res = await ai.generate(
         model='vertexai/gemini-pro-latest',
+        prompt='Explain quantum entanglement in one sentence.',
     )
-    response = await ai.generate(prompt='Hello, world!')
-    print(response.text)
+
+    # 3. Inspect output shapes directly
+    print(res.text)
+    # => "Quantum entanglement occurs when paired particles remain linked..."
     ```
 
 Requirements:

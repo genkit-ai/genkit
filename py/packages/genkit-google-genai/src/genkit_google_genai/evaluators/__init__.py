@@ -24,22 +24,26 @@ Example:
     >>> from genkit import Genkit
     >>> from genkit_google_genai import VertexAI
     >>>
-    >>> ai = Genkit(
-    ...     plugins=[VertexAI(project='my-project')],
-    ...     model='vertexai/gemini-flash-latest',
-    ... )
+    >>> # 1. Initialize Genkit with VertexAI plugin
+    >>> ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
+    >>>
+    >>> # 2. Prepare dataset with input and model output
     >>> dataset = [
     ...     {
-    ...         'input': 'Summarize this article about AI...',
-    ...         'output': 'AI is transforming industries...',
-    ...         'reference': 'The article discusses how AI impacts...',
-    ...         'context': ['Article content here...'],
+    ...         'input': 'What is the capital of France?',
+    ...         'output': 'Paris is the capital of France.',
     ...     }
     ... ]
+    >>>
+    >>> # 3. Evaluate output fluency using Vertex AI Evaluators
     >>> results = await ai.evaluate(
     ...     evaluator='vertexai/fluency',
     ...     dataset=dataset,
     ... )
+    >>>
+    >>> # 4. Inspect evaluation score directly
+    >>> print(results[0].score)
+    # => 5.0
 """
 
 from genkit_google_genai.evaluators.evaluation import (

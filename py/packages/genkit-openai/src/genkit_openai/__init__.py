@@ -26,9 +26,19 @@ Example:
     from genkit import Genkit
     from genkit_openai import OpenAI
 
-    ai = Genkit(plugins=[OpenAI()], model='openai/gpt-4o')
-    response = await ai.generate(prompt='Hello, GPT!')
-    print(response.text)
+    # 1. Initialize Genkit with OpenAI plugin
+    ai = Genkit(plugins=[OpenAI()])
+
+    # 2. Generate content using GPT-4o
+    res = await ai.generate(
+        model='openai/gpt-4o',
+        prompt='Suggest 2 catchy names for an AI newsletter.',
+    )
+
+    # 3. Inspect output shapes directly
+    print(res.text)
+    # => 1. Prompt Daily
+    #    2. Neural Notes
     ```
 
 Requirements:

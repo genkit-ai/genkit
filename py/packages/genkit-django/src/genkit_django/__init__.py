@@ -25,15 +25,25 @@ Example:
     # myapp/views.py
     from genkit import Genkit
     from genkit_django import genkit_django_handler
+    from genkit_googleai import GoogleAI
 
-    ai = Genkit(plugins=[...])
+    # 1. Initialize Genkit
+    ai = Genkit(plugins=[GoogleAI()])
 
 
+    # 2. Define flow and decorate as Django view
     @genkit_django_handler(ai)
     @ai.flow()
     async def chat(prompt: str) -> str:
-        response = await ai.generate(prompt=prompt)
-        return response.text
+        res = await ai.generate(
+            model='googleai/gemini-flash-latest',
+            prompt=f'Answer concisely: {prompt}',
+        )
+        return res.text
+
+
+    # POST /chat/ {"data": "Hello!"}
+    # => {"result": "Hi there! How can I assist you today?"}
     ```
 
     ```python
