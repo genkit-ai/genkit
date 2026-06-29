@@ -112,6 +112,7 @@ from genkit.plugin_api import ActionRunContext, get_cached_client
 from genkit.plugins.ollama.constants import (
     OllamaAPITypes,
 )
+from genkit.plugins.ollama.converters import build_request_options_dict
 
 logger = structlog.get_logger(__name__)
 
@@ -415,19 +416,8 @@ class OllamaModel:
         """
         if config is None:
             return ollama_api.Options()
-        if isinstance(config, ModelConfig):
-            config = dict(
-                top_k=config.top_k,
-                topP=config.top_p,
-                stop=config.stop_sequences,
-                temperature=config.temperature,
-                num_predict=config.max_output_tokens,
-            )
-        if isinstance(config, dict):
-            # Use cast to avoid type error with **spread of dict[str, object]
-            config = ollama_api.Options(**cast(dict[str, Any], config))
-
-        return config
+        options_dict = build_request_options_dict(config)
+        return ollama_api.Options(**options_dict)
 
     @staticmethod
     def build_prompt(request: ModelRequest) -> str:

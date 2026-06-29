@@ -96,6 +96,8 @@ def infer_export_name(model_name: str) -> str:
     base = base.split('@')[0]
     name = re.sub(r'[^a-zA-Z0-9]', '_', base)
     name = re.sub(r'_+', '_', name).strip('_')
+    if name and name[0].isdigit():
+        name = f'model_{name}'
     return name
 
 
@@ -113,7 +115,7 @@ def process_models_yaml(yaml_path: Path) -> tuple[Path, str, list[str]]:
         if py_file.name == '_generated.py':
             continue
         content = py_file.read_text(encoding='utf-8')
-        if f'class {default_schema}(' in content:
+        if re.search(rf'class\s+{default_schema}\b', content):
             target_file = py_file
             break
 

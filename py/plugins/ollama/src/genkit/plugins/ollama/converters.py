@@ -130,6 +130,8 @@ def build_request_options_dict(
             res['num_predict'] = res.pop('max_output_tokens')
         if 'top_p' in res:
             res['topP'] = res.pop('top_p')
+        if 'stop_sequences' in res:
+            res['stop'] = res.pop('stop_sequences')
         return res
 
     return {}
