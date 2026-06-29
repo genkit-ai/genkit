@@ -147,13 +147,13 @@ func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, 
 	})
 }
 
-// IsDefinedEmbedder reports whether the embedder with the given server address is defined by this plugin.
-func IsDefinedEmbedder(g *genkit.Genkit, serverAddress string) bool {
-	return genkit.LookupEmbedder(g, api.NewName(provider, serverAddress)) != nil
+// IsDefinedEmbedder reports whether the embedder with the given model is defined by this plugin.
+func IsDefinedEmbedder(g *genkit.Genkit, model string) bool {
+	return genkit.LookupEmbedder(g, api.NewName(provider, model)) != nil
 }
 
-// Embedder returns the [ai.Embedder] with the given server address.
+// Embedder returns the [ai.Embedder] with the given model.
 // It returns nil if the embedder was not defined.
-func Embedder(g *genkit.Genkit, serverAddress string) ai.Embedder {
-	return genkit.LookupEmbedder(g, api.NewName(provider, serverAddress))
+func Embedder(g *genkit.Genkit, model string) ai.Embedder {
+	return genkit.LookupEmbedder(g, api.NewName(provider, model))
 }
