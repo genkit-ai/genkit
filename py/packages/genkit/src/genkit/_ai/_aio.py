@@ -28,11 +28,12 @@ import threading
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from pathlib import Path
-from typing import Any, TypeVar, cast, overload
+from typing import Any, cast, overload
 
 import anyio
 import uvicorn
 from pydantic import BaseModel
+from typing_extensions import TypeVar
 
 from genkit._ai._embedding import EmbedderFn, EmbedderOptions, EmbedderRef, define_embedder
 from genkit._ai._evaluator import (
