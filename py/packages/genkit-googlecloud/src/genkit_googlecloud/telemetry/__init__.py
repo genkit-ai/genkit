@@ -36,13 +36,13 @@ Module Structure:
 
 Quick Start:
     ```python
-    from genkit_googlecloud import add_gcp_telemetry
+    from genkit_googlecloud import enable_googlecloud_telemetry
 
     # Enable telemetry with defaults (PII redaction enabled)
-    add_gcp_telemetry()
+    enable_googlecloud_telemetry()
 
     # Or with custom options
-    add_gcp_telemetry(
+    enable_googlecloud_telemetry(
         project_id='my-project',
         log_input_and_output=True,  # Disable PII redaction (caution!)
     )
@@ -69,14 +69,6 @@ GCP Documentation:
         - Python Exporters: https://google-cloud-opentelemetry.readthedocs.io/
 """
 
-from .tracing import (
-    add_gcp_telemetry,
-    enable_gcp_telemetry,
-    enable_googlecloud_telemetry,
-)
+from .tracing import enable_googlecloud_telemetry
 
-__all__ = [
-    'add_gcp_telemetry',
-    'enable_gcp_telemetry',
-    'enable_googlecloud_telemetry',
-]
+__all__ = ['enable_googlecloud_telemetry']

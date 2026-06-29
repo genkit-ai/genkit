@@ -153,22 +153,22 @@ Project ID Resolution Order:
 
 Usage:
     ```python
-    from genkit_googlecloud import add_gcp_telemetry
+    from genkit_googlecloud import enable_googlecloud_telemetry
 
     # Enable telemetry with default settings (PII redaction enabled)
-    add_gcp_telemetry()
+    enable_googlecloud_telemetry()
 
     # Enable telemetry with input/output logging (disable PII redaction)
-    add_gcp_telemetry(log_input_and_output=True)
+    enable_googlecloud_telemetry(log_input_and_output=True)
 
     # Force export even in dev environment
-    add_gcp_telemetry(force_dev_export=True)
+    enable_googlecloud_telemetry(force_dev_export=True)
 
     # Disable metrics but keep traces
-    add_gcp_telemetry(disable_metrics=True)
+    enable_googlecloud_telemetry(disable_metrics=True)
 
     # Custom metric export interval (minimum 5000ms for GCP)
-    add_gcp_telemetry(metric_export_interval_ms=30000)
+    enable_googlecloud_telemetry(metric_export_interval_ms=30000)
     ```
 
 Caveats:
@@ -278,22 +278,22 @@ def enable_googlecloud_telemetry(
     Example:
         ```python
         # Default: PII redaction enabled
-        add_gcp_telemetry()
+        enable_googlecloud_telemetry()
 
         # Enable input/output logging (disable PII redaction)
-        add_gcp_telemetry(log_input_and_output=True)
+        enable_googlecloud_telemetry(log_input_and_output=True)
 
         # Force export in dev environment with specific project
-        add_gcp_telemetry(force_dev_export=True, project_id='my-project')
+        enable_googlecloud_telemetry(force_dev_export=True, project_id='my-project')
 
         # Disable metrics but keep traces
-        add_gcp_telemetry(disable_metrics=True)
+        enable_googlecloud_telemetry(disable_metrics=True)
 
         # Custom metric export interval (minimum 5000ms)
-        add_gcp_telemetry(metric_export_interval_ms=30000)
+        enable_googlecloud_telemetry(metric_export_interval_ms=30000)
 
         # With custom credentials for non-GCP environments
-        add_gcp_telemetry(
+        enable_googlecloud_telemetry(
             project_id='my-project',
             credentials={'type': 'service_account', ...},
         )
@@ -326,7 +326,3 @@ def enable_googlecloud_telemetry(
     )
 
     manager.initialize()
-
-
-enable_gcp_telemetry = enable_googlecloud_telemetry
-add_gcp_telemetry = enable_googlecloud_telemetry
