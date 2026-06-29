@@ -181,7 +181,7 @@ See Also:
     - Genkit documentation: https://genkit.dev/
 """
 
-from genkit.plugins.anthropic.models import ClaudeConfigDict, claude_opus_4_7, claude_opus_4_8
+from genkit.plugins.anthropic._generated import ClaudeConfigDict, claude_opus_4_7, claude_opus_4_8
 from genkit.plugins.anthropic.plugin import Anthropic, anthropic_name
 
 __all__ = ['Anthropic', 'ClaudeConfigDict', 'anthropic_name', 'claude_opus_4_7', 'claude_opus_4_8']

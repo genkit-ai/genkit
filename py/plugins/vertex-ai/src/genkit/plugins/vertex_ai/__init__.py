@@ -143,7 +143,7 @@ See Also:
     - Genkit documentation: https://genkit.dev/
 """
 
-from genkit.plugins.vertex_ai.model_garden.anthropic import AnthropicConfigDict, claude_3_5_haiku, claude_3_5_sonnet
+from genkit.plugins.vertex_ai._generated import AnthropicConfigDict, claude_3_5_haiku, claude_3_5_sonnet
 from genkit.plugins.vertex_ai.model_garden.modelgarden_plugin import (
     ModelGardenPlugin,
 )

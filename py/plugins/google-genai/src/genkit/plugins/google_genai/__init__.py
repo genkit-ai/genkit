@@ -202,6 +202,14 @@ See Also:
     - Model catalog: https://genkit.dev/docs/models
 """
 
+from genkit.plugins.google_genai._generated import (
+    GeminiConfigDict,
+    gemini_15_flash,
+    gemini_15_pro,
+    gemini_20_flash,
+    gemini_flash_latest,
+    gemini_pro_latest,
+)
 from genkit.plugins.google_genai.google import (
     GoogleAI,
     VertexAI,
@@ -212,17 +220,11 @@ from genkit.plugins.google_genai.models.embedder import (
     VertexEmbeddingModels,
 )
 from genkit.plugins.google_genai.models.gemini import (
-    GeminiConfigDict,
     GeminiConfigSchema,
     GeminiImageConfigSchema,
     GeminiTtsConfigSchema,
     GoogleAIGeminiVersion,
     VertexAIGeminiVersion,
-    gemini_15_flash,
-    gemini_15_pro,
-    gemini_20_flash,
-    gemini_flash_latest,
-    gemini_pro_latest,
 )
 from genkit.plugins.google_genai.models.imagen import ImagenVersion
 from genkit.plugins.google_genai.models.lyria import LyriaConfig, LyriaVersion

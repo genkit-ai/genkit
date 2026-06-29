@@ -149,8 +149,9 @@ See Also:
     - Genkit documentation: https://genkit.dev/
 """
 
+from ._generated import OpenAIConfigDict, gpt_4o, gpt_4o_mini, o1, o1_mini, o3_mini
 from .openai_plugin import OpenAI, openai_model
-from .typing import OpenAIConfig, OpenAIConfigDict, gpt_4o, gpt_4o_mini, o1, o1_mini, o3_mini
+from .typing import OpenAIConfig
 
 
 def package_name() -> str:
