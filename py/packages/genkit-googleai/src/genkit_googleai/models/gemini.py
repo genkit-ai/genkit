@@ -16,26 +16,6 @@
 
 """Gemini models for use with Genkit.
 
-Example:
-    ```python
-    from genkit import Genkit
-    from genkit_googleai import GoogleAI
-
-    # 1. Initialize Genkit with the GoogleAI plugin
-    ai = Genkit(plugins=[GoogleAI()])
-
-    # 2. Generate text using Gemini Flash
-    res = await ai.generate(
-        model='googleai/gemini-flash-latest',
-        prompt='Give 2 tips for writing Python docstrings.',
-    )
-
-    # 3. Inspect output text directly
-    print(res.text)
-    # => 1. Be clear and concise
-    #    2. Show practical examples
-    ```
-
 # Naming convention
 Gemini models follow the following naming conventions:
 
