@@ -40,8 +40,9 @@ Example:
         await asyncio.sleep(5)
         op = await ai.check_operation(op)
 
-    # 4. Inspect generated video media part shape
-    print(op.output['message']['content'][0]['media']['url'][:30])
+    # 4. Extract generated video URL from operation output
+    video_part = op.output['message']['content'][0]
+    print(video_part['media']['url'][:30])
     # => "data:video/mp4;base64,AAAAIGZ..."
     ```
 """
