@@ -300,13 +300,17 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
                 mcfg = (
                     dict(model.config)
                     if isinstance(model.config, dict)
-                    else (model.config.model_dump(exclude_none=True) if hasattr(model.config, 'model_dump') else {})
+                    else (
+                        getattr(model.config, 'model_dump')(exclude_none=True)  # noqa: B009
+                        if hasattr(model.config, 'model_dump')
+                        else {}
+                    )
                 )
                 ccfg = (
                     dict(config)
                     if isinstance(config, dict)
                     else (
-                        config.model_dump(exclude_none=True)
+                        getattr(config, 'model_dump')(exclude_none=True)  # noqa: B009
                         if config is not None and hasattr(config, 'model_dump')
                         else (config or {})
                     )

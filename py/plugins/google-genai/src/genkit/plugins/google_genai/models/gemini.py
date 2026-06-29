@@ -1981,9 +1981,9 @@ class GeminiModel:
         elif isinstance(config, ModelConfig):
             # Re-route through the plugin schema so the alias machinery folds
             # any plugin-specific extras onto their canonical fields.
-            schema = self._pick_plugin_schema(config.model_dump(exclude_none=True, by_alias=True))
+            schema = self._pick_plugin_schema(config.model_dump(exclude_none=True, by_alias=True))  # ty: ignore[invalid-argument-type]
         elif isinstance(config, dict):
-            schema = self._pick_plugin_schema(config)
+            schema = self._pick_plugin_schema(config)  # ty: ignore[invalid-argument-type]
         else:
             return None
 

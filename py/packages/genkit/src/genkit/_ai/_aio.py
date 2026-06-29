@@ -1367,7 +1367,7 @@ class Genkit:
                 message='No model specified for generate_operation.',
             )
 
-        model_action = await self.registry.resolve_action(ActionKind.MODEL, resolved_model)
+        model_action = await self.registry.resolve_action(ActionKind.MODEL, str(resolved_model))
         if not model_action:
             raise GenkitError(
                 status='NOT_FOUND',

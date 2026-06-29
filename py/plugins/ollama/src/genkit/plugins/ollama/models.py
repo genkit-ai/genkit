@@ -416,6 +416,8 @@ class OllamaModel:
         """
         if config is None:
             return ollama_api.Options()
+        if isinstance(config, ollama_api.Options):
+            return config
         options_dict = build_request_options_dict(config)
         return ollama_api.Options(**options_dict)
 

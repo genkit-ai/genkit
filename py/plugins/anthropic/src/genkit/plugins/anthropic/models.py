@@ -193,7 +193,7 @@ class AnthropicModel:
             params = config.copy()
         elif config:
             if hasattr(config, 'model_dump'):
-                params = config.model_dump(exclude_none=True, by_alias=False)
+                params = getattr(config, 'model_dump')(exclude_none=True, by_alias=False)  # noqa: B009
             else:
                 params = {k: v for k, v in vars(config).items() if v is not None}
 

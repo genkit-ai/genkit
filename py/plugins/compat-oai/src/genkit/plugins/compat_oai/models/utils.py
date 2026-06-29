@@ -176,7 +176,7 @@ def extract_config_dict(request: ModelRequest) -> dict[str, Any]:
     if isinstance(request.config, dict):
         return request.config.copy()
     if hasattr(request.config, 'model_dump'):
-        return request.config.model_dump(exclude_none=True)
+        return getattr(request.config, 'model_dump')(exclude_none=True)  # noqa: B009 # pyrefly: ignore[bad-attribute-access]
     return {}
 
 

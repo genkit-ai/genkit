@@ -42,6 +42,7 @@ from genkit.plugins.compat_oai.models.utils import (
     DictMessageAdapter,
     MessageAdapter,
     MessageConverter,
+    extract_config_dict,
     strip_markdown_fences,
 )
 from genkit.plugins.compat_oai.typing import OpenAIConfig, SupportedOutputFormat
@@ -273,7 +274,7 @@ class OpenAIModel:
                 # pyrefly: ignore[bad-typed-dict-key] - response_format dict is valid for OpenAI API
                 openai_config['response_format'] = response_format
         if request.config:
-            openai_config.update(**request.config.model_dump(exclude_none=True))
+            openai_config.update(**extract_config_dict(request))
         return openai_config
 
     async def _generate(self, request: ModelRequest) -> ModelResponse:
