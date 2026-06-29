@@ -68,10 +68,11 @@ var (
 	// defaultOllamaSupports preserves the historical fallback for dynamically
 	// discovered Ollama models when capability detection is unavailable.
 	defaultOllamaSupports = ai.ModelSupports{
-		Multiturn:  true,
-		Media:      true,
-		Tools:      true,
-		SystemRole: true,
+		Multiturn:   true,
+		Media:       true,
+		Tools:       true,
+		SystemRole:  true,
+		Constrained: ai.ConstrainedSupportNoTools,
 	}
 
 	// thinkingRegex matches <think> or <thinking> tags case-insensitively across multiple lines.
@@ -148,9 +149,10 @@ func (o *Ollama) modelCapabilitiesContext(parent context.Context) (context.Conte
 // by the Ollama /api/show endpoint.
 func modelSupportsFromCapabilities(caps []string) *ai.ModelSupports {
 	return &ai.ModelSupports{
-		Multiturn:  true,
-		SystemRole: true,
-		Tools:      slices.Contains(caps, "tools"),
+		Multiturn:   true,
+		SystemRole:  true,
+		Tools:       slices.Contains(caps, "tools"),
+		Constrained: ai.ConstrainedSupportNoTools,
 		// concatImages only forwards image parts; audio input is not supported.
 		Media: slices.Contains(caps, "vision"),
 	}
@@ -160,10 +162,11 @@ func modelSupportsFromCapabilities(caps []string) *ai.ModelSupports {
 // defined models when the server does not report capabilities.
 func modelSupportsFromStaticLists(modelName string) *ai.ModelSupports {
 	return &ai.ModelSupports{
-		Multiturn:  true,
-		SystemRole: true,
-		Tools:      slices.Contains(toolSupportedModels, modelName),
-		Media:      slices.Contains(mediaSupportedModels, modelName),
+		Multiturn:   true,
+		SystemRole:  true,
+		Tools:       slices.Contains(toolSupportedModels, modelName),
+		Media:       slices.Contains(mediaSupportedModels, modelName),
+		Constrained: ai.ConstrainedSupportNoTools,
 	}
 }
 
@@ -203,6 +206,13 @@ func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.M
 	var modelOpts ai.ModelOptions
 	if opts != nil {
 		modelOpts = *opts
+		// When the caller provides opts without Supports, derive capabilities
+		// from the model name and type (same logic as the nil-opts path) rather
+		// than applying blanket defaults, so Media/Tools are not over-granted.
+		if modelOpts.Supports == nil {
+			modelOpts.Supports = modelSupportsFromStaticLists(model.Name)
+			modelOpts.Supports.Tools = model.Type == "chat" && modelOpts.Supports.Tools
+		}
 	} else {
 		// Explicitly registered models retain the static capability fallback used
 		// before dynamic discovery was added. Reuse successful discovery results
@@ -354,7 +364,7 @@ type ollamaModelRequest struct {
 	Model  string   `json:"model"`
 	Prompt string   `json:"prompt"`
 	Stream bool     `json:"stream"`
-	Format string   `json:"format,omitempty"`
+	Format any      `json:"format,omitempty"`
 }
 
 // Tool definition from Ollama API
@@ -621,13 +631,15 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 	}
 
 	if !isChatModel {
-		payload = ollamaModelRequest{
+		modelReq := ollamaModelRequest{
 			Model:  g.model.Name,
 			Prompt: concatMessages(input, []ai.Role{ai.RoleUser, ai.RoleModel, ai.RoleTool}),
 			System: concatMessages(input, []ai.Role{ai.RoleSystem}),
 			Images: images,
 			Stream: stream,
 		}
+		modelReq.Format = ollamaFormatValue(input.Output)
+		payload = modelReq
 	} else {
 		var messages []*ollamaMessage
 		// Translate all messages to ollama message format.
@@ -657,6 +669,7 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			}
 			chatReq.Tools = tools
 		}
+		chatReq.Format = ollamaFormatValue(input.Output)
 		payload = chatReq
 	}
 
@@ -702,10 +715,10 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 		} else {
 			response, err = translateModelResponse(body)
 		}
-		response.Request = input
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse response: %v", err)
 		}
+		response.Request = input
 		return response, nil
 	} else {
 		var chunks []*ai.ModelResponseChunk
@@ -749,6 +762,160 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 		return finalResponse, nil // Return the final merged response
 
 	}
+}
+
+// ollamaFormatValue returns the value for the Ollama API's format field when
+// native constrained output is active, or nil when the framework chose prompt
+// injection (e.g. tools are present or the caller opted out). Passing nil
+// leaves the format field absent from the request, which is correct in both
+// the prompt-injection case and plain text output.
+func ollamaFormatValue(output *ai.ModelOutputConfig) any {
+	if output == nil || !output.Constrained {
+		return nil
+	}
+	if len(output.Schema) > 0 {
+		return resolveSchemaRefs(output.Schema)
+	}
+	return ai.OutputFormatJSON
+}
+
+// resolveSchemaRefs returns a copy of schema with $ref pointers inlined from
+// the top-level $defs / definitions map where possible. Ollama's constrained
+// output engine does not resolve JSON Schema references itself, so schemas
+// produced by Go struct reflection (which use $defs + $ref) should be
+// flattened before forwarding. $defs (draft 2019-09+) takes precedence over
+// definitions (draft-07) when both define the same name.
+func resolveSchemaRefs(schema map[string]any) map[string]any {
+	defs := make(map[string]any)
+	// Populate definitions first so that $defs entries overwrite on collision.
+	if d, ok := schema["definitions"].(map[string]any); ok {
+		for k, v := range d {
+			defs[k] = v
+		}
+	}
+	if d, ok := schema["$defs"].(map[string]any); ok {
+		for k, v := range d {
+			defs[k] = v
+		}
+	}
+	if len(defs) == 0 {
+		return schema
+	}
+	visited := make(map[string]bool)
+	result, _ := inlineSchemaRefs(schema, defs, visited).(map[string]any)
+	if result == nil {
+		return schema
+	}
+	if !hasLocalRefsOutsideDefs(result) {
+		cloned := make(map[string]any, len(result))
+		for k, v := range result {
+			cloned[k] = v
+		}
+		result = cloned
+		delete(result, "$defs")
+		delete(result, "definitions")
+	}
+	return result
+}
+
+// inlineSchemaRefs recursively replaces $ref nodes with the definition they
+// reference. Sibling keywords alongside a $ref are merged into the resolved
+// definition (JSON Schema draft 2019-09+ semantics). Non-map $defs entries
+// (e.g. boolean schemas), unknown $refs, and cycles are left in place.
+// visited tracks names on the current DFS stack to terminate circular $refs.
+func inlineSchemaRefs(v any, defs map[string]any, visited map[string]bool) any {
+	switch node := v.(type) {
+	case map[string]any:
+		if ref, ok := node["$ref"].(string); ok {
+			name := refName(ref)
+			def, found := defs[name]
+			defMap, isMap := def.(map[string]any)
+			if found && isMap && !visited[name] {
+				visited[name] = true
+				resolved, _ := inlineSchemaRefs(defMap, defs, visited).(map[string]any)
+				visited[name] = false
+				if resolved == nil {
+					return node
+				}
+				// Merge sibling keywords from the $ref node into the resolved
+				// definition; caller annotations (description, title, etc.) win.
+				if len(node) > 1 {
+					merged := make(map[string]any, len(resolved)+len(node))
+					for k, val := range resolved {
+						merged[k] = val
+					}
+					for k, val := range node {
+						if k != "$ref" {
+							merged[k] = inlineSchemaRefs(val, defs, visited)
+						}
+					}
+					return merged
+				}
+				return resolved
+			}
+			// Non-map def (boolean schema), unknown $ref, or cycle: leave in place.
+			return node
+		}
+		result := make(map[string]any, len(node))
+		for k, val := range node {
+			result[k] = inlineSchemaRefs(val, defs, visited)
+		}
+		return result
+	case []any:
+		result := make([]any, len(node))
+		for i, item := range node {
+			result[i] = inlineSchemaRefs(item, defs, visited)
+		}
+		return result
+	case []map[string]any:
+		result := make([]any, len(node))
+		for i, item := range node {
+			result[i] = inlineSchemaRefs(item, defs, visited)
+		}
+		return result
+	default:
+		return v
+	}
+}
+
+// hasLocalRefsOutsideDefs reports whether v still contains a local JSON Schema
+// reference outside the definition blocks. If any remain after inlining, keep
+// $defs / definitions attached so the schema does not contain dangling refs.
+func hasLocalRefsOutsideDefs(v any) bool {
+	switch node := v.(type) {
+	case map[string]any:
+		if ref, ok := node["$ref"].(string); ok && strings.HasPrefix(ref, "#/") {
+			return true
+		}
+		for key, val := range node {
+			if key == "$defs" || key == "definitions" {
+				continue
+			}
+			if hasLocalRefsOutsideDefs(val) {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range node {
+			if hasLocalRefsOutsideDefs(item) {
+				return true
+			}
+		}
+	case []map[string]any:
+		for _, item := range node {
+			if hasLocalRefsOutsideDefs(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func refName(ref string) string {
+	name := ref[strings.LastIndex(ref, "/")+1:]
+	name = strings.ReplaceAll(name, "~1", "/")
+	name = strings.ReplaceAll(name, "~0", "~")
+	return name
 }
 
 // convertTools converts Genkit tool definitions to Ollama tool format
