@@ -46,3 +46,13 @@ gemini_15_pro: ModelRef[GeminiConfigDict] = model_ref('googleai/gemini-1.5-pro',
 gemini_20_flash: ModelRef[GeminiConfigDict] = model_ref('googleai/gemini-2.0-flash', config=GeminiConfigDict)
 gemini_flash_latest: ModelRef[GeminiConfigDict] = model_ref('googleai/gemini-flash-latest', config=GeminiConfigDict)
 gemini_pro_latest: ModelRef[GeminiConfigDict] = model_ref('googleai/gemini-pro-latest', config=GeminiConfigDict)
+
+
+__all__ = [
+    'GeminiConfigDict',
+    'gemini_15_flash',
+    'gemini_15_pro',
+    'gemini_20_flash',
+    'gemini_flash_latest',
+    'gemini_pro_latest',
+]

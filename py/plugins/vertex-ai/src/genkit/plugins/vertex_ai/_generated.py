@@ -22,3 +22,10 @@ claude_3_5_sonnet: ModelRef[AnthropicConfigDict] = model_ref(
 claude_3_5_haiku: ModelRef[AnthropicConfigDict] = model_ref(
     'modelgarden/anthropic/claude-3-5-haiku@20241022', config=AnthropicConfigDict
 )
+
+
+__all__ = [
+    'AnthropicConfigDict',
+    'claude_3_5_haiku',
+    'claude_3_5_sonnet',
+]

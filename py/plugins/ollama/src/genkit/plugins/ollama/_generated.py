@@ -22,3 +22,12 @@ llama3_2: ModelRef[OllamaConfigDict] = model_ref('ollama/llama3.2', config=Ollam
 llama3_1: ModelRef[OllamaConfigDict] = model_ref('ollama/llama3.1', config=OllamaConfigDict)
 mistral: ModelRef[OllamaConfigDict] = model_ref('ollama/mistral', config=OllamaConfigDict)
 gemma2: ModelRef[OllamaConfigDict] = model_ref('ollama/gemma2', config=OllamaConfigDict)
+
+
+__all__ = [
+    'OllamaConfigDict',
+    'gemma2',
+    'llama3_1',
+    'llama3_2',
+    'mistral',
+]

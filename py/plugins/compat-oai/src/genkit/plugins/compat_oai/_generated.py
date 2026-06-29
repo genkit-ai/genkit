@@ -54,3 +54,13 @@ gpt_4o_mini: ModelRef[OpenAIConfigDict] = model_ref('openai/gpt-4o-mini', config
 o1: ModelRef[OpenAIConfigDict] = model_ref('openai/o1', config=OpenAIConfigDict)
 o1_mini: ModelRef[OpenAIConfigDict] = model_ref('openai/o1-mini', config=OpenAIConfigDict)
 o3_mini: ModelRef[OpenAIConfigDict] = model_ref('openai/o3-mini', config=OpenAIConfigDict)
+
+
+__all__ = [
+    'OpenAIConfigDict',
+    'gpt_4o',
+    'gpt_4o_mini',
+    'o1',
+    'o1_mini',
+    'o3_mini',
+]
