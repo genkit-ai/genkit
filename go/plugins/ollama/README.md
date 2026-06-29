@@ -203,9 +203,9 @@ You can define and use text embedding models hosted on Ollama (e.g., `nomic-embe
 
 ```go
 // Define an embedder model
-o.DefineEmbedder(g, "http://localhost:11434", "nomic-embed-text", nil)
+o.DefineEmbedder(g, "nomic-embed-text", 768, nil)
 
-embedder := ollama.Embedder(g, "http://localhost:11434")
+embedder := ollama.Embedder(g, "nomic-embed-text")
 ```
 
 ### Usage
