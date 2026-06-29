@@ -69,6 +69,14 @@ GCP Documentation:
         - Python Exporters: https://google-cloud-opentelemetry.readthedocs.io/
 """
 
-from .tracing import add_gcp_telemetry
+from .tracing import (
+    add_gcp_telemetry,
+    enable_gcp_telemetry,
+    enable_googlecloud_telemetry,
+)
 
-__all__ = ['add_gcp_telemetry']
+__all__ = [
+    'add_gcp_telemetry',
+    'enable_gcp_telemetry',
+    'enable_googlecloud_telemetry',
+]

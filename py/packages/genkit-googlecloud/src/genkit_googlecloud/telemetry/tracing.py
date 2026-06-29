@@ -218,7 +218,7 @@ from .config import GcpTelemetry
 logger = structlog.get_logger(__name__)
 
 
-def add_gcp_telemetry(
+def enable_googlecloud_telemetry(
     project_id: str | None = None,
     credentials: dict[str, Any] | None = None,
     sampler: Sampler | None = None,
@@ -326,3 +326,7 @@ def add_gcp_telemetry(
     )
 
     manager.initialize()
+
+
+enable_gcp_telemetry = enable_googlecloud_telemetry
+add_gcp_telemetry = enable_googlecloud_telemetry
