@@ -2,12 +2,7 @@ default_schema: OpenAIConfig
 
 models:
   - name: openai/gpt-4o
-    export: gpt_4o
   - name: openai/gpt-4o-mini
-    export: gpt_4o_mini
   - name: openai/o1
-    export: o1
   - name: openai/o1-mini
-    export: o1_mini
   - name: openai/o3-mini
-    export: o3_mini

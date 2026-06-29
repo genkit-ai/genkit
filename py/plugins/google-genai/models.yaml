@@ -8,6 +8,4 @@ models:
   - name: googleai/gemini-2.0-flash
     export: gemini_20_flash
   - name: googleai/gemini-flash-latest
-    export: gemini_flash_latest
   - name: googleai/gemini-pro-latest
-    export: gemini_pro_latest
