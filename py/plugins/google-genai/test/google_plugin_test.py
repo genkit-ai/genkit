@@ -1041,6 +1041,25 @@ def test_list_genai_models_classifies_gemini_embedding_2_as_embedder() -> None:
     assert 'gemini-embedding-2' in discovered.embedders
 
 
+def test_list_genai_models_pins_multimodalembedding_version() -> None:
+    """Vertex lists multimodalembedding bare; discovery pins it to @001."""
+    mock_client = MagicMock()
+
+    model = MagicMock()
+    model.supported_actions = None  # Vertex leaves this unset.
+    model.description = ''
+
+    # Bare name returned by Vertex gets the canonical @001 version pinned.
+    model.name = 'publishers/google/models/multimodalembedding'
+    mock_client.models.list.return_value = [model]
+    assert _list_genai_models(mock_client, is_vertex=True).embedders == ['multimodalembedding@001']
+
+    # An already-versioned name is left untouched (no double suffix).
+    model.name = 'publishers/google/models/multimodalembedding@001'
+    mock_client.models.list.return_value = [model]
+    assert _list_genai_models(mock_client, is_vertex=True).embedders == ['multimodalembedding@001']
+
+
 def test_config_schema_extra_fields() -> None:
     """Test that config schema accepts extra fields (dynamic config)."""
     # Validation should succeed with unknown field by using model_validate for dynamic fields
