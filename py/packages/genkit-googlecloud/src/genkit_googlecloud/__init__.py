@@ -119,7 +119,7 @@ Architecture Overview::
 
 Example:
     ```python
-    from genkit_google_cloud import add_gcp_telemetry
+    from genkit_googlecloud import add_gcp_telemetry
 
     # Enable telemetry export to Google Cloud
     add_gcp_telemetry()
@@ -149,7 +149,7 @@ def package_name() -> str:
     Returns:
         The fully qualified package name as a string.
     """
-    return 'genkit_google_cloud'
+    return 'genkit_googlecloud'
 
 
 __all__ = ['add_gcp_telemetry', 'package_name']

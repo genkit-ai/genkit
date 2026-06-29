@@ -22,7 +22,7 @@ creation — matching the JS implementation in js/plugins/google-cloud/src/utils
 
 from unittest.mock import MagicMock
 
-from genkit_google_cloud.telemetry.utils import (
+from genkit_googlecloud.telemetry.utils import (
     MAX_LOG_CONTENT_CHARS,
     MAX_PATH_CHARS,
     create_common_log_attributes,

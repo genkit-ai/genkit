@@ -66,9 +66,9 @@ PLUGINS_MAPPING = [
     },
     {
         'old_dist': 'genkit-plugin-google-cloud',
-        'new_dist': 'genkit-google-cloud',
+        'new_dist': 'genkit-googlecloud',
         'old_import': 'google_cloud',
-        'new_import': 'genkit_google_cloud',
+        'new_import': 'genkit_googlecloud',
     },
     {
         'old_dist': 'genkit-plugin-google-genai',
@@ -90,7 +90,7 @@ PLUGINS_MAPPING = [
     },
     {
         'old_dist': 'genkit-plugin-vertex-ai',
-        'new_dist': 'genkit-vertex-ai',
+        'new_dist': 'genkit-vertexai',
         'old_import': 'vertex_ai',
         'new_import': 'genkit_vertexai',
     },

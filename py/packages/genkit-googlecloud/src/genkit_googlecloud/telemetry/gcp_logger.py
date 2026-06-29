@@ -24,7 +24,7 @@ This is analogous to the JavaScript implementation in:
 - js/plugins/google-cloud/src/gcpLogger.ts
 
 Usage:
-    from genkit_google_cloud.telemetry.gcp_logger import gcp_logger
+    from genkit_googlecloud.telemetry.gcp_logger import gcp_logger
 
     # Initialize during telemetry setup
     gcp_logger.initialize(project_id="my-project", credentials=creds, export=True)

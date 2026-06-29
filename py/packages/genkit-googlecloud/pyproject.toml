@@ -63,14 +63,14 @@ keywords = [
   "telemetry",
 ]
 license = "Apache-2.0"
-name = "genkit-google-cloud"
+name = "genkit-googlecloud"
 readme = "README.md"
 requires-python = ">=3.10"
 version = "0.7.0"
 
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"
-Changelog       = "https://github.com/genkit-ai/genkit/blob/main/py/packages/genkit-google-cloud/CHANGELOG.md"
+Changelog       = "https://github.com/genkit-ai/genkit/blob/main/py/packages/genkit-googlecloud/CHANGELOG.md"
 "Documentation" = "https://firebase.google.com/docs/genkit"
 "Homepage"      = "https://github.com/genkit-ai/genkit"
 "Repository"    = "https://github.com/genkit-ai/genkit/tree/main/py"
@@ -80,5 +80,5 @@ build-backend = "hatchling.build"
 requires      = ["hatchling"]
 
 [tool.hatch.build.targets.wheel]
-only-include = ["src/genkit_google_cloud"]
+only-include = ["src/genkit_googlecloud"]
 sources      = ["src"]

@@ -80,11 +80,11 @@ version = "0.7.0"
 
 [project.optional-dependencies]
 flask                 = ["genkit-flask"]
-google-cloud          = ["genkit-google-cloud"]
+google-cloud          = ["genkit-googlecloud"]
 google-genai          = ["genkit-googleai"]
 ollama                = ["genkit-ollama"]
 openai                = ["genkit-openai"]
-vertex-ai             = ["genkit-vertex-ai"]
+vertex-ai             = ["genkit-vertexai"]
 
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"

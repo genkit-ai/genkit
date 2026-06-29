@@ -16,7 +16,7 @@
 
 """Tests for Google Cloud telemetry metrics helpers."""
 
-from genkit_google_cloud.telemetry.metrics import (
+from genkit_googlecloud.telemetry.metrics import (
     _extract_feature_name,
     _metric,
 )

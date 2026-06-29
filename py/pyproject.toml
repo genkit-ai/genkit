@@ -25,11 +25,11 @@ dependencies = [
   "genkit-evaluators",
   "genkit-fastapi",
   "genkit-flask",
-  "genkit-google-cloud",
+  "genkit-googlecloud",
   "genkit-googleai",
   "genkit-middleware",
   "genkit-ollama",
-  "genkit-vertex-ai",
+  "genkit-vertexai",
   # Internal tools (private, not published)
   "liccheck>=0.9.2",
   "setuptools>=75.0.0,<82",                   # Required by liccheck (provides pkg_resources, removed in setuptools 82+)
@@ -148,11 +148,11 @@ genkit-django       = { workspace = true }
 genkit-evaluators   = { workspace = true }
 genkit-fastapi      = { workspace = true }
 genkit-flask        = { workspace = true }
-genkit-google-cloud = { workspace = true }
+genkit-googlecloud = { workspace = true }
 genkit-googleai     = { workspace = true }
 genkit-middleware   = { workspace = true }
 genkit-ollama       = { workspace = true }
-genkit-vertex-ai    = { workspace = true }
+genkit-vertexai    = { workspace = true }
 
 [tool.uv.workspace]
 exclude = ["*/shared", "testapps/*"]
@@ -368,11 +368,11 @@ root = [
   "packages/genkit-evaluators/src",
   "packages/genkit-fastapi/src",
   "packages/genkit-flask/src",
-  "packages/genkit-google-cloud/src",
+  "packages/genkit-googlecloud/src",
   "packages/genkit-googleai/src",
   "packages/genkit-middleware/src",
   "packages/genkit-ollama/src",
-  "packages/genkit-vertex-ai/src",
+  "packages/genkit-vertexai/src",
   ".",  # For samples.shared and other root-level imports
 ]
 
@@ -398,12 +398,12 @@ extraPaths = [
   "packages/genkit-evaluators/src",
   "packages/genkit-fastapi/src",
   "packages/genkit-flask/src",
-  "packages/genkit-google-cloud/src",
+  "packages/genkit-googlecloud/src",
   "packages/genkit-googleai/src",
   "packages/genkit-middleware/src",
   "packages/genkit-ollama/src",
   "packages/genkit-openai/src",
-  "packages/genkit-vertex-ai/src"
+  "packages/genkit-vertexai/src"
 ]
 pythonVersion = "3.10"
 reportMissingImports = true
@@ -441,12 +441,12 @@ search-path = [
   "packages/genkit-evaluators/src",
   "packages/genkit-fastapi/src",
   "packages/genkit-flask/src",
-  "packages/genkit-google-cloud/src",
+  "packages/genkit-googlecloud/src",
   "packages/genkit-googleai/src",
   "packages/genkit-middleware/src",
   "packages/genkit-ollama/src",
   "packages/genkit-openai/src",
-  "packages/genkit-vertex-ai/src"
+  "packages/genkit-vertexai/src"
 ]
 python_version         = "3.10"
 ignore-missing-imports = ["strenum"]

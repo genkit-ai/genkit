@@ -34,12 +34,12 @@ members = [
     "genkit-evaluators",
     "genkit-fastapi",
     "genkit-flask",
-    "genkit-google-cloud",
     "genkit-googleai",
+    "genkit-googlecloud",
     "genkit-middleware",
     "genkit-ollama",
     "genkit-openai",
-    "genkit-vertex-ai",
+    "genkit-vertexai",
     "genkit-workspace",
     "google-genai-media",
     "middleware",
@@ -50,7 +50,6 @@ members = [
     "tracing",
     "vertexai-imagen",
 ]
-overrides = [{ name = "werkzeug", specifier = ">=3.1.6" }]
 
 [[package]]
 name = "aiofiles"
@@ -1410,7 +1409,7 @@ flask = [
     { name = "genkit-flask" },
 ]
 google-cloud = [
-    { name = "genkit-google-cloud" },
+    { name = "genkit-googlecloud" },
 ]
 google-genai = [
     { name = "genkit-googleai" },
@@ -1422,7 +1421,7 @@ openai = [
     { name = "genkit-openai" },
 ]
 vertex-ai = [
-    { name = "genkit-vertex-ai" },
+    { name = "genkit-vertexai" },
 ]
 
 [package.metadata]
@@ -1431,11 +1430,11 @@ requires-dist = [
     { name = "asgiref", specifier = ">=3.8.1" },
     { name = "dotpromptz", specifier = ">=0.1.5" },
     { name = "genkit-flask", marker = "extra == 'flask'", editable = "packages/genkit-flask" },
-    { name = "genkit-google-cloud", marker = "extra == 'google-cloud'", editable = "packages/genkit-google-cloud" },
     { name = "genkit-googleai", marker = "extra == 'google-genai'", editable = "packages/genkit-googleai" },
+    { name = "genkit-googlecloud", marker = "extra == 'google-cloud'", editable = "packages/genkit-googlecloud" },
     { name = "genkit-ollama", marker = "extra == 'ollama'", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", marker = "extra == 'openai'", editable = "packages/genkit-openai" },
-    { name = "genkit-vertex-ai", marker = "extra == 'vertex-ai'", editable = "packages/genkit-vertex-ai" },
+    { name = "genkit-vertexai", marker = "extra == 'vertex-ai'", editable = "packages/genkit-vertexai" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "json5", specifier = ">=0.10.0" },
     { name = "opentelemetry-api", specifier = ">=1.29.0" },
@@ -1542,27 +1541,6 @@ requires-dist = [
 ]
 
 [[package]]
-name = "genkit-google-cloud"
-version = "0.7.0"
-source = { editable = "packages/genkit-google-cloud" }
-dependencies = [
-    { name = "genkit" },
-    { name = "google-cloud-logging" },
-    { name = "opentelemetry-exporter-gcp-monitoring" },
-    { name = "opentelemetry-exporter-gcp-trace" },
-    { name = "strenum", marker = "python_full_version < '3.11'" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "genkit", editable = "packages/genkit" },
-    { name = "google-cloud-logging", specifier = ">=3.10.0" },
-    { name = "opentelemetry-exporter-gcp-monitoring", specifier = ">=1.9.0" },
-    { name = "opentelemetry-exporter-gcp-trace", specifier = ">=1.9.0" },
-    { name = "strenum", marker = "python_full_version < '3.11'", specifier = ">=0.4.15" },
-]
-
-[[package]]
 name = "genkit-googleai"
 version = "0.7.0"
 source = { editable = "packages/genkit-googleai" }
@@ -1581,6 +1559,27 @@ requires-dist = [
     { name = "google-genai", specifier = ">=1.7.0" },
     { name = "strenum", marker = "python_full_version < '3.11'", specifier = ">=0.4.15" },
     { name = "structlog", specifier = ">=25.2.0" },
+]
+
+[[package]]
+name = "genkit-googlecloud"
+version = "0.7.0"
+source = { editable = "packages/genkit-googlecloud" }
+dependencies = [
+    { name = "genkit" },
+    { name = "google-cloud-logging" },
+    { name = "opentelemetry-exporter-gcp-monitoring" },
+    { name = "opentelemetry-exporter-gcp-trace" },
+    { name = "strenum", marker = "python_full_version < '3.11'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "google-cloud-logging", specifier = ">=3.10.0" },
+    { name = "opentelemetry-exporter-gcp-monitoring", specifier = ">=1.9.0" },
+    { name = "opentelemetry-exporter-gcp-trace", specifier = ">=1.9.0" },
+    { name = "strenum", marker = "python_full_version < '3.11'", specifier = ">=0.4.15" },
 ]
 
 [[package]]
@@ -1646,9 +1645,9 @@ requires-dist = [
 ]
 
 [[package]]
-name = "genkit-vertex-ai"
+name = "genkit-vertexai"
 version = "0.7.0"
-source = { editable = "packages/genkit-vertex-ai" }
+source = { editable = "packages/genkit-vertexai" }
 dependencies = [
     { name = "anthropic" },
     { name = "genkit" },
@@ -1686,12 +1685,12 @@ dependencies = [
     { name = "genkit-evaluators" },
     { name = "genkit-fastapi" },
     { name = "genkit-flask" },
-    { name = "genkit-google-cloud" },
     { name = "genkit-googleai" },
+    { name = "genkit-googlecloud" },
     { name = "genkit-middleware" },
     { name = "genkit-ollama" },
     { name = "genkit-openai" },
-    { name = "genkit-vertex-ai" },
+    { name = "genkit-vertexai" },
     { name = "liccheck" },
     { name = "mcp" },
     { name = "python-multipart" },
@@ -1720,6 +1719,7 @@ lint = [
     { name = "pyright" },
     { name = "pysentry-rs" },
     { name = "ruff" },
+    { name = "strenum" },
     { name = "ty" },
 ]
 
@@ -1732,12 +1732,12 @@ requires-dist = [
     { name = "genkit-evaluators", editable = "packages/genkit-evaluators" },
     { name = "genkit-fastapi", editable = "packages/genkit-fastapi" },
     { name = "genkit-flask", editable = "packages/genkit-flask" },
-    { name = "genkit-google-cloud", editable = "packages/genkit-google-cloud" },
     { name = "genkit-googleai", editable = "packages/genkit-googleai" },
+    { name = "genkit-googlecloud", editable = "packages/genkit-googlecloud" },
     { name = "genkit-middleware", editable = "packages/genkit-middleware" },
     { name = "genkit-ollama", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", editable = "packages/genkit-openai" },
-    { name = "genkit-vertex-ai", editable = "packages/genkit-vertex-ai" },
+    { name = "genkit-vertexai", editable = "packages/genkit-vertexai" },
     { name = "liccheck", specifier = ">=0.9.2" },
     { name = "mcp", specifier = ">=1.25.0" },
     { name = "python-multipart", specifier = ">=0.0.22" },
@@ -1766,6 +1766,7 @@ lint = [
     { name = "pyright", specifier = ">=1.1.392" },
     { name = "pysentry-rs", specifier = ">=0.3.14" },
     { name = "ruff", specifier = ">=0.9" },
+    { name = "strenum", specifier = ">=0.4.15" },
     { name = "ty", specifier = ">=0.0.1" },
 ]
 

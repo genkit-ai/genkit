@@ -36,7 +36,7 @@ Module Structure:
 
 Quick Start:
     ```python
-    from genkit_google_cloud import add_gcp_telemetry
+    from genkit_googlecloud import add_gcp_telemetry
 
     # Enable telemetry with defaults (PII redaction enabled)
     add_gcp_telemetry()
