@@ -506,6 +506,8 @@ class GenerateTelemetry:
         """Convert a part to log-safe content."""
         if part.get('text'):
             return truncate(str(part['text']))
+        if part.get('reasoning'):
+            return truncate(str(part['reasoning']))
         if part.get('data'):
             return truncate(json.dumps(part['data']))
         if part.get('media'):
@@ -514,6 +516,8 @@ class GenerateTelemetry:
             return self._to_part_log_tool_request(part)
         if part.get('toolResponse'):
             return self._to_part_log_tool_response(part)
+        if part.get('resource'):
+            return truncate(json.dumps(part['resource']))
         if part.get('custom'):
             return truncate(json.dumps(part['custom']))
         return '<unknown format>'
