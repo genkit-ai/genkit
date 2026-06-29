@@ -540,14 +540,6 @@ class ModelInfo(GenkitModel):
     stage: Stage | None = None
 
 
-class ModelReference(GenkitModel):
-    """Model for modelreference data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    name: str = Field(...)
-    config: Any | None = Field(default=None)
-
-
 class ModelResponseChunk(GenkitModel):
     """Model for modelresponsechunk data."""
 

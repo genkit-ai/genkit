@@ -212,11 +212,17 @@ from genkit.plugins.google_genai.models.embedder import (
     VertexEmbeddingModels,
 )
 from genkit.plugins.google_genai.models.gemini import (
+    GeminiConfigDict,
     GeminiConfigSchema,
     GeminiImageConfigSchema,
     GeminiTtsConfigSchema,
     GoogleAIGeminiVersion,
     VertexAIGeminiVersion,
+    gemini_15_flash,
+    gemini_15_pro,
+    gemini_20_flash,
+    gemini_flash_latest,
+    gemini_pro_latest,
 )
 from genkit.plugins.google_genai.models.imagen import ImagenVersion
 from genkit.plugins.google_genai.models.lyria import LyriaConfig, LyriaVersion
@@ -234,6 +240,7 @@ def package_name() -> str:
 
 __all__ = [
     'EmbeddingTaskType',
+    'GeminiConfigDict',
     'GeminiConfigSchema',
     'GeminiEmbeddingModels',
     'GeminiImageConfigSchema',
@@ -248,5 +255,10 @@ __all__ = [
     'VertexAI',
     'VertexAIGeminiVersion',
     'VertexEmbeddingModels',
+    'gemini_15_flash',
+    'gemini_15_pro',
+    'gemini_20_flash',
+    'gemini_flash_latest',
+    'gemini_pro_latest',
     'package_name',
 ]

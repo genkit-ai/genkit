@@ -21,7 +21,7 @@ from functools import partial
 import structlog
 
 import ollama as ollama_api
-from genkit import ModelConfig
+from genkit._core._typing import GenerationCommonConfig as ModelConfig
 from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
 from genkit.model import model_action_metadata
 from genkit.plugin_api import (

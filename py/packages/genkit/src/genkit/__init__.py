@@ -65,10 +65,11 @@ from genkit.embedder import (
 
 # Import model-related types from the model namespace.
 from genkit.model import (
+    CommonModelConfigDict,
     Constrained,
     FinishReason,
     Message,
-    ModelConfig,
+    ModelConfigDict,
     ModelInfo,
     ModelRequest,
     ModelResponse,
@@ -95,7 +96,8 @@ __all__ = [
     'EmbedResponse',
     'EmbedderOptions',
     'EmbedderRef',
-    'ModelConfig',
+    'CommonModelConfigDict',
+    'ModelConfigDict',
     'ModelInfo',
     'ModelStreamResponse',
     # Errors

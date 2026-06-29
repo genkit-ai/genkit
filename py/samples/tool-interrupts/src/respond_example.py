@@ -35,13 +35,13 @@ from genkit import (
     respond_to_interrupt,
 )
 from genkit.model import ModelResponse
-from genkit.plugins.google_genai import GoogleAI  # pyright: ignore[reportMissingImports]
+from genkit.plugins.google_genai import GoogleAI, gemini_flash_latest  # pyright: ignore[reportMissingImports]
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / 'prompts'
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=gemini_flash_latest,
     prompt_dir=_PROMPTS_DIR,
 )
 

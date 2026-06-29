@@ -150,11 +150,14 @@ from google.genai import types as genai_types
 from google.genai.errors import ClientError
 from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema
 
+from genkit._core._typing import GenerationCommonConfig as ModelConfig
+from genkit._core._model import CommonModelConfigDict
+from genkit.model import model_ref, ModelRef
 from genkit import (
     Constrained,
     GenkitError,
     Message,
-    ModelConfig,
+    ModelConfigDict,
     ModelInfo,
     ModelRequest,
     ModelResponse,
@@ -299,6 +302,19 @@ class VoiceConfigSchema(BaseModel):
 
     model_config = ConfigDict(extra='allow', populate_by_name=True)
     prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(None, alias='prebuiltVoiceConfig')
+
+
+class GeminiConfigDict(CommonModelConfigDict, total=False):
+    """Typed dictionary configuration for Gemini models with IDE autocomplete support."""
+
+    api_key: str
+    base_url: str
+    api_version: str
+    safety_settings: list[dict[str, Any]]
+    code_execution: bool | dict[str, Any]
+    context_cache: bool
+    function_calling_config: dict[str, Any]
+    google_search_retrieval: dict[str, Any]
 
 
 class GeminiConfigSchema(ModelConfig):
@@ -1961,7 +1977,7 @@ class GeminiModel:
 
     def _normalize_config_to_dict(
         self,
-        config: GeminiConfigSchema | ModelConfig | dict,
+        config: GeminiConfigSchema | ModelConfig | ModelConfigDict | dict,
     ) -> dict[str, Any] | None:
         """Return the config as a snake_case dict for the rest of the pipeline.
 
@@ -2087,3 +2103,10 @@ class GeminiModel:
             usage.cached_content_tokens = response.usage.cached_content_tokens
 
         return usage
+
+
+gemini_15_flash: ModelRef[GeminiConfigDict] = model_ref('googleai/gemini-1.5-flash')
+gemini_15_pro: ModelRef[GeminiConfigDict] = model_ref('googleai/gemini-1.5-pro')
+gemini_20_flash: ModelRef[GeminiConfigDict] = model_ref('googleai/gemini-2.0-flash')
+gemini_flash_latest: ModelRef[GeminiConfigDict] = model_ref('googleai/gemini-flash-latest')
+gemini_pro_latest: ModelRef[GeminiConfigDict] = model_ref('googleai/gemini-pro-latest')

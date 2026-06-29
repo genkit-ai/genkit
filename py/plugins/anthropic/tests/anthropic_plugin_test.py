@@ -27,7 +27,6 @@ from genkit import (
     ActionKind,
     Constrained,
     Message,
-    ModelConfig,
     ModelRequest,
     Part,
     Role,
@@ -208,7 +207,7 @@ def _create_sample_request() -> ModelRequest:
                 content=[Part(root=TextPart(text='Hello, how are you?'))],
             )
         ],
-        config=ModelConfig(),
+        config={},
         tools=[
             ToolDefinition(
                 name='get_weather',

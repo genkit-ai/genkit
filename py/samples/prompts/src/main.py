@@ -22,11 +22,11 @@ from pydantic import BaseModel, Field
 
 from genkit import Genkit
 from genkit._core._action import ActionRunContext
-from genkit.plugins.google_genai import GoogleAI
+from genkit.plugins.google_genai import GoogleAI, gemini_flash_latest
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=gemini_flash_latest,
     prompt_dir=Path(__file__).resolve().parent.parent / 'prompts',
 )
 

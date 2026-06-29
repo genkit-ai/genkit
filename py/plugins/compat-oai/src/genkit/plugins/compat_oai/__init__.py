@@ -150,7 +150,7 @@ See Also:
 """
 
 from .openai_plugin import OpenAI, openai_model
-from .typing import OpenAIConfig
+from .typing import OpenAIConfig, OpenAIConfigDict, gpt_4o, gpt_4o_mini, o1, o1_mini, o3_mini
 
 
 def package_name() -> str:
@@ -158,4 +158,15 @@ def package_name() -> str:
     return 'genkit.plugins.compat_oai'
 
 
-__all__ = ['OpenAI', 'OpenAIConfig', 'openai_model', 'package_name']
+__all__ = [
+    'OpenAI',
+    'OpenAIConfig',
+    'OpenAIConfigDict',
+    'gpt_4o',
+    'gpt_4o_mini',
+    'o1',
+    'o1_mini',
+    'o3_mini',
+    'openai_model',
+    'package_name',
+]

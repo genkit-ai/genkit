@@ -37,7 +37,7 @@ Re-running cleanly:
 from pathlib import Path
 
 from genkit import Genkit, Message, ModelResponse, Part, Role, TextPart, ToolRequestPart, restart_tool
-from genkit.plugins.google_genai import GoogleAI
+from genkit.plugins.google_genai import GoogleAI, gemini_flash_latest
 from genkit.plugins.middleware import Filesystem, Middleware, Skills, ToolApproval
 
 _HERE = Path(__file__).resolve().parent.parent
@@ -46,7 +46,7 @@ _SKILLS = _HERE / 'skills'
 
 ai = Genkit(
     plugins=[GoogleAI(), Middleware()],
-    model='googleai/gemini-flash-latest',
+    model=gemini_flash_latest,
 )
 
 

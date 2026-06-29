@@ -19,9 +19,9 @@
 from pydantic import BaseModel, Field
 
 from genkit import Genkit, Message
-from genkit.plugins.google_genai import GeminiConfigSchema, GoogleAI
+from genkit.plugins.google_genai import GoogleAI, gemini_pro_latest
 
-ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-pro-latest')
+ai = Genkit(plugins=[GoogleAI()], model=gemini_pro_latest)
 
 
 class CodeExecutionInput(BaseModel):
@@ -35,8 +35,9 @@ async def execute_code(input: CodeExecutionInput) -> Message:
     """Ask Gemini to generate and execute code."""
 
     response = await ai.generate(
+        model=gemini_pro_latest,
         prompt=f'Write code and run it to solve this task: {input.task}',
-        config=GeminiConfigSchema.model_validate({'code_execution': True}).model_dump(),
+        config={'code_execution': True},
     )
     if not response.message:
         raise ValueError('No message returned from model')

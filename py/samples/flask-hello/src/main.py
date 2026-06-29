@@ -25,11 +25,11 @@ from genkit import Genkit, ModelResponse
 from genkit._core._action import ActionRunContext
 from genkit._core._context import RequestData
 from genkit.plugins.flask import genkit_flask_handler
-from genkit.plugins.google_genai import GoogleAI
+from genkit.plugins.google_genai import GoogleAI, gemini_flash_latest
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=gemini_flash_latest,
 )
 
 app = Flask(__name__)

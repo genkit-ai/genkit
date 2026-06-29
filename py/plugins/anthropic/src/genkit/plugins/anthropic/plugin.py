@@ -19,7 +19,8 @@
 from typing import Any, cast
 
 from anthropic import AsyncAnthropic
-from genkit import ModelConfig, ModelRequest, ModelResponse
+from genkit import ModelRequest, ModelResponse
+from genkit._core._typing import GenerationCommonConfig as ModelConfig
 from genkit.model import model_action_metadata
 from genkit.plugin_api import (
     Action,

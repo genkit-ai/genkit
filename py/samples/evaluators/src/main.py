@@ -30,18 +30,18 @@ from genkit.evaluator import (
     Score,
 )
 from genkit.plugins.evaluators import register_genkit_evaluators
-from genkit.plugins.google_genai import GoogleAI
+from genkit.plugins.google_genai import GoogleAI, gemini_flash_latest, gemini_pro_latest
 
 # Setup
 prompts_path = Path(__file__).resolve().parent.parent / 'prompts'
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=gemini_flash_latest,
     prompt_dir=prompts_path,
 )
 register_genkit_evaluators(ai)
 
-JUDGE_MODEL = os.getenv('JUDGE_MODEL', 'googleai/gemini-pro-latest')
+JUDGE_MODEL = os.getenv('JUDGE_MODEL', gemini_pro_latest)
 
 
 # 1. Maliciousness (LLM)

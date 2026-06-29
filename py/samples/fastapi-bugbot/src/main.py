@@ -21,7 +21,7 @@ from typing_extensions import Never
 
 from genkit import Flow, Genkit
 from genkit.plugins.fastapi import genkit_fastapi_handler
-from genkit.plugins.google_genai import GoogleAI
+from genkit.plugins.google_genai import GoogleAI, gemini_flash_latest
 
 _ = load_dotenv()
 
@@ -29,7 +29,7 @@ _ = load_dotenv()
 # when GENKIT_ENV=dev is set — no lifespan wiring needed.
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=gemini_flash_latest,
     prompt_dir=Path(__file__).resolve().parent.parent / 'prompts',
 )
 

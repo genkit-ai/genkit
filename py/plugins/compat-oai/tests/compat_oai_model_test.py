@@ -24,7 +24,7 @@ import pytest
 
 from genkit import (
     Message,
-    ModelConfig,
+    ModelConfigDict,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -173,7 +173,7 @@ async def test_generate(stream: bool, sample_request: ModelRequest) -> None:
         (OpenAIConfig(model='test'), OpenAIConfig(model='test')),
         ({'model': 'test'}, OpenAIConfig(model='test')),
         (
-            ModelConfig(temperature=0.7),
+            {'temperature': 0.7},
             OpenAIConfig(temperature=0.7),
         ),
         (

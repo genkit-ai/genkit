@@ -90,11 +90,12 @@ import structlog
 from pydantic import BaseModel
 
 import ollama as ollama_api
+from genkit._core._typing import GenerationCommonConfig as ModelConfig
 from genkit import (
     Media,
     MediaPart,
     Message,
-    ModelConfig,
+    ModelConfigDict,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -106,7 +107,8 @@ from genkit import (
     ToolRequestPart,
     ToolResponsePart,
 )
-from genkit.model import get_basic_usage_stats
+from genkit._core._model import CommonModelConfigDict
+from genkit.model import get_basic_usage_stats, model_ref, ModelRef
 from genkit.plugin_api import ActionRunContext, get_cached_client
 from genkit.plugins.ollama.constants import (
     OllamaAPITypes,
@@ -402,7 +404,7 @@ class OllamaModel:
 
     @staticmethod
     def build_request_options(
-        config: ModelConfig | ollama_api.Options | dict[str, object] | None,
+        config: ModelConfig | ModelConfigDict | ollama_api.Options | dict[str, Any] | None,
     ) -> ollama_api.Options:
         """Build request options for the generate API.
 
@@ -604,3 +606,18 @@ def _convert_parameters(input_schema: dict[str, object]) -> ollama_api.Tool.Func
                     )
 
     return schema
+
+
+class OllamaConfigDict(CommonModelConfigDict, total=False):
+    """Typed dictionary configuration for Ollama models."""
+
+    num_predict: int
+    top_k: int
+    repeat_penalty: float
+    seed: int
+
+
+llama3_2: ModelRef[OllamaConfigDict] = model_ref('ollama/llama3.2')
+llama3_1: ModelRef[OllamaConfigDict] = model_ref('ollama/llama3.1')
+mistral: ModelRef[OllamaConfigDict] = model_ref('ollama/mistral')
+gemma2: ModelRef[OllamaConfigDict] = model_ref('ollama/gemma2')

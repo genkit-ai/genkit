@@ -17,7 +17,8 @@
 """Model protocol types for plugin authors."""
 
 from genkit._ai._model import (
-    ModelConfig,
+    CommonModelConfigDict,
+    ModelConfigDict,
     model_action_metadata,
     model_ref,
 )
@@ -75,7 +76,8 @@ __all__ = [
     # Reference types
     'ModelRef',
     # Config
-    'ModelConfig',
+    'CommonModelConfigDict',
+    'ModelConfigDict',
     # Message
     'Message',
     # Usage

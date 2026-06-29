@@ -30,8 +30,10 @@ from genkit._core._action import (
     get_func_description,
 )
 from genkit._core._model import (
+    CommonModelConfigDict,
     Message,
-    ModelConfig,
+    ConfigT,
+    ModelConfigDict,
     ModelRef,
     ModelRequest,
     ModelResponse,
@@ -70,8 +72,8 @@ def model_ref(
     namespace: str | None = None,
     info: ModelInfo | None = None,
     version: str | None = None,
-    config: dict[str, object] | None = None,
-) -> ModelRef:
+    config: ConfigT | Any = None,
+) -> ModelRef[ConfigT]:
     """Create a ModelRef, optionally prefixing name with namespace."""
     # Logic: if (options.namespace && !name.startsWith(options.namespace + '/'))
     final_name = f'{namespace}/{name}' if namespace and not name.startswith(f'{namespace}/') else name
@@ -132,13 +134,12 @@ def define_model(
 # =============================================================================
 
 
-def get_request_api_key(config: Mapping[str, object] | ModelConfig | object | None) -> str | None:
+def get_request_api_key(
+    config: ModelConfigDict | Mapping[str, object] | object | None,
+) -> str | None:
     """Extract API key from config (snake_case or camelCase)."""
     if config is None:
         return None
-
-    if isinstance(config, ModelConfig):
-        return config.api_key
 
     if isinstance(config, Mapping):
         config_mapping = cast(Mapping[str, object], config)
@@ -146,8 +147,7 @@ def get_request_api_key(config: Mapping[str, object] | ModelConfig | object | No
         if isinstance(api_key, str) and api_key:
             return api_key
     else:
-        # Defensive fallback for plugin-specific config classes that inherit from
-        # ModelConfig or expose an api_key attribute.
+        # Defensive fallback for plugin-specific config classes or objects exposing api_key attribute.
         api_key_attr = getattr(config, 'api_key', None)
         if isinstance(api_key_attr, str) and api_key_attr:
             return api_key_attr
@@ -156,7 +156,7 @@ def get_request_api_key(config: Mapping[str, object] | ModelConfig | object | No
 
 
 def get_effective_api_key(
-    config: Mapping[str, object] | ModelConfig | object | None,
+    config: ModelConfigDict | Mapping[str, object] | object | None,
     plugin_api_key: str | None,
 ) -> str | None:
     """Return request API key if set, otherwise plugin API key."""

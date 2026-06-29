@@ -31,7 +31,7 @@ from dotpromptz.typing import (
     PromptInputConfig,
     PromptMetadata,
 )
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from typing_extensions import Never, Unpack
 
 from genkit._ai._generate import (
@@ -59,7 +59,7 @@ from genkit._core._channel import Channel
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._middleware import BaseMiddleware, middleware_class_index
-from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfig
+from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfigDict, ModelRef
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
@@ -128,8 +128,8 @@ def resume_options_to_resume(
 class PromptGenerateOptions(TypedDict, total=False):
     """Runtime options for prompt execution (config, tools, messages, etc.)."""
 
-    model: str | None
-    config: dict[str, Any] | ModelConfig | None
+    model: str | ModelRef[Any] | None
+    config: ModelConfigDict | Any | None
     messages: list[Message] | None
     docs: list[Document] | None
     tools: Sequence[str | Tool] | None
@@ -210,8 +210,22 @@ class PromptConfig(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
     variant: str | None = None
-    model: str | None = None
-    config: dict[str, Any] | ModelConfig | None = None
+    model: str | ModelRef[Any] | None = None
+    config: ModelConfigDict | Any | None = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def _normalize_model_ref(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            m = data.get('model')
+            if isinstance(m, ModelRef):
+                data['model'] = m.name
+                if m.config is not None:
+                    mcfg = dict(m.config) if isinstance(m.config, dict) else (m.config.model_dump(exclude_none=True) if hasattr(m.config, 'model_dump') else {})
+                    ccfg = data.get('config')
+                    ccfg_dict = dict(ccfg) if isinstance(ccfg, dict) else (ccfg.model_dump(exclude_none=True) if hasattr(ccfg, 'model_dump') else (ccfg or {}))
+                    data['config'] = {**mcfg, **ccfg_dict}
+        return data
     description: str | None = None
     input_schema: type | dict[str, Any] | str | None = None
     system: str | list[Part] | None = None
@@ -242,8 +256,8 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         self,
         registry: Registry,
         variant: str | None = None,
-        model: str | None = None,
-        config: dict[str, Any] | ModelConfig | None = None,
+        model: str | ModelRef[Any] | None = None,
+        config: ModelConfigDict | Any | None = None,
         description: str | None = None,
         input_schema: type | dict[str, Any] | str | None = None,
         system: str | list[Part] | None = None,
@@ -268,6 +282,12 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         """Initialize prompt with configuration, templates, and schema options."""
         self._registry = registry
         self._variant = variant
+        if isinstance(model, ModelRef):
+            if model.config is not None:
+                mcfg = dict(model.config) if isinstance(model.config, dict) else (model.config.model_dump(exclude_none=True) if hasattr(model.config, 'model_dump') else {})
+                ccfg = dict(config) if isinstance(config, dict) else (config.model_dump(exclude_none=True) if hasattr(config, 'model_dump') else (config or {}))
+                config = {**mcfg, **ccfg}
+            model = model.name
         self._model = model
         self._config = config
         self._description = description
@@ -371,7 +391,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
     def _prompt_config_for_call(self, opts: PromptGenerateOptions) -> PromptConfig:
         """Merge this prompt's definition with per-call ``opts`` into a :class:`PromptConfig`."""
         output_opts = opts.get('output') or {}
-        merged_config: dict[str, Any] | ModelConfig | None
+        merged_config: ModelConfigDict | Any | None
         if opts.get('config') is not None:
             base = (
                 self._config.model_dump(exclude_none=True)

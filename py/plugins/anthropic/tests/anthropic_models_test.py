@@ -26,7 +26,7 @@ from genkit import (
     MediaPart,
     Message,
     Metadata,
-    ModelConfig,
+    ModelConfigDict,
     ModelRequest,
     ModelResponseChunk,
     Part,
@@ -48,7 +48,7 @@ def _create_sample_request() -> ModelRequest:
                 content=[Part(root=TextPart(text='Hello, how are you?'))],
             )
         ],
-        config=ModelConfig(),
+        config={},
         tools=[
             ToolDefinition(
                 name='get_weather',
@@ -140,11 +140,11 @@ async def test_generate_with_config() -> None:
 
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Test'))])],
-        config=ModelConfig(
-            temperature=0.7,
-            max_output_tokens=100,
-            top_p=0.9,
-        ),
+        config={
+            'temperature': 0.7,
+            'max_output_tokens': 100,
+            'top_p': 0.9,
+        },
     )
 
     await model.generate(request)

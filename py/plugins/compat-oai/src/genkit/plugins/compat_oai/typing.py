@@ -40,7 +40,9 @@ else:
 
 from pydantic import ConfigDict, Field
 
-from genkit.model import ModelConfig
+from genkit._core._typing import GenerationCommonConfig as ModelConfig
+from genkit._core._model import CommonModelConfigDict
+from genkit.model import model_ref, ModelRef
 
 
 class ReasoningEffort(StrEnum):
@@ -112,6 +114,17 @@ class WebSearchContextSize(StrEnum):
     LOW = 'low'
     MEDIUM = 'medium'
     HIGH = 'high'
+
+
+class OpenAIConfigDict(CommonModelConfigDict, total=False):
+    """Typed dictionary configuration for OpenAI models."""
+
+    frequency_penalty: float
+    presence_penalty: float
+    seed: int
+    logprobs: bool
+    top_logprobs: int
+    reasoning_effort: str
 
 
 class OpenAIConfig(ModelConfig):
@@ -340,3 +353,10 @@ class SupportedOutputFormat(StrEnum):
     JSON_MODE = 'json_mode'
     STRUCTURED_OUTPUTS = 'structured_outputs'
     TEXT = 'text'
+
+
+gpt_4o: ModelRef[OpenAIConfigDict] = model_ref('openai/gpt-4o')
+gpt_4o_mini: ModelRef[OpenAIConfigDict] = model_ref('openai/gpt-4o-mini')
+o1: ModelRef[OpenAIConfigDict] = model_ref('openai/o1')
+o1_mini: ModelRef[OpenAIConfigDict] = model_ref('openai/o1-mini')
+o3_mini: ModelRef[OpenAIConfigDict] = model_ref('openai/o3-mini')

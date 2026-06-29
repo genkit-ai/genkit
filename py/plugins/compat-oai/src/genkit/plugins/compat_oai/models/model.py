@@ -20,13 +20,13 @@ import json
 from collections.abc import Callable
 from typing import Any, cast
 
+from genkit._core._typing import GenerationCommonConfig
 import structlog
 from openai import AsyncOpenAI
 from openai.lib._pydantic import _ensure_strict_json_schema
-
 from genkit import (
     Message,
-    ModelConfig,
+    ModelConfigDict,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -401,7 +401,7 @@ class OpenAIModel:
         if isinstance(config, OpenAIConfig):
             return config
 
-        if isinstance(config, (ModelConfig, ModelConfig)):
+        if isinstance(config, GenerationCommonConfig):
             return OpenAIConfig(
                 temperature=config.temperature,
                 max_tokens=int(config.max_output_tokens) if config.max_output_tokens is not None else None,

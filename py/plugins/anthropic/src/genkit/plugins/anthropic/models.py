@@ -46,7 +46,8 @@ from genkit import (
     ToolRequestPart,
     ToolResponsePart,
 )
-from genkit.model import get_basic_usage_stats
+from genkit._core._model import CommonModelConfigDict
+from genkit.model import get_basic_usage_stats, model_ref, ModelRef
 from genkit.plugin_api import ActionRunContext
 from genkit.plugins.anthropic.model_info import get_model_info
 from genkit.plugins.anthropic.utils import (
@@ -437,3 +438,14 @@ class AnthropicModel:
                     )
                 )
         return parts
+
+
+class ClaudeConfigDict(CommonModelConfigDict, total=False):
+    """Typed dictionary configuration for Anthropic Claude models."""
+
+    max_tokens_to_sample: int
+    thinking: dict[str, Any]
+
+
+claude_opus_4_8: ModelRef[ClaudeConfigDict] = model_ref('anthropic/claude-opus-4-8')
+claude_opus_4_7: ModelRef[ClaudeConfigDict] = model_ref('anthropic/claude-opus-4-7')

@@ -19,9 +19,9 @@ from enum import Enum
 from pydantic import BaseModel, Field, TypeAdapter
 
 from genkit import Genkit
-from genkit.plugins.google_genai import GoogleAI
+from genkit.plugins.google_genai import GoogleAI, gemini_flash_latest
 
-ai = Genkit(plugins=[GoogleAI(api_version='v1alpha')], model='googleai/gemini-flash-latest')
+ai = Genkit(plugins=[GoogleAI(api_version='v1alpha')], model=gemini_flash_latest)
 
 
 class HaikuInput(BaseModel):

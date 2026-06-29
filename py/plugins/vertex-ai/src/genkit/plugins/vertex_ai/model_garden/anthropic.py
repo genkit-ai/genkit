@@ -23,9 +23,11 @@ from typing import cast
 from anthropic import AsyncAnthropic, AsyncAnthropicVertex
 from pydantic import ConfigDict
 
-from genkit import ModelConfig, ModelInfo, ModelRequest, ModelResponse, Supports
+from genkit import ModelInfo, ModelRequest, ModelResponse, Supports
+from genkit._core._typing import GenerationCommonConfig as ModelConfig
+from genkit.model import model_ref, ModelRef
 from genkit.plugin_api import ActionRunContext, loop_local_client
-from genkit.plugins.anthropic.models import AnthropicModel
+from genkit.plugins.anthropic.models import AnthropicModel, ClaudeConfigDict
 
 
 class AnthropicConfigSchema(ModelConfig):
@@ -96,3 +98,7 @@ class AnthropicModelGarden:
     def get_config_schema() -> type[ModelConfig]:
         """Returns the config schema for this model type."""
         return AnthropicConfigSchema
+
+
+claude_3_5_sonnet: ModelRef[ClaudeConfigDict] = model_ref('modelgarden/anthropic/claude-3-5-sonnet-v2@20241022')
+claude_3_5_haiku: ModelRef[ClaudeConfigDict] = model_ref('modelgarden/anthropic/claude-3-5-haiku@20241022')

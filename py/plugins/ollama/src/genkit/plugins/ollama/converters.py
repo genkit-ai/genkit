@@ -28,9 +28,10 @@ See: https://github.com/ollama/ollama/blob/main/docs/api.md
 
 from typing import Any, Literal, cast
 
+from genkit._core._typing import GenerationCommonConfig as ModelConfig
 from genkit import (
     Message,
-    ModelConfig,
+    ModelConfigDict,
     ModelUsage,
     Part,
     Role,
@@ -94,7 +95,7 @@ def build_prompt(messages: list[Message]) -> str:
 
 
 def build_request_options_dict(
-    config: ModelConfig | dict[str, object] | None,
+    config: ModelConfig | ModelConfigDict | dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Build options dict from config for the Ollama API.
 
@@ -124,7 +125,12 @@ def build_request_options_dict(
         return result
 
     if isinstance(config, dict):
-        return cast(dict[str, Any], config)
+        res = dict(config)
+        if 'max_output_tokens' in res:
+            res['num_predict'] = res.pop('max_output_tokens')
+        if 'top_p' in res:
+            res['topP'] = res.pop('top_p')
+        return res
 
     return {}
 
