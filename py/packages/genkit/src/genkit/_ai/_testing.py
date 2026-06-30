@@ -116,10 +116,7 @@ class EchoModel:
         echo_resp = f'[ECHO]{merged_txt}'
 
         if request.config:
-            if hasattr(request.config, 'model_dump_json'):
-                config_json = getattr(request.config, 'model_dump_json')()  # noqa: B009
-            else:
-                config_json = json.dumps(request.config, separators=(',', ':'))
+            config_json = json.dumps(request.config, separators=(',', ':'))
         else:
             config_json = '{}'
         if request.config and config_json != '{}':

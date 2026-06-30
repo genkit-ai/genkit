@@ -94,7 +94,6 @@ from genkit import (
     Media,
     MediaPart,
     Message,
-    ModelConfigDict,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -404,20 +403,18 @@ class OllamaModel:
 
     @staticmethod
     def build_request_options(
-        config: ModelConfig | ModelConfigDict | ollama_api.Options | dict[str, Any] | None,
+        config: dict[str, Any] | None,
     ) -> ollama_api.Options:
         """Build request options for the generate API.
 
         Args:
-            config: The configuration to build the request options for.
+            config: The configuration dictionary to build request options for.
 
         Returns:
             The request options for the generate API.
         """
         if config is None:
             return ollama_api.Options()
-        if isinstance(config, ollama_api.Options):
-            return config
         options_dict = build_request_options_dict(config)
         return ollama_api.Options(**options_dict)
 

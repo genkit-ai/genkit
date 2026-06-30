@@ -18,7 +18,7 @@
 
 import json
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any
 
 import structlog
 from openai import AsyncOpenAI
@@ -35,7 +35,6 @@ from genkit import (
     TextPart,
     ToolDefinition,
 )
-from genkit._core._typing import GenerationCommonConfig
 from genkit.plugin_api import ActionRunContext
 from genkit.plugins.compat_oai.models.model_info import SUPPORTED_OPENAI_MODELS
 from genkit.plugins.compat_oai.models.utils import (
@@ -45,7 +44,7 @@ from genkit.plugins.compat_oai.models.utils import (
     extract_config_dict,
     strip_markdown_fences,
 )
-from genkit.plugins.compat_oai.typing import OpenAIConfig, SupportedOutputFormat
+from genkit.plugins.compat_oai.typing import SupportedOutputFormat
 
 logger = structlog.get_logger(__name__)
 
@@ -397,23 +396,12 @@ class OpenAIModel:
             return await self._generate(request)
 
     @staticmethod
-    def normalize_config(config: object) -> OpenAIConfig:
-        """Ensures the config is an OpenAIConfig instance."""
-        if isinstance(config, OpenAIConfig):
-            return config
-
-        if isinstance(config, GenerationCommonConfig):
-            return OpenAIConfig(
-                temperature=config.temperature,
-                max_tokens=int(config.max_output_tokens) if config.max_output_tokens is not None else None,
-                top_p=config.top_p,
-                stop=config.stop_sequences,
-            )
+    def normalize_config(config: object) -> dict[str, Any]:
+        """Ensures the config is normalized to a dictionary without unsupported keys."""
+        if config is None:
+            return {}
 
         if isinstance(config, dict):
-            config_dict = cast(dict[str, Any], config)
-            if config_dict.get('top_k'):
-                del config_dict['top_k']
-            return OpenAIConfig(**config_dict)
+            return {k: v for k, v in config.items() if k != 'top_k'}
 
-        raise ValueError(f'Expected request.config to be a dict or OpenAIConfig, got {type(config).__name__}.')
+        raise ValueError(f'Expected request.config to be a dict, got {type(config).__name__}.')

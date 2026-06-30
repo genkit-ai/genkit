@@ -30,7 +30,6 @@ from typing import Any, Literal
 
 from genkit import (
     Message,
-    ModelConfigDict,
     ModelUsage,
     Part,
     Role,
@@ -38,7 +37,6 @@ from genkit import (
     ToolRequest,
     ToolRequestPart,
 )
-from genkit._core._typing import GenerationCommonConfig as ModelConfig
 
 __all__ = [
     'build_prompt',
@@ -95,46 +93,23 @@ def build_prompt(messages: list[Message]) -> str:
 
 
 def build_request_options_dict(
-    config: ModelConfig | ModelConfigDict | dict[str, Any] | None,
+    config: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Build options dict from config for the Ollama API.
 
-    Maps Genkit ``ModelConfig`` fields to Ollama option names.
+    Maps Genkit dictionary keys to Ollama option names.
 
     Args:
-        config: Request configuration.
+        config: Request configuration dictionary.
 
     Returns:
         Dict of Ollama options.
     """
-    if config is None:
+    if not isinstance(config, dict):
         return {}
 
-    if isinstance(config, ModelConfig):
-        result: dict[str, Any] = {}
-        if config.top_k is not None:
-            result['top_k'] = config.top_k
-        if config.top_p is not None:
-            result['top_p'] = config.top_p
-        if config.stop_sequences is not None:
-            result['stop'] = config.stop_sequences
-        if config.temperature is not None:
-            result['temperature'] = config.temperature
-        if config.max_output_tokens is not None:
-            result['num_predict'] = config.max_output_tokens
-        return result
-
-    if isinstance(config, dict):
-        res = dict(config)
-        if 'max_output_tokens' in res:
-            res['num_predict'] = res.pop('max_output_tokens')
-        if 'topP' in res:
-            res['top_p'] = res.pop('topP')
-        if 'stop_sequences' in res:
-            res['stop'] = res.pop('stop_sequences')
-        return res
-
-    return {}
+    key_map = {'max_output_tokens': 'num_predict', 'topP': 'top_p', 'stop_sequences': 'stop'}
+    return {key_map.get(k, k): v for k, v in config.items()}
 
 
 def build_response_parts(

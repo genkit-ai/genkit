@@ -172,7 +172,7 @@ def process_models_yaml(yaml_path: Path) -> tuple[Path, str, list[str]]:
         export_name = model_entry.get('export') or infer_export_name(model_name)
         schema_name = model_entry.get('schema', default_schema)
         dict_name = infer_typedict_name(schema_name)
-        exports.append(f"{export_name}: ModelRef[{dict_name}] = model_ref('{model_name}', config={dict_name})")
+        exports.append(f"{export_name}: ModelRef[{dict_name}] = model_ref('{model_name}', config_schema={dict_name})")
         exported_symbols.append(export_name)
 
     exported_symbols.sort()

@@ -453,7 +453,7 @@ class Genkit:
         *,
         variant: str | None = None,
         model: str | ModelRef[Any] | None = None,
-        config: ModelConfigDict | dict[str, Any] | Any | None = None,  # noqa: ANN401
+        config: ModelConfigDict | dict[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -481,7 +481,7 @@ class Genkit:
         *,
         variant: str | None = None,
         model: str | ModelRef[Any] | None = None,
-        config: ModelConfigDict | dict[str, Any] | Any | None = None,  # noqa: ANN401
+        config: ModelConfigDict | dict[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -509,7 +509,7 @@ class Genkit:
         *,
         variant: str | None = None,
         model: str | ModelRef[Any] | None = None,
-        config: ModelConfigDict | dict[str, Any] | Any | None = None,  # noqa: ANN401
+        config: ModelConfigDict | dict[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -537,7 +537,7 @@ class Genkit:
         *,
         variant: str | None = None,
         model: str | ModelRef[Any] | None = None,
-        config: ModelConfigDict | dict[str, Any] | Any | None = None,  # noqa: ANN401
+        config: ModelConfigDict | dict[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -563,7 +563,7 @@ class Genkit:
         *,
         variant: str | None = None,
         model: str | ModelRef[Any] | None = None,
-        config: ModelConfigDict | dict[str, Any] | Any | None = None,  # noqa: ANN401
+        config: ModelConfigDict | dict[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -842,7 +842,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ConfigT | dict[str, Any] | Any | None = None,  # noqa: ANN401
+        config: ConfigT | dict[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type[OutputT],
@@ -869,7 +869,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ConfigT | dict[str, Any] | Any | None = None,  # noqa: ANN401
+        config: ConfigT | dict[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -896,7 +896,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ModelConfigDict | dict[str, Any] | Any | None = None,  # noqa: ANN401
+        config: ModelConfigDict | dict[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type[OutputT],
@@ -923,7 +923,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ModelConfigDict | dict[str, Any] | Any | None = None,  # noqa: ANN401
+        config: ModelConfigDict | dict[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -948,7 +948,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ModelConfigDict | dict[str, Any] | Any | None = None,  # noqa: ANN401
+        config: ModelConfigDict | dict[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -1013,7 +1013,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ConfigT | dict[str, Any] | Any | None = None,  # noqa: ANN401
+        config: ConfigT | dict[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type[OutputT],
@@ -1041,7 +1041,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ConfigT | dict[str, Any] | Any | None = None,  # noqa: ANN401
+        config: ConfigT | dict[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -1069,7 +1069,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ModelConfigDict | dict[str, Any] | Any | None = None,  # noqa: ANN401
+        config: ModelConfigDict | dict[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type[OutputT],
@@ -1097,7 +1097,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ModelConfigDict | dict[str, Any] | Any | None = None,  # noqa: ANN401
+        config: ModelConfigDict | dict[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -1123,7 +1123,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ModelConfigDict | dict[str, Any] | Any | None = None,  # noqa: ANN401
+        config: ModelConfigDict | dict[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,

@@ -185,35 +185,18 @@ class AnthropicModel:
         )
 
     def _build_params(self, request: ModelRequest) -> dict[str, Any]:
-        """Build Anthropic API parameters."""
         config = request.config
-        params: dict[str, Any] = {}
+        raw = config if isinstance(config, dict) else {}
+        max_tokens = raw.get('max_output_tokens', raw.get('max_tokens', DEFAULT_MAX_OUTPUT_TOKENS))
+        thinking = raw.get('thinking')
+        metadata = raw.get('metadata')
 
-        if isinstance(config, dict):
-            params = config.copy()
-        elif config:
-            if hasattr(config, 'model_dump'):
-                params = getattr(config, 'model_dump')(exclude_none=True, by_alias=False)  # noqa: B009
-            else:
-                params = {k: v for k, v in vars(config).items() if v is not None}
-
-        # Handle mapped parameters
-        max_tokens = params.pop('max_output_tokens', None)
-        if max_tokens is None:
-            max_tokens = params.get('max_tokens', DEFAULT_MAX_OUTPUT_TOKENS)
-
-        params.get('temperature')
-        params.get('top_p')
-        params.get('stop_sequences')
-        thinking = params.pop('thinking', None)
-        metadata = params.pop('metadata', None)
+        ignored_keys = {'max_output_tokens', 'max_tokens', 'thinking', 'metadata', 'version'}
+        params = {k: v for k, v in raw.items() if k not in ignored_keys}
 
         params['model'] = self.model_name
         params['messages'] = self._to_anthropic_messages(request.messages)
         params['max_tokens'] = int(max_tokens)
-
-        # Remove known genkit keys that don't map directly or are handled
-        params.pop('version', None)  # If version was passed through config
 
         if thinking and isinstance(thinking, dict):
             anthropic_thinking: dict[str, str | int] = {}

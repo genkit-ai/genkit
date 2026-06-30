@@ -72,13 +72,14 @@ def model_ref(
     namespace: str | None = None,
     info: ModelInfo | None = None,
     version: str | None = None,
-    config: ConfigT | Any = None,  # noqa: ANN401
+    config_schema: object | None = None,
+    config: ConfigT | dict[str, object] | None = None,
 ) -> ModelRef[ConfigT]:
     """Create a ModelRef, optionally prefixing name with namespace."""
     # Logic: if (options.namespace && !name.startsWith(options.namespace + '/'))
     final_name = f'{namespace}/{name}' if namespace and not name.startswith(f'{namespace}/') else name
 
-    return ModelRef(name=final_name, info=info, version=version, config=config)
+    return ModelRef(name=final_name, info=info, version=version, config_schema=config_schema, config=config)
 
 
 def define_model(
@@ -135,28 +136,22 @@ def define_model(
 
 
 def get_request_api_key(
-    config: ModelConfigDict | Mapping[str, object] | object | None,
+    config: Mapping[str, object] | None,
 ) -> str | None:
-    """Extract API key from config (snake_case or camelCase)."""
+    """Extract API key from config mapping."""
     if config is None:
         return None
 
     if isinstance(config, Mapping):
-        config_mapping = cast(Mapping[str, object], config)
-        api_key = config_mapping.get('api_key')
+        api_key = config.get('api_key')
         if isinstance(api_key, str) and api_key:
             return api_key
-    else:
-        # Defensive fallback for plugin-specific config classes or objects exposing api_key attribute.
-        api_key_attr = getattr(config, 'api_key', None)
-        if isinstance(api_key_attr, str) and api_key_attr:
-            return api_key_attr
 
     return None
 
 
 def get_effective_api_key(
-    config: ModelConfigDict | Mapping[str, object] | object | None,
+    config: Mapping[str, object] | None,
     plugin_api_key: str | None,
 ) -> str | None:
     """Return request API key if set, otherwise plugin API key."""
