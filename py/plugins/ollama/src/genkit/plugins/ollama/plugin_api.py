@@ -17,7 +17,8 @@
 """Ollama Plugin for Genkit."""
 
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -203,31 +204,38 @@ class Ollama(Plugin):
             kwargs['timeout'] = self.timeout
         return ollama_api.AsyncClient(**kwargs)
 
+    @asynccontextmanager
     async def _client_for_request(
         self,
         *,
         model: ModelDefinition | EmbeddingDefinition | None = None,
         model_request: ModelRequest | None = None,
         embed_request: EmbedRequest | None = None,
-    ) -> ollama_api.AsyncClient:
-        """Return the Ollama client to use for a single request.
+    ) -> AsyncIterator[ollama_api.AsyncClient]:
+        """Yield the Ollama client to use for a single request.
 
-        Static (or absent) headers are baked into a per-event-loop cached client. A
-        header *callable* is resolved on every call — receiving the server address
-        plus any model/request context (JS parity) — and applied to a fresh client, so
-        expiring auth tokens or request-specific headers take effect.
+        Static (or absent) headers are baked into a per-event-loop cached client that
+        is shared across requests and left open. A header *callable* is resolved on
+        every call — receiving the server address plus any model/request context (JS
+        parity) — and applied to a *fresh* client, so expiring auth tokens or
+        request-specific headers take effect. Because the Ollama SDK bakes headers in
+        at construction (it has no per-request header hook, unlike the JS ``fetch`` and
+        Go ``http.Request`` paths), that fresh client owns its own httpx connection
+        pool; it is closed on exit so long-running callers don't accumulate pools.
 
         Args:
             model: The model/embedder definition this request targets, if any.
             model_request: The generate request, when resolving for a model action.
             embed_request: The embed request, when resolving for an embedder action.
 
-        Returns:
+        Yields:
             The Ollama client for this request.
         """
         source = self._request_headers_source
         if not callable(source):
-            return self.client()
+            # Shared per-event-loop cached client — reused across requests, not closed.
+            yield self.client()
+            return
 
         params = RequestHeaderParams(
             server_address=self.server_address,
@@ -239,7 +247,15 @@ class Ollama(Plugin):
         if inspect.isawaitable(result):
             result = await result
         headers = dict(cast(dict[str, str], result)) if result else {}
-        return self._make_client(headers=headers)
+        client = self._make_client(headers=headers)
+        try:
+            yield client
+        finally:
+            # ollama.AsyncClient exposes no public close, so close the wrapped httpx
+            # client to release this request's connection pool. aclose() is idempotent.
+            inner = getattr(client, '_client', None)
+            if inner is not None:
+                await inner.aclose()
 
     async def init(self) -> list:
         """Initialize the Ollama plugin.
@@ -325,8 +341,8 @@ class Ollama(Plugin):
             # and request context to a header callable (JS parity). OllamaModel wraps
             # connection errors at the SDK boundary, so a failed media-URL fetch isn't
             # misreported as an Ollama server outage.
-            client = await self._client_for_request(model=model_ref, model_request=request)
-            return await model.generate(request, ctx, client=client)
+            async with self._client_for_request(model=model_ref, model_request=request) as client:
+                return await model.generate(request, ctx, client=client)
 
         action = Action(
             kind=ActionKind.MODEL,
@@ -364,9 +380,9 @@ class Ollama(Plugin):
         async def _run(request: EmbedRequest) -> EmbedResponse:
             # Pass the embedder and embed request to a header callable (JS parity).
             # Embedding requests never fetch media, so the whole SDK call is wrapped.
-            client = await self._client_for_request(model=embedder_ref, embed_request=request)
-            async with wrap_connection_errors(server_address):
-                return await embedder.embed(request, client=client)
+            async with self._client_for_request(model=embedder_ref, embed_request=request) as client:
+                async with wrap_connection_errors(server_address):
+                    return await embedder.embed(request, client=client)
 
         return Action(
             kind=ActionKind.EMBEDDER,
@@ -392,9 +408,9 @@ class Ollama(Plugin):
                 - info (dict): The metadata dictionary describing the model configuration and properties.
                 - config_schema (type): The schema class used for validating the model's configuration.
         """
-        client = await self._client_for_request()
-        async with wrap_connection_errors(self.server_address):
-            response = await client.list()
+        async with self._client_for_request() as client:
+            async with wrap_connection_errors(self.server_address):
+                response = await client.list()
 
         actions = []
         for model in response.models:

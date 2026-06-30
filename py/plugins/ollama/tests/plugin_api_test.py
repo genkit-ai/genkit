@@ -298,12 +298,18 @@ async def test_sync_callable_headers_resolved_per_request() -> None:
     assert await plugin.init() == []
     assert plugin.request_headers == {}
 
-    with patch('ollama.AsyncClient') as async_client:
-        await plugin._client_for_request()
-        await plugin._client_for_request()
+    client_mock = MagicMock()
+    client_mock._client.aclose = AsyncMock()
+    with patch('ollama.AsyncClient', return_value=client_mock) as async_client:
+        async with plugin._client_for_request():
+            pass
+        async with plugin._client_for_request():
+            pass
 
     assert async_client.call_args_list[0].kwargs['headers'] == {'Authorization': 't1'}
     assert async_client.call_args_list[1].kwargs['headers'] == {'Authorization': 't2'}
+    # Each fresh per-request client's connection pool is closed on exit.
+    assert client_mock._client.aclose.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -319,12 +325,17 @@ async def test_async_callable_headers_resolved_per_request() -> None:
     assert await plugin.init() == []
     assert plugin.request_headers == {}
 
-    with patch('ollama.AsyncClient') as async_client:
-        await plugin._client_for_request()
-        await plugin._client_for_request()
+    client_mock = MagicMock()
+    client_mock._client.aclose = AsyncMock()
+    with patch('ollama.AsyncClient', return_value=client_mock) as async_client:
+        async with plugin._client_for_request():
+            pass
+        async with plugin._client_for_request():
+            pass
 
     assert async_client.call_args_list[0].kwargs['headers'] == {'Authorization': 'a1'}
     assert async_client.call_args_list[1].kwargs['headers'] == {'Authorization': 'a2'}
+    assert client_mock._client.aclose.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -341,6 +352,7 @@ async def test_model_action_passes_request_context_to_header_callable() -> None:
 
     sdk_client = AsyncMock()
     sdk_client.chat.return_value = ollama_api.ChatResponse(message=ollama_api.Message(role='assistant', content='hi'))
+    sdk_client._client.aclose = AsyncMock()
 
     action = plugin._create_model_action(ollama_name('m'))
     request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])])
@@ -355,6 +367,8 @@ async def test_model_action_passes_request_context_to_header_callable() -> None:
     assert params.embed_request is None
     # The resolved header is applied to the freshly built per-request client.
     assert async_client.call_args.kwargs['headers'] == {'Authorization': 'Bearer tok'}
+    # That fresh client's connection pool is closed once the request completes.
+    sdk_client._client.aclose.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -374,6 +388,7 @@ async def test_embedder_action_passes_request_context_to_header_callable() -> No
 
     sdk_client = AsyncMock()
     sdk_client.embed.return_value = ollama_api.EmbedResponse(embeddings=[[0.1, 0.2]])
+    sdk_client._client.aclose = AsyncMock()
 
     action = plugin._create_embedder_action(ollama_name('e'))
     request = EmbedRequest(input=[Document.from_text(text='hello')])
@@ -386,17 +401,22 @@ async def test_embedder_action_passes_request_context_to_header_callable() -> No
     assert params.model is not None and params.model.name == 'e'
     assert params.embed_request is request
     assert params.model_request is None
+    sdk_client._client.aclose.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_static_headers_reuse_cached_client() -> None:
-    """Static headers reuse the per-event-loop cached client across requests."""
+async def test_static_headers_reuse_cached_client_and_keep_it_open() -> None:
+    """Static headers reuse the per-event-loop cached client and never close it."""
     plugin = Ollama(request_headers={'X-Token': 'abc'})
 
-    first = await plugin._client_for_request()
-    second = await plugin._client_for_request()
+    async with plugin._client_for_request() as first:
+        pass
+    async with plugin._client_for_request() as second:
+        pass
 
+    # Same shared instance both times, and it was not closed on context exit.
     assert first is second
+    assert not first._client.is_closed
 
 
 @pytest.mark.asyncio
