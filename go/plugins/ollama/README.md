@@ -201,6 +201,8 @@ You can define and use text embedding models hosted on Ollama (e.g., `nomic-embe
 `dimensions` is required and should match the model's embedding size. The embedder is
 retrieved by model name.
 
+Note: Existing callers should replace server-address lookups with model-name lookups and pass dimensions to `DefineEmbedder`
+
 ### Defining an Embedder
 
 ```go
