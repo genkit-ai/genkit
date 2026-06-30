@@ -607,7 +607,27 @@ def _convert_parameters(input_schema: dict[str, object]) -> ollama_api.Tool.Func
         properties = cast(dict[str, dict[str, Any]], properties_raw)
         for key in properties:
             schema.properties[key] = ollama_api.Tool.Function.Parameters.Property(
-                type=properties[key]['type'], description=properties[key].get('description', '')
+                type=_property_type(properties[key]), description=properties[key].get('description', '')
             )
 
     return schema
+
+
+def _property_type(prop: dict[str, Any]) -> str | list[str] | None:
+    """Resolves a JSON-schema property to a type Ollama's Property accepts.
+
+    Optional/Union fields serialize as ``anyOf`` with no top-level ``type``
+    (e.g. ``Optional[str]`` -> ``{'anyOf': [{'type': 'string'}, {'type': 'null'}]}``).
+    Map those to the list form ``Property.type`` accepts instead of crashing on a
+    missing ``type`` key or dropping the property (which would leave ``required``
+    pointing at a property that no longer exists). Schemas with no resolvable type
+    (e.g. ``Any``) fall back to ``None``, which Ollama treats as untyped.
+    """
+    if 'type' in prop:
+        return cast('str | list[str]', prop['type'])
+    any_of = prop.get('anyOf')
+    if isinstance(any_of, list):
+        types = [entry['type'] for entry in any_of if isinstance(entry, dict) and 'type' in entry]
+        if types:
+            return types
+    return None

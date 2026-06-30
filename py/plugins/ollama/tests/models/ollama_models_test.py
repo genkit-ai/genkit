@@ -682,6 +682,51 @@ def test_convert_parameters_infers_object_from_properties() -> None:
     assert result.properties['name'].description == ''
 
 
+def test_convert_parameters_maps_anyof_to_type_list() -> None:
+    """Optional fields serialize as anyOf with no top-level type; map to the list form."""
+    result = _convert_parameters({
+        'type': 'object',
+        'properties': {
+            'units': {
+                'anyOf': [{'type': 'string'}, {'type': 'null'}],
+                'description': 'Temperature units',
+            },
+        },
+    })
+
+    assert result is not None
+    assert result.properties is not None
+    assert result.properties['units'].type == ['string', 'null']
+    assert result.properties['units'].description == 'Temperature units'
+
+
+def test_convert_parameters_keeps_optional_required_property() -> None:
+    """A property without a top-level type is kept, so required stays consistent."""
+    result = _convert_parameters({
+        'type': 'object',
+        'properties': {
+            'city': {'type': 'string'},
+            'units': {'anyOf': [{'type': 'string'}, {'type': 'null'}]},
+        },
+        'required': ['city', 'units'],
+    })
+
+    assert result is not None
+    assert result.required == ['city', 'units']
+    assert result.properties is not None
+    # Every required name still resolves to a real property (no dangling reference).
+    assert set(result.required).issubset(result.properties.keys())
+
+
+def test_convert_parameters_untyped_property_falls_back_to_none() -> None:
+    """A typeless schema (e.g. an `Any` field) stays present with no type rather than crashing."""
+    result = _convert_parameters({'type': 'object', 'properties': {'payload': {}}})
+
+    assert result is not None
+    assert result.properties is not None
+    assert result.properties['payload'].type is None
+
+
 class TestBuildRequestOptions:
     """Tests for OllamaModel.build_request_options."""
 
