@@ -17,49 +17,26 @@
 """Lyria audio generation model for Google Vertex AI plugin.
 
 Lyria is Google's music and audio generation model that creates audio from
-text prompts. It's available through Vertex AI only (not Google AI).
-
-Architecture:
-    ```
-    ┌──────────────────────────────────────────────────────────────────────┐
-    │                      Lyria Audio Generation Flow                      │
-    ├──────────────────────────────────────────────────────────────────────┤
-    │                                                                       │
-    │   Input                    Model                     Output           │
-    │   ┌─────────┐             ┌─────────┐             ┌─────────┐        │
-    │   │ Text    │ ─predict──► │ Lyria   │ ──────────► │  Audio  │        │
-    │   │ Prompt  │             │ Model   │             │  (WAV)  │        │
-    │   └─────────┘             └─────────┘             └─────────┘        │
-    │                                                                       │
-    └──────────────────────────────────────────────────────────────────────┘
-    ```
-
-Supported Models:
-    +----------------------+--------------------------------------------------+
-    | Model                | Description                                      |
-    +----------------------+--------------------------------------------------+
-    | lyria-002            | Lyria 002 - Audio generation from text           |
-    +----------------------+--------------------------------------------------+
+text prompts. It is available exclusively through Vertex AI.
 
 Example:
-    >>> from genkit import Genkit
-    >>> from genkit_googleai import VertexAI
-    >>>
-    >>> ai = Genkit(plugins=[VertexAI(project='my-project')])
-    >>>
-    >>> # Generate audio
-    >>> response = await ai.generate(
-    ...     model='vertexai/lyria-002',
-    ...     prompt='A peaceful piano melody with gentle rain sounds',
-    ... )
-    >>>
-    >>> # Response contains audio as base64-encoded WAV
-    >>> audio_content = response.message.content[0]
-    >>> print(audio_content.media.content_type)  # 'audio/wav'
+    ```python
+    from genkit import Genkit
+    from genkit_googleai import VertexAI
 
-See Also:
-    - Vertex AI Audio: https://cloud.google.com/vertex-ai/docs/generative-ai/audio
-    - JS implementation: js/plugins/google-genai/src/vertexai/lyria.ts
+    # 1. Initialize Genkit with VertexAI plugin
+    ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
+
+    # 2. Generate music or audio from a descriptive text prompt
+    res = await ai.generate(
+        model='vertexai/lyria-002',
+        prompt='A peaceful piano melody with gentle rain sounds',
+    )
+
+    # 3. Inspect generated audio media part shape
+    print(res.message.content[0].media.url[:30])
+    # => "data:audio/wav;base64,UklGRiQ..."
+    ```
 """
 
 import sys

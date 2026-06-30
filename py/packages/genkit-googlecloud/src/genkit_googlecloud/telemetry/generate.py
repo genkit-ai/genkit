@@ -14,72 +14,25 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Generate action telemetry for GCP.
+"""Generate action telemetry for Google Cloud.
 
-This module tracks generate action metrics (tokens, latencies) and logs,
-matching the JavaScript implementation in telemetry/generate.ts and Go
-implementation in googlecloud/generate.go.
+This module tracks generate action metrics (tokens, latencies) and structured logs,
+maintaining cross-language parity with JavaScript and Go implementations.
 
 When It Fires:
-    The generate telemetry handler is called for spans where:
-    - genkit:type = "action"
-    - genkit:metadata:subtype = "model"
+    The generate telemetry handler executes for spans where:
+    - ``genkit:type`` = "action"
+    - ``genkit:metadata:subtype`` = "model"
 
-Metrics Recorded:
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │ Metric Name                          │ Type      │ Description          │
-    ├──────────────────────────────────────┼───────────┼──────────────────────┤
-    │ genkit/ai/generate/requests          │ Counter   │ Model call count     │
-    │ genkit/ai/generate/latency           │ Histogram │ Response time (ms)   │
-    │ genkit/ai/generate/input/tokens      │ Counter   │ Input token count    │
-    │ genkit/ai/generate/input/characters  │ Counter   │ Input char count     │
-    │ genkit/ai/generate/input/images      │ Counter   │ Input image count    │
-    │ genkit/ai/generate/input/videos      │ Counter   │ Input video count    │
-    │ genkit/ai/generate/input/audio       │ Counter   │ Input audio count    │
-    │ genkit/ai/generate/output/tokens     │ Counter   │ Output token count   │
-    │ genkit/ai/generate/output/characters │ Counter   │ Output char count    │
-    │ genkit/ai/generate/output/images     │ Counter   │ Output image count   │
-    │ genkit/ai/generate/output/videos     │ Counter   │ Output video count   │
-    │ genkit/ai/generate/output/audio      │ Counter   │ Output audio count   │
-    │ genkit/ai/generate/thinking/tokens   │ Counter   │ Thinking token count │
-    └──────────────────────────────────────┴───────────┴──────────────────────┘
+Recorded Metrics:
+    - ``genkit/ai/generate/requests`` (Counter): Model invocation count.
+    - ``genkit/ai/generate/latency`` (Histogram): Response latency in milliseconds.
+    - ``genkit/ai/generate/input/*`` and ``genkit/ai/generate/output/*`` (Counters):
+      Token, character, image, video, audio, and thinking token counts.
 
 Metric Dimensions:
-    All metrics include these dimensions:
-    - modelName: The model name (e.g., "gemini-2.0-flash")
-    - featureName: The outer flow/feature name
-    - path: The qualified Genkit path
-    - status: "success" or "failure"
-    - error: Error name (only on failure)
-    - source: "py" (language identifier)
-    - sourceVersion: Genkit version
-
-Logs Recorded:
-    1. Config logs (always): Model configuration (maxOutputTokens, stopSequences)
-    2. Input logs (when log_input_and_output=True): Per-message, per-part input
-    3. Output logs (when log_input_and_output=True): Per-part output content
-
-Log Format:
-    - Config[path, model] - Model configuration
-    - Input[path, model] (part X of Y) - Input content with part indices
-    - Output[path, model] (part X of Y) - Output content with part indices
-
-Media Handling:
-    - Data URLs (base64) are hashed with SHA-256 to avoid logging large content
-    - Format: "data:image/png;base64,<sha256(hash)>"
-
-GCP Documentation:
-    Cloud Monitoring Metrics:
-        - Custom Metrics: https://cloud.google.com/monitoring/custom-metrics
-        - Quotas: https://cloud.google.com/monitoring/quotas
-        - Note: Rate limit is 1 point per 5 seconds per time series
-
-    OpenTelemetry:
-        - Python Metrics SDK: https://opentelemetry-python.readthedocs.io/en/stable/sdk/metrics.html
-
-Cross-Language Parity:
-    - JavaScript: js/plugins/google-cloud/src/telemetry/generate.ts
-    - Go: go/plugins/googlecloud/generate.go
+    Includes ``modelName`` (e.g., "gemini-flash-latest"), ``featureName``, ``path``,
+    ``status``, ``source`` ("py"), and ``sourceVersion``.
 """
 
 from __future__ import annotations
@@ -553,6 +506,8 @@ class GenerateTelemetry:
         """Convert a part to log-safe content."""
         if part.get('text'):
             return truncate(str(part['text']))
+        if part.get('reasoning'):
+            return truncate(str(part['reasoning']))
         if part.get('data'):
             return truncate(json.dumps(part['data']))
         if part.get('media'):
@@ -561,6 +516,8 @@ class GenerateTelemetry:
             return self._to_part_log_tool_request(part)
         if part.get('toolResponse'):
             return self._to_part_log_tool_response(part)
+        if part.get('resource'):
+            return truncate(json.dumps(part['resource']))
         if part.get('custom'):
             return truncate(json.dumps(part['custom']))
         return '<unknown format>'

@@ -29,16 +29,25 @@ Example:
     from genkit_fastapi import genkit_fastapi_handler
     from genkit_googleai import GoogleAI
 
+    # 1. Initialize Genkit and FastAPI app
     ai = Genkit(plugins=[GoogleAI()])
     app = FastAPI()
 
 
+    # 2. Define flow and expose as FastAPI endpoint in one clean decorator stack
     @app.post('/chat', response_model=None)
     @genkit_fastapi_handler(ai)
     @ai.flow()
     async def chat_flow(prompt: str) -> str:
-        response = await ai.generate(prompt=prompt)
-        return response.text
+        res = await ai.generate(
+            model='googleai/gemini-flash-latest',
+            prompt=f'Answer concisely: {prompt}',
+        )
+        return res.text
+
+
+    # POST /chat {"data": "Why is the sky blue?"}
+    # => {"result": "The sky appears blue due to Rayleigh scattering..."}
     ```
 
 Running:

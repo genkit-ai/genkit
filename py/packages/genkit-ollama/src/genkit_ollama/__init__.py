@@ -16,143 +16,35 @@
 
 """Ollama plugin for Genkit.
 
-This plugin provides integration with Ollama for running local LLMs. Ollama
-allows you to run models like Llama, Mistral, and others on your own hardware.
-
-Key Concepts (ELI5)::
-
-    ┌─────────────────────┬────────────────────────────────────────────────────┐
-    │ Concept             │ ELI5 Explanation                                   │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Ollama              │ Software that runs AI models on YOUR computer.    │
-    │                     │ Like having a mini ChatGPT at home.               │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Local LLM           │ An AI that runs offline on your machine.          │
-    │                     │ No internet needed, your data stays private.      │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Llama               │ Meta's open-source AI model. Like a free          │
-    │                     │ version of ChatGPT you can run yourself.          │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Model Pull          │ Download a model to your computer. Like           │
-    │                     │ installing an app before you can use it.          │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Server URL          │ Where Ollama listens for requests. Default        │
-    │                     │ is localhost:11434 (your own computer).           │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ GGUF                │ File format for AI models. Like .mp3 for          │
-    │                     │ music, but for AI brains.                         │
-    └─────────────────────┴────────────────────────────────────────────────────┘
-
-Data Flow::
-
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                   HOW OLLAMA RUNS AI ON YOUR COMPUTER                   │
-    │                                                                         │
-    │    Your Code                                                            │
-    │    ai.generate(prompt="Hello!")                                         │
-    │         │                                                               │
-    │         │  (1) Request goes to Ollama plugin                            │
-    │         ▼                                                               │
-    │    ┌─────────────────┐                                                  │
-    │    │  Ollama Plugin  │   Formats request for Ollama API                 │
-    │    │                 │                                                  │
-    │    └────────┬────────┘                                                  │
-    │             │                                                           │
-    │             │  (2) HTTP to localhost:11434 (your computer!)             │
-    │             ▼                                                           │
-    │    ┌─────────────────┐                                                  │
-    │    │  Ollama Server  │   Loads model into RAM/GPU                       │
-    │    │  (on your PC)   │   (first request may be slow)                    │
-    │    └────────┬────────┘                                                  │
-    │             │                                                           │
-    │             │  (3) Model processes on YOUR hardware                     │
-    │             ▼                                                           │
-    │    ┌─────────────────┐                                                  │
-    │    │  Llama/Mistral  │   CPU or GPU does the thinking                   │
-    │    │  Model (local)  │   No data leaves your machine!                   │
-    │    └────────┬────────┘                                                  │
-    │             │                                                           │
-    │             │  (4) Response streamed back                               │
-    │             ▼                                                           │
-    │    ┌─────────────────┐                                                  │
-    │    │  Your App       │   response.text = "Hello! How can I help?"       │
-    │    └─────────────────┘                                                  │
-    └─────────────────────────────────────────────────────────────────────────┘
-
-Architecture Overview::
-
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                          Ollama Plugin                                  │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  Plugin Entry Point (__init__.py)                                       │
-    │  ├── Ollama - Plugin class                                              │
-    │  └── ollama_name() - Helper to create namespaced model names            │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  plugin_api.py - Plugin Implementation                                  │
-    │  ├── Ollama class (registers models and embedders)                      │
-    │  └── Configuration for server URL and models                            │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  models.py - Model Implementation                                       │
-    │  ├── OllamaModel (chat/generate API integration)                        │
-    │  ├── Request/response conversion                                        │
-    │  └── Streaming support                                                  │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  embedders.py - Embedding Implementation                                │
-    │  └── OllamaEmbedder (embedding API integration)                         │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  constants.py - Default Configuration                                   │
-    │  └── DEFAULT_OLLAMA_SERVER_URL                                          │
-    └─────────────────────────────────────────────────────────────────────────┘
-
-Overview:
-    The Ollama plugin connects Genkit to locally running Ollama models.
-    This is ideal for development, privacy-sensitive applications, or
-    when you want to run models without cloud dependencies.
+This plugin provides integration with Ollama for running local LLMs and text
+embedders directly on your own infrastructure.
 
 Prerequisites:
     - Install Ollama: https://ollama.ai/
-    - Pull a model: ``ollama pull llama3.2`` or ``ollama pull mistral``
-    - Ollama server running (default: http://localhost:11434)
-
-Key Components:
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │ Component         │ Purpose                                             │
-    ├───────────────────┼─────────────────────────────────────────────────────┤
-    │ Ollama            │ Plugin class to register with Genkit                │
-    │ ollama_name()     │ Helper to create namespaced model names             │
-    └───────────────────┴─────────────────────────────────────────────────────┘
+    - Ensure the Ollama server is running (default: ``http://localhost:11434``).
+    - Pull target models locally (e.g., ``ollama pull llama3.2``).
 
 Example:
-    Basic usage:
-
     ```python
     from genkit import Genkit
     from genkit_ollama import Ollama
 
-    # Configure with model name and optional server URL
-    ai = Genkit(
-        plugins=[Ollama(models=['llama3.2', 'mistral'])],
+    # 1. Initialize Genkit with local Ollama plugin
+    ai = Genkit(plugins=[Ollama(models=['llama3.2'])])
+
+    # 2. Generate content entirely on local hardware
+    res = await ai.generate(
         model='ollama/llama3.2',
+        prompt='Why run AI models locally in 10 words?',
     )
 
-    response = await ai.generate(prompt='Hello, Llama!')
-    print(response.text)
-
-    # Use a specific model
-    response = await ai.generate(
-        model='ollama/mistral',
-        prompt='Write a haiku about coding',
-    )
+    # 3. Inspect output shapes directly
+    print(res.text)
+    # => Complete data privacy with zero cloud latency or API costs.
     ```
-
-Caveats:
-    - Requires Ollama installed and running locally
-    - Model names are prefixed with 'ollama/' (e.g., 'ollama/llama3.2')
-    - Performance depends on local hardware
 
 See Also:
     - Ollama documentation: https://ollama.ai/
-    - Genkit documentation: https://genkit.dev/
 """
 
 from genkit_ollama.plugin_api import Ollama, ollama_name

@@ -18,126 +18,30 @@
 """Google Cloud Plugin for Genkit.
 
 This plugin provides Google Cloud observability integration for Genkit,
-enabling telemetry export to Cloud Trace and Cloud Monitoring.
-
-Key Concepts (ELI5)::
-
-    ┌─────────────────────┬────────────────────────────────────────────────────┐
-    │ Concept             │ ELI5 Explanation                                   │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Telemetry           │ Data about how your app is running. Like a        │
-    │                     │ fitness tracker for your code.                    │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Cloud Trace         │ Shows the path requests take through your app.    │
-    │                     │ Like GPS tracking for your API calls.             │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Cloud Monitoring    │ Graphs and alerts for your app's health.          │
-    │                     │ Like a heart rate monitor dashboard.              │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Span                │ One step in a request's journey. Like one         │
-    │                     │ leg of a relay race.                              │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Trace               │ All spans for one request connected together.     │
-    │                     │ The complete story of one API call.               │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Metrics             │ Numbers that describe your app (requests/sec,     │
-    │                     │ error rate, latency). Like a report card.         │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ PII Redaction       │ Hiding sensitive data in traces. Like blurring    │
-    │                     │ faces in photos before sharing.                   │
-    └─────────────────────┴────────────────────────────────────────────────────┘
-
-Data Flow::
-
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                    HOW TELEMETRY FLOWS TO GOOGLE CLOUD                  │
-    │                                                                         │
-    │    Your Genkit App                                                      │
-    │         │                                                               │
-    │         │  (1) App runs flows, calls models, uses tools                 │
-    │         ▼                                                               │
-    │    ┌─────────────────┐                                                  │
-    │    │  OpenTelemetry  │   Automatically creates spans for each           │
-    │    │  SDK            │   operation (you don't write this code!)         │
-    │    └────────┬────────┘                                                  │
-    │             │                                                           │
-    │             │  (2) Spans collected and processed                        │
-    │             ▼                                                           │
-    │    ┌─────────────────┐                                                  │
-    │    │  GCP Exporters  │   • Redact PII (input/output)                    │
-    │    │                 │   • Add error markers                            │
-    │    │                 │   • Batch for efficiency                         │
-    │    └────────┬────────┘                                                  │
-    │             │                                                           │
-    │             │  (3) HTTPS to Google Cloud                                │
-    │             ▼                                                           │
-    │    ════════════════════════════════════════════════════                 │
-    │             │  Internet                                                 │
-    │             ▼                                                           │
-    │    ┌─────────────────────────────────────────────────────┐              │
-    │    │  Google Cloud Console                               │              │
-    │    │  ┌──────────────┐  ┌──────────────┐                │              │
-    │    │  │ Cloud Trace  │  │ Cloud        │                │              │
-    │    │  │ (waterfall   │  │ Monitoring   │                │              │
-    │    │  │  diagrams)   │  │ (dashboards) │                │              │
-    │    │  └──────────────┘  └──────────────┘                │              │
-    │    └─────────────────────────────────────────────────────┘              │
-    └─────────────────────────────────────────────────────────────────────────┘
-
-Architecture Overview::
-
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                      Google Cloud Plugin                                │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  Plugin Entry Point (__init__.py)                                       │
-    │  └── enable_googlecloud_telemetry() - Enable Cloud Trace/Monitoring export         │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  telemetry/__init__.py - Telemetry Module                               │
-    │  └── Re-exports from submodules                                         │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  telemetry/tracing.py - Distributed Tracing                             │
-    │  ├── Cloud Trace exporter configuration                                 │
-    │  └── OpenTelemetry integration                                          │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  telemetry/metrics.py - Metrics Collection                              │
-    │  ├── Cloud Monitoring exporter                                          │
-    │  └── Custom Genkit metrics                                              │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  telemetry/action.py - Action Instrumentation                           │
-    │  └── Automatic span creation for Genkit actions                         │
-    └─────────────────────────────────────────────────────────────────────────┘
-
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                     Telemetry Data Flow                                 │
-    │                                                                         │
-    │  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────┐      │
-    │  │ Genkit App   │───►│ OpenTelemetry│───►│ Google Cloud         │      │
-    │  │ (actions,    │    │ SDK          │    │ (Trace, Monitoring)  │      │
-    │  │  flows)      │    └──────────────┘    └──────────────────────┘      │
-    │  └──────────────┘                                                       │
-    └─────────────────────────────────────────────────────────────────────────┘
+enabling telemetry export to Cloud Trace, Cloud Monitoring, and Cloud Logging.
 
 Example:
     ```python
+    from genkit import Genkit
+    from genkit_googleai import GoogleAI
     from genkit_googlecloud import enable_googlecloud_telemetry
 
-    # Enable telemetry export to Google Cloud
-    enable_googlecloud_telemetry()
+    # 1. Enable Google Cloud Trace and Monitoring export
+    enable_googlecloud_telemetry(project_id='my-project')
 
-    # Traces and metrics are now exported to:
-    # - Cloud Trace (distributed tracing)
-    # - Cloud Monitoring (metrics)
+    # 2. All subsequent Genkit actions automatically export telemetry
+    ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
+    await ai.generate(prompt='Hello, world!')
+    # => Traces exported asynchronously to Cloud Trace (latency, tokens, status)
     ```
 
-Caveats:
-    - Requires Google Cloud credentials (ADC or explicit)
-    - Telemetry is disabled by default in development mode (GENKIT_ENV=dev)
-    - Requires opentelemetry and google-cloud-* packages
+Requirements:
+    - Requires Google Cloud Application Default Credentials (ADC) or explicit credentials.
+    - Telemetry export is disabled by default in local dev environments unless explicitly configured.
 
 See Also:
     - Cloud Trace: https://cloud.google.com/trace
     - Cloud Monitoring: https://cloud.google.com/monitoring
-    - Genkit documentation: https://genkit.dev/
 """
 
 from .telemetry import enable_googlecloud_telemetry
