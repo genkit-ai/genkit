@@ -624,10 +624,17 @@ def _property_type(prop: dict[str, Any]) -> str | list[str] | None:
     (e.g. ``Any``) fall back to ``None``, which Ollama treats as untyped.
     """
     if 'type' in prop:
-        return cast('str | list[str]', prop['type'])
-    any_of = prop.get('anyOf')
-    if isinstance(any_of, list):
-        types = [entry['type'] for entry in any_of if isinstance(entry, dict) and 'type' in entry]
+        return cast(str | list[str], prop['type'])
+    union = prop.get('anyOf') or prop.get('oneOf')
+    if isinstance(union, list):
+        types: list[str] = []
+        for entry in union:
+            if isinstance(entry, dict):
+                entry_type = entry.get('type')
+                if isinstance(entry_type, str):
+                    types.append(entry_type)
+                elif isinstance(entry_type, list):
+                    types.extend(t for t in entry_type if isinstance(t, str))
         if types:
-            return types
+            return list(dict.fromkeys(types))  # order-preserving dedup
     return None
