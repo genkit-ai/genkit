@@ -19,12 +19,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic
 
 from opentelemetry import trace as trace_api
 
 # Internal imports from sibling modules
-from genkit._ai._agents._client import AgentSession
+from genkit._ai._agents._client import AgentChat, _init_from
 from genkit._ai._agents._runtime import (
     AgentFn,
     AgentRuntime,
@@ -37,11 +37,11 @@ from genkit._ai._agents._session import (
     StateT,
 )
 from genkit._ai._agents._snapshot import (
+    abort_snapshot_in_store,
     lookup_label,
     parse_abort_input,
     parse_snapshot_lookup_input,
     resolve_snapshot,
-    run_abort,
 )
 from genkit._ai._agents._transports._inprocess import InProcessTransport
 from genkit._ai._agents._types import (
@@ -72,6 +72,7 @@ from genkit._core._typing import (
     AgentOutput,
     AgentResult,
     AgentStreamChunk,
+    Artifact,
     MessageData,
     MiddlewareRef,
     Part,
@@ -79,14 +80,12 @@ from genkit._core._typing import (
     SnapshotStatus,
 )
 
-StreamT = TypeVar('StreamT')
-
 # ---------------------------------------------------------------------------
 # Agent Class
 # ---------------------------------------------------------------------------
 
 
-class Agent(BidiAction, Generic[StateT, StreamT]):
+class Agent(BidiAction, Generic[StateT]):
     """In-process agent: registered in the registry, implements AgentAPI.
 
     Created by ``define_agent`` / ``define_custom_agent``. Extends BidiAction
@@ -101,19 +100,26 @@ class Agent(BidiAction, Generic[StateT, StreamT]):
         bidi_fn: BidiFn[AgentInit, AgentOutput],
         store: SessionStore | None = None,
         client_transform: ClientTransform | None = None,
+        state_schema: type[Any] | None = None,
         description: str | None = None,
         metadata: dict[str, object] | None = None,
     ) -> None:
         """Initialise Agent; transport is inferred from the action + store."""
+        agent_meta: dict[str, object] = {'stateManagement': 'server' if store is not None else 'client'}
+        # Publish the state shape so tooling (e.g. the Dev UI) can inspect and
+        # validate custom state the same way it does tool/prompt schemas.
+        if state_schema is not None and hasattr(state_schema, 'model_json_schema'):
+            agent_meta['stateSchema'] = state_schema.model_json_schema()
         super().__init__(
             kind=ActionKind.AGENT,
             name=name,
             bidi_fn=bidi_fn,
             description=description,
-            metadata={**(metadata or {}), 'agent': {'stateManagement': 'server' if store is not None else 'client'}},
+            metadata={**(metadata or {}), 'agent': agent_meta},
         )
         self.store = store
         self._client_transform = client_transform
+        self._state_schema = state_schema
 
     def _in_process_transport(self) -> InProcessTransport:
         state_management: StateManagement = 'server' if self.store is not None else 'client'
@@ -146,32 +152,44 @@ class Agent(BidiAction, Generic[StateT, StreamT]):
         """Abort a running snapshot."""
         if self.store is None:
             return None
-        return await run_abort(self.store, snapshot_id)
+        return await abort_snapshot_in_store(self.store, snapshot_id)
 
     # ------------------------------------------------------------------
     # AgentAPI implementation
     # ------------------------------------------------------------------
 
-    def chat(self, init: AgentInit | None = None) -> AgentSession[StateT, StreamT]:
-        """Starts a new in-process session, or attaches to one via init."""
-        return AgentSession(self._in_process_transport(), init)
+    def chat(
+        self,
+        *,
+        snapshot_id: str | None = None,
+        session_id: str | None = None,
+        messages: list[MessageData] | None = None,
+        artifacts: list[Artifact] | None = None,
+        state: StateT | None = None,
+    ) -> AgentChat[StateT]:
+        """Starts a new in-process session, or attaches to one via a snapshot/session id or saved conversation state."""
+        return AgentChat(
+            self._in_process_transport(),
+            _init_from(snapshot_id, session_id, messages, artifacts, state),
+            state_schema=self._state_schema,
+        )
 
     async def load_chat(
         self,
         *,
         snapshot_id: str | None = None,
         session_id: str | None = None,
-    ) -> AgentSession[StateT, StreamT]:
-        """Loads a server snapshot and returns a session with history restored."""
+    ) -> AgentChat[StateT]:
+        """Loads a server snapshot and returns a chat with history restored."""
         session_transport = self._in_process_transport()
         snapshot = await session_transport.get_snapshot(snapshot_id=snapshot_id, session_id=session_id)
         if snapshot is None:
             label = lookup_label(snapshot_id=snapshot_id, session_id=session_id)
             raise ValueError(f'Failed to load chat: Snapshot {label!r} not found.')
         session_transport.state_management = 'server'
-        session = AgentSession(session_transport)
-        session._load_from_snapshot(snapshot)
-        return session
+        chat = AgentChat(session_transport, state_schema=self._state_schema)
+        chat._load_from_snapshot(snapshot)
+        return chat
 
     async def get_snapshot(
         self,
@@ -197,13 +215,19 @@ def define_custom_agent(
     name: str,
     fn: AgentFn,
     *,
-    store: SessionStore | None = None,
+    store: SessionStore[StateT] | None = None,
     client_transform: ClientTransform | None = None,
     transform: StateTransform | None = None,
+    state_schema: type[StateT] | None = None,
     description: str | None = None,
     metadata: dict[str, object] | None = None,
-) -> Agent:
-    """Register a custom agent; ``fn`` owns the turn loop via ``session_runner.run``."""
+) -> Agent[StateT]:
+    """Register a custom agent; ``fn`` owns the turn loop via ``session_runner.run``.
+
+    Pass ``state_schema`` (a Pydantic model) to type the custom state: the chat's
+    ``state``, each turn's ``response.state``, and streamed ``chunk.custom`` come
+    back as that model, validated on the way in, instead of a bare dict.
+    """
     resolved_transform = resolve_client_transform(
         client_transform=client_transform,
         transform=transform,
@@ -214,7 +238,7 @@ def define_custom_agent(
         in_queue: CloseableQueue[AgentInput],
         out_queue: CloseableQueue[AgentStreamChunk],
     ) -> AgentOutput:
-        session, parent = await load_session(init, store, agent_name=name)
+        session, parent = await load_session(init, store, agent_name=name, state_schema=state_schema)
         state = await session.state()
         if state.session_id:
             span = trace_api.get_current_span()
@@ -239,6 +263,7 @@ def define_custom_agent(
         metadata=metadata,
         store=store,
         client_transform=resolved_transform,
+        state_schema=state_schema,
     )
     registry.register_action_from_instance(agent)
 
@@ -288,16 +313,21 @@ def define_agent(
     max_turns: int | None = None,
     description: str | None = None,
     metadata: dict[str, object] | None = None,
-    store: SessionStore | None = None,
+    store: SessionStore[StateT] | None = None,
     client_transform: ClientTransform | None = None,
     transform: StateTransform | None = None,
-) -> Agent:
+    state_schema: type[StateT] | None = None,
+) -> Agent[StateT]:
     """Register a prompt-backed agent.
 
-    Conversation input arrives via ``AgentSession.send``;
+    Conversation input arrives via ``AgentChat.send``;
     ``system`` is the only static preamble re-rendered each turn alongside
     session history. For template variables, few-shot messages, RAG docs, or
     prompt variants, use ``define_prompt`` + ``define_prompt_agent`` instead.
+
+    Pass ``state_schema`` (a Pydantic model) to type the custom state that tools
+    read and write via the session — the chat's ``state``, ``response.state``,
+    and streamed ``chunk.custom`` come back as that model instead of a dict.
     """
     executable_prompt = ExecutablePrompt(
         registry,
@@ -317,6 +347,7 @@ def define_agent(
         store=store,
         client_transform=client_transform,
         transform=transform,
+        state_schema=state_schema,
         description=description,
         metadata=metadata,
     )
@@ -326,12 +357,13 @@ def define_prompt_agent(
     registry: Registry,
     name: str,
     *,
-    store: SessionStore | None = None,
+    store: SessionStore[StateT] | None = None,
     client_transform: ClientTransform | None = None,
     transform: StateTransform | None = None,
+    state_schema: type[StateT] | None = None,
     description: str | None = None,
     metadata: dict[str, object] | None = None,
-) -> Agent:
+) -> Agent[StateT]:
     """Wire an already-registered prompt as an agent.
 
     Looks up the prompt named `name` from the registry and wires it as an
@@ -382,6 +414,7 @@ def define_prompt_agent(
         store=store,
         client_transform=client_transform,
         transform=transform,
+        state_schema=state_schema,
         description=description,
         metadata=metadata,
     )

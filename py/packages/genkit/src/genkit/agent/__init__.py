@@ -19,11 +19,11 @@
 from genkit._ai._agents._base import Agent
 from genkit._ai._agents._client import (
     AgentAPI,
+    AgentChat,
     AgentChunk,
     AgentClient,
     AgentInterrupt,
     AgentResponse,
-    AgentSession,
     AgentTransport,
     AgentTurn,
     DetachedTask,
@@ -32,22 +32,11 @@ from genkit._ai._agents._runtime import AgentFn, SessionRunner
 from genkit._ai._agents._session import (
     Session,
     SessionStore,
-    SnapshotAborter,
+    SnapshotSubscriber,
 )
-from genkit._ai._agents._session_stores._branching import (
-    BranchingSessionStore,
-    FileBranchingSessionStore,
-    InMemoryBranchingSessionStore,
-)
-from genkit._ai._agents._session_stores._latest_state import (
-    FileLatestStateStore,
-    InMemoryLatestStateStore,
-    LatestStateStore,
-)
-from genkit._ai._agents._session_stores._linear import (
-    FileLinearSessionStore,
-    InMemoryLinearSessionStore,
-    LinearSessionStore,
+from genkit._ai._agents._session_stores import (
+    FileSessionStore,
+    InMemorySessionStore,
 )
 from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
 from genkit._ai._agents._transports._http import HttpAgentTransport, remote_agent
@@ -80,7 +69,7 @@ __all__ = [
     'AgentAPI',
     'AgentClient',
     # Agent Client APIs
-    'AgentSession',
+    'AgentChat',
     'AgentTurn',
     'AgentChunk',
     'AgentInterrupt',
@@ -98,16 +87,9 @@ __all__ = [
     # Session persistence
     'Session',
     'SessionStore',
-    'SnapshotAborter',
-    'LatestStateStore',
-    'InMemoryLatestStateStore',
-    'FileLatestStateStore',
-    'LinearSessionStore',
-    'InMemoryLinearSessionStore',
-    'FileLinearSessionStore',
-    'BranchingSessionStore',
-    'InMemoryBranchingSessionStore',
-    'FileBranchingSessionStore',
+    'SnapshotSubscriber',
+    'InMemorySessionStore',
+    'FileSessionStore',
     # Callbacks and transforms
     'StateTransform',
     'ChunkTransform',

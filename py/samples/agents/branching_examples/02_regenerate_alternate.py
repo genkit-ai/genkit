@@ -26,7 +26,7 @@ what the user already saw. Requires GEMINI_API_KEY.
 from __future__ import annotations
 
 from genkit import Genkit
-from genkit.agent import InMemoryBranchingSessionStore
+from genkit.agent import InMemorySessionStore
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -35,17 +35,17 @@ agent = ai.define_agent(
     name='designer',
     model='googleai/gemini-flash-latest',
     system='You help design a product landing page. Reply in two or three short sentences.',
-    store=InMemoryBranchingSessionStore(),
+    store=InMemorySessionStore(),
 )
 
 
 async def main() -> None:
     # Turn 1 sets the scene; bookmark it, then keep going on the main line.
-    session = agent.chat()
-    await session.send('Plan a landing page for a note-taking app.')
-    checkpoint = session.snapshot_id
+    chat = agent.chat()
+    await chat.send('Plan a landing page for a note-taking app.')
+    checkpoint = chat.snapshot_id
     assert checkpoint
-    await session.send('Make it minimal.')  # → the original "minimal" answer
+    await chat.send('Make it minimal.')  # → the original "minimal" answer
 
     # Regenerate turn 2 from the bookmark with different input. The original
     # "minimal" answer is untouched; both versions now coexist as siblings.

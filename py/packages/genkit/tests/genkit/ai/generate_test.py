@@ -702,6 +702,26 @@ async def test_prompt_stream_runs_middleware() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_response_is_awaitable_and_iterable() -> None:
+    """A streamed call reads like an agent turn: iterate it for chunks or await it
+    for the final response, with .stream / .response still there for both halves."""
+    ai = Genkit()
+    define_echo_model(ai)
+    my_prompt = ai.define_prompt(model='echoModel', prompt='hi')
+
+    # Await the handle directly, the same as `await streamed.response`.
+    direct = await my_prompt.stream()
+    assert direct.text
+
+    # Iterate the handle directly for chunks, then await it for the response.
+    streamed = my_prompt.stream()
+    _ = [chunk async for chunk in streamed]
+    via_await = await streamed
+    via_response = await streamed.response
+    assert via_await.text == via_response.text == direct.text
+
+
+@pytest.mark.asyncio
 async def test_generate_applies_middleware() -> None:
     """When middleware is provided, apply it via MiddlewareRef resolution."""
     ai = Genkit(plugins=[PrePostMiddlewarePlugin()])

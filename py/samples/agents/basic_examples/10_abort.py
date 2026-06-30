@@ -27,11 +27,11 @@ from __future__ import annotations
 import asyncio
 
 from genkit import Genkit, GenkitError, ToolRunContext
-from genkit.agent import InMemoryLatestStateStore
+from genkit.agent import InMemorySessionStore
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
-store = InMemoryLatestStateStore()
+store = InMemorySessionStore()
 
 
 @ai.tool(name='slowWork', description='Simulate long background work.')
@@ -53,17 +53,17 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    session = agent.chat()
+    chat = agent.chat()
 
     # Kick off the background turn and let it run for a moment.
-    task = await session.detach('Please run a long task using slowWork.')
+    task = await chat.detach('Please run a long task using slowWork.')
     assert task.snapshot_id
     await asyncio.sleep(2.0)
 
     # → abort_signal fires inside slowWork; the snapshot settles as ABORTED
     await task.abort()
     await asyncio.sleep(1.0)  # let the background task unwind
-    await session.close()
+    await chat.close()
 
 
 if __name__ == '__main__':

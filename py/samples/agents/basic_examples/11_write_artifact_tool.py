@@ -25,12 +25,12 @@ agents that build up a workspace of documents. Requires GEMINI_API_KEY.
 from __future__ import annotations
 
 from genkit import Genkit
-from genkit.agent import InMemoryLatestStateStore
+from genkit.agent import InMemorySessionStore
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Artifacts, Middleware
 
 ai = Genkit(plugins=[GoogleAI(), Middleware()])
-store = InMemoryLatestStateStore()
+store = InMemorySessionStore()
 
 agent = ai.define_agent(
     name='workspaceAgent',
@@ -41,12 +41,12 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    session = agent.chat()
+    chat = agent.chat()
 
-    # The model writes a named file; the Artifacts middleware captures it on the session.
-    await session.send('Write poem.txt with a short poem about Python agents.')
-    # → session.artifacts now contains poem.txt holding the generated poem
-    assert any(a.name == 'poem.txt' for a in session.artifacts)
+    # The model writes a named file; the Artifacts middleware captures it on the chat.
+    await chat.send('Write poem.txt with a short poem about Python agents.')
+    # → chat.artifacts now contains poem.txt holding the generated poem
+    assert any(a.name == 'poem.txt' for a in chat.artifacts)
 
 
 if __name__ == '__main__':

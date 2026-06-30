@@ -15,15 +15,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stream live state patches and accumulate artifacts from a custom agent.
+"""Stream live state patches as a typed model and accumulate artifacts.
 
-A custom turn bumps a counter and writes an artifact before answering. As it runs you
-receive incremental state-patch chunks, and once it settles the session holds the
-merged custom state plus every artifact the turn produced — the state model behind a
-live-updating agent UI. Requires GEMINI_API_KEY.
+A custom turn bumps a counter and writes an artifact before answering. Declaring a
+``state_schema`` means the custom state comes back as that model — so ``chat.state``,
+``response.state``, and each streamed ``chunk.custom`` are a ``Progress`` with typed
+attribute access, not a bare dict. This is the state model behind a live-updating
+agent UI. Requires GEMINI_API_KEY.
 """
 
 from __future__ import annotations
+
+from pydantic import BaseModel
 
 from genkit import ActionRunContext, FinishReason, Genkit, Message, Part, TextPart
 from genkit.agent import (
@@ -32,14 +35,18 @@ from genkit.agent import (
     AgentResult,
     AgentStreamChunk,
     Artifact,
-    InMemoryLatestStateStore,
+    InMemorySessionStore,
     SessionRunner,
     TurnResult,
 )
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
-store = InMemoryLatestStateStore()
+store = InMemorySessionStore()
+
+
+class Progress(BaseModel):
+    turns: int = 0
 
 
 async def stateful_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
@@ -55,7 +62,7 @@ async def stateful_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult
             messages=messages,
         )
         async for chunk in stream_resp.stream:
-            ctx.send_chunk(AgentStreamChunk(model_chunk=chunk.model_dump()))
+            ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
 
         res = await stream_resp.response
         if res.message:
@@ -68,20 +75,27 @@ async def stateful_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult
     return await sess.result()
 
 
-agent = ai.define_custom_agent(name='statefulAgent', fn=stateful_fn, store=store)
+agent = ai.define_custom_agent(name='statefulAgent', fn=stateful_fn, store=store, state_schema=Progress)
 
 
 async def main() -> None:
-    session = agent.chat()
+    chat = agent.chat()  # AgentChat[Progress] — state is typed
 
-    # State patches stream live as the custom turn works.
-    patches = [chunk.custom async for chunk in session.send('Go') if chunk.custom]
-    # → e.g. [{'turns': 1}] — incremental updates you could render as they arrive
-    assert patches
+    # Text and live state stream through the same chunk — the two halves a
+    # live-updating component renders. accumulated_text is the reply so far;
+    # chunk.custom is the Progress model after each patch, so reading
+    # chunk.custom.turns is typed attribute access, never chunk.custom['turns'].
+    turn = chat.send('Go')
+    async for chunk in turn:
+        if chunk.custom is not None:
+            print(f'\rturn {chunk.custom.turns} · {chunk.accumulated_text}', end='', flush=True)
+    print()
 
-    # Once the turn settles, the session holds the merged state + the turn's artifacts.
-    assert session.custom == {'turns': 1}
-    assert any(a.name == 'status' for a in session.artifacts)
+    # state_schema materializes the wire blob into the model on the way out, so
+    # the awaited response and the chat handle both expose .turns, not ['turns'].
+    res = await turn
+    if res.state is not None:
+        print(f'{res.state.turns} turn(s), {len(chat.artifacts)} artifact(s)')
 
 
 if __name__ == '__main__':

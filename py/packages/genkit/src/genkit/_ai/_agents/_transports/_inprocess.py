@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
-from typing import Protocol, TypeVar
+from typing import Protocol
 
 from genkit._ai._agents._types import StateManagement
 from genkit._core._action import BidiAction
@@ -33,9 +33,6 @@ from genkit._core._typing import (
     SessionSnapshot,
     SnapshotStatus,
 )
-
-StateT = TypeVar('StateT')
-StreamT = TypeVar('StreamT')
 
 
 class GetSnapshotFn(Protocol):
@@ -70,7 +67,6 @@ class InProcessTransport:
         self,
         agent_input: AgentInput,
         init: AgentInit,
-        abort_event: asyncio.Event | None = None,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
         """Run a single turn and return the stream and output awaitables.
 
@@ -91,9 +87,9 @@ class InProcessTransport:
         stream_queue = CloseableQueue[AgentStreamChunk | BaseException]()
 
         # Aborting a turn is a client-side detach: the caller stops listening,
-        # but the in-flight turn keeps running to completion so its work and any
-        # snapshot still land. So we ignore abort_event here and let the drain
-        # below finish on its own.
+        # but this drain keeps running to completion so the in-flight turn's work
+        # and any snapshot still land. Halting server-side work is a separate
+        # operation (abort_snapshot), not part of running a turn.
         async def drain_connection() -> None:
             try:
                 async for chunk in conn.receive():

@@ -23,14 +23,14 @@ checkpoint right after the headline. Loading that snapshot restores the WHOLE
 state — the artifact reverts with the conversation — so the playful timeline we
 build next grows from the original headline, and the enterprise page is untouched.
 
-Every turn is a snapshot you can rewind to. Swap InMemoryBranchingSessionStore
-for FileBranchingSessionStore to keep the tree on disk. Requires GEMINI_API_KEY.
+Every turn is a snapshot you can rewind to. Swap InMemorySessionStore
+for FileSessionStore to keep the tree on disk. Requires GEMINI_API_KEY.
 """
 
 from __future__ import annotations
 
 from genkit import Genkit
-from genkit.agent import InMemoryBranchingSessionStore
+from genkit.agent import InMemorySessionStore
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Artifacts, Middleware
 
@@ -45,13 +45,13 @@ writer = ai.define_agent(
         'short sentence about what you changed.'
     ),
     use=[Artifacts()],
-    store=InMemoryBranchingSessionStore(),  # every turn is a checkpoint you can rewind to
+    store=InMemorySessionStore(),  # every turn is a snapshot you can rewind to
 )
 
 
-def page(session) -> str:
+def page(chat) -> str:
     """The landing.md the agent is maintaining in this timeline."""
-    for art in session.artifacts:
+    for art in chat.artifacts:
         if art.name == 'landing.md':
             return ''.join(getattr(getattr(p, 'root', p), 'text', '') for p in art.parts).strip()
     return ''

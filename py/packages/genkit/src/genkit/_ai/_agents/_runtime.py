@@ -25,13 +25,16 @@ from datetime import datetime, timezone
 from typing import Any, Generic, TypeVar
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from genkit._ai._agents._session import (
     Session,
     SessionStore,
-    SnapshotAborter,
+    SnapshotSubscriber,
     StateT,
     run_with_session,
 )
+from genkit._ai._agents._snapshot import walk_back_to_resumable
 from genkit._ai._agents._types import ClientTransform, TurnResult
 from genkit._ai._generate import generate_action
 from genkit._ai._json_patch import diff_json
@@ -62,7 +65,6 @@ from genkit._core._typing import (
 
 PREAMBLE_KEY = '_genkit_agent_preamble'
 
-StreamT = TypeVar('StreamT')
 InT = TypeVar('InT')
 OutT = TypeVar('OutT')
 StreamOutT = TypeVar('StreamOutT')
@@ -144,6 +146,7 @@ class SessionRunner(Generic[StateT]):
                 self.last_good_finish_reason = self.last_turn_finish_reason
                 self.turn_index += 1
             except BaseException as exc:
+                self.last_turn_finish_reason = AgentFinishReason.FAILED
                 self.last_turn_error = to_error_details(exc)
 
                 if self.on_end_turn is not None:
@@ -204,16 +207,48 @@ BidiFunc = Callable[
 # ---------------------------------------------------------------------------
 
 
+def validate_custom_state(custom: Any, state_schema: type[Any] | None, agent_name: str) -> None:  # noqa: ANN401
+    """Reject custom state that doesn't match the agent's declared shape.
+
+    Runs at load time on the state about to seed a turn — whether it came from a
+    snapshot or a client that shipped its own blob — so a malformed payload fails
+    fast with a clear error instead of surfacing deep inside a tool. No-ops when
+    no schema is declared, and skips a never-set state so a required field doesn't
+    trip a session that simply hasn't written state yet.
+    """
+    if state_schema is None or custom is None or not hasattr(state_schema, 'model_validate'):
+        return
+    try:
+        state_schema.model_validate(custom)
+    except ValidationError as e:
+        # Surface the per-field failures and the expected shape so the caller can
+        # see exactly what was wrong, not just that something was.
+        raise GenkitError(
+            status=StatusCodes.INVALID_ARGUMENT,
+            message=(
+                f"Invalid custom state for agent '{agent_name}': {e.error_count()} schema validation error(s).\n{e}"
+            ),
+            details={
+                'schema': state_schema.model_json_schema(),
+                'errors': [{'loc': list(err['loc']), 'message': err['msg'], 'type': err['type']} for err in e.errors()],
+            },
+        ) from e
+
+
 async def load_session(
     init: AgentInit,
     store: SessionStore | None,
     *,
     agent_name: str = '',
+    state_schema: type[Any] | None = None,
 ) -> tuple[Session[Any], SessionSnapshot | None]:
     """Construct a Session from AgentInit payload.
 
     Server-managed (store set): resume via snapshot_id or session_id.
     Client-managed (no store): use init.state or start fresh.
+
+    When ``state_schema`` is set the custom state loaded from a snapshot or the
+    client is validated against it before the session is built.
     """
     name = agent_name or 'agent'
 
@@ -247,6 +282,18 @@ async def load_session(
                 status=StatusCodes.NOT_FOUND,
                 message=f'Snapshot {init.snapshot_id!r} not found',
             )
+        # A failed/aborted/pending snapshot is kept for inspection but isn't a
+        # valid place to continue a conversation from.
+        if snap.status != SnapshotStatus.COMPLETED:
+            raise GenkitError(
+                status=StatusCodes.INVALID_ARGUMENT,
+                message=(
+                    f'Snapshot {init.snapshot_id!r} is not resumable '
+                    f'(status: {snap.status.value if snap.status else "unknown"}). '
+                    "Only 'completed' snapshots can be resumed."
+                ),
+            )
+        validate_custom_state(snap.state.custom, state_schema, name)
         return Session(initial_state=snap.state), snap
 
     session_id = init.session_id
@@ -254,8 +301,11 @@ async def load_session(
         session_id = str(uuid4())
 
     if store is not None and session_id:
-        snap = await store.get_snapshot(session_id=session_id)
+        # The latest leaf may be a failed/aborted/pending turn, which can't be
+        # resumed — fall back to the last good snapshot behind it.
+        snap = await walk_back_to_resumable(store, await store.get_snapshot(session_id=session_id))
         if snap is not None:
+            validate_custom_state(snap.state.custom, state_schema, name)
             return Session(initial_state=snap.state), snap
         return (
             Session(
@@ -269,6 +319,7 @@ async def load_session(
         )
 
     if init.state is not None:
+        validate_custom_state(init.state.custom, state_schema, name)
         return Session(initial_state=init.state), None
 
     return Session(), None
@@ -486,7 +537,7 @@ class AgentRuntime:
         return out
 
     async def watch_snapshot_abort(self, snapshot_id: str, abort_signal: asyncio.Event) -> None:
-        if self.store is None or not isinstance(self.store, SnapshotAborter):
+        if self.store is None or not isinstance(self.store, SnapshotSubscriber):
             return
         q = await self.store.on_snapshot_status_change(snapshot_id)
         while True:

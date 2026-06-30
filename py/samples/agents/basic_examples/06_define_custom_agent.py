@@ -31,14 +31,14 @@ from genkit.agent import (
     AgentInput,
     AgentResult,
     AgentStreamChunk,
-    InMemoryLatestStateStore,
+    InMemorySessionStore,
     SessionRunner,
     TurnResult,
 )
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
-store = InMemoryLatestStateStore()
+store = InMemorySessionStore()
 
 
 async def custom_coder_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
@@ -52,7 +52,7 @@ async def custom_coder_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentRe
             messages=messages,
         )
         async for chunk in stream_resp.stream:
-            ctx.send_chunk(AgentStreamChunk(model_chunk=chunk.model_dump(by_alias=True, exclude_none=True)))
+            ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
 
         res = await stream_resp.response
         if res.message:
@@ -69,9 +69,9 @@ agent = ai.define_custom_agent(name='customCoder', fn=custom_coder_fn, store=sto
 
 
 async def main() -> None:
-    session = agent.chat()
+    chat = agent.chat()
     # → the custom fn streams a concise explanation and persists it to history
-    await session.send('What is a Python list comprehension?')
+    await chat.send('What is a Python list comprehension?')
 
 
 if __name__ == '__main__':

@@ -29,11 +29,14 @@ Requires GEMINI_API_KEY.
 from __future__ import annotations
 
 from genkit import Genkit, GenkitError, SessionErrorType
-from genkit.agent import InMemoryBranchingSessionStore
+from genkit.agent import InMemorySessionStore
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
-store = InMemoryBranchingSessionStore()
+# reject_ambiguous_session makes a session-id lookup over a forked history
+# raise instead of silently picking the newest branch — which is what lets this
+# sample surface AMBIGUOUS_BRANCH below.
+store = InMemorySessionStore(reject_ambiguous_session=True)
 
 agent = ai.define_agent(
     name='designer',

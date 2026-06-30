@@ -26,7 +26,7 @@ Requires GEMINI_API_KEY.
 from __future__ import annotations
 
 from genkit import Genkit
-from genkit.agent import InMemoryBranchingSessionStore
+from genkit.agent import InMemorySessionStore
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -35,7 +35,7 @@ agent = ai.define_agent(
     name='designer',
     model='googleai/gemini-flash-latest',
     system='You help design a product landing page. Reply in two or three short sentences.',
-    store=InMemoryBranchingSessionStore(),
+    store=InMemorySessionStore(),
 )
 
 

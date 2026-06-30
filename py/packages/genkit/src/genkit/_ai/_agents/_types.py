@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, TypedDict, TypeVar
+from typing import Literal, TypedDict
 
 from genkit._core._typing import (
     AgentFinishReason,
@@ -30,9 +30,6 @@ from genkit._core._typing import (
 )
 
 StateManagement = Literal['server', 'client']
-
-StateT = TypeVar('StateT')
-StreamT = TypeVar('StreamT')
 
 # StateTransform — redact or reshape session state before it leaves the server.
 StateTransform = Callable[[SessionState], SessionState | None]

@@ -19,7 +19,7 @@
 
 Same human-in-the-loop approval as the stored version, but with no store the paused
 turn lives only in this process. Inspect out.interrupts on the paused response, approve
-them in one resume, and continue the same in-memory session. Requires GEMINI_API_KEY.
+them in one resume, and continue the same in-memory chat. Requires GEMINI_API_KEY.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from genkit import Genkit
-from genkit.agent import AgentFinishReason, Resume
+from genkit.agent import AgentFinishReason
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Middleware, ToolApproval
 
@@ -67,16 +67,16 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    session = agent.chat()
+    chat = agent.chat()
 
-    out1 = await session.send('Transfer $100 to account 999 for lunch.')
+    out1 = await chat.send('Transfer $100 to account 999 for lunch.')
     assert out1.finish_reason == AgentFinishReason.INTERRUPTED
 
     # Approve each pending tool call, then one resume continues the turn.
-    restart_parts = [intr.restart_part(resumed_metadata={'tool_approved': True}) for intr in out1.interrupts]
-    out2 = await session.resume(Resume(restart=restart_parts))
+    restart_parts = [intr.restart(resumed_metadata={'tool_approved': True}) for intr in out1.interrupts]
+    out2 = await chat.resume(restart=restart_parts)
     assert out2.finish_reason == AgentFinishReason.STOP
-    await session.close()
+    await chat.close()
 
 
 if __name__ == '__main__':

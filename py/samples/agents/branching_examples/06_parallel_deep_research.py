@@ -30,7 +30,7 @@ from __future__ import annotations
 import asyncio
 
 from genkit import Genkit
-from genkit.agent import InMemoryBranchingSessionStore
+from genkit.agent import InMemorySessionStore
 from genkit.plugins.google_genai import GoogleAI
 
 QUESTION = 'How are AI coding agents changing the way software teams hire engineers in 2026?'
@@ -50,7 +50,7 @@ analyst = ai.define_agent(
         'Be concise: 4-6 bullets with concrete facts, names, and numbers.'
     ),
     config={'google_search_retrieval': True},
-    store=InMemoryBranchingSessionStore(),
+    store=InMemorySessionStore(),
 )
 
 

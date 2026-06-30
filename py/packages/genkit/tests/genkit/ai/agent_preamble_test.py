@@ -26,12 +26,10 @@ from genkit._ai._aio import Genkit
 from genkit._ai._testing import define_programmable_model
 from genkit._core._model import Message, ModelResponse
 from genkit._core._typing import (
-    AgentInit,
     FinishReason,
     MessageData,
     Part,
     Role,
-    SessionState,
     TextPart,
     ToolRequest,
     ToolRequestPart,
@@ -294,8 +292,8 @@ async def test_prompt_agent_tool_messages_preserved_verbatim() -> None:
         tool_response_msg,
     ]
 
-    init = AgentInit(state=SessionState(messages=[MessageData.model_validate(m.model_dump()) for m in history]))
-    async with agent.chat(init) as session:
+    seed_messages = [MessageData.model_validate(m.model_dump()) for m in history]
+    async with agent.chat(messages=seed_messages) as session:
         turn = session.send('continue')
         async for _chunk in turn:
             pass

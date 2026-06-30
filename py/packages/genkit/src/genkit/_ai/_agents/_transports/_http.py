@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar
 
 from genkit._ai._agents._client import AgentClient, AgentTransport
 from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
@@ -32,10 +32,9 @@ from genkit._core._http_client import get_cached_client
 from genkit._core._typing import AgentInit, AgentInput, AgentOutput, AgentStreamChunk, SessionSnapshot, SnapshotStatus
 
 StateT = TypeVar('StateT')
-StreamT = TypeVar('StreamT')
 
 
-class HttpAgentTransport(AgentTransport[StateT, StreamT]):
+class HttpAgentTransport(AgentTransport[StateT]):
     """Client-side agent transport that talks to a remote agent over HTTP."""
 
     def __init__(
@@ -93,7 +92,6 @@ class HttpAgentTransport(AgentTransport[StateT, StreamT]):
         self,
         agent_input: AgentInput,
         init: AgentInit,
-        abort_event: asyncio.Event | None = None,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
         """Runs a single turn over HTTP using a streaming POST request."""
         client = get_cached_client('agent_transport')
@@ -154,8 +152,8 @@ class HttpAgentTransport(AgentTransport[StateT, StreamT]):
 
         # Aborting a turn is a client-side detach: the caller stops listening,
         # but we leave the streaming request running so the server turn finishes
-        # and persists. So we ignore abort_event here and let fetch_stream drain
-        # to completion on its own.
+        # and persists. Halting server-side work is a separate operation
+        # (abort_snapshot), not part of running a turn.
         asyncio.create_task(fetch_stream())
 
         async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
@@ -187,7 +185,7 @@ class HttpAgentTransport(AgentTransport[StateT, StreamT]):
         if not isinstance(result, dict):
             return None
         status_val = result.get('status')
-        return cast(SnapshotStatus, SnapshotStatus(status_val)) if status_val else None
+        return SnapshotStatus(status_val) if status_val else None
 
     async def close(self) -> None:
         """Close the underlying bidi connection."""
@@ -201,7 +199,7 @@ def remote_agent(
     get_snapshot_url: str | None = None,
     abort_url: str | None = None,
     state_management: StateManagement,
-) -> AgentClient[Any, Any]:
+) -> AgentClient[Any]:
     """Create a remote agent client over HTTP (JS ``remoteAgent`` equivalent)."""
     transport = HttpAgentTransport(
         url=url,

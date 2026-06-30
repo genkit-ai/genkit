@@ -41,7 +41,7 @@ from genkit._ai._agents._base import (
     define_prompt_agent,
 )
 from genkit._ai._agents._runtime import AgentFn
-from genkit._ai._agents._session import SessionStore
+from genkit._ai._agents._session import SessionStore, StateT
 from genkit._ai._agents._types import ClientTransform, StateTransform
 from genkit._ai._embedding import EmbedderFn, EmbedderOptions, EmbedderRef, define_embedder
 from genkit._ai._evaluator import (
@@ -703,16 +703,21 @@ class Genkit:
         name: str,
         fn: AgentFn,
         *,
-        store: SessionStore | None = None,
+        store: SessionStore[StateT] | None = None,
         client_transform: ClientTransform | None = None,
         transform: StateTransform | None = None,
+        state_schema: type[StateT] | None = None,
         description: str | None = None,
         metadata: dict[str, object] | None = None,
-    ) -> Agent:
+    ) -> Agent[StateT]:
         """Define and register an agent with full control over the turn loop.
 
         fn receives (SessionRunner, ActionRunContext) and must call sess.run(handle_turn)
         to process inputs, then return an AgentResult.
+
+        Pass ``state_schema`` (a Pydantic model) to type the custom state, so the
+        chat's ``state``, ``response.state``, and streamed ``chunk.custom`` come
+        back as that model instead of a dict.
         """
         return define_custom_agent(
             registry=self.registry,
@@ -721,6 +726,7 @@ class Genkit:
             store=store,
             client_transform=client_transform,
             transform=transform,
+            state_schema=state_schema,
             description=description,
             metadata=metadata,
         )
@@ -737,14 +743,19 @@ class Genkit:
         max_turns: int | None = None,
         description: str | None = None,
         metadata: dict[str, object] | None = None,
-        store: SessionStore | None = None,
+        store: SessionStore[StateT] | None = None,
         client_transform: ClientTransform | None = None,
         transform: StateTransform | None = None,
-    ) -> Agent:
+        state_schema: type[StateT] | None = None,
+    ) -> Agent[StateT]:
         """Define a prompt-backed agent.
 
         Each turn: attaches session history, calls generate with streaming,
         updates session. Pass resume in AgentInput to resume from an interrupt.
+
+        Pass ``state_schema`` (a Pydantic model) to type the custom state tools
+        read and write — the chat's ``state``, ``response.state``, and streamed
+        ``chunk.custom`` come back as that model instead of a dict.
         """
         return define_agent(
             registry=self.registry,
@@ -760,18 +771,20 @@ class Genkit:
             store=store,
             client_transform=client_transform,
             transform=transform,
+            state_schema=state_schema,
         )
 
     def define_prompt_agent(
         self,
         name: str,
         *,
-        store: SessionStore | None = None,
+        store: SessionStore[StateT] | None = None,
         client_transform: ClientTransform | None = None,
         transform: StateTransform | None = None,
+        state_schema: type[StateT] | None = None,
         description: str | None = None,
         metadata: dict[str, object] | None = None,
-    ) -> Agent:
+    ) -> Agent[StateT]:
         """Wire an already-registered prompt as an agent.
 
         Looks up the prompt named `name` from the registry. Use when the prompt
@@ -783,6 +796,7 @@ class Genkit:
             store=store,
             client_transform=client_transform,
             transform=transform,
+            state_schema=state_schema,
             description=description,
             metadata=metadata,
         )

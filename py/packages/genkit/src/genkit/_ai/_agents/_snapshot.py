@@ -21,11 +21,39 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from genkit._ai._agents._session import SessionStore, SnapshotAborter
+from genkit._ai._agents._session import SessionStore
 from genkit._ai._agents._types import ClientTransform
+from genkit._core._error import GenkitError, StatusCodes
 from genkit._core._typing import SessionSnapshot, SnapshotStatus
 
 DEFAULT_HEARTBEAT_TIMEOUT_MS = 60_000
+
+
+async def walk_back_to_resumable(
+    store: SessionStore,
+    snapshot: SessionSnapshot | None,
+) -> SessionSnapshot | None:
+    """Falls back from a session leaf to the last resumable (completed) snapshot.
+
+    A session's newest snapshot can be a failed, aborted, or still-pending turn,
+    and none of those are a place you can pick the conversation back up from. So
+    a non-completed leaf walks its parent chain back to the last good turn —
+    landing a reload on the same spot a live chat would resume from, instead of a
+    dead handle. A visited set guards a corrupt or cyclic chain.
+    """
+    visited: set[str] = set()
+    while snapshot is not None and snapshot.status != SnapshotStatus.COMPLETED:
+        if snapshot.snapshot_id in visited:
+            raise GenkitError(
+                status=StatusCodes.FAILED_PRECONDITION,
+                message=(
+                    f'Snapshot parent chain for {snapshot.snapshot_id!r} is cyclic '
+                    '(a snapshot was visited twice). Resume by snapshot_id instead.'
+                ),
+            )
+        visited.add(snapshot.snapshot_id)
+        snapshot = await store.get_snapshot(snapshot_id=snapshot.parent_id) if snapshot.parent_id else None
+    return snapshot
 
 
 def parse_snapshot_lookup_kw(
@@ -127,7 +155,9 @@ async def resolve_snapshot(
         snapshot = await store.get_snapshot(snapshot_id=snapshot_id)
     else:
         assert session_id is not None
-        snapshot = await store.get_snapshot(session_id=session_id)
+        # Resolving a session means "where do I continue from", so skip a
+        # failed/aborted/pending leaf back to the last resumable turn.
+        snapshot = await walk_back_to_resumable(store, await store.get_snapshot(session_id=session_id))
     if snapshot is None:
         return None
     effective = (
@@ -136,7 +166,28 @@ async def resolve_snapshot(
     return to_client_snapshot(effective, client_transform)
 
 
-async def run_abort(store: SessionStore, snapshot_id: str) -> SnapshotStatus | None:
-    if not isinstance(store, SnapshotAborter):
+def _abort_if_pending(existing: SessionSnapshot | None) -> SessionSnapshot | None:
+    """save_snapshot mutator: flip a still-pending snapshot to aborted, else skip."""
+    if existing is None or existing.status != SnapshotStatus.PENDING:
         return None
-    return await store.abort_snapshot(snapshot_id)
+    return existing.model_copy(update={'status': SnapshotStatus.ABORTED})
+
+
+async def abort_snapshot_in_store(store: SessionStore, snapshot_id: str) -> SnapshotStatus | None:
+    """Abort a running snapshot by flipping it to aborted.
+
+    There's no dedicated store abort call: aborting is an ordinary atomic
+    snapshot write whose mutator flips a still-pending turn to aborted and leaves
+    an already-finished one untouched, so a late abort never rewrites a
+    completed/failed result. The write also notifies any status subscribers,
+    which is how a detached turn learns it was aborted. Returns the snapshot's
+    resulting status (aborted when this call did the flip), or None if it doesn't
+    exist.
+    """
+    saved = await store.save_snapshot(snapshot_id, _abort_if_pending)
+    if saved is not None:
+        return saved.status
+    # The mutator skipped the write: either the snapshot is gone or already
+    # terminal. Report its current status without touching it.
+    current = await store.get_snapshot(snapshot_id=snapshot_id)
+    return current.status if current is not None else None

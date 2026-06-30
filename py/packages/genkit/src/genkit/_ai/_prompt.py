@@ -20,7 +20,7 @@
 import asyncio
 import os
 import weakref
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Generator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypedDict, TypeVar, cast
@@ -193,6 +193,12 @@ class ModelStreamResponse(Generic[OutputT]):
     # remain available for cases where you want both halves explicitly.
     def __aiter__(self) -> AsyncIterator[ModelResponseChunk]:
         return self._channel.__aiter__()
+
+    # The flip side of __aiter__: a streamed call reads the same as an agent
+    # turn, so you either iterate it for chunks or await it for the final
+    # response, and only reach for .stream / .response when you want both halves.
+    def __await__(self) -> Generator[Any, None, ModelResponse[OutputT]]:
+        return self._response_future.__await__()
 
 
 @dataclass

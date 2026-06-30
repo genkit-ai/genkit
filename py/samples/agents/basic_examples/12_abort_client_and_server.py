@@ -15,12 +15,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Two ways to stop an agent: turn.abort() (client) vs session.abort() (server).
+"""Two ways to stop an agent: turn.abort() (client) vs chat.abort() (server).
 
 turn.abort() is a client-side detach — you stop reading the stream and the turn
-settles immediately, while the server turn keeps running to completion. The
-optimistic user message is rolled back, so the conversation just continues from the
-last good turn; it works with or without a store. session.abort() is the opposite:
+settles immediately, while the server turn keeps running to completion. The prompt
+you sent stays in history (it was still asked), so the session just continues from
+there; it works with or without a store. chat.abort() is the opposite:
 it halts the work on the server, firing the abort_signal inside running tools so a
 detached turn settles ABORTED. It needs a store. Requires GEMINI_API_KEY.
 """
@@ -30,13 +30,13 @@ from __future__ import annotations
 import asyncio
 
 from genkit import Genkit, GenkitError, ToolRunContext
-from genkit.agent import InMemoryLatestStateStore, SnapshotStatus
+from genkit.agent import InMemorySessionStore, SnapshotStatus
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
-store = InMemoryLatestStateStore()
+store = InMemorySessionStore()
 
-# No store: state lives on the client, so turn.abort()'s rollback is fully local.
+# No store: state lives on the client, so turn.abort() is a purely local detach.
 chatty = ai.define_agent(
     name='chattyAgent',
     model='googleai/gemini-flash-latest',
@@ -47,13 +47,13 @@ chatty = ai.define_agent(
 @ai.tool(name='slowWork', description='Simulate long background work.')
 async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
     for _i in range(30):
-        if ctx.abort_signal.is_set():  # session.abort() reaches the tool here so it can bail out
+        if ctx.abort_signal.is_set():  # chat.abort() reaches the tool here so it can bail out
             raise GenkitError(status='ABORTED', message='Task aborted')
         await asyncio.sleep(0.5)
     return {'done': True}
 
 
-# Store-backed: session.abort() cancels a server-side snapshot, so it needs a store.
+# Store-backed: chat.abort() cancels a server-side snapshot, so it needs a store.
 worker = ai.define_agent(
     name='workerAgent',
     model='googleai/gemini-flash-latest',
@@ -67,7 +67,6 @@ async def main() -> None:
     # --- turn.abort(): client-side stop button ---
     chat = chatty.chat()
     await chat.send('My name is Ada.')  # turn 1 establishes context the session should keep
-    history_len = len(chat.messages)
 
     # Ask for something long, then bail out partway like a user hitting "stop".
     turn = chat.send('Write a very long, multi-paragraph essay about the history of tea.')
@@ -78,30 +77,30 @@ async def main() -> None:
             await turn.abort()  # detach now; the server finishes the essay in the background, then discards it
             break
 
-    # The aborted turn's prompt is rolled back, so the session reads as if it never happened.
-    assert len(chat.messages) == history_len
+    # Detach is client-side only: the prompt stays in history (it was still
+    # asked), and turn 1's context is intact, so the session continues cleanly.
     answer = await chat.send('What is my name? One word.')
-    assert 'Ada' in answer.text  # → continues cleanly from turn 1
+    assert 'Ada' in answer.text  # → still remembers turn 1
 
-    # --- session.abort(): server-side cancel of background work ---
-    session = worker.chat()
-    task = await session.detach('Please run a long task using slowWork.')
+    # --- chat.abort(): server-side cancel of background work ---
+    worker_chat = worker.chat()
+    task = await worker_chat.detach('Please run a long task using slowWork.')
     assert task.snapshot_id
     await asyncio.sleep(2.0)  # let the tool start churning
 
-    status = await session.abort()  # abort_signal fires inside slowWork; the snapshot settles ABORTED
+    status = await worker_chat.abort()  # abort_signal fires inside slowWork; the snapshot settles ABORTED
     assert status == SnapshotStatus.ABORTED
     await asyncio.sleep(0.5)  # let the background task unwind
 
     # The stop is durable: read the snapshot back and it stays ABORTED.
-    snap = await session.get_snapshot()
+    snap = await worker_chat.get_snapshot()
     assert snap and snap.status == SnapshotStatus.ABORTED
     # The snapshot holds history through this turn's user prompt but none of its
     # model output: a turn's model/tool messages are committed to the session in
     # one batch at turn end, and abort interrupts before that. So an aborted
     # snapshot is a clean pre-response checkpoint you can branch from.
 
-    await session.close()
+    await worker_chat.close()
 
 
 if __name__ == '__main__':

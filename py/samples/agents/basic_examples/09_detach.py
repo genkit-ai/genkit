@@ -17,10 +17,10 @@
 
 """Fire a long turn into the background and poll it to completion.
 
-session.detach() submits a turn and returns immediately with a snapshot id instead of
-streaming — the work runs server-side. You poll that snapshot until it reaches a
-terminal status. This is the shape of a job-queue / async-task API on top of an agent.
-Requires GEMINI_API_KEY.
+chat.detach() submits a turn and returns immediately with a snapshot id instead of
+streaming — the work runs server-side. task.wait() resolves once the snapshot
+reaches a terminal status (task.poll() streams status for a live UI). This is the
+shape of a job-queue / async-task API on top of an agent. Requires GEMINI_API_KEY.
 """
 
 from __future__ import annotations
@@ -28,11 +28,11 @@ from __future__ import annotations
 import asyncio
 
 from genkit import Genkit, GenkitError, ToolRunContext
-from genkit.agent import InMemoryLatestStateStore, SnapshotStatus
+from genkit.agent import InMemorySessionStore, SnapshotStatus
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
-store = InMemoryLatestStateStore()
+store = InMemorySessionStore()
 
 
 @ai.tool(name='slowWork', description='Simulate long background work.')
@@ -54,20 +54,17 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    session = agent.chat()
+    chat = agent.chat()
 
     # Submit the turn and return right away — the work continues in the background.
-    task = await session.detach('Please run a long task using slowWork.')
+    task = await chat.detach('Please run a long task using slowWork.')
     assert task.snapshot_id  # the handle you poll on, hand off, or persist
 
-    # Poll the snapshot until it reaches a terminal status.
-    while True:
-        snap = await task.poll()
-        if snap and snap.status in (SnapshotStatus.COMPLETED, SnapshotStatus.FAILED, SnapshotStatus.ABORTED):
-            break  # → settles COMPLETED once slowWork finishes its steps
-        await asyncio.sleep(1.0)
+    # Wait for the snapshot to settle (poll() yields status updates for a live UI).
+    snap = await task.wait()  # → settles COMPLETED once slowWork finishes its steps
+    assert snap.status == SnapshotStatus.COMPLETED
 
-    await session.close()
+    await chat.close()
 
 
 if __name__ == '__main__':

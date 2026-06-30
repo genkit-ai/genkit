@@ -21,7 +21,9 @@ import copy
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from enum import Enum
-from typing import Any, Generic, Protocol, TypeVar, cast, runtime_checkable
+from typing import Any, Generic, Protocol, cast, runtime_checkable
+
+from typing_extensions import TypeVar as TypeVarExt
 
 from genkit._core._error import GenkitError, StatusCodes
 from genkit._core._typing import (
@@ -39,23 +41,24 @@ class SessionErrorType(str, Enum):
     AMBIGUOUS_BRANCH = 'ambiguousBranch'
 
 
-class StoreRecordKind(str, Enum):
-    """The storage kind of a session store record."""
-
-    CHECKPOINT = 'checkpoint'
-    DIFF = 'diff'
-
-
-StateT = TypeVar('StateT')
-SessionContextT = TypeVar('SessionContextT')
+StateT = TypeVarExt('StateT', default=Any)
+SessionContextT = TypeVarExt('SessionContextT', default=Any)
+# A store only ever hands custom state back out (it's a phantom over the wire
+# format), so its parameter is covariant.
+StateT_co = TypeVarExt('StateT_co', covariant=True, default=Any)
 
 
 @runtime_checkable
-class SessionStore(Protocol):
+class SessionStore(Protocol, Generic[StateT_co]):
     """Structural interface for snapshot persistence backends.
 
     Minimum: ``get_snapshot`` + ``save_snapshot``.
-    Optional abort lifecycle: implement ``SnapshotAborter`` as well.
+    Optional detach/abort support: implement ``SnapshotSubscriber`` as well.
+
+    The ``StateT`` parameter names the custom-state shape a store round-trips,
+    so a typed store agrees with its agent's ``state_schema``. It's a phantom
+    over the snapshot wire format (which stays plain JSON), so leaving it off
+    just defaults to ``Any``.
     """
 
     async def get_snapshot(
@@ -88,12 +91,15 @@ class SessionStore(Protocol):
 
 
 @runtime_checkable
-class SnapshotAborter(Protocol):
-    """Optional abort/status subscription surface for server-managed agents."""
+class SnapshotSubscriber(Protocol):
+    """Optional capability that makes a store's snapshots abortable/detachable.
 
-    async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
-        """Flip PENDING → ABORTED. Return resulting status or None if not found."""
-        ...
+    Aborting itself is just a ``save_snapshot`` that flips a pending snapshot to
+    aborted — there's no separate abort method. This is the other half: a way to
+    *notice* that flip (e.g. when a different request aborts a detached turn
+    that's still running) so the runtime can cancel the background work. A store
+    that can't signal status changes can't support detach.
+    """
 
     async def on_snapshot_status_change(self, snapshot_id: str) -> asyncio.Queue[SnapshotStatus | None]:
         """Queue that receives status changes; None sentinel when done."""
@@ -101,8 +107,8 @@ class SnapshotAborter(Protocol):
 
 
 def supports_abort(store: SessionStore) -> bool:
-    """True when the store implements abort + status subscription."""
-    return isinstance(store, SnapshotAborter)
+    """True when the store can signal status changes, and so supports detach/abort."""
+    return isinstance(store, SnapshotSubscriber)
 
 
 def select_leaf_snapshot(

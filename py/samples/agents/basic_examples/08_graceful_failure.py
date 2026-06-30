@@ -15,11 +15,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""A failing turn fails gracefully instead of crashing the session.
+"""A failing turn fails gracefully instead of crashing the chat.
 
 One turn succeeds; the next raises inside the agent. Rather than bubbling up and
 killing the process, the turn resolves with finish_reason FAILED, so your app can
-surface the error and keep the session alive for the next turn.
+surface the error and keep the session alive. Crucially, the failed turn doesn't
+advance the session: it leaves the resume handle pinned to the last successful
+snapshot, so the next send picks up from that last good parent — the failure is
+a dead end, not a new branch point.
 """
 
 from __future__ import annotations
@@ -29,14 +32,14 @@ from genkit.agent import (
     AgentFinishReason,
     AgentInput,
     AgentResult,
-    InMemoryLinearSessionStore,
+    InMemorySessionStore,
     SessionRunner,
     TurnResult,
 )
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
-store = InMemoryLinearSessionStore()
+store = InMemorySessionStore()
 
 
 async def flaky_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
@@ -61,16 +64,25 @@ agent = ai.define_custom_agent(name='flakyAgent', fn=flaky_fn, store=store)
 
 
 async def main() -> None:
-    session = agent.chat()
+    chat = agent.chat()
 
-    # A normal turn succeeds.
-    out_ok = await session.send('hello')
+    # A normal turn succeeds and becomes the session's last good parent.
+    out_ok = await chat.send('hello')
     assert out_ok.finish_reason == AgentFinishReason.STOP
+    last_good_parent = chat.snapshot_id
 
     # This turn raises inside the agent — but the failure is contained.
-    out_fail = await session.send('please fail now')
+    out_fail = await chat.send('please fail now')
     # → resolves as FAILED instead of throwing; the session stays usable
     assert out_fail.finish_reason == AgentFinishReason.FAILED
+    # → the failure didn't advance the session: the resume handle is still the
+    #   last successful snapshot, so the next turn won't build on the failure.
+    assert chat.snapshot_id == last_good_parent
+
+    # The next send picks up from that last good parent, as if the failure never
+    # branched the conversation.
+    out_ok2 = await chat.send('hello again')
+    assert out_ok2.finish_reason == AgentFinishReason.STOP
 
 
 if __name__ == '__main__':

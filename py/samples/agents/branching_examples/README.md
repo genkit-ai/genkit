@@ -2,15 +2,15 @@
 
 Every turn in a store-backed agent is a snapshot you can fork from. These samples
 build up from the core forking mechanics to two end-to-end demos, all in the same
-hero style: `await session.send(...)` drives each turn and inline comments call out
+hero style: `await chat.send(...)` drives each turn and inline comments call out
 what each step produces, so the script reads top-to-bottom like a story.
 
 All of them use `googleai/gemini-flash-latest`, so they require `GEMINI_API_KEY`.
 
 ## The one idea
 
-`session.snapshot_id` bookmarks any turn. `agent.load_chat(snapshot_id=...)` starts a
-fresh session from that bookmark. Fork the same snapshot twice and you get sibling
+`chat.snapshot_id` bookmarks any turn. `agent.load_chat(snapshot_id=...)` starts a
+fresh chat from that bookmark. Fork the same snapshot twice and you get sibling
 timelines that never see each other — that's the whole primitive.
 
 Once a session has more than one leaf, "the latest turn for this session" is
@@ -39,5 +39,5 @@ uv sync
 uv run branching_examples/01_fork_sibling_snapshots.py
 ```
 
-Swap `InMemoryBranchingSessionStore` for `FileBranchingSessionStore('./tree')` in
+Swap `InMemorySessionStore` for `FileSessionStore('./tree')` in
 any of them to persist the snapshot tree across process restarts.

@@ -25,11 +25,11 @@ prompts you already have. Requires GEMINI_API_KEY.
 from __future__ import annotations
 
 from genkit import Genkit
-from genkit.agent import InMemoryLatestStateStore
+from genkit.agent import InMemorySessionStore
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
-store = InMemoryLatestStateStore()
+store = InMemorySessionStore()
 
 ai.define_prompt(
     name='greeterPrompt',
@@ -40,9 +40,9 @@ agent = ai.define_prompt_agent(name='greeterPrompt', store=store)
 
 
 async def main() -> None:
-    session = agent.chat()
+    chat = agent.chat()
     # → the greeter prompt drives the turn; you get a warm, brief hello back
-    await session.send('Hello!')
+    await chat.send('Hello!')
 
 
 if __name__ == '__main__':

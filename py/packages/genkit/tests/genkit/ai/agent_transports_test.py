@@ -32,7 +32,7 @@ from genkit.agent import (
     AgentInput,
     AgentResult,
     HttpAgentTransport,
-    InMemoryLatestStateStore,
+    InMemorySessionStore,
     SessionRunner,
     TurnResult,
 )
@@ -69,7 +69,7 @@ async def test_http_transport_integration() -> None:
             await session_runner.run(handle_turn)
             return await session_runner.result()
 
-        ai.define_custom_agent(name='echoAgent', fn=echo_agent, store=InMemoryLatestStateStore())
+        ai.define_custom_agent(name='echoAgent', fn=echo_agent, store=InMemorySessionStore())
 
         # Wait for the Starlette reflection server to become active in the background
         # (Using private attr for test synchronization, as in reflection_server_test.py)

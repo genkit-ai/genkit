@@ -19,13 +19,13 @@
 
 Without a store the agent keeps nothing between sessions — snapshot_id and
 session_id stay None. You capture messages + custom state yourself, then hand
-them back through AgentInit(state=...) to resume. Requires GEMINI_API_KEY.
+them back through chat(messages=..., artifacts=..., state=...) to resume.
+Requires GEMINI_API_KEY.
 """
 
 from __future__ import annotations
 
 from genkit import Genkit
-from genkit.agent import AgentInit
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -38,23 +38,25 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    session = agent.chat()
-    turn = session.send('My name is Ada. Remember it.')
+    chat = agent.chat()
+    turn = chat.send('My name is Ada. Remember it.')
 
     # Two ways to consume a turn:
-    #   await session.send(msg)            output only, skip the stream
+    #   await chat.send(msg)            output only, skip the stream
     #   async for chunk in turn: ...       stream chunks, then await turn
     out = await turn
     assert out.text
 
     # → no server-managed ids — resume by passing the state blob you saved
-    assert session.session_id is None
-    assert session.snapshot_id is None
+    assert chat.session_id is None
+    assert chat.snapshot_id is None
 
-    saved = session.state
-    await session.close()
+    # You own the state: capture the conversation (messages + custom state +
+    # artifacts) yourself, then hand them straight back to resume.
+    messages, state, artifacts = chat.messages, chat.state, chat.artifacts
+    await chat.close()
 
-    resumed = agent.chat(AgentInit(state=saved))
+    resumed = agent.chat(messages=messages, state=state, artifacts=artifacts)
     await resumed.send('What is my name? One word.')
 
 

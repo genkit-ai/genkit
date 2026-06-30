@@ -33,8 +33,7 @@ from pydantic import BaseModel, Field
 from genkit import Genkit
 from genkit.agent import (
     AgentFinishReason,
-    InMemoryLinearSessionStore,
-    Resume,
+    InMemorySessionStore,
     ToolRequestPart,
 )
 from genkit.plugins.google_genai import GoogleAI
@@ -64,7 +63,7 @@ async def transfer_money(_input: TransferInput) -> TransferOutput:
     return TransferOutput(success=True, transactionId=f'txn-{uuid4().hex[:12]}')
 
 
-store = InMemoryLinearSessionStore()
+store = InMemorySessionStore()
 
 agent = ai.define_agent(
     name='bankingAgent',
@@ -77,19 +76,19 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    session = agent.chat()
+    chat = agent.chat()
 
-    out1 = await session.send('Transfer $500 to account 12345 for rent.')
+    out1 = await chat.send('Transfer $500 to account 12345 for rent.')
     # → finish_reason INTERRUPTED; transferMoney is pending, not executed yet
     assert out1.finish_reason == AgentFinishReason.INTERRUPTED
 
     # Human approves each pending tool call, then one resume continues the turn.
     restart_parts: list[ToolRequestPart] = [
-        intr.restart_part(resumed_metadata={'tool_approved': True}) for intr in out1.interrupts
+        intr.restart(resumed_metadata={'tool_approved': True}) for intr in out1.interrupts
     ]
-    out2 = await session.resume(Resume(restart=restart_parts))
+    out2 = await chat.resume(restart=restart_parts)
     assert out2.finish_reason == AgentFinishReason.STOP
-    await session.close()
+    await chat.close()
 
 
 if __name__ == '__main__':
