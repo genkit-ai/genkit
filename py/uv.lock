@@ -1797,7 +1797,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
-    { name = "ollama", specifier = "~=0.4" },
+    { name = "ollama", specifier = ">=0.5.3,<1.0" },
     { name = "structlog", specifier = ">=25.2.0" },
 ]
 
