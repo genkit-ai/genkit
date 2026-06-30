@@ -596,9 +596,9 @@ class OllamaModel:
         ``think`` and ``keep_alive`` are top-level parameters of the Ollama
         ``chat``/``generate`` calls — not sampler ``options``. The framework
         dumps a ``BaseModel`` config to a dict before the model fn sees it, so
-        this reads them from either an :class:`OllamaConfig` instance *or* a
-        dumped dict (whose declared keys arrive camelCased, hence the
-        snake-casing) and returns only the values that are set.
+        this reads them from any :class:`ModelConfig` instance *or* a dumped
+        dict. Both paths snake-case the keys (declared fields and ``extra``
+        keys can arrive camelCased) and return only the values that are set.
 
         Args:
             config: The configuration to extract request kwargs from.
@@ -606,9 +606,10 @@ class OllamaModel:
         Returns:
             A dict with ``think``/``keep_alive`` entries that are not ``None``.
         """
-        if isinstance(config, OllamaConfig):
-            think: Any = config.think
-            keep_alive: Any = config.keep_alive
+        if isinstance(config, ModelConfig):
+            snake = {to_snake(k): v for k, v in config.model_dump(exclude_none=True).items()}
+            think: Any = snake.get('think')
+            keep_alive: Any = snake.get('keep_alive')
         elif isinstance(config, dict):
             snake = {to_snake(k): v for k, v in cast(dict[str, Any], config).items()}
             think = snake.get('think')

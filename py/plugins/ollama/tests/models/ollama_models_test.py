@@ -820,6 +820,16 @@ class TestBuildRequestKwargs:
         kwargs = OllamaModel.build_request_kwargs(dumped)
         assert kwargs == {'think': 'low', 'keep_alive': '10m'}
 
+    def test_plain_model_config_extras_surface_think_and_keep_alive(self) -> None:
+        """A plain ModelConfig carrying think/keep_alive as extras surfaces them.
+
+        ModelConfig has ``extra='allow'``, so the knobs can ride on a base
+        ModelConfig instance (including camelCased), not just OllamaConfig.
+        """
+        config = ModelConfig.model_validate({'think': True, 'keepAlive': '5m'})
+        kwargs = OllamaModel.build_request_kwargs(config)
+        assert kwargs == {'think': True, 'keep_alive': '5m'}
+
     def test_absent_knobs_yield_empty_kwargs(self) -> None:
         """Configs without think/keep_alive produce no extra kwargs."""
         assert OllamaModel.build_request_kwargs(OllamaConfig(num_ctx=2048)) == {}
