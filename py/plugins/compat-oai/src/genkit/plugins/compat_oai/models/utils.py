@@ -174,7 +174,7 @@ def extract_config_dict(request: ModelRequest) -> dict[str, Any]:
     if not request.config:
         return {}
     if isinstance(request.config, Mapping):
-        return dict(request.config)
+        return {str(k): v for k, v in request.config.items()}
     if hasattr(request.config, 'model_dump'):
         return getattr(request.config, 'model_dump')(exclude_none=True)  # noqa: B009 # pyrefly: ignore[bad-attribute-access]
     return {}
