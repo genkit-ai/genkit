@@ -83,7 +83,7 @@ behavioral divergence from the JS plugin.
 """
 
 import mimetypes
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, Literal, cast
 
 import structlog
@@ -204,7 +204,7 @@ class OllamaModel:
                     model=self.model_definition.name,
                     response=str(api_response.response)[:500],
                 )
-                content = [Part(root=TextPart(text=api_response.response))]
+                content = [Part(root=TextPart(text=api_response.response or ''))]
         else:
             raise ValueError(f'Unresolved API type: {self.model_definition.api_type}')
 
@@ -259,21 +259,25 @@ class OllamaModel:
             fmt = ''
 
         # Build common kwargs for both streaming and non-streaming calls
-        tools = [
-            ollama_api.Tool(
-                function=ollama_api.Tool.Function(
-                    name=tool.name,
-                    description=tool.description,
-                    parameters=_convert_parameters(tool.input_schema or {}),
+        tools = (
+            [
+                ollama_api.Tool(
+                    function=ollama_api.Tool.Function(
+                        name=tool.name,
+                        description=tool.description,
+                        parameters=_convert_parameters(tool.input_schema or {}),
+                    )
                 )
-            )
-            for tool in request.tools or []
-        ]
+                for tool in request.tools
+            ]
+            if request.tools
+            else None
+        )
         options = self.build_request_options(config=request.config)
 
         if streaming_request:
             # Streaming call with literal stream=True for proper overload resolution
-            chat_response = await self._get_client().chat(  # type: ignore[no-matching-overload]
+            chat_response = await self._get_client().chat(  # type: ignore
                 model=self.model_definition.name,
                 messages=messages,
                 tools=tools,
@@ -299,7 +303,7 @@ class OllamaModel:
             return None
         else:
             # Non-streaming call with literal stream=False for proper overload resolution
-            chat_response = await self._get_client().chat(  # type: ignore[no-matching-overload]
+            chat_response = await self._get_client().chat(  # type: ignore
                 model=self.model_definition.name,
                 messages=messages,
                 tools=tools,
@@ -341,7 +345,7 @@ class OllamaModel:
                         chunk=ModelResponseChunk(
                             role=Role.MODEL,
                             index=idx,
-                            content=[Part(root=TextPart(text=chunk.response))],
+                            content=[Part(root=TextPart(text=chunk.response or ''))],
                         )
                     )
             # For streaming requests, we return None because the response chunks
@@ -403,7 +407,7 @@ class OllamaModel:
 
     @staticmethod
     def build_request_options(
-        config: dict[str, Any] | None,
+        config: Mapping[str, Any] | None,
     ) -> ollama_api.Options:
         """Build request options for the generate API.
 

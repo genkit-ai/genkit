@@ -56,7 +56,7 @@ Data Flow (STT)::
 from __future__ import annotations
 
 import base64
-from typing import Any
+from typing import Any, cast
 
 from openai import AsyncOpenAI
 from openai._legacy_response import HttpxBinaryResponseContent
@@ -410,4 +410,4 @@ class OpenAISTTModel:
         # transcriptions.create(stream=False) returns a union of
         # Transcription | TranscriptionVerbose | TranscriptionDiarized | str.
         # _to_stt_response handles all of these via isinstance/hasattr checks.
-        return _to_stt_response(result)
+        return _to_stt_response(cast(Any, result))

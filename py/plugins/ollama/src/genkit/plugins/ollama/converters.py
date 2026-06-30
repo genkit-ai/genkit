@@ -26,6 +26,7 @@ transformations that can be tested without SDK dependencies.
 See: https://github.com/ollama/ollama/blob/main/docs/api.md
 """
 
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from genkit import (
@@ -93,7 +94,7 @@ def build_prompt(messages: list[Message]) -> str:
 
 
 def build_request_options_dict(
-    config: dict[str, Any] | None,
+    config: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     """Build options dict from config for the Ollama API.
 

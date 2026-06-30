@@ -88,7 +88,7 @@ class ModelRef(BaseModel, Generic[ConfigT]):
     config_schema: object | None = None
     info: object | None = None
     version: str | None = None
-    config: ConfigT | dict[str, object] | None = None
+    config: ConfigT | dict[str, Any] | None = None
 
 
 class Message(MessageData):
@@ -260,7 +260,7 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
     # Veneer types for IDE/typing (validators wrap MessageData->Message, DocumentData->Document)
     messages: list[Message]  # pyright: ignore[reportIncompatibleVariableOverride]
     docs: list[Document] | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
-    config: ConfigT | dict[str, object] | None = None
+    config: ConfigT | dict[str, Any] | None = None
     tools: list[ToolDefinition] | None = None
     tool_choice: ToolChoice | None = Field(default=None)
     # Flat output fields (no nested OutputConfig)

@@ -25,7 +25,8 @@ See:
 """
 
 import json
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, cast
 
 import structlog
 
@@ -128,7 +129,7 @@ class AnthropicModel:
             assert ctx is not None  # streaming requires ctx
             response = await self._generate_streaming(params, ctx)
         else:
-            response = await self.client.messages.create(**params)
+            response = cast(AnthropicMessage, await self.client.messages.create(**params))
 
         logger.debug(
             'Anthropic raw API response',
@@ -186,7 +187,7 @@ class AnthropicModel:
 
     def _build_params(self, request: ModelRequest) -> dict[str, Any]:
         config = request.config
-        raw = config if isinstance(config, dict) else {}
+        raw = dict(config) if isinstance(config, Mapping) else {}
         max_tokens = raw.get('max_output_tokens', raw.get('max_tokens', DEFAULT_MAX_OUTPUT_TOKENS))
         thinking = raw.get('thinking')
         metadata = raw.get('metadata')
@@ -196,23 +197,23 @@ class AnthropicModel:
 
         params['model'] = self.model_name
         params['messages'] = self._to_anthropic_messages(request.messages)
-        params['max_tokens'] = int(max_tokens)
+        params['max_tokens'] = (
+            int(max_tokens) if isinstance(max_tokens, (int, str, float)) else DEFAULT_MAX_OUTPUT_TOKENS
+        )
 
-        if thinking and isinstance(thinking, dict):
-            anthropic_thinking: dict[str, str | int] = {}
-            # Handle boolean enabled -> type="enabled"
+        if isinstance(thinking, Mapping):
+            anthropic_thinking: dict[str, Any] = {}
             if thinking.get('enabled') is True or thinking.get('type') == 'enabled':
                 anthropic_thinking['type'] = 'enabled'
 
-            # Handle camelCase -> snake_case for budget tokens
             tokens = thinking.get('budgetTokens', thinking.get('budget_tokens'))
-            if tokens:
+            if isinstance(tokens, (int, str, float)):
                 anthropic_thinking['budget_tokens'] = int(tokens)
 
             if anthropic_thinking.get('type') == 'enabled':
                 params['thinking'] = anthropic_thinking
 
-        if metadata:
+        if isinstance(metadata, Mapping):
             params['metadata'] = metadata
 
         system = self._extract_system(request.messages)

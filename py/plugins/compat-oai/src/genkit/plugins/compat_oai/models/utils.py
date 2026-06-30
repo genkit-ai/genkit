@@ -20,7 +20,7 @@
 import base64
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from genkit import (
@@ -173,8 +173,8 @@ def extract_config_dict(request: ModelRequest) -> dict[str, Any]:
     """
     if not request.config:
         return {}
-    if isinstance(request.config, dict):
-        return request.config.copy()
+    if isinstance(request.config, Mapping):
+        return dict(request.config)
     if hasattr(request.config, 'model_dump'):
         return getattr(request.config, 'model_dump')(exclude_none=True)  # noqa: B009 # pyrefly: ignore[bad-attribute-access]
     return {}
@@ -318,7 +318,7 @@ class MessageAdapter:
             The reasoning content string or None.
         """
         try:
-            return self._data.reasoning_content  # type: ignore[union-attr]
+            return self._data.reasoning_content  # type: ignore
         except AttributeError:
             return None
 
@@ -498,8 +498,8 @@ class MessageConverter:
             func_args = func.arguments if hasattr(func, 'arguments') else ''
         else:
             # Assume dict-like access
-            func = tool_call.get('function', {})  # type: ignore[attr-defined]
-            tool_id = tool_call.get('id', '')  # type: ignore[attr-defined]
+            func = tool_call.get('function', {})  # type: ignore
+            tool_id = tool_call.get('id', '')  # type: ignore
             func_name = func.get('name', '')
             func_args = func.get('arguments', '')
 

@@ -142,6 +142,7 @@ if sys.version_info < (3, 11):
 else:
     from enum import StrEnum
 
+from collections.abc import Mapping
 from functools import cached_property
 from typing import Annotated, Any, Any as JsonAny, cast
 
@@ -1784,7 +1785,8 @@ class GeminiModel:
             model metadata.
         """
         if self._version in SUPPORTED_MODELS:
-            supports = SUPPORTED_MODELS[self._version].supports.model_dump(by_alias=True, exclude_none=True)
+            info = SUPPORTED_MODELS[self._version]
+            supports = info.supports.model_dump(by_alias=True, exclude_none=True) if info.supports else {}
         else:
             # Fallback to default supports for models not explicitly listed
             supports = DEFAULT_SUPPORTS_MODEL.model_dump(by_alias=True, exclude_none=True)
@@ -1911,18 +1913,17 @@ class GeminiModel:
             if cfg is None:
                 cfg = genai_types.GenerateContentConfig()
 
-            if has_output:
-                model_name = self._version
+                model_name = str(self._version)
                 if request.config:
-                    if isinstance(request.config, dict):
+                    if isinstance(request.config, Mapping):
                         version = request.config.get('version')
                     else:
                         version = getattr(request.config, 'version', None)
                     if version:
-                        model_name = version
+                        model_name = str(version)
 
                 # Check if the model supports constrained generation with this configuration
-                model_info = google_model_info(model_name)
+                model_info = google_model_info(str(model_name))
                 model_supports_constrained = (
                     model_info.supports.constrained if model_info and model_info.supports else Constrained.NO_TOOLS
                 )
@@ -1957,7 +1958,7 @@ class GeminiModel:
 
     def _normalize_config_to_dict(
         self,
-        config: dict[str, Any] | None,
+        config: Mapping[str, Any] | None,
     ) -> dict[str, Any] | None:
         """Return the config as a canonical snake_case dict for the rest of the pipeline.
 
@@ -1967,14 +1968,14 @@ class GeminiModel:
 
         Returns ``None`` if the config has no meaningful values.
         """
-        if not isinstance(config, dict):
+        if not isinstance(config, Mapping):
             return None
 
         schema = self._pick_plugin_schema(config)
         dumped = schema.model_dump(exclude_none=True, by_alias=False)
         return dumped or None
 
-    def _pick_plugin_schema(self, data: dict[str, Any]) -> GeminiConfigSchema:
+    def _pick_plugin_schema(self, data: Mapping[str, Any]) -> GeminiConfigSchema:
         """Validate ``data`` against the schema matching this model instance.
 
         Routing uses ``self._version`` so each family gets its own validation

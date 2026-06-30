@@ -18,6 +18,8 @@
 
 import base64
 
+from typing import Any
+
 import pytest
 from pydantic import BaseModel
 
@@ -162,7 +164,7 @@ class TestDecodeDataUriBytes:
 class TestExtractConfigDict:
     """Tests for extract_config_dict."""
 
-    def _make_request(self, config: object = None) -> ModelRequest:
+    def _make_request(self, config: Any = None) -> ModelRequest:
         """Create a minimal ModelRequest with the given config."""
         return ModelRequest(
             messages=[

@@ -17,12 +17,13 @@
 """OpenAI Compatible Models for Genkit."""
 
 import json
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Callable, Mapping
+from typing import Any, cast
 
 import structlog
 from openai import AsyncOpenAI
 from openai.lib._pydantic import _ensure_strict_json_schema
+from openai.types.chat import ChatCompletion
 
 from genkit import (
     Message,
@@ -287,7 +288,7 @@ class OpenAIModel:
         """
         openai_config = await self._get_openai_request_config(request=request)
         logger.debug('OpenAI generate request', model=self._model, streaming=False)
-        response = await self._openai_client.chat.completions.create(**openai_config)
+        response = cast(ChatCompletion, await self._openai_client.chat.completions.create(**openai_config))
         logger.debug(
             'OpenAI raw API response',
             model=self._model,
@@ -319,7 +320,7 @@ class OpenAIModel:
 
         tool_calls: dict[int, Any] = {}
         accumulated_content: list[Part] = []
-        async for chunk in stream:
+        async for chunk in cast(Any, stream):
             delta = chunk.choices[0].delta
 
             # Text content chunk
@@ -401,7 +402,7 @@ class OpenAIModel:
         if config is None:
             return {}
 
-        if isinstance(config, dict):
-            return {k: v for k, v in config.items() if k != 'top_k'}
+        if isinstance(config, Mapping):
+            return {str(k): v for k, v in config.items() if k != 'top_k'}
 
-        raise ValueError(f'Expected request.config to be a dict, got {type(config).__name__}.')
+        raise ValueError(f'Expected request.config to be a dict or Mapping, got {type(config).__name__}.')
