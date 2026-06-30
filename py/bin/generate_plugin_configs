@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Copyright 2025 Google LLC
+# SPDX-License-Identifier: Apache-2.0
+
+# Generates plugin configuration TypedDicts (*ConfigDict) and ModelRef exports
+# across all core model plugins from their models.yaml specs.
+#
+# Usage: ./py/bin/generate_plugin_configs [--ci]
+#   --ci  Fail if generated files differ from committed versions.
+
+set -euo pipefail
+
+. "$(dirname "$0")/_common.sh"
+
+CI_ENABLED=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --ci) CI_ENABLED=true; shift ;;
+    *) echo "Unknown option: $1"; echo "Usage: $0 [--ci]"; exit 1 ;;
+  esac
+done
+
+TOP_DIR=$(git rev-parse --show-toplevel)
+GENERATOR="${TOP_DIR}/py/tools/generate_config_dicts.py"
+PYTHON="${TOP_DIR}/py/.venv/bin/python3"
+RUFF="${TOP_DIR}/py/.venv/bin/ruff"
+
+# Run generator in-place across all models.yaml specs in plugins
+for yaml_file in "${TOP_DIR}"/py/plugins/*/models.yaml; do
+  if [[ -f "${yaml_file}" ]]; then
+    "${PYTHON}" "${GENERATOR}" --in-place "${yaml_file}"
+  fi
+done
+
+# Format and check generated files
+"${RUFF}" format "${TOP_DIR}/py/plugins"
+"${RUFF}" check --fix "${TOP_DIR}/py/plugins" || true
+"${RUFF}" format "${TOP_DIR}/py/plugins"
+
+if [[ $CI_ENABLED == "true" ]]; then
+  if ! git diff --exit-code "${TOP_DIR}/py/plugins" >/dev/null; then
+    echo "Error: Generated plugin configuration dicts or model refs differ from committed versions."
+    echo "Run './py/bin/generate_plugin_configs' locally and commit the result."
+    git diff "${TOP_DIR}/py/plugins"
+    exit 1
+  fi
+fi

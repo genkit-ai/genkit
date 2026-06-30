@@ -106,7 +106,7 @@ class TimeAdjustedSpan(RedactedSpan):
 
     @property
     def end_time(self) -> int | None:
-        """Return the span end time, adjusted to meet GCP requirements.
+        """Span end time, adjusted to meet GCP requirements.
 
         Returns:
             The span end time, guaranteed to be > start_time if start_time exists.

@@ -19,9 +19,9 @@
 from pydantic import BaseModel, Field
 
 from genkit import Genkit
-from genkit.plugins.anthropic import Anthropic
+from genkit.plugins.anthropic import Anthropic, claude_opus_4_7, claude_opus_4_8
 
-ai = Genkit(plugins=[Anthropic()], model='anthropic/claude-opus-4-8')
+ai = Genkit(plugins=[Anthropic()], model=claude_opus_4_8)
 
 
 class TopicInput(BaseModel):
@@ -52,7 +52,7 @@ class Cat(BaseModel):
 async def haiku_opus_4_7(data: TopicInput) -> str:
     """Plain-text generate against claude-opus-4-7."""
     response = await ai.generate(
-        model='anthropic/claude-opus-4-7',
+        model=claude_opus_4_7,
         prompt=f'Write a haiku about {data.topic}.',
     )
     return response.text
@@ -62,7 +62,7 @@ async def haiku_opus_4_7(data: TopicInput) -> str:
 async def cat_opus_4_7(data: CatInput) -> Cat:
     """Structured/JSON generate against claude-opus-4-7."""
     response = await ai.generate(
-        model='anthropic/claude-opus-4-7',
+        model=claude_opus_4_7,
         prompt=f'Invent a cat named {data.name}.',
         output_format='json',
         output_schema=Cat,
@@ -77,7 +77,7 @@ async def cat_opus_4_7(data: CatInput) -> Cat:
 async def haiku_opus_4_8(data: TopicInput) -> str:
     """Plain-text generate against claude-opus-4-8."""
     response = await ai.generate(
-        model='anthropic/claude-opus-4-8',
+        model=claude_opus_4_8,
         prompt=f'Write a haiku about {data.topic}.',
     )
     return response.text
@@ -87,7 +87,7 @@ async def haiku_opus_4_8(data: TopicInput) -> str:
 async def cat_opus_4_8(data: CatInput) -> Cat:
     """Structured/JSON generate against claude-opus-4-8."""
     response = await ai.generate(
-        model='anthropic/claude-opus-4-8',
+        model=claude_opus_4_8,
         prompt=f'Invent a cat named {data.name}.',
         output_format='json',
         output_schema=Cat,

@@ -1,0 +1,55 @@
+default_schema: GeminiConfigSchema
+
+models:
+  # Standard Gemini Models (GoogleAI)
+  - name: googleai/gemini-2.0-flash-001
+    export: gemini_20_flash
+  - name: googleai/gemini-2.0-flash-lite-001
+    export: gemini_20_flash_lite
+  - name: googleai/gemini-2.5-flash-lite
+    export: gemini_25_flash_lite
+  - name: googleai/gemini-3-flash-preview
+    export: gemini_3_flash_preview
+  - name: googleai/gemini-3.1-flash-lite
+    export: gemini_31_flash_lite
+  - name: googleai/gemini-3.1-pro-preview
+    export: gemini_31_pro_preview
+  - name: googleai/gemini-3.5-flash
+    export: gemini_35_flash
+  - name: googleai/gemini-flash-latest
+  - name: googleai/gemini-pro-latest
+
+  # Standard Gemini Models (VertexAI)
+  - name: vertexai/gemini-2.5-flash
+    export: vertexai_gemini_25_flash
+  - name: vertexai/gemini-2.5-flash-lite
+    export: vertexai_gemini_25_flash_lite
+  - name: vertexai/gemini-2.5-pro
+    export: vertexai_gemini_25_pro
+  - name: vertexai/gemini-3-flash-preview
+    export: vertexai_gemini_3_flash_preview
+
+  # Image Models
+  - name: googleai/gemini-2.5-flash-image
+    export: gemini_25_flash_image
+    schema: GeminiImageConfigSchema
+  - name: googleai/gemini-3-pro-image
+    export: gemini_3_pro_image
+    schema: GeminiImageConfigSchema
+  - name: googleai/gemini-3.1-flash-image
+    export: gemini_31_flash_image
+    schema: GeminiImageConfigSchema
+
+  # Gemma 3 Models
+  - name: googleai/gemma-3-1b-it
+    export: gemma_3_1b_it
+    schema: GemmaConfigSchema
+  - name: googleai/gemma-3-4b-it
+    export: gemma_3_4b_it
+    schema: GemmaConfigSchema
+  - name: googleai/gemma-3-12b-it
+    export: gemma_3_12b_it
+    schema: GemmaConfigSchema
+  - name: googleai/gemma-3-27b-it
+    export: gemma_3_27b_it
+    schema: GemmaConfigSchema

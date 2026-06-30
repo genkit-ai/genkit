@@ -157,6 +157,9 @@ See Also:
 
 from genkit.plugins.ollama.plugin_api import Ollama, ollama_name
 
+from ._generated import *  # noqa: F403
+from ._generated import __all__ as _generated_all
+
 
 def package_name() -> str:
     """Get the package name for the Ollama plugin.
@@ -171,4 +174,5 @@ __all__ = [
     'Ollama',
     'ollama_name',
     'package_name',
+    *_generated_all,
 ]

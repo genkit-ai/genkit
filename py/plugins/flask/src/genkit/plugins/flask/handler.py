@@ -20,7 +20,7 @@ import asyncio
 import json
 from asyncio import AbstractEventLoop
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable
-from typing import Any, TypeAlias, TypeVar
+from typing import Any, TypeAlias, TypeVar, cast
 
 from pydantic import BaseModel
 
@@ -131,7 +131,7 @@ def genkit_flask_handler(
                 if asyncio.iscoroutine(context):
                     context = await context
                 if isinstance(context, dict):
-                    action_context = context
+                    action_context = cast(Any, context)
 
             stream = request_data.headers.get('accept') == 'text/event-stream' or request.args.get('stream') == 'true'
             if stream:

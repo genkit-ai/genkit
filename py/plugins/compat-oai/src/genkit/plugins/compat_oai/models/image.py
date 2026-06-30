@@ -37,7 +37,7 @@ Data Flow::
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from openai import AsyncOpenAI
 from openai.types.images_response import ImagesResponse
@@ -191,4 +191,4 @@ class OpenAIImageModel:
         """
         params = _to_image_generate_params(self._model_name, request)
         result = await self._client.images.generate(**params)
-        return _to_generate_response(result)
+        return _to_generate_response(cast(ImagesResponse, result))

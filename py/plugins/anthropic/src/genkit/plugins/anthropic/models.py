@@ -25,7 +25,8 @@ See:
 """
 
 import json
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, cast
 
 import structlog
 
@@ -46,6 +47,7 @@ from genkit import (
     ToolRequestPart,
     ToolResponsePart,
 )
+from genkit._core._typing import GenerationCommonConfig as ModelConfig
 from genkit.model import get_basic_usage_stats
 from genkit.plugin_api import ActionRunContext
 from genkit.plugins.anthropic.model_info import get_model_info
@@ -127,7 +129,7 @@ class AnthropicModel:
             assert ctx is not None  # streaming requires ctx
             response = await self._generate_streaming(params, ctx)
         else:
-            response = await self.client.messages.create(**params)
+            response = cast(AnthropicMessage, await self.client.messages.create(**params))
 
         logger.debug(
             'Anthropic raw API response',
@@ -184,51 +186,34 @@ class AnthropicModel:
         )
 
     def _build_params(self, request: ModelRequest) -> dict[str, Any]:
-        """Build Anthropic API parameters."""
         config = request.config
-        params: dict[str, Any] = {}
+        raw = dict(config) if isinstance(config, Mapping) else {}
+        max_tokens = raw.get('max_output_tokens', raw.get('max_tokens', DEFAULT_MAX_OUTPUT_TOKENS))
+        thinking = raw.get('thinking')
+        metadata = raw.get('metadata')
 
-        if isinstance(config, dict):
-            params = config.copy()
-        elif config:
-            if hasattr(config, 'model_dump'):
-                params = config.model_dump(exclude_none=True, by_alias=False)
-            else:
-                params = {k: v for k, v in vars(config).items() if v is not None}
-
-        # Handle mapped parameters
-        max_tokens = params.pop('max_output_tokens', None)
-        if max_tokens is None:
-            max_tokens = params.get('max_tokens', DEFAULT_MAX_OUTPUT_TOKENS)
-
-        params.get('temperature')
-        params.get('top_p')
-        params.get('stop_sequences')
-        thinking = params.pop('thinking', None)
-        metadata = params.pop('metadata', None)
+        ignored_keys = {'max_output_tokens', 'max_tokens', 'thinking', 'metadata', 'version'}
+        params = {k: v for k, v in raw.items() if k not in ignored_keys}
 
         params['model'] = self.model_name
         params['messages'] = self._to_anthropic_messages(request.messages)
-        params['max_tokens'] = int(max_tokens)
+        params['max_tokens'] = (
+            int(max_tokens) if isinstance(max_tokens, (int, str, float)) else DEFAULT_MAX_OUTPUT_TOKENS
+        )
 
-        # Remove known genkit keys that don't map directly or are handled
-        params.pop('version', None)  # If version was passed through config
-
-        if thinking and isinstance(thinking, dict):
-            anthropic_thinking: dict[str, str | int] = {}
-            # Handle boolean enabled -> type="enabled"
+        if isinstance(thinking, Mapping):
+            anthropic_thinking: dict[str, Any] = {}
             if thinking.get('enabled') is True or thinking.get('type') == 'enabled':
                 anthropic_thinking['type'] = 'enabled'
 
-            # Handle camelCase -> snake_case for budget tokens
             tokens = thinking.get('budgetTokens', thinking.get('budget_tokens'))
-            if tokens:
+            if isinstance(tokens, (int, str, float)):
                 anthropic_thinking['budget_tokens'] = int(tokens)
 
             if anthropic_thinking.get('type') == 'enabled':
                 params['thinking'] = anthropic_thinking
 
-        if metadata:
+        if isinstance(metadata, Mapping):
             params['metadata'] = metadata
 
         system = self._extract_system(request.messages)
@@ -437,3 +422,10 @@ class AnthropicModel:
                     )
                 )
         return parts
+
+
+class ClaudeConfigSchema(ModelConfig):
+    """Configuration schema for Anthropic Claude models."""
+
+    max_tokens_to_sample: int | None = None
+    thinking: dict[str, Any] | None = None

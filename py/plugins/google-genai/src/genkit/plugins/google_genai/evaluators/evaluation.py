@@ -478,8 +478,8 @@ def _create_evaluator_for_metric(
         return None
 
     evaluator_name = f'vertexai/{metric_type.lower()}'
-    display_name: str = config['display_name']  # type: ignore[assignment]
-    definition: str = config['definition']  # type: ignore[assignment]
+    display_name: str = str(config['display_name'])
+    definition: str = str(config['definition'])
     evaluator_fn = factory.create_evaluator_fn(
         metric_type,
         metric_spec,

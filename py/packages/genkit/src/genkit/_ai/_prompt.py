@@ -31,7 +31,7 @@ from dotpromptz.typing import (
     PromptInputConfig,
     PromptMetadata,
 )
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from typing_extensions import Never, Unpack
 
 from genkit._ai._generate import (
@@ -59,7 +59,7 @@ from genkit._core._channel import Channel
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._middleware import BaseMiddleware, middleware_class_index
-from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfig
+from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfigDict, ModelRef
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
@@ -128,8 +128,8 @@ def resume_options_to_resume(
 class PromptGenerateOptions(TypedDict, total=False):
     """Runtime options for prompt execution (config, tools, messages, etc.)."""
 
-    model: str | None
-    config: dict[str, Any] | ModelConfig | None
+    model: str | ModelRef[Any] | None
+    config: ModelConfigDict | Any | None
     messages: list[Message] | None
     docs: list[Document] | None
     tools: Sequence[str | Tool] | None
@@ -161,7 +161,7 @@ class ModelStreamResponse(Generic[OutputT]):
 
     @property
     def stream(self) -> AsyncIterable[ModelResponseChunk]:
-        """Get the async iterable of response chunks.
+        """The async iterable of response chunks.
 
         Returns:
             An async iterable that yields ModelResponseChunk objects
@@ -174,7 +174,7 @@ class ModelStreamResponse(Generic[OutputT]):
 
     @property
     def response(self) -> Awaitable[ModelResponse[OutputT]]:
-        """Get the awaitable for the complete response.
+        """The awaitable for the complete response.
 
         Returns:
             An awaitable that resolves to a ModelResponse containing:
@@ -210,8 +210,23 @@ class PromptConfig(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
     variant: str | None = None
-    model: str | None = None
-    config: dict[str, Any] | ModelConfig | None = None
+    model: str | ModelRef[Any] | None = None
+    config: ModelConfigDict | dict[str, Any] | None = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def _normalize_model_ref(cls, data: Any) -> Any:  # noqa: ANN401
+        if isinstance(data, dict):
+            m = data.get('model')
+            if isinstance(m, ModelRef):
+                data['model'] = m.name
+                if m.config is not None:
+                    mcfg = dict(m.config) if isinstance(m.config, dict) else {}
+                    ccfg = data.get('config')
+                    ccfg_dict = dict(ccfg) if isinstance(ccfg, dict) else {}
+                    data['config'] = {**mcfg, **ccfg_dict}
+        return data
+
     description: str | None = None
     input_schema: type | dict[str, Any] | str | None = None
     system: str | list[Part] | None = None
@@ -242,8 +257,8 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         self,
         registry: Registry,
         variant: str | None = None,
-        model: str | None = None,
-        config: dict[str, Any] | ModelConfig | None = None,
+        model: str | ModelRef[Any] | None = None,
+        config: ModelConfigDict | dict[str, Any] | None = None,
         description: str | None = None,
         input_schema: type | dict[str, Any] | str | None = None,
         system: str | list[Part] | None = None,
@@ -268,6 +283,12 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         """Initialize prompt with configuration, templates, and schema options."""
         self._registry = registry
         self._variant = variant
+        if isinstance(model, ModelRef):
+            if model.config is not None:
+                mcfg = dict(model.config) if isinstance(model.config, dict) else {}
+                ccfg = dict(config) if isinstance(config, dict) else {}
+                config = {**mcfg, **ccfg}
+            model = model.name
         self._model = model
         self._config = config
         self._description = description
@@ -349,7 +370,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             **opts: Runtime prompt options (e.g. model, tools, config).
         """
         # ty doesn't infer Unpack[TD] as TD in function body (PEP 692 gap)
-        return await self._call_impl(input, opts)  # ty: ignore[invalid-argument-type]
+        return await self._call_impl(input, opts)  # type: ignore
 
     async def _call_impl(
         self,
@@ -371,17 +392,11 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
     def _prompt_config_for_call(self, opts: PromptGenerateOptions) -> PromptConfig:
         """Merge this prompt's definition with per-call ``opts`` into a :class:`PromptConfig`."""
         output_opts = opts.get('output') or {}
-        merged_config: dict[str, Any] | ModelConfig | None
+        merged_config: ModelConfigDict | dict[str, Any] | None
         if opts.get('config') is not None:
-            base = (
-                self._config.model_dump(exclude_none=True)
-                if isinstance(self._config, BaseModel)
-                else (self._config or {})
-            )
+            base = dict(self._config) if isinstance(self._config, dict) else {}
             opt_config = opts.get('config')
-            override = (
-                opt_config.model_dump(exclude_none=True) if isinstance(opt_config, BaseModel) else (opt_config or {})
-            )
+            override = dict(opt_config) if isinstance(opt_config, dict) else {}
             merged_config = {**base, **override} if base or override else None
         else:
             merged_config = self._config
@@ -447,7 +462,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         Same keyword options as ``__call__`` (see PromptGenerateOptions).
         """
         # ty treats **opts as a plain dict here; callers are still validated against PromptGenerateOptions.
-        call_opts: PromptGenerateOptions = opts  # ty: ignore[invalid-assignment]
+        call_opts: PromptGenerateOptions = opts  # type: ignore
         _child_registry, gen_options = await _prepare(self, input, call_opts)
         return gen_options
 
@@ -623,7 +638,8 @@ async def to_generate_action_options(
     options: PromptConfig,
 ) -> GenerateActionOptions:
     """Render ``PromptConfig`` into `GenerateActionOptions`."""
-    model = options.model or cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
+    raw_model = options.model or registry.lookup_value('defaultModel', 'defaultModel')
+    model = raw_model.name if isinstance(raw_model, ModelRef) else cast(str | None, raw_model)
     if model is None:
         raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')
 
@@ -667,16 +683,16 @@ async def to_generate_action_options(
 
     return GenerateActionOptions(
         model=model,
-        messages=resolved_msgs,  # type: ignore[arg-type]
+        messages=resolved_msgs,  # type: ignore
         config=options.config,
         tools=tools_refs,
         return_tool_requests=options.return_tool_requests,
         tool_choice=options.tool_choice,
         output=output,
         max_turns=options.max_turns,
-        docs=merged_docs,  # type: ignore[arg-type]
+        docs=merged_docs,  # type: ignore
         resume=resume,
-        use=options.use,  # type: ignore[arg-type]
+        use=options.use,  # type: ignore
     )
 
 
@@ -703,7 +719,7 @@ def resume_from_prompt_call_opts(opts: PromptGenerateOptions) -> Resume | None:
     )
 
 
-async def to_generate_request(registry: Registry, options: GenerateActionOptions) -> ModelRequest:
+async def to_generate_request(registry: Registry, options: GenerateActionOptions) -> ModelRequest[Any]:
     """Convert GenerateActionOptions to ModelRequest, resolving tool names."""
     tools: list[Action] = []
     if options.tools:
@@ -724,11 +740,11 @@ async def to_generate_request(registry: Registry, options: GenerateActionOptions
         schema_=options.output.json_schema if options.output else None,
         constrained=options.output.constrained if options.output else None,
     )
-    return ModelRequest(
+    return ModelRequest[Any](
         # Field validators auto-wrap MessageData -> Message and DocumentData -> Document
-        messages=options.messages,  # type: ignore[arg-type]
-        config=options.config if options.config is not None else {},  # type: ignore[arg-type]
-        docs=options.docs if options.docs else None,  # type: ignore[arg-type]
+        messages=options.messages,  # type: ignore
+        config=options.config if options.config is not None else {},  # type: ignore
+        docs=options.docs if options.docs else None,  # type: ignore
         tools=tool_defs,
         tool_choice=options.tool_choice,
         output_format=output_config.format,
@@ -868,7 +884,7 @@ async def render_message_prompt(
             data=DataArgument[dict[str, Any]](
                 input=flattened_data,
                 context=context,
-                messages=messages_,  # type: ignore[arg-type]
+                messages=messages_,  # type: ignore
             ),
             options=PromptMetadata(
                 input=PromptInputConfig(

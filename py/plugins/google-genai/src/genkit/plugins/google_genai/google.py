@@ -94,7 +94,7 @@ See Also:
 
 import os
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from google import genai
 from google.auth.credentials import Credentials
@@ -331,8 +331,8 @@ def _create_embedder_action(
     )
 
     # Explicitly set schemas (no 'if' needed as they are always present in metadata)
-    action.input_schema = action_metadata.input_json_schema  # type: ignore[invalid-assignment]
-    action.output_schema = action_metadata.output_json_schema  # type: ignore[invalid-assignment]
+    action.input_schema = action_metadata.input_json_schema  # type: ignore
+    action.output_schema = action_metadata.output_json_schema  # type: ignore
 
     return action
 
@@ -598,11 +598,11 @@ class GoogleAI(Plugin):
         # Determine model type and create model metadata/config schema
         if clean_name.lower().startswith('image'):
             model_ref = vertexai_image_model_info(clean_name)
-            IMAGE_SUPPORTED_MODELS[clean_name] = model_ref
+            IMAGE_SUPPORTED_MODELS[cast(Any, clean_name)] = model_ref
             config_schema = ImagenConfigSchema
         else:
             model_ref = google_model_info(clean_name)
-            SUPPORTED_MODELS[clean_name] = model_ref
+            SUPPORTED_MODELS[cast(Any, clean_name)] = model_ref
             config_schema = get_model_config_schema(clean_name)
 
         async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
@@ -930,14 +930,14 @@ class VertexAI(Plugin):
             config_schema = GeminiConfigSchema
         elif clean_name.lower().startswith('image'):
             model_ref = vertexai_image_model_info(clean_name)
-            IMAGE_SUPPORTED_MODELS[clean_name] = model_ref
+            IMAGE_SUPPORTED_MODELS[cast(Any, clean_name)] = model_ref
             config_schema = ImagenConfigSchema
         elif is_veo_model(clean_name):
             model_ref = veo_model_info(clean_name)
             config_schema = VeoConfigSchema
         else:
             model_ref = google_model_info(clean_name)
-            SUPPORTED_MODELS[clean_name] = model_ref
+            SUPPORTED_MODELS[cast(Any, clean_name)] = model_ref
             config_schema = get_model_config_schema(clean_name)
 
         async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:

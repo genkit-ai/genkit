@@ -1,0 +1,8 @@
+default_schema: OpenAIConfig
+
+models:
+  - name: openai/gpt-4o
+  - name: openai/gpt-4o-mini
+  - name: openai/o1
+  - name: openai/o1-mini
+  - name: openai/o3-mini

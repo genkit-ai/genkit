@@ -11,9 +11,9 @@
 import asyncio
 
 from genkit import Genkit
-from genkit.plugins.google_genai import GoogleAI
+from genkit.plugins.google_genai import GoogleAI, gemini_flash_latest
 
-ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
+ai = Genkit(plugins=[GoogleAI()], model=gemini_flash_latest)
 
 
 async def _run_realtime_demo(topic: str) -> str:

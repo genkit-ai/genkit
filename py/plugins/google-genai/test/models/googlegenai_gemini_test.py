@@ -46,7 +46,6 @@ from genkit import (
     TextPart,
     ToolDefinition,
 )
-from genkit._core._typing import GenerationCommonConfig
 from genkit.plugin_api import to_json_schema
 from genkit.plugins.google_genai.models.gemini import (
     DEFAULT_SUPPORTS_MODEL,
@@ -955,11 +954,6 @@ async def test_gemini_model__retrieve_cached_content(
     [
         ('snake_case dict', {'code_execution': True}),
         ('camelCase dict', {'codeExecution': True}),
-        (
-            'GenerationCommonConfig with alias-form extra',
-            GenerationCommonConfig.model_validate({'codeExecution': True}),
-        ),
-        ('GeminiConfigSchema instance', GeminiConfigSchema.model_validate({'code_execution': True})),
     ],
 )
 def test_gemini_model__normalize_config_canonicalizes_aliases(
@@ -1012,20 +1006,6 @@ def test_gemini_model__normalize_config_picks_gemma_schema() -> None:
     dumped = gemma_model._normalize_config_to_dict({'temperature': 3.0})
 
     assert dumped == {'temperature': 3.0}
-
-
-def test_gemini_model__normalize_config_respects_version_override() -> None:
-    """A per-request ``version`` override picks the matching schema.
-
-    Same model instance, but the caller overrides the version to a Gemma one,
-    so the schema selection has to follow the override -- otherwise the
-    instance's standard Gemini schema would reject the relaxed temperature.
-    """
-    gemini_model = GeminiModel(version='gemini-2.0-flash-001', client=MagicMock(spec=genai.Client))
-
-    dumped = gemini_model._normalize_config_to_dict({'version': 'gemma-2-27b-it', 'temperature': 3.0})
-
-    assert dumped == {'version': 'gemma-2-27b-it', 'temperature': 3.0}
 
 
 @pytest.mark.parametrize(

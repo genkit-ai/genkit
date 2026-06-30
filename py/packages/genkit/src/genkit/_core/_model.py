@@ -29,7 +29,7 @@ from typing import Any, ClassVar, Generic, cast
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer
 from pydantic.alias_generators import to_camel
-from typing_extensions import TypeVar
+from typing_extensions import TypedDict, TypeVar
 
 from genkit._core._base import GenkitModel
 from genkit._core._extract_json import extract_json
@@ -59,22 +59,36 @@ from genkit._core._typing import (
     ToolRequestPart,
 )
 
+
+class CommonModelConfigDict(TypedDict, total=False):
+    """Base dictionary configuration for AI models with IDE autocomplete support."""
+
+    version: str
+    temperature: float
+    max_output_tokens: int
+    top_k: int
+    top_p: float
+    stop_sequences: list[str]
+
+
+CommonModelConfigDict.__pydantic_config__ = ConfigDict(extra='allow')  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+ModelConfigDict = CommonModelConfigDict
 ModelConfig = GenerationCommonConfig  # public name for GenerationCommonConfig
 ModelUsage = GenerationUsage  # public name for GenerationUsage
 
 # TypeVars for generic types
 OutputT = TypeVar('OutputT', default=object)
-ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
+ConfigT = TypeVar('ConfigT', bound=ModelConfigDict, default=ModelConfigDict)
 
 
-class ModelRef(BaseModel):
+class ModelRef(BaseModel, Generic[ConfigT]):
     """Reference to a model with configuration."""
 
     name: str
     config_schema: object | None = None
     info: object | None = None
     version: str | None = None
-    config: dict[str, object] | None = None
+    config: ConfigT | dict[str, Any] | None = None
 
 
 class Message(MessageData):
@@ -103,7 +117,7 @@ class Message(MessageData):
                     metadata=message.metadata,
                 )
         else:
-            super().__init__(**kwargs)  # type: ignore[arg-type]
+            super().__init__(**kwargs)  # type: ignore
 
     def __eq__(self, other: object) -> bool:
         """Compare messages by role, content, and metadata."""
@@ -199,7 +213,7 @@ class Document(DocumentData):
 
     @cached_property
     def media(self) -> list[Media]:
-        """Get all media parts."""
+        """All media parts."""
         return [
             part.root.media for part in self.content if isinstance(part.root, MediaPart) and part.root.media is not None
         ]
@@ -246,7 +260,7 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
     # Veneer types for IDE/typing (validators wrap MessageData->Message, DocumentData->Document)
     messages: list[Message]  # pyright: ignore[reportIncompatibleVariableOverride]
     docs: list[Document] | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
-    config: ConfigT | None = None
+    config: ConfigT | dict[str, Any] | None = None
     tools: list[ToolDefinition] | None = None
     tool_choice: ToolChoice | None = Field(default=None)
     # Flat output fields (no nested OutputConfig)

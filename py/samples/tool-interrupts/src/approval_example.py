@@ -41,7 +41,7 @@ from genkit import (
     restart_tool,
 )
 from genkit.model import ModelResponse
-from genkit.plugins.google_genai import GoogleAI  # pyright: ignore[reportMissingImports]
+from genkit.plugins.google_genai import GoogleAI, gemini_flash_latest
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / 'prompts'
 
@@ -78,12 +78,17 @@ def _print_model_turn(label: str, r: ModelResponse) -> None:
         print(r.text)
 
 
+def _print_transfer_summary(summary: str) -> None:
+    """Print the final transfer outcome summary."""
+    if summary:
+        print(f'  {summary}')
+
+
 def _print_transfer_approval_prompt(summary: str) -> None:
     print('\n' + _BAR)
     print('  TRANSFER APPROVAL — y = approve (rerun tool)  |  n = decline')
     print(_BAR)
-    if summary:
-        print(f'  {summary}')
+    _print_transfer_summary(summary)
 
 
 def _print_unexpected_tool(name: str) -> None:
@@ -92,7 +97,7 @@ def _print_unexpected_tool(name: str) -> None:
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
+    model=gemini_flash_latest,
     prompt_dir=_PROMPTS_DIR,
 )
 

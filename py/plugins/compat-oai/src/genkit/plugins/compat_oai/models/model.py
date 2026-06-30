@@ -17,16 +17,16 @@
 """OpenAI Compatible Models for Genkit."""
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, cast
 
 import structlog
 from openai import AsyncOpenAI
 from openai.lib._pydantic import _ensure_strict_json_schema
+from openai.types.chat import ChatCompletion
 
 from genkit import (
     Message,
-    ModelConfig,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -42,9 +42,10 @@ from genkit.plugins.compat_oai.models.utils import (
     DictMessageAdapter,
     MessageAdapter,
     MessageConverter,
+    extract_config_dict,
     strip_markdown_fences,
 )
-from genkit.plugins.compat_oai.typing import OpenAIConfig, SupportedOutputFormat
+from genkit.plugins.compat_oai.typing import SupportedOutputFormat
 
 logger = structlog.get_logger(__name__)
 
@@ -273,7 +274,7 @@ class OpenAIModel:
                 # pyrefly: ignore[bad-typed-dict-key] - response_format dict is valid for OpenAI API
                 openai_config['response_format'] = response_format
         if request.config:
-            openai_config.update(**request.config.model_dump(exclude_none=True))
+            openai_config.update(**extract_config_dict(request))
         return openai_config
 
     async def _generate(self, request: ModelRequest) -> ModelResponse:
@@ -287,7 +288,7 @@ class OpenAIModel:
         """
         openai_config = await self._get_openai_request_config(request=request)
         logger.debug('OpenAI generate request', model=self._model, streaming=False)
-        response = await self._openai_client.chat.completions.create(**openai_config)
+        response = cast(ChatCompletion, await self._openai_client.chat.completions.create(**openai_config))
         logger.debug(
             'OpenAI raw API response',
             model=self._model,
@@ -319,7 +320,7 @@ class OpenAIModel:
 
         tool_calls: dict[int, Any] = {}
         accumulated_content: list[Part] = []
-        async for chunk in stream:
+        async for chunk in cast(Any, stream):
             delta = chunk.choices[0].delta
 
             # Text content chunk
@@ -396,23 +397,12 @@ class OpenAIModel:
             return await self._generate(request)
 
     @staticmethod
-    def normalize_config(config: object) -> OpenAIConfig:
-        """Ensures the config is an OpenAIConfig instance."""
-        if isinstance(config, OpenAIConfig):
-            return config
+    def normalize_config(config: object) -> dict[str, Any]:
+        """Ensures the config is normalized to a dictionary without unsupported keys."""
+        if config is None:
+            return {}
 
-        if isinstance(config, (ModelConfig, ModelConfig)):
-            return OpenAIConfig(
-                temperature=config.temperature,
-                max_tokens=int(config.max_output_tokens) if config.max_output_tokens is not None else None,
-                top_p=config.top_p,
-                stop=config.stop_sequences,
-            )
+        if isinstance(config, Mapping):
+            return {str(k): v for k, v in config.items() if k != 'top_k'}
 
-        if isinstance(config, dict):
-            config_dict = cast(dict[str, Any], config)
-            if config_dict.get('top_k'):
-                del config_dict['top_k']
-            return OpenAIConfig(**config_dict)
-
-        raise ValueError(f'Expected request.config to be a dict or OpenAIConfig, got {type(config).__name__}.')
+        raise ValueError(f'Expected request.config to be a dict or Mapping, got {type(config).__name__}.')

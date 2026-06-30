@@ -183,4 +183,7 @@ See Also:
 
 from genkit.plugins.anthropic.plugin import Anthropic, anthropic_name
 
-__all__ = ['Anthropic', 'anthropic_name']
+from ._generated import *  # noqa: F403
+from ._generated import __all__ as _generated_all
+
+__all__ = ['Anthropic', 'anthropic_name', *_generated_all]

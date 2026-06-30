@@ -166,7 +166,7 @@ def genkit_django_handler(
                     if asyncio.iscoroutine(context):
                         context = await context
                     if isinstance(context, dict):
-                        action_context = context
+                        action_context = cast(Any, context)
                 except Exception as e:
                     return _error_response(500, _unwrap_cause(e))
 

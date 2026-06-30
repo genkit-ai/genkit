@@ -142,6 +142,7 @@ if sys.version_info < (3, 11):
 else:
     from enum import StrEnum
 
+from collections.abc import Mapping
 from functools import cached_property
 from typing import Annotated, Any, Any as JsonAny, cast
 
@@ -154,7 +155,6 @@ from genkit import (
     Constrained,
     GenkitError,
     Message,
-    ModelConfig,
     ModelInfo,
     ModelRequest,
     ModelResponse,
@@ -167,6 +167,7 @@ from genkit import (
     TextPart,
     ToolDefinition,
 )
+from genkit._core._typing import GenerationCommonConfig as ModelConfig
 from genkit.model import Candidate, FinishReason, get_basic_usage_stats
 from genkit.plugin_api import (
     ActionRunContext,
@@ -932,9 +933,6 @@ class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     | `gemini-2.5-pro-preview-03-25`       | Gemini 2.5 Pro Preview 03-25         | Supported    |
     | `gemini-2.5-pro-preview-05-06`       | Gemini 2.5 Pro Preview 05-06         | Supported    |
     | `gemini-3-flash-preview`             | Gemini 3 Flash Preview               | Supported    |
-    | `gemini-3.5-flash`                   | Gemini 3.5 Flash                     | Supported    |
-    | `gemini-3.1-pro-preview`            | Gemini 3.1 Pro Preview               | Supported    |
-    | `gemini-3.1-flash-lite`             | Gemini 3.1 Flash Lite                | Supported    |
     | `gemini-2.5-pro`                     | Gemini 2.5 Pro                       | Supported    |
     | `gemini-2.5-flash`                   | Gemini 2.5 Flash                     | Supported    |
     | `gemini-2.5-flash-lite`              | Gemini 2.5 Flash Lite                | Supported    |
@@ -971,9 +969,6 @@ class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMINI_3_PRO_IMAGE_PREVIEW = 'gemini-3-pro-image-preview'
     GEMINI_2_5_FLASH_IMAGE_PREVIEW = 'gemini-2.5-flash-image-preview'
     GEMINI_2_5_FLASH_IMAGE = 'gemini-2.5-flash-image'
-    GEMINI_3_5_FLASH = 'gemini-3.5-flash'
-    GEMINI_3_1_PRO_PREVIEW = 'gemini-3.1-pro-preview'
-    GEMINI_3_1_FLASH_LITE = 'gemini-3.1-flash-lite'
     GEMMA_3_12B_IT = 'gemma-3-12b-it'
     GEMMA_3_1B_IT = 'gemma-3-1b-it'
     GEMMA_3_27B_IT = 'gemma-3-27b-it'
@@ -1044,6 +1039,8 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMINI_3_1_PRO_PREVIEW = 'gemini-3.1-pro-preview'
     GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS = 'gemini-3.1-pro-preview-customtools'
     GEMINI_3_1_FLASH_LITE_PREVIEW = 'gemini-3.1-flash-lite-preview'
+    GEMINI_3_1_FLASH_LITE = 'gemini-3.1-flash-lite'
+    GEMINI_3_5_FLASH = 'gemini-3.5-flash'
     GEMMA_3_12B_IT = 'gemma-3-12b-it'
     GEMMA_3_1B_IT = 'gemma-3-1b-it'
     GEMMA_3_27B_IT = 'gemma-3-27b-it'
@@ -1782,13 +1779,14 @@ class GeminiModel:
 
     @cached_property
     def metadata(self) -> dict:
-        """Get model metadata.
+        """Model metadata.
 
         Returns:
             model metadata.
         """
         if self._version in SUPPORTED_MODELS:
-            supports = SUPPORTED_MODELS[self._version].supports.model_dump(by_alias=True, exclude_none=True)
+            info = SUPPORTED_MODELS[self._version]
+            supports = info.supports.model_dump(by_alias=True, exclude_none=True) if info.supports else {}
         else:
             # Fallback to default supports for models not explicitly listed
             supports = DEFAULT_SUPPORTS_MODEL.model_dump(by_alias=True, exclude_none=True)
@@ -1916,17 +1914,17 @@ class GeminiModel:
                 cfg = genai_types.GenerateContentConfig()
 
             if has_output:
-                model_name = self._version
+                model_name = str(self._version)
                 if request.config:
-                    if isinstance(request.config, dict):
+                    if isinstance(request.config, Mapping):
                         version = request.config.get('version')
                     else:
                         version = getattr(request.config, 'version', None)
                     if version:
-                        model_name = version
+                        model_name = str(version)
 
                 # Check if the model supports constrained generation with this configuration
-                model_info = google_model_info(model_name)
+                model_info = google_model_info(str(model_name))
                 model_supports_constrained = (
                     model_info.supports.constrained if model_info and model_info.supports else Constrained.NO_TOOLS
                 )
@@ -1961,46 +1959,30 @@ class GeminiModel:
 
     def _normalize_config_to_dict(
         self,
-        config: GeminiConfigSchema | ModelConfig | dict,
+        config: Mapping[str, Any] | None,
     ) -> dict[str, Any] | None:
-        """Return the config as a snake_case dict for the rest of the pipeline.
+        """Return the config as a canonical snake_case dict for the rest of the pipeline.
 
-        Callers can hand us three shapes: a typed ``GeminiConfigSchema``, the
-        generic ``GenerationCommonConfig`` (which keeps plugin-specific keys
-        as alias-form extras), or a raw dict in either casing. Only the
-        plugin schema knows the alias mapping (e.g. ``codeExecution`` <->
-        ``code_execution``), so we re-validate through it whenever the input
-        isn't already one — that's what folds aliased keys onto their
-        canonical snake_case fields before tool extraction runs.
+        Callers hand us a raw dictionary in either snake_case or camelCase.
+        Validating through the schema matching this model instance folds aliased
+        keys onto their canonical fields before tool extraction runs.
 
         Returns ``None`` if the config has no meaningful values.
         """
-        if isinstance(config, GeminiConfigSchema):
-            schema = config
-        elif isinstance(config, ModelConfig):
-            # Re-route through the plugin schema so the alias machinery folds
-            # any plugin-specific extras onto their canonical fields.
-            schema = self._pick_plugin_schema(config.model_dump(exclude_none=True, by_alias=True))
-        elif isinstance(config, dict):
-            schema = self._pick_plugin_schema(config)
-        else:
+        if not isinstance(config, Mapping):
             return None
 
+        schema = self._pick_plugin_schema(config)
         dumped = schema.model_dump(exclude_none=True, by_alias=False)
         return dumped or None
 
-    def _pick_plugin_schema(self, data: dict[str, Any]) -> GeminiConfigSchema:
-        """Validate ``data`` through whichever subclass matches the model.
+    def _pick_plugin_schema(self, data: Mapping[str, Any]) -> GeminiConfigSchema:
+        """Validate ``data`` against the schema matching this model instance.
 
-        Routing is purely by model name so each family gets its own
-        validation rules -- most importantly Gemma, which intentionally
-        relaxes the standard Gemini temperature bounds and would otherwise
-        reject valid configs. The per-request ``version`` override (when
-        present) takes precedence over the version this instance is bound
-        to, mirroring how the actual model name is resolved at call time.
+        Routing uses ``self._version`` so each family gets its own validation
+        rules (e.g. Gemma relaxing standard Gemini temperature bounds).
         """
-        model_name = data.get('version') or self._version
-        schema_cls = get_model_config_schema(model_name)
+        schema_cls = get_model_config_schema(str(self._version))
         return schema_cls.model_validate(data)
 
     def _extract_tools_from_config(

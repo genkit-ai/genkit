@@ -1,0 +1,7 @@
+default_schema: OllamaConfigSchema
+
+models:
+  - name: ollama/llama3.2
+  - name: ollama/llama3.1
+  - name: ollama/mistral
+  - name: ollama/gemma2

@@ -37,7 +37,7 @@ from genkit._ai._testing import (
 )
 from genkit._core._action import ActionKind
 from genkit._core._error import GenkitError
-from genkit._core._model import GenerateActionOptions, ModelConfig
+from genkit._core._model import GenerateActionOptions, ModelConfigDict
 from genkit._core._typing import Part, Role, TextPart, ToolChoice
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 from genkit.plugin_api import MiddlewarePlugin, new_middleware
@@ -125,7 +125,7 @@ async def test_simple_prompt_with_override_config() -> None:
     # Config is MERGED: prompt config (banana: true) + opts config (temperature: 12)
     want_txt = '[ECHO] user: "hi" {"temperature":12.0,"banana":true}'
 
-    my_prompt = ai.define_prompt(prompt='hi', config={'banana': True})
+    my_prompt = ai.define_prompt(prompt='hi', config={'banana': True})  # type: ignore
 
     # Pass config via kwargs — this MERGES with prompt config
     response = await my_prompt(config={'temperature': 12})
@@ -218,7 +218,7 @@ test_cases_parse_partial_json = [
             'metadata': {'state': {'name': 'bar'}},
         },
         {'name': 'foo'},
-        ModelConfig.model_validate({'temperature': 11}),
+        {'temperature': 11.0},
         {},
         # Config is MERGED: prompt config (banana: ripe) + opts config (temperature: 11)
         """[ECHO] system: "hello foo (bar)" {"temperature":11.0,"banana":"ripe"}""",
@@ -238,7 +238,7 @@ test_cases_parse_partial_json = [
             'metadata': {'state': {'name': 'bar_system'}},
         },
         {'name': 'foo'},
-        ModelConfig.model_validate({'temperature': 11}),
+        {'temperature': 11.0},
         {},
         # Config is MERGED: prompt config (banana: ripe) + opts config (temperature: 11)
         """[ECHO] user: "hello foo (bar_system)" {"temperature":11.0,"banana":"ripe"}""",
@@ -258,7 +258,7 @@ test_cases_parse_partial_json = [
             'metadata': {'state': {'name': 'bar'}},
         },
         {'name': 'foo'},
-        ModelConfig.model_validate({'temperature': 11}),
+        {'temperature': 11.0},
         {'auth': {'email': 'a@b.c'}},
         # Config is MERGED: prompt config (banana: ripe) + opts config (temperature: 11)
         """[ECHO] user: "hello foo (bar, a@b.c)" {"temperature":11.0,"banana":"ripe"}""",
@@ -276,7 +276,7 @@ async def test_prompt_rendering_dotprompt(
     test_case: str,
     prompt: dict[str, Any],
     input: dict[str, Any],
-    input_option: ModelConfig,
+    input_option: ModelConfigDict | dict[str, Any],
     context: dict[str, Any],
     want_rendered: str,
 ) -> None:
@@ -524,7 +524,7 @@ async def test_config_merge_priority() -> None:
 
     my_prompt = ai.define_prompt(
         prompt='test',
-        config={'temperature': 0.5, 'banana': 'yellow'},
+        config={'temperature': 0.5, 'banana': 'yellow'},  # type: ignore
     )
 
     # New API: runtime config is MERGED with prompt config

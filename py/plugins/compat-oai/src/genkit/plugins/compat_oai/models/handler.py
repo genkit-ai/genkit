@@ -16,7 +16,7 @@
 
 """OpenAI Compatible Model handlers for Genkit."""
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 
 from openai import AsyncOpenAI
 
@@ -124,7 +124,7 @@ class OpenAIModelHandler:
         """
         request.config = self._model.normalize_config(request.config)
 
-        if request.config and hasattr(request.config, 'model') and request.config.model:
-            self._validate_version(request.config.model)
+        if isinstance(request.config, Mapping) and request.config.get('model'):
+            self._validate_version(str(request.config.get('model')))
 
         return await self._model.generate(request, ctx)

@@ -222,6 +222,9 @@ from genkit.plugins.google_genai.models.imagen import ImagenVersion
 from genkit.plugins.google_genai.models.lyria import LyriaConfig, LyriaVersion
 from genkit.plugins.google_genai.models.veo import VeoConfig, VeoVersion
 
+from ._generated import *  # noqa: F403
+from ._generated import __all__ as _generated_all
+
 
 def package_name() -> str:
     """Get the package name for the Vertex AI plugin.
@@ -249,4 +252,5 @@ __all__ = [
     'VertexAIGeminiVersion',
     'VertexEmbeddingModels',
     'package_name',
+    *_generated_all,
 ]

@@ -17,6 +17,8 @@
 
 """Test configuration for the OpenAI compatible plugin."""
 
+from typing import Any
+
 import pytest
 
 from genkit import (
@@ -26,13 +28,12 @@ from genkit import (
     Role,
     TextPart,
 )
-from genkit.plugins.compat_oai.typing import OpenAIConfig
 
 
 @pytest.fixture
 def sample_request() -> ModelRequest:
     """Fixture to create a sample ModelRequest object."""
-    return ModelRequest(
+    return ModelRequest[Any](
         messages=[
             Message(
                 role=Role.SYSTEM,
@@ -40,11 +41,11 @@ def sample_request() -> ModelRequest:
             ),
             Message(role=Role.USER, content=[Part(root=TextPart(text='Hello, world!'))]),
         ],
-        config=OpenAIConfig(
-            model='gpt-4',
-            top_p=0.9,
-            temperature=0.7,
-            stop=['stop'],
-            max_tokens=100,
-        ),
+        config={
+            'model': 'gpt-4',
+            'top_p': 0.9,
+            'temperature': 0.7,
+            'stop': ['stop'],
+            'max_tokens': 100,
+        },
     )

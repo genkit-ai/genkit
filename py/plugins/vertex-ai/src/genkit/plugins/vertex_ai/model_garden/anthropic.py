@@ -23,7 +23,8 @@ from typing import cast
 from anthropic import AsyncAnthropic, AsyncAnthropicVertex
 from pydantic import ConfigDict
 
-from genkit import ModelConfig, ModelInfo, ModelRequest, ModelResponse, Supports
+from genkit import ModelInfo, ModelRequest, ModelResponse, Supports
+from genkit._core._typing import GenerationCommonConfig as ModelConfig
 from genkit.plugin_api import ActionRunContext, loop_local_client
 from genkit.plugins.anthropic.models import AnthropicModel
 

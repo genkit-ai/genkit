@@ -22,9 +22,9 @@ import httpx
 from pydantic import BaseModel, Field
 
 from genkit import Genkit, Message, Part, Role, TextPart
-from genkit.plugins.google_genai import GoogleAI
+from genkit.plugins.google_genai import GoogleAI, gemini_pro_latest
 
-ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-pro-latest')
+ai = Genkit(plugins=[GoogleAI()], model=gemini_pro_latest)
 
 DEFAULT_TEXT_FILE = 'https://www.gutenberg.org/cache/epub/74/pg74.txt'
 

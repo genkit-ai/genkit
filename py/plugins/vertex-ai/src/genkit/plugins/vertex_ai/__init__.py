@@ -147,6 +147,9 @@ from genkit.plugins.vertex_ai.model_garden.modelgarden_plugin import (
     ModelGardenPlugin,
 )
 
+from ._generated import *  # noqa: F403
+from ._generated import __all__ as _generated_all
+
 
 def package_name() -> str:
     """Get the package name for the Vertex AI plugin.
@@ -160,4 +163,5 @@ def package_name() -> str:
 __all__ = [
     'ModelGardenPlugin',
     'package_name',
+    *_generated_all,
 ]

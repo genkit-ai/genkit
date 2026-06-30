@@ -26,11 +26,11 @@ transformations that can be tested without SDK dependencies.
 See: https://github.com/ollama/ollama/blob/main/docs/api.md
 """
 
-from typing import Any, Literal, cast
+from collections.abc import Mapping
+from typing import Any, Literal
 
 from genkit import (
     Message,
-    ModelConfig,
     ModelUsage,
     Part,
     Role,
@@ -94,39 +94,23 @@ def build_prompt(messages: list[Message]) -> str:
 
 
 def build_request_options_dict(
-    config: ModelConfig | dict[str, object] | None,
+    config: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     """Build options dict from config for the Ollama API.
 
-    Maps Genkit ``ModelConfig`` fields to Ollama option names.
+    Maps Genkit dictionary keys to Ollama option names.
 
     Args:
-        config: Request configuration.
+        config: Request configuration dictionary.
 
     Returns:
         Dict of Ollama options.
     """
-    if config is None:
+    if not isinstance(config, dict):
         return {}
 
-    if isinstance(config, ModelConfig):
-        result: dict[str, Any] = {}
-        if config.top_k is not None:
-            result['top_k'] = config.top_k
-        if config.top_p is not None:
-            result['topP'] = config.top_p
-        if config.stop_sequences is not None:
-            result['stop'] = config.stop_sequences
-        if config.temperature is not None:
-            result['temperature'] = config.temperature
-        if config.max_output_tokens is not None:
-            result['num_predict'] = config.max_output_tokens
-        return result
-
-    if isinstance(config, dict):
-        return cast(dict[str, Any], config)
-
-    return {}
+    key_map = {'max_output_tokens': 'num_predict', 'topP': 'top_p', 'stop_sequences': 'stop'}
+    return {key_map.get(k, k): v for k, v in config.items()}
 
 
 def build_response_parts(

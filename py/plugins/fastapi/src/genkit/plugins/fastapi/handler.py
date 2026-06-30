@@ -19,7 +19,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel
 
@@ -123,7 +123,7 @@ def genkit_fastapi_handler(
                 if asyncio.iscoroutine(context):
                     context = await context
                 if isinstance(context, dict):
-                    action_context = context
+                    action_context = cast(Any, context)
 
             # Check if client wants streaming
             accept = request.headers.get('accept', '')

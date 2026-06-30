@@ -26,7 +26,7 @@ else:
 
 import json
 from functools import cached_property
-from typing import Any
+from typing import Any, cast
 
 from google import genai
 from google.genai import types as genai_types
@@ -239,16 +239,16 @@ class ImagenModel:
 
     @cached_property
     def metadata(self) -> dict:
-        """Get model metadata.
+        """Model metadata.
 
         Returns:
             model metadata.
         """
         supports = {}
         if self._version in SUPPORTED_MODELS:
-            model_supports = SUPPORTED_MODELS[self._version].supports  # pyrefly: ignore[bad-index]
-            if model_supports:
-                supports = model_supports.model_dump(by_alias=True)
+            info = SUPPORTED_MODELS[cast(Any, self._version)]
+            if info and info.supports:
+                supports = info.supports.model_dump(by_alias=True)
         else:
             model_supports = vertexai_image_model_info(self._version).supports
             if model_supports:

@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from genkit import Genkit, Message, Part, Role, TextPart
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext
-from genkit.plugins.google_genai import GoogleAI
+from genkit.plugins.google_genai import GoogleAI, gemini_flash_latest
 from genkit.plugins.middleware import Middleware
 
 logger = structlog.get_logger(__name__)
@@ -40,7 +40,7 @@ class PromptInput(BaseModel):
 
 ai = Genkit(
     plugins=[GoogleAI(), Middleware()],
-    model='googleai/gemini-flash-latest',
+    model=gemini_flash_latest,
     prompt_dir=Path(__file__).resolve().parent.parent / 'prompts',
 )
 

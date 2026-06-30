@@ -19,9 +19,9 @@
 from pydantic import BaseModel, Field
 
 from genkit import ActionRunContext, Genkit
-from genkit.plugins.google_genai import GoogleAI
+from genkit.plugins.google_genai import GoogleAI, gemini_flash_latest
 
-ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
+ai = Genkit(plugins=[GoogleAI()], model=gemini_flash_latest)
 
 USERS: dict[int, dict[str, str]] = {
     42: {'name': 'Arthur Dent', 'plan': 'premium'},

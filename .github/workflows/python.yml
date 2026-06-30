@@ -93,6 +93,9 @@ jobs:
       - name: Generate schema typing
         run: ./py/bin/generate_schema_typing --ci
 
+      - name: Verify plugin config dicts & model refs
+        run: ./py/bin/generate_plugin_configs --ci
+
       - name: Type check with Ty
         if: matrix.checker == 'ty'
         run: uv run --directory py ty check .
@@ -174,6 +177,9 @@ jobs:
 
       - name: Generate schema typing
         run: ./py/bin/generate_schema_typing --ci
+
+      - name: Verify plugin config dicts & model refs
+        run: ./py/bin/generate_plugin_configs --ci
 
       - name: Run tests
         run: |

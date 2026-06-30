@@ -83,7 +83,7 @@ behavioral divergence from the JS plugin.
 """
 
 import mimetypes
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, Literal, cast
 
 import structlog
@@ -94,7 +94,6 @@ from genkit import (
     Media,
     MediaPart,
     Message,
-    ModelConfig,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -106,11 +105,13 @@ from genkit import (
     ToolRequestPart,
     ToolResponsePart,
 )
+from genkit._core._typing import GenerationCommonConfig as ModelConfig
 from genkit.model import get_basic_usage_stats
 from genkit.plugin_api import ActionRunContext, get_cached_client
 from genkit.plugins.ollama.constants import (
     OllamaAPITypes,
 )
+from genkit.plugins.ollama.converters import build_request_options_dict
 
 logger = structlog.get_logger(__name__)
 
@@ -203,7 +204,7 @@ class OllamaModel:
                     model=self.model_definition.name,
                     response=str(api_response.response)[:500],
                 )
-                content = [Part(root=TextPart(text=api_response.response))]
+                content = [Part(root=TextPart(text=api_response.response or ''))]
         else:
             raise ValueError(f'Unresolved API type: {self.model_definition.api_type}')
 
@@ -258,21 +259,25 @@ class OllamaModel:
             fmt = ''
 
         # Build common kwargs for both streaming and non-streaming calls
-        tools = [
-            ollama_api.Tool(
-                function=ollama_api.Tool.Function(
-                    name=tool.name,
-                    description=tool.description,
-                    parameters=_convert_parameters(tool.input_schema or {}),
+        tools = (
+            [
+                ollama_api.Tool(
+                    function=ollama_api.Tool.Function(
+                        name=tool.name,
+                        description=tool.description,
+                        parameters=_convert_parameters(tool.input_schema or {}),
+                    )
                 )
-            )
-            for tool in request.tools or []
-        ]
+                for tool in request.tools
+            ]
+            if request.tools
+            else []
+        )
         options = self.build_request_options(config=request.config)
 
         if streaming_request:
             # Streaming call with literal stream=True for proper overload resolution
-            chat_response = await self._get_client().chat(  # type: ignore[no-matching-overload]
+            chat_response = await self._get_client().chat(  # type: ignore
                 model=self.model_definition.name,
                 messages=messages,
                 tools=tools,
@@ -298,7 +303,7 @@ class OllamaModel:
             return None
         else:
             # Non-streaming call with literal stream=False for proper overload resolution
-            chat_response = await self._get_client().chat(  # type: ignore[no-matching-overload]
+            chat_response = await self._get_client().chat(  # type: ignore
                 model=self.model_definition.name,
                 messages=messages,
                 tools=tools,
@@ -340,7 +345,7 @@ class OllamaModel:
                         chunk=ModelResponseChunk(
                             role=Role.MODEL,
                             index=idx,
-                            content=[Part(root=TextPart(text=chunk.response))],
+                            content=[Part(root=TextPart(text=chunk.response or ''))],
                         )
                     )
             # For streaming requests, we return None because the response chunks
@@ -402,31 +407,20 @@ class OllamaModel:
 
     @staticmethod
     def build_request_options(
-        config: ModelConfig | ollama_api.Options | dict[str, object] | None,
+        config: Mapping[str, Any] | None,
     ) -> ollama_api.Options:
         """Build request options for the generate API.
 
         Args:
-            config: The configuration to build the request options for.
+            config: The configuration dictionary to build request options for.
 
         Returns:
             The request options for the generate API.
         """
         if config is None:
             return ollama_api.Options()
-        if isinstance(config, ModelConfig):
-            config = dict(
-                top_k=config.top_k,
-                topP=config.top_p,
-                stop=config.stop_sequences,
-                temperature=config.temperature,
-                num_predict=config.max_output_tokens,
-            )
-        if isinstance(config, dict):
-            # Use cast to avoid type error with **spread of dict[str, object]
-            config = ollama_api.Options(**cast(dict[str, Any], config))
-
-        return config
+        options_dict = build_request_options_dict(config)
+        return ollama_api.Options(**options_dict)
 
     @staticmethod
     def build_prompt(request: ModelRequest) -> str:
@@ -604,3 +598,11 @@ def _convert_parameters(input_schema: dict[str, object]) -> ollama_api.Tool.Func
                     )
 
     return schema
+
+
+class OllamaConfigSchema(ModelConfig):
+    """Configuration schema for Ollama models."""
+
+    num_predict: int | None = None
+    repeat_penalty: float | None = None
+    seed: int | None = None

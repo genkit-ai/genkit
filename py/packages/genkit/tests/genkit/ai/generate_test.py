@@ -566,8 +566,8 @@ def test_middleware_validation_raises_correct_errors() -> None:
 def test_base_middleware_rejects_explicit_config_class() -> None:
     with pytest.raises(TypeError, match='must not define Config'):
 
-        class _Bad(BaseMiddleware):
-            class Config(BaseModel):
+        class _Bad(BaseMiddleware):  # type: ignore
+            class Config(BaseModel):  # type: ignore
                 x: int = 1
 
 
@@ -2008,7 +2008,7 @@ async def test_generate_action_spec(spec: dict[str, Any]) -> None:
         action_response = await action.run(
             ai.registry,
             TypeAdapter(GenerateActionOptions).validate_python(spec['input']),  # type: ignore[arg-type]
-            on_chunk=on_chunk,  # type: ignore[misc]
+            on_chunk=on_chunk,  # type: ignore
         )
         response = action_response.response
     else:

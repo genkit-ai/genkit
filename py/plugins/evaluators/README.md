@@ -24,13 +24,15 @@ ai = Genkit(plugins=[GenkitEval()])
 
 # Run evaluation with genkit eval-flow or programmatically
 evaluator = await ai.registry.resolve_evaluator('genkitEval/regex')
-result = await evaluator.run(input={
-    'dataset': [
-        {'input': 'sample', 'output': 'banana', 'reference': 'ba?a?a'},
-        {'input': 'sample', 'output': 'apple', 'reference': 'ba?a?a'},
-    ],
-    'evalRunId': 'test',
-})
+result = await evaluator.run(
+    input={
+        'dataset': [
+            {'input': 'sample', 'output': 'banana', 'reference': 'ba?a?a'},
+            {'input': 'sample', 'output': 'apple', 'reference': 'ba?a?a'},
+        ],
+        'evalRunId': 'test',
+    }
+)
 ```
 
 ## Evaluators

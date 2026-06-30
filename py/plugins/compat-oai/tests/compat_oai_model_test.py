@@ -24,7 +24,6 @@ import pytest
 
 from genkit import (
     Message,
-    ModelConfig,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -35,7 +34,6 @@ from genkit import (
 from genkit.plugin_api import ActionRunContext
 from genkit.plugins.compat_oai.models import OpenAIModel
 from genkit.plugins.compat_oai.models.utils import strip_markdown_fences
-from genkit.plugins.compat_oai.typing import OpenAIConfig
 
 
 def test_get_messages(sample_request: ModelRequest) -> None:
@@ -170,22 +168,16 @@ async def test_generate(stream: bool, sample_request: ModelRequest) -> None:
 @pytest.mark.parametrize(
     'config, expected',
     [
-        (OpenAIConfig(model='test'), OpenAIConfig(model='test')),
-        ({'model': 'test'}, OpenAIConfig(model='test')),
-        (
-            ModelConfig(temperature=0.7),
-            OpenAIConfig(temperature=0.7),
-        ),
-        (
-            None,
-            Exception(),
-        ),
+        ({'model': 'test'}, {'model': 'test'}),
+        ({'temperature': 0.7, 'top_k': 10}, {'temperature': 0.7}),
+        (None, {}),
+        (123, Exception()),
     ],
 )
 def test_normalize_config(config: object, expected: object) -> None:
     """Tests for _normalize_config."""
     if isinstance(expected, Exception):
-        with pytest.raises(ValueError, match=r'Expected request.config to be a dict or OpenAIConfig, got .*'):
+        with pytest.raises(ValueError, match=r'Expected request.config to be a dict or Mapping, got .*'):
             OpenAIModel.normalize_config(config)
     else:
         response = OpenAIModel.normalize_config(config)
