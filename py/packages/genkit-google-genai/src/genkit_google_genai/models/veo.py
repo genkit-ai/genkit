@@ -22,6 +22,7 @@ implements the background polling operation pattern.
 
 Example:
     ```python
+    import asyncio
     from genkit import Genkit
     from genkit_google_genai import GoogleAI
 
