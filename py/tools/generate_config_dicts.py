@@ -54,11 +54,7 @@ def collect_referenced_types(node: ast.AST) -> set[str]:
 
 def unwrap_annotated(node: ast.AST | None) -> ast.AST | None:
     """Extract the underlying type node from an Annotated[Type, ...] AST subscript."""
-    if (
-        isinstance(node, ast.Subscript)
-        and isinstance(node.value, ast.Name)
-        and node.value.id == 'Annotated'
-    ):
+    if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id == 'Annotated':
         slice_node = node.slice
         if isinstance(slice_node, ast.Tuple) and slice_node.elts:
             return slice_node.elts[0]
