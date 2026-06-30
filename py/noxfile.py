@@ -16,7 +16,7 @@
 
 """This file is used to run the test suite for the project using nox."""
 
-import nox
+import nox  # type: ignore
 
 # See: https://github.com/astral-sh/uv/issues/6579
 nox.options.default_venv_backend = 'uv|virtualenv'

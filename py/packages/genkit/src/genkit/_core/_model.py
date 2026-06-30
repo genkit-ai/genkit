@@ -117,7 +117,7 @@ class Message(MessageData):
                     metadata=message.metadata,
                 )
         else:
-            super().__init__(**kwargs)  # type: ignore[arg-type]
+            super().__init__(**kwargs)  # type: ignore
 
     def __eq__(self, other: object) -> bool:
         """Compare messages by role, content, and metadata."""

@@ -125,7 +125,7 @@ async def test_simple_prompt_with_override_config() -> None:
     # Config is MERGED: prompt config (banana: true) + opts config (temperature: 12)
     want_txt = '[ECHO] user: "hi" {"temperature":12.0,"banana":true}'
 
-    my_prompt = ai.define_prompt(prompt='hi', config={'banana': True})  # ty: ignore[invalid-key]
+    my_prompt = ai.define_prompt(prompt='hi', config={'banana': True})  # type: ignore
 
     # Pass config via kwargs — this MERGES with prompt config
     response = await my_prompt(config={'temperature': 12})
@@ -524,7 +524,7 @@ async def test_config_merge_priority() -> None:
 
     my_prompt = ai.define_prompt(
         prompt='test',
-        config={'temperature': 0.5, 'banana': 'yellow'},  # ty: ignore[invalid-key]
+        config={'temperature': 0.5, 'banana': 'yellow'},  # type: ignore
     )
 
     # New API: runtime config is MERGED with prompt config

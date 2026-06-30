@@ -1031,7 +1031,7 @@ async def resolve_parameters(
 
 async def action_to_generate_request(
     options: GenerateActionOptions, resolved_tools: list[Action[Any, Any, Any]], _model: Action[Any, Any, Any]
-) -> ModelRequest:
+) -> ModelRequest[Any]:
     """Convert GenerateActionOptions to a ModelRequest with tool definitions."""
     # TODO(#4340): add warning when tools are not supported in ModelInfo
     # TODO(#4341): add warning when toolChoice is not supported in ModelInfo
@@ -1041,11 +1041,11 @@ async def action_to_generate_request(
     out_schema = output.json_schema if output else None
     if out_schema is not None and hasattr(out_schema, 'model_dump'):
         out_schema = out_schema.model_dump()
-    return ModelRequest(
+    return ModelRequest[Any](
         # Field validators auto-wrap MessageData -> Message and DocumentData -> Document
-        messages=options.messages,  # type: ignore[arg-type]
-        config=options.config if options.config is not None else {},  # type: ignore[arg-type]
-        docs=options.docs if options.docs else None,  # type: ignore[arg-type]
+        messages=options.messages,  # type: ignore
+        config=options.config if options.config is not None else {},  # type: ignore
+        docs=options.docs if options.docs else None,  # type: ignore
         tools=tool_defs,
         tool_choice=options.tool_choice,
         output_format=output.format if output else None,

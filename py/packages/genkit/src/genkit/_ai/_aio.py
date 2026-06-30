@@ -798,7 +798,7 @@ class Genkit:
             try:
                 async with anyio.create_task_group() as tg:
 
-                    async def _handle_sigterm(tg_: anyio.abc.TaskGroup) -> None:  # type: ignore[name-defined]
+                    async def _handle_sigterm(tg_: anyio.abc.TaskGroup) -> None:  # type: ignore
                         with anyio.open_signal_receiver(signal.SIGTERM) as sigs:
                             async for _ in sigs:
                                 tg_.cancel_scope.cancel()
@@ -1211,7 +1211,7 @@ class Genkit:
         response = (
             await embed_action.run(
                 EmbedRequest(
-                    input=documents,  # pyright: ignore[reportArgumentType]
+                    input=documents,  # type: ignore
                     options=final_options,
                 )
             )
@@ -1242,7 +1242,7 @@ class Genkit:
         if embed_action is None:
             raise ValueError(f'Embedder "{embedder_name}" not found')
 
-        response = (await embed_action.run(EmbedRequest(input=documents, options=options))).response  # type: ignore[arg-type]
+        response = (await embed_action.run(EmbedRequest(input=documents, options=options))).response  # type: ignore
         return response.embeddings
 
     async def evaluate(

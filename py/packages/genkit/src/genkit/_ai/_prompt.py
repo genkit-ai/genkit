@@ -370,7 +370,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             **opts: Runtime prompt options (e.g. model, tools, config).
         """
         # ty doesn't infer Unpack[TD] as TD in function body (PEP 692 gap)
-        return await self._call_impl(input, opts)  # ty: ignore[invalid-argument-type]
+        return await self._call_impl(input, opts)  # type: ignore
 
     async def _call_impl(
         self,
@@ -462,7 +462,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         Same keyword options as ``__call__`` (see PromptGenerateOptions).
         """
         # ty treats **opts as a plain dict here; callers are still validated against PromptGenerateOptions.
-        call_opts: PromptGenerateOptions = opts  # ty: ignore[invalid-assignment]
+        call_opts: PromptGenerateOptions = opts  # type: ignore
         _child_registry, gen_options = await _prepare(self, input, call_opts)
         return gen_options
 
@@ -683,16 +683,16 @@ async def to_generate_action_options(
 
     return GenerateActionOptions(
         model=model,
-        messages=resolved_msgs,  # type: ignore[arg-type]
+        messages=resolved_msgs,  # type: ignore
         config=options.config,
         tools=tools_refs,
         return_tool_requests=options.return_tool_requests,
         tool_choice=options.tool_choice,
         output=output,
         max_turns=options.max_turns,
-        docs=merged_docs,  # type: ignore[arg-type]
+        docs=merged_docs,  # type: ignore
         resume=resume,
-        use=options.use,  # type: ignore[arg-type]
+        use=options.use,  # type: ignore
     )
 
 
@@ -719,7 +719,7 @@ def resume_from_prompt_call_opts(opts: PromptGenerateOptions) -> Resume | None:
     )
 
 
-async def to_generate_request(registry: Registry, options: GenerateActionOptions) -> ModelRequest:
+async def to_generate_request(registry: Registry, options: GenerateActionOptions) -> ModelRequest[Any]:
     """Convert GenerateActionOptions to ModelRequest, resolving tool names."""
     tools: list[Action] = []
     if options.tools:
@@ -740,11 +740,11 @@ async def to_generate_request(registry: Registry, options: GenerateActionOptions
         schema_=options.output.json_schema if options.output else None,
         constrained=options.output.constrained if options.output else None,
     )
-    return ModelRequest(
+    return ModelRequest[Any](
         # Field validators auto-wrap MessageData -> Message and DocumentData -> Document
-        messages=options.messages,  # type: ignore[arg-type]
-        config=options.config if options.config is not None else {},  # type: ignore[arg-type]
-        docs=options.docs if options.docs else None,  # type: ignore[arg-type]
+        messages=options.messages,  # type: ignore
+        config=options.config if options.config is not None else {},  # type: ignore
+        docs=options.docs if options.docs else None,  # type: ignore
         tools=tool_defs,
         tool_choice=options.tool_choice,
         output_format=output_config.format,
@@ -884,7 +884,7 @@ async def render_message_prompt(
             data=DataArgument[dict[str, Any]](
                 input=flattened_data,
                 context=context,
-                messages=messages_,  # type: ignore[arg-type]
+                messages=messages_,  # type: ignore
             ),
             options=PromptMetadata(
                 input=PromptInputConfig(

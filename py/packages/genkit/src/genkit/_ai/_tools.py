@@ -436,10 +436,10 @@ def define_interrupt(
         # Interrupt tools accept arbitrary JSON args like any tool.
         meta = None
         if callable(request_metadata):
-            meta = request_metadata(input)
+            meta = request_metadata(input)  # type: ignore
         elif request_metadata is not None:
             meta = request_metadata
-        raise Interrupt(meta)
+        raise Interrupt(cast(Any, meta))
 
     return _define_tool(
         registry,

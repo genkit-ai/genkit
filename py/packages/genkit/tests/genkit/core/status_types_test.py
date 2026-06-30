@@ -72,7 +72,7 @@ def test_status_validation() -> None:
 
     # Test with extra fields
     with pytest.raises(ValidationError):
-        Status(name='OK', extra_field='value')  # type: ignore[call-arg]
+        Status(name='OK', extra_field='value')  # type: ignore
 
 
 def test_http_status_code_mapping() -> None:

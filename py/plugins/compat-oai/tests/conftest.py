@@ -17,6 +17,8 @@
 
 """Test configuration for the OpenAI compatible plugin."""
 
+from typing import Any
+
 import pytest
 
 from genkit import (
@@ -31,7 +33,7 @@ from genkit import (
 @pytest.fixture
 def sample_request() -> ModelRequest:
     """Fixture to create a sample ModelRequest object."""
-    return ModelRequest(
+    return ModelRequest[Any](
         messages=[
             Message(
                 role=Role.SYSTEM,

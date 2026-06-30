@@ -23,7 +23,7 @@ import json
 import os
 import signal
 import threading
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -266,7 +266,7 @@ def create_reflection_asgi_app(
         ],
         lifespan=lifespan,
     )
-    app.active_actions = active_actions  # type: ignore[attr-defined]
+    app.active_actions = active_actions  # type: ignore
     return app
 
 

@@ -31,7 +31,7 @@ from genkit._core._typing import (
 try:
     from jsonata import Jsonata
 except ImportError:
-    Jsonata = None  # type: ignore[misc, assignment]
+    Jsonata: Any = None
 
 PROVIDER = 'genkitEval'
 

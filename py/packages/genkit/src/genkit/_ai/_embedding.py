@@ -76,7 +76,7 @@ class Embedder:
         """Generate embeddings for a list of documents."""
         # Document veneer is compatible with DocumentData at runtime
         return (
-            await self._action.run(EmbedRequest(input=documents, options=options))  # type: ignore[arg-type]
+            await self._action.run(EmbedRequest(input=documents, options=options))  # type: ignore
         ).response
 
 

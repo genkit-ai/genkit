@@ -73,7 +73,7 @@ def urlconf(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     module = types.ModuleType('genkit_django_tests_urls')
     # Django reads urlpatterns off the module object; type checkers can't see
     # this attribute on `types.ModuleType`, hence the suppressions.
-    module.urlpatterns = [  # type: ignore[attr-defined]  # pyrefly: ignore[missing-attribute]
+    module.urlpatterns = [  # type: ignore
         path('chat', views['say_hi']),
         path('error_flow', views['raise_error']),
     ]
