@@ -94,6 +94,67 @@ func TestDefineEmbedderRegistersByModel(t *testing.T) {
 	}
 }
 
+func TestDefineEmbedderRegistersDistinctModelsOnSameServer(t *testing.T) {
+	g, o := newTestGenkit(t, "http://localhost:11434")
+
+	firstModel := "nomic-embed-text"
+	secondModel := "mxbai-embed-large"
+
+	firstDefined := o.DefineEmbedder(g, firstModel, 768, nil)
+	secondDefined := o.DefineEmbedder(g, secondModel, 1024, nil)
+
+	if !IsDefinedEmbedder(g, firstModel) {
+		t.Fatalf("expected %q embedder to be registered", firstModel)
+	}
+	if !IsDefinedEmbedder(g, secondModel) {
+		t.Fatalf("expected %q embedder to be registered", secondModel)
+	}
+
+	firstLookup := Embedder(g, firstModel)
+	secondLookup := Embedder(g, secondModel)
+
+	if firstLookup == nil {
+		t.Fatalf("expected lookup for %q to succeed", firstModel)
+	}
+	if secondLookup == nil {
+		t.Fatalf("expected lookup for %q to succeed", secondModel)
+	}
+
+	firstDefinedAction, ok := firstDefined.(api.Action)
+	if !ok {
+		t.Fatalf("expected %q embedder to implement api.Action", firstModel)
+	}
+	secondDefinedAction, ok := secondDefined.(api.Action)
+	if !ok {
+		t.Fatalf("expected %q embedder to implement api.Action", secondModel)
+	}
+
+	firstLookupAction, ok := firstLookup.(api.Action)
+	if !ok {
+		t.Fatalf("expected lookup for %q to implement api.Action", firstModel)
+	}
+	secondLookupAction, ok := secondLookup.(api.Action)
+	if !ok {
+		t.Fatalf("expected lookup for %q to implement api.Action", secondModel)
+	}
+
+	if got, want := firstDefinedAction.Desc().Name, api.NewName(provider, firstModel); got != want {
+		t.Fatalf("first Desc().Name = %q, want %q", got, want)
+	}
+	if got, want := secondDefinedAction.Desc().Name, api.NewName(provider, secondModel); got != want {
+		t.Fatalf("second Desc().Name = %q, want %q", got, want)
+	}
+	if got, want := firstLookupAction.Desc().Name, api.NewName(provider, firstModel); got != want {
+		t.Fatalf("lookup first Desc().Name = %q, want %q", got, want)
+	}
+	if got, want := secondLookupAction.Desc().Name, api.NewName(provider, secondModel); got != want {
+		t.Fatalf("lookup second Desc().Name = %q, want %q", got, want)
+	}
+	if firstDefinedAction.Desc().Name == secondDefinedAction.Desc().Name {
+		t.Fatal("expected embedders with different models to have distinct registration names")
+	}
+}
+
 func TestDefineEmbedderSetsDefaultMetadata(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
