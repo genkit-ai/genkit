@@ -177,7 +177,7 @@ async def test_generate(stream: bool, sample_request: ModelRequest) -> None:
 def test_normalize_config(config: object, expected: object) -> None:
     """Tests for _normalize_config."""
     if isinstance(expected, Exception):
-        with pytest.raises(ValueError, match=r'Expected request.config to be a dict, got .*'):
+        with pytest.raises(ValueError, match=r'Expected request.config to be a dict or Mapping, got .*'):
             OpenAIModel.normalize_config(config)
     else:
         response = OpenAIModel.normalize_config(config)
