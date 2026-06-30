@@ -66,12 +66,21 @@ def generate_typedict_from_ast(class_node: ast.ClassDef, typedict_name: str) -> 
             field_name = item.target.id
             if field_name.startswith('_') or field_name in ('model_config',):
                 continue
-            if item.annotation:
-                referenced_symbols.update(collect_referenced_types(item.annotation))
-            raw_type = ast_to_type_str(item.annotation)
-            if raw_type.startswith('Annotated['):
-                inner = raw_type[10:-1].split(',')[0].strip()
-                raw_type = inner
+            annotation_node = item.annotation
+            if (
+                isinstance(annotation_node, ast.Subscript)
+                and isinstance(annotation_node.value, ast.Name)
+                and annotation_node.value.id == 'Annotated'
+            ):
+                slice_node = annotation_node.slice
+                if isinstance(slice_node, ast.Tuple):
+                    annotation_node = slice_node.elts[0]
+                elif hasattr(slice_node, 'value') and isinstance(slice_node.value, ast.Tuple):
+                    annotation_node = slice_node.value.elts[0]
+
+            if annotation_node:
+                referenced_symbols.update(collect_referenced_types(annotation_node))
+            raw_type = ast_to_type_str(annotation_node)
             clean_type = strip_optional(raw_type)
             lines.append(f'    {field_name}: {clean_type}')
             fields_found += 1

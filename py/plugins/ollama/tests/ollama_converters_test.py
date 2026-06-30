@@ -96,7 +96,7 @@ class TestBuildRequestOptionsDict:
         got = build_request_options_dict(config)
         assert got.get('temperature') == 0.7
         assert got.get('num_predict') == 100
-        assert got.get('topP') == 0.9
+        assert got.get('top_p') == 0.9
 
     def test_dict_passthrough(self) -> None:
         """Test Dict passthrough."""

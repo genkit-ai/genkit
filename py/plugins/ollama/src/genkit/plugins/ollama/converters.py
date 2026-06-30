@@ -115,7 +115,7 @@ def build_request_options_dict(
         if config.top_k is not None:
             result['top_k'] = config.top_k
         if config.top_p is not None:
-            result['topP'] = config.top_p
+            result['top_p'] = config.top_p
         if config.stop_sequences is not None:
             result['stop'] = config.stop_sequences
         if config.temperature is not None:
@@ -128,8 +128,8 @@ def build_request_options_dict(
         res = dict(config)
         if 'max_output_tokens' in res:
             res['num_predict'] = res.pop('max_output_tokens')
-        if 'top_p' in res:
-            res['topP'] = res.pop('top_p')
+        if 'topP' in res:
+            res['top_p'] = res.pop('topP')
         if 'stop_sequences' in res:
             res['stop'] = res.pop('stop_sequences')
         return res
