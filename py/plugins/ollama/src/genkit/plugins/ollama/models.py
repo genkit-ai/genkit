@@ -271,7 +271,7 @@ class OllamaModel:
                 for tool in request.tools
             ]
             if request.tools
-            else None
+            else []
         )
         options = self.build_request_options(config=request.config)
 
