@@ -21,12 +21,24 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import ollama as ollama_api
 import pytest
 from pydantic import BaseModel
 
-from genkit import ActionKind, Media, MediaPart, Message, ModelRequest, Part, Role, TextPart
+from genkit import (
+    ActionKind,
+    Document,
+    EmbedRequest,
+    Media,
+    MediaPart,
+    Message,
+    ModelRequest,
+    Part,
+    Role,
+    TextPart,
+)
 from genkit.plugin_api import to_json_schema
-from genkit.plugins.ollama import Ollama, OllamaConnectionError, ollama_name
+from genkit.plugins.ollama import Ollama, OllamaConnectionError, RequestHeaderParams, ollama_name
 from genkit.plugins.ollama._errors import wrap_connection_errors
 from genkit.plugins.ollama.constants import OllamaAPITypes
 from genkit.plugins.ollama.embedders import EmbeddingDefinition
@@ -280,7 +292,7 @@ def test_make_client_propagates_static_headers() -> None:
 async def test_sync_callable_headers_resolved_per_request() -> None:
     """A sync header callable is resolved on every request, not once at init()."""
     tokens = iter(['t1', 't2'])
-    plugin = Ollama(request_headers=lambda: {'Authorization': next(tokens)})
+    plugin = Ollama(request_headers=lambda params: {'Authorization': next(tokens)})
 
     # init() does not eagerly resolve a callable.
     assert await plugin.init() == []
@@ -299,7 +311,7 @@ async def test_async_callable_headers_resolved_per_request() -> None:
     """An async header callable is awaited on every request, not once at init()."""
     tokens = iter(['a1', 'a2'])
 
-    async def headers() -> dict[str, str]:
+    async def headers(params: RequestHeaderParams) -> dict[str, str]:
         return {'Authorization': next(tokens)}
 
     plugin = Ollama(request_headers=headers)
@@ -313,6 +325,67 @@ async def test_async_callable_headers_resolved_per_request() -> None:
 
     assert async_client.call_args_list[0].kwargs['headers'] == {'Authorization': 'a1'}
     assert async_client.call_args_list[1].kwargs['headers'] == {'Authorization': 'a2'}
+
+
+@pytest.mark.asyncio
+async def test_model_action_passes_request_context_to_header_callable() -> None:
+    """A model header callable receives the server address, model, and model request."""
+    captured: dict[str, Any] = {}
+
+    def make_headers(params: RequestHeaderParams) -> dict[str, str]:
+        captured['params'] = params
+        return {'Authorization': 'Bearer tok'}
+
+    model_def = ModelDefinition(name='m', api_type=OllamaAPITypes.CHAT)
+    plugin = Ollama(models=[model_def], server_address='http://example:11434', request_headers=make_headers)
+
+    sdk_client = AsyncMock()
+    sdk_client.chat.return_value = ollama_api.ChatResponse(message=ollama_api.Message(role='assistant', content='hi'))
+
+    action = plugin._create_model_action(ollama_name('m'))
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])])
+
+    with patch('ollama.AsyncClient', return_value=sdk_client) as async_client:
+        await action._fn(request, None)
+
+    params = cast(RequestHeaderParams, captured['params'])
+    assert params.server_address == 'http://example:11434'
+    assert params.model is model_def
+    assert params.model_request is request
+    assert params.embed_request is None
+    # The resolved header is applied to the freshly built per-request client.
+    assert async_client.call_args.kwargs['headers'] == {'Authorization': 'Bearer tok'}
+
+
+@pytest.mark.asyncio
+async def test_embedder_action_passes_request_context_to_header_callable() -> None:
+    """An embedder header callable receives the server address, embedder, and embed request."""
+    captured: dict[str, Any] = {}
+
+    def make_headers(params: RequestHeaderParams) -> dict[str, str]:
+        captured['params'] = params
+        return {'X-Token': 'abc'}
+
+    plugin = Ollama(
+        embedders=[EmbeddingDefinition(name='e')],
+        server_address='http://example:11434',
+        request_headers=make_headers,
+    )
+
+    sdk_client = AsyncMock()
+    sdk_client.embed.return_value = ollama_api.EmbedResponse(embeddings=[[0.1, 0.2]])
+
+    action = plugin._create_embedder_action(ollama_name('e'))
+    request = EmbedRequest(input=[Document.from_text(text='hello')])
+
+    with patch('ollama.AsyncClient', return_value=sdk_client):
+        await action._fn(request)
+
+    params = cast(RequestHeaderParams, captured['params'])
+    assert params.server_address == 'http://example:11434'
+    assert params.model is not None and params.model.name == 'e'
+    assert params.embed_request is request
+    assert params.model_request is None
 
 
 @pytest.mark.asyncio
