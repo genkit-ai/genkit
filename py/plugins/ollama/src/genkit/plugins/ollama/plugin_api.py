@@ -141,7 +141,9 @@ class Ollama(Plugin):
                 Ollama server URL if not provided.
             request_headers: Optional HTTP headers to include with requests to the
                 Ollama server. May be a static dict, or a sync/async callable that
-                returns a dict (resolved once during ``init()``).
+                returns a dict. A callable is resolved per request (matching the JS
+                plugin) so expiring auth tokens take effect; a static dict is applied
+                once to a cached client.
             timeout: Optional request timeout (seconds) forwarded to the underlying
                 httpx client.
         """
@@ -150,21 +152,45 @@ class Ollama(Plugin):
         self.server_address = server_address or DEFAULT_OLLAMA_SERVER_URL
 
         self._request_headers_source = request_headers
-        # Static dicts are usable immediately; callables resolve during init().
+        # Static dicts are baked into the cached client; callables resolve per request.
         self.request_headers = dict(request_headers) if isinstance(request_headers, dict) else {}
         self.timeout = timeout
         self.client = loop_local_client(self._make_client)
 
-    def _make_client(self) -> ollama_api.AsyncClient:
-        """Build an Ollama AsyncClient with the resolved headers and timeout.
+    def _make_client(self, headers: dict[str, str] | None = None) -> ollama_api.AsyncClient:
+        """Build an Ollama AsyncClient with the given (or static) headers and timeout.
+
+        Args:
+            headers: Per-request headers to use instead of the static ``request_headers``
+                (e.g. resolved from a callable). Defaults to the static headers, which is
+                what the per-event-loop cached client is built with.
 
         Returns:
             A new ``ollama.AsyncClient`` targeting the configured server.
         """
-        kwargs: dict[str, Any] = {'host': self.server_address, 'headers': self.request_headers}
+        kwargs: dict[str, Any] = {
+            'host': self.server_address,
+            'headers': self.request_headers if headers is None else headers,
+        }
         if self.timeout is not None:
             kwargs['timeout'] = self.timeout
         return ollama_api.AsyncClient(**kwargs)
+
+    async def _client_for_request(self) -> ollama_api.AsyncClient:
+        """Return the Ollama client to use for a single request.
+
+        Static (or absent) headers are baked into a per-event-loop cached client.
+        A header *callable* is resolved on every call and applied to a fresh client,
+        so expiring auth tokens or per-request headers take effect — matching the JS
+        plugin, which resolves ``request_headers`` per request.
+
+        Returns:
+            The Ollama client for this request.
+        """
+        if callable(self._request_headers_source):
+            headers = await self._resolve_request_headers()
+            return self._make_client(headers=headers)
+        return self.client()
 
     async def _resolve_request_headers(self) -> dict[str, str]:
         """Resolve the configured request headers to a plain dict.
@@ -192,10 +218,8 @@ class Ollama(Plugin):
         Returns:
             List of Action objects for pre-configured models and embedders.
         """
-        # Resolve callable headers before any client is built. Clients are
-        # created lazily per request, so they pick up the resolved headers.
-        self.request_headers = await self._resolve_request_headers()
-
+        # Header callables are resolved per request (see _client_for_request), so
+        # there is nothing to resolve eagerly here; static headers are already set.
         actions = []
 
         # Register pre-configured models
@@ -256,6 +280,7 @@ class Ollama(Plugin):
         model = OllamaModel(
             client=self.client,
             model_definition=model_ref,
+            server_address=self.server_address,
         )
 
         action_metadata = model_action_metadata(
@@ -264,11 +289,12 @@ class Ollama(Plugin):
             info=ollama_model_info(model_ref, f'Ollama - {clean_name}'),
         )
 
-        server_address = self.server_address
-
         async def _run(request: ModelRequest, ctx: ActionRunContext | None = None) -> ModelResponse:
-            async with wrap_connection_errors(server_address):
-                return await model.generate(request, ctx)
+            # Resolve per-request headers (no-op for static headers) and let
+            # OllamaModel wrap connection errors at the Ollama SDK boundary, so a
+            # failed media-URL fetch isn't misreported as an Ollama server outage.
+            client = await self._client_for_request()
+            return await model.generate(request, ctx, client=client)
 
         action = Action(
             kind=ActionKind.MODEL,
@@ -304,8 +330,10 @@ class Ollama(Plugin):
         server_address = self.server_address
 
         async def _run(request: EmbedRequest) -> EmbedResponse:
+            # Embedding requests never fetch media, so the whole SDK call is wrapped.
+            client = await self._client_for_request()
             async with wrap_connection_errors(server_address):
-                return await embedder.embed(request)
+                return await embedder.embed(request, client=client)
 
         return Action(
             kind=ActionKind.EMBEDDER,
@@ -331,7 +359,7 @@ class Ollama(Plugin):
                 - info (dict): The metadata dictionary describing the model configuration and properties.
                 - config_schema (type): The schema class used for validating the model's configuration.
         """
-        client = self.client()
+        client = await self._client_for_request()
         async with wrap_connection_errors(self.server_address):
             response = await client.list()
 

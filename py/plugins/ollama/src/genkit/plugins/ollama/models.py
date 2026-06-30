@@ -111,7 +111,9 @@ from genkit import (
 )
 from genkit.model import get_basic_usage_stats
 from genkit.plugin_api import ActionRunContext, get_cached_client
+from genkit.plugins.ollama._errors import wrap_connection_errors
 from genkit.plugins.ollama.constants import (
+    DEFAULT_OLLAMA_SERVER_URL,
     OllamaAPITypes,
 )
 
@@ -185,7 +187,12 @@ class OllamaModel:
     allowing it to be integrated into the Genkit framework for generative tasks.
     """
 
-    def __init__(self, client: Callable, model_definition: ModelDefinition) -> None:
+    def __init__(
+        self,
+        client: Callable,
+        model_definition: ModelDefinition,
+        server_address: str = DEFAULT_OLLAMA_SERVER_URL,
+    ) -> None:
         """Initializes the OllamaModel.
 
         Sets up the client factory for communicating with the Ollama server and stores
@@ -199,9 +206,11 @@ class OllamaModel:
             client: A callable that returns an asynchronous Ollama client instance.
             model_definition: The definition describing the specific Ollama model
                 to be used (e.g., its name, API type, supported features).
+            server_address: The Ollama server URL, surfaced in connectivity errors.
         """
         self._client_factory = client
         self.model_definition = model_definition
+        self._server_address = server_address
 
     def _get_client(self) -> ollama_api.AsyncClient:
         """Creates a fresh async client bound to the current event loop.
@@ -214,12 +223,20 @@ class OllamaModel:
         """
         return self._client_factory()
 
-    async def generate(self, request: ModelRequest, ctx: ActionRunContext | None = None) -> ModelResponse:
+    async def generate(
+        self,
+        request: ModelRequest,
+        ctx: ActionRunContext | None = None,
+        client: ollama_api.AsyncClient | None = None,
+    ) -> ModelResponse:
         """Generate a response from Ollama.
 
         Args:
             request: The request to generate a response for.
             ctx: The context to generate a response for.
+            client: An optional pre-resolved Ollama client to use for this request
+                (e.g. one built with per-request headers). Falls back to the stored
+                client factory when omitted.
 
         Returns:
             The generated response.
@@ -234,7 +251,7 @@ class OllamaModel:
         )
 
         if self.model_definition.api_type == OllamaAPITypes.CHAT:
-            api_response = await self._chat_with_ollama(request=request, ctx=ctx)
+            api_response = await self._chat_with_ollama(request=request, ctx=ctx, client=client)
             if api_response:
                 logger.debug(
                     'Ollama raw API response',
@@ -246,7 +263,7 @@ class OllamaModel:
                     thinking_enabled=self._thinking_requested(request.config),
                 )
         elif self.model_definition.api_type == OllamaAPITypes.GENERATE:
-            api_response = await self._generate_ollama_response(request=request, ctx=ctx)
+            api_response = await self._generate_ollama_response(request=request, ctx=ctx, client=client)
             if api_response:
                 logger.debug(
                     'Ollama raw API response',
@@ -285,18 +302,28 @@ class OllamaModel:
         )
 
     async def _chat_with_ollama(
-        self, request: ModelRequest, ctx: ActionRunContext | None = None
+        self,
+        request: ModelRequest,
+        ctx: ActionRunContext | None = None,
+        client: ollama_api.AsyncClient | None = None,
     ) -> ollama_api.ChatResponse | None:
         """Chat with Ollama.
 
         Args:
             request: The request to chat with Ollama for.
             ctx: The context to chat with Ollama for.
+            client: An optional pre-resolved Ollama client; falls back to the
+                stored client factory when omitted.
 
         Returns:
             The chat response from Ollama.
         """
+        # Resolve media URLs first. build_chat_messages may perform HTTP fetches
+        # for image parts, and those must stay *outside* wrap_connection_errors so
+        # an image-host failure isn't misreported as an Ollama server outage.
         messages = await self.build_chat_messages(request)
+        if client is None:
+            client = self._get_client()
         streaming_request = self.is_streaming_request(ctx=ctx)
 
         if request.output_format or request.output_schema:
@@ -324,96 +351,112 @@ class OllamaModel:
         options = self.build_request_options(config=request.config)
         extra_kwargs = self.build_request_kwargs(config=request.config)
 
+        # Only the Ollama SDK call (and, when streaming, its iteration — where a
+        # connection failure can first surface) is wrapped, so transport errors are
+        # attributed to the Ollama server rather than to media-URL fetches above.
         if streaming_request:
-            # Streaming call with literal stream=True for proper overload resolution
-            chat_response = await self._get_client().chat(  # type: ignore[no-matching-overload]
-                model=self.model_definition.name,
-                messages=messages,
-                tools=tools,
-                options=options,
-                format=fmt,
-                stream=True,
-                **extra_kwargs,
-            )
-            idx = 0
-            async for chunk in chat_response:
-                idx += 1
-                role = self._from_ollama_role(chunk.message.role)
-                if ctx:
-                    ctx.send_chunk(
-                        chunk=ModelResponseChunk(
-                            role=role,
-                            index=idx,
-                            content=self._build_multimodal_chat_response(chat_response=chunk),
+            async with wrap_connection_errors(self._server_address):
+                # Streaming call with literal stream=True for proper overload resolution
+                chat_response = await client.chat(  # type: ignore[no-matching-overload]
+                    model=self.model_definition.name,
+                    messages=messages,
+                    tools=tools,
+                    options=options,
+                    format=fmt,
+                    stream=True,
+                    **extra_kwargs,
+                )
+                idx = 0
+                async for chunk in chat_response:
+                    idx += 1
+                    role = self._from_ollama_role(chunk.message.role)
+                    if ctx:
+                        ctx.send_chunk(
+                            chunk=ModelResponseChunk(
+                                role=role,
+                                index=idx,
+                                content=self._build_multimodal_chat_response(chat_response=chunk),
+                            )
                         )
-                    )
             # For streaming requests, we return None because the response chunks
             # have already been sent via ctx.send_chunk() above. The async generator
             # is now exhausted, and the caller should not expect a return value.
             return None
         else:
-            # Non-streaming call with literal stream=False for proper overload resolution
-            chat_response = await self._get_client().chat(  # type: ignore[no-matching-overload]
-                model=self.model_definition.name,
-                messages=messages,
-                tools=tools,
-                options=options,
-                format=fmt,
-                stream=False,
-                **extra_kwargs,
-            )
+            async with wrap_connection_errors(self._server_address):
+                # Non-streaming call with literal stream=False for proper overload resolution
+                chat_response = await client.chat(  # type: ignore[no-matching-overload]
+                    model=self.model_definition.name,
+                    messages=messages,
+                    tools=tools,
+                    options=options,
+                    format=fmt,
+                    stream=False,
+                    **extra_kwargs,
+                )
             return chat_response
 
     async def _generate_ollama_response(
-        self, request: ModelRequest, ctx: ActionRunContext | None = None
+        self,
+        request: ModelRequest,
+        ctx: ActionRunContext | None = None,
+        client: ollama_api.AsyncClient | None = None,
     ) -> ollama_api.GenerateResponse | None:
         """Generate a response from Ollama.
 
         Args:
             request: The request to generate a response for.
             ctx: The context to generate a response for.
+            client: An optional pre-resolved Ollama client; falls back to the
+                stored client factory when omitted.
 
         Returns:
             The generated response.
         """
         prompt = self.build_prompt(request)
+        if client is None:
+            client = self._get_client()
         streaming_request = self.is_streaming_request(ctx=ctx)
         options = self.build_request_options(config=request.config)
         extra_kwargs = self.build_request_kwargs(config=request.config)
 
+        # Wrap only the Ollama SDK call (and its streamed iteration) so transport
+        # errors are attributed to the Ollama server, matching the chat path.
         if streaming_request:
-            # Streaming call with literal stream=True for proper overload resolution
-            generate_response = await self._get_client().generate(
-                model=self.model_definition.name,
-                prompt=prompt,
-                options=options,
-                stream=True,
-                **extra_kwargs,
-            )
-            idx = 0
-            async for chunk in generate_response:
-                idx += 1
-                if ctx:
-                    ctx.send_chunk(
-                        chunk=ModelResponseChunk(
-                            role=Role.MODEL,
-                            index=idx,
-                            content=self._build_generate_response(generate_response=chunk),
+            async with wrap_connection_errors(self._server_address):
+                # Streaming call with literal stream=True for proper overload resolution
+                generate_response = await client.generate(
+                    model=self.model_definition.name,
+                    prompt=prompt,
+                    options=options,
+                    stream=True,
+                    **extra_kwargs,
+                )
+                idx = 0
+                async for chunk in generate_response:
+                    idx += 1
+                    if ctx:
+                        ctx.send_chunk(
+                            chunk=ModelResponseChunk(
+                                role=Role.MODEL,
+                                index=idx,
+                                content=self._build_generate_response(generate_response=chunk),
+                            )
                         )
-                    )
             # For streaming requests, we return None because the response chunks
             # have already been sent via ctx.send_chunk() above. The async generator
             # is now exhausted, and the caller should not expect a return value.
             return None
         else:
-            # Non-streaming call with literal stream=False for proper overload resolution
-            generate_response = await self._get_client().generate(
-                model=self.model_definition.name,
-                prompt=prompt,
-                options=options,
-                stream=False,
-                **extra_kwargs,
-            )
+            async with wrap_connection_errors(self._server_address):
+                # Non-streaming call with literal stream=False for proper overload resolution
+                generate_response = await client.generate(
+                    model=self.model_definition.name,
+                    prompt=prompt,
+                    options=options,
+                    stream=False,
+                    **extra_kwargs,
+                )
             return generate_response
 
     @staticmethod

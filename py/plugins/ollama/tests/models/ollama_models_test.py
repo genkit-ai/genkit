@@ -99,7 +99,9 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         response = await ollama_model.generate(self.request, self.ctx)
 
         # Assertions
-        cast(AsyncMock, ollama_model._chat_with_ollama).assert_awaited_once_with(request=self.request, ctx=self.ctx)
+        cast(AsyncMock, ollama_model._chat_with_ollama).assert_awaited_once_with(
+            request=self.request, ctx=self.ctx, client=None
+        )
         cast(AsyncMock, ollama_model._generate_ollama_response).assert_not_awaited()
         cast(MagicMock, self.ctx.send_chunk).assert_not_called()
         cast(MagicMock, ollama_model._build_multimodal_chat_response).assert_called_once_with(
@@ -156,7 +158,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
 
         # Assertions
         cast(AsyncMock, ollama_model._generate_ollama_response).assert_awaited_once_with(
-            request=self.request, ctx=self.ctx
+            request=self.request, ctx=self.ctx, client=None
         )
         cast(AsyncMock, ollama_model._chat_with_ollama).assert_not_called()
         cast(MagicMock, ollama_model.is_streaming_request).assert_called_with(ctx=self.ctx)
@@ -209,6 +211,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         cast(AsyncMock, ollama_model._chat_with_ollama).assert_awaited_once_with(
             request=self.request,
             ctx=streaming_ctx,
+            client=None,
         )
         cast(MagicMock, ollama_model.is_streaming_request).assert_called_with(
             ctx=streaming_ctx,
@@ -251,6 +254,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         cast(AsyncMock, ollama_model._generate_ollama_response).assert_awaited_once_with(
             request=self.request,
             ctx=streaming_ctx,
+            client=None,
         )
         cast(MagicMock, ollama_model.is_streaming_request).assert_called_with(
             ctx=streaming_ctx,

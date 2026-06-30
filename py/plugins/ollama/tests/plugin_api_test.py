@@ -24,7 +24,7 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
-from genkit import ActionKind, Message, ModelRequest, Part, Role, TextPart
+from genkit import ActionKind, Media, MediaPart, Message, ModelRequest, Part, Role, TextPart
 from genkit.plugin_api import to_json_schema
 from genkit.plugins.ollama import Ollama, OllamaConnectionError, ollama_name
 from genkit.plugins.ollama._errors import wrap_connection_errors
@@ -277,29 +277,53 @@ def test_make_client_propagates_static_headers() -> None:
 
 
 @pytest.mark.asyncio
-async def test_init_resolves_sync_callable_headers() -> None:
-    """A sync callable for request_headers is resolved during init()."""
-    plugin = Ollama(request_headers=lambda: {'A': '1'})
+async def test_sync_callable_headers_resolved_per_request() -> None:
+    """A sync header callable is resolved on every request, not once at init()."""
+    tokens = iter(['t1', 't2'])
+    plugin = Ollama(request_headers=lambda: {'Authorization': next(tokens)})
 
-    actions = await plugin.init()
+    # init() does not eagerly resolve a callable.
+    assert await plugin.init() == []
+    assert plugin.request_headers == {}
 
-    assert actions == []
-    assert plugin.request_headers == {'A': '1'}
+    with patch('ollama.AsyncClient') as async_client:
+        await plugin._client_for_request()
+        await plugin._client_for_request()
+
+    assert async_client.call_args_list[0].kwargs['headers'] == {'Authorization': 't1'}
+    assert async_client.call_args_list[1].kwargs['headers'] == {'Authorization': 't2'}
 
 
 @pytest.mark.asyncio
-async def test_init_resolves_async_callable_headers() -> None:
-    """An async callable for request_headers is awaited during init()."""
+async def test_async_callable_headers_resolved_per_request() -> None:
+    """An async header callable is awaited on every request, not once at init()."""
+    tokens = iter(['a1', 'a2'])
 
     async def headers() -> dict[str, str]:
-        return {'B': '2'}
+        return {'Authorization': next(tokens)}
 
     plugin = Ollama(request_headers=headers)
 
-    actions = await plugin.init()
+    assert await plugin.init() == []
+    assert plugin.request_headers == {}
 
-    assert actions == []
-    assert plugin.request_headers == {'B': '2'}
+    with patch('ollama.AsyncClient') as async_client:
+        await plugin._client_for_request()
+        await plugin._client_for_request()
+
+    assert async_client.call_args_list[0].kwargs['headers'] == {'Authorization': 'a1'}
+    assert async_client.call_args_list[1].kwargs['headers'] == {'Authorization': 'a2'}
+
+
+@pytest.mark.asyncio
+async def test_static_headers_reuse_cached_client() -> None:
+    """Static headers reuse the per-event-loop cached client across requests."""
+    plugin = Ollama(request_headers={'X-Token': 'abc'})
+
+    first = await plugin._client_for_request()
+    second = await plugin._client_for_request()
+
+    assert first is second
 
 
 @pytest.mark.asyncio
@@ -362,6 +386,46 @@ async def test_model_action_wraps_transport_timeout() -> None:
 
     with pytest.raises(OllamaConnectionError):
         await action._fn(request, None)
+
+
+@pytest.mark.asyncio
+async def test_model_action_does_not_wrap_media_fetch_error() -> None:
+    """A failed media-URL fetch surfaces raw, not as an Ollama server outage.
+
+    build_chat_messages resolves image URLs (an HTTP fetch) before any Ollama SDK
+    call. That transport failure must not be relabelled "Cannot reach the Ollama
+    server", which would point users at the wrong fix.
+    """
+    plugin = Ollama(
+        models=[ModelDefinition(name='m', api_type=OllamaAPITypes.CHAT, supports=OllamaSupports(media=True))]
+    )
+
+    # The Ollama SDK client must never be reached: image resolution fails first.
+    client_mock = MagicMock()
+    client_mock.chat = AsyncMock()
+    plugin.client = lambda: client_mock
+
+    image_client = MagicMock()
+    image_client.get = AsyncMock(side_effect=httpx.ConnectError('image host unreachable'))
+
+    action = plugin._create_model_action(ollama_name('m'))
+    request = ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[
+                    Part(root=MediaPart(media=Media(url='http://imgs.example/cat.jpg', content_type='image/jpeg')))
+                ],
+            )
+        ]
+    )
+
+    with patch('genkit.plugins.ollama.models.get_cached_client', return_value=image_client):
+        # The raw httpx.ConnectError propagates; it is not wrapped as OllamaConnectionError.
+        with pytest.raises(httpx.ConnectError):
+            await action._fn(request, None)
+
+    cast(AsyncMock, client_mock.chat).assert_not_called()
 
 
 @pytest.mark.asyncio
