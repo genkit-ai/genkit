@@ -17,7 +17,6 @@
 """Exhaustive tests for models/utils.py utility functions."""
 
 import base64
-
 from typing import Any
 
 import pytest

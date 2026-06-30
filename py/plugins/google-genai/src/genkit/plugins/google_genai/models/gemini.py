@@ -1913,6 +1913,7 @@ class GeminiModel:
             if cfg is None:
                 cfg = genai_types.GenerateContentConfig()
 
+            if has_output:
                 model_name = str(self._version)
                 if request.config:
                     if isinstance(request.config, Mapping):
