@@ -10,12 +10,7 @@ from typing import Any
 from genkit._core._model import CommonModelConfigDict
 from genkit.model import ModelRef, model_ref
 
-from .models.gemini import (
-    FileSearchConfigSchema,
-    FunctionCallingConfig,
-    SafetySettingsSchema,
-    ThinkingConfigSchema,
-)
+from .models.gemini import FileSearchConfigSchema, FunctionCallingConfig, SafetySettingsSchema, ThinkingConfigSchema
 
 
 class GeminiConfigDict(CommonModelConfigDict, total=False):

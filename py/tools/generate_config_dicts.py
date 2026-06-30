@@ -52,6 +52,21 @@ def collect_referenced_types(node: ast.AST) -> set[str]:
     return refs
 
 
+def unwrap_annotated(node: ast.AST | None) -> ast.AST | None:
+    """Extract the underlying type node from an Annotated[Type, ...] AST subscript."""
+    if (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == 'Annotated'
+    ):
+        slice_node = node.slice
+        if isinstance(slice_node, ast.Tuple) and slice_node.elts:
+            return slice_node.elts[0]
+        if hasattr(slice_node, 'value') and isinstance(slice_node.value, ast.Tuple) and slice_node.value.elts:
+            return slice_node.value.elts[0]
+    return node
+
+
 def generate_typedict_from_ast(class_node: ast.ClassDef, typedict_name: str) -> tuple[str, set[str]]:
     """Synthesize a TypedDict class definition string and referenced symbols from a Pydantic AST class node."""
     lines = [
@@ -66,18 +81,7 @@ def generate_typedict_from_ast(class_node: ast.ClassDef, typedict_name: str) -> 
             field_name = item.target.id
             if field_name.startswith('_') or field_name in ('model_config',):
                 continue
-            annotation_node = item.annotation
-            if (
-                isinstance(annotation_node, ast.Subscript)
-                and isinstance(annotation_node.value, ast.Name)
-                and annotation_node.value.id == 'Annotated'
-            ):
-                slice_node = annotation_node.slice
-                if isinstance(slice_node, ast.Tuple):
-                    annotation_node = slice_node.elts[0]
-                elif hasattr(slice_node, 'value') and isinstance(slice_node.value, ast.Tuple):
-                    annotation_node = slice_node.value.elts[0]
-
+            annotation_node = unwrap_annotated(item.annotation)
             if annotation_node:
                 referenced_symbols.update(collect_referenced_types(annotation_node))
             raw_type = ast_to_type_str(annotation_node)
