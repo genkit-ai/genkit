@@ -55,7 +55,7 @@ class VideoInput(BaseModel):
         'googleai/veo-3.0-generate-001',
         'googleai/veo-3.0-fast-generate-001',
         'googleai/veo-2.0-generate-001',
-    ] = Field(default='googleai/veo-3.1-generate-preview', description='Veo model for generation')
+    ] = Field(default='googleai/veo-3.1-generate-preview', description='Veo model for generation')  # pyrefly: ignore[bad-assignment]
     prompt: str = Field(
         default='A paper airplane gliding through a bright classroom, cinematic slow motion',
         description='Video prompt',
