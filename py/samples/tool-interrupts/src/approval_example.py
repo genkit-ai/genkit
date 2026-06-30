@@ -41,7 +41,7 @@ from genkit import (
     restart_tool,
 )
 from genkit.model import ModelResponse
-from genkit.plugins.google_genai import GoogleAI, gemini_flash_latest  # pyright: ignore[reportMissingImports]
+from genkit.plugins.google_genai import GoogleAI, gemini_flash_latest
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / 'prompts'
 
