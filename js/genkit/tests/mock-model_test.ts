@@ -381,42 +381,46 @@ describe('mockModel — interrupts and agent handoff', () => {
     assert.strictEqual(model.requestCount, 2);
   });
 
-  it('models an agent handoff: a prompt-as-tool swaps the system preamble', async () => {
-    const app = genkitBeta({ model: 'handoffModel' });
+  it('drives a defineAgent tool loop with mockModel, exposing the preamble', async () => {
+    // Migrated from an `app.chat(promptAgent)` handoff test: the beta Chat API
+    // (and its cross-agent preamble swap) was removed in #5248. This keeps the
+    // same mockModel surface under test — a multi-turn tool loop, with the
+    // agent's rendered system preamble asserted via `lastRequestText` — using
+    // the current `defineAgent(...).chat().send(...)` API.
+    const app = genkitBeta({ model: 'agentModel' });
 
-    app.definePrompt({
-      name: 'agentB',
-      description: 'Handles B things.',
-      system: 'You are agent B.',
-    });
-    const agentA = app.definePrompt({
-      name: 'agentA',
-      description: 'Handles A things.',
-      system: 'You are agent A.',
-      tools: ['agentB'],
-    });
+    app.defineTool(
+      { name: 'lookup', description: "Look up today's special." },
+      async () => 'Mushroom risotto'
+    );
 
     const model = mockModel(app, {
-      name: 'handoffModel',
+      name: 'agentModel',
       info: { supports: { tools: true } },
       respond: (req) => {
-        // Once agent B's preamble is in the request, we've been handed off —
-        // answer as B. Until then, request the handoff to agentB.
-        const handedOff = req.messages.some((m) =>
-          m.content.some((c) => c.text?.includes('You are agent B'))
+        // The model's two-turn view of one `send`: call the tool, then once its
+        // result is in the conversation, finish.
+        const sawToolResult = req.messages.some((m) =>
+          m.content.some((c) => c.toolResponse?.output === 'Mushroom risotto')
         );
-        return handedOff
-          ? { text: 'handled by agent B' }
-          : { toolRequests: [{ name: 'agentB', input: {} }] };
+        return sawToolResult
+          ? { text: 'Booked: Mushroom risotto' }
+          : { toolRequests: [{ name: 'lookup', input: {} }] };
       },
     });
 
-    const chat = app.chat(agentA);
-    const { text } = await chat.send('help me');
+    const agent = app.defineAgent({
+      name: 'concierge',
+      model: 'agentModel',
+      system: 'You are the booking concierge.',
+      tools: ['lookup'],
+    });
 
-    assert.strictEqual(text, 'handled by agent B');
-    // The handoff swapped the preamble the model sees from A to B.
-    assert.match(model.lastRequestText!, /You are agent B/);
+    const { text } = await agent.chat().send('book me the special');
+
+    assert.strictEqual(text, 'Booked: Mushroom risotto');
     assert.strictEqual(model.requestCount, 2);
+    // The agent's system preamble is what the model saw.
+    assert.match(model.lastRequestText!, /You are the booking concierge/);
   });
 });
