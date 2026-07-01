@@ -115,6 +115,40 @@ describe('mockModel', () => {
     assert.match(captured!.messages.at(-1)!.content[0].text!, /first/);
   });
 
+  it('separates adjacent messages so their text does not fuse', async () => {
+    const model = mockModel(ai, { respond: () => ({ text: 'ok' }) });
+    await ai.generate({ model, system: 'alpha', prompt: 'beta' });
+
+    // The last word of one message must not run into the first of the next,
+    // or boundary-spanning assertions silently break.
+    assert.doesNotMatch(model.lastRequestText!, /alphabeta/);
+    assert.match(model.lastRequestText!, /alpha\nbeta/);
+  });
+
+  it('returns a defensive copy from lastRequest and requests', async () => {
+    const model = mockModel(ai, { respond: () => ({ text: 'ok' }) });
+    await ai.generate({ model, prompt: 'hello' });
+
+    // Mutating the view must not corrupt recorded history.
+    model.lastRequest!.messages.length = 0;
+    model.requests[0].messages.length = 0;
+
+    assert.ok(model.lastRequest!.messages.length > 0);
+    assert.ok(model.requests[0].messages.length > 0);
+  });
+
+  it('defaults finishReason to stop when a full response leaves it undefined', async () => {
+    const model = mockModel(ai, {
+      respond: () => ({
+        message: { role: 'model', content: [{ text: 'x' }] },
+        finishReason: undefined,
+      }),
+    });
+
+    const res = await ai.generate({ model, prompt: 'hi' });
+    assert.strictEqual(res.finishReason, 'stop');
+  });
+
   it('flattens the whole assembled request via lastRequestText', async () => {
     // Works even with an output schema, where echoModel can't be used: the mock
     // returns conforming JSON, and assembly is asserted by inspection.

@@ -149,7 +149,9 @@ function renderPart(part: Part): string {
 
 /**
  * Flattens a request's full message list to text — system and tool messages are
- * prefixed with their role; `user`/`model` are not. This is the assembled
+ * prefixed with their role; `user`/`model` are not. Messages are newline-
+ * separated so adjacent messages' text can't fuse into a single token (which
+ * would silently break boundary-spanning assertions). This is the assembled
  * conversation the model would have seen, used by both {@link echoModel} and
  * {@link MockModel.lastRequestText}.
  */
@@ -160,7 +162,7 @@ function renderRequestText(request: GenerateRequest): string {
         (m.role === 'user' || m.role === 'model' ? '' : `${m.role}: `) +
         m.content.map(renderPart).join('')
     )
-    .join('');
+    .join('\n');
 }
 
 function toResponseData(response: MockResponse): GenerateResponseData {
@@ -171,7 +173,9 @@ function toResponseData(response: MockResponse): GenerateResponseData {
     };
   }
   if ('message' in response && response.message) {
-    return { finishReason: 'stop', ...(response as GenerateResponseData) };
+    const data = response as GenerateResponseData;
+    // Default finishReason without letting an explicit `undefined` clobber it.
+    return { ...data, finishReason: data.finishReason ?? 'stop' };
   }
   const obj = response as MockResponseObject;
   const content: Part[] = [...(obj.content ?? [])];
@@ -249,8 +253,14 @@ export function mockModel(
   ) as MockModel;
 
   Object.defineProperties(model, {
-    requests: { get: () => [...requests] },
-    lastRequest: { get: () => requests[requests.length - 1] },
+    // Return clones so callers can't mutate recorded history through a view.
+    requests: { get: () => requests.map((r) => structuredClone(r)) },
+    lastRequest: {
+      get: () => {
+        const last = requests[requests.length - 1];
+        return last ? structuredClone(last) : undefined;
+      },
+    },
     lastRequestMessage: {
       get: () => {
         const last = requests[requests.length - 1]?.messages.at(-1);
