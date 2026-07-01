@@ -33,66 +33,6 @@ type ActionMetadata struct {
 	StreamSchema     any `json:"streamSchema,omitempty"`
 }
 
-type AgentFinishReason string
-
-const (
-	AgentFinishReasonStop        AgentFinishReason = "stop"
-	AgentFinishReasonLength      AgentFinishReason = "length"
-	AgentFinishReasonBlocked     AgentFinishReason = "blocked"
-	AgentFinishReasonAborted     AgentFinishReason = "aborted"
-	AgentFinishReasonInterrupted AgentFinishReason = "interrupted"
-	AgentFinishReasonOther       AgentFinishReason = "other"
-	AgentFinishReasonUnknown     AgentFinishReason = "unknown"
-	AgentFinishReasonDetached    AgentFinishReason = "detached"
-	AgentFinishReasonFailed      AgentFinishReason = "failed"
-)
-
-type AgentInit struct {
-	SessionID  string        `json:"sessionId,omitempty"`
-	SnapshotID string        `json:"snapshotId,omitempty"`
-	State      *SessionState `json:"state,omitempty"`
-}
-
-type AgentInput struct {
-	Detach  bool              `json:"detach,omitempty"`
-	Message *Message          `json:"message,omitempty"`
-	Resume  *AgentInputResume `json:"resume,omitempty"`
-}
-
-type AgentInputResume struct {
-	Respond []*toolResponsePart `json:"respond,omitempty"`
-	Restart []*toolRequestPart  `json:"restart,omitempty"`
-}
-
-type AgentOutput struct {
-	Artifacts    []*Artifact       `json:"artifacts,omitempty"`
-	Error        *RuntimeError     `json:"error,omitempty"`
-	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
-	Message      *Message          `json:"message,omitempty"`
-	SessionID    string            `json:"sessionId,omitempty"`
-	SnapshotID   string            `json:"snapshotId,omitempty"`
-	State        *SessionState     `json:"state,omitempty"`
-}
-
-type AgentResult struct {
-	Artifacts    []*Artifact       `json:"artifacts,omitempty"`
-	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
-	Message      *Message          `json:"message,omitempty"`
-}
-
-type AgentStreamChunk struct {
-	Artifact    *Artifact           `json:"artifact,omitempty"`
-	CustomPatch *JsonPatch          `json:"customPatch,omitempty"`
-	ModelChunk  *ModelResponseChunk `json:"modelChunk,omitempty"`
-	TurnEnd     *TurnEnd            `json:"turnEnd,omitempty"`
-}
-
-type Artifact struct {
-	Metadata map[string]any `json:"metadata,omitempty"`
-	Name     string         `json:"name,omitempty"`
-	Parts    []*Part        `json:"parts,omitempty"`
-}
-
 type customPart struct {
 	// Custom contains custom key-value data specific to this part.
 	Custom map[string]any `json:"custom,omitempty"`
@@ -260,31 +200,6 @@ type GenerationUsage struct {
 	// TotalTokens is the sum of input and output tokens.
 	TotalTokens int `json:"totalTokens,omitempty"`
 }
-
-type GetSnapshotDataInput struct {
-	SessionID  string `json:"sessionId,omitempty"`
-	SnapshotID string `json:"snapshotId,omitempty"`
-}
-
-type JsonPatch []*JsonPatchOperation
-
-type JsonPatchOperation struct {
-	From  string               `json:"from,omitempty"`
-	Op    JsonPatchOperationOp `json:"op,omitempty"`
-	Path  string               `json:"path,omitempty"`
-	Value any                  `json:"value,omitempty"`
-}
-
-type JsonPatchOperationOp string
-
-const (
-	JsonPatchOperationOpAdd     JsonPatchOperationOp = "add"
-	JsonPatchOperationOpRemove  JsonPatchOperationOp = "remove"
-	JsonPatchOperationOpReplace JsonPatchOperationOp = "replace"
-	JsonPatchOperationOpMove    JsonPatchOperationOp = "move"
-	JsonPatchOperationOpCopy    JsonPatchOperationOp = "copy"
-	JsonPatchOperationOpTest    JsonPatchOperationOp = "test"
-)
 
 // Media represents media content with a URL and content type.
 type Media struct {
@@ -589,54 +504,11 @@ const (
 	RoleTool Role = "tool"
 )
 
-type RuntimeError struct {
-	Details any    `json:"details,omitempty"`
-	Message string `json:"message,omitempty"`
-	Status  string `json:"status,omitempty"`
-}
-
 // ScoreDetails provides additional context and explanation for an evaluation score.
 type ScoreDetails struct {
 	// Reasoning explains the rationale behind the score.
 	Reasoning string `json:"reasoning,omitempty"`
 }
-
-type SessionSnapshot struct {
-	CreatedAt    string            `json:"createdAt,omitempty"`
-	Error        *RuntimeError     `json:"error,omitempty"`
-	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
-	HeartbeatAt  string            `json:"heartbeatAt,omitempty"`
-	ParentID     string            `json:"parentId,omitempty"`
-	SessionID    string            `json:"sessionId,omitempty"`
-	SnapshotID   string            `json:"snapshotId,omitempty"`
-	State        *SessionState     `json:"state,omitempty"`
-	Status       SnapshotStatus    `json:"status,omitempty"`
-	UpdatedAt    string            `json:"updatedAt,omitempty"`
-}
-
-type SessionState struct {
-	Artifacts []*Artifact `json:"artifacts,omitempty"`
-	Custom    any         `json:"custom,omitempty"`
-	Messages  []*Message  `json:"messages,omitempty"`
-	SessionID string      `json:"sessionId,omitempty"`
-}
-
-type SnapshotEvent string
-
-const (
-	SnapshotEventTurnEnd       SnapshotEvent = "turnEnd"
-	SnapshotEventInvocationEnd SnapshotEvent = "invocationEnd"
-)
-
-type SnapshotStatus string
-
-const (
-	SnapshotStatusPending   SnapshotStatus = "pending"
-	SnapshotStatusCompleted SnapshotStatus = "completed"
-	SnapshotStatusAborted   SnapshotStatus = "aborted"
-	SnapshotStatusFailed    SnapshotStatus = "failed"
-	SnapshotStatusExpired   SnapshotStatus = "expired"
-)
 
 type textPart struct {
 	// Metadata contains arbitrary key-value data for this part.
@@ -712,9 +584,4 @@ type TraceMetadata struct {
 	Paths []*PathMetadata `json:"paths,omitempty"`
 	// Timestamp is when the trace was created.
 	Timestamp float64 `json:"timestamp,omitempty"`
-}
-
-type TurnEnd struct {
-	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
-	SnapshotID   string            `json:"snapshotId,omitempty"`
 }
