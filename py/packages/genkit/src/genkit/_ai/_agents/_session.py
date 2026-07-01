@@ -253,8 +253,13 @@ class Session(Generic[StateT]):
 
     async def update_artifacts(self, fn: Callable[[list[Artifact]], list[Artifact]]) -> None:
         async with self.lock:
-            self.session_state.artifacts = fn(list(self.session_state.artifacts or []))
+            before = list(self.session_state.artifacts or [])
+            updated = fn(before)
+            self.session_state.artifacts = updated
             self.version += 1
+            changed = [art for art in updated if art not in before]
+        for art in changed:
+            await self.notify_artifact_changed(art)
 
 
 # ---------------------------------------------------------------------------

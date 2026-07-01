@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar
 
 from genkit._ai._agents._client import AgentClient, AgentTransport
 from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
@@ -61,6 +61,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
         self.get_snapshot_url = get_snapshot_url or f'{url}/getSnapshot'
         self.abort_url = abort_url or f'{url}/abort'
         self.state_management: StateManagement = state_management
+        self._background_tasks: set[asyncio.Task[Any]] = set()
 
     async def _post_json(self, url: str, input_val: dict[str, Any]) -> Any:  # noqa: ANN401
         """POST JSON to a one-shot action endpoint and return the parsed body."""
@@ -154,7 +155,9 @@ class HttpAgentTransport(AgentTransport[StateT]):
         # but we leave the streaming request running so the server turn finishes
         # and persists. Halting server-side work is a separate operation
         # (abort_snapshot), not part of running a turn.
-        asyncio.create_task(fetch_stream())
+        task = asyncio.create_task(fetch_stream())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
         async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
             async for chunk in stream_queue:
@@ -185,7 +188,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
         if not isinstance(result, dict):
             return None
         status_val = result.get('status')
-        return cast(SnapshotStatus, SnapshotStatus(status_val)) if status_val else None
+        return SnapshotStatus(status_val) if status_val else None
 
     async def close(self) -> None:
         """Close the underlying bidi connection."""

@@ -353,6 +353,7 @@ class AgentRuntime:
         # Separate turn inputs queue: runtime controls its lifecycle,
         # BidiAction's client_inputs is forwarded here by run().
         self.turn_inputs = CloseableQueue(maxsize=1)
+        self._background_tasks: set[asyncio.Task[Any]] = set()
 
         self.session_runner = SessionRunner(
             session,
@@ -633,7 +634,9 @@ class AgentRuntime:
                                     pass
                             self.turn_inputs.close()
 
-                        asyncio.create_task(finish_detach_input())
+                        task = asyncio.create_task(finish_detach_input())
+                        self._background_tasks.add(task)
+                        task.add_done_callback(self._background_tasks.discard)
                         return
                     await self.turn_inputs.put(item)
             finally:
@@ -706,8 +709,14 @@ class AgentRuntime:
             # Stop sending chunks to the (now-gone) client.
             # Background task finalizes snapshot when fn finishes.
             self.detached = True
-            asyncio.create_task(self.watch_snapshot_abort(pending_snap.snapshot_id, abort_signal))
-            asyncio.create_task(self.finalize_detach(pending_snap, fn_task, forward_task, err_holder, result_holder))
+            t1 = asyncio.create_task(self.watch_snapshot_abort(pending_snap.snapshot_id, abort_signal))
+            t2 = asyncio.create_task(
+                self.finalize_detach(pending_snap, fn_task, forward_task, err_holder, result_holder)
+            )
+            self._background_tasks.add(t1)
+            self._background_tasks.add(t2)
+            t1.add_done_callback(self._background_tasks.discard)
+            t2.add_done_callback(self._background_tasks.discard)
             return AgentOutput(
                 snapshot_id=pending_snap.snapshot_id,
                 finish_reason=AgentFinishReason.DETACHED,

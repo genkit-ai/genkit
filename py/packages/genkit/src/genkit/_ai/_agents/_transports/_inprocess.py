@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
-from typing import Protocol
+from typing import Any, Protocol
 
 from genkit._ai._agents._types import StateManagement
 from genkit._core._action import BidiAction
@@ -62,6 +62,7 @@ class InProcessTransport:
         self._get_snapshot = get_snapshot
         self._abort_snapshot = abort_snapshot
         self.state_management: StateManagement = state_management
+        self._background_tasks: set[asyncio.Task[Any]] = set()
 
     async def run_turn(
         self,
@@ -103,7 +104,9 @@ class InProcessTransport:
             finally:
                 stream_queue.close()
 
-        asyncio.create_task(drain_connection())
+        task = asyncio.create_task(drain_connection())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
         async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
             async for chunk in stream_queue:
