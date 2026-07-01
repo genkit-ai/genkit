@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
-import express from 'express';
+import express, {
+  type NextFunction,
+  type Request,
+  type Response,
+} from 'express';
 import fs from 'fs/promises';
 import getPort, { makeRange } from 'get-port';
 import type { Server } from 'http';
@@ -27,6 +31,65 @@ import { logger } from './logging.js';
 import type { Registry } from './registry.js';
 import { toJsonSchema } from './schema.js';
 import { flushTracing, setTelemetryServerUrl } from './tracing.js';
+
+/**
+ * Environment variable that lets a developer expose the reflection server on a
+ * non-loopback interface (e.g. when running inside a remote dev container).
+ * When set, the server binds to its value and the loopback `Host`-header check
+ * is skipped, since the developer has explicitly opted into remote access.
+ */
+const DEV_SERVER_HOST_ENV_VAR = 'GENKIT_DEV_SERVER_HOST';
+
+/**
+ * Returns the network interface the reflection server should bind to. Defaults
+ * to the loopback interface (`localhost`) so the server is not reachable from
+ * other hosts on the network. Override with `GENKIT_DEV_SERVER_HOST`.
+ */
+function getDevServerHost(): string {
+  return process.env[DEV_SERVER_HOST_ENV_VAR] || 'localhost';
+}
+
+/**
+ * Returns true if the given `Host` header refers to the local loopback
+ * interface (`localhost`, `127.0.0.1` or `[::1]`, with an optional port).
+ */
+function isLoopbackHost(hostHeader: string | undefined): boolean {
+  if (!hostHeader) {
+    return false;
+  }
+  // IPv6 literals are wrapped in brackets, e.g. "[::1]:4000".
+  const hostname = hostHeader.startsWith('[')
+    ? hostHeader.slice(1, hostHeader.indexOf(']'))
+    : hostHeader.split(':')[0];
+  return (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::1' ||
+    hostname.endsWith('.localhost')
+  );
+}
+
+/**
+ * Express middleware that rejects requests whose `Host` header is not a
+ * loopback address. The reflection server can execute arbitrary registered
+ * actions, so it must only be reachable from the local machine. Validating the
+ * `Host` header defeats DNS-rebinding attacks, which the CORS check does not
+ * prevent. Skipped when the developer opts into `GENKIT_DEV_SERVER_HOST`.
+ */
+function rejectNonLoopbackHost(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  if (
+    !process.env[DEV_SERVER_HOST_ENV_VAR] &&
+    !isLoopbackHost(req.headers.host)
+  ) {
+    res.status(403).send('Forbidden: requests must originate from localhost.');
+    return;
+  }
+  next();
+}
 
 // TODO: Move this to common location for schemas.
 export const RunActionResponseSchema = z.object({
@@ -150,6 +213,7 @@ export class ReflectionServer {
 
     const server = express();
 
+    server.use(rejectNonLoopbackHost);
     server.use(express.json({ limit: this.options.bodyLimit }));
     server.use((req, res, next) => {
       res.header('x-genkit-version', GENKIT_VERSION);
@@ -437,24 +501,30 @@ export class ReflectionServer {
       res.status(200).end(JSON.stringify({ error: errorResponse }));
     });
 
-    this.port = await this.findPort();
-    this.server = server.listen(this.port, async () => {
-      logger.debug(
-        `Reflection server (${process.pid}) running on http://localhost:${this.port}`
-      );
-      ReflectionServer.RUNNING_SERVERS.push(this);
+    const port = await this.findPort();
+    this.port = port;
+    // Binding to a specific host resolves the address asynchronously, so wait
+    // for the server to be listening before resolving start().
+    await new Promise<void>((resolve) => {
+      this.server = server.listen(port, getDevServerHost(), async () => {
+        logger.debug(
+          `Reflection server (${process.pid}) running on http://localhost:${port}`
+        );
+        ReflectionServer.RUNNING_SERVERS.push(this);
 
-      try {
-        await this.registry.listActions();
-        await this.writeRuntimeFile();
-      } catch (e) {
-        logger.error(`Error initializing plugins: ${e}`);
         try {
-          await this.stop();
-        } catch (err) {
-          logger.error(`Failed to stop server gracefully: ${err}`);
+          await this.registry.listActions();
+          await this.writeRuntimeFile();
+        } catch (e) {
+          logger.error(`Error initializing plugins: ${e}`);
+          try {
+            await this.stop();
+          } catch (err) {
+            logger.error(`Failed to stop server gracefully: ${err}`);
+          }
         }
-      }
+        resolve();
+      });
     });
   }
 

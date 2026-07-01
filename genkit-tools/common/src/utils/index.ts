@@ -16,6 +16,7 @@
 
 export * from './analytics';
 export * from './configstore';
+export * from './dev-server-security';
 export * from './eval';
 export * from './logger';
 export * from './package';

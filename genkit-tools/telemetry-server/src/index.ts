@@ -20,7 +20,11 @@ import {
   TraceQueryFilterSchema,
   type SpanData,
 } from '@genkit-ai/tools-common';
-import { logger } from '@genkit-ai/tools-common/utils';
+import {
+  getDevServerHost,
+  logger,
+  rejectNonLoopbackHost,
+} from '@genkit-ai/tools-common/utils';
 import cors from 'cors';
 import express from 'express';
 import type * as http from 'http';
@@ -113,6 +117,7 @@ export async function startTelemetryServer(params: {
       exposedHeaders: ['X-Genkit-Trace-Id'],
     })
   );
+  api.use(rejectNonLoopbackHost);
 
   api.use(express.json({ limit: params.maxRequestBodySize ?? '100mb' }));
 
@@ -134,12 +139,12 @@ export async function startTelemetryServer(params: {
     try {
       const { traceId } = request.params;
 
-      // Set SSE headers
+      // Set SSE headers. CORS is handled by the shared cors() middleware above
+      // (localhost origins only); the SSE handler must not widen it to '*',
+      // which would let any web origin read trace inputs and outputs.
       response.setHeader('Content-Type', 'text/event-stream');
       response.setHeader('Cache-Control', 'no-cache');
       response.setHeader('Connection', 'keep-alive');
-      response.setHeader('Access-Control-Allow-Origin', '*');
-      response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
       // Send initial snapshot of current trace data
       const currentTrace = await params.traceStore.load(traceId);
@@ -337,7 +342,7 @@ export async function startTelemetryServer(params: {
     res.status(500).json(errorResponse);
   });
 
-  server = api.listen(params.port, () => {
+  server = api.listen(params.port, getDevServerHost(), () => {
     logger.info(`Telemetry API running on http://localhost:${params.port}`);
   });
 
