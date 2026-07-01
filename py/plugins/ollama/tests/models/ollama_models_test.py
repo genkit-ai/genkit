@@ -374,6 +374,29 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
 
         self.mock_build_multimodal_response.assert_not_called()
 
+    async def test_think_and_keep_alive_forwarded_as_top_level_kwargs(self) -> None:
+        """think/keep_alive reach the chat call as top-level kwargs, not sampler options.
+
+        Guards the JS/Go parity wiring: build_request_kwargs feeds ``**extra_kwargs``
+        into client.chat(), so dropping that spread would silently regress reasoning
+        and model keep-alive.
+        """
+        request = ModelRequest(
+            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])],
+            config={'think': 'low', 'keepAlive': '5m'},
+        )
+        self.mock_ollama_client_instance.chat.return_value = ollama_api.ChatResponse(
+            message=ollama_api.Message(role='', content='ok')
+        )
+
+        await self.ollama_model._chat_with_ollama(request, self.ctx)
+
+        call_kwargs = self.mock_ollama_client_instance.chat.await_args.kwargs
+        assert call_kwargs['think'] == 'low'
+        assert call_kwargs['keep_alive'] == '5m'
+        # Sampler options stay separate from the top-level kwargs.
+        assert call_kwargs['options'] == self.mock_build_request_options.return_value
+
     async def test_streaming_chat_success(self) -> None:
         """Test _chat_with_ollama in streaming mode with multiple chunks."""
         self.mock_is_streaming_request.return_value = True
@@ -563,6 +586,21 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
         self.patcher_build_prompt.stop()
         self.patcher_is_streaming_request.stop()
         self.patcher_build_request_options.stop()
+
+    async def test_think_and_keep_alive_forwarded_as_top_level_kwargs(self) -> None:
+        """think/keep_alive reach the generate call as top-level kwargs, matching chat."""
+        request = ModelRequest(
+            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])],
+            config={'think': True, 'keepAlive': '10m'},
+        )
+        self.mock_ollama_client_instance.generate.return_value = ollama_api.GenerateResponse(response='ok')
+
+        await self.ollama_model._generate_ollama_response(request, self.ctx)
+
+        call_kwargs = self.mock_ollama_client_instance.generate.await_args.kwargs
+        assert call_kwargs['think'] is True
+        assert call_kwargs['keep_alive'] == '10m'
+        assert call_kwargs['options'] == self.mock_build_request_options.return_value
 
     async def test_non_streaming_generate_success(self) -> None:
         """Test _generate_ollama_response in non-streaming mode with successful response."""
@@ -802,6 +840,15 @@ class TestBuildRequestOptions:
 
         assert from_dict == from_instance
         assert from_dict == {'num_ctx': 4096, 'num_predict': 100, 'temperature': 0.5}
+
+    def test_stop_sequences_map_to_stop_list(self) -> None:
+        """stop_sequences maps to Ollama's stop field, preserved as a list.
+
+        Go parity: stop is sent as a list, unlike the JS plugin which joins it.
+        """
+        options = OllamaModel.build_request_options(ModelConfig(stop_sequences=['STOP', '###']))
+        assert options['stop'] == ['STOP', '###']
+        assert 'stop_sequences' not in options
 
 
 class TestBuildRequestKwargs:
