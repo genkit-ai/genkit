@@ -112,7 +112,7 @@ describe('GoogleCloudMetrics', () => {
       return explode();
     });
 
-    assert.rejects(async () => {
+    await assert.rejects(async () => {
       await testFlow();
     });
 
@@ -242,7 +242,7 @@ describe('GoogleCloudMetrics', () => {
       return explode();
     });
 
-    assert.rejects(async () => {
+    await assert.rejects(async () => {
       return ai.generate({
         model: testModel,
         prompt: 'test prompt',
@@ -344,7 +344,7 @@ describe('GoogleCloudMetrics', () => {
         return Promise.reject(new Error('failed'));
       });
 
-      assert.rejects(async () => {
+      await assert.rejects(async () => {
         await flow();
       });
 
@@ -379,7 +379,7 @@ describe('GoogleCloudMetrics', () => {
         return 'done';
       });
 
-      assert.rejects(async () => {
+      await assert.rejects(async () => {
         await flow();
       });
 
@@ -424,7 +424,7 @@ describe('GoogleCloudMetrics', () => {
         return 'done';
       });
 
-      assert.rejects(async () => {
+      await assert.rejects(async () => {
         await flow();
       });
 
@@ -463,7 +463,7 @@ describe('GoogleCloudMetrics', () => {
         return 'done';
       });
 
-      assert.rejects(async () => {
+      await assert.rejects(async () => {
         await flow();
       });
 
@@ -504,7 +504,7 @@ describe('GoogleCloudMetrics', () => {
         return 'not failing';
       });
 
-      assert.rejects(async () => {
+      await assert.rejects(async () => {
         await flow();
       });
 
