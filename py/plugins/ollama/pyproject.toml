@@ -22,7 +22,7 @@ authors = [
   { name = "Niraj Nepal", email = "nnepal@google.com" },
 ]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Environment :: Console",
   "Environment :: Web Environment",
   "Framework :: AsyncIO",
