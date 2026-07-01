@@ -729,12 +729,13 @@ func runAction(ctx context.Context, g *Genkit, key string, input, init json.RawM
 	ctx = core.WithActionContext(ctx, runtimeContext)
 
 	// Parse telemetry attributes if provided
-	var telemetryAttributes map[string]string
-	if telemetryLabels != nil {
+	if base.HasJSONValue(telemetryLabels) {
+		var telemetryAttributes map[string]string
 		err := json.Unmarshal(telemetryLabels, &telemetryAttributes)
 		if err != nil {
-			return nil, core.NewError(core.INTERNAL, "Error unmarshalling telemetryLabels: %v", err)
+			return nil, core.NewError(core.INVALID_ARGUMENT, "Error unmarshalling telemetryLabels: %v", err)
 		}
+		ctx = tracing.WithTelemetryLabels(ctx, telemetryAttributes)
 	}
 
 	// Run the action and capture trace ID. We need to ensure there's a valid trace context.
