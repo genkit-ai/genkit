@@ -35,6 +35,54 @@ export { TraceQuerySchema, type TraceQuery, type TraceStore } from './types';
 let server: http.Server;
 const broadcastManager = new BroadcastManager();
 
+/** A live-trace event streamed to dev UI clients over SSE. */
+export interface SpanBroadcastEvent {
+  type: 'span_start' | 'span_end';
+  traceId: string;
+  span: SpanData;
+}
+
+/**
+ * spanBroadcastEvents decides which span_start / span_end events to broadcast
+ * for an incoming /api/traces save, given the trace's merged (post-save) spans.
+ *
+ * Live traces export each span twice — once as it starts (no endTime) and again
+ * as it ends — and the senders do not guarantee start-before-end delivery. A
+ * stale, still-in-progress "start" for a span the store already has as ended is
+ * dropped, so it cannot re-open a finished span in the live view (which would
+ * leave it spinning forever); this mirrors the merge in the file trace store
+ * that already ignores such a start on disk. Events are returned in
+ * chronological order, with span_start before span_end when times tie.
+ */
+export function spanBroadcastEvents(
+  traceId: string,
+  incomingSpans: SpanData[],
+  mergedSpans: Record<string, SpanData> = {}
+): SpanBroadcastEvent[] {
+  const events: SpanBroadcastEvent[] = [];
+  for (const span of incomingSpans) {
+    const incomingEnded = span.endTime > 0;
+    const mergedSpan = mergedSpans[span.spanId];
+    const alreadyEnded = !!mergedSpan && mergedSpan.endTime > 0;
+    if (!incomingEnded && alreadyEnded) {
+      continue;
+    }
+    events.push({ type: 'span_start', traceId, span });
+    if (incomingEnded) {
+      events.push({ type: 'span_end', traceId, span });
+    }
+  }
+  events.sort((a, b) => {
+    const aTime = a.type === 'span_start' ? a.span.startTime : a.span.endTime;
+    const bTime = b.type === 'span_start' ? b.span.startTime : b.span.endTime;
+    if (aTime !== bTime) {
+      return aTime - bTime;
+    }
+    return a.type === 'span_start' ? -1 : 1;
+  });
+  return events;
+}
+
 /**
  * Starts the telemetry server with the provided params
  */
@@ -117,44 +165,21 @@ export async function startTelemetryServer(params: {
       const traceData = TraceDataSchema.parse(request.body);
       await params.traceStore.save(traceData.traceId, traceData);
 
-      // Create events for all spans and sort them by start time to ensure
-      // correct ordering.
-      const allSpans = Object.values(traceData.spans);
-      const events: {
-        type: 'span_start' | 'span_end';
-        traceId: string;
-        span: SpanData;
-      }[] = [];
-
-      // Create span_start and span_end events
-      for (const span of allSpans) {
-        events.push({
-          type: 'span_start',
-          traceId: traceData.traceId,
-          span,
-        });
-        if (span.endTime > 0) {
-          events.push({
-            type: 'span_end',
-            traceId: traceData.traceId,
-            span,
-          });
-        }
-      }
-
-      // Sort events chronologically. If times are equal, start comes before end.
-      events.sort((a, b) => {
-        const aTime =
-          a.type === 'span_start' ? a.span.startTime : a.span.endTime;
-        const bTime =
-          b.type === 'span_start' ? b.span.startTime : b.span.endTime;
-        if (aTime !== bTime) {
-          return aTime - bTime;
-        }
-        return a.type === 'span_start' ? -1 : 1;
-      });
-
-      // Broadcast events in chronological order.
+      // Decide what to broadcast against the merged store so a stale in-progress
+      // "start" cannot re-open an already-finished span in the live view (see
+      // spanBroadcastEvents). Only an in-progress span can be a stale start, so
+      // the extra read is skipped for the common all-ended save (e.g. the
+      // non-realtime exporter, which sends each span only once, on end).
+      const spans = Object.values(traceData.spans);
+      const hasInProgress = spans.some((s) => !(s.endTime > 0));
+      const merged = hasInProgress
+        ? await params.traceStore.load(traceData.traceId)
+        : undefined;
+      const events = spanBroadcastEvents(
+        traceData.traceId,
+        spans,
+        merged?.spans
+      );
       for (const event of events) {
         broadcastManager.broadcast(traceData.traceId, event);
       }

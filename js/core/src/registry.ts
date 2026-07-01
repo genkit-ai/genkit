@@ -56,6 +56,9 @@ const ACTION_TYPES = [
   'tool.v2',
   'util',
   'resource',
+  'agent',
+  'agent-snapshot',
+  'agent-abort',
 ] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
@@ -272,9 +275,14 @@ export class Registry {
    * @param type The type of the action to register.
    * @param action The action to register.
    */
-  registerAction<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+  registerAction<
+    I extends z.ZodTypeAny,
+    O extends z.ZodTypeAny,
+    S extends z.ZodTypeAny,
+    Init extends z.ZodTypeAny,
+  >(
     type: ActionType,
-    action: Action<I, O>,
+    action: Action<I, O, S, any, Init>,
     opts?: { namespace?: string }
   ) {
     if (type !== action.__action.actionType) {

@@ -336,22 +336,24 @@ func TestEarlyTraceIDTransmission(t *testing.T) {
 	tc := tracing.NewTestOnlyTelemetryClient()
 	tracing.WriteTelemetryImmediate(tc)
 
-	actionStarted := make(chan struct{})
-	actionCanProceed := make(chan struct{})
-
-	// Action that waits for permission to complete - this lets us check headers while it's running
-	core.DefineAction(g.reg, "test/slow", api.ActionTypeCustom, nil, nil,
-		func(ctx context.Context, input any) (any, error) {
-			close(actionStarted) // Signal we've started
-			<-actionCanProceed   // Wait for test to say we can finish
-			return "completed", nil
-		})
-
 	s := &reflectionServer{Server: &http.Server{}, activeActions: newActiveActionsMap()}
 	ts := httptest.NewServer(serveMux(g, s))
 	defer ts.Close()
 
 	t.Run("headers arrive before body completes", func(t *testing.T) {
+		// Subtest-local channels and action so the server goroutine for
+		// this subtest doesn't read variables that the next subtest is
+		// about to reassign. The previous shared-state setup raced under
+		// -race because t.Run only synchronizes with the subtest
+		// goroutine, not with the httptest server's request goroutine.
+		actionStarted := make(chan struct{})
+		actionCanProceed := make(chan struct{})
+		core.DefineAction(g.reg, "test/slow", api.ActionTypeCustom, nil, nil,
+			func(ctx context.Context, input any) (any, error) {
+				close(actionStarted)
+				<-actionCanProceed
+				return "completed", nil
+			})
 		// Channel to receive headers as soon as they arrive
 		type headerResult struct {
 			traceID string
@@ -409,11 +411,10 @@ func TestEarlyTraceIDTransmission(t *testing.T) {
 
 	// Backwards compatability
 	t.Run("trace ID in headers matches body", func(t *testing.T) {
-		// Reset channels for this subtest
-		actionStarted = make(chan struct{})
-		actionCanProceed = make(chan struct{})
-
-		// Re-register action for this subtest
+		// Subtest-local channels and action; see the comment on the
+		// previous subtest.
+		actionStarted := make(chan struct{})
+		actionCanProceed := make(chan struct{})
 		core.DefineAction(g.reg, "test/slow2", api.ActionTypeCustom, nil, nil,
 			func(ctx context.Context, input any) (any, error) {
 				close(actionStarted)
@@ -646,6 +647,84 @@ func TestCancelActionEndpoint(t *testing.T) {
 			// Good, context was cancelled
 		default:
 			t.Error("Context should have been cancelled")
+		}
+	})
+}
+
+// TestRunActionWithInit verifies that the v1 reflection API forwards the
+// request's init payload to the action (matching the JS runtime) and that
+// init on an action without init support fails loudly.
+func TestRunActionWithInit(t *testing.T) {
+	g := Init(context.Background())
+
+	tc := tracing.NewTestOnlyTelemetryClient()
+	tracing.WriteTelemetryImmediate(tc)
+
+	type initConfig struct {
+		Prefix string `json:"prefix"`
+	}
+	core.DefineBidiAction(g.reg, "test/bidi-prefix", api.ActionTypeCustom, nil,
+		func(ctx context.Context, cfg initConfig, inCh <-chan string, outCh chan<- string) (string, error) {
+			var out string
+			for chunk := range inCh {
+				out = cfg.Prefix + chunk
+			}
+			return out, nil
+		})
+	core.DefineAction(g.reg, "test/no-init", api.ActionTypeCustom, nil, nil, inc)
+
+	s := &reflectionServer{
+		Server:        &http.Server{},
+		activeActions: newActiveActionsMap(),
+	}
+	ts := httptest.NewServer(serveMux(g, s))
+	s.Addr = strings.TrimPrefix(ts.URL, "http://")
+	defer ts.Close()
+
+	t.Run("init reaches bidi action", func(t *testing.T) {
+		body := `{"key": "/custom/test/bidi-prefix", "input": "hello", "init": {"prefix": ">> "}}`
+		res, err := http.Post(ts.URL+"/api/runAction", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(res.Body)
+			t.Fatalf("status = %d, body: %s", res.StatusCode, b)
+		}
+		var resp runActionResponse
+		if err := json.NewDecoder(res.Body).Decode(&resp); err != nil {
+			t.Fatal(err)
+		}
+		var out string
+		if err := json.Unmarshal(resp.Result, &out); err != nil {
+			t.Fatal(err)
+		}
+		if out != ">> hello" {
+			t.Errorf("result = %q, want %q", out, ">> hello")
+		}
+	})
+
+	t.Run("init on non-bidi action is rejected", func(t *testing.T) {
+		body := `{"key": "/custom/test/no-init", "input": 1, "init": {"x": 1}}`
+		res, err := http.Post(ts.URL+"/api/runAction", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		// The v1 handler reports action errors as an error JSON body
+		// (matching the TS runtime), not via the HTTP status.
+		var resp struct {
+			Error *core.ReflectionError `json:"error"`
+		}
+		if err := json.NewDecoder(res.Body).Decode(&resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.Error == nil {
+			t.Fatal("expected error response for init on non-bidi action")
+		}
+		if !strings.Contains(resp.Error.Message, "does not accept init") {
+			t.Errorf("error message = %q, want mention of init rejection", resp.Error.Message)
 		}
 	})
 }

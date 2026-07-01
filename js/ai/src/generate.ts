@@ -790,16 +790,3 @@ export function generateStream<
     stream: channel,
   };
 }
-
-export function tagAsPreamble(msgs?: MessageData[]): MessageData[] | undefined {
-  if (!msgs) {
-    return undefined;
-  }
-  return msgs.map((m) => ({
-    ...m,
-    metadata: {
-      ...m.metadata,
-      preamble: true,
-    },
-  }));
-}

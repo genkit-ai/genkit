@@ -5,15 +5,17 @@
     "genkit",
     "genkit-plugin",
     "genkit-telemetry",
+    "genkit-statestore",
     "genkit-deploy",
     "genkit-flow",
     "google cloud",
     "google cloud platform",
+    "firestore",
     "ai",
     "genai",
     "generative-ai"
   ],
-  "version": "1.38.0",
+  "version": "1.39.0",
   "type": "commonjs",
   "scripts": {
     "check": "tsc",
@@ -21,7 +23,8 @@
     "build:clean": "rimraf ./lib",
     "build": "npm-run-all build:clean check compile",
     "build:watch": "tsup-node --watch",
-    "test": "node node_modules/jest/bin/jest --runInBand --verbose"
+    "test": "firebase emulators:exec 'node node_modules/jest/bin/jest --runInBand --verbose' --config tests/emulator/firebase.json",
+    "test:session-store": "firebase emulators:exec 'node node_modules/jest/bin/jest session_store --runInBand --verbose' --config tests/emulator/firebase.json"
   },
   "repository": {
     "type": "git",
@@ -31,6 +34,7 @@
   "author": "genkit",
   "license": "Apache-2.0",
   "dependencies": {
+    "@google-cloud/firestore": "^7.11.0",
     "@google-cloud/logging-winston": "^6.0.0",
     "@google-cloud/modelarmor": "^0.4.1",
     "@google-cloud/opentelemetry-cloud-monitoring-exporter": "^0.19.0",
@@ -55,7 +59,10 @@
   },
   "devDependencies": {
     "@jest/globals": "^29.7.0",
+    "@types/jest": "^29.5.12",
     "@types/node": "^20.11.16",
+    "firebase-tools": "^13.13.2",
+    "genkit": "workspace:*",
     "jest": "^29.7.0",
     "npm-run-all": "^4.1.5",
     "rimraf": "^6.0.1",
@@ -77,12 +84,21 @@
       "import": "./lib/model-armor.mjs",
       "types": "./lib/model-armor.d.ts",
       "default": "./lib/model-armor.js"
+    },
+    "./beta": {
+      "require": "./lib/beta.js",
+      "import": "./lib/beta.mjs",
+      "types": "./lib/beta.d.ts",
+      "default": "./lib/beta.js"
     }
   },
   "typesVersions": {
     "*": {
       "model-armor": [
         "lib/model-armor"
+      ],
+      "beta": [
+        "lib/beta"
       ]
     }
   }

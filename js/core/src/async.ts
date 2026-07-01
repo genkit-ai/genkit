@@ -40,13 +40,22 @@ export function createTask<T>(): Task<T> {
 }
 
 /**
+ * Unique sentinel used internally to mark the end of a {@link Channel}'s
+ * stream. Using a private Symbol (instead of `null`) ensures that legitimate
+ * falsy values sent by callers (including `null`) are never confused with the
+ * close signal.
+ */
+const DONE = Symbol('channel-done');
+
+/**
  * A class designed to help turn repeated callbacks into async iterators.
  * Based loosely on a combination of Go channels and Promises.
  */
 export class Channel<T> implements AsyncIterable<T> {
   private ready: Task<void> = createTask<void>();
-  private buffer: (T | null)[] = [];
+  private buffer: (T | typeof DONE)[] = [];
   private err: unknown = null;
+  private done: boolean = false;
 
   send(value: T): void {
     this.buffer.push(value);
@@ -54,7 +63,7 @@ export class Channel<T> implements AsyncIterable<T> {
   }
 
   close(): void {
-    this.buffer.push(null);
+    this.buffer.push(DONE);
     this.ready.resolve();
   }
 
@@ -69,6 +78,9 @@ export class Channel<T> implements AsyncIterable<T> {
   [Symbol.asyncIterator](): AsyncIterator<T> {
     return {
       next: async (): Promise<IteratorResult<T>> => {
+        if (this.done) {
+          return { value: undefined as unknown as T, done: true };
+        }
         if (this.err) {
           throw this.err;
         }
@@ -80,10 +92,21 @@ export class Channel<T> implements AsyncIterable<T> {
         if (!this.buffer.length) {
           this.ready = createTask<void>();
         }
+        if (value === DONE) {
+          // Mark the channel as done so that any further calls to next()
+          // (e.g. manual iteration after the stream has ended) return
+          // {done: true} immediately instead of awaiting a readiness promise
+          // that will never resolve.
+          this.done = true;
+          return {
+            value: undefined,
+            done: true,
+          };
+        }
 
         return {
           value,
-          done: !value,
+          done: false,
         };
       },
     };
@@ -172,5 +195,27 @@ export class AsyncTaskQueue {
    */
   async merge() {
     await this.last;
+  }
+}
+
+/** A lightweight, cross-platform EventEmitter. */
+export class EventEmitter {
+  private listeners: Record<string, ((...args: any[]) => void)[]> = {};
+
+  on(event: string, listener: (...args: any[]) => void) {
+    if (!this.listeners[event]) {
+      this.listeners[event] = [];
+    }
+    this.listeners[event].push(listener);
+  }
+
+  off(event: string, listener: (...args: any[]) => void) {
+    if (!this.listeners[event]) return;
+    this.listeners[event] = this.listeners[event].filter((l) => l !== listener);
+  }
+
+  emit(event: string, ...args: any[]) {
+    if (!this.listeners[event]) return;
+    this.listeners[event].forEach((l) => l(...args));
   }
 }

@@ -6,6 +6,7 @@ The Google Cloud plugin provides integrations with Google Cloud Platform service
 
 *   **Google Cloud Observability**: Exports telemetry (traces, metrics) and logs to Google Cloud's operations suite.
 *   **Model Armor**: Middleware for sanitizing user prompts and model responses using Google Cloud Model Armor.
+*   **Firestore Session Store (Beta)**: Persists agent session snapshots in Firestore, sharded and scalable to arbitrarily long sessions.
 
 ## Installation
 
@@ -74,9 +75,49 @@ const response = await ai.generate({
 *   `protectionTarget` (Optional): specificies what to sanitize. Options: `'all'` (default), `'userPrompt'`, `'modelResponse'`.
 *   `clientOptions` (Optional): Additional options for the underlying Model Armor client.
 
+## Firestore Session Store (Beta)
+
+`FirestoreSessionStore` is a Firestore-backed `SessionStore` for persisting agent session snapshots. Unlike a naive single-document store, it persists each turn as an incremental JSON Patch diff anchored to periodic, sharded full-state checkpoints, so:
+
+*   No single document approaches Firestore's [1 MiB limit](https://firebase.google.com/docs/firestore/quotas) (state is sharded across documents).
+*   The number of documents read/written per turn is bounded by `checkpointInterval` rather than total session length, so it scales to arbitrarily long sessions (e.g. long-lived chatbots, coding agents).
+*   Reconstruction uses only document-ID lookups inside a read-only transaction, so it needs no secondary indexes and is strongly consistent.
+
+> If you are running on Firebase, the `@genkit-ai/firebase` package re-exports this store with Firebase app setup (a `firebaseApp` option). See its README.
+
+### Usage
+
+Import it from `@genkit-ai/google-cloud/beta` and pass it as the `store` when defining an agent:
+
+```typescript
+import { genkit } from 'genkit/beta';
+import { FirestoreSessionStore } from '@genkit-ai/google-cloud/beta';
+
+const ai = genkit({
+  plugins: [
+    // ...
+  ],
+});
+
+const myAgent = ai.defineAgent({
+  name: 'myAgent',
+  system: 'You are a helpful assistant.',
+  // Defaults to a new Firestore() instance using Application Default
+  // Credentials; pass `db` to provide your own.
+  store: new FirestoreSessionStore(),
+});
+```
+
+### Options
+
+*   `db`: An explicit Firestore instance. Defaults to a new `Firestore()` instance (which picks up Application Default Credentials and the `FIRESTORE_EMULATOR_HOST` environment variable).
+*   `collection`: The collection where snapshot documents are stored. Defaults to `"genkit-sessions"`. Two companion collections are derived from it: `"<collection>-pointers"` (one pointer document per session) and `"<collection>-shards"` (the sharded checkpoint state).
+*   `checkpointInterval`: Number of turns between full-state checkpoints. Defaults to `25`. Lower it (e.g. `10`) for small-state, read-heavy sessions; raise it (e.g. `50`-`100`) for large per-turn state retained for a long time.
+*   `shardSize`: Maximum size in bytes of a single shard / diff document. Defaults to `512 KiB`. Any diff exceeding this is promoted to a sharded checkpoint so no document approaches the 1 MiB limit.
+
 ## Reference
 
-Visit the [official Genkit documentation](https://genkit.dev/docs/get-started/) for more information.
+Visit the [official Genkit documentation](https://genkit.dev/docs/js/get-started/) for more information.
 
 The sources for this package are in the main [Genkit](https://github.com/genkit-ai/genkit) repo. Please file issues and pull requests against that repo.
 

@@ -85,7 +85,7 @@ type EmbedderOptions struct {
 
 // embedder is an action with functions specific to converting documents to multidimensional vectors such as Embed().
 type embedder struct {
-	core.ActionDef[*EmbedRequest, *EmbedResponse, struct{}]
+	core.Action[*EmbedRequest, *EmbedResponse, struct{}]
 }
 
 // NewEmbedder creates a new [Embedder].
@@ -127,7 +127,7 @@ func NewEmbedder(name string, opts *EmbedderOptions, fn EmbedderFunc) Embedder {
 	}
 
 	return &embedder{
-		ActionDef: *core.NewAction(name, api.ActionTypeEmbedder, metadata, inputSchema, fn),
+		Action: *core.NewAction(name, api.ActionTypeEmbedder, metadata, inputSchema, fn),
 	}
 }
 
@@ -148,7 +148,7 @@ func LookupEmbedder(r api.Registry, name string) Embedder {
 		return nil
 	}
 	return &embedder{
-		ActionDef: *action,
+		Action: *action,
 	}
 }
 
