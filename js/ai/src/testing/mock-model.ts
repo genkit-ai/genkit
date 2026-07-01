@@ -72,7 +72,16 @@ export type MockRespondFn = (
 export interface MockModelOptions {
   /** Registered model name. Defaults to `'mockModel'`. */
   name?: string;
-  /** Model metadata (e.g. `supports`, `versions`). */
+  /**
+   * Model metadata (e.g. `supports`, `versions`).
+   *
+   * `supports.constrained` defaults to `'all'` (native constrained generation),
+   * so a `generate` with an `output.schema` reaches `respond` with that schema
+   * on `request.output.schema`. Pass `supports: { constrained: 'none' }` to
+   * instead exercise the framework's simulated path, where the schema is
+   * injected into the prompt (and thus visible in `lastRequestText`) and
+   * stripped from what `respond` sees.
+   */
   info?: ModelInfo;
   /**
    * What to respond with on each `generate` call. Defaults to empty text.
@@ -297,6 +306,11 @@ function toResponseData(response: MockResponse): GenerateResponseData {
  * });
  * ```
  *
+ * For structured output, the mock defaults to native constrained generation
+ * (`supports.constrained: 'all'`), so `respond` sees `request.output.schema`
+ * and no schema blob is injected into the prompt. Override with
+ * `supports: { constrained: 'none' }` to test the simulated path.
+ *
  * @param registry a `Genkit` instance (or anything holding a `Registry`).
  * @param options model name, metadata, and the `respond` callback.
  */
@@ -316,7 +330,12 @@ export function mockModel(
       // `configSchema`/`stage` aren't part of DefineModelOptions.
       versions: options.info?.versions,
       label: options.info?.label,
-      supports: options.info?.supports,
+      // Default to native constrained generation (like modern provider models),
+      // so a structured-output request reaches `respond` with `output.schema`
+      // intact instead of the framework injecting a schema blob into the prompt
+      // and stripping it. Spread last so callers can opt out with
+      // `supports: { constrained: 'none' }` to exercise the simulated path.
+      supports: { constrained: 'all', ...options.info?.supports },
     },
     async (request, { sendChunk }) => {
       // Snapshot so later mutation of the request can't alter recorded history.

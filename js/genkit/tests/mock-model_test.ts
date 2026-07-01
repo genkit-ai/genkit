@@ -247,6 +247,52 @@ describe('mockModel', () => {
     assert.match(model.lastRequestText!, /system: Be terse/);
     assert.match(model.lastRequestText!, /hello/);
   });
+
+  it('exposes the output schema to respond by default (native constrained)', async () => {
+    let seenSchema: unknown;
+    const model = mockModel(ai, {
+      respond: (req) => {
+        seenSchema = req.output?.schema;
+        return { text: JSON.stringify({ x: 'ok' }) };
+      },
+    });
+
+    await ai.generate({
+      model,
+      prompt: 'hello',
+      output: { schema: z.object({ x: z.string() }) },
+    });
+
+    // Native constrained: the schema is handed to the model on the request...
+    assert.ok(seenSchema, 'respond should see request.output.schema');
+    // ...not injected into the prompt.
+    assert.doesNotMatch(
+      model.lastRequestText!,
+      /conform to the following schema/i
+    );
+  });
+
+  it('simulates constrained output when supports.constrained is none', async () => {
+    let seenSchema: unknown = 'unset';
+    const model = mockModel(ai, {
+      info: { supports: { constrained: 'none' } },
+      respond: (req) => {
+        seenSchema = req.output?.schema;
+        return { text: JSON.stringify({ x: 'ok' }) };
+      },
+    });
+
+    await ai.generate({
+      model,
+      prompt: 'hello',
+      output: { schema: z.object({ x: z.string() }) },
+    });
+
+    // Simulated path strips the schema from what the model sees...
+    assert.strictEqual(seenSchema, undefined);
+    // ...and injects it into the prompt instead.
+    assert.match(model.lastRequestText!, /conform to the following schema/i);
+  });
 });
 
 describe('echoModel', () => {
