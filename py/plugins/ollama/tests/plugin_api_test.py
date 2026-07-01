@@ -518,7 +518,7 @@ async def test_model_action_does_not_wrap_media_fetch_error() -> None:
         with pytest.raises(httpx.ConnectError):
             await action._fn(request, None)
 
-    cast(AsyncMock, client_mock.chat).assert_not_called()
+    client_mock.chat.assert_not_called()
 
 
 @pytest.mark.asyncio
