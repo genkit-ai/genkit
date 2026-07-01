@@ -42,4 +42,5 @@ export {
   type MockModel,
   type MockModelOptions,
   type MockResponse,
+  type MockRespondFn,
 } from '@genkit-ai/ai/testing';

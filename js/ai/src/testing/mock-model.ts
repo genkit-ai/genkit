@@ -62,6 +62,12 @@ export interface MockResponseObject {
 
 export type MockResponse = string | MockResponseObject | GenerateResponseData;
 
+/** A `respond` callback: given the request, returns the response to emit. */
+export type MockRespondFn = (
+  request: GenerateRequest,
+  context: MockContext
+) => MockResponse | Promise<MockResponse>;
+
 /** Options for {@link mockModel}. */
 export interface MockModelOptions {
   /** Registered model name. Defaults to `'mockModel'`. */
@@ -69,14 +75,22 @@ export interface MockModelOptions {
   /** Model metadata (e.g. `supports`, `versions`). */
   info?: ModelInfo;
   /**
-   * Called once per `generate` call. Return the response to give back. Receives
-   * the resolved request and a {@link MockContext} for streaming. Defaults to
-   * returning empty text.
+   * What to respond with on each `generate` call. Defaults to empty text.
+   *
+   * - A **callback** `(request, { sendChunk }) => response` is invoked once per
+   *   call, so you can branch on request history (for tool loops) and stream via
+   *   `sendChunk`.
+   * - An **array** is a queue consumed one item per call, with the last item
+   *   repeating once exhausted — handy for scripted multi-turn tests. A queued
+   *   `Error` is thrown when reached, to inject a failure on a given turn.
+   *   (Queued items are static, so streaming needs the callback form.)
+   *
+   * ```ts
+   * mockModel(ai, { respond: ['first', 'second'] });
+   * mockModel(ai, { respond: ['ok', new Error('rate limited')] });
+   * ```
    */
-  respond?: (
-    request: GenerateRequest,
-    context: MockContext
-  ) => MockResponse | Promise<MockResponse>;
+  respond?: MockRespondFn | Array<MockResponse | Error>;
 }
 
 /**
@@ -107,6 +121,17 @@ export type MockModel = ModelAction & {
    * ```
    */
   readonly lastRequestText: string | undefined;
+  /**
+   * The tool results fed back to the model in the most recent request, in order.
+   * Use it to assert which tools ran and what they returned, without digging
+   * through message content yourself. Empty if the model was never called or saw
+   * no tool results.
+   *
+   * ```ts
+   * assert.deepStrictEqual(model.toolResponses.map((t) => t.name), ['lookup']);
+   * ```
+   */
+  readonly toolResponses: Array<{ name: string; ref?: string; output: unknown }>;
   /** Every request this model received, oldest first. */
   readonly requests: GenerateRequest[];
   /** How many times this model was called. */
@@ -163,6 +188,29 @@ function renderRequestText(request: GenerateRequest): string {
         m.content.map(renderPart).join('')
     )
     .join('\n');
+}
+
+/**
+ * Normalizes the `respond` option into a single callback. An array becomes a
+ * queue consumed one item per call, with the last item repeating once
+ * exhausted; a queued `Error` is thrown when reached.
+ */
+function toRespondFn(
+  respond: MockModelOptions['respond']
+): MockRespondFn {
+  if (!Array.isArray(respond)) {
+    return respond ?? (() => ({ text: '' }));
+  }
+  if (respond.length === 0) {
+    return () => ({ text: '' });
+  }
+  let i = 0;
+  return () => {
+    const item = respond[Math.min(i, respond.length - 1)];
+    i++;
+    if (item instanceof Error) throw item;
+    return item;
+  };
 }
 
 function toResponseData(response: MockResponse): GenerateResponseData {
@@ -229,7 +277,7 @@ export function mockModel(
   options: MockModelOptions = {}
 ): MockModel {
   const requests: GenerateRequest[] = [];
-  const respond = options.respond ?? (() => ({ text: '' }));
+  const respond = toRespondFn(options.respond);
 
   const model = defineModel(
     resolveRegistry(registry),
@@ -272,6 +320,17 @@ export function mockModel(
         const last = requests[requests.length - 1];
         return last ? renderRequestText(last) : undefined;
       },
+    },
+    toolResponses: {
+      get: () =>
+        (requests[requests.length - 1]?.messages ?? [])
+          .flatMap((m) => m.content)
+          .filter((p) => p.toolResponse)
+          .map((p) => ({
+            name: p.toolResponse!.name,
+            ref: p.toolResponse!.ref,
+            output: p.toolResponse!.output,
+          })),
     },
     requestCount: { get: () => requests.length },
   });

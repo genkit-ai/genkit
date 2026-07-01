@@ -24,4 +24,5 @@ export {
   type MockModel,
   type MockModelOptions,
   type MockResponse,
+  type MockRespondFn,
 } from './mock-model.js';

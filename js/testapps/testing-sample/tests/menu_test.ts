@@ -157,10 +157,8 @@ describe('recommendDish flow — tool round-trip', () => {
     // Two turns: the tool request, then the follow-up with the tool result.
     assert.equal(model.requestCount, 2);
     // The tool's output was fed back to the model.
-    const toolResult = model.lastRequest!.messages
-      .flatMap((m) => m.content)
-      .find((c) => c.toolResponse);
-    assert.match(String(toolResult?.toolResponse?.output), /mushroom risotto/);
+    assert.equal(model.toolResponses[0]?.name, 'dailySpecial');
+    assert.match(String(model.toolResponses[0]?.output), /mushroom risotto/);
   });
 });
 

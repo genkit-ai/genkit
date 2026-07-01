@@ -150,6 +150,60 @@ describe('mockModel', () => {
     assert.strictEqual(res.finishReason, 'stop');
   });
 
+  it('consumes an array of responses one per call, repeating the last', async () => {
+    const model = mockModel(ai, { respond: ['first', 'second'] });
+
+    assert.strictEqual((await ai.generate({ model, prompt: 'a' })).text, 'first');
+    assert.strictEqual(
+      (await ai.generate({ model, prompt: 'b' })).text,
+      'second'
+    );
+    // Past the end, the last response repeats rather than throwing.
+    assert.strictEqual(
+      (await ai.generate({ model, prompt: 'c' })).text,
+      'second'
+    );
+    assert.strictEqual(model.requestCount, 3);
+  });
+
+  it('throws a queued Error to inject a failure on a given turn', async () => {
+    const model = mockModel(ai, {
+      respond: ['ok', new Error('rate limited')],
+    });
+
+    assert.strictEqual((await ai.generate({ model, prompt: 'a' })).text, 'ok');
+    await assert.rejects(
+      ai.generate({ model, prompt: 'b' }),
+      /rate limited/
+    );
+  });
+
+  it('exposes tool results fed back to the model via toolResponses', async () => {
+    const lookup = ai.defineTool(
+      {
+        name: 'lookup',
+        description: 'look something up',
+        inputSchema: z.object({ id: z.number() }),
+        outputSchema: z.string(),
+      },
+      async ({ id }) => `item-${id}`
+    );
+
+    const model = mockModel(ai, {
+      info: { supports: { tools: true } },
+      // A queued tool loop: request the tool, then answer.
+      respond: [{ toolRequests: [{ name: 'lookup', input: { id: 1 } }] }, 'done'],
+    });
+
+    await ai.generate({ model, prompt: 'go', tools: [lookup] });
+
+    assert.deepStrictEqual(
+      model.toolResponses.map((t) => t.name),
+      ['lookup']
+    );
+    assert.strictEqual(model.toolResponses[0].output, 'item-1');
+  });
+
   it('flattens the whole assembled request via lastRequestText', async () => {
     // Works even with an output schema, where echoModel can't be used: the mock
     // returns conforming JSON, and assembly is asserted by inspection.
