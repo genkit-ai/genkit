@@ -125,7 +125,7 @@ class TestGoogleAIInit(unittest.TestCase):
             patch.dict(os.environ, {'GEMINI_API_KEY': ''}, clear=True),
             self.assertRaisesRegex(
                 ValueError,
-                'Gemini api key should be passed in plugin params or as a GEMINI_API_KEY environment variable',
+                r'GEMINI_API_KEY environment variable not set',
             ),
         ):
             GoogleAI()

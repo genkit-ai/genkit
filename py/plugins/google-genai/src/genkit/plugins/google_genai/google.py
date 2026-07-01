@@ -417,9 +417,15 @@ class GoogleAI(Plugin):
         """
         api_key = api_key if api_key else os.getenv('GEMINI_API_KEY')
         if not api_key and credentials is None:
-            raise ValueError(
-                'Gemini api key should be passed in plugin params or as a GEMINI_API_KEY environment variable'
+            msg = (
+                '\n[Genkit] GEMINI_API_KEY environment variable not set.\n\n'
+                'To get started with Google AI models:\n'
+                '1. Obtain an API key from Google AI Studio: https://aistudio.google.com/app/apikey\n'
+                '2. Set your key in the terminal environment:\n'
+                '   export GEMINI_API_KEY="your-api-key"\n\n'
+                'Documentation: https://genkit.dev/docs/python/integrations/google-genai/\n'
             )
+            raise ValueError(msg)
 
         self._client_kwargs: dict[str, Any] = {
             'vertexai': self._vertexai,
