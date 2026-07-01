@@ -55,6 +55,7 @@ func TestProjectIDResolution(t *testing.T) {
 		} else {
 			os.Unsetenv("GOOGLE_CLOUD_PROJECT")
 		}
+		os.Unsetenv("GCLOUD_PROJECT")
 
 		result := resolveFirebaseProjectID(tt.input)
 		if result != tt.expected {
@@ -64,5 +65,6 @@ func TestProjectIDResolution(t *testing.T) {
 		// Cleanup
 		os.Unsetenv("FIREBASE_PROJECT_ID")
 		os.Unsetenv("GOOGLE_CLOUD_PROJECT")
+		os.Unsetenv("GCLOUD_PROJECT")
 	}
 }
