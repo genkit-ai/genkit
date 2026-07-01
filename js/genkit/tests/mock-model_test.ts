@@ -19,6 +19,7 @@ import { z } from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
+import { genkit as genkitBeta, type GenkitBeta } from '../src/beta';
 import { genkit, type Genkit } from '../src/genkit';
 
 initNodeFeatures();
@@ -198,5 +199,98 @@ describe('echoModel', () => {
       }),
       /can't satisfy an output schema/
     );
+  });
+});
+
+// These cover the two features most likely to need dedicated helpers —
+// interrupts (human-in-the-loop) and agent handoff — and show that `mockModel`
+// already tests them with no extra machinery: an interrupt is just a tool
+// request the framework turns into a pause, and a handoff is just a
+// prompt-as-tool request. Both live on the beta surface (`chat`, resume).
+describe('mockModel — interrupts and agent handoff', () => {
+  let ai: GenkitBeta;
+
+  beforeEach(() => {
+    ai = genkitBeta({});
+  });
+
+  it('drives an interrupt round-trip, then resumes to completion', async () => {
+    // A human-in-the-loop tool: it interrupts on first run, and completes once
+    // the generation is resumed with an answer.
+    const confirmAction = ai.defineTool(
+      { name: 'confirmAction', description: 'needs human confirmation' },
+      async (_input, { interrupt, resumed }) => {
+        if (resumed) return 'approved';
+        return interrupt({ ask: 'Proceed?' });
+      }
+    );
+
+    let turn = 0;
+    const model = mockModel(ai, {
+      info: { supports: { tools: true } },
+      respond: () =>
+        turn++ === 0
+          ? { toolRequests: [{ name: 'confirmAction', input: {} }] }
+          : { text: 'all done' },
+    });
+
+    // Turn 1: the model calls the tool, the tool interrupts, generation pauses.
+    const paused = await ai.generate({
+      model,
+      prompt: 'do the thing',
+      tools: [confirmAction],
+    });
+    assert.strictEqual(paused.interrupts.length, 1);
+    assert.strictEqual(paused.interrupts[0].toolRequest.name, 'confirmAction');
+
+    // Turn 2: a human approves; resuming re-runs the tool and the model finishes.
+    const finished = await ai.generate({
+      model,
+      messages: paused.messages,
+      tools: [confirmAction],
+      resume: { respond: confirmAction.respond(paused.interrupts[0], 'yes') },
+    });
+
+    assert.strictEqual(finished.text, 'all done');
+    assert.strictEqual(model.requestCount, 2);
+  });
+
+  it('models an agent handoff: a prompt-as-tool swaps the system preamble', async () => {
+    const app = genkitBeta({ model: 'handoffModel' });
+
+    app.definePrompt({
+      name: 'agentB',
+      description: 'Handles B things.',
+      system: 'You are agent B.',
+    });
+    const agentA = app.definePrompt({
+      name: 'agentA',
+      description: 'Handles A things.',
+      system: 'You are agent A.',
+      tools: ['agentB'],
+    });
+
+    const model = mockModel(app, {
+      name: 'handoffModel',
+      info: { supports: { tools: true } },
+      respond: (req) => {
+        // Once agent B's preamble is in the request, we've been handed off —
+        // answer as B. Until then, request the handoff to agentB.
+        const handedOff = req.messages.some((m) =>
+          m.content.some((c) => c.text?.includes('You are agent B'))
+        );
+        return handedOff
+          ? { text: 'handled by agent B' }
+          : { toolRequests: [{ name: 'agentB', input: {} }] };
+      },
+    });
+
+    const chat = app.chat(agentA);
+    const { text } = await chat.send('help me');
+
+    assert.strictEqual(text, 'handled by agent B');
+    // The handoff swapped the preamble the model sees from A to B.
+    assert.match(model.lastRequestText!, /You are agent B/);
+    assert.strictEqual(model.requestCount, 2);
   });
 });
