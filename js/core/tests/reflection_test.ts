@@ -63,6 +63,63 @@ describe('ReflectionServer API', () => {
     });
   }
 
+  async function fetchApiWithHost(
+    path: string,
+    hostHeader?: string,
+    extraHeaders?: Record<string, string>
+  ) {
+    return new Promise<{ status: number; body: any }>((resolve, reject) => {
+      const headers: Record<string, string> = { ...extraHeaders };
+      if (hostHeader !== undefined) {
+        headers.Host = hostHeader;
+      }
+      http
+        .get({ host: 'localhost', port, path, headers }, (res) => {
+          let data = '';
+          res.on('data', (chunk) => {
+            data += chunk;
+          });
+          res.on('end', () => {
+            try {
+              resolve({
+                status: res.statusCode || 200,
+                body: JSON.parse(data),
+              });
+            } catch (e) {
+              resolve({ status: res.statusCode || 200, body: data });
+            }
+          });
+        })
+        .on('error', reject);
+    });
+  }
+
+  it('rejects requests with a non-loopback Host header', async () => {
+    const res = await fetchApiWithHost('/api/actions', 'evil.example.com');
+    assert.strictEqual(res.status, 403);
+    assert.match(res.body.error, /untrusted Host header/);
+  });
+
+  it('allows requests with a loopback Host header', async () => {
+    const res = await fetchApiWithHost('/api/actions', `localhost:${port}`);
+    assert.strictEqual(res.status, 200);
+  });
+
+  it('allows requests with a 127.0.0.1 Host header', async () => {
+    const res = await fetchApiWithHost('/api/actions', `127.0.0.1:${port}`);
+    assert.strictEqual(res.status, 200);
+  });
+
+  it('rejects cross-origin requests to /api/__quitquitquit', async () => {
+    const res = await fetchApiWithHost(
+      '/api/__quitquitquit',
+      `localhost:${port}`,
+      { Origin: 'http://evil.example.com' }
+    );
+    assert.strictEqual(res.status, 403);
+    assert.match(res.body.error, /cross-origin shutdown/);
+  });
+
   it('rejects missing type parameter for /api/values', async () => {
     const res = await fetchApi('/api/values');
     assert.strictEqual(res.status, 400);
