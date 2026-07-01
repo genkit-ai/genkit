@@ -61,6 +61,8 @@ async def wrap_connection_errors(server_address: str) -> AsyncIterator[None]:
     except OllamaConnectionError:
         # Already actionable (e.g. nested wrap); don't re-wrap.
         raise
+    except httpx.TimeoutException as exc:
+        raise OllamaConnectionError(f'Request to Ollama server at {server_address} timed out.') from exc
     except (httpx.TransportError, ConnectionError) as exc:
         raise OllamaConnectionError(
             f'Cannot reach the Ollama server at {server_address}. '
