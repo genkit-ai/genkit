@@ -125,14 +125,17 @@ Ollama(server_address='http://ollama.example.com:11434')
 # Static headers
 Ollama(request_headers={'Authorization': 'Bearer <token>'})
 
-# Async-resolved headers (e.g. minting a short-lived token at startup)
-async def auth_headers() -> dict[str, str]:
-    return {'Authorization': f'Bearer {await mint_token()}'}
+# Async-resolved headers, re-evaluated per request (e.g. minting a short-lived token)
+from genkit.plugins.ollama import RequestHeaderParams
+
+async def auth_headers(params: RequestHeaderParams) -> dict[str, str]:
+    return {'Authorization': f'Bearer {await mint_token(params.server_address)}'}
 
 Ollama(request_headers=auth_headers, timeout=60.0)
 ```
 
-Callable headers are evaluated once during plugin initialization.
+Callable headers are re-evaluated on every request, so short-lived tokens refresh
+automatically. A static dict is applied once to a cached client.
 
 ### Vision models
 
