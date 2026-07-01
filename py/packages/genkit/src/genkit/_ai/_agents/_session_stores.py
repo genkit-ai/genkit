@@ -44,7 +44,7 @@ from genkit._ai._agents._session import (
     StateT,
     select_leaf_snapshot,
 )
-from genkit._core._error import GenkitError, StatusCodes
+from genkit._core._error import GenkitError
 from genkit._core._typing import SessionSnapshot, SnapshotStatus
 
 SaveFn = Callable[[SessionSnapshot | None], SessionSnapshot | None]
@@ -62,7 +62,7 @@ def _require_one_selector(snapshot_id: str | None, session_id: str | None) -> No
     """Enforce that a get_snapshot call names exactly one of snapshot_id / session_id."""
     if bool(snapshot_id) == bool(session_id):
         raise GenkitError(
-            status=StatusCodes.INVALID_ARGUMENT,
+            status='INVALID_ARGUMENT',
             message=(
                 "get_snapshot requires exactly one of 'snapshot_id' or "
                 f"'session_id' (got {'snapshot_id' if snapshot_id else 'neither'}"
@@ -94,7 +94,7 @@ def _select_leaf(
     leaves = [snap for snap in snapshots if snap.snapshot_id not in parent_ids]
     if not leaves:
         raise GenkitError(
-            status=StatusCodes.FAILED_PRECONDITION,
+            status='FAILED_PRECONDITION',
             message=(
                 f"Session '{session_id}' has no leaf snapshot (corrupt or cyclic "
                 'history). Resume by snapshot_id instead.'

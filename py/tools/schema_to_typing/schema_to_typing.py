@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import keyword
 import re
 import sys
 from datetime import datetime
@@ -41,18 +42,9 @@ PRIM = {'string': 'str', 'number': 'float', 'integer': 'int', 'boolean': 'bool'}
 TRANSFORMATIONS = {
     'Message': {'output_name': 'MessageData'},
     'GenerateActionOptions': {'suffix': 'Data', 'omit': ['messages']},
+    # RuntimeError would shadow Python's builtin exception.
+    'RuntimeError': {'output_name': 'GenkitRuntimeError'},
 }
-
-# Inline field enums that should become named StrEnums (no standalone $def in schema).
-# We explicitly map these rather than auto-promoting all inline enums to:
-# 1) Control naming (e.g. `SnapshotStatus` instead of `SessionSnapshotStatus`)
-# 2) Avoid polluting the namespace with Enums for fields where Literals are
-#    ergonomic enough (like `op: Literal['add', 'remove']`).
-INLINE_FIELD_ENUMS: dict[tuple[str, str], str] = {
-    ('SessionSnapshot', 'status'): 'SnapshotStatus',
-}
-
-PYTHON_KEYWORDS = frozenset({'from'})
 
 
 def _output_name(name: str) -> str:
@@ -68,7 +60,7 @@ def _output_name(name: str) -> str:
 
 
 # Emit early to avoid Pydantic forward-ref issues (Schema/ConfigSchema for OutputConfig; Metadata for MessageData etc.)
-PREFERRED_FIRST = ('Schema', 'ConfigSchema', 'Metadata', 'Custom', 'RuntimeError')
+PREFERRED_FIRST = ('Schema', 'ConfigSchema', 'Metadata', 'Custom')
 # anyOf/oneOf defs emitted as RootModel (have .root) so Part(root=TextPart(...)) works
 ROOT_MODEL_UNIONS = frozenset({'Part', 'DocumentPart', 'TraceEvent'})
 HEADER = '''# Copyright {year} Google LLC
@@ -169,76 +161,14 @@ def _typed_map_aliases(defs: dict) -> dict[str, str]:
     return result
 
 
-def _top_level_refs(schema: dict) -> set[str]:
-    """Def names referenced via a top-level ``#/$defs/<Name>`` ref (not a nested ``/properties/`` ref)."""
-    found: set[str] = set()
-
-    def walk(node: object) -> None:
-        if isinstance(node, dict):
-            ref = node.get('$ref')
-            if isinstance(ref, str) and ref.startswith('#/$defs/') and '/' not in ref[len('#/$defs/') :]:
-                found.add(ref[len('#/$defs/') :])
-            for value in node.values():
-                walk(value)
-        elif isinstance(node, list):
-            for value in node:
-                walk(value)
-
-    walk(schema)
-    return found
-
-
-def _alias_defs(defs: dict) -> dict[str, str]:
-    """Detect ``$defs`` that are pure aliases of another ``$def`` -> {alias: target}.
-
-    When the source schema declares one type as another (e.g. zod's
-    ``GenerateResponseChunkSchema = ModelResponseChunkSchema``), the exporter
-    emits a def whose every property is a ``$ref`` into a single other def's
-    ``/properties/<sameName>``, with an identical property set, ``required``, and
-    ``additionalProperties``. Materializing both as standalone classes produces
-    look-alike-but-unrelated types: an instance of one fails validation against a
-    field typed as the other, even though they're the same shape. Emitting the
-    alias as ``Alias = Target`` keeps them a single class so values flow freely.
-
-    The check is deliberately strict: defs that merely *share* some fields via
-    ``/properties/`` refs (Part variants, eval data points) keep their own class.
-    """
-    aliases: dict[str, str] = {}
-    for name, defn in defs.items():
-        if name in EXCLUDED or not isinstance(defn, dict) or defn.get('type') != 'object':
-            continue
-        props = defn.get('properties') or {}
-        if not props:
-            continue
-        target: str | None = None
-        for prop_name, prop in props.items():
-            ref = prop.get('$ref') if isinstance(prop, dict) else None
-            suffix = f'/properties/{prop_name}'
-            if not ref or not ref.startswith('#/$defs/') or not ref.endswith(suffix):
-                target = None
-                break
-            this_target = ref[len('#/$defs/') : -len(suffix)]
-            if '/' in this_target or (target is not None and this_target != target):
-                target = None
-                break
-            target = this_target
-        if target is None:
-            continue
-        tgt = defs.get(target)
-        if target in EXCLUDED or not isinstance(tgt, dict) or tgt.get('type') != 'object':
-            continue
-        if set(props) != set(tgt.get('properties') or {}):
-            continue
-        if set(defn.get('required') or []) != set(tgt.get('required') or []):
-            continue
-        if defn.get('additionalProperties') != tgt.get('additionalProperties'):
-            continue
-        aliases[name] = target
-    return aliases
-
-
 def _extract_inline_classes(schema: dict) -> dict[str, dict]:
-    """Extract inline object schemas to named classes (e.g. Score.details -> Details)."""
+    """Extract inline object schemas to named classes (e.g. Score.details -> Details).
+
+    When two inline schemas across different parents share a derived class
+    name (e.g. ``resume`` on both ``AgentInput`` and ``GenerateActionOptions``),
+    keep the one with the larger property set so the generated dataclass
+    captures the superset of fields.
+    """
     result = {}
     defs = schema.get('$defs') or {}
 
@@ -246,8 +176,11 @@ def _extract_inline_classes(schema: dict) -> dict[str, dict]:
         for prop_name, prop_schema in (props or {}).items():
             if isinstance(prop_schema, dict) and prop_schema.get('type') == 'object' and '$ref' not in prop_schema:
                 class_name = _pascal(prop_name)
-                if class_name not in defs and class_name not in result:
-                    result[class_name] = prop_schema
+                if class_name not in defs:
+                    existing = result.get(class_name)
+                    new_props = prop_schema.get('properties') or {}
+                    if existing is None or len(existing.get('properties') or {}) < len(new_props):
+                        result[class_name] = prop_schema
                 walk(prop_schema.get('properties', {}))
 
     for defn in defs.values():
@@ -312,11 +245,6 @@ def _py_type(prop: dict, schema: dict, defs: dict, class_name: str, field_name: 
         return 'dict[str, Any]'
     if 'enum' in prop:
         vals = prop['enum']
-        inline_enum = INLINE_FIELD_ENUMS.get((class_name, field_name)) or INLINE_FIELD_ENUMS.get(
-            (class_name, _camel_to_snake(field_name))
-        )
-        if inline_enum:
-            return inline_enum
         if field_name in ('tool_choice', 'toolChoice') and set(vals) == {'auto', 'required', 'none'}:
             return 'ToolChoice'
         if field_name in ('constrained',) and set(vals) == {'none', 'all', 'no-tools'}:
@@ -358,18 +286,27 @@ def _emit_model(
     for k, v in props.items():
         # Use schema_ for OutputConfig.schema to avoid shadowing GenkitModel.schema
         snake = _camel_to_snake(k)
+        force_field = False
         if name == 'OutputConfig' and snake == 'schema':
             field_name = 'schema_'
             alias_extra = ", alias='schema'"
         elif snake in ('schema_', 'schema'):
             field_name = 'schema' if name != 'OutputConfig' else 'schema_'
             alias_extra = ", alias='schema'" if name == 'OutputConfig' else ''
+        elif keyword.iskeyword(snake):
+            # Field name is a Python reserved word (e.g. JSON Patch's `from`),
+            # which is a keyword only in Python. Suffix the Python attribute
+            # and pin the wire alias to the original key so the JSON shape is
+            # unchanged. to_camel cannot recover the original name from the
+            # suffixed one, so the alias must be explicit and emitted even for
+            # plain scalar fields (where the default would otherwise be a bare
+            # None that drops the alias).
+            field_name = snake + '_'
+            alias_extra = f', alias={k!r}'
+            force_field = True
         else:
             field_name = snake
             alias_extra = ''
-        if snake in PYTHON_KEYWORDS:
-            field_name = f'{snake}_'
-            alias_extra = f", alias='{snake}'"
         py_type_str = _py_type(v, schema, defs, name, k)
         # OutputConfig.schema is free-form JSON schema object; use dict for direct use
         if name == 'OutputConfig' and snake == 'schema':
@@ -386,7 +323,7 @@ def _emit_model(
         else:
             default_val = (
                 f'Field(default=None{desc_extra}{alias_extra})'
-                if '|' in py_type_str or py_type_str == 'Any'
+                if '|' in py_type_str or py_type_str == 'Any' or force_field
                 else 'None'
             )
             lines.append(f'    {field_name}: {py_type_str} | None = {default_val}')
@@ -404,21 +341,6 @@ def generate(schema_path: Path, _out: Path) -> str:
     defs.update({k: v for k, v in _extract_inline_classes(schema).items() if k not in defs})
     allow_extra = _models_allowing_extra(schema)
     typed_map_aliases = _typed_map_aliases(defs)
-    alias_defs = _alias_defs(defs)
-    top_refs = _top_level_refs(schema)
-    # Collapse each pure-alias pair to a single class. The survivor takes whichever
-    # name the rest of the schema actually references, and the redundant name is
-    # dropped so callers only ever see one type. If both names are referenced, keep
-    # `alias = target` so neither dangles.
-    promote: dict[str, str] = {}  # body def name -> output class name to emit it under
-    drop_alias: set[str] = set()  # alias defs fully superseded by a promoted body
-    alias_lines: dict[str, str] = {}  # alias def -> target output name (emit `alias = target`)
-    for alias, body in alias_defs.items():
-        if alias in top_refs and body not in top_refs:
-            promote[body] = _output_name(alias)
-            drop_alias.add(alias)
-        else:
-            alias_lines[alias] = _output_name(body)
     out = [HEADER.format(year=datetime.now().year, schema_name=schema_path.name)]
     emitted = set()
 
@@ -431,26 +353,13 @@ def generate(schema_path: Path, _out: Path) -> str:
             out.extend(_emit_enum(class_name, defn))
             emitted.add(name)
 
-    # Pass 1b: inline field enums promoted to StrEnums
-    for (model_name, field_name), enum_name in INLINE_FIELD_ENUMS.items():
-        if enum_name in emitted:
-            continue
-        model = defs.get(model_name, {})
-        prop = model.get('properties', {}).get(field_name, {})
-        if 'enum' in prop:
-            out.extend(_emit_enum(enum_name, prop))
-            emitted.add(enum_name)
-
     # Pass 2: object models (must precede root models that reference them)
     # Emit Schema, ConfigSchema, Metadata early (OutputConfig uses Schema; MessageData etc. use Metadata)
     for name in (*PREFERRED_FIRST, *(k for k in defs if k not in PREFERRED_FIRST)):
         defn = defs.get(name, {})
         if name in EXCLUDED or name in emitted or not isinstance(defn, dict) or defn.get('type') != 'object':
             continue
-        # Superseded alias defs are dropped; kept aliases are emitted in Pass 2.4.
-        if name in drop_alias or name in alias_lines:
-            continue
-        class_name = promote.get(name, _output_name(name))
+        class_name = _output_name(name)
         # Metadata and Custom: type aliases for dict (SDK uses .get(), [], passes dict)
         if name == 'Metadata':
             out.extend([
@@ -475,13 +384,6 @@ def generate(schema_path: Path, _out: Path) -> str:
             emitted.add(name)
         else:
             out.extend(_emit_model(class_name, defn, schema, defs, allow_extra))
-        emitted.add(name)
-
-    # Pass 2.4: kept aliases (target name still referenced elsewhere) -> `Alias = Target`.
-    for name in defs:
-        if name in EXCLUDED or name in emitted or name not in alias_lines:
-            continue
-        out.extend([f'{_output_name(name)} = {alias_lines[name]}', ''])
         emitted.add(name)
 
     # Pass 2.5: union types (anyOf/oneOf)

@@ -22,7 +22,7 @@ import asyncio
 import copy
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, cast
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -38,9 +38,9 @@ from genkit._ai._agents._snapshot import walk_back_to_resumable
 from genkit._ai._agents._types import ClientTransform, TurnResult
 from genkit._ai._generate import generate_action
 from genkit._ai._json_patch import diff_json
-from genkit._core._action import ActionRunContext, get_current_context
+from genkit._core._action import ActionRunContext, StreamingCallback, get_current_context
 from genkit._core._channel import CloseableQueue, QueueShutDown
-from genkit._core._error import GenkitError, StatusCodes
+from genkit._core._error import GenkitError
 from genkit._core._model import GenerateActionOptions, Message, ModelResponse, ModelResponseChunk
 from genkit._core._registry import Registry
 from genkit._core._tracing import SpanMetadata, run_in_new_span
@@ -53,10 +53,11 @@ from genkit._core._typing import (
     AgentStreamChunk,
     Artifact,
     FinishReason,
+    GenkitRuntimeError,
     JsonPatch,
+    JsonPatchOp,
     JsonPatchOperation,
     MessageData,
-    RuntimeError as GenkitRuntimeError,
     SessionSnapshot,
     SessionState,
     SnapshotStatus,
@@ -224,7 +225,7 @@ def validate_custom_state(custom: Any, state_schema: type[Any] | None, agent_nam
         # Surface the per-field failures and the expected shape so the caller can
         # see exactly what was wrong, not just that something was.
         raise GenkitError(
-            status=StatusCodes.INVALID_ARGUMENT,
+            status='INVALID_ARGUMENT',
             message=(
                 f"Invalid custom state for agent '{agent_name}': {e.error_count()} schema validation error(s).\n{e}"
             ),
@@ -254,13 +255,13 @@ async def load_session(
 
     if init.snapshot_id and init.session_id:
         raise GenkitError(
-            status=StatusCodes.INVALID_ARGUMENT,
+            status='INVALID_ARGUMENT',
             message=(f"Cannot send both 'snapshot_id' and 'session_id' to agent '{name}'. Provide exactly one."),
         )
     if (init.snapshot_id or init.session_id) and store is None:
         field = 'snapshot_id' if init.snapshot_id else 'session_id'
         raise GenkitError(
-            status=StatusCodes.FAILED_PRECONDITION,
+            status='FAILED_PRECONDITION',
             message=(
                 f"Cannot use '{field}' with agent '{name}': this agent has no "
                 "store configured (client-managed state). Send 'state' instead."
@@ -268,7 +269,7 @@ async def load_session(
         )
     if init.state is not None and store is not None:
         raise GenkitError(
-            status=StatusCodes.FAILED_PRECONDITION,
+            status='FAILED_PRECONDITION',
             message=(
                 f"Cannot send 'state' to agent '{name}': this agent uses a "
                 "server-managed store. Send 'snapshot_id' or 'session_id' instead."
@@ -279,21 +280,21 @@ async def load_session(
         snap = await store.get_snapshot(snapshot_id=init.snapshot_id)
         if snap is None:
             raise GenkitError(
-                status=StatusCodes.NOT_FOUND,
+                status='NOT_FOUND',
                 message=f'Snapshot {init.snapshot_id!r} not found',
             )
         # A failed/aborted/pending snapshot is kept for inspection but isn't a
         # valid place to continue a conversation from.
         if snap.status != SnapshotStatus.COMPLETED:
             raise GenkitError(
-                status=StatusCodes.INVALID_ARGUMENT,
+                status='INVALID_ARGUMENT',
                 message=(
                     f'Snapshot {init.snapshot_id!r} is not resumable '
                     f'(status: {snap.status.value if snap.status else "unknown"}). '
                     "Only 'completed' snapshots can be resumed."
                 ),
             )
-        validate_custom_state(snap.state.custom, state_schema, name)
+        validate_custom_state(snap.state.custom if snap.state else None, state_schema, name)
         return Session(initial_state=snap.state), snap
 
     session_id = init.session_id
@@ -305,7 +306,7 @@ async def load_session(
         # resumed — fall back to the last good snapshot behind it.
         snap = await walk_back_to_resumable(store, await store.get_snapshot(session_id=session_id))
         if snap is not None:
-            validate_custom_state(snap.state.custom, state_schema, name)
+            validate_custom_state(snap.state.custom if snap.state else None, state_schema, name)
             return Session(initial_state=snap.state), snap
         return (
             Session(
@@ -393,7 +394,7 @@ class AgentRuntime:
         if self.first_custom_patch_in_turn:
             # Send full state on the first patch of a turn to re-base the client.
             ops: list[JsonPatchOperation] = [
-                JsonPatchOperation(op='replace', path='', value=copy.deepcopy(transformed))
+                JsonPatchOperation(op=JsonPatchOp.REPLACE, path='', value=copy.deepcopy(transformed))
             ]
             self.first_custom_patch_in_turn = False
         else:
@@ -580,7 +581,7 @@ class AgentRuntime:
                 parent_id=pending_snap.parent_id or '',
                 status=SnapshotStatus.FAILED if fn_err else SnapshotStatus.COMPLETED,
                 state=state,
-                error=(GenkitRuntimeError(status=StatusCodes.INTERNAL, message=str(fn_err)) if fn_err else None),
+                error=(to_error_details(fn_err) if fn_err else None),
                 finish_reason=finish_reason,
                 created_at=existing.created_at if existing else now,
             )
@@ -602,7 +603,7 @@ class AgentRuntime:
         abort_signal = asyncio.Event()
         action_ctx = ActionRunContext(
             context=get_current_context(),
-            streaming_callback=self.send_chunk,
+            streaming_callback=cast(StreamingCallback, self.send_chunk),
             abort_signal=abort_signal,
         )
 

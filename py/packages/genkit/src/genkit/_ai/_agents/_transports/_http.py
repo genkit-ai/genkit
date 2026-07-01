@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from genkit._ai._agents._client import AgentClient, AgentTransport
 from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
@@ -185,7 +185,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
         if not isinstance(result, dict):
             return None
         status_val = result.get('status')
-        return SnapshotStatus(status_val) if status_val else None
+        return cast(SnapshotStatus, SnapshotStatus(status_val)) if status_val else None
 
     async def close(self) -> None:
         """Close the underlying bidi connection."""

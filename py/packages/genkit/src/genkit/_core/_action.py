@@ -32,7 +32,7 @@ from typing_extensions import Never, TypeVar
 
 from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
-from genkit._core._error import GenkitError, StatusCodes
+from genkit._core._error import GenkitError
 from genkit._core._schema import to_json_schema
 from genkit._core._trace._suppress import suppress_telemetry
 from genkit._core._tracing import SpanMetadata, run_in_new_span
@@ -592,11 +592,11 @@ class Action(Generic[InputT, OutputT, ChunkT]):
                         f"Action '{self.name}' requires input but none was provided. "
                         'Please supply a valid input payload.'
                     ),
-                    status=StatusCodes.INVALID_ARGUMENT,
+                    status='INVALID_ARGUMENT',
                 ) from e
             raise GenkitError(
                 message=f"Invalid input for action '{self.name}': {e}",
-                status=StatusCodes.INVALID_ARGUMENT,
+                status='INVALID_ARGUMENT',
                 cause=e,
             ) from e
 
@@ -730,7 +730,7 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
                     'already been closed. No further inputs can be sent after close() '
                     'is called.'
                 ),
-                status=StatusCodes.FAILED_PRECONDITION,
+                status='FAILED_PRECONDITION',
             )
         await self.in_queue.put(item)
 
@@ -831,7 +831,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
         if validated is None:
             raise GenkitError(
                 message=f"Action '{self.name}' requires input but none was provided.",
-                status=StatusCodes.INVALID_ARGUMENT,
+                status='INVALID_ARGUMENT',
             )
         input = validated
 

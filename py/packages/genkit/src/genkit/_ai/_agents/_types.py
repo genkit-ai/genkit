@@ -25,7 +25,7 @@ from typing import Literal, TypedDict
 from genkit._core._typing import (
     AgentFinishReason,
     AgentStreamChunk,
-    RuntimeError as GenkitRuntimeError,
+    GenkitRuntimeError,
     SessionState,
 )
 

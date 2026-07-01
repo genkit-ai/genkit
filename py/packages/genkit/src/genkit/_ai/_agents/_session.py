@@ -25,7 +25,7 @@ from typing import Any, Generic, Protocol, cast, runtime_checkable
 
 from typing_extensions import TypeVar as TypeVarExt
 
-from genkit._core._error import GenkitError, StatusCodes
+from genkit._core._error import GenkitError
 from genkit._core._typing import (
     Artifact,
     MessageData,
@@ -126,7 +126,7 @@ def select_leaf_snapshot(
 
     if not leaves:
         raise GenkitError(
-            status=StatusCodes.FAILED_PRECONDITION,
+            status='FAILED_PRECONDITION',
             message=(
                 f"Session '{session_id}' has no leaf snapshot (corrupt or cyclic "
                 'history). Resume by snapshot_id instead.'
@@ -134,7 +134,7 @@ def select_leaf_snapshot(
         )
 
     raise GenkitError(
-        status=StatusCodes.FAILED_PRECONDITION,
+        status='FAILED_PRECONDITION',
         message=(
             f"Session '{session_id}' has branching snapshots ({len(leaves)} "
             'leaves), so there is no single latest snapshot. This happens when a '

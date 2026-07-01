@@ -23,7 +23,7 @@ from typing import Any
 
 from genkit._ai._agents._session import SessionStore
 from genkit._ai._agents._types import ClientTransform
-from genkit._core._error import GenkitError, StatusCodes
+from genkit._core._error import GenkitError
 from genkit._core._typing import SessionSnapshot, SnapshotStatus
 
 DEFAULT_HEARTBEAT_TIMEOUT_MS = 60_000
@@ -45,7 +45,7 @@ async def walk_back_to_resumable(
     while snapshot is not None and snapshot.status != SnapshotStatus.COMPLETED:
         if snapshot.snapshot_id in visited:
             raise GenkitError(
-                status=StatusCodes.FAILED_PRECONDITION,
+                status='FAILED_PRECONDITION',
                 message=(
                     f'Snapshot parent chain for {snapshot.snapshot_id!r} is cyclic '
                     '(a snapshot was visited twice). Resume by snapshot_id instead.'
