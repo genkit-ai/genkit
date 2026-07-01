@@ -18,6 +18,7 @@ package ollama_test
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"testing"
 
@@ -77,6 +78,57 @@ func TestLive(t *testing.T) {
 	// Assert that the response text is as expected
 	if text == "" {
 		t.Fatalf("expected non-empty response, got: %s", text)
+	}
+}
+
+// TestLiveStructuredOutput verifies native schema-constrained output against a running Ollama server.
+func TestLiveStructuredOutput(t *testing.T) {
+	if !*testLive {
+		t.Skip("skipping go/plugins/ollama live structured output test")
+	}
+
+	ctx := context.Background()
+	o := &ollamaPlugin.Ollama{ServerAddress: *serverAddress, Timeout: 60}
+	g := genkit.Init(ctx, genkit.WithPlugins(o))
+	o.DefineModel(g, ollamaPlugin.ModelDefinition{Name: *modelName, Type: "chat"}, nil)
+
+	m := ollamaPlugin.Model(g, *modelName)
+	if m == nil {
+		t.Fatalf("failed to find model: %s", *modelName)
+	}
+
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "integer"},
+		},
+		"required": []string{"answer"},
+	}
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithModel(m),
+		ai.WithPrompt("What is 2 + 2? Respond with a JSON object."),
+		ai.WithOutputSchema(schema),
+	)
+	if err != nil {
+		t.Fatalf("failed to generate structured output: %v", err)
+	}
+	text := resp.Text()
+	t.Logf("structured output response: %s", text)
+	if text == "" {
+		t.Fatal("expected non-empty response")
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+		t.Fatalf("response is not valid JSON: %v\nresponse: %s", err, text)
+	}
+	answerRaw, ok := parsed["answer"]
+	if !ok {
+		t.Fatalf("response JSON missing required key \"answer\": %s", text)
+	}
+	// JSON numbers unmarshal as float64; any numeric value is acceptable.
+	if _, ok := answerRaw.(float64); !ok {
+		t.Errorf("expected \"answer\" to be a number, got %T: %v", answerRaw, answerRaw)
 	}
 }
 
