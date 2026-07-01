@@ -188,7 +188,10 @@ class HttpAgentTransport(AgentTransport[StateT]):
         if not isinstance(result, dict):
             return None
         status_val = result.get('status')
-        return SnapshotStatus(status_val) if status_val else None
+        if not status_val:
+            return None
+        out: Any = SnapshotStatus(status_val)
+        return out
 
     async def close(self) -> None:
         """Close the underlying bidi connection."""
