@@ -230,7 +230,7 @@ class DictMessageAdapter:
 
     @property
     def content(self) -> str | None:
-        """Returns the 'content' of the message if available.
+        """The 'content' of the message if available.
 
         Returns:
             The message content or None.
@@ -239,7 +239,7 @@ class DictMessageAdapter:
 
     @property
     def tool_calls(self) -> list | None:
-        """Returns the 'tool_calls' list if present in the message.
+        """The 'tool_calls' list if present in the message.
 
         Returns:
             A list of tool calls or None.
@@ -248,7 +248,7 @@ class DictMessageAdapter:
 
     @property
     def role(self) -> str | None:
-        """Returns the role of the message.
+        """The role of the message.
 
         Returns:
             The role string or None.
@@ -257,7 +257,7 @@ class DictMessageAdapter:
 
     @property
     def reasoning_content(self) -> str | None:
-        """Returns the 'reasoning_content' if present in the message.
+        """The 'reasoning_content' if present in the message.
 
         Returns:
             The reasoning content string or None.
@@ -278,7 +278,7 @@ class MessageAdapter:
 
     @property
     def content(self) -> str | None:
-        """Returns the 'content' attribute of the message if available.
+        """The 'content' attribute of the message if available.
 
         Returns:
             The message content or None.
@@ -287,7 +287,7 @@ class MessageAdapter:
 
     @property
     def tool_calls(self) -> list | None:
-        """Returns the 'tool_calls' attribute of the message if available.
+        """The 'tool_calls' attribute of the message if available.
 
         Returns:
             A list of tool calls or None.
@@ -296,7 +296,7 @@ class MessageAdapter:
 
     @property
     def role(self) -> str | None:
-        """Returns the 'role' attribute of the message if available.
+        """The 'role' attribute of the message if available.
 
         Returns:
             The role string or None.
@@ -305,7 +305,7 @@ class MessageAdapter:
 
     @property
     def reasoning_content(self) -> str | None:
-        """Returns the 'reasoning_content' attribute if available.
+        """The 'reasoning_content' attribute if available.
 
         DeepSeek R1/reasoner models return chain-of-thought reasoning
         in this separate field alongside the regular content.

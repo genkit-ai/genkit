@@ -104,21 +104,13 @@ class Role(StrEnum):
     TOOL = 'tool'
 
 
-class Schema(GenkitModel):
-    """Model for schema data."""
+Schema = dict[str, Any]  # type alias for flexible JSON schema / dictionary data
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+ConfigSchema = dict[str, Any]  # type alias for flexible JSON schema / dictionary data
 
+Metadata = dict[str, Any]  # type alias for flexible JSON schema / dictionary data
 
-class ConfigSchema(GenkitModel):
-    """Model for configschema data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-
-
-Metadata = dict[str, Any]  # type alias for flexible metadata
-
-Custom = dict[str, Any]  # type alias for flexible custom data
+Custom = dict[str, Any]  # type alias for flexible JSON schema / dictionary data
 
 
 class AgentAbortRequest(GenkitModel):
@@ -367,7 +359,7 @@ class MiddlewareDesc(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     name: str = Field(...)
     description: str | None = None
-    config_schema: Any | ConfigSchema | None = Field(default=None)
+    config_schema: ConfigSchema | Any | None = Field(default=None)
     metadata: Metadata | None = None
 
 
@@ -644,10 +636,10 @@ class ToolDefinition(GenkitModel):
     name: str = Field(...)
     key: str | None = None
     description: str = Field(...)
-    input_schema: Any | dict[str, Any] | None = Field(
+    input_schema: dict[str, Any] | Any | None = Field(
         default=None, description='Valid JSON Schema representing the input of the tool.'
     )
-    output_schema: Any | dict[str, Any] | None = Field(
+    output_schema: dict[str, Any] | Any | None = Field(
         default=None, description='Valid JSON Schema describing the output of the tool.'
     )
     metadata: Metadata | None = None
@@ -720,7 +712,7 @@ class ActionMetadata(GenkitModel):
     name: str = Field(...)
     description: str | None = None
     input_schema: Any | None = Field(default=None)
-    input_json_schema: Any | dict[str, Any] | None = Field(
+    input_json_schema: dict[str, Any] | Any | None = Field(
         default=None, description='A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object.'
     )
     output_schema: Any | None = Field(default=None)
@@ -966,7 +958,7 @@ class Resume(GenkitModel):
 class StateSchema(GenkitModel):
     """Model for stateschema data."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
 
 
 class Details(GenkitModel):
@@ -1025,13 +1017,13 @@ class Resource(GenkitModel):
 class Actions(GenkitModel):
     """Model for actions data."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
 
 
 class Values(GenkitModel):
     """Model for values data."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
 
 
 TelemetryLabels = dict[str, str]  # type alias for telemetrylabels (typed string map)
@@ -1047,7 +1039,7 @@ class State(GenkitModel):
 class Attributes(GenkitModel):
     """Model for attributes data."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
 
 
 class SameProcessAsParentSpan(GenkitModel):
@@ -1075,7 +1067,7 @@ class Annotation(GenkitModel):
 class Spans(GenkitModel):
     """Model for spans data."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
 
 
 class DocumentPart(RootModel[TextPart | MediaPart]):
