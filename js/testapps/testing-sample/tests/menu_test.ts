@@ -26,11 +26,12 @@ import { createMenuApp } from '../src/menu.js';
 // shared registry.
 type App = ReturnType<typeof createMenuApp>;
 let ai: App['ai'];
+let confirmBooking: App['confirmBooking'];
 let recommendDish: App['recommendDish'];
 let recommendPrompt: App['recommendPrompt'];
 let streamRecommendation: App['streamRecommendation'];
 beforeEach(() => {
-  ({ ai, recommendDish, recommendPrompt, streamRecommendation } =
+  ({ ai, confirmBooking, recommendDish, recommendPrompt, streamRecommendation } =
     createMenuApp());
 });
 
@@ -207,5 +208,97 @@ describe('streamRecommendation flow — streaming through the flow', () => {
 
     assert.deepEqual(chunks, ['Try ', 'the ', 'risotto.']);
     assert.equal(await output, 'Try the risotto.');
+  });
+});
+
+describe('scripting responses with a queue', () => {
+  it('scripts a two-turn tool interaction with an array of responses', async () => {
+    const model = mockModel(ai, {
+      name: 'menuModel',
+      info: { supports: { tools: true } },
+      // Turn 1: ask for the special. Turn 2: return the recommendation. The
+      // array is consumed one item per call, so no branching callback is needed.
+      respond: [
+        {
+          toolRequests: [
+            { name: 'dailySpecial', input: { restaurant: 'Lumen' } },
+          ],
+        },
+        {
+          text: JSON.stringify({
+            dish: 'Mushroom risotto',
+            reason: "It's the daily special.",
+            priceUSD: 22,
+          }),
+        },
+      ],
+    });
+
+    const out = await recommendDish({
+      restaurant: 'Lumen',
+      mood: 'curious',
+      budgetUSD: 40,
+    });
+
+    assert.equal(out.dish, 'Mushroom risotto');
+    assert.equal(model.requestCount, 2);
+    assert.equal(model.toolResponses[0]?.name, 'dailySpecial');
+  });
+});
+
+describe('model failure handling', () => {
+  it('surfaces a model error injected via a queued Error', async () => {
+    // A queued Error is thrown when reached — here on the very first call — so
+    // you can test how a flow behaves when the model fails.
+    mockModel(ai, {
+      name: 'menuModel',
+      respond: [new Error('model overloaded')],
+    });
+
+    await assert.rejects(
+      recommendDish({ restaurant: 'Lumen', mood: 'cozy', budgetUSD: 30 }),
+      /model overloaded/
+    );
+  });
+});
+
+describe('human-in-the-loop with interrupts', () => {
+  it('pauses on confirmBooking, then resumes to complete the booking', async () => {
+    const model = mockModel(ai, {
+      name: 'menuModel',
+      info: { supports: { tools: true } },
+      respond: [
+        {
+          toolRequests: [
+            { name: 'confirmBooking', input: { dish: 'Mushroom risotto' } },
+          ],
+        },
+        { text: 'Enjoy your meal!' },
+      ],
+    });
+
+    // First pass: the tool interrupts, so generation pauses awaiting the human.
+    const paused = await ai.generate({
+      model,
+      prompt: 'Book the risotto.',
+      tools: [confirmBooking],
+    });
+    assert.equal(paused.interrupts.length, 1);
+    assert.equal(paused.interrupts[0].toolRequest.name, 'confirmBooking');
+
+    // The human confirms; `restart` re-runs the tool with the decision (so its
+    // `resumed` branch books the dish), then the model finishes.
+    const done = await ai.generate({
+      model,
+      messages: paused.messages,
+      tools: [confirmBooking],
+      resume: {
+        restart: confirmBooking.restart(paused.interrupts[0], { confirmed: true }),
+      },
+    });
+
+    assert.equal(done.text, 'Enjoy your meal!');
+    assert.equal(model.requestCount, 2);
+    assert.match(String(model.toolResponses[0]?.output), /Booked: Mushroom risotto/);
   });
 });

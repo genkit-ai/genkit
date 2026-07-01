@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
-import { genkit, z } from 'genkit';
+// `genkit/beta` is a superset of `genkit` — used here because the
+// human-in-the-loop `confirmBooking` tool relies on interrupts, a beta feature.
+// Everything else in this app works identically on the stable `genkit` entry.
+import { genkit } from 'genkit/beta';
+import { z } from 'genkit';
 
 /** What we ask the model to produce: a structured recommendation. */
 export const RecommendationSchema = z.object({
@@ -134,9 +138,29 @@ export function createMenuApp() {
     }
   );
 
+  /**
+   * A human-in-the-loop tool: booking a dish needs explicit confirmation, so the
+   * tool `interrupt()`s on first run to hand control back to the caller, and
+   * completes once generation is resumed with the human's answer. Tests drive
+   * the pause -> resume round-trip with `mockModel` (see menu_test.ts).
+   */
+  const confirmBooking = ai.defineTool(
+    {
+      name: 'confirmBooking',
+      description: 'Confirm with the user before booking a dish.',
+      inputSchema: z.object({ dish: z.string() }),
+      outputSchema: z.string(),
+    },
+    async ({ dish }, { interrupt, resumed }) => {
+      if (resumed) return `Booked: ${dish}.`;
+      return interrupt({ dish });
+    }
+  );
+
   return {
     ai,
     dailySpecial,
+    confirmBooking,
     recommendPrompt,
     recommendDish,
     streamRecommendation,
@@ -150,6 +174,7 @@ export function createMenuApp() {
 export const {
   ai,
   dailySpecial,
+  confirmBooking,
   recommendPrompt,
   recommendDish,
   streamRecommendation,

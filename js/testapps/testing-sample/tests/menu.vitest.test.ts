@@ -24,11 +24,12 @@ import { createMenuApp } from '../src/menu.js';
 // unchanged.
 type App = ReturnType<typeof createMenuApp>;
 let ai: App['ai'];
+let confirmBooking: App['confirmBooking'];
 let recommendDish: App['recommendDish'];
 let recommendPrompt: App['recommendPrompt'];
 let streamRecommendation: App['streamRecommendation'];
 beforeEach(() => {
-  ({ ai, recommendDish, recommendPrompt, streamRecommendation } =
+  ({ ai, confirmBooking, recommendDish, recommendPrompt, streamRecommendation } =
     createMenuApp());
 });
 
@@ -105,6 +106,50 @@ describe('recommendDish flow — tool round-trip (vitest)', () => {
 
     expect(out.dish).toBe('Mushroom risotto');
     expect(model.requestCount).toBe(2);
+    expect(model.toolResponses[0]?.name).toBe('dailySpecial');
+  });
+});
+
+describe('human-in-the-loop with interrupts (vitest)', () => {
+  it('pauses on confirmBooking, then resumes to complete the booking', async () => {
+    const model = mockModel(ai, {
+      name: 'menuModel',
+      info: { supports: { tools: true } },
+      // Queued responses: request the interrupting tool, then answer.
+      respond: [
+        {
+          toolRequests: [
+            { name: 'confirmBooking', input: { dish: 'Mushroom risotto' } },
+          ],
+        },
+        { text: 'Enjoy your meal!' },
+      ],
+    });
+
+    const paused = await ai.generate({
+      model,
+      prompt: 'Book the risotto.',
+      tools: [confirmBooking],
+    });
+    expect(paused.interrupts.length).toBe(1);
+    expect(paused.interrupts[0].toolRequest.name).toBe('confirmBooking');
+
+    const done = await ai.generate({
+      model,
+      messages: paused.messages,
+      tools: [confirmBooking],
+      resume: {
+        restart: confirmBooking.restart(paused.interrupts[0], {
+          confirmed: true,
+        }),
+      },
+    });
+
+    expect(done.text).toBe('Enjoy your meal!');
+    expect(model.requestCount).toBe(2);
+    expect(String(model.toolResponses[0]?.output)).toMatch(
+      /Booked: Mushroom risotto/
+    );
   });
 });
 
