@@ -522,6 +522,26 @@ async def test_model_action_does_not_wrap_media_fetch_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_embedder_action_wraps_connection_error() -> None:
+    """The embedder action surfaces a down server as OllamaConnectionError.
+
+    Mirrors the model/list_actions paths so the embedder endpoint's connection
+    wrapping cannot silently regress.
+    """
+    plugin = Ollama(embedders=[EmbeddingDefinition(name='e')])
+
+    client_mock = MagicMock()
+    client_mock.embed = AsyncMock(side_effect=ConnectionError('Failed to connect to Ollama.'))
+    plugin.client = lambda: client_mock
+
+    action = plugin._create_embedder_action(ollama_name('e'))
+    request = EmbedRequest(input=[Document.from_text(text='hello')])
+
+    with pytest.raises(OllamaConnectionError):
+        await action._fn(request)
+
+
+@pytest.mark.asyncio
 async def test_wrap_connection_errors_translates_transport_error() -> None:
     """wrap_connection_errors turns an httpx TransportError into OllamaConnectionError."""
     with pytest.raises(OllamaConnectionError) as exc_info:
@@ -529,6 +549,18 @@ async def test_wrap_connection_errors_translates_transport_error() -> None:
             raise httpx.ConnectError('refused')
 
     assert 'http://localhost:11434' in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_wrap_connection_errors_timeout_has_distinct_message() -> None:
+    """A timeout gets its own 'timed out' message, not the generic unreachable one."""
+    with pytest.raises(OllamaConnectionError) as exc_info:
+        async with wrap_connection_errors('http://localhost:11434'):
+            raise httpx.ReadTimeout('slow')
+
+    message = str(exc_info.value)
+    assert 'timed out' in message
+    assert 'http://localhost:11434' in message
 
 
 @pytest.mark.asyncio
