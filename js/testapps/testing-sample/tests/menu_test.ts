@@ -31,8 +31,13 @@ let recommendDish: App['recommendDish'];
 let recommendPrompt: App['recommendPrompt'];
 let streamRecommendation: App['streamRecommendation'];
 beforeEach(() => {
-  ({ ai, confirmBooking, recommendDish, recommendPrompt, streamRecommendation } =
-    createMenuApp());
+  ({
+    ai,
+    confirmBooking,
+    recommendDish,
+    recommendPrompt,
+    streamRecommendation,
+  } = createMenuApp());
 });
 
 // Structured output is the highest-value case: the model returns JSON, and the
@@ -92,7 +97,10 @@ describe('recommendDish flow — structured output + business logic', () => {
 
     await recommendDish({ restaurant: 'Lumen', mood: 'cozy', budgetUSD: 30 });
 
-    assert.match(model.lastRequestText!, /You are a concise restaurant concierge/);
+    assert.match(
+      model.lastRequestText!,
+      /You are a concise restaurant concierge/
+    );
     assert.match(
       model.lastRequestText!,
       /Recommend a dish at Lumen for someone feeling cozy/
@@ -293,12 +301,17 @@ describe('human-in-the-loop with interrupts', () => {
       messages: paused.messages,
       tools: [confirmBooking],
       resume: {
-        restart: confirmBooking.restart(paused.interrupts[0], { confirmed: true }),
+        restart: confirmBooking.restart(paused.interrupts[0], {
+          confirmed: true,
+        }),
       },
     });
 
     assert.equal(done.text, 'Enjoy your meal!');
     assert.equal(model.requestCount, 2);
-    assert.match(String(model.toolResponses[0]?.output), /Booked: Mushroom risotto/);
+    assert.match(
+      String(model.toolResponses[0]?.output),
+      /Booked: Mushroom risotto/
+    );
   });
 });

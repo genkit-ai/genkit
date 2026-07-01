@@ -131,7 +131,11 @@ export type MockModel = ModelAction & {
    * assert.deepStrictEqual(model.toolResponses.map((t) => t.name), ['lookup']);
    * ```
    */
-  readonly toolResponses: Array<{ name: string; ref?: string; output: unknown }>;
+  readonly toolResponses: Array<{
+    name: string;
+    ref?: string;
+    output: unknown;
+  }>;
   /** Every request this model received, oldest first. */
   readonly requests: GenerateRequest[];
   /** How many times this model was called. */
@@ -140,6 +144,26 @@ export type MockModel = ModelAction & {
 
 function resolveRegistry(registry: Registry | HasRegistry): Registry {
   return (registry as HasRegistry).registry ?? (registry as Registry);
+}
+
+/**
+ * Snapshots a request so later mutation can't alter recorded history. Prefers a
+ * deep `structuredClone`, but falls back to a message/part-level copy when the
+ * request carries non-serializable values (e.g. a function or class instance in
+ * `config`), which would otherwise throw a `DataCloneError`.
+ */
+function cloneRequest(request: GenerateRequest): GenerateRequest {
+  try {
+    return structuredClone(request);
+  } catch {
+    return {
+      ...request,
+      messages: request.messages.map((m) => ({
+        ...m,
+        content: m.content.map((c) => ({ ...c })),
+      })),
+    };
+  }
 }
 
 function toChunkData(chunk: MockChunk): GenerateResponseChunkData {
@@ -168,7 +192,8 @@ function renderPart(part: Part): string {
   if (part.reasoning !== undefined) return `[reasoning: ${part.reasoning}]`;
   if (part.resource) return `[resource: ${part.resource.uri}]`;
   if (part.data !== undefined) return `[data: ${JSON.stringify(part.data)}]`;
-  if (part.custom !== undefined) return `[custom: ${JSON.stringify(part.custom)}]`;
+  if (part.custom !== undefined)
+    return `[custom: ${JSON.stringify(part.custom)}]`;
   return '';
 }
 
@@ -195,9 +220,7 @@ function renderRequestText(request: GenerateRequest): string {
  * queue consumed one item per call, with the last item repeating once
  * exhausted; a queued `Error` is thrown when reached.
  */
-function toRespondFn(
-  respond: MockModelOptions['respond']
-): MockRespondFn {
+function toRespondFn(respond: MockModelOptions['respond']): MockRespondFn {
   if (!Array.isArray(respond)) {
     return respond ?? (() => ({ text: '' }));
   }
@@ -214,6 +237,11 @@ function toRespondFn(
 }
 
 function toResponseData(response: MockResponse): GenerateResponseData {
+  // A `respond` that streams but returns nothing (void) yields an empty message
+  // rather than throwing on the `'message' in response` check below.
+  if (!response) {
+    return { message: { role: 'model', content: [] }, finishReason: 'stop' };
+  }
   if (typeof response === 'string') {
     return {
       message: { role: 'model', content: [{ text: response }] },
@@ -292,7 +320,7 @@ export function mockModel(
     },
     async (request, { sendChunk }) => {
       // Snapshot so later mutation of the request can't alter recorded history.
-      requests.push(structuredClone(request));
+      requests.push(cloneRequest(request));
       const context: MockContext = {
         sendChunk: (chunk) => sendChunk?.(toChunkData(chunk)),
       };
@@ -302,11 +330,11 @@ export function mockModel(
 
   Object.defineProperties(model, {
     // Return clones so callers can't mutate recorded history through a view.
-    requests: { get: () => requests.map((r) => structuredClone(r)) },
+    requests: { get: () => requests.map((r) => cloneRequest(r)) },
     lastRequest: {
       get: () => {
         const last = requests[requests.length - 1];
-        return last ? structuredClone(last) : undefined;
+        return last ? cloneRequest(last) : undefined;
       },
     },
     lastRequestMessage: {

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { echoModel, mockModel } from '@genkit-ai/ai/testing';
+import { echoModel, mockModel, type MockResponse } from '@genkit-ai/ai/testing';
 import { z } from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import * as assert from 'assert';
@@ -34,8 +34,10 @@ describe('mockModel', () => {
   it('returns the scripted text and records the request', async () => {
     const model = mockModel(ai, { respond: () => ({ text: 'a summary' }) });
 
-    const summarize = ai.defineFlow('summarize', async (doc: string) =>
-      (await ai.generate({ model, prompt: `Summarize: ${doc}` })).text
+    const summarize = ai.defineFlow(
+      'summarize',
+      async (doc: string) =>
+        (await ai.generate({ model, prompt: `Summarize: ${doc}` })).text
     );
 
     assert.strictEqual(await summarize('long text'), 'a summary');
@@ -153,7 +155,10 @@ describe('mockModel', () => {
   it('consumes an array of responses one per call, repeating the last', async () => {
     const model = mockModel(ai, { respond: ['first', 'second'] });
 
-    assert.strictEqual((await ai.generate({ model, prompt: 'a' })).text, 'first');
+    assert.strictEqual(
+      (await ai.generate({ model, prompt: 'a' })).text,
+      'first'
+    );
     assert.strictEqual(
       (await ai.generate({ model, prompt: 'b' })).text,
       'second'
@@ -172,10 +177,7 @@ describe('mockModel', () => {
     });
 
     assert.strictEqual((await ai.generate({ model, prompt: 'a' })).text, 'ok');
-    await assert.rejects(
-      ai.generate({ model, prompt: 'b' }),
-      /rate limited/
-    );
+    await assert.rejects(ai.generate({ model, prompt: 'b' }), /rate limited/);
   });
 
   it('exposes tool results fed back to the model via toolResponses', async () => {
@@ -192,7 +194,10 @@ describe('mockModel', () => {
     const model = mockModel(ai, {
       info: { supports: { tools: true } },
       // A queued tool loop: request the tool, then answer.
-      respond: [{ toolRequests: [{ name: 'lookup', input: { id: 1 } }] }, 'done'],
+      respond: [
+        { toolRequests: [{ name: 'lookup', input: { id: 1 } }] },
+        'done',
+      ],
     });
 
     await ai.generate({ model, prompt: 'go', tools: [lookup] });
@@ -202,6 +207,27 @@ describe('mockModel', () => {
       ['lookup']
     );
     assert.strictEqual(model.toolResponses[0].output, 'item-1');
+  });
+
+  it('treats a falsy respond result as an empty response', async () => {
+    // A callback that streams but forgets to return (void) must not crash.
+    const model = mockModel(ai, {
+      respond: () => undefined as unknown as MockResponse,
+    });
+    const res = await ai.generate({ model, prompt: 'x' });
+    assert.strictEqual(res.text, '');
+  });
+
+  it('records a request even when it carries a non-serializable value', async () => {
+    const model = mockModel(ai, { respond: () => 'ok' });
+    // A function in config can't be structuredClone'd; recording must not throw.
+    await ai.generate({
+      model,
+      prompt: 'hi',
+      config: { onEvent: () => 1 } as unknown as Record<string, unknown>,
+    });
+    assert.strictEqual(model.requestCount, 1);
+    assert.match(model.lastRequestText!, /hi/);
   });
 
   it('flattens the whole assembled request via lastRequestText', async () => {

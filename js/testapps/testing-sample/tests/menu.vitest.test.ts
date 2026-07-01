@@ -29,8 +29,13 @@ let recommendDish: App['recommendDish'];
 let recommendPrompt: App['recommendPrompt'];
 let streamRecommendation: App['streamRecommendation'];
 beforeEach(() => {
-  ({ ai, confirmBooking, recommendDish, recommendPrompt, streamRecommendation } =
-    createMenuApp());
+  ({
+    ai,
+    confirmBooking,
+    recommendDish,
+    recommendPrompt,
+    streamRecommendation,
+  } = createMenuApp());
 });
 
 describe('recommendDish flow — structured output + business logic (vitest)', () => {

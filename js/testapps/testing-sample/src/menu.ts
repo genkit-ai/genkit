@@ -17,8 +17,8 @@
 // `genkit/beta` is a superset of `genkit` — used here because the
 // human-in-the-loop `confirmBooking` tool relies on interrupts, a beta feature.
 // Everything else in this app works identically on the stable `genkit` entry.
-import { genkit } from 'genkit/beta';
 import { z } from 'genkit';
+import { genkit } from 'genkit/beta';
 
 /** What we ask the model to produce: a structured recommendation. */
 export const RecommendationSchema = z.object({
