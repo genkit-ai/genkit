@@ -31,7 +31,7 @@ func main() {
 
 	// Define a simple flow that generates jokes about a given topic
 	genkit.DefineFlow(g, "jokesFlow", func(ctx context.Context, input string) (string, error) {
-		m := modelgarden.AnthropicModel(g, "claude-3-5-sonnet-v2")
+		m := modelgarden.AnthropicModel(g, "claude-3-5-sonnet-v2@20241022")
 		if m == nil {
 			return "", errors.New("jokesFlow: failed to find model")
 		}
@@ -40,6 +40,7 @@ func main() {
 			ai.WithModel(m),
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1.0),
+				MaxTokens:   1024,
 			}),
 			ai.WithPrompt(`Tell a short joke about %s`, input))
 		if err != nil {
