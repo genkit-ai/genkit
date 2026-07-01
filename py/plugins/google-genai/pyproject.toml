@@ -46,7 +46,7 @@ dependencies = [
   "genkit",
   "google-genai>=1.7.0",
   "google-cloud-aiplatform>=1.77.0",
-  "structlog>=25.2.0",
+  "structlog>=26.1.0",
   "strenum>=0.4.15; python_version < '3.11'",
 ]
 description = "Genkit Google GenAI Plugin"

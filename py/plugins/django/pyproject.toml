@@ -43,7 +43,7 @@ classifiers = [
 ]
 dependencies = [
   "genkit",
-  "pydantic>=2.10.5",
+  "pydantic>=2.13.4",
   "django>=4.2",
 ]
 description = "Genkit Django Plugin"
