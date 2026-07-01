@@ -420,6 +420,22 @@ async def test_static_headers_reuse_cached_client_and_keep_it_open() -> None:
 
 
 @pytest.mark.asyncio
+async def test_missing_inner_client_logs_instead_of_leaking() -> None:
+    """If a future SDK exposes no _client, cleanup warns rather than silently leaking."""
+    plugin = Ollama(request_headers=lambda params: {'X-Token': 't'})
+
+    sdk_client = MagicMock()
+    sdk_client._client = None  # simulate an SDK without the private httpx client to close
+
+    with patch('ollama.AsyncClient', return_value=sdk_client):
+        with patch('genkit.plugins.ollama.plugin_api.logger') as mock_logger:
+            async with plugin._client_for_request():
+                pass
+
+    cast(MagicMock, mock_logger.warning).assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_list_actions_wraps_connection_error(ollama_plugin_instance: Ollama) -> None:
     """list_actions surfaces transport failures as OllamaConnectionError."""
     client_mock = MagicMock()

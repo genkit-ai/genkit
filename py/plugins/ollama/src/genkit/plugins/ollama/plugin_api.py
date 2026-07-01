@@ -256,6 +256,10 @@ class Ollama(Plugin):
             inner = getattr(client, '_client', None)
             if inner is not None:
                 await inner.aclose()
+            else:
+                # Defensive: if a future ollama SDK renames/drops ``_client`` this
+                # would silently leak a connection pool per request. Surface it.
+                logger.warning('ollama client exposes no _client; per-request connection pool was not closed')
 
     async def init(self) -> list:
         """Initialize the Ollama plugin.
