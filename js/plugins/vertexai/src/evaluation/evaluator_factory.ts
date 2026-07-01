@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { protos } from '@google-cloud/aiplatform';
 import { type Action, type Genkit, type z } from 'genkit';
 import type { BaseEvalDataPoint, Score } from 'genkit/evaluator';
 import { runInNewSpan } from 'genkit/tracing';
@@ -36,7 +37,9 @@ export class EvaluatorFactory {
       definition: string;
       responseSchema: ResponseType;
     },
-    toRequest: (datapoint: BaseEvalDataPoint) => any,
+    toRequest: (
+      datapoint: BaseEvalDataPoint
+    ) => protos.google.cloud.aiplatform.v1.IEvaluateInstancesRequest,
     responseHandler: (response: z.infer<ResponseType>) => Score
   ): Action {
     return ai.defineEvaluator(
@@ -63,7 +66,7 @@ export class EvaluatorFactory {
 
   async evaluateInstances<ResponseType extends z.ZodTypeAny>(
     ai: Genkit,
-    partialRequest: any,
+    partialRequest: protos.google.cloud.aiplatform.v1.IEvaluateInstancesRequest,
     responseSchema: ResponseType
   ): Promise<z.infer<ResponseType>> {
     const locationName = `projects/${this.projectId}/locations/${this.location}`;
@@ -75,10 +78,11 @@ export class EvaluatorFactory {
         },
       },
       async (metadata, _otSpan) => {
-        const request = {
-          location: locationName,
-          ...partialRequest,
-        };
+        const request: protos.google.cloud.aiplatform.v1.IEvaluateInstancesRequest =
+          {
+            location: locationName,
+            ...partialRequest,
+          };
 
         metadata.input = request;
         const client = await this.auth.getClient();
