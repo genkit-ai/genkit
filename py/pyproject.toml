@@ -148,6 +148,7 @@ override-dependencies = ["werkzeug>=3.1.6"]
 
 [tool.uv.sources]
 # Samples (alphabetical by package name from pyproject.toml)
+agents               = { workspace = true }
 anthropic-sample     = { workspace = true }
 basic-flows          = { workspace = true }
 context              = { workspace = true }
@@ -260,6 +261,8 @@ select = [
 "packages/genkit/src/genkit/_core/_typing.py" = ["E501"]
 # Base model uses **kwargs: Any to match pydantic signatures
 "packages/genkit/src/genkit/_core/_base.py" = ["ANN401"]
+# JSON Patch diff/apply operations require manipulating arbitrary Any JSON structures
+"packages/genkit/src/genkit/_ai/_json_patch.py" = ["ANN401"]
 # HTTP client uses **httpx_kwargs: Any to forward arbitrary options
 "packages/genkit/src/genkit/_core/_http_client.py" = ["ANN401"]
 # Span wrapper uses __getattr__ -> Any for dynamic delegation
@@ -474,7 +477,7 @@ project_includes = [
 ]
 
 # Search path for first-party code import resolution.
-search-path = ["."]
+search-path = [".", "samples/agents/branching_examples"]
 # Ignore missing imports for namespace packages - pyrefly can't resolve PEP 420
 # namespace packages but these imports work at runtime.
 # model_performance_test is local to sample-test (excluded from workspace).

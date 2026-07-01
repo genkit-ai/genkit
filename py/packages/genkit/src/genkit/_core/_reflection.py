@@ -26,7 +26,8 @@ import threading
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
+from uuid import uuid4
 
 import uvicorn
 from pydantic import BaseModel
@@ -37,12 +38,13 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from genkit._core._action import Action
+from genkit._core._action import Action, ActionResponse, BidiAction
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import get_reflection_json
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
 from genkit._core._registry import Registry
+from genkit._core._typing import AgentInit, AgentInput
 
 logger = get_logger(__name__)
 
@@ -85,19 +87,67 @@ class ActionRunner:
             on_chunk = (
                 (
                     lambda c: self.queue.put_nowait(
-                        f'{c.model_dump_json() if isinstance(c, BaseModel) else json.dumps(c)}\n'
+                        (
+                            c.model_dump_json(by_alias=True, exclude_none=True)
+                            if isinstance(c, BaseModel)
+                            else json.dumps(c)
+                        )
+                        + '\n'
                     )
                 )
                 if self.stream
                 else None
             )
-            output = await self.action.run(
-                input=self.payload.get('input'),
-                on_chunk=on_chunk,
-                context=self.payload.get('context', {}),
-                on_trace_start=self.on_trace_start,
-                telemetry_labels=self.payload.get('telemetryLabels'),
-            )
+            if isinstance(self.action, BidiAction):
+                agent_meta = (self.action.metadata or {}).get('agent')
+                agent_dict = cast(dict[str, Any], agent_meta) if isinstance(agent_meta, dict) else {}
+                has_store = agent_dict.get('stateManagement') == 'server'
+                init_val = self.payload.get('init')
+                if init_val is not None:
+                    init = AgentInit.model_validate(init_val)
+                else:
+                    input_val = self.payload.get('input')
+                    if isinstance(input_val, dict) and ('sessionId' in input_val or 'snapshotId' in input_val):
+                        init = AgentInit.model_validate(input_val)
+                    else:
+                        init = AgentInit()
+
+                if has_store and not init.session_id and not init.snapshot_id:
+                    init.session_id = str(uuid4())
+
+                action = cast(BidiAction[Any, Any, Any], self.action)
+                conn = await action.stream_bidi(
+                    input=init,
+                    context=self.payload.get('context', {}),
+                    on_trace_start=self.on_trace_start,
+                    telemetry_labels=self.payload.get('telemetryLabels'),
+                )
+
+                inp_val = self.payload.get('input')
+                if inp_val == init_val:
+                    inp = AgentInput()
+                elif inp_val is not None:
+                    inp = AgentInput.model_validate(inp_val)
+                else:
+                    inp = AgentInput()
+
+                await conn.send(inp)
+                await conn.close()
+
+                async for chunk in conn.receive():
+                    if on_chunk:
+                        on_chunk(chunk)
+
+                resp = await conn.output()
+                output = ActionResponse(response=resp, trace_id=conn.trace_id or '', span_id=self.span_id or '')
+            else:
+                output = await self.action.run(
+                    input=self.payload.get('input'),
+                    on_chunk=on_chunk,
+                    context=self.payload.get('context', {}),
+                    on_trace_start=self.on_trace_start,
+                    telemetry_labels=self.payload.get('telemetryLabels'),
+                )
             result = (
                 output.response.model_dump(by_alias=True, exclude_none=True)
                 if isinstance(output.response, BaseModel)
@@ -124,7 +174,7 @@ class ActionRunner:
         task = asyncio.create_task(self.execute())
         await self.trace_ready.wait()
 
-        headers = {'x-genkit-version': version, 'Transfer-Encoding': 'chunked'}
+        headers = {'x-genkit-version': version}
         if self.trace_id:
             headers['X-Genkit-Trace-Id'] = self.trace_id
         if self.span_id:

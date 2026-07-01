@@ -30,7 +30,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
 from typing_extensions import Never, TypeVar
 
-from genkit._core._channel import Channel
+from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError
 from genkit._core._schema import to_json_schema
@@ -111,6 +111,9 @@ class ActionKind(StrEnum):
     """Types of actions that can be registered."""
 
     BACKGROUND_MODEL = 'background-model'
+    AGENT = 'agent'
+    AGENT_ABORT = 'agent-abort'
+    AGENT_SNAPSHOT = 'agent-snapshot'
     CANCEL_OPERATION = 'cancel-operation'
     CHECK_OPERATION = 'check-operation'
     CUSTOM = 'custom'
@@ -312,6 +315,11 @@ InputT = TypeVar('InputT', default=Any)
 OutputT = TypeVar('OutputT', default=Any)
 ChunkT = TypeVar('ChunkT', default=Never)
 
+BidiFn = Callable[
+    [InputT, CloseableQueue[Any], CloseableQueue[Any]],
+    Awaitable[OutputT],
+]
+
 # Generic streaming callback - use Callable[[ChunkT], None] for typed chunks
 # This untyped version is for internal use where chunk type is unknown
 StreamingCallback = Callable[[object], None]
@@ -323,16 +331,19 @@ _ = _action_context.set(None)
 class ActionRunContext:
     """Execution context for an action.
 
-    Provides read-only access to action context (auth, metadata) and streaming support.
+    Provides read-only access to action context (auth, metadata), streaming
+    support, and an abort signal for cooperative cancellation.
     """
 
     def __init__(
         self,
         context: dict[str, object] | None = None,
         streaming_callback: StreamingCallback | None = None,
+        abort_signal: asyncio.Event | None = None,
     ) -> None:
         self._context: dict[str, object] = context if context is not None else {}
         self._streaming_callback = streaming_callback
+        self.abort_signal: asyncio.Event = abort_signal if abort_signal is not None else asyncio.Event()
 
     @property
     def context(self) -> dict[str, object]:
@@ -467,6 +478,7 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         context: dict[str, object] | None = None,
         on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
         telemetry_labels: dict[str, object] | None = None,
+        abort_signal: asyncio.Event | None = None,
     ) -> ActionResponse[OutputT]:
         """Execute the action with optional input validation.
 
@@ -476,6 +488,7 @@ class Action(Generic[InputT, OutputT, ChunkT]):
             context: Optional context dict for the action.
             on_trace_start: Optional callback invoked when trace starts.
             telemetry_labels: Custom labels to set as direct span attributes.
+            abort_signal: Optional shared abort event for cooperative cancellation.
 
         Returns:
             ActionResponse containing the result and trace metadata.
@@ -483,44 +496,28 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         Raises:
             GenkitError: If input validation fails (INVALID_ARGUMENT status).
         """
-        # Skip validation when the caller passed nothing AND the wrapped
-        # function declares a Python default for its first arg — that's the
-        # signal that "no input" is a legitimate way to invoke this action.
-        skip_validation = input is None and self._first_arg_optional
+        input = self._validate_input(input)
 
-        # Validate input if we have a schema
-        if self._input_type is not None and not skip_validation:
-            try:
-                input = self._input_type.validate_python(input)
-            except ValidationError as e:
-                if input is None:
-                    raise GenkitError(
-                        message=(
-                            f"Action '{self.name}' requires input but none was provided. "
-                            'Please supply a valid input payload.'
-                        ),
-                        status='INVALID_ARGUMENT',
-                    ) from e
-                raise GenkitError(
-                    message=f"Invalid input for action '{self.name}': {e}",
-                    status='INVALID_ARGUMENT',
-                    cause=e,
-                ) from e
-
+        token = None
         if context:
-            _ = _action_context.set(context)
+            token = _action_context.set(context)
 
         streaming_cb = cast(StreamingCallback, on_chunk) if on_chunk else None
 
-        return await self._run_with_telemetry(
-            input,
-            ActionRunContext(
-                context=_action_context.get(None),
-                streaming_callback=streaming_cb,
-            ),
-            on_trace_start,
-            telemetry_labels,
-        )
+        try:
+            return await self._run_with_telemetry(
+                input,
+                ActionRunContext(
+                    context=_action_context.get(None),
+                    streaming_callback=streaming_cb,
+                    abort_signal=abort_signal,
+                ),
+                on_trace_start,
+                telemetry_labels,
+            )
+        finally:
+            if token is not None:
+                _action_context.reset(token)
 
     def stream(
         self,
@@ -577,12 +574,40 @@ class Action(Generic[InputT, OutputT, ChunkT]):
             self._output_schema = TypeAdapter(object).json_schema()
             self._metadata[ActionMetadataKey.OUTPUT_KEY] = self._output_schema
 
+    def _validate_input(self, input: InputT | None) -> InputT | None:
+        """Validate caller input against the action schema when one is registered."""
+        if self._input_type is None:
+            return input
+        # Skip validation when the caller passed nothing AND the wrapped
+        # function declares a Python default for its first arg — that's the
+        # signal that "no input" is a legitimate way to invoke this action.
+        if input is None and self._first_arg_optional:
+            return input
+        try:
+            return self._input_type.validate_python(input)
+        except ValidationError as e:
+            if input is None:
+                raise GenkitError(
+                    message=(
+                        f"Action '{self.name}' requires input but none was provided. "
+                        'Please supply a valid input payload.'
+                    ),
+                    status='INVALID_ARGUMENT',
+                ) from e
+            raise GenkitError(
+                message=f"Invalid input for action '{self.name}': {e}",
+                status='INVALID_ARGUMENT',
+                cause=e,
+            ) from e
+
     async def _run_with_telemetry(
         self,
         input: object | None,
         ctx: ActionRunContext,
         on_trace_start: Callable[[str, str], Awaitable[None]] | None,
         telemetry_labels: dict[str, object] | None,
+        *,
+        execute: Callable[[], Awaitable[OutputT]] | None = None,
     ) -> ActionResponse[OutputT]:
         """Open the action span via ``run_in_new_span``, dispatch ``self._fn``, wrap errors in ``GenkitError``."""
         start_time = time.perf_counter()
@@ -622,7 +647,10 @@ class Action(Generic[InputT, OutputT, ChunkT]):
                 if on_trace_start:
                     await on_trace_start(trace_id, span_id)
 
-                output = await self._invoke(input, ctx)
+                if execute is not None:
+                    output = await execute()
+                else:
+                    output = await self._invoke(input, ctx)
                 output = cast(OutputT, _record_latency(output, start_time))
                 # Picked up by run_in_new_span's success branch and written as ``genkit:output``.
                 span_meta.output = output
@@ -663,6 +691,199 @@ class Action(Generic[InputT, OutputT, ChunkT]):
                 return await self._fn(input, ctx)
             case _:
                 raise ValueError('action fn must have 0-2 args')
+
+
+# =============================================================================
+# BidiConnection
+# =============================================================================
+
+StreamInT = TypeVar('StreamInT')
+StreamOutT_co = TypeVar('StreamOutT_co', covariant=True)
+BidiOutT_co = TypeVar('BidiOutT_co', covariant=True)
+
+
+class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
+    """Client-side handle for an active bidirectional streaming session.
+
+    Returned by BidiAction.stream_bidi(). Wraps two asyncio.Queues and a
+    result Future that resolves when the server fn completes.
+    """
+
+    def __init__(
+        self,
+        in_queue: CloseableQueue[StreamInT],
+        out_queue: CloseableQueue[StreamOutT_co],
+        result: asyncio.Future[BidiOutT_co],
+    ) -> None:
+        self.in_queue = in_queue
+        self.out_queue = out_queue
+        self.result = result
+        self.closed = False
+        self.trace_id: str | None = None
+
+    async def send(self, item: StreamInT) -> None:
+        """Send a per-turn input to the server."""
+        if self.closed:
+            raise GenkitError(
+                message=(
+                    'Cannot send input on BidiConnection because the connection has '
+                    'already been closed. No further inputs can be sent after close() '
+                    'is called.'
+                ),
+                status='FAILED_PRECONDITION',
+            )
+        await self.in_queue.put(item)
+
+    async def close(self) -> None:
+        """Signal no more inputs will be sent."""
+        if not self.closed:
+            self.closed = True
+            self.in_queue.close()
+
+    async def receive(self) -> AsyncIterator[StreamOutT_co]:
+        """Async iterator yielding server-side stream chunks."""
+        async for chunk in self.out_queue:
+            yield chunk
+
+    async def output(self) -> BidiOutT_co:
+        """Await the final output from the server fn."""
+        return await self.result
+
+
+# =============================================================================
+# BidiAction
+# =============================================================================
+
+
+class BidiAction(Action[InputT, OutputT, ChunkT]):
+    """An Action extended with bidirectional streaming via stream_bidi().
+
+    The underlying fn still runs through Action.run() for one-shot calls.
+    stream_bidi() wires up two asyncio.Queues and launches the bidi fn as
+    a background task.
+    """
+
+    def __init__(
+        self,
+        kind: ActionKind,
+        name: str,
+        bidi_fn: BidiFn[InputT, OutputT],
+        metadata_fn: Callable[..., object] | None = None,
+        description: str | None = None,
+        metadata: dict[str, object] | None = None,
+        span_metadata: dict[str, SpanAttributeValue] | None = None,
+    ) -> None:
+        # Wrap bidi_fn as a standard Action fn (closes in_queue immediately,
+        # forwards out_queue chunks to on_chunk callback) so Action.run() works.
+        async def as_action_fn(input: InputT, ctx: ActionRunContext) -> OutputT:  # noqa: A002
+            in_queue = CloseableQueue()
+            out_queue = CloseableQueue()
+            # Close input immediately — no streaming inputs via one-shot path.
+            in_queue.close()
+
+            async def run() -> OutputT:
+                try:
+                    return await bidi_fn(input, in_queue, out_queue)
+                finally:
+                    out_queue.close()
+
+            run_task = asyncio.create_task(run())
+            try:
+                # Forward chunks to Action's streaming callback.
+                async for chunk in out_queue:
+                    ctx.send_chunk(chunk)
+                return await run_task
+            except Exception:
+                if not run_task.done():
+                    run_task.cancel()
+                    try:
+                        await run_task
+                    except asyncio.CancelledError:
+                        pass
+                raise
+
+        super().__init__(
+            kind=kind,
+            name=name,
+            fn=as_action_fn,
+            metadata_fn=metadata_fn,
+            description=description,
+            # The 'bidi': True metadata flag is used by the Genkit Dev UI and Reflection API
+            # to identify this as a bidirectional action and render the interactive chat interface.
+            metadata={**(metadata or {}), 'bidi': True},
+            span_metadata=span_metadata,
+        )
+        self.bidi_fn = bidi_fn
+
+    async def stream_bidi(
+        self,
+        input: InputT,  # noqa: A002
+        context: dict[str, object] | None = None,
+        on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
+        telemetry_labels: dict[str, object] | None = None,
+    ) -> BidiConnection[Any, ChunkT, OutputT]:
+        """Start a bidirectional streaming session.
+
+        Launches the bidi fn as a background asyncio task and returns a
+        BidiConnection the caller uses to send inputs and receive chunks.
+        """
+        validated = self._validate_input(input)
+        if validated is None:
+            raise GenkitError(
+                message=f"Action '{self.name}' requires input but none was provided.",
+                status='INVALID_ARGUMENT',
+            )
+        input = validated
+
+        # in_queue and out_queue are unbounded. Turn-level backpressure is
+        # managed at the agent runtime intake layer.
+        in_queue = CloseableQueue()
+        out_queue = CloseableQueue()
+        result_future: asyncio.Future[OutputT] = asyncio.Future()
+        conn = BidiConnection(in_queue, out_queue, result_future)
+
+        token = None
+        if context:
+            token = _action_context.set(context)
+
+        async def trace_start_cb(trace_id: str, span_id: str) -> None:
+            conn.trace_id = trace_id
+            if on_trace_start is not None:
+                await on_trace_start(trace_id, span_id)
+
+        async def run() -> None:
+            try:
+                response = await self._run_with_telemetry(
+                    input,
+                    ActionRunContext(context=_action_context.get(None)),
+                    trace_start_cb,
+                    telemetry_labels,
+                    execute=lambda: self.bidi_fn(input, in_queue, out_queue),
+                )
+                result_future.set_result(response.response)
+            except asyncio.CancelledError:
+                # The connection was torn down (e.g. loop shutdown on a session that
+                # was never closed), not errored. Marking the result future cancelled
+                # dies quietly; set_exception() would instead dump an "exception was
+                # never retrieved" traceback at exit when nobody awaited it.
+                if not result_future.done():
+                    result_future.cancel()
+                raise
+            except Exception as e:  # noqa: BLE001
+                # Standard exceptions are forwarded to the client's result_future.
+                # We swallow them here to prevent asyncio from duplicate-logging
+                # "exception was never retrieved" warnings on the background task.
+                result_future.set_exception(e)
+            finally:
+                # Close out_queue to signal the end of the streaming iterator.
+                out_queue.close()
+
+        try:
+            asyncio.create_task(run())
+            return conn
+        finally:
+            if token is not None:
+                _action_context.reset(token)
 
 
 def get_current_context() -> dict[str, object] | None:

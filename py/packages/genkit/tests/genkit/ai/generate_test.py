@@ -141,9 +141,7 @@ async def test_simulates_doc_grounding(
         ),
     )
 
-    assert response.request is not None
-    assert response.request.messages is not None
-    assert response.request.messages[0] == Message(
+    grounded_msg = Message(
         role=Role.USER,
         content=[
             Part(TextPart(text='hi')),
@@ -155,6 +153,17 @@ async def test_simulates_doc_grounding(
             ),
         ],
     )
+
+    # the model receives the grounded prompt with docs injected as a context part.
+    assert pm.last_request is not None
+    assert pm.last_request.messages[0] == grounded_msg
+
+    # the returned request is the conversation we persist: the clean turn. The
+    # docs ride along as structured data, not inlined into the message.
+    assert response.request is not None
+    assert response.request.messages is not None
+    assert response.request.messages[0] == Message(role=Role.USER, content=[Part(TextPart(text='hi'))])
+    assert response.request.docs is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -690,6 +699,26 @@ async def test_prompt_stream_runs_middleware() -> None:
     response = await streamed.response
 
     assert response.text == '[ECHO] user: "PRE hi" POST'
+
+
+@pytest.mark.asyncio
+async def test_stream_response_is_awaitable_and_iterable() -> None:
+    """A streamed call reads like an agent turn: iterate it for chunks or await it
+    for the final response, with .stream / .response still there for both halves."""
+    ai = Genkit()
+    define_echo_model(ai)
+    my_prompt = ai.define_prompt(model='echoModel', prompt='hi')
+
+    # Await the handle directly, the same as `await streamed.response`.
+    direct = await my_prompt.stream()
+    assert direct.text
+
+    # Iterate the handle directly for chunks, then await it for the response.
+    streamed = my_prompt.stream()
+    _ = [chunk async for chunk in streamed]
+    via_await = await streamed
+    via_response = await streamed.response
+    assert via_await.text == via_response.text == direct.text
 
 
 @pytest.mark.asyncio
@@ -1517,7 +1546,7 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
                 restart=[
                     ToolRequestPart(
                         tool_request=ToolRequest(name='approveMe', input={}, ref='r1'),
-                        metadata={'resumed': {'toolApproved': True}},
+                        metadata={'resumed': {'tool_approved': True}},
                     )
                 ],
             ),
@@ -2006,7 +2035,6 @@ async def test_generate_action_spec(spec: dict[str, Any]) -> None:
             captured_chunks.append(chunk)
 
         action_response = await action.run(
-            ai.registry,
             TypeAdapter(GenerateActionOptions).validate_python(spec['input']),  # type: ignore[arg-type]
             on_chunk=on_chunk,  # type: ignore[misc]
         )

@@ -40,7 +40,6 @@ from genkit._core._typing import (
     FinishReason,
     GenerateActionOptionsData,
     GenerateActionOutputConfig,
-    GenerateResponseChunk,
     GenerationCommonConfig,
     GenerationUsage,
     Media,
@@ -48,6 +47,7 @@ from genkit._core._typing import (
     MediaPart,
     MessageData,
     MiddlewareRef,
+    ModelResponseChunk as ModelResponseChunkSchema,
     Operation,
     Part,
     Resume,
@@ -399,7 +399,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         return self.message.interrupts
 
 
-class ModelResponseChunk(GenerateResponseChunk, Generic[OutputT]):
+class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
     """Streaming chunk with text, accumulated text, and output parsing."""
 
     # Field(exclude=True) means these fields are not included in serialization

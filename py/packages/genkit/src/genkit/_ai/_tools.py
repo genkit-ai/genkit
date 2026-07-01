@@ -16,6 +16,7 @@
 
 """Tool-specific types and utilities for the Genkit framework."""
 
+import asyncio
 import inspect
 import json
 from collections.abc import Callable
@@ -101,7 +102,11 @@ class ToolRunContext(ActionRunContext):
             resumed_metadata: Metadata from previous interrupt (if resumed)
             original_input: Original tool input before replacement (if resumed)
         """
-        super().__init__(context=ctx.context)
+        super().__init__(
+            context=ctx.context,
+            streaming_callback=ctx.streaming_callback,
+            abort_signal=ctx.abort_signal,
+        )
         self.resumed_metadata = resumed_metadata
         self.original_input = original_input
 
@@ -176,10 +181,10 @@ def respond_to_interrupt(
 
 
 def restart_tool(
-    interrupt: ToolRequestPart,
     *,
-    resumed_metadata: dict[str, Any] | None = None,
+    interrupt: ToolRequestPart,
     replace_input: Any | None = None,  # noqa: ANN401 - new tool input; shape is per tool
+    resumed_metadata: dict[str, Any] | None = None,
 ) -> ToolRequestPart:
     """Build a restart ``ToolRequestPart`` for a pending tool interrupt.
 
@@ -187,20 +192,17 @@ def restart_tool(
 
     Args:
         interrupt: The interrupted ``ToolRequestPart`` (e.g. from ``response.interrupts``).
-        resumed_metadata: Passed to the tool as ``ToolRunContext.resumed_metadata``. The
-            common case is a small dict the tool / middleware checks
-            (e.g. ``{'toolApproved': True}`` for ``ToolApproval``).
-        replace_input: Optional new ``tool_request.input`` for this run; the previous input
-            is stashed in ``metadata.replacedInput`` so the tool can see what changed.
+        replace_input: Optional new ``tool_request.input`` for this run (previous input is
+            stored in ``metadata.replacedInput`` when this is set).
+        resumed_metadata: Passed to the tool as ``ToolRunContext.resumed_metadata``.
 
     Returns:
         A ``ToolRequestPart`` for ``resume_restart`` / message history.
 
     Example:
-        ``restart_tool(trp, resumed_metadata={'toolApproved': True})``
+        ``restart_tool(interrupt=trp, resumed_metadata={"tool_approved": True})``
     """
     tool_req = interrupt.tool_request
-
     new_meta: dict[str, Any] = dict(interrupt.metadata or {})
 
     new_meta['resumed'] = resumed_metadata if resumed_metadata is not None else True
@@ -220,12 +222,17 @@ def restart_tool(
     )
 
 
-async def run_tool_after_restart(tool: Action[Any, Any, Any], restart_trp: ToolRequestPart) -> ToolResponsePart:
+async def run_tool_after_restart(
+    tool: Action[Any, Any, Any],
+    restart_trp: ToolRequestPart,
+    abort_signal: asyncio.Event | None = None,
+) -> ToolResponsePart:
     """Run a tool for ``resume_restart``: applies ``resumed`` / ``replacedInput`` from metadata.
 
     Sets the same context variables as the tool wrapper so ToolRunContext reflects
     a resumed run. Nested interrupts during restart are not supported and raise GenkitError.
     """
+    signal = abort_signal or asyncio.Event()
     meta = restart_trp.metadata or {}
     raw_resumed = meta.get('resumed')
     if raw_resumed is True:
@@ -234,13 +241,14 @@ async def run_tool_after_restart(tool: Action[Any, Any, Any], restart_trp: ToolR
         resumed_meta = raw_resumed
     else:
         resumed_meta = None
+
     original_input = meta.get('replacedInput')
 
     token_meta = _tool_resumed_metadata.set(resumed_meta)
     token_input = _tool_original_input.set(original_input)
     try:
         try:
-            tool_response = (await tool.run(restart_trp.tool_request.input)).response
+            tool_response = (await tool.run(restart_trp.tool_request.input, abort_signal=signal)).response
         except GenkitError as e:
             if e.cause and isinstance(e.cause, Interrupt):
                 raise GenkitError(

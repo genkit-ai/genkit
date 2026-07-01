@@ -17,9 +17,9 @@
 """Internal testing utilities for Genkit AI (mock models, test_models)."""
 
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 from pydantic import BaseModel, Field
 
@@ -47,7 +47,9 @@ class ProgrammableModel:
         self.responses: list[ModelResponse] = []
         self.chunks: list[list[ModelResponseChunk]] | None = None
         self.last_request: ModelRequest | None = None
-        self.response_cb: Callable[[ModelRequest], ModelResponse] | None = None
+        self.response_cb: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]] | ModelResponse[Any]] | None = (
+            None
+        )
 
     def reset(self) -> None:
         self._request_idx = 0
@@ -66,14 +68,20 @@ class ProgrammableModel:
         self.request_count += 1
 
         if self.response_cb is not None:
-            response = self.response_cb(request)
+            res = self.response_cb(request)
+            import inspect
+
+            if inspect.isawaitable(res):
+                response = await res
+            else:
+                response = res
         else:
             response = self.responses[self._request_idx]
         if self.chunks and self._request_idx < len(self.chunks):
             for chunk in self.chunks[self._request_idx]:
                 ctx.send_chunk(chunk)
         self._request_idx += 1
-        return response
+        return cast(ModelResponse[object], response)
 
 
 def define_programmable_model(

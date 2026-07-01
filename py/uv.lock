@@ -11,6 +11,7 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "agents",
     "anthropic-sample",
     "basic-flows",
     "context",
@@ -43,6 +44,33 @@ members = [
     "vertexai-imagen",
 ]
 overrides = [{ name = "werkzeug", specifier = ">=3.1.6" }]
+
+[[package]]
+name = "agents"
+version = "0.1.0"
+source = { editable = "samples/agents" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "genkit" },
+    { name = "genkit-plugin-fastapi" },
+    { name = "genkit-plugin-google-genai" },
+    { name = "genkit-plugin-middleware" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.100.0" },
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "genkit-plugin-fastapi", editable = "plugins/fastapi" },
+    { name = "genkit-plugin-google-genai", editable = "plugins/google-genai" },
+    { name = "genkit-plugin-middleware", editable = "plugins/middleware" },
+    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
+]
 
 [[package]]
 name = "aiofiles"

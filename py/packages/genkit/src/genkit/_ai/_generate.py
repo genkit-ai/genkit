@@ -28,6 +28,7 @@ from typing import Any, cast
 from pydantic import BaseModel
 from typing_extensions import Never
 
+from genkit._ai._agents._session import get_current_session
 from genkit._ai._formats._types import FormatDef, Formatter
 from genkit._ai._messages import inject_instructions
 from genkit._ai._model import (
@@ -394,6 +395,11 @@ def _redact_data_uris(obj: Any) -> Any:  # noqa: ANN401
     return obj
 
 
+def _raise_if_aborted(abort_signal: asyncio.Event) -> None:
+    if abort_signal.is_set():
+        raise GenkitError(status='ABORTED', message='Generation aborted.')
+
+
 def define_generate_action(registry: Registry) -> None:
     """Register the generation action triggered by the Dev UI."""
 
@@ -405,6 +411,7 @@ def define_generate_action(registry: Registry) -> None:
         return await generate_with_request(
             registry=registry,
             raw_request=input,
+            abort_signal=ctx.abort_signal,
             on_chunk=on_chunk,
             context=dict(ctx.context),
         )
@@ -423,6 +430,7 @@ async def generate_action(
     message_index: int = 0,
     current_turn: int = 0,
     context: dict[str, Any] | None = None,
+    abort_signal: asyncio.Event | None = None,
 ) -> ModelResponse:
     """Open the user-facing ``generate`` span and delegate to the engine.
 
@@ -435,6 +443,7 @@ async def generate_action(
         result = await generate_with_request(
             registry=registry,
             raw_request=raw_request,
+            abort_signal=abort_signal,
             on_chunk=on_chunk,
             message_index=message_index,
             current_turn=current_turn,
@@ -452,6 +461,7 @@ async def generate_with_request(
     message_index: int = 0,
     current_turn: int = 0,
     context: dict[str, Any] | None = None,
+    abort_signal: asyncio.Event | None = None,
 ) -> ModelResponse:
     """Resolve ``raw_request.use`` and run the generation.
 
@@ -471,6 +481,8 @@ async def generate_with_request(
         registry=registry,
         custom_context=dict(context or {}),
         on_chunk=on_chunk,
+        session=get_current_session(),
+        abort_signal=abort_signal if abort_signal is not None else asyncio.Event(),
     )
 
     mw_pipeline: _GenerateMiddlewarePipeline | None = None
@@ -514,13 +526,14 @@ async def _generate_action_turn(
     """Run one model call plus tool resolution, then recurse for the next turn."""
     middleware = mw_pipeline.middleware
     run_ctx = mw_pipeline.ctx
+    _raise_if_aborted(run_ctx.abort_signal)
 
     model, tools, format_def = await resolve_parameters(registry, raw_request)
 
     raw_request, formatter = apply_format(raw_request, format_def)
 
     if raw_request.resources:
-        raw_request = await apply_resources(registry, raw_request)
+        raw_request = await apply_resources(registry, raw_request, run_ctx.abort_signal)
 
     assert_valid_tool_names(tools)
 
@@ -529,8 +542,9 @@ async def _generate_action_turn(
         interrupted_response,
         resumed_tool_message,
     ) = await _resolve_resume_options(
-        registry,
-        raw_request,
+        registry=registry,
+        raw_request=raw_request,
+        abort_signal=run_ctx.abort_signal,
         mw_pipeline=mw_pipeline,
     )
 
@@ -655,10 +669,13 @@ async def _generate_action_turn(
         _ctx: GenerateMiddlewareContext,
     ) -> ModelResponse:
         """Execute one turn of the generate loop (model call + optional tool resolution)."""
-        nonlocal request, message_index, chunk_role
-        # Pick up whatever wrap_generate middleware put on params.request — replacement
-        # or in-place mutation. Without this re-sync, those changes get silently dropped.
+        nonlocal request, raw_request, message_index, chunk_role
+        # Pick up whatever wrap_generate middleware put on params — for the model
+        # request and for the options we thread to the next turn. Both support
+        # replacement or in-place mutation; without this re-sync those edits get
+        # silently dropped.
         request = _params.request
+        raw_request = _params.options
 
         async def next_fn(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
             return (
@@ -666,6 +683,7 @@ async def _generate_action_turn(
                     input=params.request,
                     context=c.custom_context,
                     on_chunk=c.on_chunk,
+                    abort_signal=c.abort_signal,
                 )
             ).response
 
@@ -707,7 +725,12 @@ async def _generate_action_turn(
         generated_msg = response.message
 
         if generated_msg is None:
-            # No message in response, return as-is
+            # We persist the conversation we threaded through the loop, not the
+            # request the model saw — that one carries per-call extras (docs/format
+            # injection, middleware edits) we don't want in saved history. Copy onto
+            # a fresh request so we leave the object the model saw intact for tracing.
+            if response.request is not None:
+                response.request = response.request.model_copy(update={'messages': list(raw_request.messages)})
             return response
 
         # Stamp output format metadata on message so the Dev UI can render formatted JSON vs plain text.
@@ -731,6 +754,9 @@ async def _generate_action_turn(
         if raw_request.return_tool_requests or len(tool_requests) == 0:
             if len(tool_requests) == 0:
                 response.assert_valid_schema()
+            # Persist the threaded conversation, not the augmented request the model saw.
+            if response.request is not None:
+                response.request = response.request.model_copy(update={'messages': list(raw_request.messages)})
             return response
 
         max_iters = raw_request.max_turns if raw_request.max_turns else DEFAULT_MAX_TURNS
@@ -743,15 +769,14 @@ async def _generate_action_turn(
                 details={'request': request},
             )
 
-        (
-            revised_model_msg,
-            tool_msg,
-            transfer_preamble,
-        ) = await resolve_tool_requests(
-            registry,
-            raw_request,
-            generated_msg,
+        _raise_if_aborted(_ctx.abort_signal)
+
+        revised_model_msg, tool_msg = await resolve_tool_requests(
+            registry=registry,
+            request=raw_request,
+            message=generated_msg,
             mw_pipeline=mw_pipeline,
+            abort_signal=_ctx.abort_signal,
         )
 
         # if an interrupt message is returned, stop the tool loop and return a
@@ -761,6 +786,11 @@ async def _generate_action_turn(
             interrupted_resp.finish_reason = FinishReason.INTERRUPTED
             interrupted_resp.finish_message = 'One or more tool calls resulted in interrupts.'
             interrupted_resp.message = Message(revised_model_msg)
+            # Persist the threaded conversation, not the augmented request the model saw.
+            if interrupted_resp.request is not None:
+                interrupted_resp.request = interrupted_resp.request.model_copy(
+                    update={'messages': copy.copy(raw_request.messages)}
+                )
             return interrupted_resp
 
         # If the loop will continue, stream out the tool response message...
@@ -781,8 +811,6 @@ async def _generate_action_turn(
         if tool_msg:
             next_messages.append(tool_msg)
         next_request.messages = next_messages
-        if transfer_preamble:
-            next_request = apply_transfer_preamble(next_request, transfer_preamble)
 
         return await _generate_action_turn(
             registry=registry,
@@ -856,14 +884,6 @@ def resolve_instructions(formatter: Formatter[Any, Any], instructions_opt: str |
     return formatter.instructions
 
 
-def apply_transfer_preamble(
-    next_request: GenerateActionOptions, _preamble: GenerateActionOptions
-) -> GenerateActionOptions:
-    """Transfer preamble settings to the next request. (TODO: not yet implemented)."""
-    # TODO(#4338): implement me
-    return next_request
-
-
 def _extract_resource_uri(resource_obj: Any) -> str | None:  # noqa: ANN401
     """Extract URI from a resource object, unwrapping Pydantic structures as needed."""
     # Direct uri attribute (Resource1, ResourceInput, etc.)
@@ -885,7 +905,11 @@ def _extract_resource_uri(resource_obj: Any) -> str | None:  # noqa: ANN401
     return None
 
 
-async def apply_resources(registry: Registry, raw_request: GenerateActionOptions) -> GenerateActionOptions:
+async def apply_resources(
+    registry: Registry,
+    raw_request: GenerateActionOptions,
+    abort_signal: asyncio.Event,
+) -> GenerateActionOptions:
     """Resolve and hydrate resource parts in the request messages."""
     # Quick check if any message has a resource part
     has_resource = False
@@ -947,7 +971,12 @@ async def apply_resources(registry: Registry, raw_request: GenerateActionOptions
                 )
 
             # Execute the resource
-            response = await resource_action.run(resource_input, on_chunk=None, context=None)
+            response = await resource_action.run(
+                resource_input,
+                on_chunk=None,
+                context=None,
+                abort_signal=abort_signal,
+            )
 
             # response.response is ResourceOutput which has .content (list of Parts)
             # It usually returns a dict if coming from dynamic_resource (model_dump called)
@@ -1067,14 +1096,14 @@ def to_tool_definition(tool: Action) -> ToolDefinition:
 
 
 async def resolve_tool_requests(
+    *,
     registry: Registry,
     request: GenerateActionOptions,
     message: Message,
-    *,
+    abort_signal: asyncio.Event,
     mw_pipeline: _GenerateMiddlewarePipeline | None = None,
-) -> tuple[Message | None, Message | None, GenerateActionOptions | None]:
+) -> tuple[Message | None, Message | None]:
     """Execute tool requests in a message, returning responses or interrupt info."""
-    # TODO(#4342): prompt transfer
     tool_dict: dict[str, Action] = {}
     if request.tools:
         for tool_name in request.tools:
@@ -1102,22 +1131,39 @@ async def resolve_tool_requests(
         work.append((i, tool, tool_req_root))
 
     if not work:
-        return (None, Message(role=Role.TOOL, content=[]), None)
+        return (None, Message(role=Role.TOOL, content=[]))
 
     async def _resolve_one_tool(
         tool: Action, trp: ToolRequestPart
     ) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
+        ctx = (
+            mw_pipeline.ctx
+            if mw_pipeline is not None
+            else GenerateMiddlewareContext(
+                registry=registry,
+                abort_signal=abort_signal,
+                session=get_current_session(),
+            )
+        )
+        _raise_if_aborted(ctx.abort_signal)
         params = ToolHookParams(tool_request_part=trp, tool=tool)
 
         async def next_fn(p: ToolHookParams, c: GenerateMiddlewareContext) -> MultipartToolResponse:
-            return await _resolve_tool_request(p.tool, p.tool_request_part)
+            return await _resolve_tool_request(p.tool, p.tool_request_part, c.abort_signal)
 
         try:
             if mw_list and mw_pipeline is not None:
                 multipart = await dispatch_tool(mw_list, params, mw_pipeline.ctx, next_fn)
             else:
                 multipart = await next_fn(
-                    params, mw_pipeline.ctx if mw_pipeline else GenerateMiddlewareContext(registry=registry)
+                    params,
+                    mw_pipeline.ctx
+                    if mw_pipeline
+                    else GenerateMiddlewareContext(
+                        registry=registry,
+                        abort_signal=abort_signal,
+                        session=get_current_session(),
+                    ),
                 )
             return (multipart, None)
         except Exception as e:
@@ -1154,9 +1200,9 @@ async def resolve_tool_requests(
             revised_model_message.content[idx] = Part(root=interrupt_part)
 
     if has_interrupts:
-        return (revised_model_message, None, None)
+        return (revised_model_message, None)
 
-    return (None, Message(role=Role.TOOL, content=response_parts), None)
+    return (None, Message(role=Role.TOOL, content=response_parts))
 
 
 def _to_pending_response(request: ToolRequestPart, response: ToolResponsePart) -> Part:
@@ -1181,7 +1227,11 @@ def _interrupt_from_tool_exc(exc: BaseException) -> Interrupt | None:
     return None
 
 
-async def _resolve_tool_request(tool: Action, tool_request_part: ToolRequestPart) -> MultipartToolResponse:
+async def _resolve_tool_request(
+    tool: Action,
+    tool_request_part: ToolRequestPart,
+    abort_signal: asyncio.Event,
+) -> MultipartToolResponse:
     """Execute a tool and return its response.
 
     Interrupts from the tool body propagate to the caller (the engine
@@ -1190,7 +1240,24 @@ async def _resolve_tool_request(tool: Action, tool_request_part: ToolRequestPart
     ``BaseMiddleware.wrap_tool``: responses are return values, interrupts
     are exceptions.
     """
-    tool_response = (await tool.run(tool_request_part.tool_request.input)).response
+    tool_task = asyncio.create_task(tool.run(tool_request_part.tool_request.input, abort_signal=abort_signal))
+
+    async def watch_abort() -> None:
+        await abort_signal.wait()
+        if not tool_task.done():
+            tool_task.cancel()
+
+    watcher_task = asyncio.create_task(watch_abort())
+    try:
+        res = await tool_task
+        tool_response = res.response
+    except asyncio.CancelledError:
+        if abort_signal.is_set():
+            raise GenkitError(status='ABORTED', message='Task aborted') from None
+        raise
+    finally:
+        watcher_task.cancel()
+
     return MultipartToolResponse(
         output=tool_response.model_dump() if isinstance(tool_response, BaseModel) else tool_response,
     )
@@ -1229,9 +1296,10 @@ async def resolve_tool(registry: Registry, tool_ref: str | Tool) -> Action:
 
 
 async def _resolve_resume_options(
-    _registry: Registry,
-    raw_request: GenerateActionOptions,
     *,
+    registry: Registry,
+    raw_request: GenerateActionOptions,
+    abort_signal: asyncio.Event,
     mw_pipeline: _GenerateMiddlewarePipeline | None = None,
 ) -> tuple[GenerateActionOptions, ModelResponse | None, Message | None]:
     """Handle resume options by resolving pending tool calls from a previous turn."""
@@ -1261,9 +1329,10 @@ async def _resolve_resume_options(
             continue
 
         resumed_request, resumed_response = await _resolve_resumed_tool_request(
-            _registry,
-            raw_request,
-            part,
+            registry=registry,
+            raw_request=raw_request,
+            tool_request_part=part,
+            abort_signal=abort_signal,
             mw_pipeline=mw_pipeline,
         )
         tool_responses.append(Part(root=resumed_response))
@@ -1279,7 +1348,7 @@ async def _resolve_resume_options(
     tool_message = Message(
         role=Role.TOOL,
         content=tool_responses,
-        metadata={'resumed': (raw_request.resume.metadata if raw_request.resume.metadata else True)},
+        metadata={'resumed': True},
     )
 
     revised_request = raw_request.model_copy(deep=True)
@@ -1297,10 +1366,11 @@ async def _resolve_resume_options(
 
 
 async def _resolve_resumed_tool_request(
+    *,
     registry: Registry,
     raw_request: GenerateActionOptions,
     tool_request_part: Part,
-    *,
+    abort_signal: asyncio.Event,
     mw_pipeline: _GenerateMiddlewarePipeline | None = None,
 ) -> tuple[ToolRequestPart, ToolResponsePart]:
     """Resolve a single tool request from pending output, resume.respond, or resume.restart."""
@@ -1364,7 +1434,12 @@ async def _resolve_resumed_tool_request(
     )
     if restart_trp:
         tool = await resolve_tool(registry, tool_req_root.tool_request.name)
-        executed = await _run_restart_through_middleware(tool, restart_trp, mw_pipeline=mw_pipeline)
+        executed = await _run_restart_through_middleware(
+            tool=tool,
+            restart_trp=restart_trp,
+            abort_signal=abort_signal,
+            mw_pipeline=mw_pipeline,
+        )
         metadata = dict(tool_req_root.metadata) if tool_req_root.metadata else {}
         interrupt = metadata.get('interrupt')
         if interrupt:
@@ -1390,9 +1465,10 @@ async def _resolve_resumed_tool_request(
 
 
 async def _run_restart_through_middleware(
+    *,
     tool: Action,
     restart_trp: ToolRequestPart,
-    *,
+    abort_signal: asyncio.Event,
     mw_pipeline: _GenerateMiddlewarePipeline | None,
 ) -> ToolResponsePart:
     """Run a restarted tool through the wrap_tool middleware chain.
@@ -1404,7 +1480,8 @@ async def _run_restart_through_middleware(
     """
     mw_list = mw_pipeline.middleware if mw_pipeline else []
     if not mw_list or mw_pipeline is None:
-        return await run_tool_after_restart(tool, restart_trp)
+        signal = mw_pipeline.ctx.abort_signal if mw_pipeline is not None else abort_signal
+        return await run_tool_after_restart(tool, restart_trp, signal)
 
     params = ToolHookParams(
         tool_request_part=restart_trp,
@@ -1412,7 +1489,7 @@ async def _run_restart_through_middleware(
     )
 
     async def next_fn(p: ToolHookParams, c: GenerateMiddlewareContext) -> MultipartToolResponse:
-        executed = await run_tool_after_restart(p.tool, restart_trp)
+        executed = await run_tool_after_restart(p.tool, restart_trp, c.abort_signal)
         return MultipartToolResponse(
             output=executed.tool_response.output,
             content=[Part.model_validate(c) for c in (executed.tool_response.content or [])],

@@ -16,6 +16,7 @@
 
 """Genkit — Build AI-powered applications."""
 
+from genkit._ai._agents._session import SessionErrorType
 from genkit._ai._aio import ActionKind, Genkit
 from genkit._ai._prompt import (
     ExecutablePrompt,
@@ -31,7 +32,7 @@ from genkit._ai._tools import (
     tool,
 )
 from genkit._core._action import Action, ActionRunContext, StreamResponse
-from genkit._core._error import GenkitError, PublicError
+from genkit._core._error import GenkitError, PublicError, StatusCodes
 from genkit._core._model import Document
 from genkit._core._plugin import Plugin
 from genkit._core._plugins import extend_plugin_namespace
@@ -101,6 +102,8 @@ __all__ = [
     # Errors
     'GenkitError',
     'PublicError',
+    'StatusCodes',
+    'SessionErrorType',
     # Tools
     'Interrupt',
     'Tool',

@@ -20,7 +20,8 @@ import asyncio
 import os
 import queue
 import threading
-from unittest.mock import MagicMock, patch
+from collections.abc import AsyncIterator
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -322,3 +323,88 @@ def test_gemini_config_schema_defaults() -> None:
     # All fields should be optional with None defaults
     assert config.temperature is None
     assert config.max_output_tokens is None
+
+
+def test_to_finish_reason_mapping() -> None:
+    """Gemini finish reason names map onto Genkit's FinishReason."""
+    from genkit.model import FinishReason
+    from genkit.plugins.google_genai.models.gemini import _to_finish_reason
+
+    assert _to_finish_reason('STOP') == FinishReason.STOP
+    assert _to_finish_reason('MAX_TOKENS') == FinishReason.LENGTH
+    assert _to_finish_reason('SAFETY') == FinishReason.BLOCKED
+    assert _to_finish_reason('PROHIBITED_CONTENT') == FinishReason.BLOCKED
+    assert _to_finish_reason(None) == FinishReason.OTHER
+    assert _to_finish_reason('SOMETHING_NEW') == FinishReason.OTHER
+
+
+def test_usage_from_metadata() -> None:
+    """Token usage is read off a google-genai usage_metadata block."""
+    from genkit.plugins.google_genai.models.gemini import _usage_from_metadata
+
+    assert _usage_from_metadata(None).input_tokens is None
+
+    md = MagicMock(
+        prompt_token_count=5,
+        candidates_token_count=7,
+        total_token_count=12,
+        thoughts_token_count=0,
+        cached_content_token_count=0,
+    )
+    usage = _usage_from_metadata(md)
+    assert usage.input_tokens == 5
+    assert usage.output_tokens == 7
+    assert usage.total_tokens == 12
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_propagates_finish_reason_and_usage() -> None:
+    """A streamed turn reports the finish reason and usage that ride on the trailing chunks.
+
+    Without this the model would stream content but return no finish reason, so
+    agents (which always stream) could never tell a turn actually completed.
+    """
+    from genkit.model import FinishReason
+    from genkit.plugins.google_genai.models.gemini import GeminiModel
+
+    # google-genai delivers the finish reason + cumulative usage on a trailing chunk,
+    # after the content chunks.
+    content_chunk = MagicMock(candidates=None, usage_metadata=None)
+    final_chunk = MagicMock()
+    final_chunk.candidates = [MagicMock()]
+    final_chunk.candidates[0].finish_reason.name = 'STOP'
+    final_chunk.usage_metadata = MagicMock(
+        prompt_token_count=5,
+        candidates_token_count=7,
+        total_token_count=12,
+        thoughts_token_count=0,
+        cached_content_token_count=0,
+    )
+
+    async def fake_stream() -> AsyncIterator[MagicMock]:
+        for chunk in (content_chunk, final_chunk):
+            yield chunk
+
+    async def generate_content_stream(**_kwargs: object) -> AsyncIterator[MagicMock]:
+        return fake_stream()
+
+    client = MagicMock()
+    client.aio.models.generate_content_stream = generate_content_stream
+
+    ctx = MagicMock()
+    model = GeminiModel('gemini-2.0-flash', client=client)
+
+    with (
+        patch.object(GeminiModel, '_contents_from_response', new=AsyncMock(return_value=[])),
+        patch(
+            'genkit.plugins.google_genai.models.gemini.resolve_vertex_model_name',
+            return_value='gemini-2.0-flash',
+        ),
+    ):
+        resp = await model._streaming_generate([], None, ctx, 'gemini-2.0-flash', client=client)
+
+    assert resp.finish_reason == FinishReason.STOP
+    assert resp.usage is not None
+    assert resp.usage.input_tokens == 5
+    assert resp.usage.output_tokens == 7
+    assert resp.usage.total_tokens == 12
