@@ -86,6 +86,7 @@ export interface MockModelOptions {
   /**
    * What to respond with on each `generate` call. Defaults to empty text.
    *
+   * - A **single response** (string / object) is returned on every call.
    * - A **callback** `(request, { sendChunk }) => response` is invoked once per
    *   call, so you can branch on request history (for tool loops) and stream via
    *   `sendChunk`.
@@ -95,12 +96,23 @@ export interface MockModelOptions {
    *   (Queued items are static, so streaming needs the callback form.)
    *
    * ```ts
+   * mockModel(ai, { respond: 'always this' });
    * mockModel(ai, { respond: ['first', 'second'] });
    * mockModel(ai, { respond: ['ok', new Error('rate limited')] });
    * ```
    */
-  respond?: MockRespondFn | Array<MockResponse | Error>;
+  respond?: MockRespond;
 }
+
+/**
+ * Anything accepted as respond behavior: a single {@link MockResponse}, a
+ * per-call callback, or a queue of responses/errors. See
+ * {@link MockModelOptions.respond}.
+ */
+export type MockRespond =
+  | MockRespondFn
+  | MockResponse
+  | Array<MockResponse | Error>;
 
 /**
  * A mock model with typed inspection of the calls it received. The extra
@@ -149,6 +161,32 @@ export type MockModel = ModelAction & {
   readonly requests: GenerateRequest[];
   /** How many times this model was called. */
   readonly requestCount: number;
+  /**
+   * Replaces the respond behavior for subsequent calls. Accepts everything
+   * {@link MockModelOptions.respond} does; an array re-arms as a fresh queue.
+   * Recorded history is untouched — use {@link MockModel.reset} for that.
+   *
+   * Together with `reset()` this supports the register-once idiom: define the
+   * mock once per test file, then give each test its own behavior.
+   *
+   * ```ts
+   * const model = mockModel(ai, { name: 'menuModel' });
+   * beforeEach(() => model.reset());
+   *
+   * test('...', async () => {
+   *   model.respondWith({ text: 'scripted' });
+   *   // ...
+   * });
+   * ```
+   */
+  respondWith(respond: MockRespond): void;
+  /**
+   * Clears recorded history (`requests`, `requestCount`, …) and restores the
+   * respond behavior given at construction, re-arming a queued `respond` from
+   * its first item. Call it in `beforeEach` so tests sharing a mock stay
+   * order-independent.
+   */
+  reset(): void;
 };
 
 function resolveRegistry(registry: Registry | HasRegistry): Registry {
@@ -225,20 +263,25 @@ function renderRequestText(request: GenerateRequest): string {
 }
 
 /**
- * Normalizes the `respond` option into a single callback. An array becomes a
- * queue consumed one item per call, with the last item repeating once
- * exhausted; a queued `Error` is thrown when reached.
+ * Normalizes the `respond` option into a single callback. A single response is
+ * returned on every call; an array becomes a queue consumed one item per call,
+ * with the last item repeating once exhausted; a queued `Error` is thrown when
+ * reached.
  */
-function toRespondFn(respond: MockModelOptions['respond']): MockRespondFn {
-  if (!Array.isArray(respond)) {
-    return respond ?? (() => ({ text: '' }));
+function toRespondFn(respond: MockRespond | undefined): MockRespondFn {
+  if (respond === undefined) {
+    return () => ({ text: '' });
   }
-  if (respond.length === 0) {
+  if (typeof respond === 'function') {
+    return respond;
+  }
+  const queue = Array.isArray(respond) ? respond : [respond];
+  if (queue.length === 0) {
     return () => ({ text: '' });
   }
   let i = 0;
   return () => {
-    const item = respond[Math.min(i, respond.length - 1)];
+    const item = queue[Math.min(i, queue.length - 1)];
     i++;
     if (item instanceof Error) throw item;
     return item;
@@ -247,8 +290,9 @@ function toRespondFn(respond: MockModelOptions['respond']): MockRespondFn {
 
 function toResponseData(response: MockResponse): GenerateResponseData {
   // A `respond` that streams but returns nothing (void) yields an empty message
-  // rather than throwing on the `'message' in response` check below.
-  if (!response) {
+  // rather than throwing on the `'message' in response` check below. Checked
+  // against null/undefined only, so `respond: ''` still means empty *text*.
+  if (response === undefined || response === null) {
     return { message: { role: 'model', content: [] }, finishReason: 'stop' };
   }
   if (typeof response === 'string') {
@@ -319,7 +363,7 @@ export function mockModel(
   options: MockModelOptions = {}
 ): MockModel {
   const requests: GenerateRequest[] = [];
-  const respond = toRespondFn(options.respond);
+  let respond = toRespondFn(options.respond);
 
   const model = defineModel(
     resolveRegistry(registry),
@@ -380,6 +424,17 @@ export function mockModel(
           })),
     },
     requestCount: { get: () => requests.length },
+    respondWith: {
+      value: (next: MockRespond) => {
+        respond = toRespondFn(next);
+      },
+    },
+    reset: {
+      value: () => {
+        requests.length = 0;
+        respond = toRespondFn(options.respond);
+      },
+    },
   });
   return model;
 }

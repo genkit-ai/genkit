@@ -180,6 +180,70 @@ describe('mockModel', () => {
     await assert.rejects(ai.generate({ model, prompt: 'b' }), /rate limited/);
   });
 
+  it('treats an empty-string response as empty text, not a missing message', async () => {
+    const model = mockModel(ai, { respond: '' });
+    const res = await ai.generate({ model, prompt: 'x' });
+    assert.strictEqual(res.text, '');
+    assert.deepStrictEqual(res.message?.content, [{ text: '' }]);
+  });
+
+  it('accepts a single static response, returned on every call', async () => {
+    const model = mockModel(ai, { respond: 'always this' });
+
+    assert.strictEqual(
+      (await ai.generate({ model, prompt: 'a' })).text,
+      'always this'
+    );
+    assert.strictEqual(
+      (await ai.generate({ model, prompt: 'b' })).text,
+      'always this'
+    );
+  });
+
+  it('swaps behavior for subsequent calls via respondWith', async () => {
+    const model = mockModel(ai, { respond: 'initial' });
+
+    assert.strictEqual(
+      (await ai.generate({ model, prompt: 'a' })).text,
+      'initial'
+    );
+
+    model.respondWith(['first', 'second']);
+    assert.strictEqual(
+      (await ai.generate({ model, prompt: 'b' })).text,
+      'first'
+    );
+    assert.strictEqual(
+      (await ai.generate({ model, prompt: 'c' })).text,
+      'second'
+    );
+    // respondWith leaves recorded history untouched.
+    assert.strictEqual(model.requestCount, 3);
+  });
+
+  it('clears history and re-arms the construction respond via reset', async () => {
+    const model = mockModel(ai, { respond: ['first', 'second'] });
+
+    await ai.generate({ model, prompt: 'a' });
+    await ai.generate({ model, prompt: 'b' });
+    model.respondWith('overridden');
+    assert.strictEqual(
+      (await ai.generate({ model, prompt: 'c' })).text,
+      'overridden'
+    );
+
+    model.reset();
+
+    assert.strictEqual(model.requestCount, 0);
+    assert.deepStrictEqual(model.requests, []);
+    assert.strictEqual(model.lastRequest, undefined);
+    // Back to the construction-time queue, re-armed from its first item.
+    assert.strictEqual(
+      (await ai.generate({ model, prompt: 'd' })).text,
+      'first'
+    );
+  });
+
   it('exposes tool results fed back to the model via toolResponses', async () => {
     const lookup = ai.defineTool(
       {
