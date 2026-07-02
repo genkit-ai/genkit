@@ -240,26 +240,26 @@ describe('Vertex AI Client', () => {
       it('should build URL for predictLongRunning', () => {
         const url = getVertexAIUrl({
           includeProjectAndLocation: true,
-          resourcePath: 'publishers/google/models/veo-2.0',
+          resourcePath: 'publishers/google/models/veo-3.1',
           resourceMethod: 'predictLongRunning',
           clientOptions: opts,
         });
         assert.strictEqual(
           url,
-          'https://us-east1-aiplatform.googleapis.com/v1beta1/projects/test-proj/locations/us-east1/publishers/google/models/veo-2.0:predictLongRunning'
+          'https://us-east1-aiplatform.googleapis.com/v1beta1/projects/test-proj/locations/us-east1/publishers/google/models/veo-3.1:predictLongRunning'
         );
       });
 
       it('should build URL for fetchPredictOperation', () => {
         const url = getVertexAIUrl({
           includeProjectAndLocation: true,
-          resourcePath: 'publishers/google/models/veo-2.0',
+          resourcePath: 'publishers/google/models/veo-3.1',
           resourceMethod: 'fetchPredictOperation',
           clientOptions: opts,
         });
         assert.strictEqual(
           url,
-          'https://us-east1-aiplatform.googleapis.com/v1beta1/projects/test-proj/locations/us-east1/publishers/google/models/veo-2.0:fetchPredictOperation'
+          'https://us-east1-aiplatform.googleapis.com/v1beta1/projects/test-proj/locations/us-east1/publishers/google/models/veo-3.1:fetchPredictOperation'
         );
       });
 
@@ -342,7 +342,7 @@ describe('Vertex AI Client', () => {
         assert.throws(() => {
           return getVertexAIUrl({
             includeProjectAndLocation: true,
-            resourcePath: 'publishers/google/models/veo-2.0',
+            resourcePath: 'publishers/google/models/veo-3.1',
             resourceMethod: 'predictLongRunning',
             clientOptions: opts,
           });
@@ -766,7 +766,7 @@ describe('Vertex AI Client', () => {
             instances: [{ prompt: 'a video' }],
             parameters: {},
           };
-          const model = 'veo-2.0-generate-001';
+          const model = 'veo-3.1-generate-preview';
           if (!isExpress) {
             it('should return VeoOperation', async () => {
               const mockResponse: VeoOperation = { name: 'operations/123' };
@@ -797,7 +797,7 @@ describe('Vertex AI Client', () => {
           const request: VeoOperationRequest = {
             operationName: 'operations/123',
           };
-          const model = 'veo-2.0-generate-001';
+          const model = 'veo-3.1-generate-preview';
           if (!isExpress) {
             it('should return VeoOperation', async () => {
               const mockResponse: VeoOperation = {
