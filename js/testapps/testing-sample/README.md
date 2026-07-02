@@ -17,9 +17,10 @@ streaming deterministically, without a live model, network, or API key.
 
 The app is a standard module-level Genkit singleton. Its default model is
 referenced by name only (`'menuModel'`), so tests register a mock under that
-name and the app code runs unchanged. Each test *file* gets a fresh process
-(and so a fresh registry) from the runner — `node --test`, Jest, and Vitest all
-isolate per file — so a file registers its mock **once** and tests share it:
+name and the app code runs unchanged. Each test *file* gets its own process or
+module graph (and so a fresh registry) from the runner — `node --test` spawns
+a child process per file; Jest and Vitest isolate each file's module registry —
+so a file registers its mock **once** and tests share it:
 `reset()` in `beforeEach` clears recorded history, and each test scripts its
 own behavior with `respondWith(...)`.
 

@@ -21,8 +21,9 @@ import { ai, recommendPrompt } from '../src/menu.js';
 
 // This file registers `echoModel` under the app's default model name. It lives
 // in its own test file because menu_test.ts already claims 'menuModel' with a
-// `mockModel` — and since the test runner gives each file a fresh process (and
-// so a fresh registry), the two registrations never meet.
+// `mockModel` — and since the test runner isolates each file (`node --test`
+// spawns a child process per file, so each gets a fresh registry), the two
+// registrations never meet.
 echoModel(ai, { name: 'menuModel', info: { supports: { tools: true } } });
 
 describe('prompt assembly with echoModel', () => {
