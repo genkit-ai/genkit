@@ -291,6 +291,24 @@ async def test_prompt_rendering_dotprompt(
     assert response.text == want_rendered
 
 
+@pytest.mark.asyncio
+async def test_prompt_template_reads_ambient_context_scope() -> None:
+    """A dotprompt template interpolates context from an ambient scope, not just explicit context=."""
+    from genkit._core._action import context_scope
+
+    ai, *_ = setup_test()
+
+    my_prompt = ai.define_prompt(
+        model='echoModel',
+        prompt='hello ({{@auth.email}})',
+    )
+
+    with context_scope({'auth': {'email': 'a@b.c'}}):
+        response = await my_prompt({})
+
+    assert 'a@b.c' in response.text
+
+
 # Tests for prompt variants and partials
 @pytest.mark.asyncio
 async def test_load_prompt_variant() -> None:

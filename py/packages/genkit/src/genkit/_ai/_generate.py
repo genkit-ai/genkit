@@ -44,6 +44,7 @@ from genkit._core._action import (
     Action,
     ActionKind,
     ActionRunContext,
+    get_current_context,
 )
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
@@ -402,11 +403,12 @@ def define_generate_action(registry: Registry) -> None:
         ctx: ActionRunContext,
     ) -> ModelResponse:
         on_chunk = cast(Callable[[ModelResponseChunk], None], ctx.streaming_callback) if ctx.is_streaming else None
+        # The action runtime already bound the request context as ambient before
+        # dispatching us, so the engine reads it off the scope like everything else.
         return await generate_with_request(
             registry=registry,
             raw_request=input,
             on_chunk=on_chunk,
-            context=dict(ctx.context),
         )
 
     _ = registry.register_action(
@@ -422,13 +424,16 @@ async def generate_action(
     on_chunk: Callable[[ModelResponseChunk], None] | None = None,
     message_index: int = 0,
     current_turn: int = 0,
-    context: dict[str, Any] | None = None,
 ) -> ModelResponse:
     """Open the user-facing ``generate`` span and delegate to the engine.
 
     Thin wrapper so in-process callers get a trace span named ``generate``
     around the whole call.  The registered ``/util/generate`` action skips
     this wrapper because the action runtime already opens its own span.
+
+    Context flows in ambiently: callers bind it with ``context_scope`` (the
+    veneer and prompt do this at their boundary) so the model, middleware, and
+    the tools the model triggers all read the same bag off the scope.
     """
     span_name = 'generate'
     with run_in_new_span(SpanMetadata(name=span_name, type='util', input=raw_request)) as span:
@@ -438,7 +443,6 @@ async def generate_action(
             on_chunk=on_chunk,
             message_index=message_index,
             current_turn=current_turn,
-            context=context,
         )
         with contextlib.suppress(Exception):
             span.set_attribute('genkit:output', result.model_dump_json(by_alias=True, exclude_none=True))
@@ -451,12 +455,15 @@ async def generate_with_request(
     on_chunk: Callable[[ModelResponseChunk], None] | None = None,
     message_index: int = 0,
     current_turn: int = 0,
-    context: dict[str, Any] | None = None,
 ) -> ModelResponse:
     """Resolve ``raw_request.use`` and run the generation.
 
     Core generate business logic. `ai.generate` veneer and the registered
     `/util/generate` action funnel through here.
+
+    Context is read off the ambient scope the caller bound, so the model,
+    middleware, and tools all see the same bag without it being threaded
+    through as a parameter.
     """
     # Shallow-copy the wire-shape struct so per-field updates below (and any
     # future mutations) don't leak back to the caller's ``raw_request``.
@@ -469,7 +476,7 @@ async def generate_with_request(
     middleware = resolve_middleware_from_use(registry, raw_request.use)
     run_ctx = GenerateMiddlewareContext(
         registry=registry,
-        custom_context=dict(context or {}),
+        context=dict(get_current_context() or {}),
         on_chunk=on_chunk,
     )
 
@@ -664,7 +671,7 @@ async def _generate_action_turn(
             return (
                 await model.run(
                     input=params.request,
-                    context=c.custom_context,
+                    context=c.context,
                     on_chunk=c.on_chunk,
                 )
             ).response

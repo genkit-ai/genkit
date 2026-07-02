@@ -75,7 +75,7 @@ from genkit._ai._resource import (
     define_resource,
 )
 from genkit._ai._tools import Tool, define_interrupt, define_tool
-from genkit._core._action import Action, ActionKind, get_current_context
+from genkit._core._action import Action, ActionKind, context_scope, get_current_context
 from genkit._core._background import (
     BackgroundAction,
     CancelModelOpFn,
@@ -936,11 +936,11 @@ class Genkit:
             use=refs,
         )
         gen_options = await to_generate_action_options(child_registry, prompt_config)
-        return await generate_action(
-            child_registry,
-            gen_options,
-            context=context if context else get_current_context(),
-        )
+        # Bind context as ambient for the turn so the model, middleware, and the
+        # tools the model triggers all read the same bag; an explicit context
+        # wins, else we inherit whatever scope the caller is already inside.
+        with context_scope(context if context else get_current_context()):
+            return await generate_action(child_registry, gen_options)
 
     # Overload: output_schema=type[T] -> ModelStreamResponse[T]
     @overload
@@ -1054,12 +1054,12 @@ class Genkit:
                 use=refs,
             )
             gen_options = await to_generate_action_options(child_registry, prompt_config)
-            return await generate_action(
-                child_registry,
-                gen_options,
-                on_chunk=lambda c: channel.send(c),
-                context=context if context else get_current_context(),
-            )
+            with context_scope(context if context else get_current_context()):
+                return await generate_action(
+                    child_registry,
+                    gen_options,
+                    on_chunk=lambda c: channel.send(c),
+                )
 
         response_future: asyncio.Future[ModelResponse[Any]] = asyncio.create_task(_run_generate())
         channel.set_close_future(response_future)

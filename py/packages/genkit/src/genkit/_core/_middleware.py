@@ -127,13 +127,13 @@ class ToolHookParams(BaseModel):
 class GenerateMiddlewareContext:
     """Per-``generate()`` runtime services shared by every middleware in ``use=[...]``.
 
-    Holds the call-scoped registry, caller-provided metadata (``custom_context``),
-    and streaming hooks for the whole generate invocation. Hook ``params`` carry
-    per-turn request data only.
+    Holds the call-scoped registry, the caller-provided request ``context`` (auth,
+    tenant, and other metadata — the same dict tools see), and streaming hooks for
+    the whole generate invocation. Hook ``params`` carry per-turn request data only.
     """
 
     registry: RegistryLike
-    custom_context: dict[str, object] = field(default_factory=dict)
+    context: dict[str, object] = field(default_factory=dict)
     on_chunk: Callable[[ModelResponseChunk], None] | None = None
     abort_signal: Any | None = None
     telemetry_labels: dict[str, str] | None = None

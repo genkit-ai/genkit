@@ -52,6 +52,7 @@ from genkit._core._action import (
     Action,
     ActionKind,
     StreamingCallback,
+    context_scope,
     create_action_key,
     get_current_context,
 )
@@ -360,12 +361,12 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         child_registry, gen_options = await _prepare(self, input, opts)
         on_chunk = opts.get('on_chunk')
         context = opts.get('context')
-        result = await generate_action(
-            child_registry,
-            gen_options,
-            on_chunk=on_chunk,
-            context=context if context else get_current_context(),
-        )
+        with context_scope(context if context else get_current_context()):
+            result = await generate_action(
+                child_registry,
+                gen_options,
+                on_chunk=on_chunk,
+            )
         return cast(ModelResponse[OutputT], result)
 
     def _prompt_config_for_call(self, opts: PromptGenerateOptions) -> PromptConfig:
@@ -927,7 +928,10 @@ async def render_prompt_config_for_executable_call(
     before :func:`to_generate_action_options`.
     """
     ri = coerce_prompt_template_input(template_input)
-    render_context = opts.get('context')
+    # Fall back to the ambient context so a template that interpolates context
+    # values renders the same bag the model and tools see, rather than blanks,
+    # when the caller set context via a scope instead of passing it explicitly.
+    render_context = opts.get('context') or get_current_context()
     message_history = opts.get('messages')
     cache = executable_prompt._cache_prompt
     extra_docs = opts.get('docs')
