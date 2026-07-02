@@ -746,7 +746,7 @@ class AddContextMiddleware(BaseMiddleware):
         ctx: GenerateMiddlewareContext,
         next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        ctx.custom_context['banana'] = True
+        ctx.context['banana'] = True
         return await next_fn(params, ctx)
 
 
@@ -765,7 +765,7 @@ class InjectContextMiddleware(BaseMiddleware):
                     messages=[
                         Message(
                             role=Role.USER,
-                            content=[Part(TextPart(text=f'{txt} {ctx.custom_context}'))],
+                            content=[Part(TextPart(text=f'{txt} {ctx.context}'))],
                         ),
                     ],
                 ),
@@ -783,24 +783,26 @@ class ContextMiddlewarePlugin(ExtensionMiddlewarePlugin):
 
 @pytest.mark.asyncio
 async def test_generate_middleware_can_modify_context() -> None:
-    """Test that middleware can modify custom_context on the shared generate ctx."""
+    """Test that middleware can modify context on the shared generate ctx."""
+    from genkit._core._action import context_scope
+
     ai = Genkit(plugins=[ContextMiddlewarePlugin()])
     define_echo_model(ai)
 
-    response = await generate_action(
-        ai.registry,
-        GenerateActionOptions(
-            model='echoModel',
-            messages=[
-                Message(
-                    role=Role.USER,
-                    content=[Part(TextPart(text='hi'))],
-                ),
-            ],
-            use=[MiddlewareRef(name='add_ctx'), MiddlewareRef(name='inject_ctx')],
-        ),
-        context={'foo': 'bar'},
-    )
+    with context_scope({'foo': 'bar'}):
+        response = await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='echoModel',
+                messages=[
+                    Message(
+                        role=Role.USER,
+                        content=[Part(TextPart(text='hi'))],
+                    ),
+                ],
+                use=[MiddlewareRef(name='add_ctx'), MiddlewareRef(name='inject_ctx')],
+            ),
+        )
 
     assert response.text == '''[ECHO] user: "hi {'foo': 'bar', 'banana': True}"'''
 
@@ -1166,6 +1168,97 @@ async def test_wrap_tool_called_on_tool_execution() -> None:
     )
     assert response.text == 'done'
     assert tool_names == ['myTool']
+
+
+@pytest.mark.asyncio
+async def test_tool_sees_context_from_top_level_generate() -> None:
+    """A tool triggered by a top-level generate sees the ``context`` passed to it.
+
+    Regression: the context handed to ``generate`` used to reach the model and
+    middleware but not the tools the model called, so an auth check inside a tool
+    silently saw nothing on a bare generate call.
+    """
+    from genkit._ai._tools import ToolRunContext
+
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    seen: dict[str, object] = {}
+
+    @ai.tool(name='whoami')
+    async def whoami(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        seen['auth'] = (ctx.context or {}).get('auth')
+        return 'ok'
+
+    pm.responses.append(
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='whoami', input={}, ref='r1')))],
+            ),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='done'))]),
+        )
+    )
+
+    response = await ai.generate(
+        model='programmableModel',
+        messages=[Message(role=Role.USER, content=[Part(TextPart(text='hi'))])],
+        tools=['whoami'],
+        context={'auth': 'alice'},
+    )
+
+    assert response.text == 'done'
+    assert seen['auth'] == 'alice'
+
+
+@pytest.mark.asyncio
+async def test_tool_sees_context_from_ambient_context_scope() -> None:
+    """A bare generate with no explicit context inherits an ambient ``context_scope``."""
+    from genkit._ai._tools import ToolRunContext
+    from genkit._core._action import context_scope
+
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    seen: dict[str, object] = {}
+
+    @ai.tool(name='whoami2')
+    async def whoami2(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        seen['auth'] = (ctx.context or {}).get('auth')
+        return 'ok'
+
+    pm.responses.append(
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='whoami2', input={}, ref='r1')))],
+            ),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='done'))]),
+        )
+    )
+
+    with context_scope({'auth': 'bob'}):
+        response = await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[Message(role=Role.USER, content=[Part(TextPart(text='hi'))])],
+                tools=['whoami2'],
+            ),
+        )
+
+    assert response.text == 'done'
+    assert seen['auth'] == 'bob'
 
 
 @pytest.mark.asyncio

@@ -85,7 +85,7 @@ class Fallback(BaseMiddleware[FallbackConfig]):
             try:
                 result = await fallback_action.run(
                     input=params.request,
-                    context=ctx.custom_context,
+                    context=ctx.context,
                     on_chunk=on_chunk,
                 )
                 return result.response  # type: ignore[return-value]

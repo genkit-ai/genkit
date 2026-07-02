@@ -1086,7 +1086,7 @@ async def test_generate_passes_through_current_action_context() -> None:
                         messages=[
                             Message(
                                 role=Role.USER,
-                                content=[Part(root=TextPart(text=f'{txt} {ctx.custom_context}'))],
+                                content=[Part(root=TextPart(text=f'{txt} {ctx.context}'))],
                             ),
                         ],
                     ),
@@ -1129,7 +1129,7 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
                         messages=[
                             Message(
                                 role=Role.USER,
-                                content=[Part(root=TextPart(text=f'{txt} {ctx.custom_context}'))],
+                                content=[Part(root=TextPart(text=f'{txt} {ctx.context}'))],
                             ),
                         ],
                     ),
@@ -1172,7 +1172,7 @@ async def test_generate_uses_inline_middleware_instance_with_context() -> None:
                         messages=[
                             Message(
                                 role=Role.USER,
-                                content=[Part(root=TextPart(text=f'{txt} {ctx.custom_context}'))],
+                                content=[Part(root=TextPart(text=f'{txt} {ctx.context}'))],
                             ),
                         ],
                     ),

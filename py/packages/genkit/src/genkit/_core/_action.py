@@ -21,7 +21,8 @@ import inspect
 import json
 import re
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, ClassVar, Generic, NamedTuple, cast, get_type_hints
 
@@ -672,6 +673,29 @@ def get_current_context() -> dict[str, object] | None:
     the private _action_context ContextVar.
     """
     return _action_context.get(None)
+
+
+@contextmanager
+def context_scope(context: dict[str, object] | None) -> Generator[None, None, None]:
+    """Bind ``context`` as the ambient action context for the duration of the block.
+
+    Everything that runs inside — tool calls, sub-actions, nested generate, and
+    prompt rendering — reads the same context. Handing context to a top-level
+    call otherwise reaches the model but silently skips the tools it triggers,
+    because those tools resolve their context from the ambient var rather than an
+    argument.
+
+    A falsy context is a no-op so callers can wrap unconditionally without
+    clobbering an outer scope with an empty bag.
+    """
+    if not context:
+        yield
+        return
+    token = _action_context.set(context)
+    try:
+        yield
+    finally:
+        _action_context.reset(token)
 
 
 def set_action_name(action: Action[Any, Any, Any], name: str) -> None:
