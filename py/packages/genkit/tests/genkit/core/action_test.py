@@ -5,8 +5,10 @@
 
 """Tests for the action module."""
 
+import asyncio
 import json
 from typing import cast
+from unittest.mock import patch
 
 import pytest
 
@@ -186,6 +188,50 @@ async def test_streaming_action_with_stream_method() -> None:
 
     assert await result.response == 3
     assert chunks == ['1', '2']
+
+
+@pytest.mark.asyncio
+async def test_stream_cancellation_does_not_crash_callback() -> None:
+    """ACC-562: When stream task is cancelled, the channel.closed callback must not crash.
+
+    Previously the callback called channel.closed.result() which raises CancelledError
+    when the future was cancelled. The fix propagates cancellation to result_future
+    instead of crashing.
+    """
+    block = asyncio.Event()
+
+    async def blocking_stream(
+        _input: str,
+        ctx: ActionRunContext,
+    ) -> int:
+        ctx.send_chunk('started')
+        await block.wait()  # Never completes unless we set it
+        return 42
+
+    action = Action(name='blocking', kind=ActionKind.CUSTOM, fn=blocking_stream)
+
+    captured_task: asyncio.Task | None = None
+    original_create_task = asyncio.create_task
+
+    def capturing_create_task(coro: object) -> asyncio.Task:
+        nonlocal captured_task
+        task = original_create_task(coro)
+        captured_task = task
+        return task
+
+    with patch('genkit._core._action.asyncio.create_task', side_effect=capturing_create_task):
+        result = action.stream('x')
+
+    # Consume the first chunk so the action progresses to block.wait()
+    async for _ in result.stream:
+        break
+
+    assert captured_task is not None
+    captured_task.cancel()
+
+    # Awaiting response should raise CancelledError, not crash in callback
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(result.response, timeout=1.0)
 
 
 def test_parse_plugin_name_from_action_name() -> None:
