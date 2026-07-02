@@ -36,6 +36,7 @@ import { vertexAI } from '../../src/vertexai/index.js';
 import type {
   ExpressClientOptions,
   GlobalClientOptions,
+  MultiRegionalClientOptions,
   RegionalClientOptions,
 } from '../../src/vertexai/types.js';
 import {
@@ -47,6 +48,14 @@ describe('VertexAI Plugin', () => {
   const regionalMockDerivedOptions: RegionalClientOptions = {
     kind: 'regional' as const,
     location: 'us-central1',
+    projectId: 'test-project',
+    authClient: {
+      getAccessToken: async () => 'fake-test-token',
+    } as unknown as GoogleAuth,
+  };
+  const multiRegionalMockDerivedOptions: MultiRegionalClientOptions = {
+    kind: 'multi-regional' as const,
+    location: 'us',
     projectId: 'test-project',
     authClient: {
       getAccessToken: async () => 'fake-test-token',
@@ -557,6 +566,79 @@ describe('VertexAI Plugin', () => {
         assert.strictEqual(headers['Authorization'], 'Bearer fake-test-token');
         assert.strictEqual(headers['x-goog-api-key'], 'test-api-key');
         assert.ok(!url.includes('?key=test-api-key'));
+      });
+    });
+
+    describe('With Multi-Regional Options', () => {
+      beforeEach(() => {
+        UTILS_TEST_ONLY.setMockDerivedOptions(multiRegionalMockDerivedOptions);
+        ai = genkit({ plugins: [vertexAI()] });
+      });
+
+      it('should use auth token and multi-regional URL for Gemini generateContent', async () => {
+        const modelRef = vertexAI.model('gemini-2.5-flash');
+        const generateAction = await ai.registry.lookupAction(
+          '/model/' + modelRef.name
+        );
+        assert.ok(generateAction, `/model/${modelRef.name} action not found`);
+
+        fetchMock.mock.mockImplementation(async () =>
+          createMockApiResponse({
+            candidates: [
+              {
+                index: 0,
+                content: { role: 'model', parts: [{ text: 'response' }] },
+              },
+            ],
+          })
+        );
+
+        await generateAction({
+          messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+          config: {},
+        } as GenerateRequest);
+
+        const fetchCall = fetchMock.mock.calls[0];
+        const headers = fetchCall.arguments[1].headers;
+        const url = fetchCall.arguments[0];
+        assert.strictEqual(headers['Authorization'], 'Bearer fake-test-token');
+        assert.ok(url.includes('aiplatform.us.googleapis.com'));
+      });
+    });
+
+    describe('With apiVersion Option', () => {
+      it('should pass apiVersion through to request URL', async () => {
+        UTILS_TEST_ONLY.setMockDerivedOptions({
+          ...regionalMockDerivedOptions,
+          apiVersion: 'v1',
+        });
+        ai = genkit({ plugins: [vertexAI({ apiVersion: 'v1' })] });
+
+        const modelRef = vertexAI.model('gemini-2.5-flash');
+        const generateAction = await ai.registry.lookupAction(
+          '/model/' + modelRef.name
+        );
+        assert.ok(generateAction, `/model/${modelRef.name} action not found`);
+
+        fetchMock.mock.mockImplementation(async () =>
+          createMockApiResponse({
+            candidates: [
+              {
+                index: 0,
+                content: { role: 'model', parts: [{ text: 'response' }] },
+              },
+            ],
+          })
+        );
+
+        await generateAction({
+          messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+          config: {},
+        } as GenerateRequest);
+
+        const fetchCall = fetchMock.mock.calls[0];
+        const url = fetchCall.arguments[0];
+        assert.ok(url.includes('/v1/projects/'));
       });
     });
 

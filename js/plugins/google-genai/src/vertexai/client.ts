@@ -323,6 +323,8 @@ export async function veoCheckOperation(
   });
 }
 
+const SUPPORTED_API_VERSIONS = ['v1beta1', 'v1'] as const;
+
 export function getVertexAIUrl(params: {
   includeProjectAndLocation: boolean; // False for listModels, true for most others
   resourcePath: string;
@@ -332,12 +334,19 @@ export function getVertexAIUrl(params: {
 }): string {
   checkSupportedResourceMethod(params);
 
-  const DEFAULT_API_VERSION = 'v1beta1';
-  const API_BASE_PATH = 'aiplatform.googleapis.com';
+  // https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/agent-locations
+  // https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations
 
+  const apiVersion = params.clientOptions.apiVersion ?? 'v1beta1';
+  if (!SUPPORTED_API_VERSIONS.includes(apiVersion))
+    throw new Error(`Invalid apiVersion [${apiVersion}] for VertexAi client`);
+
+  const API_BASE_PATH = 'aiplatform.googleapis.com';
   let basePath: string;
 
-  if (params.clientOptions.kind == 'regional') {
+  if (params.clientOptions.kind === 'multi-regional') {
+    basePath = `aiplatform.${params.clientOptions.location}.googleapis.com`;
+  } else if (params.clientOptions.kind == 'regional') {
     basePath = `${params.clientOptions.location}-${API_BASE_PATH}`;
   } else {
     basePath = API_BASE_PATH;
@@ -352,7 +361,7 @@ export function getVertexAIUrl(params: {
     resourcePath = `${parent}/${params.resourcePath}`;
   }
 
-  let url = `https://${basePath}/${DEFAULT_API_VERSION}/${resourcePath}`;
+  let url = `https://${basePath}/${apiVersion}/${resourcePath}`;
   if (params.resourceMethod) {
     url += `:${params.resourceMethod}`;
   }
