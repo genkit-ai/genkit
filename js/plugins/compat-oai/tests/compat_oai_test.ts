@@ -656,6 +656,68 @@ describe('fromOpenAiChunkChoice', () => {
       },
     },
     {
+      should:
+        'emit a tool request part for the first streaming tool_call delta',
+      chunkChoice: {
+        index: 0,
+        delta: {
+          role: 'assistant',
+          tool_calls: [
+            {
+              index: 0,
+              id: 'call_abc',
+              function: {
+                name: 'list_files',
+                arguments: '',
+              },
+            },
+          ],
+        },
+        finish_reason: null,
+      },
+      expectedOutput: {
+        finishReason: 'unknown',
+        message: {
+          role: 'model',
+          content: [
+            {
+              toolRequest: {
+                name: 'list_files',
+                input: '',
+                ref: 'call_abc',
+              },
+            },
+          ],
+        },
+      },
+    },
+    {
+      should:
+        'skip streaming tool_call argument-continuation deltas (no id, no name)',
+      chunkChoice: {
+        index: 0,
+        delta: {
+          role: 'assistant',
+          tool_calls: [
+            {
+              index: 0,
+              function: {
+                arguments: '{"path":',
+              },
+            },
+          ],
+        } as any,
+        finish_reason: null,
+      },
+      expectedOutput: {
+        finishReason: 'unknown',
+        message: {
+          role: 'model',
+          content: [],
+        },
+      },
+    },
+    {
       should: 'work with reasoning_content',
       chunkChoice: {
         index: 0,
