@@ -235,7 +235,7 @@ export class GenkitBeta extends Genkit {
    *
    * ```ts
    * const operation = await ai.generateOperation({
-   *   model: googleAI.model('veo-2.0-generate-001'),
+   *   model: googleAI.model('veo-3.1-generate-preview'),
    *   prompt: 'A banana riding a bicycle.',
    * });
    * ```
