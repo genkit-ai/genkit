@@ -22,8 +22,10 @@ from pytest_mock import MockerFixture
 
 from genkit import Document, EmbedRequest, EmbedResponse
 from genkit.plugins.google_genai.models.embedder import (
+    EMBEDDER_DIMENSIONS,
     Embedder,
     GeminiEmbeddingModels,
+    get_embedder_options,
 )
 
 
@@ -63,3 +65,29 @@ async def test_embedding_rejects_empty_input(mocker: MockerFixture) -> None:
     with pytest.raises(ValueError, match='Embed request input is empty'):
         await embedder.generate(EmbedRequest(input=[]))
     googleai_client_mock.aio.models.embed_content.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    'model_name, expected_dimensions',
+    [
+        ('gemini-embedding-2-preview', 3072),
+        ('gemini-embedding-2', 3072),
+        ('gemini-embedding-001', 3072),
+    ],
+)
+def test_embedder_dimensions_known_models(model_name: str, expected_dimensions: int) -> None:
+    """Known Gemini embedders expose the expected static dimensions."""
+    assert EMBEDDER_DIMENSIONS[model_name] == expected_dimensions
+
+
+def test_get_embedder_options_multimodal_and_fallback() -> None:
+    """Gemini embedding 2 models are multimodal while unknown stays text-only."""
+    options = get_embedder_options('gemini-embedding-2', 'Google AI - gemini-embedding-2')
+    assert options.dimensions == 3072
+    assert options.supports is not None
+    assert options.supports.input == ['text', 'image', 'video']
+
+    unknown_options = get_embedder_options('custom-embedder', 'Google AI - custom-embedder')
+    assert unknown_options.dimensions is None
+    assert unknown_options.supports is not None
+    assert unknown_options.supports.input == ['text']

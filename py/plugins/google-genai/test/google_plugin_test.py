@@ -40,7 +40,12 @@ from genkit import (
 )
 from genkit.plugin_api import GENKIT_CLIENT_HEADER
 from genkit.plugins.google_genai import GoogleAI, VertexAI
-from genkit.plugins.google_genai.google import _inject_attribution_headers, googleai_name, vertexai_name
+from genkit.plugins.google_genai.google import (
+    _inject_attribution_headers,
+    _list_genai_models,
+    googleai_name,
+    vertexai_name,
+)
 from genkit.plugins.google_genai.models.gemini import (
     DEFAULT_SUPPORTS_MODEL,
     SUPPORTED_MODELS,
@@ -235,16 +240,17 @@ def test_googleai__resolve_model(
 
 
 @pytest.mark.parametrize(
-    'model_name, expected_model_name, clean_name',
+    'expected_model_name, expected_dimensions, expected_support_inputs',
     [
-        ('gemini-pro-deluxe-max', 'googleai/gemini-pro-deluxe-max', 'gemini-pro-deluxe-max'),
-        ('googleai/gemini-pro-deluxe-max', 'googleai/gemini-pro-deluxe-max', 'gemini-pro-deluxe-max'),
+        ('googleai/gemini-embedding-2', 3072, ['text', 'image', 'video']),
+        ('googleai/gemini-embedding-2-preview', 3072, ['text', 'image', 'video']),
+        ('googleai/custom-embedder', None, ['text']),
     ],
 )
 def test_googleai__resolve_embedder(
-    model_name: str,
     expected_model_name: str,
-    clean_name: str,
+    expected_dimensions: int | None,
+    expected_support_inputs: list[str],
     googleai_plugin_instance: GoogleAI,
 ) -> None:
     """Tests for GoogleAI._resolve_embedder method."""
@@ -255,6 +261,8 @@ def test_googleai__resolve_embedder(
     assert action is not None
     assert action.kind == ActionKind.EMBEDDER
     assert action.name == expected_model_name
+    assert action.metadata['embedder']['dimensions'] == expected_dimensions
+    assert action.metadata['embedder']['supports']['input'] == expected_support_inputs
 
 
 @pytest.mark.asyncio
@@ -269,6 +277,8 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
 
     models_return_value = [
         MockModel(supported_actions=['generateContent'], name='models/gemini-pro'),
+        MockModel(supported_actions=['embedContent'], name='models/gemini-embedding-2'),
+        MockModel(supported_actions=['embedContent'], name='models/gemini-embedding-2-preview'),
         MockModel(supported_actions=['embedContent'], name='models/gemini-embedding-001'),
         MockModel(supported_actions=['generateContent'], name='models/gemini-2.0-flash-tts'),  # TTS
     ]
@@ -287,6 +297,20 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
     action2 = next(a for a in result if a.name == googleai_name('gemini-embedding-001'))
     assert action2 is not None
     assert action2.action_type == ActionKind.EMBEDDER
+    assert action2.metadata['embedder']['dimensions'] == 3072
+    assert action2.metadata['embedder']['supports']['input'] == ['text']
+
+    action2b = next(a for a in result if a.name == googleai_name('gemini-embedding-2'))
+    assert action2b is not None
+    assert action2b.action_type == ActionKind.EMBEDDER
+    assert action2b.metadata['embedder']['dimensions'] == 3072
+    assert action2b.metadata['embedder']['supports']['input'] == ['text', 'image', 'video']
+
+    action2c = next(a for a in result if a.name == googleai_name('gemini-embedding-2-preview'))
+    assert action2c is not None
+    assert action2c.action_type == ActionKind.EMBEDDER
+    assert action2c.metadata['embedder']['dimensions'] == 3072
+    assert action2c.metadata['embedder']['supports']['input'] == ['text', 'image', 'video']
 
     # Check TTS
     action3 = next(a for a in result if a.name == googleai_name('gemini-2.0-flash-tts'))
@@ -711,24 +735,17 @@ def test_vertexai__resolve_model(
 
 
 @pytest.mark.parametrize(
-    'model_name, expected_model_name, clean_name',
+    'expected_model_name, expected_dimensions, expected_support_inputs',
     [
-        (
-            'gemini-pro-deluxe-max',
-            'vertexai/gemini-pro-deluxe-max',
-            'gemini-pro-deluxe-max',
-        ),
-        (
-            'vertexai/gemini-pro-deluxe-max',
-            'vertexai/gemini-pro-deluxe-max',
-            'gemini-pro-deluxe-max',
-        ),
+        ('vertexai/gemini-embedding-2', 3072, ['text', 'image', 'video']),
+        ('vertexai/gemini-embedding-2-preview', 3072, ['text', 'image', 'video']),
+        ('vertexai/custom-embedder', None, ['text']),
     ],
 )
 def test_vertexai__resolve_embedder(
-    model_name: str,
     expected_model_name: str,
-    clean_name: str,
+    expected_dimensions: int | None,
+    expected_support_inputs: list[str],
     vertexai_plugin_instance: VertexAI,
 ) -> None:
     """Tests for VertexAI._resolve_embedder method."""
@@ -739,6 +756,8 @@ def test_vertexai__resolve_embedder(
     assert action is not None
     assert action.kind == ActionKind.EMBEDDER
     assert action.name == expected_model_name
+    assert action.metadata['embedder']['dimensions'] == expected_dimensions
+    assert action.metadata['embedder']['supports']['input'] == expected_support_inputs
 
 
 @pytest.mark.asyncio
@@ -769,6 +788,16 @@ async def test_vertexai_list_actions(vertexai_plugin_instance: VertexAI) -> None
     m2.supported_actions = ['embedContent']
     m2.description = 'Embedder'
 
+    m2b = MagicMock()
+    m2b.name = 'publishers/google/models/gemini-embedding-2'
+    m2b.supported_actions = ['embedContent']
+    m2b.description = 'Embedder'
+
+    m2c = MagicMock()
+    m2c.name = 'publishers/google/models/gemini-embedding-2-preview'
+    m2c.supported_actions = ['embedContent']
+    m2c.description = 'Embedder'
+
     m3 = MagicMock()
     m3.name = 'publishers/google/models/imagen-3.0-generate-001'
     m3.supported_actions = ['predict']  # Imagen uses predict
@@ -779,7 +808,7 @@ async def test_vertexai_list_actions(vertexai_plugin_instance: VertexAI) -> None
     m4.supported_actions = ['generateVideos']  # Veo uses generateVideos
     m4.description = 'Veo'
 
-    mock_client.models.list.return_value = [m1, m2, m3, m4]
+    mock_client.models.list.return_value = [m1, m2, m2b, m2c, m3, m4]
     vertexai_plugin_instance._runtime_client = lambda: mock_client
 
     result = await vertexai_plugin_instance.list_actions()
@@ -791,6 +820,21 @@ async def test_vertexai_list_actions(vertexai_plugin_instance: VertexAI) -> None
     # Verify Embedder
     action2 = next(a for a in result if a.name == vertexai_name('gemini-embedding-001'))
     assert action2 is not None
+    assert action2.action_type == ActionKind.EMBEDDER
+    assert action2.metadata['embedder']['dimensions'] == 3072
+    assert action2.metadata['embedder']['supports']['input'] == ['text']
+
+    action2b = next(a for a in result if a.name == vertexai_name('gemini-embedding-2'))
+    assert action2b is not None
+    assert action2b.action_type == ActionKind.EMBEDDER
+    assert action2b.metadata['embedder']['dimensions'] == 3072
+    assert action2b.metadata['embedder']['supports']['input'] == ['text', 'image', 'video']
+
+    action2c = next(a for a in result if a.name == vertexai_name('gemini-embedding-2-preview'))
+    assert action2c is not None
+    assert action2c.action_type == ActionKind.EMBEDDER
+    assert action2c.metadata['embedder']['dimensions'] == 3072
+    assert action2c.metadata['embedder']['supports']['input'] == ['text', 'image', 'video']
 
     # Verify Imagen
     action3 = next(a for a in result if a.name == vertexai_name('imagen-3.0-generate-001'))
@@ -980,6 +1024,21 @@ async def test_vertexai_resolve_evaluator(vertexai_plugin_instance: VertexAI) ->
     assert action is not None
     assert action.kind == ActionKind.EVALUATOR
     assert action.name == vertexai_name('fluency')
+
+
+def test_list_genai_models_classifies_gemini_embedding_2_as_embedder() -> None:
+    """gemini-embedding-2 should always be discovered in the embedder list."""
+    mock_client = MagicMock()
+
+    embedder_model = MagicMock()
+    embedder_model.name = 'models/gemini-embedding-2'
+    embedder_model.supported_actions = ['embedContent']
+    embedder_model.description = 'Gemini embedding model'
+
+    mock_client.models.list.return_value = [embedder_model]
+    discovered = _list_genai_models(mock_client, is_vertex=False)
+
+    assert 'gemini-embedding-2' in discovered.embedders
 
 
 def test_config_schema_extra_fields() -> None:
