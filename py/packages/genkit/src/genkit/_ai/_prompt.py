@@ -89,7 +89,7 @@ class OutputOptions(TypedDict, total=False):
 
     format: str | None
     content_type: str | None
-    instructions: str | None
+    instructions: bool | str | None
     schema: type | dict[str, Any] | str | None
     json_schema: dict[str, Any] | None
     constrained: bool | None
@@ -219,7 +219,7 @@ class PromptConfig(BaseModel):
     messages: str | list[Message] | None = None
     output_format: str | None = None
     output_content_type: str | None = None
-    output_instructions: str | None = None
+    output_instructions: bool | str | None = None
     output_schema: type | dict[str, Any] | str | None = None
     output_constrained: bool | None = None
     max_turns: int | None = None
@@ -251,7 +251,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         messages: str | list[Message] | None = None,
         output_format: str | None = None,
         output_content_type: str | None = None,
-        output_instructions: str | None = None,
+        output_instructions: bool | str | None = None,
         output_schema: type | dict[str, Any] | str | None = None,
         output_constrained: bool | None = None,
         max_turns: int | None = None,
