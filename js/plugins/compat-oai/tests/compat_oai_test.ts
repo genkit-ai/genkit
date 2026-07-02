@@ -1149,6 +1149,47 @@ describe('toOpenAiRequestBody', () => {
     });
   }
 
+  it('applies visualDetailLevel to image parts without leaking it into the request body', () => {
+    const actualOutput = toOpenAIRequestBody('gpt-4o', {
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              media: {
+                contentType: 'image/png',
+                url: 'https://example.com/image.png',
+              },
+            },
+          ],
+        },
+      ],
+      config: {
+        seed: 42,
+        visualDetailLevel: 'high',
+      },
+    } as GenerateRequest) as any;
+
+    // visualDetailLevel is consumed when building messages, not forwarded to OpenAI.
+    expect(actualOutput.visualDetailLevel).toBeUndefined();
+    // Genuine passthrough config is still forwarded.
+    expect(actualOutput.seed).toBe(42);
+    expect(actualOutput.messages).toStrictEqual([
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'image_url',
+            image_url: {
+              url: 'https://example.com/image.png',
+              detail: 'high',
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
   it('(gpt4) does NOT set response_format in openai request body', () => {
     // In either case - output.format='json' or output.format='text' - do NOT set response_format in the OpenAI request body explicitly.
     const modelName = 'gpt-4';
