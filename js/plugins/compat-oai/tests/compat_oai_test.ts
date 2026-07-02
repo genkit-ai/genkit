@@ -717,6 +717,7 @@ describe('toOpenAiRequestBody', () => {
         tools: [],
         output: { format: 'text' },
         config: {
+          maxOutputTokens: 128,
           topP: 1,
           frequency_penalty: 0.7,
           logit_bias: {
@@ -741,6 +742,7 @@ describe('toOpenAiRequestBody', () => {
         ],
         model: 'gpt-3.5-turbo',
         response_format: { type: 'text' },
+        max_tokens: 128,
         top_p: 1,
         frequency_penalty: 0.7,
         logit_bias: {
