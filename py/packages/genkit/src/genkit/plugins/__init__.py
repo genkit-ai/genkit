@@ -16,7 +16,7 @@
 
 """Namespace package for Genkit plugins.
 
-This is a namespace package that allows plugins to be discovered from
+This package acts as a namespace allowing plugins to be discovered from
 multiple installed packages. Each plugin can be imported as:
 
     from genkit.plugins.<plugin_name> import <PluginClass>
@@ -24,4 +24,17 @@ multiple installed packages. Each plugin can be imported as:
 For example:
     from genkit.plugins.google_genai import GoogleGenai
     from genkit.plugins.anthropic import Anthropic
+
+Because this module ships an ``__init__.py``, ``genkit.plugins`` is a regular
+package, not a PEP 420 namespace. Its ``__path__`` is extended at runtime by
+``genkit._core._plugins.extend_plugin_namespace`` (called from
+``genkit.__init__``), which scans ``sys.path`` for ``genkit/plugins`` dirs.
+
+``pkgutil.extend_path`` is not used: it searches ``genkit.__path__`` rather than
+``sys.path``, and a single-directory ``genkit`` package does not span the other
+distributions, so it would find nothing.
+
+A native PEP 420 namespace would require ``genkit`` itself to be a pure namespace
+package (no ``__init__.py``, like ``google.cloud.*``), giving up the populated
+top-level ``genkit`` API. So the runtime scan stays.
 """
