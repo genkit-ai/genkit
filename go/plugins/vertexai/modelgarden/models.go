@@ -197,4 +197,19 @@ var LlamaModels = map[string]ai.ModelOptions{
 		Label:    "Llama 3.3 70B Instruct",
 		Supports: &internal.BasicText,
 	},
+	// Starting with the 4.6 generation, Anthropic's Vertex AI IDs are dateless
+	// pinned snapshots (not evergreen pointers).
+	// See https://docs.claude.com/en/docs/about-claude/models/overview
+	"claude-sonnet-4-6": {
+		Label:    "Claude 4.6 Sonnet",
+		Supports: &internal.Multimodal,
+	},
+	"claude-opus-4-6": {
+		Label:    "Claude 4.6 Opus",
+		Supports: &internal.Multimodal,
+	},
+	"claude-opus-4-7": {
+		Label:    "Claude 4.7 Opus",
+		Supports: &internal.Multimodal,
+	},
 }
