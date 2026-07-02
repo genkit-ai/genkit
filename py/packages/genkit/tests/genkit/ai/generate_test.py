@@ -1262,6 +1262,157 @@ async def test_tool_sees_context_from_ambient_context_scope() -> None:
 
 
 @pytest.mark.asyncio
+async def test_middleware_context_mutation_reaches_tool() -> None:
+    """A value middleware adds to the shared bag is visible to a tool the model calls.
+
+    The model, middleware, and the tools the model triggers all read one context
+    bag, so something middleware resolves (say, a tenant) reaches a tool in the
+    same turn rather than only the model.
+    """
+    from genkit._ai._tools import ToolRunContext
+
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.middleware(name='inject_tenant', description='inject tenant into context')
+    class InjectTenant(BaseMiddleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            ctx.context['tenant'] = 'acme'
+            return await next_fn(params, ctx)
+
+    seen: dict[str, object] = {}
+
+    @ai.tool(name='tenant_reader')
+    async def tenant_reader(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        seen['tenant'] = (ctx.context or {}).get('tenant')
+        return 'ok'
+
+    pm.responses.append(
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[
+                    Part(root=ToolRequestPart(tool_request=ToolRequest(name='tenant_reader', input={}, ref='r1')))
+                ],
+            ),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='done'))]),
+        )
+    )
+
+    response = await ai.generate(
+        model='programmableModel',
+        messages=[Message(role=Role.USER, content=[Part(TextPart(text='hi'))])],
+        tools=['tenant_reader'],
+        use=[MiddlewareRef(name='inject_tenant')],
+        context={'auth': 'alice'},
+    )
+
+    assert response.text == 'done'
+    assert seen['tenant'] == 'acme'
+
+
+@pytest.mark.asyncio
+async def test_middleware_context_mutation_reaches_ambient_dict() -> None:
+    """Middleware mutates the exact dictionary instance bound to the ambient scope.
+
+    Avoid copying the dictionary if it already exists, so middleware edits reach
+    the ambient dictionary instance.
+    """
+    ai = Genkit()
+    define_echo_model(ai)
+
+    @ai.middleware(name='adds_key', description='adds a key to context')
+    class AddsKey(BaseMiddleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            ctx.context['added'] = True
+            return await next_fn(params, ctx)
+
+    caller_ctx: dict[str, object] = {'auth': 'alice'}
+    await ai.generate(
+        model='echoModel',
+        messages=[Message(role=Role.USER, content=[Part(TextPart(text='hi'))])],
+        use=[MiddlewareRef(name='adds_key')],
+        context=caller_ctx,
+    )
+
+    assert caller_ctx == {'auth': 'alice', 'added': True}
+
+
+@pytest.mark.asyncio
+async def test_middleware_injects_context_from_empty_reaches_tool() -> None:
+    """Middleware can populate context from nothing and a tool still sees it.
+
+    Even a generate with no context bound starts an owned, mutable bag, so
+    middleware that injects request metadata (e.g. from a header) reaches the
+    tools the model triggers.
+    """
+    from genkit._ai._tools import ToolRunContext
+
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.middleware(name='inject_from_empty', description='inject into empty context')
+    class InjectFromEmpty(BaseMiddleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            ctx.context['origin'] = 'middleware'
+            return await next_fn(params, ctx)
+
+    seen: dict[str, object] = {}
+
+    @ai.tool(name='origin_reader')
+    async def origin_reader(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        seen['origin'] = (ctx.context or {}).get('origin')
+        return 'ok'
+
+    pm.responses.append(
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[
+                    Part(root=ToolRequestPart(tool_request=ToolRequest(name='origin_reader', input={}, ref='r1')))
+                ],
+            ),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='done'))]),
+        )
+    )
+
+    response = await ai.generate(
+        model='programmableModel',
+        messages=[Message(role=Role.USER, content=[Part(TextPart(text='hi'))])],
+        tools=['origin_reader'],
+        use=[MiddlewareRef(name='inject_from_empty')],
+    )
+
+    assert response.text == 'done'
+    assert seen['origin'] == 'middleware'
+
+
+@pytest.mark.asyncio
 async def test_middleware_wrap_tool_interrupt_handled_as_interrupt_not_crash() -> None:
     """Interrupt raised by wrap_tool middleware is converted to an interrupt part.
 

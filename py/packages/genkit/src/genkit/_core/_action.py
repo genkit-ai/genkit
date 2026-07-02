@@ -676,6 +676,23 @@ def get_current_context() -> dict[str, object] | None:
 
 
 @contextmanager
+def bind_context(context: dict[str, object]) -> Generator[None, None, None]:
+    """Bind ``context`` as the ambient action context, even when it's empty.
+
+    The generate engine owns one context bag per call and shares that exact dict
+    with the middleware, the model, and the tools the model triggers. Binding it
+    here — unlike :func:`context_scope`, which skips a falsy bag so it won't
+    shadow an outer scope — lets middleware start from an empty bag and add auth
+    or tenant data that the model and those tools then read off the same object.
+    """
+    token = _action_context.set(context)
+    try:
+        yield
+    finally:
+        _action_context.reset(token)
+
+
+@contextmanager
 def context_scope(context: dict[str, object] | None) -> Generator[None, None, None]:
     """Bind ``context`` as the ambient action context for the duration of the block.
 
@@ -691,11 +708,8 @@ def context_scope(context: dict[str, object] | None) -> Generator[None, None, No
     if not context:
         yield
         return
-    token = _action_context.set(context)
-    try:
+    with bind_context(context):
         yield
-    finally:
-        _action_context.reset(token)
 
 
 def set_action_name(action: Action[Any, Any, Any], name: str) -> None:
