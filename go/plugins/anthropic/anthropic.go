@@ -39,6 +39,8 @@ const (
 	anthropicLabelPrefix = "Anthropic"
 )
 
+var dateSuffix = regexp.MustCompile(`-\d{8}$`)
+
 // Anthropic is a Genkit plugin for interacting with the Anthropic services
 type Anthropic struct {
 	APIKey  string // If not provided, defaults to ANTHROPIC_API_KEY
@@ -107,7 +109,7 @@ func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOpt
 // label. This is the single source of model capabilities shared by ListActions
 // and ResolveAction, mirroring the JS plugin's claudeModelReference.
 func modelOptions(name string) ai.ModelOptions {
-	opts, ok := knownModels[name]
+	opts, ok := knownModels[baseModelName(name)]
 	if !ok {
 		opts = defaultClaudeOpts
 	}
@@ -219,6 +221,10 @@ func newModel(client anthropic.Client, name, apiModelName string, opts ai.ModelO
 	return ai.NewModel(api.NewName(provider, name), meta, fn)
 }
 
+func baseModelName(name string) string {
+	return dateSuffix.ReplaceAllString(name, "")
+}
+
 func resolveModelID(id string, availableModels []string) (string, bool) {
 	// First check for exact match
 	for _, m := range availableModels {
@@ -229,16 +235,11 @@ func resolveModelID(id string, availableModels []string) (string, bool) {
 
 	var bestMatch string
 	prefix := id + "-"
-	// Suffix must be exactly 8 digits (YYYYMMDD)
-	dateSuffix := regexp.MustCompile(`^\d{8}$`)
 
 	for _, m := range availableModels {
-		if strings.HasPrefix(m, prefix) {
-			suffix := strings.TrimPrefix(m, prefix)
-			if dateSuffix.MatchString(suffix) {
-				if m > bestMatch {
-					bestMatch = m
-				}
+		if strings.HasPrefix(m, prefix) && baseModelName(m) == id {
+			if m > bestMatch {
+				bestMatch = m
 			}
 		}
 	}
