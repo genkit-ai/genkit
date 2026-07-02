@@ -86,6 +86,75 @@ describe('Tools Server', () => {
     );
   });
 
+  it('should redact sensitive environment variable values', async () => {
+    process.env.GENKIT_TEST_API_KEY = 'test-secret-value';
+    process.env.GENKIT_TEST_DATABASE_URL = 'postgres://user:pass@host/db';
+    process.env.GENKIT_TEST_SENTRY_DSN = 'https://key@sentry.example/1';
+    process.env.GENKIT_TEST_CONNECTION_STRING =
+      'Server=host;User Id=user;Password=pass';
+    process.env.GENKIT_TEST_CONNECT_TIMEOUT = '30';
+    process.env.GENKIT_TEST_PUBLIC_VALUE = 'test-public-value';
+
+    try {
+      const response = await axios.get(
+        `http://localhost:${port}/api/getGenkitEnvironment`
+      );
+      const environmentVars = response.data.result.data.environmentVars;
+
+      expect(
+        environmentVars.find((env: any) => env.name === 'GENKIT_TEST_API_KEY')
+      ).toEqual({
+        name: 'GENKIT_TEST_API_KEY',
+        value: '[redacted]',
+      });
+      expect(
+        environmentVars.find(
+          (env: any) => env.name === 'GENKIT_TEST_DATABASE_URL'
+        )
+      ).toEqual({
+        name: 'GENKIT_TEST_DATABASE_URL',
+        value: '[redacted]',
+      });
+      expect(
+        environmentVars.find((env: any) => env.name === 'GENKIT_TEST_SENTRY_DSN')
+      ).toEqual({
+        name: 'GENKIT_TEST_SENTRY_DSN',
+        value: '[redacted]',
+      });
+      expect(
+        environmentVars.find(
+          (env: any) => env.name === 'GENKIT_TEST_CONNECTION_STRING'
+        )
+      ).toEqual({
+        name: 'GENKIT_TEST_CONNECTION_STRING',
+        value: '[redacted]',
+      });
+      expect(
+        environmentVars.find(
+          (env: any) => env.name === 'GENKIT_TEST_CONNECT_TIMEOUT'
+        )
+      ).toEqual({
+        name: 'GENKIT_TEST_CONNECT_TIMEOUT',
+        value: '30',
+      });
+      expect(
+        environmentVars.find(
+          (env: any) => env.name === 'GENKIT_TEST_PUBLIC_VALUE'
+        )
+      ).toEqual({
+        name: 'GENKIT_TEST_PUBLIC_VALUE',
+        value: 'test-public-value',
+      });
+    } finally {
+      delete process.env.GENKIT_TEST_API_KEY;
+      delete process.env.GENKIT_TEST_DATABASE_URL;
+      delete process.env.GENKIT_TEST_SENTRY_DSN;
+      delete process.env.GENKIT_TEST_CONNECTION_STRING;
+      delete process.env.GENKIT_TEST_CONNECT_TIMEOUT;
+      delete process.env.GENKIT_TEST_PUBLIC_VALUE;
+    }
+  });
+
   it('should handle bidi streaming', async () => {
     let inputStream: AsyncIterable<any> | undefined;
     let finishAction: (() => void) | undefined;

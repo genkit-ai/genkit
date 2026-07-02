@@ -274,6 +274,31 @@ describe('spawn-config', () => {
         expect(config.args).toContain('8080');
       });
 
+      it('should pass custom hosts to the server harness', () => {
+        const cliRuntime: CLIRuntimeInfo = {
+          type: 'node',
+          execPath: '/usr/bin/node',
+          scriptPath: '/script.js',
+          isCompiledBinary: false,
+          platform: 'linux',
+        };
+
+        const config = buildServerHarnessSpawnConfig(
+          cliRuntime,
+          mockPort,
+          mockLogPath,
+          '127.0.0.1'
+        );
+
+        expect(config.args).toEqual([
+          '/script.js',
+          SERVER_HARNESS_COMMAND,
+          '4000',
+          '/path/to/devui.log',
+          '127.0.0.1',
+        ]);
+      });
+
       it('should handle paths with spaces', () => {
         const cliRuntime: CLIRuntimeInfo = {
           type: 'node',
