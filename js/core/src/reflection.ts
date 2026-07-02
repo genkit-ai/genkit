@@ -438,7 +438,12 @@ export class ReflectionServer {
     });
 
     this.port = await this.findPort();
-    this.server = server.listen(this.port, async () => {
+    // Bind to loopback only. The reflection server is a local development API
+    // with no authentication, so it must not be exposed on all interfaces.
+    // Use the explicit IPv4 loopback address (rather than 'localhost', which on
+    // Node 17+ can resolve to the IPv6 '::1' only) so the bind is deterministic
+    // across platforms and matches the Go runtime, which binds 127.0.0.1.
+    this.server = server.listen(this.port, '127.0.0.1', async () => {
       logger.debug(
         `Reflection server (${process.pid}) running on http://localhost:${this.port}`
       );
