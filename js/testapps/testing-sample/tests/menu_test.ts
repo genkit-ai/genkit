@@ -14,49 +14,44 @@
  * limitations under the License.
  */
 
-import { echoModel, mockModel } from 'genkit/testing';
+import { mockModel } from 'genkit/testing';
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
-import { createMenuApp } from '../src/menu.js';
+import {
+  ai,
+  confirmBooking,
+  recommendDish,
+  streamRecommendation,
+} from '../src/menu.js';
 
-// Build a fresh app (its own Genkit registry) for each test, then register the
-// mock under the app's default model name ('menuModel') so the app's
-// `ai.generate` / prompt resolves to it with no code change. The fresh instance
-// keeps tests isolated and avoids re-registering the same model name on a
-// shared registry.
-type App = ReturnType<typeof createMenuApp>;
-let ai: App['ai'];
-let confirmBooking: App['confirmBooking'];
-let recommendDish: App['recommendDish'];
-let recommendPrompt: App['recommendPrompt'];
-let streamRecommendation: App['streamRecommendation'];
-beforeEach(() => {
-  ({
-    ai,
-    confirmBooking,
-    recommendDish,
-    recommendPrompt,
-    streamRecommendation,
-  } = createMenuApp());
+// Register ONE mock under the app's default model name ('menuModel'), once for
+// this whole file — the app's `ai.generate` / prompt resolves to it with no
+// code change. Test runners (`node --test`, Jest, Vitest) run each test file
+// in its own process/module graph, so this registration can't collide with
+// other test files. Within the file, `reset()` in beforeEach clears recorded
+// history and re-arms the construction respond, and each test scripts its own
+// behavior with `respondWith(...)`.
+const model = mockModel(ai, {
+  name: 'menuModel',
+  info: { supports: { tools: true } },
 });
+
+beforeEach(() => model.reset());
 
 // Structured output is the highest-value case: the model returns JSON, and the
 // flow's *own* logic (validation, deriving `withinBudget`) is what we pin down.
 describe('recommendDish flow — structured output + business logic', () => {
   // A fixed, deterministic structured response from the "model".
-  const respondWithRecommendation = () => ({
+  const recommendation = {
     text: JSON.stringify({
       dish: 'Mushroom risotto',
       reason: 'Comforting and in season.',
       priceUSD: 18,
     }),
-  });
+  };
 
   it('parses the structured recommendation and marks it within budget', async () => {
-    const model = mockModel(ai, {
-      name: 'menuModel',
-      respond: respondWithRecommendation,
-    });
+    model.respondWith(recommendation);
 
     const out = await recommendDish({
       restaurant: 'Lumen',
@@ -72,10 +67,7 @@ describe('recommendDish flow — structured output + business logic', () => {
   it('marks the SAME model output over budget when the budget is lower', async () => {
     // Identical model response as above — only the flow's input changes. This
     // proves the test exercises *our* budget logic, not the model.
-    mockModel(ai, {
-      name: 'menuModel',
-      respond: respondWithRecommendation,
-    });
+    model.respondWith(recommendation);
 
     const out = await recommendDish({
       restaurant: 'Lumen',
@@ -90,10 +82,7 @@ describe('recommendDish flow — structured output + business logic', () => {
     // echoModel can't be used here — the prompt requests structured output, and
     // echo returns text. Inspect the recorded request instead: `lastRequestText`
     // flattens the whole assembled conversation (system + rendered template).
-    const model = mockModel(ai, {
-      name: 'menuModel',
-      respond: respondWithRecommendation,
-    });
+    model.respondWith(recommendation);
 
     await recommendDish({ restaurant: 'Lumen', mood: 'cozy', budgetUSD: 30 });
 
@@ -110,14 +99,11 @@ describe('recommendDish flow — structured output + business logic', () => {
   it('rejects a recommendation the flow considers invalid', async () => {
     // The model returns a structurally-valid but business-invalid price; the
     // flow's guard, not the framework, is what throws.
-    mockModel(ai, {
-      name: 'menuModel',
-      respond: () => ({
-        text: JSON.stringify({
-          dish: 'Free water',
-          reason: 'Out of stock on everything else.',
-          priceUSD: 0,
-        }),
+    model.respondWith({
+      text: JSON.stringify({
+        dish: 'Free water',
+        reason: 'Out of stock on everything else.',
+        priceUSD: 0,
       }),
     });
 
@@ -130,29 +116,25 @@ describe('recommendDish flow — structured output + business logic', () => {
 
 describe('recommendDish flow — tool round-trip', () => {
   it('runs dailySpecial, then returns the structured recommendation', async () => {
-    const model = mockModel(ai, {
-      name: 'menuModel',
-      info: { supports: { tools: true } },
-      respond: (req) => {
-        const toolAnswered = req.messages.some((m) =>
-          m.content.some((c) => c.toolResponse)
-        );
-        // First turn: ask for the special. Second turn (after the tool ran):
-        // return the structured recommendation.
-        return toolAnswered
-          ? {
-              text: JSON.stringify({
-                dish: 'Mushroom risotto',
-                reason: "It's the daily special.",
-                priceUSD: 22,
-              }),
-            }
-          : {
-              toolRequests: [
-                { name: 'dailySpecial', input: { restaurant: 'Lumen' } },
-              ],
-            };
-      },
+    model.respondWith((req) => {
+      const toolAnswered = req.messages.some((m) =>
+        m.content.some((c) => c.toolResponse)
+      );
+      // First turn: ask for the special. Second turn (after the tool ran):
+      // return the structured recommendation.
+      return toolAnswered
+        ? {
+            text: JSON.stringify({
+              dish: 'Mushroom risotto',
+              reason: "It's the daily special.",
+              priceUSD: 22,
+            }),
+          }
+        : {
+            toolRequests: [
+              { name: 'dailySpecial', input: { restaurant: 'Lumen' } },
+            ],
+          };
     });
 
     const out = await recommendDish({
@@ -171,37 +153,13 @@ describe('recommendDish flow — tool round-trip', () => {
   });
 });
 
-describe('prompt assembly with echoModel', () => {
-  it('shows the full rendered request — system + interpolated template', async () => {
-    // echoModel echoes the whole assembled conversation, so we can assert on
-    // the system instruction *and* the Handlebars-rendered user message — what
-    // the model would have seen — without a live model.
-    echoModel(ai, { name: 'menuModel', info: { supports: { tools: true } } });
-
-    const res = await recommendPrompt({
-      restaurant: 'Lumen',
-      mood: 'tired',
-      budgetUSD: 40,
-    });
-
-    assert.match(res.text, /system: You are a concise restaurant concierge/);
-    assert.match(
-      res.text,
-      /Recommend a dish at Lumen for someone feeling tired\. Their budget is 40 USD/
-    );
-  });
-});
-
 describe('streamRecommendation flow — streaming through the flow', () => {
   it('forwards model chunks out through the flow stream', async () => {
-    mockModel(ai, {
-      name: 'menuModel',
-      respond: (_req, { sendChunk }) => {
-        sendChunk('Try ');
-        sendChunk('the ');
-        sendChunk('risotto.');
-        return { text: 'Try the risotto.' };
-      },
+    model.respondWith((_req, { sendChunk }) => {
+      sendChunk('Try ');
+      sendChunk('the ');
+      sendChunk('risotto.');
+      return { text: 'Try the risotto.' };
     });
 
     const { stream, output } = streamRecommendation.stream({
@@ -221,26 +179,22 @@ describe('streamRecommendation flow — streaming through the flow', () => {
 
 describe('scripting responses with a queue', () => {
   it('scripts a two-turn tool interaction with an array of responses', async () => {
-    const model = mockModel(ai, {
-      name: 'menuModel',
-      info: { supports: { tools: true } },
-      // Turn 1: ask for the special. Turn 2: return the recommendation. The
-      // array is consumed one item per call, so no branching callback is needed.
-      respond: [
-        {
-          toolRequests: [
-            { name: 'dailySpecial', input: { restaurant: 'Lumen' } },
-          ],
-        },
-        {
-          text: JSON.stringify({
-            dish: 'Mushroom risotto',
-            reason: "It's the daily special.",
-            priceUSD: 22,
-          }),
-        },
-      ],
-    });
+    // Turn 1: ask for the special. Turn 2: return the recommendation. The
+    // array is consumed one item per call, so no branching callback is needed.
+    model.respondWith([
+      {
+        toolRequests: [
+          { name: 'dailySpecial', input: { restaurant: 'Lumen' } },
+        ],
+      },
+      {
+        text: JSON.stringify({
+          dish: 'Mushroom risotto',
+          reason: "It's the daily special.",
+          priceUSD: 22,
+        }),
+      },
+    ]);
 
     const out = await recommendDish({
       restaurant: 'Lumen',
@@ -258,10 +212,7 @@ describe('model failure handling', () => {
   it('surfaces a model error injected via a queued Error', async () => {
     // A queued Error is thrown when reached — here on the very first call — so
     // you can test how a flow behaves when the model fails.
-    mockModel(ai, {
-      name: 'menuModel',
-      respond: [new Error('model overloaded')],
-    });
+    model.respondWith([new Error('model overloaded')]);
 
     await assert.rejects(
       recommendDish({ restaurant: 'Lumen', mood: 'cozy', budgetUSD: 30 }),
@@ -272,22 +223,17 @@ describe('model failure handling', () => {
 
 describe('human-in-the-loop with interrupts', () => {
   it('pauses on confirmBooking, then resumes to complete the booking', async () => {
-    const model = mockModel(ai, {
-      name: 'menuModel',
-      info: { supports: { tools: true } },
-      respond: [
-        {
-          toolRequests: [
-            { name: 'confirmBooking', input: { dish: 'Mushroom risotto' } },
-          ],
-        },
-        { text: 'Enjoy your meal!' },
-      ],
-    });
+    model.respondWith([
+      {
+        toolRequests: [
+          { name: 'confirmBooking', input: { dish: 'Mushroom risotto' } },
+        ],
+      },
+      { text: 'Enjoy your meal!' },
+    ]);
 
     // First pass: the tool interrupts, so generation pauses awaiting the human.
     const paused = await ai.generate({
-      model,
       prompt: 'Book the risotto.',
       tools: [confirmBooking],
     });
@@ -297,7 +243,6 @@ describe('human-in-the-loop with interrupts', () => {
     // The human confirms; `restart` re-runs the tool with the decision (so its
     // `resumed` branch books the dish), then the model finishes.
     const done = await ai.generate({
-      model,
       messages: paused.messages,
       tools: [confirmBooking],
       resume: {
