@@ -44,6 +44,7 @@ from genkit._core._action import (
     Action,
     ActionKind,
     ActionRunContext,
+    bind_context,
     get_current_context,
 )
 from genkit._core._error import GenkitError
@@ -461,9 +462,10 @@ async def generate_with_request(
     Core generate business logic. `ai.generate` veneer and the registered
     `/util/generate` action funnel through here.
 
-    Context is read off the ambient scope the caller bound, so the model,
-    middleware, and tools all see the same bag without it being threaded
-    through as a parameter.
+    This call uses one context bag for the whole generation: the ambient scope
+    the caller bound, or a new empty dict if none was bound. It's shared by reference
+    with the middleware and re-bound as the ambient scope, so anything middleware
+    adds or changes is seen by the model and every tool the model triggers.
     """
     # Shallow-copy the wire-shape struct so per-field updates below (and any
     # future mutations) don't leak back to the caller's ``raw_request``.
@@ -473,10 +475,16 @@ async def generate_with_request(
     if raw_request.tools:
         raw_request.tools = await expand_wildcard_tools(registry, raw_request.tools)
 
+    # One context bag for the whole call: use the ambient scope if present so
+    # middleware can add or change what the model and the tools it triggers all
+    # see. If no context was bound, create an empty dict and bind it as ambient below.
+    curr_ctx = get_current_context()
+    ctx_bag: dict[str, object] = curr_ctx if curr_ctx is not None else {}
+
     middleware = resolve_middleware_from_use(registry, raw_request.use)
     run_ctx = GenerateMiddlewareContext(
         registry=registry,
-        context=dict(get_current_context() or {}),
+        context=ctx_bag,
         on_chunk=on_chunk,
     )
 
@@ -502,13 +510,16 @@ async def generate_with_request(
     else:
         mw_pipeline = _GenerateMiddlewarePipeline(middleware=[], ctx=run_ctx)
 
-    return await _generate_action_turn(
-        registry=registry,
-        raw_request=raw_request,
-        mw_pipeline=mw_pipeline,
-        message_index=message_index,
-        current_turn=current_turn,
-    )
+    # Bind the shared bag as ambient for the whole (recursive) turn loop, so the
+    # model call and the tools it triggers read the same object middleware holds.
+    with bind_context(ctx_bag):
+        return await _generate_action_turn(
+            registry=registry,
+            raw_request=raw_request,
+            mw_pipeline=mw_pipeline,
+            message_index=message_index,
+            current_turn=current_turn,
+        )
 
 
 async def _generate_action_turn(
@@ -668,10 +679,12 @@ async def _generate_action_turn(
         request = _params.request
 
         async def next_fn(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
+            # No explicit context: the model reads the ambient bag, the same
+            # object c.context points at, so middleware edits reach the model
+            # just like they reach the tools it triggers.
             return (
                 await model.run(
                     input=params.request,
-                    context=c.context,
                     on_chunk=c.on_chunk,
                 )
             ).response
