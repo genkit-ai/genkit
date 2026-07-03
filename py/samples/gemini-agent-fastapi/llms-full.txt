@@ -1,0 +1,148 @@
+# Gemini Agent on Cloud Run (FastAPI) — agent reference
+
+Product: multi-tenant chat API. Auth → agent turn (NDJSON) → persisted session → token accounting.
+
+## Decision guide
+
+| Goal | Do this | Not this |
+|------|---------|----------|
+| User sends a chat message | `serve_agent` + `define_prompt_agent` | `@ai.flow` + `ai.generate()` |
+| Change agent voice/rules | Edit `app/ai/prompts/*.prompt` | Hardcode system string (unless no prompt file) |
+| Bill/log model usage | `@ai.middleware` + `use:` in prompt | Manual logging after generate |
+| User-private tool data | `@ai.tool` + `ctx.context["auth"]` | Global state / no auth check |
+| Account/plan questions | `getMyProfile` tool reads the `profiles` store | Hardcode in system prompt |
+| List sessions in UI | `session_index.upsert/list_for` in `app/data/` | Duplicate messages in Firestore |
+| Resume conversation | `session_id` on `/api/chat` or `init.sessionId` | Client-only message array |
+| Isolate tenants | `Depends(with_tenant)` | Manual `set_tenant_uid` in handlers |
+
+## Layout
+
+```
+app/api/          HTTP (thin)
+app/ai/agents/    agent definitions
+app/ai/prompts/   dotprompt (.prompt)
+app/ai/tools/     @ai.tool
+app/ai/middleware/
+app/auth/         identity providers behind one interface (base + dev + firebase)
+app/data/         the data layer (catalog + store engine + backends)
+app/models.py     domain types (Pydantic)
+app/core/         config (env + bootstrap), identity, tenant
+app/server.py     FastAPI app assembly
+```
+
+Shared runtime: `from app.ai import ai`
+
+Stores: declare in `app/data/__init__.py` — `user_doc('name', Model)` (one per user)
+or `user_collection('name', Model)` (many per user). Use like `await profiles.get(uid)`,
+`await usage.add(uid, rec)`. There's no in-memory backend — a datastore is required
+(FIREBASE_PROJECT_ID deployed, FIRESTORE_EMULATOR_HOST local); `get_storage()` fails
+loudly otherwise. Switch databases by adding a module under `app/data/backends/` that
+implements `Storage` (`app/data/store.py`) and pointing `get_storage` at it.
+
+Auth: `from app.auth import get_auth_provider, AuthUser`. Providers implement
+`app/auth/base.py` (`verify_token`, optional `password_login`); swap by adding a module
+and pointing the factory in `app/auth/__init__.py`. Never verify tokens inline in routes.
+
+## API contract
+
+```
+POST /api/chat                     {"message":"..."}  or  {"input":..., "init":...}
+POST /api/chat/getSnapshot
+POST /api/chat/abort
+GET  /api/sessions
+GET  /api/sessions/{session_id}
+Authorization: Bearer <token>
+Chat stream: application/x-ndjson
+```
+
+## Copy-paste patterns
+
+### Prompt-backed agent (preferred)
+
+`app/ai/prompts/my_agent.prompt`:
+```
+---
+model: googleai/gemini-flash-latest
+tools: [myTool]
+use: [token_tracker]
+---
+System instructions for the product...
+```
+
+```python
+# app/ai/agents/my_agent.py
+from app.ai import ai
+from app.data import get_agent_session_store
+
+my_agent = ai.define_prompt_agent(name='my_agent', store=get_agent_session_store())
+```
+
+Register new tools/middleware in `app/ai/__init__.py` bootstrap.
+
+### User-scoped tool
+
+```python
+@ai.tool(name='myTool', description='What the user gets when the model picks this.')
+async def my_tool(input: MyInput, ctx: ToolRunContext) -> MyOutput:
+    uid = (ctx.context.get('auth') or {}).get('uid')
+    if not uid:
+        return MyOutput()
+    ...
+```
+
+### Middleware (billing/observability)
+
+```python
+@ai.middleware(name='my_mw')
+class MyMiddleware(BaseMiddleware):
+    async def wrap_model(self, params, ctx, next_fn):
+        return await next_fn(params, ctx)
+```
+
+### Mount routes
+
+```python
+# app/api/chat.py — run-turn / getSnapshot / abort, with auth
+from genkit.plugins.fastapi import serve_agent
+
+# serve_agent returns an APIRouter; app/server.py mounts it with include_router(prefix='/api').
+router = serve_agent(
+    my_agent,
+    base_path='/chat',
+    context_provider=_auth_context,   # authenticate; return {"auth":..., "uid":...}
+)
+```
+
+Post-turn side effects (e.g. keeping the `session_index` fresh) need a turn
+lifecycle hook in the agent framework, not this transport — not wired for now, so
+`GET /api/sessions` returns an empty list until that lands in core.
+
+Plain (non-agent) persistence routes still use `user: Annotated[AuthUser, Depends(with_tenant)]`.
+
+## Imports (valid)
+
+```python
+from app.ai import ai
+from genkit import Message, Part, Role, TextPart, ToolRunContext
+from genkit.middleware import BaseMiddleware
+from genkit.agent import Agent, AgentInit, AgentInput, AgentOutput, AgentChat
+from genkit.plugins.google_genai import GoogleAI
+```
+
+## Invalid (common hallucinations)
+
+- `from genkit.ai import Genkit`
+- `serve_flow` for main chat (that's for flows; agents use `serve_agent`)
+- `ai.generate()` on `/api/chat` path
+- Second `Genkit()` instance
+- `genkit._*` imports in `app/api/`
+- `thread_id` in public API (use `session_id`)
+- Chat history in session index (index is metadata only)
+
+## Dev
+
+```bash
+export GEMINI_API_KEY=... GENKIT_ENV=dev
+uv run genkit start -- uvicorn app.server:app --reload --port 8000
+# Dev UI: http://localhost:4000
+```

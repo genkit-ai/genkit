@@ -1,0 +1,55 @@
+# Gemini Agent on Cloud Run (FastAPI)
+
+You are extending a **real agent product**, not a demo script. Users expect auth, resumable sessions, and predictable token accounting. Every change should make the product more reliable for them—not just compile.
+
+## Product defaults
+
+- **Chat is agent-backed.** Users stream turns, resume later, abort long work. Use `define_prompt_agent` / `define_agent` served via `serve_agent`—not `ai.generate()` on the HTTP path.
+- **Sessions belong to one user.** Anything that reads/writes agent state must authenticate: the agent handler's `context_provider` for chat, `Depends(with_tenant)` on plain REST routes. Cross-tenant data leaks are unacceptable.
+- **One source of truth for history.** Messages live in the agent session store. The session index is only for fast listing—never store chat history there.
+- **Token usage is a billing surface.** New model calls that bypass middleware mean lost revenue and surprise invoices.
+- **Tools gate private data.** Get the caller with `current_uid(ctx)` (from `app/ai/context.py`); return empty—not guessed data—when it's `None`. Read user data through the `app/data` stores scoped to that uid.
+
+## Where new code goes
+
+| User-facing need | Put it here |
+|------------------|-------------|
+| New HTTP route | `app/api/` — thin handlers only |
+| New agent behavior | `app/ai/agents/` + optional `app/ai/prompts/*.prompt` |
+| Model/tool side effects (logging, billing) | `app/ai/middleware/` |
+| User-scoped actions the model can call | `app/ai/tools/` with Pydantic in/out |
+| Store user data (settings, profiles, notes, logs) | Add a model in `app/models.py`, declare `user_doc`/`user_collection` in `app/data/__init__.py`; never import a backend directly |
+| Auth / identity provider | `app/auth/` — implement `AuthProvider`; verify via `get_auth_provider()`, never inline in a route |
+| Env vars and secrets | `app/core/config.py` — never boot Genkit here |
+| Cross-cutting helpers (identity, etc.) | `app/core/` |
+
+Do not grow `server.py`, do not add a second `Genkit()` instance (`from app.ai import ai`).
+
+## Genkit rules (avoid first-attempt failures)
+
+```python
+from app.ai import ai
+from genkit.agent import AgentInit, AgentInput, AgentOutput, Agent
+from genkit.middleware import BaseMiddleware
+from genkit import ToolRunContext
+```
+
+- Prompt agents: edit `.prompt` for system voice/tools/middleware; wire in `app/ai/agents/`.
+- Middleware: `@ai.middleware(name="...")`, reference by name in `.prompt` `use:`.
+- Public chat API: `{"message": "..."}` + optional `?session_id=`; stream as `application/x-ndjson`.
+- Public REST: `/api/sessions`, `/api/sessions/{session_id}` — use `session_id`, not `thread_id`.
+- Never import `genkit._*` from `app/api/` — use `app.ai.messages` helpers.
+
+## Scope and quality bar
+
+- **Smallest diff that solves the user problem.** No drive-by refactors, no new abstractions for one call site.
+- **Match existing patterns** in the file you edit (naming, imports, error style).
+- **Comments explain why the user/model/caller cares**, not what the line does. No "renamed from X", no SDK parity justification. Skip obvious narration.
+- **Prompts speak to end users** — concise, actionable, honest about limits (especially billing and private data).
+
+## Before you finish
+
+- [ ] Auth + tenant scoping on any route that touches sessions or user data
+- [ ] Tools/middleware registered (via `app/ai/__init__.py` bootstrap if new)
+- [ ] No secrets in code; settings via `get_settings()`
+- [ ] API shapes documented in handler docstring if non-obvious

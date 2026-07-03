@@ -1,0 +1,26 @@
+[project]
+name = "gemini-agent-fastapi"
+version = "0.1.0"
+description = "Gemini agent on Cloud Run — a full agent (tools, sessions, streaming, auth) as one FastAPI service"
+requires-python = ">=3.10"
+dependencies = [
+  "genkit",
+  "genkit-plugin-fastapi",
+  "genkit-plugin-google-cloud",
+  "genkit-plugin-google-genai",
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.34.0",
+  "pydantic-settings>=2.0.0",
+  "python-dotenv>=1.0.0",
+  "pyjwt>=2.8.0",
+  "email-validator>=2.0.0",
+  "google-cloud-firestore>=2.19.0",
+  "firebase-admin>=6.5.0",
+]
+
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
