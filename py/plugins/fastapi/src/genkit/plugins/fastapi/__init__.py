@@ -22,23 +22,37 @@ Genkit flows as HTTP endpoints in a FastAPI application.
 The Dev UI reflection server starts automatically in a background thread when
 ``GENKIT_ENV=dev`` is set — no lifespan wiring needed.
 
-Example:
+Both ``serve_flow`` and ``serve_agent`` return an ``APIRouter`` you mount with
+``app.include_router`` — so FastAPI's own ``prefix`` / ``dependencies`` / ``tags``
+do the framework-level wiring, and a flow and an agent read the same way.
+
+Serve a flow (one route):
     ```python
     from fastapi import FastAPI
     from genkit import Genkit
-    from genkit.plugins.fastapi import genkit_fastapi_handler
+    from genkit.plugins.fastapi import serve_flow
     from genkit.plugins.google_genai import GoogleAI
 
     ai = Genkit(plugins=[GoogleAI()])
     app = FastAPI()
 
 
-    @app.post('/chat', response_model=None)
-    @genkit_fastapi_handler(ai)
     @ai.flow()
     async def chat_flow(prompt: str) -> str:
         response = await ai.generate(prompt=prompt)
         return response.text
+
+
+    app.include_router(serve_flow(chat_flow), prefix='/api')  # POST /api/chat_flow
+    ```
+
+Serve an agent (run-turn / getSnapshot / abort):
+    ```python
+    from fastapi import FastAPI
+    from genkit.plugins.fastapi import serve_agent
+
+    app = FastAPI()
+    app.include_router(serve_agent(my_agent), prefix='/api')  # POST /api/<agent name>
     ```
 
 Running:
@@ -51,7 +65,8 @@ Running:
     ```
 """
 
-from .handler import genkit_fastapi_handler
+from .agent_handler import serve_agent
+from .handler import serve_flow
 
 
 def package_name() -> str:
@@ -59,4 +74,8 @@ def package_name() -> str:
     return 'genkit.plugins.fastapi'
 
 
-__all__ = ['package_name', 'genkit_fastapi_handler']
+__all__ = [
+    'package_name',
+    'serve_agent',
+    'serve_flow',
+]

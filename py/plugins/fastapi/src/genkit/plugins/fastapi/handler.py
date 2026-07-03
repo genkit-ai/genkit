@@ -18,14 +18,14 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Any
+from collections.abc import AsyncIterator
+from typing import Any, cast
 
 from pydantic import BaseModel
 
-from fastapi import Request, Response
+from fastapi import APIRouter, Request, Response
 from fastapi.responses import StreamingResponse
-from genkit import Action, Genkit, GenkitError
+from genkit import Action, GenkitError
 from genkit.plugin_api import ContextProvider, RequestData, get_callable_json
 
 # Compact JSON (no spaces) for smaller wire payload.
@@ -47,115 +47,86 @@ class _FastAPIRequestData(RequestData):
         self.input = body.get('data') if body else None
 
 
-def genkit_fastapi_handler(
-    ai: Genkit,
+def serve_flow(
+    flow: Action,
+    *,
+    base_path: str | None = None,
     context_provider: ContextProvider | None = None,
-) -> Callable[[Callable[[], Action]], Callable[[Request], Awaitable[Response | dict[str, Any]]]]:
-    """Decorator for serving Genkit flows via FastAPI.
+) -> APIRouter:
+    """Build an ``APIRouter`` serving a single flow over HTTP.
 
-    Example (decorator on flow directly):
-        ```python
-        @app.post('/chat', response_model=None)
-        @genkit_fastapi_handler(ai)
-        @ai.flow()
-        async def chat(prompt: str) -> str:
-            response = await ai.generate(prompt=prompt)
-            return response.text
-        ```
+    Mount the returned router like any other, so FastAPI's own ``prefix`` /
+    ``dependencies`` / ``tags`` handle the framework-level wiring::
 
-    Example (wrapper when flow is defined later; must be async):
-        ```python
-        @app.post('/chat', response_model=None)
-        @genkit_fastapi_handler(ai)
-        async def chat():
-            return my_flow
+        app.include_router(serve_flow(chat_flow), prefix='/api')
+        # POST /api/chat_flow  (or pass base_path='/chat')
 
-
-        @ai.flow()
-        async def my_flow(prompt: str) -> str: ...
-        ```
+    The route takes ``{"data": <input>}`` and returns ``{"result": <output>}``, or
+    streams Server-Sent Events when the client sends ``Accept: text/event-stream``.
 
     Args:
-        ai: The Genkit instance.
-        context_provider: Optional function to extract context from the request.
+        flow: The flow to serve (from ``ai.flow()``).
+        base_path: Route path. Defaults to ``/<flow name>``; pass ``''`` for the router root.
+        context_provider: Reads the request and returns the context dict the flow
+            runs with — the place to authenticate and attach the user. Raise to
+            reject the request before the flow runs.
 
     Returns:
-        A decorator that wraps an Action or a function returning an Action.
+        An ``APIRouter`` with the single flow route registered.
     """
+    resolved_base_path = f'/{flow.name}' if base_path is None else base_path
+    router = APIRouter()
 
-    def decorator(
-        fn: Callable[[], Action] | Action,
-    ) -> Callable[[Request], Awaitable[Response | dict[str, Any]]]:
-        async def handler(request: Request) -> Response | dict[str, Any]:
-            if isinstance(fn, Action):
-                flow = fn
-            else:
-                result = fn()
-                if not asyncio.iscoroutine(result):
-                    raise GenkitError(
-                        status='INVALID_ARGUMENT',
-                        message='genkit_fastapi_handler wrapper must be async when flow is defined elsewhere',
-                    )
-                flow = await result
-            if not isinstance(flow, Action):
-                raise GenkitError(
-                    status='INVALID_ARGUMENT',
-                    message='genkit_fastapi_handler must wrap a function that returns a @flow',
-                )
+    @router.post(resolved_base_path, response_model=None)
+    async def run_flow(request: Request) -> Response | dict[str, Any]:
+        body = await request.json()
+        if 'data' not in body:
+            err = GenkitError(
+                status='INVALID_ARGUMENT',
+                message='Action request must be wrapped in {"data": ...} object',
+            )
+            return Response(
+                status_code=400,
+                content=json.dumps(get_callable_json(err), separators=_JSON_SEPARATORS),
+                media_type='application/json',
+            )
 
-            body = await request.json()
-            if 'data' not in body:
-                err = GenkitError(
-                    status='INVALID_ARGUMENT',
-                    message='Action request must be wrapped in {"data": ...} object',
-                )
-                return Response(
-                    status_code=400,
-                    content=json.dumps(get_callable_json(err), separators=_JSON_SEPARATORS),
-                    media_type='application/json',
-                )
+        action_context: dict[str, object] | None = None
+        if context_provider:
+            context = context_provider(_FastAPIRequestData(request, body))
+            if asyncio.iscoroutine(context):
+                context = await context
+            if isinstance(context, dict):
+                action_context = cast(dict[str, object], context)
 
-            request_data = _FastAPIRequestData(request, body)
-            action_context: dict[str, object] | None = None
+        accept = request.headers.get('accept', '')
+        stream = 'text/event-stream' in accept or request.query_params.get('stream') == 'true'
 
-            if context_provider:
-                context = context_provider(request_data)
-                if asyncio.iscoroutine(context):
-                    context = await context
-                if isinstance(context, dict):
-                    action_context = context
+        if stream:
 
-            # Check if client wants streaming
-            accept = request.headers.get('accept', '')
-            stream = 'text/event-stream' in accept or request.query_params.get('stream') == 'true'
-
-            if stream:
-
-                async def event_stream() -> AsyncIterator[str]:
-                    try:
-                        stream_response = flow.stream(body.get('data'), context=action_context)
-                        async for chunk in stream_response.stream:
-                            yield f'data: {json.dumps({"message": _to_dict(chunk)}, separators=_JSON_SEPARATORS)}\n\n'
-
-                        result = await stream_response.response
-                        yield f'data: {json.dumps({"result": _to_dict(result)}, separators=_JSON_SEPARATORS)}\n\n'
-                    except Exception as e:
-                        ex = e.cause if isinstance(e, GenkitError) else e
-                        yield f'error: {json.dumps({"error": get_callable_json(ex)}, separators=_JSON_SEPARATORS)}'
-
-                return StreamingResponse(event_stream(), media_type='text/event-stream')
-            else:
+            async def event_stream() -> AsyncIterator[str]:
                 try:
-                    response = await flow.run(body.get('data'), context=action_context)
-                    return {'result': _to_dict(response.response)}
+                    stream_response = flow.stream(body.get('data'), context=action_context)
+                    async for chunk in stream_response.stream:
+                        yield f'data: {json.dumps({"message": _to_dict(chunk)}, separators=_JSON_SEPARATORS)}\n\n'
+
+                    result = await stream_response.response
+                    yield f'data: {json.dumps({"result": _to_dict(result)}, separators=_JSON_SEPARATORS)}\n\n'
                 except Exception as e:
                     ex = e.cause if isinstance(e, GenkitError) else e
-                    return Response(
-                        status_code=500,
-                        content=json.dumps(get_callable_json(ex), separators=_JSON_SEPARATORS),
-                        media_type='application/json',
-                    )
+                    yield f'error: {json.dumps({"error": get_callable_json(ex)}, separators=_JSON_SEPARATORS)}'
 
-        return handler
+            return StreamingResponse(event_stream(), media_type='text/event-stream')
 
-    return decorator
+        try:
+            response = await flow.run(body.get('data'), context=action_context)
+            return {'result': _to_dict(response.response)}
+        except Exception as e:
+            ex = e.cause if isinstance(e, GenkitError) else e
+            return Response(
+                status_code=500,
+                content=json.dumps(get_callable_json(ex), separators=_JSON_SEPARATORS),
+                media_type='application/json',
+            )
+
+    return router

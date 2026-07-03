@@ -23,7 +23,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from genkit import ActionRunContext, Genkit
-from genkit.plugins.fastapi import genkit_fastapi_handler
+from genkit.plugins.fastapi import serve_flow
 
 
 def _assert_is_error_response(parsed: dict) -> None:
@@ -37,18 +37,16 @@ def create_app() -> FastAPI:
     ai = Genkit()
     app = FastAPI()
 
-    @app.post('/chat', response_model=None)
-    @genkit_fastapi_handler(ai)
     @ai.flow()
     async def say_hi(name: str, ctx: ActionRunContext) -> dict[str, str]:
         return {'greeting': f'Hi {name}'}
 
-    @app.post('/error_flow', response_model=None)
-    @genkit_fastapi_handler(ai)
     @ai.flow()
     async def raise_error(_: str) -> None:
         raise ValueError('Intentional test error')
 
+    app.include_router(serve_flow(say_hi, base_path='/chat'))
+    app.include_router(serve_flow(raise_error, base_path='/error_flow'))
     return app
 
 
