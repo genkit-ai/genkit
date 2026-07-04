@@ -33,7 +33,7 @@
     "compute-cosine-similarity": "^1.1.0",
     "node-fetch": "^3.3.2",
     "dotprompt": "^1.1.1",
-    "jsonata": "^2.0.6"
+    "jsonata": "^2.2.0"
   },
   "peerDependencies": {
     "genkit": "workspace:^"
