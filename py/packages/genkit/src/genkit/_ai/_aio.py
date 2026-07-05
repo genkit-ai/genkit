@@ -1199,7 +1199,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: str | ModelRef[Any] | None = None,
+        model: str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
