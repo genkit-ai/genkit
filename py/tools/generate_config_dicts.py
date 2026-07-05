@@ -2,7 +2,18 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Generate plugin configuration TypedDicts (*ConfigDict) and ModelRef exports."""
+"""Generate plugin configuration TypedDicts (*ConfigDict) and ModelRef exports.
+
+In Python, static type checkers enforce nominal typing for Pydantic `BaseModel` classes,
+while `TypedDict` is the only construct that provides static key autocompletion and type checking
+for raw dictionary literals (`config={...}`) at the API surface.
+
+To avoid requiring plugin authors to manually author and synchronize two copies of every schema
+(the `TypedDict` for IDE autocompletion and the `BaseModel` for runtime data validation),
+this tool performs AST codegen from `models.yaml`. It inspects the Pydantic schema classes via
+AST without runtime side-effects and generates the synchronized `TypedDict` twin (`*ConfigDict`)
+and `ModelRef` definitions inside each plugin's `_generated.py` file.
+"""
 
 import ast
 import re
