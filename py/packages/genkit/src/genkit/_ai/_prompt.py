@@ -23,7 +23,7 @@ import weakref
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Generic, TypedDict, TypeVar, cast
+from typing import Any, ClassVar, Generic, TypedDict, TypeVar, cast, overload
 
 from dotpromptz.typing import (
     DataArgument,
@@ -59,7 +59,7 @@ from genkit._core._channel import Channel
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._middleware import BaseMiddleware, middleware_class_index
-from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfigDict, ModelRef
+from genkit._core._model import ConfigT, Document, GenerateActionOptions, Message, ModelConfigDict, ModelRef
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
@@ -358,6 +358,33 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         self._resources = resolved._resources
         self._prompt_action = resolved._prompt_action
 
+    @overload
+    async def __call__(
+        self,
+        input: InputT | dict[str, Any] | None = None,
+        *,
+        model: ModelRef[ConfigT],
+        config: ConfigT | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        resources: list[str] | None = None,
+        tool_choice: ToolChoice | None = None,
+        output: OutputOptions | None = None,
+        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
+        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
+        return_tool_requests: bool | None = None,
+        max_turns: int | None = None,
+        on_chunk: ModelStreamingCallback | None = None,
+        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+    ) -> ModelResponse[OutputT]: ...
+
+    @overload
+    async def __call__(
+        self,
+        input: InputT | dict[str, Any] | None = None,
+        **opts: Unpack[PromptGenerateOptions],
+    ) -> ModelResponse[OutputT]: ...
+
     async def __call__(
         self,
         input: InputT | dict[str, Any] | None = None,
@@ -433,6 +460,36 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             resume_metadata=opts.get('resume_metadata'),
         )
 
+    @overload
+    def stream(
+        self,
+        input: InputT | dict[str, Any] | None = None,
+        *,
+        model: ModelRef[ConfigT],
+        config: ConfigT | None = None,
+        timeout: float | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        resources: list[str] | None = None,
+        tool_choice: ToolChoice | None = None,
+        output: OutputOptions | None = None,
+        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
+        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
+        return_tool_requests: bool | None = None,
+        max_turns: int | None = None,
+        on_chunk: ModelStreamingCallback | None = None,
+        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+    ) -> ModelStreamResponse[OutputT]: ...
+
+    @overload
+    def stream(
+        self,
+        input: InputT | dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+        **opts: Unpack[PromptGenerateOptions],
+    ) -> ModelStreamResponse[OutputT]: ...
+
     def stream(
         self,
         input: InputT | dict[str, Any] | None = None,
@@ -451,6 +508,33 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         channel.set_close_future(response_future)
 
         return ModelStreamResponse[OutputT](channel=channel, response_future=response_future)
+
+    @overload
+    async def render(
+        self,
+        input: InputT | dict[str, Any] | None = None,
+        *,
+        model: ModelRef[ConfigT],
+        config: ConfigT | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        resources: list[str] | None = None,
+        tool_choice: ToolChoice | None = None,
+        output: OutputOptions | None = None,
+        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
+        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
+        return_tool_requests: bool | None = None,
+        max_turns: int | None = None,
+        on_chunk: ModelStreamingCallback | None = None,
+        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+    ) -> GenerateActionOptions: ...
+
+    @overload
+    async def render(
+        self,
+        input: InputT | dict[str, Any] | None = None,
+        **opts: Unpack[PromptGenerateOptions],
+    ) -> GenerateActionOptions: ...
 
     async def render(
         self,
