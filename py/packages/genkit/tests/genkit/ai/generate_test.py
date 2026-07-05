@@ -1405,9 +1405,9 @@ async def test_queue_drain_streams_each_message_at_one_index() -> None:
                                 index=params.message_index,
                             )
                         )
-                request = params.request.model_copy()
-                request.messages = [*request.messages, *queued]
-                params = params.model_copy(update={'request': request})
+                options = params.options.model_copy()
+                options.messages = [*options.messages, *queued]
+                params = params.model_copy(update={'options': options})
             return await next_fn(params, ctx)
 
         async def wrap_tool(

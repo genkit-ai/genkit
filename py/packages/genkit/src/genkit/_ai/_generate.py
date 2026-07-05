@@ -21,14 +21,14 @@ import contextlib
 import copy
 import re
 import secrets
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Generator, Sequence
 from dataclasses import dataclass
-from typing import Any, Generic, cast
+from typing import Any, cast
 
 from pydantic import BaseModel
 from typing_extensions import Never
 
-from genkit._ai._formats._types import ChunkT, FormatDef, Formatter, OutputT
+from genkit._ai._formats._types import FormatDef, Formatter
 from genkit._ai._messages import inject_instructions
 from genkit._ai._model import (
     Message,
@@ -504,7 +504,7 @@ async def generate_with_request(
     )
 
 
-class _ChunkAccumulator(Generic[OutputT, ChunkT]):
+class ChunkAccumulator:
     """Tracks role and message-index state across a streaming turn's chunks.
 
     The message index it lands on is what seeds the next turn, so the counter
@@ -512,13 +512,13 @@ class _ChunkAccumulator(Generic[OutputT, ChunkT]):
     saved history numbered consistently.
     """
 
-    def __init__(self, message_index: int, formatter: Formatter[OutputT, ChunkT] | None) -> None:
+    def __init__(self, message_index: int, formatter: Formatter[Any, Any] | None) -> None:
         self.message_index = message_index
         self.formatter = formatter
         self.chunk_role: Role = Role.MODEL
         self.prev_chunks: list[ModelResponseChunk[Any]] = []
 
-    def make(self, role: Role, chunk: ModelResponseChunk[Any]) -> ModelResponseChunk[ChunkT]:
+    def make(self, role: Role, chunk: ModelResponseChunk[Any]) -> ModelResponseChunk[Any]:
         """Wrap a raw chunk with metadata and track message index changes."""
         if role != self.chunk_role and len(self.prev_chunks) > 0:
             self.message_index += 1
@@ -530,7 +530,7 @@ class _ChunkAccumulator(Generic[OutputT, ChunkT]):
 
         formatter = self.formatter
 
-        def chunk_parser(chunk: ModelResponseChunk[Any]) -> ChunkT | None:
+        def chunk_parser(chunk: ModelResponseChunk[Any]) -> Any | None:  # noqa: ANN401
             if formatter is None:
                 return None
             return formatter.parse_chunk(chunk)
@@ -542,50 +542,35 @@ class _ChunkAccumulator(Generic[OutputT, ChunkT]):
             chunk_parser=chunk_parser if formatter else None,
         )
 
-    def _wrap_on_chunk(
-        self,
-        ctx: GenerateMiddlewareContext,
-        *,
-        role: Role = Role.MODEL,
-    ) -> Callable[[ModelResponseChunk[Any]], None]:
-        """Build a callback that decorates raw chunks before the existing stream chain.
-
-        Snapshots ``ctx.on_chunk`` when called so middleware handlers installed
-        on the context are preserved in the forwarding path.
-        """
-        downstream = ctx.on_chunk
-
-        def handler(chunk: ModelResponseChunk[Any]) -> None:
-            if downstream is not None:
-                downstream(cast(ModelResponseChunk[Any], self.make(role, chunk)))
-
-        return handler
-
     def stream_chunk(
         self,
-        ctx: GenerateMiddlewareContext,
-        chunk: ModelResponseChunk[Any],
         *,
-        role: Role = Role.MODEL,
+        chunk: ModelResponseChunk[Any],
+        role: Role,
+        ctx: GenerateMiddlewareContext,
     ) -> None:
         """Send one framework-wrapped chunk through the current stream chain."""
         if ctx.on_chunk is None:
             return
-        self._wrap_on_chunk(ctx, role=role)(chunk)
+        ctx.on_chunk(self.make(role, chunk))
 
     @contextlib.contextmanager
     def intercept_model_stream(
         self,
         ctx: GenerateMiddlewareContext,
         *,
-        role: Role = Role.MODEL,
-    ) -> Iterator[None]:
+        role: Role,
+    ) -> Generator[None, None, None]:
         """Wrap raw model tokens for one model call, then restore the prior callback."""
-        if ctx.on_chunk is None:
+        downstream = ctx.on_chunk
+        if downstream is None:
             yield
             return
 
-        handler = self._wrap_on_chunk(ctx, role=role)
+        def handler(chunk: ModelResponseChunk[Any]) -> None:
+            if downstream is not None:
+                downstream(self.make(role, chunk))
+
         previous = ctx.replace_on_chunk(handler)
         try:
             yield
@@ -634,15 +619,7 @@ async def _generate_action_turn(
         )
     raw_request = revised_request
 
-    request = await action_to_generate_request(raw_request, tools, model)
-
-    logger.debug('generate request', model=model.name, request=_redact_data_uris(request.model_dump()))
-
-    chunks = _ChunkAccumulator(message_index, formatter)
-
-    # Inject ``request.docs`` as a context part on the last user message.
-    if request.docs:
-        request = _augment_with_context(request)
+    chunks = ChunkAccumulator(message_index, formatter)
 
     async def dispatch_generate(
         params: GenerateHookParams,
@@ -691,22 +668,24 @@ async def _generate_action_turn(
     # if resolving the 'resume' option above generated a tool message, stream it.
     if resumed_tool_message:
         chunks.stream_chunk(
-            run_ctx,
-            ModelResponseChunk(
+            chunk=ModelResponseChunk(
                 role=resumed_tool_message.role,
                 content=resumed_tool_message.content,
             ),
             role=Role.TOOL,
+            ctx=run_ctx,
         )
 
     async def run_one_iteration(
-        _params: GenerateHookParams,
+        params: GenerateHookParams,
         _ctx: GenerateMiddlewareContext,
     ) -> ModelResponse:
         """Execute one turn of the generate loop (model call + optional tool resolution)."""
-        # Pick up whatever wrap_generate middleware put on params.request — replacement
-        # or in-place mutation. Without this re-sync, those changes get silently dropped.
-        request = _params.request
+        turn_options = params.options
+        request = await action_to_generate_request(turn_options, tools, model)
+        if request.docs:
+            request = _augment_with_context(request)
+        logger.debug('generate request', model=model.name, request=_redact_data_uris(request.model_dump()))
 
         async def next_fn(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
             return (
@@ -717,7 +696,7 @@ async def _generate_action_turn(
                 )
             ).response
 
-        with chunks.intercept_model_stream(_ctx):
+        with chunks.intercept_model_stream(_ctx, role=Role.MODEL):
             model_response = await dispatch_model(
                 ModelHookParams(request=request),
                 _ctx,
@@ -730,7 +709,7 @@ async def _generate_action_turn(
             return formatter.parse_message(msg)
 
         # Extract schema_type for runtime Pydantic validation
-        schema_type = raw_request.output.schema_type if raw_request.output else None
+        schema_type = turn_options.output.schema_type if turn_options.output else None
 
         # Plugin returns ModelResponse directly. Framework sets request and
         # any output format context (message_parser, schema_type) as private attrs.
@@ -754,7 +733,7 @@ async def _generate_action_turn(
             return response
 
         # Stamp output format metadata on message so the Dev UI can render formatted JSON vs plain text.
-        out = raw_request.output
+        out = turn_options.output
         if out and (out.content_type or out.format):
             generate_output: dict[str, str] = {}
             if out.content_type:
@@ -771,12 +750,12 @@ async def _generate_action_turn(
 
         tool_requests = [x for x in generated_msg.content if x.root.tool_request]
 
-        if raw_request.return_tool_requests or len(tool_requests) == 0:
+        if turn_options.return_tool_requests or len(tool_requests) == 0:
             if len(tool_requests) == 0:
                 response.assert_valid_schema()
             return response
 
-        max_iters = raw_request.max_turns if raw_request.max_turns else DEFAULT_MAX_TURNS
+        max_iters = turn_options.max_turns if turn_options.max_turns else DEFAULT_MAX_TURNS
 
         if current_turn + 1 > max_iters:
             raise GenerationResponseError(
@@ -792,7 +771,7 @@ async def _generate_action_turn(
             transfer_preamble,
         ) = await resolve_tool_requests(
             registry,
-            raw_request,
+            turn_options,
             generated_msg,
             mw_pipeline=mw_pipeline,
         )
@@ -809,16 +788,16 @@ async def _generate_action_turn(
         # If the loop will continue, stream out the tool response message...
         if tool_msg:
             chunks.stream_chunk(
-                _ctx,
-                ModelResponseChunk(
+                chunk=ModelResponseChunk(
                     role=tool_msg.role,
                     content=tool_msg.content,
                 ),
                 role=Role.TOOL,
+                ctx=_ctx,
             )
 
-        next_request = copy.copy(raw_request)
-        next_messages = copy.copy(raw_request.messages)
+        next_request = copy.copy(turn_options)
+        next_messages = copy.copy(turn_options.messages)
         next_messages.append(generated_msg)
         if tool_msg:
             next_messages.append(tool_msg)
@@ -836,7 +815,6 @@ async def _generate_action_turn(
 
     generate_params = GenerateHookParams(
         options=raw_request,
-        request=request,
         iteration=current_turn,
         message_index=message_index,
     )
@@ -1083,20 +1061,17 @@ async def action_to_generate_request(
     out_schema = output.json_schema if output else None
     if out_schema is not None and hasattr(out_schema, 'model_dump'):
         out_schema = out_schema.model_dump()
-    return cast(
-        ModelRequest[Any],
-        ModelRequest(
-            # Field validators auto-wrap MessageData -> Message and DocumentData -> Document
-            messages=options.messages,  # type: ignore[arg-type]
-            config=options.config if options.config is not None else {},  # type: ignore
-            docs=options.docs if options.docs else None,  # type: ignore
-            tools=tool_defs,
-            tool_choice=options.tool_choice,
-            output_format=output.format if output else None,
-            output_schema=out_schema,
-            output_constrained=output.constrained if output else None,
-            output_content_type=output.content_type if output else None,
-        ),
+    return ModelRequest(
+        # Field validators auto-wrap MessageData -> Message and DocumentData -> Document
+        messages=cast(Any, options.messages),
+        config=cast(Any, options.config if options.config is not None else {}),
+        docs=cast(Any, options.docs),
+        tools=tool_defs,
+        tool_choice=options.tool_choice,
+        output_format=output.format if output else None,
+        output_schema=out_schema,
+        output_constrained=output.constrained if output else None,
+        output_content_type=output.content_type if output else None,
     )
 
 

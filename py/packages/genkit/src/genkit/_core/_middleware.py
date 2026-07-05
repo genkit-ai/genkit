@@ -22,7 +22,7 @@ import inspect
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, get_args, get_origin
+from typing import Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, cast, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
@@ -101,7 +101,6 @@ class GenerateHookParams(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
     options: GenerateActionOptions
-    request: ModelRequest
     iteration: int
     message_index: int = 0
 
@@ -246,7 +245,7 @@ class BaseMiddleware(Generic[TConfig]):
                 raise TypeError(f'expected config type {self.Config.__name__}, got {type(config).__name__}')
             self.config = config
         else:
-            self.config = self.Config(**kwargs)  # type: ignore[assignment]
+            self.config = cast(Any, self.Config(**kwargs))
 
     def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
         """Return additional tools to expose to the model for this generate call."""

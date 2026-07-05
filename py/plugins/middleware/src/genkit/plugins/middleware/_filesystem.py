@@ -321,13 +321,13 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
                 ctx.send_chunk(ModelResponseChunk(role=msg.role, content=msg.content, index=message_index))
                 message_index += 1
 
-        new_request = params.request.model_copy()
-        new_request.messages = [*params.request.messages, *self._message_queue]
+        new_options = params.options.model_copy()
+        new_options.messages = [*params.options.messages, *self._message_queue]
         self._message_queue.clear()
 
         params = params.model_copy(
             update={
-                'request': new_request,
+                'options': new_options,
                 'message_index': message_index,
             }
         )
