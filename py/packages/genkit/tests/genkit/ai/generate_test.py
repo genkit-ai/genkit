@@ -903,8 +903,8 @@ async def test_stream_interception_chains_across_model_and_generate_hooks() -> N
     generate interceptors'):
     - wrap_generate installs gen_chunk_handler on ctx.on_chunk
     - wrap_model installs model_chunk_handler on ctx.on_chunk (wrapping gen_chunk_handler)
-    - wrap_chunks() captures ctx.on_chunk *at call time* so it picks up the full chain
-    - Raw chunks flow: model → wrap_chunks → model_chunk_handler → gen_chunk_handler → caller
+    - intercept_model_stream captures ctx.on_chunk at install time so it picks up the full chain
+    - Raw chunks flow: model → framework wrapper → model_chunk_handler → gen_chunk_handler → caller
     """
     ai = Genkit()
     chunk_intercepts: list[str] = []
