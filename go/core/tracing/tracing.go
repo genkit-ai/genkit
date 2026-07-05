@@ -480,10 +480,24 @@ var spanMetaKey = base.NewContextKey[*spanMetadata]()
 // telemetryCbKey is the context key for telemetry callbacks.
 var telemetryCbKey = base.NewContextKey[func(traceID, spanID string)]()
 
+// telemetryLabelsKey is the context key for telemetry labels.
+var telemetryLabelsKey = base.NewContextKey[map[string]string]()
+
 // WithTelemetryCallback returns a context with the telemetry callback attached.
 // Used by the reflection server to pass callbacks to actions.
 func WithTelemetryCallback(ctx context.Context, cb func(traceID, spanID string)) context.Context {
 	return telemetryCbKey.NewContext(ctx, cb)
+}
+
+// WithTelemetryLabels returns a context with the telemetry labels attached.
+// Used by the reflection server to pass labels to actions.
+func WithTelemetryLabels(ctx context.Context, labels map[string]string) context.Context {
+	return telemetryLabelsKey.NewContext(ctx, labels)
+}
+
+// TelemetryLabelsFromContext retrieves the telemetry labels from context, or nil if not set.
+func TelemetryLabelsFromContext(ctx context.Context) map[string]string {
+	return telemetryLabelsKey.FromContext(ctx)
 }
 
 // telemetryCallback retrieves the telemetry callback from context, or nil if not set.

@@ -1,4 +1,4 @@
-default_schema: OllamaConfigSchema
+default_schema: OllamaConfig
 
 models:
   - name: ollama/llama3.2

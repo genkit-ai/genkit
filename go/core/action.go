@@ -292,11 +292,12 @@ func (a *Action[In, Out, Stream]) runWithTelemetry(ctx context.Context, input In
 // the tracing package from parent span presence.
 func (a *Action[In, Out, Stream]) spanMetadata(ctx context.Context, spanInit any) *tracing.SpanMetadata {
 	sm := &tracing.SpanMetadata{
-		Name:     a.desc.Name,
-		Type:     "action",
-		Subtype:  string(a.desc.Type), // The actual action type becomes the subtype.
-		Metadata: make(map[string]string),
-		Init:     spanInit,
+		Name:            a.desc.Name,
+		Type:            "action",
+		Subtype:         string(a.desc.Type), // The actual action type becomes the subtype.
+		Metadata:        make(map[string]string),
+		TelemetryLabels: tracing.TelemetryLabelsFromContext(ctx),
+		Init:            spanInit,
 	}
 	if flowName := FlowNameFromContext(ctx); flowName != "" {
 		sm.Metadata["flow:name"] = flowName
