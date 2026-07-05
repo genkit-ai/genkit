@@ -161,7 +161,7 @@ class ModelStreamResponse(Generic[OutputT]):
 
     @property
     def stream(self) -> AsyncIterable[ModelResponseChunk]:
-        """Get the async iterable of response chunks.
+        """Async iterable of response chunks.
 
         Returns:
             An async iterable that yields ModelResponseChunk objects
@@ -174,7 +174,7 @@ class ModelStreamResponse(Generic[OutputT]):
 
     @property
     def response(self) -> Awaitable[ModelResponse[OutputT]]:
-        """Get the awaitable for the complete response.
+        """Awaitable for the complete response.
 
         Returns:
             An awaitable that resolves to a ModelResponse containing:
@@ -348,8 +348,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             input: Template variables for rendering.
             **opts: Runtime prompt options (e.g. model, tools, config).
         """
-        # ty doesn't infer Unpack[TD] as TD in function body (PEP 692 gap)
-        return await self._call_impl(input, opts)  # ty: ignore[invalid-argument-type]
+        return await self._call_impl(input, opts)  # type: ignore[arg-type]
 
     async def _call_impl(
         self,
@@ -446,8 +445,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
 
         Same keyword options as ``__call__`` (see PromptGenerateOptions).
         """
-        # ty treats **opts as a plain dict here; callers are still validated against PromptGenerateOptions.
-        call_opts: PromptGenerateOptions = opts  # ty: ignore[invalid-assignment]
+        call_opts: PromptGenerateOptions = opts  # type: ignore[assignment]
         _child_registry, gen_options = await _prepare(self, input, call_opts)
         return gen_options
 
@@ -1011,6 +1009,61 @@ def registry_lookup_key(name: str, variant: str | None = None, ns: str | None = 
     return f'/prompt/{registry_definition_key(name, variant, ns)}'
 
 
+def define_prompt(
+    registry: Registry,
+    name: str | None = None,
+    *,
+    variant: str | None = None,
+    model: str | None = None,
+    config: dict[str, Any] | ModelConfig | None = None,
+    description: str | None = None,
+    system: str | list[Part] | None = None,
+    prompt: str | list[Part] | None = None,
+    messages: str | list[Message] | None = None,
+    output_format: str | None = None,
+    output_content_type: str | None = None,
+    output_instructions: bool | str | None = None,
+    output_constrained: bool | None = None,
+    max_turns: int | None = None,
+    return_tool_requests: bool | None = None,
+    metadata: dict[str, Any] | None = None,
+    tools: Sequence[str | Tool] | None = None,
+    tool_choice: ToolChoice | None = None,
+    use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+    docs: list[Document] | None = None,
+    input_schema: type | dict[str, Any] | str | None = None,
+    output_schema: type | dict[str, Any] | str | None = None,
+) -> ExecutablePrompt[Any, Any]:
+    """Register a prompt template in the registry."""
+    executable_prompt = ExecutablePrompt(
+        registry,
+        variant=variant,
+        model=model,
+        config=config,
+        description=description,
+        input_schema=input_schema,
+        system=system,
+        prompt=prompt,
+        messages=messages,
+        output_format=output_format,
+        output_content_type=output_content_type,
+        output_instructions=output_instructions,
+        output_schema=output_schema,
+        output_constrained=output_constrained,
+        max_turns=max_turns,
+        return_tool_requests=return_tool_requests,
+        metadata=metadata,
+        tools=tools,
+        tool_choice=tool_choice,
+        use=use,
+        docs=docs,
+        name=name,
+    )
+    if name:
+        register_prompt_actions(registry, executable_prompt, name, variant)
+    return executable_prompt
+
+
 def define_partial(registry: Registry, name: str, source: str) -> None:
     """Define a partial template in the registry.
 
@@ -1180,6 +1233,7 @@ def _transform_prompt_metadata(
             schema.pop('description', None)
 
     raw = md.get('raw')
+    raw_output = raw.get('output') if isinstance(raw, dict) and isinstance(raw.get('output'), dict) else {}
     raw_use = raw.get('use') if isinstance(raw, dict) else None
     parsed_use = _parse_dotprompt_use(raw_use)
 
@@ -1216,6 +1270,11 @@ def _transform_prompt_metadata(
         'output': {
             'jsonSchema': output.get('schema') if isinstance(output, dict) else None,
             'format': output.get('format') if isinstance(output, dict) else None,
+            'instructions': (
+                output.get('instructions')
+                if isinstance(output, dict) and 'instructions' in output
+                else (raw_output.get('instructions') if isinstance(raw_output, dict) else None)
+            ),
         },
         'input': {
             'default': input_cfg.get('default') if isinstance(input_cfg, dict) else None,
@@ -1273,6 +1332,7 @@ def load_prompt(registry: Registry, path: Path, filename: str, prefix: str = '',
             output_schema=metadata.get('output', {}).get('jsonSchema'),
             output_constrained=True if metadata.get('output', {}).get('jsonSchema') else None,
             output_format=metadata.get('output', {}).get('format'),
+            output_instructions=metadata.get('output', {}).get('instructions'),
             messages=metadata.get('messages'),
             max_turns=metadata.get('maxTurns'),
             tool_choice=metadata.get('toolChoice'),

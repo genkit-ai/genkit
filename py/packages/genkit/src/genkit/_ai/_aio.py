@@ -64,9 +64,9 @@ from genkit._ai._prompt import (
     PromptConfig,
     define_helper,
     define_partial,
+    define_prompt as _define_prompt,
     define_schema,
     load_prompt_folder,
-    register_prompt_actions,
     to_generate_action_options,
 )
 from genkit._ai._resource import (
@@ -552,8 +552,8 @@ class Genkit:
         tool_choice: ToolChoice | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
-        input_schema: dict[str, object] | str | None = None,
-        output_schema: dict[str, object] | str | None = None,
+        input_schema: type | dict[str, object] | str | None = None,
+        output_schema: type | dict[str, object] | str | None = None,
     ) -> ExecutablePrompt[Any, Any]: ...
 
     def define_prompt(
@@ -582,20 +582,19 @@ class Genkit:
         output_schema: type | dict[str, object] | str | None = None,
     ) -> ExecutablePrompt[Any, Any]:
         """Register a prompt template."""
-        executable_prompt = ExecutablePrompt(
+        return _define_prompt(
             self.registry,
+            name=name,
             variant=variant,
             model=model,
             config=config,
             description=description,
-            input_schema=input_schema,
             system=system,
             prompt=prompt,
             messages=messages,
             output_format=output_format,
             output_content_type=output_content_type,
             output_instructions=output_instructions,
-            output_schema=output_schema,
             output_constrained=output_constrained,
             max_turns=max_turns,
             return_tool_requests=return_tool_requests,
@@ -604,11 +603,9 @@ class Genkit:
             tool_choice=tool_choice,
             use=use,
             docs=docs,
-            name=name,
+            input_schema=input_schema,
+            output_schema=output_schema,
         )
-        if name:
-            register_prompt_actions(self.registry, executable_prompt, name, variant)
-        return executable_prompt
 
     # Overload 1: Neither typed -> ExecutablePrompt[Any, Any]
     @overload
@@ -1099,7 +1096,7 @@ class Genkit:
         response = (
             await embed_action.run(
                 EmbedRequest(
-                    input=documents,  # pyright: ignore[reportArgumentType]
+                    input=documents,
                     options=final_options,
                 )
             )
