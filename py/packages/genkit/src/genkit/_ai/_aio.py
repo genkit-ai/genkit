@@ -445,7 +445,7 @@ class Genkit:
         """Register a custom output format."""
         self.registry.register_value('format', format.name, format)
 
-    # Overload 1: Both input_schema and output_schema typed -> ExecutablePrompt[InputT, OutputT]
+    # Overload 1a: ModelRef[ConfigT] + input_schema/output_schema typed -> ExecutablePrompt[InputT, OutputT]
     @overload
     def define_prompt(
         self,
@@ -473,7 +473,6 @@ class Genkit:
         output_schema: type[OutputT],
     ) -> ExecutablePrompt[InputT, OutputT]: ...
 
-    # Overload 2: Only input_schema typed -> ExecutablePrompt[InputT, Any]
     # Overload 1b: str | None + input_schema/output_schema typed -> ExecutablePrompt[InputT, OutputT]
     @overload
     def define_prompt(
