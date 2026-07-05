@@ -1199,7 +1199,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: str | None = None,
+        model: str | ModelRef[Any] | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1457,7 +1457,7 @@ class Genkit:
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        config: ModelConfigDict | Any | None = None,  # noqa: ANN401
+        config: ModelConfigDict | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
