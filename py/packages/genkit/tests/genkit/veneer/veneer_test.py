@@ -7,7 +7,7 @@
 
 import json
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel, Field
@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from genkit import (
     Document,
     Genkit,
+    ModelConfigDict,
     Interrupt,
     Message,
     MiddlewareRef,
@@ -138,7 +139,7 @@ async def test_generate_with_model_ref(setup_test: SetupFixture) -> None:
     ai, *_ = setup_test
     from genkit.model import model_ref
 
-    ref = model_ref('echoModel', config={'temperature': 11.0})
+    ref = model_ref('echoModel', config=cast(ModelConfigDict, {'temperature': 11.0}))
     response = await ai.generate(model=ref, prompt='hi')
     assert response.text == '[ECHO] user: "hi" {"temperature":11.0}'
 

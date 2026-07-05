@@ -276,7 +276,7 @@ async def test_prompt_rendering_dotprompt(
     test_case: str,
     prompt: dict[str, Any],
     input: dict[str, Any],
-    input_option: ModelConfigDict | dict[str, Any],
+    input_option: ModelConfigDict,
     context: dict[str, Any],
     want_rendered: str,
 ) -> None:
@@ -524,7 +524,7 @@ async def test_config_merge_priority() -> None:
 
     my_prompt = ai.define_prompt(
         prompt='test',
-        config={'temperature': 0.5, 'banana': 'yellow'},  # type: ignore
+        config=cast(ModelConfigDict, {'temperature': 0.5, 'banana': 'yellow'}),
     )
 
     # New API: runtime config is MERGED with prompt config

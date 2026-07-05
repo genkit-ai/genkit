@@ -129,7 +129,7 @@ class PromptGenerateOptions(TypedDict, total=False):
     """Runtime options for prompt execution (config, tools, messages, etc.)."""
 
     model: str | ModelRef[Any] | None
-    config: ModelConfigDict | Any | None
+    config: ModelConfigDict | None
     messages: list[Message] | None
     docs: list[Document] | None
     tools: Sequence[str | Tool] | None
@@ -211,7 +211,7 @@ class PromptConfig(BaseModel):
 
     variant: str | None = None
     model: str | ModelRef[Any] | None = None
-    config: ModelConfigDict | dict[str, Any] | None = None
+    config: ModelConfigDict | None = None
 
     @model_validator(mode='before')
     @classmethod
@@ -258,7 +258,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         registry: Registry,
         variant: str | None = None,
         model: str | ModelRef[Any] | None = None,
-        config: ModelConfigDict | dict[str, Any] | None = None,
+        config: ModelConfigDict | None = None,
         description: str | None = None,
         input_schema: type | dict[str, Any] | str | None = None,
         system: str | list[Part] | None = None,
@@ -287,7 +287,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             if model.config is not None:
                 mcfg = dict(model.config) if isinstance(model.config, dict) else {}
                 ccfg = dict(config) if isinstance(config, dict) else {}
-                config = {**mcfg, **ccfg}
+                config = cast(ModelConfigDict, {**mcfg, **ccfg})
             model = model.name
         self._model = model
         self._config = config
@@ -392,12 +392,12 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
     def _prompt_config_for_call(self, opts: PromptGenerateOptions) -> PromptConfig:
         """Merge this prompt's definition with per-call ``opts`` into a :class:`PromptConfig`."""
         output_opts = opts.get('output') or {}
-        merged_config: ModelConfigDict | dict[str, Any] | None
+        merged_config: ModelConfigDict | None
         if opts.get('config') is not None:
             base = dict(self._config) if isinstance(self._config, dict) else {}
             opt_config = opts.get('config')
             override = dict(opt_config) if isinstance(opt_config, dict) else {}
-            merged_config = {**base, **override} if base or override else None
+            merged_config = cast(ModelConfigDict | None, {**base, **override} if base or override else None)
         else:
             merged_config = self._config
 

@@ -88,7 +88,7 @@ class ModelRef(BaseModel, Generic[ConfigT]):
     config_schema: object | None = None
     info: object | None = None
     version: str | None = None
-    config: ConfigT | dict[str, Any] | None = None
+    config: ConfigT | None = None
 
 
 class Message(MessageData):
