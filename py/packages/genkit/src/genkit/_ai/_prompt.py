@@ -1218,7 +1218,7 @@ def _transform_prompt_metadata(
             'instructions': (
                 output.get('instructions')
                 if isinstance(output, dict) and 'instructions' in output
-                else raw_output.get('instructions')
+                else (raw_output.get('instructions') if isinstance(raw_output, dict) else None)
             ),
         },
         'input': {
