@@ -260,7 +260,7 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
     # Veneer types for IDE/typing (validators wrap MessageData->Message, DocumentData->Document)
     messages: list[Message]  # pyright: ignore[reportIncompatibleVariableOverride]
     docs: list[Document] | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
-    config: ConfigT | dict[str, Any] | None = None
+    config: ConfigT | None = None
     tools: list[ToolDefinition] | None = None
     tool_choice: ToolChoice | None = Field(default=None)
     # Flat output fields (no nested OutputConfig)

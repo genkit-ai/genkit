@@ -388,7 +388,7 @@ class OpenAIModel:
         Returns:
             A ModelResponse containing the model's response.
         """
-        request.config = self.normalize_config(request.config)
+        request.config = self.normalize_config(request.config)  # type: ignore
 
         if ctx.is_streaming:
             logger.debug('OpenAI generate request', model=self._model, streaming=True)
