@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._error import GenkitError, GenkitInterrupt
+from genkit._core._middleware import GenerateMiddlewareContext
 from genkit._core._registry import Registry
 from genkit._core._typing import ToolDefinition, ToolRequest, ToolRequestPart, ToolResponse, ToolResponsePart
 
@@ -220,13 +221,11 @@ def restart_tool(
     )
 
 
-async def run_tool_after_restart(tool: Action[Any, Any, Any], restart_trp: ToolRequestPart) -> ToolResponsePart:
-    """Run a tool for ``resume_restart``: applies ``resumed`` / ``replacedInput`` from metadata.
-
-    Sets the same context variables as the tool wrapper so ToolRunContext reflects
-    a resumed run. Nested interrupts during restart are not supported and raise GenkitError.
-    """
-    meta = restart_trp.metadata or {}
+def _resume_context_from_tool_request_part(
+    tool_request_part: ToolRequestPart,
+) -> tuple[dict[str, Any] | None, Any | None]:
+    """Read resume/restart fields from a tool request part's metadata."""
+    meta = tool_request_part.metadata or {}
     raw_resumed = meta.get('resumed')
     if raw_resumed is True:
         resumed_meta: dict[str, Any] | None = {}
@@ -235,23 +234,60 @@ async def run_tool_after_restart(tool: Action[Any, Any, Any], restart_trp: ToolR
     else:
         resumed_meta = None
     original_input = meta.get('replacedInput')
+    return resumed_meta, original_input
 
+
+async def run_tool_request(
+    tool: Action[Any, Any, Any],
+    tool_request_part: ToolRequestPart,
+    *,
+    ctx: GenerateMiddlewareContext | None = None,
+) -> Any:  # noqa: ANN401 - tool output follows registered handler
+    """Execute a tool request with generate-scoped context and resume metadata.
+
+    Pipes ``GenerateMiddlewareContext.custom_context`` and ``telemetry_labels``
+    into ``tool.run``, and sets resume ContextVars from ``tool_request_part``
+    metadata so ``ToolRunContext`` reflects ``resumed`` / ``replacedInput``.
+    """
+    resumed_meta, original_input = _resume_context_from_tool_request_part(tool_request_part)
     token_meta = _tool_resumed_metadata.set(resumed_meta)
     token_input = _tool_original_input.set(original_input)
+    run_context = dict(ctx.custom_context) if ctx and ctx.custom_context else None
+    telemetry_labels = cast(dict[str, object], dict(ctx.telemetry_labels)) if ctx and ctx.telemetry_labels else None
     try:
-        try:
-            tool_response = (await tool.run(restart_trp.tool_request.input)).response
-        except GenkitError as e:
-            if e.cause and isinstance(e.cause, Interrupt):
-                raise GenkitError(
-                    status='FAILED_PRECONDITION',
-                    message='Tool interrupted again during a restart execution; not supported yet.',
-                    cause=e.cause,
-                ) from e
-            raise
+        return (
+            await tool.run(
+                tool_request_part.tool_request.input,
+                context=run_context,
+                telemetry_labels=telemetry_labels,
+            )
+        ).response
     finally:
         _tool_resumed_metadata.reset(token_meta)
         _tool_original_input.reset(token_input)
+
+
+async def run_tool_after_restart(
+    tool: Action[Any, Any, Any],
+    restart_trp: ToolRequestPart,
+    *,
+    ctx: GenerateMiddlewareContext | None = None,
+) -> ToolResponsePart:
+    """Run a tool for ``resume_restart``: applies ``resumed`` / ``replacedInput`` from metadata.
+
+    Sets the same context variables as the tool wrapper so ToolRunContext reflects
+    a resumed run. Nested interrupts during restart are not supported and raise GenkitError.
+    """
+    try:
+        tool_response = await run_tool_request(tool, restart_trp, ctx=ctx)
+    except GenkitError as e:
+        if e.cause and isinstance(e.cause, Interrupt):
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message='Tool interrupted again during a restart execution; not supported yet.',
+                cause=e.cause,
+            ) from e
+        raise
 
     return ToolResponsePart(
         tool_response=ToolResponse(

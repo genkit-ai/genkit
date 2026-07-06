@@ -38,7 +38,7 @@ from genkit._ai._model import (
     text_from_content,
 )
 from genkit._ai._resource import ResourceArgument, ResourceInput, find_matching_resource, resolve_resources
-from genkit._ai._tools import Interrupt, Tool, run_tool_after_restart
+from genkit._ai._tools import Interrupt, Tool, run_tool_after_restart, run_tool_request
 from genkit._core._action import (
     GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR,
     Action,
@@ -1130,7 +1130,11 @@ async def resolve_tool_requests(
         params = ToolHookParams(tool_request_part=trp, tool=tool)
 
         async def next_fn(p: ToolHookParams, c: GenerateMiddlewareContext) -> MultipartToolResponse:
-            return await _resolve_tool_request(p.tool, p.tool_request_part)
+            return await _resolve_tool_request(
+                tool=p.tool,
+                tool_request_part=p.tool_request_part,
+                ctx=c,
+            )
 
         try:
             if mw_list and mw_pipeline is not None:
@@ -1201,7 +1205,12 @@ def _interrupt_from_tool_exc(exc: BaseException) -> Interrupt | None:
     return None
 
 
-async def _resolve_tool_request(tool: Action, tool_request_part: ToolRequestPart) -> MultipartToolResponse:
+async def _resolve_tool_request(
+    *,
+    tool: Action,
+    tool_request_part: ToolRequestPart,
+    ctx: GenerateMiddlewareContext,
+) -> MultipartToolResponse:
     """Execute a tool and return its response.
 
     Interrupts from the tool body propagate to the caller (the engine
@@ -1210,7 +1219,7 @@ async def _resolve_tool_request(tool: Action, tool_request_part: ToolRequestPart
     ``BaseMiddleware.wrap_tool``: responses are return values, interrupts
     are exceptions.
     """
-    tool_response = (await tool.run(tool_request_part.tool_request.input)).response
+    tool_response = await run_tool_request(tool, tool_request_part, ctx=ctx)
     return MultipartToolResponse(
         output=tool_response.model_dump() if isinstance(tool_response, BaseModel) else tool_response,
     )
@@ -1424,7 +1433,11 @@ async def _run_restart_through_middleware(
     """
     mw_list = mw_pipeline.middleware if mw_pipeline else []
     if not mw_list or mw_pipeline is None:
-        return await run_tool_after_restart(tool, restart_trp)
+        return await run_tool_after_restart(
+            tool,
+            restart_trp,
+            ctx=mw_pipeline.ctx if mw_pipeline is not None else None,
+        )
 
     params = ToolHookParams(
         tool_request_part=restart_trp,
@@ -1432,7 +1445,7 @@ async def _run_restart_through_middleware(
     )
 
     async def next_fn(p: ToolHookParams, c: GenerateMiddlewareContext) -> MultipartToolResponse:
-        executed = await run_tool_after_restart(p.tool, restart_trp)
+        executed = await run_tool_after_restart(p.tool, restart_trp, ctx=c)
         return MultipartToolResponse(
             output=executed.tool_response.output,
             content=[Part.model_validate(c) for c in (executed.tool_response.content or [])],

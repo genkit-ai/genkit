@@ -22,7 +22,7 @@ from genkit._ai._testing import (
     define_echo_model,
     define_programmable_model,
 )
-from genkit._ai._tools import Interrupt, define_tool
+from genkit._ai._tools import Interrupt, ToolRunContext, define_tool
 from genkit._core._model import GenerateActionOptions, ModelRequest
 from genkit._core._registry import Registry
 from genkit._core._typing import (
@@ -1166,6 +1166,183 @@ async def test_wrap_tool_called_on_tool_execution() -> None:
     )
     assert response.text == 'done'
     assert tool_names == ['myTool']
+
+
+@pytest.mark.asyncio
+async def test_generate_context_reaches_tool_run() -> None:
+    """``generate(context=...)`` is piped into ``tool.run`` as ``ToolRunContext.context``."""
+    seen: list[dict[str, object]] = []
+
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='ctxTool')
+    async def ctx_tool(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        seen.append(dict(ctx.context))
+        return 'ok'
+
+    pm.responses.append(
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='ctxTool', input={}, ref='r1')))],
+            ),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='done'))]),
+        )
+    )
+
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message(role=Role.USER, content=[Part(TextPart(text='hi'))])],
+            tools=['ctxTool'],
+        ),
+        context={'user_id': 'u-123'},
+    )
+
+    assert response.text == 'done'
+    assert seen == [{'user_id': 'u-123'}]
+
+
+@pytest.mark.asyncio
+async def test_wrap_tool_middleware_custom_context_reaches_tool_run() -> None:
+    """Mutations to ``ctx.custom_context`` in ``wrap_tool`` are visible in ``ToolRunContext``."""
+    seen: list[dict[str, object]] = []
+
+    ai = Genkit()
+
+    @ai.middleware(name='enrich_tool_ctx', description='add context before tool runs')
+    class EnrichToolContextMiddleware(BaseMiddleware):
+        async def wrap_tool(
+            self,
+            params: ToolHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+        ) -> MultipartToolResponse:
+            ctx.custom_context['added_by_mw'] = True
+            return await next_fn(params, ctx)
+
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='ctxTool')
+    async def ctx_tool(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        seen.append(dict(ctx.context))
+        return 'ok'
+
+    pm.responses.append(
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='ctxTool', input={}, ref='r1')))],
+            ),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='done'))]),
+        )
+    )
+
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message(role=Role.USER, content=[Part(TextPart(text='hi'))])],
+            tools=['ctxTool'],
+            use=[MiddlewareRef(name='enrich_tool_ctx')],
+        ),
+        context={'user_id': 'u-123'},
+    )
+
+    assert response.text == 'done'
+    assert seen == [{'user_id': 'u-123', 'added_by_mw': True}]
+
+
+@pytest.mark.asyncio
+async def test_wrap_tool_custom_context_visible_to_generate_and_model_on_next_turn() -> None:
+    """``wrap_tool`` mutations to ``custom_context`` appear in later ``wrap_generate`` / ``wrap_model`` calls."""
+    generate_ctx: list[tuple[int, dict[str, object]]] = []
+    model_ctx: list[dict[str, object]] = []
+
+    ai = Genkit()
+
+    @ai.middleware(name='enrich_and_track', description='enrich tool ctx and track hook visibility')
+    class EnrichAndTrackMiddleware(BaseMiddleware):
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            generate_ctx.append((params.iteration, dict(ctx.custom_context)))
+            return await next_fn(params, ctx)
+
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            model_ctx.append(dict(ctx.custom_context))
+            return await next_fn(params, ctx)
+
+        async def wrap_tool(
+            self,
+            params: ToolHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+        ) -> MultipartToolResponse:
+            ctx.custom_context['added_by_mw'] = True
+            return await next_fn(params, ctx)
+
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='ctxTool')
+    async def ctx_tool() -> str:
+        return 'ok'
+
+    pm.responses.append(
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='ctxTool', input={}, ref='r1')))],
+            ),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='done'))]),
+        )
+    )
+
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message(role=Role.USER, content=[Part(TextPart(text='hi'))])],
+            tools=['ctxTool'],
+            use=[MiddlewareRef(name='enrich_and_track')],
+        ),
+        context={'user_id': 'u-123'},
+    )
+
+    assert response.text == 'done'
+    assert generate_ctx == [
+        (0, {'user_id': 'u-123'}),
+        (1, {'user_id': 'u-123', 'added_by_mw': True}),
+    ]
+    assert model_ctx == [
+        {'user_id': 'u-123'},
+        {'user_id': 'u-123', 'added_by_mw': True},
+    ]
 
 
 @pytest.mark.asyncio
