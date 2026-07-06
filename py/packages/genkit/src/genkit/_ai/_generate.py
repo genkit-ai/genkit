@@ -685,7 +685,6 @@ async def _generate_action_turn(
         request = await action_to_generate_request(turn_options, tools, model)
         if request.docs:
             request = _augment_with_context(request)
-        logger.debug('generate request', model=model.name, request=_redact_data_uris(request.model_dump()))
 
         async def next_fn(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
             return (
