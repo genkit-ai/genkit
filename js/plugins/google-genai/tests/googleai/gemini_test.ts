@@ -449,6 +449,27 @@ describe('Google AI Gemini', () => {
         );
       });
 
+      it('strips the removed contextCache flag from the outbound request', async () => {
+        const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          // The schema is passthrough, so a stale config still validates; it
+          // must not be forwarded as an unknown generationConfig field.
+          config: { contextCache: true } as any,
+        };
+        await model.run(request);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(
+          (apiRequest.generationConfig as any)?.contextCache,
+          undefined,
+          'contextCache should not be in generationConfig'
+        );
+      });
+
       it('uses baseUrl and apiVersion from call config', async () => {
         const model = defineModel('gemini-2.5-flash', {
           ...defaultPluginOptions,

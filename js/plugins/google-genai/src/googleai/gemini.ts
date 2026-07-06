@@ -176,13 +176,6 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     .union([z.boolean(), z.object({}).strict()])
     .describe('Enables the model to generate and run code.')
     .optional(),
-  contextCache: z
-    .boolean()
-    .describe(
-      'Context caching allows you to save and reuse precomputed input ' +
-        'tokens that you wish to use repeatedly.'
-    )
-    .optional(),
   functionCallingConfig: z
     .object({
       mode: z.enum(['MODE_UNSPECIFIED', 'AUTO', 'ANY', 'NONE']).optional(),
@@ -751,6 +744,10 @@ export function defineModel(
         tools: toolsFromConfig,
         retrievalConfig,
         serviceTier,
+        // The schema is passthrough, so also strip the removed contextCache
+        // flag; otherwise a stale config would still forward it to the API as
+        // an unknown generationConfig field.
+        contextCache: _contextCache,
         ...restOfConfigOptions
       } = requestOptions;
 
