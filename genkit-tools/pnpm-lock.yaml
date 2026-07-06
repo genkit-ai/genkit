@@ -71,6 +71,9 @@ importers:
       yaml:
         specifier: ^2.8.0
         version: 2.8.2
+      zod:
+        specifier: ^3.22.4
+        version: 3.25.67
     devDependencies:
       '@jest/globals':
         specifier: ^29.7.0
