@@ -682,7 +682,13 @@ async def _generate_action_turn(
     ) -> ModelResponse:
         """Execute one turn of the generate loop (model call + optional tool resolution)."""
         turn_options = params.options
-        request = await action_to_generate_request(turn_options, tools, model)
+        turn_tools: list[Action[Any, Any, Any]] = []
+        if turn_options.tools:
+            expanded_tools = await expand_wildcard_tools(registry, turn_options.tools)
+            for t_name in expanded_tools:
+                t_action = await resolve_tool(registry, t_name)
+                turn_tools.append(t_action)
+        request = await action_to_generate_request(turn_options, turn_tools, model)
         if request.docs:
             request = _augment_with_context(request)
 

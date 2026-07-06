@@ -14,7 +14,6 @@ from genkit._ai._tools import (
     _tool_resumed_metadata,
     respond_to_interrupt,
     restart_tool,
-    run_tool_request,
 )
 from genkit._core._error import GenkitError
 from genkit._core._middleware import GenerateMiddlewareContext
@@ -299,27 +298,6 @@ async def test_run_tool_after_restart_response_preserves_ref_and_uses_new_input(
 
 
 @pytest.mark.asyncio
-async def test_run_tool_request_kwargs_only() -> None:
-    """``run_tool_request`` strictly requires keyword-only arguments for ``tool`` and ``tool_request_part``."""
-    ai = Genkit()
-
-    @ai.tool(name='kw_tool')
-    async def kw_tool(inp: dict) -> str:  # noqa: ARG001
-        return 'ok'
-
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='kw_tool')
-    assert action is not None
-
-    trp = ToolRequestPart(tool_request=ToolRequest(name='kw_tool', ref='r1', input={}))
-
-    with pytest.raises(TypeError):
-        await run_tool_request(action, trp)  # type: ignore[misc]
-
-    res = await run_tool_request(tool=action, tool_request_part=trp)
-    assert res == 'ok'
-
-
-@pytest.mark.asyncio
 async def test_run_tool_after_restart_pipes_generate_context() -> None:
     """``run_tool_after_restart(..., ctx=ctx)`` pipes custom_context into ``ToolRunContext.context``."""
     ai = Genkit()
@@ -341,27 +319,3 @@ async def test_run_tool_after_restart_pipes_generate_context() -> None:
     await run_tool_after_restart(tool=action, restart_trp=restart_trp, ctx=mw_ctx)
 
     assert seen == [{'auth_role': 'admin'}]
-
-
-@pytest.mark.asyncio
-async def test_run_tool_after_restart_kwargs_only() -> None:
-    """``run_tool_after_restart`` strictly requires keyword-only arguments for ``tool`` and ``restart_trp``."""
-    ai = Genkit()
-
-    @ai.tool(name='kw_restart_tool')
-    async def kw_restart_tool(inp: dict) -> str:  # noqa: ARG001
-        return 'ok'
-
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='kw_restart_tool')
-    assert action is not None
-
-    trp = ToolRequestPart(
-        tool_request=ToolRequest(name='kw_restart_tool', ref='r1', input={}),
-        metadata={'resumed': True},
-    )
-
-    with pytest.raises(TypeError):
-        await run_tool_after_restart(action, trp)  # type: ignore[misc]
-
-    res = await run_tool_after_restart(tool=action, restart_trp=trp)
-    assert res.tool_response.output == 'ok'

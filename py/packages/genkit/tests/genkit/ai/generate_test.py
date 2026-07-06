@@ -2303,3 +2303,51 @@ def test_chunk_accumulator_make_kwargs_only() -> None:
 
     wrapped = acc.make(role=Role.MODEL, chunk=raw_chunk)
     assert wrapped.index == 0
+
+
+@pytest.mark.asyncio
+async def test_wrap_generate_middleware_injects_dynamic_tool() -> None:
+    """Tools dynamically added to ``params.options.tools`` inside ``wrap_generate`` are captured by ``ModelRequest``."""
+    ai = Genkit()
+    captured_tool_names: list[list[str]] = []
+
+    @ai.tool(name='dynamic_mw_tool')
+    async def dynamic_mw_tool() -> str:
+        return 'ok'
+
+    class DynCfg(BaseModel):
+        pass
+
+    @ai.middleware(name='dynamic_tool_mw')
+    class DynamicToolMiddleware(BaseMiddleware[DynCfg]):
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            new_opts = params.options.model_copy()
+            tools = list(new_opts.tools or [])
+            tools.append('dynamic_mw_tool')
+            new_opts.tools = tools
+            return await next_fn(params.model_copy(update={'options': new_opts}), ctx)
+
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            names = [t.name for t in (params.request.tools or [])]
+            captured_tool_names.append(names)
+            return await next_fn(params, ctx)
+
+    define_echo_model(ai)
+
+    response = await ai.generate(
+        model='echoModel',
+        prompt='hi',
+        use=[DynamicToolMiddleware()],
+    )
+    assert response.text == '[ECHO] user: "hi" tools=dynamic_mw_tool'
+    assert captured_tool_names == [['dynamic_mw_tool']]
