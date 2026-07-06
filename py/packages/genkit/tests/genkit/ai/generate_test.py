@@ -1370,6 +1370,7 @@ async def test_wrap_tool_custom_context_visible_to_generate_and_model_on_next_tu
         )
     )
 
+    caller_ctx = {'user_id': 'u-123'}
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
@@ -1378,10 +1379,11 @@ async def test_wrap_tool_custom_context_visible_to_generate_and_model_on_next_tu
             tools=['ctxTool'],
             use=[MiddlewareRef(name='enrich_and_track')],
         ),
-        context={'user_id': 'u-123'},
+        context=caller_ctx,
     )
 
     assert response.text == 'done'
+    assert caller_ctx == {'user_id': 'u-123'}
     assert generate_ctx == [
         (0, {'user_id': 'u-123'}),
         (1, {'user_id': 'u-123', 'added_by_mw': True}),
