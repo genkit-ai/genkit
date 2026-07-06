@@ -1062,9 +1062,9 @@ async def action_to_generate_request(
         out_schema = out_schema.model_dump()
     return ModelRequest(
         # Field validators auto-wrap MessageData -> Message and DocumentData -> Document
-        messages=cast(Any, options.messages),
-        config=cast(Any, options.config if options.config is not None else {}),
-        docs=cast(Any, options.docs),
+        messages=options.messages,  # type: ignore[arg-type]
+        config=options.config if options.config is not None else {},  # type: ignore[arg-type]
+        docs=options.docs if options.docs else None,  # type: ignore[arg-type]
         tools=tool_defs,
         tool_choice=options.tool_choice,
         output_format=output.format if output else None,
