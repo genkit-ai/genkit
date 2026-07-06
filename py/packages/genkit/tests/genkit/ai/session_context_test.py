@@ -32,12 +32,18 @@ async def test_get_current_session_outside_bind() -> None:
 
 @pytest.mark.asyncio
 async def test_middleware_context_session_field() -> None:
-    ctx = GenerateMiddlewareContext(registry=Registry())
-    assert ctx.session is None
+    from genkit import Genkit
+    ai = Genkit()
+    ctx = GenerateMiddlewareContext(ai=ai)
+    assert ctx.ai.current_session() is None
 
     session = Session(SessionState(custom={'bound': True}))
-    ctx = GenerateMiddlewareContext(registry=Registry(), session=session)
-    assert ctx.session is session
+    from genkit._ai._agents._session import run_with_session
+
+    async def check() -> None:
+        assert ctx.ai.current_session() is session
+
+    await run_with_session(session, check())
 
 
 @pytest.mark.asyncio

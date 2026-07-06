@@ -35,7 +35,7 @@ from genkit._core._model import (
     ModelResponse,
     ModelResponseChunk,
 )
-from genkit._core._protocols import RegistryLike, SessionLike
+from genkit._core._protocols import GenkitLike, RegistryLike, SessionLike
 from genkit._core._typing import MiddlewareDesc, MultipartToolResponse, ToolRequestPart
 
 logger = get_logger(__name__)
@@ -146,17 +146,16 @@ class ToolHookParams(BaseModel):
 class GenerateMiddlewareContext:
     """Per-``generate()`` runtime services shared by every middleware in ``use=[...]``.
 
-    Holds the call-scoped registry, caller-provided metadata (``custom_context``),
-    streaming hooks, and (when inside an agent) the bound session for the whole
-    generate invocation. Hook ``params`` carry per-turn request data only.
+    Holds the Genkit instance (``ai``) providing access to ``ai.registry()`` and
+    ``ai.current_session()``, along with caller-provided metadata (``custom_context``),
+    streaming hooks, and abort signal for the whole generate invocation.
     """
 
-    registry: RegistryLike
+    ai: GenkitLike
     abort_signal: asyncio.Event = field(default_factory=asyncio.Event)
     custom_context: dict[str, object] = field(default_factory=dict)
     on_chunk: Callable[[ModelResponseChunk], None] | None = None
     telemetry_labels: dict[str, str] | None = None
-    session: SessionLike | None = None
 
     @property
     def is_streaming(self) -> bool:

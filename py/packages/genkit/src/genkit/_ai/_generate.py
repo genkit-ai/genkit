@@ -63,6 +63,7 @@ from genkit._core._model import (
     Document,
     GenerateActionOptions,
 )
+from genkit._core._protocols import GenkitLike, RegistryLike, SessionLike
 from genkit._core._registry import Registry
 from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
@@ -82,6 +83,19 @@ from genkit._core._typing import (
 DEFAULT_MAX_TURNS = 5
 
 logger = get_logger(__name__)
+
+
+class _ScopedGenkit:
+    """Scoped GenkitLike proxy wrapping a call-scoped registry for a generate invocation."""
+
+    def __init__(self, reg: RegistryLike) -> None:
+        self._reg = reg
+
+    def registry(self) -> RegistryLike:
+        return self._reg
+
+    def current_session(self) -> SessionLike | None:
+        return get_current_session()
 
 
 def register_middleware(
@@ -478,10 +492,9 @@ async def generate_with_request(
 
     middleware = resolve_middleware_from_use(registry, raw_request.use)
     run_ctx = GenerateMiddlewareContext(
-        registry=registry,
+        ai=_ScopedGenkit(registry),
         custom_context=dict(context or {}),
         on_chunk=on_chunk,
-        session=get_current_session(),
         abort_signal=abort_signal if abort_signal is not None else asyncio.Event(),
     )
 
@@ -1140,9 +1153,8 @@ async def resolve_tool_requests(
             mw_pipeline.ctx
             if mw_pipeline is not None
             else GenerateMiddlewareContext(
-                registry=registry,
+                ai=_ScopedGenkit(registry),
                 abort_signal=abort_signal,
-                session=get_current_session(),
             )
         )
         _raise_if_aborted(ctx.abort_signal)
@@ -1160,9 +1172,8 @@ async def resolve_tool_requests(
                     mw_pipeline.ctx
                     if mw_pipeline
                     else GenerateMiddlewareContext(
-                        registry=registry,
+                        ai=_ScopedGenkit(registry),
                         abort_signal=abort_signal,
-                        session=get_current_session(),
                     ),
                 )
             return (multipart, None)

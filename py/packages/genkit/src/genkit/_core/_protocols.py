@@ -103,3 +103,16 @@ class SessionLike(Protocol):
     async def update_custom(self, fn: Callable[[Any], Any]) -> None:  # noqa: ANN401
         """Replace custom state via ``fn(old) -> new``."""
         ...
+
+
+@runtime_checkable
+class GenkitLike(Protocol):
+    """Structural interface for the Genkit instance exposed on middleware context."""
+
+    def registry(self) -> RegistryLike:
+        """Return the call-scoped registry for this generate invocation."""
+        ...
+
+    def current_session(self) -> SessionLike | None:
+        """Return the bound agent session, if running inside one."""
+        ...

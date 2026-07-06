@@ -283,7 +283,7 @@ async def test_generate_tool_respects_abort_signal() -> None:
     async def run_generate() -> None:
         with pytest.raises(GenkitError) as exc_info:
             await generate_action(
-                ai.registry,
+                ai.registry(),
                 GenerateActionOptions(
                     model='programmableModel',
                     messages=[Message(role=Role.USER, content=[Part(TextPart(text='go'))])],

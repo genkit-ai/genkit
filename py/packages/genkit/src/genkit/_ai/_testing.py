@@ -254,7 +254,7 @@ async def test_models(ai: Genkit, models: list[str]) -> TestReport:
         return (input.value**3) + 1.407
 
     async def get_model_info(model_name: str) -> ModelInfo | None:
-        model_action = await ai.registry.resolve_action(ActionKind.MODEL, model_name)
+        model_action = await ai.registry().resolve_action(ActionKind.MODEL, model_name)
         if model_action and model_action.metadata:
             info_obj = model_action.metadata.get('model')
             if isinstance(info_obj, ModelInfo):

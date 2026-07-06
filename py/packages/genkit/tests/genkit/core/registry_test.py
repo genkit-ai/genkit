@@ -129,10 +129,10 @@ async def test_resolve_action_from_plugin() -> None:
 
     ai = Genkit(plugins=[MyPlugin()])
 
-    catalog = await ai.registry.list_actions()
+    catalog = await ai.registry().list_actions()
     assert catalog['/model/myplugin/foo'].name == 'myplugin/foo'
 
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'myplugin/foo')
+    action = await ai.registry().resolve_action(ActionKind.MODEL, 'myplugin/foo')
 
     assert action is not None
     assert len(resolver_calls) == 1
@@ -140,7 +140,7 @@ async def test_resolve_action_from_plugin() -> None:
     assert resolver_calls == [[ActionKind.MODEL, 'myplugin/foo']]
 
     # should be idempotent
-    await ai.registry.resolve_action(ActionKind.MODEL, 'myplugin/foo')
+    await ai.registry().resolve_action(ActionKind.MODEL, 'myplugin/foo')
     assert len(resolver_calls) == 1
 
 

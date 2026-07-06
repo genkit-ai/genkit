@@ -30,7 +30,7 @@ async def test_adding_ollama_chat_model_to_genkit_veneer(
     genkit_veneer_chat_model: Genkit,
 ) -> None:
     """Test adding ollama chat model to genkit veneer."""
-    action = await genkit_veneer_chat_model.registry.resolve_action(ActionKind.MODEL, ollama_model)
+    action = await genkit_veneer_chat_model.registry().resolve_action(ActionKind.MODEL, ollama_model)
     assert action is not None
 
 
@@ -40,7 +40,7 @@ async def test_adding_ollama_generation_model_to_genkit_veneer(
     genkit_veneer_generate_model: Genkit,
 ) -> None:
     """Test adding ollama generation model to genkit veneer."""
-    action = await genkit_veneer_generate_model.registry.resolve_action(ActionKind.MODEL, ollama_model)
+    action = await genkit_veneer_generate_model.registry().resolve_action(ActionKind.MODEL, ollama_model)
     assert action is not None
 
 

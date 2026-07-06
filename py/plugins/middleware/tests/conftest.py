@@ -11,4 +11,5 @@ from genkit.middleware import GenerateMiddlewareContext
 
 @pytest.fixture
 def ctx() -> GenerateMiddlewareContext:
-    return GenerateMiddlewareContext(registry=Registry())
+    from genkit import Genkit
+    return GenerateMiddlewareContext(ai=Genkit())

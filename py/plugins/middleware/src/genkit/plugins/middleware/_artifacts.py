@@ -148,7 +148,7 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
         tools: list[Any] = []
 
         async def read_artifact(input: ReadArtifactInput) -> ReadArtifactOutput:
-            session = ctx.session
+            session = ctx.ai.current_session()
             if session is None:
                 return ReadArtifactOutput(
                     name=input.name,
@@ -190,7 +190,7 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
         if not self.config.readonly:
 
             async def write_artifact(input: WriteArtifactInput) -> WriteArtifactOutput:
-                session = ctx.session
+                session = ctx.ai.current_session()
                 if session is None:
                     return WriteArtifactOutput(status='Error: no active session.')
 
@@ -219,7 +219,7 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
         ctx: GenerateMiddlewareContext,
         next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        session = ctx.session
+        session = ctx.ai.current_session()
         artifacts = await session.get_artifacts() if session is not None else []
         listing = build_artifact_listing(artifacts)
         params.request = inject_artifact_listing(params.request, listing)
