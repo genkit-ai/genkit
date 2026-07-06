@@ -17,6 +17,7 @@
 """OpenAI Compatible Model handlers for Genkit."""
 
 from collections.abc import Awaitable, Callable, Mapping
+from typing import Any, cast
 
 from openai import AsyncOpenAI
 
@@ -122,7 +123,7 @@ class OpenAIModelHandler:
         Raises:
             ValueError: If the specified model version is not supported.
         """
-        request.config = self._model.normalize_config(request.config)  # type: ignore
+        request.config = cast(Any, self._model.normalize_config(request.config))
 
         if isinstance(request.config, Mapping) and request.config.get('model'):
             self._validate_version(str(request.config.get('model')))

@@ -388,7 +388,7 @@ class OpenAIModel:
         Returns:
             A ModelResponse containing the model's response.
         """
-        request.config = self.normalize_config(request.config)  # type: ignore
+        request.config = cast(Any, self.normalize_config(request.config))
 
         if ctx.is_streaming:
             logger.debug('OpenAI generate request', model=self._model, streaming=True)
@@ -397,7 +397,7 @@ class OpenAIModel:
             return await self._generate(request)
 
     @staticmethod
-    def normalize_config(config: object) -> dict[str, Any]:
+    def normalize_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
         """Ensures the config is normalized to a dictionary without unsupported keys."""
         if config is None:
             return {}
