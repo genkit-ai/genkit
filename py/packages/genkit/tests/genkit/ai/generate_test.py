@@ -15,7 +15,7 @@ import yaml
 from pydantic import BaseModel, TypeAdapter
 
 from genkit import ActionKind, Document, Genkit, Message, MiddlewareRef, ModelResponse, ModelResponseChunk
-from genkit._ai._generate import _augment_with_context, generate_action
+from genkit._ai._generate import ChunkAccumulator, _augment_with_context, generate_action
 from genkit._ai._model import text_from_content, text_from_message
 from genkit._ai._testing import (
     ProgrammableModel,
@@ -2291,3 +2291,15 @@ def clean_schema(d: object) -> object:
         return [clean_schema(i) for i in d]
     else:
         return d
+
+
+def test_chunk_accumulator_make_kwargs_only() -> None:
+    """``ChunkAccumulator.make`` requires keyword-only arguments."""
+    acc = ChunkAccumulator(message_index=0, formatter=None)
+    raw_chunk = ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='hi'))])
+
+    with pytest.raises(TypeError):
+        acc.make(Role.MODEL, raw_chunk)  # type: ignore[misc]
+
+    wrapped = acc.make(role=Role.MODEL, chunk=raw_chunk)
+    assert wrapped.index == 0

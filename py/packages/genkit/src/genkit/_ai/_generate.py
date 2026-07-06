@@ -518,7 +518,7 @@ class ChunkAccumulator:
         self.chunk_role: Role = Role.MODEL
         self.prev_chunks: list[ModelResponseChunk[Any]] = []
 
-    def make(self, role: Role, chunk: ModelResponseChunk[Any]) -> ModelResponseChunk[Any]:
+    def make(self, *, role: Role, chunk: ModelResponseChunk[Any]) -> ModelResponseChunk[Any]:
         """Wrap a raw chunk with metadata and track message index changes."""
         if role != self.chunk_role and len(self.prev_chunks) > 0:
             self.message_index += 1
@@ -552,7 +552,7 @@ class ChunkAccumulator:
         """Send one framework-wrapped chunk through the current stream chain."""
         if ctx.on_chunk is None:
             return
-        ctx.on_chunk(self.make(role, chunk))
+        ctx.on_chunk(self.make(role=role, chunk=chunk))
 
     @contextlib.contextmanager
     def intercept_model_stream(
@@ -569,7 +569,7 @@ class ChunkAccumulator:
 
         def handler(chunk: ModelResponseChunk[Any]) -> None:
             if downstream is not None:
-                downstream(self.make(role, chunk))
+                downstream(self.make(role=role, chunk=chunk))
 
         previous = ctx.replace_on_chunk(handler)
         try:
