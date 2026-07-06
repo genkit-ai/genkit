@@ -14,6 +14,7 @@ from genkit._ai._tools import (
     _tool_resumed_metadata,
     respond_to_interrupt,
     restart_tool,
+    run_tool_request,
 )
 from genkit._core._error import GenkitError
 from genkit._core._typing import ToolRequest, ToolRequestPart, ToolResponsePart
@@ -294,3 +295,24 @@ async def test_run_tool_after_restart_response_preserves_ref_and_uses_new_input(
     assert received_inputs == [{'amount': 100, 'confirmed': True}]
     assert original_inputs == [prior]
     assert result.tool_response.output == 'transferred 100'
+
+
+@pytest.mark.asyncio
+async def test_run_tool_request_kwargs_only() -> None:
+    """``run_tool_request`` strictly requires keyword-only arguments for ``tool`` and ``tool_request_part``."""
+    ai = Genkit()
+
+    @ai.tool(name='kw_tool')
+    async def kw_tool(inp: dict) -> str:  # noqa: ARG001
+        return 'ok'
+
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='kw_tool')
+    assert action is not None
+
+    trp = ToolRequestPart(tool_request=ToolRequest(name='kw_tool', ref='r1', input={}))
+
+    with pytest.raises(TypeError):
+        await run_tool_request(action, trp)  # type: ignore[misc]
+
+    res = await run_tool_request(tool=action, tool_request_part=trp)
+    assert res == 'ok'

@@ -238,9 +238,9 @@ def _resume_context_from_tool_request_part(
 
 
 async def run_tool_request(
+    *,
     tool: Action[Any, Any, Any],
     tool_request_part: ToolRequestPart,
-    *,
     ctx: GenerateMiddlewareContext | None = None,
 ) -> Any:  # noqa: ANN401 - tool output follows registered handler
     """Execute a tool request with generate-scoped context and resume metadata.
@@ -279,13 +279,16 @@ async def run_tool_after_restart(
     a resumed run. Nested interrupts during restart are not supported and raise GenkitError.
     """
     try:
-        tool_response = await run_tool_request(tool, restart_trp, ctx=ctx)
-    except GenkitError as e:
-        if e.cause and isinstance(e.cause, Interrupt):
+        tool_response = await run_tool_request(tool=tool, tool_request_part=restart_trp, ctx=ctx)
+    except (GenkitError, Interrupt) as e:
+        intr = e.cause if isinstance(e, GenkitError) and isinstance(e.cause, Interrupt) else (
+            e if isinstance(e, Interrupt) else None
+        )
+        if intr is not None:
             raise GenkitError(
                 status='FAILED_PRECONDITION',
                 message='Tool interrupted again during a restart execution; not supported yet.',
-                cause=e.cause,
+                cause=intr,
             ) from e
         raise
 

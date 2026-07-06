@@ -1218,7 +1218,7 @@ async def _resolve_tool_request(
     ``BaseMiddleware.wrap_tool``: responses are return values, interrupts
     are exceptions.
     """
-    tool_response = await run_tool_request(tool, tool_request_part, ctx=ctx)
+    tool_response = await run_tool_request(tool=tool, tool_request_part=tool_request_part, ctx=ctx)
     return MultipartToolResponse(
         output=tool_response.model_dump() if isinstance(tool_response, BaseModel) else tool_response,
     )
