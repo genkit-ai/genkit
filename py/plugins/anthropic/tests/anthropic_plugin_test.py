@@ -153,7 +153,7 @@ async def test_anthropic_runtime_clients_are_loop_local(mock_client_ctor: MagicM
 
 def test_supported_models() -> None:
     """Test that all supported models have proper metadata."""
-    assert len(SUPPORTED_MODELS) == 11
+    assert len(SUPPORTED_MODELS) == 12
     assert 'claude-3-haiku' not in SUPPORTED_MODELS
     for _name, info in SUPPORTED_MODELS.items():
         assert info.label is not None
@@ -170,6 +170,7 @@ def test_supported_models() -> None:
         ('claude-opus-4-7', 'Anthropic - Claude Opus 4.7'),
         ('claude-opus-4-8', 'Anthropic - Claude Opus 4.8'),
         ('claude-sonnet-4-6', 'Anthropic - Claude Sonnet 4.6'),
+        ('claude-sonnet-5', 'Anthropic - Claude Sonnet 5'),
         ('claude-fable-5', 'Anthropic - Claude Fable 5'),
     ):
         info = SUPPORTED_MODELS[model_name]

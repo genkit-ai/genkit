@@ -121,7 +121,7 @@ Supported Models:
     │ claude-sonnet-4-5         │ Balanced performance and capability         │
     │ claude-haiku-4-5          │ Fast and cost-effective                     │
     │ claude-opus-4-5           │ Most capable, complex tasks                 │
-    │ claude-sonnet-4-6         │ Latest Sonnet model                         │
+    │ claude-sonnet-5           │ Latest Sonnet model                         │
     └───────────────────────────┴─────────────────────────────────────────────┘
 
 Key Components:
