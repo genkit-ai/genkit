@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright 2025 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,42 +15,37 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Code execution - let Gemini write and run Python for a task."""
+"""Code execution - let Gemini write and run Python for a task. Requires GEMINI_API_KEY.
 
-from pydantic import BaseModel, Field
+Run directly:
+    uv run src/main.py
+Or inspect live execution and traces in Dev UI:
+    genkit start -- uv run src/main.py
+"""
 
-from genkit import Genkit, Message
-from genkit.plugins.google_genai import GeminiConfigSchema, GoogleAI
+from __future__ import annotations
 
-ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-pro-latest')
+from genkit import Genkit
+from genkit.plugins.google_genai import GoogleAI
 
-
-class CodeExecutionInput(BaseModel):
-    """Input for code execution."""
-
-    task: str = Field(default='What is the sum of the first 50 prime numbers?', description='Problem to solve')
-
-
-@ai.flow()
-async def execute_code(input: CodeExecutionInput) -> Message:
-    """Ask Gemini to generate and execute code."""
-
-    response = await ai.generate(
-        prompt=f'Write code and run it to solve this task: {input.task}',
-        config=GeminiConfigSchema.model_validate({'code_execution': True}).model_dump(),
-    )
-    if not response.message:
-        raise ValueError('No message returned from model')
-    return response.message
+# 1. Initialize Genkit with Google GenAI plugin and default Gemini model
+ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
 
 
 async def main() -> None:
-    """Run the code execution sample once."""
+    """Run code execution directly without intermediate flow wrappers."""
     try:
-        message = await execute_code(CodeExecutionInput())
-        print(message.model_dump_json(indent=2))  # noqa: T201
+        # 2. Instruct Gemini to generate and execute Python code inside a secure sandbox (`code_execution=True`)
+        response = await ai.generate(
+            prompt='Write code and run it to calculate the sum of the first 50 prime numbers.',
+            config={'code_execution': True},
+        )
+        if response.message:
+            print(response.message.model_dump_json(indent=2))
+        # => Message containing both the generated Python script block and the execution stdout result:
+        # => "```python\ndef is_prime(n): ...\n```\nOutput: 5117"
     except Exception as error:
-        print(f'Set GEMINI_API_KEY to a valid value before running this sample directly.\n{error}')  # noqa: T201
+        print(f'Set GEMINI_API_KEY to a valid value before running this sample directly.\n{error}')
 
 
 if __name__ == '__main__':

@@ -1,8 +1,11 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-r"""BugBot: AI Code Reviewer.
+r"""BugBot: AI Code Reviewer. Requires GEMINI_API_KEY.
 
+Run directly:
+    uv run src/main.py
+Or inspect live execution and traces in Dev UI:
     genkit start -- uv run src/main.py
     curl localhost:8080/review -d '{"code": "query = f\"SELECT * FROM users WHERE id={user_input}\""}'
 

@@ -14,7 +14,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Django + Genkit - Serve flows as HTTP endpoints. See README.md."""
+"""Django + Genkit - Serve flows as HTTP endpoints. Requires GEMINI_API_KEY.
+
+Run directly:
+    python manage.py runserver 0.0.0.0:8080
+Or inspect live execution and traces in Dev UI:
+    genkit start -- python manage.py runserver 0.0.0.0:8080
+"""
+
+from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any, cast
@@ -22,8 +30,7 @@ from typing import Any, cast
 from django.http import HttpRequest
 from pydantic import BaseModel, Field
 
-from genkit import Genkit, ModelResponse
-from genkit._core._action import ActionRunContext
+from genkit import ActionRunContext, Genkit, ModelResponse
 from genkit.plugin_api import RequestData
 from genkit.plugins.django import genkit_django_handler
 from genkit.plugins.google_genai import GoogleAI

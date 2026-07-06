@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,63 +15,24 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Google GenAI media - one simple example each for speech, image, and video."""
+"""Google GenAI media - one simple example each for speech, image, and video. Requires GEMINI_API_KEY."""
+
+from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Literal
-
-from pydantic import BaseModel, Field
+from typing import Any
 
 from genkit import Genkit
-from genkit._core._background import lookup_background_action
-from genkit._core._typing import Operation, Part, Role, TextPart
-from genkit.model import Message, ModelRequest
+from genkit.model import Operation
 from genkit.plugins.google_genai import GoogleAI
 
+# 1. Initialize Genkit with Google GenAI plugin
 ai = Genkit(plugins=[GoogleAI()])
-
-
-class SpeechInput(BaseModel):
-    """Input for TTS."""
-
-    text: str = Field(default='Welcome to the Genkit media sample.', description='Text to speak')
-    voice: str = Field(default='Kore', description='Prebuilt voice name')
-
-
-class ImageInput(BaseModel):
-    """Input for image generation."""
-
-    prompt: str = Field(default='A watercolor postcard of San Francisco at sunrise', description='Image prompt')
-
-
-class VideoInput(BaseModel):
-    """Input for Veo."""
-
-    model: Literal[
-        'googleai/veo-3.1-generate-preview',
-        'googleai/veo-3.1-fast-generate-preview',
-        'googleai/veo-3.1-generate-001',
-        'googleai/veo-3.1-fast-generate-001',
-        'googleai/veo-3.0-generate-001',
-        'googleai/veo-3.0-fast-generate-001',
-        'googleai/veo-2.0-generate-001',
-    ] = Field(default='googleai/veo-3.1-generate-preview', description='Veo model for generation')
-    prompt: str = Field(
-        default='A paper airplane gliding through a bright classroom, cinematic slow motion',
-        description='Video prompt',
-    )
-    aspect_ratio: str = Field(default='16:9', description='Video aspect ratio')
-    duration_seconds: int = Field(default=5, description='Video duration in seconds')
-    resolution: str | None = Field(
-        default=None, description='Output resolution (for supported models, e.g. "720p", "1080p")'
-    )
-    seed: int | None = Field(default=None, description='Optional RNG seed')
 
 
 def _first_media_url(response: Any) -> str | None:
     """Return the first media URL in a model response."""
-
     message = getattr(response, 'message', None)
     if not message:
         return None
@@ -81,85 +43,48 @@ def _first_media_url(response: Any) -> str | None:
     return None
 
 
-@ai.flow(name='generate_speech')
-async def tts_speech_generator(input: SpeechInput) -> dict[str, str | None]:
-    """Turn text into speech with one TTS call."""
-
-    response = await ai.generate(
-        model='googleai/gemini-2.5-flash-preview-tts',
-        prompt=input.text,
-        config={'speech_config': {'voice_config': {'prebuilt_voice_config': {'voice_name': input.voice}}}},
-    )
-    return {'model': 'googleai/gemini-2.5-flash-preview-tts', 'audio_url': _first_media_url(response)}
-
-
-@ai.flow(name='generate_image')
-async def imagen_image_generator(input: ImageInput) -> dict[str, str | None]:
-    """Generate one image with Imagen."""
-
-    response = await ai.generate(
-        model='googleai/imagen-3.0-generate-002',
-        prompt=input.prompt,
-        config={'number_of_images': 1},
-    )
-    return {'model': 'googleai/imagen-3.0-generate-002', 'image_url': _first_media_url(response)}
-
-
-async def _poll_video(operation: Operation, model_name: str) -> Operation:
+async def _poll_video(operation: Operation) -> Operation:
     """Wait for a background video operation to finish."""
-
-    action = await lookup_background_action(ai.registry, f'/background-model/{model_name}')
-    if action is None:
-        raise ValueError(f'Veo background model not found: {model_name}')
-
     started_at = time.monotonic()
     while not operation.done:
         if time.monotonic() - started_at > 180:
             raise TimeoutError('Timed out waiting for Veo output')
         await asyncio.sleep(3)
-        operation = await action.check(operation)
+        operation = await ai.check_operation(operation)
     return operation
 
 
-@ai.flow(name='generate_video')
-async def veo_video_generator(input: VideoInput) -> dict[str, str | int | None]:
-    """Generate one video by starting and polling a background model."""
-
-    action = await lookup_background_action(ai.registry, f'/background-model/{input.model}')
-    if action is None:
-        raise ValueError(f'Veo background model not found: {input.model}')
-
-    operation = await action.start(
-        ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text=input.prompt))])],
-            config=input.model_dump(exclude_none=True, exclude={'prompt', 'model'}),
-        )
-    )
-    operation = await _poll_video(operation, input.model)
-
-    video_url = None
-    if isinstance(operation.output, dict):
-        message = operation.output.get('message', {})
-        content = message.get('content', [])
-        if content:
-            media = content[0].get('media', {})
-            video_url = media.get('url')
-
-    return {
-        'model': input.model,
-        'operation_id': operation.id,
-        'video_url': video_url,
-        'duration_seconds': input.duration_seconds,
-    }
-
-
 async def main() -> None:
-    """Run the fast media demos once."""
+    """Run fast media generation directly without intermediate flow wrappers."""
     try:
-        print(await tts_speech_generator(SpeechInput()))  # noqa: T201
-        print(await imagen_image_generator(ImageInput()))  # noqa: T201
+        # --- 1. Text-to-Speech (TTS) Generation ---
+        speech_res = await ai.generate(
+            model='googleai/gemini-2.5-flash-preview-tts',
+            prompt='Welcome to Genkit media generation.',
+            config={'speech_config': {'voice_config': {'prebuilt_voice_config': {'voice_name': 'Kore'}}}},
+        )
+        print(f'Audio URL: {_first_media_url(speech_res)}')
+        # => Audio URL: data:audio/wav;base64,UklGR...
+
+        # --- 2. Image Generation (Imagen) ---
+        image_res = await ai.generate(
+            model='googleai/imagen-3.0-generate-002',
+            prompt='A watercolor postcard of San Francisco at sunrise',
+            config={'number_of_images': 1},
+        )
+        print(f'Image URL: {_first_media_url(image_res)}')
+        # => Image URL: data:image/png;base64,iVBOR...
+
+        # --- 3. Video Generation (Veo Background Operations) ---
+        # Note: Video generation takes several minutes; uncomment below to run and poll via ai.generate_operation:
+        # operation = await ai.generate_operation(
+        #     model='googleai/veo-3.1-generate-preview',
+        #     prompt='A paper airplane gliding through a classroom in slow motion',
+        # )
+        # operation = await _poll_video(operation)
+        # => operation.output['message']['content'][0]['media']['url'] = "https://..."
     except Exception as error:
-        print(f'Set GEMINI_API_KEY to a valid value before running this sample directly.\n{error}')  # noqa: T201
+        print(f'Set GEMINI_API_KEY to a valid value before running this sample directly.\n{error}')
 
 
 if __name__ == '__main__':

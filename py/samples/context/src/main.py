@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,103 +15,77 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Context - pass request data through `generate()`, flows, and tools."""
+"""Context - pass request data through `generate()`, flows, and tools. Requires GEMINI_API_KEY.
+
+Run directly:
+    uv run src/main.py
+Or inspect live execution and traces in Dev UI:
+    genkit start -- uv run src/main.py
+"""
+
+from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
 from genkit import ActionRunContext, Genkit
 from genkit.plugins.google_genai import GoogleAI
 
+# 1. Initialize Genkit and mock database
 ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
 
 USERS: dict[int, dict[str, str]] = {
     42: {'name': 'Arthur Dent', 'plan': 'premium'},
     123: {'name': 'Jane Doe', 'plan': 'enterprise'},
-    999: {'name': 'Guest User', 'plan': 'free'},
 }
 
 
 class ContextInput(BaseModel):
-    """Input for context flows."""
-
-    user_id: int = Field(default=42, description='Try 42, 123, or 999')
+    user_id: int = Field(default=42, description='Try 42 or 123')
 
 
-def _current_user() -> dict[str, str]:
-    """Read the current user record from execution context."""
-
-    context = Genkit.current_context() or {}
-    raw_user = context.get('user')
-    if not isinstance(raw_user, dict):
-        return {'name': 'Unknown', 'plan': 'none'}
-    user_id = int(raw_user.get('id', 0))  # type: ignore[arg-type]
-    return USERS.get(user_id, {'name': 'Unknown', 'plan': 'none'})
-
-
+# 2. Define tools that read request-scoped context via Genkit.current_context()
 @ai.tool()
 async def get_user_info() -> str:
-    """Read user info from `Genkit.current_context()`."""
-
-    user = _current_user()
+    """Read user info from `Genkit.current_context()` without passing parameters."""
+    ctx = Genkit.current_context() or {}
+    user_id = int(ctx.get('user_id', 0))  # type: ignore[arg-type]
+    user = USERS.get(user_id, {'name': 'Unknown', 'plan': 'none'})
     return f'{user["name"]} ({user["plan"]} plan)'
 
 
-@ai.tool()
-async def get_user_permissions() -> str:
-    """Read plan-based permissions from execution context."""
-
-    plan = _current_user()['plan']
-    permissions = {
-        'free': 'read-only access',
-        'premium': 'read-write access',
-        'enterprise': 'admin access',
-        'none': 'no access',
-    }
-    return permissions.get(plan, 'unknown access')
-
-
+# 3. Pass context into generate() — tools inspect and inherit it automatically across turns
 @ai.flow()
 async def context_in_generate(input: ContextInput) -> str:
     """Pass context into `ai.generate()` and let a tool read it."""
-
     response = await ai.generate(
-        prompt='Look up the current user.',
-        tools=['get_user_info'],
-        context={'user': {'id': input.user_id}},
+        prompt='Look up the current user and state their name and plan.',
+        tools=[get_user_info],
+        context={'user_id': input.user_id},
     )
+    # => The current user is Arthur Dent, who is currently on the premium plan.
     return response.text
 
 
 @ai.flow()
 async def context_in_flow(input: ContextInput, ctx: ActionRunContext) -> str:
     """Access request context directly inside a flow."""
-
+    # => Flow context: {'user_id': 42}. Requested user: 42.
     return f'Flow context: {ctx.context}. Requested user: {input.user_id}.'
 
 
-@ai.flow()
-async def context_propagation_chain(input: ContextInput) -> str:
-    """Show that nested `generate()` calls inherit context automatically."""
-
-    first_response = await ai.generate(
-        prompt='Look up the current user.',
-        tools=['get_user_info'],
-        context={'user': {'id': input.user_id}},
-    )
-    second_response = await ai.generate(
-        prompt=f'The user is {first_response.text}. What permissions do they have?',
-        tools=['get_user_permissions'],
-    )
-    return f'User: {first_response.text}\nPermissions: {second_response.text}'
-
-
 async def main() -> None:
-    """Run the context demos once."""
+    """Run the context demo from the CLI."""
     try:
-        print(await context_in_generate(ContextInput()))  # noqa: T201
-        print(await context_propagation_chain(ContextInput()))  # noqa: T201
+        # 1. Pass request context into `ai.generate(...)` (`context_in_generate`)
+        print(await context_in_generate(ContextInput(user_id=42)))
+        # => The current user is Arthur Dent, who is currently on the premium plan.
+
+        # 2. Invoke a flow (`.run(...)`) explicitly passing `context={'user_id': 42}` so `ctx.context` receives it
+        flow_res = await context_in_flow.run(ContextInput(user_id=42), context={'user_id': 42})
+        print(flow_res.response)
+        # => Flow context: {'user_id': 42}. Requested user: 42.
     except Exception as error:
-        print(f'Set GEMINI_API_KEY to a valid value before running this sample directly.\n{error}')  # noqa: T201
+        print(f'Set GEMINI_API_KEY to a valid value before running this sample directly.\n{error}')
 
 
 if __name__ == '__main__':

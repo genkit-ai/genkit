@@ -32,6 +32,11 @@ Re-running cleanly:
 
 * The agent mutates files in ``workspace/`` directly. To start over,
   ``rm -rf workspace/*`` — the directory itself is recreated on next run.
+
+Run directly:
+    uv run src/main.py
+Or inspect live execution and traces in Dev UI:
+    genkit start -- uv run src/main.py
 """
 
 from pathlib import Path

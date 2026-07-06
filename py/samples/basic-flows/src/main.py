@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright 2025 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,18 +15,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Flow fundamentals — the same exercises as ``js/testapps/flow-sample1``.
+"""Flow fundamentals — exact Python parity with `js/testapps/flow-sample1` edge cases.
 
-No model is used; these flows poke the framework itself: traced steps,
-streaming, context propagation, error handling (caught and uncaught), and a
-long-running flow you can stare at in Dev UI to confirm spans appear live.
+No model is used; these flows test and stress the framework itself: traced steps,
+streaming, context propagation, error handling (caught and uncaught), ~1MB payloads,
+and long-running multi-minute broadcasts.
 
-Run the default exercise once:
-
+Run directly:
     uv run src/main.py
-
-Or open the Dev UI and pick a flow:
-
+Or inspect live execution and traces in Dev UI:
     genkit start -- uv run src/main.py
 """
 
@@ -43,25 +41,21 @@ from genkit import ActionRunContext, Genkit
 ai = Genkit()
 
 
-# ---------------------------------------------------------------------------
-# Streaming chunk + structured input/output schemas
-# ---------------------------------------------------------------------------
-
-
+# --- 1. Schemas for Traced Steps, Streaming, and Long Broadcasts ---
 class StreamChunk(BaseModel):
-    """One unit emitted by ``streamy`` / ``streamy_throwy``."""
+    """One unit emitted by `streamy` / `streamyThrowy`."""
 
     count: int
 
 
 class WithInputSchemaInput(BaseModel):
-    """Input shape for ``with_input_schema`` — mirrors the JS object input."""
+    """Input shape for `withInputSchema` — mirrors the JS object input."""
 
     subject: str
 
 
 class WithContextInput(BaseModel):
-    """Input shape for ``with_context``."""
+    """Input shape for `withContext`."""
 
     subject: str
 
@@ -75,25 +69,21 @@ class TimelineEntry(BaseModel):
 
 
 class LongBroadcastInput(BaseModel):
-    """Knobs for ``test_long_broadcast``."""
+    """Knobs for `test-long-broadcast`."""
 
     steps: int = 10
     step_delay_ms: int = 15_000
 
 
 class LongBroadcastOutput(BaseModel):
-    """Result returned by ``test_long_broadcast``."""
+    """Result returned by `test-long-broadcast`."""
 
     total_duration_ms: int
     steps_completed: int
     timeline: list[TimelineEntry]
 
 
-# ---------------------------------------------------------------------------
-# Basic + multi-step flows
-# ---------------------------------------------------------------------------
-
-
+# --- 2. Basic & Nested Traced Steps (`ai.run`) ---
 @ai.flow(name='basic')
 async def basic(subject: str) -> str:
     """Two traced steps that just shuffle the input string around."""
@@ -106,21 +96,20 @@ async def basic(subject: str) -> str:
     async def call_llm1() -> str:
         return f'foo: {foo}'
 
+    # => Dev UI records two sequential child spans: `call-llm` and `call-llm1`
     return await ai.run(name='call-llm1', fn=call_llm1)
 
 
 @ai.flow(name='parent')
 async def parent() -> str:
-    """Calls ``basic`` and returns its output as a string.
-
-    Demonstrates flow-from-flow: the inner trace nests under the outer one.
-    """
+    """Calls `basic` and returns its output as a string. Demonstrates flow-from-flow span nesting."""
+    # => Dev UI records `basic` as a child span nested cleanly under `parent`
     return await basic('foo')
 
 
 @ai.flow(name='withInputSchema')
 async def with_input_schema(input: WithInputSchemaInput) -> str:
-    """Same as ``basic`` but the input is a typed object instead of a bare string."""
+    """Same as `basic` but the input is a typed object instead of a bare string."""
 
     async def call_llm() -> str:
         return f'subject: {input.subject}'
@@ -139,14 +128,10 @@ async def with_context(input: WithContextInput, ctx: ActionRunContext) -> str:
     return f'subject: {input.subject}, context: {ctx.context}'
 
 
-# ---------------------------------------------------------------------------
-# Streaming
-# ---------------------------------------------------------------------------
-
-
+# --- 3. Streaming & Partial Error Streams (`streamyThrowy`) ---
 @ai.flow(name='streamy', chunk_type=StreamChunk)
 async def streamy(count: int, ctx: ActionRunContext) -> str:
-    """Stream ``count`` chunks at one-second intervals, then return a summary."""
+    """Stream `count` chunks at one-second intervals, then return a summary."""
     i = 0
     while i < count:
         await asyncio.sleep(1)
@@ -157,10 +142,11 @@ async def streamy(count: int, ctx: ActionRunContext) -> str:
 
 @ai.flow(name='streamyThrowy', chunk_type=StreamChunk)
 async def streamy_throwy(count: int, ctx: ActionRunContext) -> str:
-    """Stream a few chunks, then raise mid-stream so you can see partial output + error."""
+    """Stream a few chunks, then raise mid-stream so you can see partial output + error in Dev UI."""
     i = 0
     while i < count:
         if i == 3:
+            # => Emits chunks 0, 1, 2, then throws mid-stream without hanging the stream pipe
             raise RuntimeError('whoops')
         await asyncio.sleep(1)
         ctx.send_chunk(StreamChunk(count=i))
@@ -168,20 +154,17 @@ async def streamy_throwy(count: int, ctx: ActionRunContext) -> str:
     return f'done: {count}, streamed: {i} times'
 
 
-# ---------------------------------------------------------------------------
-# Error handling — uncaught and caught
-# ---------------------------------------------------------------------------
-
-
+# --- 4. Uncaught and Caught Error Tracing (`throwy*`) ---
 @ai.flow(name='throwy')
 async def throwy(subject: str) -> str:
-    """Run a step, then raise. The traced step still shows up in Dev UI."""
+    """Run a step, then raise. Tests that completed step spans are preserved when the flow crashes."""
 
     async def call_llm() -> str:
         return f'subject: {subject}'
 
     await ai.run(name='call-llm', fn=call_llm)
     if subject:
+        # => Dev UI shows completed `call-llm` span right before `throwy` flow crashes
         raise RuntimeError(subject)
 
     async def call_llm_again() -> str:
@@ -192,10 +175,11 @@ async def throwy(subject: str) -> str:
 
 @ai.flow(name='throwy2')
 async def throwy2(subject: str) -> str:
-    """Raise from inside a traced step — the span shows the error, not the flow body."""
+    """Raise from inside a traced step. Tests that the child span status captures the step error."""
 
     async def call_llm() -> str:
         if subject:
+            # => Dev UI marks the `call-llm` child span itself with status=ERROR
             raise RuntimeError(subject)
         return f'subject: {subject}'
 
@@ -209,7 +193,7 @@ async def throwy2(subject: str) -> str:
 
 @ai.flow(name='flowMultiStepCaughtError')
 async def flow_multi_step_caught_error(input: str) -> str:
-    """Catch an error from the middle step so the flow still completes."""
+    """Catch an error from the middle step so the overall flow completes despite inner step failure."""
     counter = {'i': 1}
 
     async def step1() -> str:
@@ -235,17 +219,14 @@ async def flow_multi_step_caught_error(input: str) -> str:
     async def step3() -> str:
         return f'{result2} {counter["i"]}'
 
+    # => Dev UI timeline: step1 (PASS) -> step2 (FAIL) -> step3 (PASS) -> overall flow (PASS)
     return await ai.run(name='step3', fn=step3)
 
 
-# ---------------------------------------------------------------------------
-# Multi-step + large payloads
-# ---------------------------------------------------------------------------
-
-
+# --- 5. Stress Testing: Multi-Step & Large Payloads (`multiSteps`, `largeSteps`) ---
 @ai.flow(name='multiSteps')
 async def multi_steps(input: str) -> int:
-    """Several traced steps with intermediate string transforms; returns a fixed int."""
+    """Several traced steps with intermediate string and list transforms; returns a fixed int."""
 
     async def step1() -> str:
         return f'Hello, {input}! step 1'
@@ -278,7 +259,7 @@ _LOREM = ('lorem', 'ipsum', 'dolor', 'sit', 'amet', 'consectetur', 'adipiscing',
 
 
 def _generate_string(length: int) -> str:
-    """Build a roughly ``length`` byte string of repeating lorem-ipsum tokens."""
+    """Build a roughly `length` byte string of repeating lorem-ipsum tokens."""
     parts: list[str] = []
     total = 0
     while total < length:
@@ -291,7 +272,7 @@ def _generate_string(length: int) -> str:
 
 @ai.flow(name='largeSteps')
 async def large_steps() -> str:
-    """Steps that produce ~1MB string outputs — useful for stressing the trace pipe."""
+    """Steps that produce ~1MB string outputs — useful for stressing the trace pipe and chunk accumulator."""
 
     async def large_step1() -> str:
         return _generate_string(100_000)
@@ -309,25 +290,19 @@ async def large_steps() -> str:
     await ai.run(name='large-step2', fn=large_step2)
     await ai.run(name='large-step3', fn=large_step3)
     await ai.run(name='large-step4', fn=large_step4)
+    # => Confirms ~2.8MB total trace data streams across the reflection server without dropping
     return 'something...'
 
 
-# ---------------------------------------------------------------------------
-# Long-running broadcast
-# ---------------------------------------------------------------------------
-
-
+# --- 6. Stress Testing: Long-Running Broadcast (`test-long-broadcast`) ---
 @ai.flow(name='test-long-broadcast')
 async def test_long_broadcast(input: LongBroadcastInput | None = None) -> LongBroadcastOutput:
-    """Multi-minute flow with nested spans for stress-testing trace broadcast.
-
-    Defaults: 10 steps × 15s ≈ 2.5 minutes. Tune via ``steps`` / ``step_delay_ms``.
-    """
+    """Multi-minute flow with nested spans for stress-testing trace broadcast."""
     cfg = input or LongBroadcastInput()
     start = time.monotonic()
     timeline: list[TimelineEntry] = []
 
-    print(  # noqa: T201
+    print(
         f'Starting long broadcast test: {cfg.steps} steps x {cfg.step_delay_ms / 1000}s'
         f' = ~{(cfg.steps * cfg.step_delay_ms) / 60_000:.1f} minutes'
     )
@@ -338,7 +313,7 @@ async def test_long_broadcast(input: LongBroadcastInput | None = None) -> LongBr
         step_start = time.monotonic()
 
         async def _do_step(step_idx: int = i) -> str:
-            print(f'Step {step_idx}/{cfg.steps} starting...')  # noqa: T201
+            print(f'Step {step_idx}/{cfg.steps} starting...')
 
             async def fetch() -> str:
                 await asyncio.sleep(third)
@@ -376,20 +351,12 @@ async def test_long_broadcast(input: LongBroadcastInput | None = None) -> LongBr
     )
 
 
-# ---------------------------------------------------------------------------
-# Default-run entrypoint
-# ---------------------------------------------------------------------------
-
-
+# --- 7. Smoke Test Entrypoint ---
 async def main() -> None:
-    """Run a few of the flows once so ``uv run src/main.py`` is a useful smoke test.
-
-    Skips ``streamy``/``test-long-broadcast`` (slow) and the ``throwy*`` flows
-    (would crash the script). Pick those from Dev UI when you want them.
-    """
+    """Run core flows once from the CLI (skips slow broadcast and throwy crash tests)."""
 
     async def _show(label: str, value: Any) -> None:
-        print(f'\n[{label}]\n  {value}')  # noqa: T201
+        print(f'\n[{label}]\n  {value}')
 
     await _show('basic', await basic('hello'))
     await _show('parent', await parent())
