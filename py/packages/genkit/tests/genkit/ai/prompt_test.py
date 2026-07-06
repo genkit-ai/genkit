@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 
 from genkit import Genkit, Message, MiddlewareRef, ModelResponse
 from genkit._ai._model import ModelRequest, text_from_message
-from genkit._ai._prompt import _parse_dotprompt_use, define_prompt, load_prompt_folder, lookup_prompt, prompt
+from genkit._ai._prompt import _parse_dotprompt_use, load_prompt_folder, lookup_prompt, prompt
 from genkit._ai._testing import (
     EchoModel,
     ProgrammableModel,
@@ -1007,8 +1007,7 @@ async def test_define_prompt_primitive_with_output_instructions() -> None:
         msg = resp.request.messages[0]
         return [p for p in msg.content if (p.root.metadata or {}).get('purpose') == 'output']
 
-    p_true = define_prompt(
-        ai.registry,
+    p_true = ai.define_prompt(
         name='p_true',
         model='echoModel',
         prompt='hi',
@@ -1025,8 +1024,7 @@ async def test_define_prompt_primitive_with_output_instructions() -> None:
     assert len(injected_true) == 1
     assert 'Output should be in JSON format and conform to the following schema' in (injected_true[0].root.text or '')
 
-    p_custom = define_prompt(
-        ai.registry,
+    p_custom = ai.define_prompt(
         name='p_custom',
         model='echoModel',
         prompt='hi',

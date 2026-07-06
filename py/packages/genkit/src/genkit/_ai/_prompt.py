@@ -1009,61 +1009,6 @@ def registry_lookup_key(name: str, variant: str | None = None, ns: str | None = 
     return f'/prompt/{registry_definition_key(name, variant, ns)}'
 
 
-def define_prompt(
-    registry: Registry,
-    name: str | None = None,
-    *,
-    variant: str | None = None,
-    model: str | None = None,
-    config: dict[str, Any] | ModelConfig | None = None,
-    description: str | None = None,
-    system: str | list[Part] | None = None,
-    prompt: str | list[Part] | None = None,
-    messages: str | list[Message] | None = None,
-    output_format: str | None = None,
-    output_content_type: str | None = None,
-    output_instructions: bool | str | None = None,
-    output_constrained: bool | None = None,
-    max_turns: int | None = None,
-    return_tool_requests: bool | None = None,
-    metadata: dict[str, Any] | None = None,
-    tools: Sequence[str | Tool] | None = None,
-    tool_choice: ToolChoice | None = None,
-    use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
-    docs: list[Document] | None = None,
-    input_schema: type | dict[str, Any] | str | None = None,
-    output_schema: type | dict[str, Any] | str | None = None,
-) -> ExecutablePrompt[Any, Any]:
-    """Register a prompt template in the registry."""
-    executable_prompt = ExecutablePrompt(
-        registry,
-        variant=variant,
-        model=model,
-        config=config,
-        description=description,
-        input_schema=input_schema,
-        system=system,
-        prompt=prompt,
-        messages=messages,
-        output_format=output_format,
-        output_content_type=output_content_type,
-        output_instructions=output_instructions,
-        output_schema=output_schema,
-        output_constrained=output_constrained,
-        max_turns=max_turns,
-        return_tool_requests=return_tool_requests,
-        metadata=metadata,
-        tools=tools,
-        tool_choice=tool_choice,
-        use=use,
-        docs=docs,
-        name=name,
-    )
-    if name:
-        register_prompt_actions(registry, executable_prompt, name, variant)
-    return executable_prompt
-
-
 def define_partial(registry: Registry, name: str, source: str) -> None:
     """Define a partial template in the registry.
 
