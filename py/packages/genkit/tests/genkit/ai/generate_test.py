@@ -1211,6 +1211,53 @@ async def test_generate_context_reaches_tool_run() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_resume_context_reaches_tool_run() -> None:
+    """``generate(resume=..., context=...)`` pipes ``context`` to ``ToolRunContext.context``."""
+    seen: list[dict[str, object]] = []
+
+    ai = Genkit()
+
+    @ai.tool(name='ctx_res_tool')
+    async def ctx_res_tool(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        seen.append(dict(ctx.context))
+        return 'resumed_value'
+
+    intr_trp = ToolRequestPart(
+        tool_request=ToolRequest(name='ctx_res_tool', ref='ref-abc', input={}),
+        metadata={'interrupt': True},
+    )
+    restart_trp = ToolRequestPart(
+        tool_request=ToolRequest(name='ctx_res_tool', ref='ref-abc', input={'approved': True}),
+        metadata={'resumed': True},
+    )
+
+    pm, _ = define_programmable_model(ai)
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='all done'))]),
+        )
+    )
+
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[
+                Message(role=Role.USER, content=[Part(TextPart(text='hi'))]),
+                Message(role=Role.MODEL, content=[Part(root=intr_trp)]),
+            ],
+            tools=['ctx_res_tool'],
+            resume=Resume(restart=[restart_trp]),
+        ),
+        context={'session_token': 's-999'},
+    )
+
+    assert response.text == 'all done'
+    assert seen == [{'session_token': 's-999'}]
+
+
+@pytest.mark.asyncio
 async def test_wrap_tool_middleware_custom_context_reaches_tool_run() -> None:
     """Mutations to ``ctx.custom_context`` in ``wrap_tool`` are visible in ``ToolRunContext``."""
     seen: list[dict[str, object]] = []

@@ -17,6 +17,7 @@ from genkit._ai._tools import (
     run_tool_request,
 )
 from genkit._core._error import GenkitError
+from genkit._core._middleware import GenerateMiddlewareContext
 from genkit._core._typing import ToolRequest, ToolRequestPart, ToolResponsePart
 
 
@@ -316,3 +317,27 @@ async def test_run_tool_request_kwargs_only() -> None:
 
     res = await run_tool_request(tool=action, tool_request_part=trp)
     assert res == 'ok'
+
+
+@pytest.mark.asyncio
+async def test_run_tool_after_restart_pipes_generate_context() -> None:
+    """``run_tool_after_restart(..., ctx=ctx)`` pipes custom_context into ``ToolRunContext.context``."""
+    ai = Genkit()
+    seen: list[dict[str, object]] = []
+
+    @ai.tool(name='ctx_restart_tool')
+    async def ctx_restart_tool(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        seen.append(dict(ctx.context))
+        return 'resumed_ok'
+
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='ctx_restart_tool')
+    assert action is not None
+
+    restart_trp = ToolRequestPart(
+        tool_request=ToolRequest(name='ctx_restart_tool', ref='r1', input={}),
+        metadata={'resumed': True},
+    )
+    mw_ctx = GenerateMiddlewareContext(ai.registry, custom_context={'auth_role': 'admin'})
+    await run_tool_after_restart(action, restart_trp, ctx=mw_ctx)
+
+    assert seen == [{'auth_role': 'admin'}]
