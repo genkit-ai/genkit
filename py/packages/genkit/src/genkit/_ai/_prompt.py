@@ -1215,6 +1215,8 @@ def _transform_prompt_metadata(
         'output': {
             'jsonSchema': output.get('schema') if isinstance(output, dict) else None,
             'format': output.get('format') if isinstance(output, dict) else None,
+            # Fall back to raw YAML (raw_output) because dotpromptz's PromptOutputConfig
+            # does not define 'instructions', causing it to be dropped from 'output'.
             'instructions': (
                 output.get('instructions')
                 if isinstance(output, dict) and 'instructions' in output
