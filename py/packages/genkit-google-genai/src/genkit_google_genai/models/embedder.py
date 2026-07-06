@@ -191,12 +191,21 @@ class Embedder:
     async def _generate_multimodal(self, request: EmbedRequest) -> EmbedResponse:
         """Embed text/image/video via the Vertex multimodal ``:predict`` endpoint.
 
+        ``multimodalembedding@001`` accepts only one instance per ``:predict``
+        call, so multi-document requests (e.g. ``embed_many``) are rejected
+        rather than sent as an invalid multi-instance payload. Batching multiple
+        documents is not supported yet.
+
         Args:
             request: Genkit embed request.
 
         Returns:
             EmbedResponse
         """
+        if len(request.input) > 1:
+            raise ValueError(
+                'multimodalembedding@001 supports only one document per request; embed documents one at a time.'
+            )
         instances = [self._build_multimodal_instance(doc) for doc in request.input]
 
         payload: dict[str, Any] = {'instances': instances}

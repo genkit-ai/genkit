@@ -143,19 +143,9 @@ def test_get_embedder_options_multimodalembedding_versioned_and_bare(model_name:
 
 @pytest.mark.asyncio
 async def test_multimodal_embedding_uses_predict(mocker: MockerFixture) -> None:
-    """Multimodal embedders hit the :predict endpoint and map image/video results."""
-    request = EmbedRequest(
-        input=[
-            Document.from_media('gs://bucket/cat.png', 'image/png'),
-            Document.from_media('gs://bucket/clip.mp4', 'video/mp4'),
-        ]
-    )
-    predict_body = {
-        'predictions': [
-            {'imageEmbedding': [0.1, 0.2, 0.3]},
-            {'videoEmbeddings': [{'startOffsetSec': 0, 'endOffsetSec': 5, 'embedding': [0.4, 0.5]}]},
-        ]
-    }
+    """A multimodal embed routes through :predict, not the text embed_content path."""
+    request = EmbedRequest(input=[Document.from_media('gs://bucket/cat.png', 'image/png')])
+    predict_body = {'predictions': [{'imageEmbedding': [0.1, 0.2, 0.3]}]}
     client_mock = mocker.AsyncMock()
     http_response = mocker.Mock()
     http_response.body = json.dumps(predict_body)
@@ -171,17 +161,12 @@ async def test_multimodal_embedding_uses_predict(mocker: MockerFixture) -> None:
     assert call.kwargs['http_method'] == 'post'
     assert call.kwargs['path'] == 'publishers/google/models/multimodalembedding:predict'
     instances = call.kwargs['request_dict']['instances']
-    assert instances[0] == {'image': {'gcsUri': 'gs://bucket/cat.png', 'mimeType': 'image/png'}}
-    assert instances[1] == {'video': {'gcsUri': 'gs://bucket/clip.mp4'}}
+    assert instances == [{'image': {'gcsUri': 'gs://bucket/cat.png', 'mimeType': 'image/png'}}]
 
     assert isinstance(response, EmbedResponse)
-    assert len(response.embeddings) == 2
+    assert len(response.embeddings) == 1
     assert response.embeddings[0].embedding == [0.1, 0.2, 0.3]
     assert response.embeddings[0].metadata == {'embedType': 'imageEmbedding'}
-    assert response.embeddings[1].embedding == [0.4, 0.5]
-    assert response.embeddings[1].metadata is not None
-    assert response.embeddings[1].metadata['embedType'] == 'videoEmbedding'
-    assert response.embeddings[1].metadata['startOffsetSec'] == 0
 
 
 @pytest.mark.asyncio
@@ -251,6 +236,8 @@ async def test_multimodal_embedding_allows_image_and_video_in_one_instance(mocke
     assert response.embeddings[0].metadata == {'embedType': 'imageEmbedding'}
     assert response.embeddings[1].metadata is not None
     assert response.embeddings[1].metadata['embedType'] == 'videoEmbedding'
+    # Video chunk offsets are preserved in the embedding metadata.
+    assert response.embeddings[1].metadata['startOffsetSec'] == 0
 
 
 @pytest.mark.asyncio
@@ -300,5 +287,25 @@ async def test_multimodal_embedding_rejects_http_url(mocker: MockerFixture) -> N
     client_mock = mocker.AsyncMock()
     embedder = Embedder('multimodalembedding', client_mock)
     with pytest.raises(ValueError, match='http'):
+        await embedder.generate(request)
+    client_mock._api_client.async_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_rejects_multiple_documents(mocker: MockerFixture) -> None:
+    """multimodalembedding@001 accepts one instance per request, so >1 document is rejected.
+
+    Batching (e.g. embed_many) would otherwise send a multi-instance payload that
+    Vertex rejects with an opaque error; fail fast until batching is implemented.
+    """
+    request = EmbedRequest(
+        input=[
+            Document.from_media('gs://bucket/a.png', 'image/png'),
+            Document.from_media('gs://bucket/b.png', 'image/png'),
+        ]
+    )
+    client_mock = mocker.AsyncMock()
+    embedder = Embedder('multimodalembedding', client_mock)
+    with pytest.raises(ValueError, match='one document per request'):
         await embedder.generate(request)
     client_mock._api_client.async_request.assert_not_called()
