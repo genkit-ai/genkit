@@ -15,10 +15,10 @@ from pydantic import BaseModel, Field
 from genkit import (
     Document,
     Genkit,
-    ModelConfigDict,
     Interrupt,
     Message,
     MiddlewareRef,
+    ModelConfigDict,
     ModelResponse,
     ModelResponseChunk,
     respond_to_interrupt,

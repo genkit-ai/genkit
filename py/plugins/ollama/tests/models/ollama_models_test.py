@@ -1050,7 +1050,7 @@ class TestReasoningStreaming(unittest.IsolatedAsyncioTestCase):
 
         request = ModelRequest(
             messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
-            config=OllamaConfig(think=True),
+            config={'think': True},
         )
         with patch.object(model, 'build_chat_messages', new_callable=AsyncMock, return_value=[]):
             await model._chat_with_ollama(request=request, ctx=ctx)
@@ -1162,7 +1162,7 @@ class TestReasoningGenerateStreaming(unittest.IsolatedAsyncioTestCase):
 
         request = ModelRequest(
             messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
-            config=OllamaConfig(think=True),
+            config={'think': True},
         )
         with patch.object(model, 'build_prompt', return_value='hi'):
             await model._generate_ollama_response(request=request, ctx=ctx)

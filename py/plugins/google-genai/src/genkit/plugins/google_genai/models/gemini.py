@@ -1915,11 +1915,8 @@ class GeminiModel:
 
             if has_output:
                 model_name = str(self._version)
-                if request.config:
-                    if isinstance(request.config, Mapping):
-                        version = request.config.get('version')
-                    else:
-                        version = getattr(request.config, 'version', None)
+                if dumped_config:
+                    version = dumped_config.get('version')
                     if version:
                         model_name = str(version)
 
@@ -1959,16 +1956,18 @@ class GeminiModel:
 
     def _normalize_config_to_dict(
         self,
-        config: Mapping[str, Any] | None,
+        config: Mapping[str, Any] | BaseModel | None,
     ) -> dict[str, Any] | None:
         """Return the config as a canonical snake_case dict for the rest of the pipeline.
 
-        Callers hand us a raw dictionary in either snake_case or camelCase.
+        Callers hand us a raw dictionary in either snake_case or camelCase, or a BaseModel.
         Validating through the schema matching this model instance folds aliased
         keys onto their canonical fields before tool extraction runs.
 
         Returns ``None`` if the config has no meaningful values.
         """
+        if isinstance(config, BaseModel):
+            config = config.model_dump(exclude_none=True)
         if not isinstance(config, Mapping):
             return None
 
