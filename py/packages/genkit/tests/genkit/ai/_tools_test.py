@@ -81,7 +81,7 @@ async def test_run_tool_after_restart_resumed_true_maps_to_empty_dict_in_context
         tool_request=ToolRequest(name='t2', ref='x', input={'q': 1}),
         metadata={'resumed': True},
     )
-    await run_tool_after_restart(action, restart_trp)
+    await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert len(captured) == 1
     assert captured[0][0] == {}
     assert captured[0][1] is None
@@ -105,7 +105,7 @@ async def test_run_tool_after_restart_resumed_dict() -> None:
         tool_request=ToolRequest(name='t2', ref='x', input={}),
         metadata={'resumed': {'by': 'x'}},
     )
-    await run_tool_after_restart(action, restart_trp)
+    await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert captured == [{'by': 'x'}]
 
 
@@ -127,7 +127,7 @@ async def test_run_tool_after_restart_replaced_input() -> None:
         tool_request=ToolRequest(name='t2', ref='x', input={'new': True}),
         metadata={'resumed': True, 'replacedInput': {'old': True}},
     )
-    await run_tool_after_restart(action, restart_trp)
+    await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert len(captured) == 1
     assert captured[0][0] == {'new': True}
     assert captured[0][1] == {'old': True}
@@ -149,7 +149,7 @@ async def test_run_tool_after_restart_resets_contextvars() -> None:
         tool_request=ToolRequest(name='t2', ref='x', input={}),
         metadata={'resumed': True},
     )
-    await run_tool_after_restart(action, restart_trp)
+    await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert _tool_resumed_metadata.get() is None
     assert _tool_original_input.get() is None
 
@@ -171,7 +171,7 @@ async def test_run_tool_after_restart_nested_interrupt_raises() -> None:
         metadata={'resumed': True},
     )
     with pytest.raises(GenkitError) as ei:
-        await run_tool_after_restart(action, restart_trp)
+        await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert ei.value.status == 'FAILED_PRECONDITION'
     assert 'interrupted again' in ei.value.original_message.lower()
 
@@ -256,7 +256,7 @@ async def test_run_tool_after_restart_response_preserves_ref() -> None:
         tool_request=ToolRequest(name='t_ref', ref='wire-ref-99', input={}),
         metadata={'resumed': True},
     )
-    part = await run_tool_after_restart(action, restart_trp)
+    part = await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert part.tool_response.ref == 'wire-ref-99'
 
 
@@ -287,7 +287,7 @@ async def test_run_tool_after_restart_response_preserves_ref_and_uses_new_input(
         tool_request=ToolRequest(name='transfer', ref='ref-42', input={'amount': 100, 'confirmed': True}),
         metadata={'resumed': True, 'replacedInput': prior},
     )
-    result = await run_tool_after_restart(action, restart_trp)
+    result = await run_tool_after_restart(tool=action, restart_trp=restart_trp)
 
     # Ref is preserved from the restart TRP.
     assert result.tool_response.ref == 'ref-42'
@@ -338,6 +338,30 @@ async def test_run_tool_after_restart_pipes_generate_context() -> None:
         metadata={'resumed': True},
     )
     mw_ctx = GenerateMiddlewareContext(ai.registry, custom_context={'auth_role': 'admin'})
-    await run_tool_after_restart(action, restart_trp, ctx=mw_ctx)
+    await run_tool_after_restart(tool=action, restart_trp=restart_trp, ctx=mw_ctx)
 
     assert seen == [{'auth_role': 'admin'}]
+
+
+@pytest.mark.asyncio
+async def test_run_tool_after_restart_kwargs_only() -> None:
+    """``run_tool_after_restart`` strictly requires keyword-only arguments for ``tool`` and ``restart_trp``."""
+    ai = Genkit()
+
+    @ai.tool(name='kw_restart_tool')
+    async def kw_restart_tool(inp: dict) -> str:  # noqa: ARG001
+        return 'ok'
+
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='kw_restart_tool')
+    assert action is not None
+
+    trp = ToolRequestPart(
+        tool_request=ToolRequest(name='kw_restart_tool', ref='r1', input={}),
+        metadata={'resumed': True},
+    )
+
+    with pytest.raises(TypeError):
+        await run_tool_after_restart(action, trp)  # type: ignore[misc]
+
+    res = await run_tool_after_restart(tool=action, restart_trp=trp)
+    assert res.tool_response.output == 'ok'

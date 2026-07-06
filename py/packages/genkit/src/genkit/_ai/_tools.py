@@ -268,9 +268,9 @@ async def run_tool_request(
 
 
 async def run_tool_after_restart(
+    *,
     tool: Action[Any, Any, Any],
     restart_trp: ToolRequestPart,
-    *,
     ctx: GenerateMiddlewareContext | None = None,
 ) -> ToolResponsePart:
     """Run a tool for ``resume_restart``: applies ``resumed`` / ``replacedInput`` from metadata.

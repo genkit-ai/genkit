@@ -1433,8 +1433,8 @@ async def _run_restart_through_middleware(
     mw_list = mw_pipeline.middleware if mw_pipeline else []
     if not mw_list or mw_pipeline is None:
         return await run_tool_after_restart(
-            tool,
-            restart_trp,
+            tool=tool,
+            restart_trp=restart_trp,
             ctx=mw_pipeline.ctx if mw_pipeline is not None else None,
         )
 
@@ -1444,7 +1444,7 @@ async def _run_restart_through_middleware(
     )
 
     async def next_fn(p: ToolHookParams, c: GenerateMiddlewareContext) -> MultipartToolResponse:
-        executed = await run_tool_after_restart(p.tool, restart_trp, ctx=c)
+        executed = await run_tool_after_restart(tool=p.tool, restart_trp=restart_trp, ctx=c)
         return MultipartToolResponse(
             output=executed.tool_response.output,
             content=[Part.model_validate(c) for c in (executed.tool_response.content or [])],
