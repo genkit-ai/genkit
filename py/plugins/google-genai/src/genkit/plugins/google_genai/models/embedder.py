@@ -75,6 +75,13 @@ EMBEDDER_DIMENSIONS: dict[str, int] = {
     'multimodalembedding@001': 768,
 }
 
+# Curated set of Vertex AI embedders that are verified to be callable.
+VERTEX_KNOWN_EMBEDDERS: tuple[str, ...] = (
+    'text-embedding-005',
+    'text-multilingual-embedding-002',
+    'gemini-embedding-001',
+)
+
 
 class Embedder:
     """Embedder for Google-Genai."""

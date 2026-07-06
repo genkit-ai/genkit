@@ -41,6 +41,7 @@ from genkit import (
 from genkit.plugin_api import GENKIT_CLIENT_HEADER
 from genkit.plugins.google_genai import GoogleAI, VertexAI
 from genkit.plugins.google_genai.google import _inject_attribution_headers, googleai_name, vertexai_name
+from genkit.plugins.google_genai.models.embedder import VERTEX_KNOWN_EMBEDDERS
 from genkit.plugins.google_genai.models.gemini import (
     DEFAULT_SUPPORTS_MODEL,
     SUPPORTED_MODELS,
@@ -824,6 +825,7 @@ async def test_vertexai_list_actions_without_supported_actions(vertexai_plugin_i
     mock_client.models.list.return_value = [
         mock_model('publishers/google/models/gemini-2.5-pro'),
         mock_model('publishers/google/models/gemini-embedding-001'),
+        mock_model('publishers/google/models/gemini-embedding-2'),
         mock_model('publishers/google/models/imagen-3.0-generate-002'),
         mock_model('publishers/google/models/veo-2.0-generate-001'),
     ]
@@ -841,6 +843,8 @@ async def test_vertexai_list_actions_without_supported_actions(vertexai_plugin_i
     # gemini-embedding-001 is registered as an embedder, not a gemini model.
     embedder = next(a for a in result if a.name == vertexai_name('gemini-embedding-001'))
     assert embedder.action_type == ActionKind.EMBEDDER
+    # Non-callable embedders over-listed by the catalog must not leak into Gemini text models.
+    assert vertexai_name('gemini-embedding-2') not in names
 
 
 @pytest.mark.asyncio
@@ -925,50 +929,17 @@ async def test_vertexai_list_known_models(vertexai_plugin_instance: VertexAI) ->
 
 @pytest.mark.asyncio
 async def test_vertexai_list_known_embedders(vertexai_plugin_instance: VertexAI) -> None:
-    """Unit test for list known embedders."""
+    """Vertex embedders come from a curated list, not catalog discovery.
 
-    @dataclass
-    class MockModel:
-        name: str
-        description: str = ''
-
-    [
-        MockModel(name='publishers/google/models/gemini-1.5-flash'),
-        MockModel(name='publishers/google/models/gemini-embedding-001'),
-        MockModel(name='publishers/google/models/imagen-3.0-generate-001'),
-        MockModel(name='publishers/google/models/veo-2.0-generate-001'),
-    ]
-
-    mock_client = MagicMock()
-    # Create sophisticated mocks that have supported_actions
-    m1 = MagicMock()
-    m1.name = 'publishers/google/models/gemini-1.5-flash'
-    m1.supported_actions = ['generateContent']
-    m1.description = 'Gemini model'
-
-    m2 = MagicMock()
-    m2.name = 'publishers/google/models/gemini-embedding-001'
-    m2.supported_actions = ['embedContent']
-    m2.description = 'Embedder'
-
-    m3 = MagicMock()
-    m3.name = 'publishers/google/models/imagen-3.0-generate-001'
-    m3.supported_actions = ['predict']
-    m3.description = 'Imagen'
-
-    m4 = MagicMock()
-    m4.name = 'publishers/google/models/veo-2.0-generate-001'
-    m4.supported_actions = ['generateVideos']
-    m4.description = 'Veo'
-
-    mock_client.models.list.return_value = [m1, m2, m3, m4]
-    vertexai_plugin_instance._runtime_client = lambda: mock_client
-
+    The Vertex catalog over-lists embedders that are published but not callable
+    (e.g. gemini-embedding-2), so the plugin advertises only VERTEX_KNOWN_EMBEDDERS.
+    """
     result = vertexai_plugin_instance._list_known_embedders()
 
-    # Verify Embedder
-    action2 = next(a for a in result if a.name == vertexai_name('gemini-embedding-001'))
-    assert action2 is not None
+    listed = {a.name for a in result}
+    assert listed == {vertexai_name(name) for name in VERTEX_KNOWN_EMBEDDERS}
+    assert vertexai_name('gemini-embedding-001') in listed
+    assert vertexai_name('gemini-embedding-2') not in listed
 
 
 @pytest.mark.asyncio

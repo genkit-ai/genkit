@@ -121,7 +121,11 @@ from genkit.plugins.google_genai.evaluators import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
 )
-from genkit.plugins.google_genai.models.embedder import EMBEDDER_DIMENSIONS, Embedder
+from genkit.plugins.google_genai.models.embedder import (
+    EMBEDDER_DIMENSIONS,
+    VERTEX_KNOWN_EMBEDDERS,
+    Embedder,
+)
 from genkit.plugins.google_genai.models.gemini import (
     SUPPORTED_MODELS,
     GeminiConfigSchema,
@@ -187,10 +191,12 @@ def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
     - Vertex AI returns ``supported_actions = None`` for every publisher model,
       so categorizing by action would skip them all. The Vertex path instead
       categorizes by model name (mirroring the JS plugin's ``listActions``):
-        - 'embedding' in name → embedders
         - 'imagen' in name → imagen
         - 'veo' in name → veo
         - 'gemini'/'gemma' in name (and not an embedding) → gemini
+      Embedders are intentionally NOT discovered here. The Vertex catalog
+      over-lists embedders that are published but not callable, so they
+      are advertised from a curated list (``VERTEX_KNOWN_EMBEDDERS``) instead.
 
     Args:
         client: The Google GenAI client instance.
@@ -223,12 +229,14 @@ def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
             continue
 
         # Vertex AI returns supported_actions=None for every publisher model, so
-        # categorize by name
+        # categorize by name. Embedders are deliberately excluded: the catalog
+        # over-lists embedders that are not callable, so they are advertised from a curated list
+        # (VERTEX_KNOWN_EMBEDDERS) rather than discovered here.
         if is_vertex:
             lower_name = name.lower()
             if 'embedding' in lower_name:
-                models.embedders.append(name)
-            elif 'imagen' in lower_name:
+                continue
+            if 'imagen' in lower_name:
                 models.imagen.append(name)
             elif 'veo' in lower_name:
                 models.veo.append(name)
@@ -817,7 +825,7 @@ class VertexAI(Plugin):
         for name in genai_models.veo:
             actions.append(self._resolve_model(vertexai_name(name)))
 
-        for name in genai_models.embedders:
+        for name in VERTEX_KNOWN_EMBEDDERS:
             actions.append(self._resolve_embedder(vertexai_name(name)))
 
         # Register Vertex AI evaluators
@@ -854,10 +862,14 @@ class VertexAI(Plugin):
         return actions
 
     def _list_known_embedders(self) -> list[Action]:
-        """List known embedders as Action objects."""
-        genai_models = _list_genai_models(self._runtime_client(), is_vertex=True)
+        """List known embedders as Action objects.
+
+        Vertex embedders are advertised from a curated list rather than
+        discovered from the catalog, which over-lists embedders that are not
+        callable. See VERTEX_KNOWN_EMBEDDERS.
+        """
         actions = []
-        for name in genai_models.embedders:
+        for name in VERTEX_KNOWN_EMBEDDERS:
             actions.append(self._resolve_embedder(vertexai_name(name)))
         return actions
 
@@ -1021,15 +1033,14 @@ class VertexAI(Plugin):
                 )
             )
 
-        for name in genai_models.embedders:
-            dims = EMBEDDER_DIMENSIONS.get(name)
+        for name in VERTEX_KNOWN_EMBEDDERS:
             actions_list.append(
                 embedder_action_metadata(
                     name=vertexai_name(name),
                     options=EmbedderOptions(
                         label=f'{PLUGIN_DISPLAY_NAME[VERTEXAI_PLUGIN_NAME]} - {name}',
                         supports=EmbedderSupports(input=['text']),
-                        dimensions=dims,
+                        dimensions=EMBEDDER_DIMENSIONS.get(name),
                     ),
                 )
             )
