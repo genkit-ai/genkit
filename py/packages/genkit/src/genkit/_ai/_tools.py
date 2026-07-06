@@ -281,8 +281,10 @@ async def run_tool_after_restart(
     try:
         tool_response = await run_tool_request(tool=tool, tool_request_part=restart_trp, ctx=ctx)
     except (GenkitError, Interrupt) as e:
-        intr = e.cause if isinstance(e, GenkitError) and isinstance(e.cause, Interrupt) else (
-            e if isinstance(e, Interrupt) else None
+        intr = (
+            e.cause
+            if isinstance(e, GenkitError) and isinstance(e.cause, Interrupt)
+            else (e if isinstance(e, Interrupt) else None)
         )
         if intr is not None:
             raise GenkitError(
