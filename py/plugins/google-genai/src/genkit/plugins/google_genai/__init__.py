@@ -133,7 +133,7 @@ Supported Models:
     ┌─────────────────────────────────────────────────────────────────────────┐
     │ Plugin     │ Models                                                     │
     ├────────────┼─────────────────────────────────────────────────────────────┤
-    │ GoogleAI   │ gemini-2.0-flash, gemini-2.5-flash, gemini-2.5-pro, etc.  │
+    │ GoogleAI   │ gemini-flash-latest, gemini-pro-latest, etc.              │
     │ VertexAI   │ Same Gemini models + imagen-4.0-generate-001               │
     └────────────┴─────────────────────────────────────────────────────────────┘
 
@@ -157,7 +157,7 @@ Example:
     from genkit.plugins.google_genai import GoogleAI
 
     # Uses GEMINI_API_KEY env var or pass api_key explicitly
-    ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-2.0-flash')
+    ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
 
     response = await ai.generate(prompt='Hello, world!')
     print(response.text)
@@ -178,7 +178,7 @@ Example:
     # Uses default GCP credentials; optionally pass project/location
     ai = Genkit(
         plugins=[VertexAI(project='my-project', location='us-central1')],
-        model='vertexai/gemini-2.0-flash',
+        model='vertexai/gemini-flash-latest',
     )
 
     response = await ai.generate(prompt='Hello, world!')
@@ -233,20 +233,20 @@ def package_name() -> str:
 
 
 __all__ = [
-    package_name.__name__,
-    GoogleAI.__name__,
-    VertexAI.__name__,
-    GeminiEmbeddingModels.__name__,
-    VertexEmbeddingModels.__name__,
-    GoogleAIGeminiVersion.__name__,
-    VertexAIGeminiVersion.__name__,
-    EmbeddingTaskType.__name__,
-    GeminiConfigSchema.__name__,
-    GeminiImageConfigSchema.__name__,
-    GeminiTtsConfigSchema.__name__,
-    ImagenVersion.__name__,
-    VeoVersion.__name__,
-    VeoConfig.__name__,
-    LyriaVersion.__name__,
-    LyriaConfig.__name__,
+    'EmbeddingTaskType',
+    'GeminiConfigSchema',
+    'GeminiEmbeddingModels',
+    'GeminiImageConfigSchema',
+    'GeminiTtsConfigSchema',
+    'GoogleAI',
+    'GoogleAIGeminiVersion',
+    'ImagenVersion',
+    'LyriaConfig',
+    'LyriaVersion',
+    'VeoConfig',
+    'VeoVersion',
+    'VertexAI',
+    'VertexAIGeminiVersion',
+    'VertexEmbeddingModels',
+    'package_name',
 ]

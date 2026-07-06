@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import keyword
 import re
 import sys
 from datetime import datetime
@@ -41,6 +42,8 @@ PRIM = {'string': 'str', 'number': 'float', 'integer': 'int', 'boolean': 'bool'}
 TRANSFORMATIONS = {
     'Message': {'output_name': 'MessageData'},
     'GenerateActionOptions': {'suffix': 'Data', 'omit': ['messages']},
+    # RuntimeError would shadow Python's builtin exception.
+    'RuntimeError': {'output_name': 'GenkitRuntimeError'},
 }
 
 
@@ -159,7 +162,13 @@ def _typed_map_aliases(defs: dict) -> dict[str, str]:
 
 
 def _extract_inline_classes(schema: dict) -> dict[str, dict]:
-    """Extract inline object schemas to named classes (e.g. Score.details -> Details)."""
+    """Extract inline object schemas to named classes (e.g. Score.details -> Details).
+
+    When two inline schemas across different parents share a derived class
+    name (e.g. ``resume`` on both ``AgentInput`` and ``GenerateActionOptions``),
+    keep the one with the larger property set so the generated dataclass
+    captures the superset of fields.
+    """
     result = {}
     defs = schema.get('$defs') or {}
 
@@ -167,8 +176,11 @@ def _extract_inline_classes(schema: dict) -> dict[str, dict]:
         for prop_name, prop_schema in (props or {}).items():
             if isinstance(prop_schema, dict) and prop_schema.get('type') == 'object' and '$ref' not in prop_schema:
                 class_name = _pascal(prop_name)
-                if class_name not in defs and class_name not in result:
-                    result[class_name] = prop_schema
+                if class_name not in defs:
+                    existing = result.get(class_name)
+                    new_props = prop_schema.get('properties') or {}
+                    if existing is None or len(existing.get('properties') or {}) < len(new_props):
+                        result[class_name] = prop_schema
                 walk(prop_schema.get('properties', {}))
 
     for defn in defs.values():
@@ -274,12 +286,24 @@ def _emit_model(
     for k, v in props.items():
         # Use schema_ for OutputConfig.schema to avoid shadowing GenkitModel.schema
         snake = _camel_to_snake(k)
+        force_field = False
         if name == 'OutputConfig' and snake == 'schema':
             field_name = 'schema_'
             alias_extra = ", alias='schema'"
         elif snake in ('schema_', 'schema'):
             field_name = 'schema' if name != 'OutputConfig' else 'schema_'
             alias_extra = ", alias='schema'" if name == 'OutputConfig' else ''
+        elif keyword.iskeyword(snake):
+            # Field name is a Python reserved word (e.g. JSON Patch's `from`),
+            # which is a keyword only in Python. Suffix the Python attribute
+            # and pin the wire alias to the original key so the JSON shape is
+            # unchanged. to_camel cannot recover the original name from the
+            # suffixed one, so the alias must be explicit and emitted even for
+            # plain scalar fields (where the default would otherwise be a bare
+            # None that drops the alias).
+            field_name = snake + '_'
+            alias_extra = f', alias={k!r}'
+            force_field = True
         else:
             field_name = snake
             alias_extra = ''
@@ -299,7 +323,7 @@ def _emit_model(
         else:
             default_val = (
                 f'Field(default=None{desc_extra}{alias_extra})'
-                if '|' in py_type_str or py_type_str == 'Any'
+                if '|' in py_type_str or py_type_str == 'Any' or force_field
                 else 'None'
             )
             lines.append(f'    {field_name}: {py_type_str} | None = {default_val}')

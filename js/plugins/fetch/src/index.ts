@@ -208,11 +208,13 @@ async function runActionWithDurableStreaming<
   I extends z.ZodTypeAny,
   O extends z.ZodTypeAny,
   S extends z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
-  action: Action<I, O, S>,
+  action: Action<I, O, S, any, Init>,
   streamManager: StreamManager | undefined,
   streamId: string,
   input: z.infer<I>,
+  init: z.infer<Init> | undefined,
   context: ActionContext,
   writer: WritableStreamDefaultWriter<Uint8Array>,
   abortSignal: AbortSignal
@@ -247,6 +249,7 @@ async function runActionWithDurableStreaming<
       onChunk,
       context,
       abortSignal,
+      init,
     });
 
     if (streamManager && durableStream) {
@@ -306,9 +309,10 @@ async function handleActionRequest<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
   request: Request,
-  action: Action<I, O, S>,
+  action: Action<I, O, S, any, Init>,
   options?: FetchHandlerOptions<C, I>
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -344,6 +348,7 @@ async function handleActionRequest<
   }
 
   const input = body.data as z.infer<I>;
+  const init = body.init as z.infer<Init> | undefined;
 
   let context: C;
   try {
@@ -361,7 +366,8 @@ async function handleActionRequest<
   }
 
   const acceptHeader = request.headers.get('Accept') || '';
-  const isStreaming = acceptHeader === 'text/event-stream' || shouldStream;
+  const isStreaming =
+    acceptHeader.toLowerCase().includes('text/event-stream') || shouldStream;
 
   if (isStreaming) {
     const streamManager = options?.streamManager;
@@ -381,6 +387,7 @@ async function handleActionRequest<
       options?.streamManager,
       streamIdToUse,
       input,
+      init,
       context,
       writer,
       request.signal
@@ -409,6 +416,7 @@ async function handleActionRequest<
     const result = await action.run(input, {
       context,
       abortSignal: request.signal,
+      init,
     });
 
     const headers: Record<string, string> = {
@@ -438,8 +446,9 @@ export function fetchHandler<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
-  action: Action<I, O, S>,
+  action: Action<I, O, S, any, Init>,
   options?: FetchHandlerOptions<C, I>
 ): (request: Request) => Promise<Response> {
   return (request: Request) => handleActionRequest(request, action, options);

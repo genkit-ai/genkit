@@ -23,17 +23,6 @@ from genkit import (
 )
 
 # Model definitions
-CLAUDE_3_HAIKU = ModelInfo(
-    label='Anthropic - Claude 3 Haiku',
-    versions=['claude-3-haiku-20240307'],
-    supports=Supports(
-        multiturn=True,
-        media=True,
-        tools=True,
-        system_role=True,
-    ),
-)
-
 CLAUDE_3_5_HAIKU = ModelInfo(
     label='Anthropic - Claude 3.5 Haiku',
     versions=['claude-3-5-haiku-20241022'],
@@ -148,8 +137,33 @@ CLAUDE_OPUS_4_6 = ModelInfo(
     ),
 )
 
+CLAUDE_OPUS_4_7 = ModelInfo(
+    label='Anthropic - Claude Opus 4.7',
+    versions=['claude-opus-4-7'],
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        system_role=True,
+        output=['text', 'json'],
+        constrained=Constrained.ALL,
+    ),
+)
+
+CLAUDE_OPUS_4_8 = ModelInfo(
+    label='Anthropic - Claude Opus 4.8',
+    versions=['claude-opus-4-8'],
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        system_role=True,
+        output=['text', 'json'],
+        constrained=Constrained.ALL,
+    ),
+)
+
 SUPPORTED_ANTHROPIC_MODELS: dict[str, ModelInfo] = {
-    'claude-3-haiku': CLAUDE_3_HAIKU,
     'claude-3-5-haiku': CLAUDE_3_5_HAIKU,
     'claude-3-5-sonnet': CLAUDE_3_5_SONNET,
     'claude-sonnet-4': CLAUDE_SONNET_4,
@@ -159,6 +173,8 @@ SUPPORTED_ANTHROPIC_MODELS: dict[str, ModelInfo] = {
     'claude-opus-4-1': CLAUDE_OPUS_4_1,
     'claude-opus-4-5': CLAUDE_OPUS_4_5,
     'claude-opus-4-6': CLAUDE_OPUS_4_6,
+    'claude-opus-4-7': CLAUDE_OPUS_4_7,
+    'claude-opus-4-8': CLAUDE_OPUS_4_8,
 }
 
 DEFAULT_SUPPORTS = Supports(

@@ -24,6 +24,7 @@ import (
 	"iter"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
@@ -78,11 +79,11 @@ type ModelMiddleware = core.Middleware[*ModelRequest, *ModelResponse, *ModelResp
 
 // model is an action with functions specific to model generation such as Generate().
 type model struct {
-	core.ActionDef[*ModelRequest, *ModelResponse, *ModelResponseChunk]
+	core.Action[*ModelRequest, *ModelResponse, *ModelResponseChunk]
 }
 
 // generateAction is the type for a utility model generation action that takes in a GenerateActionOptions instead of a ModelRequest.
-type generateAction = core.ActionDef[*GenerateActionOptions, *ModelResponse, *ModelResponseChunk]
+type generateAction = core.Action[*GenerateActionOptions, *ModelResponse, *ModelResponseChunk]
 
 // result is a generic struct for parallel operation results with index, value, and error.
 type result[T any] struct {
@@ -203,7 +204,7 @@ func LookupModel(r api.Registry, name string) Model {
 		return nil
 	}
 	return &model{
-		ActionDef: *action,
+		Action: *action,
 	}
 }
 
@@ -757,8 +758,8 @@ type StreamValue[Out, Stream any] struct {
 // Out is never set because the output is already available in the Response field.
 type ModelStreamValue = StreamValue[struct{}, *ModelResponseChunk]
 
-// errGenerateStop is a sentinel error used to signal early termination of streaming.
-var errGenerateStop = errors.New("stop")
+// errStop is a sentinel error used to signal early termination of streaming.
+var errStop = errors.New("stop")
 
 // GenerateStream generates a model response and streams the output.
 // It returns an iterator that yields streaming results.
@@ -773,12 +774,17 @@ var errGenerateStop = errors.New("stop")
 // Otherwise the Chunk field of the passed [ModelStreamValue] holds a streamed chunk.
 func GenerateStream(ctx context.Context, r api.Registry, opts ...GenerateOption) iter.Seq2[*ModelStreamValue, error] {
 	return func(yield func(*ModelStreamValue, error) bool) {
+		done := false
 		cb := func(ctx context.Context, chunk *ModelResponseChunk) error {
+			if done {
+				return errStop
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			if !yield(&ModelStreamValue{Chunk: chunk}, nil) {
-				return errGenerateStop
+				done = true
+				return errStop
 			}
 			return nil
 		}
@@ -786,6 +792,9 @@ func GenerateStream(ctx context.Context, r api.Registry, opts ...GenerateOption)
 		allOpts := append(slices.Clone(opts), WithStreaming(cb))
 
 		resp, err := Generate(ctx, r, allOpts...)
+		if done || errors.Is(err, errStop) {
+			return
+		}
 		if err != nil {
 			yield(nil, err)
 		} else {
@@ -807,13 +816,18 @@ func GenerateStream(ctx context.Context, r api.Registry, opts ...GenerateOption)
 // Otherwise the Chunk field of the passed [StreamValue] holds a streamed chunk.
 func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...GenerateOption) iter.Seq2[*StreamValue[Out, Out], error] {
 	return func(yield func(*StreamValue[Out, Out], error) bool) {
+		done := false
 		cb := func(ctx context.Context, chunk *ModelResponseChunk) error {
+			if done {
+				return errStop
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			var streamValue Out
 			if err := chunk.Output(&streamValue); err != nil {
 				yield(nil, err)
+				done = true
 				return err
 			}
 			// Skip yielding if there's no parseable output yet (e.g., incomplete JSON during streaming).
@@ -821,7 +835,8 @@ func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...Ge
 				return nil
 			}
 			if !yield(&StreamValue[Out, Out]{Chunk: streamValue}, nil) {
-				return errGenerateStop
+				done = true
+				return errStop
 			}
 			return nil
 		}
@@ -832,6 +847,9 @@ func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...Ge
 		allOpts = append(allOpts, WithStreaming(cb))
 
 		resp, err := Generate(ctx, r, allOpts...)
+		if done || errors.Is(err, errStop) {
+			return
+		}
 		if err != nil {
 			yield(nil, err)
 			return
@@ -861,7 +879,7 @@ func (m *model) Generate(ctx context.Context, req *ModelRequest, cb ModelStreamC
 		return nil, core.NewError(core.INVALID_ARGUMENT, "Model.Generate: generate called on a nil model; check that all models are defined")
 	}
 
-	return m.ActionDef.Run(ctx, req, cb)
+	return m.Action.Run(ctx, req, cb)
 }
 
 // supportsConstrained returns whether the model supports constrained output.
@@ -870,7 +888,7 @@ func (m *model) supportsConstrained(hasTools bool) bool {
 		return false
 	}
 
-	metadata := m.ActionDef.Desc().Metadata
+	metadata := m.Action.Desc().Metadata
 	if metadata == nil {
 		return false
 	}
@@ -945,9 +963,28 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 		return nil, nil, nil
 	}
 
-	resultChan := make(chan result[*MultipartToolResponse])
+	resultChan := make(chan result[*MultipartToolResponse], toolCount)
 	toolMsg := &Message{Role: RoleTool}
 	revisedMsg := clone(resp.Message)
+
+	// Tools run concurrently (one goroutine each, below), and tool.SendPartial /
+	// tool.SendChunk let a tool stream through cb from inside its goroutine. cb
+	// (the wrapped stream callback) mutates shared role/index state and writes
+	// the single stream sink, neither of which is safe for concurrent use, so
+	// serialize every tool-originated send under one mutex. Streaming is
+	// best-effort, so a sink error is logged and dropped rather than failing the
+	// tool's authoritative return value.
+	var streamMu sync.Mutex
+	streamChunk := func(sendCtx context.Context, chunk *ModelResponseChunk) {
+		if cb == nil {
+			return
+		}
+		streamMu.Lock()
+		defer streamMu.Unlock()
+		if err := cb(sendCtx, chunk); err != nil {
+			logger.FromContext(sendCtx).Debug("tool stream callback failed", "error", err)
+		}
+	}
 
 	for i, part := range revisedMsg.Content {
 		if !part.IsToolRequest() {
@@ -962,7 +999,30 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 				return
 			}
 
-			multipartResp, err := runTool(ctx, tool, toolReq)
+			// Inject per-tool streaming senders so tools can stream via
+			// tool.SendPartial (wrapped partial responses) and
+			// tool.SendChunk (raw model response chunks). Both route through
+			// streamChunk, which serializes sends across the concurrent tools.
+			toolCtx := ctx
+			if cb != nil {
+				toolCtx = base.ToolPartialSenderKey.NewContext(ctx, func(sendCtx context.Context, output any) {
+					streamChunk(sendCtx, &ModelResponseChunk{
+						Role: RoleTool,
+						Content: []*Part{NewPartialToolResponsePart(&ToolResponse{
+							Name:   toolReq.Name,
+							Ref:    toolReq.Ref,
+							Output: output,
+						})},
+					})
+				})
+				toolCtx = base.ToolChunkSenderKey.NewContext(toolCtx, func(sendCtx context.Context, chunk any) {
+					if c, ok := chunk.(*ModelResponseChunk); ok {
+						streamChunk(sendCtx, c)
+					}
+				})
+			}
+
+			multipartResp, err := runTool(toolCtx, tool, toolReq)
 			if err != nil {
 				var tie *toolInterruptError
 				if errors.As(err, &tie) {
@@ -999,7 +1059,10 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 		}(i, part)
 	}
 
-	var toolResps []*Part
+	// Tools run concurrently, so resultChan delivers responses in completion
+	// order. Collect them keyed by the request's position in the model message
+	// so they can be re-emitted in request order below.
+	toolRespByIndex := make(map[int]*Part, toolCount)
 	hasInterrupts := false
 	for range toolCount {
 		res := <-resultChan
@@ -1014,16 +1077,28 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 		}
 
 		toolReq := revisedMsg.Content[res.index].ToolRequest
-		toolResps = append(toolResps, NewToolResponsePart(&ToolResponse{
+		newToolResp := NewToolResponsePart(&ToolResponse{
 			Name:    toolReq.Name,
 			Ref:     toolReq.Ref,
 			Output:  res.value.Output,
 			Content: res.value.Content,
-		}))
+		})
+		newToolResp.Metadata = res.value.Metadata
+		toolRespByIndex[res.index] = newToolResp
 	}
 
 	if hasInterrupts {
 		return nil, revisedMsg, nil
+	}
+
+	// Emit tool responses in the order their requests appear in the model
+	// message, not the order the goroutines happened to finish, so the recorded
+	// tool message is deterministic across runs.
+	toolResps := make([]*Part, 0, len(toolRespByIndex))
+	for i := range revisedMsg.Content {
+		if part, ok := toolRespByIndex[i]; ok {
+			toolResps = append(toolResps, part)
+		}
 	}
 
 	toolMsg.Content = toolResps
@@ -1066,11 +1141,10 @@ func (mr *ModelResponse) History() []*Message {
 
 // Reasoning concatenates all reasoning parts present in the message
 func (mr *ModelResponse) Reasoning() string {
-	var sb strings.Builder
 	if mr == nil || mr.Message == nil {
 		return ""
 	}
-
+	var sb strings.Builder
 	for _, p := range mr.Message.Content {
 		if !p.IsReasoning() {
 			continue
@@ -1084,7 +1158,7 @@ func (mr *ModelResponse) Reasoning() string {
 // If a format handler is set, it uses the handler's ParseOutput method.
 // Otherwise, it falls back to parsing the response text as JSON.
 func (mr *ModelResponse) Output(v any) error {
-	if mr.Message == nil || len(mr.Message.Content) == 0 {
+	if mr == nil || mr.Message == nil || len(mr.Message.Content) == 0 {
 		return errors.New("no content in response")
 	}
 
@@ -1109,28 +1183,28 @@ func (mr *ModelResponse) Output(v any) error {
 }
 
 // ToolRequests returns the tool requests from the response.
-func (mr *ModelResponse) ToolRequests() []*ToolRequest {
-	toolReqs := []*ToolRequest{}
+func (mr *ModelResponse) ToolRequests() []*Part {
+	var parts []*Part
 	if mr == nil || mr.Message == nil {
-		return toolReqs
+		return parts
 	}
-	for _, part := range mr.Message.Content {
-		if part.IsToolRequest() {
-			toolReqs = append(toolReqs, part.ToolRequest)
+	for _, p := range mr.Message.Content {
+		if p.IsToolRequest() {
+			parts = append(parts, p)
 		}
 	}
-	return toolReqs
+	return parts
 }
 
 // Interrupts returns the interrupted tool request parts from the response.
 func (mr *ModelResponse) Interrupts() []*Part {
-	parts := []*Part{}
+	var parts []*Part
 	if mr == nil || mr.Message == nil {
 		return parts
 	}
-	for _, part := range mr.Message.Content {
-		if part.IsInterrupt() {
-			parts = append(parts, part)
+	for _, p := range mr.Message.Content {
+		if p.IsInterrupt() {
+			parts = append(parts, p)
 		}
 	}
 	return parts
@@ -1153,11 +1227,8 @@ func (mr *ModelResponse) Media() string {
 // It returns an empty string if there is no Content in the response chunk.
 // For the parsed structured output, use [ModelResponseChunk.Output] instead.
 func (c *ModelResponseChunk) Text() string {
-	if len(c.Content) == 0 {
+	if c == nil {
 		return ""
-	}
-	if len(c.Content) == 1 {
-		return c.Content[0].Text
 	}
 	var sb strings.Builder
 	for _, p := range c.Content {
@@ -1171,7 +1242,7 @@ func (c *ModelResponseChunk) Text() string {
 // Reasoning returns the reasoning content of the ModelResponseChunk as a string.
 // It returns an empty string if there is no Content in the response chunk.
 func (c *ModelResponseChunk) Reasoning() string {
-	if len(c.Content) == 0 {
+	if c == nil {
 		return ""
 	}
 	var sb strings.Builder
@@ -1183,9 +1254,42 @@ func (c *ModelResponseChunk) Reasoning() string {
 	return sb.String()
 }
 
+// Interrupts returns the interrupted tool request parts from the chunk.
+func (c *ModelResponseChunk) Interrupts() []*Part {
+	var parts []*Part
+	if c == nil {
+		return parts
+	}
+	for _, p := range c.Content {
+		if p.IsInterrupt() {
+			parts = append(parts, p)
+		}
+	}
+	return parts
+}
+
+// ToolResponses returns the tool response parts from the chunk.
+// Use [Part.IsPartial] to distinguish streaming progress updates
+// from final tool results.
+func (c *ModelResponseChunk) ToolResponses() []*Part {
+	var parts []*Part
+	if c == nil {
+		return parts
+	}
+	for _, p := range c.Content {
+		if p.IsToolResponse() {
+			parts = append(parts, p)
+		}
+	}
+	return parts
+}
+
 // Output parses the chunk using the format handler and unmarshals the result into v.
 // Returns an error if the format handler is not set or does not support parsing chunks.
 func (c *ModelResponseChunk) Output(v any) error {
+	if c == nil {
+		return errors.New("chunk is nil")
+	}
 	if c.formatHandler == nil {
 		return errors.New("output format chosen does not support parsing chunks")
 	}
@@ -1264,6 +1368,17 @@ func (m *Message) Text() string {
 		}
 	}
 	return sb.String()
+}
+
+// NewResume constructs a [GenerateActionResume] from Part slices.
+// This is useful when building [GenerateActionOptions] directly (e.g., from a
+// rendered prompt) and need to set the Resume field from [*Part] values
+// produced by [ToolDef.RestartWith] or [ToolDef.RespondWith].
+func NewResume(restarts, responds []*Part) *GenerateActionResume {
+	return &GenerateActionResume{
+		Restart: restarts,
+		Respond: responds,
+	}
 }
 
 // NewModelRef creates a new ModelRef with the given name and configuration.
@@ -1469,6 +1584,7 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 					Output:  multipartResp.Output,
 					Content: multipartResp.Content,
 				})
+				newToolResp.Metadata = multipartResp.Metadata
 
 				return &resumedToolRequestOutput{
 					toolRequest:  newToolReq,
@@ -1522,16 +1638,21 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 		return nil, core.NewError(core.FAILED_PRECONDITION, "handleResumeOption: cannot resume generation unless the last message is by a model with at least one tool request")
 	}
 
-	resultChan := make(chan result[*resumedToolRequestOutput])
-	newContent := make([]*Part, len(lastMessage.Content))
 	toolReqCount := 0
+	for _, part := range lastMessage.Content {
+		if part.IsToolRequest() {
+			toolReqCount++
+		}
+	}
+
+	resultChan := make(chan result[*resumedToolRequestOutput], toolReqCount)
+	newContent := make([]*Part, len(lastMessage.Content))
 
 	for i, part := range lastMessage.Content {
 		if !part.IsToolRequest() {
 			newContent[i] = part
 			continue
 		}
-		toolReqCount++
 
 		go func(idx int, p *Part) {
 			output, err := handleResumedToolRequest(ctx, r, genOpts, p, runTool)

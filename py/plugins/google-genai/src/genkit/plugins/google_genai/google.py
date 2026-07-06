@@ -64,7 +64,7 @@ Key Concepts:
     |                    | used, avoiding upfront initialization overhead.       |
     +--------------------+-------------------------------------------------------+
     | Namespacing        | Models are prefixed with plugin name (e.g.,           |
-    |                    | 'googleai/gemini-2.0-flash-001').                     |
+    |                    | 'googleai/gemini-flash-latest').                      |
     +--------------------+-------------------------------------------------------+
 
 Supported Model Types:
@@ -82,7 +82,7 @@ Example:
     >>>
     >>> # Use any available model - no pre-registration needed
     >>> response = await ai.generate(
-    ...     model='googleai/gemini-2.0-flash-001',
+    ...     model='googleai/gemini-flash-latest',
     ...     prompt='Hello, world!',
     ... )
 
@@ -102,6 +102,7 @@ from google.genai.client import DebugConfig
 from google.genai.types import HttpOptions, HttpOptionsDict
 
 import genkit.plugins.google_genai.constants as const
+from genkit import ModelInfo
 from genkit._core._action import ActionRunContext
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
@@ -123,9 +124,11 @@ from genkit.plugins.google_genai.evaluators import (
 from genkit.plugins.google_genai.models.embedder import EMBEDDER_DIMENSIONS, Embedder
 from genkit.plugins.google_genai.models.gemini import (
     SUPPORTED_MODELS,
+    GeminiConfigSchema,
     GeminiModel,
     get_model_config_schema,
     google_model_info,
+    is_tuned_gemini_name,
 )
 from genkit.plugins.google_genai.models.imagen import (
     SUPPORTED_MODELS as IMAGE_SUPPORTED_MODELS,
@@ -170,15 +173,24 @@ class GenaiModels:
 def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
     """Discover and categorize available models from the Google GenAI API.
 
-    This function queries the API for all available models and categorizes them
-    based on their supported_actions field. Models marked as deprecated are
-    excluded.
+    This function queries the API for all available models and categorizes them.
+    Models marked as deprecated are excluded.
 
-    The categorization logic:
+    Two categorization strategies are used depending on the backend:
+
+    - Google AI populates each model's ``supported_actions`` field, so models
+      are categorized by action:
         - 'embedContent' action → embedders
-        - 'predict' + 'imagen' in name → imagen (Vertex AI)
+        - 'predict' + 'imagen' in name → imagen
         - 'generateVideos' or 'veo' in name → veo
         - 'generateContent' + 'gemini'/'gemma' in name → gemini
+    - Vertex AI returns ``supported_actions = None`` for every publisher model,
+      so categorizing by action would skip them all. The Vertex path instead
+      categorizes by model name (mirroring the JS plugin's ``listActions``):
+        - 'embedding' in name → embedders
+        - 'imagen' in name → imagen
+        - 'veo' in name → veo
+        - 'gemini'/'gemma' in name (and not an embedding) → gemini
 
     Args:
         client: The Google GenAI client instance.
@@ -208,6 +220,20 @@ def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
 
         description = (m.description or '').lower()
         if 'deprecated' in description:
+            continue
+
+        # Vertex AI returns supported_actions=None for every publisher model, so
+        # categorize by name
+        if is_vertex:
+            lower_name = name.lower()
+            if 'embedding' in lower_name:
+                models.embedders.append(name)
+            elif 'imagen' in lower_name:
+                models.imagen.append(name)
+            elif 'veo' in lower_name:
+                models.veo.append(name)
+            elif 'gemini' in lower_name or 'gemma' in lower_name:
+                models.gemini.append(name)
             continue
 
         if not m.supported_actions:
@@ -322,7 +348,7 @@ class GoogleAI(Plugin):
         +------------------+-------------------+--------------------------------+
         | Type             | Action Kind       | Example                        |
         +------------------+-------------------+--------------------------------+
-        | Gemini/Gemma     | MODEL             | googleai/gemini-2.0-flash-001  |
+        | Gemini/Gemma     | MODEL             | googleai/gemini-flash-latest   |
         | Imagen           | MODEL             | googleai/imagen-3.0-generate   |
         | Embedders        | EMBEDDER          | googleai/gemini-embedding-001  |
         | Veo (video)      | BACKGROUND_MODEL  | googleai/veo-2.0-generate-001  |
@@ -336,7 +362,7 @@ class GoogleAI(Plugin):
         >>>
         >>> # Text generation
         >>> response = await ai.generate(
-        ...     model='googleai/gemini-2.0-flash-001',
+        ...     model='googleai/gemini-flash-latest',
         ...     prompt='Explain quantum computing',
         ... )
         >>>
@@ -391,9 +417,15 @@ class GoogleAI(Plugin):
         """
         api_key = api_key if api_key else os.getenv('GEMINI_API_KEY')
         if not api_key and credentials is None:
-            raise ValueError(
-                'Gemini api key should be passed in plugin params or as a GEMINI_API_KEY environment variable'
+            msg = (
+                '\n[Genkit] GEMINI_API_KEY environment variable not set.\n\n'
+                'To get started with Google AI models:\n'
+                '1. Obtain an API key from Google AI Studio: https://aistudio.google.com/app/apikey\n'
+                '2. Set your key in the terminal environment:\n'
+                '   export GEMINI_API_KEY="your-api-key"\n\n'
+                'Documentation: https://genkit.dev/docs/python/integrations/google-genai/\n'
             )
+            raise ValueError(msg)
 
         self._client_kwargs: dict[str, Any] = {
             'vertexai': self._vertexai,
@@ -685,7 +717,7 @@ class VertexAI(Plugin):
         +------------------+-------------------+--------------------------------+
         | Type             | Action Kind       | Example                        |
         +------------------+-------------------+--------------------------------+
-        | Gemini/Gemma     | MODEL             | vertexai/gemini-2.0-flash-001  |
+        | Gemini/Gemma     | MODEL             | vertexai/gemini-flash-latest   |
         | Imagen           | MODEL             | vertexai/imagen-3.0-generate   |
         | Veo (video)      | MODEL             | vertexai/veo-2.0-generate-001  |
         | Embedders        | EMBEDDER          | vertexai/text-embedding-005    |
@@ -699,7 +731,7 @@ class VertexAI(Plugin):
         >>>
         >>> # Text generation
         >>> response = await ai.generate(
-        ...     model='vertexai/gemini-2.0-flash-001',
+        ...     model='vertexai/gemini-flash-latest',
         ...     prompt='Explain quantum computing',
         ... )
         >>>
@@ -893,8 +925,16 @@ class VertexAI(Plugin):
         # Extract local name (remove plugin prefix)
         clean_name = name.replace(VERTEXAI_PLUGIN_NAME + '/', '') if name.startswith(VERTEXAI_PLUGIN_NAME) else name
 
-        # Determine model type and create model metadata/config schema
-        if clean_name.lower().startswith('image'):
+        # Determine model type and create model metadata/config schema.
+        # Tuned Gemini endpoints (endpoints/ID or projects/.../endpoints/ID)
+        # route through GeminiModel with the standard Gemini config schema.
+        if is_tuned_gemini_name(clean_name):
+            model_ref = ModelInfo(
+                label=f'{PLUGIN_DISPLAY_NAME[VERTEXAI_PLUGIN_NAME]} - {clean_name}',
+                supports=google_model_info('gemini').supports,
+            )
+            config_schema = GeminiConfigSchema
+        elif clean_name.lower().startswith('image'):
             model_ref = vertexai_image_model_info(clean_name)
             IMAGE_SUPPORTED_MODELS[clean_name] = model_ref
             config_schema = ImagenConfigSchema
@@ -907,7 +947,9 @@ class VertexAI(Plugin):
             config_schema = get_model_config_schema(clean_name)
 
         async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-            if clean_name.lower().startswith('image'):
+            if is_tuned_gemini_name(clean_name):
+                model = GeminiModel(clean_name, self._runtime_client())
+            elif clean_name.lower().startswith('image'):
                 model = ImagenModel(clean_name, self._runtime_client())
             elif is_veo_model(clean_name):
                 model = VeoModel(clean_name, self._runtime_client())

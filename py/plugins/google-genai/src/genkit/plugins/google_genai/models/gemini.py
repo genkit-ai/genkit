@@ -605,7 +605,7 @@ GEMINI_2_0_FLASH = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -618,7 +618,7 @@ GEMINI_2_0_FLASH_LITE = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -631,7 +631,7 @@ GEMINI_2_0_PRO_EXP_02_05 = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -644,7 +644,7 @@ GEMINI_2_0_FLASH_EXP_IMAGEN = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -657,7 +657,7 @@ GEMINI_2_0_FLASH_THINKING_EXP_01_21 = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -670,7 +670,7 @@ GEMINI_2_5_PRO_EXP_03_25 = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -683,7 +683,7 @@ GEMINI_2_5_PRO_PREVIEW_03_25 = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -696,7 +696,7 @@ GEMINI_2_5_PRO_PREVIEW_05_06 = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -709,9 +709,153 @@ GEMINI_2_5_FLASH_PREVIEW_04_17 = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_2_5_FLASH_LITE = ModelInfo(
+    label='Google AI - Gemini 2.5 Flash Lite',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
         constrained=Constrained.NO_TOOLS,
         output=['text', 'json'],
     ),
+)
+
+GEMINI_3_FLASH_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3 Flash Preview',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_PRO_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3 Pro Preview',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_5_FLASH = ModelInfo(
+    label='Google AI - Gemini 3.5 Flash',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_1_PRO_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3.1 Pro Preview',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+# customtools is registered identically to pro-preview (no distinct config in JS).
+GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS = ModelInfo(
+    label='Google AI - Gemini 3.1 Pro Preview (Custom Tools)',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_1_FLASH_LITE_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3.1 Flash Lite Preview',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_1_FLASH_LITE = ModelInfo(
+    label='Google AI - Gemini 3.1 Flash Lite',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_IMAGE_SUPPORTS = Supports(
+    multiturn=True,
+    media=True,
+    tools=True,
+    tool_choice=True,
+    system_role=True,
+    constrained=Constrained.ALL,
+)
+
+GEMINI_3_PRO_IMAGE = ModelInfo(
+    label='Google AI - Gemini 3 Pro Image',
+    supports=GEMINI_IMAGE_SUPPORTS,
+)
+
+GEMINI_3_1_FLASH_IMAGE = ModelInfo(
+    label='Google AI - Gemini 3.1 Flash Image',
+    supports=GEMINI_IMAGE_SUPPORTS,
+)
+
+GEMINI_3_1_FLASH_IMAGE_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3.1 Flash Image Preview',
+    supports=GEMINI_IMAGE_SUPPORTS,
+)
+
+GEMINI_3_PRO_IMAGE_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3 Pro Image Preview',
+    supports=GEMINI_IMAGE_SUPPORTS,
+)
+
+GEMINI_2_5_FLASH_IMAGE = ModelInfo(
+    label='Google AI - Gemini 2.5 Flash Image',
+    supports=GEMINI_IMAGE_SUPPORTS,
+)
+
+GEMINI_2_5_FLASH_IMAGE_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 2.5 Flash Image Preview',
+    supports=GEMINI_IMAGE_SUPPORTS,
 )
 
 GENERIC_GEMINI_MODEL = ModelInfo(
@@ -722,7 +866,7 @@ GENERIC_GEMINI_MODEL = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -735,7 +879,7 @@ GENERIC_TTS_MODEL = ModelInfo(
         tools=False,
         tool_choice=False,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
     ),
 )
 
@@ -747,7 +891,7 @@ GENERIC_IMAGE_MODEL = ModelInfo(
         tools=False,
         tool_choice=False,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['media'],
     ),
 )
@@ -760,7 +904,7 @@ GENERIC_GEMMA_MODEL = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -788,12 +932,16 @@ class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     | `gemini-2.5-pro-preview-03-25`       | Gemini 2.5 Pro Preview 03-25         | Supported    |
     | `gemini-2.5-pro-preview-05-06`       | Gemini 2.5 Pro Preview 05-06         | Supported    |
     | `gemini-3-flash-preview`             | Gemini 3 Flash Preview               | Supported    |
-    | `gemini-3-pro-preview`               | Gemini 3 Pro Preview                 | Supported    |
+    | `gemini-3.5-flash`                   | Gemini 3.5 Flash                     | Supported    |
+    | `gemini-3.1-pro-preview`            | Gemini 3.1 Pro Preview               | Supported    |
+    | `gemini-3.1-flash-lite`             | Gemini 3.1 Flash Lite                | Supported    |
     | `gemini-2.5-pro`                     | Gemini 2.5 Pro                       | Supported    |
     | `gemini-2.5-flash`                   | Gemini 2.5 Flash                     | Supported    |
     | `gemini-2.5-flash-lite`              | Gemini 2.5 Flash Lite                | Supported    |
     | `gemini-2.5-flash-preview-tts`       | Gemini 2.5 Flash Preview TTS         | Supported    |
     | `gemini-2.5-pro-preview-tts`         | Gemini 2.5 Pro Preview TTS           | Supported    |
+    | `gemini-3-pro-image`                 | Gemini 3 Pro Image                   | Supported    |
+    | `gemini-3.1-flash-image`             | Gemini 3.1 Flash Image               | Supported    |
     | `gemini-3-pro-image-preview`         | Gemini 3 Pro Image Preview           | Supported    |
     | `gemini-2.5-flash-image-preview`     | Gemini 2.5 Flash Image Preview       | Supported    |
     | `gemini-2.5-flash-image`             | Gemini 2.5 Flash Image               | Supported    |
@@ -813,15 +961,19 @@ class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMINI_2_5_PRO_PREVIEW_03_25 = 'gemini-2.5-pro-preview-03-25'
     GEMINI_2_5_PRO_PREVIEW_05_06 = 'gemini-2.5-pro-preview-05-06'
     GEMINI_3_FLASH_PREVIEW = 'gemini-3-flash-preview'
-    GEMINI_3_PRO_PREVIEW = 'gemini-3-pro-preview'
     GEMINI_2_5_PRO = 'gemini-2.5-pro'
     GEMINI_2_5_FLASH = 'gemini-2.5-flash'
     GEMINI_2_5_FLASH_LITE = 'gemini-2.5-flash-lite'
     GEMINI_2_5_FLASH_PREVIEW_TTS = 'gemini-2.5-flash-preview-tts'
     GEMINI_2_5_PRO_PREVIEW_TTS = 'gemini-2.5-pro-preview-tts'
+    GEMINI_3_PRO_IMAGE = 'gemini-3-pro-image'
+    GEMINI_3_1_FLASH_IMAGE = 'gemini-3.1-flash-image'
     GEMINI_3_PRO_IMAGE_PREVIEW = 'gemini-3-pro-image-preview'
     GEMINI_2_5_FLASH_IMAGE_PREVIEW = 'gemini-2.5-flash-image-preview'
     GEMINI_2_5_FLASH_IMAGE = 'gemini-2.5-flash-image'
+    GEMINI_3_5_FLASH = 'gemini-3.5-flash'
+    GEMINI_3_1_PRO_PREVIEW = 'gemini-3.1-pro-preview'
+    GEMINI_3_1_FLASH_LITE = 'gemini-3.1-flash-lite'
     GEMMA_3_12B_IT = 'gemma-3-12b-it'
     GEMMA_3_1B_IT = 'gemma-3-1b-it'
     GEMMA_3_27B_IT = 'gemma-3-27b-it'
@@ -848,15 +1000,20 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     | `gemini-2.5-pro-preview-03-25`       | Gemini 2.5 Pro Preview 03-25         | Supported  |
     | `gemini-2.5-pro-preview-05-06`       | Gemini 2.5 Pro Preview 05-06         | Supported  |
     | `gemini-3-flash-preview`             | Gemini 3 Flash Preview               | Supported  |
-    | `gemini-3-pro-preview`               | Gemini 3 Pro Preview                 | Supported  |
     | `gemini-2.5-pro`                     | Gemini 2.5 Pro                       | Supported  |
     | `gemini-2.5-flash`                   | Gemini 2.5 Flash                     | Supported  |
     | `gemini-2.5-flash-lite`              | Gemini 2.5 Flash Lite                | Supported  |
     | `gemini-2.5-flash-preview-tts`       | Gemini 2.5 Flash Preview TTS         | Supported  |
     | `gemini-2.5-pro-preview-tts`         | Gemini 2.5 Pro Preview TTS           | Supported  |
+    | `gemini-3-pro-image`                 | Gemini 3 Pro Image                   | Supported  |
+    | `gemini-3.1-flash-image`             | Gemini 3.1 Flash Image               | Supported  |
+    | `gemini-3.1-flash-image-preview`     | Gemini 3.1 Flash Image Preview       | Supported  |
     | `gemini-3-pro-image-preview`         | Gemini 3 Pro Image Preview           | Supported  |
     | `gemini-2.5-flash-image-preview`     | Gemini 2.5 Flash Image Preview       | Supported  |
     | `gemini-2.5-flash-image`             | Gemini 2.5 Flash Image               | Supported  |
+    | `gemini-3.1-pro-preview`             | Gemini 3.1 Pro Preview               | Supported  |
+    | `gemini-3.1-pro-preview-customtools` | Gemini 3.1 Pro Preview Custom Tools  | Supported  |
+    | `gemini-3.1-flash-lite-preview`      | Gemini 3.1 Flash Lite Preview        | Supported  |
     | `gemma-3-12b-it`                     | Gemma 3 12B IT                       | Supported  |
     | `gemma-3-1b-it`                      | Gemma 3 1B IT                        | Supported  |
     | `gemma-3-27b-it`                     | Gemma 3 27B IT                       | Supported  |
@@ -873,15 +1030,20 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMINI_2_5_PRO_PREVIEW_03_25 = 'gemini-2.5-pro-preview-03-25'
     GEMINI_2_5_PRO_PREVIEW_05_06 = 'gemini-2.5-pro-preview-05-06'
     GEMINI_3_FLASH_PREVIEW = 'gemini-3-flash-preview'
-    GEMINI_3_PRO_PREVIEW = 'gemini-3-pro-preview'
     GEMINI_2_5_PRO = 'gemini-2.5-pro'
     GEMINI_2_5_FLASH = 'gemini-2.5-flash'
     GEMINI_2_5_FLASH_LITE = 'gemini-2.5-flash-lite'
     GEMINI_2_5_FLASH_PREVIEW_TTS = 'gemini-2.5-flash-preview-tts'
     GEMINI_2_5_PRO_PREVIEW_TTS = 'gemini-2.5-pro-preview-tts'
+    GEMINI_3_PRO_IMAGE = 'gemini-3-pro-image'
+    GEMINI_3_1_FLASH_IMAGE = 'gemini-3.1-flash-image'
+    GEMINI_3_1_FLASH_IMAGE_PREVIEW = 'gemini-3.1-flash-image-preview'
     GEMINI_3_PRO_IMAGE_PREVIEW = 'gemini-3-pro-image-preview'
     GEMINI_2_5_FLASH_IMAGE_PREVIEW = 'gemini-2.5-flash-image-preview'
     GEMINI_2_5_FLASH_IMAGE = 'gemini-2.5-flash-image'
+    GEMINI_3_1_PRO_PREVIEW = 'gemini-3.1-pro-preview'
+    GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS = 'gemini-3.1-pro-preview-customtools'
+    GEMINI_3_1_FLASH_LITE_PREVIEW = 'gemini-3.1-flash-lite-preview'
     GEMMA_3_12B_IT = 'gemma-3-12b-it'
     GEMMA_3_1B_IT = 'gemma-3-1b-it'
     GEMMA_3_27B_IT = 'gemma-3-27b-it'
@@ -892,13 +1054,49 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
 SUPPORTED_MODELS = {}
 
 
+def _add_model(model_info: ModelInfo, names: list[str]) -> None:
+    for name in names:
+        SUPPORTED_MODELS[name] = model_info
+    if model_info.versions:
+        for version in model_info.versions:
+            SUPPORTED_MODELS[version] = model_info
+
+
+_add_model(GEMINI_1_5_PRO, ['gemini-1.5-pro'])
+_add_model(GEMINI_1_5_FLASH, ['gemini-1.5-flash'])
+_add_model(GEMINI_1_5_FLASH_8B, ['gemini-1.5-flash-8b'])
+_add_model(GEMINI_2_0_FLASH, ['gemini-2.0-flash'])
+_add_model(GEMINI_2_0_FLASH_LITE, ['gemini-2.0-flash-lite'])
+_add_model(GEMINI_2_0_PRO_EXP_02_05, ['gemini-2.0-pro-exp-02-05'])
+_add_model(GEMINI_2_0_FLASH_EXP_IMAGEN, ['gemini-2.0-flash-exp'])
+_add_model(GEMINI_2_0_FLASH_THINKING_EXP_01_21, ['gemini-2.0-flash-thinking-exp-01-21'])
+_add_model(GEMINI_2_5_PRO_EXP_03_25, ['gemini-2.5-pro-exp-03-25'])
+_add_model(GEMINI_2_5_PRO_PREVIEW_03_25, ['gemini-2.5-pro-preview-03-25'])
+_add_model(GEMINI_2_5_PRO_PREVIEW_05_06, ['gemini-2.5-pro-preview-05-06'])
+_add_model(GEMINI_2_5_FLASH_PREVIEW_04_17, ['gemini-2.5-flash-preview-04-17'])
+_add_model(GEMINI_2_5_FLASH_LITE, ['gemini-2.5-flash-lite'])
+_add_model(GEMINI_3_FLASH_PREVIEW, ['gemini-3-flash-preview'])
+_add_model(GEMINI_3_PRO_PREVIEW, ['gemini-3-pro-preview', 'gemini-pro-latest'])
+_add_model(GEMINI_3_5_FLASH, ['gemini-3.5-flash', 'gemini-flash-latest'])
+_add_model(GEMINI_3_1_PRO_PREVIEW, ['gemini-3.1-pro-preview'])
+_add_model(GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS, ['gemini-3.1-pro-preview-customtools'])
+_add_model(GEMINI_3_1_FLASH_LITE_PREVIEW, ['gemini-3.1-flash-lite-preview'])
+_add_model(GEMINI_3_1_FLASH_LITE, ['gemini-3.1-flash-lite'])
+_add_model(GEMINI_3_PRO_IMAGE, ['gemini-3-pro-image'])
+_add_model(GEMINI_3_1_FLASH_IMAGE, ['gemini-3.1-flash-image'])
+_add_model(GEMINI_3_1_FLASH_IMAGE_PREVIEW, ['gemini-3.1-flash-image-preview'])
+_add_model(GEMINI_3_PRO_IMAGE_PREVIEW, ['gemini-3-pro-image-preview'])
+_add_model(GEMINI_2_5_FLASH_IMAGE_PREVIEW, ['gemini-2.5-flash-image-preview'])
+_add_model(GEMINI_2_5_FLASH_IMAGE, ['gemini-2.5-flash-image'])
+
+
 DEFAULT_SUPPORTS_MODEL = Supports(
     multiturn=True,
     media=True,
     tools=True,
     tool_choice=True,
     system_role=True,
-    constrained=Constrained.NO_TOOLS,
+    constrained=Constrained.ALL,
 )
 
 
@@ -974,6 +1172,64 @@ def is_gemma_model(name: str) -> bool:
         True
     """
     return name.startswith('gemma-')
+
+
+def is_tuned_gemini_name(name: str) -> bool:
+    """Check whether a model name refers to a Vertex AI tuned Gemini endpoint.
+
+    Accepts both the short form (``endpoints/ID``) and the fully qualified
+    resource path (``projects/PROJECT/locations/LOCATION/endpoints/ID``).
+    Mirrors ``isTunedGeminiName`` in the Go plugin.
+
+    Args:
+        name: The model name to check.
+
+    Returns:
+        True if this is a tuned endpoint name.
+
+    Example:
+        >>> is_tuned_gemini_name('endpoints/1234567890')
+        True
+        >>> is_tuned_gemini_name('projects/p/locations/us-central1/endpoints/9')
+        True
+        >>> is_tuned_gemini_name('gemini-2.5-flash')
+        False
+    """
+    if name.startswith('endpoints/'):
+        return True
+    return name.startswith('projects/') and '/locations/' in name and '/endpoints/' in name
+
+
+def resolve_vertex_model_name(client: genai.Client, name: str) -> str:
+    """Prepare a model name for the google-genai SDK.
+
+    The SDK's internal model-name transformer prefixes unqualified names with
+    ``publishers/google/models/``, which is wrong for tuned endpoints. For a
+    short-form ``endpoints/ID`` this expands to the fully qualified
+    ``projects/PROJECT/locations/LOCATION/endpoints/ID`` using the client's
+    configured project and location so the SDK passes it through unchanged.
+    Non-tuned names are returned as-is. Mirrors
+    ``gemini.go:resolveVertexModelName`` in the Go plugin.
+
+    Args:
+        client: The genai.Client whose project/location to use.
+        name: The incoming model name.
+
+    Returns:
+        A name safe to hand to ``client.aio.models.generate_content``.
+    """
+    if not is_tuned_gemini_name(name):
+        return name
+    if name.startswith('projects/'):
+        return name
+    api_client = getattr(client, '_api_client', None)
+    if api_client is None or not getattr(api_client, 'vertexai', False):
+        return name
+    project = getattr(api_client, 'project', None) or ''
+    location = getattr(api_client, 'location', None) or ''
+    if not project or not location:
+        return name
+    return f'projects/{project}/locations/{location}/{name}'
 
 
 def get_model_config_schema(name: str) -> type[GeminiConfigSchema]:
@@ -1358,7 +1614,7 @@ class GeminiModel:
         client = client or self._client
         try:
             response = await client.aio.models.generate_content(
-                model=model_name,
+                model=resolve_vertex_model_name(client, model_name),
                 contents=cast(genai_types.ContentListUnion, request_contents),
                 config=request_cfg,
             )
@@ -1482,7 +1738,7 @@ class GeminiModel:
         client = client or self._client
         try:
             generator = await client.aio.models.generate_content_stream(
-                model=model_name,
+                model=resolve_vertex_model_name(client, model_name),
                 contents=cast(genai_types.ContentListUnion, request_contents),
                 config=request_cfg,
             )
@@ -1660,12 +1916,30 @@ class GeminiModel:
                 cfg = genai_types.GenerateContentConfig()
 
             if has_output:
+                model_name = self._version
+                if request.config:
+                    if isinstance(request.config, dict):
+                        version = request.config.get('version')
+                    else:
+                        version = getattr(request.config, 'version', None)
+                    if version:
+                        model_name = version
+
+                # Check if the model supports constrained generation with this configuration
+                model_info = google_model_info(model_name)
+                model_supports_constrained = (
+                    model_info.supports.constrained if model_info and model_info.supports else Constrained.NO_TOOLS
+                )
+                supports_constrained = model_supports_constrained == Constrained.ALL or (
+                    model_supports_constrained == Constrained.NO_TOOLS and not request.tools
+                )
+
                 response_mime_type = (
-                    'application/json' if request.output_format == 'json' and not request.tools else None
+                    'application/json' if request.output_format == 'json' and supports_constrained else None
                 )
                 cfg.response_mime_type = response_mime_type
 
-                if request.output_schema and request.output_constrained:
+                if request.output_schema and request.output_constrained and supports_constrained:
                     cfg.response_schema = self._convert_schema_property(request.output_schema)
 
             if tools:

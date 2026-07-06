@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+export * from './agent.js';
 export { cancelOperation } from './cancel-operation.js';
 export { checkOperation } from './check-operation.js';
 export { Document, DocumentDataSchema, type DocumentData } from './document.js';
@@ -47,7 +48,6 @@ export {
   generate,
   generateOperation,
   generateStream,
-  tagAsPreamble,
   toGenerateRequest,
   type GenerateOptions,
   type GenerateStreamOptions,
@@ -65,6 +65,7 @@ export {
 } from './generate/middleware.js';
 export { GenkitAI } from './genkit-ai.js';
 export { Message } from './message.js';
+export { GENKIT_UI_METADATA, GENKIT_UI_WIDGETS } from './metadata.js';
 export {
   GenerateResponseChunkSchema,
   GenerationCommonConfigSchema,
@@ -82,6 +83,7 @@ export {
   type GenerateResponseChunkData,
   type GenerateResponseData,
   type GenerationUsage,
+  type Media,
   type MediaPart,
   type MessageData,
   type MiddlewareRef,

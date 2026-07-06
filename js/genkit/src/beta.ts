@@ -1,4 +1,6 @@
 /**
+ * @license
+ *
  * Copyright 2025 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,6 +16,42 @@
  * limitations under the License.
  */
 
+/**
+ * Beta features including interrupts, stream managers, and the experimental
+ * {@link GenkitBeta} class.
+ *
+ * ```ts
+ * import { genkit } from 'genkit/beta';
+ * ```
+ *
+ * @module beta
+ */
+
+export {
+  AgentInitSchema,
+  AgentInputSchema,
+  AgentOutputSchema,
+  AgentStreamChunkSchema,
+  type AgentInit,
+  type AgentInput,
+  type AgentOutput,
+} from '@genkit-ai/ai';
+export { Session, type Artifact } from '@genkit-ai/ai/session';
+export {
+  AgentError,
+  remoteAgent,
+  type AgentAPI,
+  type AgentChat,
+  type AgentChunk,
+  type AgentInterrupt,
+  type AgentResponse,
+  type AgentTurn,
+  type DetachedTask,
+  type RemoteAgentOptions,
+} from './client/agent.js';
+
+export type { AgentFinishReason } from './client/types.js';
+
 export {
   InMemoryStreamManager,
   StreamNotFoundError,
@@ -23,4 +61,25 @@ export {
 } from '@genkit-ai/core';
 export { AsyncTaskQueue, lazy } from '@genkit-ai/core/async';
 export * from './common.js';
-export { GenkitBeta, genkit, type GenkitBetaOptions } from './genkit-beta.js';
+export {
+  FileSessionStore,
+  GenkitBeta,
+  InMemorySessionStore,
+  SessionRunner,
+  applyPatch,
+  diff,
+  genkit,
+  type Agent,
+  type AgentFn,
+  type AgentStreamChunk,
+  type ClientTransform,
+  type GenkitBetaOptions,
+  type JsonPatch,
+  type JsonPatchOperation,
+  type SessionSnapshot,
+  type SessionSnapshotInput,
+  type SessionState,
+  type SessionStore,
+  type SessionStoreOptions,
+  type SnapshotMutator,
+} from './genkit-beta.js';

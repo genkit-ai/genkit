@@ -34,6 +34,7 @@ from pytest_mock import MockerFixture
 
 from genkit import (
     ActionRunContext,
+    Constrained,
     MediaPart,
     Message,
     ModelInfo,
@@ -41,6 +42,7 @@ from genkit import (
     ModelResponse,
     Part,
     Role,
+    Supports,
     TextPart,
     ToolDefinition,
 )
@@ -365,6 +367,109 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
                 supports=DEFAULT_SUPPORTS_MODEL,
             ),
         ),
+        (
+            'gemini-3-pro-image',
+            ModelInfo(
+                label='Google AI - Gemini 3 Pro Image',
+                supports=Supports(
+                    multiturn=True,
+                    media=True,
+                    tools=True,
+                    tool_choice=True,
+                    system_role=True,
+                    constrained=Constrained.ALL,
+                ),
+            ),
+        ),
+        (
+            'gemini-3.1-flash-image',
+            ModelInfo(
+                label='Google AI - Gemini 3.1 Flash Image',
+                supports=Supports(
+                    multiturn=True,
+                    media=True,
+                    tools=True,
+                    tool_choice=True,
+                    system_role=True,
+                    constrained=Constrained.ALL,
+                ),
+            ),
+        ),
+        (
+            'gemini-3.1-flash-image-preview',
+            ModelInfo(
+                label='Google AI - Gemini 3.1 Flash Image Preview',
+                supports=Supports(
+                    multiturn=True,
+                    media=True,
+                    tools=True,
+                    tool_choice=True,
+                    system_role=True,
+                    constrained=Constrained.ALL,
+                ),
+            ),
+        ),
+        (
+            'gemini-3-pro-image-preview',
+            ModelInfo(
+                label='Google AI - Gemini 3 Pro Image Preview',
+                supports=Supports(
+                    multiturn=True,
+                    media=True,
+                    tools=True,
+                    tool_choice=True,
+                    system_role=True,
+                    constrained=Constrained.ALL,
+                ),
+            ),
+        ),
+        (
+            'gemini-2.5-flash-image',
+            ModelInfo(
+                label='Google AI - Gemini 2.5 Flash Image',
+                supports=Supports(
+                    multiturn=True,
+                    media=True,
+                    tools=True,
+                    tool_choice=True,
+                    system_role=True,
+                    constrained=Constrained.ALL,
+                ),
+            ),
+        ),
+        (
+            'gemini-2.5-flash-image-preview',
+            ModelInfo(
+                label='Google AI - Gemini 2.5 Flash Image Preview',
+                supports=Supports(
+                    multiturn=True,
+                    media=True,
+                    tools=True,
+                    tool_choice=True,
+                    system_role=True,
+                    constrained=Constrained.ALL,
+                ),
+            ),
+        ),
+        (
+            # An unregistered image model falls back to GENERIC_IMAGE_MODEL via
+            # is_image_model(). That fallback must stay restrictive (single-turn,
+            # no tools, output=['media']) because pure image-generation models are
+            # not conversational/tool-capable.
+            'gemini-2.0-flash-preview-image-generation',
+            ModelInfo(
+                label='Google AI - Gemini Image',
+                supports=Supports(
+                    multiturn=False,
+                    media=True,
+                    tools=False,
+                    tool_choice=False,
+                    system_role=True,
+                    constrained=Constrained.ALL,
+                    output=['media'],
+                ),
+            ),
+        ),
     ],
 )
 def test_google_model_info(input: str, expected: ModelInfo) -> None:
@@ -372,6 +477,56 @@ def test_google_model_info(input: str, expected: ModelInfo) -> None:
     model_info = google_model_info(input)
 
     assert model_info == expected
+
+
+@pytest.mark.parametrize(
+    'model_name',
+    [
+        'gemini-3.1-pro-preview',
+        'gemini-3.1-pro-preview-customtools',
+        'gemini-3.1-flash-lite-preview',
+    ],
+)
+def test_gemini_3_1_models_register_real_capabilities(model_name: str) -> None:
+    """Gemini 3.1 text models resolve to explicit ModelInfo, not the generic fallback.
+
+    The generic fallback (DEFAULT_SUPPORTS_MODEL) leaves ``output`` unset, so asserting
+    ``output == ['text', 'json']`` alongside tools/constrained proves these names are
+    registered with real capability metadata matching the JS/Go registries.
+    """
+    model_info = google_model_info(model_name)
+
+    assert model_info.label.startswith('Google AI - Gemini 3.1')
+    assert model_info.supports is not None
+    assert model_info.supports.tools is True
+    assert model_info.supports.tool_choice is True
+    assert model_info.supports.constrained == Constrained.ALL
+    assert model_info.supports.output == ['text', 'json']
+
+
+@pytest.mark.parametrize(
+    'model_name',
+    [
+        'gemini-3.1-pro-preview',
+        'gemini-3.1-flash-lite',
+        'gemini-3.5-flash',
+    ],
+)
+def test_vertexai_gemini_3_x_text_models_register_real_capabilities(model_name: str) -> None:
+    """VertexAI Gemini 3.1/3.5 text models resolve to explicit ModelInfo, not the generic fallback.
+
+    These names are now first-class ``VertexAIGeminiVersion`` members. The generic fallback
+    (DEFAULT_SUPPORTS_MODEL) leaves ``output`` unset, so asserting ``output == ['text', 'json']``
+    alongside tools/constrained proves they carry real capability metadata matching the JS Vertex
+    registry, not the fallback.
+    """
+    model_info = google_model_info(model_name)
+
+    assert model_info.supports is not None
+    assert model_info.supports.tools is True
+    assert model_info.supports.tool_choice is True
+    assert model_info.supports.constrained == Constrained.ALL
+    assert model_info.supports.output == ['text', 'json']
 
 
 @pytest.fixture
@@ -804,7 +959,7 @@ async def test_gemini_model__retrieve_cached_content(
             'GenerationCommonConfig with alias-form extra',
             GenerationCommonConfig.model_validate({'codeExecution': True}),
         ),
-        ('GeminiConfigSchema instance', GeminiConfigSchema(code_execution=True)),
+        ('GeminiConfigSchema instance', GeminiConfigSchema.model_validate({'code_execution': True})),
     ],
 )
 def test_gemini_model__normalize_config_canonicalizes_aliases(
@@ -878,6 +1033,12 @@ def test_gemini_model__normalize_config_respects_version_override() -> None:
     [
         ('gemini-2.5-flash-preview-tts', GeminiTtsConfigSchema),
         ('gemini-2.0-flash-preview-image-generation', GeminiImageConfigSchema),
+        ('gemini-3-pro-image', GeminiImageConfigSchema),
+        ('gemini-3.1-flash-image', GeminiImageConfigSchema),
+        ('gemini-3.1-flash-image-preview', GeminiImageConfigSchema),
+        ('gemini-3-pro-image-preview', GeminiImageConfigSchema),
+        ('gemini-2.5-flash-image', GeminiImageConfigSchema),
+        ('gemini-2.5-flash-image-preview', GeminiImageConfigSchema),
         ('gemma-2-27b-it', GemmaConfigSchema),
         ('gemini-2.0-flash-001', GeminiConfigSchema),
     ],

@@ -146,4 +146,6 @@ def package_name() -> str:
     return 'genkit.plugins.flask'
 
 
-__all__ = ['package_name', genkit_flask_handler.__name__]
+# String literals so pyright can see what's public — `Cls.__name__` looks
+# right at runtime but type checkers can't trace it back to an exported symbol.
+__all__ = ['genkit_flask_handler', 'package_name']

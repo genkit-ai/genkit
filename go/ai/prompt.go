@@ -32,7 +32,6 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
-	"github.com/firebase/genkit/go/core/x/session"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/dotprompt/go/dotprompt"
 	"github.com/invopop/jsonschema"
@@ -52,7 +51,7 @@ type Prompt interface {
 
 // prompt is a prompt template that can be executed to generate a model response.
 type prompt struct {
-	core.ActionDef[any, *GenerateActionOptions, struct{}]
+	core.Action[any, *GenerateActionOptions, struct{}]
 	promptOptions
 	registry api.Registry
 }
@@ -133,7 +132,7 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 		metadata["prompt"] = promptMetadata
 	}
 
-	p.ActionDef = *core.DefineAction(r, name, api.ActionTypeExecutablePrompt, metadata, p.InputSchema, p.buildRequest)
+	p.Action = *core.DefineAction(r, name, api.ActionTypeExecutablePrompt, metadata, p.InputSchema, p.buildRequest)
 
 	return p
 }
@@ -146,8 +145,8 @@ func LookupPrompt(r api.Registry, name string) Prompt {
 		return nil
 	}
 	return &prompt{
-		ActionDef: *action,
-		registry:  r,
+		Action:   *action,
+		registry: r,
 	}
 }
 
@@ -285,18 +284,26 @@ func (p *prompt) ExecuteStream(ctx context.Context, opts ...PromptExecuteOption)
 			return
 		}
 
+		done := false
 		cb := func(ctx context.Context, chunk *ModelResponseChunk) error {
+			if done {
+				return errStop
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			if !yield(&ModelStreamValue{Chunk: chunk}, nil) {
-				return errPromptStop
+				done = true
+				return errStop
 			}
 			return nil
 		}
 
 		allOpts := append(slices.Clone(opts), WithStreaming(cb))
 		resp, err := p.Execute(ctx, allOpts...)
+		if done || errors.Is(err, errStop) {
+			return
+		}
 		if err != nil {
 			yield(nil, err)
 			return
@@ -305,9 +312,6 @@ func (p *prompt) ExecuteStream(ctx context.Context, opts ...PromptExecuteOption)
 		yield(&ModelStreamValue{Done: true, Response: resp}, nil)
 	}
 }
-
-// errPromptStop is a sentinel error used to signal early termination of streaming.
-var errPromptStop = errors.New("stop")
 
 // Render renders the prompt template based on user input.
 func (p *prompt) Render(ctx context.Context, input any) (*GenerateActionOptions, error) {
@@ -329,22 +333,31 @@ func (p *prompt) Render(ctx context.Context, input any) (*GenerateActionOptions,
 
 // Desc returns a descriptor of the prompt with resolved schema references.
 func (p *prompt) Desc() api.ActionDesc {
-	desc := p.ActionDef.Desc()
-	promptMeta := desc.Metadata["prompt"].(map[string]any)
-	if inputMeta, ok := promptMeta["input"].(map[string]any); ok {
-		if inputSchema, ok := inputMeta["schema"].(map[string]any); ok {
-			if resolved, err := core.ResolveSchema(p.registry, inputSchema); err == nil {
-				inputMeta["schema"] = resolved
+	desc := p.Action.Desc()
+	descMeta := maps.Clone(desc.Metadata)
+	if promptMeta, ok := descMeta["prompt"].(map[string]any); ok {
+		promptMeta = maps.Clone(promptMeta)
+		if inputMeta, ok := promptMeta["input"].(map[string]any); ok {
+			inputMeta = maps.Clone(inputMeta)
+			if inputSchema, ok := inputMeta["schema"].(map[string]any); ok {
+				if resolved, err := core.ResolveSchema(p.registry, inputSchema); err == nil {
+					inputMeta["schema"] = resolved
+				}
 			}
+			promptMeta["input"] = inputMeta
 		}
-	}
-	if outputMeta, ok := promptMeta["output"].(map[string]any); ok {
-		if outputSchema, ok := outputMeta["schema"].(map[string]any); ok {
-			if resolved, err := core.ResolveSchema(p.registry, outputSchema); err == nil {
-				outputMeta["schema"] = resolved
+		if outputMeta, ok := promptMeta["output"].(map[string]any); ok {
+			outputMeta = maps.Clone(outputMeta)
+			if outputSchema, ok := outputMeta["schema"].(map[string]any); ok {
+				if resolved, err := core.ResolveSchema(p.registry, outputSchema); err == nil {
+					outputMeta["schema"] = resolved
+				}
 			}
+			promptMeta["output"] = outputMeta
 		}
+		descMeta["prompt"] = promptMeta
 	}
+	desc.Metadata = descMeta
 	return desc
 }
 
@@ -617,7 +630,7 @@ func renderDotpromptToMessages(ctx context.Context, promptFn dotprompt.PromptFun
 	maps.Copy(templateContext, actionCtx)
 
 	// Inject session state if available (accessible via {{@state.field}} in templates)
-	if state := session.StateFromContext(ctx); state != nil {
+	if state := base.PromptStateFromContext(ctx); state != nil {
 		templateContext["state"] = state
 	}
 
@@ -1025,13 +1038,18 @@ func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts
 			return
 		}
 
+		done := false
 		cb := func(ctx context.Context, chunk *ModelResponseChunk) error {
+			if done {
+				return errStop
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			streamValue, err := extractTypedOutput[Out](chunk)
 			if err != nil {
 				yield(nil, err)
+				done = true
 				return err
 			}
 			// Skip yielding if there's no parseable output yet (e.g., incomplete JSON during streaming).
@@ -1039,13 +1057,17 @@ func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts
 				return nil
 			}
 			if !yield(&StreamValue[Out, Out]{Chunk: streamValue}, nil) {
-				return errGenerateStop
+				done = true
+				return errStop
 			}
 			return nil
 		}
 
 		allOpts := append(slices.Clone(opts), WithInput(input), WithStreaming(cb))
 		resp, err := dp.prompt.Execute(ctx, allOpts...)
+		if done || errors.Is(err, errStop) {
+			return
+		}
 		if err != nil {
 			yield(nil, err)
 			return

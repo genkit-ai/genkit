@@ -17,6 +17,7 @@
 
 """Tests for OpenAI compatible model implementation."""
 
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
@@ -152,16 +153,18 @@ async def test_generate(stream: bool, sample_request: ModelRequest) -> None:
     mock_response = ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='mocked'))]))
 
     model = OpenAIModel(model='gpt-4', client=MagicMock())
-    model._generate_stream = AsyncMock(return_value=mock_response)
-    model._generate = AsyncMock(return_value=mock_response)
-    model.normalize_config = MagicMock(return_value={})
+    # monkey-patch real methods with mocks; sidestep the static signatures.
+    model_any = cast(Any, model)
+    model_any._generate_stream = AsyncMock(return_value=mock_response)
+    model_any._generate = AsyncMock(return_value=mock_response)
+    model_any.normalize_config = MagicMock(return_value={})
     response = await model.generate(sample_request, ctx_mock)
 
     assert response == mock_response
     if stream:
-        model._generate_stream.assert_called_once()
+        model_any._generate_stream.assert_called_once()
     else:
-        model._generate.assert_called_once()
+        model_any._generate.assert_called_once()
 
 
 @pytest.mark.parametrize(

@@ -19,9 +19,12 @@ package ai
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/firebase/genkit/go/core"
 )
 
 // --- counter: a config whose BuildMiddleware tracks hook invocations ---
@@ -520,6 +523,94 @@ func TestWrapToolInterrupts(t *testing.T) {
 	}
 	if len(resp.Interrupts()) == 0 {
 		t.Error("expected at least one interrupt part in response")
+	}
+}
+
+// --- WrapTool validation errors returned to model ---
+
+func TestWrapToolValidationErrorReturnedToModel(t *testing.T) {
+	r := newTestRegistry(t)
+
+	var callCount int32
+
+	modelHandler := func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		c := atomic.AddInt32(&callCount, 1)
+
+		if c <= 2 {
+			var toolInput map[string]any
+			if c == 1 {
+				toolInput = map[string]any{"value": "not_a_number"}
+			} else {
+				toolInput = map[string]any{"value": 42}
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: &Message{
+					Role: RoleModel,
+					Content: []*Part{NewToolRequestPart(&ToolRequest{
+						Name:  "validateMe",
+						Input: toolInput,
+					})},
+				},
+			}, nil
+		}
+
+		return &ModelResponse{
+			Request:      req,
+			Message:      NewModelTextMessage("done"),
+			FinishReason: FinishReasonStop,
+		}, nil
+	}
+
+	defineFakeModel(t, r, fakeModelConfig{
+		name:    "test/model",
+		handler: modelHandler,
+	})
+
+	DefineTool(r, "validateMe", "A tool that requires a numeric value",
+		func(ctx *ToolContext, input any) (string, error) {
+			m := input.(map[string]any)
+			return fmt.Sprintf("success: %v", m["value"]), nil
+		},
+		WithInputSchema(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"value": map[string]any{
+					"type": "number",
+				},
+			},
+			"required": []string{"value"},
+		}),
+	)
+
+	errorHandler := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{
+			WrapTool: func(ctx context.Context, params *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
+				resp, err := next(ctx, params)
+				var sve *core.SchemaValidationError
+				if errors.As(err, &sve) {
+					return &MultipartToolResponse{
+						Content: []*Part{NewTextPart(fmt.Sprintf("Validation error: %v", sve))},
+						Output:  "tool call failed; see content for details",
+					}, nil
+				}
+				return resp, err
+			},
+		}, nil
+	})
+
+	resp, err := Generate(testCtx, r,
+		WithModelName("test/model"),
+		WithPrompt("use the tool"),
+		WithTools(ToolName("validateMe")),
+		WithUse(errorHandler),
+	)
+	assertNoError(t, err)
+	if resp.FinishReason != FinishReasonStop {
+		t.Errorf("expected FinishReason=stop, got %q", resp.FinishReason)
+	}
+	if c := atomic.LoadInt32(&callCount); c < 3 {
+		t.Errorf("expected >=3 model calls (invalid → retry → done), got %d", c)
 	}
 }
 

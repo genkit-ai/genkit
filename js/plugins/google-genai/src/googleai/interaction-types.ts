@@ -406,6 +406,9 @@ export declare interface CreateInteractionRequest {
   /** The agent to use for this request (mutually exclusive with model) */
   agent?: string;
 
+  /** The environment configuration for the sandbox. */
+  environment?: string | Record<string, unknown>;
+
   /** The inputs for the interaction. */
   input: string | Step[] | Step;
 
@@ -442,6 +445,8 @@ export declare interface GeminiInteraction {
   model?: string;
   /** The name of the Agent used for generating the interaction. */
   agent?: string;
+  /** The environment ID for the sandbox, if used. */
+  environment_id?: string;
   /** The unique identifier for the interaction completion. */
   id?: string; // The interactionId to be used in subsequent interactions
   /** The ID of the previous interaction, if any. */

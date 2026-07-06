@@ -70,6 +70,311 @@ go run main.go
 
 ---
 
+## Agents
+
+Agents are Genkit's primitive for multi-turn, stateful conversations. An agent owns the per-turn loop (render the prompt, append history, call the model, stream the reply) and the conversation's session state, so your code sends messages and reads results instead of re-threading history on every call.
+
+Beyond a plain chat loop, agents give you:
+
+- **Managed session state** that persists across turns, with typed custom state of your own.
+- **Snapshots** written at the end of every successful turn, so a conversation can be resumed later by session or snapshot ID.
+- **Background execution** via `Detach`: hand a long-running turn to the server, walk away, and poll, resume, or abort it later.
+- **One definition, many transports**: the same agent runs in-process (`RunText`, `Connect`) or over HTTP, one turn per request.
+
+> [!WARNING]
+> This API is in preview and may experience breaking changes in minor releases.
+
+The constructors (`DefineAgent`, `DefinePromptAgent`, `DefineCustomAgent`) live in `github.com/firebase/genkit/go/genkit/exp` (aliased `genkitx` below); the agent types and options live in `github.com/firebase/genkit/go/ai/exp` (aliased `aix`). Initialize Genkit with `genkit.WithExperimental()` to enable the `genkit/exp` surface.
+
+### Define an Agent
+
+The shortest path is a prompt-backed agent with an inline prompt and a session store. `aix.InlinePrompt` declares the prompt right next to the agent; the store persists each turn so the conversation can resume later:
+
+```go
+import (
+    "github.com/firebase/genkit/go/ai"
+    aix "github.com/firebase/genkit/go/ai/exp"
+    "github.com/firebase/genkit/go/ai/exp/localstore"
+    "github.com/firebase/genkit/go/genkit"
+    genkitx "github.com/firebase/genkit/go/genkit/exp"
+)
+
+chatAgent := genkitx.DefineAgent(g, "chat",
+    aix.InlinePrompt{
+        ai.WithModelName("googleai/gemini-flash-latest"),
+        ai.WithSystem("You are a sarcastic pirate. Keep responses concise."),
+    },
+    aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+)
+
+// Single turn: RunText drives the whole connection lifecycle for you.
+out, _ := chatAgent.RunText(ctx, "What's the best way to learn Go?")
+fmt.Println(out.Message.Text())
+```
+
+The `State` type parameter is inferred from the typed options (`aix.WithSessionStore`, `aix.WithStateTransform`), so the explicit `genkitx.DefineAgent[State]` is only needed when no typed option is supplied.
+
+[See full example](samples/basic-agents)
+
+### Multi-Turn Conversations
+
+`Connect` opens a streaming session you drive turn by turn: send a message, iterate chunks until `TurnEnd`, then send the next one. The agent carries the history between turns. `Output` ends the conversation and returns the final result:
+
+```go
+conn, _ := chatAgent.Connect(ctx)
+
+conn.SendText("What is Go's concurrency model?")
+for chunk, err := range conn.Receive() {
+    if err != nil {
+        log.Fatal(err)
+    }
+    if chunk.ModelChunk != nil {
+        fmt.Print(chunk.ModelChunk.Text()) // stream tokens as they arrive
+    }
+    if chunk.TurnEnd != nil {
+        break // turn complete, ready for the next input
+    }
+}
+
+conn.SendText("Show me an example with goroutines.")
+// ... iterate conn.Receive() again ...
+
+out, _ := conn.Output() // closes input, drains, returns the final AgentOutput
+fmt.Println(out.Message.Text())
+```
+
+[See full example](samples/basic-agents)
+
+### Load the Prompt from a File
+
+`genkitx.DefinePromptAgent` backs the agent with a prompt from the registry instead of an inline one. By default it uses the prompt registered under the agent's own name, including one loaded from a `.prompt` file, so prompt authors can tune the model, config, template, and default input without touching the Go wiring:
+
+```yaml
+# prompts/chat.prompt
+---
+model: googleai/gemini-flash-latest
+input:
+  schema: ChatInput
+  default:
+    personality: a Michelin-starred chef
+---
+{{role "system"}}
+You are {{personality}}. Keep responses concise.
+```
+
+```go
+type ChatInput struct {
+    Personality string `json:"personality"`
+}
+
+// Register the schema so the .prompt file can reference it by name.
+genkit.DefineSchemaFor[ChatInput](g)
+
+// Agent "chat" renders ./prompts/chat.prompt every turn (no source option needed).
+chatAgent := genkitx.DefinePromptAgent(g, "chat",
+    aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+)
+```
+
+To back several agents with one shared prompt, point each at it with `aix.WithNamedPrompt` and give each its own input. The prompt name need not match the agent name:
+
+```go
+for _, p := range []struct{ name, persona string }{
+    {"pirate", "a sarcastic pirate"},
+    {"chef", "a Michelin-starred chef"},
+} {
+    genkitx.DefinePromptAgent(g, p.name,
+        aix.WithNamedPrompt[any]("chat", ChatInput{Personality: p.persona}),
+        aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+    )
+}
+```
+
+[See full example](samples/basic-agents)
+
+### Custom Turn Loops
+
+When the prompt-backed loop isn't enough (custom models per turn, pre/post processing, bespoke tool plumbing), `DefineCustomAgent` hands you the turn body. You still get managed session state, snapshots, and the detach lifecycle for free. A typed `State` parameter carries structured state across turns, and mutating it with `UpdateCustom` streams the delta to the client automatically:
+
+```go
+type ChatState struct {
+    TopicsDiscussed []string `json:"topicsDiscussed"`
+}
+
+chatAgent := genkitx.DefineCustomAgent(g, "chat",
+    func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[ChatState]) (*aix.AgentResult, error) {
+        err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+            for chunk, err := range genkit.GenerateStream(ctx, g,
+                ai.WithModelName("googleai/gemini-flash-latest"),
+                ai.WithMessages(sess.Messages()...), // the history is yours to manage
+            ) {
+                if err != nil {
+                    return nil, err
+                }
+                if chunk.Done {
+                    sess.AddMessages(chunk.Response.Message)
+                    if input.Message != nil {
+                        sess.UpdateCustom(func(s ChatState) ChatState {
+                            s.TopicsDiscussed = append(s.TopicsDiscussed, input.Message.Text())
+                            return s
+                        })
+                    }
+                    // Report how the turn ended so the framework can forward it
+                    // on the TurnEnd chunk and persist it on the snapshot.
+                    return &aix.TurnResult{
+                        FinishReason: aix.AgentFinishReason(chunk.Response.FinishReason),
+                    }, nil
+                }
+                resp.SendModelChunk(chunk.Chunk) // stream tokens to the client
+            }
+            return nil, nil
+        })
+        if err != nil {
+            return nil, err
+        }
+        return sess.Result(), nil
+    },
+    aix.WithSessionStore(localstore.NewInMemorySessionStore[ChatState]()),
+)
+```
+
+[See full example](samples/basic-agents)
+
+### Persist and Resume
+
+With a session store configured, every successful turn writes a snapshot. The caller only needs the `SessionID` from a previous result to pick the conversation back up:
+
+```go
+first, _ := chatAgent.RunText(ctx, "My name is Alex and I'm planning a trip to Japan.")
+
+// Later, in another request or process: resume from the latest snapshot.
+second, _ := chatAgent.RunText(ctx, "What is my name?",
+    aix.WithSessionID[any](first.SessionID))
+fmt.Println(second.Message.Text()) // "Your name is Alex."
+```
+
+Resume from one specific point in history with `aix.WithSnapshotID`, or skip the server store entirely and round-trip the state yourself with `aix.WithState` (the conversation's identity travels inside the state object).
+
+[See full example](samples/basic-agents)
+
+### Redact on the Way Out
+
+`WithStateTransform` rewrites session state as it leaves the server, on `GetSnapshot` reads, on a client-managed `out.State`, and on the streamed `CustomPatch` diffs, while the persisted snapshot and the state your agent function sees stay raw:
+
+```go
+chatAgent := genkitx.DefineAgent(g, "chat",
+    aix.InlinePrompt{ai.WithModelName("googleai/gemini-flash-latest")},
+    aix.WithSessionStore(store),
+    aix.WithStateTransform(func(ctx context.Context, s *aix.SessionState[ChatState]) (*aix.SessionState[ChatState], error) {
+        return redactPII(ctx, s) // ctx carries caller identity for RBAC-aware redaction
+    }),
+)
+```
+
+`WithStreamTransform[State]` is the stream-side counterpart, rewriting each `AgentStreamChunk` (model tokens, artifacts, custom patches, turn-end) on its way to the client. It takes `State` as an explicit type argument because a chunk carries no state type to infer it from, unlike `WithStateTransform`, whose `State` is derived from the transform's signature. Both transforms own a fresh deep copy: mutate it in place, return a new value, or return `nil` to omit that state (or drop that chunk) from the client's view. A non-nil error fails closed, so the read or invocation fails with the transform's status (e.g. `PERMISSION_DENIED`) instead of leaking unredacted data.
+
+### Background Agents
+
+`Detach` hands the rest of the work to the server and closes the connection promptly with a pending snapshot ID. The agent keeps processing in the background on a context decoupled from the client's, so a long task survives the caller walking away:
+
+```go
+conn, _ := chatAgent.Connect(ctx)
+conn.SendText("Draft a detailed two-week Japan itinerary.")
+conn.Detach() // server takes ownership of the remaining work
+
+out, _ := conn.Output() // returns immediately; FinishReason is "detached"
+snapshotID := out.SnapshotID
+
+// Later: poll the snapshot, then resume once it has finalized.
+snap, _ := chatAgent.GetSnapshot(ctx, snapshotID)
+switch snap.Status {
+case aix.SnapshotStatusPending:   // still working
+case aix.SnapshotStatusCompleted: // snap.State holds the final state; resume it
+case aix.SnapshotStatusFailed:    // snap.Error holds the structured failure
+}
+
+// Or stop it early; the runtime observes the abort and cancels the work.
+chatAgent.Abort(ctx, snapshotID)
+```
+
+Detach requires a store that implements `SnapshotSubscriber` (both bundled local stores do). A detached turn refreshes a heartbeat while it runs, so a crashed worker surfaces as `expired` instead of orphaning the conversation forever.
+
+[See full example](samples/basic-agents)
+
+### Delegate to Sub-Agents
+
+> [!WARNING]
+> This API is in preview and may experience breaking changes in minor releases.
+
+The experimental `Agents` middleware (in `plugins/middleware/exp`) lets one agent delegate to others. It injects one `delegate_to_<name>` tool per sub-agent and a `<sub-agents>` listing into the orchestrator's system prompt, then runs the chosen sub-agent and returns its result when the model calls the tool. Each sub-agent's `aix.WithDescription` (captured by `agent.Ref()`) tells the orchestrator when to reach for it:
+
+```go
+import (
+    "github.com/firebase/genkit/go/ai"
+    aix "github.com/firebase/genkit/go/ai/exp"
+    "github.com/firebase/genkit/go/ai/exp/localstore"
+    genkitx "github.com/firebase/genkit/go/genkit/exp"
+    middlewarex "github.com/firebase/genkit/go/plugins/middleware/exp"
+)
+
+researcher := genkitx.DefineAgent(g, "researcher",
+    aix.InlinePrompt{
+        ai.WithModelName("googleai/gemini-flash-latest"),
+        ai.WithSystem("You are a thorough research assistant. Summarize well-sourced findings."),
+    },
+    aix.WithDescription[any]("Researches a topic and summarizes well-sourced findings."),
+)
+
+// The orchestrator delegates instead of answering directly: the model calls
+// delegate_to_researcher and the middleware runs the sub-agent.
+orchestrator := genkitx.DefineAgent(g, "orchestrator",
+    aix.InlinePrompt{
+        ai.WithModelName("googleai/gemini-flash-latest"),
+        ai.WithSystem("You are a project coordinator. Delegate research to the " +
+            "researcher sub-agent, then synthesize a final answer."),
+        ai.WithUse(&middlewarex.Agents{
+            Agents:         []aix.AgentRef{researcher.Ref()},
+            MaxDelegations: 5, // cap delegation tool calls per turn (0 = unlimited)
+            HistoryLength:  4, // recent messages forwarded to client-managed sub-agents
+        }),
+    },
+    aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+)
+
+out, _ := orchestrator.RunText(ctx, "Research goroutine scheduling and summarize the key ideas.")
+fmt.Println(out.Message.Text())
+```
+
+Sub-agents are named by `aix.AgentRef`, either captured from an agent value with `agent.Ref()` or written by hand (`aix.AgentRef{Name: "researcher"}`). The middleware composes with the `Artifacts` middleware: give a sub-agent `&middlewarex.Artifacts{}` so it can save output, set `ArtifactStrategy: middlewarex.ArtifactStrategySession` to merge those artifacts into the orchestrator's session instead of inlining them in the tool result, and add `&middlewarex.Artifacts{Readonly: true}` on the orchestrator so it can review them before answering.
+
+[See full example](samples/basic-agents)
+
+### Serve Agents over HTTP
+
+An `Agent` is an `api.BidiAction`, so it serves over HTTP one turn per request. The `genkit/exp` package lays out a default route surface for every registered agent, including the snapshot companion endpoints for store-backed agents:
+
+```go
+import (
+    genkitx "github.com/firebase/genkit/go/genkit/exp"
+    "github.com/firebase/genkit/go/plugins/server"
+)
+
+mux := http.NewServeMux()
+for _, r := range genkitx.AllAgentRoutes(g) {
+    mux.HandleFunc(r.Pattern(), r.Handler())
+}
+// POST /agents/chat                one turn per request (?stream=true for SSE)
+// POST /agents/chat/getSnapshot    read a snapshot by ID
+// POST /agents/chat/abort          abort background work
+log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
+```
+
+A client starts a conversation by POSTing a turn, then continues it by sending the returned `sessionId` in the request's `init` field. Agents with no store return the full state instead and the client round-trips it, so stateless and store-backed agents deploy side by side.
+
+[See full example](samples/basic-agents-server)
+
+---
+
 ## Features
 
 Genkit Go gives you everything you need to build AI applications with confidence.
@@ -248,6 +553,91 @@ if resp.FinishReason == ai.FinishReasonInterrupted {
 
 [See full example](samples/intermediate-interrupts)
 
+### Streaming, Multipart, and Interruptible Tools
+
+> [!WARNING]
+> This API is in preview and may experience breaking changes in minor releases.
+
+The experimental tool constructors in `genkit/exp` (aliased `genkitx`) hand your function a plain `context.Context` instead of `ai.ToolContext`, with helpers in `ai/exp/tool` for streaming progress, attaching media, and typed interrupts. This is a preview of Genkit Go's next-generation tools API: it is slated to replace the current `genkit.DefineTool` (shown above) as the default in the next major version. Initialize Genkit with `genkit.WithExperimental()` to enable them.
+
+`genkitx.DefineTool` infers its input and output types from the function. Inside the tool, `tool.SendPartial` streams partial results mid-execution and `tool.AttachParts` adds extra content parts to the response, neither of which changes the function signature:
+
+```go
+import (
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/ai/exp/tool"
+    genkitx "github.com/firebase/genkit/go/genkit/exp"
+)
+
+type AnalyzeInput struct {
+    Symbol string `json:"symbol"`
+}
+
+analyzeTool := genkitx.DefineTool(g, "analyzeStock",
+    "Analyzes a stock and returns a summary with a chart.",
+    func(ctx context.Context, input AnalyzeInput) (string, error) {
+        // Stream progress to the client while the tool runs. It is a no-op when
+        // the caller isn't streaming; the return value is always authoritative.
+        tool.SendPartial(ctx, map[string]any{"status": "fetching prices", "progress": 50})
+
+        // Attach media to the tool's response without a multipart signature.
+        tool.AttachParts(ctx, ai.NewMediaPart("image/png", chartDataURI))
+
+        return fmt.Sprintf("%s closed up 4%% this week.", input.Symbol), nil
+    },
+)
+```
+
+`genkitx.DefineInterruptibleTool` adds a typed resume parameter: it is `nil` on the first call and carries the caller's decision when the tool resumes. Reusing the `TransferInput`/`TransferInterrupt` types from above, the tool pauses with `tool.Interrupt` and the caller resumes it with typed data via the tool's `Resume`:
+
+```go
+type Confirmation struct {
+    Approved bool `json:"approved"`
+}
+
+// The third parameter (*Confirmation) is the resume payload: nil on the first
+// call, populated when the caller resumes after an interrupt.
+transferTool := genkitx.DefineInterruptibleTool(g, "transfer",
+    "Transfers money to another account.",
+    func(ctx context.Context, input TransferInput, confirm *Confirmation) (string, error) {
+        if confirm == nil && input.Amount > 1000 {
+            // Pause and hand typed data to the caller.
+            return "", tool.Interrupt(TransferInterrupt{Reason: "confirm_large", Amount: input.Amount})
+        }
+        if confirm != nil && !confirm.Approved {
+            return "Transfer cancelled.", nil
+        }
+        return "Transfer completed.", nil
+    },
+)
+
+resp, _ := genkit.Generate(ctx, g,
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("Transfer $5000 to account ABC123"),
+    ai.WithTools(transferTool),
+)
+
+// Interrupts() yields nothing unless the tool paused for input.
+var restarts []*ai.Part
+for _, interrupt := range resp.Interrupts() {
+    meta, _ := tool.InterruptAs[TransferInterrupt](interrupt)
+
+    // Use meta to ask the user for a decision, then resume with their answer.
+    // The typed data arrives as the tool's *Confirmation parameter.
+    restart, _ := transferTool.Resume(interrupt, Confirmation{Approved: true})
+    restarts = append(restarts, restart)
+}
+if len(restarts) > 0 {
+    resp, _ = genkit.Generate(ctx, g,
+        ai.WithMessages(resp.History()...),
+        ai.WithTools(transferTool),
+        ai.WithToolRestarts(restarts...),
+    )
+}
+```
+
+[See the banker example](samples/basic-agents) for an interruptible tool wired into an agent.
+
 ### Middleware
 
 Middleware wraps generation, model calls, and tool execution to add cross-cutting behavior without touching your flows. Register the `middleware` plugin during `Init` to expose the built-ins in the Dev UI, then attach them per call with `ai.WithUse`:
@@ -268,7 +658,7 @@ response, _ := genkit.Generate(ctx, g,
     ai.WithUse(
         &middleware.Retry{MaxRetries: 3},
         &middleware.Fallback{Models: []ai.ModelRef{
-            googlegenai.ModelRef("googleai/gemini-3.1-flash", nil),
+            googlegenai.ModelRef("googleai/gemini-2.5-flash", nil),
         }},
     ),
 )
@@ -575,6 +965,27 @@ e.Start(":8080")
 
 Any error returned by `genkit.HandlerFunc` will be handled by Echo's middleware stack.
 
+### Durable Streaming
+
+> [!WARNING]
+> This API is in preview and may experience breaking changes in minor releases.
+
+Allow clients to reconnect to in-progress or completed streams using a stream ID. The stream manager lives in `core/x/streaming`:
+
+```go
+import "github.com/firebase/genkit/go/core/x/streaming"
+
+mux.HandleFunc("POST /myFlow", genkit.Handler(myStreamingFlow,
+    genkit.WithStreamManager(streaming.NewInMemoryStreamManager(
+        streaming.WithTTL(10*time.Minute),
+    )),
+))
+```
+
+Clients receive a stream ID in the `X-Genkit-Stream-Id` header and can reconnect to replay buffered chunks.
+
+[See full example](samples/durable-streaming)
+
 ---
 
 ## Model Providers
@@ -583,9 +994,9 @@ Genkit provides a unified interface across all major AI providers. Use whichever
 
 | Provider | Plugin | Models |
 |----------|--------|--------|
-| **Google AI** | `googlegenai.GoogleAI` | Gemini 2.5 Flash, Gemini 2.5 Pro, and more |
-| **Vertex AI** | `vertexai.VertexAI` | Gemini models via Google Cloud |
-| **Anthropic** | `anthropic.Anthropic` | Claude 3.5, Claude 3 Opus, and more |
+| **Google AI** | `googlegenai.GoogleAI` | Gemini 3.5 Flash, Gemini 3.1 Pro, and more |
+| **Vertex AI** | `vertexai.VertexAI` | Gemini 3.5 Flash, Gemini 3.1 Pro via Google Cloud |
+| **Anthropic** | `anthropic.Anthropic` | Claude Opus 4.8, Claude Sonnet 4.6, Claude Haiku 4.5 |
 | **OpenAI** | `openai.OpenAI` | GPT and reasoning models via OpenAI's Responses API |
 | **Ollama** | `ollama.Ollama` | Llama, Mistral, and other open models |
 | **OpenAI Compatible** | `compat_oai` | Any OpenAI-compatible API |
@@ -658,61 +1069,6 @@ The local developer UI lets you:
 
 ---
 
-## Experimental
-
-These features are available in `core/x` and may change in future releases.
-
-### Durable Streaming
-
-Allow clients to reconnect to in-progress or completed streams using a stream ID:
-
-```go
-import "github.com/firebase/genkit/go/core/x/streaming"
-
-mux.HandleFunc("POST /myFlow", genkit.Handler(myStreamingFlow,
-    genkit.WithStreamManager(streaming.NewInMemoryStreamManager(
-        streaming.WithTTL(10*time.Minute),
-    )),
-))
-```
-
-Clients receive a stream ID in the `X-Genkit-Stream-Id` header and can reconnect to replay buffered chunks.
-
-[See full example](samples/durable-streaming)
-
-### Sessions
-
-Maintain typed state across multiple requests and throughout generation including tools:
-
-```go
-import "github.com/firebase/genkit/go/core/x/session"
-
-type CartState struct {
-    Items []string `json:"items"`
-}
-
-store := session.NewInMemoryStore[CartState]()
-
-genkit.DefineFlow(g, "manageCart", func(ctx context.Context, input string) (string, error) {
-    sess, err := session.Load(ctx, store, "session-id")
-    if err != nil {
-        sess, _ = session.New(ctx,
-            session.WithID[CartState]("session-id"),
-            session.WithStore(store),
-            session.WithInitialState(CartState{}),
-        )
-    }
-    ctx = session.NewContext(ctx, sess)
-
-    // Tools can now access session state via session.FromContext[CartState](ctx)
-    return genkit.GenerateText(ctx, g, ai.WithPrompt(input), ai.WithTools(myTools...))
-})
-```
-
-[See full example](samples/session)
-
----
-
 ## Samples
 
 Explore working examples to see Genkit in action:
@@ -722,13 +1078,14 @@ Explore working examples to see Genkit in action:
 | [basic](samples/basic) | Simple text generation with streaming |
 | [basic-structured](samples/basic-structured) | Typed JSON output with `GenerateData` and `GenerateDataStream` |
 | [basic-prompts](samples/basic-prompts) | Prompt templates with Handlebars and `.prompt` files |
+| [basic-agents](samples/basic-agents) | Multi-turn agents (inline, prompt-file, and custom-loop) with snapshots and background detach |
+| [basic-agents-server](samples/basic-agents-server) | Serving store-backed and stateless agents over HTTP |
 | [intermediate-interrupts](samples/intermediate-interrupts) | Human-in-the-loop with tool interrupts |
 | [basic-middleware/retry-fallback](samples/basic-middleware/retry-fallback) | Composing `Retry` and `Fallback` middleware |
 | [basic-middleware/filesystem](samples/basic-middleware/filesystem) | Scoped filesystem tools for the model |
 | [basic-middleware/skills](samples/basic-middleware/skills) | On-demand loadable `SKILL.md` personas |
 | [prompts-embed](samples/prompts-embed) | Embed prompts in your binary |
 | [durable-streaming](samples/durable-streaming) | Reconnectable streams with replay |
-| [session](samples/session) | Stateful flows with typed session data |
 
 ---
 

@@ -124,3 +124,31 @@ func TestConvertSpan(t *testing.T) {
 		t.Errorf("mismatch (-want, +got)\n%s", diff)
 	}
 }
+
+// TestConvertSpanLive checks that a span exported before it has ended (as the
+// realtime processor does on span start) gets EndTime 0 rather than the garbage
+// value ToMilliseconds would produce from a zero time.Time. The telemetry
+// server relies on a falsy endTime to treat the span as in progress.
+func TestConvertSpanLive(t *testing.T) {
+	tid, err := trace.TraceIDFromHex("1234567890abcdef1234567890abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid, err := trace.SpanIDFromHex("1234567890abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ss := tracetest.SpanStub{
+		Name:        "live",
+		SpanContext: trace.NewSpanContext(trace.SpanContextConfig{TraceID: tid, SpanID: sid}),
+		StartTime:   time.Unix(1, 0),
+		// EndTime left zero: the span has not ended.
+	}
+	got := convertSpan(ss.Snapshot())
+	if got.StartTime != Milliseconds(1e3) {
+		t.Errorf("StartTime = %v, want 1000", got.StartTime)
+	}
+	if got.EndTime != 0 {
+		t.Errorf("EndTime = %v, want 0 for an unfinished span", got.EndTime)
+	}
+}

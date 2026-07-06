@@ -176,19 +176,21 @@ describe('filesystem middleware', () => {
       const ai = genkit({});
       const pm = createToolModel(ai, 'list_files', { dirPath: '../' });
 
-      // The middleware catches errors and injects user message.
-      // So verify that user message contains access denied error.
+      // The middleware catches errors and returns a tool response with the error.
       const result = (await ai.generate({
         model: pm,
         prompt: 'test',
         use: [filesystem({ rootDirectory: tempDir })],
       })) as any;
 
-      const userMsg = result.messages.find(
+      const toolMsg = result.messages.find(
         (m: any) =>
-          m.role === 'user' && m.content[0].text.includes('Access denied')
+          m.role === 'tool' &&
+          m.content.some((c: any) =>
+            c.toolResponse?.output?.toString()?.includes('Access denied')
+          )
       );
-      assert.ok(userMsg);
+      assert.ok(toolMsg);
     });
 
     it('allows listing when root is /', async () => {
@@ -308,11 +310,14 @@ describe('filesystem middleware', () => {
         use: [filesystem({ rootDirectory: tempDir })],
       })) as any;
 
-      const userMsg = result.messages.find(
+      const toolMsg = result.messages.find(
         (m: any) =>
-          m.role === 'user' && m.content[0].text.includes('Access denied')
+          m.role === 'tool' &&
+          m.content.some((c: any) =>
+            c.toolResponse?.output?.toString()?.includes('Access denied')
+          )
       );
-      assert.ok(userMsg);
+      assert.ok(toolMsg);
     });
   });
 
@@ -363,11 +368,10 @@ describe('filesystem middleware', () => {
   describe('search_and_replace', () => {
     it('replaces content', async () => {
       const ai = genkit({});
-      const editBlock = `<<<<<<< SEARCH
-hello world
-=======
-hello universe
->>>>>>> REPLACE`;
+      const SEARCH_MARKER = '<<<<<<< SEARCH';
+      const SEP_MARKER = '=======';
+      const REPLACE_MARKER = '>>>>>>> REPLACE';
+      const editBlock = `${SEARCH_MARKER}\nhello world\n${SEP_MARKER}\nhello universe\n${REPLACE_MARKER}`;
       const pm = createToolModel(ai, 'search_and_replace', {
         filePath: 'file1.txt',
         edits: [editBlock],
@@ -381,20 +385,18 @@ hello universe
 
       const toolMsg = result.messages.find((m: any) => m.role === 'tool');
       if (!toolMsg) {
-        const errorMsg = result.messages.find(
-          (m: any) => m.role === 'user' && m.content[0].text.includes('failed')
+        console.log(
+          'Messages received:',
+          JSON.stringify(result.messages, null, 2)
         );
-        if (errorMsg) {
-          throw new Error(
-            `Tool failed unexpectedly: ${errorMsg.content[0].text}`
-          );
-        }
       }
-      assert.ok(toolMsg);
-      assert.match(
-        toolMsg.content[0].toolResponse.output,
-        /Successfully applied/
-      );
+      assert.ok(toolMsg, 'Expected a tool response message');
+      // If the tool returned an error response, fail with a clear message.
+      const output = toolMsg.content[0].toolResponse.output;
+      if (typeof output === 'string' && output.includes('failed')) {
+        throw new Error(`Tool failed unexpectedly: ${output}`);
+      }
+      assert.match(output, /Successfully applied/);
 
       const content = await fs.readFile(
         path.join(tempDir, 'file1.txt'),
@@ -405,11 +407,10 @@ hello universe
 
     it('fails if search content not found', async () => {
       const ai = genkit({});
-      const editBlock = `<<<<<<< SEARCH
-nonexistent
-=======
-replace
->>>>>>> REPLACE`;
+      const SEARCH_MARKER = '<<<<<<< SEARCH';
+      const SEP_MARKER = '=======';
+      const REPLACE_MARKER = '>>>>>>> REPLACE';
+      const editBlock = `${SEARCH_MARKER}\nnonexistent\n${SEP_MARKER}\nreplace\n${REPLACE_MARKER}`;
       const pm = createToolModel(ai, 'search_and_replace', {
         filePath: 'file1.txt',
         edits: [editBlock],
@@ -421,100 +422,70 @@ replace
         use: [filesystem({ rootDirectory: tempDir, allowWriteAccess: true })],
       })) as any;
 
-      const userMsg = result.messages.find(
+      const toolMsg = result.messages.find(
         (m: any) =>
-          m.role === 'user' &&
-          m.content[0].text.includes('Search content not found')
+          m.role === 'tool' &&
+          m.content.some((c: any) =>
+            c.toolResponse?.output
+              ?.toString()
+              ?.includes('Search content not found')
+          )
       );
-      if (!userMsg) {
+      if (!toolMsg) {
         console.log(
           'Messages received:',
           JSON.stringify(result.messages, null, 2)
         );
       }
-      assert.ok(userMsg);
+      assert.ok(toolMsg);
     });
 
     it('handles tricky search/replace cases', async () => {
+      const SEARCH_MARKER = '<<<<<<< SEARCH';
+      const SEP_MARKER = '=======';
+      const REPLACE_MARKER = '>>>>>>> REPLACE';
+
       const cases = [
         {
           name: 'marker in search',
           initial: 'line1\n=======\nline2',
-          block: `<<<<<<< SEARCH
-line1
-=======
-line2
-=======
-replacement
->>>>>>> REPLACE`,
+          block: `${SEARCH_MARKER}\nline1\n${SEP_MARKER}\nline2\n${SEP_MARKER}\nreplacement\n${REPLACE_MARKER}`,
           expected: 'replacement',
         },
         {
           name: 'marker in replace',
           initial: 'original',
-          block: `<<<<<<< SEARCH
-original
-=======
-new
-=======
-line
->>>>>>> REPLACE`,
+          block: `${SEARCH_MARKER}\noriginal\n${SEP_MARKER}\nnew\n${SEP_MARKER}\nline\n${REPLACE_MARKER}`,
           expected: 'new\n=======\nline',
         },
         {
           name: 'start marker in search',
-          initial: '<<<<<<< SEARCH\ncontent',
-          block: `<<<<<<< SEARCH
-<<<<<<< SEARCH
-content
-=======
-replaced
->>>>>>> REPLACE`,
+          initial: `${SEARCH_MARKER}\ncontent`,
+          block: `${SEARCH_MARKER}\n${SEARCH_MARKER}\ncontent\n${SEP_MARKER}\nreplaced\n${REPLACE_MARKER}`,
           expected: 'replaced',
         },
         {
           name: 'start marker in replace',
           initial: 'content',
-          block: `<<<<<<< SEARCH
-content
-=======
-<<<<<<< SEARCH
-new
->>>>>>> REPLACE`,
-          expected: '<<<<<<< SEARCH\nnew',
+          block: `${SEARCH_MARKER}\ncontent\n${SEP_MARKER}\n${SEARCH_MARKER}\nnew\n${REPLACE_MARKER}`,
+          expected: `${SEARCH_MARKER}\nnew`,
         },
         {
           name: 'end marker in search',
-          initial: 'content\n>>>>>>> REPLACE',
-          block: `<<<<<<< SEARCH
-content
->>>>>>> REPLACE
-=======
-replaced
->>>>>>> REPLACE`,
+          initial: `content\n${REPLACE_MARKER}`,
+          block: `${SEARCH_MARKER}\ncontent\n${REPLACE_MARKER}\n${SEP_MARKER}\nreplaced\n${REPLACE_MARKER}`,
           expected: 'replaced',
         },
         {
           name: 'end marker in replace',
           initial: 'content',
-          block: `<<<<<<< SEARCH
-content
-=======
-new
->>>>>>> REPLACE
->>>>>>> REPLACE`,
-          expected: 'new\n>>>>>>> REPLACE',
+          block: `${SEARCH_MARKER}\ncontent\n${SEP_MARKER}\nnew\n${REPLACE_MARKER}\n${REPLACE_MARKER}`,
+          expected: `new\n${REPLACE_MARKER}`,
         },
         {
           name: 'multiple markers greedy search',
           initial: 'part1\n=======\npart2',
-          block: `<<<<<<< SEARCH
-part1
-=======
-part2
-=======
-replacement
->>>>>>> REPLACE`,
+          block: `${SEARCH_MARKER}\npart1\n${SEP_MARKER}\npart2\n${SEP_MARKER}\nreplacement\n${REPLACE_MARKER}`,
           expected: 'replacement',
         },
         {
@@ -527,15 +498,7 @@ replacement
           // 2. S=A=B, R=C=D. (Match A=B? Yes)
           // 3. S=A=B=C, R=D. (Match A=B=C? No)
           // Winner: 2.
-          block: `<<<<<<< SEARCH
-A
-=======
-B
-=======
-C
-=======
-D
->>>>>>> REPLACE`,
+          block: `${SEARCH_MARKER}\nA\n${SEP_MARKER}\nB\n${SEP_MARKER}\nC\n${SEP_MARKER}\nD\n${REPLACE_MARKER}`,
           expected: 'C\n=======\nD',
         },
       ];
@@ -578,7 +541,7 @@ D
   });
 
   describe('robustness', () => {
-    it('should handle tool errors gracefully by injecting user message', async () => {
+    it('should handle tool errors gracefully by returning error tool response', async () => {
       const ai = genkit({});
       const pm = createToolModel(ai, 'read_file', { filePath: 'nonexistent' });
 
@@ -589,36 +552,35 @@ D
       })) as any;
 
       const messages = result.messages;
-      const lastModelIndex = messages.findLastIndex(
-        (m: any) => m.role === 'model' && m.content[0].toolRequest
-      );
-      const injectedUserIndex = messages.findIndex(
+
+      // Find the tool response containing the error
+      const toolMsg = messages.find(
         (m: any) =>
-          m.role === 'user' &&
-          m.content[0].text.includes("Tool 'read_file' failed")
+          m.role === 'tool' &&
+          m.content.some((c: any) =>
+            c.toolResponse?.output
+              ?.toString()
+              ?.includes("Tool 'read_file' failed")
+          )
       );
+      assert.ok(toolMsg, 'Tool response with error should be present');
 
-      assert.ok(
-        injectedUserIndex > lastModelIndex,
-        'User message should appear after tool request'
-      );
-
-      const userMsg = messages[injectedUserIndex];
+      const errorOutput = toolMsg.content
+        .find((c: any) =>
+          c.toolResponse?.output
+            ?.toString()
+            ?.includes("Tool 'read_file' failed")
+        )
+        ?.toolResponse.output.toString();
       assert.match(
-        userMsg.content[0].text,
+        errorOutput,
         /Tool 'read_file' failed: .*ENOENT.*/,
         'Error message should contain underlying error details'
       );
 
+      // Message ordering: user, model (tool request), tool (error response), model (final)
       const roles = messages.map((m: any) => m.role);
-      assert.deepStrictEqual(roles, ['user', 'model', 'user', 'model']);
-
-      const toolMsg = messages.find((m: any) => m.role === 'tool');
-      assert.strictEqual(
-        toolMsg,
-        undefined,
-        'Tool message should not be present'
-      );
+      assert.deepStrictEqual(roles, ['user', 'model', 'tool', 'model']);
     });
 
     it('should let ToolInterruptError propagate when toolApproval is after filesystem', async () => {

@@ -32,10 +32,21 @@ const betaSonnet = anthropic.model('claude-sonnet-4-5', { apiVersion: 'beta' });
 const betaOpus41 = anthropic.model('claude-opus-4-1', { apiVersion: 'beta' });
 const betaOpus46 = anthropic.model('claude-opus-4-6', { apiVersion: 'beta' });
 const betaOpus47 = anthropic.model('claude-opus-4-7', { apiVersion: 'beta' });
+const betaOpus48 = anthropic.model('claude-opus-4-8', { apiVersion: 'beta' });
+const betaFable5 = anthropic.model('claude-fable-5', { apiVersion: 'beta' });
 
 const GreetingSchema = z.object({
   greeting: z.string(),
   apiVersion: z.string(),
+});
+
+ai.defineFlow('anthropic-beta-claude-fable-5', async () => {
+  const { text } = await ai.generate({
+    model: betaFable5,
+    prompt: 'You are a friendly Claude assistant. Greet the user briefly.',
+  });
+
+  return text;
 });
 
 ai.defineFlow('anthropic-beta-hello', async () => {

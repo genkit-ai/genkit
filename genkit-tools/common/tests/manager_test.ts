@@ -43,5 +43,7 @@ describe('RuntimeManager', () => {
     // Simulate event again
     (manager as any).eventEmitter.emit(RuntimeEvent.ADD, { id: '2' });
     expect(listener).toHaveBeenCalledTimes(1); // Should not have increased
+
+    await manager.stop();
   });
 });

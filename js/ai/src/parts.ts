@@ -64,6 +64,8 @@ export const MediaSchema = z.object({
   url: z.string(),
 });
 
+export type Media = z.infer<typeof MediaSchema>;
+
 /**
  * Zod schema of a media part.
  */
@@ -89,6 +91,7 @@ export const ToolRequestSchema = z.object({
   /** Whether the request is a partial chunk. */
   partial: z.boolean().optional(),
 });
+/** A request for a tool to be called, typically issued by a model. */
 export type ToolRequest = z.infer<typeof ToolRequestSchema>;
 
 /**
@@ -123,6 +126,7 @@ export type ToolResponse = z.infer<typeof ToolResponseSchemaBase> & {
   content?: Part[];
 };
 
+/** Zod schema for a tool response, including optional multipart content. */
 export const ToolResponseSchema: z.ZodType<ToolResponse> =
   ToolResponseSchemaBase.extend({
     content: z.array(z.any()).optional(),
@@ -200,10 +204,12 @@ export const PartSchema = z.union([
  */
 export type Part = z.infer<typeof PartSchema>;
 
+/** Zod schema for a multipart tool response containing structured output, content parts, and metadata. */
 export const MultipartToolResponseSchema = z.object({
   output: z.unknown().optional(),
   content: z.array(PartSchema).optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 
+/** A multipart tool response containing structured output, content parts, and metadata. */
 export type MultipartToolResponse = z.infer<typeof MultipartToolResponseSchema>;

@@ -155,7 +155,15 @@ See Also:
     - Genkit documentation: https://genkit.dev/
 """
 
-from genkit.plugins.ollama.plugin_api import Ollama, ollama_name
+from genkit.plugins.ollama._errors import OllamaConnectionError
+from genkit.plugins.ollama.models import ModelDefinition, OllamaConfig, OllamaSupports
+from genkit.plugins.ollama.plugin_api import (
+    Ollama,
+    RequestHeaderFunction,
+    RequestHeaderParams,
+    RequestHeaders,
+    ollama_name,
+)
 
 
 def package_name() -> str:
@@ -168,7 +176,14 @@ def package_name() -> str:
 
 
 __all__ = [
-    package_name.__name__,
-    Ollama.__name__,
-    ollama_name.__name__,
+    'ModelDefinition',
+    'Ollama',
+    'OllamaConfig',
+    'OllamaConnectionError',
+    'OllamaSupports',
+    'RequestHeaderFunction',
+    'RequestHeaderParams',
+    'RequestHeaders',
+    'ollama_name',
+    'package_name',
 ]

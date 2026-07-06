@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
-import { z, type PluginProvider } from '@genkit-ai/core';
+import {
+  defineDynamicActionProvider,
+  z,
+  type PluginProvider,
+} from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
@@ -35,7 +39,7 @@ import {
   type ModelMiddlewareWithOptions,
 } from '../../src/model.js';
 import { defineResource } from '../../src/resource.js';
-import { defineTool } from '../../src/tool.js';
+import { defineTool, tool } from '../../src/tool.js';
 
 initNodeFeatures();
 
@@ -71,6 +75,28 @@ describe('toGenerateRequest', () => {
       outputSchema: z.number(),
     },
     async ({ a, b }) => a + b
+  );
+
+  defineDynamicActionProvider(
+    registry,
+    {
+      name: 'my-dap',
+    },
+    async () => {
+      return {
+        tool: [
+          tool(
+            {
+              name: 'dapJokeTool',
+              description: 'DAP joke tool',
+              inputSchema: z.object({ topic: z.string() }),
+              outputSchema: z.string(),
+            },
+            async ({ topic }) => `DAP joke about ${topic}`
+          ),
+        ],
+      };
+    }
   );
 
   const testCases = [
@@ -122,6 +148,7 @@ describe('toGenerateRequest', () => {
               additionalProperties: true,
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
+            key: '/tool/tellAFunnyJoke',
           },
         ],
         output: {},
@@ -154,7 +181,10 @@ describe('toGenerateRequest', () => {
               $schema: 'http://json-schema.org/draft-07/schema#',
               type: 'number',
             },
-            metadata: { originalName: 'namespaced/add' },
+            key: '/tool/namespaced/add',
+            metadata: {
+              originalName: 'namespaced/add',
+            },
           },
         ],
         output: {},
@@ -191,6 +221,40 @@ describe('toGenerateRequest', () => {
               additionalProperties: true,
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
+            key: '/tool/tellAFunnyJoke',
+          },
+        ],
+        output: {},
+      },
+    },
+    {
+      should: 'translate a string prompt correctly with a DAP tool',
+      prompt: {
+        model: 'vertexai/gemini-1.0-pro',
+        tools: ['my-dap:tool/dapJokeTool'],
+        prompt: 'Call DAP tool',
+      },
+      expectedOutput: {
+        messages: [{ role: 'user', content: [{ text: 'Call DAP tool' }] }],
+        config: undefined,
+        docs: undefined,
+        resources: [],
+        tools: [
+          {
+            name: 'dapJokeTool',
+            description: 'DAP joke tool',
+            inputSchema: {
+              $schema: 'http://json-schema.org/draft-07/schema#',
+              type: 'object',
+              properties: { topic: { type: 'string' } },
+              required: ['topic'],
+              additionalProperties: true,
+            },
+            outputSchema: {
+              $schema: 'http://json-schema.org/draft-07/schema#',
+              type: 'string',
+            },
+            key: '/dynamic-action-provider/my-dap:tool/dapJokeTool',
           },
         ],
         output: {},

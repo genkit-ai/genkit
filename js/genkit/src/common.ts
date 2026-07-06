@@ -19,6 +19,8 @@ export {
   BaseDataPointSchema,
   Document,
   DocumentDataSchema,
+  GENKIT_UI_METADATA,
+  GENKIT_UI_WIDGETS,
   GenerateResponse,
   GenerateResponseChunk,
   GenerationBlockedError,
@@ -122,12 +124,6 @@ export {
   type ToolResponse,
   type ToolResponsePart,
 } from '@genkit-ai/ai';
-export { Chat } from '@genkit-ai/ai/chat';
-export {
-  Session,
-  type SessionData,
-  type SessionStore,
-} from '@genkit-ai/ai/session';
 export { dynamicTool, tool } from '@genkit-ai/ai/tool';
 export {
   GENKIT_CLIENT_HEADER,
@@ -136,8 +132,10 @@ export {
   OperationSchema,
   ReflectionServer,
   StatusCodes,
+  StatusNameSchema,
   StatusSchema,
   UserFacingError,
+  annotateSchema,
   defineJsonSchema,
   defineSchema,
   getClientHeader,
@@ -153,6 +151,7 @@ export {
   type ActionContext,
   type ActionMetadata,
   type DynamicActionProviderAction,
+  type ErrorResponseMetadata,
   type Flow,
   type FlowConfig,
   type FlowFn,

@@ -15,8 +15,8 @@
  */
 
 import { GenkitError } from '@genkit-ai/core';
-import { extractItems } from '../extract';
-import type { Formatter } from './types';
+import { extractItems } from '../extract.js';
+import type { Formatter } from './types.js';
 
 export const arrayFormatter: Formatter<unknown[], unknown[]> = {
   name: 'array',

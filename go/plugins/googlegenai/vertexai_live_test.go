@@ -391,4 +391,34 @@ func TestVertexAILive(t *testing.T) {
 			t.Errorf("expecting 0 thought tokens, got %d", resp.Usage.ThoughtsTokens)
 		}
 	})
+	t.Run("tuned gemini endpoint", func(t *testing.T) {
+		endpointID := os.Getenv("GENKIT_VERTEX_TUNED_ENDPOINT")
+		if endpointID == "" {
+			t.Skip("GENKIT_VERTEX_TUNED_ENDPOINT not set; skipping tuned endpoint live test")
+		}
+		modelName := endpointID
+		if !strings.HasPrefix(modelName, "endpoints/") && !strings.HasPrefix(modelName, "projects/") {
+			modelName = "endpoints/" + modelName
+		}
+
+		// Use a fresh Genkit instance so we can DefineModel on the Vertex
+		// plugin before Generate runs.
+		plugin := &googlegenai.VertexAI{ProjectID: projectID, Location: location}
+		gTuned := genkit.Init(ctx, genkit.WithPlugins(plugin))
+		m, err := plugin.DefineModel(gTuned, modelName, nil)
+		if err != nil {
+			t.Fatalf("failed to register tuned model %q: %v", modelName, err)
+		}
+
+		resp, err := genkit.Generate(ctx, gTuned,
+			ai.WithModel(m),
+			ai.WithPrompt("Say hello in one short sentence."),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimSpace(resp.Text()) == "" {
+			t.Fatal("expected a non-empty response from the tuned endpoint")
+		}
+	})
 }
