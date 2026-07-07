@@ -35,7 +35,7 @@
           "run": "pnpm i --frozen-lockfile"
         },
         {
-          "run": "py/bin/generate_schema_typing --ci"
+          "run": "py/scripts/generate_schema_typing --ci"
         },
         {
           "run": "bin/fmt"
@@ -44,19 +44,19 @@
           "run": "bin/lint"
         },
         {
-          "run": "py/bin/run_python_tests_with_tox p"
+          "run": "uv run --directory py pytest"
         },
         {
           "run": "echo 'disabled' || uv run --directory py mkdocs build"
         },
         {
-          "run": "py/bin/build_dists"
+          "run": "py/scripts/build_dists"
         },
         {
           "run": "uv run --directory py liccheck"
         },
         {
-          "run": "py/bin/run_python_security_checks"
+          "run": "py/scripts/run_python_security_checks"
         },
         {
           "run": "bin/run_go_tests"
@@ -81,7 +81,7 @@
           "run": "pnpm i --frozen-lockfile"
         },
         {
-          "run": "py/bin/generate_schema_typing --ci"
+          "run": "py/scripts/generate_schema_typing --ci"
         },
         {
           "run": "bin/fmt"
@@ -90,19 +90,19 @@
           "run": "bin/lint"
         },
         {
-          "run": "py/bin/run_python_tests_with_tox p"
+          "run": "uv run --directory py pytest"
         },
         {
           "run": "echo 'disabled' || uv run --directory py mkdocs build"
         },
         {
-          "run": "py/bin/build_dists"
+          "run": "py/scripts/build_dists"
         },
         {
           "run": "uv run --directory py liccheck"
         },
         {
-          "run": "py/bin/run_python_security_checks"
+          "run": "py/scripts/run_python_security_checks"
         },
         {
           "run": "bin/run_go_tests"
