@@ -153,22 +153,22 @@ Project ID Resolution Order:
 
 Usage:
     ```python
-    from genkit_google_cloud import enable_googlecloud_telemetry
+    from genkit_google_cloud import enable_google_cloud_telemetry
 
     # Enable telemetry with default settings (PII redaction enabled)
-    enable_googlecloud_telemetry()
+    enable_google_cloud_telemetry()
 
     # Enable telemetry with input/output logging (disable PII redaction)
-    enable_googlecloud_telemetry(log_input_and_output=True)
+    enable_google_cloud_telemetry(log_input_and_output=True)
 
     # Force export even in dev environment
-    enable_googlecloud_telemetry(force_dev_export=True)
+    enable_google_cloud_telemetry(force_dev_export=True)
 
     # Disable metrics but keep traces
-    enable_googlecloud_telemetry(disable_metrics=True)
+    enable_google_cloud_telemetry(disable_metrics=True)
 
     # Custom metric export interval (minimum 5000ms for GCP)
-    enable_googlecloud_telemetry(metric_export_interval_ms=30000)
+    enable_google_cloud_telemetry(metric_export_interval_ms=30000)
     ```
 
 Caveats:
@@ -219,7 +219,7 @@ from .config import GcpTelemetry
 logger = structlog.get_logger(__name__)
 
 
-def enable_googlecloud_telemetry(
+def enable_google_cloud_telemetry(
     project_id: str | None = None,
     credentials: dict[str, Any] | None = None,
     sampler: Sampler | None = None,
@@ -279,22 +279,22 @@ def enable_googlecloud_telemetry(
     Example:
         ```python
         # Default: PII redaction enabled
-        enable_googlecloud_telemetry()
+        enable_google_cloud_telemetry()
 
         # Enable input/output logging (disable PII redaction)
-        enable_googlecloud_telemetry(log_input_and_output=True)
+        enable_google_cloud_telemetry(log_input_and_output=True)
 
         # Force export in dev environment with specific project
-        enable_googlecloud_telemetry(force_dev_export=True, project_id='my-project')
+        enable_google_cloud_telemetry(force_dev_export=True, project_id='my-project')
 
         # Disable metrics but keep traces
-        enable_googlecloud_telemetry(disable_metrics=True)
+        enable_google_cloud_telemetry(disable_metrics=True)
 
         # Custom metric export interval (minimum 5000ms)
-        enable_googlecloud_telemetry(metric_export_interval_ms=30000)
+        enable_google_cloud_telemetry(metric_export_interval_ms=30000)
 
         # With custom credentials for non-GCP environments
-        enable_googlecloud_telemetry(
+        enable_google_cloud_telemetry(
             project_id='my-project',
             credentials={'type': 'service_account', ...},
         )
@@ -342,11 +342,11 @@ def add_gcp_telemetry(
     force_export: bool | None = None,
 ) -> None:
     warnings.warn(
-        'add_gcp_telemetry is deprecated; use enable_googlecloud_telemetry instead.',
+        'add_gcp_telemetry is deprecated; use enable_google_cloud_telemetry instead.',
         DeprecationWarning,
         stacklevel=2,
     )
-    enable_googlecloud_telemetry(
+    enable_google_cloud_telemetry(
         project_id=project_id,
         credentials=credentials,
         sampler=sampler,

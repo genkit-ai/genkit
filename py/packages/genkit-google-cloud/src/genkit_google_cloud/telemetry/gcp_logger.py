@@ -106,7 +106,7 @@ class GcpLogger:
                 export=True,
                 project_id=None,
                 consequence='Telemetry logs will NOT appear in Cloud Logging or AIM dashboard',
-                fix='Provide project_id when calling enable_googlecloud_telemetry()',
+                fix='Provide project_id when calling enable_google_cloud_telemetry()',
             )
             self._initialized = True  # Mark initialized to prevent repeated errors
             return
@@ -216,7 +216,7 @@ class GcpLogger:
                 logger.error(
                     'gcp_logger.log_structured() called before initialization',
                     message=message,
-                    hint='Ensure enable_googlecloud_telemetry() or gcp_logger.initialize() was called',
+                    hint='Ensure enable_google_cloud_telemetry() or gcp_logger.initialize() was called',
                 )
                 self._logged_init_error = True
 

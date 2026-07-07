@@ -90,7 +90,7 @@ Architecture Overview::
     │                      Google Cloud Plugin                                │
     ├─────────────────────────────────────────────────────────────────────────┤
     │  Plugin Entry Point (__init__.py)                                       │
-    │  └── enable_googlecloud_telemetry() - Enable Cloud Trace/Monitoring export         │
+    │  └── enable_google_cloud_telemetry() - Enable Cloud Trace/Monitoring export         │
     ├─────────────────────────────────────────────────────────────────────────┤
     │  telemetry/__init__.py - Telemetry Module                               │
     │  └── Re-exports from submodules                                         │
@@ -119,10 +119,10 @@ Architecture Overview::
 
 Example:
     ```python
-    from genkit_google_cloud import enable_googlecloud_telemetry
+    from genkit_google_cloud import enable_google_cloud_telemetry
 
     # Enable telemetry export to Google Cloud
-    enable_googlecloud_telemetry()
+    enable_google_cloud_telemetry()
 
     # Traces and metrics are now exported to:
     # - Cloud Trace (distributed tracing)
@@ -140,7 +140,7 @@ See Also:
     - Genkit documentation: https://genkit.dev/
 """
 
-from .telemetry import add_gcp_telemetry, enable_googlecloud_telemetry
+from .telemetry import add_gcp_telemetry, enable_google_cloud_telemetry
 
 
 def package_name() -> str:
@@ -154,6 +154,6 @@ def package_name() -> str:
 
 __all__ = [
     'add_gcp_telemetry',
-    'enable_googlecloud_telemetry',
+    'enable_google_cloud_telemetry',
     'package_name',
 ]
