@@ -35,7 +35,7 @@
           "run": "pnpm i --frozen-lockfile"
         },
         {
-          "run": "py/scripts/generate_schema_typing --ci"
+          "run": "py/bin/generate_schema_typing --ci"
         },
         {
           "run": "bin/fmt"
@@ -50,13 +50,13 @@
           "run": "echo 'disabled' || uv run --directory py mkdocs build"
         },
         {
-          "run": "py/scripts/build_dists"
+          "run": "py/bin/build_dists"
         },
         {
           "run": "uv run --directory py liccheck"
         },
         {
-          "run": "py/scripts/run_python_security_checks"
+          "run": "py/bin/run_python_security_checks"
         },
         {
           "run": "bin/run_go_tests"
@@ -81,7 +81,7 @@
           "run": "pnpm i --frozen-lockfile"
         },
         {
-          "run": "py/scripts/generate_schema_typing --ci"
+          "run": "py/bin/generate_schema_typing --ci"
         },
         {
           "run": "bin/fmt"
@@ -96,13 +96,13 @@
           "run": "echo 'disabled' || uv run --directory py mkdocs build"
         },
         {
-          "run": "py/scripts/build_dists"
+          "run": "py/bin/build_dists"
         },
         {
           "run": "uv run --directory py liccheck"
         },
         {
-          "run": "py/scripts/run_python_security_checks"
+          "run": "py/bin/run_python_security_checks"
         },
         {
           "run": "bin/run_go_tests"

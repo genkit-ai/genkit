@@ -161,7 +161,7 @@ class ModelStreamResponse(Generic[OutputT]):
 
     @property
     def stream(self) -> AsyncIterable[ModelResponseChunk]:
-        """Async iterable of response chunks.
+        """Get the async iterable of response chunks.
 
         Returns:
             An async iterable that yields ModelResponseChunk objects
@@ -174,7 +174,7 @@ class ModelStreamResponse(Generic[OutputT]):
 
     @property
     def response(self) -> Awaitable[ModelResponse[OutputT]]:
-        """Awaitable for the complete response.
+        """Get the awaitable for the complete response.
 
         Returns:
             An awaitable that resolves to a ModelResponse containing:

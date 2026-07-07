@@ -1782,7 +1782,7 @@ class GeminiModel:
 
     @cached_property
     def metadata(self) -> dict:
-        """Model metadata.
+        """Get model metadata.
 
         Returns:
             model metadata.

@@ -62,7 +62,7 @@ def _output_name(name: str) -> str:
 # Emit early to avoid Pydantic forward-ref issues (Schema/ConfigSchema for OutputConfig; Metadata for MessageData etc.)
 PREFERRED_FIRST = ('Schema', 'ConfigSchema', 'Metadata', 'Custom')
 # anyOf/oneOf defs emitted as RootModel (have .root) so Part(root=TextPart(...)) works
-ROOT_MODEL_UNIONS = frozenset({'Part', 'DocumentPart'})
+ROOT_MODEL_UNIONS = frozenset({'Part', 'DocumentPart', 'TraceEvent'})
 HEADER = '''# Copyright {year} Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -118,11 +118,11 @@ def _resolve_ref(schema: dict, ref: str) -> dict:
 
 
 def _models_allowing_extra(schema: dict) -> set[str]:
-    """Names of models with additionalProperties enabled (extra='allow')."""
+    """Names of models with additionalProperties: true (extra='allow')."""
     result = set()
     defs = schema.get('$defs') or {}
     for name, defn in defs.items():
-        if isinstance(defn, dict) and defn.get('additionalProperties') not in (False, None):
+        if isinstance(defn, dict) and defn.get('additionalProperties') is True:
             result.add(name)
         if not isinstance(defn, dict):
             continue
@@ -130,7 +130,7 @@ def _models_allowing_extra(schema: dict) -> set[str]:
             if (
                 isinstance(prop_def, dict)
                 and prop_def.get('type') == 'object'
-                and prop_def.get('additionalProperties') not in (False, None)
+                and prop_def.get('additionalProperties') is True
             ):
                 result.add(_pascal(prop_name))
     return result
@@ -179,10 +179,8 @@ def _extract_inline_classes(schema: dict) -> dict[str, dict]:
                 if class_name not in defs:
                     existing = result.get(class_name)
                     new_props = prop_schema.get('properties') or {}
-                    if existing is None:
-                        result[class_name] = dict(prop_schema)
-                    else:
-                        existing.setdefault('properties', {}).update(new_props)
+                    if existing is None or len(existing.get('properties') or {}) < len(new_props):
+                        result[class_name] = prop_schema
                 walk(prop_schema.get('properties', {}))
 
     for defn in defs.values():
@@ -231,15 +229,10 @@ def _py_type(prop: dict, schema: dict, defs: dict, class_name: str, field_name: 
     for key in ('anyOf', 'oneOf'):
         if key in prop:
             opts = prop[key]
-            refs = [_output_name(o.get('$ref', '').split('/')[-1]) for o in opts if o.get('$ref')]
+            refs = [o.get('$ref', '').split('/')[-1] for o in opts if o.get('$ref')]
             if refs:
-                # Preserve exact order without duplicates
-                return ' | '.join(dict.fromkeys(refs))
-            types = []
-            for o in opts:
-                t = _py_type(o, schema, defs, class_name, field_name)
-                if t and t not in types:
-                    types.append(t)
+                return ' | '.join(_output_name(r) for r in refs)
+            types = sorted({_py_type(o, schema, defs, class_name, field_name) for o in opts} - {''})
             return ' | '.join(types) if types else 'Any'
     if prop.get('type') == 'array':
         return f'list[{_py_type(prop.get("items", {}), schema, defs, class_name, field_name) or "Any"}]'
@@ -268,7 +261,7 @@ def _py_type(prop: dict, schema: dict, defs: dict, class_name: str, field_name: 
 def _emit_enum(name: str, d: dict) -> list[str]:
     lines = [f'class {name}(StrEnum):', f'    """{name} data type class."""', '']
     for v in d.get('enum', []):
-        m = re.sub(r'[^A-Z0-9_]', '_', str(v).upper())
+        m = str(v).upper().replace('-', '_')
         if m and m[0].isdigit():
             m = '_' + m
         lines.append(f'    {m} = {repr(v)}')
@@ -343,7 +336,7 @@ def _emit_model(
 
 
 def generate(schema_path: Path, _out: Path) -> str:
-    schema = json.loads(schema_path.read_text(encoding='utf-8'))
+    schema = json.loads(schema_path.read_text())
     defs = dict(schema.get('$defs', {}))
     defs.update({k: v for k, v in _extract_inline_classes(schema).items() if k not in defs})
     allow_extra = _models_allowing_extra(schema)
@@ -367,10 +360,15 @@ def generate(schema_path: Path, _out: Path) -> str:
         if name in EXCLUDED or name in emitted or not isinstance(defn, dict) or defn.get('type') != 'object':
             continue
         class_name = _output_name(name)
-        # Metadata, Custom, ConfigSchema, Schema: type aliases for dict (SDK uses .get(), [], passes dict)
-        if name in ('Metadata', 'Custom', 'ConfigSchema', 'Schema'):
+        # Metadata and Custom: type aliases for dict (SDK uses .get(), [], passes dict)
+        if name == 'Metadata':
             out.extend([
-                f'{name} = dict[str, Any]  # type alias for flexible JSON schema / dictionary data',
+                'Metadata = dict[str, Any]  # type alias for flexible metadata',
+                '',
+            ])
+        elif name == 'Custom':
+            out.extend([
+                'Custom = dict[str, Any]  # type alias for flexible custom data',
                 '',
             ])
         elif name in typed_map_aliases:
@@ -390,6 +388,7 @@ def generate(schema_path: Path, _out: Path) -> str:
 
     # Pass 2.5: union types (anyOf/oneOf)
     # Part and DocumentPart need RootModel so Part(root=TextPart(...)) works; others get type aliases
+    ROOT_MODEL_UNIONS = frozenset({'Part', 'DocumentPart'})
     for name, defn in defs.items():
         if name in EXCLUDED or name in emitted or not isinstance(defn, dict):
             continue
@@ -397,17 +396,11 @@ def generate(schema_path: Path, _out: Path) -> str:
             if key not in defn:
                 continue
             opts = defn[key]
-            types = []
-            for o in opts:
-                if not isinstance(o, dict):
-                    continue
-                t = _output_name(o['$ref'].split('/')[-1]) if '$ref' in o else _py_type(o, schema, defs, _output_name(name), '')
-                if t and t not in types:
-                    types.append(t)
-            if not types:
+            refs = [(o.get('$ref') or '').split('/')[-1] for o in opts if isinstance(o, dict) and o.get('$ref')]
+            if not refs:
                 continue
             class_name = _output_name(name)
-            union_str = ' | '.join(types)
+            union_str = ' | '.join(_output_name(r) for r in refs)
             if name in ROOT_MODEL_UNIONS:
                 out.extend([
                     f'class {class_name}(RootModel[{union_str}]):',

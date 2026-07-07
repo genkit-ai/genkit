@@ -79,6 +79,7 @@ from genkit.model import (
     ToolDefinition,
 )
 
+# Flow is an alias for Action (used in samples for flow type hints)
 Flow = Action
 
 extend_plugin_namespace()

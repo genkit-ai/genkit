@@ -69,7 +69,7 @@ test-tox:
 
 # Run security checks (bandit, pip-audit).
 security:
-    "{{ py_dir }}/scripts/run_python_security_checks"
+    "{{ py_dir }}/bin/run_python_security_checks"
 
 # Sync workspace and verify all packages install.
 sync:
@@ -78,7 +78,7 @@ sync:
 
 # Check workspace consistency (versions, naming, deps).
 check:
-    "{{ py_dir }}/scripts/check_consistency.py"
+    python3 "{{ py_dir }}/scripts/check_consistency.py"
 
 # Check lockfile is up to date.
 check-lock:
@@ -102,13 +102,13 @@ test-sample NAME="":
 
 # Regenerate typing.py from JSON schema.
 generate-schema:
-    "{{ py_dir }}/scripts/generate_schema_typing"
+    "{{ py_dir }}/bin/generate_schema_typing"
 
 # --- Release -----------------------------------------------------------
 
 # Bump version in all packages.
 bump-version VERSION:
-    "{{ py_dir }}/scripts/bump_version" {{ VERSION }}
+    "{{ py_dir }}/bin/bump_version" {{ VERSION }}
 
 # Pre-release validation suite.
 release-check:
@@ -116,11 +116,11 @@ release-check:
 
 # Build wheel/sdist packages.
 build:
-    "{{ py_dir }}/scripts/build_dists"
+    "{{ py_dir }}/bin/build_dists"
 
 # Create a GitHub release.
 create-release:
-    "{{ py_dir }}/scripts/create_release"
+    "{{ py_dir }}/bin/create_release"
 
 # Publish to PyPI.
 publish:

@@ -91,7 +91,7 @@ jobs:
           uv sync --all-groups
 
       - name: Generate schema typing
-        run: ./py/scripts/generate_schema_typing --ci
+        run: ./py/bin/generate_schema_typing --ci
 
       - name: Type check with Ty
         if: matrix.checker == 'ty'
@@ -173,7 +173,7 @@ jobs:
           uv sync
 
       - name: Generate schema typing
-        run: ./py/scripts/generate_schema_typing --ci
+        run: ./py/bin/generate_schema_typing --ci
 
       - name: Run tests
         run: |
@@ -197,7 +197,7 @@ jobs:
           python-version: "3.12"
 
       - name: Build and verify distributions
-        run: ./py/scripts/build_dists
+        run: ./py/bin/build_dists
 
       - name: Verify wheel contents
         run: |

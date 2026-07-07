@@ -366,7 +366,7 @@ class PostMiddleware(BaseMiddleware):
 
 
 class ExtensionMiddlewarePlugin(MiddlewarePlugin):
-    """Test plugin subclass; mirrors ``genkit_middleware.Middleware``."""
+    """Test plugin subclass; mirrors ``genkit.plugins.middleware.Middleware``."""
 
     name = 'extension-middleware'
 
