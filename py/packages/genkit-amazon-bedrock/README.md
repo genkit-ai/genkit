@@ -32,7 +32,7 @@ ai = Genkit(
 
 Credentials resolve through the standard AWS SDK chain (environment,
 `~/.aws/credentials`, instance metadata). Pass a pre-configured
-`aioboto3.Session` via `session=` for custom wiring.
+`boto3.session.Session` via `session=` for custom wiring.
 
 ## License
 
