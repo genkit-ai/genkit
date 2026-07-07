@@ -19,6 +19,7 @@ authors = [{ name = "Google" }]
 dependencies = [
   "dotpromptz==0.1.5",
   "genkit",
+  "genkit-plugin-amazon-bedrock",
   "genkit-plugin-anthropic",
   "genkit-plugin-compat-oai",
   "genkit-plugin-django",
@@ -170,6 +171,7 @@ vertexai-imagen      = { workspace = true }
 # Core packages
 genkit = { workspace = true }
 # Plugins (alphabetical)
+genkit-plugin-amazon-bedrock        = { workspace = true }
 genkit-plugin-anthropic             = { workspace = true }
 genkit-plugin-compat-oai            = { workspace = true }
 genkit-plugin-django                = { workspace = true }
