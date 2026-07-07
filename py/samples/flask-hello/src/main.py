@@ -20,7 +20,7 @@ from typing import cast
 
 from flask import Flask
 from genkit_flask import genkit_flask_handler
-from genkit_googleai import GoogleAI
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
 from genkit import Genkit, ModelResponse

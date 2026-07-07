@@ -99,8 +99,8 @@ Example:
     Running evaluations:
 
         >>> from genkit import Genkit
-        >>> from genkit_googleai import VertexAI
-        >>> from genkit_googleai.evaluators import VertexAIEvaluationMetricType
+        >>> from genkit_google_genai import VertexAI
+        >>> from genkit_google_genai.evaluators import VertexAIEvaluationMetricType
         >>>
         >>> ai = Genkit(plugins=[VertexAI(project='my-project')])
         >>>
@@ -135,7 +135,7 @@ See Also:
     - Genkit evaluation docs: https://genkit.dev/docs/evaluation
 """
 
-from genkit_googleai.evaluators.evaluation import (
+from genkit_google_genai.evaluators.evaluation import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
 )

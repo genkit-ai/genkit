@@ -18,7 +18,7 @@
 
 from pathlib import Path
 
-from genkit_googleai import GoogleAI
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
 from genkit import Genkit

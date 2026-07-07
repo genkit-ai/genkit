@@ -19,7 +19,7 @@
 from pathlib import Path
 
 import structlog
-from genkit_googleai import GoogleAI
+from genkit_google_genai import GoogleAI
 from genkit_middleware import Middleware
 from pydantic import BaseModel, Field
 

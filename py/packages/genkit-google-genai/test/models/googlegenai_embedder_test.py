@@ -17,7 +17,7 @@
 """Test the Google-Genai embedder model."""
 
 import pytest
-from genkit_googleai.models.embedder import (
+from genkit_google_genai.models.embedder import (
     Embedder,
     GeminiEmbeddingModels,
 )

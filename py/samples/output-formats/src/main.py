@@ -16,7 +16,7 @@
 
 from enum import Enum
 
-from genkit_googleai import GoogleAI
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field, TypeAdapter
 
 from genkit import Genkit

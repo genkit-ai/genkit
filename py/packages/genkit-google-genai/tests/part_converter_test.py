@@ -23,7 +23,7 @@ particularly around URL classification and media part conversion.
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from genkit_googleai.models.utils import PartConverter
+from genkit_google_genai.models.utils import PartConverter
 from google import genai
 
 from genkit import Media, MediaPart, Part

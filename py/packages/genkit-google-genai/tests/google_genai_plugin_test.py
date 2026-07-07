@@ -23,7 +23,7 @@ import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
-from genkit_googleai import (
+from genkit_google_genai import (
     EmbeddingTaskType,
     GeminiConfigSchema,
     GeminiEmbeddingModels,
@@ -33,7 +33,7 @@ from genkit_googleai import (
     VertexAIGeminiVersion,
     VertexEmbeddingModels,
 )
-from genkit_googleai.google import (
+from genkit_google_genai.google import (
     GOOGLEAI_PLUGIN_NAME,
     VERTEXAI_PLUGIN_NAME,
     GenaiModels,
@@ -64,7 +64,7 @@ def test_plugin_names() -> None:
 
 def test_googleai_initialization_with_api_key() -> None:
     """Test GoogleAI plugin initializes with API key parameter."""
-    with patch('genkit_googleai.google.genai.client.Client'):
+    with patch('genkit_google_genai.google.genai.client.Client'):
         plugin = GoogleAI(api_key='test-key')
         assert plugin.name == 'googleai'
         assert plugin._vertexai is False
@@ -73,7 +73,7 @@ def test_googleai_initialization_with_api_key() -> None:
 def test_googleai_initialization_from_env() -> None:
     """Test GoogleAI plugin reads API key from environment."""
     with patch.dict(os.environ, {'GEMINI_API_KEY': 'env-key'}):
-        with patch('genkit_googleai.google.genai.client.Client'):
+        with patch('genkit_google_genai.google.genai.client.Client'):
             plugin = GoogleAI()
             assert plugin.name == 'googleai'
 
@@ -91,7 +91,7 @@ def test_googleai_initialization_without_api_key() -> None:
 
 def test_vertexai_initialization() -> None:
     """Test VertexAI plugin initializes correctly."""
-    with patch('genkit_googleai.google.genai.client.Client'):
+    with patch('genkit_google_genai.google.genai.client.Client'):
         plugin = VertexAI(project='test-project', location='us-central1')
         assert plugin.name == 'vertexai'
         assert plugin._vertexai is True
@@ -100,12 +100,12 @@ def test_vertexai_initialization() -> None:
 def test_vertexai_initialization_from_env() -> None:
     """Test VertexAI plugin reads project from environment."""
     with patch.dict(os.environ, {'GCLOUD_PROJECT': 'env-project'}):
-        with patch('genkit_googleai.google.genai.client.Client'):
+        with patch('genkit_google_genai.google.genai.client.Client'):
             plugin = VertexAI()
             assert plugin.name == 'vertexai'
 
 
-@patch('genkit_googleai.google.genai.client.Client')
+@patch('genkit_google_genai.google.genai.client.Client')
 @pytest.mark.asyncio
 async def test_googleai_runtime_clients_are_loop_local(mock_client_ctor: MagicMock) -> None:
     """GoogleAI runtime clients should be cached per event loop."""
@@ -154,8 +154,8 @@ def test_genai_models_container() -> None:
     assert models.veo == []
 
 
-@patch('genkit_googleai.google.genai.client.Client')
-@patch('genkit_googleai.google._list_genai_models')
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
 @pytest.mark.asyncio
 async def test_googleai_resolve_model(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
     """Test GoogleAI plugin resolves model actions."""
@@ -169,8 +169,8 @@ async def test_googleai_resolve_model(mock_list_models: MagicMock, mock_client: 
     assert action.name == 'googleai/gemini-2.0-flash'
 
 
-@patch('genkit_googleai.google.genai.client.Client')
-@patch('genkit_googleai.google._list_genai_models')
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
 @pytest.mark.asyncio
 async def test_googleai_resolve_imagen_model(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
     """Test GoogleAI plugin resolves Imagen image generation models."""
@@ -184,8 +184,8 @@ async def test_googleai_resolve_imagen_model(mock_list_models: MagicMock, mock_c
     assert action.name == 'googleai/imagen-3.0-generate-002'
 
 
-@patch('genkit_googleai.google.genai.client.Client')
-@patch('genkit_googleai.google._list_genai_models')
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
 @pytest.mark.asyncio
 async def test_googleai_init_registers_imagen_models(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
     """Test GoogleAI init registers Imagen models from dynamic discovery."""
@@ -202,8 +202,8 @@ async def test_googleai_init_registers_imagen_models(mock_list_models: MagicMock
     assert imagen_actions[0].kind == ActionKind.MODEL
 
 
-@patch('genkit_googleai.google.genai.client.Client')
-@patch('genkit_googleai.google._list_genai_models')
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
 @pytest.mark.asyncio
 async def test_googleai_list_actions_includes_imagen(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
     """Test GoogleAI list_actions includes Imagen models."""
@@ -219,8 +219,8 @@ async def test_googleai_list_actions_includes_imagen(mock_list_models: MagicMock
     assert imagen_actions[0].name == 'googleai/imagen-3.0-generate-002'
 
 
-@patch('genkit_googleai.google.genai.client.Client')
-@patch('genkit_googleai.google._list_genai_models')
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
 @pytest.mark.asyncio
 async def test_googleai_resolve_embedder(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
     """Test GoogleAI plugin resolves embedder actions."""
@@ -234,8 +234,8 @@ async def test_googleai_resolve_embedder(mock_list_models: MagicMock, mock_clien
     assert action.name == 'googleai/gemini-embedding-001'
 
 
-@patch('genkit_googleai.google.genai.client.Client')
-@patch('genkit_googleai.google._list_genai_models')
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
 @pytest.mark.asyncio
 async def test_googleai_resolve_non_model_returns_none(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
     """Test GoogleAI plugin returns None for unsupported action kinds."""
@@ -246,8 +246,8 @@ async def test_googleai_resolve_non_model_returns_none(mock_list_models: MagicMo
     assert action is None
 
 
-@patch('genkit_googleai.google.genai.client.Client')
-@patch('genkit_googleai.google._list_genai_models')
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
 @pytest.mark.asyncio
 async def test_vertexai_resolve_model(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
     """Test VertexAI plugin resolves model actions."""
@@ -261,8 +261,8 @@ async def test_vertexai_resolve_model(mock_list_models: MagicMock, mock_client: 
     assert action.name == 'vertexai/gemini-2.0-flash'
 
 
-@patch('genkit_googleai.google.genai.client.Client')
-@patch('genkit_googleai.google._list_genai_models')
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
 @pytest.mark.asyncio
 async def test_vertexai_resolve_embedder(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
     """Test VertexAI plugin resolves embedder actions."""

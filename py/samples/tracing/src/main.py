@@ -10,7 +10,7 @@
 
 import asyncio
 
-from genkit_googleai import GoogleAI
+from genkit_google_genai import GoogleAI
 
 from genkit import Genkit
 

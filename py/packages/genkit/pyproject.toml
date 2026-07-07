@@ -81,7 +81,7 @@ version = "0.7.0"
 [project.optional-dependencies]
 flask                 = ["genkit-flask"]
 google-cloud          = ["genkit-google-cloud"]
-google-genai          = ["genkit-googleai"]
+google-genai          = ["genkit-google-genai"]
 ollama                = ["genkit-ollama"]
 openai                = ["genkit-openai"]
 vertex-ai             = ["genkit-vertexai"]
@@ -107,5 +107,5 @@ testpaths  = ["tests"]
 [tool.uv.sources]
 genkit-openai                   = { workspace = true }
 genkit-flask                        = { workspace = true }
-genkit-googleai                     = { workspace = true }
+genkit-google-genai                     = { workspace = true }
 genkit-ollama                       = { workspace = true }

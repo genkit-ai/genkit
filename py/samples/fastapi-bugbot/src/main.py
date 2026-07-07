@@ -17,7 +17,7 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from genkit_fastapi import genkit_fastapi_handler
-from genkit_googleai import GoogleAI
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 from typing_extensions import Never
 

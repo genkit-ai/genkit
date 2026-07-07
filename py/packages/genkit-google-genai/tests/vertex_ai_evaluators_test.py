@@ -19,11 +19,11 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from genkit_googleai.evaluators import (
+from genkit_google_genai.evaluators import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
 )
-from genkit_googleai.evaluators.evaluation import (
+from genkit_google_genai.evaluators.evaluation import (
     EvaluatorFactory,
     VertexAIEvaluationMetricConfig,
     _is_config,
@@ -132,7 +132,7 @@ async def test_evaluator_factory_evaluate_instances_structure() -> None:
         }
     }
 
-    with patch('genkit_googleai.evaluators.evaluation.google_auth_default') as mock_auth:
+    with patch('genkit_google_genai.evaluators.evaluation.google_auth_default') as mock_auth:
         mock_auth.return_value = (mock_credentials, 'test-project')
 
         # Mock get_cached_client to return a mock client
@@ -143,7 +143,7 @@ async def test_evaluator_factory_evaluate_instances_structure() -> None:
         mock_client.post = AsyncMock(return_value=mock_response)
         mock_client.is_closed = False
 
-        with patch('genkit_googleai.evaluators.evaluation.get_cached_client', return_value=mock_client):
+        with patch('genkit_google_genai.evaluators.evaluation.get_cached_client', return_value=mock_client):
             result = await factory.evaluate_instances({'fluencyInput': {'prediction': 'Test'}})
 
             assert result == mock_response_data
@@ -164,7 +164,7 @@ async def test_evaluator_factory_evaluate_instances_error_handling() -> None:
     mock_credentials.token = 'mock-token'
     mock_credentials.expired = False
 
-    with patch('genkit_googleai.evaluators.evaluation.google_auth_default') as mock_auth:
+    with patch('genkit_google_genai.evaluators.evaluation.google_auth_default') as mock_auth:
         mock_auth.return_value = (mock_credentials, 'test-project')
 
         # Mock get_cached_client to return a mock client
@@ -175,7 +175,7 @@ async def test_evaluator_factory_evaluate_instances_error_handling() -> None:
         mock_client.post = AsyncMock(return_value=mock_response)
         mock_client.is_closed = False
 
-        with patch('genkit_googleai.evaluators.evaluation.get_cached_client', return_value=mock_client):
+        with patch('genkit_google_genai.evaluators.evaluation.get_cached_client', return_value=mock_client):
             with pytest.raises(GenkitError) as exc_info:
                 await factory.evaluate_instances({'input': 'test'})
 

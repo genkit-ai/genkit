@@ -22,7 +22,7 @@ path where the SDK returns a model instance).
 """
 
 import pytest
-from genkit_googleai.models.veo import (
+from genkit_google_genai.models.veo import (
     VeoConfigSchema,
     VeoVersion,
     _from_veo_operation,

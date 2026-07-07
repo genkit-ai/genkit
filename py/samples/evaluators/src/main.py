@@ -20,7 +20,7 @@ import os
 from pathlib import Path
 
 from genkit_evaluators import register_genkit_evaluators
-from genkit_googleai import GoogleAI
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
 from genkit import Genkit

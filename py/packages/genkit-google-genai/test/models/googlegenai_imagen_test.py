@@ -20,7 +20,7 @@
 import base64
 
 import pytest
-from genkit_googleai.models.imagen import ImagenModel, ImagenVersion
+from genkit_google_genai.models.imagen import ImagenModel, ImagenVersion
 from google import genai
 from pytest_mock import MockerFixture
 

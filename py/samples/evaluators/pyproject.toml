@@ -5,7 +5,7 @@ requires-python = ">=3.10"
 dependencies = [
   "genkit",
   "genkit-evaluators",
-  "genkit-googleai",
+  "genkit-google-genai",
   "pydantic>=2.10.5",
 ]
 

@@ -31,7 +31,7 @@ For the trivia-only **respond** demo, see ``respond_example.py``. See README.md.
 
 from pathlib import Path
 
-from genkit_googleai import GoogleAI  # pyright: ignore[reportMissingImports]
+from genkit_google_genai import GoogleAI  # pyright: ignore[reportMissingImports]
 from pydantic import BaseModel, Field
 
 from genkit import (

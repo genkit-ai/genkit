@@ -16,7 +16,7 @@
 
 """Code execution - let Gemini write and run Python for a task."""
 
-from genkit_googleai import GeminiConfigSchema, GoogleAI
+from genkit_google_genai import GeminiConfigSchema, GoogleAI
 from pydantic import BaseModel, Field
 
 from genkit import Genkit, Message

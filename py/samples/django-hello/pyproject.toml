@@ -7,7 +7,7 @@ dependencies = [
   "uvicorn",
   "genkit",
   "genkit-django",
-  "genkit-googleai",
+  "genkit-google-genai",
   "pydantic",
 ]
 

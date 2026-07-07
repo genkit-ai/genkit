@@ -154,7 +154,7 @@ Example:
 
     ```python
     from genkit import Genkit
-    from genkit_googleai import GoogleAI
+    from genkit_google_genai import GoogleAI
 
     # Uses GEMINI_API_KEY env var or pass api_key explicitly
     ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
@@ -173,7 +173,7 @@ Example:
 
     ```python
     from genkit import Genkit
-    from genkit_googleai import VertexAI
+    from genkit_google_genai import VertexAI
 
     # Uses default GCP credentials; optionally pass project/location
     ai = Genkit(
@@ -202,25 +202,25 @@ See Also:
     - Model catalog: https://genkit.dev/docs/models
 """
 
-from genkit_googleai.google import (
+from genkit_google_genai.google import (
     GoogleAI,
     VertexAI,
 )
-from genkit_googleai.models.embedder import (
+from genkit_google_genai.models.embedder import (
     EmbeddingTaskType,
     GeminiEmbeddingModels,
     VertexEmbeddingModels,
 )
-from genkit_googleai.models.gemini import (
+from genkit_google_genai.models.gemini import (
     GeminiConfigSchema,
     GeminiImageConfigSchema,
     GeminiTtsConfigSchema,
     GoogleAIGeminiVersion,
     VertexAIGeminiVersion,
 )
-from genkit_googleai.models.imagen import ImagenVersion
-from genkit_googleai.models.lyria import LyriaConfig, LyriaVersion
-from genkit_googleai.models.veo import VeoConfig, VeoVersion
+from genkit_google_genai.models.imagen import ImagenVersion
+from genkit_google_genai.models.lyria import LyriaConfig, LyriaVersion
+from genkit_google_genai.models.veo import VeoConfig, VeoVersion
 
 
 def package_name() -> str:
@@ -229,7 +229,7 @@ def package_name() -> str:
     Returns:
         The fully qualified package name as a string.
     """
-    return 'genkit_googleai'
+    return 'genkit_google_genai'
 
 
 __all__ = [

@@ -29,7 +29,7 @@ from google.genai import types as genai_types
 
 from genkit import DocumentPart, Embedding, EmbedRequest, EmbedResponse
 from genkit._core._typing import DocumentData
-from genkit_googleai.models.utils import PartConverter
+from genkit_google_genai.models.utils import PartConverter
 
 
 class VertexEmbeddingModels(StrEnum):
@@ -74,6 +74,14 @@ EMBEDDER_DIMENSIONS: dict[str, int] = {
     'text-multilingual-embedding-002': 768,
     'multimodalembedding@001': 768,
 }
+
+
+# Curated set of Vertex AI embedders that are verified to be callable.
+VERTEX_KNOWN_EMBEDDERS: tuple[str, ...] = (
+    'text-embedding-005',
+    'text-multilingual-embedding-002',
+    'gemini-embedding-001',
+)
 
 
 class Embedder:

@@ -6,7 +6,7 @@ dependencies = [
   "flask",
   "genkit",
   "genkit-flask",
-  "genkit-googleai",
+  "genkit-google-genai",
   "pydantic",
 ]
 

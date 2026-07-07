@@ -36,7 +36,7 @@ Re-running cleanly:
 
 from pathlib import Path
 
-from genkit_googleai import GoogleAI
+from genkit_google_genai import GoogleAI
 from genkit_middleware import Filesystem, Middleware, Skills, ToolApproval
 
 from genkit import Genkit, Message, ModelResponse, Part, Role, TextPart, ToolRequestPart, restart_tool

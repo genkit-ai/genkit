@@ -39,7 +39,7 @@ The plugin automatically discovers available models from the API upon initializa
 New or experimental parameters can be passed flexibly using `model_validate` to bypass strict schema checks:
 
 ```python
-from genkit_googleai import GeminiConfigSchema
+from genkit_google_genai import GeminiConfigSchema
 
 config = GeminiConfigSchema.model_validate({
     'temperature': 1.0,
@@ -53,7 +53,7 @@ The VertexAI plugin provides semantic rerankers for improving RAG quality by re-
 
 ```python
 from genkit import Genkit
-from genkit_googleai import VertexAI
+from genkit_google_genai import VertexAI
 
 ai = Genkit(plugins=[VertexAI(project='my-project')])
 
@@ -81,7 +81,7 @@ Built-in evaluators for assessing model output quality. Evaluators are automatic
 ```python
 from genkit import Genkit
 from genkit._core.typing import BaseDataPoint
-from genkit_googleai import VertexAI
+from genkit_google_genai import VertexAI
 
 ai = Genkit(plugins=[VertexAI(project='my-project')])
 

@@ -21,7 +21,7 @@ from typing import Any, cast
 
 from django.http import HttpRequest
 from genkit_django import genkit_django_handler
-from genkit_googleai import GoogleAI
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
 from genkit import Genkit, ModelResponse

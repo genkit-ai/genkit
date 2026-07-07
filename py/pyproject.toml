@@ -26,7 +26,7 @@ dependencies = [
   "genkit-fastapi",
   "genkit-flask",
   "genkit-google-cloud",
-  "genkit-googleai",
+  "genkit-google-genai",
   "genkit-middleware",
   "genkit-ollama",
   "genkit-vertexai",
@@ -176,7 +176,7 @@ genkit-evaluators   = { workspace = true }
 genkit-fastapi      = { workspace = true }
 genkit-flask        = { workspace = true }
 genkit-google-cloud  = { workspace = true }
-genkit-googleai     = { workspace = true }
+genkit-google-genai     = { workspace = true }
 genkit-middleware   = { workspace = true }
 genkit-ollama       = { workspace = true }
 genkit-vertexai     = { workspace = true }
@@ -399,7 +399,7 @@ root = [
   "packages/genkit-fastapi/src",
   "packages/genkit-flask/src",
   "packages/genkit-google-cloud/src",
-  "packages/genkit-googleai/src",
+  "packages/genkit-google-genai/src",
   "packages/genkit-middleware/src",
   "packages/genkit-ollama/src",
   "packages/genkit-vertexai/src",
@@ -428,7 +428,7 @@ extraPaths = [
   "packages/genkit-fastapi/src",
   "packages/genkit-flask/src",
   "packages/genkit-google-cloud/src",
-  "packages/genkit-googleai/src",
+  "packages/genkit-google-genai/src",
   "packages/genkit-middleware/src",
   "packages/genkit-ollama/src",
   "packages/genkit-vertexai/src",
@@ -472,7 +472,7 @@ search-path = [
   "packages/genkit-fastapi/src",
   "packages/genkit-flask/src",
   "packages/genkit-google-cloud/src",
-  "packages/genkit-googleai/src",
+  "packages/genkit-google-genai/src",
   "packages/genkit-middleware/src",
   "packages/genkit-ollama/src",
   "packages/genkit-vertexai/src",

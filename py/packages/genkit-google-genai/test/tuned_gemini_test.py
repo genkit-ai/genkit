@@ -19,7 +19,7 @@
 from types import SimpleNamespace
 
 import pytest
-from genkit_googleai.models.gemini import (
+from genkit_google_genai.models.gemini import (
     is_tuned_gemini_name,
     resolve_vertex_model_name,
 )

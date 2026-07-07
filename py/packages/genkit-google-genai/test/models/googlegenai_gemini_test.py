@@ -27,7 +27,7 @@ else:
     from enum import StrEnum
 
 import pytest
-from genkit_googleai.models.gemini import (
+from genkit_google_genai.models.gemini import (
     DEFAULT_SUPPORTS_MODEL,
     GeminiConfigSchema,
     GeminiImageConfigSchema,
@@ -557,7 +557,7 @@ def test_gemini_model__init__() -> None:
     assert model._client == mock_client
 
 
-@patch('genkit_googleai.models.gemini.GeminiModel._create_tool')
+@patch('genkit_google_genai.models.gemini.GeminiModel._create_tool')
 def test_gemini_model__get_tools(
     mock_create_tool: MagicMock,
     gemini_model_instance: GeminiModel,
@@ -611,7 +611,7 @@ def test_gemini_model__get_tools(
         assert isinstance(tool, genai_types.Tool)
 
 
-@patch('genkit_googleai.models.gemini.GeminiModel._convert_schema_property')
+@patch('genkit_google_genai.models.gemini.GeminiModel._convert_schema_property')
 def test_gemini_model__create_tool(
     mock_convert_schema_property: MagicMock,
     gemini_model_instance: GeminiModel,
@@ -874,11 +874,11 @@ def test_gemini_model__convert_schema_property_raises_exception(
 
 @pytest.mark.asyncio
 @patch(
-    'genkit_googleai.models.gemini.generate_cache_key',
+    'genkit_google_genai.models.gemini.generate_cache_key',
     new_callable=MagicMock,
 )
 @patch(
-    'genkit_googleai.models.gemini.validate_context_cache_request',
+    'genkit_google_genai.models.gemini.validate_context_cache_request',
     new_callable=MagicMock,
 )
 @pytest.mark.parametrize(

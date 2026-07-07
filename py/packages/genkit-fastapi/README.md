@@ -13,7 +13,7 @@ pip install genkit-plugin-fastapi
 from fastapi import FastAPI
 from genkit import Genkit
 from genkit_fastapi import genkit_fastapi_handler
-from genkit_googleai import GoogleAI
+from genkit_google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
 app = FastAPI()

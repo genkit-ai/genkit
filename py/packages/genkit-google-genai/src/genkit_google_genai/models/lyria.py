@@ -43,7 +43,7 @@ Supported Models:
 
 Example:
     >>> from genkit import Genkit
-    >>> from genkit_googleai import VertexAI
+    >>> from genkit_google_genai import VertexAI
     >>>
     >>> ai = Genkit(plugins=[VertexAI(project='my-project')])
     >>>

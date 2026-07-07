@@ -24,15 +24,16 @@ from dataclasses import dataclass
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
-from genkit_googleai import GoogleAI, VertexAI
-from genkit_googleai.google import _inject_attribution_headers, googleai_name, vertexai_name
-from genkit_googleai.models.gemini import (
+from genkit_google_genai import GoogleAI, VertexAI
+from genkit_google_genai.google import _inject_attribution_headers, googleai_name, vertexai_name
+from genkit_google_genai.models.embedder import VERTEX_KNOWN_EMBEDDERS
+from genkit_google_genai.models.gemini import (
     DEFAULT_SUPPORTS_MODEL,
     SUPPORTED_MODELS,
     GeminiConfigSchema,
     GeminiModel,
 )
-from genkit_googleai.models.imagen import (
+from genkit_google_genai.models.imagen import (
     DEFAULT_IMAGE_SUPPORT,
     SUPPORTED_MODELS as IMAGE_SUPPORTED_MODELS,
 )
@@ -171,7 +172,7 @@ async def test_googleai_initialize(mock_client_cls: MagicMock) -> None:
     assert len(embedder_actions) > 0, 'Should have at least one embedder'
 
 
-@patch('genkit_googleai.GoogleAI._resolve_model')
+@patch('genkit_google_genai.GoogleAI._resolve_model')
 @pytest.mark.asyncio
 async def test_googleai_resolve_action_model(
     mock_resolve_action: MagicMock, googleai_plugin_instance: GoogleAI
@@ -183,7 +184,7 @@ async def test_googleai_resolve_action_model(
     mock_resolve_action.assert_called_once_with('lazaro-model')
 
 
-@patch('genkit_googleai.GoogleAI._resolve_embedder')
+@patch('genkit_google_genai.GoogleAI._resolve_embedder')
 @pytest.mark.asyncio
 async def test_googleai_resolve_action_embedder(
     mock_resolve_action: MagicMock, googleai_plugin_instance: GoogleAI
@@ -195,7 +196,7 @@ async def test_googleai_resolve_action_embedder(
     mock_resolve_action.assert_called_once_with('lazaro-model')
 
 
-@patch('genkit_googleai.models.gemini.google_model_info')
+@patch('genkit_google_genai.models.gemini.google_model_info')
 @pytest.mark.parametrize(
     'model_name, expected_model_name, key',
     [
@@ -291,7 +292,7 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
     # Check TTS
     action3 = next(a for a in result if a.name == googleai_name('gemini-2.0-flash-tts'))
     assert action3 is not None
-    # from genkit_googleai.models.gemini import GeminiTtsConfigSchema, GeminiConfigSchema
+    # from genkit_google_genai.models.gemini import GeminiTtsConfigSchema, GeminiConfigSchema
     # assert action3.config_schema == GeminiTtsConfigSchema
     # assert action1.config_schema == GeminiConfigSchema
 
@@ -608,7 +609,7 @@ async def test_vertexai_initialize(vertexai_plugin_instance: VertexAI) -> None:
     assert len(embedder_actions) > 0, 'Should have at least one embedder'
 
 
-@patch('genkit_googleai.VertexAI._resolve_model')
+@patch('genkit_google_genai.VertexAI._resolve_model')
 @pytest.mark.asyncio
 async def test_vertexai_resolve_action_model(
     mock_resolve_action: MagicMock, vertexai_plugin_instance: VertexAI
@@ -620,7 +621,7 @@ async def test_vertexai_resolve_action_model(
     mock_resolve_action.assert_called_once_with('lazaro-model')
 
 
-@patch('genkit_googleai.VertexAI._resolve_embedder')
+@patch('genkit_google_genai.VertexAI._resolve_embedder')
 @pytest.mark.asyncio
 async def test_vertexai_resolve_action_embedder(
     mock_resolve_action: MagicMock, vertexai_plugin_instance: VertexAI
@@ -633,11 +634,11 @@ async def test_vertexai_resolve_action_embedder(
 
 
 @patch(
-    'genkit_googleai.models.gemini.google_model_info',
+    'genkit_google_genai.models.gemini.google_model_info',
     new_callable=MagicMock,
 )
 @patch(
-    'genkit_googleai.models.imagen.vertexai_image_model_info',
+    'genkit_google_genai.models.imagen.vertexai_image_model_info',
     new_callable=MagicMock,
 )
 @pytest.mark.parametrize(
@@ -800,7 +801,7 @@ async def test_vertexai_list_actions(vertexai_plugin_instance: VertexAI) -> None
     # Verify Veo
     action4 = next(a for a in result if a.name == vertexai_name('veo-2.0-generate-001'))
     assert action4 is not None
-    # from genkit_googleai.models.veo import VeoConfigSchema
+    # from genkit_google_genai.models.veo import VeoConfigSchema
     # assert action4.config_schema == VeoConfigSchema
 
 
@@ -824,6 +825,7 @@ async def test_vertexai_list_actions_without_supported_actions(vertexai_plugin_i
     mock_client.models.list.return_value = [
         mock_model('publishers/google/models/gemini-2.5-pro'),
         mock_model('publishers/google/models/gemini-embedding-001'),
+        mock_model('publishers/google/models/gemini-embedding-2'),
         mock_model('publishers/google/models/imagen-3.0-generate-002'),
         mock_model('publishers/google/models/veo-2.0-generate-001'),
     ]
@@ -841,6 +843,8 @@ async def test_vertexai_list_actions_without_supported_actions(vertexai_plugin_i
     # gemini-embedding-001 is registered as an embedder, not a gemini model.
     embedder = next(a for a in result if a.name == vertexai_name('gemini-embedding-001'))
     assert embedder.action_type == ActionKind.EMBEDDER
+    # Non-callable embedders over-listed by the catalog must not leak into Gemini text models.
+    assert vertexai_name('gemini-embedding-2') not in names
 
 
 @pytest.mark.asyncio
@@ -925,50 +929,17 @@ async def test_vertexai_list_known_models(vertexai_plugin_instance: VertexAI) ->
 
 @pytest.mark.asyncio
 async def test_vertexai_list_known_embedders(vertexai_plugin_instance: VertexAI) -> None:
-    """Unit test for list known embedders."""
+    """Vertex embedders come from a curated list, not catalog discovery.
 
-    @dataclass
-    class MockModel:
-        name: str
-        description: str = ''
-
-    [
-        MockModel(name='publishers/google/models/gemini-1.5-flash'),
-        MockModel(name='publishers/google/models/gemini-embedding-001'),
-        MockModel(name='publishers/google/models/imagen-3.0-generate-001'),
-        MockModel(name='publishers/google/models/veo-2.0-generate-001'),
-    ]
-
-    mock_client = MagicMock()
-    # Create sophisticated mocks that have supported_actions
-    m1 = MagicMock()
-    m1.name = 'publishers/google/models/gemini-1.5-flash'
-    m1.supported_actions = ['generateContent']
-    m1.description = 'Gemini model'
-
-    m2 = MagicMock()
-    m2.name = 'publishers/google/models/gemini-embedding-001'
-    m2.supported_actions = ['embedContent']
-    m2.description = 'Embedder'
-
-    m3 = MagicMock()
-    m3.name = 'publishers/google/models/imagen-3.0-generate-001'
-    m3.supported_actions = ['predict']
-    m3.description = 'Imagen'
-
-    m4 = MagicMock()
-    m4.name = 'publishers/google/models/veo-2.0-generate-001'
-    m4.supported_actions = ['generateVideos']
-    m4.description = 'Veo'
-
-    mock_client.models.list.return_value = [m1, m2, m3, m4]
-    vertexai_plugin_instance._runtime_client = lambda: mock_client
-
+    The Vertex catalog over-lists embedders that are published but not callable
+    (e.g. gemini-embedding-2), so the plugin advertises only VERTEX_KNOWN_EMBEDDERS.
+    """
     result = vertexai_plugin_instance._list_known_embedders()
 
-    # Verify Embedder
-    action2 = next(a for a in result if a.name == vertexai_name('gemini-embedding-001'))
-    assert action2 is not None
+    listed = {a.name for a in result}
+    assert listed == {vertexai_name(name) for name in VERTEX_KNOWN_EMBEDDERS}
+    assert vertexai_name('gemini-embedding-001') in listed
+    assert vertexai_name('gemini-embedding-2') not in listed
 
 
 @pytest.mark.asyncio

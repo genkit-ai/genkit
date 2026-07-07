@@ -20,7 +20,7 @@ import asyncio
 import time
 from typing import Any, Literal
 
-from genkit_googleai import GoogleAI
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
 from genkit import Genkit

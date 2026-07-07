@@ -76,9 +76,9 @@ PLUGINS = [
     },
     {
         'old_dist': 'genkit-plugin-google-genai',
-        'new_dist': 'genkit-googleai',
+        'new_dist': 'genkit-google-genai',
         'old_import': 'google_genai',
-        'new_import': 'genkit_googleai',
+        'new_import': 'genkit_google_genai',
     },
     {
         'old_dist': 'genkit-plugin-middleware',
