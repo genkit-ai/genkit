@@ -41,7 +41,7 @@ from genkit.plugins.amazon_bedrock.config import (
 )
 
 if TYPE_CHECKING:
-    import aioboto3
+    import boto3.session
 
 BEDROCK_PLUGIN_NAME = 'bedrock'
 
@@ -68,7 +68,7 @@ class Bedrock(Plugin):
         region: str | None = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
         request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
-        session: 'aioboto3.Session | None' = None,
+        session: 'boto3.session.Session | None' = None,
         models: list[ModelDefinition] | None = None,
         embedders: list[str] | None = None,
     ) -> None:
@@ -79,7 +79,7 @@ class Bedrock(Plugin):
                 back to ``us-east-1`` (Go plugin parity).
             max_retries: Retry limit for Bedrock API calls.
             request_timeout: Per-call timeout in seconds.
-            session: Optional pre-configured ``aioboto3.Session`` for custom
+            session: Optional pre-configured ``boto3.session.Session`` for custom
                 credentials or advanced SDK wiring.
             models: Bedrock models to register. Models not listed can still be
                 resolved dynamically by namespaced name.
