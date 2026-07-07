@@ -208,8 +208,8 @@ Cross-Language Parity:
     - Same project ID resolution order
 """
 
-from typing import Any
 import warnings
+from typing import Any
 
 import structlog
 from opentelemetry.sdk.trace.sampling import Sampler
@@ -341,6 +341,7 @@ def add_gcp_telemetry(
     metric_export_timeout_ms: int | None = None,
     force_export: bool | None = None,
 ) -> None:
+    """Deprecated alias for :func:`enable_google_cloud_telemetry`."""
     warnings.warn(
         'add_gcp_telemetry is deprecated; use enable_google_cloud_telemetry instead.',
         DeprecationWarning,

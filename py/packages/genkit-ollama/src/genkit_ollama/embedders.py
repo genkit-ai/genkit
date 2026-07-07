@@ -19,9 +19,9 @@
 
 from collections.abc import Callable
 
+import ollama as ollama_api
 from pydantic import BaseModel
 
-import ollama as ollama_api
 from genkit import Embedding
 from genkit.embedder import EmbedRequest, EmbedResponse
 

@@ -246,7 +246,7 @@ class ImagenModel:
         """
         supports = {}
         if self._version in SUPPORTED_MODELS:
-            model_supports = SUPPORTED_MODELS[self._version].supports  # pyrefly: ignore[bad-index]
+            model_supports = SUPPORTED_MODELS[self._version].supports  # pyright: ignore[reportArgumentType]
             if model_supports:
                 supports = model_supports.model_dump(by_alias=True)
         else:

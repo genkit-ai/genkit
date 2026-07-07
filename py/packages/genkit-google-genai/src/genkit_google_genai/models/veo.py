@@ -364,7 +364,7 @@ class VeoModel:
             model=self._version,
             prompt=prompt,
             # pyrefly: ignore[bad-argument-type] - config dict matches GenerateVideosConfigDict
-            config=request.config if isinstance(request.config, dict) else None,
+            config=request.config if isinstance(request.config, dict) else None,  # pyright: ignore[reportArgumentType]
         )
 
         # Convert to Operation

@@ -306,7 +306,7 @@ class GeminiConfigSchema(ModelConfig):
 
     model_config = ConfigDict(extra='allow', populate_by_name=True)
 
-    api_key: str | None = Field(
+    api_key: str | None = Field(  # pyright: ignore[reportGeneralTypeIssues]
         None, description='Overrides the plugin-configured API key, if specified.', alias='apiKey', exclude=True
     )
     base_url: str | None = Field(

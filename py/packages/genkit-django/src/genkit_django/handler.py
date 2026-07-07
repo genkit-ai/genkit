@@ -67,7 +67,7 @@ def _error_response(status: int, err: Exception) -> HttpResponse:
     """Return a JSON HttpErrorWireFormat response for an exception."""
     return HttpResponse(
         status=status,
-        content=json.dumps(get_callable_json(err), separators=_JSON_SEPARATORS),
+        content=json.dumps(get_callable_json(err), separators=_JSON_SEPARATORS),  # pyright: ignore[reportArgumentType]
         content_type='application/json',
     )
 

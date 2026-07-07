@@ -336,7 +336,7 @@ class MessageConverter:
     def _get_openai_role(cls, role: Role | str) -> str:
         """Convert a Role to its OpenAI string representation."""
         if isinstance(role, Role):
-            return cls._openai_role_map.get(role, role.value)
+            return cls._openai_role_map.get(role, role.value)  # pyright: ignore[reportReturnType]
 
         if role == 'model':
             return 'assistant'
@@ -492,8 +492,8 @@ class MessageConverter:
         """
         # Get function info from tool_call (could be dict or object)
         if hasattr(tool_call, 'function') and hasattr(tool_call, 'id'):
-            func = tool_call.function
-            tool_id = tool_call.id
+            func = tool_call.function  # pyright: ignore[reportAttributeAccessIssue]
+            tool_id = tool_call.id  # pyright: ignore[reportAttributeAccessIssue]
             func_name = func.name if hasattr(func, 'name') else ''
             func_args = func.arguments if hasattr(func, 'arguments') else ''
         else:

@@ -16,8 +16,8 @@
 
 """Smoke tests for package structure."""
 
-from genkit_google_genai import package_name as google_genai_package_name
 from genkit_google_cloud import package_name as google_cloud_package_name
+from genkit_google_genai import package_name as google_genai_package_name
 from genkit_ollama import package_name as ollama_package_name
 from genkit_vertexai import package_name as vertex_ai_package_name
 

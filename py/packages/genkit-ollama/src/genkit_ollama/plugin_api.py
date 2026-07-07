@@ -22,9 +22,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, cast
 
+import ollama as ollama_api
 import structlog
 
-import ollama as ollama_api
 from genkit import Constrained, ModelInfo, ModelRequest, ModelResponse, Supports
 from genkit.embedder import (
     EmbedderOptions,

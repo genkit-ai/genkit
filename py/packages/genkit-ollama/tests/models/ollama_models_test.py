@@ -24,6 +24,8 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import httpx
 import ollama as ollama_api
 import pytest
+from genkit_ollama.constants import OllamaAPITypes
+from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaModel, _convert_parameters
 
 from genkit import (
     ActionRunContext,
@@ -40,8 +42,6 @@ from genkit import (
     TextPart,
     ToolRequestPart,
 )
-from genkit_ollama.constants import OllamaAPITypes
-from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaModel, _convert_parameters
 
 
 class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
@@ -817,9 +817,9 @@ class TestBuildRequestOptions:
 
     def test_ollama_config_extras_snake_cased(self) -> None:
         """Unknown OllamaConfig knobs are forwarded snake-cased (instance + camel)."""
-        snake = OllamaModel.build_request_options(OllamaConfig(repeat_penalty=1.1))
+        snake = OllamaModel.build_request_options(OllamaConfig.model_validate({'repeat_penalty': 1.1}))
         assert snake['repeat_penalty'] == 1.1
-        camel = OllamaModel.build_request_options(OllamaConfig(repeatPenalty=1.2))
+        camel = OllamaModel.build_request_options(OllamaConfig.model_validate({'repeatPenalty': 1.2}))
         assert camel['repeat_penalty'] == 1.2
 
     def test_num_predict_wins_over_max_output_tokens(self) -> None:

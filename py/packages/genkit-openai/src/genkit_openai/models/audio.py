@@ -410,4 +410,4 @@ class OpenAISTTModel:
         # transcriptions.create(stream=False) returns a union of
         # Transcription | TranscriptionVerbose | TranscriptionDiarized | str.
         # _to_stt_response handles all of these via isinstance/hasattr checks.
-        return _to_stt_response(result)
+        return _to_stt_response(result)  # pyright: ignore[reportArgumentType]

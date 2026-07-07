@@ -87,11 +87,11 @@ import re
 from collections.abc import Callable
 from typing import Any, Literal, cast
 
+import ollama as ollama_api
 import structlog
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel, to_snake
 
-import ollama as ollama_api
 from genkit import (
     Media,
     MediaPart,
@@ -362,7 +362,7 @@ class OllamaModel:
                     messages=messages,
                     tools=tools,
                     options=options,
-                    format=fmt,
+                    format=fmt,  # pyright: ignore[reportArgumentType]
                     stream=True,
                     **extra_kwargs,
                 )
@@ -390,7 +390,7 @@ class OllamaModel:
                     messages=messages,
                     tools=tools,
                     options=options,
-                    format=fmt,
+                    format=fmt,  # pyright: ignore[reportArgumentType]
                     stream=False,
                     **extra_kwargs,
                 )
@@ -886,7 +886,7 @@ def _convert_parameters(input_schema: dict[str, object]) -> ollama_api.Tool.Func
         # JS parity (isValidOllamaTool): Ollama only supports object-typed tool inputs.
         raise ValueError(f'Unsupported schema type {schema_type!r}: Ollama only supports tools with object inputs')
 
-    schema = ollama_api.Tool.Function.Parameters()
+    schema = ollama_api.Tool.Function.Parameters()  # pyright: ignore[reportCallIssue]
     schema.type = 'object'
 
     required = input_schema.get('required')

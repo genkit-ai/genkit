@@ -22,11 +22,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import ollama as ollama_api
 import pytest
-
-from genkit import Genkit
 from genkit_ollama.constants import OllamaAPITypes
 from genkit_ollama.models import ModelDefinition
 from genkit_ollama.plugin_api import Ollama
+
+from genkit import Genkit
 
 
 @pytest.fixture

@@ -608,7 +608,7 @@ class GoogleAI(Plugin):
         # Determine model type and create model metadata/config schema
         if clean_name.lower().startswith('image'):
             model_ref = vertexai_image_model_info(clean_name)
-            IMAGE_SUPPORTED_MODELS[clean_name] = model_ref
+            IMAGE_SUPPORTED_MODELS[clean_name] = model_ref  # pyright: ignore[reportArgumentType]
             config_schema = ImagenConfigSchema
         else:
             model_ref = google_model_info(clean_name)
@@ -944,7 +944,7 @@ class VertexAI(Plugin):
             config_schema = GeminiConfigSchema
         elif clean_name.lower().startswith('image'):
             model_ref = vertexai_image_model_info(clean_name)
-            IMAGE_SUPPORTED_MODELS[clean_name] = model_ref
+            IMAGE_SUPPORTED_MODELS[clean_name] = model_ref  # pyright: ignore[reportArgumentType]
             config_schema = ImagenConfigSchema
         elif is_veo_model(clean_name):
             model_ref = veo_model_info(clean_name)

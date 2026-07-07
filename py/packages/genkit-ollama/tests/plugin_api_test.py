@@ -23,6 +23,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import ollama as ollama_api
 import pytest
+from genkit_ollama import Ollama, OllamaConnectionError, RequestHeaderParams, ollama_name
+from genkit_ollama._errors import wrap_connection_errors
+from genkit_ollama.constants import OllamaAPITypes
+from genkit_ollama.embedders import EmbeddingDefinition
+from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaSupports
 from pydantic import BaseModel
 
 from genkit import (
@@ -38,11 +43,6 @@ from genkit import (
     TextPart,
 )
 from genkit.plugin_api import to_json_schema
-from genkit_ollama import Ollama, OllamaConnectionError, RequestHeaderParams, ollama_name
-from genkit_ollama._errors import wrap_connection_errors
-from genkit_ollama.constants import OllamaAPITypes
-from genkit_ollama.embedders import EmbeddingDefinition
-from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaSupports
 
 
 class TestOllamaInit(unittest.TestCase):

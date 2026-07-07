@@ -124,10 +124,7 @@ class TestGoogleAIInit(unittest.TestCase):
         """Test using credentials parameter."""
         with (
             patch.dict(os.environ, {'GEMINI_API_KEY': ''}, clear=True),
-            self.assertRaisesRegex(
-                ValueError,
-                'Gemini api key should be passed in plugin params or as a GEMINI_API_KEY environment variable',
-            ),
+            self.assertRaisesRegex(ValueError, r'GEMINI_API_KEY environment variable not set'),
         ):
             GoogleAI()
 
