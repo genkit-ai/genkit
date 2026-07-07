@@ -58,7 +58,7 @@ jobs:
             py/packages/genkit-fastapi
             py/packages/genkit-flask
             py/packages/genkit-googleai
-            py/packages/genkit-googlecloud
+            py/packages/genkit-google-cloud
             py/packages/genkit-middleware
             py/packages/genkit-ollama
             py/packages/genkit-openai

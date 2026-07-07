@@ -25,7 +25,7 @@ dependencies = [
   "genkit-evaluators",
   "genkit-fastapi",
   "genkit-flask",
-  "genkit-googlecloud",
+  "genkit-google-cloud",
   "genkit-googleai",
   "genkit-middleware",
   "genkit-ollama",
@@ -175,7 +175,7 @@ genkit-django       = { workspace = true }
 genkit-evaluators   = { workspace = true }
 genkit-fastapi      = { workspace = true }
 genkit-flask        = { workspace = true }
-genkit-googlecloud  = { workspace = true }
+genkit-google-cloud  = { workspace = true }
 genkit-googleai     = { workspace = true }
 genkit-middleware   = { workspace = true }
 genkit-ollama       = { workspace = true }
@@ -398,7 +398,7 @@ root = [
   "packages/genkit-evaluators/src",
   "packages/genkit-fastapi/src",
   "packages/genkit-flask/src",
-  "packages/genkit-googlecloud/src",
+  "packages/genkit-google-cloud/src",
   "packages/genkit-googleai/src",
   "packages/genkit-middleware/src",
   "packages/genkit-ollama/src",
@@ -427,7 +427,7 @@ extraPaths = [
   "packages/genkit-evaluators/src",
   "packages/genkit-fastapi/src",
   "packages/genkit-flask/src",
-  "packages/genkit-googlecloud/src",
+  "packages/genkit-google-cloud/src",
   "packages/genkit-googleai/src",
   "packages/genkit-middleware/src",
   "packages/genkit-ollama/src",
@@ -471,7 +471,7 @@ search-path = [
   "packages/genkit-evaluators/src",
   "packages/genkit-fastapi/src",
   "packages/genkit-flask/src",
-  "packages/genkit-googlecloud/src",
+  "packages/genkit-google-cloud/src",
   "packages/genkit-googleai/src",
   "packages/genkit-middleware/src",
   "packages/genkit-ollama/src",

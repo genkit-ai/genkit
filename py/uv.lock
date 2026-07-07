@@ -27,7 +27,7 @@ members = [
     "genkit-fastapi",
     "genkit-flask",
     "genkit-googleai",
-    "genkit-googlecloud",
+    "genkit-google-cloud",
     "genkit-middleware",
     "genkit-ollama",
     "genkit-openai",
@@ -1566,7 +1566,7 @@ flask = [
     { name = "genkit-flask" },
 ]
 google-cloud = [
-    { name = "genkit-googlecloud" },
+    { name = "genkit-google-cloud" },
 ]
 google-genai = [
     { name = "genkit-googleai" },
@@ -1588,7 +1588,7 @@ requires-dist = [
     { name = "dotpromptz", specifier = ">=0.1.5" },
     { name = "genkit-flask", marker = "extra == 'flask'", editable = "packages/genkit-flask" },
     { name = "genkit-googleai", marker = "extra == 'google-genai'", editable = "packages/genkit-googleai" },
-    { name = "genkit-googlecloud", marker = "extra == 'google-cloud'", editable = "packages/genkit-googlecloud" },
+    { name = "genkit-google-cloud", marker = "extra == 'google-cloud'", editable = "packages/genkit-google-cloud" },
     { name = "genkit-ollama", marker = "extra == 'ollama'", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", marker = "extra == 'openai'", editable = "packages/genkit-openai" },
     { name = "genkit-vertexai", marker = "extra == 'vertex-ai'", editable = "packages/genkit-vertexai" },
@@ -1624,7 +1624,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=0.40.0" },
+    { name = "anthropic", specifier = ">=0.96.0" },
     { name = "genkit", editable = "packages/genkit" },
 ]
 
@@ -1719,9 +1719,9 @@ requires-dist = [
 ]
 
 [[package]]
-name = "genkit-googlecloud"
+name = "genkit-google-cloud"
 version = "0.7.0"
-source = { editable = "packages/genkit-googlecloud" }
+source = { editable = "packages/genkit-google-cloud" }
 dependencies = [
     { name = "genkit" },
     { name = "google-cloud-logging" },
@@ -1820,7 +1820,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=0.40.0" },
+    { name = "anthropic", specifier = ">=0.96.0" },
     { name = "genkit", editable = "packages/genkit" },
     { name = "genkit-anthropic", editable = "packages/genkit-anthropic" },
     { name = "genkit-openai", editable = "packages/genkit-openai" },
@@ -1845,7 +1845,7 @@ dependencies = [
     { name = "genkit-fastapi" },
     { name = "genkit-flask" },
     { name = "genkit-googleai" },
-    { name = "genkit-googlecloud" },
+    { name = "genkit-google-cloud" },
     { name = "genkit-middleware" },
     { name = "genkit-ollama" },
     { name = "genkit-openai" },
@@ -1917,7 +1917,7 @@ requires-dist = [
     { name = "genkit-fastapi", editable = "packages/genkit-fastapi" },
     { name = "genkit-flask", editable = "packages/genkit-flask" },
     { name = "genkit-googleai", editable = "packages/genkit-googleai" },
-    { name = "genkit-googlecloud", editable = "packages/genkit-googlecloud" },
+    { name = "genkit-google-cloud", editable = "packages/genkit-google-cloud" },
     { name = "genkit-middleware", editable = "packages/genkit-middleware" },
     { name = "genkit-ollama", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", editable = "packages/genkit-openai" },

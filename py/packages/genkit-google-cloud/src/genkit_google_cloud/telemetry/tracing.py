@@ -153,7 +153,7 @@ Project ID Resolution Order:
 
 Usage:
     ```python
-    from genkit_googlecloud import enable_googlecloud_telemetry
+    from genkit_google_cloud import enable_googlecloud_telemetry
 
     # Enable telemetry with default settings (PII redaction enabled)
     enable_googlecloud_telemetry()

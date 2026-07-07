@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 
 def get_version() -> str:
@@ -69,9 +70,9 @@ PLUGINS = [
     },
     {
         'old_dist': 'genkit-plugin-google-cloud',
-        'new_dist': 'genkit-googlecloud',
+        'new_dist': 'genkit-google-cloud',
         'old_import': 'google_cloud',
-        'new_import': 'genkit_googlecloud',
+        'new_import': 'genkit_google_cloud',
     },
     {
         'old_dist': 'genkit-plugin-google-genai',
@@ -136,15 +137,94 @@ README = """# Deprecated Package: {old_dist}
    import {new_import}
    ```
 
-Importing from `genkit.plugins.{old_import}` raises an `ImportError`.
+Importing from `genkit.plugins.{old_import}` (including submodules) still works but emits a `DeprecationWarning`.
+Please migrate to `{new_import}` when you can.
 """
 
-INIT = """raise ImportError(
+SHIM = """import importlib
+import warnings
+
+warnings.warn(
     "The '{old_dist}' package has been renamed to '{new_dist}'. "
-    "Please update your dependencies to '{new_dist}' and swap your imports "
-    "from 'genkit.plugins.{old_import}' to '{new_import}'."
+    "Please update your dependencies to '{new_dist}' and swap imports "
+    "from 'genkit.plugins.{old_import}' to '{new_import}'.",
+    DeprecationWarning,
+    stacklevel=2,
 )
+
+_mod = importlib.import_module('{new_module}')
+__all__ = list(getattr(_mod, '__all__', ()))
+if not __all__:
+    __all__ = [name for name in dir(_mod) if not name.startswith('_')]
+
+for _name in __all__:
+    globals()[_name] = getattr(_mod, _name)
+
+del _mod, _name
 """
+
+
+def package_src_dir(new_dist: str, new_import: str) -> Path:
+    return Path(__file__).resolve().parent.parent / 'packages' / new_dist / 'src' / new_import
+
+
+def iter_package_py_files(src_dir: Path) -> list[Path]:
+    return sorted(path for path in src_dir.rglob('*.py') if path.is_file())
+
+
+def new_module_name(new_import: str, rel_py_path: Path) -> str:
+    if rel_py_path.name == '__init__.py':
+        module_path = rel_py_path.parent.as_posix()
+        if module_path == '.':
+            return new_import
+        return f'{new_import}.{module_path.replace("/", ".")}'
+    stem = rel_py_path.with_suffix('').as_posix()
+    return f'{new_import}.{stem.replace("/", ".")}'
+
+
+def write_shim(
+    tmpdir: str,
+    *,
+    old_dist: str,
+    new_dist: str,
+    old_import: str,
+    new_import: str,
+    rel_py_path: Path,
+) -> None:
+    shim_path = Path(tmpdir) / 'src' / 'genkit' / 'plugins' / old_import / rel_py_path
+    shim_path.parent.mkdir(parents=True, exist_ok=True)
+    shim_path.write_text(
+        SHIM.format(
+            old_dist=old_dist,
+            new_dist=new_dist,
+            old_import=old_import,
+            new_import=new_import,
+            new_module=new_module_name(new_import, rel_py_path),
+        )
+    )
+
+
+def build_plugin_shims(
+    tmpdir: str,
+    *,
+    old_dist: str,
+    new_dist: str,
+    old_import: str,
+    new_import: str,
+) -> None:
+    src_dir = package_src_dir(new_dist, new_import)
+    if not src_dir.is_dir():
+        sys.exit(f'publish_tombstones: could not find source package at {src_dir}')
+
+    for py_file in iter_package_py_files(src_dir):
+        write_shim(
+            tmpdir,
+            old_dist=old_dist,
+            new_dist=new_dist,
+            old_import=old_import,
+            new_import=new_import,
+            rel_py_path=py_file.relative_to(src_dir),
+        )
 
 
 def main() -> None:
@@ -166,10 +246,13 @@ def main() -> None:
                     README.format(old_dist=old_dist, new_dist=new_dist, old_import=old_import, new_import=new_import)
                 )
 
-            mod_dir = f'{tmpdir}/src/genkit/plugins/{old_import}'
-            os.makedirs(mod_dir, exist_ok=True)
-            with open(f'{mod_dir}/__init__.py', 'w') as f:
-                f.write(INIT.format(old_dist=old_dist, new_dist=new_dist, old_import=old_import, new_import=new_import))
+            build_plugin_shims(
+                tmpdir,
+                old_dist=old_dist,
+                new_dist=new_dist,
+                old_import=old_import,
+                new_import=new_import,
+            )
 
             subprocess.run(['uv', '--no-config', 'build', '--wheel', '--out-dir', 'out'], cwd=tmpdir, check=True)
             whl = [w for w in os.listdir(f'{tmpdir}/out') if w.endswith('.whl')][0]

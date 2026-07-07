@@ -80,7 +80,7 @@ version = "0.7.0"
 
 [project.optional-dependencies]
 flask                 = ["genkit-flask"]
-google-cloud          = ["genkit-googlecloud"]
+google-cloud          = ["genkit-google-cloud"]
 google-genai          = ["genkit-googleai"]
 ollama                = ["genkit-ollama"]
 openai                = ["genkit-openai"]
