@@ -41,6 +41,31 @@ def test_strip_only_removes_first_matching_prefix() -> None:
     assert strip_inference_profile_prefix('us.us.model') == 'us.model'
 
 
+def test_strip_handles_inference_profile_arn() -> None:
+    arn = 'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0'
+    assert strip_inference_profile_prefix(arn) == 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+
+
+def test_strip_handles_foundation_model_arn() -> None:
+    arn = 'arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-haiku-20240307-v1:0'
+    assert strip_inference_profile_prefix(arn) == 'anthropic.claude-3-haiku-20240307-v1:0'
+
+
+def test_strip_handles_govcloud_partition_arn() -> None:
+    arn = (
+        'arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:'
+        'inference-profile/us-gov.anthropic.claude-3-5-sonnet-20240620-v1:0'
+    )
+    assert strip_inference_profile_prefix(arn) == 'anthropic.claude-3-5-sonnet-20240620-v1:0'
+
+
+def test_application_inference_profile_arn_falls_back_to_unstable() -> None:
+    arn = 'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123opaque'
+    info = get_model_info(arn)
+    assert info.stage == Stage.UNSTABLE
+    assert info.supports.tools is True
+
+
 def test_us_gov_wins_over_us() -> None:
     assert strip_inference_profile_prefix('us-gov.anthropic.claude-3-opus-20240229-v1:0') == (
         'anthropic.claude-3-opus-20240229-v1:0'
