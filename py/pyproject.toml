@@ -19,6 +19,7 @@ authors = [{ name = "Google" }]
 dependencies = [
   "dotpromptz==0.1.5",
   "genkit",
+  "genkit-amazon-bedrock",
   "genkit-anthropic",
   "genkit-openai",
   "genkit-django",
@@ -158,6 +159,7 @@ vertexai-imagen      = { workspace = true }
 
 # Core packages
 genkit = { workspace = true }
+genkit-amazon-bedrock = { workspace = true }
 genkit-anthropic    = { workspace = true }
 genkit-openai       = { workspace = true }
 genkit-django       = { workspace = true }
@@ -360,6 +362,7 @@ root = [
   # Core package
   "packages/genkit/src",
   # Integration packages
+  "packages/genkit-amazon-bedrock/src",
   "packages/genkit-anthropic/src",
   "packages/genkit-openai/src",
   "packages/genkit-django/src",
@@ -389,6 +392,7 @@ exclude = [
 ]
 extraPaths = [
   "packages/genkit/src",
+  "packages/genkit-amazon-bedrock/src",
   "packages/genkit-anthropic/src",
   "packages/genkit-openai/src",
   "packages/genkit-django/src",
@@ -431,6 +435,7 @@ project_includes = [
 search-path = [
   ".",
   "packages/genkit/src",
+  "packages/genkit-amazon-bedrock/src",
   "packages/genkit-anthropic/src",
   "packages/genkit-openai/src",
   "packages/genkit-django/src",
