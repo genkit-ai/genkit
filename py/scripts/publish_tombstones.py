@@ -141,6 +141,9 @@ Importing from `genkit.plugins.{old_import}` (including submodules) still works 
 Please migrate to `{new_import}` when you can.
 """
 
+# Leaf modules usually skip __all__, but users can still import through old paths
+# like genkit.plugins.ollama.models. When __all__ is missing, copy every
+# non-underscore name from the target module so those imports keep working.
 SHIM = """import importlib
 import warnings
 
