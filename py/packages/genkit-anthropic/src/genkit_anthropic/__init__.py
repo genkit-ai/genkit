@@ -105,7 +105,7 @@ Architecture Overview::
     │  └── Streaming support                                                  │
     ├─────────────────────────────────────────────────────────────────────────┤
     │  model_info.py - Model Registry                                         │
-    │  ├── SUPPORTED_MODELS (claude-3.5-sonnet, opus, haiku, etc.)            │
+    │  ├── SUPPORTED_MODELS (claude-sonnet-4-5, opus, haiku, etc.)            │
     │  └── Model capabilities and metadata                                    │
     └─────────────────────────────────────────────────────────────────────────┘
 
@@ -118,10 +118,10 @@ Supported Models:
     ┌─────────────────────────────────────────────────────────────────────────┐
     │ Model                     │ Description                                 │
     ├───────────────────────────┼─────────────────────────────────────────────┤
-    │ claude-3-5-sonnet-latest  │ Balanced performance and capability         │
-    │ claude-3-5-haiku-latest   │ Fast and cost-effective                     │
-    │ claude-3-opus-latest      │ Most capable, complex tasks                 │
-    │ claude-sonnet-4-20250514  │ Latest Sonnet model                         │
+    │ claude-sonnet-4-5         │ Balanced performance and capability         │
+    │ claude-haiku-4-5          │ Fast and cost-effective                     │
+    │ claude-opus-4-5           │ Most capable, complex tasks                 │
+    │ claude-sonnet-5           │ Latest Sonnet model                         │
     └───────────────────────────┴─────────────────────────────────────────────┘
 
 Key Components:
@@ -142,7 +142,7 @@ Example:
     # Uses ANTHROPIC_API_KEY env var or pass api_key explicitly
     ai = Genkit(
         plugins=[Anthropic()],
-        model='anthropic/claude-3-5-sonnet-latest',
+        model='anthropic/claude-sonnet-4-5',
     )
 
     response = await ai.generate(prompt='Hello, Claude!')
@@ -150,7 +150,7 @@ Example:
 
     # With custom configuration
     response = await ai.generate(
-        model='anthropic/claude-3-5-haiku-latest',
+        model='anthropic/claude-haiku-4-5',
         prompt='Write a haiku about AI',
         config={'temperature': 0.7, 'max_tokens': 100},
     )
@@ -165,7 +165,7 @@ Example:
 
 
     response = await ai.generate(
-        model='anthropic/claude-3-5-sonnet-latest',
+        model='anthropic/claude-sonnet-4-5',
         prompt='What is the weather in Paris?',
         tools=['get_weather'],
     )
@@ -173,7 +173,7 @@ Example:
 
 Caveats:
     - Requires ANTHROPIC_API_KEY environment variable or api_key parameter
-    - Model names are prefixed with 'anthropic/' (e.g., 'anthropic/claude-3-5-sonnet-latest')
+    - Model names are prefixed with 'anthropic/' (e.g., 'anthropic/claude-sonnet-4-5')
     - Anthropic models may have different tool calling behavior than Google models
 
 See Also:
