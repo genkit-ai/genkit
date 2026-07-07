@@ -65,6 +65,17 @@ const analyticsEventForRoute = (
   return createToolsRequestEvent(path, durationMs, status);
 };
 
+const REDACTED_ENV_VALUE = '[redacted]';
+const SENSITIVE_ENV_NAME_PATTERN =
+  /(api_?key|token|secret|password|passwd|pwd|credentials?|auth|cookie|session|private|cert|dsn|database|db_?(url|uri|dsn|conn(?:ection)?_?string)|conn(?:ection)?_?string)/i;
+
+const sanitizeEnvValue = (name: string, value: string | undefined): string => {
+  if (!value) {
+    return '';
+  }
+  return SENSITIVE_ENV_NAME_PATTERN.test(name) ? REDACTED_ENV_VALUE : value;
+};
+
 const parseEnv = (environ: NodeJS.ProcessEnv): EnvironmentVariable[] => {
   const environmentVars: EnvironmentVariable[] = [];
 
@@ -80,7 +91,7 @@ const parseEnv = (environ: NodeJS.ProcessEnv): EnvironmentVariable[] => {
       return 0;
     })
     .forEach(([name, value]) => {
-      environmentVars.push({ name, value: value || '' });
+      environmentVars.push({ name, value: sanitizeEnvValue(name, value) });
     });
 
   return environmentVars;

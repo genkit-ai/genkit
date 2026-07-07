@@ -36,9 +36,11 @@ import {
   buildServerHarnessSpawnConfig,
   validateExecutablePath,
 } from '../utils/spawn-config';
+import { httpUrl } from '../utils/url';
 
 interface StartOptions {
   port?: string;
+  host?: string;
   open?: boolean;
 }
 
@@ -48,6 +50,7 @@ export const uiStart = new Command('ui:start')
     'start the Developer UI which connects to runtimes in the same directory'
   )
   .option('-p, --port <number>', 'Port to serve on (defaults to 4000)')
+  .option('--host <host>', 'Host to serve on', 'localhost')
   .option('-o, --open', 'Open the browser on UI start up')
   .action(async (options: StartOptions) => {
     let port: number;
@@ -60,6 +63,8 @@ export const uiStart = new Command('ui:start')
     } else {
       port = await getPort({ port: makeRange(4000, 4099) });
     }
+    const host = options.host ?? 'localhost';
+    const url = httpUrl(host, port);
     const serversDir = await findServersDir(await findProjectRoot());
     const toolsJsonPath = path.join(serversDir, 'tools.json');
     try {
@@ -86,7 +91,7 @@ export const uiStart = new Command('ui:start')
     }
     logger.info('Starting...');
     try {
-      await startAndWaitUntilHealthy(port, serversDir);
+      await startAndWaitUntilHealthy(port, host, serversDir);
     } catch (error) {
       logger.error(`Failed to start Genkit Developer UI: ${error}`);
       return;
@@ -97,7 +102,7 @@ export const uiStart = new Command('ui:start')
         toolsJsonPath,
         JSON.stringify(
           {
-            url: `http://localhost:${port}`,
+            url,
             timestamp: new Date().toISOString(),
           },
           null,
@@ -110,18 +115,18 @@ export const uiStart = new Command('ui:start')
       );
     }
     logger.info(
-      `\n  ${clc.green(`Genkit Developer UI started at: http://localhost:${port}`)}`
+      `\n  ${clc.green(`Genkit Developer UI started at: ${url}`)}`
     );
     logger.info(`  To stop the UI, run \`genkit ui:stop\`.\n`);
     try {
-      await axios.get(`http://localhost:${port}/api/trpc/listActions`);
+      await axios.get(`${url}/api/trpc/listActions`);
     } catch (error) {
       logger.info(
         'Set env variable `GENKIT_ENV` to `dev` and start your app code to interact with it in the UI.'
       );
     }
     if (options.open) {
-      open(`http://localhost:${port}`);
+      open(url);
     }
   });
 
@@ -130,6 +135,7 @@ export const uiStart = new Command('ui:start')
  */
 async function startAndWaitUntilHealthy(
   port: number,
+  host: string,
   serversDir: string
 ): Promise<ChildProcess> {
   // Detect runtime environment
@@ -143,7 +149,12 @@ async function startAndWaitUntilHealthy(
 
   // Build spawn configuration
   const logPath = path.join(serversDir, 'devui.log');
-  const spawnConfig = buildServerHarnessSpawnConfig(cliRuntime, port, logPath);
+  const spawnConfig = buildServerHarnessSpawnConfig(
+    cliRuntime,
+    port,
+    logPath,
+    host
+  );
 
   // Validate executable path
   const isExecutable = await validateExecutablePath(spawnConfig.command);
@@ -182,7 +193,7 @@ async function startAndWaitUntilHealthy(
     });
 
     // Wait for the UI to become healthy
-    waitUntilHealthy(`http://localhost:${port}`, 10000 /* 10 seconds */)
+    waitUntilHealthy(httpUrl(host, port), 10000 /* 10 seconds */)
       .then((isHealthy) => {
         if (isHealthy) {
           child.unref();
