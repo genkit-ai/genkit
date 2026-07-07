@@ -92,7 +92,6 @@ See Also:
     - JS implementation: js/plugins/google-genai/src/
 """
 
-import asyncio
 import os
 from collections.abc import Callable
 from typing import Any
@@ -449,7 +448,7 @@ class GoogleAI(Plugin):
         Returns:
             List of Action objects for known/supported models.
         """
-        genai_models = await asyncio.to_thread(_list_genai_models, self._runtime_client(), is_vertex=False)
+        genai_models = _list_genai_models(self._runtime_client(), is_vertex=False)
 
         actions: list[Action] = []
         # Gemini Models
@@ -657,7 +656,7 @@ class GoogleAI(Plugin):
         """
         if self._list_actions_cache is not None:
             return self._list_actions_cache
-        genai_models = await asyncio.to_thread(_list_genai_models, self._runtime_client(), is_vertex=False)
+        genai_models = _list_genai_models(self._runtime_client(), is_vertex=False)
         actions_list = []
 
         for name in genai_models.gemini:
@@ -810,7 +809,7 @@ class VertexAI(Plugin):
         Returns:
             List of Action objects for known/supported models.
         """
-        genai_models = await asyncio.to_thread(_list_genai_models, self._runtime_client(), is_vertex=True)
+        genai_models = _list_genai_models(self._runtime_client(), is_vertex=True)
         actions: list[Action] = []
 
         for name in genai_models.gemini:
@@ -1000,7 +999,7 @@ class VertexAI(Plugin):
         """
         if self._list_actions_cache is not None:
             return self._list_actions_cache
-        genai_models = await asyncio.to_thread(_list_genai_models, self._runtime_client(), is_vertex=True)
+        genai_models = _list_genai_models(self._runtime_client(), is_vertex=True)
         actions_list = []
 
         for name in genai_models.gemini:

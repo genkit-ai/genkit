@@ -324,14 +324,12 @@ class VeoModel:
             # Handling LRO. Using cast(Any) to avoid strict type definition issues for operation.result()
             op = cast(Any, operation)
             if hasattr(op, 'result'):
-                if asyncio.iscoroutinefunction(op.result):
-                    response = await op.result()
+                # Check if result is a coroutine (awaitable) or direct value
+                res = op.result()
+                if asyncio.iscoroutine(res):
+                    response = await res
                 else:
-                    res = await asyncio.to_thread(op.result)
-                    if asyncio.iscoroutine(res) or hasattr(res, '__await__'):
-                        response = await res
-                    else:
-                        response = res
+                    response = res
             else:
                 response = op
 
