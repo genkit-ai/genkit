@@ -28,6 +28,7 @@ Tests cover JS/Go parity for:
 """
 
 import os
+import warnings
 from unittest import mock
 from unittest.mock import MagicMock, patch
 
@@ -341,6 +342,30 @@ def test_legacy_force_export_parameter() -> None:
         assert 'deprecated' in str(mock_logger.warning.call_args)
 
         # Verify exporter was still created
+        mock_gcp_exporter.assert_called_once()
+
+
+def test_add_gcp_telemetry_deprecated_alias() -> None:
+    """Test that add_gcp_telemetry warns and delegates to enable_googlecloud_telemetry."""
+    with (
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}, clear=False),
+        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter') as mock_gcp_exporter,
+        patch('genkit_google_cloud.telemetry.config.GcpAdjustingTraceExporter'),
+        patch('genkit_google_cloud.telemetry.config.add_custom_exporter'),
+        patch('genkit_google_cloud.telemetry.config.GoogleCloudResourceDetector'),
+        patch('genkit_google_cloud.telemetry.config.CloudMonitoringMetricsExporter'),
+        patch('genkit_google_cloud.telemetry.config.GenkitMetricExporter'),
+        patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
+        patch('genkit_google_cloud.telemetry.config.metrics'),
+    ):
+        from genkit_google_cloud.telemetry.tracing import add_gcp_telemetry
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always', DeprecationWarning)
+            add_gcp_telemetry()
+
+        assert len(caught) == 1
+        assert 'add_gcp_telemetry is deprecated' in str(caught[0].message)
         mock_gcp_exporter.assert_called_once()
 
 

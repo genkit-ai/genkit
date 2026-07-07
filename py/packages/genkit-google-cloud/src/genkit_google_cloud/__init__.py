@@ -140,7 +140,7 @@ See Also:
     - Genkit documentation: https://genkit.dev/
 """
 
-from .telemetry import enable_googlecloud_telemetry
+from .telemetry import add_gcp_telemetry, enable_googlecloud_telemetry
 
 
 def package_name() -> str:
@@ -153,6 +153,7 @@ def package_name() -> str:
 
 
 __all__ = [
+    'add_gcp_telemetry',
     'enable_googlecloud_telemetry',
     'package_name',
 ]

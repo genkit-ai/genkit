@@ -209,6 +209,7 @@ Cross-Language Parity:
 """
 
 from typing import Any
+import warnings
 
 import structlog
 from opentelemetry.sdk.trace.sampling import Sampler
@@ -326,3 +327,34 @@ def enable_googlecloud_telemetry(
     )
 
     manager.initialize()
+
+
+def add_gcp_telemetry(
+    project_id: str | None = None,
+    credentials: dict[str, Any] | None = None,
+    sampler: Sampler | None = None,
+    log_input_and_output: bool = False,
+    force_dev_export: bool = False,
+    disable_metrics: bool = False,
+    disable_traces: bool = False,
+    metric_export_interval_ms: int | None = None,
+    metric_export_timeout_ms: int | None = None,
+    force_export: bool | None = None,
+) -> None:
+    warnings.warn(
+        'add_gcp_telemetry is deprecated; use enable_googlecloud_telemetry instead.',
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    enable_googlecloud_telemetry(
+        project_id=project_id,
+        credentials=credentials,
+        sampler=sampler,
+        log_input_and_output=log_input_and_output,
+        force_dev_export=force_dev_export,
+        disable_metrics=disable_metrics,
+        disable_traces=disable_traces,
+        metric_export_interval_ms=metric_export_interval_ms,
+        metric_export_timeout_ms=metric_export_timeout_ms,
+        force_export=force_export,
+    )
