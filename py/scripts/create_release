@@ -18,15 +18,15 @@
 # Create Release Tag and GitHub Release for Python SDK
 #
 # Usage:
-#   ./bin/create_release <VERSION> [PR_NUMBER]
-#   ./bin/create_release <VERSION> --notes "Release notes text"
-#   ./bin/create_release <VERSION> --notes-file path/to/notes.md
+#   ./scripts/create_release <VERSION> [PR_NUMBER]
+#   ./scripts/create_release <VERSION> --notes "Release notes text"
+#   ./scripts/create_release <VERSION> --notes-file path/to/notes.md
 #
 # Examples:
-#   ./bin/create_release 0.5.0 4417           # Use PR #4417's description
-#   ./bin/create_release 0.5.0                # Auto-find merged PR for this version
-#   ./bin/create_release 0.5.0rc1 --notes "RC1 for 0.5.0"  # Release candidate, no PR
-#   ./bin/create_release 0.5.0rc1 --notes-file rc-notes.md
+#   ./scripts/create_release 0.5.0 4417           # Use PR #4417's description
+#   ./scripts/create_release 0.5.0                # Auto-find merged PR for this version
+#   ./scripts/create_release 0.5.0rc1 --notes "RC1 for 0.5.0"  # Release candidate, no PR
+#   ./scripts/create_release 0.5.0rc1 --notes-file rc-notes.md
 #
 # This script will:
 #   1. Verify you're on main branch with latest changes

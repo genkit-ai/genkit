@@ -18,8 +18,8 @@
 set -euo pipefail
 
 # Get the directory of the script
-BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PY_DIR="$(cd "${BIN_DIR}/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 echo "--- 🐍 Running Python Security Checks (PySentry) ---"
 

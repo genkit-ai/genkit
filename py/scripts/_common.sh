@@ -15,7 +15,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Shared helpers for py/bin scripts. Source with: . "$(dirname "$0")/_common.sh"
+# Shared helpers for py/scripts. Source with: . "$(dirname "$0")/_common.sh"
 
 # Colors (CYAN exported for scripts that source this file)
 RED='\033[0;31m'

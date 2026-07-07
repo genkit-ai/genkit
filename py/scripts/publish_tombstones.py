@@ -22,7 +22,12 @@ def get_version() -> str:
             for line in f:
                 if line.startswith('version = '):
                     return line.split('"')[1]
-    return '0.8.0'
+    # A wrong version silently pins every tombstone to a nonexistent release and
+    # breaks installs for everyone upgrading, so refuse to guess.
+    sys.exit(
+        "publish_tombstones: could not resolve the release version. Expected a 'py/v*' "
+        'GITHUB_REF_NAME tag or a \'version = "..."\' line in packages/genkit/pyproject.toml.'
+    )
 
 
 PLUGINS = [

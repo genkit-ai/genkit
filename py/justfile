@@ -55,11 +55,7 @@ fmt:
 test:
     uv run --directory "{{ py_dir }}" pytest
 
-# Watch mode for tests (re-run on file changes).
-test-watch:
-    "{{ py_dir }}/scripts/watch_python_tests"
-
-# Run security checks (bandit, pip-audit).
+# Run security checks.
 security:
     "{{ py_dir }}/scripts/run_python_security_checks"
 
@@ -75,20 +71,6 @@ check:
 # Check lockfile is up to date.
 check-lock:
     uv lock --check --directory "{{ py_dir }}"
-
-# Clean build artifacts and caches.
-clean:
-    "{{ py_dir }}/scripts/cleanup"
-
-# --- Samples -----------------------------------------------------------
-
-# Run a sample (interactive picker or by name).
-sample NAME="":
-    "{{ py_dir }}/scripts/run_sample" {{ NAME }}
-
-# Test flows in a sample.
-test-sample NAME="":
-    "{{ py_dir }}/scripts/test_sample_flows" {{ NAME }}
 
 # --- Code Generation ---------------------------------------------------
 
@@ -115,11 +97,3 @@ build:
 # Create a GitHub release.
 create-release:
     "{{ py_dir }}/scripts/create_release"
-
-# Publish to PyPI.
-publish:
-    "{{ py_dir }}/scripts/publish_pypi.sh"
-
-# Validate release documentation.
-validate-docs:
-    "{{ py_dir }}/scripts/validate_release_docs"

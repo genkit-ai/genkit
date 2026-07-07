@@ -1651,6 +1651,7 @@ source = { editable = "packages/genkit-vertexai" }
 dependencies = [
     { name = "anthropic" },
     { name = "genkit" },
+    { name = "genkit-anthropic" },
     { name = "genkit-openai" },
     { name = "google-cloud-aiplatform" },
     { name = "google-cloud-bigquery" },
@@ -1664,6 +1665,7 @@ dependencies = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.40.0" },
     { name = "genkit", editable = "packages/genkit" },
+    { name = "genkit-anthropic", editable = "packages/genkit-anthropic" },
     { name = "genkit-openai", editable = "packages/genkit-openai" },
     { name = "google-cloud-aiplatform", specifier = ">=1.77.0" },
     { name = "google-cloud-bigquery", specifier = ">=3.11.0" },
