@@ -141,7 +141,7 @@ def genkit_fastapi_handler(
                         yield f'data: {json.dumps({"result": _to_dict(result)}, separators=_JSON_SEPARATORS)}\n\n'
                     except Exception as e:
                         ex = e.cause if isinstance(e, GenkitError) else e
-                        yield f'error: {json.dumps({"error": get_callable_json(ex)}, separators=_JSON_SEPARATORS)}\n\n'
+                        yield f'error: {json.dumps({"error": get_callable_json(ex)}, separators=_JSON_SEPARATORS)}'
 
                 return StreamingResponse(event_stream(), media_type='text/event-stream')
             else:

@@ -312,13 +312,13 @@ class AnthropicModel:
                             ModelResponseChunk(
                                 role=Role.MODEL,
                                 index=0,
-                                content=[Part(root=TextPart(text=str(getattr(delta, 'text', ''))))],
+                                content=[Part(root=TextPart(text=str(delta.text)))],
                             )
                         )
                     elif getattr(delta, 'type', None) == 'input_json_delta' and hasattr(delta, 'partial_json'):
                         idx = getattr(chunk, 'index', None)
                         if idx is not None and idx in pending_tools:
-                            pending_tools[idx]['input_json'] += getattr(delta, 'partial_json', '')
+                            pending_tools[idx]['input_json'] += delta.partial_json
 
                 elif chunk.type == 'content_block_stop':
                     idx = getattr(chunk, 'index', None)

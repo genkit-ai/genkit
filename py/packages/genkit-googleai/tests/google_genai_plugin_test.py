@@ -83,7 +83,10 @@ def test_googleai_initialization_without_api_key() -> None:
     with patch.dict(os.environ, {}, clear=True):
         with pytest.raises(ValueError) as exc_info:
             GoogleAI()
-        assert 'GEMINI_API_KEY' in str(exc_info.value)
+        assert 'GEMINI_API_KEY environment variable not set' in str(exc_info.value)
+        assert 'Obtain an API key from Google AI Studio' in str(exc_info.value)
+        assert 'https://aistudio.google.com/app/apikey' in str(exc_info.value)
+        assert 'https://genkit.dev/docs/python/integrations/google-genai/' in str(exc_info.value)
 
 
 def test_vertexai_initialization() -> None:

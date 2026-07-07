@@ -26,8 +26,8 @@ members = [
     "genkit-evaluators",
     "genkit-fastapi",
     "genkit-flask",
-    "genkit-googleai",
     "genkit-google-cloud",
+    "genkit-googleai",
     "genkit-middleware",
     "genkit-ollama",
     "genkit-openai",
@@ -1587,8 +1587,8 @@ requires-dist = [
     { name = "asgiref", specifier = ">=3.8.1" },
     { name = "dotpromptz", specifier = ">=0.1.5" },
     { name = "genkit-flask", marker = "extra == 'flask'", editable = "packages/genkit-flask" },
-    { name = "genkit-googleai", marker = "extra == 'google-genai'", editable = "packages/genkit-googleai" },
     { name = "genkit-google-cloud", marker = "extra == 'google-cloud'", editable = "packages/genkit-google-cloud" },
+    { name = "genkit-googleai", marker = "extra == 'google-genai'", editable = "packages/genkit-googleai" },
     { name = "genkit-ollama", marker = "extra == 'ollama'", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", marker = "extra == 'openai'", editable = "packages/genkit-openai" },
     { name = "genkit-vertexai", marker = "extra == 'vertex-ai'", editable = "packages/genkit-vertexai" },
@@ -1698,27 +1698,6 @@ requires-dist = [
 ]
 
 [[package]]
-name = "genkit-googleai"
-version = "0.7.0"
-source = { editable = "packages/genkit-googleai" }
-dependencies = [
-    { name = "genkit" },
-    { name = "google-cloud-aiplatform" },
-    { name = "google-genai" },
-    { name = "strenum", marker = "python_full_version < '3.11'" },
-    { name = "structlog" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "genkit", editable = "packages/genkit" },
-    { name = "google-cloud-aiplatform", specifier = ">=1.77.0" },
-    { name = "google-genai", specifier = ">=1.7.0" },
-    { name = "strenum", marker = "python_full_version < '3.11'", specifier = ">=0.4.15" },
-    { name = "structlog", specifier = ">=25.2.0" },
-]
-
-[[package]]
 name = "genkit-google-cloud"
 version = "0.7.0"
 source = { editable = "packages/genkit-google-cloud" }
@@ -1737,6 +1716,27 @@ requires-dist = [
     { name = "opentelemetry-exporter-gcp-monitoring", specifier = ">=1.9.0" },
     { name = "opentelemetry-exporter-gcp-trace", specifier = ">=1.9.0" },
     { name = "strenum", marker = "python_full_version < '3.11'", specifier = ">=0.4.15" },
+]
+
+[[package]]
+name = "genkit-googleai"
+version = "0.7.0"
+source = { editable = "packages/genkit-googleai" }
+dependencies = [
+    { name = "genkit" },
+    { name = "google-cloud-aiplatform" },
+    { name = "google-genai" },
+    { name = "strenum", marker = "python_full_version < '3.11'" },
+    { name = "structlog" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "google-cloud-aiplatform", specifier = ">=1.77.0" },
+    { name = "google-genai", specifier = ">=1.7.0" },
+    { name = "strenum", marker = "python_full_version < '3.11'", specifier = ">=0.4.15" },
+    { name = "structlog", specifier = ">=25.2.0" },
 ]
 
 [[package]]
@@ -1820,7 +1820,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=0.96.0" },
+    { name = "anthropic", specifier = ">=0.40.0" },
     { name = "genkit", editable = "packages/genkit" },
     { name = "genkit-anthropic", editable = "packages/genkit-anthropic" },
     { name = "genkit-openai", editable = "packages/genkit-openai" },
@@ -1844,8 +1844,8 @@ dependencies = [
     { name = "genkit-evaluators" },
     { name = "genkit-fastapi" },
     { name = "genkit-flask" },
-    { name = "genkit-googleai" },
     { name = "genkit-google-cloud" },
+    { name = "genkit-googleai" },
     { name = "genkit-middleware" },
     { name = "genkit-ollama" },
     { name = "genkit-openai" },
@@ -1916,8 +1916,8 @@ requires-dist = [
     { name = "genkit-evaluators", editable = "packages/genkit-evaluators" },
     { name = "genkit-fastapi", editable = "packages/genkit-fastapi" },
     { name = "genkit-flask", editable = "packages/genkit-flask" },
-    { name = "genkit-googleai", editable = "packages/genkit-googleai" },
     { name = "genkit-google-cloud", editable = "packages/genkit-google-cloud" },
+    { name = "genkit-googleai", editable = "packages/genkit-googleai" },
     { name = "genkit-middleware", editable = "packages/genkit-middleware" },
     { name = "genkit-ollama", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", editable = "packages/genkit-openai" },
