@@ -386,9 +386,6 @@ pyasn1                = "0.6.2"    # BSD-2-Clause
 # access that ty warns about. We can't modify generated code.
 exclude = [
   "**/generated",
-  "**/tests",
-  "**/test",
-  "**/_testing.py",
 ]
 
 [tool.ty.environment]
@@ -412,9 +409,6 @@ root = [
 [tool.pyright]
 exclude = [
   "**/__pycache__",
-  "**/tests",
-  "**/test",
-  "**/_testing.py",
   ".git",
   ".mypy_cache",
   ".nox",
@@ -468,11 +462,17 @@ project_excludes = [
   "build",
   "dist",
   "testapps",
-  "samples",
 ]
 project_includes = [
-  # Core package
+  # Core package (source and tests)
   "packages/genkit/src/**/*.py",
+  "packages/genkit/tests/**/*.py",
+  # Plugins (source and tests)
+  "plugins/*/src/**/*.py",
+  "plugins/*/tests/**/*.py",
+  # Samples
+  "samples/*/src/**/*.py",
+  "samples/*/tests/**/*.py",
 ]
 
 # Search path for first-party code import resolution.
@@ -507,7 +507,6 @@ allowed-unresolved-imports = ["genkit.plugins.**"]
 # Downgrade unused-type-ignore to avoid noise from comments that pyright needed but ty doesn't.
 [tool.ty.rules]
 unused-type-ignore-comment = "ignore"
-unused-ignore-comment = "ignore"
 
 # Relax invalid-argument-type in tests: config=dict is common, ModelRequest validates at runtime.
 [[tool.ty.overrides]]
