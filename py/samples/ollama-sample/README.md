@@ -2,11 +2,17 @@
 
 Run local LLM chat, streaming, tools, and embeddings through Genkit with Ollama.
 
-Install Ollama from [ollama.com/download](https://ollama.com/download), then
-start the server and pull the sample models:
+Install Ollama from [ollama.com/download](https://ollama.com/download). Start the
+server if it is not already running — it stays in the foreground, so use a
+separate terminal (or rely on the Ollama app):
 
 ```bash
 ollama serve
+```
+
+Then pull the sample models:
+
+```bash
 ollama pull llama3.2
 ollama pull nomic-embed-text
 ```

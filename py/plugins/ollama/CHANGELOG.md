@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.0] - 2026-06-23
+## [Unreleased]
 
 ### Added
 
@@ -20,6 +20,9 @@ and this project adheres to
   static dict.
 - `timeout` constructor argument propagated to the underlying httpx client.
 - Friendly `OllamaConnectionError` when the Ollama server is unreachable.
+- `EmbeddingDefinition` is now exported from the package root
+  `genkit.plugins.ollama` (previously importable only via the
+  `genkit.plugins.ollama.embedders` submodule).
 - Runnable sample under `py/samples/ollama-sample/` covering chat, streaming,
   tool calling, and embeddings.
 
@@ -37,4 +40,4 @@ and this project adheres to
 - `top_p` from `ModelConfig` is now mapped correctly into
   `ollama.Options` (previously sent as `topP` and ignored).
 
-[0.7.0]: https://github.com/genkit-ai/genkit/compare/py/genkit-plugin-ollama-v0.6.0...py/genkit-plugin-ollama-v0.7.0
+[Unreleased]: https://github.com/genkit-ai/genkit/compare/py/genkit-plugin-ollama-v0.6.0...HEAD

@@ -177,6 +177,7 @@ def package_name() -> str:
 
 
 __all__ = [
+    'EmbeddingDefinition',
     'ModelDefinition',
     'Ollama',
     'OllamaConfig',
@@ -187,5 +188,4 @@ __all__ = [
     'RequestHeaders',
     'ollama_name',
     'package_name',
-    'EmbeddingDefinition',
 ]

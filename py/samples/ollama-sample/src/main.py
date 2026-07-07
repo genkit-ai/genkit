@@ -13,7 +13,6 @@
 # limitations under the License.
 #
 # SPDX-License-Identifier: Apache-2.0
-# pyright: reportMissingImports=false
 
 """Ollama sample for local chat, streaming, tools, and embeddings.
 
@@ -29,29 +28,31 @@ Or open the Dev UI and pick a flow:
 from __future__ import annotations
 
 import os
-from typing import Any
 
 from pydantic import BaseModel, Field
 
-from genkit import Genkit
-from genkit.plugins.ollama import EmbeddingDefinition, ModelDefinition, Ollama
+from genkit import Genkit, GenkitError
+from genkit.plugins.ollama import (  # pyright: ignore[reportMissingImports]
+    EmbeddingDefinition,
+    ModelDefinition,
+    Ollama,
+    OllamaConnectionError,
+)
 
 CHAT_MODEL = os.getenv('OLLAMA_CHAT_MODEL', 'llama3.2')
 EMBEDDER_MODEL = os.getenv('OLLAMA_EMBEDDER_MODEL', 'nomic-embed-text')
 
 
-def _ollama_plugin() -> Ollama:
-    """Create the Ollama plugin, honoring OLLAMA_HOST when set."""
-    kwargs: dict[str, Any] = {
-        'models': [ModelDefinition(name=CHAT_MODEL)],
-        'embedders': [EmbeddingDefinition(name=EMBEDDER_MODEL)],
-    }
-    if server_address := os.getenv('OLLAMA_HOST'):
-        kwargs['server_address'] = server_address
-    return Ollama(**kwargs)
-
-
-ai = Genkit(plugins=[_ollama_plugin()], model=f'ollama/{CHAT_MODEL}')
+ai = Genkit(
+    plugins=[
+        Ollama(
+            models=[ModelDefinition(name=CHAT_MODEL)],
+            embedders=[EmbeddingDefinition(name=EMBEDDER_MODEL)],
+            server_address=os.getenv('OLLAMA_HOST'),
+        )
+    ],
+    model=f'ollama/{CHAT_MODEL}',
+)
 
 
 class PromptInput(BaseModel):
@@ -89,14 +90,16 @@ async def chat(input: PromptInput) -> str:
 async def chat_stream(input: PromptInput) -> dict[str, str | int]:
     """Stream a response and return the final text plus chunk count."""
     stream_response = ai.generate_stream(prompt=input.prompt)
+    # Ollama streams the text via chunks and returns an empty final message,
+    # so accumulate the chunk text instead of reading response.text.
     chunks: list[str] = []
     async for chunk in stream_response.stream:
         chunks.append(chunk.text or '')
 
-    response = await stream_response.response
+    await stream_response.response
     return {
         'chunks': len(chunks),
-        'text': response.text,
+        'text': ''.join(chunks),
     }
 
 
@@ -122,15 +125,20 @@ async def embed_text(input: EmbedInput) -> dict[str, int]:
 async def main() -> None:
     """Run the fast Ollama demos once."""
     try:
-        print(await chat(PromptInput()))  # noqa: T201
-        print(await embed_text(EmbedInput()))  # noqa: T201
-    except Exception as error:
-        print(  # noqa: T201
+        print(await chat(PromptInput()))
+        print(await embed_text(EmbedInput()))
+    except GenkitError as error:
+        # Genkit wraps provider failures in GenkitError, so unwrap `.cause` to
+        # tell a "server not running" setup problem from a real bug.
+        if not isinstance(error.cause, OllamaConnectionError):
+            raise
+        print(
             'Start Ollama and pull the sample models before running this sample directly:\n'
             f'  ollama pull {CHAT_MODEL}\n'
             f'  ollama pull {EMBEDDER_MODEL}\n\n'
-            f'{error}'
+            f'{error.cause}'
         )
+        raise SystemExit(1) from error
 
 
 if __name__ == '__main__':

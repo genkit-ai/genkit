@@ -47,6 +47,11 @@ embeddings = await ai.embed(embedder='ollama/nomic-embed-text', content='local i
 print(len(embeddings[0].embedding))
 ```
 
+These snippets assume an async context (`await` inside an `async def`); pasting
+them at module top level raises `SyntaxError: 'await' outside function`. See the
+[runnable sample](../../samples/ollama-sample) for a complete `async def main()`
+plus `ai.run_main(...)` entry point.
+
 ### Streaming
 
 ```python
