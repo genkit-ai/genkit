@@ -20,6 +20,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from genkit_anthropic.models import AnthropicModel
+from genkit_anthropic.utils import maybe_strip_fences, strip_markdown_fences
 
 from genkit import (
     Media,
@@ -35,8 +37,6 @@ from genkit import (
     ToolDefinition,
     ToolRequestPart,
 )
-from genkit_anthropic.models import AnthropicModel
-from genkit_anthropic.utils import maybe_strip_fences, strip_markdown_fences
 
 
 def _create_sample_request() -> ModelRequest:

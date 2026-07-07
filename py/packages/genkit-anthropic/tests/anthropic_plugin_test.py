@@ -22,6 +22,11 @@ import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
+from genkit_anthropic import Anthropic, anthropic_name
+from genkit_anthropic.model_info import (
+    SUPPORTED_ANTHROPIC_MODELS as SUPPORTED_MODELS,
+    get_model_info,
+)
 
 from genkit import (
     ActionKind,
@@ -33,11 +38,6 @@ from genkit import (
     Role,
     TextPart,
     ToolDefinition,
-)
-from genkit_anthropic import Anthropic, anthropic_name
-from genkit_anthropic.model_info import (
-    SUPPORTED_ANTHROPIC_MODELS as SUPPORTED_MODELS,
-    get_model_info,
 )
 
 
@@ -110,7 +110,7 @@ async def test_resolve_action_model() -> None:
     assert action.kind == ActionKind.MODEL
 
 
-@patch('genkit.plugins.anthropic.plugin.AsyncAnthropic')
+@patch('genkit_anthropic.plugin.AsyncAnthropic')
 @pytest.mark.asyncio
 async def test_anthropic_runtime_clients_are_loop_local(mock_client_ctor: MagicMock) -> None:
     """Runtime Anthropic clients are cached per event loop."""
