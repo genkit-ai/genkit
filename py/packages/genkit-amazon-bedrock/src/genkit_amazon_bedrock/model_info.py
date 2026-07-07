@@ -112,13 +112,18 @@ def strip_inference_profile_prefix(model_id: str) -> str:
     """Strips a cross-region inference-profile prefix from a model ID.
 
     Used for capability lookup only; requests always carry the original ID.
+    Full Bedrock ARNs (foundation-model, inference-profile) are reduced to
+    their resource ID first, across all partitions (``arn:aws:``,
+    ``arn:aws-us-gov:``, ``arn:aws-cn:``).
 
     Args:
-        model_id: Bedrock model ID, possibly prefixed (e.g. ``us.anthropic...``).
+        model_id: Bedrock model ID, inference-profile ID, or full ARN.
 
     Returns:
         The base model ID without the inference-profile prefix.
     """
+    if model_id.startswith('arn:'):
+        model_id = model_id.rsplit('/', 1)[-1]
     for prefix in INFERENCE_PROFILE_PREFIXES:
         if model_id.startswith(prefix):
             return model_id.removeprefix(prefix)
