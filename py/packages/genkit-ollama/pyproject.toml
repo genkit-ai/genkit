@@ -42,7 +42,7 @@ classifiers = [
   "Typing :: Typed",
   "License :: OSI Approved :: Apache Software License",
 ]
-dependencies = ["genkit", "ollama~=0.4", "structlog>=25.2.0"]
+dependencies = ["genkit", "ollama>=0.5.3,<1.0", "structlog>=25.2.0"]
 description = "Genkit Ollama Plugin (Community)"
 keywords = [
   "genkit",

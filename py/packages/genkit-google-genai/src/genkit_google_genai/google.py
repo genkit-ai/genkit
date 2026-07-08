@@ -105,7 +105,7 @@ import genkit_google_genai.constants as const
 from genkit import ModelInfo
 from genkit._core._action import ActionRunContext
 from genkit._core._model import ModelRequest, ModelResponse
-from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
+from genkit.embedder import embedder_action_metadata
 from genkit.evaluator import EvalFnResponse, EvalRequest
 from genkit.model import BackgroundAction, model_action_metadata
 from genkit.plugin_api import (
@@ -121,7 +121,11 @@ from genkit_google_genai.evaluators import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
 )
-from genkit_google_genai.models.embedder import EMBEDDER_DIMENSIONS, VERTEX_KNOWN_EMBEDDERS, Embedder
+from genkit_google_genai.models.embedder import (
+    VERTEX_KNOWN_EMBEDDERS,
+    Embedder,
+    get_embedder_options,
+)
 from genkit_google_genai.models.gemini import (
     SUPPORTED_MODELS,
     GeminiConfigSchema,
@@ -313,13 +317,14 @@ def _create_embedder_action(
         Action object for the embedder.
     """
     clean_name = name.replace(f'{plugin_name}/', '') if name.startswith(plugin_name) else name
+    full_name = f'{plugin_name}/{clean_name}'
     label = f'{PLUGIN_DISPLAY_NAME[plugin_name]} - {clean_name}'
     action_metadata = embedder_action_metadata(
-        name=name,
-        options=EmbedderOptions(
+        name=full_name,
+        options=get_embedder_options(
+            name=clean_name,
             label=label,
-            supports=EmbedderSupports(input=['text']),
-            dimensions=EMBEDDER_DIMENSIONS.get(clean_name),
+            is_vertex=(plugin_name == VERTEXAI_PLUGIN_NAME),
         ),
     )
 
@@ -329,7 +334,7 @@ def _create_embedder_action(
 
     action = Action(
         kind=ActionKind.EMBEDDER,
-        name=name,
+        name=full_name,
         fn=_run,
         metadata=action_metadata.metadata,
     )
@@ -690,10 +695,9 @@ class GoogleAI(Plugin):
             actions_list.append(
                 embedder_action_metadata(
                     name=googleai_name(name),
-                    options=EmbedderOptions(
+                    options=get_embedder_options(
+                        name=name,
                         label=f'{PLUGIN_DISPLAY_NAME[GOOGLEAI_PLUGIN_NAME]} - {name}',
-                        supports=EmbedderSupports(input=['text']),
-                        dimensions=EMBEDDER_DIMENSIONS.get(name),
                     ),
                 )
             )
@@ -1030,14 +1034,13 @@ class VertexAI(Plugin):
             )
 
         for name in VERTEX_KNOWN_EMBEDDERS:
-            dims = EMBEDDER_DIMENSIONS.get(name)
             actions_list.append(
                 embedder_action_metadata(
                     name=vertexai_name(name),
-                    options=EmbedderOptions(
+                    options=get_embedder_options(
+                        name=name,
                         label=f'{PLUGIN_DISPLAY_NAME[VERTEXAI_PLUGIN_NAME]} - {name}',
-                        supports=EmbedderSupports(input=['text']),
-                        dimensions=dims,
+                        is_vertex=True,
                     ),
                 )
             )

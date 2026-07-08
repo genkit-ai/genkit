@@ -156,6 +156,7 @@ See Also:
 """
 
 from genkit_ollama._errors import OllamaConnectionError
+from genkit_ollama.embedders import EmbeddingDefinition
 from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaSupports
 from genkit_ollama.plugin_api import (
     Ollama,
@@ -176,6 +177,7 @@ def package_name() -> str:
 
 
 __all__ = [
+    'EmbeddingDefinition',
     'ModelDefinition',
     'Ollama',
     'OllamaConfig',
