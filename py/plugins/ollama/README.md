@@ -66,12 +66,15 @@ final = await stream_response.response
 ```python
 from pydantic import BaseModel, Field
 
+
 class WeatherInput(BaseModel):
     city: str = Field(description='City to look up')
+
 
 @ai.tool()
 async def current_weather(input: WeatherInput) -> str:
     return f'{input.city} is 18°C and partly cloudy.'
+
 
 response = await ai.generate(
     prompt='What is the weather in London?',
@@ -89,10 +92,12 @@ model as above. When a tool's schema declares `properties` but omits an explicit
 ```python
 from pydantic import BaseModel
 
+
 class Haiku(BaseModel):
     line_one: str
     line_two: str
     line_three: str
+
 
 response = await ai.generate(
     prompt='Write a haiku about local models.',
@@ -133,8 +138,10 @@ Ollama(request_headers={'Authorization': 'Bearer <token>'})
 # Async-resolved headers, re-evaluated per request (e.g. minting a short-lived token)
 from genkit.plugins.ollama import RequestHeaderParams
 
+
 async def auth_headers(params: RequestHeaderParams) -> dict[str, str]:
     return {'Authorization': f'Bearer {await mint_token(params.server_address)}'}
+
 
 Ollama(request_headers=auth_headers, timeout=60.0)
 ```

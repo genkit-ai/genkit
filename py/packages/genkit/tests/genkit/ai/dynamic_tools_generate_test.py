@@ -227,8 +227,12 @@ async def test_wildcard_tools_in_generate() -> None:
         call_log.append(f'b:{inp.x}')
         return f'b:{inp.x}'
 
-    tool_a = ai.registry().register_action(name='tool_a', kind=ActionKind.TOOL, fn=tool_a_fn, metadata={'name': 'tool_a'})
-    tool_b = ai.registry().register_action(name='tool_b', kind=ActionKind.TOOL, fn=tool_b_fn, metadata={'name': 'tool_b'})
+    tool_a = ai.registry().register_action(
+        name='tool_a', kind=ActionKind.TOOL, fn=tool_a_fn, metadata={'name': 'tool_a'}
+    )
+    tool_b = ai.registry().register_action(
+        name='tool_b', kind=ActionKind.TOOL, fn=tool_b_fn, metadata={'name': 'tool_b'}
+    )
 
     async def dap_fn() -> DapValue:
         return {'tool': [tool_a, tool_b]}

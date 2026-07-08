@@ -1058,9 +1058,9 @@ async def test_load_prompt_with_output_instructions() -> None:
             '    type: object\n    properties:\n      foo:\n        type: integer\n'
             '  instructions: true\n---\nhi\n'
         )
-        load_prompt_folder(ai.registry, prompt_dir)
+        load_prompt_folder(ai.registry(), prompt_dir)
 
-        loaded = await prompt(ai.registry, 'with_instructions')
+        loaded = await prompt(ai.registry(), 'with_instructions')
         assert loaded._output_instructions is True  # pyright: ignore[reportPrivateUsage]
 
         rendered = await loaded.render()

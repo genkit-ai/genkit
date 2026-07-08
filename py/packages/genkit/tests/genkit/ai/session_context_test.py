@@ -20,7 +20,6 @@ from genkit._ai._agents._runtime import AgentRuntime, SessionRunner
 from genkit._ai._agents._session import Session, get_current_session, run_with_session
 from genkit._core._action import ActionRunContext
 from genkit._core._channel import CloseableQueue
-from genkit._core._registry import Registry
 from genkit._core._typing import AgentInput, AgentResult, SessionState
 from genkit.middleware import GenerateMiddlewareContext
 
@@ -33,6 +32,7 @@ async def test_get_current_session_outside_bind() -> None:
 @pytest.mark.asyncio
 async def test_middleware_context_session_field() -> None:
     from genkit import Genkit
+
     ai = Genkit()
     ctx = GenerateMiddlewareContext(ai=ai)
     assert ctx.ai.current_session() is None

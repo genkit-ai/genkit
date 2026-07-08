@@ -108,7 +108,7 @@ async def imagen_image_generator(input: ImageInput) -> dict[str, str | None]:
 async def _poll_video(operation: Operation, model_name: str) -> Operation:
     """Wait for a background video operation to finish."""
 
-    action = await lookup_background_action(ai.registry, f'/background-model/{model_name}')
+    action = await lookup_background_action(ai.registry(), f'/background-model/{model_name}')
     if action is None:
         raise ValueError(f'Veo background model not found: {model_name}')
 
@@ -125,7 +125,7 @@ async def _poll_video(operation: Operation, model_name: str) -> Operation:
 async def veo_video_generator(input: VideoInput) -> dict[str, str | int | None]:
     """Generate one video by starting and polling a background model."""
 
-    action = await lookup_background_action(ai.registry, f'/background-model/{input.model}')
+    action = await lookup_background_action(ai.registry(), f'/background-model/{input.model}')
     if action is None:
         raise ValueError(f'Veo background model not found: {input.model}')
 

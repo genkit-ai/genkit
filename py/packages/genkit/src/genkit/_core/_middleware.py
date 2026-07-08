@@ -35,7 +35,7 @@ from genkit._core._model import (
     ModelResponse,
     ModelResponseChunk,
 )
-from genkit._core._protocols import GenkitLike, RegistryLike, SessionLike
+from genkit._core._protocols import GenkitLike, RegistryLike
 from genkit._core._typing import MiddlewareDesc, MultipartToolResponse, ToolRequestPart
 
 logger = get_logger(__name__)

@@ -63,7 +63,7 @@ from genkit._core._model import (
     Document,
     GenerateActionOptions,
 )
-from genkit._core._protocols import GenkitLike, RegistryLike, SessionLike
+from genkit._core._protocols import RegistryLike, SessionLike
 from genkit._core._registry import Registry
 from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
