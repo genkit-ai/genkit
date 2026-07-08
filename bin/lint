@@ -69,7 +69,7 @@ run_check "📜 License Check"       "${TOP_DIR}/bin/check_license"
 run_check "📜 Dep License Check"   uv run --directory "${PY_DIR}" liccheck -s pyproject.toml
 
 # Consistency
-run_check "🔍 Consistency Checks"  "${PY_DIR}/bin/check_consistency"
+run_check "🔍 Consistency Checks"  python3 "${PY_DIR}/scripts/check_consistency.py"
 
 # Actionlint (GitHub Actions workflow validation)
 _run_actionlint() {

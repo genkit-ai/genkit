@@ -16,10 +16,10 @@
 
 from enum import Enum
 
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field, TypeAdapter
 
 from genkit import Genkit
-from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI(api_version='v1alpha')], model='googleai/gemini-flash-latest')
 

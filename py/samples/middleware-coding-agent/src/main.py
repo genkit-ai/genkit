@@ -36,9 +36,10 @@ Re-running cleanly:
 
 from pathlib import Path
 
+from genkit_google_genai import GoogleAI
+from genkit_middleware import Filesystem, Middleware, Skills, ToolApproval
+
 from genkit import Genkit, Message, ModelResponse, Part, Role, TextPart, ToolRequestPart, restart_tool
-from genkit.plugins.google_genai import GoogleAI
-from genkit.plugins.middleware import Filesystem, Middleware, Skills, ToolApproval
 
 _HERE = Path(__file__).resolve().parent.parent
 _WORKSPACE = _HERE / 'workspace'

@@ -29,15 +29,15 @@ from __future__ import annotations
 
 import os
 
-from pydantic import BaseModel, Field
-
-from genkit import Genkit, GenkitError
-from genkit.plugins.ollama import (  # pyright: ignore[reportMissingImports]
+from genkit_ollama import (
     EmbeddingDefinition,
     ModelDefinition,
     Ollama,
     OllamaConnectionError,
 )
+from pydantic import BaseModel, Field
+
+from genkit import Genkit, GenkitError
 
 CHAT_MODEL = os.getenv('OLLAMA_CHAT_MODEL', 'llama3.2')
 EMBEDDER_MODEL = os.getenv('OLLAMA_EMBEDDER_MODEL', 'nomic-embed-text')

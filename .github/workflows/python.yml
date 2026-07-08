@@ -59,7 +59,7 @@ jobs:
         run: uv run --directory py ruff check --preview .
 
       - name: Run consistency checks
-        run: ./py/bin/check_consistency
+        run: python3 ./py/scripts/check_consistency.py
 
   # =============================================================================
   # Type checking (runs in parallel - each checker is a separate job)
@@ -99,11 +99,11 @@ jobs:
 
       - name: Type check with Pyrefly
         if: matrix.checker == 'pyrefly'
-        run: uv run --directory py pyrefly check .
+        run: uv run --directory py pyrefly check
 
       - name: Type check with Pyright
         if: matrix.checker == 'pyright'
-        run: cd py && uv run pyright packages/
+        run: cd py && uv run pyright packages/*/src
 
   # =============================================================================
   # Security and compliance checks

@@ -6,8 +6,8 @@ dependencies = [
   "django>=4.2",
   "uvicorn",
   "genkit",
-  "genkit-plugin-django",
-  "genkit-plugin-google-genai",
+  "genkit-django",
+  "genkit-google-genai",
   "pydantic",
 ]
 
