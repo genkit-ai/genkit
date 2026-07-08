@@ -44,7 +44,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
       
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -52,7 +52,7 @@ jobs:
           bun-version: latest
       
       - name: Setup pnpm
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@v6
         with:
           version: 10.11.0
       
@@ -97,7 +97,7 @@ jobs:
           fi
       
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: genkit-${{ matrix.target }}
           path: genkit-tools/cli/dist/bin/genkit-${{ matrix.target }}${{ steps.binary.outputs.ext }}
@@ -133,7 +133,7 @@ jobs:
           fi
       
       - name: Download binary artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: genkit-${{ matrix.target }}
           path: ./
