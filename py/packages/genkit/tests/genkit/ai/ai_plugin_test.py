@@ -135,9 +135,9 @@ class MiddlewareListingPlugin(Plugin):
 async def test_plugin_list_middleware_registers_on_registry() -> None:
     """Descriptors from Plugin.list_middleware appear under list_values('middleware')."""
     ai = Genkit(plugins=[MiddlewareListingPlugin()])
-    names = ai.registry().list_values('middleware')
+    names = ai.registry.list_values('middleware')
     assert 'ai_plugin_test_mw' in names
-    desc = ai.registry().lookup_value('middleware', 'ai_plugin_test_mw')
+    desc = ai.registry.lookup_value('middleware', 'ai_plugin_test_mw')
     assert desc is not None
     assert isinstance(desc, GenerateMiddleware)
 

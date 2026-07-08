@@ -109,8 +109,9 @@ class SessionLike(Protocol):
 class GenkitLike(Protocol):
     """Structural interface for the Genkit instance exposed on middleware context."""
 
+    @property
     def registry(self) -> RegistryLike:
-        """Return the call-scoped registry for this generate invocation."""
+        """The call-scoped registry for this generate invocation."""
         ...
 
     def current_session(self) -> SessionLike | None:

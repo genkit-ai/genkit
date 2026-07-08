@@ -23,7 +23,7 @@ from genkit_evaluators import GenkitEval
 ai = Genkit(plugins=[GenkitEval()])
 
 # Run evaluation with genkit eval-flow or programmatically
-evaluator = await ai.registry().resolve_evaluator('genkitEval/regex')
+evaluator = await ai.registry.resolve_evaluator('genkitEval/regex')
 result = await evaluator.run(
     input={
         'dataset': [

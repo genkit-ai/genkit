@@ -146,7 +146,7 @@ class ToolHookParams(BaseModel):
 class GenerateMiddlewareContext:
     """Per-``generate()`` runtime services shared by every middleware in ``use=[...]``.
 
-    Holds the Genkit instance (``ai``) providing access to ``ai.registry()`` and
+    Holds the Genkit instance (``ai``) providing access to ``ai.registry`` and
     ``ai.current_session()``, along with caller-provided metadata (``custom_context``),
     streaming hooks, and abort signal for the whole generate invocation.
     """

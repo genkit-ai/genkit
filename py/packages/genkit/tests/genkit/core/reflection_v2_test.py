@@ -268,7 +268,7 @@ async def test_reflection_server_v2_list_values_serializes_middleware_as_object(
     class _NoOpMiddleware(BaseMiddleware):
         pass
 
-    client, task = await _run_client_lifecycle(ai.registry(), fake_manager)
+    client, task = await _run_client_lifecycle(ai.registry, fake_manager)
     try:
         await ack_register(fake_manager)
         await fake_manager.write_rpc({
@@ -315,7 +315,7 @@ async def test_reflection_server_v2_list_values_includes_derived_config_schema(
     class _Fallback(BaseMiddleware[_FallbackConfig]):
         pass
 
-    client, task = await _run_client_lifecycle(ai.registry(), fake_manager)
+    client, task = await _run_client_lifecycle(ai.registry, fake_manager)
     try:
         await ack_register(fake_manager)
         await fake_manager.write_rpc({
@@ -357,7 +357,7 @@ async def test_reflection_server_v2_list_values_empty_config_schema_for_no_op(
     class _NoOp(BaseMiddleware):
         pass
 
-    client, task = await _run_client_lifecycle(ai.registry(), fake_manager)
+    client, task = await _run_client_lifecycle(ai.registry, fake_manager)
     try:
         await ack_register(fake_manager)
         await fake_manager.write_rpc({

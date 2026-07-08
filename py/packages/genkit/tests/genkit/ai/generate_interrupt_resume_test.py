@@ -76,7 +76,7 @@ async def test_normal_two_arg_tools_see_no_resume_context() -> None:
     )
 
     r = await generate_action(
-        ai.registry(),
+        ai.registry,
         _gen_opts(
             ai, tools=['u1', 'u2'], messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})]
         ),
@@ -135,7 +135,7 @@ async def test_interrupt_wires_trp_metadata_interrupt_and_stops() -> None:
     )
 
     r = await generate_action(
-        ai.registry(),
+        ai.registry,
         _gen_opts(ai, tools=['intr'], messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})]),
     )
     assert r.finish_reason == FinishReason.INTERRUPTED
@@ -190,7 +190,7 @@ async def test_resume_respond_trp_gets_resolved_interrupt_and_tool_trp() -> None
     )
 
     first = await generate_action(
-        ai.registry(),
+        ai.registry,
         _gen_opts(ai, tools=['intr'], messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})]),
     )
     assert first.finish_reason == FinishReason.INTERRUPTED
@@ -214,7 +214,7 @@ async def test_resume_respond_trp_gets_resolved_interrupt_and_tool_trp() -> None
     reply = respond_to_interrupt({'bar': 2}, interrupt=first.interrupts[0])
 
     second = await generate_action(
-        ai.registry(),
+        ai.registry,
         _gen_opts(ai, tools=['intr'], messages=list(first.messages), resume=Resume(respond=[reply])),
     )
 
@@ -287,7 +287,7 @@ async def test_tool_either_interrupts_or_returns() -> None:
         )
     )
     r_fail = await generate_action(
-        ai.registry(),
+        ai.registry,
         _gen_opts(
             ai,
             tools=['bank_transfer'],
@@ -341,7 +341,7 @@ async def test_tool_either_interrupts_or_returns() -> None:
         )
     )
     r_ok = await generate_action(
-        ai.registry(),
+        ai.registry,
         _gen_opts(
             ai,
             tools=['bank_transfer'],
@@ -418,7 +418,7 @@ async def test_resume_restart_runs_tool_second_time_and_resolved_interrupt_on_mo
     # ^ Queued for the second generate call (after restart re-runs the tool).
 
     first = await generate_action(
-        ai.registry(),
+        ai.registry,
         _gen_opts(ai, tools=['pay'], messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})]),
     )
     assert first.finish_reason == FinishReason.INTERRUPTED
@@ -444,7 +444,7 @@ async def test_resume_restart_runs_tool_second_time_and_resolved_interrupt_on_mo
     )
 
     second = await generate_action(
-        ai.registry(),
+        ai.registry,
         _gen_opts(ai, tools=['pay'], messages=list(first.messages), resume=Resume(restart=[restart_trp])),
     )
 
@@ -519,7 +519,7 @@ async def test_mixed_resume_one_respond_one_restart() -> None:
     )
 
     first = await generate_action(
-        ai.registry(),
+        ai.registry,
         _gen_opts(
             ai, tools=['a', 'b'], messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})]
         ),
@@ -550,7 +550,7 @@ async def test_mixed_resume_one_respond_one_restart() -> None:
     ib = next(p for p in first.interrupts if p.tool_request.name == 'b')
 
     second = await generate_action(
-        ai.registry(),
+        ai.registry,
         _gen_opts(
             ai,
             tools=['a', 'b'],
@@ -644,7 +644,7 @@ async def test_mixed_one_interrupts_one_succeeds_pending_output_in_wire() -> Non
     )
 
     first = await generate_action(
-        ai.registry(),
+        ai.registry,
         _gen_opts(
             ai, tools=['a', 'b'], messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})]
         ),
@@ -670,7 +670,7 @@ async def test_mixed_one_interrupts_one_succeeds_pending_output_in_wire() -> Non
 
     ia = first.interrupts[0]
     second = await generate_action(
-        ai.registry(),
+        ai.registry,
         _gen_opts(
             ai,
             tools=['a', 'b'],
@@ -721,7 +721,7 @@ async def test_resume_without_matching_replies_raises() -> None:
 
     with pytest.raises(GenkitError) as ei:
         await generate_action(
-            ai.registry(),
+            ai.registry,
             GenerateActionOptions(
                 model='programmableModel',
                 messages=[
@@ -753,7 +753,7 @@ async def test_resume_requires_last_message_model_with_tool_requests() -> None:
 
     with pytest.raises(GenkitError) as ei:
         await generate_action(
-            ai.registry(),
+            ai.registry,
             GenerateActionOptions(
                 model='programmableModel',
                 messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'only user'}]})],

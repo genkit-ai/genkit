@@ -89,10 +89,7 @@ class _ScopedGenkit:
     """Scoped GenkitLike proxy wrapping a call-scoped registry for a generate invocation."""
 
     def __init__(self, reg: RegistryLike) -> None:
-        self._reg = reg
-
-    def registry(self) -> RegistryLike:
-        return self._reg
+        self.registry: RegistryLike = reg
 
     def current_session(self) -> SessionLike | None:
         return get_current_session()

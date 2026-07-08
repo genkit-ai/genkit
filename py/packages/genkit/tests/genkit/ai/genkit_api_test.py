@@ -76,7 +76,7 @@ async def test_genkit_check_operation_not_found() -> None:
     """Test Genkit.check_operation method with action not found."""
     ai = Genkit()
     op = Operation(id='123', done=False, action='missing')
-    ai.registry().resolve_action_by_key = AsyncMock(return_value=None)  # type: ignore[assignment]
+    ai.registry.resolve_action_by_key = AsyncMock(return_value=None)  # type: ignore[assignment]
 
     with pytest.raises(ValueError, match='Failed to resolve background action from original request: missing'):
         await ai.check_operation(op)

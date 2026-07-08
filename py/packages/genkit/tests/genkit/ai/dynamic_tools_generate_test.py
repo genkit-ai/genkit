@@ -152,7 +152,7 @@ async def test_dap_tool_resolved_in_generate() -> None:
     ai.define_dynamic_action_provider('mcp', dap_fn)
 
     # Precondition: `echo` is not a normal root TOOL registration (only in the DAP).
-    assert 'echo' not in ai.registry()._entries.get(ActionKind.TOOL, {})
+    assert 'echo' not in ai.registry._entries.get(ActionKind.TOOL, {})
 
     pm.responses = [
         _tool_call_response('echo', {'text': 'hello'}),
@@ -169,7 +169,7 @@ async def test_dap_tool_resolved_in_generate() -> None:
     assert call_log == ['hello']
     # Postcondition: resolving/running the tool via DAP still does not
     # persist `echo` under the root registry as a static tool (same check as above).
-    assert 'echo' not in ai.registry()._entries.get(ActionKind.TOOL, {})
+    assert 'echo' not in ai.registry._entries.get(ActionKind.TOOL, {})
 
 
 @pytest.mark.asyncio
@@ -201,7 +201,7 @@ async def test_dap_tools_do_not_pollute_root_registry() -> None:
     )
 
     # Root registry should NOT have dap_only_tool cached — it was never registered there
-    root_tools = ai.registry()._entries.get(ActionKind.TOOL, {})
+    root_tools = ai.registry._entries.get(ActionKind.TOOL, {})
     assert 'dap_only_tool' not in root_tools
 
 
@@ -227,12 +227,8 @@ async def test_wildcard_tools_in_generate() -> None:
         call_log.append(f'b:{inp.x}')
         return f'b:{inp.x}'
 
-    tool_a = ai.registry().register_action(
-        name='tool_a', kind=ActionKind.TOOL, fn=tool_a_fn, metadata={'name': 'tool_a'}
-    )
-    tool_b = ai.registry().register_action(
-        name='tool_b', kind=ActionKind.TOOL, fn=tool_b_fn, metadata={'name': 'tool_b'}
-    )
+    tool_a = ai.registry.register_action(name='tool_a', kind=ActionKind.TOOL, fn=tool_a_fn, metadata={'name': 'tool_a'})
+    tool_b = ai.registry.register_action(name='tool_b', kind=ActionKind.TOOL, fn=tool_b_fn, metadata={'name': 'tool_b'})
 
     async def dap_fn() -> DapValue:
         return {'tool': [tool_a, tool_b]}

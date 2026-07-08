@@ -76,7 +76,7 @@ async def test_run_tool_after_restart_resumed_true_maps_to_empty_dict_in_context
         captured.append((ctx.resumed_metadata, ctx.original_input))
         return 'done'
 
-    action = await ai.registry().resolve_action(kind=ActionKind.TOOL, name='t2')
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t2')
     assert action is not None
 
     restart_trp = ToolRequestPart(
@@ -100,7 +100,7 @@ async def test_run_tool_after_restart_resumed_dict() -> None:
         captured.append(ctx.resumed_metadata)
         return 'done'
 
-    action = await ai.registry().resolve_action(kind=ActionKind.TOOL, name='t2')
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t2')
     assert action is not None
 
     restart_trp = ToolRequestPart(
@@ -122,7 +122,7 @@ async def test_run_tool_after_restart_replaced_input() -> None:
         captured.append((inp, ctx.original_input))
         return 'done'
 
-    action = await ai.registry().resolve_action(kind=ActionKind.TOOL, name='t2')
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t2')
     assert action is not None
 
     restart_trp = ToolRequestPart(
@@ -144,7 +144,7 @@ async def test_run_tool_after_restart_resets_contextvars() -> None:
     async def t2(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
         return 'done'
 
-    action = await ai.registry().resolve_action(kind=ActionKind.TOOL, name='t2')
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t2')
     assert action is not None
 
     restart_trp = ToolRequestPart(
@@ -165,7 +165,7 @@ async def test_run_tool_after_restart_nested_interrupt_raises() -> None:
     async def t2(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
         raise Interrupt()
 
-    action = await ai.registry().resolve_action(kind=ActionKind.TOOL, name='t2')
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t2')
     assert action is not None
 
     restart_trp = ToolRequestPart(
@@ -244,7 +244,7 @@ async def test_run_tool_after_restart_response_preserves_ref() -> None:
     async def t_ref(inp: dict) -> str:  # noqa: ARG001
         return 'done'
 
-    action = await ai.registry().resolve_action(kind=ActionKind.TOOL, name='t_ref')
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t_ref')
     assert action is not None
 
     restart_trp = ToolRequestPart(
@@ -273,7 +273,7 @@ async def test_run_tool_after_restart_response_preserves_ref_and_uses_new_input(
             raise Interrupt({'reason': 'needs_approval'})
         return f'transferred {inp.get("amount")}'
 
-    action = await ai.registry().resolve_action(kind=ActionKind.TOOL, name='transfer')
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='transfer')
     assert action is not None
 
     prior = {'amount': 100, 'confirmed': False}
