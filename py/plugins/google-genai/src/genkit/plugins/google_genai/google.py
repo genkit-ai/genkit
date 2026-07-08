@@ -317,10 +317,15 @@ def _create_embedder_action(
         Action object for the embedder.
     """
     clean_name = name.replace(f'{plugin_name}/', '') if name.startswith(plugin_name) else name
+    full_name = f'{plugin_name}/{clean_name}'
     label = f'{PLUGIN_DISPLAY_NAME[plugin_name]} - {clean_name}'
     action_metadata = embedder_action_metadata(
-        name=name,
-        options=get_embedder_options(name=clean_name, label=label),
+        name=full_name,
+        options=get_embedder_options(
+            name=clean_name,
+            label=label,
+            is_vertex=(plugin_name == VERTEXAI_PLUGIN_NAME),
+        ),
     )
 
     async def _run(request: Any) -> Any:  # noqa: ANN401
@@ -329,7 +334,7 @@ def _create_embedder_action(
 
     action = Action(
         kind=ActionKind.EMBEDDER,
-        name=name,
+        name=full_name,
         fn=_run,
         metadata=action_metadata.metadata,
     )
@@ -1035,6 +1040,7 @@ class VertexAI(Plugin):
                     options=get_embedder_options(
                         name=name,
                         label=f'{PLUGIN_DISPLAY_NAME[VERTEXAI_PLUGIN_NAME]} - {name}',
+                        is_vertex=True,
                     ),
                 )
             )

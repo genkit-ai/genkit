@@ -86,15 +86,27 @@ VERTEX_KNOWN_EMBEDDERS: tuple[str, ...] = (
     'gemini-embedding-001',
 )
 
-EMBEDDER_INPUT_SUPPORTS: dict[str, list[str]] = {
+# Advertised input modalities per backend
+GOOGLEAI_EMBEDDER_INPUT_SUPPORTS: dict[str, list[str]] = {
     'gemini-embedding-2-preview': ['text', 'image', 'video'],
     'gemini-embedding-2': ['text', 'image', 'video'],
 }
 
 
-def get_embedder_options(name: str, label: str) -> EmbedderOptions:
-    """Return EmbedderOptions metadata for a discovered embedder model."""
-    supports = EMBEDDER_INPUT_SUPPORTS.get(name, ['text'])
+def get_embedder_options(name: str, label: str, is_vertex: bool = False) -> EmbedderOptions:
+    """Return EmbedderOptions metadata for a discovered embedder model.
+
+    Args:
+        name: The bare (unprefixed) model name, e.g. 'gemini-embedding-2'.
+        label: Human-readable label for the embedder.
+        is_vertex: True when resolving for the Vertex backend, which advertises
+            text-only because its embed path cannot deliver media.
+
+    Returns:
+        EmbedderOptions describing the model's label, supported inputs and
+        static dimensions.
+    """
+    supports = ['text'] if is_vertex else GOOGLEAI_EMBEDDER_INPUT_SUPPORTS.get(name, ['text'])
     return EmbedderOptions(
         label=label,
         supports=EmbedderSupports(input=supports),
