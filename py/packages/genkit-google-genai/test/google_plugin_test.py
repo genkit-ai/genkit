@@ -55,7 +55,6 @@ from genkit import (
 from genkit.plugin_api import GENKIT_CLIENT_HEADER
 
 
-
 async def _get_runtime_client(plugin: GoogleAI | VertexAI) -> object:
     return plugin._runtime_client()
 
