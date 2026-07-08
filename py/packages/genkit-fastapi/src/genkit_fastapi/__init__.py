@@ -51,7 +51,7 @@ Running:
     ```
 """
 
-from .handler import genkit_fastapi_handler, serve_agent, serve_flow
+from .handler import genkit_fastapi_handler, handle_genkit_request, serve_agent, serve_flow
 
 
 def package_name() -> str:
@@ -59,4 +59,10 @@ def package_name() -> str:
     return 'genkit_fastapi'
 
 
-__all__ = ['genkit_fastapi_handler', 'package_name', 'serve_agent', 'serve_flow']
+__all__ = [
+    'genkit_fastapi_handler',
+    'handle_genkit_request',
+    'package_name',
+    'serve_agent',
+    'serve_flow',
+]
