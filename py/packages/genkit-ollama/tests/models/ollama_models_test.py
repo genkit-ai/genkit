@@ -217,7 +217,10 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
             ctx=streaming_ctx,
         )
         self.assertIsNotNone(response.message)
-        self.assertEqual(cast(Message, response.message).content, [])
+        self.assertEqual(
+            cast(Message, response.message).content,
+            [Part(root=TextPart(text='Parsed chat content'))],
+        )
 
     @patch(
         'genkit.model.get_basic_usage_stats',
@@ -260,7 +263,10 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
             ctx=streaming_ctx,
         )
         self.assertIsNotNone(response.message)
-        self.assertEqual(cast(Message, response.message).content, [])
+        self.assertEqual(
+            cast(Message, response.message).content,
+            [Part(root=TextPart(text='Generated text'))],
+        )
 
     @patch(
         'genkit.model.get_basic_usage_stats',
@@ -427,10 +433,8 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
 
         response = await self.ollama_model._chat_with_ollama(self.request, self.ctx)
 
-        # For streaming requests, the method returns None because response chunks
-        # are sent incrementally via ctx.send_chunk() rather than returned at the end.
-        # This is the expected behavior for streaming APIs.
-        self.assertIsNone(response)
+        self.assertIsNotNone(response)
+        self.assertEqual(response.message.content, 'chunk1chunk2')
         self.mock_build_chat_messages.assert_called_once_with(self.request)
         self.mock_is_streaming_request.assert_called_once_with(ctx=self.ctx)
         self.mock_ollama_client_instance.chat.assert_awaited_once_with(
@@ -640,11 +644,8 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
 
         response = await self.ollama_model._generate_ollama_response(self.request, self.ctx)
 
-        # For streaming requests, the method returns None because response chunks
-        # are sent incrementally via ctx.send_chunk() rather than returned at the end.
-        # This is the expected behavior for streaming APIs.
-        self.assertIsNone(response)
-
+        self.assertIsNotNone(response)
+        self.assertEqual(response.response, 'chunk1 chunk2')
         self.mock_build_prompt.assert_called_once_with(self.request)
         self.mock_is_streaming_request.assert_called_once_with(ctx=self.ctx)
         self.mock_ollama_client_instance.generate.assert_awaited_once_with(

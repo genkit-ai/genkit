@@ -277,9 +277,6 @@ class OllamaModel:
         else:
             raise ValueError(f'Unresolved API type: {self.model_definition.api_type}')
 
-        if self.is_streaming_request(ctx=ctx):
-            content = []
-
         response_message = Message(
             role=Role.MODEL,
             content=content,
@@ -367,9 +364,13 @@ class OllamaModel:
                     **extra_kwargs,
                 )
                 idx = 0
+                accumulated_text = ''
+                last_chunk: ollama_api.ChatResponse | None = None
                 async for chunk in chat_response:
                     idx += 1
+                    last_chunk = chunk
                     role = self._from_ollama_role(chunk.message.role)
+                    accumulated_text += chunk.message.content or ''
                     if ctx:
                         ctx.send_chunk(
                             chunk=ModelResponseChunk(
@@ -378,9 +379,9 @@ class OllamaModel:
                                 content=self._build_multimodal_chat_response(chat_response=chunk),
                             )
                         )
-            # For streaming requests, we return None because the response chunks
-            # have already been sent via ctx.send_chunk() above. The async generator
-            # is now exhausted, and the caller should not expect a return value.
+            if last_chunk is not None:
+                last_chunk.message.content = accumulated_text
+                return last_chunk
             return None
         else:
             async with wrap_connection_errors(self._server_address):
@@ -433,8 +434,12 @@ class OllamaModel:
                     **extra_kwargs,
                 )
                 idx = 0
+                accumulated_text = ''
+                last_chunk: ollama_api.GenerateResponse | None = None
                 async for chunk in generate_response:
                     idx += 1
+                    last_chunk = chunk
+                    accumulated_text += chunk.response or ''
                     if ctx:
                         ctx.send_chunk(
                             chunk=ModelResponseChunk(
@@ -443,9 +448,9 @@ class OllamaModel:
                                 content=self._build_generate_response(generate_response=chunk),
                             )
                         )
-            # For streaming requests, we return None because the response chunks
-            # have already been sent via ctx.send_chunk() above. The async generator
-            # is now exhausted, and the caller should not expect a return value.
+            if last_chunk is not None:
+                last_chunk.response = accumulated_text
+                return last_chunk
             return None
         else:
             async with wrap_connection_errors(self._server_address):
