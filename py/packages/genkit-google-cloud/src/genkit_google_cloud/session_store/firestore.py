@@ -211,8 +211,12 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 async with self._lock:
                     self._subs.pop(snapshot_id, None)
 
-            loop.create_task(cleanup())
-            if watch_holder:
-                watch_holder[0].unsubscribe()
+            asyncio.run_coroutine_threadsafe(cleanup(), loop)
+
+            def unsubscribe_safely() -> None:
+                if watch_holder:
+                    watch_holder[0].unsubscribe()
+
+            loop.call_soon_threadsafe(unsubscribe_safely)
 
         watch_holder.append(ref.on_snapshot(on_snapshot))
