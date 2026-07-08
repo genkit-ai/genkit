@@ -140,15 +140,19 @@ class Embedder:
         self,
         version: VertexEmbeddingModels | GeminiEmbeddingModels | str,
         client: genai.Client,
+        is_vertex: bool = False,
     ) -> None:
         """Initialize the embedder.
 
         Args:
             version: Embedding model version.
             client: Google-Genai client.
+            is_vertex: Whether the client targets Vertex AI (as opposed to the
+                Gemini Developer API). Multimodal embedding requires Vertex.
         """
         self._client = client
         self._version = version
+        self._is_vertex = is_vertex
 
     async def generate(self, request: EmbedRequest) -> EmbedResponse:
         """Generate embeddings for a given request.
@@ -202,6 +206,11 @@ class Embedder:
         Returns:
             EmbedResponse
         """
+        if not self._is_vertex:
+            raise ValueError(
+                f'{self._version} embedding is only available on Vertex AI; '
+                'it is not supported by the Gemini Developer API. Use the VertexAI plugin instead.'
+            )
         if len(request.input) > 1:
             raise ValueError(
                 'multimodalembedding@001 supports only one document per request; embed documents one at a time.'
@@ -210,14 +219,21 @@ class Embedder:
 
         payload: dict[str, Any] = {'instances': instances}
         if request.options:
-            dimension = request.options.get('output_dimensionality') or request.options.get('outputDimensionality')
+            dimension = request.options.get('output_dimensionality')
             if dimension is not None:
                 payload['parameters'] = {'dimension': dimension}
 
         # google-genai exposes no typed multimodal-embedding method, so reuse the
         # client's authenticated low-level transport to POST to :predict. For
         # Vertex, the project/location prefix is added by the SDK automatically.
-        http_response = await self._client._api_client.async_request(
+        # These are private SDK internals, so guard against them drifting.
+        api_client = getattr(self._client, '_api_client', None)
+        if api_client is None or not hasattr(api_client, 'async_request'):
+            raise RuntimeError(
+                'Multimodal embedding relies on google-genai client internals that are '
+                'unavailable in the installed google-genai version; install google-genai>=1.63.0.'
+            )
+        http_response = await api_client.async_request(
             http_method='post',
             path=f'publishers/google/models/{self._version}:predict',
             request_dict=payload,
@@ -277,7 +293,7 @@ class Embedder:
         return instance
 
     @staticmethod
-    def _media_reference(url: str, content_type: str, include_mime_type: bool = True) -> dict[str, str]:
+    def _media_reference(url: str, content_type: str, include_mime_type: bool = True) -> dict[str, Any]:
         """Map a media URL to a Vertex image/video reference (gcsUri or base64).
 
         Unlike the JS plugin, http(s) URLs raise instead of being forwarded as a
@@ -285,14 +301,20 @@ class Embedder:
         http(s) URL produces an opaque API error. Failing fast is clearer.
         """
         if url.startswith('gs://'):
-            ref: dict[str, str] = {'gcsUri': url}
+            ref: dict[str, Any] = {'gcsUri': url}
         elif url.startswith('http'):
             raise ValueError(
                 'Vertex multimodal embedding does not accept http(s) media URLs. '
                 'Upload the file to Cloud Storage and pass a gs:// URI, or inline it as a data: URL.'
             )
         elif url.startswith('data:'):
-            ref = {'bytesBase64Encoded': url.split(',', 1)[1]}
+            marker = ';base64,'
+            marker_index = url.find(marker)
+            if marker_index == -1:
+                raise ValueError(
+                    'Vertex multimodal embedding requires base64-encoded data: URLs (data:<mimeType>;base64,<data>).'
+                )
+            ref = {'bytesBase64Encoded': url[marker_index + len(marker) :]}
         else:
             ref = {'bytesBase64Encoded': url}
         if include_mime_type and content_type:
@@ -303,9 +325,13 @@ class Embedder:
     def _prediction_to_embeddings(prediction: dict[str, Any]) -> list[Embedding]:
         """Convert one multimodal prediction into Genkit embeddings.
 
-        A prediction can carry image, text and/or video embeddings. A single
-        video is split into chunks, yielding one embedding per chunk; the chunk
-        offsets are preserved in each embedding's metadata.
+        A prediction can carry image, text and/or video embeddings, so one
+        document may fan out to several embeddings (a text+image document yields
+        two; a video yields one embedding per chunk). Embeddings are told apart
+        by their ``embedType`` metadata rather than by position, so consumers
+        must correlate via metadata instead of zipping positionally against the
+        input documents. Video chunk offsets are preserved in each embedding's
+        metadata.
         """
         embeddings: list[Embedding] = []
         if prediction.get('imageEmbedding'):

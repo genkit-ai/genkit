@@ -151,7 +151,7 @@ async def test_multimodal_embedding_uses_predict(mocker: MockerFixture) -> None:
     http_response.body = json.dumps(predict_body)
     client_mock._api_client.async_request.return_value = http_response
 
-    embedder = Embedder('multimodalembedding', client_mock)
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
     response = await embedder.generate(request)
 
     # The text embed_content path must not be used for multimodal models.
@@ -188,13 +188,14 @@ async def test_multimodal_embedding_concatenates_text_parts(mocker: MockerFixtur
     http_response.body = json.dumps(predict_body)
     client_mock._api_client.async_request.return_value = http_response
 
-    embedder = Embedder('multimodalembedding', client_mock)
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
     response = await embedder.generate(request)
 
     call = client_mock._api_client.async_request.call_args
     instances = call.kwargs['request_dict']['instances']
     assert instances[0] == {'text': 'hello world'}
     assert response.embeddings[0].embedding == [0.1, 0.2]
+    assert response.embeddings[0].metadata == {'embedType': 'textEmbedding'}
 
 
 @pytest.mark.asyncio
@@ -223,7 +224,7 @@ async def test_multimodal_embedding_allows_image_and_video_in_one_instance(mocke
     http_response.body = json.dumps(predict_body)
     client_mock._api_client.async_request.return_value = http_response
 
-    embedder = Embedder('multimodalembedding', client_mock)
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
     response = await embedder.generate(request)
 
     call = client_mock._api_client.async_request.call_args
@@ -254,7 +255,7 @@ async def test_multimodal_embedding_rejects_multiple_images(mocker: MockerFixtur
         ]
     )
     client_mock = mocker.AsyncMock()
-    embedder = Embedder('multimodalembedding', client_mock)
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
     with pytest.raises(ValueError, match='more than one image'):
         await embedder.generate(request)
     client_mock._api_client.async_request.assert_not_called()
@@ -274,7 +275,7 @@ async def test_multimodal_embedding_rejects_multiple_videos(mocker: MockerFixtur
         ]
     )
     client_mock = mocker.AsyncMock()
-    embedder = Embedder('multimodalembedding', client_mock)
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
     with pytest.raises(ValueError, match='more than one video'):
         await embedder.generate(request)
     client_mock._api_client.async_request.assert_not_called()
@@ -285,7 +286,7 @@ async def test_multimodal_embedding_rejects_http_url(mocker: MockerFixture) -> N
     """http(s) media URLs are rejected; Vertex gcsUri only accepts gs:// (diverges from JS)."""
     request = EmbedRequest(input=[Document.from_media('https://example.com/cat.png', 'image/png')])
     client_mock = mocker.AsyncMock()
-    embedder = Embedder('multimodalembedding', client_mock)
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
     with pytest.raises(ValueError, match='http'):
         await embedder.generate(request)
     client_mock._api_client.async_request.assert_not_called()
@@ -305,7 +306,126 @@ async def test_multimodal_embedding_rejects_multiple_documents(mocker: MockerFix
         ]
     )
     client_mock = mocker.AsyncMock()
-    embedder = Embedder('multimodalembedding', client_mock)
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
     with pytest.raises(ValueError, match='one document per request'):
         await embedder.generate(request)
     client_mock._api_client.async_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_rejects_non_vertex_client(mocker: MockerFixture) -> None:
+    """Multimodal embedding is Vertex-only; a Gemini API embedder fails fast, before any request."""
+    request = EmbedRequest(input=[Document.from_media('gs://bucket/cat.png', 'image/png')])
+    client_mock = mocker.AsyncMock()
+    embedder = Embedder('multimodalembedding@001', client_mock, is_vertex=False)
+    with pytest.raises(ValueError, match='only available on Vertex AI'):
+        await embedder.generate(request)
+    client_mock._api_client.async_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_inlines_base64_data_url(mocker: MockerFixture) -> None:
+    """A base64 data: URL is inlined as bytesBase64Encoded, without the data: prefix."""
+    request = EmbedRequest(input=[Document.from_media('data:image/png;base64,AAAA', 'image/png')])
+    predict_body = {'predictions': [{'imageEmbedding': [0.1, 0.2]}]}
+    client_mock = mocker.AsyncMock()
+    http_response = mocker.Mock()
+    http_response.body = json.dumps(predict_body)
+    client_mock._api_client.async_request.return_value = http_response
+
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    await embedder.generate(request)
+
+    call = client_mock._api_client.async_request.call_args
+    instances = call.kwargs['request_dict']['instances']
+    assert instances[0] == {'image': {'bytesBase64Encoded': 'AAAA', 'mimeType': 'image/png'}}
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_rejects_non_base64_data_url(mocker: MockerFixture) -> None:
+    """A data: URL without a ';base64,' marker is rejected; Vertex requires base64 bytes."""
+    request = EmbedRequest(input=[Document.from_media('data:image/png,rawbytes', 'image/png')])
+    client_mock = mocker.AsyncMock()
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    with pytest.raises(ValueError, match='base64'):
+        await embedder.generate(request)
+    client_mock._api_client.async_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_maps_output_dimensionality(mocker: MockerFixture) -> None:
+    """The output_dimensionality option maps to the :predict parameters.dimension field."""
+    request = EmbedRequest(
+        input=[Document.from_media('gs://bucket/cat.png', 'image/png')],
+        options={'output_dimensionality': 512},
+    )
+    predict_body = {'predictions': [{'imageEmbedding': [0.1, 0.2]}]}
+    client_mock = mocker.AsyncMock()
+    http_response = mocker.Mock()
+    http_response.body = json.dumps(predict_body)
+    client_mock._api_client.async_request.return_value = http_response
+
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    await embedder.generate(request)
+
+    call = client_mock._api_client.async_request.call_args
+    assert call.kwargs['request_dict']['parameters'] == {'dimension': 512}
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_omits_parameters_without_dimension(mocker: MockerFixture) -> None:
+    """Options without output_dimensionality do not produce a parameters field."""
+    request = EmbedRequest(
+        input=[Document.from_media('gs://bucket/cat.png', 'image/png')],
+        options={'task_type': 'RETRIEVAL_QUERY'},
+    )
+    predict_body = {'predictions': [{'imageEmbedding': [0.1, 0.2]}]}
+    client_mock = mocker.AsyncMock()
+    http_response = mocker.Mock()
+    http_response.body = json.dumps(predict_body)
+    client_mock._api_client.async_request.return_value = http_response
+
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    await embedder.generate(request)
+
+    call = client_mock._api_client.async_request.call_args
+    assert 'parameters' not in call.kwargs['request_dict']
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_maps_video_segment_config(mocker: MockerFixture) -> None:
+    """Document metadata video_segment_config is forwarded as the instance videoSegmentConfig."""
+    segment_config = {'startOffsetSec': 0, 'endOffsetSec': 10, 'intervalSec': 5}
+    request = EmbedRequest(
+        input=[
+            Document(
+                content=Document.from_media('gs://bucket/clip.mp4', 'video/mp4').content,
+                metadata={'video_segment_config': segment_config},
+            )
+        ]
+    )
+    predict_body = {
+        'predictions': [{'videoEmbeddings': [{'startOffsetSec': 0, 'endOffsetSec': 5, 'embedding': [0.3, 0.4]}]}]
+    }
+    client_mock = mocker.AsyncMock()
+    http_response = mocker.Mock()
+    http_response.body = json.dumps(predict_body)
+    client_mock._api_client.async_request.return_value = http_response
+
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    await embedder.generate(request)
+
+    call = client_mock._api_client.async_request.call_args
+    instances = call.kwargs['request_dict']['instances']
+    assert instances[0] == {'video': {'gcsUri': 'gs://bucket/clip.mp4', 'videoSegmentConfig': segment_config}}
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_guards_missing_private_transport(mocker: MockerFixture) -> None:
+    """A client missing the private _api_client transport fails with an actionable error."""
+    request = EmbedRequest(input=[Document.from_media('gs://bucket/cat.png', 'image/png')])
+    client_mock = mocker.Mock(spec=[])  # no _api_client attribute at all
+
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    with pytest.raises(RuntimeError, match='google-genai>=1.63.0'):
+        await embedder.generate(request)
