@@ -9,7 +9,7 @@ import json
 from typing import Any
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
 # serve_agent needs the agent subsystem; skip the whole module where it isn't built.
@@ -18,7 +18,7 @@ if not hasattr(_genkit_agent, 'InMemorySessionStore'):
     pytest.skip('agents API not available', allow_module_level=True)
 InMemorySessionStore = _genkit_agent.InMemorySessionStore
 
-from genkit_fastapi import serve_agent  # noqa: E402
+from genkit_fastapi import handle_genkit_request, serve_agent  # noqa: E402
 
 from genkit import Genkit  # noqa: E402
 from genkit._ai._testing import define_programmable_model  # noqa: E402
@@ -134,3 +134,48 @@ def test_get_snapshot_missing_returns_404() -> None:
     response = client_obj.post('/api/chat/getSnapshot', json={'snapshotId': 'does-not-exist'})
 
     assert response.status_code == 404
+
+
+def test_context_dependency_gates_the_turn() -> None:
+    """A context_dependency that raises stops the turn before it streams."""
+
+    async def deny() -> dict[str, object]:
+        raise HTTPException(status_code=401, detail='no token')
+
+    client_obj = client(build_agent('depAuthAgent'), context_dependency=deny)
+
+    response = client_obj.post('/api/chat', json={'message': 'Hi'})
+
+    assert response.status_code == 401
+
+
+def test_context_dependency_allows_the_turn() -> None:
+    """A resolved context_dependency lets the turn run and stream normally."""
+
+    async def allow() -> dict[str, object]:
+        return {'uid': 'user-123'}
+
+    client_obj = client(build_agent('depOkAgent'), context_dependency=allow)
+
+    response = client_obj.post('/api/chat?stream=true', json={'message': 'Hi'})
+
+    assert response.status_code == 200
+    assert 'Hi there!' in json.dumps(sse_events(response.text)[-1]['result'])
+
+
+def test_handle_genkit_request_powers_a_hand_rolled_route() -> None:
+    """The public primitive serves the wire format from a custom endpoint."""
+    agent = build_agent('handRolledAgent')
+    app = FastAPI()
+
+    @app.post('/custom', response_model=None)
+    async def custom(request: Request) -> object:
+        # A real app would build this context from its own Depends params.
+        return await handle_genkit_request(agent, request, context={'uid': 'user-123'})
+
+    client_obj = TestClient(app)
+
+    response = client_obj.post('/custom', json={'message': 'Hi'})
+
+    assert response.status_code == 200
+    assert 'Hi there!' in json.dumps(response.json()['result'])

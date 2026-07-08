@@ -19,7 +19,7 @@
 
 import json
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from genkit_fastapi import genkit_fastapi_handler, serve_flow
 
@@ -74,3 +74,28 @@ def test_500_flow_exception_returns_valid_json() -> None:
     assert response.status_code == 500
     parsed = json.loads(response.text)
     assert_is_error_response(parsed)
+
+
+def test_context_dependency_value_reaches_action() -> None:
+    """A value resolved through FastAPI's DI graph lands in the action context."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def whoami(_: str, ctx: ActionRunContext) -> str:
+        return str(ctx.context.get('uid'))
+
+    async def current_uid() -> str:
+        return 'user-123'
+
+    # A dependency with its own sub-dependency, proving the whole graph resolves.
+    async def user_context(uid: str = Depends(current_uid)) -> dict[str, object]:
+        return {'uid': uid}
+
+    app = FastAPI()
+    app.include_router(serve_flow(whoami, base_path='/whoami', context_dependency=user_context))
+    client = TestClient(app)
+
+    response = client.post('/whoami', json={'data': 'x'})
+
+    assert response.status_code == 200
+    assert response.json()['result'] == 'user-123'

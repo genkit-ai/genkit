@@ -23,7 +23,7 @@ import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, TypeVar, cast
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -121,6 +121,74 @@ def format_stream_error(error: Exception) -> str:
     return f'error: {json.dumps({"error": get_callable_json(ex)}, separators=JSON_SEPARATORS)}\n\n'
 
 
+async def handle_genkit_request(
+    action: Action[InputT, OutputT, ChunkT, InitT],
+    request: Request,
+    *,
+    context: dict[str, object] | None = None,
+) -> Response | dict[str, Any]:
+    """Run one Genkit action request and return its FastAPI response.
+
+    This is the wire contract every route sits on. It reads the JSON body in
+    whichever shape the client sends (``data`` / ``input`` / ``message``, or a
+    snapshot/session lookup), threads ``init`` (an agent's session identity), and
+    then either streams SSE frames — ``data: {"message": ...}`` chunks followed by
+    a final ``data: {"result": ...}`` — or returns a one-shot ``{"result": ...}``.
+
+    ``context`` is handed straight to the action, so you can resolve auth and
+    per-request state however you like and pass the dict in. That makes this the
+    escape hatch for full control: write your own ``@app.post`` endpoint with any
+    ``Depends(...)`` params you need, build the context, and call this to get the
+    exact Genkit wire format without re-implementing it.
+
+    Args:
+        action: The flow or agent action to run.
+        request: The incoming FastAPI request.
+        context: Optional context dict passed through to the action.
+
+    Returns:
+        A streaming SSE response, a ``{"result": ...}`` dict, or an error Response.
+    """
+    body = await request.json()
+    if not isinstance(body, dict):
+        return json_error_response(
+            GenkitError(
+                status='INVALID_ARGUMENT',
+                message='Action request must be a JSON object',
+            )
+        )
+
+    try:
+        input_data = extract_action_input(body)
+    except GenkitError as err:
+        return json_error_response(err)
+
+    init = resolve_session_init(body, request.query_params)
+    action_obj = cast(Action[Any, Any, Any, Any], action)
+
+    if wants_stream(request):
+
+        async def event_stream() -> AsyncIterator[str]:
+            try:
+                stream_response = action_obj.stream(input_data, context=context, init=init)
+                async for chunk in stream_response.stream:
+                    yield format_stream_chunk(chunk)
+                result = await stream_response.response
+                yield format_stream_result(result)
+            except Exception as e:
+                yield format_stream_error(e)
+
+        return StreamingResponse(event_stream(), media_type='text/event-stream')
+
+    try:
+        response = await action_obj.run(input_data, context=context, init=init)
+        if response.response is None and action_obj.kind == ActionKind.AGENT_SNAPSHOT:
+            return Response(status_code=404)
+        return {'result': to_dict(response.response)}
+    except Exception as e:
+        return json_error_response(e, status_code=500)
+
+
 def genkit_fastapi_handler(
     ai: Genkit | None = None,
     context_provider: ContextProvider | None = None,
@@ -180,58 +248,58 @@ def genkit_fastapi_handler(
                     message='genkit_fastapi_handler must wrap an Action or an async function returning an Action',
                 )
 
-            body = await request.json()
-            if not isinstance(body, dict):
-                return json_error_response(
-                    GenkitError(
-                        status='INVALID_ARGUMENT',
-                        message='Action request must be a JSON object',
-                    )
-                )
-
-            try:
-                input_data = extract_action_input(body)
-            except GenkitError as err:
-                return json_error_response(err)
-
-            request_data = FastAPIRequestData(request, body)
+            # This decorator reads context from the request itself. Routes that
+            # want FastAPI's dependency graph (auth schemes, DB sessions) go
+            # through serve_flow/serve_agent's context_dependency instead.
             action_context: dict[str, object] | None = None
-
             if context_provider:
+                body = await request.json()
+                request_data = FastAPIRequestData(request, body if isinstance(body, dict) else None)
                 context = context_provider(request_data)
                 if asyncio.iscoroutine(context):
                     context = await context
                 if isinstance(context, dict):
                     action_context = context
 
-            init = resolve_session_init(body, request.query_params)
-            action_obj = cast(Action[Any, Any, Any, Any], action)
-
-            if wants_stream(request):
-
-                async def event_stream() -> AsyncIterator[str]:
-                    try:
-                        stream_response = action_obj.stream(input_data, context=action_context, init=init)
-                        async for chunk in stream_response.stream:
-                            yield format_stream_chunk(chunk)
-                        result = await stream_response.response
-                        yield format_stream_result(result)
-                    except Exception as e:
-                        yield format_stream_error(e)
-
-                return StreamingResponse(event_stream(), media_type='text/event-stream')
-
-            try:
-                response = await action_obj.run(input_data, context=action_context, init=init)
-                if response.response is None and action_obj.kind == ActionKind.AGENT_SNAPSHOT:
-                    return Response(status_code=404)
-                return {'result': to_dict(response.response)}
-            except Exception as e:
-                return json_error_response(e, status_code=500)
+            return await handle_genkit_request(action, request, context=action_context)
 
         return handler
 
     return decorator
+
+
+def _mount_action(
+    router: APIRouter,
+    path: str,
+    action: Action[Any, Any, Any, Any],
+    *,
+    context_provider: ContextProvider | None,
+    context_dependency: Callable[..., Any] | None,
+    ai: Genkit | None,
+) -> None:
+    """Register one action on the router, honoring FastAPI DI when asked.
+
+    With a ``context_dependency`` the route's own signature carries the
+    dependency, so FastAPI resolves it (and any sub-dependencies or security
+    schemes) and the resulting dict is threaded into the action as context.
+    Without one, we fall back to the request-reading ``context_provider``.
+    """
+    if context_dependency is not None:
+
+        async def endpoint(
+            request: Request,
+            context: Any = Depends(context_dependency),  # noqa: ANN401, B008
+        ) -> Response | dict[str, Any]:
+            return await handle_genkit_request(
+                action,
+                request,
+                context=context if isinstance(context, dict) else None,
+            )
+
+        router.post(path, response_model=None)(endpoint)
+    else:
+        handler = genkit_fastapi_handler(ai, context_provider=context_provider)(action)
+        router.post(path, response_model=None)(handler)
 
 
 def serve_flow(
@@ -239,6 +307,7 @@ def serve_flow(
     *,
     base_path: str | None = None,
     context_provider: ContextProvider | None = None,
+    context_dependency: Callable[..., Any] | None = None,
     ai: Genkit | None = None,
 ) -> APIRouter:
     """Build an APIRouter serving a single flow over HTTP.
@@ -251,6 +320,9 @@ def serve_flow(
         flow: The flow action to serve.
         base_path: Route path. Defaults to /<flow name>.
         context_provider: Reads the request and returns the context dict.
+        context_dependency: A FastAPI dependency whose resolved value becomes the
+            action context. Use this to reuse existing ``Depends``-based auth /
+            resources; it takes precedence over ``context_provider``.
         ai: Optional Genkit instance.
 
     Returns:
@@ -258,8 +330,14 @@ def serve_flow(
     """
     resolved_base_path = f'/{flow.name}' if base_path is None else base_path
     router = APIRouter()
-    handler = genkit_fastapi_handler(ai, context_provider=context_provider)(flow)
-    router.post(resolved_base_path, response_model=None)(handler)
+    _mount_action(
+        router,
+        resolved_base_path,
+        flow,
+        context_provider=context_provider,
+        context_dependency=context_dependency,
+        ai=ai,
+    )
     return router
 
 
@@ -268,6 +346,7 @@ def serve_agent(
     *,
     base_path: str | None = None,
     context_provider: ContextProvider | None = None,
+    context_dependency: Callable[..., Any] | None = None,
     ai: Genkit | None = None,
 ) -> APIRouter:
     """Build an APIRouter serving an agent and its snapshot/abort endpoints over HTTP.
@@ -280,6 +359,10 @@ def serve_agent(
         agent: The agent to serve.
         base_path: Route path. Defaults to /<agent name>.
         context_provider: Reads the request and returns the context dict.
+        context_dependency: A FastAPI dependency whose resolved value becomes the
+            action context, applied to the turn, getSnapshot, and abort routes.
+            Use this to reuse existing ``Depends``-based auth / resources; it
+            takes precedence over ``context_provider``.
         ai: Optional Genkit instance.
 
     Returns:
@@ -288,8 +371,14 @@ def serve_agent(
     resolved_base_path = f'/{agent.name}' if base_path is None else base_path
     router = APIRouter()
 
-    turn_handler = genkit_fastapi_handler(ai, context_provider=context_provider)(agent)
-    router.post(resolved_base_path, response_model=None)(turn_handler)
+    _mount_action(
+        router,
+        resolved_base_path,
+        cast(Action[Any, Any, Any, Any], agent),
+        context_provider=context_provider,
+        context_dependency=context_dependency,
+        ai=ai,
+    )
 
     if agent.store is not None:
 
@@ -315,9 +404,21 @@ def serve_agent(
             description=f'Aborts {agent.name} agent by snapshotId',
         )
 
-        snapshot_handler = genkit_fastapi_handler(ai, context_provider=context_provider)(snapshot_action)
-        abort_handler = genkit_fastapi_handler(ai, context_provider=context_provider)(abort_action)
-        router.post(f'{resolved_base_path}/getSnapshot', response_model=None)(snapshot_handler)
-        router.post(f'{resolved_base_path}/abort', response_model=None)(abort_handler)
+        _mount_action(
+            router,
+            f'{resolved_base_path}/getSnapshot',
+            snapshot_action,
+            context_provider=context_provider,
+            context_dependency=context_dependency,
+            ai=ai,
+        )
+        _mount_action(
+            router,
+            f'{resolved_base_path}/abort',
+            abort_action,
+            context_provider=context_provider,
+            context_dependency=context_dependency,
+            ai=ai,
+        )
 
     return router
