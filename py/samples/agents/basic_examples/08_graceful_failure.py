@@ -27,6 +27,8 @@ a dead end, not a new branch point.
 
 from __future__ import annotations
 
+from genkit_google_genai import GoogleAI
+
 from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, TextPart
 from genkit.agent import (
     AgentFinishReason,
@@ -36,7 +38,6 @@ from genkit.agent import (
     SessionRunner,
     TurnResult,
 )
-from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
 store = InMemorySessionStore()

@@ -33,11 +33,11 @@ from __future__ import annotations
 import random
 from typing import TypeVar
 
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
 from genkit import Genkit
 from genkit.agent import AgentChat, AgentResponse, InMemorySessionStore
-from genkit.plugins.google_genai import GoogleAI
 
 StateT = TypeVar('StateT')
 

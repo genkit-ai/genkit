@@ -28,9 +28,10 @@ Requires GEMINI_API_KEY.
 
 from __future__ import annotations
 
+from genkit_google_genai import GoogleAI
+
 from genkit import Genkit, GenkitError, SessionErrorType
 from genkit.agent import InMemorySessionStore
-from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
 # reject_ambiguous_session makes a session-id lookup over a forked history

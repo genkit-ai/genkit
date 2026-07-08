@@ -29,9 +29,10 @@ from __future__ import annotations
 
 import asyncio
 
+from genkit_google_genai import GoogleAI
+
 from genkit import Genkit
 from genkit.agent import InMemorySessionStore
-from genkit.plugins.google_genai import GoogleAI
 
 QUESTION = 'How are AI coding agents changing the way software teams hire engineers in 2026?'
 ANGLES = [

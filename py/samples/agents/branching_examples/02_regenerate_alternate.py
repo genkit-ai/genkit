@@ -25,9 +25,10 @@ what the user already saw. Requires GEMINI_API_KEY.
 
 from __future__ import annotations
 
+from genkit_google_genai import GoogleAI
+
 from genkit import Genkit
 from genkit.agent import InMemorySessionStore
-from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
 

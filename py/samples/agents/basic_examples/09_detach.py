@@ -27,9 +27,10 @@ from __future__ import annotations
 
 import asyncio
 
+from genkit_google_genai import GoogleAI
+
 from genkit import Genkit, GenkitError, ToolRunContext
 from genkit.agent import InMemorySessionStore, SnapshotStatus
-from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
 store = InMemorySessionStore()

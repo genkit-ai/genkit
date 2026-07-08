@@ -26,12 +26,12 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+from genkit_google_genai import GoogleAI
+from genkit_middleware import Middleware, ToolApproval
 from pydantic import BaseModel, Field
 
 from genkit import Genkit
 from genkit.agent import AgentFinishReason
-from genkit.plugins.google_genai import GoogleAI
-from genkit.plugins.middleware import Middleware, ToolApproval
 
 
 class TransferInput(BaseModel):

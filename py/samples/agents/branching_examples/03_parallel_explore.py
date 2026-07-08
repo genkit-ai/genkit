@@ -33,9 +33,10 @@ from __future__ import annotations
 
 import asyncio
 
+from genkit_google_genai import GoogleAI
+
 from genkit import Genkit
 from genkit.agent import InMemorySessionStore
-from genkit.plugins.google_genai import GoogleAI
 
 DIRECTIONS = ['minimal', 'bold', 'corporate']
 

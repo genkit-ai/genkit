@@ -24,10 +24,11 @@ agents that build up a workspace of documents. Requires GEMINI_API_KEY.
 
 from __future__ import annotations
 
+from genkit_google_genai import GoogleAI
+from genkit_middleware import Artifacts, Middleware
+
 from genkit import Genkit
 from genkit.agent import InMemorySessionStore
-from genkit.plugins.google_genai import GoogleAI
-from genkit.plugins.middleware import Artifacts, Middleware
 
 ai = Genkit(plugins=[GoogleAI(), Middleware()])
 store = InMemorySessionStore()
