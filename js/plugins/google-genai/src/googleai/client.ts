@@ -21,9 +21,12 @@ import {
   buildTraceMetadataInput,
   extractErrMsg,
   getGenkitClientHeader,
+  interactionProcessStream,
   parseRetryAfterMs,
   processStream,
 } from '../common/utils.js';
+import { InteractionStreamResult } from './interaction-types.js';
+
 import {
   ClientOptions,
   CreateInteractionRequest,
@@ -72,6 +75,34 @@ export async function createInteraction(
   return maybeTraceRequest<GeminiInteraction>(url, fetchOptions, {
     request: createInteractionRequest,
     clientOptions,
+  });
+}
+
+export async function createInteractionStream(
+  apiKey: string | undefined,
+  createInteractionRequest: CreateInteractionRequest,
+  clientOptions?: ClientOptions
+): Promise<InteractionStreamResult> {
+  const url = getGoogleAIUrl({
+    resourcePath: 'interactions',
+    clientOptions,
+  });
+
+  const fetchOptions = getFetchOptions({
+    method: 'POST',
+    apiKey,
+    clientOptions,
+    body: JSON.stringify(createInteractionRequest),
+    isInteraction: true,
+  });
+
+  return maybeTraceRequest<InteractionStreamResult>(url, fetchOptions, {
+    request: createInteractionRequest,
+    streaming: true,
+    clientOptions,
+    processFn: async (response) => {
+      return interactionProcessStream(response);
+    },
   });
 }
 
