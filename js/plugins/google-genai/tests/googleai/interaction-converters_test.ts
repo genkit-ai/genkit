@@ -22,8 +22,12 @@ import {
   ensureToolIds,
   fromInteraction,
   fromInteractionContent,
+  fromInteractionDelta,
   fromInteractionStep,
+  toInteractionConfigTool,
   toInteractionContent,
+  toInteractionGenerationConfig,
+  toInteractionGoogleSearch,
   toInteractionRole,
   toInteractionSteps,
   toInteractionTool,
@@ -32,6 +36,7 @@ import {
   Content,
   GeminiInteraction,
   Step,
+  StepDeltaData,
 } from '../../src/googleai/interaction-types.js';
 
 describe('Interaction Converters', () => {
@@ -147,6 +152,217 @@ describe('Interaction Converters', () => {
           type: 'object',
           properties: { arg: { type: 'string' } },
         },
+      });
+    });
+  });
+
+  describe('toInteractionGenerationConfig', () => {
+    it('should flatten thinkingConfig and map casing', () => {
+      const config = {
+        thinkingConfig: {
+          thinkingLevel: 'HIGH',
+          includeThoughts: true,
+        },
+      };
+      const result = toInteractionGenerationConfig(config);
+      assert.deepStrictEqual(result, {
+        thinking_level: 'high',
+        thinking_summaries: 'auto',
+      });
+    });
+
+    it('should preserve other properties in thinkingConfig', () => {
+      const config = {
+        thinkingConfig: {
+          thinkingLevel: 'LOW',
+          includeThoughts: false,
+          thinkingBudget: 1024,
+          unknownProp: 'test',
+        },
+      };
+      const result = toInteractionGenerationConfig(config);
+      assert.deepStrictEqual(result, {
+        thinking_level: 'low',
+        thinking_summaries: 'none',
+        thinking_config: {
+          thinking_budget: 1024,
+          unknown_prop: 'test',
+        },
+      });
+    });
+
+    it('should handle already snake_cased thinking_config', () => {
+      const config = {
+        thinking_config: {
+          thinking_level: 'MEDIUM',
+          include_thoughts: true,
+          thinking_budget: 2048,
+        },
+      };
+      const result = toInteractionGenerationConfig(config);
+      assert.deepStrictEqual(result, {
+        thinking_level: 'medium',
+        thinking_summaries: 'auto',
+        thinking_config: {
+          thinking_budget: 2048,
+        },
+      });
+    });
+  });
+
+  describe('toInteractionGoogleSearch', () => {
+    it('should handle boolean true config', () => {
+      const result = toInteractionGoogleSearch(true);
+      assert.deepStrictEqual(result, { type: 'google_search' });
+    });
+
+    it('should handle array format in snake_case', () => {
+      const result = toInteractionGoogleSearch({
+        search_types: ['web_search', 'image_search'],
+      });
+      assert.deepStrictEqual(result, {
+        type: 'google_search',
+        search_types: ['web_search', 'image_search'],
+      });
+    });
+
+    it('should handle object format in camelCase', () => {
+      const result = toInteractionGoogleSearch({
+        searchTypes: { webSearch: {}, enterpriseWebSearch: {} },
+      });
+      assert.deepStrictEqual(result, {
+        type: 'google_search',
+        search_types: ['web_search', 'enterprise_web_search'],
+      });
+    });
+
+    it('should handle empty config object', () => {
+      const result = toInteractionGoogleSearch({});
+      assert.deepStrictEqual(result, { type: 'google_search' });
+    });
+
+    it('should pass through unrecognized fields from search types array', () => {
+      const result = toInteractionGoogleSearch({
+        searchTypes: ['web_search', 'my_custom_search'],
+      });
+      assert.deepStrictEqual(result, {
+        type: 'google_search',
+        search_types: ['web_search', 'my_custom_search'],
+      });
+    });
+
+    it('should pass through unrecognized fields from search types object', () => {
+      const result = toInteractionGoogleSearch({
+        searchTypes: { webSearch: {}, customSearchPlugin: {} },
+      });
+      assert.deepStrictEqual(result, {
+        type: 'google_search',
+        search_types: ['web_search', 'custom_search_plugin'],
+      });
+    });
+
+    it('should throw an error for invalid top-level config', () => {
+      assert.throws(
+        () => toInteractionGoogleSearch('invalid'),
+        /Invalid configuration for googleSearch tool/
+      );
+    });
+
+    it('should throw an error for invalid searchTypes format', () => {
+      assert.throws(
+        () => toInteractionGoogleSearch({ searchTypes: 'invalid' }),
+        /Invalid searchTypes configuration/
+      );
+    });
+
+    it('should throw an error for invalid search type in array', () => {
+      assert.throws(
+        () => toInteractionGoogleSearch({ searchTypes: [123] }),
+        /Invalid search type/
+      );
+    });
+  });
+
+  describe('toInteractionConfigTool', () => {
+    it('should throw an error if toolRaw is not an object', () => {
+      assert.throws(
+        () => toInteractionConfigTool('not-an-object'),
+        /Invalid tool configuration/
+      );
+      assert.throws(
+        () => toInteractionConfigTool(['not-an-object']),
+        /Invalid tool configuration/
+      );
+      assert.throws(
+        () => toInteractionConfigTool(null),
+        /Invalid tool configuration/
+      );
+    });
+
+    it('should handle built-in tool format with valid inputs', () => {
+      const tool = { codeExecution: { someProp: 123 } };
+      const result = toInteractionConfigTool(tool);
+      assert.deepStrictEqual(result, {
+        type: 'code_execution',
+        some_prop: 123,
+      });
+    });
+
+    it('should handle built-in tool format with boolean true', () => {
+      const tool = { codeExecution: true };
+      const result = toInteractionConfigTool(tool);
+      assert.deepStrictEqual(result, {
+        type: 'code_execution',
+      });
+    });
+
+    it('should throw an error if built-in tool config is invalid type', () => {
+      const tool = { codeExecution: 'invalid' };
+      assert.throws(
+        () => toInteractionConfigTool(tool),
+        /Invalid configuration for codeExecution tool/
+      );
+    });
+
+    it('should handle fileSearch configurations and validate array', () => {
+      const tool = { fileSearch: { fileSearchStoreNames: ['store1'] } };
+      const result = toInteractionConfigTool(tool);
+      assert.deepStrictEqual(result, {
+        type: 'file_search',
+        file_search_store_names: ['store1'],
+      });
+
+      const invalidTool = { fileSearch: { fileSearchStoreNames: 'store1' } };
+      assert.throws(
+        () => toInteractionConfigTool(invalidTool),
+        /fileSearchStoreNames must be an array of strings/
+      );
+    });
+
+    it('should pass through arbitrary custom tools un-nested', () => {
+      const tool = {
+        type: 'function',
+        name: 'myFunction',
+        parameters: { type: 'object' },
+      };
+      const result = toInteractionConfigTool(tool);
+      assert.deepStrictEqual(result, {
+        type: 'function',
+        name: 'myFunction',
+        parameters: { type: 'object' },
+      });
+    });
+
+    it('should pass through unrecognized fields from tool configurations', () => {
+      const tool = {
+        urlContext: {
+          myUrlParam: 1,
+        },
+      };
+      const result = toInteractionConfigTool(tool);
+      assert.deepStrictEqual(result, {
+        type: 'url_context',
+        my_url_param: 1,
       });
     });
   });
@@ -652,6 +868,57 @@ describe('Interaction Converters', () => {
           custom: { thought: step },
         },
       ]);
+    });
+  });
+
+  describe('fromInteractionDelta', () => {
+    it('should convert text delta', () => {
+      const delta: StepDeltaData = { type: 'text', text: 'hello' };
+      const result = fromInteractionDelta(delta);
+      assert.deepStrictEqual(result, [{ text: 'hello' }]);
+    });
+
+    it('should convert image delta', () => {
+      const delta: StepDeltaData = {
+        type: 'image',
+        data: 'XYZ',
+        mime_type: 'image/png',
+      };
+      const result = fromInteractionDelta(delta);
+      assert.deepStrictEqual(result, [
+        {
+          media: { url: 'data:image/png;base64,XYZ', contentType: 'image/png' },
+        },
+      ]);
+    });
+
+    it('should convert function_call delta', () => {
+      const delta: StepDeltaData = {
+        type: 'function_call',
+        name: 'myTool',
+        id: 'ref1',
+        arguments: { a: 1 },
+      };
+      const result = fromInteractionDelta(delta);
+      assert.deepStrictEqual(result, [
+        {
+          toolRequest: {
+            name: 'myTool',
+            ref: 'ref1',
+            input: { a: 1 },
+            partial: true,
+          },
+        },
+      ]);
+    });
+
+    it('should ignore arguments_delta', () => {
+      const delta: StepDeltaData = {
+        type: 'arguments_delta',
+        arguments: '{"a":',
+      };
+      const result = fromInteractionDelta(delta);
+      assert.deepStrictEqual(result, []);
     });
   });
 

@@ -265,3 +265,40 @@ export function applyContextOverrides(
   // `config`).
   return calculateRequestOptions(newOptions, context.config);
 }
+
+/**
+ * Converts a string in camelCase to lowercase snake_case.
+ */
+export function camelToSnakeCase(str: string): string {
+  return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+}
+
+export function convertObjectKeysToSnakeCase(
+  obj: unknown
+): Record<string, unknown> | unknown {
+  if (typeof obj !== 'object' || obj === null) {
+    return obj;
+  }
+
+  if (Array.isArray(obj)) {
+    return obj.map((item) => convertObjectKeysToSnakeCase(item));
+  }
+
+  const newObj: Record<string, unknown> = {};
+  for (const key in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+      const snakeCaseKey = camelToSnakeCase(key);
+      newObj[snakeCaseKey] = convertObjectKeysToSnakeCase(obj[key]);
+    }
+  }
+  return newObj;
+}
+
+export function isObject(val: unknown): val is Record<string, unknown> {
+  return typeof val === 'object' && val !== null && !Array.isArray(val);
+}
+
+export function toSnakeCaseObj(val: unknown): Record<string, unknown> {
+  const snakeVal = convertObjectKeysToSnakeCase(val);
+  return isObject(snakeVal) ? snakeVal : {};
+}

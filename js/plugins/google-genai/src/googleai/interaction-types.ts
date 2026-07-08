@@ -13,8 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { ToolChoice } from 'genkit';
-import { FunctionDeclaration, ToolConfig } from '../common/types.js';
+import { FunctionDeclaration } from '../common/types.js';
 
 /**
  * A tool that can be used by the model.
@@ -30,6 +29,7 @@ export declare interface InteractionFunctionTool extends FunctionDeclaration {
  */
 export declare interface InteractionGoogleSearchTool {
   type: 'google_search';
+  search_types?: ('web_search' | 'image_search' | 'enterprise_web_search')[];
 }
 
 /**
@@ -53,6 +53,17 @@ export declare interface InteractionUrlContextTool {
 export declare interface InteractionFileSearchTool {
   type: 'file_search';
   file_search_store_names?: string[];
+  metadata_filter?: string;
+  top_k?: number;
+}
+
+export declare interface InteractionAllowedTools {
+  mode?: string;
+  tools?: string[];
+}
+
+export declare interface InteractionToolChoiceConfig {
+  allowed_tools?: InteractionAllowedTools;
 }
 
 /**
@@ -63,7 +74,36 @@ export declare interface InteractionMcpServerTool {
   name?: string;
   url?: string;
   headers?: Record<string, string>;
-  allowed_tools?: string[];
+  allowed_tools?: InteractionAllowedTools[];
+}
+
+export declare interface InteractionGoogleMapsTool {
+  type: 'google_maps';
+  enable_widget?: boolean;
+  latitude?: number;
+  longitude?: number;
+}
+
+export declare interface InteractionComputerUseTool {
+  type: 'computer_use';
+  disabled_safety_policies?: string[];
+  enable_prompt_injection_detection?: boolean;
+  environment?: string;
+  excluded_predefined_functions?: string[];
+}
+
+export declare interface InteractionRetrievalTool {
+  type: 'retrieval';
+  exa_ai_search_config?: Record<string, unknown>;
+  parallel_ai_search_config?: Record<string, unknown>;
+  rag_store_config?: Record<string, unknown>;
+  retrieval_types?: string[];
+  vertex_ai_search_config?: Record<string, unknown>;
+}
+
+export declare interface InteractionDynamicTool {
+  type: string;
+  [key: string]: unknown;
 }
 
 /**
@@ -75,7 +115,11 @@ export declare type InteractionTool =
   | InteractionCodeExecutionTool
   | InteractionUrlContextTool
   | InteractionFileSearchTool
-  | InteractionMcpServerTool;
+  | InteractionMcpServerTool
+  | InteractionGoogleMapsTool
+  | InteractionComputerUseTool
+  | InteractionRetrievalTool
+  | InteractionDynamicTool;
 
 /**
  * Citation information for model-generated content.
@@ -257,6 +301,29 @@ export declare interface CodeExecutionResultStep {
   signature?: string;
 }
 
+export declare interface FunctionCallStep {
+  type: 'function_call';
+  name: string;
+  arguments?: Record<string, unknown>;
+  id: string;
+  signature?: string;
+}
+
+export declare interface FunctionResultStep {
+  type: 'function_result';
+  name?: string;
+  call_id: string;
+  is_error?: boolean;
+  result: Record<string, unknown> | string | (ImageContent | TextContent)[];
+  signature?: string;
+}
+
+export declare interface ThoughtStep {
+  type: 'thought';
+  signature?: string;
+  summary?: (TextContent | ImageContent)[];
+}
+
 export type Step =
   | ModelOutputStep
   | UserInputStep
@@ -264,7 +331,10 @@ export type Step =
   | GoogleSearchCallStep
   | GoogleSearchResultStep
   | CodeExecutionCallStep
-  | CodeExecutionResultStep;
+  | CodeExecutionResultStep
+  | FunctionCallStep
+  | FunctionResultStep
+  | ThoughtStep;
 
 /**
  * A turn in a conversation.
@@ -349,7 +419,7 @@ export declare interface ModelGenerationConfig {
   /** A list of character sequences that will stop output interaction. */
   stop_sequences?: string[];
   /** The tool choice for the interaction. */
-  tool_choice?: ToolChoice | ToolConfig;
+  tool_choice?: string | InteractionToolChoiceConfig;
   /** The level of thought tokens that the model should generate. */
   thinking_level?: 'minimal' | 'low' | 'medium' | 'high';
   /** Whether to include thought summaries in the response. */
@@ -383,6 +453,11 @@ export declare interface DeepResearchAgentConfig {
 }
 
 /**
+ * Service Tier
+ */
+export declare type ServiceTier = 'flex' | 'standard' | 'priority';
+
+/**
  * Configuration for the agent.
  */
 export type InteractionsAgentConfig =
@@ -392,7 +467,11 @@ export type InteractionsAgentConfig =
 /**
  * Indicates the model should return text, images, or audio.
  */
-export declare type ResponseModality = 'text' | 'image' | 'audio';
+export declare type ResponseModality =
+  | 'text'
+  | 'image'
+  | 'audio'
+  | (string & {});
 
 /**
  * Parameters for creating interactions.
@@ -435,11 +514,219 @@ export declare interface CreateInteractionRequest {
   generation_config?: ModelGenerationConfig;
   /** Configuration for the agent. */
   agent_config?: InteractionsAgentConfig;
+  /** */
+  service_tier?: ServiceTier;
 }
 
-/**
- * Response from creating an interaction.
- */
+export interface TextDelta {
+  type: 'text';
+  text: string;
+}
+
+export interface ImageDelta {
+  type: 'image';
+  data?: string;
+  uri?: string;
+  mime_type?: string;
+  resolution?: MediaResolution;
+}
+
+export interface AudioDelta {
+  type: 'audio';
+  data?: string;
+  uri?: string;
+  mime_type?: string;
+  sample_rate?: number;
+  channels?: number;
+}
+
+export interface DocumentDelta {
+  type: 'document';
+  data?: string;
+  uri?: string;
+  mime_type?: string;
+}
+
+export interface VideoDelta {
+  type: 'video';
+  data?: string;
+  uri?: string;
+  mime_type?: string;
+  resolution?: MediaResolution;
+}
+
+export interface ThoughtSummaryDelta {
+  type: 'thought_summary';
+  content?: Content;
+}
+
+export interface ThoughtSignatureDelta {
+  type: 'thought_signature';
+  signature?: string;
+}
+
+export interface FunctionCallDelta {
+  type: 'function_call';
+  name: string;
+  arguments: Record<string, unknown>;
+  id: string;
+}
+
+export interface ArgumentsDelta {
+  type: 'arguments_delta';
+  arguments?: string;
+}
+
+export interface CodeExecutionCallDelta {
+  type: 'code_execution_call';
+  arguments: { code?: string; language?: string; [key: string]: unknown };
+  signature?: string;
+}
+
+export interface UrlContextCallDelta {
+  type: 'url_context_call';
+  arguments: { urls?: string[] };
+  signature?: string;
+}
+
+export interface GoogleSearchCallDelta {
+  type: 'google_search_call';
+  arguments: { queries?: string[] };
+  signature?: string;
+}
+
+export interface McpServerToolCallDelta {
+  type: 'mcp_server_tool_call';
+  name: string;
+  server_name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface FileSearchCallDelta {
+  type: 'file_search_call';
+  signature?: string;
+}
+
+export interface GoogleMapsCallDelta {
+  type: 'google_maps_call';
+  arguments?: { queries?: string[] };
+  signature?: string;
+}
+
+export interface FunctionResultDelta {
+  type: 'function_result';
+  name?: string;
+  call_id: string;
+  is_error?: boolean;
+  result: Record<string, unknown> | string | (ImageContent | TextContent)[];
+}
+
+export interface CodeExecutionResultDelta {
+  type: 'code_execution_result';
+  result: string;
+  is_error?: boolean;
+  signature?: string;
+}
+
+export interface UrlContextResultDelta {
+  type: 'url_context_result';
+  result: Record<string, unknown>[];
+  is_error?: boolean;
+  signature?: string;
+}
+
+export interface GoogleSearchResultDelta {
+  type: 'google_search_result';
+  result: Record<string, unknown>[];
+  is_error?: boolean;
+  signature?: string;
+}
+
+export interface McpServerToolResultDelta {
+  type: 'mcp_server_tool_result';
+  name?: string;
+  server_name?: string;
+  result: Record<string, unknown> | string | (ImageContent | TextContent)[];
+}
+
+export interface FileSearchResultDelta {
+  type: 'file_search_result';
+  result: Record<string, unknown>[];
+  signature?: string;
+}
+
+export interface GoogleMapsResultDelta {
+  type: 'google_maps_result';
+  result?: Record<string, unknown>[];
+  signature?: string;
+}
+
+export interface TextAnnotationDelta {
+  type: 'text_annotation_delta';
+  annotations?: TextAnnotation[];
+}
+
+export type StepDeltaData =
+  | TextDelta
+  | ImageDelta
+  | AudioDelta
+  | DocumentDelta
+  | VideoDelta
+  | ThoughtSummaryDelta
+  | ThoughtSignatureDelta
+  | FunctionCallDelta
+  | ArgumentsDelta
+  | CodeExecutionCallDelta
+  | UrlContextCallDelta
+  | GoogleSearchCallDelta
+  | McpServerToolCallDelta
+  | FileSearchCallDelta
+  | GoogleMapsCallDelta
+  | FunctionResultDelta
+  | CodeExecutionResultDelta
+  | UrlContextResultDelta
+  | GoogleSearchResultDelta
+  | McpServerToolResultDelta
+  | FileSearchResultDelta
+  | GoogleMapsResultDelta
+  | TextAnnotationDelta;
+
+export type InteractionSseEvent =
+  | {
+      event_type: 'interaction.created';
+      interaction: Partial<GeminiInteraction>;
+      event_id?: string;
+    }
+  | {
+      event_type: 'interaction.completed';
+      interaction: Partial<GeminiInteraction>;
+      event_id?: string;
+    }
+  | {
+      event_type: 'interaction.status_update';
+      interaction_id: string;
+      status: GeminiInteraction['status'];
+      event_id?: string;
+    }
+  | {
+      event_type: 'error';
+      error: { code: string; message: string };
+      event_id?: string;
+    }
+  | { event_type: 'step.start'; index: number; step: Step; event_id?: string }
+  | {
+      event_type: 'step.delta';
+      index: number;
+      delta: StepDeltaData;
+      event_id?: string;
+    }
+  | { event_type: 'step.stop'; index: number; event_id?: string };
+
+export interface InteractionStreamResult {
+  stream: AsyncGenerator<InteractionSseEvent>;
+  response: Promise<GeminiInteraction>;
+}
+
 export declare interface GeminiInteraction {
   /** The name of the Model used for generating the interaction. */
   model?: string;
