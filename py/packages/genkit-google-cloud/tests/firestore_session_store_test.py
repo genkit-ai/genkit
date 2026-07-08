@@ -6,9 +6,9 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from genkit_google_cloud.session_store import FirestoreSessionStore
 
 from genkit._core._typing import SessionSnapshot
-from genkit.plugins.google_cloud.session_store.firestore import FirestoreSessionStore
 
 
 @pytest.mark.asyncio
