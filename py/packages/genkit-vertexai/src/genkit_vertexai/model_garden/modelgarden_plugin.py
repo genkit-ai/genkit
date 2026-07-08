@@ -17,6 +17,7 @@
 """ModelGarden API Compatible Plugin for Genkit."""
 
 import os
+import warnings
 from typing import cast
 
 from genkit_openai.models import SUPPORTED_OPENAI_COMPAT_MODELS
@@ -26,10 +27,10 @@ from genkit_vertexai import constants as const
 from genkit.model import model_action_metadata
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, to_json_schema
 
-from .model_garden import MODELGARDEN_PLUGIN_NAME, ModelGarden, model_garden_name
+from .model_garden import MODELGARDEN_PLUGIN_NAME, ModelGardenModel, model_garden_name
 
 
-class ModelGardenPlugin(Plugin):
+class ModelGarden(Plugin):
     """Model Garden plugin for Genkit.
 
     This plugin provides integration with Google Cloud's Vertex AI platform,
@@ -142,7 +143,7 @@ class ModelGardenPlugin(Plugin):
         location = self.model_locations.get(clean_name, self.location)
         if not self.project_id:
             raise ValueError('project_id must be provided')
-        model_proxy = ModelGarden(
+        model_proxy = ModelGardenModel(
             model=clean_name,
             location=location,
             project_id=self.project_id,
@@ -187,3 +188,27 @@ class ModelGardenPlugin(Plugin):
             )
 
         return actions_list
+
+
+class ModelGardenPlugin(ModelGarden):
+    """Deprecated alias for :class:`ModelGarden`."""
+
+    def __init__(
+        self,
+        project_id: str | None = None,
+        location: str | None = None,
+        models: list[str] | None = None,
+        model_locations: dict[str, str] | None = None,
+    ) -> None:
+        """Initialize the plugin and emit a deprecation warning."""
+        warnings.warn(
+            'ModelGardenPlugin is deprecated; use ModelGarden from genkit_vertexai.model_garden instead.',
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(
+            project_id=project_id,
+            location=location,
+            models=models,
+            model_locations=model_locations,
+        )

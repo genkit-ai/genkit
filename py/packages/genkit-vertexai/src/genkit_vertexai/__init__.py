@@ -84,12 +84,12 @@ Architecture Overview::
     │                        Vertex AI Plugin                                 │
     ├─────────────────────────────────────────────────────────────────────────┤
     │  Plugin Entry Point (__init__.py)                                       │
-    │  ├── ModelGardenPlugin - Access third-party models via Model Garden     │
+    │  ├── ModelGarden - Access third-party models via Model Garden           │
     │  ├── Vector Search Retrievers (BigQuery, Firestore)                     │
     │  └── Helper functions for defining vector search                        │
     ├─────────────────────────────────────────────────────────────────────────┤
     │  model_garden/modelgarden_plugin.py - Model Garden Integration          │
-    │  ├── ModelGardenPlugin class                                            │
+    │  ├── ModelGarden class                                                │
     │  └── Access to Anthropic, Llama, Mistral via Vertex AI                  │
     ├─────────────────────────────────────────────────────────────────────────┤
     │  model_garden/client.py - API Client                                    │
@@ -105,7 +105,7 @@ Architecture Overview::
     └─────────────────────────────────────────────────────────────────────────┘
 
 Key Components:
-    - ModelGardenPlugin: Access third-party models (Anthropic, Meta, Mistral)
+    - ModelGarden: Access third-party models (Anthropic, Meta, Mistral)
       through Vertex AI Model Garden
     - BigQueryRetriever: Vector similarity search using BigQuery
     - FirestoreRetriever: Vector similarity search using Firestore
@@ -113,22 +113,11 @@ Key Components:
 Example:
     ```python
     from genkit import Genkit
-    from genkit_vertexai import (
-        ModelGardenPlugin,
-        define_vertex_vector_search_firestore,
-    )
+    from genkit_vertexai.model_garden import ModelGarden
 
     # Model Garden for third-party models
     ai = Genkit(
-        plugins=[ModelGardenPlugin(project='my-project', location='us-central1')],
-    )
-
-    # Vector Search with Firestore
-    store = define_vertex_vector_search_firestore(
-        ai,
-        name='my_store',
-        collection='documents',
-        embedder='vertexai/text-embedding-005',
+        plugins=[ModelGarden(project_id='my-project', location='us-central1')],
     )
     ```
 
@@ -143,9 +132,7 @@ See Also:
     - Genkit documentation: https://genkit.dev/
 """
 
-from genkit_vertexai.model_garden.modelgarden_plugin import (
-    ModelGardenPlugin,
-)
+from genkit_vertexai.model_garden import ModelGarden, ModelGardenPlugin
 
 
 def package_name() -> str:
@@ -158,6 +145,7 @@ def package_name() -> str:
 
 
 __all__ = [
+    'ModelGarden',
     'ModelGardenPlugin',
     'package_name',
 ]

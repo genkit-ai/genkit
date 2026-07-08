@@ -50,7 +50,7 @@ def model_garden_name(name: str) -> str:
     return f'{MODELGARDEN_PLUGIN_NAME}/{name}'
 
 
-class ModelGarden:
+class ModelGardenModel:
     """Manages integration with Google's Model Garden service for Genkit.
 
     This class provides a convenient way to interact with models hosted on
@@ -66,7 +66,7 @@ class ModelGarden:
         location: str,
         project_id: str,
     ) -> None:
-        """Initialize the ModelGarden instance.
+        """Initialize the ModelGardenModel instance.
 
         Client creation is deferred to ``create_client()`` (async) so the
         blocking credential refresh never runs on the event loop.
