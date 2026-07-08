@@ -422,6 +422,7 @@ The Python samples are intentionally short and beginner-friendly. Use this table
 | `gemini-context-caching` | Gemini, Context Caching | Cache a large document and ask follow-up questions |
 | `google-genai-media` | Gemini, Imagen, Veo | Simple speech, image, and video generation examples |
 | `middleware` | Middleware | Observe or modify model requests with `use=[...]` |
+| `ollama-sample` | Ollama, Streaming, Tool, Embedder | Run local chat, streaming, tool calling, and embeddings with Ollama |
 | `output-formats` | Structured Output | Text, enum, JSON object, array, and JSONL outputs |
 | `prompts` | Prompt, Dotprompt | Use `.prompt` files, helpers, variants, and streaming |
 | `tool-interrupts` | Tool | Trivia (`respond_example.py`) and bank approval (`approval_example.py`) for interrupt / resume |

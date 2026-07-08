@@ -40,7 +40,12 @@ from genkit import (
 )
 from genkit.plugin_api import GENKIT_CLIENT_HEADER
 from genkit.plugins.google_genai import GoogleAI, VertexAI
-from genkit.plugins.google_genai.google import _inject_attribution_headers, googleai_name, vertexai_name
+from genkit.plugins.google_genai.google import (
+    _inject_attribution_headers,
+    googleai_name,
+    vertexai_name,
+)
+from genkit.plugins.google_genai.models.embedder import VERTEX_KNOWN_EMBEDDERS
 from genkit.plugins.google_genai.models.gemini import (
     DEFAULT_SUPPORTS_MODEL,
     SUPPORTED_MODELS,
@@ -125,7 +130,7 @@ class TestGoogleAIInit(unittest.TestCase):
             patch.dict(os.environ, {'GEMINI_API_KEY': ''}, clear=True),
             self.assertRaisesRegex(
                 ValueError,
-                'Gemini api key should be passed in plugin params or as a GEMINI_API_KEY environment variable',
+                r'GEMINI_API_KEY environment variable not set',
             ),
         ):
             GoogleAI()
@@ -235,26 +240,59 @@ def test_googleai__resolve_model(
 
 
 @pytest.mark.parametrize(
-    'model_name, expected_model_name, clean_name',
+    'input_name, expected_model_name, expected_dimensions, expected_support_inputs',
     [
-        ('gemini-pro-deluxe-max', 'googleai/gemini-pro-deluxe-max', 'gemini-pro-deluxe-max'),
-        ('googleai/gemini-pro-deluxe-max', 'googleai/gemini-pro-deluxe-max', 'gemini-pro-deluxe-max'),
+        ('googleai/gemini-embedding-2', 'googleai/gemini-embedding-2', 3072, ['text', 'image', 'video']),
+        # Bare (unprefixed) names resolve to the namespaced action name.
+        ('gemini-embedding-2', 'googleai/gemini-embedding-2', 3072, ['text', 'image', 'video']),
+        (
+            'googleai/gemini-embedding-2-preview',
+            'googleai/gemini-embedding-2-preview',
+            3072,
+            ['text', 'image', 'video'],
+        ),
+        ('googleai/custom-embedder', 'googleai/custom-embedder', None, ['text']),
     ],
 )
 def test_googleai__resolve_embedder(
-    model_name: str,
+    input_name: str,
     expected_model_name: str,
-    clean_name: str,
+    expected_dimensions: int | None,
+    expected_support_inputs: list[str],
     googleai_plugin_instance: GoogleAI,
 ) -> None:
     """Tests for GoogleAI._resolve_embedder method."""
     plugin = googleai_plugin_instance
 
-    action = plugin._resolve_embedder(name=expected_model_name)
+    action = plugin._resolve_embedder(name=input_name)
 
     assert action is not None
     assert action.kind == ActionKind.EMBEDDER
     assert action.name == expected_model_name
+    assert action.metadata['embedder']['dimensions'] == expected_dimensions
+    assert action.metadata['embedder']['supports']['input'] == expected_support_inputs
+
+
+@pytest.mark.parametrize(
+    'input_name, expected_model_name',
+    [
+        ('vertexai/gemini-embedding-2', 'vertexai/gemini-embedding-2'),
+        ('gemini-embedding-2', 'vertexai/gemini-embedding-2'),
+    ],
+)
+def test_vertexai__resolve_embedder_scopes_supports_to_text(
+    input_name: str,
+    expected_model_name: str,
+    vertexai_plugin_instance: VertexAI,
+) -> None:
+    """Vertex must not inherit Google AI's multimodal advertisement."""
+    action = vertexai_plugin_instance._resolve_embedder(name=input_name)
+
+    assert action is not None
+    assert action.kind == ActionKind.EMBEDDER
+    assert action.name == expected_model_name
+    assert action.metadata['embedder']['supports']['input'] == ['text']
+    assert action.metadata['embedder']['dimensions'] == 3072
 
 
 @pytest.mark.asyncio
@@ -269,6 +307,8 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
 
     models_return_value = [
         MockModel(supported_actions=['generateContent'], name='models/gemini-pro'),
+        MockModel(supported_actions=['embedContent'], name='models/gemini-embedding-2'),
+        MockModel(supported_actions=['embedContent'], name='models/gemini-embedding-2-preview'),
         MockModel(supported_actions=['embedContent'], name='models/gemini-embedding-001'),
         MockModel(supported_actions=['generateContent'], name='models/gemini-2.0-flash-tts'),  # TTS
     ]
@@ -287,6 +327,20 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
     action2 = next(a for a in result if a.name == googleai_name('gemini-embedding-001'))
     assert action2 is not None
     assert action2.action_type == ActionKind.EMBEDDER
+    assert action2.metadata['embedder']['dimensions'] == 3072
+    assert action2.metadata['embedder']['supports']['input'] == ['text']
+
+    action2b = next(a for a in result if a.name == googleai_name('gemini-embedding-2'))
+    assert action2b is not None
+    assert action2b.action_type == ActionKind.EMBEDDER
+    assert action2b.metadata['embedder']['dimensions'] == 3072
+    assert action2b.metadata['embedder']['supports']['input'] == ['text', 'image', 'video']
+
+    action2c = next(a for a in result if a.name == googleai_name('gemini-embedding-2-preview'))
+    assert action2c is not None
+    assert action2c.action_type == ActionKind.EMBEDDER
+    assert action2c.metadata['embedder']['dimensions'] == 3072
+    assert action2c.metadata['embedder']['supports']['input'] == ['text', 'image', 'video']
 
     # Check TTS
     action3 = next(a for a in result if a.name == googleai_name('gemini-2.0-flash-tts'))
@@ -824,6 +878,7 @@ async def test_vertexai_list_actions_without_supported_actions(vertexai_plugin_i
     mock_client.models.list.return_value = [
         mock_model('publishers/google/models/gemini-2.5-pro'),
         mock_model('publishers/google/models/gemini-embedding-001'),
+        mock_model('publishers/google/models/gemini-embedding-2'),
         mock_model('publishers/google/models/imagen-3.0-generate-002'),
         mock_model('publishers/google/models/veo-2.0-generate-001'),
     ]
@@ -841,6 +896,8 @@ async def test_vertexai_list_actions_without_supported_actions(vertexai_plugin_i
     # gemini-embedding-001 is registered as an embedder, not a gemini model.
     embedder = next(a for a in result if a.name == vertexai_name('gemini-embedding-001'))
     assert embedder.action_type == ActionKind.EMBEDDER
+    # Non-callable embedders over-listed by the catalog must not leak into Gemini text models.
+    assert vertexai_name('gemini-embedding-2') not in names
 
 
 @pytest.mark.asyncio
@@ -925,50 +982,17 @@ async def test_vertexai_list_known_models(vertexai_plugin_instance: VertexAI) ->
 
 @pytest.mark.asyncio
 async def test_vertexai_list_known_embedders(vertexai_plugin_instance: VertexAI) -> None:
-    """Unit test for list known embedders."""
+    """Vertex embedders come from a curated list, not catalog discovery.
 
-    @dataclass
-    class MockModel:
-        name: str
-        description: str = ''
-
-    [
-        MockModel(name='publishers/google/models/gemini-1.5-flash'),
-        MockModel(name='publishers/google/models/gemini-embedding-001'),
-        MockModel(name='publishers/google/models/imagen-3.0-generate-001'),
-        MockModel(name='publishers/google/models/veo-2.0-generate-001'),
-    ]
-
-    mock_client = MagicMock()
-    # Create sophisticated mocks that have supported_actions
-    m1 = MagicMock()
-    m1.name = 'publishers/google/models/gemini-1.5-flash'
-    m1.supported_actions = ['generateContent']
-    m1.description = 'Gemini model'
-
-    m2 = MagicMock()
-    m2.name = 'publishers/google/models/gemini-embedding-001'
-    m2.supported_actions = ['embedContent']
-    m2.description = 'Embedder'
-
-    m3 = MagicMock()
-    m3.name = 'publishers/google/models/imagen-3.0-generate-001'
-    m3.supported_actions = ['predict']
-    m3.description = 'Imagen'
-
-    m4 = MagicMock()
-    m4.name = 'publishers/google/models/veo-2.0-generate-001'
-    m4.supported_actions = ['generateVideos']
-    m4.description = 'Veo'
-
-    mock_client.models.list.return_value = [m1, m2, m3, m4]
-    vertexai_plugin_instance._runtime_client = lambda: mock_client
-
+    The Vertex catalog over-lists embedders that are published but not callable
+    (e.g. gemini-embedding-2), so the plugin advertises only VERTEX_KNOWN_EMBEDDERS.
+    """
     result = vertexai_plugin_instance._list_known_embedders()
 
-    # Verify Embedder
-    action2 = next(a for a in result if a.name == vertexai_name('gemini-embedding-001'))
-    assert action2 is not None
+    listed = {a.name for a in result}
+    assert listed == {vertexai_name(name) for name in VERTEX_KNOWN_EMBEDDERS}
+    assert vertexai_name('gemini-embedding-001') in listed
+    assert vertexai_name('gemini-embedding-2') not in listed
 
 
 @pytest.mark.asyncio

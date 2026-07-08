@@ -153,7 +153,7 @@ async def test_anthropic_runtime_clients_are_loop_local(mock_client_ctor: MagicM
 
 def test_supported_models() -> None:
     """Test that all supported models have proper metadata."""
-    assert len(SUPPORTED_MODELS) == 11
+    assert len(SUPPORTED_MODELS) == 12
     assert 'claude-3-haiku' not in SUPPORTED_MODELS
     for _name, info in SUPPORTED_MODELS.items():
         assert info.label is not None
@@ -163,15 +163,15 @@ def test_supported_models() -> None:
         assert info.supports is not None
         assert info.supports.multiturn is True
         assert info.supports.tools is True
-        if _name == 'claude-3-5-haiku':
-            assert info.supports.media is False
-        else:
-            assert info.supports.media is True
+        assert info.supports.media is True
         assert info.supports.system_role is True
 
     for model_name, expected_label in (
         ('claude-opus-4-7', 'Anthropic - Claude Opus 4.7'),
         ('claude-opus-4-8', 'Anthropic - Claude Opus 4.8'),
+        ('claude-sonnet-4-6', 'Anthropic - Claude Sonnet 4.6'),
+        ('claude-sonnet-5', 'Anthropic - Claude Sonnet 5'),
+        ('claude-fable-5', 'Anthropic - Claude Fable 5'),
     ):
         info = SUPPORTED_MODELS[model_name]
         assert info.label == expected_label
@@ -179,6 +179,15 @@ def test_supported_models() -> None:
         assert info.supports is not None
         assert info.supports.output == ['text', 'json']
         assert info.supports.constrained == Constrained.ALL
+
+
+def test_mythos_excluded_but_resolvable() -> None:
+    """Test claude-mythos-5 is not advertised but resolves via the generic fallback."""
+    assert 'claude-mythos-5' not in SUPPORTED_MODELS
+    info = get_model_info('claude-mythos-5')
+    assert info.label == 'Anthropic - claude-mythos-5'
+    assert info.supports is not None
+    assert info.supports.output == ['text']
 
 
 def test_get_model_info_known() -> None:

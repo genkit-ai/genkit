@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -187,6 +188,19 @@ func TestServeMux(t *testing.T) {
 	})
 
 	t.Run("run action", func(t *testing.T) {
+		core.DefineAction(g.reg, "test/checkLabels", api.ActionTypeCustom, nil,
+			nil,
+			func(ctx context.Context, in any) (any, error) {
+				labels := tracing.TelemetryLabelsFromContext(ctx)
+				if labels == nil {
+					return nil, errors.New("no telemetry labels found in context")
+				}
+				if labels["test_k"] != "test_v" {
+					return nil, fmt.Errorf("unexpected telemetry labels: %v", labels)
+				}
+				return "ok", nil
+			})
+
 		tests := []struct {
 			name       string
 			body       string
@@ -206,10 +220,10 @@ func TestServeMux(t *testing.T) {
 				wantResult: "2",
 			},
 			{
-				name:       "check telemetry labels",
-				body:       `{"key": "/custom/test/dec", "input": 3,"telemetryLabels":{"test_k":"test_v"}}`,
+				name:       "verify telemetry labels in context",
+				body:       `{"key": "/custom/test/checkLabels", "input": null, "telemetryLabels": {"test_k": "test_v"}}`,
 				wantStatus: http.StatusOK,
-				wantResult: "2",
+				wantResult: "\"ok\"",
 			},
 			{
 				name:       "invalid action key",

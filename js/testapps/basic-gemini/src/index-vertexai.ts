@@ -600,7 +600,7 @@ ai.defineFlow('veo-photo-move', async (_, { sendChunk }) => {
   const startingImage = fs.readFileSync('photo.jpg', { encoding: 'base64' });
 
   let { operation } = await ai.generate({
-    model: vertexAI.model('veo-3.0-generate-001'),
+    model: vertexAI.model('veo-3.1-generate-001'),
     prompt: [
       {
         text: 'make the subject in the photo move',

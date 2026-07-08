@@ -61,6 +61,26 @@ func TestAnthropicLive(t *testing.T) {
 			t.Fatalf("not a pirate :( :%s", resp.Text())
 		}
 	})
+	t.Run("latest opus models", func(t *testing.T) {
+		for _, modelName := range []string{"claude-opus-4-7", "claude-opus-4-8"} {
+			t.Run(modelName, func(t *testing.T) {
+				m := anthropicPlugin.Model(g, modelName)
+				resp, err := genkit.Generate(ctx, g,
+					ai.WithConfig(&anthropic.MessageNewParams{
+						MaxTokens: 64,
+					}),
+					ai.WithModel(m),
+					ai.WithPrompt("Reply with exactly: ok"),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.TrimSpace(resp.Text()) == "" {
+					t.Fatal("expected a response but nothing was returned")
+				}
+			})
+		}
+	})
 	t.Run("model version not ok", func(t *testing.T) {
 		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
 		_, err := genkit.Generate(ctx, g,

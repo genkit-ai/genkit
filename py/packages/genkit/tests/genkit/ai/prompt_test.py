@@ -993,3 +993,81 @@ async def test_load_prompt_metadata_tool_defs_empty_array() -> None:
         prompt_md = cast(dict[str, Any], action_md['prompt'])
         assert prompt_md['toolDefs'] == []
         assert prompt_md['name'] == 'no_tools'
+
+
+@pytest.mark.asyncio
+async def test_define_prompt_primitive_with_output_instructions() -> None:
+    """``define_prompt(registry, ...)`` primitive preserves output_instructions and injects on call."""
+    ai, *_ = setup_test()
+
+    class TestSchema(BaseModel):
+        foo: int | None = Field(None, description='foo field')
+
+    def output_parts(resp: Any) -> list[Any]:
+        msg = resp.request.messages[0]
+        return [p for p in msg.content if (p.root.metadata or {}).get('purpose') == 'output']
+
+    p_true = ai.define_prompt(
+        name='p_true',
+        model='echoModel',
+        prompt='hi',
+        output_format='json',
+        output_schema=TestSchema,
+        output_instructions=True,
+    )
+    rendered_true = await p_true.render()
+    assert rendered_true.output is not None
+    assert rendered_true.output.instructions is True
+
+    resp_true = await p_true()
+    injected_true = output_parts(resp_true)
+    assert len(injected_true) == 1
+    assert 'Output should be in JSON format and conform to the following schema' in (injected_true[0].root.text or '')
+
+    p_custom = ai.define_prompt(
+        name='p_custom',
+        model='echoModel',
+        prompt='hi',
+        output_format='json',
+        output_instructions='Only use single quotes in JSON keys if you dare',
+    )
+    rendered_custom = await p_custom.render()
+    assert rendered_custom.output is not None
+    assert rendered_custom.output.instructions == 'Only use single quotes in JSON keys if you dare'
+
+    resp_custom = await p_custom()
+    injected_custom = output_parts(resp_custom)
+    assert len(injected_custom) == 1
+    assert (injected_custom[0].root.text or '') == 'Only use single quotes in JSON keys if you dare'
+
+
+@pytest.mark.asyncio
+async def test_load_prompt_with_output_instructions() -> None:
+    """File-based (.prompt) dotprompts preserve output.instructions and inject on call."""
+    ai, *_ = setup_test()
+
+    def output_parts(resp: Any) -> list[Any]:
+        msg = resp.request.messages[0]
+        return [p for p in msg.content if (p.root.metadata or {}).get('purpose') == 'output']
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prompt_dir = Path(tmpdir) / 'prompts'
+        prompt_dir.mkdir()
+        (prompt_dir / 'with_instructions.prompt').write_text(
+            '---\nmodel: echoModel\noutput:\n  format: json\n  schema:\n'
+            '    type: object\n    properties:\n      foo:\n        type: integer\n'
+            '  instructions: true\n---\nhi\n'
+        )
+        load_prompt_folder(ai.registry, prompt_dir)
+
+        loaded = await prompt(ai.registry, 'with_instructions')
+        assert loaded._output_instructions is True  # pyright: ignore[reportPrivateUsage]
+
+        rendered = await loaded.render()
+        assert rendered.output is not None
+        assert rendered.output.instructions is True
+
+        resp = await loaded()
+        injected = output_parts(resp)
+        assert len(injected) == 1
+        assert 'Output should be in JSON format' in (injected[0].root.text or '')

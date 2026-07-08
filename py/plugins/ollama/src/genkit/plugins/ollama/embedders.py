@@ -77,7 +77,7 @@ class OllamaEmbedder:
         """
         return self._client_factory()
 
-    async def embed(self, request: EmbedRequest) -> EmbedResponse:
+    async def embed(self, request: EmbedRequest, client: ollama_api.AsyncClient | None = None) -> EmbedResponse:
         """Generates embeddings for the provided input text.
 
         Converts the input documents from the Genkit EmbedRequest into a raw
@@ -86,14 +86,18 @@ class OllamaEmbedder:
 
         Args:
             request: The embedding request containing the input documents.
+            client: An optional pre-resolved Ollama client (e.g. one built with
+                per-request headers); falls back to the stored client factory.
 
         Returns:
             An EmbedResponse containing the generated vector embeddings.
         """
+        if client is None:
+            client = self._get_client()
         input_raw: list[str] = []
         for doc in request.input:
             input_raw.extend([str(content.root.text) for content in doc.content if content.root.text is not None])
-        response = await self._get_client().embed(
+        response = await client.embed(
             model=self.embedding_definition.name,
             input=input_raw,
         )

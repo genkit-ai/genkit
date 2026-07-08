@@ -670,8 +670,9 @@ def test_structured_output_falls_back_to_system_prompt() -> None:
 def test_structured_output_falls_back_for_unsupported_models() -> None:
     """Test that JSON with schema falls back to system prompt for unsupported models."""
     mock_client = MagicMock()
-    # Claude 3.5 Haiku is marked as not supporting JSON natively in model_info.py
-    model = AnthropicModel(model_name='claude-3-5-haiku', client=mock_client)
+    # Unknown models resolve to the generic fallback in model_info.py, whose
+    # supports.output is ['text'] — no native JSON support.
+    model = AnthropicModel(model_name='claude-unknown-model', client=mock_client)
 
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],

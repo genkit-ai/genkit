@@ -105,7 +105,7 @@ import genkit.plugins.google_genai.constants as const
 from genkit import ModelInfo
 from genkit._core._action import ActionRunContext
 from genkit._core._model import ModelRequest, ModelResponse
-from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
+from genkit.embedder import embedder_action_metadata
 from genkit.evaluator import EvalFnResponse, EvalRequest
 from genkit.model import BackgroundAction, model_action_metadata
 from genkit.plugin_api import (
@@ -121,7 +121,11 @@ from genkit.plugins.google_genai.evaluators import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
 )
-from genkit.plugins.google_genai.models.embedder import EMBEDDER_DIMENSIONS, Embedder
+from genkit.plugins.google_genai.models.embedder import (
+    VERTEX_KNOWN_EMBEDDERS,
+    Embedder,
+    get_embedder_options,
+)
 from genkit.plugins.google_genai.models.gemini import (
     SUPPORTED_MODELS,
     GeminiConfigSchema,
@@ -187,10 +191,12 @@ def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
     - Vertex AI returns ``supported_actions = None`` for every publisher model,
       so categorizing by action would skip them all. The Vertex path instead
       categorizes by model name (mirroring the JS plugin's ``listActions``):
-        - 'embedding' in name → embedders
         - 'imagen' in name → imagen
         - 'veo' in name → veo
         - 'gemini'/'gemma' in name (and not an embedding) → gemini
+      Embedders are intentionally NOT discovered here. The Vertex catalog
+      over-lists embedders that are published but not callable, so they
+      are advertised from a curated list (``VERTEX_KNOWN_EMBEDDERS``) instead.
 
     Args:
         client: The Google GenAI client instance.
@@ -223,12 +229,14 @@ def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
             continue
 
         # Vertex AI returns supported_actions=None for every publisher model, so
-        # categorize by name
+        # categorize by name. Embedders are deliberately excluded: the catalog
+        # over-lists embedders that are not callable, so they are advertised from a curated list
+        # (VERTEX_KNOWN_EMBEDDERS) rather than discovered here.
         if is_vertex:
             lower_name = name.lower()
             if 'embedding' in lower_name:
-                models.embedders.append(name)
-            elif 'imagen' in lower_name:
+                continue
+            if 'imagen' in lower_name:
                 models.imagen.append(name)
             elif 'veo' in lower_name:
                 models.veo.append(name)
@@ -309,13 +317,14 @@ def _create_embedder_action(
         Action object for the embedder.
     """
     clean_name = name.replace(f'{plugin_name}/', '') if name.startswith(plugin_name) else name
+    full_name = f'{plugin_name}/{clean_name}'
     label = f'{PLUGIN_DISPLAY_NAME[plugin_name]} - {clean_name}'
     action_metadata = embedder_action_metadata(
-        name=name,
-        options=EmbedderOptions(
+        name=full_name,
+        options=get_embedder_options(
+            name=clean_name,
             label=label,
-            supports=EmbedderSupports(input=['text']),
-            dimensions=EMBEDDER_DIMENSIONS.get(clean_name),
+            is_vertex=(plugin_name == VERTEXAI_PLUGIN_NAME),
         ),
     )
 
@@ -325,7 +334,7 @@ def _create_embedder_action(
 
     action = Action(
         kind=ActionKind.EMBEDDER,
-        name=name,
+        name=full_name,
         fn=_run,
         metadata=action_metadata.metadata,
     )
@@ -417,9 +426,15 @@ class GoogleAI(Plugin):
         """
         api_key = api_key if api_key else os.getenv('GEMINI_API_KEY')
         if not api_key and credentials is None:
-            raise ValueError(
-                'Gemini api key should be passed in plugin params or as a GEMINI_API_KEY environment variable'
+            msg = (
+                '\n[Genkit] GEMINI_API_KEY environment variable not set.\n\n'
+                'To get started with Google AI models:\n'
+                '1. Obtain an API key from Google AI Studio: https://aistudio.google.com/app/apikey\n'
+                '2. Set your key in the terminal environment:\n'
+                '   export GEMINI_API_KEY="your-api-key"\n\n'
+                'Documentation: https://genkit.dev/docs/python/integrations/google-genai/\n'
             )
+            raise ValueError(msg)
 
         self._client_kwargs: dict[str, Any] = {
             'vertexai': self._vertexai,
@@ -680,10 +695,9 @@ class GoogleAI(Plugin):
             actions_list.append(
                 embedder_action_metadata(
                     name=googleai_name(name),
-                    options=EmbedderOptions(
+                    options=get_embedder_options(
+                        name=name,
                         label=f'{PLUGIN_DISPLAY_NAME[GOOGLEAI_PLUGIN_NAME]} - {name}',
-                        supports=EmbedderSupports(input=['text']),
-                        dimensions=EMBEDDER_DIMENSIONS.get(name),
                     ),
                 )
             )
@@ -811,7 +825,7 @@ class VertexAI(Plugin):
         for name in genai_models.veo:
             actions.append(self._resolve_model(vertexai_name(name)))
 
-        for name in genai_models.embedders:
+        for name in VERTEX_KNOWN_EMBEDDERS:
             actions.append(self._resolve_embedder(vertexai_name(name)))
 
         # Register Vertex AI evaluators
@@ -848,10 +862,14 @@ class VertexAI(Plugin):
         return actions
 
     def _list_known_embedders(self) -> list[Action]:
-        """List known embedders as Action objects."""
-        genai_models = _list_genai_models(self._runtime_client(), is_vertex=True)
+        """List known embedders as Action objects.
+
+        Vertex embedders are advertised from a curated list rather than
+        discovered from the catalog, which over-lists embedders that are not
+        callable. See VERTEX_KNOWN_EMBEDDERS.
+        """
         actions = []
-        for name in genai_models.embedders:
+        for name in VERTEX_KNOWN_EMBEDDERS:
             actions.append(self._resolve_embedder(vertexai_name(name)))
         return actions
 
@@ -1015,15 +1033,14 @@ class VertexAI(Plugin):
                 )
             )
 
-        for name in genai_models.embedders:
-            dims = EMBEDDER_DIMENSIONS.get(name)
+        for name in VERTEX_KNOWN_EMBEDDERS:
             actions_list.append(
                 embedder_action_metadata(
                     name=vertexai_name(name),
-                    options=EmbedderOptions(
+                    options=get_embedder_options(
+                        name=name,
                         label=f'{PLUGIN_DISPLAY_NAME[VERTEXAI_PLUGIN_NAME]} - {name}',
-                        supports=EmbedderSupports(input=['text']),
-                        dimensions=dims,
+                        is_vertex=True,
                     ),
                 )
             )
