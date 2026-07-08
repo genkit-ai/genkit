@@ -62,7 +62,7 @@ class RegistryLike(Protocol):
         """List all values registered under a kind, merged with the parent registry."""
         ...
 
-    def register_action_from_instance(self, action: Action) -> None:
+    def register_action_from_instance(self, action: Action[Any, Any, Any, Any]) -> None:
         """Register a pre-built Action instance."""
         ...
 

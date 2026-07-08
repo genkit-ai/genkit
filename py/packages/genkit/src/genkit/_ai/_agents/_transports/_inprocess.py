@@ -52,7 +52,7 @@ class InProcessTransport:
 
     def __init__(
         self,
-        action: BidiAction,
+        action: BidiAction[Any, Any, Any, Any],
         *,
         get_snapshot: GetSnapshotFn | None = None,
         abort_snapshot: AbortSnapshotFn | None = None,

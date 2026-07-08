@@ -389,10 +389,25 @@ class AgentAPI(Protocol, Generic[StateT]):
 
 
 class AgentClient(Generic[StateT]):
-    """Remote/transport-backed agent — wraps any AgentTransport. Implements AgentAPI."""
+    """Transport-backed agent client — wraps any AgentTransport and implements AgentAPI.
 
-    def __init__(self, transport: AgentTransport[StateT]) -> None:
+    This is the one ergonomic surface (``chat``/``load_chat``/``get_snapshot``/
+    ``abort``) for talking to an agent, whether it's remote (HTTP transport) or
+    in-process (the local agent action). Point it at a transport and you get the
+    same client either way.
+
+    ``state_schema`` types the custom session state so the resulting chat hands
+    back a validated model instead of a bare dict; leave it None for untyped state.
+    """
+
+    def __init__(
+        self,
+        transport: AgentTransport[StateT],
+        *,
+        state_schema: type[Any] | None = None,
+    ) -> None:
         self._transport = transport
+        self._state_schema = state_schema
 
     def chat(
         self,
@@ -405,7 +420,11 @@ class AgentClient(Generic[StateT]):
     ) -> AgentChat[StateT]:
         """Starts a new session, or attaches to one via a snapshot/session id or saved conversation state."""
         session_transport = copy.copy(self._transport)
-        return AgentChat(session_transport, _init_from(snapshot_id, session_id, messages, artifacts, state))
+        return AgentChat(
+            session_transport,
+            _init_from(snapshot_id, session_id, messages, artifacts, state),
+            state_schema=self._state_schema,
+        )
 
     async def load_chat(
         self,
@@ -419,7 +438,7 @@ class AgentClient(Generic[StateT]):
             raise ValueError(f'Snapshot {lookup_label(snapshot_id=snapshot_id, session_id=session_id)!r} not found.')
         session_transport = copy.copy(self._transport)
         session_transport.state_management = 'server'
-        chat = AgentChat(session_transport)
+        chat = AgentChat(session_transport, state_schema=self._state_schema)
         chat._load_from_snapshot(snapshot)
         return chat
 

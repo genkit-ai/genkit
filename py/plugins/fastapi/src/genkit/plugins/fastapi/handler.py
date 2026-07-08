@@ -125,6 +125,11 @@ def genkit_fastapi_handler(
                 if isinstance(context, dict):
                     action_context = context
 
+            # init carries per-run setup (e.g. an agent's session identity). It's
+            # optional and ignored by plain flows; agents use it to resume or
+            # start a session.
+            init = body.get('init')
+
             # Check if client wants streaming
             accept = request.headers.get('accept', '')
             stream = 'text/event-stream' in accept or request.query_params.get('stream') == 'true'
@@ -133,7 +138,7 @@ def genkit_fastapi_handler(
 
                 async def event_stream() -> AsyncIterator[str]:
                     try:
-                        stream_response = flow.stream(body.get('data'), context=action_context)
+                        stream_response = flow.stream(body.get('data'), context=action_context, init=init)
                         async for chunk in stream_response.stream:
                             yield f'data: {json.dumps({"message": _to_dict(chunk)}, separators=_JSON_SEPARATORS)}\n\n'
 
@@ -146,7 +151,7 @@ def genkit_fastapi_handler(
                 return StreamingResponse(event_stream(), media_type='text/event-stream')
             else:
                 try:
-                    response = await flow.run(body.get('data'), context=action_context)
+                    response = await flow.run(body.get('data'), context=action_context, init=init)
                     return {'result': _to_dict(response.response)}
                 except Exception as e:
                     ex = e.cause if isinstance(e, GenkitError) else e

@@ -22,7 +22,7 @@ import asyncio
 import threading
 import weakref
 from collections.abc import Awaitable, Callable
-from typing import cast
+from typing import Any, cast
 
 from dotpromptz.dotprompt import Dotprompt
 from pydantic import BaseModel
@@ -254,7 +254,7 @@ class Registry:
             self._entries[kind][name] = action
         return action_typed
 
-    def register_action_from_instance(self, action: Action) -> None:
+    def register_action_from_instance(self, action: Action[Any, Any, Any, Any]) -> None:
         """Register an existing Action instance.
 
         Allows registering a pre-configured Action object, such as one created via

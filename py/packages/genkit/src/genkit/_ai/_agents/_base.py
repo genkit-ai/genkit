@@ -24,7 +24,7 @@ from typing import Any, Generic
 from opentelemetry import trace as trace_api
 
 # Internal imports from sibling modules
-from genkit._ai._agents._client import AgentChat, _init_from
+from genkit._ai._agents._client import AgentClient
 from genkit._ai._agents._runtime import (
     AgentFn,
     AgentRuntime,
@@ -38,7 +38,6 @@ from genkit._ai._agents._session import (
 )
 from genkit._ai._agents._snapshot import (
     abort_snapshot_in_store,
-    lookup_label,
     parse_abort_input,
     parse_snapshot_lookup_input,
     resolve_snapshot,
@@ -72,7 +71,6 @@ from genkit._core._typing import (
     AgentOutput,
     AgentResult,
     AgentStreamChunk,
-    Artifact,
     MessageData,
     MiddlewareRef,
     Part,
@@ -85,19 +83,30 @@ from genkit._core._typing import (
 # ---------------------------------------------------------------------------
 
 
-class Agent(BidiAction, Generic[StateT]):
-    """In-process agent: registered in the registry, implements AgentAPI.
+class Agent(
+    BidiAction[AgentInput, AgentOutput, AgentStreamChunk, AgentInit],
+    AgentClient[StateT],
+    Generic[StateT],
+):
+    """The low-level agent primitive: a BidiAction that lives in the registry.
 
-    Created by ``define_agent`` / ``define_custom_agent``. Extends BidiAction
-    so it lives in the registry and can be served over HTTP. Also implements
-    AgentAPI so it can be used as a client directly without a separate handle.
+    Created by ``define_agent`` / ``define_custom_agent``. As a BidiAction it's
+    the thing that gets registered and served over HTTP. It's *also* an
+    ``AgentClient``, so the ergonomic chat surface (``chat``/``load_chat``/
+    ``get_snapshot``/``abort``) is inherited rather than reimplemented — it's the
+    same client used for remote agents, just pointed at an in-process transport.
+    So talking to a local agent and a remote one go through one client, not two.
+
+    The action generics are pinned to the agent turn shape: each turn's input is
+    an ``AgentInput``, streamed chunks are ``AgentStreamChunk``, the turn result
+    is an ``AgentOutput``, and ``init`` (session identity) is an ``AgentInit``.
     """
 
     def __init__(
         self,
         *,
         name: str,
-        bidi_fn: BidiFn[AgentInit, AgentOutput],
+        bidi_fn: BidiFn[AgentInit, AgentInput, AgentStreamChunk, AgentOutput],
         store: SessionStore | None = None,
         client_transform: ClientTransform | None = None,
         state_schema: type[Any] | None = None,
@@ -110,16 +119,31 @@ class Agent(BidiAction, Generic[StateT]):
         # validate custom state the same way it does tool/prompt schemas.
         if state_schema is not None and hasattr(state_schema, 'model_json_schema'):
             agent_meta['stateSchema'] = state_schema.model_json_schema()
+        # BidiAction is inited via super() (not an explicit BidiAction.__init__)
+        # so the type checker keeps Agent's bound generics; calling it explicitly
+        # makes it re-infer them and the invariant ChunkT collapses to Never. The
+        # AgentClient half is inited explicitly just below.
         super().__init__(
             kind=ActionKind.AGENT,
             name=name,
             bidi_fn=bidi_fn,
             description=description,
             metadata={**(metadata or {}), 'agent': agent_meta},
+            # An agent turn always resumes (or starts) a session, so its init is
+            # always an AgentInit. Declaring it here validates the session
+            # identity up front and lets a bare run() default to a fresh session.
+            init_schema=AgentInit,
+            # Each turn's input is an AgentInput. Declaring it means a raw payload
+            # (e.g. an HTTP JSON body) is coerced into an AgentInput before the
+            # turn runs, instead of reaching the runtime as a bare dict.
+            input_schema=AgentInput,
         )
         self.store = store
         self._client_transform = client_transform
-        self._state_schema = state_schema
+        # The AgentClient half (chat/load_chat/get_snapshot/abort rides along)
+        # runs against an in-process transport that drives this very action — the
+        # way remote_agent runs against an HTTP one.
+        AgentClient.__init__(self, self._in_process_transport(), state_schema=state_schema)
 
     def _in_process_transport(self) -> InProcessTransport:
         state_management: StateManagement = 'server' if self.store is not None else 'client'
@@ -153,56 +177,6 @@ class Agent(BidiAction, Generic[StateT]):
         if self.store is None:
             return None
         return await abort_snapshot_in_store(self.store, snapshot_id)
-
-    # ------------------------------------------------------------------
-    # AgentAPI implementation
-    # ------------------------------------------------------------------
-
-    def chat(
-        self,
-        *,
-        snapshot_id: str | None = None,
-        session_id: str | None = None,
-        messages: list[MessageData] | None = None,
-        artifacts: list[Artifact] | None = None,
-        state: StateT | None = None,
-    ) -> AgentChat[StateT]:
-        """Starts a new in-process session, or attaches to one via a snapshot/session id or saved conversation state."""
-        return AgentChat(
-            self._in_process_transport(),
-            _init_from(snapshot_id, session_id, messages, artifacts, state),
-            state_schema=self._state_schema,
-        )
-
-    async def load_chat(
-        self,
-        *,
-        snapshot_id: str | None = None,
-        session_id: str | None = None,
-    ) -> AgentChat[StateT]:
-        """Loads a server snapshot and returns a chat with history restored."""
-        session_transport = self._in_process_transport()
-        snapshot = await session_transport.get_snapshot(snapshot_id=snapshot_id, session_id=session_id)
-        if snapshot is None:
-            label = lookup_label(snapshot_id=snapshot_id, session_id=session_id)
-            raise ValueError(f'Failed to load chat: Snapshot {label!r} not found.')
-        session_transport.state_management = 'server'
-        chat = AgentChat(session_transport, state_schema=self._state_schema)
-        chat._load_from_snapshot(snapshot)
-        return chat
-
-    async def get_snapshot(
-        self,
-        *,
-        snapshot_id: str | None = None,
-        session_id: str | None = None,
-    ) -> SessionSnapshot | None:
-        """Reads a snapshot without starting a session."""
-        return await self.get_snapshot_data(snapshot_id=snapshot_id, session_id=session_id)
-
-    async def abort(self, snapshot_id: str) -> SnapshotStatus | None:
-        """Aborts a running snapshot."""
-        return await self.abort_snapshot_data(snapshot_id)
 
 
 # ---------------------------------------------------------------------------

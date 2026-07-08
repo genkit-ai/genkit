@@ -117,7 +117,7 @@ class ActionRunner:
 
                 action = cast(BidiAction[Any, Any, Any], self.action)
                 conn = await action.stream_bidi(
-                    input=init,
+                    init=init,
                     context=self.payload.get('context', {}),
                     on_trace_start=self.on_trace_start,
                     telemetry_labels=self.payload.get('telemetryLabels'),
