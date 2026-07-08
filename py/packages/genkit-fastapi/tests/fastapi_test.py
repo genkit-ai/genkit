@@ -21,12 +21,12 @@ import json
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from genkit_fastapi import genkit_fastapi_handler
+from genkit_fastapi import genkit_fastapi_handler, serve_flow
 
 from genkit import ActionRunContext, Genkit
 
 
-def _assert_is_error_response(parsed: dict) -> None:
+def assert_is_error_response(parsed: dict) -> None:
     """Assert parsed dict has HttpErrorWireFormat shape (message, status, details)."""
     assert isinstance(parsed, dict)
     assert all(k in parsed for k in ('message', 'status', 'details'))
@@ -43,11 +43,11 @@ def create_app() -> FastAPI:
     async def say_hi(name: str, ctx: ActionRunContext) -> dict[str, str]:
         return {'greeting': f'Hi {name}'}
 
-    @app.post('/error_flow', response_model=None)
-    @genkit_fastapi_handler(ai)
     @ai.flow()
     async def raise_error(_: str) -> None:
         raise ValueError('Intentional test error')
+
+    app.include_router(serve_flow(raise_error, base_path='/error_flow'))
 
     return app
 
@@ -58,7 +58,7 @@ def test_400_missing_data_returns_valid_json() -> None:
     response = client.post('/chat', json={})  # no 'data' key
     assert response.status_code == 400
     parsed = json.loads(response.text)
-    _assert_is_error_response(parsed)
+    assert_is_error_response(parsed)
 
 
 def test_500_flow_exception_returns_valid_json() -> None:
@@ -73,4 +73,4 @@ def test_500_flow_exception_returns_valid_json() -> None:
     response = client.post('/error_flow', json={'data': code_snippet})
     assert response.status_code == 500
     parsed = json.loads(response.text)
-    _assert_is_error_response(parsed)
+    assert_is_error_response(parsed)
