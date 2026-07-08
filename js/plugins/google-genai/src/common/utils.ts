@@ -27,6 +27,12 @@ import {
   z,
 } from 'genkit';
 import { GenerateRequest } from 'genkit/model';
+import { toJsonSchema } from 'genkit/schema';
+import {
+  GeminiInteraction,
+  InteractionSseEvent,
+  InteractionStreamResult,
+} from '../googleai/interaction-types.js';
 import { applyGeminiPartialArgs } from './converters.js';
 import {
   GenerateContentCandidate,
@@ -327,15 +333,29 @@ export function extractMediaArray(
  * @param {JSONSchema} schema The JSON schema to clean.
  * @returns {JSONSchema} The cleaned JSON schema.
  */
-export function cleanSchema(schema: JSONSchema): JSONSchema {
-  const out = structuredClone(schema);
+export function cleanSchema(schema: JSONSchema | z.ZodTypeAny): JSONSchema {
+  let schemaToClean: JSONSchema;
+
+  if (
+    schema &&
+    typeof schema === 'object' &&
+    '_def' in schema &&
+    'parse' in schema
+  ) {
+    // It's a Zod Schema, convert it first.
+    schemaToClean = toJsonSchema({ schema: schema as z.ZodTypeAny });
+  } else {
+    schemaToClean = schema as JSONSchema;
+  }
+
+  const out = structuredClone(schemaToClean);
   for (const key in out) {
     if (key === '$schema' || key === 'additionalProperties') {
       delete out[key];
       continue;
     }
-    if (typeof out[key] === 'object') {
-      out[key] = cleanSchema(out[key]);
+    if (typeof out[key] === 'object' && out[key] !== null) {
+      out[key] = cleanSchema(out[key] as JSONSchema);
     }
     // Zod nullish() and picoschema optional fields will produce type `["string", "null"]`
     // which is not supported by the model API. Convert them to just `"string"`.
@@ -345,6 +365,258 @@ export function cleanSchema(schema: JSONSchema): JSONSchema {
     }
   }
   return out;
+}
+
+export function interactionProcessStream(
+  response: Response
+): InteractionStreamResult {
+  if (!response.body) {
+    throw new Error('Error processing stream because response.body not found');
+  }
+  const inputStream = response.body.pipeThrough(
+    new TextDecoderStream('utf8', { fatal: true })
+  );
+  const responseStream = getInteractionResponseStream(inputStream);
+  const [stream1, stream2] = responseStream.tee();
+  return {
+    stream: generateInteractionResponseSequence(stream1),
+    response: getInteractionResponsePromise(stream2),
+  };
+}
+
+function getInteractionResponseStream(
+  inputStream: ReadableStream<string>
+): ReadableStream<InteractionSseEvent> {
+  const reader = inputStream.getReader();
+  const stream = new ReadableStream<InteractionSseEvent>({
+    start(controller) {
+      let currentText = '';
+      return pump();
+      function pump(): Promise<(() => Promise<void>) | undefined> {
+        return reader
+          .read()
+          .then(({ value, done }) => {
+            if (done) {
+              reader.releaseLock();
+              if (currentText.trim()) {
+                controller.error(new Error('Failed to parse stream'));
+                return;
+              }
+              controller.close();
+              return;
+            }
+
+            currentText += value;
+
+            while (true) {
+              const doubleNewline = currentText.indexOf('\n\n');
+              const doubleReturn = currentText.indexOf('\r\r');
+              const doubleReturnNewline = currentText.indexOf('\r\n\r\n');
+
+              let endIndex = -1;
+              let skip = 2;
+              if (
+                doubleReturnNewline !== -1 &&
+                (endIndex === -1 || doubleReturnNewline < endIndex)
+              ) {
+                endIndex = doubleReturnNewline;
+                skip = 4;
+              }
+              if (
+                doubleNewline !== -1 &&
+                (endIndex === -1 || doubleNewline < endIndex)
+              ) {
+                endIndex = doubleNewline;
+                skip = 2;
+              }
+              if (
+                doubleReturn !== -1 &&
+                (endIndex === -1 || doubleReturn < endIndex)
+              ) {
+                endIndex = doubleReturn;
+                skip = 2;
+              }
+
+              if (endIndex === -1) {
+                break; // Need more data
+              }
+
+              const block = currentText.substring(0, endIndex);
+              currentText = currentText.substring(endIndex + skip);
+
+              const lines = block.split(/\r\n|\r|\n/);
+              let dataText = '';
+
+              for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                  dataText += line.substring(6);
+                } else if (line.startsWith('data:')) {
+                  dataText += line.substring(5);
+                }
+              }
+
+              if (dataText === '[DONE]') {
+                continue;
+              }
+
+              if (dataText) {
+                try {
+                  const parsed = JSON.parse(dataText) as InteractionSseEvent;
+                  controller.enqueue(parsed);
+                } catch (e) {
+                  reader.releaseLock();
+                  controller.error(
+                    new Error(`Error parsing JSON response: "${dataText}"`)
+                  );
+                  return;
+                }
+              }
+            }
+            return pump();
+          })
+          .catch((e: Error) => {
+            reader.releaseLock();
+            let err = e;
+            err.stack = e.stack;
+            if (err.name === 'AbortError') {
+              err = new GenkitError({
+                status: 'ABORTED',
+                message: 'Request aborted when reading from the stream',
+              });
+            } else {
+              err = new Error('Error reading from the stream');
+            }
+            throw err;
+          });
+      }
+    },
+    cancel() {
+      reader.cancel().catch(() => {});
+    },
+  });
+  return stream;
+}
+
+async function* generateInteractionResponseSequence(
+  stream: ReadableStream<InteractionSseEvent>
+): AsyncGenerator<InteractionSseEvent> {
+  const reader = stream.getReader();
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      yield value;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function getInteractionResponsePromise(
+  stream: ReadableStream<InteractionSseEvent>
+): Promise<GeminiInteraction> {
+  let interaction: GeminiInteraction = {};
+  const partialArgumentsMap = new Map<number, string>();
+  const reader = stream.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return interaction;
+      }
+
+      if (value.event_type === 'error') {
+        throw new GenkitError({
+          status: 'INTERNAL',
+          message: `Interaction API returned an error: [${value.error?.code}] ${value.error?.message}`,
+        });
+      }
+
+      if (
+        value.event_type === 'interaction.created' ||
+        value.event_type === 'interaction.completed'
+      ) {
+        Object.assign(interaction, value.interaction);
+      } else if (value.event_type === 'interaction.status_update') {
+        interaction.status = value.status;
+      } else if (value.event_type === 'step.start') {
+        if (!interaction.steps) interaction.steps = [];
+        interaction.steps[value.index] = value.step;
+      } else if (value.event_type === 'step.delta') {
+        if (!interaction.steps) interaction.steps = [];
+        const step = interaction.steps[value.index];
+        if (step) {
+          if (
+            step.type === 'model_output' ||
+            step.type === 'user_input' ||
+            step.type === 'thought'
+          ) {
+            const contentArray =
+              step.type === 'thought' ? step.summary : step.content;
+            if (!contentArray) {
+              if (step.type === 'thought') step.summary = [];
+              else step.content = [];
+            }
+            const arr = (
+              step.type === 'thought' ? step.summary : step.content
+            )!;
+
+            if (value.delta.type === 'text') {
+              arr.push({ type: 'text', text: value.delta.text });
+            } else if (
+              value.delta.type === 'thought_summary' &&
+              value.delta.content
+            ) {
+              arr.push(value.delta.content);
+            } else if (value.delta.type === 'thought_signature') {
+              if (step.type === 'thought') {
+                step.signature = value.delta.signature;
+              }
+            } else if (value.delta.type === 'function_call') {
+              // A function call that is part of the content array
+              arr.push({
+                type: 'function_call',
+                name: value.delta.name,
+                id: value.delta.id,
+                arguments: value.delta.arguments,
+              });
+            }
+          } else if (step.type === 'function_call') {
+            if (value.delta.type === 'arguments_delta') {
+              const existing = partialArgumentsMap.get(value.index) || '';
+              partialArgumentsMap.set(
+                value.index,
+                existing + (value.delta.arguments || '')
+              );
+            }
+          }
+        }
+      } else if (value.event_type === 'step.stop') {
+        // If we had partial arguments for this step, parse them and update the function call arguments
+        if (partialArgumentsMap.has(value.index)) {
+          const step = interaction.steps?.[value.index];
+          if (step && step.type === 'function_call') {
+            try {
+              const argStr = partialArgumentsMap.get(value.index);
+              if (argStr) {
+                step.arguments = JSON.parse(argStr);
+              }
+            } catch (e) {
+              console.warn(
+                'Failed to parse partial arguments JSON for function call:',
+                e
+              );
+            }
+          }
+          partialArgumentsMap.delete(value.index);
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 /**

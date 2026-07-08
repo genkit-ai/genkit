@@ -116,12 +116,23 @@ const GENERIC_MODEL = commonRef('imagen', {
   },
 });
 
+const DEPRECATED_MODELS = {
+  // When models are < 1 month from shutdown, move them here instead.
+  // They will still be instatiated with the correct options,
+  // but they will no longer appear in autocomplete suggestions.
+};
+
 const KNOWN_MODELS = {
   'imagen-4.0-fast-generate-001': commonRef('imagen-4.0-fast-generate-001'),
   'imagen-4.0-generate-001': commonRef('imagen-4.0-generate-001'),
   'imagen-4.0-ultra-generate-001': commonRef('imagen-4.0-ultra-generate-001'),
 } as const;
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
+
+const ALL_MODELS = {
+  ...DEPRECATED_MODELS,
+  ...KNOWN_MODELS,
+};
 
 // For conditional types in index.ts model()
 export type ImagenModelName = `imagen-${string}`;
@@ -135,8 +146,8 @@ export function model(
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
-  if (isKnownKey(name, KNOWN_MODELS)) {
-    return KNOWN_MODELS[name].withConfig(config);
+  if (isKnownKey(name, ALL_MODELS)) {
+    return ALL_MODELS[name].withConfig(config);
   }
 
   return modelRef({
@@ -168,7 +179,7 @@ export function listActions(models: Model[]): ActionMetadata[] {
 }
 
 export function listKnownModels(options?: GoogleAIPluginOptions) {
-  return Object.keys(KNOWN_MODELS).map((name: string) =>
+  return Object.keys(ALL_MODELS).map((name: string) =>
     defineModel(name, options)
   );
 }
