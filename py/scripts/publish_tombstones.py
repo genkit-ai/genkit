@@ -163,7 +163,10 @@ if not __all__:
 for _name in __all__:
     globals()[_name] = getattr(_mod, _name)
 
-del _mod, _name
+# A private-only module (e.g. constants with just _FOO) leaves __all__ empty, so
+# the loop never binds _name. Pop it defensively so the shim never dies on import.
+globals().pop('_name', None)
+del _mod
 """
 
 
