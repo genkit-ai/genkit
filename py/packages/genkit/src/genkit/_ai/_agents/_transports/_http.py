@@ -125,8 +125,13 @@ class HttpAgentTransport(AgentTransport[StateT]):
                         )
 
                     async for line in response.aiter_lines():
-                        if not line.strip():
+                        line = line.strip()
+                        if not line or line.startswith(':'):
                             continue
+                        if line.startswith('data: '):
+                            line = line[6:].strip()
+                        elif line.startswith('error: '):
+                            line = line[7:].strip()
 
                         data = json.loads(line)
                         if 'result' in data:
@@ -136,7 +141,10 @@ class HttpAgentTransport(AgentTransport[StateT]):
                             break
                         if 'error' in data:
                             raise RuntimeError(f'Agent execution error: {data["error"]}')
-                        chunk = AgentStreamChunk.model_validate(data)
+                        if 'message' in data and isinstance(data['message'], dict):
+                            chunk = AgentStreamChunk.model_validate(data['message'])
+                        else:
+                            chunk = AgentStreamChunk.model_validate(data)
                         stream_queue.put_nowait(chunk)
                     else:
                         err = GenkitError(
