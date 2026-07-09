@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from datetime import datetime, timezone
 from typing import Any, Generic, TypeVar
 
 from google.cloud import firestore
@@ -175,13 +174,22 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
 
     async def _maybe_update_pointer(self, session_id: str, snapshot_id: str, *, is_new: bool) -> None:
         ref = self._pointer_ref(session_id)
-        existing = await ref.get()
-        pointer = existing.to_dict() if existing.exists else None
-        if is_new or not pointer or pointer.get('currentSnapshotId') == snapshot_id:
-            await ref.set({
-                'currentSnapshotId': snapshot_id,
-                'updatedAt': datetime.now(timezone.utc).isoformat(),
-            })
+        transaction = self._client.transaction()
+
+        @firestore.async_transactional
+        async def update_in_transaction(transaction: Any) -> None:  # noqa: ANN401
+            snapshot = await ref.get(transaction=transaction)
+            pointer = snapshot.to_dict() if snapshot.exists else None
+            if is_new or not pointer or pointer.get('currentSnapshotId') == snapshot_id:
+                transaction.set(
+                    ref,
+                    {
+                        'currentSnapshotId': snapshot_id,
+                        'updatedAt': firestore.SERVER_TIMESTAMP,
+                    },
+                )
+
+        await update_in_transaction(transaction)
 
     async def _list_session_snapshots(self, session_id: str) -> list[SessionSnapshot]:
         snaps: list[SessionSnapshot] = []
@@ -194,10 +202,23 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
 
     def _start_listener(self, snapshot_id: str) -> None:
         ref = self._snapshot_ref(snapshot_id)
+        if not hasattr(ref, 'on_snapshot'):
+            sync_client = firestore.Client(
+                project=self._client.project,
+                credentials=getattr(self._client, '_credentials', None),
+                database=getattr(self._client, '_database', getattr(self._client, 'database', None)),
+            )
+            prefix = self._prefix_fn()
+            ref = (
+                sync_client.collection(self._collection).document(prefix).collection('snapshots').document(snapshot_id)
+            )
         loop = asyncio.get_event_loop()
         watch_holder: list[Any] = []
 
-        def on_snapshot(doc_snapshot: Any) -> None:  # noqa: ANN401
+        def on_snapshot(doc_snapshots: list[Any], changes: Any, read_time: Any) -> None:  # noqa: ANN401
+            if not doc_snapshots:
+                return
+            doc_snapshot = doc_snapshots[0]
             status = _status_from_doc(doc_snapshot)
             if status is None:
                 return

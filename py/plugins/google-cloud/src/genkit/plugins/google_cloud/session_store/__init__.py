@@ -3,6 +3,6 @@
 
 """Firestore session store module for Google Cloud plugin."""
 
-from genkit.plugins.google_cloud.session_store.firestore import FirestoreSessionStore
+from .firestore import FirestoreSessionStore
 
 __all__ = ['FirestoreSessionStore']

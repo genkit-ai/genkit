@@ -17,6 +17,13 @@ from genkit._core._typing import SessionSnapshot, SnapshotStatus
 async def test_firestore_session_store_save_and_get() -> None:
     """Test saving and getting a session snapshot using a mock Firestore client."""
     mock_client = MagicMock()
+    mock_transaction = MagicMock()
+    mock_transaction._max_attempts = 1
+    mock_transaction._read_only = False
+    mock_transaction._begin = AsyncMock()
+    mock_transaction._commit = AsyncMock()
+    mock_transaction._rollback = AsyncMock()
+    mock_client.transaction.return_value = mock_transaction
     mock_doc_snapshot = MagicMock()
 
     mock_doc_ref = MagicMock()
@@ -59,6 +66,7 @@ async def test_firestore_session_store_save_and_get() -> None:
     assert saved.session_id == 'sess-456'
     assert isinstance(saved.snapshot_id, str)
     mock_doc_ref.set.assert_called()
+    mock_transaction.set.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -105,7 +113,7 @@ async def test_firestore_session_store_status_change_and_cleanup() -> None:
         'status': 'aborted',
     }
 
-    captured_cb[0](terminal_doc)
+    captured_cb[0]([terminal_doc], None, None)
     await asyncio.sleep(0.05)
 
     assert await queue.get() == SnapshotStatus.ABORTED
