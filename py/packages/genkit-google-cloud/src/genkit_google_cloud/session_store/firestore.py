@@ -153,7 +153,8 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 )
 
             await self.write_snapshot(next_snapshot)
-            await self.maybe_update_pointer(session_id, sid, is_new=existing is None)
+            parent_id = snapshot_id if snapshot_id is not None else getattr(next_snapshot, 'parent_id', None)
+            await self.maybe_update_pointer(session_id, sid, parent_snapshot_id=parent_id)
             notify(self.subs, sid, next_snapshot.status)
             return next_snapshot
 
@@ -164,7 +165,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             is_first = snapshot_id not in self.subs
             q = await subscribe(self.subs, snapshot_id, current)
             # Firestore listener keeps cross-instance abort working for detached turns.
-            if is_first:
+            if is_first and (current is None or current.status not in TERMINAL_STATUSES):
                 try:
                     self.start_listener(snapshot_id)
                 except Exception:
@@ -193,7 +194,13 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         current = (doc.to_dict() or {}).get('currentSnapshotId')
         return current if isinstance(current, str) else None
 
-    async def maybe_update_pointer(self, session_id: str, snapshot_id: str, *, is_new: bool) -> None:
+    async def maybe_update_pointer(
+        self,
+        session_id: str,
+        snapshot_id: str,
+        *,
+        parent_snapshot_id: str | None,
+    ) -> None:
         """Atomically update the session pointer to the given snapshot ID."""
         ref = self.pointer_ref(session_id)
         transaction = self.client.transaction()
@@ -202,7 +209,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         async def update_in_transaction(transaction: Any) -> None:  # noqa: ANN401
             snapshot = await ref.get(transaction=transaction)
             pointer = snapshot.to_dict() if snapshot.exists else None
-            if is_new or not pointer or pointer.get('currentSnapshotId') == snapshot_id:
+            if parent_snapshot_id is None or not pointer or pointer.get('currentSnapshotId') == parent_snapshot_id:
                 transaction.set(
                     ref,
                     {
