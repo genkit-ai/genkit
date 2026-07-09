@@ -18,10 +18,10 @@
   "type": "commonjs",
   "scripts": {
     "check": "tsc",
-    "compile": "tsup-node",
+    "compile": "node ../../scripts/tsc-build.mjs",
     "build:clean": "rimraf ./lib",
     "build": "npm-run-all build:clean check compile",
-    "build:watch": "tsup-node --watch",
+    "build:watch": "node ../../scripts/tsc-build.mjs --watch",
     "test": "jest --verbose"
   },
   "repository": {
@@ -50,9 +50,8 @@
     "rimraf": "^6.0.1",
     "jest": "^29.7.0",
     "ts-jest": "^29.1.2",
-    "tsup": "^8.3.5",
     "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   },
   "types": "./lib/index.d.ts",
   "exports": {

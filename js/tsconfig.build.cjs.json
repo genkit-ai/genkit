@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "noEmit": false,
+    "noCheck": true,
+    "declaration": true,
+    "sourceMap": true,
+    "module": "node16",
+    "moduleResolution": "node16"
+  }
+}

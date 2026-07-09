@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "noEmit": false,
+    "noCheck": true,
+    "declaration": true,
+    "sourceMap": true,
+    "module": "esnext",
+    "moduleResolution": "bundler"
+  }
+}
