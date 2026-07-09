@@ -88,9 +88,16 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         self.collection = collection
         self.prefix_fn = snapshot_path_prefix or (lambda: DEFAULT_PREFIX)
         self.reject_ambiguous = reject_ambiguous_session
-        self.lock = asyncio.Lock()
+        self._lock_obj: asyncio.Lock | None = None
         self.subs: Subs = {}
         self.sync_client: firestore.Client | None = None
+
+    @property
+    def lock(self) -> asyncio.Lock:
+        """Return the async lock, lazily initializing it in the current event loop."""
+        if self._lock_obj is None:
+            self._lock_obj = asyncio.Lock()
+        return self._lock_obj
 
     def snapshots_col(self) -> Any:  # noqa: ANN401
         """Return the Firestore collection reference for snapshots."""
@@ -158,7 +165,11 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             q = await subscribe(self.subs, snapshot_id, current)
             # Firestore listener keeps cross-instance abort working for detached turns.
             if is_first:
-                self.start_listener(snapshot_id)
+                try:
+                    self.start_listener(snapshot_id)
+                except Exception:
+                    self.subs.pop(snapshot_id, None)
+                    raise
         return q
 
     async def read_snapshot(self, snapshot_id: str) -> SessionSnapshot | None:
