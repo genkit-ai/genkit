@@ -198,14 +198,18 @@ resp, err := genkit.Generate(ctx, g,
 ## Embedding Models
 
 You can define and use text embedding models hosted on Ollama (e.g., `nomic-embed-text`).
+`dimensions` is required and should match the model's embedding size. The embedder is
+retrieved by model name.
+
+Note: Existing callers should replace server-address lookups with model-name lookups and pass dimensions to `DefineEmbedder`
 
 ### Defining an Embedder
 
 ```go
 // Define an embedder model
-o.DefineEmbedder(g, "http://localhost:11434", "nomic-embed-text", nil)
+o.DefineEmbedder(g, "nomic-embed-text", 768, nil)
 
-embedder := ollama.Embedder(g, "http://localhost:11434")
+embedder := ollama.Embedder(g, "nomic-embed-text")
 ```
 
 ### Usage

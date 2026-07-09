@@ -19,13 +19,13 @@
 from typing import cast
 
 from flask import Flask
+from genkit_flask import genkit_flask_handler
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
 from genkit import Genkit, ModelResponse
 from genkit._core._action import ActionRunContext
 from genkit._core._context import RequestData
-from genkit.plugins.flask import genkit_flask_handler
-from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],

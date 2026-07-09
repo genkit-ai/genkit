@@ -19,6 +19,8 @@
 import os
 from pathlib import Path
 
+from genkit_evaluators import register_genkit_evaluators
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
 from genkit import Genkit
@@ -29,8 +31,6 @@ from genkit.evaluator import (
     EvalStatusEnum,
     Score,
 )
-from genkit.plugins.evaluators import register_genkit_evaluators
-from genkit.plugins.google_genai import GoogleAI
 
 # Setup
 prompts_path = Path(__file__).resolve().parent.parent / 'prompts'

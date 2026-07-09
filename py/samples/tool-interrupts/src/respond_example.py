@@ -27,6 +27,7 @@ Run: ``uv run src/respond_example.py``. See README.md.
 
 from pathlib import Path
 
+from genkit_google_genai import GoogleAI  # pyright: ignore[reportMissingImports]
 from pydantic import BaseModel, Field
 
 from genkit import (
@@ -35,7 +36,6 @@ from genkit import (
     respond_to_interrupt,
 )
 from genkit.model import ModelResponse
-from genkit.plugins.google_genai import GoogleAI  # pyright: ignore[reportMissingImports]
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / 'prompts'
 

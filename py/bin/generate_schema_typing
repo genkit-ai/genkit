@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Generates py/packages/genkit/src/genkit/_core/_typing.py from the JSON schema
-# using our custom generator (py/tools/schema_to_typing/schema_to_typing.py).
+# using our custom generator (py/scripts/schema_to_typing.py).
 #
 # Usage: ./py/bin/generate_schema_typing [--ci]
 #   --ci  Fail if the generated file differs from the committed one.
@@ -23,7 +23,7 @@ done
 TOP_DIR=$(git rev-parse --show-toplevel)
 SCHEMA_FILE="${TOP_DIR}/genkit-tools/genkit-schema.json"
 TYPING_FILE="${TOP_DIR}/py/packages/genkit/src/genkit/_core/_typing.py"
-GENERATOR="${TOP_DIR}/py/tools/schema_to_typing/schema_to_typing.py"
+GENERATOR="${TOP_DIR}/py/scripts/schema_to_typing.py"
 
 if [[ $CI_ENABLED == "true" ]] && [[ -f $TYPING_FILE ]]; then
   BACKUP_FILE="${TYPING_FILE}.backup"
@@ -32,9 +32,15 @@ fi
 
 python3 "$GENERATOR" "$SCHEMA_FILE" "$TYPING_FILE"
 
-uv run --active --directory "${TOP_DIR}/py" ruff format "$TYPING_FILE"
-uv run --active --directory "${TOP_DIR}/py" ruff check --fix "$TYPING_FILE"
-uv run --active --directory "${TOP_DIR}/py" ruff format "$TYPING_FILE"
+if [[ -x "${TOP_DIR}/py/.venv/bin/ruff" ]]; then
+  RUFF="${TOP_DIR}/py/.venv/bin/ruff"
+else
+  RUFF="uv run --directory ${TOP_DIR}/py ruff"
+fi
+
+$RUFF format "$TYPING_FILE"
+$RUFF check --fix "$TYPING_FILE"
+$RUFF format "$TYPING_FILE"
 
 if [[ $CI_ENABLED == "true" ]] && [[ -f ${BACKUP_FILE:-} ]]; then
   if ! diff -q "$BACKUP_FILE" "$TYPING_FILE" >/dev/null; then

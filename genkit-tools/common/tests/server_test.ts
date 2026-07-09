@@ -26,6 +26,7 @@ import axios from 'axios';
 import getPort from 'get-port';
 import { BaseRuntimeManager } from '../src/manager/manager';
 import { startServer } from '../src/server/server';
+import * as analytics from '../src/utils/analytics';
 
 describe('Tools Server', () => {
   let port: number;
@@ -161,5 +162,354 @@ describe('Tools Server', () => {
     const output = outputChunks.join('');
     expect(output).toContain('chunk1');
     expect(output).toContain('done');
+  });
+
+  describe('analytics events', () => {
+    let recordSpy: jest.Spied<typeof analytics.recordRequestEvent>;
+
+    beforeEach(() => {
+      recordSpy = jest
+        .spyOn(analytics, 'recordRequestEvent')
+        .mockImplementation(() => {});
+      jest.spyOn(analytics, 'record').mockImplementation(async () => {});
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('should record analytics event for runAction with valid string key', async () => {
+      mockManager.runAction.mockResolvedValue({ result: 'bar' });
+
+      await axios.post(`http://localhost:${port}/api/runAction`, {
+        key: '/flow/foo',
+        input: 'bar',
+      });
+
+      expect(recordSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'tools_request',
+          parameters: expect.objectContaining({
+            route: 'runAction',
+            action: 'flow',
+            status: 'success',
+          }),
+        })
+      );
+    });
+
+    it('should record analytics event for runAction with non-string key as unknown action', async () => {
+      mockManager.runAction.mockResolvedValue({ result: 'bar' });
+
+      await axios.post(`http://localhost:${port}/api/runAction`, {
+        key: 123,
+        input: 'bar',
+      });
+
+      expect(recordSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'tools_request',
+          parameters: expect.objectContaining({
+            route: 'runAction',
+            action: 'unknown',
+            status: 'success',
+          }),
+        })
+      );
+    });
+
+    it('should record analytics event with full path specifically for /util/generate while splitting other util actions', async () => {
+      mockManager.runAction.mockResolvedValue({ result: 'bar' });
+
+      await axios.post(`http://localhost:${port}/api/runAction`, {
+        key: '/util/generate',
+        input: 'bar',
+      });
+
+      expect(recordSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'tools_request',
+          parameters: expect.objectContaining({
+            route: 'runAction',
+            action: '/util/generate',
+            status: 'success',
+          }),
+        })
+      );
+
+      await axios.post(`http://localhost:${port}/api/runAction`, {
+        key: '/util/other',
+        input: 'bar',
+      });
+
+      expect(recordSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'tools_request',
+          parameters: expect.objectContaining({
+            route: 'runAction',
+            action: 'util',
+            status: 'success',
+          }),
+        })
+      );
+    });
+
+    it('should record analytics event for streamTrace', async () => {
+      mockManager.streamTrace.mockImplementation(
+        async (_opts: any, cb: any) => {
+          cb({ traceId: 'test-trace' });
+        }
+      );
+      await axios.post(`http://localhost:${port}/api/streamTrace`, {
+        traceId: 'test-trace',
+      });
+      expect(recordSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'tools_request',
+          parameters: expect.objectContaining({
+            route: 'streamTrace',
+            status: 'success',
+          }),
+        })
+      );
+    });
+
+    it('should record failure analytics event for sendBidiInput when stream is not found', async () => {
+      await axios.post(
+        `http://localhost:${port}/api/sendBidiInput`,
+        {
+          traceId: 'non-existent',
+          chunk: 'test',
+        },
+        { validateStatus: () => true }
+      );
+      expect(recordSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'tools_request',
+          parameters: expect.objectContaining({
+            route: 'sendBidiInput',
+            status: 'failure',
+          }),
+        })
+      );
+    });
+
+    it('should record failure analytics event for endBidiInput when stream is not found', async () => {
+      await axios.post(
+        `http://localhost:${port}/api/endBidiInput`,
+        {
+          traceId: 'non-existent',
+        },
+        { validateStatus: () => true }
+      );
+      expect(recordSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'tools_request',
+          parameters: expect.objectContaining({
+            route: 'endBidiInput',
+            status: 'failure',
+          }),
+        })
+      );
+    });
+
+    it('should record failure analytics event for runAction when action fails', async () => {
+      mockManager.runAction.mockRejectedValue({
+        data: { message: 'Action failed' },
+      });
+
+      await axios.post(
+        `http://localhost:${port}/api/runAction`,
+        { key: '/flow/foo', input: 'bar' },
+        { validateStatus: () => true }
+      );
+
+      expect(recordSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'tools_request',
+          parameters: expect.objectContaining({
+            route: 'runAction',
+            action: 'flow',
+            status: 'failure',
+          }),
+        })
+      );
+    });
+
+    it('should record success analytics event for streamAction', async () => {
+      mockManager.runAction.mockImplementation(async (_input: any, cb: any) => {
+        if (cb) cb({ result: 'chunk' });
+        return { result: 'done' };
+      });
+
+      await axios.post(
+        `http://localhost:${port}/api/streamAction`,
+        { key: '/flow/foo', input: 'bar' },
+        { responseType: 'stream' }
+      );
+
+      expect(recordSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'tools_request',
+          parameters: expect.objectContaining({
+            route: 'streamAction',
+            action: 'flow',
+            status: 'success',
+          }),
+        })
+      );
+    });
+
+    it('should record failure analytics event for streamAction on error', async () => {
+      mockManager.runAction.mockRejectedValue({
+        data: { message: 'Stream error' },
+      });
+
+      await axios.post(
+        `http://localhost:${port}/api/streamAction`,
+        { key: '/flow/foo', input: 'bar' },
+        { validateStatus: () => true }
+      );
+
+      expect(recordSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'tools_request',
+          parameters: expect.objectContaining({
+            route: 'streamAction',
+            action: 'flow',
+            status: 'failure',
+          }),
+        })
+      );
+    });
+
+    it('should record success analytics event for sendBidiInput when stream exists', async () => {
+      let inputStream: AsyncIterable<any> | undefined;
+      let finishAction: (() => void) | undefined;
+
+      mockManager.runAction.mockImplementation(
+        async (_input: any, _cb: any, onTraceId: any, stream: any) => {
+          inputStream = stream;
+          if (onTraceId) onTraceId('bidi-send-trace-id');
+          await new Promise<void>((resolve) => {
+            finishAction = resolve;
+          });
+          return { result: 'done' };
+        }
+      );
+
+      const streamActionPromise = axios.post(
+        `http://localhost:${port}/api/streamAction?bidi=true`,
+        { key: '/flow/bidiFlow' },
+        { responseType: 'stream' }
+      );
+
+      while (!inputStream) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      await axios.post(`http://localhost:${port}/api/sendBidiInput`, {
+        traceId: 'bidi-send-trace-id',
+        chunk: 'hello',
+      });
+
+      expect(recordSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'tools_request',
+          parameters: expect.objectContaining({
+            route: 'sendBidiInput',
+            status: 'success',
+          }),
+        })
+      );
+
+      await axios
+        .post(`http://localhost:${port}/api/endBidiInput`, {
+          traceId: 'bidi-send-trace-id',
+        })
+        .catch(() => {});
+      if (finishAction) finishAction();
+      await streamActionPromise.catch(() => {});
+    });
+
+    it('should record success analytics event for endBidiInput when stream exists', async () => {
+      let inputStream: AsyncIterable<any> | undefined;
+      let finishAction: (() => void) | undefined;
+
+      mockManager.runAction.mockImplementation(
+        async (_input: any, _cb: any, onTraceId: any, stream: any) => {
+          inputStream = stream;
+          if (onTraceId) onTraceId('bidi-end-trace-id');
+          await new Promise<void>((resolve) => {
+            finishAction = resolve;
+          });
+          return { result: 'done' };
+        }
+      );
+
+      const streamActionPromise = axios.post(
+        `http://localhost:${port}/api/streamAction?bidi=true`,
+        { key: '/flow/bidiFlow' },
+        { responseType: 'stream' }
+      );
+
+      while (!inputStream) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      await axios.post(`http://localhost:${port}/api/endBidiInput`, {
+        traceId: 'bidi-end-trace-id',
+      });
+
+      expect(recordSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'tools_request',
+          parameters: expect.objectContaining({
+            route: 'endBidiInput',
+            status: 'success',
+          }),
+        })
+      );
+
+      if (finishAction) finishAction();
+      await streamActionPromise.catch(() => {});
+    });
+
+    it('should record failure analytics event for streamTrace when traceId is missing or stream throws', async () => {
+      await axios.post(
+        `http://localhost:${port}/api/streamTrace`,
+        {},
+        { validateStatus: () => true }
+      );
+
+      expect(recordSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'tools_request',
+          parameters: expect.objectContaining({
+            route: 'streamTrace',
+            status: 'failure',
+          }),
+        })
+      );
+
+      mockManager.streamTrace.mockRejectedValue({
+        data: { message: 'Trace not found' },
+      });
+      await axios.post(
+        `http://localhost:${port}/api/streamTrace`,
+        { traceId: 'bad-trace' },
+        { validateStatus: () => true }
+      );
+
+      expect(recordSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'tools_request',
+          parameters: expect.objectContaining({
+            route: 'streamTrace',
+            status: 'failure',
+          }),
+        })
+      );
+    });
   });
 });

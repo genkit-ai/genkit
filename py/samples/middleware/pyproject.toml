@@ -4,8 +4,8 @@ version = "0.2.0"
 requires-python = ">=3.10"
 dependencies = [
   "genkit",
-  "genkit-plugin-google-genai",
-  "genkit-plugin-middleware",
+  "genkit-google-genai",
+  "genkit-middleware",
   "pydantic>=2.0.0",
   "structlog>=24.0.0",
 ]

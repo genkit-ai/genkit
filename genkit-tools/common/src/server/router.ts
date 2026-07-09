@@ -31,8 +31,12 @@ import { CancelActionRequestSchema } from '../types/apis';
 import type { EnvironmentVariable } from '../types/env';
 import * as evals from '../types/eval';
 import type { PromptFrontmatter } from '../types/prompt';
-import { logger } from '../utils';
-import { PageViewEvent, ToolsRequestEvent, record } from '../utils/analytics';
+import {
+  PageViewEvent,
+  createToolsRequestEvent,
+  record,
+  recordRequestEvent,
+} from '../utils/analytics';
 import { toolsPackage } from '../utils/package';
 import { fromMessages } from '../utils/prompt';
 
@@ -55,31 +59,10 @@ const t = initTRPC.create({
 
 const analyticsEventForRoute = (
   path: string,
-  input: unknown,
   durationMs: number,
   status: string
 ) => {
-  const event = new ToolsRequestEvent(path);
-  event.duration = durationMs;
-  event.parameters = {
-    ...event.parameters,
-    status,
-  };
-
-  switch (path) {
-    case 'runAction':
-      // set action type (flow, model, etc...)
-      const splits = (input as apis.RunActionRequest).key?.split('/');
-      event.parameters = {
-        ...event.parameters,
-        action: splits.length > 1 ? splits[1] : 'unknown',
-      };
-      break;
-    default:
-    // do nothing
-  }
-
-  return event;
+  return createToolsRequestEvent(path, durationMs, status);
 };
 
 const parseEnv = (environ: NodeJS.ProcessEnv): EnvironmentVariable[] => {
@@ -111,15 +94,11 @@ const loggedProcedure = t.procedure.use(async (opts) => {
 
   const analyticsEvent = analyticsEventForRoute(
     opts.path,
-    opts.rawInput,
     durationMs,
     result.ok ? 'success' : 'failure'
   );
 
-  // fire-and-forget
-  record(analyticsEvent).catch((err) => {
-    logger.error(`Failed to send analytics ${err}`);
-  });
+  recordRequestEvent(analyticsEvent);
 
   return result;
 });

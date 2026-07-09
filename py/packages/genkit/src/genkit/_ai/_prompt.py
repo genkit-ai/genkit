@@ -89,7 +89,7 @@ class OutputOptions(TypedDict, total=False):
 
     format: str | None
     content_type: str | None
-    instructions: str | None
+    instructions: bool | str | None
     schema: type | dict[str, Any] | str | None
     json_schema: dict[str, Any] | None
     constrained: bool | None
@@ -161,7 +161,7 @@ class ModelStreamResponse(Generic[OutputT]):
 
     @property
     def stream(self) -> AsyncIterable[ModelResponseChunk]:
-        """Get the async iterable of response chunks.
+        """Async iterable of response chunks.
 
         Returns:
             An async iterable that yields ModelResponseChunk objects
@@ -174,7 +174,7 @@ class ModelStreamResponse(Generic[OutputT]):
 
     @property
     def response(self) -> Awaitable[ModelResponse[OutputT]]:
-        """Get the awaitable for the complete response.
+        """Awaitable for the complete response.
 
         Returns:
             An awaitable that resolves to a ModelResponse containing:
@@ -219,7 +219,7 @@ class PromptConfig(BaseModel):
     messages: str | list[Message] | None = None
     output_format: str | None = None
     output_content_type: str | None = None
-    output_instructions: str | None = None
+    output_instructions: bool | str | None = None
     output_schema: type | dict[str, Any] | str | None = None
     output_constrained: bool | None = None
     max_turns: int | None = None
@@ -251,7 +251,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         messages: str | list[Message] | None = None,
         output_format: str | None = None,
         output_content_type: str | None = None,
-        output_instructions: str | None = None,
+        output_instructions: bool | str | None = None,
         output_schema: type | dict[str, Any] | str | None = None,
         output_constrained: bool | None = None,
         max_turns: int | None = None,
@@ -348,8 +348,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             input: Template variables for rendering.
             **opts: Runtime prompt options (e.g. model, tools, config).
         """
-        # ty doesn't infer Unpack[TD] as TD in function body (PEP 692 gap)
-        return await self._call_impl(input, opts)  # ty: ignore[invalid-argument-type]
+        return await self._call_impl(input, opts)  # type: ignore[arg-type]
 
     async def _call_impl(
         self,
@@ -446,8 +445,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
 
         Same keyword options as ``__call__`` (see PromptGenerateOptions).
         """
-        # ty treats **opts as a plain dict here; callers are still validated against PromptGenerateOptions.
-        call_opts: PromptGenerateOptions = opts  # ty: ignore[invalid-assignment]
+        call_opts: PromptGenerateOptions = opts  # type: ignore[assignment]
         _child_registry, gen_options = await _prepare(self, input, call_opts)
         return gen_options
 
@@ -1180,6 +1178,7 @@ def _transform_prompt_metadata(
             schema.pop('description', None)
 
     raw = md.get('raw')
+    raw_output = raw.get('output') if isinstance(raw, dict) and isinstance(raw.get('output'), dict) else {}
     raw_use = raw.get('use') if isinstance(raw, dict) else None
     parsed_use = _parse_dotprompt_use(raw_use)
 
@@ -1216,6 +1215,13 @@ def _transform_prompt_metadata(
         'output': {
             'jsonSchema': output.get('schema') if isinstance(output, dict) else None,
             'format': output.get('format') if isinstance(output, dict) else None,
+            # Fall back to raw YAML (raw_output) because dotpromptz's PromptOutputConfig
+            # does not define 'instructions', causing it to be dropped from 'output'.
+            'instructions': (
+                output.get('instructions')
+                if isinstance(output, dict) and 'instructions' in output
+                else (raw_output.get('instructions') if isinstance(raw_output, dict) else None)
+            ),
         },
         'input': {
             'default': input_cfg.get('default') if isinstance(input_cfg, dict) else None,
@@ -1273,6 +1279,7 @@ def load_prompt(registry: Registry, path: Path, filename: str, prefix: str = '',
             output_schema=metadata.get('output', {}).get('jsonSchema'),
             output_constrained=True if metadata.get('output', {}).get('jsonSchema') else None,
             output_format=metadata.get('output', {}).get('format'),
+            output_instructions=metadata.get('output', {}).get('instructions'),
             messages=metadata.get('messages'),
             max_turns=metadata.get('maxTurns'),
             tool_choice=metadata.get('toolChoice'),

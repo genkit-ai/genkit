@@ -78,7 +78,7 @@ sync:
 
 # Check workspace consistency (versions, naming, deps).
 check:
-    "{{ py_dir }}/bin/check_consistency"
+    python3 "{{ py_dir }}/scripts/check_consistency.py"
 
 # Check lockfile is up to date.
 check-lock:
