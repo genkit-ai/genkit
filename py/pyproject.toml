@@ -79,7 +79,6 @@ lint = [
   "strenum>=0.4.15",
   "streamlit>=1.41.0",
   "ty>=0.0.1",
-  "typos>=1.42.0",
   "fastapi>=0.115.0",
   "grpcio>=1.68.0",
   "grpcio-reflection>=1.68.0",
