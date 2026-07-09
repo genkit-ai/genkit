@@ -4187,10 +4187,18 @@ Now respond to the latest message.`,
             });
             // Message 2: the final assistant text, in two incremental deltas.
             sendChunk({
-              modelChunk: { role: 'model', index: 2, content: [{ text: "It's " }] },
+              modelChunk: {
+                role: 'model',
+                index: 2,
+                content: [{ text: "It's " }],
+              },
             });
             sendChunk({
-              modelChunk: { role: 'model', index: 2, content: [{ text: 'sunny' }] },
+              modelChunk: {
+                role: 'model',
+                index: 2,
+                content: [{ text: 'sunny' }],
+              },
             });
             return { finishReason: 'stop' as const };
           });
@@ -4342,4 +4350,3 @@ Now respond to the latest message.`,
     });
   });
 });
-

@@ -437,7 +437,10 @@ class MessageAssembler {
     this.lastIndex = index;
     let entry = this.byIndex.get(index);
     if (!entry) {
-      entry = { role: (chunk.role ?? 'model') as MessageData['role'], content: [] };
+      entry = {
+        role: (chunk.role ?? 'model') as MessageData['role'],
+        content: [],
+      };
       this.byIndex.set(index, entry);
       this.order.push(index);
     }
