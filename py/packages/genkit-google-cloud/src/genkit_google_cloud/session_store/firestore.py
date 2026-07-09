@@ -88,6 +88,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         self._reject_ambiguous = reject_ambiguous_session
         self._lock = asyncio.Lock()
         self._subs: Subs = {}
+        self._sync_client: firestore.Client | None = None
 
     def _snapshots_col(self) -> Any:  # noqa: ANN401
         prefix = self._prefix_fn()
@@ -203,16 +204,21 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
     def _start_listener(self, snapshot_id: str) -> None:
         ref = self._snapshot_ref(snapshot_id)
         if not hasattr(ref, 'on_snapshot'):
-            sync_client = firestore.Client(
-                project=self._client.project,
-                credentials=getattr(self._client, '_credentials', None),
-                database=getattr(self._client, '_database', getattr(self._client, 'database', None)),
-            )
+            if self._sync_client is None:
+                self._sync_client = firestore.Client(
+                    project=self._client.project,
+                    credentials=getattr(self._client, '_credentials', None),
+                    database=getattr(self._client, '_database', getattr(self._client, 'database', None)),
+                )
             prefix = self._prefix_fn()
             ref = (
-                sync_client.collection(self._collection).document(prefix).collection('snapshots').document(snapshot_id)
+                self._sync_client
+                .collection(self._collection)
+                .document(prefix)
+                .collection('snapshots')
+                .document(snapshot_id)
             )
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         watch_holder: list[Any] = []
 
         def on_snapshot(doc_snapshots: list[Any], changes: Any, read_time: Any) -> None:  # noqa: ANN401
