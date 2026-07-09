@@ -21,7 +21,7 @@ import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
 
-import { z } from '@genkit-ai/core';
+import { GenkitError, z } from '@genkit-ai/core';
 import { TestSpanExporter } from '../../core/tests/utils.js';
 import { AgentError } from '../src/agent-core.js';
 import {
@@ -2480,6 +2480,27 @@ describe('Agent', () => {
       assert.strictEqual(
         (actionResult as any).state.custom.secretField,
         undefined
+      );
+    });
+
+    it('should throw NOT_FOUND when getSnapshotDataAction is called with an invalid snapshotId', async () => {
+      const registry = new Registry();
+      const store = new InMemorySessionStore();
+      const flow = defineCustomAgent(
+        registry,
+        {
+          name: 'missingSnapshotTest',
+          store,
+        },
+        async () => ({
+          artifacts: [],
+          message: { role: 'model', content: [{ text: 'done' }] },
+        })
+      );
+
+      await assert.rejects(
+        () => flow.getSnapshotDataAction({ snapshotId: 'non-existent-id' }),
+        (err: any) => err instanceof GenkitError && err.status === 'NOT_FOUND'
       );
     });
 

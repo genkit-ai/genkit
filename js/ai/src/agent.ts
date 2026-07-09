@@ -1356,9 +1356,19 @@ export function defineCustomAgent<State = unknown>(
       description: `Gets snapshot data for ${config.name} by snapshotId or sessionId`,
       actionType: 'agent-snapshot',
       inputSchema: GetSnapshotRequestSchema,
-      outputSchema: SessionSnapshotSchema.optional(),
+      outputSchema: SessionSnapshotSchema,
     },
-    async (lookup) => resolveSnapshot({ ...lookup, context: getContext() })
+    async (lookup) => {
+      const snap = await resolveSnapshot({ ...lookup, context: getContext() });
+      if (!snap) {
+        const target = lookup.snapshotId || lookup.sessionId || 'unknown';
+        throw new GenkitError({
+          status: 'NOT_FOUND',
+          message: `Snapshot '${target}' not found for agent '${config.name}'.`,
+        });
+      }
+      return snap;
+    }
   );
 
   const abortAgentAction = defineAction(

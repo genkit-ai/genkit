@@ -14,16 +14,25 @@
  * limitations under the License.
  */
 
+import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import * as assert from 'assert';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { WebSocket, WebSocketServer } from 'ws';
 import { z } from 'zod';
 import { action, bidiAction } from '../src/action.js';
+import { GenkitError } from '../src/error.js';
 import { initNodeFeatures } from '../src/node.js';
 import { ReflectionServerV2 } from '../src/reflection-v2.js';
 import { Registry } from '../src/registry.js';
+import { enableTelemetry } from '../src/tracing.js';
+import { TestSpanExporter } from './utils.js';
 
 initNodeFeatures();
+const spanExporter = new TestSpanExporter();
+enableTelemetry({
+  exporter: spanExporter,
+  spanProcessor: new SimpleSpanProcessor(spanExporter),
+});
 
 describe('ReflectionServerV2', () => {
   let wss: WebSocketServer;
@@ -1274,6 +1283,71 @@ describe('ReflectionServerV2', () => {
               });
               clearTimeout(timeout);
               resolve();
+            }
+          } catch (e) {
+            clearTimeout(timeout);
+            reject(e);
+          }
+        });
+      });
+    });
+
+    server = new ReflectionServerV2(registry, {
+      url: `ws://localhost:${port}`,
+    });
+    await server.start();
+    await actionRun;
+  });
+
+  it('should return status code 5 when action throws GenkitError NOT_FOUND in Reflection v2', async () => {
+    registry.registerAction(
+      'custom',
+      action({ name: 'missingV2Action', actionType: 'custom' }, async () => {
+        throw new GenkitError({
+          status: 'NOT_FOUND',
+          message: 'Snapshot not found for v2 test',
+        });
+      })
+    );
+
+    const actionRun = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('timeout')), 2000);
+      wss.on('connection', (ws) => {
+        ws.on('message', (data) => {
+          try {
+            const msg = JSON.parse(data.toString());
+            if (msg.method === 'register') {
+              ws.send(
+                JSON.stringify({
+                  jsonrpc: '2.0',
+                  result: {},
+                  id: msg.id,
+                })
+              );
+              ws.send(
+                JSON.stringify({
+                  jsonrpc: '2.0',
+                  method: 'runAction',
+                  params: {
+                    key: '/custom/missingV2Action',
+                    input: {},
+                    stream: false,
+                  },
+                  id: 'missing-1',
+                })
+              );
+            } else if (msg.id === 'missing-1') {
+              if (msg.error) {
+                assert.strictEqual(msg.error.data.code, 5); // StatusCodes.NOT_FOUND === 5
+                assert.match(
+                  msg.error.message,
+                  /NOT_FOUND: Snapshot not found for v2 test/
+                );
+                clearTimeout(timeout);
+                resolve();
+              } else {
+                reject(new Error('expected error but got result'));
+              }
             }
           } catch (e) {
             clearTimeout(timeout);

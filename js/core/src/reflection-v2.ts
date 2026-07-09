@@ -15,7 +15,7 @@
  */
 
 import WebSocket from 'ws';
-import { StatusCodes, type Status } from './action.js';
+import { StatusCodes, statusNameToCode, type Status } from './action.js';
 import { Channel } from './async.js';
 import { GENKIT_REFLECTION_API_SPEC_VERSION, GENKIT_VERSION } from './index.js';
 import { logger } from './logging.js';
@@ -502,7 +502,9 @@ export class ReflectionServerV2 {
           err.name === 'AbortError');
 
       const errorResponse: Status = {
-        code: isAbort ? StatusCodes.CANCELLED : StatusCodes.INTERNAL,
+        code: isAbort
+          ? StatusCodes.CANCELLED
+          : (statusNameToCode(err?.status) ?? StatusCodes.INTERNAL),
         message: isAbort ? 'Action was cancelled' : err.message,
         details: {
           stack: err.stack,

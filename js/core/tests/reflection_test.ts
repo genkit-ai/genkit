@@ -14,12 +14,25 @@
  * limitations under the License.
  */
 
+import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import * as assert from 'assert';
 import getPort from 'get-port';
 import * as http from 'http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { action } from '../src/action.js';
+import { GenkitError } from '../src/error.js';
+import { initNodeFeatures } from '../src/node.js';
 import { ReflectionServer } from '../src/reflection.js';
 import { Registry } from '../src/registry.js';
+import { enableTelemetry } from '../src/tracing.js';
+import { TestSpanExporter } from './utils.js';
+
+initNodeFeatures();
+const spanExporter = new TestSpanExporter();
+enableTelemetry({
+  exporter: spanExporter,
+  spanProcessor: new SimpleSpanProcessor(spanExporter),
+});
 
 describe('ReflectionServer API', () => {
   let registry: Registry;
@@ -98,5 +111,66 @@ describe('ReflectionServer API', () => {
       mw1: { name: 'mw1', description: 'test mw1' },
       mw2: { name: 'mw2' },
     });
+  });
+
+  async function postApi(path: string, body: any) {
+    return new Promise<{ status: number; body: any }>((resolve, reject) => {
+      const payload = JSON.stringify(body);
+      const req = http.request(
+        `http://localhost:${port}${path}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
+          },
+        },
+        (res) => {
+          let data = '';
+          res.on('data', (chunk) => {
+            data += chunk;
+          });
+          res.on('end', () => {
+            try {
+              resolve({
+                status: res.statusCode || 200,
+                body: JSON.parse(data),
+              });
+            } catch (e) {
+              resolve({
+                status: res.statusCode || 200,
+                body: data,
+              });
+            }
+          });
+        }
+      );
+      req.on('error', reject);
+      req.write(payload);
+      req.end();
+    });
+  }
+
+  it('returns code 5 (NOT_FOUND) when an action throws NOT_FOUND via /api/runAction', async () => {
+    registry.registerAction(
+      'custom',
+      action({ name: 'missingAction', actionType: 'custom' }, async () => {
+        throw new GenkitError({
+          status: 'NOT_FOUND',
+          message: 'Snapshot not found for action test',
+        });
+      })
+    );
+
+    const res = await postApi('/api/runAction', {
+      key: '/custom/missingAction',
+      input: {},
+    });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.error.code, 5); // StatusCodes.NOT_FOUND === 5
+    assert.match(
+      res.body.error.message,
+      /NOT_FOUND: Snapshot not found for action test/
+    );
   });
 });

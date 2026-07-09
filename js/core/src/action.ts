@@ -32,7 +32,12 @@ import {
   setCustomMetadataAttributes,
 } from './tracing.js';
 
-export { StatusCodes, StatusSchema, type Status } from './statusTypes.js';
+export {
+  StatusCodes,
+  StatusSchema,
+  statusNameToCode,
+  type Status,
+} from './statusTypes.js';
 export { InMemoryStreamManager, StreamNotFoundError } from './streaming.js';
 export type {
   ActionStreamInput,
