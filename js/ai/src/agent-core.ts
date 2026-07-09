@@ -349,6 +349,118 @@ function toolRequestParts(parts?: Part[]): ToolRequestPart[] {
   return (parts ?? []).filter((p) => !!p.toolRequest) as ToolRequestPart[];
 }
 
+// ── Stream → message assembly helpers ──────────────────────────────────────
+
+/** A streamed model chunk (the `modelChunk` field of an {@link AgentStreamChunk}). */
+type ModelChunk = NonNullable<AgentStreamChunk['modelChunk']>;
+
+/**
+ * Returns `true` for a part that carries only streamed `text` (no tool
+ * request/response, media, data, or reasoning). Consecutive text-only parts are
+ * coalesced into a single part when assembling a message from stream chunks so
+ * the reconstructed message mirrors the server's stored, concatenated form.
+ */
+function isTextOnlyPart(part: Part): boolean {
+  return (
+    part.text !== undefined &&
+    part.reasoning === undefined &&
+    !part.toolRequest &&
+    !part.toolResponse &&
+    !part.media &&
+    part.data === undefined
+  );
+}
+
+/** As {@link isTextOnlyPart} but for `reasoning`-only parts. */
+function isReasoningOnlyPart(part: Part): boolean {
+  return (
+    part.reasoning !== undefined &&
+    part.text === undefined &&
+    !part.toolRequest &&
+    !part.toolResponse &&
+    !part.media &&
+    part.data === undefined
+  );
+}
+
+/**
+ * Merges incremental streamed `incoming` parts into an accumulating `existing`
+ * part list, coalescing consecutive text-only / reasoning-only deltas into a
+ * single part. Other parts (tool requests/responses, media, data) pass through
+ * unchanged.
+ */
+function mergeParts(existing: Part[], incoming: Part[]): Part[] {
+  const out = [...existing];
+  for (const part of incoming) {
+    const last = out[out.length - 1];
+    if (last && isTextOnlyPart(last) && isTextOnlyPart(part)) {
+      out[out.length - 1] = {
+        ...last,
+        text: (last.text ?? '') + part.text,
+      } as Part;
+    } else if (last && isReasoningOnlyPart(last) && isReasoningOnlyPart(part)) {
+      out[out.length - 1] = {
+        ...last,
+        reasoning: (last.reasoning ?? '') + part.reasoning,
+      } as Part;
+    } else {
+      out.push(part);
+    }
+  }
+  return out;
+}
+
+/**
+ * Reconstructs a turn's message list from its streamed `modelChunk` frames.
+ *
+ * Server-managed agents (with a store) return only the final response message
+ * on the wire; the intermediate messages a turn produces - the assistant
+ * message that issued tool requests, the `role: 'tool'` responses, reasoning -
+ * exist only as streamed chunks. Each chunk carries an `index` identifying the
+ * message it belongs to (bumped by the server when generation advances to a new
+ * message), so we bucket chunks by index and merge their parts to rebuild the
+ * per-turn messages in order.
+ */
+class MessageAssembler {
+  private readonly byIndex = new Map<
+    number,
+    { role: MessageData['role']; content: Part[] }
+  >();
+  private readonly order: number[] = [];
+  /** Index to attribute a chunk to when it omits `index` (e.g. the trailing
+   * interrupt `tool` chunk); defaults to the most recently seen index. */
+  private lastIndex = 0;
+
+  /** Folds one streamed model chunk into the accumulating messages. */
+  add(chunk: ModelChunk): void {
+    const index = chunk.index ?? this.lastIndex;
+    this.lastIndex = index;
+    let entry = this.byIndex.get(index);
+    if (!entry) {
+      entry = { role: (chunk.role ?? 'model') as MessageData['role'], content: [] };
+      this.byIndex.set(index, entry);
+      this.order.push(index);
+    }
+    if (chunk.role) {
+      entry.role = chunk.role;
+    }
+    const content = (chunk.content ?? []) as Part[];
+    // An `aggregated` chunk already contains all data from previous chunks of
+    // its message, so replace rather than merge.
+    entry.content = chunk.aggregated
+      ? [...content]
+      : mergeParts(entry.content, content);
+  }
+
+  /** The assembled messages, in the order their indices first appeared. */
+  get messages(): MessageData[] {
+    return this.order.map((i) => {
+      const e = this.byIndex.get(i)!;
+      return { role: e.role, content: e.content } as MessageData;
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // AgentInterrupt
 // ---------------------------------------------------------------------------
@@ -396,7 +508,15 @@ class AgentResponseImpl<State = unknown, O = unknown>
 {
   constructor(
     private readonly _raw: AgentOutput<State>,
-    private readonly _messages: MessageData[],
+    /**
+     * Live messages getter. Server-managed agents assemble the turn's
+     * intermediate messages (tool requests/responses, reasoning) from the
+     * stream, which may still be draining when this response is first
+     * constructed. Reading through a getter (rather than snapshotting an array)
+     * ensures `res.messages` reflects the fully-assembled list at read time and
+     * stays consistent with {@link AgentChat.messages}.
+     */
+    private readonly _messages: () => MessageData[],
     /**
      * Fallback custom-state getter. Server-managed agents (with a store) do not
      * return `state` on the wire - they return a `snapshotId` and the chat
@@ -444,7 +564,7 @@ class AgentResponseImpl<State = unknown, O = unknown>
   }
 
   get messages(): MessageData[] {
-    return this._messages;
+    return this._messages();
   }
 
   get finishReason(): AgentFinishReason {
@@ -684,10 +804,15 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
         this.transport.stateManagement = 'client';
       }
     }
+    // Client-managed agents round-trip the full authoritative history on the
+    // wire, so replace `this.messages` wholesale. Server-managed agents return
+    // only the final response message here (no `state.messages`); their
+    // per-turn messages - including intermediate tool-request/response and
+    // reasoning messages, and the final message - are assembled from the
+    // streamed `modelChunk` frames during `sendStream` (see `MessageAssembler`),
+    // so there is nothing to append here.
     if (raw.state?.messages !== undefined) {
       this.messages = [...raw.state.messages];
-    } else if (raw.message) {
-      this.messages.push(raw.message);
     }
     if (raw.state?.artifacts !== undefined) {
       this.artifacts = [...raw.state.artifacts];
@@ -769,7 +894,7 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
       this.applyOutput(raw);
       const response = new AgentResponseImpl<State>(
         raw,
-        [...this.messages],
+        () => [...this.messages],
         () => this.state,
         () => this.sessionId
       );
@@ -824,11 +949,12 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
       const aborted = (async (): Promise<AgentResponse<State>> => {
         return new AgentResponseImpl<State>(
           { finishReason: 'aborted' as AgentFinishReason },
-          [...this.messages],
+          () => [...this.messages],
           () => this.state,
           () => this.sessionId
         );
       })();
+
       aborted.catch(() => {});
       return {
         stream: (async function* (): AsyncIterable<AgentChunk<State>> {})(),
@@ -846,6 +972,13 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
     if (agentInput.message) {
       this.messages.push(agentInput.message);
     }
+    // Length of `this.messages` after the eager user-message push and before
+    // this turn's assistant/tool messages. Server-managed turns return only the
+    // final response message on the wire, so we assemble the turn's intermediate
+    // messages (assistant tool-requests, `role: 'tool'` responses, reasoning)
+    // from the streamed `modelChunk` frames and splice them in starting here.
+    const turnPrefixLength = this.messages.length;
+    const assembler = new MessageAssembler();
     const init = this.buildInit();
 
     const { controller, isAborted } = this.setupAbort(opts);
@@ -880,6 +1013,19 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
           if (raw.customPatch) {
             self.applyCustomPatch(raw.customPatch);
             chunk._setCustom(self.state);
+          }
+          // Reconstruct this turn's messages from the streamed model chunks and
+          // keep `this.messages` live as they arrive. Only the final response
+          // message comes back on the wire for server-managed agents, so the
+          // intermediate messages (assistant tool-requests, `tool` responses,
+          // reasoning) exist only in the stream. We re-splice the whole assembled
+          // block each time (cheap; turns have few messages). For client-managed
+          // agents this is provisional - `applyOutput` later replaces
+          // `this.messages` wholesale with the authoritative `state.messages`.
+          if (raw.modelChunk) {
+            assembler.add(raw.modelChunk);
+            self.messages.length = turnPrefixLength;
+            self.messages.push(...assembler.messages);
           }
           yield chunk;
         }
@@ -978,7 +1124,7 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
     };
     const response = new AgentResponseImpl<State>(
       raw,
-      [...this.messages],
+      () => [...this.messages],
       () => this.clientState?.custom as State | undefined,
       () => this.sessionId
     );
