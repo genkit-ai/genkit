@@ -244,4 +244,3 @@ if (args.includes('--watch')) {
 } else {
   build();
 }
-
