@@ -8,7 +8,7 @@ Get started in three simple steps:
 
 1. **Install the SDK and your preferred model provider:**
 ```bash
-pip install genkit genkit-google-genai
+uv add genkit genkit-google-genai
 ```
 
 2. **Set your API key:**
