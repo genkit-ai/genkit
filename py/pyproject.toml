@@ -235,8 +235,8 @@ select = [
 "packages/genkit/src/genkit/_ai/_model.py" = ["F401"]
 "packages/genkit/src/genkit/_ai/_formats/__init__.py" = ["F401"]
 "packages/genkit/src/genkit/_core/trace/__init__.py" = ["F401"]
-# Test files don't need docstrings; test method names are self-documenting
-"**/tests/**/*.py" = ["D", "ANN401"]
+# Test files don't need docstrings or type ceremony; test names/bodies are self-documenting
+"**/tests/**/*.py" = ["D", "ANN"]
 "packages/genkit/tests/typing/*.py" = ["D", "F821", "F841", "B018", "ANN"]
 # Samples are demo code and can use blocking I/O, prints, top-level execution
 "samples/**/*.py" = ["ANN", "D", "E402", "ASYNC", "T201"]
