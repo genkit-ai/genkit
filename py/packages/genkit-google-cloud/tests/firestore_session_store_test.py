@@ -119,4 +119,4 @@ async def test_firestore_session_store_status_change_and_cleanup() -> None:
     assert await queue.get() == SnapshotStatus.ABORTED
     assert await queue.get() is None
     watch_mock.unsubscribe.assert_called_once()
-    assert 'snap-sub' not in store._subs
+    assert 'snap-sub' not in store.subs
