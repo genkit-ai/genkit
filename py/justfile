@@ -57,7 +57,7 @@ test:
 
 # Run tests across multiple Python versions (3.10–3.14) with nox.
 test-nox:
-    cd "{{ py_dir }}" && uvx nox
+    uv run --directory "{{ py_dir }}" nox
 
 # Run security checks (bandit, pip-audit).
 security:
