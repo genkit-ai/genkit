@@ -40,7 +40,7 @@ StateT = TypeVar('StateT')
 DEFAULT_COLLECTION = 'genkit-sessions'
 DEFAULT_PREFIX = 'global'
 
-_TERMINAL_STATUSES = frozenset({
+TERMINAL_STATUSES = frozenset({
     SnapshotStatus.COMPLETED,
     SnapshotStatus.FAILED,
     SnapshotStatus.ABORTED,
@@ -48,11 +48,13 @@ _TERMINAL_STATUSES = frozenset({
 })
 
 
-def _copy_snapshot(snapshot: SessionSnapshot | None) -> SessionSnapshot | None:
+def copy_snapshot(snapshot: SessionSnapshot | None) -> SessionSnapshot | None:
+    """Return a deep copy of the session snapshot if present."""
     return snapshot.model_copy(deep=True) if snapshot is not None else None
 
 
-def _status_from_doc(doc_snapshot: Any) -> SnapshotStatus | None:  # noqa: ANN401
+def status_from_doc(doc_snapshot: Any) -> SnapshotStatus | None:  # noqa: ANN401
+    """Extract and validate the snapshot status from a Firestore document."""
     if not doc_snapshot.exists:
         return None
     status_val = (doc_snapshot.to_dict() or {}).get('status')
@@ -113,15 +115,15 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         """Retrieve a session snapshot by snapshot ID or session ID."""
         _require_one_selector(snapshot_id, session_id)
         if snapshot_id is not None:
-            return _copy_snapshot(await self._read_snapshot(snapshot_id))
+            return copy_snapshot(await self._read_snapshot(snapshot_id))
 
         assert session_id is not None
         current_id = await self._read_pointer(session_id)
         if current_id is not None:
-            return _copy_snapshot(await self._read_snapshot(current_id))
+            return copy_snapshot(await self._read_snapshot(current_id))
 
         owned = await self._list_session_snapshots(session_id)
-        return _copy_snapshot(_select_leaf(owned, session_id, reject_ambiguous=self._reject_ambiguous))
+        return copy_snapshot(_select_leaf(owned, session_id, reject_ambiguous=self._reject_ambiguous))
 
     async def save_snapshot(self, snapshot_id: str | None, fn: SaveFn) -> SessionSnapshot | None:
         """Save or update a session snapshot in Firestore."""
@@ -225,11 +227,11 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             if not doc_snapshots:
                 return
             doc_snapshot = doc_snapshots[0]
-            status = _status_from_doc(doc_snapshot)
+            status = status_from_doc(doc_snapshot)
             if status is None:
                 return
             loop.call_soon_threadsafe(lambda: _notify(self._subs, snapshot_id, status))
-            if status not in _TERMINAL_STATUSES:
+            if status not in TERMINAL_STATUSES:
                 return
 
             loop.call_soon_threadsafe(lambda: _notify(self._subs, snapshot_id, None))
