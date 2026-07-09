@@ -451,7 +451,7 @@ class MessageAssembler {
     // An `aggregated` chunk already contains all data from previous chunks of
     // its message, so replace rather than merge.
     entry.content = chunk.aggregated
-      ? [...content]
+      ? mergeParts([], content)
       : mergeParts(entry.content, content);
   }
 
