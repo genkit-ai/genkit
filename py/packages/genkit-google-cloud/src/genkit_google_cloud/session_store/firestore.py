@@ -164,7 +164,10 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             current = await self.read_snapshot(snapshot_id)
             is_first = snapshot_id not in self.subs
             q = await subscribe(self.subs, snapshot_id, current)
-            # Firestore listener keeps cross-instance abort working for detached turns.
+            if current is not None and current.status in TERMINAL_STATUSES:
+                await q.put(None)
+                self.subs.pop(snapshot_id, None)
+                return q
             if is_first and (current is None or current.status not in TERMINAL_STATUSES):
                 try:
                     self.start_listener(snapshot_id)
@@ -233,7 +236,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
     def start_listener(self, snapshot_id: str) -> None:
         """Start a Firestore real-time listener for status changes on a snapshot."""
         ref = self.snapshot_ref(snapshot_id)
-        if not hasattr(ref, 'on_snapshot'):
+        if isinstance(self.client, firestore.AsyncClient) or not hasattr(ref, 'on_snapshot'):
             if self.sync_client is None:
                 self.sync_client = firestore.Client(
                     project=self.client.project,
