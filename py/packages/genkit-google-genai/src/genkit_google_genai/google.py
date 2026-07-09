@@ -324,6 +324,7 @@ def _create_embedder_action(
         options=get_embedder_options(
             name=clean_name,
             label=label,
+            is_vertex=(plugin_name == VERTEXAI_PLUGIN_NAME),
         ),
     )
 
@@ -1043,6 +1044,7 @@ class VertexAI(Plugin):
                     options=get_embedder_options(
                         name=name,
                         label=f'{PLUGIN_DISPLAY_NAME[VERTEXAI_PLUGIN_NAME]} - {name}',
+                        is_vertex=True,
                     ),
                 )
             )

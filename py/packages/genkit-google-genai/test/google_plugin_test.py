@@ -291,6 +291,29 @@ def test_vertexai__resolve_embedder_multimodalembedding(
     assert metadata['embedder']['dimensions'] == 1408
 
 
+@pytest.mark.parametrize(
+    'input_name, expected_model_name',
+    [
+        ('vertexai/gemini-embedding-2', 'vertexai/gemini-embedding-2'),
+        ('gemini-embedding-2', 'vertexai/gemini-embedding-2'),
+    ],
+)
+def test_vertexai__resolve_embedder_scopes_supports_to_text(
+    input_name: str,
+    expected_model_name: str,
+    vertexai_plugin_instance: VertexAI,
+) -> None:
+    """Vertex must not inherit Google AI's multimodal advertisement."""
+    action = vertexai_plugin_instance._resolve_embedder(name=input_name)
+
+    assert action is not None
+    assert action.kind == ActionKind.EMBEDDER
+    assert action.name == expected_model_name
+    metadata = cast(dict[str, Any], action.metadata)
+    assert metadata['embedder']['supports']['input'] == ['text']
+    assert metadata['embedder']['dimensions'] == 3072
+
+
 @pytest.mark.asyncio
 async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None:
     """Unit test for list actions."""

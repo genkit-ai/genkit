@@ -96,13 +96,13 @@ VERTEX_KNOWN_EMBEDDERS: tuple[str, ...] = (
     'multimodalembedding@001',
 )
 
-# Advertised input modalities for multimodal embedders. Each model belongs to a
-# single backend (gemini-embedding-2* is Google AI only; multimodalembedding@001
-# is Vertex only), so a model name is never ambiguous across backends and no
-# backend scoping is needed. Lookups strip the '@version' suffix first.
-EMBEDDER_INPUT_SUPPORTS: dict[str, list[str]] = {
+# Advertised input modalities, per backend. Unknown names default to text-only.
+GOOGLEAI_EMBEDDER_INPUT_SUPPORTS: dict[str, list[str]] = {
     'gemini-embedding-2-preview': ['text', 'image', 'video'],
     'gemini-embedding-2': ['text', 'image', 'video'],
+}
+
+VERTEX_EMBEDDER_INPUT_SUPPORTS: dict[str, list[str]] = {
     'multimodalembedding': ['text', 'image', 'video'],
 }
 
@@ -112,19 +112,21 @@ def _base_name(name: str) -> str:
     return name.split('@', 1)[0]
 
 
-def get_embedder_options(name: str, label: str) -> EmbedderOptions:
+def get_embedder_options(name: str, label: str, is_vertex: bool = False) -> EmbedderOptions:
     """Return EmbedderOptions metadata for a discovered embedder model.
 
     Args:
         name: The bare (unprefixed) model name, e.g. 'gemini-embedding-2'.
         label: Human-readable label for the embedder.
+        is_vertex: True when resolving for the Vertex backend.
 
     Returns:
         EmbedderOptions describing the model's label, supported inputs and
         static dimensions.
     """
     base = _base_name(name)
-    supports = EMBEDDER_INPUT_SUPPORTS.get(name) or EMBEDDER_INPUT_SUPPORTS.get(base) or ['text']
+    supports_map = VERTEX_EMBEDDER_INPUT_SUPPORTS if is_vertex else GOOGLEAI_EMBEDDER_INPUT_SUPPORTS
+    supports = supports_map.get(name) or supports_map.get(base) or ['text']
     dimensions = EMBEDDER_DIMENSIONS.get(name) or EMBEDDER_DIMENSIONS.get(base)
     return EmbedderOptions(
         label=label,

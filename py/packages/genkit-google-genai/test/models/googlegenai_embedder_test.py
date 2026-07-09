@@ -135,10 +135,21 @@ def test_get_embedder_options_multimodal_and_fallback() -> None:
 @pytest.mark.parametrize('model_name', ['multimodalembedding', 'multimodalembedding@001'])
 def test_get_embedder_options_multimodalembedding_versioned_and_bare(model_name: str) -> None:
     """The multimodalembedding model is multimodal with or without the '@001' suffix."""
-    options = get_embedder_options(model_name, f'Vertex AI - {model_name}')
+    options = get_embedder_options(model_name, f'Vertex AI - {model_name}', is_vertex=True)
     assert options.dimensions == 1408
     assert options.supports is not None
     assert options.supports.input == ['text', 'image', 'video']
+
+
+def test_get_embedder_options_scopes_supports_per_backend() -> None:
+    """Each backend advertises only its own multimodal models, defaulting to text."""
+    on_vertex = get_embedder_options('gemini-embedding-2', 'Vertex AI - gemini-embedding-2', is_vertex=True)
+    assert on_vertex.supports is not None
+    assert on_vertex.supports.input == ['text']
+
+    on_googleai = get_embedder_options('multimodalembedding@001', 'Google AI - multimodalembedding@001')
+    assert on_googleai.supports is not None
+    assert on_googleai.supports.input == ['text']
 
 
 @pytest.mark.asyncio
