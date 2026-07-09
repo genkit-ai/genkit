@@ -239,6 +239,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                     project=self.client.project,
                     credentials=getattr(self.client, '_credentials', None),
                     database=getattr(self.client, '_database', getattr(self.client, 'database', None)),
+                    client_options=getattr(self.client, '_client_options', None),
                 )
             prefix = self.prefix_fn()
             ref = (
@@ -272,7 +273,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
 
             def unsubscribe_safely() -> None:
                 if watch_holder:
-                    watch_holder[0].unsubscribe()
+                    loop.run_in_executor(None, watch_holder[0].unsubscribe)
 
             loop.call_soon_threadsafe(unsubscribe_safely)
 
