@@ -19,10 +19,10 @@ export GEMINI_API_KEY="your-api-key"
 3. **Create your AI application:**
 ```python
 from genkit import Genkit
-from genkit.plugins.google_genai import GoogleGenAI
+from genkit_google_genai import GoogleAI
 
 # 1. Initialize Genkit with the Google GenAI plugin
-ai = Genkit(plugins=[GoogleGenAI()])
+ai = Genkit(plugins=[GoogleAI()])
 
 # 2. Define a type-safe tool
 @ai.tool(description="Get current weather for a city")
