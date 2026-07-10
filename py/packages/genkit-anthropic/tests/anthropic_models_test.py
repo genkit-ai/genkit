@@ -29,6 +29,7 @@ from pydantic import ValidationError
 
 from genkit import (
     Constrained,
+    CustomPart,
     FinishReason,
     Media,
     MediaPart,
@@ -39,6 +40,7 @@ from genkit import (
     ModelRequest,
     ModelResponseChunk,
     Part,
+    ReasoningPart,
     Role,
     Supports,
     TextPart,
@@ -1208,3 +1210,410 @@ def test_thinking_dropped_when_no_mode_is_set(raw: dict) -> None:
     ]
 
     assert _to_anthropic_thinking_config(thinking) is None
+
+
+@pytest.mark.asyncio
+async def test_generate_with_thinking_block() -> None:
+    """Test that thinking blocks become ReasoningPart values with signatures."""
+    sample_request = _create_sample_request()
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.content = [
+        MagicMock(type='thinking', thinking='Let me reason.', signature='sig-abc'),
+        MagicMock(type='text', text='Answer'),
+    ]
+    mock_response.usage = MagicMock(input_tokens=10, output_tokens=15)
+    mock_response.stop_reason = 'end_turn'
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+    response = await model.generate(sample_request)
+
+    assert response.message is not None
+    assert len(response.message.content) == 2
+    reasoning_part = response.message.content[0].root
+    assert isinstance(reasoning_part, ReasoningPart)
+    assert reasoning_part.reasoning == 'Let me reason.'
+    assert reasoning_part.metadata == {'thoughtSignature': 'sig-abc'}
+
+    text_part = response.message.content[1].root
+    assert isinstance(text_part, TextPart)
+    assert text_part.text == 'Answer'
+
+
+@pytest.mark.asyncio
+async def test_generate_thinking_block_without_signature_omits_metadata() -> None:
+    """Test that thinking blocks without signatures omit metadata."""
+    sample_request = _create_sample_request()
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(type='thinking', thinking='No signature.', signature=None)]
+    mock_response.usage = MagicMock(input_tokens=10, output_tokens=15)
+    mock_response.stop_reason = 'end_turn'
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+    response = await model.generate(sample_request)
+
+    assert response.message is not None
+    reasoning_part = response.message.content[0].root
+    assert isinstance(reasoning_part, ReasoningPart)
+    assert reasoning_part.reasoning == 'No signature.'
+    assert reasoning_part.metadata is None
+
+
+@pytest.mark.asyncio
+async def test_generate_with_redacted_thinking_block() -> None:
+    """Test that redacted thinking blocks become CustomPart values."""
+    sample_request = _create_sample_request()
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(type='redacted_thinking', data='opaque-blob')]
+    mock_response.usage = MagicMock(input_tokens=10, output_tokens=15)
+    mock_response.stop_reason = 'end_turn'
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+    response = await model.generate(sample_request)
+
+    assert response.message is not None
+    custom_part = response.message.content[0].root
+    assert isinstance(custom_part, CustomPart)
+    assert custom_part.custom == {'redactedThinking': 'opaque-blob'}
+
+
+@pytest.mark.asyncio
+async def test_streaming_thinking_deltas() -> None:
+    """Test that thinking deltas stream as reasoning chunks."""
+    sample_request = _create_sample_request()
+    mock_client = MagicMock()
+
+    chunks = [
+        MagicMock(type='content_block_start', index=0, content_block=MagicMock(type='thinking')),
+        MagicMock(type='content_block_delta', index=0, delta=MagicMock(type='thinking_delta', thinking='Think')),
+        MagicMock(type='content_block_delta', index=0, delta=MagicMock(type='thinking_delta', thinking='ing')),
+        MagicMock(type='content_block_delta', index=0, delta=MagicMock(type='signature_delta', signature='sig-abc')),
+        MagicMock(type='content_block_stop', index=0),
+        MagicMock(type='content_block_delta', delta=MagicMock(type='text_delta', text='Answer')),
+    ]
+    final_content = [
+        MagicMock(type='thinking', thinking='Thinking', signature='sig-abc'),
+        MagicMock(type='text', text='Answer'),
+    ]
+    mock_client.messages.stream.return_value = MockStreamManager(chunks, final_content=final_content)
+
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    ctx = MagicMock()
+    ctx.is_streaming = True
+    collected_chunks: list[ModelResponseChunk] = []
+    ctx.send_chunk = lambda chunk: collected_chunks.append(chunk)
+
+    response = await model.generate(sample_request, ctx)
+
+    assert len(collected_chunks) == 3
+
+    first_part = collected_chunks[0].content[0].root
+    assert isinstance(first_part, ReasoningPart)
+    assert first_part.reasoning == 'Think'
+
+    second_part = collected_chunks[1].content[0].root
+    assert isinstance(second_part, ReasoningPart)
+    assert second_part.reasoning == 'ing'
+
+    third_part = collected_chunks[2].content[0].root
+    assert isinstance(third_part, TextPart)
+    assert third_part.text == 'Answer'
+
+    assert response.message is not None
+    final_reasoning_part = response.message.content[0].root
+    assert isinstance(final_reasoning_part, ReasoningPart)
+    assert final_reasoning_part.reasoning == 'Thinking'
+    assert final_reasoning_part.metadata == {'thoughtSignature': 'sig-abc'}
+
+
+@pytest.mark.asyncio
+async def test_streaming_redacted_thinking_block() -> None:
+    """Test that redacted thinking blocks stream as custom chunks and reach the final response."""
+    sample_request = _create_sample_request()
+    mock_client = MagicMock()
+
+    chunks = [
+        MagicMock(
+            type='content_block_start',
+            index=0,
+            content_block=MagicMock(type='redacted_thinking', data='opaque-blob'),
+        ),
+        MagicMock(type='content_block_stop', index=0),
+        MagicMock(type='content_block_delta', delta=MagicMock(type='text_delta', text='Answer')),
+    ]
+    final_content = [
+        MagicMock(type='redacted_thinking', data='opaque-blob'),
+        MagicMock(type='text', text='Answer'),
+    ]
+    mock_client.messages.stream.return_value = MockStreamManager(chunks, final_content=final_content)
+
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    ctx = MagicMock()
+    ctx.is_streaming = True
+    collected_chunks: list[ModelResponseChunk] = []
+    ctx.send_chunk = lambda chunk: collected_chunks.append(chunk)
+
+    response = await model.generate(sample_request, ctx)
+
+    assert len(collected_chunks) == 2
+
+    first_part = collected_chunks[0].content[0].root
+    assert isinstance(first_part, CustomPart)
+    assert first_part.custom == {'redactedThinking': 'opaque-blob'}
+
+    second_part = collected_chunks[1].content[0].root
+    assert isinstance(second_part, TextPart)
+    assert second_part.text == 'Answer'
+
+    assert response.message is not None
+    final_first_part = response.message.content[0].root
+    assert isinstance(final_first_part, CustomPart)
+    assert final_first_part.custom == {'redactedThinking': 'opaque-blob'}
+
+
+@pytest.mark.asyncio
+async def test_streaming_thinking_then_tool_use_interleave() -> None:
+    """Test a turn that streams a thinking block followed by a tool_use block."""
+    sample_request = _create_sample_request()
+    mock_client = MagicMock()
+
+    tool_block = MagicMock(type='tool_use', id='tool_abc')
+    tool_block.name = 'get_weather'
+    chunks = [
+        MagicMock(type='content_block_start', index=0, content_block=MagicMock(type='thinking')),
+        MagicMock(type='content_block_delta', index=0, delta=MagicMock(type='thinking_delta', thinking='Need')),
+        MagicMock(type='content_block_delta', index=0, delta=MagicMock(type='thinking_delta', thinking=' a tool')),
+        MagicMock(type='content_block_delta', index=0, delta=MagicMock(type='signature_delta', signature='sig-abc')),
+        MagicMock(type='content_block_stop', index=0),
+        MagicMock(type='content_block_start', index=1, content_block=tool_block),
+        MagicMock(
+            type='content_block_delta',
+            index=1,
+            delta=MagicMock(type='input_json_delta', partial_json='{"location"'),
+        ),
+        MagicMock(
+            type='content_block_delta',
+            index=1,
+            delta=MagicMock(type='input_json_delta', partial_json=': "Paris"}'),
+        ),
+        MagicMock(type='content_block_stop', index=1),
+    ]
+
+    final_tool = MagicMock(type='tool_use', id='tool_abc', input={'location': 'Paris'})
+    final_tool.name = 'get_weather'
+    final_content = [
+        MagicMock(type='thinking', thinking='Need a tool', signature='sig-abc'),
+        final_tool,
+    ]
+    mock_client.messages.stream.return_value = MockStreamManager(chunks, final_content=final_content)
+
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    ctx = MagicMock()
+    ctx.is_streaming = True
+    collected_chunks: list[ModelResponseChunk] = []
+    ctx.send_chunk = lambda chunk: collected_chunks.append(chunk)
+
+    response = await model.generate(sample_request, ctx)
+
+    # Two reasoning chunks, then one tool request chunk.
+    assert len(collected_chunks) == 3
+
+    first_part = collected_chunks[0].content[0].root
+    assert isinstance(first_part, ReasoningPart)
+    assert first_part.reasoning == 'Need'
+
+    second_part = collected_chunks[1].content[0].root
+    assert isinstance(second_part, ReasoningPart)
+    assert second_part.reasoning == ' a tool'
+
+    tool_part = collected_chunks[2].content[0].root
+    assert isinstance(tool_part, ToolRequestPart)
+    assert tool_part.tool_request.name == 'get_weather'
+    assert tool_part.tool_request.ref == 'tool_abc'
+    assert tool_part.tool_request.input == {'location': 'Paris'}
+
+    # The final message keeps both blocks, with the signature on the reasoning part.
+    assert response.message is not None
+    assert len(response.message.content) == 2
+    final_reasoning_part = response.message.content[0].root
+    assert isinstance(final_reasoning_part, ReasoningPart)
+    assert final_reasoning_part.reasoning == 'Need a tool'
+    assert final_reasoning_part.metadata == {'thoughtSignature': 'sig-abc'}
+    final_tool_part = response.message.content[1].root
+    assert isinstance(final_tool_part, ToolRequestPart)
+    assert final_tool_part.tool_request.name == 'get_weather'
+
+
+def test_reasoning_part_encodes_as_thinking_block() -> None:
+    """Test that signed ReasoningPart values encode as Anthropic thinking blocks."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    messages = [
+        Message(
+            role=Role.MODEL,
+            content=[Part(root=ReasoningPart(reasoning='step', metadata={'thoughtSignature': 'sig-abc'}))],
+        ),
+    ]
+
+    anthropic_messages = model._to_anthropic_messages(messages)
+
+    assert anthropic_messages[0]['content'][0] == {
+        'type': 'thinking',
+        'thinking': 'step',
+        'signature': 'sig-abc',
+    }
+
+
+@pytest.mark.parametrize('signature', ['sig-go', b'sig-go'])
+def test_reasoning_part_accepts_go_style_signature_alias(signature: str | bytes) -> None:
+    """Test that metadata.signature is accepted as an outbound alias."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    messages = [
+        Message(
+            role=Role.MODEL,
+            content=[Part(root=ReasoningPart(reasoning='step', metadata={'signature': signature}))],
+        ),
+    ]
+
+    anthropic_messages = model._to_anthropic_messages(messages)
+    block = anthropic_messages[0]['content'][0]
+    assert block['type'] == 'thinking'
+    assert block['signature'] == 'sig-go'
+
+
+def test_reasoning_part_without_signature_raises() -> None:
+    """Test that non-empty reasoning cannot be sent back without a signature."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    messages = [
+        Message(
+            role=Role.MODEL,
+            content=[Part(root=ReasoningPart(reasoning='step'))],
+        ),
+    ]
+
+    with pytest.raises(ValueError, match='require a signature'):
+        model._to_anthropic_messages(messages)
+
+
+def test_empty_reasoning_part_is_skipped() -> None:
+    """Test that empty reasoning parts produce no Anthropic block."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    messages = [
+        Message(
+            role=Role.MODEL,
+            content=[Part(root=ReasoningPart(reasoning='', metadata={'thoughtSignature': 'sig-abc'}))],
+        ),
+    ]
+
+    anthropic_messages = model._to_anthropic_messages(messages)
+    assert anthropic_messages[0]['content'] == []
+
+
+def test_redacted_thinking_part_round_trips() -> None:
+    """Test that redacted thinking custom data encodes as a redacted block."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    messages = [
+        Message(
+            role=Role.MODEL,
+            content=[Part(root=CustomPart(custom={'redactedThinking': 'opaque-blob'}))],
+        ),
+    ]
+
+    anthropic_messages = model._to_anthropic_messages(messages)
+    assert anthropic_messages[0]['content'][0] == {
+        'type': 'redacted_thinking',
+        'data': 'opaque-blob',
+    }
+
+
+def test_thinking_blocks_do_not_get_cache_control() -> None:
+    """Test that cache_control metadata is not applied to thinking blocks."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    cache_meta = {'cache_control': {'type': 'ephemeral'}}
+    messages = [
+        Message(
+            role=Role.MODEL,
+            content=[
+                Part(
+                    root=ReasoningPart(
+                        reasoning='step',
+                        metadata={'thoughtSignature': 'sig-abc', **cache_meta},
+                    )
+                ),
+                Part(root=CustomPart(custom={'redactedThinking': 'opaque-blob'}, metadata=cache_meta)),
+                Part(root=TextPart(text='Answer', metadata=cache_meta)),
+            ],
+        ),
+    ]
+
+    anthropic_messages = model._to_anthropic_messages(messages)
+    thinking_block, redacted_block, text_block = anthropic_messages[0]['content']
+
+    assert thinking_block['type'] == 'thinking'
+    assert 'cache_control' not in thinking_block
+    assert redacted_block['type'] == 'redacted_thinking'
+    assert 'cache_control' not in redacted_block
+    assert text_block['cache_control'] == {'type': 'ephemeral'}
+
+
+def test_deserialized_reasoning_part_round_trips() -> None:
+    """Test that reasoning history parsed from JSON encodes as a thinking block."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    messages = [
+        Message.model_validate({
+            'role': 'model',
+            'content': [{'reasoning': 'step', 'metadata': {'thoughtSignature': 'sig-abc'}}],
+        }),
+    ]
+
+    anthropic_messages = model._to_anthropic_messages(messages)
+
+    assert anthropic_messages[0]['content'][0] == {
+        'type': 'thinking',
+        'thinking': 'step',
+        'signature': 'sig-abc',
+    }
+
+
+def test_deserialized_redacted_thinking_part_round_trips() -> None:
+    """Test that redacted thinking history parsed from JSON encodes as a redacted block."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    messages = [
+        Message.model_validate({
+            'role': 'model',
+            'content': [{'custom': {'redactedThinking': 'opaque-blob'}}],
+        }),
+    ]
+
+    anthropic_messages = model._to_anthropic_messages(messages)
+
+    assert anthropic_messages[0]['content'][0] == {
+        'type': 'redacted_thinking',
+        'data': 'opaque-blob',
+    }

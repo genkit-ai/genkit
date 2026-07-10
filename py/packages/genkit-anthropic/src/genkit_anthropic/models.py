@@ -33,6 +33,7 @@ from anthropic.types import Message as AnthropicMessage
 
 from genkit import (
     Constrained,
+    CustomPart,
     FinishReason,
     MediaPart,
     Message,
@@ -41,6 +42,7 @@ from genkit import (
     ModelResponseChunk,
     ModelUsage,
     Part,
+    ReasoningPart,
     Role,
     TextPart,
     ToolRequest,
@@ -54,6 +56,8 @@ from genkit_anthropic.model_info import get_model_info
 from genkit_anthropic.utils import (
     build_cache_usage,
     get_cache_control,
+    get_redacted_thinking_data,
+    get_thinking_signature,
     maybe_strip_fences,
     to_anthropic_media,
 )
@@ -436,8 +440,9 @@ class AnthropicModel:
     ) -> AnthropicMessage:
         """Handle streaming generation.
 
-        Processes Anthropic streaming events including text deltas and
-        tool-use blocks.  Tool-use blocks arrive as:
+        Processes Anthropic streaming events including text deltas,
+        thinking deltas, redacted thinking blocks, and tool-use blocks.
+        Tool-use blocks arrive as:
 
         1. ``content_block_start`` with ``content_block.type == 'tool_use'``
         2. Zero or more ``content_block_delta`` with ``delta.type == 'input_json_delta'``
@@ -465,6 +470,15 @@ class AnthropicModel:
                                 'name': getattr(block, 'name', ''),
                                 'input_json': '',
                             }
+                    elif getattr(block, 'type', None) == 'redacted_thinking' and hasattr(block, 'data'):
+                        # Redacted thinking arrives complete in the start event; no deltas follow.
+                        ctx.send_chunk(
+                            ModelResponseChunk(
+                                role=Role.MODEL,
+                                index=0,
+                                content=[Part(root=CustomPart(custom={'redactedThinking': block.data}))],  # pyright: ignore[reportAttributeAccessIssue]
+                            )
+                        )
 
                 elif chunk.type == 'content_block_delta' and hasattr(chunk, 'delta'):
                     delta = chunk.delta
@@ -476,6 +490,16 @@ class AnthropicModel:
                                 content=[Part(root=TextPart(text=str(delta.text)))],  # pyright: ignore[reportAttributeAccessIssue]
                             )
                         )
+                    elif getattr(delta, 'type', None) == 'thinking_delta' and hasattr(delta, 'thinking'):
+                        ctx.send_chunk(
+                            ModelResponseChunk(
+                                role=Role.MODEL,
+                                index=0,
+                                content=[Part(root=ReasoningPart(reasoning=str(delta.thinking)))],  # pyright: ignore[reportAttributeAccessIssue]
+                            )
+                        )
+                    # signature_delta is intentionally not streamed. The signature
+                    # is recovered from the final message via _to_genkit_content.
                     elif getattr(delta, 'type', None) == 'input_json_delta' and hasattr(delta, 'partial_json'):
                         idx = getattr(chunk, 'index', None)
                         if idx is not None and idx in pending_tools:
@@ -540,9 +564,10 @@ class AnthropicModel:
                 actual_part = part.root if isinstance(part, Part) else part
                 block = self._to_anthropic_block(actual_part)
                 if block is not None:
-                    # Apply cache_control from part metadata if present.
+                    # Apply cache_control from part metadata if present; the API
+                    # rejects it on thinking blocks.
                     cache_meta = get_cache_control(actual_part)
-                    if cache_meta:
+                    if cache_meta and block['type'] not in ('thinking', 'redacted_thinking'):
                         block['cache_control'] = cache_meta
                     content.append(block)
             result.append({'role': role, 'content': content})
@@ -551,8 +576,8 @@ class AnthropicModel:
     def _to_anthropic_block(self, part: Any) -> dict[str, Any] | None:  # noqa: ANN401
         """Convert a single Genkit content part to an Anthropic content block.
 
-        Handles TextPart, MediaPart (images + PDFs), ToolRequestPart,
-        and ToolResponsePart.
+        Handles reasoning parts, redacted thinking custom parts, TextPart,
+        MediaPart (images + PDFs), ToolRequestPart, and ToolResponsePart.
 
         Args:
             part: The actual (unwrapped) content part.
@@ -560,6 +585,22 @@ class AnthropicModel:
         Returns:
             An Anthropic content block dict, or None if unrecognized.
         """
+        # Attribute check (not isinstance): JSON-parsed reasoning parts deserialize as DataPart.
+        reasoning = getattr(part, 'reasoning', None)
+        if reasoning:
+            signature = get_thinking_signature(part)
+            if not signature:
+                raise ValueError(
+                    'Anthropic thinking parts require a signature when sending back '
+                    'to the API. Preserve the `metadata.thoughtSignature` value from '
+                    'the original response.'
+                )
+            return {'type': 'thinking', 'thinking': reasoning, 'signature': signature}
+
+        redacted_thinking = get_redacted_thinking_data(part)
+        if redacted_thinking is not None:
+            return {'type': 'redacted_thinking', 'data': redacted_thinking}
+
         if isinstance(part, TextPart):
             return {'type': 'text', 'text': part.text}
         if isinstance(part, MediaPart):
@@ -597,4 +638,16 @@ class AnthropicModel:
                         )
                     )
                 )
+            elif block.type == 'thinking':
+                signature = getattr(block, 'signature', None)
+                parts.append(
+                    Part(
+                        root=ReasoningPart(
+                            reasoning=block.thinking,
+                            metadata={'thoughtSignature': signature} if signature else None,
+                        )
+                    )
+                )
+            elif block.type == 'redacted_thinking':
+                parts.append(Part(root=CustomPart(custom={'redactedThinking': block.data})))
         return parts

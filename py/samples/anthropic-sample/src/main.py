@@ -19,7 +19,7 @@
 from genkit_anthropic import Anthropic
 from pydantic import BaseModel, Field
 
-from genkit import Genkit
+from genkit import ActionRunContext, Genkit, ModelResponse, ReasoningPart
 
 ai = Genkit(plugins=[Anthropic()], model='anthropic/claude-opus-4-8')
 
@@ -43,6 +43,50 @@ class Cat(BaseModel):
     breed: str
     age: int
     personality: str
+
+
+class WeatherInput(BaseModel):
+    """Input for the weather tool and thinking round-trip flow."""
+
+    city: str = Field(default='Reykjavik', description='City to look up')
+
+
+@ai.tool()
+async def current_weather(input: WeatherInput) -> str:
+    """Return mocked weather data for tool-calling demos."""
+    return f'The weather in {input.city} is 3C, windy, and clear.'
+
+
+def _thinking_summary(response: ModelResponse) -> dict[str, object]:
+    """Summarize reasoning parts across the full generate transcript."""
+    reasoning_parts: list[str] = []
+    signature_present: list[bool] = []
+    content_types: list[str] = []
+
+    for message in response.messages:
+        for part in message.content:
+            root = part.root
+            if root.text is not None:
+                content_types.append('text')
+            elif root.tool_request is not None:
+                content_types.append('tool_request')
+            elif root.tool_response is not None:
+                content_types.append('tool_response')
+            elif isinstance(root, ReasoningPart):
+                content_types.append('reasoning')
+                reasoning_parts.append(root.reasoning)
+                signature_present.append(bool(root.metadata and root.metadata.get('thoughtSignature')))
+            elif root.custom is not None:
+                content_types.append('custom')
+            else:
+                content_types.append(type(root).__name__)
+
+    return {
+        'content_types': content_types,
+        'reasoning_parts': len(reasoning_parts),
+        'reasoning_preview': ''.join(reasoning_parts)[:1000],
+        'thinking_signatures_present': signature_present,
+    }
 
 
 # --- claude-opus-4-7 -------------------------------------------------------
@@ -95,8 +139,49 @@ async def cat_opus_4_8(data: CatInput) -> Cat:
     return response.output
 
 
+@ai.flow(name='thinking_tool_round_trip')
+async def thinking_tool_round_trip(data: WeatherInput, ctx: ActionRunContext) -> dict[str, object]:
+    """Dev UI check for Anthropic thinking streaming and signature round-trip."""
+    # Opus 4.7+ accept only adaptive thinking; older models use type=enabled with a budget.
+    stream_response = ai.generate_stream(
+        model='anthropic/claude-opus-4-8',
+        prompt=(
+            f'You must call the current_weather tool exactly once for {data.city}. '
+            'Think through the request before and after the tool call, then answer in one concise sentence.'
+        ),
+        tools=['current_weather'],
+        config={
+            'thinking': {'type': 'adaptive'},
+            'max_tokens': 4096,
+        },
+        max_turns=3,
+    )
+
+    streamed_reasoning: list[str] = []
+    streamed_text: list[str] = []
+    async for chunk in stream_response.stream:
+        for part in chunk.content:
+            root = part.root
+            if isinstance(root, ReasoningPart):
+                streamed_reasoning.append(root.reasoning)
+                ctx.send_chunk(f'[thinking] {root.reasoning}')
+        if chunk.text:
+            streamed_text.append(chunk.text)
+            ctx.send_chunk(chunk.text)
+
+    response = await stream_response.response
+    summary = _thinking_summary(response)
+    return {
+        **summary,
+        'final_text': response.text,
+        'streamed_reasoning_chunks': len(streamed_reasoning),
+        'streamed_reasoning_preview': ''.join(streamed_reasoning)[:1000],
+        'streamed_text': ''.join(streamed_text),
+    }
+
+
 async def main() -> None:
-    """Run each flow once from the CLI."""
+    """Run the lightweight flows once from the CLI."""
     try:
         print(await haiku_opus_4_7(TopicInput()))  # noqa: T201
         print(await cat_opus_4_7(CatInput()))  # noqa: T201
