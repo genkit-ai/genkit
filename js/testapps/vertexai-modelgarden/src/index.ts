@@ -44,7 +44,7 @@ export const anthropicSonnet5Model = ai.defineFlow(
   },
   async (_input, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: vertexModelGarden.model('claude-sonnet-4-6'),
+      model: vertexModelGarden.model('claude-sonnet-5'),
       config: {
         temperature: 1,
         location: 'global',
