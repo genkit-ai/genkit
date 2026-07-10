@@ -191,7 +191,7 @@ class ThinkingConfig(BaseModel):
         if (
             (enabled or budget_implies_enabled)
             and self.budget_tokens is not None
-            and not self.budget_tokens.is_integer()
+            and not float(self.budget_tokens).is_integer()
         ):
             raise ValueError('budgetTokens must be an integer when thinking is enabled')
         return self

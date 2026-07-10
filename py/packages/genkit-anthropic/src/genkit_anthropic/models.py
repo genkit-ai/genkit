@@ -317,19 +317,19 @@ class AnthropicModel:
         if not config.api_key:
             return self.client
 
-        if type(self.client).__module__.startswith('unittest.mock') or not hasattr(self.client, 'api_key'):
+        if not isinstance(self.client, AsyncAnthropic):
             logger.warning('Ignored per-request Anthropic apiKey because the configured client does not support it')
             return self.client
 
-        kwargs: dict[str, Any] = {'api_key': config.api_key}
-        for attr in ('base_url', 'timeout', 'max_retries'):
-            value = getattr(self.client, attr, None)
-            if value is not None:
-                kwargs[attr] = value
-        return AsyncAnthropic(**kwargs)
+        # copy() keeps every other client setting and shares the pooled HTTP transport.
+        return self.client.copy(api_key=config.api_key)
 
     def _uses_beta_api(self, config: AnthropicConfig) -> bool:
-        """Whether this request should use the Anthropic beta API surface."""
+        """Whether this request should use the Anthropic beta API surface.
+
+        Unlike the JS plugin, setting ``betas`` alone selects the beta surface
+        so the requested features are honored instead of silently dropped.
+        """
         return config.api_version == 'beta' or bool(config.betas)
 
     def _build_params(
@@ -358,14 +358,9 @@ class AnthropicModel:
         params['messages'] = self._to_anthropic_messages(request.messages)
         params['max_tokens'] = int(max_tokens)
 
-        # Strip keys the SDK's messages.create does not accept.
-        stripped_keys = []
+        # api_version and api_key select the API surface and client; they are not create() kwargs.
         for key in AnthropicConfig.SDK_UNSUPPORTED_KEYS:
-            if key in params:
-                params.pop(key)
-                stripped_keys.append(key)
-        if stripped_keys:
-            logger.warning('Ignored unsupported Anthropic config keys', keys=sorted(stripped_keys))
+            params.pop(key, None)
 
         if use_beta and betas:
             params['betas'] = betas

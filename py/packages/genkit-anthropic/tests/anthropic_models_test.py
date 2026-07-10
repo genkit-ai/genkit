@@ -17,10 +17,11 @@
 """Tests for Anthropic models."""
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from anthropic import AsyncAnthropic
+from genkit_anthropic import models as anthropic_models
 from genkit_anthropic.config import AnthropicConfig
 from genkit_anthropic.models import AnthropicModel
 from genkit_anthropic.utils import maybe_strip_fences, strip_markdown_fences
@@ -938,8 +939,8 @@ async def test_api_key_does_not_reach_sdk_params() -> None:
 
 
 def test_api_key_config_overrides_real_sdk_client() -> None:
-    """apiKey creates a request-scoped client when the configured client supports it."""
-    base_client = AsyncAnthropic(api_key='base-key')
+    """apiKey yields a request-scoped copy that keeps client settings and transport."""
+    base_client = AsyncAnthropic(api_key='base-key', default_headers={'X-Custom': 'yes'})
     model = AnthropicModel(model_name='claude-sonnet-4', client=base_client)
 
     client = model._client_for_config(AnthropicConfig.model_validate({'apiKey': 'request-key'}))
@@ -947,6 +948,21 @@ def test_api_key_config_overrides_real_sdk_client() -> None:
     assert client is not base_client
     assert isinstance(client, AsyncAnthropic)
     assert client.api_key == 'request-key'
+    assert client.default_headers.get('X-Custom') == 'yes'
+    assert client._client is base_client._client
+
+
+def test_build_params_consumes_client_level_keys_silently() -> None:
+    """apiVersion/apiKey are honored elsewhere and must not be logged as ignored."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    with patch.object(anthropic_models, 'logger') as mock_logger:
+        params = model._build_params(_text_request({'apiVersion': 'beta', 'apiKey': 'request-key'}))
+
+    mock_logger.warning.assert_not_called()
+    assert 'api_version' not in params
+    assert 'api_key' not in params
 
 
 @pytest.mark.asyncio
