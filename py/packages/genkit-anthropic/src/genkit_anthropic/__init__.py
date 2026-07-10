@@ -137,7 +137,7 @@ Example:
 
     ```python
     from genkit import Genkit
-    from genkit_anthropic import Anthropic
+    from genkit_anthropic import Anthropic, AnthropicConfig
 
     # Uses ANTHROPIC_API_KEY env var or pass api_key explicitly
     ai = Genkit(
@@ -152,7 +152,7 @@ Example:
     response = await ai.generate(
         model='anthropic/claude-haiku-4-5',
         prompt='Write a haiku about AI',
-        config={'temperature': 0.7, 'max_tokens': 100},
+        config=AnthropicConfig(temperature=0.7, max_output_tokens=100),
     )
     ```
 
@@ -181,6 +181,31 @@ See Also:
     - Genkit documentation: https://genkit.dev/
 """
 
+from genkit_anthropic.config import (
+    AnthropicConfig,
+    AnyToolChoice,
+    AutoToolChoice,
+    OutputConfig,
+    RequestMetadata,
+    SpecificToolChoice,
+    TaskBudget,
+    ThinkingConfig,
+    ToolChoice,
+    ToolChoiceNone,
+)
 from genkit_anthropic.plugin import Anthropic, anthropic_name
 
-__all__ = ['Anthropic', 'anthropic_name']
+__all__ = [
+    'Anthropic',
+    'AnthropicConfig',
+    'AutoToolChoice',
+    'AnyToolChoice',
+    'OutputConfig',
+    'RequestMetadata',
+    'SpecificToolChoice',
+    'TaskBudget',
+    'ThinkingConfig',
+    'ToolChoice',
+    'ToolChoiceNone',
+    'anthropic_name',
+]

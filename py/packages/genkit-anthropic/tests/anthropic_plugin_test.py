@@ -20,6 +20,7 @@ import asyncio
 import queue
 import threading
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -343,6 +344,54 @@ async def test_list_actions_empty_api_response_returns_and_caches_statics() -> N
     # Unlike the error path, an empty-but-successful response is cached.
     _ = await plugin.list_actions()
     assert mock_client.beta.models.list.call_count == 1
+
+
+_ANTHROPIC_CONFIG_KEYS = {
+    'apiKey',
+    'apiVersion',
+    'betas',
+    'maxOutputTokens',
+    'tool_choice',
+    'metadata',
+    'thinking',
+    'output_config',
+}
+
+
+def _custom_options(action_metadata: object) -> dict[str, Any]:
+    metadata = cast(dict[str, Any], action_metadata)
+    model_metadata = cast(dict[str, Any], metadata['model'])
+    return cast(dict[str, Any], model_metadata['customOptions'])
+
+
+@pytest.mark.asyncio
+async def test_resolve_advertises_anthropic_config() -> None:
+    """resolve() metadata customOptions reflects the typed AnthropicConfig."""
+    plugin = Anthropic(api_key='test-key')
+
+    action = await plugin.resolve(ActionKind.MODEL, 'anthropic/claude-sonnet-4')
+
+    assert action is not None
+    custom_options = _custom_options(action.metadata)
+    properties = set(custom_options['properties'].keys())
+    assert _ANTHROPIC_CONFIG_KEYS <= properties
+
+
+@pytest.mark.asyncio
+async def test_list_actions_advertises_anthropic_config() -> None:
+    """list_actions() customOptions reflects the typed AnthropicConfig."""
+    plugin = Anthropic(api_key='test-key')
+    mock_client = MagicMock()
+    mock_client.beta.models.list = MagicMock(side_effect=RuntimeError('offline'))
+    plugin._runtime_client = lambda: mock_client
+
+    actions = await plugin.list_actions()
+
+    assert actions
+    for action in actions:
+        custom_options = _custom_options(action.metadata)
+        properties = set(custom_options['properties'].keys())
+        assert _ANTHROPIC_CONFIG_KEYS <= properties
 
 
 def _create_sample_request() -> ModelRequest:

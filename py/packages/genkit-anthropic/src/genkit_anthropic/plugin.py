@@ -21,7 +21,7 @@ from typing import Any, cast
 import structlog
 from anthropic import AsyncAnthropic
 
-from genkit import ModelConfig, ModelRequest, ModelResponse
+from genkit import ModelRequest, ModelResponse
 from genkit.model import model_action_metadata
 from genkit.plugin_api import (
     Action,
@@ -32,6 +32,7 @@ from genkit.plugin_api import (
     loop_local_client,
     to_json_schema,
 )
+from genkit_anthropic.config import AnthropicConfig
 from genkit_anthropic.model_info import SUPPORTED_ANTHROPIC_MODELS, get_model_info
 from genkit_anthropic.models import AnthropicModel
 
@@ -128,7 +129,7 @@ class Anthropic(Plugin):
                     'supports': (
                         model_info.supports.model_dump(by_alias=True, exclude_none=True) if model_info.supports else {}
                     ),
-                    'customOptions': to_json_schema(ModelConfig),
+                    'customOptions': to_json_schema(AnthropicConfig),
                 },
             },
         )
@@ -146,7 +147,7 @@ class Anthropic(Plugin):
         return model_action_metadata(
             name=anthropic_name(model_id),
             info=get_model_info(model_id).model_dump(by_alias=True, exclude_none=True),
-            config_schema=ModelConfig,
+            config_schema=AnthropicConfig,
         )
 
     async def _fetch_dynamic_model_ids(self) -> list[str]:

@@ -20,8 +20,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from anthropic import AsyncAnthropic
+from genkit_anthropic.config import AnthropicConfig
 from genkit_anthropic.models import AnthropicModel
 from genkit_anthropic.utils import maybe_strip_fences, strip_markdown_fences
+from pydantic import ValidationError
 
 from genkit import (
     Constrained,
@@ -828,3 +831,203 @@ def test_structured_output_with_no_tools_capability() -> None:
     assert 'output_config' in params_without_tools
     assert 'output_config' not in params_with_tools
     assert 'Output valid JSON' in params_with_tools['system']
+
+
+# --- typed config (AnthropicConfig) ----------------------------------------
+
+
+def _mock_client_for_generate() -> MagicMock:
+    """A client whose messages.create returns a minimal text response."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(type='text', text='ok')]
+    mock_response.usage = MagicMock(input_tokens=1, output_tokens=1)
+    mock_response.stop_reason = 'end_turn'
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+    mock_client.beta.messages.create = AsyncMock(return_value=mock_response)
+    return mock_client
+
+
+def _text_request(config: Any) -> ModelRequest:
+    return ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+        config=config,
+    )
+
+
+@pytest.mark.asyncio
+async def test_dict_config_unknown_key_reaches_sdk() -> None:
+    """Unknown extra keys in a dict config pass through the SDK body escape hatch."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'temperature': 0.3, 'future_option': 'x'}))
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert kwargs['temperature'] == 0.3
+    assert kwargs['extra_body'] == {'future_option': 'x'}
+
+
+@pytest.mark.asyncio
+async def test_typed_config_thinking_translated_for_sdk() -> None:
+    """A typed thinking config is translated to the SDK's snake_case shape."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    config = AnthropicConfig.model_validate({'thinking': {'enabled': True, 'budgetTokens': 2048}})
+    await model.generate(_text_request(config))
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert kwargs['thinking'] == {'type': 'enabled', 'budget_tokens': 2048}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'thinking, expected',
+    [
+        ({'adaptive': True, 'display': 'summarized'}, {'type': 'adaptive', 'display': 'summarized'}),
+        ({'enabled': False}, {'type': 'disabled'}),
+        ({'budgetTokens': 2048}, {'type': 'enabled', 'budget_tokens': 2048}),
+    ],
+)
+async def test_typed_config_thinking_variants_translated_for_sdk(
+    thinking: dict[str, Any], expected: dict[str, Any]
+) -> None:
+    """Advertised thinking variants are translated to the SDK shape."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    config = AnthropicConfig.model_validate({'thinking': thinking})
+    await model.generate(_text_request(config))
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert kwargs['thinking'] == expected
+
+
+@pytest.mark.asyncio
+async def test_beta_config_uses_beta_sdk_and_sends_betas() -> None:
+    """apiVersion / betas route through the beta SDK surface."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    config = AnthropicConfig.model_validate({
+        'apiVersion': 'beta',
+        'betas': ['token-efficient-tools-2025'],
+    })
+    await model.generate(_text_request(config))
+
+    mock_client.messages.create.assert_not_called()
+    kwargs = mock_client.beta.messages.create.call_args.kwargs
+    assert 'api_version' not in kwargs
+    assert 'apiVersion' not in kwargs
+    assert kwargs['betas'] == ['token-efficient-tools-2025']
+
+
+@pytest.mark.asyncio
+async def test_api_key_does_not_reach_sdk_params() -> None:
+    """apiKey is a client override and is never passed as a messages kwarg."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    config = AnthropicConfig.model_validate({'apiKey': 'secret'})
+    await model.generate(_text_request(config))
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert 'api_key' not in kwargs
+    assert 'apiKey' not in kwargs
+
+
+def test_api_key_config_overrides_real_sdk_client() -> None:
+    """apiKey creates a request-scoped client when the configured client supports it."""
+    base_client = AsyncAnthropic(api_key='base-key')
+    model = AnthropicModel(model_name='claude-sonnet-4', client=base_client)
+
+    client = model._client_for_config(AnthropicConfig.model_validate({'apiKey': 'request-key'}))
+
+    assert client is not base_client
+    assert isinstance(client, AsyncAnthropic)
+    assert client.api_key == 'request-key'
+
+
+@pytest.mark.asyncio
+async def test_invalid_config_raises_from_generate() -> None:
+    """An invalid dict config surfaces a validation error from generate()."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    with pytest.raises(ValidationError):
+        await model.generate(_text_request({'thinking': {'enabled': True}}))
+
+    mock_client.messages.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_config_tool_choice_and_metadata_reach_sdk() -> None:
+    """Config-level tool_choice and metadata reach the SDK kwargs."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    config = AnthropicConfig.model_validate({
+        'tool_choice': {'type': 'tool', 'name': 'get_weather'},
+        'metadata': {'user_id': 'user-123'},
+    })
+    await model.generate(_text_request(config))
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert kwargs['tool_choice'] == {'type': 'tool', 'name': 'get_weather'}
+    assert kwargs['metadata'] == {'user_id': 'user-123'}
+
+
+@pytest.mark.asyncio
+async def test_config_tool_choice_none_reaches_sdk() -> None:
+    """Config-level tool_choice none remains valid for dict compatibility."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'tool_choice': {'type': 'none'}}))
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert kwargs['tool_choice'] == {'type': 'none'}
+
+
+def test_structured_output_merges_existing_output_config() -> None:
+    """Native structured output keeps user-supplied output_config options."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-opus-4-6', client=mock_client)
+    config: Any = AnthropicConfig.model_validate({'output_config': {'effort': 'high', 'task_budget': {'total': 20000}}})
+
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
+        output_format='json',
+        output_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
+        config=config,
+        output_constrained=True,
+    )
+
+    params = model._build_params(request)
+
+    assert params['output_config']['effort'] == 'high'
+    assert params['output_config']['task_budget'] == {'type': 'tokens', 'total': 20000}
+    assert params['output_config']['format']['type'] == 'json_schema'
+
+
+def test_config_version_overrides_model_name() -> None:
+    """Per-request version maps to the Anthropic model parameter."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    params = model._build_params(_text_request({'version': 'claude-sonnet-4-20260101'}))
+
+    assert params['model'] == 'claude-sonnet-4-20260101'
+
+
+def test_backward_compat_plain_model_config() -> None:
+    """A plain ModelConfig still maps to the same SDK params (no behavior change)."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    params = model._build_params(_text_request(ModelConfig(temperature=0.7, max_output_tokens=100, top_p=0.9)))
+
+    assert params['temperature'] == 0.7
+    assert params['max_tokens'] == 100
+    assert params['top_p'] == 0.9
