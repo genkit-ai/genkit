@@ -433,9 +433,16 @@ export function fromOpenAIChunkChoice(
   choice: ChatCompletionChunk.Choice,
   jsonMode = false
 ): GenerateResponseData {
-  const toolRequestParts = choice.delta.tool_calls?.map((toolCall) =>
-    fromOpenAIToolCall(toolCall, choice)
-  );
+  // While streaming, OpenAI-compatible models emit the tool call's identity
+  // (id + function.name) only in the first delta; the following deltas carry
+  // incremental `arguments` fragments with no id and no name. Mapping those
+  // continuation deltas produced empty `{ toolRequest: { input: '' } }` chunks
+  // (see #5374). Keep only deltas that start a new tool call — the complete
+  // tool call (with assembled arguments) is reconstructed from the final
+  // response via `stream.finalChatCompletion()`.
+  const toolRequestParts = choice.delta.tool_calls
+    ?.filter((toolCall) => toolCall.id || toolCall.function?.name)
+    .map((toolCall) => fromOpenAIToolCall(toolCall, choice));
 
   // Build content array based on what's present in the delta
   let content: Part[] = [];
