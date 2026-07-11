@@ -36,6 +36,44 @@ var defaultClaudeOpts = ai.ModelOptions{
 	Stage:    ai.ModelStageStable,
 }
 
+// advancedClaudeSupports mirrors the JS plugin's ADVANCED_MODEL_INFO: capable
+// Claude models that additionally support JSON output.
+var advancedClaudeSupports = ai.ModelSupports{
+	Multiturn:   true,
+	Tools:       true,
+	ToolChoice:  true,
+	SystemRole:  true,
+	Media:       true,
+	Constrained: ai.ConstrainedSupportAll,
+	Output:      []string{"text", "json"},
+}
+
+// advancedModel builds the ModelOptions for a known, JSON-capable Claude model
+// with the given display label.
+func advancedModel(label string) ai.ModelOptions {
+	return ai.ModelOptions{
+		Label:    anthropicLabelPrefix + " - " + label,
+		Supports: &advancedClaudeSupports,
+		Versions: []string{},
+		Stage:    ai.ModelStageStable,
+	}
+}
+
+// knownModels are Claude models with curated capabilities, mirroring the JS
+// plugin's KNOWN_MODELS. They are looked up via modelOptions by both
+// ListActions and ResolveAction; any model not listed here falls back to
+// defaultClaudeOpts and is still resolved dynamically from the Anthropic API.
+var knownModels = map[string]ai.ModelOptions{
+	"claude-opus-4-8":   advancedModel("Claude Opus 4.8"),
+	"claude-opus-4-7":   advancedModel("Claude Opus 4.7"),
+	"claude-opus-4-6":   advancedModel("Claude Opus 4.6"),
+	"claude-opus-4-5":   advancedModel("Claude Opus 4.5"),
+	"claude-opus-4-1":   advancedModel("Claude Opus 4.1"),
+	"claude-sonnet-4-6": advancedModel("Claude Sonnet 4.6"),
+	"claude-sonnet-4-5": advancedModel("Claude Sonnet 4.5"),
+	"claude-haiku-4-5":  advancedModel("Claude Haiku 4.5"),
+}
+
 // listModels returns a list of model names supported by the Anthropic client
 func listModels(ctx context.Context, client *anthropic.Client) ([]string, error) {
 	iter := client.Models.ListAutoPaging(ctx, anthropic.ModelListParams{})

@@ -16,12 +16,12 @@ from typing import Literal
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from genkit_fastapi import genkit_fastapi_handler
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 from typing_extensions import Never
 
 from genkit import Flow, Genkit
-from genkit.plugins.fastapi import genkit_fastapi_handler
-from genkit.plugins.google_genai import GoogleAI
 
 _ = load_dotenv()
 

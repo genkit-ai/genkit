@@ -52,17 +52,17 @@ jobs:
 
           PACKAGES=(
             py/packages/genkit
-            py/plugins/anthropic
-            py/plugins/compat-oai
-            py/plugins/django
-            py/plugins/evaluators
-            py/plugins/fastapi
-            py/plugins/flask
-            py/plugins/google-cloud
-            py/plugins/google-genai
-            py/plugins/middleware
-            py/plugins/ollama
-            py/plugins/vertex-ai
+            py/packages/genkit-anthropic
+            py/packages/genkit-django
+            py/packages/genkit-evaluators
+            py/packages/genkit-fastapi
+            py/packages/genkit-flask
+            py/packages/genkit-google-genai
+            py/packages/genkit-google-cloud
+            py/packages/genkit-middleware
+            py/packages/genkit-ollama
+            py/packages/genkit-openai
+            py/packages/genkit-vertexai
           )
 
           FAILED=()
@@ -81,6 +81,10 @@ jobs:
             echo "::error::Failed packages: ${FAILED[*]}"
             exit 1
           fi
+
+          echo "::group::Build tombstone packages"
+          python3 py/scripts/publish_tombstones.py --dist-dir dist/
+          echo "::endgroup::"
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

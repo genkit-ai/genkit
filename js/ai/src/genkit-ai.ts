@@ -15,6 +15,7 @@
  */
 
 import {
+  GenkitError,
   getContext,
   run,
   z,
@@ -42,6 +43,7 @@ import {
   type GenerateStreamResponse,
 } from './generate.js';
 import { GenerationCommonConfigSchema, type Part } from './model-types.js';
+import { Session, getCurrentSession } from './session.js';
 
 /**
  * `GenkitAI` encapsulates Genkit's AI APIs.
@@ -268,7 +270,7 @@ export class GenkitAI {
    *
    * ```ts
    * let operation = await ai.generateOperation({
-   *   model: googleAI.model('veo-2.0-generate-001'),
+   *   model: googleAI.model('veo-3.1-generate-preview'),
    *   prompt: 'A banana riding a bicycle.',
    * });
    *
@@ -341,6 +343,22 @@ export class GenkitAI {
       return run(name, funcOrInput, maybeFunc, this.registry);
     }
     return run(name, funcOrInput, this.registry);
+  }
+
+  /**
+   * Gets the current session if running within one, otherwise throws a {@link GenkitError}.
+   *
+   * @beta
+   */
+  currentSession<S = any>(): Session<S> {
+    const currentSession = getCurrentSession(this.registry);
+    if (!currentSession) {
+      throw new GenkitError({
+        status: 'FAILED_PRECONDITION',
+        message: 'not running within a session',
+      });
+    }
+    return currentSession as any as Session<S>;
   }
 
   /**

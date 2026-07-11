@@ -14,5 +14,9 @@
  * limitations under the License.
  */
 
+export {
+  FirestoreSessionStore,
+  type FirestoreSessionStoreOptions,
+} from './session-store/firestore.js';
 export { FirestoreStreamManager } from './stream-manager/firestore.js';
 export { RtdbStreamManager } from './stream-manager/rtdb.js';

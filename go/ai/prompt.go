@@ -32,7 +32,6 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
-	"github.com/firebase/genkit/go/core/x/session"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/dotprompt/go/dotprompt"
 	"github.com/invopop/jsonschema"
@@ -52,7 +51,7 @@ type Prompt interface {
 
 // prompt is a prompt template that can be executed to generate a model response.
 type prompt struct {
-	core.ActionDef[any, *GenerateActionOptions, struct{}]
+	core.Action[any, *GenerateActionOptions, struct{}]
 	promptOptions
 	registry api.Registry
 }
@@ -133,7 +132,7 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 		metadata["prompt"] = promptMetadata
 	}
 
-	p.ActionDef = *core.DefineAction(r, name, api.ActionTypeExecutablePrompt, metadata, p.InputSchema, p.buildRequest)
+	p.Action = *core.DefineAction(r, name, api.ActionTypeExecutablePrompt, metadata, p.InputSchema, p.buildRequest)
 
 	return p
 }
@@ -146,8 +145,8 @@ func LookupPrompt(r api.Registry, name string) Prompt {
 		return nil
 	}
 	return &prompt{
-		ActionDef: *action,
-		registry:  r,
+		Action:   *action,
+		registry: r,
 	}
 }
 
@@ -334,7 +333,7 @@ func (p *prompt) Render(ctx context.Context, input any) (*GenerateActionOptions,
 
 // Desc returns a descriptor of the prompt with resolved schema references.
 func (p *prompt) Desc() api.ActionDesc {
-	desc := p.ActionDef.Desc()
+	desc := p.Action.Desc()
 	descMeta := maps.Clone(desc.Metadata)
 	if promptMeta, ok := descMeta["prompt"].(map[string]any); ok {
 		promptMeta = maps.Clone(promptMeta)
@@ -631,7 +630,7 @@ func renderDotpromptToMessages(ctx context.Context, promptFn dotprompt.PromptFun
 	maps.Copy(templateContext, actionCtx)
 
 	// Inject session state if available (accessible via {{@state.field}} in templates)
-	if state := session.StateFromContext(ctx); state != nil {
+	if state := base.PromptStateFromContext(ctx); state != nil {
 		templateContext["state"] = state
 	}
 

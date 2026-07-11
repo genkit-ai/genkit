@@ -17,6 +17,7 @@
 package base
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,13 @@ import (
 
 	"github.com/invopop/jsonschema"
 )
+
+// HasJSONValue reports whether raw carries an actual JSON value: it is
+// non-empty and not the JSON null literal, ignoring surrounding whitespace.
+func HasJSONValue(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
+}
 
 // JSONString returns json.Marshal(x) as a string. If json.Marshal returns
 // an error, jsonString returns the error text as a JSON string beginning "ERROR:".
@@ -138,6 +146,24 @@ func InferJSONSchema(x any) *jsonschema.Schema {
 	s := r.Reflect(x)
 	s.Version = ""
 	return s
+}
+
+// ConvertTo attempts to convert a value to type T. It tries a direct type
+// assertion first, then falls back to a JSON round-trip for values that were
+// deserialized from JSON (e.g., map[string]any instead of a concrete struct).
+func ConvertTo[T any](v any) (T, bool) {
+	if typed, ok := v.(T); ok {
+		return typed, true
+	}
+	var result T
+	data, err := json.Marshal(v)
+	if err != nil {
+		return result, false
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return result, false
+	}
+	return result, true
 }
 
 // anyStructSchema returns the "any" schema used to break recursion. Types

@@ -1283,6 +1283,48 @@ async def test_generate_json_format_unconstrained_with_instructions(
 
 
 @pytest.mark.asyncio
+async def test_generate_output_instructions_true_injects_standard(
+    setup_test: SetupFixture,
+) -> None:
+    """``output_instructions=True`` injects the format's standard instructions.
+
+    ``json`` defaults to not injecting (it leans on native constrained output), so
+    passing ``True`` is how a caller opts back into the schema instructions -- e.g.
+    when running unconstrained against a model without native structured output.
+    """
+    ai, *_ = setup_test
+
+    class TestSchema(BaseModel):
+        foo: int | None = Field(None, description='foo field')
+
+    def output_parts(resp: Any) -> list[Part]:
+        msg = resp.request.messages[0]
+        return [p for p in msg.content if (p.root.metadata or {}).get('purpose') == 'output']
+
+    # True -> the standard schema preamble is injected.
+    on = await ai.generate(
+        model='echoModel',
+        prompt='hi',
+        output_schema=TestSchema,
+        output_constrained=False,
+        output_instructions=True,
+    )
+    injected = output_parts(on)
+    assert len(injected) == 1
+    injected_text = injected[0].root.text or ''
+    assert 'Output should be in JSON format and conform to the following schema' in injected_text
+
+    # Unset -> json's default (False) means nothing is injected.
+    off = await ai.generate(
+        model='echoModel',
+        prompt='hi',
+        output_schema=TestSchema,
+        output_constrained=False,
+    )
+    assert output_parts(off) == []
+
+
+@pytest.mark.asyncio
 async def test_generate_simulates_doc_grounding(
     setup_test: SetupFixture,
 ) -> None:

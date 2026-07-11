@@ -316,10 +316,10 @@ echo ""
 echo -e "${BLUE}━━━ Section 3: Code Quality ━━━${NC}"
 
 echo -e "\n${CYAN}Running consistency checks...${NC}"
-if "$SCRIPT_DIR/check_consistency" > /dev/null 2>&1; then
+if python3 "$PY_DIR/scripts/check_consistency.py" > /dev/null 2>&1; then
   echo -e "  ${GREEN}✓${NC} All consistency checks passed"
 else
-  echo -e "  ${RED}ERROR${NC}: Consistency checks failed. Run 'py/bin/check_consistency' for details."
+  echo -e "  ${RED}ERROR${NC}: Consistency checks failed. Run 'python3 py/scripts/check_consistency.py' for details."
   ERRORS=$((ERRORS + 1))
 fi
 

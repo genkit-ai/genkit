@@ -40,9 +40,10 @@ import (
 var genkitCtxKey = base.NewContextKey[*Genkit]()
 
 // FromContext returns the [*Genkit] instance stored in the context.
-// This is set automatically by [Generate] and related functions.
-// Middleware implementations can use this to access the Genkit instance
-// during generation.
+// This is set automatically by [Generate] and related functions, and seeded
+// into each agent turn by the agent constructors in
+// [github.com/firebase/genkit/go/genkit/exp]. Middleware implementations can
+// use this to access the Genkit instance during generation.
 func FromContext(ctx context.Context) *Genkit {
 	return genkitCtxKey.FromContext(ctx)
 }
@@ -62,6 +63,7 @@ type genkitOptions struct {
 	PromptDir    string       // Directory where dotprompts are stored. Will be loaded automatically on initialization.
 	PromptFS     fs.FS        // Embedded filesystem containing prompts (alternative to PromptDir).
 	Plugins      []api.Plugin // Plugin to initialize automatically.
+	Experimental bool         // Whether the experimental genkit/exp surface is allowed to be used.
 }
 
 type GenkitOption interface {
@@ -96,6 +98,12 @@ func (o *genkitOptions) apply(gOpts *genkitOptions) error {
 			return errors.New("cannot set plugins more than once (WithPlugins)")
 		}
 		gOpts.Plugins = o.Plugins
+	}
+
+	// Experimental is a pure opt-in toggle, so applying it more than once is
+	// harmless and idempotent rather than an error.
+	if o.Experimental {
+		gOpts.Experimental = true
 	}
 
 	return nil
@@ -159,6 +167,20 @@ func WithPromptFS(fsys fs.FS) GenkitOption {
 	return &genkitOptions{PromptFS: fsys}
 }
 
+// WithExperimental opts the Genkit instance into its experimental surface: the
+// constructors in the genkit/exp package, such as DefineAgent, DefineTool, and
+// DefineStreamingFlow. Without this option, calling any of those constructors
+// panics with a message pointing back here.
+//
+// These features are in preview and/or under active development. Their APIs are
+// still taking shape, so opting in means accepting that they may have breaking
+// or backward-incompatible changes between minor releases, without the
+// source-stability guarantees that apply to the rest of Genkit. Pin your Genkit
+// version if you build on them.
+func WithExperimental() GenkitOption {
+	return &genkitOptions{Experimental: true}
+}
+
 // Init creates and initializes a new [Genkit] instance with the provided options.
 // It sets up the registry, initializes plugins ([WithPlugins]), loads prompts
 // ([WithPromptDir]), and configures other settings like the default model
@@ -191,7 +213,7 @@ func WithPromptFS(fsys fs.FS) GenkitOption {
 //		// Assumes a prompt file at ./prompts/jokePrompt.prompt
 //		g := genkit.Init(ctx,
 //			genkit.WithPlugins(&googlegenai.GoogleAI{}),
-//			genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+//			genkit.WithDefaultModel("googleai/gemini-3-flash-preview"),
 //			genkit.WithPromptDir("./prompts"),
 //		)
 //
@@ -259,6 +281,7 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 
 	r.RegisterValue(api.DefaultModelKey, gOpts.DefaultModel)
 	r.RegisterValue(api.PromptDirKey, gOpts.PromptDir)
+	r.RegisterValue(api.ExperimentalKey, gOpts.Experimental)
 
 	if api.CurrentEnvironment() == api.EnvironmentDev {
 		errCh := make(chan error, 1)
@@ -301,6 +324,19 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 //	genkit.RegisterAction(g, model)
 func RegisterAction(g *Genkit, action api.Registerable) {
 	action.Register(g.reg)
+}
+
+// LookupAction returns the action registered with g under key, or nil if
+// none is registered. key is an action's fully qualified
+// "/type/provider/name" identifier; build it with [api.NewKey] or
+// [api.KeyFromName]. For example, an agent's getSnapshot companion is keyed
+// by api.KeyFromName(api.ActionTypeAgentSnapshot, agentName).
+//
+// This is the generic, type-agnostic lookup. Prefer a typed accessor
+// ([LookupModel], [LookupPrompt], etc.) when one exists for the kind of
+// action you need.
+func LookupAction(g *Genkit, key string) api.Action {
+	return g.reg.LookupAction(key)
 }
 
 // DefineFlow defines a non-streaming flow, registers it as a [core.Action] of type Flow,
@@ -834,7 +870,7 @@ func LookupMiddleware(g *Genkit, name string) *ai.MiddlewareDesc {
 //	// Define the prompt
 //	capitalPrompt := genkit.DefinePrompt(g, "findCapital",
 //		ai.WithDescription("Finds the capital of a country."),
-//		ai.WithModelName("googleai/gemini-2.5-flash"),
+//		ai.WithModelName("googleai/gemini-3-flash-preview"),
 //		ai.WithSystem("You are a helpful geography assistant."),
 //		ai.WithPrompt("What is the capital of {{country}}?"),
 //		ai.WithInputType(GeoInput{Country: "USA"}),
@@ -943,7 +979,7 @@ func DefineSchemaFor[T any](g *Genkit) {
 //	}
 //
 //	capitalPrompt := genkit.DefineDataPrompt[GeoInput, GeoOutput](g, "findCapital",
-//		ai.WithModelName("googleai/gemini-2.5-flash"),
+//		ai.WithModelName("googleai/gemini-3-flash-preview"),
 //		ai.WithSystem("You are a helpful geography assistant."),
 //		ai.WithPrompt("What is the capital of {{country}}?"),
 //	)
@@ -1000,7 +1036,7 @@ func GenerateWithRequest(ctx context.Context, g *Genkit, actionOpts *ai.Generate
 //
 // Model and Configuration:
 //   - [ai.WithModel]: Specify the model (accepts [ai.Model] or [ai.ModelRef])
-//   - [ai.WithModelName]: Specify model by name string (e.g., "googleai/gemini-2.5-flash")
+//   - [ai.WithModelName]: Specify model by name string (e.g., "googleai/gemini-3-flash-preview")
 //   - [ai.WithConfig]: Set generation parameters (temperature, max tokens, etc.)
 //
 // Prompting:
@@ -1038,7 +1074,7 @@ func GenerateWithRequest(ctx context.Context, g *Genkit, actionOpts *ai.Generate
 // Example:
 //
 //	resp, err := genkit.Generate(ctx, g,
-//		ai.WithModelName("googleai/gemini-2.5-flash"),
+//		ai.WithModelName("googleai/gemini-3-flash-preview"),
 //		ai.WithPrompt("Write a short poem about clouds."),
 //	)
 //	if err != nil {
@@ -1525,7 +1561,7 @@ func LoadPrompt(g *Genkit, path, namespace string) ai.Prompt {
 // Example:
 //
 //	promptSource := `---
-//	model: googleai/gemini-2.5-flash
+//	model: googleai/gemini-3-flash-preview
 //	input:
 //	  schema:
 //	    name: string

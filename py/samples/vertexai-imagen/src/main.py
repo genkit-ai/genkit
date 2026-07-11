@@ -18,8 +18,9 @@
 
 import os
 
+from genkit_google_genai import VertexAI
+
 from genkit import Genkit, ModelResponse
-from genkit.plugins.google_genai import VertexAI
 
 if 'GCLOUD_PROJECT' not in os.environ:
     if 'GOOGLE_CLOUD_PROJECT' in os.environ:

@@ -39,7 +39,7 @@ const (
 	ABORTED             StatusName = "ABORTED"
 	OUT_OF_RANGE        StatusName = "OUT_OF_RANGE"
 	UNIMPLEMENTED       StatusName = "UNIMPLEMENTED"
-	INTERNAL            StatusName = "INTERNAL_SERVER_ERROR"
+	INTERNAL            StatusName = "INTERNAL"
 	UNAVAILABLE         StatusName = "UNAVAILABLE"
 	DATA_LOSS           StatusName = "DATA_LOSS"
 )

@@ -79,12 +79,12 @@ requires-python = ">=3.10"
 version = "0.7.0"
 
 [project.optional-dependencies]
-flask                 = ["genkit-plugin-flask"]
-google-cloud          = ["genkit-plugin-google-cloud"]
-google-genai          = ["genkit-plugin-google-genai"]
-ollama                = ["genkit-plugin-ollama"]
-openai                = ["genkit-plugin-compat-oai"]
-vertex-ai             = ["genkit-plugin-vertex-ai"]
+flask                 = ["genkit-flask"]
+google-cloud          = ["genkit-google-cloud"]
+google-genai          = ["genkit-google-genai"]
+ollama                = ["genkit-ollama"]
+openai                = ["genkit-openai"]
+vertex-ai             = ["genkit-vertexai"]
 
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"
@@ -105,7 +105,7 @@ pythonpath = [".", "src", "tests", "packages/genkit/src"]
 testpaths  = ["tests"]
 
 [tool.uv.sources]
-genkit-plugin-compat-oai            = { workspace = true }
-genkit-plugin-flask                 = { workspace = true }
-genkit-plugin-google-genai          = { workspace = true }
-genkit-plugin-ollama                = { workspace = true }
+genkit-openai                   = { workspace = true }
+genkit-flask                        = { workspace = true }
+genkit-google-genai                     = { workspace = true }
+genkit-ollama                       = { workspace = true }

@@ -121,33 +121,6 @@ const PrixFixeMenuSchema = z.object({
   dessert: z.string(),
 });
 
-export const complexMenuSuggestionFlow = ai.defineFlow(
-  {
-    name: 'complexMenuSuggestionFlow',
-    inputSchema: z.string(),
-    outputSchema: PrixFixeMenuSchema,
-  },
-  async (theme: string): Promise<z.infer<typeof PrixFixeMenuSchema>> => {
-    const chat = ai.chat({ model: googleAI.model('gemini-2.5-flash') });
-    await chat.send('What makes a good prix fixe menu?');
-    await chat.send(
-      'What are some ingredients, seasonings, and cooking techniques that ' +
-        `would work for a ${theme} themed menu?`
-    );
-    const { output } = await chat.send({
-      prompt:
-        `Based on our discussion, invent a prix fixe menu for a ${theme} ` +
-        'themed restaurant.',
-      output: {
-        schema: PrixFixeMenuSchema,
-      },
-    });
-    if (!output) {
-      throw new Error('No data generated.');
-    }
-    return output;
-  }
-);
 // [END ex10]
 
 // [START ex11]

@@ -118,6 +118,46 @@ export async function record(event: GAEvent): Promise<void> {
   await recordInternal(event, getSession());
 }
 
+/**
+ * Creates a ToolsRequestEvent with validated duration and optional action parameter.
+ */
+export function createToolsRequestEvent(
+  route: string,
+  durationMs: number,
+  status: string,
+  options?: { action?: string }
+): ToolsRequestEvent {
+  const event = new ToolsRequestEvent(route);
+  event.duration = Math.max(1, durationMs);
+  event.parameters = {
+    ...event.parameters,
+    status,
+    ...(options?.action && { action: options.action }),
+  };
+  return event;
+}
+
+/**
+ * Fire-and-forget helper to record a request analytics event with error logging.
+ */
+export function recordRequestEvent(event: GAEvent): void {
+  record(event).catch((err) => {
+    logger.error(`Failed to send analytics ${err}`);
+  });
+}
+
+/**
+ * Extracts action type from a request action key.
+ */
+export function extractActionType(key?: unknown): string {
+  const keyStr = typeof key === 'string' ? key : '';
+  if (keyStr === '/util/generate' || keyStr === 'util/generate') {
+    return keyStr;
+  }
+  const splits = keyStr.split('/');
+  return splits.length > 1 ? splits[1] : 'unknown';
+}
+
 /** Displays a notification that analytics are in use. */
 export async function notifyAnalyticsIfFirstRun(): Promise<void> {
   if (isAnalyticsOptedOut()) return;
