@@ -202,6 +202,12 @@ def test_parse_retry_after_rejects_blank_and_malformed_values(value: str) -> Non
     assert anthropic_models._parse_retry_after_ms(value) is None
 
 
+@pytest.mark.parametrize('value', ['inf', 'Infinity', 'nan', '1e999', '1e307'])
+def test_parse_retry_after_rejects_non_finite_delays(value: str) -> None:
+    """Reject delays that are, or scale to, non-finite milliseconds."""
+    assert anthropic_models._parse_retry_after_ms(value) is None
+
+
 def test_parse_retry_after_future_http_date(monkeypatch: pytest.MonkeyPatch) -> None:
     """Convert a future HTTP-date to a relative millisecond delay."""
     monkeypatch.setattr(anthropic_models.time, 'time', lambda: 1_700_000_000.0)
@@ -216,8 +222,17 @@ def test_parse_retry_after_past_http_date(monkeypatch: pytest.MonkeyPatch) -> No
     assert anthropic_models._parse_retry_after_ms('Tue, 14 Nov 2023 22:13:15 GMT') == 0.0
 
 
+def test_parse_retry_after_returns_none_on_timestamp_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ignore platform timestamp failures for parseable dates."""
+    retry_at = MagicMock()
+    retry_at.timestamp.side_effect = OSError
+    monkeypatch.setattr(anthropic_models, 'parsedate_to_datetime', lambda _: retry_at)
+
+    assert anthropic_models._parse_retry_after_ms('Thu, 01 Jan 1601 00:00:00') is None
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize('retry_after', [None, '', '   ', 'not-a-delay'])
+@pytest.mark.parametrize('retry_after', [None, '', '   ', 'not-a-delay', 'inf', '1e999'])
 async def test_generate_omits_invalid_retry_after_metadata(retry_after: str | None) -> None:
     """Leave response metadata unset when Retry-After cannot be parsed."""
     api_error = _status_error(429, retry_after=retry_after)

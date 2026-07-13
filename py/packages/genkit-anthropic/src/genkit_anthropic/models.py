@@ -25,6 +25,7 @@ See:
 """
 
 import json
+import math
 import time
 from email.utils import parsedate_to_datetime
 from typing import Any, Protocol, cast
@@ -106,15 +107,17 @@ def _parse_retry_after_ms(value: str) -> float | None:
     except ValueError:
         pass
     else:
-        if seconds >= 0:
-            return seconds * 1000
+        # Check the scaled value: a large finite input can overflow to inf.
+        retry_after_ms = seconds * 1000
+        if seconds >= 0 and math.isfinite(retry_after_ms):
+            return retry_after_ms
 
     try:
         retry_at = parsedate_to_datetime(value)
         if retry_at is None:
             return None
         retry_at_ms = retry_at.timestamp() * 1000
-    except (OverflowError, TypeError, ValueError):
+    except (OSError, OverflowError, TypeError, ValueError):
         return None
     return max(0.0, retry_at_ms - time.time() * 1000)
 
