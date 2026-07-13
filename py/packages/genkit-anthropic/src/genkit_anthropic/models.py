@@ -80,6 +80,20 @@ def _to_anthropic_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _to_tool_input_schema(schema: dict[str, Any] | None) -> dict[str, Any]:
+    """Ensure a tool input schema is valid for the Anthropic API.
+
+    Anthropic requires ``input_schema.type`` to be present and rejects a
+    missing or empty schema with a 400, so no-input tools get a default
+    object schema.
+    """
+    if not schema:
+        return {'type': 'object', 'properties': {}}
+    if 'type' not in schema:
+        return {**schema, 'type': 'object'}
+    return schema
+
+
 class AnthropicModel:
     """Represents an Anthropic language model for use with Genkit.
 
@@ -260,7 +274,7 @@ class AnthropicModel:
                 {
                     'name': t.name,
                     'description': t.description,
-                    'input_schema': t.input_schema,
+                    'input_schema': _to_tool_input_schema(t.input_schema),
                 }
                 for t in request.tools
             ]

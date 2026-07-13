@@ -126,6 +126,52 @@ async def test_generate_with_tools() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_defaults_empty_tool_input_schema() -> None:
+    """Test that tools with a missing or empty input schema get a default object schema."""
+    populated_schema = {
+        'type': 'object',
+        'properties': {'location': {'type': 'string', 'description': 'Location name'}},
+        'required': ['location'],
+    }
+    request = ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[Part(root=TextPart(text='Hello'))],
+            )
+        ],
+        config=ModelConfig(),
+        tools=[
+            ToolDefinition(name='no_schema_tool', description='Tool with no input schema', input_schema=None),
+            ToolDefinition(name='empty_schema_tool', description='Tool with empty input schema', input_schema={}),
+            ToolDefinition(
+                name='untyped_schema_tool',
+                description='Tool with a schema missing a top-level type',
+                input_schema={'properties': {'location': {'type': 'string'}}},
+            ),
+            ToolDefinition(name='get_weather', description='Get weather for a location', input_schema=populated_schema),
+        ],
+    )
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(type='text', text='Done')]
+    mock_response.usage = MagicMock(input_tokens=5, output_tokens=5)
+    mock_response.stop_reason = 'end_turn'
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+    await model.generate(request)
+
+    sent_tools = mock_client.messages.create.call_args.kwargs['tools']
+    default_schema = {'type': 'object', 'properties': {}}
+    assert sent_tools[0]['input_schema'] == default_schema
+    assert sent_tools[1]['input_schema'] == default_schema
+    assert sent_tools[2]['input_schema'] == {'properties': {'location': {'type': 'string'}}, 'type': 'object'}
+    assert sent_tools[3]['input_schema'] == populated_schema
+
+
+@pytest.mark.asyncio
 async def test_generate_with_config() -> None:
     """Test generation with custom config."""
     mock_client = MagicMock()
