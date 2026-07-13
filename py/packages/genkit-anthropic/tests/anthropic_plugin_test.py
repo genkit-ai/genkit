@@ -19,6 +19,7 @@
 import asyncio
 import queue
 import threading
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -206,6 +207,142 @@ def test_get_model_info_unknown() -> None:
     assert info.supports is not None
     assert info.supports.multiturn is True
     assert info.supports.tools is True
+
+
+class _FakeModelPage:
+    """Minimal async-iterable stand-in for the SDK's AsyncPaginator[BetaModelInfo].
+
+    ``client.beta.models.list()`` in the real SDK is a synchronous call that
+    returns an object iterated over with ``async for`` (auto-paginating). A
+    plain ``MagicMock`` does not reliably support the async-iterator protocol,
+    so this tiny fake implements it directly.
+    """
+
+    def __init__(self, items: list[SimpleNamespace]) -> None:
+        self._items = items
+
+    def __aiter__(self) -> '_FakeModelPage':
+        self._iter = iter(self._items)
+        return self
+
+    async def __anext__(self) -> SimpleNamespace:
+        try:
+            return next(self._iter)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+
+@pytest.mark.asyncio
+async def test_list_actions_dynamic_union_dedup_and_fallback_info() -> None:
+    """Dynamic models union with statics, dedup by id, unknown ids get generic info."""
+    plugin = Anthropic(api_key='test-key')
+    mock_client = MagicMock()
+    api_items = [
+        SimpleNamespace(id='claude-mythos-5'),  # unknown id -> generic fallback info
+        SimpleNamespace(id='claude-sonnet-4'),  # known static id -> must appear once, curated info
+        SimpleNamespace(id='claude-unknown-xyz'),  # unknown id -> generic fallback info
+    ]
+    mock_client.beta.models.list = MagicMock(return_value=_FakeModelPage(api_items))
+    plugin._runtime_client = lambda: mock_client
+
+    actions = await plugin.list_actions()
+    names = [a.name for a in actions]
+
+    # No duplicates.
+    assert len(names) == len(set(names))
+
+    # API ids present, in API order, first.
+    assert names[0] == 'anthropic/claude-mythos-5'
+    assert names[1] == 'anthropic/claude-sonnet-4'
+    assert names[2] == 'anthropic/claude-unknown-xyz'
+
+    # Static-only ids the mock didn't return are still present (appended after API ids).
+    for model_id in SUPPORTED_MODELS:
+        if model_id != 'claude-sonnet-4':
+            assert anthropic_name(model_id) in names
+    assert len(names) == 3 + len(SUPPORTED_MODELS) - 1
+
+    # Curated info preserved for a known id returned by the API.
+    sonnet_action = next(a for a in actions if a.name == 'anthropic/claude-sonnet-4')
+    assert sonnet_action.metadata is not None
+    assert sonnet_action.metadata['model']['label'] == 'Anthropic - Claude Sonnet 4'
+
+    # Unknown ids get the generic fallback info, not curated.
+    mythos_action = next(a for a in actions if a.name == 'anthropic/claude-mythos-5')
+    assert mythos_action.metadata is not None
+    assert mythos_action.metadata['model']['label'] == 'Anthropic - claude-mythos-5'
+    assert mythos_action.metadata['model']['supports']['output'] == ['text']
+
+
+@pytest.mark.asyncio
+async def test_list_actions_falls_back_to_static_on_error_uncached() -> None:
+    """API errors fall back to the static list without caching the failure."""
+    plugin = Anthropic(api_key='test-key')
+    mock_client = MagicMock()
+    mock_client.beta.models.list = MagicMock(side_effect=RuntimeError('boom'))
+    plugin._runtime_client = lambda: mock_client
+
+    actions = await plugin.list_actions()
+    names = {a.name for a in actions}
+    assert names == {anthropic_name(model_id) for model_id in SUPPORTED_MODELS}
+
+    _ = await plugin.list_actions()
+    assert mock_client.beta.models.list.call_count == 2  # not cached on failure
+
+
+@pytest.mark.asyncio
+async def test_list_actions_caches_on_success() -> None:
+    """A successful API fetch is memoized for the plugin's lifetime."""
+    plugin = Anthropic(api_key='test-key')
+    mock_client = MagicMock()
+    mock_client.beta.models.list = MagicMock(return_value=_FakeModelPage([SimpleNamespace(id='claude-sonnet-4')]))
+    plugin._runtime_client = lambda: mock_client
+
+    first = await plugin.list_actions()
+    second = await plugin.list_actions()
+    assert mock_client.beta.models.list.call_count == 1
+    assert first is second
+
+
+@pytest.mark.asyncio
+async def test_list_actions_skips_empty_model_ids() -> None:
+    """Models with an empty or missing id are dropped, not turned into bogus actions."""
+    plugin = Anthropic(api_key='test-key')
+    mock_client = MagicMock()
+    api_items = [
+        SimpleNamespace(id='claude-sonnet-4'),
+        SimpleNamespace(id=''),  # empty id -> dropped
+        SimpleNamespace(id=None),  # missing id -> dropped
+    ]
+    mock_client.beta.models.list = MagicMock(return_value=_FakeModelPage(api_items))
+    plugin._runtime_client = lambda: mock_client
+
+    actions = await plugin.list_actions()
+    names = [a.name for a in actions]
+
+    # The valid id is present; the empty/missing ones produce no action.
+    assert 'anthropic/claude-sonnet-4' in names
+    assert 'anthropic/' not in names
+    assert 'anthropic/None' not in names
+    # Only the static set is advertised (the one API id overlaps it).
+    assert len(names) == len(SUPPORTED_MODELS)
+
+
+@pytest.mark.asyncio
+async def test_list_actions_empty_api_response_returns_and_caches_statics() -> None:
+    """A successful but empty API response still advertises (and caches) the static set."""
+    plugin = Anthropic(api_key='test-key')
+    mock_client = MagicMock()
+    mock_client.beta.models.list = MagicMock(return_value=_FakeModelPage([]))
+    plugin._runtime_client = lambda: mock_client
+
+    actions = await plugin.list_actions()
+    names = {a.name for a in actions}
+    assert names == {anthropic_name(model_id) for model_id in SUPPORTED_MODELS}
+
+    # Unlike the error path, an empty-but-successful response is cached.
+    _ = await plugin.list_actions()
+    assert mock_client.beta.models.list.call_count == 1
 
 
 def _create_sample_request() -> ModelRequest:

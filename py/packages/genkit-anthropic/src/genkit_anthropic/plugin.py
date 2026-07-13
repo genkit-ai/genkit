@@ -18,6 +18,7 @@
 
 from typing import Any, cast
 
+import structlog
 from anthropic import AsyncAnthropic
 
 from genkit import ModelConfig, ModelRequest, ModelResponse
@@ -33,6 +34,8 @@ from genkit.plugin_api import (
 )
 from genkit_anthropic.model_info import SUPPORTED_ANTHROPIC_MODELS, get_model_info
 from genkit_anthropic.models import AnthropicModel
+
+logger = structlog.get_logger(__name__)
 
 ANTHROPIC_PLUGIN_NAME = 'anthropic'
 
@@ -73,6 +76,7 @@ class Anthropic(Plugin):
         self.models = models or list(SUPPORTED_ANTHROPIC_MODELS.keys())
         self._anthropic_params = anthropic_params
         self._runtime_client = loop_local_client(lambda: AsyncAnthropic(**cast(dict[str, Any], self._anthropic_params)))
+        self._list_actions_cache: list[ActionMetadata] | None = None
 
     async def init(self) -> list[Action]:
         """Initialize plugin.
@@ -129,19 +133,73 @@ class Anthropic(Plugin):
             },
         )
 
+    def _model_metadata(self, model_id: str) -> ActionMetadata:
+        """Build ActionMetadata for a single (bare, unprefixed) Anthropic model id.
+
+        Args:
+            model_id: Bare model id (no ``anthropic/`` prefix).
+
+        Returns:
+            ActionMetadata for the model, using curated info if known, else a
+            generic fallback.
+        """
+        return model_action_metadata(
+            name=anthropic_name(model_id),
+            info=get_model_info(model_id).model_dump(by_alias=True, exclude_none=True),
+            config_schema=ModelConfig,
+        )
+
+    async def _fetch_dynamic_model_ids(self) -> list[str]:
+        """Fetch all available model ids from the Anthropic API.
+
+        Uses the beta models endpoint (matching JS, so both stable and beta
+        models are discovered) and fully paginates via ``async for`` (matching
+        Go's completeness, rather than JS's first-page-only read).
+
+        Returns:
+            Model ids in API order.
+        """
+        model_ids: list[str] = []
+        async for model in self._runtime_client().beta.models.list():
+            if model.id:
+                model_ids.append(model.id)
+        return model_ids
+
     async def list_actions(self) -> list[ActionMetadata]:
         """List available Anthropic models.
 
+        Queries the Anthropic API for currently available models and returns
+        the union of API-discovered models and any statically known models
+        not already covered by the API response (API ids first, in API
+        order, then remaining static ids, deduplicated by bare id). The
+        successful result is cached for the lifetime of the plugin instance.
+        If the API call fails, logs a warning and returns the static model
+        list only, without caching the failure, so the next call retries the
+        API.
+
         Returns:
-            List of ActionMetadata for all supported models.
+            List of ActionMetadata for all discovered/supported models.
         """
-        actions = []
-        for model_name, model_info in SUPPORTED_ANTHROPIC_MODELS.items():
-            actions.append(
-                model_action_metadata(
-                    name=anthropic_name(model_name),
-                    info=model_info.model_dump(by_alias=True, exclude_none=True),
-                    config_schema=ModelConfig,
-                )
-            )
+        if self._list_actions_cache is not None:
+            return self._list_actions_cache
+
+        try:
+            model_ids = await self._fetch_dynamic_model_ids()
+        except Exception as e:
+            logger.warning('Failed to list Anthropic models from API, using static model list', error=str(e))
+            return [self._model_metadata(model_id) for model_id in SUPPORTED_ANTHROPIC_MODELS]
+
+        seen: set[str] = set()
+        ordered_ids: list[str] = []
+        for model_id in model_ids:
+            if model_id and model_id not in seen:
+                seen.add(model_id)
+                ordered_ids.append(model_id)
+        for model_id in SUPPORTED_ANTHROPIC_MODELS:
+            if model_id not in seen:
+                seen.add(model_id)
+                ordered_ids.append(model_id)
+
+        actions = [self._model_metadata(model_id) for model_id in ordered_ids]
+        self._list_actions_cache = actions
         return actions
