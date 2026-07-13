@@ -24,15 +24,18 @@ from genkit_anthropic.models import AnthropicModel
 from genkit_anthropic.utils import maybe_strip_fences, strip_markdown_fences
 
 from genkit import (
+    Constrained,
     Media,
     MediaPart,
     Message,
     Metadata,
     ModelConfig,
+    ModelInfo,
     ModelRequest,
     ModelResponseChunk,
     Part,
     Role,
+    Supports,
     TextPart,
     ToolDefinition,
     ToolRequestPart,
@@ -641,6 +644,7 @@ def test_structured_output_uses_native_output_config(model_name: str) -> None:
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
         output_format='json',
         output_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
+        output_constrained=True,
     )
 
     params = model._build_params(request)
@@ -650,14 +654,32 @@ def test_structured_output_uses_native_output_config(model_name: str) -> None:
     assert params['output_config']['format']['schema']['additionalProperties'] is False
 
 
-def test_structured_output_falls_back_to_system_prompt() -> None:
-    """Test that JSON without schema falls back to system prompt instruction."""
+def test_structured_output_uses_native_output_config_for_empty_schema() -> None:
+    """Test that an empty, but present, schema enables native structured output."""
     mock_client = MagicMock()
-    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+    model = AnthropicModel(model_name='claude-opus-4-6', client=mock_client)
 
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate JSON'))])],
         output_format='json',
+        output_schema={},
+        output_constrained=True,
+    )
+
+    params = model._build_params(request)
+
+    assert params['output_config']['format'] == {'type': 'json_schema', 'schema': {}}
+
+
+def test_structured_output_falls_back_to_system_prompt() -> None:
+    """Test that JSON without schema falls back to system prompt instruction."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-opus-4-6', client=mock_client)
+
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate JSON'))])],
+        output_format='json',
+        output_constrained=True,
     )
 
     params = model._build_params(request)
@@ -667,17 +689,39 @@ def test_structured_output_falls_back_to_system_prompt() -> None:
     assert 'Output valid JSON' in params['system']
 
 
+@pytest.mark.parametrize('output_constrained', [None, False])
+def test_structured_output_falls_back_when_unconstrained(output_constrained: bool | None) -> None:
+    """Test that callers can opt out of native constrained output."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-opus-4-6', client=mock_client)
+
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
+        output_format='json',
+        output_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
+        output_constrained=output_constrained,
+    )
+
+    params = model._build_params(request)
+
+    assert 'output_config' not in params
+    assert 'Output valid JSON' in params['system']
+    assert 'Follow this JSON schema' in params['system']
+    assert '"name"' in params['system']
+
+
 def test_structured_output_falls_back_for_unsupported_models() -> None:
     """Test that JSON with schema falls back to system prompt for unsupported models."""
     mock_client = MagicMock()
     # Unknown models resolve to the generic fallback in model_info.py, whose
-    # supports.output is ['text'] — no native JSON support.
+    # supports.constrained is unset — no native constrained-output support.
     model = AnthropicModel(model_name='claude-unknown-model', client=mock_client)
 
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
         output_format='json',
         output_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
+        output_constrained=True,
     )
 
     params = model._build_params(request)
@@ -687,3 +731,54 @@ def test_structured_output_falls_back_for_unsupported_models() -> None:
     assert 'Output valid JSON' in params['system']
     assert 'Follow this JSON schema' in params['system']
     assert '"name"' in params['system']
+
+
+def test_structured_output_falls_back_when_model_disallows_constraints() -> None:
+    """Test that an explicit constrained=none capability disables native output."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-opus-4-6', client=mock_client)
+    model._model_info = ModelInfo(label='Test model', supports=Supports(constrained=Constrained.NONE))
+
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
+        output_format='json',
+        output_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
+        output_constrained=True,
+    )
+
+    params = model._build_params(request)
+
+    assert 'output_config' not in params
+    assert 'Output valid JSON' in params['system']
+
+
+def test_structured_output_with_no_tools_capability() -> None:
+    """Test that no-tools constrained output is disabled only when tools are present."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-opus-4-6', client=mock_client)
+    model._model_info = ModelInfo(label='Test model', supports=Supports(constrained=Constrained.NO_TOOLS))
+
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
+        output_format='json',
+        output_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
+        output_constrained=True,
+    )
+    params_without_tools = model._build_params(request)
+
+    request_with_tools = request.model_copy(
+        update={
+            'tools': [
+                ToolDefinition(
+                    name='get_weather',
+                    description='Get weather for a location',
+                    input_schema={'type': 'object'},
+                )
+            ]
+        }
+    )
+    params_with_tools = model._build_params(request_with_tools)
+
+    assert 'output_config' in params_without_tools
+    assert 'output_config' not in params_with_tools
+    assert 'Output valid JSON' in params_with_tools['system']

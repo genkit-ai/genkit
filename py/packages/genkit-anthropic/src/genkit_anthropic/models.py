@@ -32,6 +32,7 @@ from anthropic import AsyncAnthropic
 from anthropic.types import Message as AnthropicMessage
 
 from genkit import (
+    Constrained,
     FinishReason,
     MediaPart,
     Message,
@@ -235,8 +236,13 @@ class AnthropicModel:
 
         # Handle JSON output constraint
         if request.output_format == 'json':
-            supports_json = 'json' in (self._model_info.supports.output or []) if self._model_info.supports else False
-            if request.output_schema and supports_json:
+            use_native = (
+                request.output_schema is not None
+                and bool(request.output_constrained)
+                and self._supports_constrained(bool(request.tools))
+            )
+            if use_native:
+                assert request.output_schema is not None
                 # Use native structured outputs via output_config.
                 params['output_config'] = {
                     'format': {
@@ -247,7 +253,7 @@ class AnthropicModel:
             else:
                 # Fall back to system prompt instruction.
                 instruction = '\n\nOutput valid JSON. Do not wrap the JSON in markdown code fences.'
-                if request.output_schema:
+                if request.output_schema is not None:
                     schema_str = json.dumps(request.output_schema, indent=2)
                     instruction += f'\n\nFollow this JSON schema:\n{schema_str}'
                 system = (system or '') + instruction
@@ -274,6 +280,14 @@ class AnthropicModel:
                     params['tool_choice'] = request.tool_choice
 
         return params
+
+    def _supports_constrained(self, has_tools: bool) -> bool:
+        """Return whether this model supports native constrained output."""
+        supports = self._model_info.supports
+        constrained = supports.constrained if supports else None
+        if constrained is None or constrained == Constrained.NONE:
+            return False
+        return constrained != Constrained.NO_TOOLS or not has_tools
 
     async def _generate_streaming(self, params: dict[str, Any], ctx: ActionRunContext) -> AnthropicMessage:
         """Handle streaming generation.
