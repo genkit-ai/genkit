@@ -4303,6 +4303,103 @@ Now respond to the latest message.`,
       ]);
     });
 
+    it('does not corrupt the final message when a trailing index-less interrupt frame streams (server-managed)', async () => {
+      // On interrupt, `agentFromPrompt` streams the model message
+      // (with an `index`) and then emits an extra `role: 'tool'` frame with no
+      // `index` carrying the same tool requests. A naive assembler folds that
+      // index-less frame into the model message's bucket, flipping its role to
+      // `tool` and duplicating the tool request. The final message must stay the
+      // authoritative `role: 'model'` message (with interrupt metadata), with no
+      // duplicated tool request.
+      const store = new InMemorySessionStore<{}>();
+      const agent = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'apiTrailingInterruptFrame', store },
+        async (sess, { sendChunk }) => {
+          await sess.run(async () => {
+            // The model message that issued the interrupt tool request.
+            sendChunk({
+              modelChunk: {
+                role: 'model',
+                index: 0,
+                content: [
+                  {
+                    toolRequest: {
+                      name: 'userApproval',
+                      ref: 'r1',
+                      input: { action: 'transfer' },
+                    },
+                    metadata: { interrupt: true },
+                  },
+                ],
+              },
+            });
+            // The trailing, index-less `tool` frame emitted on interrupt.
+            sendChunk({
+              modelChunk: {
+                role: 'tool',
+                content: [
+                  {
+                    toolRequest: {
+                      name: 'userApproval',
+                      ref: 'r1',
+                      input: { action: 'transfer' },
+                    },
+                    metadata: { interrupt: true },
+                  },
+                ],
+              },
+            });
+            return { finishReason: 'interrupted' as const };
+          });
+          return {
+            message: {
+              role: 'model',
+              content: [
+                {
+                  toolRequest: {
+                    name: 'userApproval',
+                    ref: 'r1',
+                    input: { action: 'transfer' },
+                  },
+                  metadata: { interrupt: true },
+                },
+              ],
+            },
+            finishReason: 'interrupted' as const,
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      const turn = chat.sendStream('Transfer $500');
+      for await (const _ of turn.stream) {
+      }
+      const res = await turn.response;
+
+      assert.strictEqual(res.finishReason, 'interrupted');
+      const expected = [
+        { role: 'user', content: [{ text: 'Transfer $500' }] },
+        {
+          role: 'model',
+          content: [
+            {
+              toolRequest: {
+                name: 'userApproval',
+                ref: 'r1',
+                input: { action: 'transfer' },
+              },
+              metadata: { interrupt: true },
+            },
+          ],
+        },
+      ];
+      // The trailing index-less frame must not flip the role to `tool` nor
+      // duplicate the tool request.
+      assert.deepEqual(chat.messages, expected);
+      assert.deepEqual(res.messages, expected);
+    });
+
     it('replaces messages wholesale with authoritative history (client-managed)', async () => {
       // Client-managed agents round-trip the full authoritative history on the
       // wire, so `applyOutput` replaces `chat.messages` wholesale - any

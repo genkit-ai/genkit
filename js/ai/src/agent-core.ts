@@ -433,9 +433,11 @@ class MessageAssembler {
 
   /** Folds one streamed model chunk into the accumulating messages. */
   add(chunk: ModelChunk): void {
+    const hasIndex = chunk.index !== undefined;
     const index = chunk.index ?? this.lastIndex;
     this.lastIndex = index;
     let entry = this.byIndex.get(index);
+    const isNewEntry = !entry;
     if (!entry) {
       entry = {
         role: (chunk.role ?? 'model') as MessageData['role'],
@@ -443,6 +445,16 @@ class MessageAssembler {
       };
       this.byIndex.set(index, entry);
       this.order.push(index);
+    }
+    // An index-less chunk that folds into an already-seen message is a trailing
+    // signal frame - e.g. the `role: 'tool'` interrupt frame `agentFromPrompt`
+    // emits after the model message has already streamed. Its tool requests are
+    // already present in the target message, so merging would duplicate them and
+    // its role would wrongly override the established message role. Ignore it;
+    // the authoritative final message is reconciled from `raw.message` once the
+    // turn resolves (see `AgentChatImpl.applyOutput`).
+    if (!hasIndex && !isNewEntry) {
+      return;
     }
     if (chunk.role) {
       entry.role = chunk.role;
@@ -869,7 +881,8 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
   private buildResponse(
     output: Promise<AgentOutput>,
     isAborted: () => boolean,
-    messageCountBeforeTurn: number
+    messageCountBeforeTurn: number,
+    turnPrefixLength: number
   ): Promise<AgentResponse<State>> {
     return (async (): Promise<AgentResponse<State>> => {
       let raw: AgentOutput<State>;
@@ -895,6 +908,21 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
         this.messages.length = messageCountBeforeTurn;
       }
       this.applyOutput(raw);
+      // Server-managed turns stream the turn's intermediate messages (assembled
+      // via `MessageAssembler`) but return only the authoritative final message
+      // on the wire (`raw.message`; no `state.messages`). Overwrite the last
+      // assembled message with it so redundant trailing stream frames - e.g. the
+      // `role: 'tool'` interrupt frame `agentFromPrompt` emits - cannot leave a
+      // corrupted final entry, and so metadata present only on the stored message
+      // (e.g. interrupt metadata) is preserved. Client-managed turns carry
+      // authoritative `state.messages` and are replaced wholesale in `applyOutput`.
+      if (raw.state?.messages === undefined && raw.message) {
+        if (this.messages.length > turnPrefixLength) {
+          this.messages[this.messages.length - 1] = raw.message;
+        } else {
+          this.messages.push(raw.message);
+        }
+      }
       const response = new AgentResponseImpl<State>(
         raw,
         () => [...this.messages],
@@ -995,7 +1023,8 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
     const responsePromise = this.buildResponse(
       output,
       isAborted,
-      messageCountBeforeTurn
+      messageCountBeforeTurn,
+      turnPrefixLength
     );
     // Avoid unhandled-rejection warnings when only the stream is consumed.
     responsePromise.catch(() => {});
