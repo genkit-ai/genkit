@@ -132,25 +132,59 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         doc = await self.pointer_ref(session_id).get()
         if doc.exists:
             pointer = doc.to_dict() or {}
-            if pointer.get('isAmbiguous') and self.reject_ambiguous:
-                raise GenkitError(
-                    status='FAILED_PRECONDITION',
-                    message=(
-                        f"Session '{session_id}' has branching snapshots, so there is no single latest snapshot. "
-                        'This happens when a conversation is branched (e.g. regenerate). '
-                        'Resume by snapshot_id instead.'
-                    ),
-                    details={
-                        'type': SessionErrorType.AMBIGUOUS_BRANCH,
-                        'sessionId': session_id,
-                    },
-                )
+            if pointer.get('isAmbiguous'):
+                leaves = pointer.get('leaves')
+                leaves_dict = leaves if isinstance(leaves, dict) else {}
+                if self.reject_ambiguous:
+                    raise GenkitError(
+                        status='FAILED_PRECONDITION',
+                        message=(
+                            f"Session '{session_id}' has branching snapshots, so there is no single latest snapshot. "
+                            'This happens when a conversation is branched (e.g. regenerate). '
+                            'Resume by snapshot_id instead.'
+                        ),
+                        details={
+                            'type': SessionErrorType.AMBIGUOUS_BRANCH,
+                            'sessionId': session_id,
+                            'leaves': list(leaves_dict.keys()),
+                        },
+                    )
+                if leaves_dict:
+                    newest_id = max(
+                        leaves_dict.items(),
+                        key=lambda kv: (str(kv[1]), str(kv[0])),
+                    )[0]
+                    return copy_snapshot(await self.read_snapshot(newest_id))
+
             current_id = pointer.get('currentSnapshotId')
             if isinstance(current_id, str):
                 return copy_snapshot(await self.read_snapshot(current_id))
 
         owned = await self.list_session_snapshots(session_id)
+        await self._repair_pointer(session_id, owned)
         return copy_snapshot(select_leaf(owned, session_id, reject_ambiguous=self.reject_ambiguous))
+
+    async def _repair_pointer(self, session_id: str, owned: list[SessionSnapshot]) -> None:
+        """Reconstruct and write pointer document for an unpointed or corrupted session."""
+        if not owned:
+            return
+        parent_ids = {snap.parent_id for snap in owned if snap.parent_id}
+        leaves = {
+            snap.snapshot_id: snap.created_at
+            for snap in owned
+            if snap.snapshot_id not in parent_ids
+        }
+        if not leaves:
+            return
+        is_ambiguous = len(leaves) > 1
+        payload: dict[str, Any] = {
+            'isAmbiguous': is_ambiguous,
+            'leaves': leaves,
+            'updatedAt': firestore.SERVER_TIMESTAMP,
+        }
+        if not is_ambiguous:
+            payload['currentSnapshotId'] = next(iter(leaves.keys()))
+        await self.pointer_ref(session_id).set(payload)
 
     async def save_snapshot(self, snapshot_id: str | None, fn: SaveFn) -> SessionSnapshot | None:
         """Save or update a session snapshot in Firestore."""
@@ -170,7 +204,12 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
 
             await self.write_snapshot(next_snapshot)
             parent_id = snapshot_id if snapshot_id is not None else getattr(next_snapshot, 'parent_id', None)
-            await self.maybe_update_pointer(session_id, sid, parent_snapshot_id=parent_id)
+            await self.maybe_update_pointer(
+                session_id,
+                sid,
+                parent_snapshot_id=parent_id,
+                created_at=next_snapshot.created_at,
+            )
             notify(self.subs, sid, next_snapshot.status)
             return next_snapshot
 
@@ -219,8 +258,9 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         snapshot_id: str,
         *,
         parent_snapshot_id: str | None,
+        created_at: str,
     ) -> None:
-        """Atomically update the session pointer to the given snapshot ID."""
+        """Atomically update the session pointer to the given snapshot ID and track leaves."""
         ref = self.pointer_ref(session_id)
         transaction = self.client.transaction()
 
@@ -228,35 +268,35 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         async def update_in_transaction(transaction: Any) -> None:  # noqa: ANN401
             snapshot = await ref.get(transaction=transaction)
             pointer = snapshot.to_dict() if snapshot.exists else None
-            # Linear continuation (parent matches tip) or new root session (parent is None):
-            if parent_snapshot_id is None or (pointer and pointer.get('currentSnapshotId') == parent_snapshot_id):
-                transaction.set(
-                    ref,
-                    {
-                        'currentSnapshotId': snapshot_id,
-                        'isAmbiguous': False,
-                        'updatedAt': firestore.SERVER_TIMESTAMP,
-                    },
-                )
+
+            leaves: dict[str, str] = {}
+            if pointer and isinstance(pointer.get('leaves'), dict):
+                leaves = {
+                    str(k): str(v)
+                    for k, v in pointer['leaves'].items()
+                    if isinstance(k, str) and isinstance(v, str)
+                }
+
+            if parent_snapshot_id and parent_snapshot_id in leaves:
+                leaves.pop(parent_snapshot_id, None)
+
+            leaves[snapshot_id] = created_at
+
+            is_ambiguous = len(leaves) > 1
+            payload: dict[str, Any] = {
+                'isAmbiguous': is_ambiguous,
+                'leaves': leaves,
+                'updatedAt': firestore.SERVER_TIMESTAMP,
+            }
+            if not is_ambiguous:
+                payload['currentSnapshotId'] = next(iter(leaves.keys()))
+            elif pointer and 'currentSnapshotId' in pointer:
+                payload['currentSnapshotId'] = firestore.DELETE_FIELD
+
+            if pointer:
+                transaction.update(ref, payload)
             else:
-                # Branch split or unpointed historical continuation: mark ambiguous.
-                if pointer:
-                    transaction.update(
-                        ref,
-                        {
-                            'currentSnapshotId': firestore.DELETE_FIELD,
-                            'isAmbiguous': True,
-                            'updatedAt': firestore.SERVER_TIMESTAMP,
-                        },
-                    )
-                else:
-                    transaction.set(
-                        ref,
-                        {
-                            'isAmbiguous': True,
-                            'updatedAt': firestore.SERVER_TIMESTAMP,
-                        },
-                    )
+                transaction.set(ref, payload)
 
         await update_in_transaction(transaction)
 

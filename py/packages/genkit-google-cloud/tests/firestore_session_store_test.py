@@ -179,6 +179,7 @@ async def test_firestore_session_store_update_existing_pointer() -> None:
     pointer_snapshot.exists = True
     pointer_snapshot.to_dict.return_value = {
         'currentSnapshotId': 'snap-123',
+        'leaves': {'snap-123': '2026-07-03T00:00:00Z'},
     }
     pointer_doc_ref.get = AsyncMock(return_value=pointer_snapshot)
 
@@ -195,8 +196,8 @@ async def test_firestore_session_store_update_existing_pointer() -> None:
     saved = await store.save_snapshot(None, save_fn)
     assert saved is not None
     assert isinstance(saved.snapshot_id, str)
-    mock_transaction.set.assert_called_once()
-    assert mock_transaction.set.call_args[0][1]['currentSnapshotId'] == saved.snapshot_id
+    mock_transaction.update.assert_called_once()
+    assert mock_transaction.update.call_args[0][1]['currentSnapshotId'] == saved.snapshot_id
 
 
 @pytest.mark.asyncio
@@ -214,7 +215,12 @@ async def test_firestore_session_store_branching_ambiguity() -> None:
     snap_doc_ref = MagicMock()
     snap_doc_ref.set = AsyncMock()
     snap_snapshot = MagicMock()
-    snap_snapshot.exists = False
+    snap_snapshot.exists = True
+    snap_snapshot.to_dict.return_value = {
+        'snapshotId': 'snap-branch',
+        'sessionId': 'sess-branch-1',
+        'createdAt': '2026-07-03T00:00:02Z',
+    }
     snap_doc_ref.get = AsyncMock(return_value=snap_snapshot)
 
     pointer_doc_ref = MagicMock()
@@ -223,6 +229,7 @@ async def test_firestore_session_store_branching_ambiguity() -> None:
     pointer_snapshot.exists = True
     pointer_snapshot.to_dict.return_value = {
         'currentSnapshotId': 'snap-existing',
+        'leaves': {'snap-existing': '2026-07-03T00:00:01Z'},
     }
     pointer_doc_ref.get = AsyncMock(return_value=pointer_snapshot)
 
@@ -250,19 +257,89 @@ async def test_firestore_session_store_branching_ambiguity() -> None:
             created_at='2026-07-03T00:00:02Z',
         )
 
-    saved = await store.save_snapshot(None, save_fn)
+    saved = await store.save_snapshot('snap-branch', save_fn)
     assert saved is not None
     mock_transaction.update.assert_called_once()
     update_payload = mock_transaction.update.call_args[0][1]
     assert update_payload['isAmbiguous'] is True
     assert update_payload['currentSnapshotId'] == firestore.DELETE_FIELD
+    assert update_payload['leaves'] == {
+        'snap-existing': '2026-07-03T00:00:01Z',
+        'snap-branch': '2026-07-03T00:00:02Z',
+    }
 
-    # Now verify get_snapshot raises early when isAmbiguous=True on pointer doc:
+    # Verify get_snapshot raises early when isAmbiguous=True and reject_ambiguous=True:
     pointer_snapshot.to_dict.return_value = {
         'isAmbiguous': True,
+        'leaves': {'snap-existing': '2026-07-03T00:00:01Z', 'snap-branch': '2026-07-03T00:00:02Z'},
     }
     with pytest.raises(GenkitError) as exc_info:
         await store.get_snapshot(session_id='sess-branch-1')
     assert exc_info.value.status == 'FAILED_PRECONDITION'
     assert exc_info.value.details is not None
     assert exc_info.value.details['type'] == SessionErrorType.AMBIGUOUS_BRANCH
+    assert sorted(exc_info.value.details['leaves']) == ['snap-branch', 'snap-existing']
+
+    # Verify get_snapshot resolves newest leaf directly from pointer['leaves'] when reject_ambiguous=False:
+    store_permissive = FirestoreSessionStore(client=mock_client, reject_ambiguous_session=False)
+    snap_existing_doc = MagicMock()
+    snap_existing_doc.to_dict.return_value = {
+        'snapshotId': 'snap-branch',
+        'sessionId': 'sess-branch-1',
+        'createdAt': '2026-07-03T00:00:02Z',
+    }
+    snap_doc_ref.get = AsyncMock(return_value=snap_existing_doc)
+    resolved = await store_permissive.get_snapshot(session_id='sess-branch-1')
+    assert resolved is not None
+    assert resolved.snapshot_id == 'snap-branch'
+
+
+@pytest.mark.asyncio
+async def test_firestore_session_store_repair_pointer_on_read() -> None:
+    """Test self-repair of missing/unpointed pointer document right during get_snapshot fallback."""
+    mock_client = MagicMock()
+    pointer_doc_ref = MagicMock()
+    pointer_doc_ref.set = AsyncMock()
+    pointer_snapshot = MagicMock()
+    pointer_snapshot.exists = False
+    pointer_doc_ref.get = AsyncMock(return_value=pointer_snapshot)
+
+    snap_doc_1 = MagicMock()
+    snap_doc_1.to_dict.return_value = {
+        'snapshotId': 'snap-1',
+        'sessionId': 'sess-unpointed',
+        'createdAt': '2026-07-03T00:00:01Z',
+    }
+    snap_doc_2 = MagicMock()
+    snap_doc_2.to_dict.return_value = {
+        'snapshotId': 'snap-2',
+        'parentId': 'snap-1',
+        'sessionId': 'sess-unpointed',
+        'createdAt': '2026-07-03T00:00:02Z',
+    }
+
+    snapshots_stream = MagicMock()
+    async def mock_stream() -> Any:  # noqa: ANN401
+        for doc in [snap_doc_1, snap_doc_2]:
+            yield doc
+    snapshots_stream.stream = MagicMock(return_value=mock_stream())
+
+    mock_col = MagicMock()
+    def collection_side_effect(col_name: str) -> Any:  # noqa: ANN401
+        if 'pointer' in col_name:
+            return mock_col
+        return mock_col
+    mock_client.collection.side_effect = collection_side_effect
+    mock_col.document.return_value = pointer_doc_ref
+    pointer_doc_ref.collection.return_value = mock_col
+    mock_col.where.return_value = snapshots_stream
+
+    store = FirestoreSessionStore(client=mock_client, reject_ambiguous_session=False)
+    resolved = await store.get_snapshot(session_id='sess-unpointed')
+    assert resolved is not None
+    assert resolved.snapshot_id == 'snap-2'
+    pointer_doc_ref.set.assert_called_once()
+    set_payload = pointer_doc_ref.set.call_args[0][0]
+    assert set_payload['isAmbiguous'] is False
+    assert set_payload['currentSnapshotId'] == 'snap-2'
+    assert set_payload['leaves'] == {'snap-2': '2026-07-03T00:00:02Z'}
