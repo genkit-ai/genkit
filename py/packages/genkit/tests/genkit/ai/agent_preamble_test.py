@@ -81,11 +81,11 @@ async def test_prompt_agent_does_not_persist_system_preamble() -> None:
         )
     )
 
-    async with agent.chat() as session:
-        turn = session.send('hello')
-        async for _chunk in turn:
-            pass
-        await turn
+    session = agent.chat()
+    turn = session.send('hello')
+    async for _chunk in turn:
+        pass
+    await turn
 
     roles = [m.role for m in session.messages]
     assert Role.SYSTEM not in roles
@@ -111,16 +111,16 @@ async def test_prompt_agent_multi_turn_session_has_no_accumulated_preamble() -> 
         ),
     ])
 
-    async with agent.chat() as session:
-        turn1 = session.send('hello')
-        async for _chunk in turn1:
-            pass
-        await turn1
+    session = agent.chat()
+    turn1 = session.send('hello')
+    async for _chunk in turn1:
+        pass
+    await turn1
 
-        turn2 = session.send('again')
-        async for _chunk in turn2:
-            pass
-        await turn2
+    turn2 = session.send('again')
+    async for _chunk in turn2:
+        pass
+    await turn2
 
     roles = [m.role for m in session.messages]
     assert Role.SYSTEM not in roles
@@ -165,11 +165,11 @@ async def test_prompt_agent_explicit_history_tag_preamble() -> None:
         )
     )
 
-    async with agent.chat() as session:
-        turn = session.send('turn 1')
-        async for _chunk in turn:
-            pass
-        await turn
+    session = agent.chat()
+    turn = session.send('turn 1')
+    async for _chunk in turn:
+        pass
+    await turn
 
     # Verify that the LLM received the prefix instructions, history, and suffix instructions
     assert pm.request_count == 1
@@ -228,11 +228,11 @@ async def test_prompt_agent_few_shot_preamble() -> None:
         )
     )
 
-    async with agent.chat() as session:
-        turn = session.send('turn 1')
-        async for _chunk in turn:
-            pass
-        await turn
+    session = agent.chat()
+    turn = session.send('turn 1')
+    async for _chunk in turn:
+        pass
+    await turn
 
     # Verify the LLM received the system prompt, few-shots, and user query
     assert pm.request_count == 1
@@ -293,11 +293,11 @@ async def test_prompt_agent_tool_messages_preserved_verbatim() -> None:
     ]
 
     seed_messages = [MessageData.model_validate(m.model_dump()) for m in history]
-    async with agent.chat(messages=seed_messages) as session:
-        turn = session.send('continue')
-        async for _chunk in turn:
-            pass
-        await turn
+    session = agent.chat(messages=seed_messages)
+    turn = session.send('continue')
+    async for _chunk in turn:
+        pass
+    await turn
 
     # Verify that LLM receives all history messages, including tool components
     assert pm.request_count == 1

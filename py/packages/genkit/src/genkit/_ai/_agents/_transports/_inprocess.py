@@ -130,7 +130,3 @@ class InProcessTransport:
         if self._abort_snapshot is None:
             return None
         return await self._abort_snapshot(snapshot_id)
-
-    async def close(self) -> None:
-        """No persistent connection to tear down: each turn owns its own."""
-        return None

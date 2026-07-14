@@ -193,10 +193,6 @@ class HttpAgentTransport(AgentTransport[StateT]):
         out: Any = SnapshotStatus(status_val)
         return out
 
-    async def close(self) -> None:
-        """Close the underlying bidi connection."""
-        pass
-
 
 def remote_agent(
     url: str,

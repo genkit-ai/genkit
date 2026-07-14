@@ -98,7 +98,6 @@ class MockAgentTransport(AgentTransport[dict[str, Any]]):
         self.connect_init: AgentInit | None = None
         self.send_payloads: list[AgentInput] = []
         self.final_output: AgentOutput | None = None
-        self.close_called: bool = False
         self.abort_snapshot_id: str | None = None
         self.state_management: StateManagement = state_management
         self._receive_queue: asyncio.Queue[AgentStreamChunk | None] = asyncio.Queue()
@@ -135,9 +134,6 @@ class MockAgentTransport(AgentTransport[dict[str, Any]]):
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
         self.abort_snapshot_id = snapshot_id
         return SnapshotStatus.ABORTED
-
-    async def close(self) -> None:
-        self.close_called = True
 
     def push_chunk(self, chunk: AgentStreamChunk | None) -> None:
         self._receive_queue.put_nowait(chunk)
@@ -567,24 +563,24 @@ async def test_server_managed_running_view_matches_snapshot_over_real_tool_loop(
         [ModelResponseChunkModel(role=Role.MODEL, content=[Part(root=TextPart(text='It is 12C in Tokyo.'))])],
     ]
 
-    async with agent.chat() as chat:
-        await chat.send('Weather in Tokyo?')
+    chat = agent.chat()
+    await chat.send('Weather in Tokyo?')
 
-        # The running view carries the whole turn, not just user + final reply.
-        assert [m.role for m in chat.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
-        call_req = chat.messages[1].content[0].root
-        assert isinstance(call_req, ToolRequestPart)
-        assert call_req.tool_request.name == 'weather'
-        reply_resp = chat.messages[2].content[0].root
-        assert isinstance(reply_resp, ToolResponsePart)
-        assert reply_resp.tool_response.output == '12C'
-        assert chat.messages[3].content[0].root.text == 'It is 12C in Tokyo.'
+    # The running view carries the whole turn, not just user + final reply.
+    assert [m.role for m in chat.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+    call_req = chat.messages[1].content[0].root
+    assert isinstance(call_req, ToolRequestPart)
+    assert call_req.tool_request.name == 'weather'
+    reply_resp = chat.messages[2].content[0].root
+    assert isinstance(reply_resp, ToolResponsePart)
+    assert reply_resp.tool_response.output == '12C'
+    assert chat.messages[3].content[0].root.text == 'It is 12C in Tokyo.'
 
-        # And it matches the durable store snapshot the server actually persisted.
-        snapshot = await chat.get_snapshot()
-        assert snapshot is not None
-        assert snapshot.state is not None
-        assert [m.role for m in (snapshot.state.messages or [])] == [m.role for m in chat.messages]
+    # And it matches the durable store snapshot the server actually persisted.
+    snapshot = await chat.get_snapshot()
+    assert snapshot is not None
+    assert snapshot.state is not None
+    assert [m.role for m in (snapshot.state.messages or [])] == [m.role for m in chat.messages]
 
 
 @pytest.mark.asyncio
@@ -891,14 +887,6 @@ async def test_session_handling_multiple_tool_interrupts() -> None:
     assert {p.tool_request.name for p in sent_resume.restart} == {'transferA', 'transferB'}
 
 
-@pytest.mark.asyncio
-async def test_session_context_manager_autocloses() -> None:
-    transport = MockAgentTransport()
-
-    async with AgentChat(transport):
-        assert not transport.close_called
-
-    assert transport.close_called
 
 
 @pytest.mark.asyncio
@@ -926,26 +914,26 @@ async def test_in_process_persistent_connection() -> None:
         )
     )
 
-    async with agent.chat() as chat:
-        # Turn 1
-        turn1 = chat.send('Hello')
-        chunks1 = []
-        async for chunk in turn1:
-            chunks1.append(chunk)
-        res1 = await turn1
-        assert res1.message is not None
-        assert res1.message.content is not None
-        assert res1.message.content[0].root.text == 'Echo 1'
+    chat = agent.chat()
+    # Turn 1
+    turn1 = chat.send('Hello')
+    chunks1 = []
+    async for chunk in turn1:
+        chunks1.append(chunk)
+    res1 = await turn1
+    assert res1.message is not None
+    assert res1.message.content is not None
+    assert res1.message.content[0].root.text == 'Echo 1'
 
-        # Turn 2
-        turn2 = chat.send('World')
-        chunks2 = []
-        async for chunk in turn2:
-            chunks2.append(chunk)
-        res2 = await turn2
-        assert res2.message is not None
-        assert res2.message.content is not None
-        assert res2.message.content[0].root.text == 'Echo 2'
+    # Turn 2
+    turn2 = chat.send('World')
+    chunks2 = []
+    async for chunk in turn2:
+        chunks2.append(chunk)
+    res2 = await turn2
+    assert res2.message is not None
+    assert res2.message.content is not None
+    assert res2.message.content[0].root.text == 'Echo 2'
 
 
 @pytest.mark.asyncio
@@ -971,43 +959,43 @@ async def test_attached_turn_abort() -> None:
 
     pm.response_cb = slow_response
 
-    async with agent.chat() as chat:
-        turn = chat.send('Hello')
+    chat = agent.chat()
+    turn = chat.send('Hello')
 
-        # Let it run a bit
-        await asyncio.sleep(0.1)
+    # Let it run a bit
+    await asyncio.sleep(0.1)
 
-        # Abort the turn client-side (stops reading the stream)
-        await turn.abort()
+    # Abort the turn client-side (stops reading the stream)
+    await turn.abort()
 
-        # Verify awaiting the turn raises CancelledError
-        with pytest.raises(asyncio.CancelledError):
-            await turn
+    # Verify awaiting the turn raises CancelledError
+    with pytest.raises(asyncio.CancelledError):
+        await turn
 
-        # Abort is a client-side detach only: the prompt was still asked, so the
-        # optimistic user message stays in history (just without a reply).
-        texts_after_abort = [p.root.text for m in chat.messages for p in (m.content or []) if hasattr(p.root, 'text')]
-        assert texts_after_abort == ['Hello']
+    # Abort is a client-side detach only: the prompt was still asked, so the
+    # optimistic user message stays in history (just without a reply).
+    texts_after_abort = [p.root.text for m in chat.messages for p in (m.content or []) if hasattr(p.root, 'text')]
+    assert texts_after_abort == ['Hello']
 
-        # Restore normal fast response for the second turn
-        pm.response_cb = None
-        pm.responses.append(
-            ModelResponse(
-                finish_reason=FinishReason.STOP,
-                message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Second turn echo'))]),
-            )
+    # Restore normal fast response for the second turn
+    pm.response_cb = None
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Second turn echo'))]),
         )
+    )
 
-        # We can keep going; the next turn appends onto the kept history.
-        turn2 = chat.send('Continue conversation')
-        res2 = await turn2
+    # We can keep going; the next turn appends onto the kept history.
+    turn2 = chat.send('Continue conversation')
+    res2 = await turn2
 
-        # The detached turn's 'Hello' is still there, followed by the new exchange.
-        texts = [p.root.text for m in chat.messages for p in (m.content or []) if hasattr(p.root, 'text')]
-        assert texts == ['Hello', 'Continue conversation', 'Second turn echo']
-        assert res2.message is not None
-        assert res2.message.content is not None
-        assert res2.message.content[0].root.text == 'Second turn echo'
+    # The detached turn's 'Hello' is still there, followed by the new exchange.
+    texts = [p.root.text for m in chat.messages for p in (m.content or []) if hasattr(p.root, 'text')]
+    assert texts == ['Hello', 'Continue conversation', 'Second turn echo']
+    assert res2.message is not None
+    assert res2.message.content is not None
+    assert res2.message.content[0].root.text == 'Second turn echo'
 
 
 @pytest.mark.asyncio
@@ -1031,31 +1019,31 @@ async def test_await_turn_under_timeout_detaches() -> None:
 
     pm.response_cb = slow_response
 
-    async with agent.chat() as chat:
-        turn = chat.send('Hello')
+    chat = agent.chat()
+    turn = chat.send('Hello')
 
-        # The deadline fires before the slow model responds → surfaces as TimeoutError.
-        async def _await_turn() -> None:
-            await turn
+    # The deadline fires before the slow model responds → surfaces as TimeoutError.
+    async def _await_turn() -> None:
+        await turn
 
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(_await_turn(), 0.2)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_await_turn(), 0.2)
 
-        # Detach kept the optimistic prompt; the session reads as a turn with no reply.
-        texts_after = [p.root.text for m in chat.messages for p in (m.content or []) if hasattr(p.root, 'text')]
-        assert texts_after == ['Hello']
+    # Detach kept the optimistic prompt; the session reads as a turn with no reply.
+    texts_after = [p.root.text for m in chat.messages for p in (m.content or []) if hasattr(p.root, 'text')]
+    assert texts_after == ['Hello']
 
-        # And we can continue cleanly.
-        pm.response_cb = None
-        pm.responses.append(
-            ModelResponse(
-                finish_reason=FinishReason.STOP,
-                message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Second turn echo'))]),
-            )
+    # And we can continue cleanly.
+    pm.response_cb = None
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Second turn echo'))]),
         )
-        res2 = await chat.send('Continue conversation')
-        assert res2.message is not None
-        assert res2.message.content[0].root.text == 'Second turn echo'
+    )
+    res2 = await chat.send('Continue conversation')
+    assert res2.message is not None
+    assert res2.message.content[0].root.text == 'Second turn echo'
 
 
 @pytest.mark.asyncio
@@ -1078,18 +1066,18 @@ async def test_stream_turn_under_timeout_detaches() -> None:
 
     pm.response_cb = slow_response
 
-    async with agent.chat() as chat:
-        turn = chat.send('Hello')
+    chat = agent.chat()
+    turn = chat.send('Hello')
 
-        async def _drain() -> None:
-            async for _chunk in turn:
-                pass
+    async def _drain() -> None:
+        async for _chunk in turn:
+            pass
 
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(_drain(), 0.2)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_drain(), 0.2)
 
-        texts_after = [p.root.text for m in chat.messages for p in (m.content or []) if hasattr(p.root, 'text')]
-        assert texts_after == ['Hello']
+    texts_after = [p.root.text for m in chat.messages for p in (m.content or []) if hasattr(p.root, 'text')]
+    assert texts_after == ['Hello']
 
 
 @pytest.mark.asyncio
@@ -1135,24 +1123,24 @@ async def test_session_abort() -> None:
         )
     )
 
-    async with agent.chat() as chat:
-        # Start a detached turn to get a snapshot ID on the server
-        task = await chat.detach('Trigger slow action')
-        assert task.snapshot_id is not None
+    chat = agent.chat()
+    # Start a detached turn to get a snapshot ID on the server
+    task = await chat.detach('Trigger slow action')
+    assert task.snapshot_id is not None
 
-        # Give it a tiny moment to start execution
-        await asyncio.sleep(0.2)
+    # Give it a tiny moment to start execution
+    await asyncio.sleep(0.2)
 
-        # Abort the running snapshot on the server (requires a store)
-        status = await chat.abort()
-        assert status == SnapshotStatus.ABORTED
+    # Abort the running snapshot on the server (requires a store)
+    status = await chat.abort()
+    assert status == SnapshotStatus.ABORTED
 
-        # Give the background task a moment to process cancellation
-        await asyncio.sleep(0.5)
+    # Give the background task a moment to process cancellation
+    await asyncio.sleep(0.5)
 
-        # Verify the tool was started and successfully cancelled by the server abort!
-        assert tool_executed
-        assert tool_cancelled
+    # Verify the tool was started and successfully cancelled by the server abort!
+    assert tool_executed
+    assert tool_cancelled
 
 
 @pytest.mark.asyncio

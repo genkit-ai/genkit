@@ -97,7 +97,6 @@ async def test_http_transport_integration() -> None:
             res = await turn
             assert res.text == 'Echo: Hello Genkit!'
             assert res.finish_reason == AgentFinishReason.STOP
-            await chat.close()
         finally:
             # Shutdown Genkit and reflection server
             pass

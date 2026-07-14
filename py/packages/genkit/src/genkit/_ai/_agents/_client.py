@@ -121,10 +121,6 @@ class AgentTransport(Protocol, Generic[StateT_co]):
         """Aborts the specified snapshot on the server."""
         ...
 
-    async def close(self) -> None:
-        """Cleanly closes any persistent connections held by this transport."""
-        ...
-
 
 # ===========================================================================
 # Client Return Types & Models
@@ -818,17 +814,6 @@ class AgentChat(Generic[StateT]):
     # Public API
     # ------------------------------------------------------------------
 
-    async def __aenter__(self) -> AgentChat[StateT]:
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        await self.close()
-
     def send(
         self,
         input: str | AgentInput,
@@ -949,10 +934,6 @@ class AgentChat(Generic[StateT]):
                 'completed turn). For a client-side stop, use turn.abort().'
             )
         return await self._transport.abort_snapshot(self._snapshot_id)
-
-    async def close(self) -> None:
-        """Cleanly closes the underlying transport."""
-        await self._transport.close()
 
     # ------------------------------------------------------------------
     # Internal (transport / runtime wiring)
