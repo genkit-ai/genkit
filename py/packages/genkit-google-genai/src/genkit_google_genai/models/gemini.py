@@ -179,6 +179,34 @@ def _to_dict(obj: JsonAny) -> JsonAny:  # noqa: ANN401
     return obj.model_dump() if isinstance(obj, BaseModel) else obj
 
 
+def _to_finish_reason(fr_name: str | None) -> FinishReason:
+    """Map a google-genai finish reason name onto Genkit's FinishReason."""
+    if fr_name == 'STOP':
+        return FinishReason.STOP
+    if fr_name == 'MAX_TOKENS':
+        return FinishReason.LENGTH
+    if fr_name in ('SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII'):
+        return FinishReason.BLOCKED
+    return FinishReason.OTHER
+
+
+def _usage_from_metadata(usage_metadata: Any) -> ModelUsage:  # noqa: ANN401
+    """Build ModelUsage from a google-genai usage_metadata block."""
+    if usage_metadata is None:
+        return ModelUsage()
+    return ModelUsage(
+        input_tokens=float(usage_metadata.prompt_token_count or 0),
+        output_tokens=float(usage_metadata.candidates_token_count or 0),
+        total_tokens=float(usage_metadata.total_token_count or 0),
+        thoughts_tokens=float(usage_metadata.thoughts_token_count or 0)
+        if usage_metadata.thoughts_token_count
+        else None,
+        cached_content_tokens=float(usage_metadata.cached_content_token_count or 0)
+        if usage_metadata.cached_content_token_count
+        else None,
+    )
+
+
 from genkit_google_genai.models._deprecations import (  # noqa: E402
     deprecated_enum_metafactory,
 )
@@ -1668,17 +1696,7 @@ class GeminiModel:
                 if not c_content:
                     c_content = [Part(root=TextPart(text=''))]
 
-                c_finish_reason = FinishReason.OTHER
-                if c.finish_reason:
-                    fr_name = c.finish_reason.name
-                    if fr_name == 'STOP':
-                        c_finish_reason = FinishReason.STOP
-                    elif fr_name == 'MAX_TOKENS':
-                        c_finish_reason = FinishReason.LENGTH
-                    elif fr_name in ['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII']:
-                        c_finish_reason = FinishReason.BLOCKED
-                    elif fr_name == 'OTHER':
-                        c_finish_reason = FinishReason.OTHER
+                c_finish_reason = _to_finish_reason(c.finish_reason.name if c.finish_reason else None)
 
                 if i == 0:
                     finish_reason = c_finish_reason
@@ -1762,6 +1780,8 @@ class GeminiModel:
             ) from e
 
         accumulated_content: list[Part] = []
+        finish_reason = FinishReason.STOP
+        usage_metadata: Any = None
         async for response_chunk in generator:
             content = await self._contents_from_response(response_chunk)
             if content:  # Only process if we have content
@@ -1772,12 +1792,21 @@ class GeminiModel:
                         role=Role.MODEL,
                     )
                 )
+            # The terminating reason and cumulative token usage ride on the trailing
+            # chunks, so hold onto the latest values we see as the stream drains —
+            # otherwise a streamed turn reports no finish reason and no usage at all.
+            if response_chunk.candidates and response_chunk.candidates[0].finish_reason:
+                finish_reason = _to_finish_reason(response_chunk.candidates[0].finish_reason.name)
+            if response_chunk.usage_metadata is not None:
+                usage_metadata = response_chunk.usage_metadata
 
         return ModelResponse(
             message=Message(
                 role=Role.MODEL,
                 content=accumulated_content,
-            )
+            ),
+            finish_reason=finish_reason,
+            usage=_usage_from_metadata(usage_metadata),
         )
 
     @cached_property
