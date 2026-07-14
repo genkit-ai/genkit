@@ -17,6 +17,7 @@ _genkit_agent = pytest.importorskip('genkit.agent', reason='agents API not avail
 if not hasattr(_genkit_agent, 'InMemorySessionStore'):
     pytest.skip('agents API not available', allow_module_level=True)
 InMemorySessionStore = _genkit_agent.InMemorySessionStore
+AgentInit = _genkit_agent.AgentInit
 
 from genkit_fastapi import handle_genkit_request, serve_agent  # noqa: E402
 
@@ -98,35 +99,6 @@ def test_turn_shorthand_matches_wire_format() -> None:
     assert 'Hi there!' in json.dumps(response.json()['result'])
 
 
-def test_context_provider_rejects_before_stream() -> None:
-    """A context_provider that raises stops the turn with a normal error response."""
-
-    def deny(_request_data: Any) -> dict[str, object]:
-        raise HTTPException(status_code=401, detail='no token')
-
-    client_obj = client(build_agent('authAgent'), context_provider=deny)
-
-    response = client_obj.post('/api/chat', json={'message': 'Hi'})
-
-    assert response.status_code == 401
-
-
-def test_context_provider_receives_request() -> None:
-    """The provider sees the incoming request headers before the turn runs."""
-    seen: dict[str, Any] = {}
-
-    def provide(request_data: Any) -> dict[str, object]:
-        seen['authorization'] = request_data.request.headers.get('authorization')
-        return {'uid': 'user-123'}
-
-    client_obj = client(build_agent('ctxAgent'), context_provider=provide)
-
-    response = client_obj.post('/api/chat', json={'message': 'Hi'}, headers={'Authorization': 'Bearer abc'})
-
-    assert response.status_code == 200
-    assert seen['authorization'] == 'Bearer abc'
-
-
 def test_get_snapshot_missing_returns_404() -> None:
     """getSnapshot for an unknown snapshot id returns 404."""
     client_obj = client(build_agent('snapAgent'))
@@ -170,8 +142,13 @@ def test_handle_genkit_request_powers_a_hand_rolled_route() -> None:
 
     @app.post('/custom', response_model=None)
     async def custom(request: Request) -> object:
-        # A real app would build this context from its own Depends params.
-        return await handle_genkit_request(agent, request, context={'uid': 'user-123'})
+        # A real app would build this context and init from its own Depends params.
+        return await handle_genkit_request(
+            request,
+            action=agent,
+            context={'uid': 'user-123'},
+            init=AgentInit(session_id='session-789'),
+        )
 
     client_obj = TestClient(app)
 
