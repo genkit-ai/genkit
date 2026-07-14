@@ -194,16 +194,19 @@ def _usage_from_metadata(usage_metadata: Any) -> ModelUsage:  # noqa: ANN401
     """Build ModelUsage from a google-genai usage_metadata block."""
     if usage_metadata is None:
         return ModelUsage()
+
+    prompt_tokens = getattr(usage_metadata, 'prompt_token_count', 0) or 0
+    candidates_tokens = getattr(usage_metadata, 'candidates_token_count', 0) or 0
+    total_tokens = getattr(usage_metadata, 'total_token_count', 0) or 0
+    thoughts_tokens = getattr(usage_metadata, 'thoughts_token_count', None)
+    cached_tokens = getattr(usage_metadata, 'cached_content_token_count', None)
+
     return ModelUsage(
-        input_tokens=float(usage_metadata.prompt_token_count or 0),
-        output_tokens=float(usage_metadata.candidates_token_count or 0),
-        total_tokens=float(usage_metadata.total_token_count or 0),
-        thoughts_tokens=float(usage_metadata.thoughts_token_count or 0)
-        if usage_metadata.thoughts_token_count
-        else None,
-        cached_content_tokens=float(usage_metadata.cached_content_token_count or 0)
-        if usage_metadata.cached_content_token_count
-        else None,
+        input_tokens=float(prompt_tokens),
+        output_tokens=float(candidates_tokens),
+        total_tokens=float(total_tokens),
+        thoughts_tokens=float(thoughts_tokens) if thoughts_tokens else None,
+        cached_content_tokens=float(cached_tokens) if cached_tokens else None,
     )
 
 
@@ -1795,8 +1798,10 @@ class GeminiModel:
             # The terminating reason and cumulative token usage ride on the trailing
             # chunks, so hold onto the latest values we see as the stream drains —
             # otherwise a streamed turn reports no finish reason and no usage at all.
-            if response_chunk.candidates and response_chunk.candidates[0].finish_reason:
-                finish_reason = _to_finish_reason(response_chunk.candidates[0].finish_reason.name)
+            if response_chunk.candidates and response_chunk.candidates[0] is not None:
+                fr = response_chunk.candidates[0].finish_reason
+                if fr:
+                    finish_reason = _to_finish_reason(getattr(fr, 'name', fr))
             if response_chunk.usage_metadata is not None:
                 usage_metadata = response_chunk.usage_metadata
 
@@ -2109,15 +2114,9 @@ class GeminiModel:
 
         usage = get_basic_usage_stats(input_=request.messages, response=response.message)
         if response.usage:
-            if response.usage.input_tokens is not None:
-                usage.input_tokens = response.usage.input_tokens
-            if response.usage.output_tokens is not None:
-                usage.output_tokens = response.usage.output_tokens
-            if response.usage.total_tokens is not None:
-                usage.total_tokens = response.usage.total_tokens
-            if response.usage.thoughts_tokens is not None:
-                usage.thoughts_tokens = response.usage.thoughts_tokens
-            if response.usage.cached_content_tokens is not None:
-                usage.cached_content_tokens = response.usage.cached_content_tokens
+            for field in ('input_tokens', 'output_tokens', 'total_tokens', 'thoughts_tokens', 'cached_content_tokens'):
+                val = getattr(response.usage, field, None)
+                if val is not None:
+                    setattr(usage, field, val)
 
         return usage
