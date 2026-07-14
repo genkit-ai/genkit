@@ -2109,10 +2109,15 @@ class GeminiModel:
 
         usage = get_basic_usage_stats(input_=request.messages, response=response.message)
         if response.usage:
-            usage.input_tokens = response.usage.input_tokens
-            usage.output_tokens = response.usage.output_tokens
-            usage.total_tokens = response.usage.total_tokens
-            usage.thoughts_tokens = response.usage.thoughts_tokens
-            usage.cached_content_tokens = response.usage.cached_content_tokens
+            if response.usage.input_tokens is not None:
+                usage.input_tokens = response.usage.input_tokens
+            if response.usage.output_tokens is not None:
+                usage.output_tokens = response.usage.output_tokens
+            if response.usage.total_tokens is not None:
+                usage.total_tokens = response.usage.total_tokens
+            if response.usage.thoughts_tokens is not None:
+                usage.thoughts_tokens = response.usage.thoughts_tokens
+            if response.usage.cached_content_tokens is not None:
+                usage.cached_content_tokens = response.usage.cached_content_tokens
 
         return usage
