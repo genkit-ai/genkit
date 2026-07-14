@@ -434,6 +434,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
         response = await self.ollama_model._chat_with_ollama(self.request, self.ctx)
 
         self.assertIsNotNone(response)
+        assert response is not None
         self.assertEqual(response.message.content, 'chunk1chunk2')
         self.mock_build_chat_messages.assert_called_once_with(self.request)
         self.mock_is_streaming_request.assert_called_once_with(ctx=self.ctx)
@@ -645,6 +646,7 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
         response = await self.ollama_model._generate_ollama_response(self.request, self.ctx)
 
         self.assertIsNotNone(response)
+        assert response is not None
         self.assertEqual(response.response, 'chunk1 chunk2')
         self.mock_build_prompt.assert_called_once_with(self.request)
         self.mock_is_streaming_request.assert_called_once_with(ctx=self.ctx)
