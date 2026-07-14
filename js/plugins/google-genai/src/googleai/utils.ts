@@ -165,6 +165,52 @@ export function extractImagenImage(
   return undefined;
 }
 
+const DEFAULT_GOOGLEAI_HOST = 'generativelanguage.googleapis.com';
+
+/**
+ * Validate a per-request `baseUrl` override before it is used to build the
+ * request URL. Unless the plugin was constructed with
+ * `allowCustomBaseUrl: true`, the override host must be the default Google
+ * endpoint or the host of the plugin-configured `baseUrl`. This blocks SSRF
+ * and API-key / prompt exfiltration via an attacker-controlled request config.
+ */
+function resolveBaseUrlOverride(
+  override: string,
+  clientOptions: ClientOptions
+): string {
+  let host: string;
+  try {
+    host = new URL(override).host;
+  } catch {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message: `Invalid baseUrl override: "${override}" is not a valid URL.`,
+    });
+  }
+  if (clientOptions.allowCustomBaseUrl) {
+    return override;
+  }
+  const trustedHosts = new Set<string>([DEFAULT_GOOGLEAI_HOST]);
+  if (clientOptions.baseUrl) {
+    try {
+      trustedHosts.add(new URL(clientOptions.baseUrl).host);
+    } catch {
+      // Plugin-configured baseUrl is malformed; do not use it as a trust anchor.
+    }
+  }
+  if (!trustedHosts.has(host)) {
+    throw new GenkitError({
+      status: 'PERMISSION_DENIED',
+      message:
+        `Per-request baseUrl override host "${host}" is not the default Google ` +
+        `endpoint or the plugin-configured baseUrl host. To allow arbitrary ` +
+        `per-request baseUrl overrides, construct the googleAI plugin with ` +
+        `{ allowCustomBaseUrl: true }.`,
+    });
+  }
+  return override;
+}
+
 /**
  * For each field in ClientOptions, if the request config object has
  * a matching non-empty/non-null field, it overrides the original.
@@ -196,7 +242,7 @@ export function calculateRequestOptions<T extends z.ZodObject<any, any, any>>(
   }
 
   if (typeof reqConfig.baseUrl == 'string') {
-    newOptions.baseUrl = reqConfig.baseUrl;
+    newOptions.baseUrl = resolveBaseUrlOverride(reqConfig.baseUrl, clientOptions);
   }
 
   if (reqConfig.customHeaders && typeof reqConfig.customHeaders === 'object') {
