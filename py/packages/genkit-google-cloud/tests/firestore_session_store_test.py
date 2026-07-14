@@ -9,7 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from genkit_google_cloud.session_store import FirestoreSessionStore
+from google.cloud import firestore
 
+from genkit._ai._agents._session import SessionErrorType
+from genkit._core._error import GenkitError
 from genkit._core._typing import SessionSnapshot, SnapshotStatus
 
 
@@ -194,3 +197,72 @@ async def test_firestore_session_store_update_existing_pointer() -> None:
     assert isinstance(saved.snapshot_id, str)
     mock_transaction.set.assert_called_once()
     assert mock_transaction.set.call_args[0][1]['currentSnapshotId'] == saved.snapshot_id
+
+
+@pytest.mark.asyncio
+async def test_firestore_session_store_branching_ambiguity() -> None:
+    """Test pointer update setting isAmbiguous on branch split, and get_snapshot raising when reject_ambiguous is True."""
+    mock_client = MagicMock()
+    mock_transaction = MagicMock()
+    mock_transaction._max_attempts = 1
+    mock_transaction._read_only = False
+    mock_transaction._begin = AsyncMock()
+    mock_transaction._commit = AsyncMock()
+    mock_transaction._rollback = AsyncMock()
+    mock_client.transaction.return_value = mock_transaction
+
+    snap_doc_ref = MagicMock()
+    snap_doc_ref.set = AsyncMock()
+    snap_snapshot = MagicMock()
+    snap_snapshot.exists = False
+    snap_doc_ref.get = AsyncMock(return_value=snap_snapshot)
+
+    pointer_doc_ref = MagicMock()
+    pointer_doc_ref.set = AsyncMock()
+    pointer_snapshot = MagicMock()
+    pointer_snapshot.exists = True
+    pointer_snapshot.to_dict.return_value = {
+        'currentSnapshotId': 'snap-existing',
+    }
+    pointer_doc_ref.get = AsyncMock(return_value=pointer_snapshot)
+
+    mock_doc_ref = MagicMock()
+    mock_col = MagicMock()
+    def get_doc(doc_id: str) -> Any:  # noqa: ANN401
+        if doc_id == 'sess-branch-1':
+            return pointer_doc_ref
+        if doc_id == 'global':
+            return mock_doc_ref
+        return snap_doc_ref
+    mock_col.document.side_effect = get_doc
+    pointer_doc_ref.collection.return_value = mock_col
+    snap_doc_ref.collection.return_value = mock_col
+    mock_doc_ref.collection.return_value = mock_col
+    mock_client.collection.return_value = mock_col
+
+    store = FirestoreSessionStore(client=mock_client, reject_ambiguous_session=True)
+
+    def save_fn(existing: SessionSnapshot | None) -> SessionSnapshot:
+        return SessionSnapshot(
+            snapshot_id='snap-branch',
+            parent_id='snap-root',
+            session_id='sess-branch-1',
+            created_at='2026-07-03T00:00:02Z',
+        )
+
+    saved = await store.save_snapshot(None, save_fn)
+    assert saved is not None
+    mock_transaction.update.assert_called_once()
+    update_payload = mock_transaction.update.call_args[0][1]
+    assert update_payload['isAmbiguous'] is True
+    assert update_payload['currentSnapshotId'] == firestore.DELETE_FIELD
+
+    # Now verify get_snapshot raises early when isAmbiguous=True on pointer doc:
+    pointer_snapshot.to_dict.return_value = {
+        'isAmbiguous': True,
+    }
+    with pytest.raises(GenkitError) as exc_info:
+        await store.get_snapshot(session_id='sess-branch-1')
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
+    assert exc_info.value.details is not None
+    assert exc_info.value.details['type'] == SessionErrorType.AMBIGUOUS_BRANCH

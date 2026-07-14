@@ -21,7 +21,7 @@ from typing import Any, Generic, TypeVar
 from google.cloud import firestore
 from google.cloud.firestore import AsyncClient
 
-from genkit._ai._agents._session import SessionStore, SnapshotSubscriber
+from genkit._ai._agents._session import SessionErrorType, SessionStore, SnapshotSubscriber
 from genkit._ai._agents._session_stores import (
     SaveFn,
     Subs,
@@ -129,9 +129,25 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             return copy_snapshot(await self.read_snapshot(snapshot_id))
 
         assert session_id is not None
-        current_id = await self.read_pointer(session_id)
-        if current_id is not None:
-            return copy_snapshot(await self.read_snapshot(current_id))
+        doc = await self.pointer_ref(session_id).get()
+        if doc.exists:
+            pointer = doc.to_dict() or {}
+            if pointer.get('isAmbiguous') and self.reject_ambiguous:
+                raise GenkitError(
+                    status='FAILED_PRECONDITION',
+                    message=(
+                        f"Session '{session_id}' has branching snapshots, so there is no single latest snapshot. "
+                        'This happens when a conversation is branched (e.g. regenerate). '
+                        'Resume by snapshot_id instead.'
+                    ),
+                    details={
+                        'type': SessionErrorType.AMBIGUOUS_BRANCH,
+                        'sessionId': session_id,
+                    },
+                )
+            current_id = pointer.get('currentSnapshotId')
+            if isinstance(current_id, str):
+                return copy_snapshot(await self.read_snapshot(current_id))
 
         owned = await self.list_session_snapshots(session_id)
         return copy_snapshot(select_leaf(owned, session_id, reject_ambiguous=self.reject_ambiguous))
@@ -212,14 +228,35 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         async def update_in_transaction(transaction: Any) -> None:  # noqa: ANN401
             snapshot = await ref.get(transaction=transaction)
             pointer = snapshot.to_dict() if snapshot.exists else None
-            if parent_snapshot_id is None or not pointer or pointer.get('currentSnapshotId') == parent_snapshot_id:
+            # Linear continuation (parent matches tip) or new root session (parent is None):
+            if parent_snapshot_id is None or (pointer and pointer.get('currentSnapshotId') == parent_snapshot_id):
                 transaction.set(
                     ref,
                     {
                         'currentSnapshotId': snapshot_id,
+                        'isAmbiguous': False,
                         'updatedAt': firestore.SERVER_TIMESTAMP,
                     },
                 )
+            else:
+                # Branch split or unpointed historical continuation: mark ambiguous.
+                if pointer:
+                    transaction.update(
+                        ref,
+                        {
+                            'currentSnapshotId': firestore.DELETE_FIELD,
+                            'isAmbiguous': True,
+                            'updatedAt': firestore.SERVER_TIMESTAMP,
+                        },
+                    )
+                else:
+                    transaction.set(
+                        ref,
+                        {
+                            'isAmbiguous': True,
+                            'updatedAt': firestore.SERVER_TIMESTAMP,
+                        },
+                    )
 
         await update_in_transaction(transaction)
 
