@@ -78,6 +78,10 @@ def extract_action_input(body: dict[str, Any]) -> object:
         return {'message': {'role': 'user', 'content': [{'text': str(body['message'])}]}}
     if 'snapshotId' in body or 'sessionId' in body:
         return body
+    # Callable clients omit ``data`` when runFlow has no input (POST ``{}``).
+    # Match Express: ``request.body.data`` is undefined, not a wire error.
+    if not body:
+        return None
     raise GenkitError(
         status='INVALID_ARGUMENT',
         message='Action request must be wrapped in {"data": ...} object',
@@ -122,10 +126,11 @@ def format_stream_error(error: Exception) -> str:
 
 
 async def handle_genkit_request(
-    action: Action[InputT, OutputT, ChunkT, InitT],
     request: Request,
     *,
+    action: Action[InputT, OutputT, ChunkT, InitT],
     context: dict[str, object] | None = None,
+    init: InitT | dict[str, Any] | None = None,
 ) -> Response | dict[str, Any]:
     """Run one Genkit action request and return its FastAPI response.
 
@@ -135,16 +140,17 @@ async def handle_genkit_request(
     then either streams SSE frames — ``data: {"message": ...}`` chunks followed by
     a final ``data: {"result": ...}`` — or returns a one-shot ``{"result": ...}``.
 
-    ``context`` is handed straight to the action, so you can resolve auth and
-    per-request state however you like and pass the dict in. That makes this the
-    escape hatch for full control: write your own ``@app.post`` endpoint with any
-    ``Depends(...)`` params you need, build the context, and call this to get the
-    exact Genkit wire format without re-implementing it.
+    ``context`` and ``init`` are handed straight to the action, so you can resolve
+    auth, session identity, and per-request state however you like and pass them in.
+    That makes this the escape hatch for full control: write your own ``@app.post``
+    endpoint with any ``Depends(...)`` params you need, build context and init, and
+    call this to get the exact Genkit wire format without re-implementing it.
 
     Args:
-        action: The flow or agent action to run.
         request: The incoming FastAPI request.
+        action: The flow or agent action to run.
         context: Optional context dict passed through to the action.
+        init: Optional session identity / init payload passed through to the action.
 
     Returns:
         A streaming SSE response, a ``{"result": ...}`` dict, or an error Response.
@@ -163,14 +169,14 @@ async def handle_genkit_request(
     except GenkitError as err:
         return json_error_response(err)
 
-    init = resolve_session_init(body, request.query_params)
+    resolved_init = init if init is not None else resolve_session_init(body, request.query_params)
     action_obj = cast(Action[Any, Any, Any, Any], action)
 
     if wants_stream(request):
 
         async def event_stream() -> AsyncIterator[str]:
             try:
-                stream_response = action_obj.stream(input_data, context=context, init=init)
+                stream_response = action_obj.stream(input_data, context=context, init=resolved_init)
                 async for chunk in stream_response.stream:
                     yield format_stream_chunk(chunk)
                 result = await stream_response.response
@@ -181,7 +187,7 @@ async def handle_genkit_request(
         return StreamingResponse(event_stream(), media_type='text/event-stream')
 
     try:
-        response = await action_obj.run(input_data, context=context, init=init)
+        response = await action_obj.run(input_data, context=context, init=resolved_init)
         if response.response is None and action_obj.kind == ActionKind.AGENT_SNAPSHOT:
             return Response(status_code=404)
         return {'result': to_dict(response.response)}
@@ -190,7 +196,7 @@ async def handle_genkit_request(
 
 
 def genkit_fastapi_handler(
-    ai: Genkit | None = None,
+    ai: Genkit,
     context_provider: ContextProvider | None = None,
 ) -> Callable[
     [Callable[[], Action[InputT, OutputT, ChunkT, InitT]] | Action[InputT, OutputT, ChunkT, InitT]],
@@ -221,7 +227,7 @@ def genkit_fastapi_handler(
         ```
 
     Args:
-        ai: Optional Genkit instance.
+        ai: The Genkit instance.
         context_provider: Optional function to extract context from the request.
 
     Returns:
@@ -261,7 +267,11 @@ def genkit_fastapi_handler(
                 if isinstance(context, dict):
                     action_context = context
 
-            return await handle_genkit_request(action, request, context=action_context)
+            return await handle_genkit_request(
+                request,
+                action=cast(Action[InputT, OutputT, ChunkT, InitT], action),  # ty: ignore[redundant-cast]
+                context=action_context,
+            )
 
         return handler
 
@@ -271,9 +281,8 @@ def genkit_fastapi_handler(
 def _mount_action(
     router: APIRouter,
     path: str,
-    action: Action[Any, Any, Any, Any],
+    action: Action[InputT, OutputT, ChunkT, InitT],
     *,
-    context_provider: ContextProvider | None,
     context_dependency: Callable[..., Any] | None,
     ai: Genkit | None,
 ) -> None:
@@ -282,7 +291,6 @@ def _mount_action(
     With a ``context_dependency`` the route's own signature carries the
     dependency, so FastAPI resolves it (and any sub-dependencies or security
     schemes) and the resulting dict is threaded into the action as context.
-    Without one, we fall back to the request-reading ``context_provider``.
     """
     if context_dependency is not None:
 
@@ -291,14 +299,14 @@ def _mount_action(
             context: Any = Depends(context_dependency),  # noqa: ANN401, B008
         ) -> Response | dict[str, Any]:
             return await handle_genkit_request(
-                action,
                 request,
+                action=action,
                 context=context if isinstance(context, dict) else None,
             )
 
         router.post(path, response_model=None)(endpoint)
     else:
-        handler = genkit_fastapi_handler(ai, context_provider=context_provider)(action)
+        handler = genkit_fastapi_handler(cast(Genkit, ai))(action)
         router.post(path, response_model=None)(handler)
 
 
@@ -306,7 +314,6 @@ def serve_flow(
     flow: Action[InputT, OutputT, ChunkT, InitT],
     *,
     base_path: str | None = None,
-    context_provider: ContextProvider | None = None,
     context_dependency: Callable[..., Any] | None = None,
     ai: Genkit | None = None,
 ) -> APIRouter:
@@ -319,10 +326,9 @@ def serve_flow(
     Args:
         flow: The flow action to serve.
         base_path: Route path. Defaults to /<flow name>.
-        context_provider: Reads the request and returns the context dict.
         context_dependency: A FastAPI dependency whose resolved value becomes the
             action context. Use this to reuse existing ``Depends``-based auth /
-            resources; it takes precedence over ``context_provider``.
+            resources.
         ai: Optional Genkit instance.
 
     Returns:
@@ -334,7 +340,6 @@ def serve_flow(
         router,
         resolved_base_path,
         flow,
-        context_provider=context_provider,
         context_dependency=context_dependency,
         ai=ai,
     )
@@ -345,7 +350,6 @@ def serve_agent(
     agent: Agent[StateT],
     *,
     base_path: str | None = None,
-    context_provider: ContextProvider | None = None,
     context_dependency: Callable[..., Any] | None = None,
     ai: Genkit | None = None,
 ) -> APIRouter:
@@ -358,11 +362,9 @@ def serve_agent(
     Args:
         agent: The agent to serve.
         base_path: Route path. Defaults to /<agent name>.
-        context_provider: Reads the request and returns the context dict.
         context_dependency: A FastAPI dependency whose resolved value becomes the
             action context, applied to the turn, getSnapshot, and abort routes.
-            Use this to reuse existing ``Depends``-based auth / resources; it
-            takes precedence over ``context_provider``.
+            Use this to reuse existing ``Depends``-based auth / resources.
         ai: Optional Genkit instance.
 
     Returns:
@@ -374,8 +376,7 @@ def serve_agent(
     _mount_action(
         router,
         resolved_base_path,
-        cast(Action[Any, Any, Any, Any], agent),
-        context_provider=context_provider,
+        agent,
         context_dependency=context_dependency,
         ai=ai,
     )
@@ -408,7 +409,6 @@ def serve_agent(
             router,
             f'{resolved_base_path}/getSnapshot',
             snapshot_action,
-            context_provider=context_provider,
             context_dependency=context_dependency,
             ai=ai,
         )
@@ -416,7 +416,6 @@ def serve_agent(
             router,
             f'{resolved_base_path}/abort',
             abort_action,
-            context_provider=context_provider,
             context_dependency=context_dependency,
             ai=ai,
         )

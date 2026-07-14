@@ -44,18 +44,48 @@ def create_app() -> FastAPI:
         return {'greeting': f'Hi {name}'}
 
     @ai.flow()
+    async def void_flow() -> dict[str, str]:
+        return {'ok': 'true'}
+
+    @ai.flow()
     async def raise_error(_: str) -> None:
         raise ValueError('Intentional test error')
 
+    app.include_router(serve_flow(void_flow, base_path='/void_flow'))
     app.include_router(serve_flow(raise_error, base_path='/error_flow'))
 
     return app
 
 
-def test_400_missing_data_returns_valid_json() -> None:
-    """400 (missing data) must return valid JSON."""
+def test_void_flow_accepts_empty_body() -> None:
+    """runFlow() with no input sends {}; void flows should still run."""
     client = TestClient(create_app())
-    response = client.post('/chat', json={})  # no 'data' key
+    response = client.post('/void_flow', json={})
+    assert response.status_code == 200
+    assert response.json()['result'] == {'ok': 'true'}
+
+
+def test_void_flow_accepts_explicit_null_data() -> None:
+    """Explicit ``{"data": null}`` is equivalent to a missing input."""
+    client = TestClient(create_app())
+    response = client.post('/void_flow', json={'data': None})
+    assert response.status_code == 200
+    assert response.json()['result'] == {'ok': 'true'}
+
+
+def test_required_input_empty_body_fails_at_action_not_wire() -> None:
+    """Missing input on a required-parameter flow is an action error, not 400."""
+    client = TestClient(create_app())
+    response = client.post('/chat', json={})
+    assert response.status_code == 500
+    parsed = json.loads(response.text)
+    assert_is_error_response(parsed)
+
+
+def test_unknown_body_shape_still_returns_400() -> None:
+    """Bodies with unrecognized keys still require a data wrapper."""
+    client = TestClient(create_app())
+    response = client.post('/chat', json={'foo': 'bar'})
     assert response.status_code == 400
     parsed = json.loads(response.text)
     assert_is_error_response(parsed)
