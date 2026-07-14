@@ -44,8 +44,8 @@ from genkit._core._typing import (
     ReasoningPart,
     Resume,
     Role,
-    SessionSnapshot,
-    SessionState,
+    SessionSnapshot as SessionSnapshotSchema,
+    SessionState as SessionStateSchema,
     SnapshotStatus,
     TextPart,
     ToolRequest,
@@ -60,6 +60,18 @@ OutputT = TypeVar('OutputT')
 # The transport protocol only ever hands this type back out (in the sessions it
 # returns), never takes it in, so it's covariant.
 StateT_co = TypeVar('StateT_co', covariant=True)
+
+
+class SessionState(SessionStateSchema, Generic[StateT]):
+    """Session state generic over custom state."""
+
+    custom: StateT | Any | None = None
+
+
+class SessionSnapshot(SessionSnapshotSchema, Generic[StateT]):
+    """Session snapshot generic over custom state."""
+
+    state: SessionState[StateT] | None = None
 
 
 # ===========================================================================
@@ -915,8 +927,9 @@ class AgentChat(Generic[StateT]):
         # was never really answered, so drop it the same way a failed turn does —
         # leaving the chat as if the detach never happened.
         return DetachedTask(
-            raw_output.snapshot_id,
-            self._transport,
+            snapshot_id=raw_output.snapshot_id,
+            transport=self._transport,
+            state_schema=self._state_schema,
             on_abort_rollback=lambda: self._rollback_optimistic(message_count_before),
         )
 
@@ -945,13 +958,13 @@ class AgentChat(Generic[StateT]):
     # Internal (transport / runtime wiring)
     # ------------------------------------------------------------------
 
-    def _load_from_snapshot(self, snapshot: SessionSnapshot) -> None:
+    def _load_from_snapshot(self, snapshot: SessionSnapshotSchema) -> None:
         self._snapshot_id = snapshot.snapshot_id
         self._resume_snapshot_id = snapshot.snapshot_id
         if snapshot.state is not None:
             self._set_state(snapshot.state)
 
-    def _set_state(self, state: SessionState) -> None:
+    def _set_state(self, state: SessionStateSchema) -> None:
         snapshot = state.model_copy(deep=True)
         self._session_id = snapshot.session_id
         self._messages = list(snapshot.messages or [])
@@ -1100,16 +1113,35 @@ class DetachedTask(Generic[StateT]):
 
     def __init__(
         self,
+        *,
         snapshot_id: str,
         transport: AgentTransport[StateT],
-        *,
+        state_schema: type[StateT] | None = None,
         on_abort_rollback: Callable[[], None] | None = None,
     ) -> None:
         self.snapshot_id = snapshot_id
         self._transport = transport
+        self._state_schema = state_schema
         self._on_abort_rollback = on_abort_rollback
 
-    async def poll(self, interval: float = 1.0) -> AsyncIterator[SessionSnapshot]:
+    def _parse_snapshot(self, raw: SessionSnapshotSchema | None) -> SessionSnapshot[StateT] | None:
+        if raw is None:
+            return None
+        snap = SessionSnapshot[StateT].model_validate(raw.model_dump(by_alias=True))
+        if (
+            snap.state is not None
+            and snap.state.custom is not None
+            and self._state_schema is not None
+            and hasattr(self._state_schema, 'model_validate')
+        ):
+            try:
+                snap.state.custom = cast(Any, self._state_schema).model_validate(snap.state.custom)
+            except Exception:
+                if snap.status is not None and snap.status in _TERMINAL_SNAPSHOT_STATUSES:
+                    raise
+        return snap
+
+    async def poll(self, interval: float = 1.0) -> AsyncIterator[SessionSnapshot[StateT]]:
         """Yields the task's snapshot every ``interval`` seconds until it settles.
 
         Re-reads the server snapshot on a fixed cadence and stops once it reaches
@@ -1118,16 +1150,17 @@ class DetachedTask(Generic[StateT]):
         result, await ``wait`` instead.
         """
         while True:
-            snapshot = await self._transport.get_snapshot(snapshot_id=self.snapshot_id)
-            if snapshot is not None:
-                yield snapshot
-                if snapshot.status is not None and snapshot.status in _TERMINAL_SNAPSHOT_STATUSES:
+            raw = await self._transport.get_snapshot(snapshot_id=self.snapshot_id)
+            snap = self._parse_snapshot(raw)
+            if snap is not None:
+                yield snap
+                if snap.status is not None and snap.status in _TERMINAL_SNAPSHOT_STATUSES:
                     return
             await asyncio.sleep(interval)
 
-    async def wait(self, interval: float = 1.0) -> SessionSnapshot:
+    async def wait(self, interval: float = 1.0) -> SessionSnapshot[StateT]:
         """Polls until the task settles and returns its final snapshot."""
-        last: SessionSnapshot | None = None
+        last: SessionSnapshot[StateT] | None = None
         async for snapshot in self.poll(interval):
             last = snapshot
         if last is None:

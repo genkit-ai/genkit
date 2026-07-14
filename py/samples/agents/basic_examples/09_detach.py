@@ -29,8 +29,26 @@ import asyncio
 
 from genkit_google_genai import GoogleAI
 
-from genkit import Genkit, GenkitError, ToolRunContext
-from genkit.agent import InMemorySessionStore, SnapshotStatus
+from genkit import FinishReason, Genkit, GenkitError, Message, ToolRunContext
+from genkit.agent import (
+    ActionRunContext,
+    AgentFinishReason,
+    AgentInput,
+    AgentResult,
+    InMemorySessionStore,
+    SessionRunner,
+    SessionSnapshot,
+    SnapshotStatus,
+    TurnResult,
+)
+
+from pydantic import BaseModel
+
+
+class JobState(BaseModel):
+    step: int = 0
+    completed: bool = False
+
 
 ai = Genkit(plugins=[GoogleAI()])
 store = InMemorySessionStore()
@@ -45,27 +63,70 @@ async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
     return {'done': True}
 
 
-agent = ai.define_agent(
+async def long_task_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    # Define tool inside turn handler closure so it can mutate custom session state on each step:
+    @ai.tool(name='slowWork', description='Simulate long background work.')
+    async def slow_work_closure(_: dict, tool_ctx: ToolRunContext) -> dict:
+        for i in range(1, 11):
+            if tool_ctx.abort_signal.is_set():
+                raise GenkitError(status='ABORTED', message='Task aborted')
+            await asyncio.sleep(0.5)
+            await sess.update_custom(lambda _: JobState(step=i, completed=(i == 10)))
+        return {'done': True}
+
+    async def handle_turn(inp: AgentInput) -> TurnResult | None:
+        history = await sess.get_messages()
+        messages = [Message(m) for m in history] if history else None
+        res = await ai.generate(
+            model='googleai/gemini-flash-latest',
+            system='When asked for a long task, call slowWork.',
+            messages=messages,
+            tools=[slow_work_closure],
+        )
+        if res.message:
+            await sess.add_messages(res.message)
+        fr = AgentFinishReason.STOP if res.finish_reason == FinishReason.STOP else AgentFinishReason.UNKNOWN
+        return TurnResult(finish_reason=fr)
+
+    await sess.run(handle_turn)
+    return await sess.result()
+
+
+agent = ai.define_custom_agent(
     name='longTaskAgent',
-    model='googleai/gemini-flash-latest',
-    system='When asked for a long task, call slowWork.',
-    tools=[slow_work],
+    fn=long_task_fn,
+    state_schema=JobState,
     store=store,
 )
 
 
 async def main() -> None:
-    chat = agent.chat()
+    chat = agent.chat(state=JobState(step=0, completed=False))
 
     # Submit the turn and return right away — the work continues in the background.
     task = await chat.detach('Please run a long task using slowWork.')
     assert task.snapshot_id  # the handle you poll on, hand off, or persist
 
-    # Wait for the snapshot to settle (poll() yields status updates for a live UI).
-    snap = await task.wait()  # → settles COMPLETED once slowWork finishes its steps
-    assert snap.status == SnapshotStatus.COMPLETED
+    # Re-read the server snapshot every 0.5s and yield live status until terminal:
+    last_snap: SessionSnapshot[JobState] | None = None
+    async for snap in task.poll(interval=0.5):
+        last_snap = snap
+        if snap.state and snap.state.custom:
+            print(f'Live poll -> status: {snap.status}, step: {snap.state.custom.step}, completed: {snap.state.custom.completed}')
 
-    await chat.close()
+    assert last_snap is not None and last_snap.status == SnapshotStatus.COMPLETED
+    assert last_snap.state
+    assert last_snap.state.custom is not None
+    assert last_snap.state.custom.step == 10 and last_snap.state.custom.completed is True
+
+    # Access the agent's completed output message off the terminal snapshot
+    assert last_snap.state.messages is not None
+    latest_message = last_snap.state.messages[-1]
+    print('Completed background task output:', latest_message.content[0].root.text)
+
+    # To resume the conversation later, load the chat by snapshot_id
+    loaded_chat = await agent.load_chat(snapshot_id=task.snapshot_id)
+    assert len(loaded_chat.messages) == len(last_snap.state.messages)
 
 
 if __name__ == '__main__':
