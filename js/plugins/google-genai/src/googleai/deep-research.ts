@@ -43,6 +43,7 @@ import {
 } from './types.js';
 import {
   calculateApiKey,
+  resolveBaseUrlOverride,
   checkApiKey,
   checkModelName,
   extractVersion,
@@ -282,7 +283,9 @@ export function defineModel(
       const newClientOptions: ClientOptions = {
         ...clientOptions,
         apiKey,
-        baseUrl: baseUrl || clientOptions.baseUrl,
+        baseUrl: baseUrl
+          ? resolveBaseUrlOverride(baseUrl, clientOptions)
+          : clientOptions.baseUrl,
         apiVersion: apiVersion || clientOptions.apiVersion,
       };
 

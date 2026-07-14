@@ -174,7 +174,7 @@ const DEFAULT_GOOGLEAI_HOST = 'generativelanguage.googleapis.com';
  * endpoint or the host of the plugin-configured `baseUrl`. This blocks SSRF
  * and API-key / prompt exfiltration via an attacker-controlled request config.
  */
-function resolveBaseUrlOverride(
+export function resolveBaseUrlOverride(
   override: string,
   clientOptions: ClientOptions
 ): string {
