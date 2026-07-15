@@ -12,7 +12,6 @@
     "noImplicitAny": false,
     "resolveJsonModule": true,
     "sourceMap": true,
-    "esModuleInterop": false,
     "strict": true,
     "target": "es2022",
     "lib": ["es2022", "DOM"],

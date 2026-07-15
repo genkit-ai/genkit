@@ -21,10 +21,10 @@
   "type": "commonjs",
   "scripts": {
     "check": "tsc",
-    "compile": "cross-env NODE_OPTIONS=\"--max-old-space-size=16384\" npx tsup-node",
+    "compile": "node ../../scripts/tsc-build.mjs",
     "build:clean": "rimraf ./lib",
     "build": "npm-run-all build:clean check compile",
-    "build:watch": "cross-env NODE_OPTIONS=\"--max-old-space-size=16384\" tsup-node --watch",
+    "build:watch": "node ../../scripts/tsc-build.mjs --watch",
     "test": "tsx --test ./tests/*_test.ts ./tests/**/*_test.ts ./tests/**/**/*_test.ts"
   },
   "repository": {
@@ -60,9 +60,8 @@
     "npm-run-all": "^4.1.5",
     "rimraf": "^6.0.1",
     "sinon": "^21.0.0",
-    "tsup": "^8.3.5",
     "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   },
   "types": "./lib/index.d.ts",
   "exports": {

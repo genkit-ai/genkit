@@ -6,6 +6,7 @@
     "moduleResolution": "NodeNext",
     "noImplicitReturns": true,
     "outDir": "lib",
+    "rootDir": "src",
     "sourceMap": true,
     "strict": true,
     "target": "ES2022",

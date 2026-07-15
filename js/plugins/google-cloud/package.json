@@ -19,10 +19,10 @@
   "type": "commonjs",
   "scripts": {
     "check": "tsc",
-    "compile": "tsup-node",
+    "compile": "node ../../scripts/tsc-build.mjs",
     "build:clean": "rimraf ./lib",
     "build": "npm-run-all build:clean check compile",
-    "build:watch": "tsup-node --watch",
+    "build:watch": "node ../../scripts/tsc-build.mjs --watch",
     "test": "firebase emulators:exec 'node node_modules/jest/bin/jest --runInBand --verbose' --config tests/emulator/firebase.json",
     "test:session-store": "firebase emulators:exec 'node node_modules/jest/bin/jest session_store --runInBand --verbose' --config tests/emulator/firebase.json"
   },
@@ -67,9 +67,8 @@
     "npm-run-all": "^4.1.5",
     "rimraf": "^6.0.1",
     "ts-jest": "^29.1.2",
-    "tsup": "^8.3.5",
     "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   },
   "types": "./lib/index.d.ts",
   "exports": {

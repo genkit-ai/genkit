@@ -276,7 +276,7 @@ export function backgroundAction<
   O extends z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
 >(config: BackgroundActionParams<I, O, S>): BackgroundAction<I, O> {
-  const startAction = action(
+  const startAction = action<I, typeof OperationSchema>(
     {
       actionType: config.actionType,
       name: config.name,
@@ -291,7 +291,7 @@ export function backgroundAction<
           jsonSchema: config.outputJsonSchema,
         }),
       },
-      use: config.use,
+      use: config.use as Middleware[] | undefined,
     },
     async (input, options) => {
       const operation = await config.start(input, options);
