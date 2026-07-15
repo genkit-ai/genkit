@@ -314,6 +314,44 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cast(ModelUsage, response.usage).input_tokens, None)
         self.assertEqual(cast(ModelUsage, response.usage).output_tokens, None)
 
+    @patch(
+        'genkit.model.get_basic_usage_stats',
+        return_value=ModelUsage(),
+    )
+    async def test_generate_chat_streaming_zero_chunks(self, mock_get_basic_usage_stats: MagicMock) -> None:
+        """Streaming with zero chunks returns empty content, not the error default."""
+        model_def = ModelDefinition(name='chat-model', api_type=OllamaAPITypes.CHAT)
+        ollama_model = OllamaModel(client=self.mock_client, model_definition=model_def)
+        streaming_ctx = ActionRunContext(streaming_callback=MagicMock())
+
+        cast(Any, ollama_model)._chat_with_ollama = AsyncMock(return_value=None)
+        cast(Any, ollama_model).is_streaming_request = MagicMock(return_value=True)
+        cast(Any, ollama_model).get_usage_info = MagicMock(return_value=ModelUsage())
+
+        response = await ollama_model.generate(self.request, streaming_ctx)
+
+        self.assertIsNotNone(response.message)
+        self.assertEqual(cast(Message, response.message).content, [])
+
+    @patch(
+        'genkit.model.get_basic_usage_stats',
+        return_value=ModelUsage(),
+    )
+    async def test_generate_generate_streaming_zero_chunks(self, mock_get_basic_usage_stats: MagicMock) -> None:
+        """Streaming with zero chunks returns empty content, not the error default."""
+        model_def = ModelDefinition(name='generate-model', api_type=OllamaAPITypes.GENERATE)
+        ollama_model = OllamaModel(client=self.mock_client, model_definition=model_def)
+        streaming_ctx = ActionRunContext(streaming_callback=MagicMock())
+
+        cast(Any, ollama_model)._generate_ollama_response = AsyncMock(return_value=None)
+        cast(Any, ollama_model).is_streaming_request = MagicMock(return_value=True)
+        cast(Any, ollama_model).get_usage_info = MagicMock(return_value=ModelUsage())
+
+        response = await ollama_model.generate(self.request, streaming_ctx)
+
+        self.assertIsNotNone(response.message)
+        self.assertEqual(cast(Message, response.message).content, [])
+
 
 class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
     """Unit tests for OllamaModel._chat_with_ollama method."""
@@ -433,7 +471,6 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
 
         response = await self.ollama_model._chat_with_ollama(self.request, self.ctx)
 
-        self.assertIsNotNone(response)
         assert response is not None
         self.assertEqual(response.message.content, 'chunk1chunk2')
         self.mock_build_chat_messages.assert_called_once_with(self.request)
@@ -645,7 +682,6 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
 
         response = await self.ollama_model._generate_ollama_response(self.request, self.ctx)
 
-        self.assertIsNotNone(response)
         assert response is not None
         self.assertEqual(response.response, 'chunk1 chunk2')
         self.mock_build_prompt.assert_called_once_with(self.request)
