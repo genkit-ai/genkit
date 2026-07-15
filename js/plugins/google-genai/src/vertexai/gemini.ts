@@ -139,6 +139,12 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     .string()
     .describe('Overrides the plugin-configured API key, if specified.')
     .optional(),
+  apiVersion: z
+    .enum(['v1', 'v1beta1'])
+    .describe(
+      'Overrides the plugin-configured API version to use, if specified.'
+    )
+    .optional(),
   labels: z
     .record(z.string())
     .optional()
@@ -607,6 +613,7 @@ export function defineModel(
 
       const {
         apiKey: apiKeyFromConfig,
+        apiVersion: apiVersionFromConfig,
         functionCallingConfig,
         retrievalConfig,
         version: versionFromConfig,
@@ -623,6 +630,7 @@ export function defineModel(
       clientOpt = calculateRequestOptions(clientOpt, {
         location,
         apiKey: apiKeyFromConfig,
+        apiVersion: apiVersionFromConfig,
       });
 
       if (payGo) {

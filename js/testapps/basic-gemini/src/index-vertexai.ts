@@ -89,6 +89,18 @@ ai.defineFlow(
   }
 );
 
+ai.defineFlow('multi-regional', async () => {
+  const { text } = await ai.generate({
+    model: vertexAI.model('gemini-3.5-flash'),
+    prompt: 'You are a helpful AI assistant named Walt, say hello.',
+    config: {
+      location: 'us', // OR 'eu'
+      apiVersion: 'v1',
+    },
+  });
+  return text;
+});
+
 ai.defineFlow(
   {
     name: 'thinking-level-flash',
