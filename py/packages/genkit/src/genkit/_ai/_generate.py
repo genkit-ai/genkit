@@ -517,9 +517,8 @@ class ChunkAccumulator:
         self.formatter = formatter
         self.chunk_role: Role = Role.MODEL
         self.prev_chunks: list[ModelResponseChunk[Any]] = []
-        fmt = formatter
         self._chunk_parser: Callable[[ModelResponseChunk[Any]], Any | None] | None = (
-            (lambda chunk: fmt.parse_chunk(chunk)) if fmt is not None else None
+            formatter.parse_chunk if formatter is not None else None
         )
 
     def make(self, *, role: Role, chunk: ModelResponseChunk[Any]) -> ModelResponseChunk[Any]:
