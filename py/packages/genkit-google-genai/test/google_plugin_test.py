@@ -271,6 +271,29 @@ def test_googleai__resolve_embedder(
 @pytest.mark.parametrize(
     'input_name, expected_model_name',
     [
+        ('vertexai/multimodalembedding@001', 'vertexai/multimodalembedding@001'),
+        ('multimodalembedding@001', 'vertexai/multimodalembedding@001'),
+    ],
+)
+def test_vertexai__resolve_embedder_multimodalembedding(
+    input_name: str,
+    expected_model_name: str,
+    vertexai_plugin_instance: VertexAI,
+) -> None:
+    """Vertex's multimodalembedding resolves (bare or namespaced) and advertises multimodal."""
+    action = vertexai_plugin_instance._resolve_embedder(name=input_name)
+
+    assert action is not None
+    assert action.kind == ActionKind.EMBEDDER
+    assert action.name == expected_model_name
+    metadata = cast(dict[str, Any], action.metadata)
+    assert metadata['embedder']['supports']['input'] == ['text', 'image', 'video']
+    assert metadata['embedder']['dimensions'] == 1408
+
+
+@pytest.mark.parametrize(
+    'input_name, expected_model_name',
+    [
         ('vertexai/gemini-embedding-2', 'vertexai/gemini-embedding-2'),
         ('gemini-embedding-2', 'vertexai/gemini-embedding-2'),
     ],
@@ -991,6 +1014,9 @@ async def test_vertexai_list_known_embedders(vertexai_plugin_instance: VertexAI)
     listed = {a.name for a in result}
     assert listed == {vertexai_name(name) for name in VERTEX_KNOWN_EMBEDDERS}
     assert vertexai_name('gemini-embedding-001') in listed
+    # multimodalembedding@001 is callable (via :predict) and curated in, unlike
+    # the non-callable embedders the catalog over-lists.
+    assert vertexai_name('multimodalembedding@001') in listed
     assert vertexai_name('gemini-embedding-2') not in listed
 
 

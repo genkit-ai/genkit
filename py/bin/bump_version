@@ -198,7 +198,6 @@ else
   echo ""
   echo -e "Next steps:"
   echo -e "  1. Update CHANGELOG.md with release notes"
-  echo -e "  2. Run ${CYAN}py/bin/release_check${NC} to verify release readiness"
-  echo -e "  3. Commit changes: ${CYAN}git commit -am 'chore: bump version to $NEW_VERSION'${NC}"
-  echo -e "  4. Create release tag: ${CYAN}git tag -a py-v$NEW_VERSION -m 'Python SDK v$NEW_VERSION'${NC}"
+  echo -e "  2. Open a PR to main (CI verifies build, tests, and consistency)"
+  echo -e "  3. Once merged, run: ${CYAN}py/bin/create_release $NEW_VERSION${NC}"
 fi

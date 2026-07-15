@@ -19,6 +19,7 @@
 
 import base64
 import sys
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 if sys.version_info < (3, 11):
@@ -48,6 +49,7 @@ from pytest_mock import MockerFixture
 from genkit import (
     ActionRunContext,
     Constrained,
+    FinishReason,
     MediaPart,
     Message,
     ModelInfo,
@@ -161,6 +163,81 @@ async def test_generate_stream_text_response(mocker: MockerFixture, version: str
     assert isinstance(response, ModelResponse)
     assert response.message is not None
     assert response.message.content == []
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_captures_finish_reason_and_usage(mocker: MockerFixture) -> None:
+    """Test that streaming generate captures trailing finish_reason and usage_metadata."""
+    request = ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[Part(root=TextPart(text='hi'))],
+            ),
+        ]
+    )
+    cand_1 = genai.types.Candidate(content=genai.types.Content(parts=[genai.types.Part(text='Hello')]))
+    resp_1 = genai.types.GenerateContentResponse(candidates=[cand_1])
+
+    cand_2 = genai.types.Candidate(
+        content=genai.types.Content(parts=[genai.types.Part(text=' world!')]),
+        finish_reason=genai.types.FinishReason.STOP,
+    )
+    usage_meta = genai.types.GenerateContentResponseUsageMetadata(
+        prompt_token_count=10,
+        candidates_token_count=5,
+        total_token_count=15,
+    )
+    resp_2 = genai.types.GenerateContentResponse(candidates=[cand_2], usage_metadata=usage_meta)
+
+    googleai_client_mock = mocker.AsyncMock()
+
+    async def mock_stream() -> Any:  # noqa: ANN401
+        for r in [resp_1, resp_2]:
+            yield r
+
+    googleai_client_mock.aio.models.generate_content_stream.return_value = mock_stream()
+
+    on_chunk_mock = mocker.MagicMock()
+    gemini = GeminiModel('gemini-2.5-flash', googleai_client_mock)
+    ctx = ActionRunContext(streaming_callback=on_chunk_mock)
+
+    response = await gemini.generate(request, ctx)
+    assert response.finish_reason == FinishReason.STOP
+    assert response.usage is not None
+    assert response.usage.input_tokens == 10
+    assert response.usage.output_tokens == 5
+    assert response.usage.total_tokens == 15
+    assert on_chunk_mock.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_without_finish_reason(mocker: MockerFixture) -> None:
+    """Test that streaming generate defaults to FinishReason.UNKNOWN when no chunk carries a finish_reason."""
+    request = ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[Part(root=TextPart(text='hi'))],
+            ),
+        ]
+    )
+    cand_1 = genai.types.Candidate(content=genai.types.Content(parts=[genai.types.Part(text='Hello')]))
+    resp_1 = genai.types.GenerateContentResponse(candidates=[cand_1])
+
+    googleai_client_mock = mocker.AsyncMock()
+
+    async def mock_stream() -> Any:  # noqa: ANN401
+        yield resp_1
+
+    googleai_client_mock.aio.models.generate_content_stream.return_value = mock_stream()
+
+    on_chunk_mock = mocker.MagicMock()
+    gemini = GeminiModel('gemini-2.5-flash', googleai_client_mock)
+    ctx = ActionRunContext(streaming_callback=on_chunk_mock)
+
+    response = await gemini.generate(request, ctx)
+    assert response.finish_reason == FinishReason.UNKNOWN
 
 
 @pytest.mark.asyncio

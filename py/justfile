@@ -51,21 +51,13 @@ fmt:
     uv run --directory "{{ py_dir }}" ruff format --preview .
     uv run --directory "{{ py_dir }}" ruff check --fix --preview --unsafe-fixes .
 
-# Run all Python tests.
+# Run all Python tests in the default environment.
 test:
-    "{{ py_dir }}/bin/run_python_tests"
+    uv run --directory "{{ py_dir }}" pytest .
 
-# Watch mode for tests (re-run on file changes).
-test-watch:
-    "{{ py_dir }}/bin/watch_python_tests"
-
-# Run tests with nox (multi-version).
+# Run tests across multiple Python versions (3.10–3.14) with nox.
 test-nox:
-    "{{ py_dir }}/bin/run_python_tests_with_nox"
-
-# Run tests with tox (multi-version).
-test-tox:
-    "{{ py_dir }}/bin/run_python_tests_with_tox"
+    uv run --directory "{{ py_dir }}" nox
 
 # Run security checks (bandit, pip-audit).
 security:
@@ -109,10 +101,6 @@ generate-schema:
 # Bump version in all packages.
 bump-version VERSION:
     "{{ py_dir }}/bin/bump_version" {{ VERSION }}
-
-# Pre-release validation suite.
-release-check:
-    "{{ py_dir }}/bin/release_check"
 
 # Build wheel/sdist packages.
 build:

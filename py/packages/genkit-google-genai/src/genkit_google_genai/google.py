@@ -329,7 +329,11 @@ def _create_embedder_action(
     )
 
     async def _run(request: Any) -> Any:  # noqa: ANN401
-        embedder = Embedder(version=clean_name, client=client_getter())
+        embedder = Embedder(
+            version=clean_name,
+            client=client_getter(),
+            is_vertex=(plugin_name == VERTEXAI_PLUGIN_NAME),
+        )
         return await embedder.generate(request)
 
     action = Action(

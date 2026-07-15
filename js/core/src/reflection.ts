@@ -20,7 +20,7 @@ import getPort, { makeRange } from 'get-port';
 import type { Server } from 'http';
 import path from 'path';
 import * as z from 'zod';
-import { StatusCodes, type Status } from './action.js';
+import { StatusCodes, statusNameToCode, type Status } from './action.js';
 import { getGenkitRuntimeConfig } from './config.js';
 import { GENKIT_REFLECTION_API_SPEC_VERSION, GENKIT_VERSION } from './index.js';
 import { logger } from './logging.js';
@@ -303,12 +303,15 @@ export class ReflectionServer {
             response.end();
           } catch (err) {
             const { message, stack } = err as Error;
+            const isAbort = isAbortError(err);
+            const code: StatusCodes = isAbort
+              ? StatusCodes.CANCELLED
+              : (statusNameToCode((err as any)?.status) ??
+                StatusCodes.INTERNAL);
             // since we're streaming, we must do special error handling here -- the headers are already sent.
             const errorResponse: Status = {
-              code: isAbortError(err)
-                ? StatusCodes.CANCELLED
-                : StatusCodes.INTERNAL,
-              message: isAbortError(err) ? 'Action was cancelled' : message,
+              code,
+              message: isAbort ? 'Action was cancelled' : message,
               details: {
                 stack,
               },
@@ -344,11 +347,13 @@ export class ReflectionServer {
         }
       } catch (err) {
         const { message, stack } = err as Error;
+        const isAbort = isAbortError(err);
+        const code: StatusCodes = isAbort
+          ? StatusCodes.CANCELLED
+          : (statusNameToCode((err as any)?.status) ?? StatusCodes.INTERNAL);
         const errorResponse: Status = {
-          code: isAbortError(err)
-            ? StatusCodes.CANCELLED
-            : StatusCodes.INTERNAL,
-          message: isAbortError(err) ? 'Action was cancelled' : message,
+          code,
+          message: isAbort ? 'Action was cancelled' : message,
           details: { stack, traceId: (err as any).traceId || traceId },
         };
         if (response.headersSent) {
