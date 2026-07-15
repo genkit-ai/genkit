@@ -113,6 +113,36 @@ describe('ReflectionServer API', () => {
     });
   });
 
+  function fetchApiWithHost(path: string, host: string) {
+    return new Promise<{ status: number; body: string }>((resolve, reject) => {
+      http
+        .get(
+          `http://localhost:${port}${path}`,
+          { headers: { host } },
+          (res) => {
+            let data = '';
+            res.on('data', (chunk) => {
+              data += chunk;
+            });
+            res.on('end', () =>
+              resolve({ status: res.statusCode || 200, body: data })
+            );
+          }
+        )
+        .on('error', reject);
+    });
+  }
+
+  it('rejects requests with a non-loopback Host header', async () => {
+    const res = await fetchApiWithHost('/api/__health', 'attacker.evil.com');
+    assert.strictEqual(res.status, 403);
+  });
+
+  it('accepts requests with a loopback Host header', async () => {
+    const res = await fetchApiWithHost('/api/__health', `localhost:${port}`);
+    assert.strictEqual(res.status, 200);
+  });
+
   async function postApi(path: string, body: any) {
     return new Promise<{ status: number; body: any }>((resolve, reject) => {
       const payload = JSON.stringify(body);

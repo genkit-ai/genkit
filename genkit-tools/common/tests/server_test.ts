@@ -164,6 +164,22 @@ describe('Tools Server', () => {
     expect(output).toContain('done');
   });
 
+  it('rejects requests with a non-loopback Host header', async () => {
+    let status: number | undefined;
+    try {
+      await axios.post(
+        `http://localhost:${port}/api/runAction`,
+        { key: 'foo', input: 'bar' },
+        { headers: { Host: 'attacker.evil.com' } }
+      );
+    } catch (e: any) {
+      status = e.response?.status;
+    }
+
+    expect(status).toBe(403);
+    expect(mockManager.runAction).not.toHaveBeenCalled();
+  });
+
   describe('analytics events', () => {
     let recordSpy: jest.Spied<typeof analytics.recordRequestEvent>;
 
