@@ -23,7 +23,7 @@ from collections.abc import Callable
 import pytest
 
 from genkit._ai._agents._runtime import load_session
-from genkit._core._error import GenkitError, StatusCodes
+from genkit._core._error import GenkitError
 from genkit._core._typing import (
     AgentInit,
     SessionSnapshot,
@@ -31,8 +31,8 @@ from genkit._core._typing import (
     SnapshotStatus,
 )
 
-INVALID_ARGUMENT = StatusCodes.INVALID_ARGUMENT.name
-FAILED_PRECONDITION = StatusCodes.FAILED_PRECONDITION.name
+INVALID_ARGUMENT = 'INVALID_ARGUMENT'
+FAILED_PRECONDITION = 'FAILED_PRECONDITION'
 
 SESSION_ID = 's1'
 

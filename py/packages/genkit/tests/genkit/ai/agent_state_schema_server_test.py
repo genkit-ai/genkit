@@ -22,7 +22,7 @@ import pytest
 from pydantic import BaseModel
 
 from genkit._ai._agents._runtime import load_session, validate_custom_state
-from genkit._core._error import GenkitError, StatusCodes
+from genkit._core._error import GenkitError
 from genkit._core._typing import (
     AgentInit,
     SessionSnapshot,
@@ -31,7 +31,7 @@ from genkit._core._typing import (
 )
 from genkit.agent import InMemorySessionStore
 
-INVALID_ARGUMENT = StatusCodes.INVALID_ARGUMENT.name
+INVALID_ARGUMENT = 'INVALID_ARGUMENT'
 
 
 class TaskState(BaseModel):
