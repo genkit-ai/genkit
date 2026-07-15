@@ -682,12 +682,8 @@ async def _generate_action_turn(
     ) -> ModelResponse:
         """Execute one turn of the generate loop (model call + optional tool resolution)."""
         turn_options = params.options
-        turn_tools: list[Action[Any, Any, Any]] = []
-        if turn_options.tools:
-            expanded_tools = await expand_wildcard_tools(registry, turn_options.tools)
-            for t_name in expanded_tools:
-                t_action = await resolve_tool(registry, t_name)
-                turn_tools.append(t_action)
+        turn_tools = await resolve_tools_from_options(registry, turn_options.tools)
+        assert_valid_tool_names(turn_tools)
         request = await action_to_generate_request(turn_options, turn_tools, model)
         if request.docs:
             request = _augment_with_context(request)
@@ -1019,6 +1015,23 @@ def assert_valid_tool_names(tools: list[Action[Any, Any, Any]]) -> None:
         seen[short] = tool.name
 
 
+async def resolve_tools_from_options(
+    registry: Registry,
+    tool_names: list[str] | None,
+) -> list[Action[Any, Any, Any]]:
+    """Expand wildcards and resolve tool actions for a list of tool names."""
+    if not tool_names:
+        return []
+    expanded = await expand_wildcard_tools(registry, tool_names)
+    actions: list[Action[Any, Any, Any]] = []
+    for t_name in expanded:
+        try:
+            actions.append(await resolve_tool(registry, t_name))
+        except GenkitError as e:
+            raise Exception(f'Unable to resolve tool {t_name}') from e
+    return actions
+
+
 async def resolve_parameters(
     registry: Registry, request: GenerateActionOptions
 ) -> tuple[Action[Any, Any, Any], list[Action[Any, Any, Any]], FormatDef | None]:
@@ -1035,14 +1048,7 @@ async def resolve_parameters(
     if model_action is None:
         raise Exception(f'Failed to to resolve model {model}')
 
-    tools: list[Action[Any, Any, Any]] = []
-    if request.tools:
-        for tool_name in request.tools:
-            try:
-                tool_action = await resolve_tool(registry, tool_name)
-            except GenkitError as e:
-                raise Exception(f'Unable to resolve tool {tool_name}') from e
-            tools.append(tool_action)
+    tools = await resolve_tools_from_options(registry, request.tools)
 
     format_def: FormatDef | None = None
     if request.output and request.output.format:
