@@ -488,6 +488,83 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
         cast(MagicMock, self.ctx.send_chunk).assert_any_call(chunk=ANY)
         self.mock_build_multimodal_response.assert_any_call(chat_response=ANY)
 
+    async def test_streaming_chat_accumulates_thinking(self) -> None:
+        """Thinking from non-final chunks is concatenated into the returned response."""
+        self.mock_is_streaming_request.return_value = True
+        self.ctx = ActionRunContext(streaming_callback=MagicMock())
+        cast(Any, self.ctx).send_chunk = MagicMock()
+
+        async def mock_streaming_chunks() -> AsyncIterator[ollama_api.ChatResponse]:
+            yield ollama_api.ChatResponse(
+                message=ollama_api.Message(role='assistant', content='Hello ', thinking='step1 '),
+            )
+            yield ollama_api.ChatResponse(
+                message=ollama_api.Message(role='assistant', content='world', thinking='step2'),
+            )
+            yield ollama_api.ChatResponse(
+                message=ollama_api.Message(role='assistant', content='', thinking=''),
+            )
+
+        self.mock_ollama_client_instance.chat.return_value = mock_streaming_chunks()
+
+        response = await self.ollama_model._chat_with_ollama(self.request, self.ctx)
+
+        assert response is not None
+        self.assertEqual(response.message.content, 'Hello world')
+        self.assertEqual(response.message.thinking, 'step1 step2')
+
+        parts = OllamaModel._build_multimodal_chat_response(chat_response=response)
+        reasoning_parts = [p for p in parts if isinstance(p.root, ReasoningPart)]
+        self.assertEqual(len(reasoning_parts), 1)
+        self.assertEqual(reasoning_parts[0].root.reasoning, 'step1 step2')
+
+    async def test_streaming_chat_accumulates_tool_calls(self) -> None:
+        """Tool calls from a mid-stream chunk survive into the returned response."""
+        self.mock_is_streaming_request.return_value = True
+        self.ctx = ActionRunContext(streaming_callback=MagicMock())
+        cast(Any, self.ctx).send_chunk = MagicMock()
+
+        tool_call = ollama_api.Message.ToolCall(
+            function=ollama_api.Message.ToolCall.Function(
+                name='search', arguments={'q': 'test'}
+            )
+        )
+
+        async def mock_streaming_chunks() -> AsyncIterator[ollama_api.ChatResponse]:
+            yield ollama_api.ChatResponse(
+                message=ollama_api.Message(role='assistant', content='', tool_calls=[tool_call]),
+            )
+            yield ollama_api.ChatResponse(
+                message=ollama_api.Message(role='assistant', content=''),
+            )
+
+        self.mock_ollama_client_instance.chat.return_value = mock_streaming_chunks()
+
+        response = await self.ollama_model._chat_with_ollama(self.request, self.ctx)
+
+        assert response is not None
+        self.assertIsNotNone(response.message.tool_calls)
+        self.assertEqual(len(response.message.tool_calls), 1)
+        self.assertEqual(response.message.tool_calls[0].function.name, 'search')
+        self.assertEqual(response.message.tool_calls[0].function.arguments, {'q': 'test'})
+
+    async def test_streaming_chat_empty_stream_returns_none(self) -> None:
+        """An empty stream (zero chunks) returns None from the real helper."""
+        self.mock_is_streaming_request.return_value = True
+        self.ctx = ActionRunContext(streaming_callback=MagicMock())
+        cast(Any, self.ctx).send_chunk = MagicMock()
+
+        async def mock_empty_stream() -> AsyncIterator[ollama_api.ChatResponse]:
+            return
+            yield
+
+        self.mock_ollama_client_instance.chat.return_value = mock_empty_stream()
+
+        response = await self.ollama_model._chat_with_ollama(self.request, self.ctx)
+
+        self.assertIsNone(response)
+        cast(MagicMock, self.ctx.send_chunk).assert_not_called()
+
     async def test_streaming_chat_empty_role_maps_to_model(self) -> None:
         """Streamed chunks with an empty role should be labeled MODEL, not TOOL."""
         self.mock_is_streaming_request.return_value = True
