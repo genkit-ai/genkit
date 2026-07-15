@@ -2361,7 +2361,14 @@ func TestPromptAgent_RunText(t *testing.T) {
 func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
-	ai.DefinePrompt(reg, "rejectPrompt", ai.WithModelName("test/echo"))
+	var modelCalls atomic.Int64
+	ai.DefineModel(reg, "test/reject", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			modelCalls.Add(1)
+			return &ai.ModelResponse{Message: ai.NewModelTextMessage("unexpected")}, nil
+		},
+	)
+	ai.DefinePrompt(reg, "rejectPrompt", ai.WithModelName("test/reject"))
 	af := DefinePromptAgent[testState](reg, "rejectPrompt")
 
 	tests := []struct {
@@ -2369,6 +2376,11 @@ func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 		message *ai.Message
 		wantMsg string
 	}{
+		{
+			name:    "missing message",
+			message: nil,
+			wantMsg: "message",
+		},
 		{
 			name:    "non-user role",
 			message: &ai.Message{Role: ai.RoleModel, Content: []*ai.Part{ai.NewTextPart("hi")}},
@@ -2409,6 +2421,9 @@ func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 				t.Errorf("Error.Message = %q, want substring %q", out.Error.Message, tc.wantMsg)
 			}
 		})
+	}
+	if got := modelCalls.Load(); got != 0 {
+		t.Fatalf("model calls = %d, want 0", got)
 	}
 }
 

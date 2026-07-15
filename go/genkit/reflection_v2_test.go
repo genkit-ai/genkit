@@ -24,11 +24,14 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/firebase/genkit/go/ai"
+	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/tracing"
@@ -704,6 +707,88 @@ loop:
 	}
 	if out != "processed" {
 		t.Errorf("result = %q, want %q", out, "processed")
+	}
+}
+
+func TestReflectionServerV2_PromptAgentRejectsEmptyStreamInput(t *testing.T) {
+	m := newFakeManager(t)
+	defer m.close()
+
+	g := Init(context.Background())
+	var modelCalls atomic.Int64
+	DefineModel(g, "test/agent-empty-guard", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			modelCalls.Add(1)
+			return &ai.ModelResponse{Message: ai.NewModelTextMessage("unexpected")}, nil
+		},
+	)
+	aix.DefineAgent[any](g.reg, "promptAgent", aix.InlinePrompt{ai.WithModelName("test/agent-empty-guard")})
+
+	ctx, cancel := startRuntime(t, g, m)
+	defer cancel()
+
+	conn := m.waitForConnection(t)
+	m.ackRegister(t, ctx, conn)
+
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "runAction",
+		"params": map[string]any{
+			"key":         "/agent/promptAgent",
+			"streamInput": true,
+		},
+		"id": "agent-empty-1",
+	})
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "sendInputStreamChunk",
+		"params":  map[string]any{"requestId": "agent-empty-1", "chunk": map[string]any{}},
+	})
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "endInputStream",
+		"params":  map[string]any{"requestId": "agent-empty-1"},
+	})
+
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for response")
+		default:
+		}
+		msg := m.read(t, ctx, conn)
+		if msg["method"] == "runActionState" {
+			continue // ignore notifications (e.g., runActionState)
+		}
+		if errObj, ok := msg["error"].(map[string]any); ok {
+			t.Fatalf("expected failed agent output, got error: %v", errObj)
+		}
+		result, ok := msg["result"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected result object, got %v", msg)
+		}
+		output, ok := result["result"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected agent output object, got %v", result["result"])
+		}
+		if output["finishReason"] != "failed" {
+			t.Errorf("finishReason = %v, want failed", output["finishReason"])
+		}
+		errObj, ok := output["error"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected agent output error, got %v", output["error"])
+		}
+		if errObj["status"] != string(core.INVALID_ARGUMENT) {
+			t.Errorf("error status = %v, want %s", errObj["status"], core.INVALID_ARGUMENT)
+		}
+		if !strings.Contains(errObj["message"].(string), "message") {
+			t.Errorf("error message = %q, want substring %q", errObj["message"], "message")
+		}
+		if got := modelCalls.Load(); got != 0 {
+			t.Fatalf("model calls = %d, want 0", got)
+		}
+		return
 	}
 }
 
