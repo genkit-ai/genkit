@@ -756,7 +756,7 @@ async def _generate_action_turn(
                 response.assert_valid_schema()
             return response
 
-        max_iters = turn_options.max_turns if turn_options.max_turns else DEFAULT_MAX_TURNS
+        max_iters = turn_options.max_turns if turn_options.max_turns is not None else DEFAULT_MAX_TURNS
 
         if current_turn + 1 > max_iters:
             raise GenerationResponseError(
