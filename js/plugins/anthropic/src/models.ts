@@ -109,6 +109,7 @@ const KNOWN_MODELS = {
   'claude-opus-4-6': commonRef('claude-opus-4-6', ADVANCED_MODEL_INFO),
   'claude-opus-4-5': commonRef('claude-opus-4-5', ADVANCED_MODEL_INFO),
   'claude-haiku-4-5': commonRef('claude-haiku-4-5', ADVANCED_MODEL_INFO),
+  'claude-sonnet-5': commonRef('claude-sonnet-5', ADVANCED_MODEL_INFO),
   'claude-sonnet-4-6': commonRef('claude-sonnet-4-6', ADVANCED_MODEL_INFO),
   'claude-sonnet-4-5': commonRef('claude-sonnet-4-5', ADVANCED_MODEL_INFO),
   'claude-opus-4-1': commonRef('claude-opus-4-1', ADVANCED_MODEL_INFO),

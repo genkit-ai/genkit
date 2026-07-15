@@ -35,7 +35,7 @@ ai.defineFlow('anthropic-stable-claude-fable-5', async () => {
 
 ai.defineFlow('anthropic-stable-hello', async () => {
   const { text } = await ai.generate({
-    model: anthropic.model('claude-sonnet-4-5'),
+    model: anthropic.model('claude-sonnet-5'),
     prompt: 'You are a friendly Claude assistant. Greet the user briefly.',
   });
 
