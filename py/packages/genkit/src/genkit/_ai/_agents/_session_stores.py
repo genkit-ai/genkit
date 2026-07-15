@@ -164,17 +164,9 @@ class InMemorySessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[Sta
         the most recent branch — useful when accidental branching should surface
         loudly.
         """
-        self._lock_obj: asyncio.Lock | None = None
         self.reject_ambiguous = reject_ambiguous_session
         self.snapshots: dict[str, SessionSnapshot] = {}
         self.subs: Subs = {}
-
-    @property
-    def lock(self) -> asyncio.Lock:
-        """Return the async lock, lazily initializing it in the current event loop."""
-        if self._lock_obj is None:
-            self._lock_obj = asyncio.Lock()
-        return self._lock_obj
 
     async def get_snapshot(
         self,
@@ -216,18 +208,10 @@ class FileSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[StateT]
 
         See :class:`InMemorySessionStore` for ``reject_ambiguous_session``.
         """
-        self._lock_obj: asyncio.Lock | None = None
         self.reject_ambiguous = reject_ambiguous_session
         self.directory = directory
         self.subs: Subs = {}
         os.makedirs(directory, exist_ok=True)
-
-    @property
-    def lock(self) -> asyncio.Lock:
-        """Return the async lock, lazily initializing it in the current event loop."""
-        if self._lock_obj is None:
-            self._lock_obj = asyncio.Lock()
-        return self._lock_obj
 
     def path(self, snapshot_id: str) -> str:
         """Return the file path for a snapshot ID."""

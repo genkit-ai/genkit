@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import weakref
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from enum import Enum
@@ -26,6 +27,7 @@ from typing import Any, Generic, Protocol, cast, runtime_checkable
 from typing_extensions import TypeVar as TypeVarExt
 
 from genkit._core._error import GenkitError
+from genkit._core._loop_cache import _loop_local_client
 from genkit._core._typing import (
     Artifact,
     MessageData,
@@ -46,6 +48,9 @@ SessionContextT = TypeVarExt('SessionContextT', default=Any)
 # A store only ever hands custom state back out (it's a phantom over the wire
 # format), so its parameter is covariant.
 StateT_co = TypeVarExt('StateT_co', covariant=True, default=Any)
+
+
+_STORE_LOCK_GETTERS: weakref.WeakKeyDictionary[object, Callable[[], asyncio.Lock]] = weakref.WeakKeyDictionary()
 
 
 @runtime_checkable
@@ -88,6 +93,23 @@ class SessionStore(Protocol, Generic[StateT_co]):
         done when fn leaves it empty.
         """
         ...
+
+    @property
+    def lock(self) -> asyncio.Lock:
+        """Return a loop-local asyncio.Lock for this store instance."""
+        try:
+            getter = _STORE_LOCK_GETTERS.get(self)
+            if getter is None:
+                getter = _loop_local_client(lambda: asyncio.Lock())
+                _STORE_LOCK_GETTERS[self] = getter
+            return getter()
+        except TypeError:
+            # Fallback for classes that disallow weak references
+            getter = getattr(self, '_loop_lock_getter', None)
+            if getter is None:
+                getter = _loop_local_client(lambda: asyncio.Lock())
+                object.__setattr__(self, '_loop_lock_getter', getter)
+            return getter()
 
 
 @runtime_checkable

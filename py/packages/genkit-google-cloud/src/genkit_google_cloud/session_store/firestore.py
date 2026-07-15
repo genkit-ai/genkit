@@ -88,16 +88,8 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         self.collection = collection
         self.prefix_fn = snapshot_path_prefix or (lambda: DEFAULT_PREFIX)
         self.reject_ambiguous = reject_ambiguous_session
-        self._lock_obj: asyncio.Lock | None = None
         self.subs: Subs = {}
         self.sync_client: firestore.Client | None = None
-
-    @property
-    def lock(self) -> asyncio.Lock:
-        """Return the async lock, lazily initializing it in the current event loop."""
-        if self._lock_obj is None:
-            self._lock_obj = asyncio.Lock()
-        return self._lock_obj
 
     def snapshots_col(self) -> Any:  # noqa: ANN401
         """Return the Firestore collection reference for snapshots."""
@@ -317,8 +309,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 )
             prefix = self.prefix_fn()
             ref = (
-                self.sync_client
-                .collection(self.collection)
+                self.sync_client.collection(self.collection)
                 .document(prefix)
                 .collection('snapshots')
                 .document(snapshot_id)
