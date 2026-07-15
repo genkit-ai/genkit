@@ -179,8 +179,9 @@ def _to_dict(obj: JsonAny) -> JsonAny:  # noqa: ANN401
     return obj.model_dump() if isinstance(obj, BaseModel) else obj
 
 
-def _to_finish_reason(fr_name: str | None) -> FinishReason:
-    """Map a google-genai finish reason name onto Genkit's FinishReason."""
+def _to_finish_reason(fr: Any) -> FinishReason:  # noqa: ANN401
+    """Map a google-genai finish reason onto Genkit's FinishReason."""
+    fr_name = getattr(fr, 'name', fr) if fr is not None else None
     if fr_name == 'STOP':
         return FinishReason.STOP
     if fr_name == 'MAX_TOKENS':
@@ -207,8 +208,8 @@ def _usage_from_metadata(usage_metadata: Any) -> ModelUsage:  # noqa: ANN401
         input_tokens=float(prompt_tokens),
         output_tokens=float(candidates_tokens),
         total_tokens=float(total_tokens),
-        thoughts_tokens=float(thoughts_tokens) if thoughts_tokens else None,
-        cached_content_tokens=float(cached_tokens) if cached_tokens else None,
+        thoughts_tokens=float(thoughts_tokens) if thoughts_tokens is not None else None,
+        cached_content_tokens=float(cached_tokens) if cached_tokens is not None else None,
     )
 
 
@@ -1701,7 +1702,7 @@ class GeminiModel:
                 if not c_content:
                     c_content = [Part(root=TextPart(text=''))]
 
-                c_finish_reason = _to_finish_reason(c.finish_reason.name if c.finish_reason else None)
+                c_finish_reason = _to_finish_reason(c.finish_reason)
 
                 if i == 0:
                     finish_reason = c_finish_reason
@@ -1789,7 +1790,7 @@ class GeminiModel:
             if response_chunk.candidates and response_chunk.candidates[0] is not None:
                 fr = response_chunk.candidates[0].finish_reason
                 if fr:
-                    finish_reason = _to_finish_reason(getattr(fr, 'name', fr))
+                    finish_reason = _to_finish_reason(fr)
             if response_chunk.usage_metadata is not None:
                 usage_metadata = response_chunk.usage_metadata
 
