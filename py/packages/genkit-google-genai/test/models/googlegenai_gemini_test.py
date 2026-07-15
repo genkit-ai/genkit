@@ -191,9 +191,11 @@ async def test_generate_stream_captures_finish_reason_and_usage(mocker: MockerFi
     resp_2 = genai.types.GenerateContentResponse(candidates=[cand_2], usage_metadata=usage_meta)
 
     googleai_client_mock = mocker.AsyncMock()
+
     async def mock_stream() -> Any:  # noqa: ANN401
         for r in [resp_1, resp_2]:
             yield r
+
     googleai_client_mock.aio.models.generate_content_stream.return_value = mock_stream()
 
     on_chunk_mock = mocker.MagicMock()
