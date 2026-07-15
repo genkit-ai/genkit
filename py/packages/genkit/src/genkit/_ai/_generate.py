@@ -674,7 +674,7 @@ async def _generate_action_turn(
 
     async def run_one_iteration(
         params: GenerateHookParams,
-        _ctx: GenerateMiddlewareContext,
+        ctx: GenerateMiddlewareContext,
     ) -> ModelResponse:
         """Execute one turn of the generate loop (model call + optional tool resolution)."""
         chunks.message_index = params.message_index
@@ -696,10 +696,10 @@ async def _generate_action_turn(
                 )
             ).response
 
-        with chunks.intercept_model_stream(_ctx, role=Role.MODEL):
+        with chunks.intercept_model_stream(ctx, role=Role.MODEL):
             model_response = await dispatch_model(
                 ModelHookParams(request=request),
-                _ctx,
+                ctx,
                 next_fn,
             )
 
@@ -793,7 +793,7 @@ async def _generate_action_turn(
                     content=tool_msg.content,
                 ),
                 role=Role.TOOL,
-                ctx=_ctx,
+                ctx=run_ctx,
             )
 
         next_request = copy.copy(turn_options)
@@ -1024,10 +1024,7 @@ async def resolve_tools_from_options(
     expanded = await expand_wildcard_tools(registry, tool_names)
     actions: list[Action[Any, Any, Any]] = []
     for t_name in expanded:
-        try:
-            actions.append(await resolve_tool(registry, t_name))
-        except GenkitError as e:
-            raise Exception(f'Unable to resolve tool {t_name}') from e
+        actions.append(await resolve_tool(registry, t_name))
     return actions
 
 
