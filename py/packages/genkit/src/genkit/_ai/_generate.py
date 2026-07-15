@@ -1457,7 +1457,7 @@ async def _run_restart_through_middleware(
     )
 
     async def next_fn(p: ToolHookParams, c: GenerateMiddlewareContext) -> MultipartToolResponse:
-        executed = await run_tool_after_restart(tool=p.tool, restart_trp=restart_trp, ctx=c)
+        executed = await run_tool_after_restart(tool=p.tool, restart_trp=p.tool_request_part, ctx=c)
         return MultipartToolResponse(
             output=executed.tool_response.output,
             content=[Part.model_validate(c) for c in (executed.tool_response.content or [])],
