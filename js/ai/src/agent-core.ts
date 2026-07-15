@@ -158,7 +158,7 @@ export interface AgentChat<
   resumeStream(resume: AgentInput['resume'], opts?: Opts): AgentTurn<State>;
 
   /** Submits a detached (background) turn. */
-  detach(input: string | AgentInput): Promise<DetachedTask<State>>;
+  detach(input: string | AgentInput, opts?: Opts): Promise<DetachedTask<State>>;
 
   /** Aborts the current snapshot. */
   abort(): Promise<SessionSnapshot['status'] | undefined>;
