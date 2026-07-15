@@ -193,23 +193,23 @@ def _to_finish_reason(fr: Any) -> FinishReason:  # noqa: ANN401
     return FinishReason.UNKNOWN
 
 
+def _to_float(obj: Any, attr: str) -> float | None:  # noqa: ANN401
+    """Extract an optional numeric attribute as a float."""
+    val = getattr(obj, attr, None)
+    return float(val) if val is not None else None
+
+
 def _usage_from_metadata(usage_metadata: Any) -> ModelUsage:  # noqa: ANN401
     """Build ModelUsage from a google-genai usage_metadata block."""
     if usage_metadata is None:
         return ModelUsage()
 
-    prompt_tokens = getattr(usage_metadata, 'prompt_token_count', 0) or 0
-    candidates_tokens = getattr(usage_metadata, 'candidates_token_count', 0) or 0
-    total_tokens = getattr(usage_metadata, 'total_token_count', 0) or 0
-    thoughts_tokens = getattr(usage_metadata, 'thoughts_token_count', None)
-    cached_tokens = getattr(usage_metadata, 'cached_content_token_count', None)
-
     return ModelUsage(
-        input_tokens=float(prompt_tokens),
-        output_tokens=float(candidates_tokens),
-        total_tokens=float(total_tokens),
-        thoughts_tokens=float(thoughts_tokens) if thoughts_tokens is not None else None,
-        cached_content_tokens=float(cached_tokens) if cached_tokens is not None else None,
+        input_tokens=_to_float(usage_metadata, 'prompt_token_count'),
+        output_tokens=_to_float(usage_metadata, 'candidates_token_count'),
+        total_tokens=_to_float(usage_metadata, 'total_token_count'),
+        thoughts_tokens=_to_float(usage_metadata, 'thoughts_token_count'),
+        cached_content_tokens=_to_float(usage_metadata, 'cached_content_token_count'),
     )
 
 
