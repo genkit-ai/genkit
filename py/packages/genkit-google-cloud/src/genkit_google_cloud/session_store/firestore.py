@@ -169,11 +169,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         if not owned:
             return
         parent_ids = {snap.parent_id for snap in owned if snap.parent_id}
-        leaves = {
-            snap.snapshot_id: snap.created_at
-            for snap in owned
-            if snap.snapshot_id not in parent_ids
-        }
+        leaves = {snap.snapshot_id: snap.created_at for snap in owned if snap.snapshot_id not in parent_ids}
         if not leaves:
             return
         is_ambiguous = len(leaves) > 1
@@ -272,9 +268,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             leaves: dict[str, str] = {}
             if pointer and isinstance(pointer.get('leaves'), dict):
                 leaves = {
-                    str(k): str(v)
-                    for k, v in pointer['leaves'].items()
-                    if isinstance(k, str) and isinstance(v, str)
+                    str(k): str(v) for k, v in pointer['leaves'].items() if isinstance(k, str) and isinstance(v, str)
                 }
 
             if parent_snapshot_id and parent_snapshot_id in leaves:

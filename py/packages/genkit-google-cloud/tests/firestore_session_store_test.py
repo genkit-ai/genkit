@@ -202,7 +202,7 @@ async def test_firestore_session_store_update_existing_pointer() -> None:
 
 @pytest.mark.asyncio
 async def test_firestore_session_store_branching_ambiguity() -> None:
-    """Test pointer update setting isAmbiguous on branch split, and get_snapshot raising when reject_ambiguous is True."""
+    """Test pointer update setting isAmbiguous on branch split, and get_snapshot raising when ambiguous."""
     mock_client = MagicMock()
     mock_transaction = MagicMock()
     mock_transaction._max_attempts = 1
@@ -235,12 +235,14 @@ async def test_firestore_session_store_branching_ambiguity() -> None:
 
     mock_doc_ref = MagicMock()
     mock_col = MagicMock()
+
     def get_doc(doc_id: str) -> Any:  # noqa: ANN401
         if doc_id == 'sess-branch-1':
             return pointer_doc_ref
         if doc_id == 'global':
             return mock_doc_ref
         return snap_doc_ref
+
     mock_col.document.side_effect = get_doc
     pointer_doc_ref.collection.return_value = mock_col
     snap_doc_ref.collection.return_value = mock_col
@@ -319,16 +321,20 @@ async def test_firestore_session_store_repair_pointer_on_read() -> None:
     }
 
     snapshots_stream = MagicMock()
+
     async def mock_stream() -> Any:  # noqa: ANN401
         for doc in [snap_doc_1, snap_doc_2]:
             yield doc
+
     snapshots_stream.stream = MagicMock(return_value=mock_stream())
 
     mock_col = MagicMock()
+
     def collection_side_effect(col_name: str) -> Any:  # noqa: ANN401
         if 'pointer' in col_name:
             return mock_col
         return mock_col
+
     mock_client.collection.side_effect = collection_side_effect
     mock_col.document.return_value = pointer_doc_ref
     pointer_doc_ref.collection.return_value = mock_col
