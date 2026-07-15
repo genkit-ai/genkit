@@ -38,7 +38,7 @@ _THINKING_SCHEMA = {
     'type': 'object',
     'properties': {
         'enabled': {'type': 'boolean'},
-        'budgetTokens': {'type': 'number', 'minimum': 1024},
+        'budgetTokens': {'type': 'integer', 'minimum': 1024},
         'adaptive': {'type': 'boolean'},
         'display': {'type': 'string', 'enum': ['summarized', 'omitted']},
     },
@@ -52,7 +52,7 @@ _THINKING_SCHEMA = {
 _OUTPUT_CONFIG_SCHEMA = {
     'type': 'object',
     'properties': {
-        'effort': {'type': 'string', 'enum': ['low', 'medium', 'high', 'xhigh']},
+        'effort': {'type': 'string', 'enum': ['low', 'medium', 'high', 'xhigh', 'max']},
         'task_budget': {
             'type': 'object',
             'properties': {
@@ -170,6 +170,7 @@ class ThinkingConfig(BaseModel):
     model_config = _NESTED_CONFIG
 
     enabled: bool | None = None
+    # float, not int: adaptive mode allows a fractional budget it ignores; integers enforced only when enabled.
     budget_tokens: float | None = Field(default=None, alias='budgetTokens', ge=1024)
     adaptive: bool | None = None
     display: Literal['summarized', 'omitted'] | None = None
@@ -211,7 +212,7 @@ class OutputConfig(BaseModel):
 
     model_config = _NESTED_CONFIG
 
-    effort: Literal['low', 'medium', 'high', 'xhigh'] | None = None
+    effort: Literal['low', 'medium', 'high', 'xhigh', 'max'] | None = None
     task_budget: TaskBudget | None = Field(default=None, alias='task_budget')
 
 
@@ -300,3 +301,10 @@ class AnthropicConfig(ModelConfig):
         default=None,
         description='Anthropic beta feature headers to enable for this request.',
     )
+
+    @model_validator(mode='after')
+    def _check_api_surface(self) -> 'AnthropicConfig':
+        """Reject betas on the stable surface so an explicit apiVersion is never silently overridden."""
+        if self.api_version == 'stable' and self.betas:
+            raise ValueError("betas require the beta API surface; remove betas or set apiVersion to 'beta'")
+        return self

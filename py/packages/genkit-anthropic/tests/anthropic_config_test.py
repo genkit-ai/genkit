@@ -91,6 +91,15 @@ def test_output_config_effort_literal_enforced() -> None:
         AnthropicConfig.model_validate({'output_config': {'effort': 'extreme'}})
 
 
+def test_output_config_effort_max_valid_and_advertised() -> None:
+    cfg = AnthropicConfig.model_validate({'output_config': {'effort': 'max'}})
+    assert cfg.output_config is not None
+    assert cfg.output_config.effort == 'max'
+
+    schema = to_json_schema(AnthropicConfig)
+    assert 'max' in schema['properties']['output_config']['properties']['effort']['enum']
+
+
 # --- tool_choice ------------------------------------------------------------
 
 
@@ -122,6 +131,16 @@ def test_api_version_literal_and_alias() -> None:
     assert cfg.api_version == 'beta'
     with pytest.raises(ValidationError):
         AnthropicConfig.model_validate({'apiVersion': 'nightly'})
+
+
+def test_stable_api_version_with_betas_raises() -> None:
+    with pytest.raises(ValidationError):
+        AnthropicConfig.model_validate({'apiVersion': 'stable', 'betas': ['token-efficient-tools-2025']})
+
+
+def test_beta_api_version_with_betas_valid() -> None:
+    cfg = AnthropicConfig.model_validate({'apiVersion': 'beta', 'betas': ['token-efficient-tools-2025']})
+    assert cfg.betas == ['token-efficient-tools-2025']
 
 
 def test_unknown_extras_survive_validate_dump() -> None:

@@ -327,8 +327,8 @@ class AnthropicModel:
     def _uses_beta_api(self, config: AnthropicConfig) -> bool:
         """Whether this request should use the Anthropic beta API surface.
 
-        Unlike the JS plugin, setting ``betas`` alone selects the beta surface
-        so the requested features are honored instead of silently dropped.
+        Setting ``betas`` alone selects the beta surface, so the requested
+        features are honored instead of silently dropped.
         """
         return config.api_version == 'beta' or bool(config.betas)
 
