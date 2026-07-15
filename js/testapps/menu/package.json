@@ -16,14 +16,14 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "genkit": "workspace:*",
     "@genkit-ai/dev-local-vectorstore": "workspace:*",
-    "@genkit-ai/firebase": "workspace:*",
     "@genkit-ai/evaluator": "workspace:*",
-    "@genkit-ai/google-genai": "workspace:*"
+    "@genkit-ai/firebase": "workspace:*",
+    "@genkit-ai/google-genai": "workspace:*",
+    "genkit": "workspace:*"
   },
   "devDependencies": {
-    "rimraf": "^6.0.1",
+    "rimraf": "^6.1.3",
     "typescript": "^5.9.3"
   },
   "type": "module"
