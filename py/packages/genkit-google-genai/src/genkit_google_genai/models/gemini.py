@@ -185,9 +185,11 @@ def _to_finish_reason(fr_name: str | None) -> FinishReason:
         return FinishReason.STOP
     if fr_name == 'MAX_TOKENS':
         return FinishReason.LENGTH
-    if fr_name in ('SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII'):
+    if fr_name in ('SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII', 'LANGUAGE'):
         return FinishReason.BLOCKED
-    return FinishReason.OTHER
+    if fr_name == 'OTHER':
+        return FinishReason.OTHER
+    return FinishReason.UNKNOWN
 
 
 def _usage_from_metadata(usage_metadata: Any) -> ModelUsage:  # noqa: ANN401
@@ -1719,21 +1721,7 @@ class GeminiModel:
             ),
             finish_reason=finish_reason,
             candidates=candidates,
-            usage=ModelUsage(
-                input_tokens=float(response.usage_metadata.prompt_token_count or 0)
-                if response.usage_metadata
-                else None,
-                output_tokens=float(response.usage_metadata.candidates_token_count or 0)
-                if response.usage_metadata
-                else None,
-                total_tokens=float(response.usage_metadata.total_token_count or 0) if response.usage_metadata else None,
-                thoughts_tokens=float(response.usage_metadata.thoughts_token_count or 0)
-                if response.usage_metadata and response.usage_metadata.thoughts_token_count
-                else None,
-                cached_content_tokens=float(response.usage_metadata.cached_content_token_count or 0)
-                if response.usage_metadata and response.usage_metadata.cached_content_token_count
-                else None,
-            ),
+            usage=_usage_from_metadata(response.usage_metadata),
         )
 
     async def _streaming_generate(
@@ -1783,7 +1771,7 @@ class GeminiModel:
             ) from e
 
         accumulated_content: list[Part] = []
-        finish_reason = FinishReason.STOP
+        finish_reason = FinishReason.UNKNOWN
         usage_metadata: Any = None
         async for response_chunk in generator:
             content = await self._contents_from_response(response_chunk)

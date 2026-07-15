@@ -212,6 +212,35 @@ async def test_generate_stream_captures_finish_reason_and_usage(mocker: MockerFi
 
 
 @pytest.mark.asyncio
+async def test_generate_stream_without_finish_reason(mocker: MockerFixture) -> None:
+    """Test that streaming generate defaults to FinishReason.UNKNOWN when no chunk carries a finish_reason."""
+    request = ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[Part(root=TextPart(text='hi'))],
+            ),
+        ]
+    )
+    cand_1 = genai.types.Candidate(content=genai.types.Content(parts=[genai.types.Part(text='Hello')]))
+    resp_1 = genai.types.GenerateContentResponse(candidates=[cand_1])
+
+    googleai_client_mock = mocker.AsyncMock()
+
+    async def mock_stream() -> Any:  # noqa: ANN401
+        yield resp_1
+
+    googleai_client_mock.aio.models.generate_content_stream.return_value = mock_stream()
+
+    on_chunk_mock = mocker.MagicMock()
+    gemini = GeminiModel('gemini-2.5-flash', googleai_client_mock)
+    ctx = ActionRunContext(streaming_callback=on_chunk_mock)
+
+    response = await gemini.generate(request, ctx)
+    assert response.finish_reason == FinishReason.UNKNOWN
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('version', [x for x in IMAGE_GENERATION_VERSIONS])
 async def test_generate_media_response(mocker: MockerFixture, version: str) -> None:
     """Test generate method for media responses."""
