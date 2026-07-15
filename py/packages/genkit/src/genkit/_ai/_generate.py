@@ -517,6 +517,10 @@ class ChunkAccumulator:
         self.formatter = formatter
         self.chunk_role: Role = Role.MODEL
         self.prev_chunks: list[ModelResponseChunk[Any]] = []
+        fmt = formatter
+        self._chunk_parser: Callable[[ModelResponseChunk[Any]], Any | None] | None = (
+            (lambda chunk: fmt.parse_chunk(chunk)) if fmt is not None else None
+        )
 
     def make(self, *, role: Role, chunk: ModelResponseChunk[Any]) -> ModelResponseChunk[Any]:
         """Wrap a raw chunk with metadata and track message index changes."""
@@ -528,18 +532,11 @@ class ChunkAccumulator:
         prev_to_send = copy.copy(self.prev_chunks)
         self.prev_chunks.append(chunk)
 
-        formatter = self.formatter
-
-        def chunk_parser(chunk: ModelResponseChunk[Any]) -> Any | None:  # noqa: ANN401
-            if formatter is None:
-                return None
-            return formatter.parse_chunk(chunk)
-
         return ModelResponseChunk(
             chunk,
             index=self.message_index,
             previous_chunks=prev_to_send,
-            chunk_parser=chunk_parser if formatter else None,
+            chunk_parser=self._chunk_parser,
         )
 
     def stream_chunk(
