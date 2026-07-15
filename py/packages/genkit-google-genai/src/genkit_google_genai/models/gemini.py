@@ -186,7 +186,16 @@ def _to_finish_reason(fr: Any) -> FinishReason:  # noqa: ANN401
         return FinishReason.STOP
     if fr_name == 'MAX_TOKENS':
         return FinishReason.LENGTH
-    if fr_name in ('SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII', 'LANGUAGE', 'MALICIOUS'):
+    if fr_name in (
+        'SAFETY',
+        'RECITATION',
+        'BLOCKLIST',
+        'PROHIBITED_CONTENT',
+        'SPII',
+        'LANGUAGE',
+        'MALICIOUS',
+        'IMAGE_SAFETY',
+    ):
         return FinishReason.BLOCKED
     if fr_name in ('OTHER', 'MALFORMED_FUNCTION_CALL', 'MISSING_THOUGHT_SIGNATURE'):
         return FinishReason.OTHER
