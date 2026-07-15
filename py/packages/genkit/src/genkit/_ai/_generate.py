@@ -679,6 +679,8 @@ async def _generate_action_turn(
     ) -> ModelResponse:
         """Execute one turn of the generate loop (model call + optional tool resolution)."""
         turn_options = params.options
+        # Re-resolve and re-validate tools per turn to pick up dynamic tool
+        # injections or removals from middleware (e.g. wrap_generate).
         turn_tools = await resolve_tools_from_options(registry, turn_options.tools)
         assert_valid_tool_names(turn_tools)
         request = await action_to_generate_request(turn_options, turn_tools, model)
@@ -1045,6 +1047,8 @@ async def resolve_parameters(
     if model_action is None:
         raise Exception(f'Failed to to resolve model {model}')
 
+    # Resolve tools up front to fail fast on invalid caller-supplied tool names or
+    # duplicate short names before running side effects or middleware.
     tools = await resolve_tools_from_options(registry, request.tools)
 
     format_def: FormatDef | None = None
