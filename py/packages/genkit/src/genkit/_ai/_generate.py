@@ -677,6 +677,7 @@ async def _generate_action_turn(
         _ctx: GenerateMiddlewareContext,
     ) -> ModelResponse:
         """Execute one turn of the generate loop (model call + optional tool resolution)."""
+        chunks.message_index = params.message_index
         turn_options = params.options
         # Re-resolve and re-validate tools per turn to pick up dynamic tool
         # injections or removals from middleware (e.g. wrap_generate).
@@ -815,7 +816,7 @@ async def _generate_action_turn(
     generate_params = GenerateHookParams(
         options=raw_request,
         iteration=current_turn,
-        message_index=message_index,
+        message_index=chunks.message_index,
     )
     return await dispatch_generate(generate_params, run_ctx, run_one_iteration)
 
