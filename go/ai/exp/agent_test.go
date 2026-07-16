@@ -2374,11 +2374,22 @@ func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 	tests := []struct {
 		name    string
 		message *ai.Message
+		resume  *ToolResume
 		wantMsg string
 	}{
 		{
 			name:    "missing message",
 			message: nil,
+			wantMsg: "message",
+		},
+		{
+			// A Resume struct that is non-nil but carries no Respond/Restart
+			// entries must be treated the same as no Resume at all; only
+			// checking for a nil Resume would let this slip through to the
+			// model with an effectively empty turn.
+			name:    "empty resume payload",
+			message: nil,
+			resume:  &ToolResume{},
 			wantMsg: "message",
 		},
 		{
@@ -2404,7 +2415,7 @@ func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			out, err := af.Run(ctx, &AgentInput{Message: tc.message})
+			out, err := af.Run(ctx, &AgentInput{Message: tc.message, Resume: tc.resume})
 			if err != nil {
 				t.Fatalf("Run: %v", err)
 			}
