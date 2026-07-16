@@ -23,7 +23,7 @@ import pytest
 from anthropic import AsyncAnthropic
 from genkit_anthropic import models as anthropic_models
 from genkit_anthropic.config import AnthropicConfig
-from genkit_anthropic.models import AnthropicModel, _to_anthropic_thinking_config
+from genkit_anthropic.models import BETA_APIS, AnthropicModel, _to_anthropic_thinking_config
 from genkit_anthropic.utils import maybe_strip_fences, strip_markdown_fences
 from pydantic import ValidationError
 
@@ -861,6 +861,115 @@ def _text_request(config: Any) -> ModelRequest:
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
         config=config,
     )
+
+
+@pytest.mark.parametrize(
+    ('config', 'default_api_version', 'expected'),
+    [
+        ({'apiVersion': 'beta'}, 'stable', True),
+        ({'apiVersion': 'stable'}, 'beta', False),
+        ({}, 'beta', True),
+        ({}, 'stable', False),
+        ({}, None, False),
+        ({'metadata': {'user_id': 'test-user'}}, 'beta', True),
+        ({'metadata': {'user_id': 'test-user'}}, 'stable', False),
+        ({'betas': ['custom-beta']}, None, True),
+        ({'betas': ['custom-beta']}, 'stable', True),
+        ({'output_config': {'task_budget': {'total': 20000}}}, None, True),
+        ({'betas': []}, None, False),
+    ],
+)
+def test_api_surface_resolution(config: dict[str, Any], default_api_version: Any, expected: bool) -> None:
+    """Resolve request override, feature signals, plugin default, then stable."""
+    model = AnthropicModel(
+        model_name='claude-sonnet-4',
+        client=MagicMock(),
+        default_api_version=default_api_version,
+    )
+
+    assert model._uses_beta_api(AnthropicConfig.model_validate(config)) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('default_api_version', 'config', 'use_beta'),
+    [
+        ('beta', {}, True),
+        ('beta', {'apiVersion': 'stable'}, False),
+        ('stable', {'apiVersion': 'beta'}, True),
+    ],
+)
+async def test_api_surface_resolution_routes_create(
+    default_api_version: Any,
+    config: dict[str, Any],
+    use_beta: bool,
+) -> None:
+    """The resolved API surface selects the matching SDK create method."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(
+        model_name='claude-sonnet-4',
+        client=mock_client,
+        default_api_version=default_api_version,
+    )
+
+    await model.generate(_text_request(config))
+
+    if use_beta:
+        mock_client.beta.messages.create.assert_awaited_once()
+        mock_client.messages.create.assert_not_called()
+    else:
+        mock_client.messages.create.assert_awaited_once()
+        mock_client.beta.messages.create.assert_not_called()
+        assert 'betas' not in mock_client.messages.create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_default_api_version_beta_routes_streaming() -> None:
+    """The configured beta default applies to streaming as well as create."""
+    mock_client = MagicMock()
+    final_content = [MagicMock(type='text', text='ok')]
+    mock_client.beta.messages.stream.return_value = MockStreamManager([], final_content=final_content)
+    model = AnthropicModel(
+        model_name='claude-sonnet-4',
+        client=mock_client,
+        default_api_version='beta',
+    )
+    ctx = MagicMock()
+    ctx.is_streaming = True
+
+    await model.generate(_text_request({}), ctx)
+
+    mock_client.beta.messages.stream.assert_called_once()
+    mock_client.messages.stream.assert_not_called()
+    assert mock_client.beta.messages.stream.call_args.kwargs['betas'] == list(BETA_APIS)
+
+
+@pytest.mark.asyncio
+async def test_beta_surface_sends_default_betas() -> None:
+    """Beta calls send the same default beta headers as the JS plugin."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'apiVersion': 'beta'}))
+
+    assert mock_client.beta.messages.create.call_args.kwargs['betas'] == list(BETA_APIS)
+    assert list(BETA_APIS) == [
+        'files-api-2025-04-14',
+        'effort-2025-11-24',
+        'structured-outputs-2025-11-13',
+        'task-budgets-2026-03-13',
+    ]
+
+
+@pytest.mark.asyncio
+async def test_beta_surface_preserves_empty_betas_opt_out() -> None:
+    """An explicit empty list opts out of the default beta headers."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'apiVersion': 'beta', 'betas': []}))
+
+    assert mock_client.beta.messages.create.call_args.kwargs['betas'] == []
 
 
 @pytest.mark.asyncio

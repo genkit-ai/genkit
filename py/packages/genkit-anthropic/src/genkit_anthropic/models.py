@@ -28,7 +28,7 @@ import json
 import math
 import time
 from email.utils import parsedate_to_datetime
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 import structlog
 from anthropic import APIError, AsyncAnthropic
@@ -70,6 +70,13 @@ from genkit_anthropic.utils import (
 logger = structlog.get_logger(__name__)
 
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
+# Keep in sync with ``js/plugins/anthropic/src/runner/beta.ts``.
+BETA_APIS: tuple[str, ...] = (
+    'files-api-2025-04-14',
+    'effort-2025-11-24',
+    'structured-outputs-2025-11-13',
+    'task-budgets-2026-03-13',
+)
 _THINKING_MODE_KEYS = frozenset({'adaptive', 'budget_tokens', 'enabled', 'type'})
 
 
@@ -257,7 +264,12 @@ class AnthropicModel:
         - Tool use / function calling
     """
 
-    def __init__(self, model_name: str, client: AsyncAnthropic) -> None:
+    def __init__(
+        self,
+        model_name: str,
+        client: AsyncAnthropic,
+        default_api_version: Literal['stable', 'beta'] | None = None,
+    ) -> None:
         """Initialize Anthropic model.
 
         Sets up the client for communicating with the Anthropic API
@@ -266,11 +278,14 @@ class AnthropicModel:
         Args:
             model_name: Name of the Anthropic model.
             client: AsyncAnthropic client instance.
+            default_api_version: Default API surface when a request does not
+                provide an explicit ``apiVersion``.
         """
         model_info = get_model_info(model_name)
         self._model_info = model_info
         self.model_name = model_info.versions[0] if model_info.versions else model_name
         self.client = client
+        self._default_api_version = default_api_version
 
     async def generate(self, request: ModelRequest, ctx: ActionRunContext | None = None) -> ModelResponse:
         """Generate response from Anthropic.
@@ -383,10 +398,16 @@ class AnthropicModel:
     def _uses_beta_api(self, config: AnthropicConfig) -> bool:
         """Whether this request should use the Anthropic beta API surface.
 
-        Any beta-only field selects the beta surface, so the requested features
-        are honored instead of being rejected by the stable surface.
+        An explicit per-request API version takes precedence. Otherwise, any
+        beta-only field selects the beta surface so a request-level feature is
+        not suppressed by a plugin-wide default. Requests without either use
+        the plugin default, falling back to stable.
         """
-        return config.api_version == 'beta' or bool(config.beta_only_fields())
+        if config.api_version is not None:
+            return config.api_version == 'beta'
+        if config.beta_only_fields():
+            return True
+        return self._default_api_version == 'beta'
 
     def _build_params(
         self,
@@ -421,8 +442,8 @@ class AnthropicModel:
         # Genkit selects the streaming surface from the request context.
         params.pop('stream', None)
 
-        if use_beta and betas:
-            params['betas'] = betas
+        if use_beta:
+            params['betas'] = list(betas) if betas is not None else list(BETA_APIS)
 
         if isinstance(thinking, dict):
             anthropic_thinking = _to_anthropic_thinking_config(thinking)
