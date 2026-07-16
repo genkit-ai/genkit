@@ -16,10 +16,12 @@
 
 import { GenkitError, z } from 'genkit';
 import { GoogleAuth } from 'google-auth-library';
-import type {
+import {
   ClientOptions,
   ExpressClientOptions,
   GlobalClientOptions,
+  MULTI_REGIONAL_LOCATIONS,
+  MultiRegionalClientOptions,
   RegionalClientOptions,
   VertexPluginOptions,
 } from './types.js';
@@ -71,17 +73,18 @@ export async function getDerivedOptions(
   if (options?.location == 'global') {
     return await getGlobalDerivedOptions(AuthClass, options);
   } else if (options?.location) {
-    return await getRegionalDerivedOptions(AuthClass, options);
+    return await getRegionalOrMultiRegionalDerivedOptions(AuthClass, options);
   } else if (options?.apiKey !== undefined) {
     // apiKey = false still indicates apiKey expectation
     return getExpressDerivedOptions(options);
   }
 
   // If we got here then we're relying on environment variables.
-  // Try regional first, it's the most common usage.
+  // Try regional or multi-regional first, they are the the most common usages.
   try {
-    const regionalOptions = await getRegionalDerivedOptions(AuthClass, options);
-    return regionalOptions;
+    const regionalOrMultiRegionalOptions =
+      await getRegionalOrMultiRegionalDerivedOptions(AuthClass, options);
+    return regionalOrMultiRegionalOptions;
   } catch (e: unknown) {
     /* no-op - try global next */
   }
@@ -157,6 +160,9 @@ async function getGlobalDerivedOptions(
   if (options?.apiKey) {
     clientOpt.apiKey = options.apiKey;
   }
+  if (options?.apiVersion) {
+    clientOpt.apiVersion = options.apiVersion;
+  }
 
   return clientOpt;
 }
@@ -169,13 +175,14 @@ function getExpressDerivedOptions(
     kind: 'express',
     apiKey,
     experimental_debugTraces: options?.experimental_debugTraces,
+    ...(options?.apiVersion ? { apiVersion: options.apiVersion } : {}),
   };
 }
 
-async function getRegionalDerivedOptions(
+async function getRegionalOrMultiRegionalDerivedOptions(
   AuthClass: typeof GoogleAuth,
   options?: VertexPluginOptions
-): Promise<RegionalClientOptions> {
+): Promise<RegionalClientOptions | MultiRegionalClientOptions> {
   let authOptions = options?.googleAuth;
   let authClient: GoogleAuth;
   const providedProjectId =
@@ -219,17 +226,28 @@ async function getRegionalDerivedOptions(
     );
   }
 
-  const clientOpt: RegionalClientOptions = {
-    kind: 'regional',
-    location,
+  const clientOptBase: Omit<RegionalClientOptions, 'location' | 'kind'> &
+    Omit<MultiRegionalClientOptions, 'kind' | 'location'> = {
     projectId,
     authClient,
     experimental_debugTraces: options?.experimental_debugTraces,
+    ...(options?.apiKey ? { apiKey: options.apiKey } : {}),
+    ...(options?.apiVersion ? { apiVersion: options.apiVersion } : {}),
   };
-  if (options?.apiKey) {
-    clientOpt.apiKey = options.apiKey;
+
+  if (MULTI_REGIONAL_LOCATIONS.includes(location as any)) {
+    return {
+      kind: 'multi-regional',
+      location,
+      ...clientOptBase,
+    } as MultiRegionalClientOptions;
+  } else {
+    return {
+      kind: 'regional',
+      location,
+      ...clientOptBase,
+    } as RegionalClientOptions;
   }
-  return clientOpt;
 }
 
 export type RequestClientOptions = ClientOptions & {

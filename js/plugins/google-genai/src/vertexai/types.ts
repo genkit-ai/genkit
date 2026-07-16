@@ -50,6 +50,9 @@ import {
   isRetrievalTool,
 } from '../common/types.js';
 
+export const SUPPORTED_API_VERSIONS = ['v1beta1', 'v1'] as const;
+export const MULTI_REGIONAL_LOCATIONS = ['us', 'eu'] as const;
+
 // This makes it easier to import all types from one place
 export {
   FunctionCallingMode,
@@ -91,6 +94,8 @@ export interface VertexPluginOptions {
   apiKey?: string | false;
   /** The Google Cloud project id to call. */
   projectId?: string;
+  /** The API version to use (defaults to v1beta1) */
+  apiVersion?: (typeof SUPPORTED_API_VERSIONS)[number];
   /** The Google Cloud region to call. */
   location?: string;
   /** Provide custom authentication configuration for connecting to Vertex AI. */
@@ -102,6 +107,7 @@ export interface VertexPluginOptions {
 }
 
 interface BaseClientOptions {
+  apiVersion?: VertexPluginOptions['apiVersion'];
   /** timeout in milli seconds. time out value needs to be non negative. */
   timeout?: number;
   signal?: AbortSignal;
@@ -110,20 +116,31 @@ interface BaseClientOptions {
   experimental_debugTraces?: boolean;
 }
 
-export interface RegionalClientOptions extends BaseClientOptions {
-  kind: 'regional';
-  location: string;
+interface SharedLocationBasedClientOptions {
   projectId: string;
   authClient: GoogleAuth;
   apiKey?: string; // In addition to regular auth
 }
 
-export interface GlobalClientOptions extends BaseClientOptions {
+export interface MultiRegionalClientOptions
+  extends BaseClientOptions,
+    SharedLocationBasedClientOptions {
+  kind: 'multi-regional';
+  location: (typeof MULTI_REGIONAL_LOCATIONS)[number];
+}
+
+export interface RegionalClientOptions
+  extends BaseClientOptions,
+    SharedLocationBasedClientOptions {
+  kind: 'regional';
+  location: string;
+}
+
+export interface GlobalClientOptions
+  extends BaseClientOptions,
+    SharedLocationBasedClientOptions {
   kind: 'global';
   location: 'global';
-  projectId: string;
-  authClient: GoogleAuth;
-  apiKey?: string; // In addition to regular auth
 }
 
 export interface ExpressClientOptions extends BaseClientOptions {
@@ -134,6 +151,7 @@ export interface ExpressClientOptions extends BaseClientOptions {
 /** Resolved options for use with the client */
 export type ClientOptions =
   | RegionalClientOptions
+  | MultiRegionalClientOptions
   | GlobalClientOptions
   | ExpressClientOptions;
 

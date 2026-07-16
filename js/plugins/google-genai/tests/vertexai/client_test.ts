@@ -311,6 +311,80 @@ describe('Vertex AI Client', () => {
       });
     });
 
+    describe('Multi-regional', () => {
+      const opts: ClientOptions = {
+        kind: 'multi-regional',
+        projectId: 'test-proj',
+        location: 'us',
+        authClient: {} as any,
+      };
+
+      it('should build URL for listModels', () => {
+        const url = getVertexAIUrl({
+          includeProjectAndLocation: false,
+          resourcePath: 'publishers/google/models',
+          clientOptions: opts,
+        });
+        assert.strictEqual(
+          url,
+          'https://aiplatform.us.googleapis.com/v1beta1/publishers/google/models'
+        );
+      });
+
+      it('should build URL for generateContent', () => {
+        const url = getVertexAIUrl({
+          includeProjectAndLocation: true,
+          resourcePath: 'publishers/google/models/gemini-2.0-pro',
+          resourceMethod: 'generateContent',
+          clientOptions: opts,
+        });
+        assert.strictEqual(
+          url,
+          'https://aiplatform.us.googleapis.com/v1beta1/projects/test-proj/locations/us/publishers/google/models/gemini-2.0-pro:generateContent'
+        );
+      });
+    });
+
+    describe('apiVersion options', () => {
+      it('should use specified apiVersion if provided in clientOptions', () => {
+        const opts: ClientOptions = {
+          kind: 'regional',
+          projectId: 'test-proj',
+          location: 'us-east1',
+          authClient: {} as any,
+          apiVersion: 'v1',
+        };
+        const url = getVertexAIUrl({
+          includeProjectAndLocation: true,
+          resourcePath: 'publishers/google/models/gemini-2.0-pro',
+          resourceMethod: 'generateContent',
+          clientOptions: opts,
+        });
+        assert.strictEqual(
+          url,
+          'https://us-east1-aiplatform.googleapis.com/v1/projects/test-proj/locations/us-east1/publishers/google/models/gemini-2.0-pro:generateContent'
+        );
+      });
+
+      it('should throw if specified apiVersion is not supported', () => {
+        const opts: ClientOptions = {
+          kind: 'regional',
+          projectId: 'test-proj',
+          location: 'us-east1',
+          authClient: {} as any,
+          apiVersion: 'v2' as any,
+        };
+        assert.throws(() => {
+          getVertexAIUrl({
+            includeProjectAndLocation: true,
+            resourcePath: 'publishers/google/models/gemini-2.0-pro',
+            resourceMethod: 'generateContent',
+            clientOptions: opts,
+          });
+        }, /Invalid apiVersion \[v2\] for VertexAi client/);
+      });
+    });
+
     describe('Express', () => {
       const opts: ClientOptions = {
         kind: 'express',

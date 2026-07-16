@@ -60,6 +60,7 @@ const ai = genkit({
   plugins: [
     // Using Application Default Credentials (Recommended for full features)
     vertexAI({ location: 'us-central1' }), // Regional endpoint
+    // vertexAI({ location: 'us', apiVersion: 'v1' }), // Multi-regional endpoint, overriding apiVersion
     // vertexAI({ location: 'global' }),      // Global endpoint
 
     // OR
