@@ -969,7 +969,26 @@ async def test_beta_surface_preserves_empty_betas_opt_out() -> None:
 
     await model.generate(_text_request({'apiVersion': 'beta', 'betas': []}))
 
-    assert mock_client.beta.messages.create.call_args.kwargs['betas'] == []
+    mock_client.beta.messages.create.assert_awaited_once()
+    mock_client.messages.create.assert_not_called()
+    assert 'betas' not in mock_client.beta.messages.create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_beta_streaming_omits_empty_betas_opt_out() -> None:
+    """Streaming also omits the SDK kwarg rather than sending an empty header."""
+    mock_client = MagicMock()
+    final_content = [MagicMock(type='text', text='ok')]
+    mock_client.beta.messages.stream.return_value = MockStreamManager([], final_content=final_content)
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+    ctx = MagicMock()
+    ctx.is_streaming = True
+
+    await model.generate(_text_request({'apiVersion': 'beta', 'betas': []}), ctx)
+
+    mock_client.beta.messages.stream.assert_called_once()
+    mock_client.messages.stream.assert_not_called()
+    assert 'betas' not in mock_client.beta.messages.stream.call_args.kwargs
 
 
 @pytest.mark.asyncio
