@@ -197,18 +197,22 @@ async def test_generate_with_config() -> None:
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Test'))])],
         config=ModelConfig(
-            temperature=0.7,
+            temperature=0.0,
             max_output_tokens=100,
             top_p=0.9,
+            top_k=40,
+            stop_sequences=['STOP'],
         ),
     )
 
     await model.generate(request)
 
     call_args = mock_client.messages.create.call_args
-    assert call_args.kwargs['temperature'] == 0.7
+    assert call_args.kwargs['temperature'] == 0.0
     assert call_args.kwargs['max_tokens'] == 100
     assert call_args.kwargs['top_p'] == 0.9
+    assert call_args.kwargs['top_k'] == 40
+    assert call_args.kwargs['stop_sequences'] == ['STOP']
 
 
 def test_extract_system() -> None:
@@ -857,6 +861,92 @@ def _text_request(config: Any) -> ModelRequest:
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
         config=config,
     )
+
+
+@pytest.mark.asyncio
+async def test_camelcase_sampling_aliases_normalized() -> None:
+    """CamelCase sampling aliases become SDK kwargs without leaking."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(
+        _text_request({
+            'topP': 0.9,
+            'topK': 20,
+            'stopSequences': ['x'],
+            'maxOutputTokens': 64,
+        })
+    )
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert kwargs['top_p'] == 0.9
+    assert kwargs['top_k'] == 20
+    assert kwargs['stop_sequences'] == ['x']
+    assert kwargs['max_tokens'] == 64
+
+    camelcase_keys = {'topP', 'topK', 'stopSequences', 'maxOutputTokens'}
+    assert camelcase_keys.isdisjoint(kwargs)
+    assert camelcase_keys.isdisjoint(kwargs.get('extra_body', {}))
+
+
+@pytest.mark.asyncio
+async def test_sampling_params_reach_streaming_request() -> None:
+    """Sampling parameters reach the SDK's streaming request unchanged."""
+    mock_client = _mock_client_for_generate()
+    mock_client.messages.stream.return_value = MockStreamManager(
+        [],
+        final_content=[MagicMock(type='text', text='ok')],
+    )
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+    ctx = MagicMock()
+    ctx.is_streaming = True
+
+    await model.generate(
+        _text_request(
+            ModelConfig(
+                temperature=0.2,
+                top_p=0.8,
+                top_k=30,
+                stop_sequences=['END'],
+                max_output_tokens=256,
+            )
+        ),
+        ctx,
+    )
+
+    kwargs = mock_client.messages.stream.call_args.kwargs
+    assert kwargs['temperature'] == 0.2
+    assert kwargs['top_p'] == 0.8
+    assert kwargs['top_k'] == 30
+    assert kwargs['stop_sequences'] == ['END']
+    assert kwargs['max_tokens'] == 256
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('model_name', ['claude-opus-4-8', 'claude-fable-5'])
+async def test_sampling_params_pass_through_for_newest_models(model_name: str) -> None:
+    """Newest models keep local pass-through for API-enforced sampling rules."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name=model_name, client=mock_client)
+
+    # These models enforce sampling restrictions server-side; match JS and Go by forwarding unchanged.
+    await model.generate(_text_request({'temperature': 0.7, 'top_p': 0.9, 'top_k': 40}))
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert kwargs['temperature'] == 0.7
+    assert kwargs['top_p'] == 0.9
+    assert kwargs['top_k'] == 40
+
+
+def test_build_params_default_max_tokens() -> None:
+    """An empty config uses the plugin's default output-token limit."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    params = model._build_params(_text_request({}))
+
+    assert params['max_tokens'] == anthropic_models.DEFAULT_MAX_OUTPUT_TOKENS
+    assert {'temperature', 'top_p', 'top_k', 'stop_sequences'}.isdisjoint(params)
 
 
 @pytest.mark.asyncio
