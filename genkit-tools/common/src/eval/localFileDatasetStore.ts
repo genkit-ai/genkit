@@ -64,6 +64,40 @@ export class LocalFileDatasetStore implements DatasetStore {
     this.cachedDatasetStore = null;
   }
 
+  /**
+   * Resolves the on-disk path for a given dataset id, guarding against path
+   * traversal. Dataset ids arrive from unauthenticated tRPC input
+   * (`getDataset`, `updateDataset`, `deleteDataset`), so they must be treated
+   * as untrusted. Ids are expected to be simple file-name-safe tokens; anything
+   * containing a path separator, a traversal segment, a null byte, or that
+   * would otherwise resolve outside of `storeRoot` is rejected.
+   */
+  private resolveDatasetPath(datasetId: string): string {
+    if (
+      typeof datasetId !== 'string' ||
+      datasetId.length === 0 ||
+      datasetId === '.' ||
+      datasetId === '..' ||
+      datasetId.includes('/') ||
+      datasetId.includes('\\') ||
+      datasetId.includes('\0')
+    ) {
+      throw new Error(`Invalid dataset id: ${JSON.stringify(datasetId)}`);
+    }
+    const filePath = path.resolve(
+      this.storeRoot,
+      this.generateFileName(datasetId)
+    );
+    // Defense in depth: ensure the resolved path stays within storeRoot. Using
+    // `path.relative` handles case-insensitive file systems and Windows drive
+    // letters more robustly than a `startsWith` prefix check.
+    const relative = path.relative(this.storeRoot, filePath);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+      throw new Error(`Invalid dataset id: ${JSON.stringify(datasetId)}`);
+    }
+    return filePath;
+  }
+
   async createDataset(req: CreateDatasetRequest): Promise<DatasetMetadata> {
     return this.createDatasetInternal(req);
   }
@@ -111,10 +145,7 @@ export class LocalFileDatasetStore implements DatasetStore {
 
   async updateDataset(req: UpdateDatasetRequest): Promise<DatasetMetadata> {
     const { datasetId, data, schema, targetAction, metricRefs } = req;
-    const filePath = path.resolve(
-      this.storeRoot,
-      this.generateFileName(datasetId)
-    );
+    const filePath = this.resolveDatasetPath(datasetId);
     if (!fs.existsSync(filePath)) {
       throw new Error(`Update dataset failed: dataset not found`);
     }
@@ -156,10 +187,7 @@ export class LocalFileDatasetStore implements DatasetStore {
   }
 
   async getDataset(datasetId: string): Promise<Dataset> {
-    const filePath = path.resolve(
-      this.storeRoot,
-      this.generateFileName(datasetId)
-    );
+    const filePath = this.resolveDatasetPath(datasetId);
     if (!fs.existsSync(filePath)) {
       throw new Error(`Dataset not found for dataset ID ${datasetId}`);
     }
@@ -180,10 +208,7 @@ export class LocalFileDatasetStore implements DatasetStore {
   }
 
   async deleteDataset(datasetId: string): Promise<void> {
-    const filePath = path.resolve(
-      this.storeRoot,
-      this.generateFileName(datasetId)
-    );
+    const filePath = this.resolveDatasetPath(datasetId);
     await rm(filePath);
 
     const metadataMap = await this.getMetadataMap();

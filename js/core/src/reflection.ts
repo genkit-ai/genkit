@@ -443,24 +443,30 @@ export class ReflectionServer {
     });
 
     this.port = await this.findPort();
-    this.server = server.listen(this.port, async () => {
-      logger.debug(
-        `Reflection server (${process.pid}) running on http://localhost:${this.port}`
-      );
-      ReflectionServer.RUNNING_SERVERS.push(this);
-
-      try {
-        await this.registry.listActions();
-        await this.writeRuntimeFile();
-      } catch (e) {
-        logger.error(`Error initializing plugins: ${e}`);
-        try {
-          await this.stop();
-        } catch (err) {
-          logger.error(`Failed to stop server gracefully: ${err}`);
-        }
-      }
+    // Bind to loopback so the (unauthenticated) reflection server is not
+    // exposed on the network by default. `GENKIT_REFLECTION_HOST` can be set
+    // (e.g. to `0.0.0.0`) for container/remote dev scenarios.
+    const host = process.env.GENKIT_REFLECTION_HOST || '127.0.0.1';
+    await new Promise<void>((resolve) => {
+      this.server = server.listen(this.port!, host, resolve);
     });
+
+    logger.debug(
+      `Reflection server (${process.pid}) running on http://localhost:${this.port}`
+    );
+    ReflectionServer.RUNNING_SERVERS.push(this);
+
+    try {
+      await this.registry.listActions();
+      await this.writeRuntimeFile();
+    } catch (e) {
+      logger.error(`Error initializing plugins: ${e}`);
+      try {
+        await this.stop();
+      } catch (err) {
+        logger.error(`Failed to stop server gracefully: ${err}`);
+      }
+    }
   }
 
   /**

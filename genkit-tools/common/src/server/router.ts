@@ -57,6 +57,19 @@ const t = initTRPC.create({
   },
 });
 
+/**
+ * Schema for a dataset id supplied by an (unauthenticated) client. Dataset ids
+ * are used to build on-disk file paths, so they must be constrained to simple
+ * file-name-safe tokens to prevent path traversal. This mirrors the validation
+ * used when a dataset is created (see `generateDatasetId`).
+ */
+const DatasetIdSchema = z
+  .string()
+  .regex(
+    /^[A-Za-z][A-Za-z0-9_.-]{4,34}[A-Za-z0-9]$/,
+    'Invalid dataset id: must be 6-36 characters, alphanumeric with hyphens, dots and underscores, starting with a letter and ending with a letter or number.'
+  );
+
 const analyticsEventForRoute = (
   path: string,
   durationMs: number,
@@ -212,7 +225,7 @@ export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
 
     /** Retrieves an existing dataset */
     getDataset: loggedProcedure
-      .input(z.string())
+      .input(DatasetIdSchema)
       .output(evals.DatasetSchema)
       .query(async ({ input }) => {
         const response = await getDatasetStore().getDataset(input);
@@ -239,7 +252,7 @@ export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
 
     /** Deletes an exsting dataset */
     deleteDataset: loggedProcedure
-      .input(z.string())
+      .input(DatasetIdSchema)
       .output(z.void())
       .mutation(async ({ input }) => {
         const response = await getDatasetStore().deleteDataset(input);

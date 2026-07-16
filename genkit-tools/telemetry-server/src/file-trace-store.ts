@@ -84,11 +84,11 @@ export class LocalFileTraceStore implements TraceStore {
       throw new Error(`Invalid trace id: ${JSON.stringify(id)}`);
     }
     const filePath = path.resolve(this.storeRoot, id);
-    // Defense in depth: ensure the resolved path stays within storeRoot.
-    if (
-      filePath !== this.storeRoot &&
-      !filePath.startsWith(this.storeRoot + path.sep)
-    ) {
+    // Defense in depth: ensure the resolved path stays within storeRoot. Using
+    // `path.relative` handles case-insensitive file systems and Windows drive
+    // letters more robustly than a `startsWith` prefix check.
+    const relative = path.relative(this.storeRoot, filePath);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
       throw new Error(`Invalid trace id: ${JSON.stringify(id)}`);
     }
     return filePath;
