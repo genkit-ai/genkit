@@ -465,6 +465,12 @@ function fromOpenAIToolCallChunk(
     acc.args += toolCall.function.arguments;
   }
 
+  // Without a tool name there is nothing meaningful to emit yet; the name
+  // arrives with the first delta of a tool call, so wait for it.
+  if (!acc.name) {
+    return undefined;
+  }
+
   // Best-effort parse of the (possibly incomplete) accumulated arguments.
   let input: unknown = {};
   if (acc.args) {
@@ -477,7 +483,7 @@ function fromOpenAIToolCallChunk(
 
   return {
     toolRequest: {
-      name: acc.name!,
+      name: acc.name,
       ref: acc.ref,
       input,
       partial: true,
