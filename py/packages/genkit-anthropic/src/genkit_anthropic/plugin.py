@@ -87,7 +87,7 @@ class Anthropic(Plugin):
             raise ValueError("api_version must be 'stable', 'beta', or None")
 
         self.models = models or list(SUPPORTED_ANTHROPIC_MODELS.keys())
-        self._default_api_version = api_version
+        self._default_api_version: Literal['stable', 'beta'] | None = api_version
         self._anthropic_params = anthropic_params
         self._runtime_client = loop_local_client(lambda: AsyncAnthropic(**cast(dict[str, Any], self._anthropic_params)))
         self._list_actions_cache: list[ActionMetadata] | None = None
