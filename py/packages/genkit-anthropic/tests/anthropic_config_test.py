@@ -194,3 +194,69 @@ def test_json_schema_advertises_js_shaped_keys() -> None:
     assert 'user_id' in text  # metadata.user_id (snake_case)
     assert '$defs' not in schema
     assert '$ref' not in text
+
+
+@pytest.mark.parametrize(
+    'raw',
+    [
+        {'enabled': False, 'type': 'enabled', 'budgetTokens': 2048},
+        {'enabled': True, 'budgetTokens': 2048, 'type': 'disabled'},
+        {'adaptive': True, 'type': 'disabled'},
+    ],
+)
+def test_thinking_rejects_disabled_conflicting_with_enabled_or_adaptive(raw: dict) -> None:
+    """An explicit disable cannot be combined with an enabled or adaptive mode."""
+    with pytest.raises(ValidationError, match='Cannot disable thinking'):
+        ThinkingConfig.model_validate(raw)
+
+
+@pytest.mark.parametrize(
+    'raw',
+    [{'enabled': False}, {'enabled': True, 'budgetTokens': 2048}, {'adaptive': True}, {'type': 'disabled'}],
+)
+def test_thinking_accepts_unambiguous_modes(raw: dict) -> None:
+    """Single-mode thinking configs stay valid."""
+    assert ThinkingConfig.model_validate(raw) is not None
+
+
+@pytest.mark.parametrize(
+    ('raw', 'expected'),
+    [
+        ({'speed': 'fast'}, {'speed'}),
+        ({'betas': ['x']}, {'betas'}),
+        # Setting a beta-only feature at all is intent, even when the value is empty.
+        ({'mcp_servers': []}, {'mcp_servers'}),
+        # An empty betas list requests no beta headers, so it does not select the surface.
+        ({'betas': []}, set()),
+        ({'output_config': {'task_budget': {'total': 20000}}}, {'output_config.task_budget'}),
+        ({'output_config': {'effort': 'high'}}, set()),
+        ({'temperature': 0.5}, set()),
+        ({'future_option': 'x'}, set()),
+    ],
+)
+def test_beta_only_fields_detection(raw: dict, expected: set[str]) -> None:
+    """Only beta-only request fields select the beta surface."""
+    assert AnthropicConfig.model_validate(raw).beta_only_fields() == expected
+
+
+@pytest.mark.parametrize(
+    'raw',
+    [
+        {'apiVersion': 'stable', 'betas': ['x']},
+        {'apiVersion': 'stable', 'speed': 'fast'},
+        {'apiVersion': 'stable', 'output_config': {'task_budget': {'total': 20000}}},
+    ],
+)
+def test_beta_only_fields_rejected_on_stable_surface(raw: dict) -> None:
+    """An explicit stable apiVersion is never silently overridden."""
+    with pytest.raises(ValidationError, match='require the beta API surface'):
+        AnthropicConfig.model_validate(raw)
+
+
+@pytest.mark.parametrize(
+    'raw',
+    [{'apiVersion': 'beta', 'speed': 'fast'}, {'speed': 'fast'}, {'apiVersion': 'stable', 'temperature': 0.5}],
+)
+def test_beta_only_fields_allowed_without_explicit_stable(raw: dict) -> None:
+    """Beta-only fields are accepted unless stable is explicitly requested."""
+    assert AnthropicConfig.model_validate(raw) is not None

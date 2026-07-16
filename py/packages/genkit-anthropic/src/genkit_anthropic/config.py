@@ -21,16 +21,28 @@ Extends the shared :class:`ModelConfig` (``version``, ``temperature``,
 
 Unknown keys pass through (``extra='allow'``). Top-level Genkit fields
 accept their usual camelCase aliases, while Anthropic-specific nested keys
-match the Anthropic/JavaScript plugin shape field-by-field.
+match the Anthropic plugin shape field-by-field.
 """
 
 from typing import Annotated, ClassVar, Literal, cast
 
+from anthropic.types.beta.message_create_params import MessageCreateParamsBase as BetaMessageCreateParamsBase
+from anthropic.types.message_create_params import MessageCreateParamsBase
 from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic.config import JsonDict
 
 from genkit import ModelConfig
+
+_STABLE_BODY_KEYS = frozenset(MessageCreateParamsBase.__annotations__)
+_BETA_BODY_KEYS = frozenset(BetaMessageCreateParamsBase.__annotations__)
+
+# Accepted by create() alongside the body fields; `stream` is excluded because Genkit owns streaming.
+_REQUEST_KWARG_KEYS = frozenset({'extra_body', 'extra_headers', 'extra_query', 'timeout'})
+
+STABLE_KWARG_KEYS = _STABLE_BODY_KEYS | _REQUEST_KWARG_KEYS
+BETA_KWARG_KEYS = _BETA_BODY_KEYS | _REQUEST_KWARG_KEYS
+BETA_ONLY_KEYS = _BETA_BODY_KEYS - _STABLE_BODY_KEYS
 
 _NESTED_CONFIG = ConfigDict(extra='allow', populate_by_name=True)
 
@@ -163,14 +175,14 @@ def _anthropic_config_schema_extra(schema: JsonDict) -> None:
 class ThinkingConfig(BaseModel):
     """Extended-thinking configuration.
 
-    ``enabled`` and ``adaptive`` are mutually exclusive, and ``budgetTokens``
-    is required when ``enabled`` is true.
+    ``enabled``, ``adaptive`` and ``disabled`` are mutually exclusive, and
+    ``budgetTokens`` is required when ``enabled`` is true.
     """
 
     model_config = _NESTED_CONFIG
 
     enabled: bool | None = None
-    # float, not int: adaptive mode allows a fractional budget it ignores; integers enforced only when enabled.
+    # Adaptive mode allows a fractional budget it ignores; integers enforced only when enabled.
     budget_tokens: float | None = Field(default=None, alias='budgetTokens', ge=1024)
     adaptive: bool | None = None
     display: Literal['summarized', 'omitted'] | None = None
@@ -187,6 +199,8 @@ class ThinkingConfig(BaseModel):
 
         if enabled and adaptive:
             raise ValueError('Cannot use both enabled and adaptive thinking modes simultaneously')
+        if disabled and (enabled or adaptive):
+            raise ValueError('Cannot disable thinking and request an enabled or adaptive thinking mode simultaneously')
         if enabled and self.budget_tokens is None:
             raise ValueError('budgetTokens is required when thinking is enabled')
         if (
@@ -302,9 +316,26 @@ class AnthropicConfig(ModelConfig):
         description='Anthropic beta feature headers to enable for this request.',
     )
 
+    def beta_only_fields(self) -> set[str]:
+        """Return the names of beta-only request fields set on this config."""
+        present = {
+            name
+            for name, value in (self.__pydantic_extra__ or {}).items()
+            if name in BETA_ONLY_KEYS and value is not None
+        }
+        if self.betas:
+            present.add('betas')
+        if self.output_config is not None and self.output_config.task_budget is not None:
+            present.add('output_config.task_budget')
+        return present
+
     @model_validator(mode='after')
     def _check_api_surface(self) -> 'AnthropicConfig':
-        """Reject betas on the stable surface so an explicit apiVersion is never silently overridden."""
-        if self.api_version == 'stable' and self.betas:
-            raise ValueError("betas require the beta API surface; remove betas or set apiVersion to 'beta'")
+        """Reject beta-only fields on the stable surface so an explicit apiVersion is never silently overridden."""
+        if self.api_version != 'stable':
+            return self
+        beta_only = self.beta_only_fields()
+        if beta_only:
+            names = ', '.join(sorted(beta_only))
+            raise ValueError(f"{names} require the beta API surface; remove them or set apiVersion to 'beta'")
         return self

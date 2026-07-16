@@ -16,19 +16,20 @@
 
 """Tests for Anthropic models."""
 
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from anthropic import AsyncAnthropic
 from genkit_anthropic import models as anthropic_models
 from genkit_anthropic.config import AnthropicConfig
-from genkit_anthropic.models import AnthropicModel
+from genkit_anthropic.models import AnthropicModel, _to_anthropic_thinking_config
 from genkit_anthropic.utils import maybe_strip_fences, strip_markdown_fences
 from pydantic import ValidationError
 
 from genkit import (
     Constrained,
+    FinishReason,
     Media,
     MediaPart,
     Message,
@@ -986,6 +987,7 @@ async def test_config_tool_choice_and_metadata_reach_sdk() -> None:
     config = AnthropicConfig.model_validate({
         'tool_choice': {'type': 'tool', 'name': 'get_weather'},
         'metadata': {'user_id': 'user-123'},
+        'tools': [{'name': 'get_weather', 'description': 'Weather', 'input_schema': {'type': 'object'}}],
     })
     await model.generate(_text_request(config))
 
@@ -1000,10 +1002,27 @@ async def test_config_tool_choice_none_reaches_sdk() -> None:
     mock_client = _mock_client_for_generate()
     model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
 
-    await model.generate(_text_request({'tool_choice': {'type': 'none'}}))
+    await model.generate(
+        _text_request({
+            'tool_choice': {'type': 'none'},
+            'tools': [{'name': 'get_weather', 'description': 'Weather', 'input_schema': {'type': 'object'}}],
+        })
+    )
 
     kwargs = mock_client.messages.create.call_args.kwargs
     assert kwargs['tool_choice'] == {'type': 'none'}
+
+
+@pytest.mark.asyncio
+async def test_config_tool_choice_dropped_without_tools() -> None:
+    """Config-level tool_choice is dropped when the request carries no tools."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'tool_choice': {'type': 'auto'}}))
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert 'tool_choice' not in kwargs
 
 
 def test_structured_output_merges_existing_output_config() -> None:
@@ -1047,3 +1066,136 @@ def test_backward_compat_plain_model_config() -> None:
     assert params['temperature'] == 0.7
     assert params['max_tokens'] == 100
     assert params['top_p'] == 0.9
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('config', 'kwarg'),
+    [
+        ({'speed': 'fast'}, 'speed'),
+        ({'mcp_servers': [{'type': 'url', 'name': 'x', 'url': 'https://example.com'}]}, 'mcp_servers'),
+        ({'context_management': {'edits': []}}, 'context_management'),
+    ],
+)
+async def test_beta_only_params_select_beta_surface(config: dict, kwarg: str) -> None:
+    """Beta-only params route to the beta surface instead of crashing the stable one."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request(config))
+
+    mock_client.messages.create.assert_not_called()
+    kwargs = mock_client.beta.messages.create.call_args.kwargs
+    assert kwargs[kwarg] == config[kwarg]
+    assert 'extra_body' not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_task_budget_selects_beta_surface() -> None:
+    """output_config.task_budget is beta-only and must not ship on the stable surface."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'output_config': {'task_budget': {'total': 20000}}}))
+
+    mock_client.messages.create.assert_not_called()
+    kwargs = mock_client.beta.messages.create.call_args.kwargs
+    assert kwargs['output_config']['task_budget'] == {'type': 'tokens', 'total': 20000}
+
+
+@pytest.mark.asyncio
+async def test_unknown_params_still_route_to_extra_body_on_beta() -> None:
+    """The escape hatch keeps working once the beta surface is selected."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'speed': 'fast', 'future_option': 'x'}))
+
+    kwargs = mock_client.beta.messages.create.call_args.kwargs
+    assert kwargs['speed'] == 'fast'
+    assert kwargs['extra_body'] == {'future_option': 'x'}
+
+
+@pytest.mark.asyncio
+async def test_config_stream_does_not_reach_sdk() -> None:
+    """Genkit owns streaming, so a config-level stream flag is dropped."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'stream': True}))
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert 'stream' not in kwargs
+    assert 'stream' not in (kwargs.get('extra_body') or {})
+
+
+@pytest.mark.parametrize(
+    ('stop_reason', 'expected'),
+    [
+        ('end_turn', FinishReason.STOP),
+        ('max_tokens', FinishReason.LENGTH),
+        ('model_context_window_exceeded', FinishReason.LENGTH),
+        ('refusal', FinishReason.BLOCKED),
+        ('pause_turn', FinishReason.OTHER),
+        ('compaction', FinishReason.OTHER),
+        ('something_new', FinishReason.UNKNOWN),
+    ],
+)
+@pytest.mark.asyncio
+async def test_finish_reason_mapping(stop_reason: str, expected: FinishReason) -> None:
+    """Anthropic stop reasons map onto Genkit finish reasons."""
+    mock_client = _mock_client_for_generate()
+    mock_client.messages.create.return_value.stop_reason = stop_reason
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    response = await model.generate(_text_request({}))
+
+    assert response.finish_reason == expected
+
+
+def test_per_request_api_key_ignored_when_client_uses_auth_token() -> None:
+    """An auth-token client cannot be re-credentialed by copy(), so the key is ignored."""
+    client = AsyncAnthropic(auth_token='corp-bearer')
+    model = AnthropicModel(model_name='claude-sonnet-4', client=client)
+
+    assert model._client_for_config(AnthropicConfig.model_validate({'apiKey': 'user-key'})) is client
+
+
+def test_per_request_api_key_ignored_when_client_pins_api_key_header() -> None:
+    """A pinned x-api-key header outranks copy(api_key=...), so the key is ignored."""
+    client = AsyncAnthropic(api_key='plugin-key', default_headers={'X-Api-Key': 'pinned'})
+    model = AnthropicModel(model_name='claude-sonnet-4', client=client)
+
+    assert model._client_for_config(AnthropicConfig.model_validate({'apiKey': 'user-key'})) is client
+
+
+def test_per_request_api_key_applied_on_plain_client() -> None:
+    """A plain api-key client is re-credentialed for the request."""
+    client = AsyncAnthropic(api_key='plugin-key')
+    model = AnthropicModel(model_name='claude-sonnet-4', client=client)
+
+    applied = model._client_for_config(AnthropicConfig.model_validate({'apiKey': 'user-key'}))
+
+    assert applied is not client
+    assert cast(AsyncAnthropic, applied).api_key == 'user-key'
+
+
+@pytest.mark.parametrize(
+    ('raw', 'expected'),
+    [
+        (
+            {'enabled': True, 'budgetTokens': 2048, 'display': 'omitted'},
+            {'display': 'omitted', 'type': 'enabled', 'budget_tokens': 2048},
+        ),
+        ({'adaptive': True, 'display': 'summarized'}, {'display': 'summarized', 'type': 'adaptive'}),
+        ({'type': 'interleaved'}, {'type': 'interleaved'}),
+        ({'display': 'summarized'}, {'display': 'summarized'}),
+    ],
+)
+def test_thinking_preserves_display_and_forward_compatible_keys(raw: dict, expected: dict) -> None:
+    """display and unknown thinking keys survive translation to the SDK shape."""
+    thinking = AnthropicConfig.model_validate({'thinking': raw}).model_dump(exclude_none=True, by_alias=False)[
+        'thinking'
+    ]
+
+    assert _to_anthropic_thinking_config(thinking) == expected

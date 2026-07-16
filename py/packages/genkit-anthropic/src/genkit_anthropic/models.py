@@ -49,7 +49,7 @@ from genkit import (
 )
 from genkit.model import get_basic_usage_stats
 from genkit.plugin_api import ActionRunContext
-from genkit_anthropic.config import AnthropicConfig
+from genkit_anthropic.config import BETA_KWARG_KEYS, STABLE_KWARG_KEYS, AnthropicConfig
 from genkit_anthropic.model_info import get_model_info
 from genkit_anthropic.utils import (
     build_cache_usage,
@@ -61,39 +61,7 @@ from genkit_anthropic.utils import (
 logger = structlog.get_logger(__name__)
 
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
-_SDK_KWARG_KEYS = frozenset({
-    'betas',
-    'cache_control',
-    'container',
-    'context_management',
-    'diagnostics',
-    'extra_body',
-    'extra_headers',
-    'extra_query',
-    'fallback_credit_token',
-    'fallbacks',
-    'inference_geo',
-    'max_tokens',
-    'mcp_servers',
-    'messages',
-    'metadata',
-    'model',
-    'output_config',
-    'output_format',
-    'service_tier',
-    'speed',
-    'stop_sequences',
-    'stream',
-    'system',
-    'temperature',
-    'thinking',
-    'timeout',
-    'tool_choice',
-    'tools',
-    'top_k',
-    'top_p',
-    'user_profile_id',
-})
+_THINKING_MODE_KEYS = frozenset({'adaptive', 'budget_tokens', 'enabled', 'type'})
 
 
 class _ModelDumpable(Protocol):
@@ -158,36 +126,40 @@ def _to_anthropic_thinking_config(thinking: dict[str, Any] | None) -> dict[str, 
         return None
 
     thinking_type = thinking.get('type')
-    display = thinking.get('display')
     budget_tokens = thinking.get('budget_tokens')
+    adaptive = thinking.get('adaptive') is True or thinking_type == 'adaptive'
+    enabled = thinking.get('enabled') is True or thinking_type == 'enabled'
+    disabled = thinking.get('enabled') is False or thinking_type == 'disabled'
 
-    if thinking.get('adaptive') is True or thinking_type == 'adaptive':
-        result: dict[str, Any] = {'type': 'adaptive'}
-        if display is not None:
-            result['display'] = display
+    # Keys that are not mode toggles (display, and any forward-compatible field) pass through unchanged.
+    result: dict[str, Any] = {key: value for key, value in thinking.items() if key not in _THINKING_MODE_KEYS}
+
+    if adaptive:
+        result['type'] = 'adaptive'
         return result
 
-    if thinking.get('enabled') is True or thinking_type == 'enabled':
+    if enabled or (budget_tokens is not None and not disabled):
         if budget_tokens is None:
             raise ValueError('budgetTokens is required when thinking is enabled')
         if not float(budget_tokens).is_integer():
             raise ValueError('budgetTokens must be an integer when thinking is enabled')
-        return {'type': 'enabled', 'budget_tokens': int(budget_tokens)}
+        result['type'] = 'enabled'
+        result['budget_tokens'] = int(budget_tokens)
+        return result
 
-    if thinking.get('enabled') is False or thinking_type == 'disabled':
-        return {'type': 'disabled'}
+    if disabled:
+        result['type'] = 'disabled'
+        return result
 
-    if budget_tokens is not None:
-        if not float(budget_tokens).is_integer():
-            raise ValueError('budgetTokens must be an integer when thinking is enabled')
-        return {'type': 'enabled', 'budget_tokens': int(budget_tokens)}
-
-    return None
+    if thinking_type is not None:
+        result['type'] = thinking_type
+    return result or None
 
 
-def _move_unknown_params_to_extra_body(params: dict[str, Any]) -> None:
+def _move_unknown_params_to_extra_body(params: dict[str, Any], use_beta: bool) -> None:
     """Route passthrough body params through the SDK's ``extra_body`` escape hatch."""
-    unknown_keys = [key for key in params if key not in _SDK_KWARG_KEYS]
+    allowed = BETA_KWARG_KEYS if use_beta else STABLE_KWARG_KEYS
+    unknown_keys = [key for key in params if key not in allowed]
     if not unknown_keys:
         return
 
@@ -274,8 +246,12 @@ class AnthropicModel:
         basic_usage = get_basic_usage_stats(input_=request.messages, response=response_message)
 
         finish_reason_map: dict[str, FinishReason] = {
+            'compaction': FinishReason.OTHER,
             'end_turn': FinishReason.STOP,
             'max_tokens': FinishReason.LENGTH,
+            'model_context_window_exceeded': FinishReason.LENGTH,
+            'pause_turn': FinishReason.OTHER,
+            'refusal': FinishReason.BLOCKED,
             'stop_sequence': FinishReason.STOP,
             'tool_use': FinishReason.STOP,
         }
@@ -321,16 +297,25 @@ class AnthropicModel:
             logger.warning('Ignored per-request Anthropic apiKey because the configured client does not support it')
             return self.client
 
+        # copy() cannot unset these, so the override would leave the base credential authenticating the request.
+        if self.client.auth_token is not None:
+            logger.warning('Ignored per-request Anthropic apiKey because the client authenticates with an auth token')
+            return self.client
+
+        if any(name.lower() == 'x-api-key' for name in self.client._custom_headers):  # noqa: SLF001
+            logger.warning('Ignored per-request Anthropic apiKey because the client pins an x-api-key header')
+            return self.client
+
         # copy() keeps every other client setting and shares the pooled HTTP transport.
         return self.client.copy(api_key=config.api_key)
 
     def _uses_beta_api(self, config: AnthropicConfig) -> bool:
         """Whether this request should use the Anthropic beta API surface.
 
-        Setting ``betas`` alone selects the beta surface, so the requested
-        features are honored instead of silently dropped.
+        Any beta-only field selects the beta surface, so the requested features
+        are honored instead of being rejected by the stable surface.
         """
-        return config.api_version == 'beta' or bool(config.betas)
+        return config.api_version == 'beta' or bool(config.beta_only_fields())
 
     def _build_params(
         self,
@@ -361,6 +346,9 @@ class AnthropicModel:
         # api_version and api_key select the API surface and client; they are not create() kwargs.
         for key in AnthropicConfig.SDK_UNSUPPORTED_KEYS:
             params.pop(key, None)
+
+        # Genkit selects the streaming surface from the request context.
+        params.pop('stream', None)
 
         if use_beta and betas:
             params['betas'] = betas
@@ -422,7 +410,11 @@ class AnthropicModel:
                 elif isinstance(request.tool_choice, dict):
                     params['tool_choice'] = request.tool_choice
 
-        _move_unknown_params_to_extra_body(params)
+        # The API rejects tool_choice when the request carries no tools.
+        if not params.get('tools'):
+            params.pop('tool_choice', None)
+
+        _move_unknown_params_to_extra_body(params, use_beta)
         return params
 
     def _supports_constrained(self, has_tools: bool) -> bool:
