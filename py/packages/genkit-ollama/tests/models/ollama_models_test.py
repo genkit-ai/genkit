@@ -525,9 +525,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
         cast(Any, self.ctx).send_chunk = MagicMock()
 
         tool_call = ollama_api.Message.ToolCall(
-            function=ollama_api.Message.ToolCall.Function(
-                name='search', arguments={'q': 'test'}
-            )
+            function=ollama_api.Message.ToolCall.Function(name='search', arguments={'q': 'test'})
         )
 
         async def mock_streaming_chunks() -> AsyncIterator[ollama_api.ChatResponse]:
@@ -543,7 +541,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
         response = await self.ollama_model._chat_with_ollama(self.request, self.ctx)
 
         assert response is not None
-        self.assertIsNotNone(response.message.tool_calls)
+        assert response.message.tool_calls is not None
         self.assertEqual(len(response.message.tool_calls), 1)
         self.assertEqual(response.message.tool_calls[0].function.name, 'search')
         self.assertEqual(response.message.tool_calls[0].function.arguments, {'q': 'test'})
