@@ -17,11 +17,11 @@
 import { GenkitError, z } from 'genkit';
 import { GoogleAuth } from 'google-auth-library';
 import {
-  MultiRegionalClientOptions,
   isMultiRegionalLocation,
   type ClientOptions,
   type ExpressClientOptions,
   type GlobalClientOptions,
+  type MultiRegionalClientOptions,
   type RegionalClientOptions,
   type VertexPluginOptions,
 } from './types.js';
