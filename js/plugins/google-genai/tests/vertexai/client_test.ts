@@ -75,6 +75,13 @@ describe('Vertex AI Client', () => {
     apiKey: 'test-api-key',
   };
 
+  const multiRegionalClientOptions: ClientOptions = {
+    kind: 'multi-regional',
+    projectId: 'test-project',
+    location: 'eu',
+    authClient: {} as GoogleAuth,
+  };
+
   const notSupportedInExpressErrorMessage = {
     message: NOT_SUPPORTED_IN_EXPRESS_ERROR.message,
   };
@@ -96,6 +103,8 @@ describe('Vertex AI Client', () => {
     (regionalClientOptions as any).authClient =
       authMock as unknown as GoogleAuth;
     (globalClientOptions as any).authClient = authMock as unknown as GoogleAuth;
+    (multiRegionalClientOptions as any).authClient =
+      authMock as unknown as GoogleAuth;
   });
 
   afterEach(() => {
@@ -275,6 +284,45 @@ describe('Vertex AI Client', () => {
           'https://us-east1-aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=10'
         );
       });
+
+      it('should respect apiVersion in options', () => {
+        const customOpts: ClientOptions = {
+          ...opts,
+          apiVersion: 'v1',
+        };
+        const url = getVertexAIUrl({
+          includeProjectAndLocation: true,
+          resourcePath: 'publishers/google/models/gemini-2.5-flash',
+          resourceMethod: 'generateContent',
+          clientOptions: customOpts,
+        });
+        assert.strictEqual(
+          url,
+          'https://us-east1-aiplatform.googleapis.com/v1/projects/test-proj/locations/us-east1/publishers/google/models/gemini-2.5-flash:generateContent'
+        );
+      });
+    });
+
+    describe('Multi-Regional', () => {
+      const opts: ClientOptions = {
+        kind: 'multi-regional',
+        projectId: 'test-proj',
+        location: 'eu',
+        authClient: {} as any,
+      };
+
+      it('should build URL for generateContent', () => {
+        const url = getVertexAIUrl({
+          includeProjectAndLocation: true,
+          resourcePath: 'publishers/google/models/gemini-3.5-flash',
+          resourceMethod: 'generateContent',
+          clientOptions: opts,
+        });
+        assert.strictEqual(
+          url,
+          'https://aiplatform.eu.rep.googleapis.com/v1beta1/projects/test-proj/locations/eu/publishers/google/models/gemini-3.5-flash:generateContent'
+        );
+      });
     });
 
     describe('Global', () => {
@@ -399,6 +447,23 @@ describe('Vertex AI Client', () => {
           'https://aiplatform.googleapis.com/v1beta1/publishers/google/models/gemini-2.5-flash:generateContent?pageSize=10'
         );
       });
+
+      it('should respect apiVersion in options', () => {
+        const customOpts: ClientOptions = {
+          ...opts,
+          apiVersion: 'v1',
+        };
+        const url = getVertexAIUrl({
+          includeProjectAndLocation: true,
+          resourcePath: 'publishers/google/models/gemini-2.5-flash',
+          resourceMethod: 'generateContent',
+          clientOptions: customOpts,
+        });
+        assert.strictEqual(
+          url,
+          'https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash:generateContent'
+        );
+      });
     });
   });
 
@@ -417,6 +482,7 @@ describe('Vertex AI Client', () => {
       { name: 'Regional', options: regionalClientOptions },
       { name: 'Global', options: globalClientOptions },
       { name: 'Express', options: expressClientOptions },
+      { name: 'Multi-Regional', options: multiRegionalClientOptions },
     ];
 
     for (const testCase of testCases) {
@@ -424,7 +490,8 @@ describe('Vertex AI Client', () => {
         const currentOptions = testCase.options;
         const isExpress = currentOptions.kind === 'express';
         const location =
-          currentOptions.kind === 'regional'
+          currentOptions.kind === 'regional' ||
+          currentOptions.kind === 'multi-regional'
             ? currentOptions.location
             : 'global';
         const projectId =
@@ -453,10 +520,12 @@ describe('Vertex AI Client', () => {
           if (isExpress) {
             return `https://aiplatform.googleapis.com/v1beta1/${path}`;
           }
-          const domain =
-            currentOptions.kind === 'regional'
-              ? `${location}-aiplatform.googleapis.com`
-              : 'aiplatform.googleapis.com';
+          let domain = 'aiplatform.googleapis.com';
+          if (currentOptions.kind === 'regional') {
+            domain = `${location}-aiplatform.googleapis.com`;
+          } else if (currentOptions.kind === 'multi-regional') {
+            domain = `aiplatform.${location}.rep.googleapis.com`;
+          }
           return `https://${domain}/v1beta1/${path}`;
         };
 
@@ -474,10 +543,12 @@ describe('Vertex AI Client', () => {
             }
             url = `https://aiplatform.googleapis.com/v1beta1/${resourcePath}:${method}`;
           } else {
-            const domain =
-              currentOptions.kind === 'regional'
-                ? `${location}-aiplatform.googleapis.com`
-                : 'aiplatform.googleapis.com';
+            let domain = 'aiplatform.googleapis.com';
+            if (currentOptions.kind === 'regional') {
+              domain = `${location}-aiplatform.googleapis.com`;
+            } else if (currentOptions.kind === 'multi-regional') {
+              domain = `aiplatform.${location}.rep.googleapis.com`;
+            }
 
             let resourcePath;
             if (isTuned) {

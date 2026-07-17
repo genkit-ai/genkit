@@ -53,7 +53,7 @@ describe('ReflectionServer API', () => {
   async function fetchApi(path: string) {
     return new Promise<{ status: number; body: any }>((resolve, reject) => {
       http
-        .get(`http://localhost:${port}${path}`, (res) => {
+        .get(`http://127.0.0.1:${port}${path}`, (res) => {
           let data = '';
           res.on('data', (chunk) => {
             data += chunk;
@@ -117,7 +117,7 @@ describe('ReflectionServer API', () => {
     return new Promise<{ status: number; body: any }>((resolve, reject) => {
       const payload = JSON.stringify(body);
       const req = http.request(
-        `http://localhost:${port}${path}`,
+        `http://127.0.0.1:${port}${path}`,
         {
           method: 'POST',
           headers: {

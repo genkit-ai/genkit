@@ -35,6 +35,13 @@ import { downloadAndExtractUiAssets } from '../utils/ui-assets';
 import { TOOLS_SERVER_ROUTER } from './router';
 
 const MAX_PAYLOAD_SIZE = 30000000;
+/**
+ * Default host for the Dev UI / Tools API server. Binding to loopback keeps the
+ * (unauthenticated) developer server off the network by default. Callers can
+ * opt into a different interface (e.g. `0.0.0.0` for container/remote dev) by
+ * passing an explicit host.
+ */
+const DEFAULT_HOST = '127.0.0.1';
 const UI_ASSETS_GCS_BUCKET = `https://storage.googleapis.com/genkit-assets`;
 const UI_ASSETS_ZIP_FILE_NAME = `${toolsPackage.version}.zip`;
 const UI_ASSETS_ZIP_GCS_PATH = `${UI_ASSETS_GCS_BUCKET}/${UI_ASSETS_ZIP_FILE_NAME}`;
@@ -128,7 +135,11 @@ const loggedExpressRoute = (routeName: string) => {
 /**
  * Starts up the Genkit Tools server which includes static files for the UI and the Tools API.
  */
-export function startServer(manager: BaseRuntimeManager, port: number) {
+export function startServer(
+  manager: BaseRuntimeManager,
+  port: number,
+  host: string = DEFAULT_HOST
+) {
   let server: Server;
   const app = express();
 
@@ -374,7 +385,7 @@ export function startServer(manager: BaseRuntimeManager, port: number) {
   };
   app.use(errorHandler);
 
-  server = app.listen(port, async () => {
+  server = app.listen(port, host, async () => {
     const uiUrl = 'http://localhost:' + port;
     const projectRoot = manager.projectRoot;
     logger.info(`${clc.green(clc.bold('Project root:'))} ${projectRoot}`);

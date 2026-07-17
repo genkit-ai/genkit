@@ -1,6 +1,6 @@
 {
   "name": "@genkit-ai/vercel-ai",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A Genkit plugin providing a Vercel AI SDK ChatTransport for connecting useChat to Genkit Agents.",
   "keywords": [
     "genkit",

@@ -35,6 +35,7 @@ import {
   z,
   type ErrorResponseMetadata,
 } from 'genkit';
+import { parsePartialJson } from 'genkit/extract';
 import type { ModelAction, ModelInfo, ToolDefinition } from 'genkit/model';
 import { model } from 'genkit/plugin';
 import OpenAI, { APIError } from 'openai';
@@ -423,19 +424,98 @@ export function fromOpenAIChoice(
 }
 
 /**
+ * Accumulates the streamed fragments of a single tool call. OpenAI streams tool
+ * calls incrementally: the first delta carries `name`/`id` (with empty or
+ * partial `arguments`) and subsequent deltas carry only fragments of the
+ * `arguments` JSON string, keyed by the tool call `index` within the message.
+ */
+export interface ToolCallAccumulator {
+  ref?: string;
+  name?: string;
+  /** Concatenated `arguments` JSON string fragments received so far. */
+  args: string;
+}
+
+/**
+ * Converts a streamed tool-call delta into a partial Genkit ToolRequestPart,
+ * accumulating `arguments` fragments across chunks so that the emitted
+ * `toolRequest` carries the best-effort parsed input instead of `input: ''`.
+ * @param toolCall The streamed tool-call delta.
+ * @param accumulators Per-message tool-call accumulators, keyed by tool call
+ *   index. Mutated in place as fragments arrive.
+ * @returns The partial ToolRequestPart, or `undefined` if there is no
+ *   meaningful data to emit yet.
+ */
+function fromOpenAIToolCallChunk(
+  toolCall: ChatCompletionChunk.Choice.Delta.ToolCall,
+  accumulators: ToolCallAccumulator[]
+): ToolRequestPart | undefined {
+  const index = toolCall.index ?? 0;
+  const acc = (accumulators[index] ??= { args: '' });
+
+  // The first delta for a tool call carries its `id` and function `name`;
+  // subsequent deltas omit them, so carry the accumulated values forward.
+  if (toolCall.id) {
+    acc.ref = toolCall.id;
+  }
+  if (toolCall.function?.name) {
+    acc.name = toolCall.function.name;
+  }
+  if (toolCall.function?.arguments) {
+    acc.args += toolCall.function.arguments;
+  }
+
+  // Without a tool name there is nothing meaningful to emit yet; the name
+  // arrives with the first delta of a tool call, so wait for it.
+  if (!acc.name) {
+    return undefined;
+  }
+
+  // Best-effort parse of the (possibly incomplete) accumulated arguments.
+  let input: unknown = {};
+  if (acc.args) {
+    try {
+      input = parsePartialJson(acc.args);
+    } catch {
+      input = {};
+    }
+  }
+
+  return {
+    toolRequest: {
+      name: acc.name,
+      ref: acc.ref,
+      input,
+      partial: true,
+    },
+  };
+}
+
+/**
  * Converts an OpenAI message stream event to a Genkit GenerateResponseData
  * object.
  * @param choice The OpenAI message stream event to convert.
  * @param jsonMode Whether the event is a JSON response.
+ * @param toolCallAccumulators Optional per-message tool-call accumulators (keyed
+ *   by tool call index) used to assemble streamed `arguments` fragments into
+ *   partial tool requests. When omitted, tool-call deltas are converted
+ *   statelessly (legacy behavior).
  * @returns The converted Genkit GenerateResponseData object.
  */
 export function fromOpenAIChunkChoice(
   choice: ChatCompletionChunk.Choice,
-  jsonMode = false
+  jsonMode = false,
+  toolCallAccumulators?: ToolCallAccumulator[]
 ): GenerateResponseData {
-  const toolRequestParts = choice.delta.tool_calls?.map((toolCall) =>
-    fromOpenAIToolCall(toolCall, choice)
-  );
+  const toolRequestParts = toolCallAccumulators
+    ? choice.delta.tool_calls
+        ?.map((toolCall) =>
+          fromOpenAIToolCallChunk(toolCall, toolCallAccumulators)
+        )
+        .filter((p): p is ToolRequestPart => !!p)
+    : choice.delta.tool_calls?.map((toolCall) =>
+        fromOpenAIToolCall(toolCall, choice)
+      );
 
   // Build content array based on what's present in the delta
   let content: Part[] = [];
@@ -591,9 +671,21 @@ export function openAIModelRunner(
           },
           { signal: options?.abortSignal }
         );
+        // Tracks streamed tool-call argument fragments per choice index so we
+        // can accumulate them and emit `partial` tool requests with parsed
+        // input instead of a flurry of empty `input: ''` chunks. OpenAI streams
+        // tool calls incrementally: the first delta carries `name`/`id` and
+        // subsequent deltas carry only fragments of the `arguments` JSON string.
+        const toolCallAccumulators = new Map<number, ToolCallAccumulator[]>();
+        const jsonMode = request.output?.format === 'json';
         for await (const chunk of stream) {
           chunk.choices?.forEach((chunk) => {
-            const c = fromOpenAIChunkChoice(chunk);
+            let accumulators = toolCallAccumulators.get(chunk.index);
+            if (!accumulators) {
+              accumulators = [];
+              toolCallAccumulators.set(chunk.index, accumulators);
+            }
+            const c = fromOpenAIChunkChoice(chunk, jsonMode, accumulators);
             options?.sendChunk!({
               index: chunk.index,
               content: c.message?.content ?? [],

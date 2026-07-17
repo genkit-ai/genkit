@@ -28,7 +28,7 @@ from pydantic import BaseModel as PydanticBaseModel, Field
 
 from genkit._ai._model import Message
 from genkit._ai._tools import define_tool
-from genkit._core._model import ModelRequest, ModelResponse
+from genkit._core._model import GenerateActionOptions, ModelResponse
 from genkit._core._registry import Registry
 from genkit._core._typing import Part, Role, TextPart
 from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
@@ -116,8 +116,8 @@ class Skills(BaseMiddleware[SkillsConfig]):
         lines.append('</skills>')
         return '\n'.join(lines)
 
-    def _inject_skills_prompt(self, request: ModelRequest, prompt_text: str) -> ModelRequest:
-        messages = list(request.messages)
+    def _inject_skills_prompt(self, options: GenerateActionOptions, prompt_text: str) -> GenerateActionOptions:
+        messages = list(options.messages)
         system_idx: int | None = None
         for i, msg in enumerate(messages):
             if msg.role == Role.SYSTEM:
@@ -144,9 +144,9 @@ class Skills(BaseMiddleware[SkillsConfig]):
         else:
             messages.insert(0, Message(role=Role.SYSTEM, content=[new_part]))
 
-        new_request = request.model_copy()
-        new_request.messages = messages
-        return new_request
+        new_options = options.model_copy()
+        new_options.messages = messages
+        return new_options
 
     def tools(self, ctx: GenerateMiddlewareContext) -> list[Any]:
         if not self._scan_skills():
@@ -181,5 +181,5 @@ class Skills(BaseMiddleware[SkillsConfig]):
             prompt_text = self._build_skills_prompt(skills)
             if prompt_text:
                 params = params.model_copy()
-                params.request = self._inject_skills_prompt(params.request, prompt_text)
+                params.options = self._inject_skills_prompt(params.options, prompt_text)
         return await next_fn(params, ctx)

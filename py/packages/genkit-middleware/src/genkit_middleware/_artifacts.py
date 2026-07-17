@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from genkit._ai._model import Message
 from genkit._ai._tools import define_tool
-from genkit._core._model import ModelRequest, ModelResponse
+from genkit._core._model import GenerateActionOptions, ModelResponse
 from genkit._core._registry import Registry
 from genkit._core._typing import Artifact, Part, Role, TextPart
 from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
@@ -134,10 +134,10 @@ def inject_artifact_listing_messages(messages: list[Message], listing: str) -> l
     return out
 
 
-def inject_artifact_listing(request: ModelRequest, listing: str) -> ModelRequest:
-    new_request = request.model_copy()
-    new_request.messages = inject_artifact_listing_messages(list(request.messages), listing)
-    return new_request
+def inject_artifact_listing(options: GenerateActionOptions, listing: str) -> GenerateActionOptions:
+    new_options = options.model_copy()
+    new_options.messages = inject_artifact_listing_messages(list(options.messages), listing)
+    return new_options
 
 
 class Artifacts(BaseMiddleware[ArtifactsConfig]):
@@ -222,5 +222,5 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
         session = ctx.ai.current_session()
         artifacts = await session.get_artifacts() if session is not None else []
         listing = build_artifact_listing(artifacts)
-        params.request = inject_artifact_listing(params.request, listing)
+        params.options = inject_artifact_listing(params.options, listing)
         return await next_fn(params, ctx)

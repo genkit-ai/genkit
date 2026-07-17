@@ -26,7 +26,7 @@ from genkit_middleware._artifacts import (
     extract_artifact_text,
 )
 
-from genkit import ModelRequest, ModelResponse
+from genkit import ModelResponse
 from genkit._ai._agents._session import Session, run_with_session
 from genkit._core._model import GenerateActionOptions
 from genkit._core._typing import Artifact, Part, Role, SessionState, TextPart
@@ -37,7 +37,6 @@ def _make_params(options: GenerateActionOptions | None = None) -> GenerateHookPa
     opts = options or GenerateActionOptions(messages=[])
     return GenerateHookParams(
         options=opts,
-        request=ModelRequest(messages=list(opts.messages)),
         iteration=0,
     )
 
@@ -83,7 +82,7 @@ async def test_write_artifact_uses_current_session(ctx: GenerateMiddlewareContex
         assert arts[0].name == 'poem.txt'
         assert arts[0].parts[0].root.text == 'roses are red'
 
-    await run_with_session(session, check())
+    await run_with_session(session=session, coro=check())
 
 
 @pytest.mark.asyncio
@@ -100,7 +99,7 @@ async def test_read_artifact_returns_found(ctx: GenerateMiddlewareContext) -> No
         assert result.response.content == 'hello'
         assert result.response.found is True
 
-    await run_with_session(session, check())
+    await run_with_session(session=session, coro=check())
 
 
 @pytest.mark.asyncio
@@ -127,10 +126,10 @@ async def test_wrap_generate_injects_listing(ctx: GenerateMiddlewareContext) -> 
         SessionState(artifacts=[Artifact(name='poem.txt', parts=[Part(TextPart(text='abc'))])]),
     )
 
-    captured: list[ModelRequest] = []
+    captured: list[GenerateActionOptions] = []
 
     async def next_fn(params, _ctx):
-        captured.append(params.request)
+        captured.append(params.options)
         return ModelResponse(message=None)
 
     async def check() -> None:
@@ -150,7 +149,7 @@ async def test_wrap_generate_injects_listing(ctx: GenerateMiddlewareContext) -> 
         assert 'poem.txt' in (listing_parts[0].root.text or '')
         assert '(3 chars)' in (listing_parts[0].root.text or '')
 
-    await run_with_session(session, check())
+    await run_with_session(session=session, coro=check())
 
 
 @pytest.mark.asyncio
@@ -162,7 +161,7 @@ async def test_wrap_generate_refreshes_listing(ctx: GenerateMiddlewareContext) -
     seen: list[str] = []
 
     async def next_fn(params, _ctx):
-        for part in _listing_parts(params.request.messages):
+        for part in _listing_parts(params.options.messages):
             seen.append(part.text or '')
         return ModelResponse(message=None)
 
@@ -176,7 +175,7 @@ async def test_wrap_generate_refreshes_listing(ctx: GenerateMiddlewareContext) -
         assert 'b.txt' in seen[1]
         assert len(_listing_parts(envelope.messages)) == 0
 
-    await run_with_session(session, check())
+    await run_with_session(session=session, coro=check())
 
 
 @pytest.mark.asyncio
@@ -187,10 +186,10 @@ async def test_wrap_generate_does_not_mutate_envelope(ctx: GenerateMiddlewareCon
         SessionState(artifacts=[Artifact(name='a.txt', parts=[Part(TextPart(text='hi'))])]),
     )
 
-    captured_request: list[ModelRequest] = []
+    captured_request: list[GenerateActionOptions] = []
 
     async def next_fn(params, _ctx):
-        captured_request.append(params.request)
+        captured_request.append(params.options)
         return ModelResponse(message=None)
 
     async def check() -> None:
@@ -200,4 +199,4 @@ async def test_wrap_generate_does_not_mutate_envelope(ctx: GenerateMiddlewareCon
         assert len(_listing_parts(captured_request[0].messages)) == 1
         assert 'a.txt' in _listing_parts(captured_request[0].messages)[0].text
 
-    await run_with_session(session, check())
+    await run_with_session(session=session, coro=check())

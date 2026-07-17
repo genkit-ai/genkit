@@ -199,7 +199,7 @@ class Document(DocumentData):
 
     @cached_property
     def media(self) -> list[Media]:
-        """Get all media parts."""
+        """All media parts."""
         return [
             part.root.media for part in self.content if isinstance(part.root, MediaPart) and part.root.media is not None
         ]

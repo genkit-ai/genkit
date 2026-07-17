@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 from genkit_middleware import Skills
 
-from genkit import ModelRequest, ModelResponse
+from genkit import ModelResponse
 from genkit._core._model import GenerateActionOptions
 from genkit.middleware import GenerateHookParams, GenerateMiddlewareContext
 
@@ -30,7 +30,6 @@ from genkit.middleware import GenerateHookParams, GenerateMiddlewareContext
 def _make_params() -> GenerateHookParams:
     return GenerateHookParams(
         options=GenerateActionOptions(messages=[]),
-        request=ModelRequest(messages=[]),
         iteration=0,
     )
 
@@ -77,7 +76,7 @@ You are a test assistant.
 
         async def next_fn(params, ctx):
             # Check that skills prompt was injected
-            assert len(params.request.messages) > 0
+            assert len(params.options.messages) > 0
             return ModelResponse(message=None)
 
         result = await skills.wrap_generate(_make_params(), ctx, next_fn)

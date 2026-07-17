@@ -99,6 +99,13 @@ export async function startTelemetryServer(params: {
    */
   maxRequestBodySize?: string | number;
   corsOrigin?: string | RegExp;
+  /**
+   * The network interface to bind to. Defaults to '127.0.0.1' so the
+   * telemetry server is only reachable from the local machine. This is a
+   * developer-facing tool with no authentication, so it should not be exposed
+   * to other hosts by default.
+   */
+  host?: string;
 }) {
   await params.traceStore.init();
   await params.logStore.init();
@@ -337,8 +344,9 @@ export async function startTelemetryServer(params: {
     res.status(500).json(errorResponse);
   });
 
-  server = api.listen(params.port, () => {
-    logger.info(`Telemetry API running on http://localhost:${params.port}`);
+  const host = params.host ?? '127.0.0.1';
+  server = api.listen(params.port, host, () => {
+    logger.info(`Telemetry API running on http://${host}:${params.port}`);
   });
 
   server.on('error', (error) => {

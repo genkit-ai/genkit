@@ -212,6 +212,9 @@ describe('ReflectionServerV2', () => {
     registry.registerValue('middleware', 'mw2', {
       name: 'mw2',
     });
+    const mw3Fn = () => {};
+    (mw3Fn as any).toJson = () => ({ name: 'mw3' });
+    registry.registerValue('middleware', 'mw3', mw3Fn);
 
     const gotListValues = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
@@ -242,6 +245,8 @@ describe('ReflectionServerV2', () => {
             assert.strictEqual(msg.result.values['mw1'].name, 'mw1');
             assert.ok(msg.result.values['mw2']);
             assert.strictEqual(msg.result.values['mw2'].name, 'mw2');
+            assert.ok(msg.result.values['mw3']);
+            assert.strictEqual(msg.result.values['mw3'].name, 'mw3');
             clearTimeout(timer);
             resolve();
           }

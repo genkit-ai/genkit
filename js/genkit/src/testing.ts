@@ -17,14 +17,31 @@
  */
 
 /**
- * Testing utilities — helpers for testing model plugins, including the
- * `testModels` test harness.
+ * Testing utilities for Genkit apps and model plugins.
+ *
+ * - {@link mockModel} — a programmable mock model with typed call inspection,
+ *   for testing flows, prompts, and tools deterministically.
+ * - {@link echoModel} — a zero-config model that echoes the rendered request,
+ *   for asserting prompt/message assembly.
+ * - `testModels` — a conformance harness for model *plugin* authors.
  *
  * ```ts
- * import { testModels } from 'genkit/testing';
+ * import { mockModel, echoModel, testModels } from 'genkit/testing';
  * ```
  *
  * @module testing
  */
 
-export { testModels } from '@genkit-ai/ai/testing';
+export {
+  echoModel,
+  mockModel,
+  testModels,
+  type EchoModelOptions,
+  type MockChunk,
+  type MockContext,
+  type MockModel,
+  type MockModelOptions,
+  type MockRespond,
+  type MockRespondFn,
+  type MockResponse,
+} from '@genkit-ai/ai/testing';
