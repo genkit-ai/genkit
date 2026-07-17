@@ -76,7 +76,6 @@ async def main() -> None:
     restart_parts = [intr.restart(resumed_metadata={'tool_approved': True}) for intr in out1.interrupts]
     out2 = await chat.resume(restart=restart_parts)
     assert out2.finish_reason == AgentFinishReason.STOP
-    await chat.close()
 
 
 if __name__ == '__main__':

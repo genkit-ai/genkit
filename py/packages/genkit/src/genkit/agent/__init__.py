@@ -18,7 +18,6 @@
 
 from genkit._ai._agents._base import Agent
 from genkit._ai._agents._client import (
-    AgentAPI,
     AgentChat,
     AgentChunk,
     AgentClient,
@@ -38,7 +37,6 @@ from genkit._ai._agents._session_stores import (
     FileSessionStore,
     InMemorySessionStore,
 )
-from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
 from genkit._ai._agents._transports._http import HttpAgentTransport, remote_agent
 from genkit._ai._agents._types import (
     ChunkTransform,
@@ -46,7 +44,6 @@ from genkit._ai._agents._types import (
     StateTransform,
     TurnResult,
 )
-from genkit._core._action import ActionRunContext
 from genkit._core._typing import (
     AgentFinishReason,
     AgentInit,
@@ -55,18 +52,14 @@ from genkit._core._typing import (
     AgentResult,
     AgentStreamChunk,
     Artifact,
-    Resume,
     SessionSnapshot,
     SessionState,
     SnapshotStatus,
-    ToolRequest,
-    ToolRequestPart,
     TurnEnd,
 )
 
 __all__ = [
     'Agent',
-    'AgentAPI',
     'AgentClient',
     # Agent Client APIs
     'AgentChat',
@@ -78,9 +71,7 @@ __all__ = [
     'AgentTransport',
     'HttpAgentTransport',
     'remote_agent',
-    'parse_snapshot_lookup_kw',
     # Agent function protocol
-    'ActionRunContext',
     'AgentFn',
     'SessionRunner',
     'TurnResult',
@@ -102,11 +93,8 @@ __all__ = [
     'AgentResult',
     'AgentStreamChunk',
     'Artifact',
-    'Resume',
     'SessionSnapshot',
     'SessionState',
     'SnapshotStatus',
-    'ToolRequest',
-    'ToolRequestPart',
     'TurnEnd',
 ]

@@ -43,7 +43,7 @@ async def test_middleware_context_session_field() -> None:
     async def check() -> None:
         assert ctx.ai.current_session() is session
 
-    await run_with_session(session, check())
+    await run_with_session(session=session, coro=check())
 
 
 @pytest.mark.asyncio
@@ -55,7 +55,7 @@ async def test_run_with_session_binds_and_clears() -> None:
         assert bound is session
         return bound
 
-    result = await run_with_session(session, inner())
+    result = await run_with_session(session=session, coro=inner())
     assert result is session
     assert get_current_session() is None
 
@@ -75,13 +75,13 @@ async def test_run_with_session_nested_bind() -> None:
 
     async def outer_fn() -> tuple[dict[str, str] | None, str]:
         assert get_current_session() is outer
-        label = await run_with_session(inner, nested())
+        label = await run_with_session(session=inner, coro=nested())
         assert get_current_session() is outer
         custom = await outer.get_custom()
         assert isinstance(custom, dict)
         return custom, label
 
-    custom, nested_label = await run_with_session(outer, outer_fn())
+    custom, nested_label = await run_with_session(session=outer, coro=outer_fn())
     assert custom == {'label': 'outer'}
     assert nested_label == 'inner'
 
@@ -117,7 +117,7 @@ async def test_agent_runtime_binds_session_during_handler() -> None:
     in_queue.put_nowait(AgentInput())
     in_queue.close()
 
-    await rt.run(agent_fn, in_queue)
+    await rt.run(fn=agent_fn, client_inputs=in_queue)
 
     assert seen == [session, session]
     assert (await session.get_custom()) == {'seen': True}

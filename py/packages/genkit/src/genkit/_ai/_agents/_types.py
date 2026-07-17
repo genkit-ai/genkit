@@ -25,7 +25,6 @@ from typing import Literal, TypedDict
 from genkit._core._typing import (
     AgentFinishReason,
     AgentStreamChunk,
-    GenkitRuntimeError,
     SessionState,
 )
 
@@ -50,7 +49,16 @@ def resolve_client_transform(
     client_transform: ClientTransform | None = None,
     transform: StateTransform | None = None,
 ) -> ClientTransform | None:
-    """``transform`` is shorthand for ``client_transform={'state': transform}``."""
+    """``transform`` is shorthand for ``client_transform={'state': transform}``.
+
+    They're two spellings of the same thing, so passing both is almost always a
+    mistake — reject it loudly rather than silently dropping one.
+    """
+    if client_transform is not None and transform is not None:
+        raise ValueError(
+            "Pass either 'transform' (shorthand for the state hook) or "
+            "'client_transform' (the full {state, chunk} form), not both."
+        )
     if client_transform is not None:
         return client_transform
     if transform is not None:
@@ -60,7 +68,10 @@ def resolve_client_transform(
 
 @dataclass
 class TurnResult:
-    """Per-turn execution result returned by an agent loop step."""
+    """What an agent turn function returns to tell the loop how the turn ended.
+
+    Failures don't travel through here — they surface as raised exceptions, which
+    the loop catches and records separately.
+    """
 
     finish_reason: AgentFinishReason | None = None
-    error: GenkitRuntimeError | None = None

@@ -16,6 +16,7 @@
 
 """Internal testing utilities for Genkit AI (mock models, test_models)."""
 
+import inspect
 import json
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
@@ -69,8 +70,6 @@ class ProgrammableModel:
 
         if self.response_cb is not None:
             res = self.response_cb(request)
-            import inspect
-
             if inspect.isawaitable(res):
                 response = await res
             else:

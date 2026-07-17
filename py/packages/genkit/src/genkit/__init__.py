@@ -16,7 +16,6 @@
 
 """Genkit — Build AI-powered applications."""
 
-from genkit._ai._agents._session import SessionErrorType
 from genkit._ai._aio import ActionKind, Genkit
 from genkit._ai._prompt import (
     ExecutablePrompt,
@@ -99,7 +98,6 @@ __all__ = [
     # Errors
     'GenkitError',
     'PublicError',
-    'SessionErrorType',
     # Tools
     'Interrupt',
     'Tool',

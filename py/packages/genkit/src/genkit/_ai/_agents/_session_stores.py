@@ -58,7 +58,7 @@ def session_id_of(snapshot: SessionSnapshot) -> str | None:
     return snapshot.state.session_id if snapshot.state is not None else None
 
 
-def require_one_selector(snapshot_id: str | None, session_id: str | None) -> None:
+def require_one_selector(*, snapshot_id: str | None, session_id: str | None) -> None:
     """Enforce that a get_snapshot call names exactly one of snapshot_id / session_id."""
     if bool(snapshot_id) == bool(session_id):
         raise GenkitError(
@@ -72,9 +72,9 @@ def require_one_selector(snapshot_id: str | None, session_id: str | None) -> Non
 
 
 def select_leaf(
+    *,
     snapshots: list[SessionSnapshot],
     session_id: str,
-    *,
     reject_ambiguous: bool,
 ) -> SessionSnapshot | None:
     """Resolve a session's current leaf from all its snapshots.
@@ -88,7 +88,7 @@ def select_leaf(
         return None
 
     if reject_ambiguous:
-        return select_leaf_snapshot(snapshots, session_id)
+        return select_leaf_snapshot(snapshots=snapshots, session_id=session_id)
 
     parent_ids = {snap.parent_id for snap in snapshots if snap.parent_id}
     leaves = [snap for snap in snapshots if snap.snapshot_id not in parent_ids]
@@ -105,7 +105,7 @@ def select_leaf(
     return max(leaves, key=lambda snap: (snap.created_at, snap.snapshot_id))
 
 
-def stamp_store_fields(snapshot: SessionSnapshot, snapshot_id: str | None) -> None:
+def stamp_store_fields(*, snapshot: SessionSnapshot, snapshot_id: str | None) -> None:
     """Fill in the fields the store owns on a snapshot about to be written."""
     snapshot.snapshot_id = snapshot_id or str(uuid4())
     if not snapshot.created_at:
@@ -118,27 +118,26 @@ def stamp_store_fields(snapshot: SessionSnapshot, snapshot_id: str | None) -> No
         snapshot.session_id = snapshot.state.session_id
 
 
-def apply_save(existing: SessionSnapshot | None, snapshot_id: str | None, fn: SaveFn) -> SessionSnapshot | None:
+def apply_save(*, existing: SessionSnapshot | None, snapshot_id: str | None, fn: SaveFn) -> SessionSnapshot | None:
     """Run a save mutator and stamp the result, or None to skip the write."""
     if snapshot_id is not None and existing is None:
         return None
     next_snapshot = fn(existing.model_copy(deep=True) if existing is not None else None)
     if next_snapshot is None:
         return None
-    stamp_store_fields(next_snapshot, snapshot_id)
+    stamp_store_fields(snapshot=next_snapshot, snapshot_id=snapshot_id)
     return next_snapshot
 
 
-def notify(subs: Subs, snapshot_id: str, status: SnapshotStatus | None) -> None:
+def notify(*, subs: Subs, snapshot_id: str, status: SnapshotStatus | None) -> None:
     """Push a status change to everyone subscribed to a snapshot."""
+    # Subscriber queues are unbounded, so put_nowait can't fail here.
     for q in subs.get(snapshot_id, []):
-        try:
-            q.put_nowait(status)
-        except asyncio.QueueFull:
-            pass
+        q.put_nowait(status)
 
 
 async def subscribe(
+    *,
     subs: Subs,
     snapshot_id: str,
     current: SessionSnapshot | None,
@@ -174,7 +173,7 @@ class InMemorySessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[Sta
         snapshot_id: str | None = None,
         session_id: str | None = None,
     ) -> SessionSnapshot | None:
-        require_one_selector(snapshot_id, session_id)
+        require_one_selector(snapshot_id=snapshot_id, session_id=session_id)
         async with self.lock:
             if snapshot_id is not None:
                 snap = self.snapshots.get(snapshot_id)
@@ -182,33 +181,47 @@ class InMemorySessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[Sta
 
             assert session_id is not None
             owned = [snap for snap in self.snapshots.values() if session_id_of(snap) == session_id]
-            leaf = select_leaf(owned, session_id, reject_ambiguous=self.reject_ambiguous)
+            leaf = select_leaf(snapshots=owned, session_id=session_id, reject_ambiguous=self.reject_ambiguous)
             return leaf.model_copy(deep=True) if leaf is not None else None
 
     async def save_snapshot(self, snapshot_id: str | None, fn: SaveFn) -> SessionSnapshot | None:
         async with self.lock:
             existing = self.snapshots.get(snapshot_id) if snapshot_id is not None else None
-            next_snapshot = apply_save(existing, snapshot_id, fn)
+            next_snapshot = apply_save(existing=existing, snapshot_id=snapshot_id, fn=fn)
             if next_snapshot is None:
                 return None
             self.snapshots[next_snapshot.snapshot_id] = next_snapshot.model_copy(deep=True)
-            notify(self.subs, next_snapshot.snapshot_id, next_snapshot.status)
+            notify(subs=self.subs, snapshot_id=next_snapshot.snapshot_id, status=next_snapshot.status)
             return next_snapshot
 
     async def on_snapshot_status_change(self, snapshot_id: str) -> asyncio.Queue[SnapshotStatus | None]:
         async with self.lock:
-            return await subscribe(self.subs, snapshot_id, self.snapshots.get(snapshot_id))
+            return await subscribe(subs=self.subs, snapshot_id=snapshot_id, current=self.snapshots.get(snapshot_id))
 
 
 class FileSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[StateT]):
     """File-backed snapshot store: one ``<snapshot_id>.json`` per snapshot."""
 
-    def __init__(self, directory: str, *, reject_ambiguous_session: bool = False) -> None:
+    def __init__(
+        self,
+        directory: str,
+        *,
+        reject_ambiguous_session: bool = False,
+        max_persisted_chain_length: int | None = None,
+    ) -> None:
         """Create the store, ensuring ``directory`` exists.
 
         See :class:`InMemorySessionStore` for ``reject_ambiguous_session``.
+
+        ``max_persisted_chain_length`` caps how many snapshots of a chat's
+        history stay on disk: once a chain grows past it, the oldest turns are
+        deleted on each save so a long-lived conversation doesn't accumulate
+        files forever. Resuming and continuing still work, but you lose the
+        ability to rewind or branch past the retained window. Leave it unset to
+        keep the full history.
         """
         self.reject_ambiguous = reject_ambiguous_session
+        self.max_persisted_chain_length = max_persisted_chain_length
         self.directory = directory
         self.subs: Subs = {}
         os.makedirs(directory, exist_ok=True)
@@ -233,6 +246,36 @@ class FileSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[StateT]
             f.write(snapshot.model_dump_json(indent=2))
         os.replace(temp_path, path)
 
+    def delete_sync(self, snapshot_id: str) -> None:
+        """Delete a snapshot file, tolerating one that's already gone."""
+        try:
+            os.remove(self.path(snapshot_id))
+        except FileNotFoundError:
+            pass
+
+    def prune_chain_sync(self, leaf: SessionSnapshot) -> None:
+        """Trim a chat's ancestry to the newest ``max_persisted_chain_length`` turns.
+
+        Walks ``parent_id`` back from the just-written snapshot and deletes the
+        oldest links past the cap. The retained oldest snapshot keeps pointing at
+        its (now-deleted) parent, so history reconstruction simply stops at the
+        window's edge.
+        """
+        cap = self.max_persisted_chain_length
+        if not cap or cap <= 0:
+            return
+        chain: list[str] = []
+        seen: set[str] = set()
+        cur: SessionSnapshot | None = leaf
+        # `seen` stops a corrupt/cyclic parent chain from looping forever (each
+        # hop is a disk read), the same guard walk_back_to_resumable uses.
+        while cur is not None and cur.snapshot_id not in seen:
+            seen.add(cur.snapshot_id)
+            chain.append(cur.snapshot_id)
+            cur = self.read_sync(cur.parent_id) if cur.parent_id else None
+        for snapshot_id in chain[cap:]:
+            self.delete_sync(snapshot_id)
+
     def read_session_sync(self, session_id: str) -> list[SessionSnapshot]:
         """Read all snapshots for a session from disk synchronously."""
         out: list[SessionSnapshot] = []
@@ -256,41 +299,28 @@ class FileSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[StateT]
         snapshot_id: str | None = None,
         session_id: str | None = None,
     ) -> SessionSnapshot | None:
-        require_one_selector(snapshot_id, session_id)
+        require_one_selector(snapshot_id=snapshot_id, session_id=session_id)
         async with self.lock:
             if snapshot_id is not None:
                 return await asyncio.to_thread(self.read_sync, snapshot_id)
 
             assert session_id is not None
             owned = await asyncio.to_thread(self.read_session_sync, session_id)
-            return select_leaf(owned, session_id, reject_ambiguous=self.reject_ambiguous)
+            return select_leaf(snapshots=owned, session_id=session_id, reject_ambiguous=self.reject_ambiguous)
 
     async def save_snapshot(self, snapshot_id: str | None, fn: SaveFn) -> SessionSnapshot | None:
         async with self.lock:
             existing = await asyncio.to_thread(self.read_sync, snapshot_id) if snapshot_id is not None else None
-            next_snapshot = apply_save(existing, snapshot_id, fn)
+            next_snapshot = apply_save(existing=existing, snapshot_id=snapshot_id, fn=fn)
             if next_snapshot is None:
                 return None
             await asyncio.to_thread(self.write_sync, next_snapshot)
-            notify(self.subs, next_snapshot.snapshot_id, next_snapshot.status)
+            if self.max_persisted_chain_length:
+                await asyncio.to_thread(self.prune_chain_sync, next_snapshot)
+            notify(subs=self.subs, snapshot_id=next_snapshot.snapshot_id, status=next_snapshot.status)
             return next_snapshot
 
     async def on_snapshot_status_change(self, snapshot_id: str) -> asyncio.Queue[SnapshotStatus | None]:
         async with self.lock:
             current = await asyncio.to_thread(self.read_sync, snapshot_id)
-            return await subscribe(self.subs, snapshot_id, current)
-
-
-__all__ = [
-    'FileSessionStore',
-    'InMemorySessionStore',
-    'SaveFn',
-    'Subs',
-    'apply_save',
-    'notify',
-    'require_one_selector',
-    'select_leaf',
-    'session_id_of',
-    'stamp_store_fields',
-    'subscribe',
-]
+            return await subscribe(subs=self.subs, snapshot_id=snapshot_id, current=current)

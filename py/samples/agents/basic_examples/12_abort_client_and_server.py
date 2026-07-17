@@ -101,8 +101,6 @@ async def main() -> None:
     # one batch at turn end, and abort interrupts before that. So an aborted
     # snapshot is a clean pre-response checkpoint you can branch from.
 
-    await worker_chat.close()
-
 
 if __name__ == '__main__':
     ai.run_main(main())

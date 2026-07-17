@@ -40,10 +40,10 @@ class HttpAgentTransport(AgentTransport[StateT]):
     def __init__(
         self,
         url: str,
+        *,
         agent_name: str | None = None,
         get_snapshot_url: str | None = None,
         abort_url: str | None = None,
-        *,
         state_management: StateManagement,
     ) -> None:
         """Initializes the HTTP transport.
@@ -91,6 +91,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
 
     async def run_turn(
         self,
+        *,
         agent_input: AgentInput,
         init: AgentInit,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
@@ -132,7 +133,6 @@ class HttpAgentTransport(AgentTransport[StateT]):
                             output_val = AgentOutput.model_validate(data['result'])
                             if not output_future.done():
                                 output_future.set_result(output_val)
-                            stream_queue.close()
                             break
                         if 'error' in data:
                             raise RuntimeError(f'Agent execution error: {data["error"]}')
@@ -150,6 +150,10 @@ class HttpAgentTransport(AgentTransport[StateT]):
                 if not output_future.done():
                     output_future.set_exception(e)
                 stream_queue.put_nowait(e)
+            finally:
+                # Wakes the stream consumer once buffered chunks drain, so the
+                # generator ends cleanly on every path, not just the success one.
+                stream_queue.close()
 
         # Aborting a turn is a client-side detach: the caller stops listening,
         # but we leave the streaming request running so the server turn finishes

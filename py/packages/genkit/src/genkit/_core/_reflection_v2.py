@@ -16,11 +16,15 @@
 
 """Reflection API v2 (WebSocket JSON-RPC client) for Genkit Dev UI / CLI.
 
-``runAction`` with ``stream: true`` emits ``streamChunk`` notifications (output streaming).
-Bidirectional input streaming (``sendInputStreamChunk`` / ``endInputStream``) is not
-implemented yet. Requests with an ``id`` receive JSON-RPC ``-32000`` with message
-``Not implemented`` and ``error.data.stack`` (same pattern as JS ``throw`` in the handler).
-Notifications without ``id`` are ignored except for a debug log.
+Connects out to the CLI reflection manager and serves its JSON-RPC requests:
+``listActions``, ``listValues``, ``runAction``, ``cancelAction``, ``configure``,
+and the bidi input-stream methods (``sendInputStreamChunk`` / ``endInputStream``).
+
+``runAction`` with ``stream: true`` emits ``streamChunk`` notifications as output
+is produced. Agents (bidi actions) additionally accept streamed *input*: the
+client drives the turn with ``sendInputStreamChunk`` and ends it with
+``endInputStream``. Unknown methods that carry an ``id`` get a JSON-RPC ``-32601``
+(method not found); notifications without an ``id`` are logged and ignored.
 """
 
 from __future__ import annotations
@@ -29,9 +33,8 @@ import asyncio
 import json
 import os
 import traceback
-import uuid
-from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from collections.abc import Awaitable, Callable, Coroutine
+from typing import Any
 
 import websockets
 from opentelemetry import trace as trace_api
@@ -40,6 +43,7 @@ from pydantic import BaseModel, JsonValue, ValidationError
 from websockets.exceptions import ConnectionClosed
 
 from genkit._core._action import Action, BidiAction, BidiConnection
+from genkit._core._agent_reflection import resolve_agent_init, resolve_agent_input
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
 from genkit._core._logger import get_logger
@@ -48,8 +52,6 @@ from genkit._core._registry import Registry
 from genkit._core._trace._default_exporter import TraceServerExporter
 from genkit._core._tracing import add_custom_exporter
 from genkit._core._typing import (
-    AgentInit,
-    AgentInput,
     ReflectionCancelActionParams,
     ReflectionCancelActionResponse,
     ReflectionConfigureParams,
@@ -130,6 +132,10 @@ class ReflectionServerV2:
         self._pending: dict[str, asyncio.Future[JsonValue]] = {}
         self._request_seq = 0
         self._active_actions: dict[str, asyncio.Task[Any]] = {}
+        # Fire-and-forget register/dispatch tasks. Held so the event loop can't
+        # GC them mid-flight (asyncio only weakly references tasks) and so they
+        # can be cancelled when the connection drops.
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         # request_id → AgentConnection for active bidi (agent) sessions
         self._bidi_connections: dict[str, BidiConnection] = {}
         self._stop = False
@@ -163,7 +169,7 @@ class ReflectionServerV2:
                 ) as ws:
                     self._ws = ws
                     attempt = 0
-                    _ = asyncio.create_task(self._register())
+                    self._spawn(self._register())
                     await self._read_loop()
             except ConnectionClosed as e:
                 logger.debug('reflection V2: connection closed', code=e.code, reason=e.reason)
@@ -172,6 +178,10 @@ class ReflectionServerV2:
             finally:
                 self._ws = None
                 self._drain_pending(ConnectionError('connection closed'))
+                # Cancel in-flight register/dispatch handlers so they don't keep
+                # running against a dead socket after the connection drops.
+                for t in list(self._background_tasks):
+                    t.cancel()
                 for _rid, conn in list(self._bidi_connections.items()):
                     try:
                         await conn.close()
@@ -189,6 +199,18 @@ class ReflectionServerV2:
 
     def stop(self) -> None:
         self._stop = True
+
+    def _spawn(self, coro: Coroutine[Any, Any, Any]) -> None:
+        """Run a fire-and-forget coroutine while keeping a reference to its task."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._on_background_task_done)
+
+    def _on_background_task_done(self, task: asyncio.Task[Any]) -> None:
+        self._background_tasks.discard(task)
+        # Retrieve any exception so it isn't reported as "never retrieved".
+        if not task.cancelled() and (exc := task.exception()) is not None:
+            logger.debug('reflection V2: background task error', err=exc)
 
     def _drain_pending(self, exc: BaseException) -> None:
         for _rid, fut in list(self._pending.items()):
@@ -273,7 +295,7 @@ class ReflectionServerV2:
                 )
                 continue
             if 'method' in msg:
-                _ = asyncio.create_task(self._dispatch_incoming(msg))
+                self._spawn(self._dispatch_incoming(msg))
             elif msg.get('id') is not None:
                 self._deliver_response(msg)
             else:
@@ -363,7 +385,7 @@ class ReflectionServerV2:
             return
 
         try:
-            inp = AgentInput.model_validate(p.chunk) if p.chunk is not None else AgentInput()
+            inp = resolve_agent_input(p.chunk)
             await conn.send(inp)
         except Exception as e:  # noqa: BLE001
             logger.error('reflection V2: sendInputStreamChunk error', err=e)
@@ -507,6 +529,9 @@ class ReflectionServerV2:
         if stream:
 
             def on_chunk_fn(chunk: object) -> None:
+                # Chunks reach the client in order because tasks start in creation
+                # order and _send_message serializes on a FIFO lock with no await
+                # before it — keep it that way, or streamed output can reorder.
                 stream_chunk_tasks.append(asyncio.create_task(self._notify_stream_chunk(sid, chunk)))
 
             on_chunk = on_chunk_fn
@@ -554,17 +579,7 @@ class ReflectionServerV2:
           4. When output() resolves, send final runAction response
         """
         try:
-            agent_meta = (action.metadata or {}).get('agent')
-            agent_dict = cast(dict[str, Any], agent_meta) if isinstance(agent_meta, dict) else {}
-            has_store = agent_dict.get('stateManagement') == 'server'
-
-            init = AgentInit.model_validate(p.init) if isinstance(p.init, dict) else AgentInit()
-
-            if has_store:
-                if not init.session_id and not init.snapshot_id:
-                    init.session_id = str(uuid.uuid4())
-                if init.state is not None:
-                    init.state = None
+            init = resolve_agent_init(action, p.init)
         except Exception as e:  # noqa: BLE001
             await self._send_error(sid, JSON_RPC_INVALID_PARAMS, f'invalid AgentInit input: {e}')
             return
@@ -583,7 +598,7 @@ class ReflectionServerV2:
             self._bidi_connections[sid] = conn
 
             if not p.stream_input:
-                inp = AgentInput.model_validate(p.input) if p.input is not None else AgentInput()
+                inp = resolve_agent_input(p.input)
                 await conn.send(inp)
                 await conn.close()
 
@@ -600,6 +615,12 @@ class ReflectionServerV2:
             await self._send_run_action_error(sid, e, trace_holder)
         finally:
             self._bidi_connections.pop(sid, None)
+            # Drop the cancel registration too, or a finished turn's trace id
+            # lingers in _active_actions and a late cancelAction would falsely
+            # report success against a task that already completed.
+            tid = trace_holder[0]
+            if tid:
+                self._active_actions.pop(tid, None)
 
     async def _handle_list_actions(self, req_id: str | int | None, _: dict[str, Any]) -> None:
         if req_id is None:
@@ -707,13 +728,6 @@ class ReflectionServerV2:
 
         # --- Bidi (agent) path ---
         if isinstance(action, BidiAction):
-            if not isinstance(action, BidiAction):
-                await self._send_error(
-                    sid,
-                    JSON_RPC_INVALID_PARAMS,
-                    f'action {p.key} does not support bidi streaming',
-                )
-                return
             await self._run_bidi_action(sid, p, action)
         else:
             await self._run_action(sid, p, action)

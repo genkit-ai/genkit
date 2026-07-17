@@ -40,28 +40,28 @@ class TaskState(BaseModel):
 
 
 def test_validate_custom_state_noops_without_schema() -> None:
-    validate_custom_state({'anything': 1}, None, 'agent')
+    validate_custom_state(custom={'anything': 1}, state_schema=None, agent_name='agent')
 
 
 def test_validate_custom_state_skips_unset_state() -> None:
     # A required-field schema must not trip a session that never wrote state.
-    validate_custom_state(None, TaskState, 'agent')
+    validate_custom_state(custom=None, state_schema=TaskState, agent_name='agent')
 
 
 def test_validate_custom_state_accepts_valid() -> None:
-    validate_custom_state({'title': 'ship it', 'done': True}, TaskState, 'agent')
+    validate_custom_state(custom={'title': 'ship it', 'done': True}, state_schema=TaskState, agent_name='agent')
 
 
 def test_validate_custom_state_rejects_invalid() -> None:
     with pytest.raises(GenkitError) as exc:
-        validate_custom_state({'done': 'not-a-bool'}, TaskState, 'taskAgent')
+        validate_custom_state(custom={'done': 'not-a-bool'}, state_schema=TaskState, agent_name='taskAgent')
     assert exc.value.status == INVALID_ARGUMENT
     assert 'taskAgent' in str(exc.value)
 
 
 def test_validate_custom_state_error_carries_field_details() -> None:
     with pytest.raises(GenkitError) as exc:
-        validate_custom_state({'done': 'not-a-bool'}, TaskState, 'taskAgent')
+        validate_custom_state(custom={'done': 'not-a-bool'}, state_schema=TaskState, agent_name='taskAgent')
     details = exc.value.details
     # The expected shape plus each per-field failure, so callers can show why.
     assert 'schema' in details
@@ -73,13 +73,13 @@ def test_validate_custom_state_error_carries_field_details() -> None:
 @pytest.mark.asyncio
 async def test_load_session_client_managed_validates_state() -> None:
     valid = AgentInit(state=SessionState(custom={'title': 'x'}))
-    session, snap = await load_session(valid, None, agent_name='a', state_schema=TaskState)
+    session, snap = await load_session(init=valid, store=None, agent_name='a', state_schema=TaskState)
     assert snap is None
     assert (await session.get_custom()) == {'title': 'x'}
 
     bad = AgentInit(state=SessionState(custom={'done': True}))  # missing required title
     with pytest.raises(GenkitError) as exc:
-        await load_session(bad, None, agent_name='a', state_schema=TaskState)
+        await load_session(init=bad, store=None, agent_name='a', state_schema=TaskState)
     assert exc.value.status == INVALID_ARGUMENT
 
 
@@ -97,5 +97,5 @@ async def test_load_session_validates_snapshot_custom() -> None:
     await store.save_snapshot(None, lambda _existing: snap)
 
     with pytest.raises(GenkitError) as exc:
-        await load_session(AgentInit(session_id=session_id), store, agent_name='a', state_schema=TaskState)
+        await load_session(init=AgentInit(session_id=session_id), store=store, agent_name='a', state_schema=TaskState)
     assert exc.value.status == INVALID_ARGUMENT

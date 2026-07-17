@@ -18,13 +18,14 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from typing import Any, Generic
 
 from opentelemetry import trace as trace_api
 
 # Internal imports from sibling modules
-from genkit._ai._agents._client import AgentClient
+from genkit._ai._agents._client import AgentClient, part_roots
 from genkit._ai._agents._runtime import (
     AgentFn,
     AgentRuntime,
@@ -62,6 +63,7 @@ from genkit._ai._prompt import (
 from genkit._ai._tools import Tool
 from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction, BidiFn
 from genkit._core._channel import CloseableQueue
+from genkit._core._error import GenkitError
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import Message, ModelConfig
 from genkit._core._registry import Registry
@@ -74,8 +76,11 @@ from genkit._core._typing import (
     MessageData,
     MiddlewareRef,
     Part,
+    Resume,
+    Role,
     SessionSnapshot,
     SnapshotStatus,
+    ToolRequest,
 )
 
 # ---------------------------------------------------------------------------
@@ -128,6 +133,8 @@ class Agent(
             name=name,
             bidi_fn=bidi_fn,
             description=description,
+            # 'agent' is framework-owned metadata (state management + schema), so
+            # it always wins over anything the caller put under that key.
             metadata={**(metadata or {}), 'agent': agent_meta},
             # An agent turn always resumes (or starts) a session, so its init is
             # always an AgentInit. Declaring it here validates the session
@@ -148,9 +155,9 @@ class Agent(
     def _in_process_transport(self) -> InProcessTransport:
         state_management: StateManagement = 'server' if self.store is not None else 'client'
         if self.store is None:
-            return InProcessTransport(self, state_management=state_management)
+            return InProcessTransport(action=self, state_management=state_management)
         return InProcessTransport(
-            self,
+            action=self,
             get_snapshot=self.get_snapshot_data,
             abort_snapshot=self.abort_snapshot_data,
             state_management=state_management,
@@ -166,7 +173,7 @@ class Agent(
         if self.store is None:
             return None
         return await resolve_snapshot(
-            self.store,
+            store=self.store,
             snapshot_id=snapshot_id,
             session_id=session_id,
             client_transform=self._client_transform,
@@ -176,7 +183,7 @@ class Agent(
         """Abort a running snapshot."""
         if self.store is None:
             return None
-        return await abort_snapshot_in_store(self.store, snapshot_id)
+        return await abort_snapshot_in_store(store=self.store, snapshot_id=snapshot_id)
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +219,7 @@ def define_custom_agent(
         in_queue: CloseableQueue[AgentInput],
         out_queue: CloseableQueue[AgentStreamChunk],
     ) -> AgentOutput:
-        session, parent = await load_session(init, store, agent_name=name, state_schema=state_schema)
+        session, parent = await load_session(init=init, store=store, agent_name=name, state_schema=state_schema)
         state = await session.state()
         if state.session_id:
             span = trace_api.get_current_span()
@@ -228,7 +235,7 @@ def define_custom_agent(
             session_outputs=out_queue,
         )
         await rt.session_runner.seed_last_good_state()
-        return await rt.run(fn, in_queue)
+        return await rt.run(fn=fn, client_inputs=in_queue)
 
     agent = Agent(
         name=name,
@@ -248,9 +255,16 @@ def define_custom_agent(
 
 
 def _register_snapshot_actions(registry: Registry, name: str, agent: Agent) -> None:
-    async def snapshot_fn(input_val: Any) -> SessionSnapshot | None:  # noqa: ANN401
+    async def snapshot_fn(input_val: Any) -> SessionSnapshot:  # noqa: ANN401
         sid, sess_id = parse_snapshot_lookup_input(input_val)
-        return await agent.get_snapshot_data(snapshot_id=sid, session_id=sess_id)
+        snap = await agent.get_snapshot_data(snapshot_id=sid, session_id=sess_id)
+        if snap is None:
+            # A poller asking for a snapshot that isn't there is a lookup miss, not
+            # an empty-but-successful read, so surface it as NOT_FOUND instead of a
+            # null the caller has to re-interpret.
+            target = sid or sess_id or 'unknown'
+            raise GenkitError(status='NOT_FOUND', message=f'Snapshot {target!r} not found for agent {name!r}.')
+        return snap
 
     async def abort_fn(input_val: Any) -> dict[str, object]:  # noqa: ANN401
         snapshot_id = parse_abort_input(input_val)
@@ -394,9 +408,67 @@ def define_prompt_agent(
     )
 
 
-# Inline helper to prevent circular imports for validate_resume_against_history
-def validate_resume_against_history(resume: Any, history: list[MessageData]) -> None:  # noqa: ANN401
-    pass
+def _tool_input_key(value: object) -> str:
+    """Canonical JSON form of a tool input for order-insensitive deep comparison."""
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+def validate_resume_against_history(resume: Resume, history: list[MessageData]) -> None:
+    """Reject a resume that doesn't line up with the tool requests in history.
+
+    A resumed turn answers tool requests the model actually made, so every
+    ``respond``/``restart`` entry has to point at a tool request recorded in the
+    session (searched across the whole history, not just the last message). A
+    restart additionally has to carry the *same* inputs as the interrupted
+    request — otherwise a client could resume a tool with forged arguments.
+    Raises ``INVALID_ARGUMENT`` on the first mismatch.
+    """
+    tool_requests: list[ToolRequest] = []
+    for msg in history:
+        if msg.role != Role.MODEL:
+            continue
+        for root in part_roots(msg.content):
+            tr = getattr(root, 'tool_request', None)
+            if isinstance(tr, ToolRequest):
+                tool_requests.append(tr)
+
+    def find(name: str, ref: str | None) -> ToolRequest | None:
+        return next((tr for tr in tool_requests if tr.name == name and tr.ref == ref), None)
+
+    def ref_suffix(ref: str | None) -> str:
+        return f' (ref: {ref})' if ref else ''
+
+    for restart_part in resume.restart or []:
+        tr = restart_part.tool_request
+        match = find(tr.name, tr.ref)
+        if match is None:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f"resume.restart references tool '{tr.name}'{ref_suffix(tr.ref)} "
+                    'which was not found in session history.'
+                ),
+            )
+        if _tool_input_key(tr.input) != _tool_input_key(match.input):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f"resume.restart for tool '{tr.name}'{ref_suffix(tr.ref)} has modified inputs that do not "
+                    'match the original tool request in session history. Restart inputs must exactly match the '
+                    'interrupted tool request.'
+                ),
+            )
+
+    for respond_part in resume.respond or []:
+        resp = respond_part.tool_response
+        if find(resp.name, resp.ref) is None:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f"resume.respond references tool '{resp.name}'{ref_suffix(resp.ref)} "
+                    'which was not found in session history.'
+                ),
+            )
 
 
 # ---------------------------------------------------------------------------

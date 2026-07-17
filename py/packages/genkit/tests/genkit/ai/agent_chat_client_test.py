@@ -63,28 +63,28 @@ from genkit._core._typing import (
 
 def test_apply_json_patch_root_replace() -> None:
     patch = [JsonPatchOperation(op=JsonPatchOp.REPLACE, path='', value={'status': 'idle', 'score': 10})]
-    res = apply_json_patch(None, patch)
+    res = apply_json_patch(doc=None, patch=patch)
     assert res == {'status': 'idle', 'score': 10}
 
 
 def test_apply_json_patch_nested_replace() -> None:
     doc = {'status': 'idle', 'nested': {'value': 1}}
     patch = [JsonPatchOperation(op=JsonPatchOp.REPLACE, path='/nested/value', value=2)]
-    res = apply_json_patch(doc, patch)
+    res = apply_json_patch(doc=doc, patch=patch)
     assert res == {'status': 'idle', 'nested': {'value': 2}}
 
 
 def test_apply_json_patch_array_add() -> None:
     doc = {'items': [1, 2]}
     patch = [JsonPatchOperation(op=JsonPatchOp.ADD, path='/items/-', value=3)]
-    res = apply_json_patch(doc, patch)
+    res = apply_json_patch(doc=doc, patch=patch)
     assert res == {'items': [1, 2, 3]}
 
 
 def test_apply_json_patch_array_remove() -> None:
     doc = {'items': [1, 2, 3]}
     patch = [JsonPatchOperation(op=JsonPatchOp.REMOVE, path='/items/1')]
-    res = apply_json_patch(doc, patch)
+    res = apply_json_patch(doc=doc, patch=patch)
     assert res == {'items': [1, 3]}
 
 
@@ -104,6 +104,7 @@ class MockAgentTransport(AgentTransport[dict[str, Any]]):
 
     async def run_turn(
         self,
+        *,
         agent_input: AgentInput,
         init: AgentInit,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
@@ -653,6 +654,7 @@ class _ServerEmulatingClientManagedTransport(AgentTransport[dict[str, Any]]):
 
     async def run_turn(
         self,
+        *,
         agent_input: AgentInput,
         init: AgentInit,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
@@ -885,8 +887,6 @@ async def test_session_handling_multiple_tool_interrupts() -> None:
     assert sent_resume.restart is not None
     assert len(sent_resume.restart) == 2
     assert {p.tool_request.name for p in sent_resume.restart} == {'transferA', 'transferB'}
-
-
 
 
 @pytest.mark.asyncio
@@ -1223,4 +1223,37 @@ async def test_agent_turn_direct_await() -> None:
 
     assert output.message is not None
     assert output.message.content is not None
+    assert output.message.content[0].root.text == 'Final output!'
+
+
+@pytest.mark.asyncio
+async def test_agent_turn_stream_and_response_accessors() -> None:
+    """`turn.stream` / `turn.response` mirror `async for turn` / `await turn`.
+
+    Genkit's other streaming handles expose these, so a turn offers the same
+    surface. Both must route through the detach-on-cancel wrappers, i.e. behave
+    identically to the dunder forms."""
+    transport = MockAgentTransport()
+    transport.final_output = AgentOutput(
+        snapshot_id='snapshot_1',
+        message=MessageData(role='model', content=[Part(root=TextPart(text='Final output!'))]),
+        finish_reason=AgentFinishReason.STOP,
+    )
+
+    chat = AgentChat(transport)
+    turn = chat.send('Weather in Tokyo?')
+
+    transport.push_chunk(
+        AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='Weather is '))]))
+    )
+    transport.push_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='Sunny.'))])))
+    transport.push_chunk(
+        AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.STOP))
+    )
+
+    chunks = [chunk async for chunk in turn.stream]
+    assert [c.text for c in chunks] == ['Weather is ', 'Sunny.', None]
+
+    output = await turn.response
+    assert output.message is not None
     assert output.message.content[0].root.text == 'Final output!'

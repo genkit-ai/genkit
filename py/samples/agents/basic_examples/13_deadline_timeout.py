@@ -59,8 +59,6 @@ async def main() -> None:
     answer = await chat.send('What is my name? One word.')
     assert 'Ada' in answer.text  # → still remembers turn 1
 
-    await chat.close()
-
 
 if __name__ == '__main__':
     ai.run_main(main())

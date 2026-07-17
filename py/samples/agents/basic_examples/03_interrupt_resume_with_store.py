@@ -32,11 +32,10 @@ from genkit_google_genai import GoogleAI
 from genkit_middleware import Middleware, ToolApproval
 from pydantic import BaseModel, Field
 
-from genkit import Genkit
+from genkit import Genkit, ToolRequestPart
 from genkit.agent import (
     AgentFinishReason,
     InMemorySessionStore,
-    ToolRequestPart,
 )
 
 
@@ -88,7 +87,6 @@ async def main() -> None:
     ]
     out2 = await chat.resume(restart=restart_parts)
     assert out2.finish_reason == AgentFinishReason.STOP
-    await chat.close()
 
 
 if __name__ == '__main__':

@@ -11,7 +11,6 @@ import pytest
 from genkit_google_cloud.session_store import FirestoreSessionStore
 from google.cloud import firestore
 
-from genkit._ai._agents._session import SessionErrorType
 from genkit._core._error import GenkitError
 from genkit._core._typing import SessionSnapshot, SnapshotStatus
 
@@ -278,9 +277,7 @@ async def test_firestore_session_store_branching_ambiguity() -> None:
     with pytest.raises(GenkitError) as exc_info:
         await store.get_snapshot(session_id='sess-branch-1')
     assert exc_info.value.status == 'FAILED_PRECONDITION'
-    assert exc_info.value.details is not None
-    assert exc_info.value.details['type'] == SessionErrorType.AMBIGUOUS_BRANCH
-    assert sorted(exc_info.value.details['leaves']) == ['snap-branch', 'snap-existing']
+    assert 'branching snapshots' in exc_info.value.original_message
 
     # Verify get_snapshot resolves newest leaf directly from pointer['leaves'] when reject_ambiguous=False:
     store_permissive = FirestoreSessionStore(client=mock_client, reject_ambiguous_session=False)

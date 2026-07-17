@@ -113,10 +113,15 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
     )
     in_queue.close()
 
-    out = await rt.run(agent_fn, in_queue)
+    out = await rt.run(fn=agent_fn, client_inputs=in_queue)
 
     assert out.finish_reason == AgentFinishReason.DETACHED
     assert out.snapshot_id is not None
+
+    # Detach returns immediately; the forwarded payload is processed by the
+    # background handler and lands in the finalized snapshot.
+    await _wait_for_snapshot_status(store, out.snapshot_id, SnapshotStatus.COMPLETED)
+
     assert len(seen_inputs) == 1
     assert seen_inputs[0].message is not None
     assert seen_inputs[0].message.content[0].root.text == 'appended message'
@@ -125,7 +130,6 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
     assert len(msgs) == 1
     assert msgs[0].content[0].root.text == 'appended message'
 
-    await _wait_for_snapshot_status(store, out.snapshot_id, SnapshotStatus.COMPLETED)
     snap = await store.get_snapshot(snapshot_id=out.snapshot_id)
     assert snap is not None
     assert snap.state is not None
@@ -160,7 +164,7 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
     await in_queue.put(AgentInput(detach=True))
     in_queue.close()
 
-    out = await rt.run(agent_fn, in_queue)
+    out = await rt.run(fn=agent_fn, client_inputs=in_queue)
     assert out.finish_reason == AgentFinishReason.DETACHED
     assert out.snapshot_id is not None
 
@@ -189,6 +193,69 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_detach_stamps_and_refreshes_pending_heartbeat(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A live detached turn keeps its pending snapshot's heartbeat fresh.
+
+    Without a beat a reader would age the snapshot into ``expired`` (worker
+    presumed dead), so the runtime stamps an initial heartbeat and refreshes it
+    while the turn runs, then stops once the turn settles.
+    """
+    import genkit._ai._agents._runtime as runtime_mod
+
+    # Beat far faster than the 30s default so the test observes a refresh quickly.
+    monkeypatch.setattr(runtime_mod, 'DEFAULT_HEARTBEAT_INTERVAL_MS', 10)
+
+    store = InMemorySessionStore()
+    session = Session(SessionState(session_id='test-session', messages=[]))
+    rt, _ = _runtime(session, store)
+    await rt.session_runner.seed_last_good_state()
+
+    release = asyncio.Event()
+
+    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+        async def handle_turn(_inp: AgentInput) -> None:
+            await release.wait()
+
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
+
+    in_queue = CloseableQueue()
+    await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='slow'))])))
+    await in_queue.put(AgentInput(detach=True))
+    in_queue.close()
+
+    out = await rt.run(fn=agent_fn, client_inputs=in_queue)
+    assert out.finish_reason == AgentFinishReason.DETACHED
+    assert out.snapshot_id is not None
+
+    # The pending snapshot carries an initial beat.
+    snap = await store.get_snapshot(snapshot_id=out.snapshot_id)
+    assert snap is not None
+    assert snap.status == SnapshotStatus.PENDING
+    assert snap.heartbeat_at is not None
+    first_beat = snap.heartbeat_at
+
+    # The refresh task advances it while the turn is still running.
+    await asyncio.sleep(0.05)
+    snap = await store.get_snapshot(snapshot_id=out.snapshot_id)
+    assert snap is not None and snap.heartbeat_at is not None
+    assert snap.heartbeat_at > first_beat
+
+    # Turn settles → finalize stops the beat and writes the terminal snapshot.
+    release.set()
+    await _wait_for_snapshot_status(store, out.snapshot_id, SnapshotStatus.COMPLETED)
+
+    settled = await store.get_snapshot(snapshot_id=out.snapshot_id)
+    assert settled is not None
+    settled_beat = settled.heartbeat_at
+    await asyncio.sleep(0.05)
+    after = await store.get_snapshot(snapshot_id=out.snapshot_id)
+    assert after is not None
+    # No more beats once the snapshot is terminal.
+    assert after.heartbeat_at == settled_beat
+
+
+@pytest.mark.asyncio
 async def test_detach_without_store_raises() -> None:
     session = Session(SessionState(session_id='test-session', messages=[]))
     rt, _ = _runtime(session, None)
@@ -207,7 +274,7 @@ async def test_detach_without_store_raises() -> None:
     in_queue.close()
 
     with pytest.raises(ValueError, match='detach requires a session store'):
-        await rt.run(agent_fn, in_queue)
+        await rt.run(fn=agent_fn, client_inputs=in_queue)
 
 
 @pytest.mark.asyncio
@@ -235,10 +302,10 @@ async def test_abort_snapshot_stops_detached_work() -> None:
     await in_queue.put(AgentInput(detach=True))
     in_queue.close()
 
-    out = await rt.run(agent_fn, in_queue)
+    out = await rt.run(fn=agent_fn, client_inputs=in_queue)
     assert out.snapshot_id is not None
 
-    prev = await abort_snapshot_in_store(store, out.snapshot_id)
+    prev = await abort_snapshot_in_store(store=store, snapshot_id=out.snapshot_id)
     assert prev == SnapshotStatus.ABORTED
 
     await _wait_for_snapshot_status(store, out.snapshot_id, SnapshotStatus.ABORTED, timeout_s=2.0)

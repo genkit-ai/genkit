@@ -27,7 +27,6 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, cast
-from uuid import uuid4
 
 import uvicorn
 from pydantic import BaseModel
@@ -39,12 +38,12 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from genkit._core._action import Action, ActionResponse, BidiAction
+from genkit._core._agent_reflection import resolve_agent_init, resolve_agent_input
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import get_reflection_json
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
 from genkit._core._registry import Registry
-from genkit._core._typing import AgentInit, AgentInput
 
 logger = get_logger(__name__)
 
@@ -99,47 +98,33 @@ class ActionRunner:
                 else None
             )
             if isinstance(self.action, BidiAction):
-                agent_meta = (self.action.metadata or {}).get('agent')
-                agent_dict = cast(dict[str, Any], agent_meta) if isinstance(agent_meta, dict) else {}
-                has_store = agent_dict.get('stateManagement') == 'server'
-                init_val = self.payload.get('init')
-                if init_val is not None:
-                    init = AgentInit.model_validate(init_val)
-                else:
-                    input_val = self.payload.get('input')
-                    if isinstance(input_val, dict) and ('sessionId' in input_val or 'snapshotId' in input_val):
-                        init = AgentInit.model_validate(input_val)
-                    else:
-                        init = AgentInit()
-
-                if has_store and not init.session_id and not init.snapshot_id:
-                    init.session_id = str(uuid4())
-
-                action = cast(BidiAction[Any, Any, Any], self.action)
+                # isinstance narrows BidiAction's generics to Never, so cast them to
+                # Any to keep the init/input args typed. pyrefly reads the cast as
+                # redundant (it already backfills Any) but ty needs it.
+                action = cast(BidiAction[Any, Any, Any], self.action)  # pyrefly: ignore[redundant-cast]
+                init = resolve_agent_init(action, self.payload.get('init'))
                 conn = await action.stream_bidi(
                     init=init,
                     context=self.payload.get('context', {}),
                     on_trace_start=self.on_trace_start,
                     telemetry_labels=self.payload.get('telemetryLabels'),
                 )
+                try:
+                    inp = resolve_agent_input(self.payload.get('input'))
 
-                inp_val = self.payload.get('input')
-                if inp_val == init_val:
-                    inp = AgentInput()
-                elif inp_val is not None:
-                    inp = AgentInput.model_validate(inp_val)
-                else:
-                    inp = AgentInput()
+                    await conn.send(inp)
+                    await conn.close()
 
-                await conn.send(inp)
-                await conn.close()
+                    async for chunk in conn.receive():
+                        if on_chunk:
+                            on_chunk(chunk)
 
-                async for chunk in conn.receive():
-                    if on_chunk:
-                        on_chunk(chunk)
-
-                resp = await conn.output()
-                output = ActionResponse(response=resp, trace_id=conn.trace_id or '', span_id=self.span_id or '')
+                    resp = await conn.output()
+                    output = ActionResponse(response=resp, trace_id=self.trace_id or '', span_id=self.span_id or '')
+                finally:
+                    # Close the send side so the background agent task winds down even
+                    # if we bail mid-turn — otherwise it blocks forever on the next input.
+                    await conn.close()
             else:
                 output = await self.action.run(
                     input=self.payload.get('input'),

@@ -64,7 +64,6 @@ async def main() -> None:
     # → abort_signal fires inside slowWork; the snapshot settles as ABORTED
     await task.abort()
     await asyncio.sleep(1.0)  # let the background task unwind
-    await chat.close()
 
 
 if __name__ == '__main__':

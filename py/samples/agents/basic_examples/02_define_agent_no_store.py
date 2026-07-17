@@ -55,7 +55,6 @@ async def main() -> None:
     # You own the state: capture the conversation (messages + custom state +
     # artifacts) yourself, then hand them straight back to resume.
     messages, state, artifacts = chat.messages, chat.state, chat.artifacts
-    await chat.close()
 
     resumed = agent.chat(messages=messages, state=state, artifacts=artifacts)
     await resumed.send('What is my name? One word.')

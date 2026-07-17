@@ -19,10 +19,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 
 from genkit._ai._agents._runtime import load_session
+from genkit._ai._agents._session import SessionStore
 from genkit._core._error import GenkitError
 from genkit._core._typing import (
     AgentInit,
@@ -52,7 +54,7 @@ def _snap(
     )
 
 
-class _ScriptedStore:
+class _ScriptedStore(SessionStore[Any]):
     """Returns snapshots by id and a designated leaf by session, to drive load_session."""
 
     def __init__(self, by_id: dict[str, SessionSnapshot], leaf: SessionSnapshot | None) -> None:
@@ -85,7 +87,7 @@ async def test_resume_by_snapshot_id_rejects_non_completed() -> None:
     store = _ScriptedStore({'snap-f': failed}, leaf=None)
 
     with pytest.raises(GenkitError) as exc:
-        await load_session(AgentInit(snapshot_id='snap-f'), store, agent_name='a')
+        await load_session(init=AgentInit(snapshot_id='snap-f'), store=store, agent_name='a')
     assert exc.value.status == INVALID_ARGUMENT
     assert 'not resumable' in str(exc.value)
 
@@ -96,7 +98,7 @@ async def test_resume_by_session_id_walks_back_to_last_completed() -> None:
     failed = _snap('snap-f', SnapshotStatus.FAILED, parent_id='snap-c')
     store = _ScriptedStore({'snap-c': completed, 'snap-f': failed}, leaf=failed)
 
-    _session, snap = await load_session(AgentInit(session_id=SESSION_ID), store, agent_name='a')
+    _session, snap = await load_session(init=AgentInit(session_id=SESSION_ID), store=store, agent_name='a')
     assert snap is not None
     assert snap.snapshot_id == 'snap-c'
 
@@ -108,7 +110,7 @@ async def test_resume_by_session_id_cyclic_chain_raises() -> None:
     store = _ScriptedStore({'a': a, 'b': b}, leaf=a)
 
     with pytest.raises(GenkitError) as exc:
-        await load_session(AgentInit(session_id=SESSION_ID), store, agent_name='a')
+        await load_session(init=AgentInit(session_id=SESSION_ID), store=store, agent_name='a')
     assert exc.value.status == FAILED_PRECONDITION
     assert 'cyclic' in str(exc.value)
 
@@ -118,7 +120,7 @@ async def test_resume_by_session_id_no_completed_seeds_fresh() -> None:
     failed = _snap('snap-f', SnapshotStatus.FAILED)  # no parent, not resumable
     store = _ScriptedStore({'snap-f': failed}, leaf=failed)
 
-    session, snap = await load_session(AgentInit(session_id=SESSION_ID), store, agent_name='a')
+    session, snap = await load_session(init=AgentInit(session_id=SESSION_ID), store=store, agent_name='a')
     assert snap is None
     state = await session.state()
     assert state.session_id == SESSION_ID

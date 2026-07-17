@@ -480,6 +480,57 @@ async def test_resume_restart_runs_tool_second_time_and_resolved_interrupt_on_mo
 
 
 @pytest.mark.asyncio
+async def test_resume_top_level_metadata_lands_on_tool_message() -> None:
+    """Top-level ``Resume(metadata=...)`` is stamped onto the resolved tool message's
+    ``metadata.resumed`` (matching JS ``resumed: resume.metadata || true``), rather than
+    being flattened to ``True``.
+    """
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='pay')
+    async def pay(inp: dict) -> str:
+        if not inp.get('ok'):
+            raise Interrupt({'hold': True})
+        return 'paid'
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({
+                'role': 'model',
+                'content': [{'toolRequest': {'ref': 'p1', 'name': 'pay', 'input': {}}}],
+            }),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({'role': 'model', 'content': [{'text': 'final'}]}),
+        )
+    )
+
+    first = await generate_action(
+        ai.registry,
+        _gen_opts(ai, tools=['pay'], messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})]),
+    )
+    restart_trp = restart_tool(interrupt=first.interrupts[0], replace_input={'ok': True})
+
+    second = await generate_action(
+        ai.registry,
+        _gen_opts(
+            ai,
+            tools=['pay'],
+            messages=list(first.messages),
+            resume=Resume(restart=[restart_trp], metadata={'approved_by': 'test'}),
+        ),
+    )
+
+    tool_msg = next(m for m in second.messages if m.role == 'tool')
+    assert tool_msg.metadata == {'resumed': {'approved_by': 'test'}}
+
+
+@pytest.mark.asyncio
 async def test_mixed_resume_one_respond_one_restart() -> None:
     """Two tool calls both interrupt in one turn; the next generate fills in a ``respond`` for one
     ref and a ``restart`` for the other. Expect one tool message with two parts (respond path still

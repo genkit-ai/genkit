@@ -21,7 +21,7 @@ import copy
 import inspect
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Generator, Iterator
 from dataclasses import dataclass, field
-from typing import Any, Generic, Protocol, TypeVar, cast, runtime_checkable
+from typing import Any, Generic, Protocol, TypeVar, cast
 
 from typing_extensions import TypeVar as TypeVarExt
 
@@ -65,7 +65,7 @@ StateT_co = TypeVar('StateT_co', covariant=True)
 class SessionState(SessionStateSchema, Generic[StateT]):
     """Session state generic over custom state."""
 
-    custom: StateT | Any | None = None
+    custom: StateT | None = None
 
 
 class SessionSnapshot(SessionSnapshotSchema, Generic[StateT]):
@@ -79,7 +79,6 @@ class SessionSnapshot(SessionSnapshotSchema, Generic[StateT]):
 # ===========================================================================
 
 
-@runtime_checkable
 class AgentTransport(Protocol, Generic[StateT_co]):
     """Interface implemented by the transport layer (local or websocket)."""
 
@@ -88,6 +87,7 @@ class AgentTransport(Protocol, Generic[StateT_co]):
 
     async def run_turn(
         self,
+        *,
         agent_input: AgentInput,
         init: AgentInit,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
@@ -113,7 +113,7 @@ class AgentTransport(Protocol, Generic[StateT_co]):
         *,
         snapshot_id: str | None = None,
         session_id: str | None = None,
-    ) -> SessionSnapshot | None:
+    ) -> SessionSnapshotSchema | None:
         """Retrieves a session snapshot from the server store."""
         ...
 
@@ -256,7 +256,7 @@ class AgentResponse(Generic[StateT]):
     @property
     def interrupts(self) -> list[AgentInterrupt[Any, Any]]:
         """Tool requests that paused this turn."""
-        return _agent_interrupts_from_message(self.raw.message)
+        return agent_interrupts_from_message(self.raw.message)
 
     def assert_valid(self) -> None:
         """Raises if the turn didn't produce a usable reply (blocked, or no message)."""
@@ -267,7 +267,7 @@ class AgentResponse(Generic[StateT]):
             raise ValueError('Agent response has no message.')
 
 
-def _agent_interrupts_from_message(message: MessageData | None) -> list[AgentInterrupt[Any, Any]]:
+def agent_interrupts_from_message(message: MessageData | None) -> list[AgentInterrupt[Any, Any]]:
     if message is None:
         return []
     msg = message if isinstance(message, Message) else Message(message)
@@ -316,6 +316,20 @@ class AgentTurn(Generic[StateT]):
         """Return the completed turn result. The turn runs whether or not you stream."""
         return self._await_detaching_on_cancel().__await__()
 
+    @property
+    def stream(self) -> AsyncIterator[AgentChunk[StateT]]:
+        """The turn's chunk stream — the same thing ``async for turn`` iterates.
+
+        Offered so a turn reads like the SDK's other streaming handles, where you
+        reach for ``.stream`` / ``.response`` when you want both halves explicitly.
+        """
+        return self._stream_detaching_on_cancel()
+
+    @property
+    def response(self) -> Awaitable[AgentResponse[StateT]]:
+        """The turn's final result — the same thing ``await turn`` resolves to."""
+        return self._await_detaching_on_cancel()
+
     async def _await_detaching_on_cancel(self) -> AgentResponse[StateT]:
         """Awaits the result, detaching the turn if the awaiter is cancelled.
 
@@ -357,7 +371,6 @@ class AgentTurn(Generic[StateT]):
 # ===========================================================================
 
 
-@runtime_checkable
 class AgentAPI(Protocol, Generic[StateT]):
     """Implemented by both Agent (in-process) and AgentClient (remote)."""
 
@@ -387,7 +400,7 @@ class AgentAPI(Protocol, Generic[StateT]):
         *,
         snapshot_id: str | None = None,
         session_id: str | None = None,
-    ) -> SessionSnapshot | None:
+    ) -> SessionSnapshotSchema | None:
         """Reads a snapshot without starting a session."""
         ...
 
@@ -430,7 +443,7 @@ class AgentClient(Generic[StateT]):
         session_transport = copy.copy(self._transport)
         return AgentChat(
             session_transport,
-            _init_from(snapshot_id, session_id, messages, artifacts, state),
+            init_from(snapshot_id, session_id, messages, artifacts, state),
             state_schema=self._state_schema,
         )
 
@@ -455,7 +468,7 @@ class AgentClient(Generic[StateT]):
         *,
         snapshot_id: str | None = None,
         session_id: str | None = None,
-    ) -> SessionSnapshot | None:
+    ) -> SessionSnapshotSchema | None:
         """Reads a snapshot without starting a session."""
         return await self._transport.get_snapshot(snapshot_id=snapshot_id, session_id=session_id)
 
@@ -464,14 +477,18 @@ class AgentClient(Generic[StateT]):
         return await self._transport.abort_snapshot(snapshot_id)
 
 
-def _to_agent_input(input: str | AgentInput) -> AgentInput:  # noqa: A002
-    """Wraps a plain string in an AgentInput; passes an AgentInput through unchanged."""
+def to_agent_input(input: str | AgentInput) -> AgentInput:  # noqa: A002
+    """Wraps a plain string in an AgentInput, or copies a passed-in one.
+
+    Always returns a fresh object the caller doesn't own, so per-turn tweaks
+    (e.g. flagging detach) never mutate an AgentInput the caller might reuse.
+    """
     if isinstance(input, str):
         return AgentInput(message=MessageData(role='user', content=[Part(root=TextPart(text=input))]))
-    return input
+    return input.model_copy()
 
 
-def _init_from(
+def init_from(
     snapshot_id: str | None,
     session_id: str | None,
     messages: list[MessageData] | None,
@@ -486,7 +503,7 @@ def _init_from(
     return AgentInit(snapshot_id=snapshot_id, session_id=session_id, state=session_state)
 
 
-def _validate_init(init: AgentInit) -> None:
+def validate_init(init: AgentInit) -> None:
     """Ensures init specifies at most one resume handle."""
     provided = [
         name
@@ -503,11 +520,11 @@ def _validate_init(init: AgentInit) -> None:
         )
 
 
-def _as_part(part: Any) -> Part:  # noqa: ANN401
+def as_part(part: Any) -> Part:  # noqa: ANN401
     return part if isinstance(part, Part) else Part.model_validate(part)
 
 
-class _StreamedMessageAccumulator:
+class StreamedMessageAccumulator:
     """Rebuilds a turn's messages from its chunk stream.
 
     The chunk stream is the one channel that carries a turn's intermediate
@@ -517,31 +534,32 @@ class _StreamedMessageAccumulator:
     """
 
     def __init__(self) -> None:
+        # Underscored to avoid colliding with the messages() accessor below.
         self._messages: list[MessageData] = []
-        self._role: Role | str | None = None
-        self._index: float | None = None
-        self._parts: list[Part] = []
+        self.role: Role | str | None = None
+        self.index: float | None = None
+        self.parts: list[Part] = []
 
     def add(self, chunk: AgentStreamChunk) -> None:
         mc = chunk.model_chunk
         if mc is None:
             return
         role = mc.role if mc.role is not None else Role.MODEL
-        if self._role is not None and (role != self._role or mc.index != self._index):
-            self._flush()
-        self._role = role
-        self._index = mc.index
+        if self.role is not None and (role != self.role or mc.index != self.index):
+            self.flush()
+        self.role = role
+        self.index = mc.index
         for part in mc.content or []:
-            self._parts.append(_as_part(part))
+            self.parts.append(as_part(part))
 
-    def _flush(self) -> None:
-        if self._role is None:
+    def flush(self) -> None:
+        if self.role is None:
             return
         # Merge adjacent text deltas back into a single part while preserving the
         # order of tool/data/media parts as they streamed.
         merged: list[Part] = []
         text_buf: list[str] = []
-        for p in self._parts:
+        for p in self.parts:
             root = p.root
             if isinstance(root, TextPart) and root.text is not None:
                 text_buf.append(root.text)
@@ -553,18 +571,29 @@ class _StreamedMessageAccumulator:
         if text_buf:
             merged.append(Part(root=TextPart(text=''.join(text_buf))))
         if merged:
-            self._messages.append(MessageData(role=self._role, content=merged))
-        self._role = None
-        self._index = None
-        self._parts = []
+            self._messages.append(MessageData(role=self.role, content=merged))
+        self.role = None
+        self.index = None
+        self.parts = []
 
     def messages(self) -> list[MessageData]:
         """The reconstructed messages, finalizing any in-progress message first."""
-        self._flush()
+        self.flush()
         return self._messages
 
 
-class _TurnDriver(Generic[StateT]):
+class RunTurnFn(Protocol):
+    """A bound ``AgentTransport.run_turn``, kept as a field so TurnDriver stays transport-agnostic."""
+
+    async def __call__(
+        self,
+        *,
+        agent_input: AgentInput,
+        init: AgentInit,
+    ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]: ...
+
+
+class TurnDriver(Generic[StateT]):
     """Runs one in-flight turn and exposes it as an AgentTurn.
 
     Everything a turn needs lives here so AgentChat.send stays small: it starts
@@ -578,10 +607,7 @@ class _TurnDriver(Generic[StateT]):
         inp: AgentInput,
         init: AgentInit,
         *,
-        run_turn: Callable[
-            [AgentInput, AgentInit],
-            Awaitable[tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]],
-        ],
+        run_turn: RunTurnFn,
         commit_output: Callable[[AgentOutput], AgentResponse[StateT]],
         commit_custom_patch: Callable[[Any], StateT | None],
         accumulate_chunk: Callable[[AgentStreamChunk], None] | None = None,
@@ -593,10 +619,7 @@ class _TurnDriver(Generic[StateT]):
         self.commit_custom_patch = commit_custom_patch
         self.accumulate_chunk = accumulate_chunk
         self.accumulated_text = ''
-        # Set once the chunk pump has drained the turn's stream, so the result is
-        # committed only after every message chunk has been accumulated.
-        self.pump_complete = asyncio.Event()
-        self.output: asyncio.Future[AgentResponse[StateT]] = asyncio.get_event_loop().create_future()
+        self.output: asyncio.Future[AgentResponse[StateT]] = asyncio.get_running_loop().create_future()
         self.chunks: CloseableQueue[AgentChunk[StateT] | BaseException] = CloseableQueue()
         self.run_task: asyncio.Task[None] | None = None
         self.turn: AgentTurn[StateT] = AgentTurn(
@@ -611,59 +634,34 @@ class _TurnDriver(Generic[StateT]):
         return self.turn
 
     async def run(self) -> None:
-        """Pumps chunks to the caller's stream while a sibling task resolves the output.
+        """Pumps every chunk to the caller's stream, then resolves the turn's result.
 
-        Per the transport contract, the ``output`` awaitable is the authoritative
-        "turn is done" signal and settles on its own. We resolve ``self.output`` from a
-        sibling task rather than awaiting ``output`` after the pump loop so the turn's
-        *result* stays decoupled from the *stream's* health.
+        The transport drives its turn to completion on its own; we drain its chunk
+        stream — which also feeds the message accumulator and applies state patches —
+        and only then read the authoritative output. Committing after the pump means a
+        server-managed turn sees a complete message history (the intermediate messages
+        are stitched from chunks, not carried on the output).
 
-        - If ``emit`` chokes on a bad chunk after the transport has already produced a
-          valid output, the resolver has set ``self.output`` from the real result, so the
-          decode error only surfaces on the stream — a good turn isn't poisoned by a
-          plumbing hiccup. Sequencing ``await output`` after the pump would instead dump
-          that exception onto ``self.output``.
-        - The pump and resolver can settle in either order; both guard on
-          ``self.output.done()`` so whoever's first wins and the other is a no-op
-          (including ``abort()`` cancelling ``self.output`` directly).
-        - The done-callback cancels the resolver once ``self.output`` is settled by
-          anyone, so the task never dangles.
+        ``self.output`` is otherwise only touched by ``abort()``, so the
+        ``done()`` guards let abort win a race without the result being set twice.
         """
         try:
-            stream, output = await self.run_turn(self.inp, self.init)
-            resolve_task = asyncio.create_task(self.resolve_output(output))
-            self.output.add_done_callback(lambda _: resolve_task.cancel())
-
+            stream, output = await self.run_turn(agent_input=self.inp, init=self.init)
             async for chunk in stream:
                 self.emit(chunk)
                 if chunk.turn_end:
                     break
+            raw = await output
+            if not self.output.done():
+                self.output.set_result(self.commit_output(raw))
         except BaseException as e:
             if not self.output.done():
                 self.output.set_exception(e)
             self.chunks.put_nowait(e)
         finally:
-            # The pump has consumed every chunk it will, so the message
-            # accumulator is complete and the result can be committed.
-            self.pump_complete.set()
             # Closing wakes the stream consumer once buffered chunks drain, so the
             # turn ends without a sentinel value threading through the queue.
             self.chunks.close()
-
-    async def resolve_output(self, output: Awaitable[AgentOutput]) -> None:
-        """Awaits the transport's final output and publishes it as the turn's result."""
-        try:
-            raw = await output
-            # Wait for the chunk pump to finish so a server-managed turn commits a
-            # complete message history (the intermediate messages are stitched from
-            # chunks, not carried on the output).
-            await self.pump_complete.wait()
-            response = self.commit_output(raw)
-            if not self.output.done():
-                self.output.set_result(response)
-        except BaseException as e:
-            if not self.output.done():
-                self.output.set_exception(e)
 
     def emit(self, chunk: AgentStreamChunk) -> None:
         """Applies any state patch, transforms the wire chunk, and enqueues it."""
@@ -715,8 +713,8 @@ class AgentChat(Generic[StateT]):
     """A stateful conversation session with an agent.
 
     Public surface: read ``snapshot_id``, ``session_id``, ``state``, ``messages``,
-    and ``artifacts``; call ``send``, ``resume``, ``detach``, ``abort``, and
-    ``close``. Everything prefixed with ``_`` is internal wiring.
+    and ``artifacts``; call ``send``, ``resume``, ``detach``, and ``abort``.
+    Everything prefixed with ``_`` is internal wiring.
 
     ``state`` is the agent's custom session state; ``messages`` and ``artifacts``
     are the running conversation and files. The chat tracks all three directly,
@@ -752,10 +750,10 @@ class AgentChat(Generic[StateT]):
         self._custom: Any | None = None
         # Rebuilds a server-managed turn's full message history (including
         # intermediate tool steps) from its chunk stream; created fresh per turn.
-        self._turn_accumulator: _StreamedMessageAccumulator | None = None
+        self._turn_accumulator: StreamedMessageAccumulator | None = None
 
         if init is not None:
-            _validate_init(init)
+            validate_init(init)
             if init.state is not None:
                 self._set_state(init.state)
             elif init.snapshot_id:
@@ -827,7 +825,7 @@ class AgentChat(Generic[StateT]):
         deadline. Use ``chat.abort()`` to halt server-side work on a store-backed
         agent.
         """
-        inp = _to_agent_input(input)
+        inp = to_agent_input(input)
 
         # Capture the resume payload from history *before* this turn's message.
         # The transport carries the new message as the turn input and the agent
@@ -842,8 +840,8 @@ class AgentChat(Generic[StateT]):
         if inp.message:
             self.messages.append(inp.message)
 
-        self._turn_accumulator = _StreamedMessageAccumulator()
-        driver = _TurnDriver(
+        self._turn_accumulator = StreamedMessageAccumulator()
+        driver = TurnDriver(
             inp=inp,
             init=init,
             run_turn=self._transport.run_turn,
@@ -868,7 +866,7 @@ class AgentChat(Generic[StateT]):
         inp = AgentInput(resume=Resume(respond=respond, restart=restart))
         return self.send(inp)
 
-    async def get_snapshot(self) -> SessionSnapshot | None:
+    async def get_snapshot(self) -> SessionSnapshotSchema | None:
         """Reads the current snapshot from the server store, if store-backed."""
         if not self._snapshot_id:
             return None
@@ -876,7 +874,7 @@ class AgentChat(Generic[StateT]):
 
     async def detach(self, input: str | AgentInput) -> DetachedTask[StateT]:  # noqa: A002
         """Runs a turn in the background on the server and returns a poll handle."""
-        inp = _to_agent_input(input)
+        inp = to_agent_input(input)
         inp.detach = True
 
         init = self._wire_init()
@@ -889,12 +887,12 @@ class AgentChat(Generic[StateT]):
         # This session never sees a detached turn's chunks, so start from an empty
         # accumulator — otherwise a prior turn's leftover messages would be folded
         # in when the output settles.
-        self._turn_accumulator = _StreamedMessageAccumulator()
+        self._turn_accumulator = StreamedMessageAccumulator()
 
         # The transport drives the turn to completion on its own (see
         # AgentTransport.run_turn), so the output resolves whether or not anyone
         # reads the stream. For detach we only care about the resulting handle.
-        _stream, output_awaitable = await self._transport.run_turn(inp, init)
+        _stream, output_awaitable = await self._transport.run_turn(agent_input=inp, init=init)
         raw_output = await output_awaitable
 
         # The detached turn's snapshot is still in flight: it may complete, but it
@@ -983,7 +981,7 @@ class AgentChat(Generic[StateT]):
 
     def _apply_custom_patch(self, patch: Any) -> None:  # noqa: ANN401
         patch_list = patch.root if hasattr(patch, 'root') else patch
-        self._custom = apply_json_patch(self._custom, patch_list)
+        self._custom = apply_json_patch(doc=self._custom, patch=patch_list)
 
     def _commit_output(self, raw: AgentOutput, message_count_before: int) -> AgentResponse[StateT]:
         """Folds a turn's final output into the session and builds the turn result."""
@@ -1038,20 +1036,26 @@ class AgentChat(Generic[StateT]):
     def _append_turn_messages(self, raw: AgentOutput) -> None:
         """Extend the running view with this turn's messages.
 
-        Both modes build history the same way, because the chunk stream is the
-        same in both: the intermediate tool-request/tool-response steps are
-        stitched from the chunks, and the final reply is taken from the turn's
-        output when it's there — it's the one copy that carries the interrupt and
-        output-format metadata a resume depends on, which the model chunks don't.
-        When no output rides home (a long-lived socket only resolves at close) we
-        fall back to the last streamed model group so the reply still shows.
+        Intermediate tool-request/tool-response steps only exist on the chunk
+        stream, so they're always taken from the accumulator. The final reply is
+        taken from the turn's output when present — it's the copy that carries the
+        interrupt and output-format metadata a resume depends on, which the model
+        chunks don't.
         """
         streamed = self._turn_accumulator.messages() if self._turn_accumulator is not None else []
-        if raw.message is not None and streamed and streamed[-1].role == Role.MODEL:
+
+        # No output reply this turn (e.g. a long-lived socket that only resolves
+        # at close): the streamed model group is the reply, so keep it whole.
+        if raw.message is None:
+            self.messages.extend(streamed)
+            return
+
+        # Prefer the output's reply over the streamed copy of it, so drop that
+        # trailing streamed model group before appending the authoritative one.
+        if streamed and streamed[-1].role == Role.MODEL:
             streamed = streamed[:-1]
         self.messages.extend(streamed)
-        if raw.message is not None:
-            self.messages.append(raw.message)
+        self.messages.append(raw.message)
 
     def _sync_nonmessage_state(self, raw: AgentOutput) -> None:
         """Refresh the non-message state a turn carries back.
@@ -1081,7 +1085,7 @@ class AgentChat(Generic[StateT]):
             self._merge_artifacts(raw.artifacts)
 
 
-_TERMINAL_SNAPSHOT_STATUSES = frozenset({
+TERMINAL_SNAPSHOT_STATUSES = frozenset({
     SnapshotStatus.COMPLETED,
     SnapshotStatus.FAILED,
     SnapshotStatus.ABORTED,
@@ -1118,7 +1122,7 @@ class DetachedTask(Generic[StateT]):
             try:
                 snap.state.custom = cast(Any, self._state_schema).model_validate(snap.state.custom)
             except Exception:
-                if snap.status is not None and snap.status in _TERMINAL_SNAPSHOT_STATUSES:
+                if snap.status is not None and snap.status in TERMINAL_SNAPSHOT_STATUSES:
                     raise
         return snap
 
@@ -1135,7 +1139,7 @@ class DetachedTask(Generic[StateT]):
             snap = self._parse_snapshot(raw)
             if snap is not None:
                 yield snap
-                if snap.status is not None and snap.status in _TERMINAL_SNAPSHOT_STATUSES:
+                if snap.status is not None and snap.status in TERMINAL_SNAPSHOT_STATUSES:
                     return
             await asyncio.sleep(interval)
 

@@ -62,7 +62,7 @@ class RegistryLike(Protocol):
         """List all values registered under a kind, merged with the parent registry."""
         ...
 
-    def register_action_from_instance(self, action: Action[Any, Any, Any, Any]) -> None:
+    def register_action_from_instance(self, action: Action) -> None:
         """Register a pre-built Action instance."""
         ...
 
@@ -71,13 +71,12 @@ class RegistryLike(Protocol):
         ...
 
 
-@runtime_checkable
 class SessionLike(Protocol):
     """Structural interface for agent session state peekable from generate middleware.
 
-    The concrete ``Session`` in ``_ai._session`` satisfies this protocol. Middleware
-    should treat ``GenerateMiddlewareContext.session`` as optional and only call
-    methods when a bind is present.
+    The concrete ``Session`` in ``_ai._agents._session`` satisfies this protocol.
+    Middleware should treat ``GenerateMiddlewareContext.session`` as optional and only
+    call methods when a bind is present.
     """
 
     async def get_artifacts(self) -> list[Artifact]:
@@ -105,7 +104,6 @@ class SessionLike(Protocol):
         ...
 
 
-@runtime_checkable
 class GenkitLike(Protocol):
     """Structural interface for the Genkit instance exposed on middleware context."""
 

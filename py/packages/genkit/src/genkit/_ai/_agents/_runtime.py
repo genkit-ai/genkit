@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
@@ -41,6 +42,7 @@ from genkit._ai._json_patch import diff_json
 from genkit._core._action import ActionRunContext, StreamingCallback, get_current_context
 from genkit._core._channel import CloseableQueue, QueueShutDown
 from genkit._core._error import GenkitError
+from genkit._core._logger import get_logger
 from genkit._core._model import GenerateActionOptions, Message, ModelResponse, ModelResponseChunk
 from genkit._core._registry import Registry
 from genkit._core._tracing import SpanMetadata, run_in_new_span
@@ -64,7 +66,14 @@ from genkit._core._typing import (
     TurnEnd,
 )
 
+logger = get_logger(__name__)
+
 PREAMBLE_KEY = '_genkit_agent_preamble'
+
+# How often a detached (background) turn refreshes its pending snapshot's
+# heartbeat. Comfortably under the read-side staleness timeout so a single
+# missed beat doesn't trip a live turn into `expired`.
+DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000
 
 InT = TypeVar('InT')
 OutT = TypeVar('OutT')
@@ -81,6 +90,7 @@ class SessionRunner(Generic[StateT]):
 
     def __init__(
         self,
+        *,
         session: Session[StateT],
         turn_inputs: CloseableQueue[AgentInput],
         on_begin_turn: Callable[[], Awaitable[None]] | None = None,
@@ -146,7 +156,7 @@ class SessionRunner(Generic[StateT]):
                 self.last_good_state_version = self.session.version
                 self.last_good_finish_reason = self.last_turn_finish_reason
                 self.turn_index += 1
-            except BaseException as exc:
+            except Exception as exc:
                 self.last_turn_finish_reason = AgentFinishReason.FAILED
                 self.last_turn_error = to_error_details(exc)
 
@@ -208,7 +218,7 @@ BidiFunc = Callable[
 # ---------------------------------------------------------------------------
 
 
-def validate_custom_state(custom: Any, state_schema: type[Any] | None, agent_name: str) -> None:  # noqa: ANN401
+def validate_custom_state(*, custom: Any, state_schema: type[Any] | None, agent_name: str) -> None:  # noqa: ANN401
     """Reject custom state that doesn't match the agent's declared shape.
 
     Runs at load time on the state about to seed a turn — whether it came from a
@@ -237,9 +247,9 @@ def validate_custom_state(custom: Any, state_schema: type[Any] | None, agent_nam
 
 
 async def load_session(
+    *,
     init: AgentInit,
     store: SessionStore | None,
-    *,
     agent_name: str = '',
     state_schema: type[Any] | None = None,
 ) -> tuple[Session[Any], SessionSnapshot | None]:
@@ -294,7 +304,9 @@ async def load_session(
                     "Only 'completed' snapshots can be resumed."
                 ),
             )
-        validate_custom_state(snap.state.custom if snap.state else None, state_schema, name)
+        validate_custom_state(
+            custom=snap.state.custom if snap.state else None, state_schema=state_schema, agent_name=name
+        )
         return Session(initial_state=snap.state), snap
 
     session_id = init.session_id
@@ -304,9 +316,11 @@ async def load_session(
     if store is not None and session_id:
         # The latest leaf may be a failed/aborted/pending turn, which can't be
         # resumed — fall back to the last good snapshot behind it.
-        snap = await walk_back_to_resumable(store, await store.get_snapshot(session_id=session_id))
+        snap = await walk_back_to_resumable(store=store, snapshot=await store.get_snapshot(session_id=session_id))
         if snap is not None:
-            validate_custom_state(snap.state.custom if snap.state else None, state_schema, name)
+            validate_custom_state(
+                custom=snap.state.custom if snap.state else None, state_schema=state_schema, agent_name=name
+            )
             return Session(initial_state=snap.state), snap
         return (
             Session(
@@ -320,7 +334,7 @@ async def load_session(
         )
 
     if init.state is not None:
-        validate_custom_state(init.state.custom, state_schema, name)
+        validate_custom_state(custom=init.state.custom, state_schema=state_schema, agent_name=name)
         return Session(initial_state=init.state), None
 
     return Session(), None
@@ -331,6 +345,7 @@ class AgentRuntime:
 
     def __init__(
         self,
+        *,
         name: str,
         session: Session[Any],
         parent_snapshot: SessionSnapshot | None,
@@ -353,11 +368,11 @@ class AgentRuntime:
         # Separate turn inputs queue: runtime controls its lifecycle,
         # BidiAction's client_inputs is forwarded here by run().
         self.turn_inputs = CloseableQueue(maxsize=1)
-        self._background_tasks: set[asyncio.Task[Any]] = set()
+        self.background_tasks: set[asyncio.Task[Any]] = set()
 
         self.session_runner = SessionRunner(
-            session,
-            self.turn_inputs,
+            session=session,
+            turn_inputs=self.turn_inputs,
             on_begin_turn=self.reset_custom_patch_turn,
             on_end_turn=self.emit_turn_end,
         )
@@ -366,7 +381,9 @@ class AgentRuntime:
         session.on_artifact_changed(self.emit_artifact)
 
     async def reset_custom_patch_turn(self) -> None:
-        # Re-base clients that may not share the server's custom-state baseline.
+        # Force the first custom-state update of each turn to be a full-state
+        # replace rather than a diff, so a client that missed earlier turns (or
+        # never had the baseline) gets re-synced before we resume sending deltas.
         self.first_custom_patch_in_turn = True
 
     def transform_state(self, state: SessionState) -> SessionState | None:
@@ -400,7 +417,7 @@ class AgentRuntime:
             self.first_custom_patch_in_turn = False
         else:
             # Send only the diff against the last sent state on subsequent patches.
-            ops = diff_json(self.last_sent_custom, transformed)
+            ops = diff_json(from_value=self.last_sent_custom, to_value=transformed)
 
         self.last_sent_custom = copy.deepcopy(transformed)
         if not ops:
@@ -538,7 +555,7 @@ class AgentRuntime:
             out.snapshot_id = await self.ensure_recovery_snapshot()
         return out
 
-    async def watch_snapshot_abort(self, snapshot_id: str, abort_signal: asyncio.Event) -> None:
+    async def watch_snapshot_abort(self, *, snapshot_id: str, abort_signal: asyncio.Event) -> None:
         if self.store is None or not isinstance(self.store, SnapshotSubscriber):
             return
         q = await self.store.on_snapshot_status_change(snapshot_id)
@@ -550,17 +567,52 @@ class AgentRuntime:
                 abort_signal.set()
                 return
 
+    async def refresh_heartbeat(self, snapshot_id: str) -> None:
+        """Keep a detached turn's pending snapshot fresh so readers don't flag it dead.
+
+        A reader treats a pending snapshot whose heartbeat has gone stale as
+        ``expired`` — the assumption being the background worker died. While the
+        detached turn is genuinely still running we bump the beat on an interval.
+        The mutator only touches a still-pending snapshot, so a beat never
+        resurrects a terminal snapshot or races a concurrent abort/finalize.
+        """
+        if self.store is None:
+            return
+        interval_s = DEFAULT_HEARTBEAT_INTERVAL_MS / 1000
+
+        def beat(existing: SessionSnapshot | None) -> SessionSnapshot | None:
+            if existing is None or existing.status != SnapshotStatus.PENDING:
+                return None
+            return existing.model_copy(update={'heartbeat_at': datetime.now(timezone.utc).isoformat()})
+
+        while True:
+            await asyncio.sleep(interval_s)
+            try:
+                await self.store.save_snapshot(snapshot_id, beat)
+            except Exception:  # noqa: BLE001
+                # Best-effort: a missed beat just ages the snapshot toward
+                # ``expired``, which is the right signal if the store is unhealthy.
+                logger.debug('Heartbeat refresh failed for snapshot %s', snapshot_id, exc_info=True)
+
     async def finalize_detach(
         self,
+        *,
         pending_snap: SessionSnapshot,
         fn_task: asyncio.Task,
         forward_task: asyncio.Task,
         err_holder: list[BaseException],
         result_holder: list[AgentResult],
+        heartbeat_task: asyncio.Task,
     ) -> None:
         """Background task: wait for fn, then rewrite pending snapshot with final state."""
         await fn_task
         await forward_task
+
+        # The turn has settled, so stop refreshing its heartbeat before we rewrite
+        # the snapshot to its terminal status.
+        heartbeat_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat_task
 
         state = await self.session.state()
         now = datetime.now(timezone.utc).isoformat()
@@ -589,10 +641,13 @@ class AgentRuntime:
 
         try:
             await self.store.save_snapshot(pending_snap.snapshot_id, finalize)  # type: ignore[union-attr]
-        except Exception:  # noqa: BLE001, S110
-            pass  # best-effort; log in production
+        except Exception:  # noqa: BLE001
+            # Best-effort: the snapshot stays pending, but its heartbeat stopped
+            # above, so a later read ages it into ``expired`` and resume walks back
+            # to the last good turn. Log it so a stuck detach is at least visible.
+            logger.exception("Agent '%s' failed to finalize detached snapshot %s", self.name, pending_snap.snapshot_id)
 
-    async def run(self, fn: AgentFn, client_inputs: CloseableQueue[AgentInput]) -> AgentOutput:
+    async def run(self, *, fn: AgentFn, client_inputs: CloseableQueue[AgentInput]) -> AgentOutput:
         """Drive fn to completion, return AgentOutput.
 
         Two terminal paths (v1):
@@ -600,7 +655,7 @@ class AgentRuntime:
           2. detach signal       -> pending snapshot -> AgentOutput(snapshot_id)
              background finalizer rewrites snapshot when fn finishes
         """
-        detach_future: asyncio.Future[None] = asyncio.get_event_loop().create_future()
+        detach_future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         abort_signal = asyncio.Event()
         action_ctx = ActionRunContext(
             context=get_current_context(),
@@ -616,33 +671,24 @@ class AgentRuntime:
                 async for item in client_inputs:
                     if getattr(item, 'detach', False):
                         is_detached = True
+                        # Forward the detach input's payload (if any) into the turn
+                        # loop and close it *before* signaling detach. Doing it in
+                        # this order means the turn is deterministically queued for
+                        # the background handler rather than racing the detach
+                        # branch — the queue drains buffered items after close().
+                        if agent_input_has_payload(item):
+                            try:
+                                await self.turn_inputs.put(item)
+                            except QueueShutDown:
+                                pass
+                        self.turn_inputs.close()
                         if not detach_future.done():
                             detach_future.set_result(None)
-
-                        val = item
-
-                        async def finish_detach_input(
-                            payload: AgentInput | None = None,
-                            *,
-                            bound_item: AgentInput = val,
-                        ) -> None:
-                            p = payload if payload is not None else bound_item
-                            if agent_input_has_payload(p):
-                                try:
-                                    await self.turn_inputs.put(p)
-                                except QueueShutDown:
-                                    pass
-                            self.turn_inputs.close()
-
-                        task = asyncio.create_task(finish_detach_input())
-                        self._background_tasks.add(task)
-                        task.add_done_callback(self._background_tasks.discard)
                         return
                     await self.turn_inputs.put(item)
             finally:
-                # Synchronously close self.turn_inputs when client_inputs terminates normally,
-                # ensuring the SessionRunner's active turn loop exits cleanly.
-                # If we are detaching, the background task will close it after writing the payload.
+                # Normal end-of-stream: close so the turn loop exits cleanly. On the
+                # detach path we already closed above.
                 if not is_detached:
                     self.turn_inputs.close()
 
@@ -654,8 +700,8 @@ class AgentRuntime:
         async def run_agent_loop() -> None:
             try:
                 result = await run_with_session(
-                    self.session,
-                    fn(self.session_runner, action_ctx),
+                    session=self.session,
+                    coro=fn(self.session_runner, action_ctx),
                 )
                 result_holder.append(result)
             except Exception as e:  # noqa: BLE001
@@ -667,9 +713,11 @@ class AgentRuntime:
 
         fn_task = asyncio.create_task(run_agent_loop())
 
-        # Wait for fn completion OR detach signal, whichever comes first.
+        # Wait for fn completion OR detach signal, whichever comes first. The
+        # detach payload is already queued by the time detach_future resolves, so
+        # there's no ordering to protect — the plain future goes in directly.
         done, _ = await asyncio.wait(
-            {fn_task, asyncio.ensure_future(asyncio.shield(detach_future))},
+            {fn_task, detach_future},
             return_when=asyncio.FIRST_COMPLETED,
         )
 
@@ -697,6 +745,9 @@ class AgentRuntime:
                     status=SnapshotStatus.PENDING,
                     state=state,
                     created_at=now,
+                    # Stamp the first beat now so a reader has a baseline to age
+                    # against; the refresh task keeps it fresh while the turn runs.
+                    heartbeat_at=now,
                 )
 
             pending_snap = await self.store.save_snapshot(None, pending)
@@ -706,17 +757,30 @@ class AgentRuntime:
                     'during the detach flow. The turn execution has been aborted.'
                 )
 
-            # Stop sending chunks to the (now-gone) client.
-            # Background task finalizes snapshot when fn finishes.
+            # The client detached and is no longer reading the stream, so stop
+            # emitting chunks to it. The turn keeps running; a background task
+            # finalizes the snapshot when fn finishes.
             self.detached = True
-            t1 = asyncio.create_task(self.watch_snapshot_abort(pending_snap.snapshot_id, abort_signal))
-            t2 = asyncio.create_task(
-                self.finalize_detach(pending_snap, fn_task, forward_task, err_holder, result_holder)
+            t1 = asyncio.create_task(
+                self.watch_snapshot_abort(snapshot_id=pending_snap.snapshot_id, abort_signal=abort_signal)
             )
-            self._background_tasks.add(t1)
-            self._background_tasks.add(t2)
-            t1.add_done_callback(self._background_tasks.discard)
-            t2.add_done_callback(self._background_tasks.discard)
+            heartbeat_task = asyncio.create_task(self.refresh_heartbeat(pending_snap.snapshot_id))
+            t2 = asyncio.create_task(
+                self.finalize_detach(
+                    pending_snap=pending_snap,
+                    fn_task=fn_task,
+                    forward_task=forward_task,
+                    err_holder=err_holder,
+                    result_holder=result_holder,
+                    heartbeat_task=heartbeat_task,
+                )
+            )
+            self.background_tasks.add(t1)
+            self.background_tasks.add(heartbeat_task)
+            self.background_tasks.add(t2)
+            t1.add_done_callback(self.background_tasks.discard)
+            heartbeat_task.add_done_callback(self.background_tasks.discard)
+            t2.add_done_callback(self.background_tasks.discard)
             return AgentOutput(
                 snapshot_id=pending_snap.snapshot_id,
                 finish_reason=AgentFinishReason.DETACHED,
@@ -800,18 +864,18 @@ async def generate_prompt_agent_turn(
 
     if response.finish_reason == FinishReason.INTERRUPTED:
         await persist_turn_messages(
-            session_runner,
-            history,
-            response.message,
+            session_runner=session_runner,
+            history=history,
+            response_message=response.message,
             response=response,
         )
         return TurnResult(finish_reason=AgentFinishReason.INTERRUPTED)
 
     if response.message:
         await persist_turn_messages(
-            session_runner,
-            history,
-            response.message,
+            session_runner=session_runner,
+            history=history,
+            response_message=response.message,
             response=response,
         )
 
@@ -847,10 +911,10 @@ def coerce_message(msg: MessageData) -> Message:
 
 
 async def persist_turn_messages(
+    *,
     session_runner: SessionRunner,
     history: list[MessageData],
     response_message: MessageData | Message | None,
-    *,
     response: ModelResponse | None = None,
 ) -> None:
     if response is not None and response.request is not None and response.request.messages:
@@ -876,11 +940,4 @@ async def persist_turn_messages(
 
 def agent_input_has_payload(inp: AgentInput) -> bool:
     """True when ``AgentInput`` carries turn data beyond a detach directive."""
-    if inp.message:
-        return True
-    if inp.resume is not None:
-        if inp.resume.restart:
-            return True
-        if inp.resume.respond:
-            return True
-    return False
+    return bool(inp.message or (inp.resume and (inp.resume.restart or inp.resume.respond)))

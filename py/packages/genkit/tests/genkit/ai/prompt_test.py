@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 
 from genkit import Genkit, Message, MiddlewareRef, ModelResponse
 from genkit._ai._model import ModelRequest, text_from_message
-from genkit._ai._prompt import _parse_dotprompt_use, load_prompt_folder, lookup_prompt, prompt
+from genkit._ai._prompt import _parse_dotprompt_use, load_prompt_folder, lookup_prompt, prompt, resume_options_to_resume
 from genkit._ai._testing import (
     EchoModel,
     ProgrammableModel,
@@ -38,7 +38,7 @@ from genkit._ai._testing import (
 from genkit._core._action import ActionKind
 from genkit._core._error import GenkitError
 from genkit._core._model import GenerateActionOptions, ModelConfig
-from genkit._core._typing import Part, Role, TextPart, ToolChoice
+from genkit._core._typing import Part, Role, TextPart, ToolChoice, ToolRequest, ToolRequestPart
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 from genkit.plugin_api import MiddlewarePlugin, new_middleware
 
@@ -1071,3 +1071,25 @@ async def test_load_prompt_with_output_instructions() -> None:
         injected = output_parts(resp)
         assert len(injected) == 1
         assert 'Output should be in JSON format' in (injected[0].root.text or '')
+
+
+def test_resume_options_to_resume_carries_metadata() -> None:
+    """The flat ``resume_metadata`` kwarg is threaded onto ``Resume.metadata`` (not dropped)."""
+    restart = ToolRequestPart(tool_request=ToolRequest(name='t', ref='r1', input={}))
+    resume = resume_options_to_resume(resume_restart=restart, resume_metadata={'approved_by': 'test'})
+    assert resume is not None
+    assert resume.metadata == {'approved_by': 'test'}
+
+
+def test_resume_options_to_resume_metadata_only_still_builds() -> None:
+    """Even with only metadata (no respond/restart), a Resume is built so a stray
+    ``resume_metadata`` forces a resume (and fails loudly downstream) rather than being
+    silently dropped."""
+    resume = resume_options_to_resume(resume_metadata={'x': 1})
+    assert resume is not None
+    assert resume.metadata == {'x': 1}
+
+
+def test_resume_options_to_resume_none_when_all_empty() -> None:
+    """No respond, restart, or metadata -> no Resume."""
+    assert resume_options_to_resume() is None

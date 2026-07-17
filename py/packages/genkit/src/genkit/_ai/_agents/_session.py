@@ -17,11 +17,9 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import weakref
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
-from enum import Enum
 from typing import Any, Generic, Protocol, cast, runtime_checkable
 
 from typing_extensions import TypeVar as TypeVarExt
@@ -36,13 +34,6 @@ from genkit._core._typing import (
     SnapshotStatus,
 )
 
-
-class SessionErrorType(str, Enum):
-    """Types of session-related errors returned in GenkitError details."""
-
-    AMBIGUOUS_BRANCH = 'ambiguousBranch'
-
-
 StateT = TypeVarExt('StateT', default=Any)
 SessionContextT = TypeVarExt('SessionContextT', default=Any)
 # A store only ever hands custom state back out (it's a phantom over the wire
@@ -53,7 +44,6 @@ StateT_co = TypeVarExt('StateT_co', covariant=True, default=Any)
 _STORE_LOCK_GETTERS: weakref.WeakKeyDictionary[object, Callable[[], asyncio.Lock]] = weakref.WeakKeyDictionary()
 
 
-@runtime_checkable
 class SessionStore(Protocol, Generic[StateT_co]):
     """Structural interface for snapshot persistence backends.
 
@@ -128,12 +118,8 @@ class SnapshotSubscriber(Protocol):
         ...
 
 
-def supports_abort(store: SessionStore) -> bool:
-    """True when the store can signal status changes, and so supports detach/abort."""
-    return isinstance(store, SnapshotSubscriber)
-
-
 def select_leaf_snapshot(
+    *,
     snapshots: list[SessionSnapshot],
     session_id: str,
 ) -> SessionSnapshot | None:
@@ -163,11 +149,6 @@ def select_leaf_snapshot(
             'conversation is branched (e.g. regenerate). Resume by '
             'snapshot_id instead.'
         ),
-        details={
-            'type': SessionErrorType.AMBIGUOUS_BRANCH,
-            'sessionId': session_id,
-            'leaves': [snap.snapshot_id for snap in leaves],
-        },
     )
 
 
@@ -184,6 +165,7 @@ class Session(Generic[StateT]):
     def __init__(
         self,
         initial_state: SessionState | None = None,
+        *,
         store: SessionStore | None = None,
     ) -> None:
         self.lock = asyncio.Lock()
@@ -212,10 +194,7 @@ class Session(Generic[StateT]):
     async def state(self) -> SessionState:
         """Deep copy of current state."""
         async with self.lock:
-            copied = self.session_state.model_copy(deep=True)
-            if self.session_state.custom is not None:
-                copied.custom = copy.deepcopy(self.session_state.custom)
-            return copied
+            return self.session_state.model_copy(deep=True)
 
     async def get_messages(self) -> list[MessageData]:
         async with self.lock:
@@ -297,6 +276,7 @@ def get_current_session() -> Session[Any] | None:
 
 
 async def run_with_session(
+    *,
     session: Session[StateT],
     coro: Awaitable[SessionContextT],
 ) -> SessionContextT:

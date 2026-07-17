@@ -52,8 +52,8 @@ class InProcessTransport:
 
     def __init__(
         self,
-        action: BidiAction[Any, Any, Any, Any],
         *,
+        action: BidiAction[Any, Any, Any, Any],
         get_snapshot: GetSnapshotFn | None = None,
         abort_snapshot: AbortSnapshotFn | None = None,
         state_management: StateManagement,
@@ -66,6 +66,7 @@ class InProcessTransport:
 
     async def run_turn(
         self,
+        *,
         agent_input: AgentInput,
         init: AgentInit,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:

@@ -73,7 +73,7 @@ async def test_resolve_snapshot_applies_client_transform() -> None:
         custom = state.custom if isinstance(state.custom, dict) else {}
         return state.model_copy(update={'custom': {'public': custom.get('public')}})
 
-    result = await resolve_snapshot(store, snapshot_id=saved.snapshot_id, client_transform={'state': redact})
+    result = await resolve_snapshot(store=store, snapshot_id=saved.snapshot_id, client_transform={'state': redact})
     assert result is not None
     assert result.state is not None
     assert result.state.custom == {'public': 'ok'}
@@ -126,6 +126,24 @@ async def test_define_custom_agent_registers_snapshot_and_abort_actions() -> Non
     via_action = await snapshot_action.run({'snapshotId': out.snapshot_id})
     assert via_action.response is not None
     assert via_action.response.snapshot_id == out.snapshot_id
+
+
+@pytest.mark.asyncio
+async def test_snapshot_action_raises_not_found_for_missing_snapshot() -> None:
+    """A poll for a snapshot that isn't in the store surfaces NOT_FOUND, not a null."""
+    registry = Registry()
+    store = InMemorySessionStore()
+
+    async def fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+        return await session_runner.result()
+
+    define_custom_agent(registry, 'missingSnapTest', fn, store=store)
+    snapshot_action = registry._entries[ActionKind.AGENT_SNAPSHOT]['missingSnapTest']  # noqa: SLF001
+
+    with pytest.raises(GenkitError) as exc:
+        await snapshot_action.run({'snapshotId': 'non-existent-id'})
+    assert exc.value.status == 'NOT_FOUND'
+    assert 'non-existent-id' in str(exc.value)
 
 
 @pytest.mark.asyncio

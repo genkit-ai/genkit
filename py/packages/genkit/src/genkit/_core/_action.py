@@ -28,7 +28,7 @@ from typing import Any, ClassVar, Generic, NamedTuple, cast, get_type_hints
 from opentelemetry.util import types as otel_types
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
-from typing_extensions import Never, TypeVar
+from typing_extensions import TypeVar
 
 from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
@@ -314,7 +314,7 @@ def create_action_key(kind: ActionKind | str, name: str) -> str:
 
 InputT = TypeVar('InputT', default=Any)
 OutputT = TypeVar('OutputT', default=Any)
-ChunkT = TypeVar('ChunkT', default=Never)
+ChunkT = TypeVar('ChunkT', default=Any)
 InitT = TypeVar('InitT', default=Any)
 
 # A bidi fn is (init, incoming-message queue, outgoing-chunk queue) -> output.
@@ -626,14 +626,22 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         """Validate per-run ``init`` against the init schema when one is registered.
 
         A missing ``init`` is validated as an empty object so a schema whose
-        fields are all optional (like an agent's session identity) produces a
-        sensible default instead of forcing every caller to build one.
+        fields are all optional (like an agent's session identity) still produces
+        a sensible default. A schema with required fields instead surfaces a clear
+        "init required" error rather than a raw validation dump about ``{}``.
         """
         if self._init_type is None:
             return init
         try:
             return self._init_type.validate_python(init if init is not None else {})
         except ValidationError as e:
+            if init is None:
+                raise GenkitError(
+                    message=(
+                        f"Action '{self.name}' requires init but none was provided. Please supply a valid init payload."
+                    ),
+                    status='INVALID_ARGUMENT',
+                ) from e
             raise GenkitError(
                 message=f"Invalid init for action '{self.name}': {e}",
                 status='INVALID_ARGUMENT',
@@ -883,18 +891,28 @@ class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
                 out_queue.close()
 
         run_task = asyncio.create_task(run())
-        try:
-            # Forward chunks to Action's streaming callback.
-            async for chunk in out_queue:
-                ctx.send_chunk(chunk)
-            return await run_task
-        except Exception:
+
+        async def cancel_run() -> None:
             if not run_task.done():
                 run_task.cancel()
                 try:
                     await run_task
                 except asyncio.CancelledError:
                     pass
+
+        try:
+            # Forward chunks to Action's streaming callback.
+            async for chunk in out_queue:
+                ctx.send_chunk(chunk)
+            return await run_task
+        except asyncio.CancelledError:
+            # Our single-turn view was cancelled, so tear down the bidi fn task
+            # too — otherwise it keeps running detached, writing into an out_queue
+            # nobody is draining.
+            await cancel_run()
+            raise
+        except Exception:
+            await cancel_run()
             raise
 
     async def stream_bidi(
@@ -954,7 +972,10 @@ class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
                 # Standard exceptions are forwarded to the client's result_future.
                 # We swallow them here to prevent asyncio from duplicate-logging
                 # "exception was never retrieved" warnings on the background task.
-                result_future.set_exception(e)
+                # Guard against a client that already cancelled the future, so we
+                # don't turn a normal error into an InvalidStateError.
+                if not result_future.done():
+                    result_future.set_exception(e)
             finally:
                 # Close out_queue to signal the end of the streaming iterator.
                 out_queue.close()

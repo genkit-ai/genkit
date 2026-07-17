@@ -120,9 +120,9 @@ def resume_options_to_resume(
     """Build wire Resume from flat keyword options (``generate`` / prompts)."""
     respond = _normalize_resume_respond_parts(resume_respond)
     restart = _normalize_resume_restart_parts(resume_restart)
-    if respond is None and restart is None:
+    if respond is None and restart is None and resume_metadata is None:
         return None
-    return Resume(respond=respond, restart=restart)
+    return Resume(respond=respond, restart=restart, metadata=resume_metadata)
 
 
 class PromptGenerateOptions(TypedDict, total=False):

@@ -223,8 +223,9 @@ def restart_tool(
 
 
 async def run_tool_after_restart(
-    tool: Action[Any, Any, Any],
+    tool: Action,
     restart_trp: ToolRequestPart,
+    *,
     abort_signal: asyncio.Event | None = None,
 ) -> ToolResponsePart:
     """Run a tool for ``resume_restart``: applies ``resumed`` / ``replacedInput`` from metadata.

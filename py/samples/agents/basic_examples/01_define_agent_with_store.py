@@ -102,7 +102,6 @@ async def main() -> None:
 
     # Hold onto snapshot_id — it's the resume handle after disconnect/restart.
     checkpoint = res.snapshot_id
-    await chat.close()
 
     # Same view, now driving a chat rehydrated from just that one string.
     resumed = await agent.load_chat(snapshot_id=checkpoint)

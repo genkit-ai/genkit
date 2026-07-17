@@ -28,10 +28,10 @@ from __future__ import annotations
 import asyncio
 
 from genkit_google_genai import GoogleAI
+from pydantic import BaseModel
 
-from genkit import FinishReason, Genkit, GenkitError, Message, ToolRunContext
+from genkit import ActionRunContext, FinishReason, Genkit, GenkitError, Message, ToolRunContext
 from genkit.agent import (
-    ActionRunContext,
     AgentFinishReason,
     AgentInput,
     AgentResult,
@@ -41,8 +41,6 @@ from genkit.agent import (
     SnapshotStatus,
     TurnResult,
 )
-
-from pydantic import BaseModel
 
 
 class JobState(BaseModel):
@@ -71,7 +69,7 @@ async def long_task_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResul
             if tool_ctx.abort_signal.is_set():
                 raise GenkitError(status='ABORTED', message='Task aborted')
             await asyncio.sleep(0.5)
-            await sess.update_custom(lambda _: JobState(step=i, completed=(i == 10)))
+            await sess.update_custom(lambda _, step=i: JobState(step=step, completed=(step == 10)))
         return {'done': True}
 
     async def handle_turn(inp: AgentInput) -> TurnResult | None:
@@ -112,7 +110,10 @@ async def main() -> None:
     async for snap in task.poll(interval=0.5):
         last_snap = snap
         if snap.state and snap.state.custom:
-            print(f'Live poll -> status: {snap.status}, step: {snap.state.custom.step}, completed: {snap.state.custom.completed}')
+            print(
+                f'Live poll -> status: {snap.status}, step: {snap.state.custom.step}, '
+                f'completed: {snap.state.custom.completed}'
+            )
 
     assert last_snap is not None and last_snap.status == SnapshotStatus.COMPLETED
     assert last_snap.state

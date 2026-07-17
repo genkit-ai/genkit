@@ -30,13 +30,13 @@ from __future__ import annotations
 
 from genkit_google_genai import GoogleAI
 
-from genkit import Genkit, GenkitError, SessionErrorType
+from genkit import Genkit, GenkitError
 from genkit.agent import InMemorySessionStore
 
 ai = Genkit(plugins=[GoogleAI()])
 # reject_ambiguous_session makes a session-id lookup over a forked history
 # raise instead of silently picking the newest branch — which is what lets this
-# sample surface AMBIGUOUS_BRANCH below.
+# sample surface the ambiguous-branch error below.
 store = InMemorySessionStore(reject_ambiguous_session=True)
 
 agent = ai.define_agent(
@@ -65,13 +65,13 @@ async def main() -> None:
     assert bold_leaf
 
     # The tree has two leaves now, so a session-id lookup can't pick "the latest"
-    # turn. Genkit raises AMBIGUOUS_BRANCH carrying the conflicting leaves; you
+    # turn. Genkit raises FAILED_PRECONDITION rather than silently guessing; you
     # resolve it by continuing from the specific leaf you mean.
     try:
         await store.get_snapshot(session_id=session_id)
     except GenkitError as exc:
-        # → exc.details holds type=AMBIGUOUS_BRANCH and the conflicting leaves
-        assert exc.details and exc.details.get('type') == SessionErrorType.AMBIGUOUS_BRANCH
+        # → the lookup is ambiguous, so resume the specific leaf you want
+        assert exc.status == 'FAILED_PRECONDITION'
         resumed = await agent.load_chat(snapshot_id=bold_leaf)
         # → continues the bold timeline, extending it with a pricing section
         await resumed.send('Add a pricing section.')

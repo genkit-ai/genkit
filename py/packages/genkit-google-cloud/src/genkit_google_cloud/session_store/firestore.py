@@ -21,7 +21,7 @@ from typing import Any, Generic, TypeVar
 from google.cloud import firestore
 from google.cloud.firestore import AsyncClient
 
-from genkit._ai._agents._session import SessionErrorType, SessionStore, SnapshotSubscriber
+from genkit._ai._agents._session import SessionStore, SnapshotSubscriber
 from genkit._ai._agents._session_stores import (
     SaveFn,
     Subs,
@@ -116,7 +116,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         session_id: str | None = None,
     ) -> SessionSnapshot | None:
         """Retrieve a session snapshot by snapshot ID or session ID."""
-        require_one_selector(snapshot_id, session_id)
+        require_one_selector(snapshot_id=snapshot_id, session_id=session_id)
         if snapshot_id is not None:
             return copy_snapshot(await self.read_snapshot(snapshot_id))
 
@@ -135,11 +135,6 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                             'This happens when a conversation is branched (e.g. regenerate). '
                             'Resume by snapshot_id instead.'
                         ),
-                        details={
-                            'type': SessionErrorType.AMBIGUOUS_BRANCH,
-                            'sessionId': session_id,
-                            'leaves': list(leaves_dict.keys()),
-                        },
                     )
                 if leaves_dict:
                     newest_id = max(
@@ -154,7 +149,9 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
 
         owned = await self.list_session_snapshots(session_id)
         await self._repair_pointer(session_id, owned)
-        return copy_snapshot(select_leaf(owned, session_id, reject_ambiguous=self.reject_ambiguous))
+        return copy_snapshot(
+            select_leaf(snapshots=owned, session_id=session_id, reject_ambiguous=self.reject_ambiguous)
+        )
 
     async def _repair_pointer(self, session_id: str, owned: list[SessionSnapshot]) -> None:
         """Reconstruct and write pointer document for an unpointed or corrupted session."""
@@ -178,7 +175,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         """Save or update a session snapshot in Firestore."""
         async with self.lock:
             existing = await self.read_snapshot(snapshot_id) if snapshot_id is not None else None
-            next_snapshot = apply_save(existing, snapshot_id, fn)
+            next_snapshot = apply_save(existing=existing, snapshot_id=snapshot_id, fn=fn)
             if next_snapshot is None:
                 return None
 
@@ -198,7 +195,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 parent_snapshot_id=parent_id,
                 created_at=next_snapshot.created_at,
             )
-            notify(self.subs, sid, next_snapshot.status)
+            notify(subs=self.subs, snapshot_id=sid, status=next_snapshot.status)
             return next_snapshot
 
     async def on_snapshot_status_change(self, snapshot_id: str) -> asyncio.Queue[SnapshotStatus | None]:
@@ -206,7 +203,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         async with self.lock:
             current = await self.read_snapshot(snapshot_id)
             is_first = snapshot_id not in self.subs
-            q = await subscribe(self.subs, snapshot_id, current)
+            q = await subscribe(subs=self.subs, snapshot_id=snapshot_id, current=current)
             if current is not None and current.status in TERMINAL_STATUSES:
                 await q.put(None)
                 self.subs.pop(snapshot_id, None)
@@ -309,7 +306,8 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 )
             prefix = self.prefix_fn()
             ref = (
-                self.sync_client.collection(self.collection)
+                self.sync_client
+                .collection(self.collection)
                 .document(prefix)
                 .collection('snapshots')
                 .document(snapshot_id)
@@ -324,11 +322,11 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             status = status_from_doc(doc_snapshot)
             if status is None:
                 return
-            loop.call_soon_threadsafe(lambda: notify(self.subs, snapshot_id, status))
+            loop.call_soon_threadsafe(lambda: notify(subs=self.subs, snapshot_id=snapshot_id, status=status))
             if status not in TERMINAL_STATUSES:
                 return
 
-            loop.call_soon_threadsafe(lambda: notify(self.subs, snapshot_id, None))
+            loop.call_soon_threadsafe(lambda: notify(subs=self.subs, snapshot_id=snapshot_id, status=None))
 
             async def cleanup() -> None:
                 async with self.lock:

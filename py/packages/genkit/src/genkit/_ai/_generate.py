@@ -1356,7 +1356,7 @@ async def _resolve_resume_options(
     tool_message = Message(
         role=Role.TOOL,
         content=tool_responses,
-        metadata={'resumed': True},
+        metadata={'resumed': raw_request.resume.metadata if raw_request.resume.metadata else True},
     )
 
     revised_request = raw_request.model_copy(deep=True)
@@ -1489,7 +1489,7 @@ async def _run_restart_through_middleware(
     mw_list = mw_pipeline.middleware if mw_pipeline else []
     if not mw_list or mw_pipeline is None:
         signal = mw_pipeline.ctx.abort_signal if mw_pipeline is not None else abort_signal
-        return await run_tool_after_restart(tool, restart_trp, signal)
+        return await run_tool_after_restart(tool, restart_trp, abort_signal=signal)
 
     params = ToolHookParams(
         tool_request_part=restart_trp,
@@ -1497,7 +1497,7 @@ async def _run_restart_through_middleware(
     )
 
     async def next_fn(p: ToolHookParams, c: GenerateMiddlewareContext) -> MultipartToolResponse:
-        executed = await run_tool_after_restart(p.tool, restart_trp, c.abort_signal)
+        executed = await run_tool_after_restart(p.tool, restart_trp, abort_signal=c.abort_signal)
         return MultipartToolResponse(
             output=executed.tool_response.output,
             content=[Part.model_validate(c) for c in (executed.tool_response.content or [])],

@@ -134,16 +134,16 @@ async def test_abort_flips_pending_only() -> None:
     pending = await store.save_snapshot(None, lambda _: make_snapshot(session_id, 'work', SnapshotStatus.PENDING))
     assert pending is not None
 
-    assert await abort_snapshot_in_store(store, pending.snapshot_id) == SnapshotStatus.ABORTED
+    assert await abort_snapshot_in_store(store=store, snapshot_id=pending.snapshot_id) == SnapshotStatus.ABORTED
     snap = await store.get_snapshot(snapshot_id=pending.snapshot_id)
     assert snap is not None and snap.status == SnapshotStatus.ABORTED
 
     # A terminal snapshot is never rewritten by a late abort.
     done = await store.save_snapshot(None, lambda _: make_snapshot(session_id, 'done', SnapshotStatus.COMPLETED))
     assert done is not None
-    assert await abort_snapshot_in_store(store, done.snapshot_id) == SnapshotStatus.COMPLETED
+    assert await abort_snapshot_in_store(store=store, snapshot_id=done.snapshot_id) == SnapshotStatus.COMPLETED
 
-    assert await abort_snapshot_in_store(store, 'does-not-exist') is None
+    assert await abort_snapshot_in_store(store=store, snapshot_id='does-not-exist') is None
 
 
 @pytest.mark.asyncio
@@ -155,7 +155,7 @@ async def test_status_subscription_observes_abort() -> None:
     queue = await store.on_snapshot_status_change(pending.snapshot_id)
     assert await queue.get() == SnapshotStatus.PENDING  # current status on subscribe
 
-    await abort_snapshot_in_store(store, pending.snapshot_id)
+    await abort_snapshot_in_store(store=store, snapshot_id=pending.snapshot_id)
     assert await queue.get() == SnapshotStatus.ABORTED
 
 
@@ -195,3 +195,57 @@ async def test_branched_session_rejected_when_opted_in() -> None:
     with pytest.raises(GenkitError) as exc_info:
         await store.get_snapshot(session_id=session_id)
     assert 'branching snapshots (2 leaves)' in str(exc_info.value)
+
+
+# --- File store chain pruning ---
+
+
+async def save_chained(store: SessionStore, session_id: str, text: str, parent_id: str | None, when: str) -> str:
+    """Save one turn chained onto ``parent_id`` and return the minted snapshot id."""
+    snap = make_snapshot(session_id, text, parent_id=parent_id, created_at=when)
+    saved = await store.save_snapshot(None, lambda _: snap)
+    assert saved is not None
+    return saved.snapshot_id
+
+
+@pytest.mark.asyncio
+async def test_file_store_prunes_oldest_past_cap(tmp_path: Path) -> None:
+    store = FileSessionStore(str(tmp_path), max_persisted_chain_length=3)
+    session_id = 'sess-prune'
+
+    ids: list[str] = []
+    parent: str | None = None
+    for i in range(4):
+        parent = await save_chained(store, session_id, f'turn {i}', parent, f'2026-06-18T12:00:0{i}Z')
+        ids.append(parent)
+
+    # Cap is 3, so writing the 4th turn drops the oldest snapshot from disk...
+    assert await store.get_snapshot(snapshot_id=ids[0]) is None
+    for kept in ids[1:]:
+        assert await store.get_snapshot(snapshot_id=kept) is not None
+
+    # ...while the chat still resolves and continues from the newest leaf.
+    leaf = await store.get_snapshot(session_id=session_id)
+    assert leaf is not None and leaf.snapshot_id == ids[3]
+
+    # A 5th turn rolls the window forward: the walk stops at the already-deleted
+    # parent, and the next-oldest turn is trimmed while the newest three remain.
+    ids.append(await save_chained(store, session_id, 'turn 4', ids[3], '2026-06-18T12:00:05Z'))
+    assert await store.get_snapshot(snapshot_id=ids[1]) is None
+    for kept in ids[2:]:
+        assert await store.get_snapshot(snapshot_id=kept) is not None
+
+
+@pytest.mark.asyncio
+async def test_file_store_without_cap_retains_full_chain(tmp_path: Path) -> None:
+    store = FileSessionStore(str(tmp_path))
+    session_id = 'sess-keep'
+
+    ids: list[str] = []
+    parent: str | None = None
+    for i in range(5):
+        parent = await save_chained(store, session_id, f'turn {i}', parent, f'2026-06-18T12:00:0{i}Z')
+        ids.append(parent)
+
+    for kept in ids:
+        assert await store.get_snapshot(snapshot_id=kept) is not None

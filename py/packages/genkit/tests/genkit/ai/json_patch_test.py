@@ -18,13 +18,21 @@ import pytest
 
 from genkit._ai._agents._runtime import AgentRuntime
 from genkit._ai._agents._session import Session
-from genkit._ai._json_patch import diff_json
+from genkit._ai._json_patch import apply_json_patch, diff_json
 from genkit._core._channel import CloseableQueue
-from genkit._core._typing import AgentStreamChunk, ModelResponseChunk, Part, SessionState, TextPart
+from genkit._core._typing import (
+    AgentStreamChunk,
+    JsonPatchOp,
+    JsonPatchOperation,
+    ModelResponseChunk,
+    Part,
+    SessionState,
+    TextPart,
+)
 
 
 def test_diff_object_field_replace() -> None:
-    patch = diff_json({'status': 'idle'}, {'status': 'working'})
+    patch = diff_json(from_value={'status': 'idle'}, to_value={'status': 'working'})
     assert len(patch) == 1
     assert patch[0].op == 'replace'
     assert patch[0].path == '/status'
@@ -32,8 +40,66 @@ def test_diff_object_field_replace() -> None:
 
 
 def test_diff_array_append() -> None:
-    patch = diff_json({'items': [1]}, {'items': [1, 2]})
+    patch = diff_json(from_value={'items': [1]}, to_value={'items': [1, 2]})
     assert any(op.op == 'add' and op.path == '/items/-' and op.value == 2 for op in patch)
+
+
+# ---------------------------------------------------------------------------
+# apply_json_patch: leniency + full op set (aligned with the JS/Go runtimes)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_add_creates_missing_parent() -> None:
+    # Lenient: a missing intermediate container is initialized rather than raising.
+    res = apply_json_patch(doc={}, patch=[JsonPatchOperation(op=JsonPatchOp.ADD, path='/a/b', value=1)])
+    assert res == {'a': {'b': 1}}
+
+
+def test_apply_remove_missing_member_is_noop() -> None:
+    doc = {'a': 1}
+    res = apply_json_patch(doc=doc, patch=[JsonPatchOperation(op=JsonPatchOp.REMOVE, path='/missing')])
+    assert res == {'a': 1}
+
+
+def test_apply_replace_missing_parent_is_lenient() -> None:
+    res = apply_json_patch(doc={}, patch=[JsonPatchOperation(op=JsonPatchOp.REPLACE, path='/x/y', value='v')])
+    assert res == {'x': {'y': 'v'}}
+
+
+def test_apply_test_op_passes() -> None:
+    doc = {'status': 'idle'}
+    res = apply_json_patch(doc=doc, patch=[JsonPatchOperation(op=JsonPatchOp.TEST, path='/status', value='idle')])
+    assert res == {'status': 'idle'}
+
+
+def test_apply_test_op_fails() -> None:
+    with pytest.raises(ValueError, match='test failed'):
+        apply_json_patch(
+            doc={'status': 'idle'}, patch=[JsonPatchOperation(op=JsonPatchOp.TEST, path='/status', value='busy')]
+        )
+
+
+def test_apply_move_op() -> None:
+    doc = {'a': 1}
+    res = apply_json_patch(doc=doc, patch=[JsonPatchOperation(op=JsonPatchOp.MOVE, path='/b', **{'from': '/a'})])
+    assert res == {'b': 1}
+
+
+def test_apply_copy_op() -> None:
+    doc = {'a': 1}
+    res = apply_json_patch(doc=doc, patch=[JsonPatchOperation(op=JsonPatchOp.COPY, path='/b', **{'from': '/a'})])
+    assert res == {'a': 1, 'b': 1}
+
+
+def test_apply_does_not_mutate_input() -> None:
+    doc = {'a': {'b': 1}}
+    apply_json_patch(doc=doc, patch=[JsonPatchOperation(op=JsonPatchOp.REPLACE, path='/a/b', value=2)])
+    assert doc == {'a': {'b': 1}}
+
+
+def test_apply_invalid_pointer_raises() -> None:
+    with pytest.raises(ValueError, match='must start with'):
+        apply_json_patch(doc={}, patch=[JsonPatchOperation(op=JsonPatchOp.ADD, path='nope', value=1)])
 
 
 @pytest.mark.asyncio
