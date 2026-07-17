@@ -153,7 +153,9 @@ def _to_anthropic_thinking_config(thinking: dict[str, Any] | None) -> dict[str, 
 
     if thinking_type is not None:
         result['type'] = thinking_type
-    return result or None
+    if 'type' not in result:
+        return None
+    return result
 
 
 def _move_unknown_params_to_extra_body(params: dict[str, Any], use_beta: bool) -> None:

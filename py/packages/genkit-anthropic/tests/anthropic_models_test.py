@@ -1189,7 +1189,6 @@ def test_per_request_api_key_applied_on_plain_client() -> None:
         ),
         ({'adaptive': True, 'display': 'summarized'}, {'display': 'summarized', 'type': 'adaptive'}),
         ({'type': 'interleaved'}, {'type': 'interleaved'}),
-        ({'display': 'summarized'}, {'display': 'summarized'}),
     ],
 )
 def test_thinking_preserves_display_and_forward_compatible_keys(raw: dict, expected: dict) -> None:
@@ -1199,3 +1198,13 @@ def test_thinking_preserves_display_and_forward_compatible_keys(raw: dict, expec
     ]
 
     assert _to_anthropic_thinking_config(thinking) == expected
+
+
+@pytest.mark.parametrize('raw', [{'display': 'summarized'}, {}])
+def test_thinking_dropped_when_no_mode_is_set(raw: dict) -> None:
+    """A thinking config with no mode has no SDK type, so it is dropped rather than sent."""
+    thinking = AnthropicConfig.model_validate({'thinking': raw}).model_dump(exclude_none=True, by_alias=False)[
+        'thinking'
+    ]
+
+    assert _to_anthropic_thinking_config(thinking) is None
