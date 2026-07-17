@@ -180,6 +180,43 @@ async def thinking_tool_round_trip(data: WeatherInput, ctx: ActionRunContext) ->
     }
 
 
+# --- claude-haiku-4-5 (manual thinking budget) ------------------------------
+
+
+@ai.flow(name='thinking_budget_story')
+async def thinking_budget_story(data: TopicInput, ctx: ActionRunContext) -> dict[str, object]:
+    """Streams a story using a manual thinking budget on a pre-4.7 model."""
+    stream_response = ai.generate_stream(
+        model='anthropic/claude-haiku-4-5',
+        prompt=f'Tell me a very short story about {data.topic}.',
+        config={
+            'thinking': {'enabled': True, 'budgetTokens': 1024},
+            'maxOutputTokens': 2048,
+        },
+    )
+
+    streamed_reasoning: list[str] = []
+    streamed_text: list[str] = []
+    async for chunk in stream_response.stream:
+        for part in chunk.content:
+            root = part.root
+            if isinstance(root, ReasoningPart):
+                streamed_reasoning.append(root.reasoning)
+                ctx.send_chunk(f'[thinking] {root.reasoning}')
+        if chunk.text:
+            streamed_text.append(chunk.text)
+            ctx.send_chunk(chunk.text)
+
+    response = await stream_response.response
+    summary = _thinking_summary(response)
+    return {
+        **summary,
+        'final_text': response.text,
+        'streamed_reasoning_chunks': len(streamed_reasoning),
+        'streamed_text': ''.join(streamed_text),
+    }
+
+
 async def main() -> None:
     """Run the lightweight flows once from the CLI."""
     try:

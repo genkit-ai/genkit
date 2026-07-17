@@ -890,8 +890,17 @@ async def test_typed_config_thinking_translated_for_sdk() -> None:
     'thinking, expected',
     [
         ({'adaptive': True, 'display': 'summarized'}, {'type': 'adaptive', 'display': 'summarized'}),
+        ({'adaptive': True}, {'type': 'adaptive'}),
         ({'enabled': False}, {'type': 'disabled'}),
         ({'budgetTokens': 2048}, {'type': 'enabled', 'budget_tokens': 2048}),
+        # Non-mode keys (display, forward-compatible fields) pass through in every mode.
+        (
+            {'enabled': True, 'budgetTokens': 2048, 'display': 'summarized'},
+            {'type': 'enabled', 'budget_tokens': 2048, 'display': 'summarized'},
+        ),
+        # SDK-native type spellings are accepted alongside the boolean flags.
+        ({'type': 'adaptive'}, {'type': 'adaptive'}),
+        ({'type': 'disabled'}, {'type': 'disabled'}),
     ],
 )
 async def test_typed_config_thinking_variants_translated_for_sdk(
