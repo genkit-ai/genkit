@@ -6,7 +6,7 @@ dependencies = [
   "genkit",
   "genkit-google-genai",
   "pydantic>=2.0.0",
-  "structlog>=24.0.0",
+  "structlog>=26.1.0",
 ]
 
 [build-system]

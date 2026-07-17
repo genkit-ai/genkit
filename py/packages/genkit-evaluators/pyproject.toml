@@ -30,7 +30,7 @@ classifiers = [
 ]
 dependencies = [
   "genkit",
-  "jsonata-python>=0.6.0",
+  "jsonata-python>=0.7.0",
 ]
 description = "Genkit Evaluators Plugin (regex, deep_equal, jsonata)"
 keywords = ["genkit", "ai", "evaluator", "eval", "ragas"]
