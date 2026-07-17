@@ -151,7 +151,7 @@ async def thinking_tool_round_trip(data: WeatherInput, ctx: ActionRunContext) ->
         ),
         tools=['current_weather'],
         config={
-            'thinking': {'type': 'adaptive'},
+            'thinking': {'type': 'adaptive', 'display': 'summarized'},
             'max_tokens': 4096,
         },
         max_turns=3,
