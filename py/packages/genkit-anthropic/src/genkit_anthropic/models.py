@@ -443,7 +443,7 @@ class AnthropicModel:
         params.pop('stream', None)
 
         if use_beta:
-            beta_headers = list(BETA_APIS if betas is None else betas)
+            beta_headers = betas if betas is not None else list(BETA_APIS)
             # The Python SDK serializes [] as an empty anthropic-beta header,
             # which the API rejects. Omit the kwarg to request no beta headers.
             if beta_headers:
