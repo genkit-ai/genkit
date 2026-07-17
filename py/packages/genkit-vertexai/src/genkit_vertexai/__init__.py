@@ -26,9 +26,7 @@ Example:
     from genkit_vertexai.model_garden import ModelGarden
 
     # 1. Initialize Genkit with the Vertex AI Model Garden plugin
-    ai = Genkit(
-        plugins=[ModelGarden(project_id='my-project', location='us-central1')]
-    )
+    ai = Genkit(plugins=[ModelGarden(project_id='my-project', location='us-central1')])
 
     # 2. Generate content using a Model Garden model
     res = await ai.generate(

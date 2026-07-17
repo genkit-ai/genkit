@@ -80,7 +80,7 @@ class Middleware(MiddlewarePlugin):
     Example:
         ```python
         from genkit import Genkit
-        from genkit_googleai import GoogleAI
+        from genkit_google_genai import GoogleAI
         from genkit_middleware import Middleware, Retry
 
         # 1. Register middleware plugin

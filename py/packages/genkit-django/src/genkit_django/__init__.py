@@ -25,7 +25,7 @@ Example:
     # myapp/views.py
     from genkit import Genkit
     from genkit_django import genkit_django_handler
-    from genkit_googleai import GoogleAI
+    from genkit_google_genai import GoogleAI
 
     # 1. Initialize Genkit
     ai = Genkit(plugins=[GoogleAI()])

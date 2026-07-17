@@ -46,7 +46,6 @@ See Also:
     - Anthropic documentation: https://docs.anthropic.com/
 """
 
-
 from genkit_anthropic.config import (
     AnthropicConfig,
     AnyToolChoice,

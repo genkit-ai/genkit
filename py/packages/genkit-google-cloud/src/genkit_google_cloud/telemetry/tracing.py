@@ -24,7 +24,7 @@ PII redaction and error span adjustment.
 Usage:
     ```python
     from genkit import Genkit
-    from genkit_googleai import GoogleAI
+    from genkit_google_genai import GoogleAI
     from genkit_google_cloud import enable_google_cloud_telemetry
 
     # 1. Enable telemetry with default settings (PII redaction enabled)
