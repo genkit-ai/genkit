@@ -12,7 +12,7 @@ Requires `GEMINI_API_KEY`.
 
 ```bash
 cd py/samples/agents
-genkit start -- uv run testapps/server.py
+genkit start -- uv run testapp/server.py
 ```
 
 - Dev UI: http://localhost:4000 — pick any `test_*` flow and Run it.
@@ -27,5 +27,5 @@ cd js/testapps/agents/web && pnpm install && pnpm dev   # http://localhost:5173
 Or run a single agent on its own:
 
 ```bash
-genkit start -- uv run testapps/weather_agent.py
+genkit start -- uv run testapp/weather_agent.py
 ```

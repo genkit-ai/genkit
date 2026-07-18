@@ -114,7 +114,7 @@ async def test_file_store_chain_pruning(user_name: str, ctx: ActionRunContext) -
 
 if __name__ == '__main__':
     # Lets you run this one agent on its own in the Dev UI:
-    #   genkit start -- uv run testapps/file_store_agent.py
+    #   genkit start -- uv run testapp/file_store_agent.py
     import asyncio
 
     ai.run_main(asyncio.sleep(0))
