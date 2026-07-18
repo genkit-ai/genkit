@@ -97,7 +97,7 @@ async def test_weather_agent_stream(text: str, ctx: ActionRunContext) -> str:
 
 if __name__ == '__main__':
     # Lets you run this one agent on its own in the Dev UI:
-    #   genkit start -- uv run testapps/weather_agent.py
+    #   genkit start -- uv run testapp/weather_agent.py
     import asyncio
 
     ai.run_main(asyncio.sleep(0))

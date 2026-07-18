@@ -23,7 +23,7 @@ its ``/getSnapshot`` and ``/abort`` companions — and plain flows go through
 ``/api/<name>``, so the same web frontend that talks to the Node server talks to
 this one unchanged.
 
-    genkit start -- uv run testapps/server.py   # Dev UI (:4000) + API (:8080)
+    genkit start -- uv run testapp/server.py   # Dev UI (:4000) + API (:8080)
 
 Requires GEMINI_API_KEY.
 """
