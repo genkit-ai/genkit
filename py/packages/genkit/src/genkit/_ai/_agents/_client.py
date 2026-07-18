@@ -71,7 +71,7 @@ class SessionState(SessionStateSchema, Generic[StateT]):
 class SessionSnapshot(SessionSnapshotSchema, Generic[StateT]):
     """Session snapshot generic over custom state."""
 
-    state: SessionState[StateT] | None = None
+    state: SessionState[StateT] | None = None  # pyrefly: ignore[bad-override]
 
 
 # ===========================================================================
