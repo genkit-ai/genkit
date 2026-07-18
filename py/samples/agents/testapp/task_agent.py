@@ -77,7 +77,8 @@ async def add_task(input: AddTaskInput) -> TaskItem:
         s['next_id'] += 1
         return s
 
-    await ai.current_session().update_custom(mutate)
+    if sess := ai.current_session():
+        await sess.update_custom(mutate)
     return created  # type: ignore[return-value]
 
 
@@ -94,7 +95,8 @@ async def toggle_task(input: TaskIdInput) -> dict[str, Any]:
                 result = {'success': True, 'task': t}
         return s
 
-    await ai.current_session().update_custom(mutate)
+    if sess := ai.current_session():
+        await sess.update_custom(mutate)
     return result
 
 
@@ -111,7 +113,8 @@ async def remove_task(input: TaskIdInput) -> dict[str, Any]:
             result = {'success': True}
         return s
 
-    await ai.current_session().update_custom(mutate)
+    if sess := ai.current_session():
+        await sess.update_custom(mutate)
     return result
 
 
