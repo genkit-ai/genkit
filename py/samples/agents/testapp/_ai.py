@@ -25,9 +25,10 @@ Requires GEMINI_API_KEY.
 
 from __future__ import annotations
 
-from genkit import Genkit
 from genkit_google_genai import GoogleAI
 from genkit_middleware import Middleware
+
+from genkit import Genkit
 
 # The capable default; a couple of agents also reach for the lite model below
 # for cheap sub-steps (decomposition, safety checks) so the main model isn't
