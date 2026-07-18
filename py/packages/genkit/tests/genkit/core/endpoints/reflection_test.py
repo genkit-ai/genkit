@@ -178,6 +178,7 @@ async def test_run_action_standard(asgi_client: AsyncClient, mock_registry: Magi
         on_trace_start=ANY,
         on_chunk=None,
         telemetry_labels=None,
+        init=None,
     )
 
 
@@ -212,6 +213,7 @@ async def test_run_action_with_context(asgi_client: AsyncClient, mock_registry: 
         on_trace_start=ANY,
         on_chunk=None,
         telemetry_labels=None,
+        init=None,
     )
 
 

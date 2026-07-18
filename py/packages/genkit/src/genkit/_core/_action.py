@@ -317,18 +317,20 @@ OutputT = TypeVar('OutputT', default=Any)
 ChunkT = TypeVar('ChunkT', default=Any)
 InitT = TypeVar('InitT', default=Any)
 
-# A bidi fn is (init, incoming-message queue, outgoing-chunk queue) -> output.
-# init is the session identity for the whole connection; the in queue carries
-# the per-turn inputs, the out queue carries the streamed chunks. Keeping init
-# in its own slot is what lets one connection span many typed message turns.
-BidiFn = Callable[
-    [InitT, CloseableQueue[InputT], CloseableQueue[ChunkT]],
-    Awaitable[OutputT],
-]
-
 # Generic streaming callback - use Callable[[ChunkT], None] for typed chunks
 # This untyped version is for internal use where chunk type is unknown
 StreamingCallback = Callable[[object], None]
+
+# A bidi fn is (init, incoming per-turn inputs, chunk sink) -> output. init is
+# the session identity for the whole connection; input_stream yields the per-turn
+# inputs (one item for a one-shot call, many for a live chat) and send_chunk emits
+# streamed chunks. Keeping init in its own slot is what lets one connection span
+# many typed message turns. This is the same shape a plain action fn sees on its
+# ctx (input stream + send_chunk), so bidi fns don't need any queue plumbing.
+BidiFn = Callable[
+    [InitT, AsyncIterator[InputT], Callable[[ChunkT], None]],
+    Awaitable[OutputT],
+]
 
 _action_context: ContextVar[dict[str, object] | None] = ContextVar('context')
 _ = _action_context.set(None)
@@ -347,11 +349,13 @@ class ActionRunContext:
         streaming_callback: StreamingCallback | None = None,
         abort_signal: asyncio.Event | None = None,
         init: object | None = None,
+        input_stream: AsyncIterator[object] | None = None,
     ) -> None:
         self._context: dict[str, object] = context if context is not None else {}
         self._streaming_callback = streaming_callback
         self.abort_signal: asyncio.Event = abort_signal if abort_signal is not None else asyncio.Event()
         self._init = init
+        self._input_stream = input_stream
 
     @property
     def context(self) -> dict[str, object]:
@@ -366,6 +370,16 @@ class ActionRunContext:
         actions ignore it; bidi actions read it to pick up the right session.
         """
         return self._init
+
+    @property
+    def input_stream(self) -> AsyncIterator[object] | None:
+        """The live sequence of per-turn inputs for a bidi run, if any.
+
+        A one-shot call has a single ``input`` and no stream; a bidi call (an
+        agent chat) instead gets its turns over time here. Plain actions never
+        look at it — only bidi actions drain it turn by turn.
+        """
+        return self._input_stream
 
     @property
     def is_streaming(self) -> bool:
@@ -500,6 +514,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         telemetry_labels: dict[str, object] | None = None,
         abort_signal: asyncio.Event | None = None,
         init: InitT | None = None,
+        input_stream: AsyncIterator[InputT] | None = None,
     ) -> ActionResponse[OutputT]:
         """Execute the action with optional input validation.
 
@@ -513,6 +528,9 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             init: Optional per-run initialization data (e.g. an agent's session
                 identity). Validated against the init schema and exposed to the
                 action fn via ``ActionRunContext.init``; plain actions ignore it.
+            input_stream: Optional live stream of per-turn inputs for a bidi
+                action. When omitted, a one-shot run is exactly the single ``input``;
+                only bidi actions read it. Exposed via ``ActionRunContext.input_stream``.
 
         Returns:
             ActionResponse containing the result and trace metadata.
@@ -520,7 +538,10 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         Raises:
             GenkitError: If input validation fails (INVALID_ARGUMENT status).
         """
-        input = self._validate_input(input)
+        # With a live input_stream, `input` isn't the payload — the stream
+        # carries the per-turn inputs — so there's nothing to validate up front.
+        if input_stream is None:
+            input = self._validate_input(input)
         init = self._validate_init(init)
 
         token = None
@@ -537,6 +558,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                     streaming_callback=streaming_cb,
                     abort_signal=abort_signal,
                     init=init,
+                    input_stream=input_stream,
                 ),
                 on_trace_start,
                 telemetry_labels,
@@ -552,6 +574,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         telemetry_labels: dict[str, object] | None = None,
         timeout: float | None = None,
         init: InitT | None = None,
+        input_stream: AsyncIterator[InputT] | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
         """Execute and return a StreamResponse with .stream and .response properties."""
         channel: Channel[ChunkT, ActionResponse[OutputT]] = Channel(timeout=timeout)
@@ -565,11 +588,26 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             telemetry_labels=telemetry_labels,
             on_chunk=send_chunk,
             init=init,
+            input_stream=input_stream,
         )
         channel.set_close_future(asyncio.create_task(resp))
 
+        # Mirror the run's terminal state onto .response so a caller awaiting it
+        # sees the same success/error/cancel the run ended with, instead of
+        # hanging (or dropping the error on the floor) when the run raises.
         result_future: asyncio.Future[OutputT] = asyncio.Future()
-        channel.closed.add_done_callback(lambda _: result_future.set_result(channel.closed.result().response))
+
+        def _resolve_response(closed: asyncio.Future[ActionResponse[OutputT]]) -> None:
+            if result_future.done():
+                return
+            if closed.cancelled():
+                result_future.cancel()
+            elif (exc := closed.exception()) is not None:
+                result_future.set_exception(exc)
+            else:
+                result_future.set_result(closed.result().response)
+
+        channel.closed.add_done_callback(_resolve_response)
 
         return StreamResponse(stream=channel, response=result_future)
 
@@ -767,6 +805,16 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 raise ValueError('action fn must have 0-2 args')
 
 
+async def single_item_stream(item: InputT) -> AsyncIterator[InputT]:
+    """Present a one-shot input as a one-item stream (no item ⇒ no turns).
+
+    Lets a multi-turn fn be driven by a plain ``run(input)``: the fn just sees a
+    stream with exactly one turn (or zero when there's no input to send).
+    """
+    if item is not None:
+        yield item
+
+
 # =============================================================================
 # BidiConnection
 # =============================================================================
@@ -779,21 +827,20 @@ BidiOutT_co = TypeVar('BidiOutT_co', covariant=True)
 class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
     """Client-side handle for an active bidirectional streaming session.
 
-    Returned by BidiAction.stream_bidi(). Wraps two asyncio.Queues and a
-    result Future that resolves when the server fn completes.
+    Returned by BidiAction.stream_bidi(). It's a thin ergonomic wrapper: send/
+    close push per-turn inputs into the run's input stream, while receive/output
+    read the run's chunk stream and final result. The run itself goes through the
+    same stream()/run() path as any other action.
     """
 
     def __init__(
         self,
         in_queue: CloseableQueue[StreamInT],
-        out_queue: CloseableQueue[StreamOutT_co],
-        result: asyncio.Future[BidiOutT_co],
+        stream_response: StreamResponse[StreamOutT_co, BidiOutT_co],
     ) -> None:
-        self.in_queue = in_queue
-        self.out_queue = out_queue
-        self.result = result
+        self._in_queue = in_queue
+        self._stream_response = stream_response
         self.closed = False
-        self.trace_id: str | None = None
 
     async def send(self, item: StreamInT) -> None:
         """Send a per-turn input to the server."""
@@ -806,22 +853,22 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
                 ),
                 status='FAILED_PRECONDITION',
             )
-        await self.in_queue.put(item)
+        await self._in_queue.put(item)
 
     async def close(self) -> None:
         """Signal no more inputs will be sent."""
         if not self.closed:
             self.closed = True
-            self.in_queue.close()
+            self._in_queue.close()
 
     async def receive(self) -> AsyncIterator[StreamOutT_co]:
         """Async iterator yielding server-side stream chunks."""
-        async for chunk in self.out_queue:
+        async for chunk in self._stream_response.stream:
             yield chunk
 
     async def output(self) -> BidiOutT_co:
         """Await the final output from the server fn."""
-        return await self.result
+        return await self._stream_response.response
 
 
 # =============================================================================
@@ -832,9 +879,10 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
 class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
     """An Action extended with bidirectional streaming via stream_bidi().
 
-    The underlying fn still runs through Action.run() for one-shot calls.
-    stream_bidi() wires up two asyncio.Queues and launches the bidi fn as
-    a background task.
+    Both one-shot calls and live sessions run through the same Action.run() /
+    stream() path: run() drives the fn with a single input, while stream_bidi()
+    is sugar that hands run() a live input stream and returns a connection
+    handle for sending per-turn inputs and receiving chunks.
     """
 
     def __init__(
@@ -871,121 +919,47 @@ class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
             self._override_input_schema(input_schema)
 
     async def action_fn(self, input: InputT, ctx: ActionRunContext) -> OutputT:  # noqa: A002
-        """Run the bidi fn as a plain Action fn, giving a single-turn view of a connection.
+        """Adapt the bidi fn to the plain Action fn shape.
 
-        Seeds the one input, closes the send side so the fn's loop ends after
-        that turn, and forwards its output chunks to the run's streaming
-        callback. init (session identity) rides the run's init channel, keeping
-        it separate from the per-turn input.
+        The bidi fn reads its per-turn inputs from an async stream and emits
+        chunks through a callback — the same pair a plain action fn gets on its
+        ctx. A live chat supplies ``ctx.input_stream``; a one-shot run has just
+        the single ``input``, which we hand over as a one-item stream. init
+        (session identity) rides the run's init channel, separate from inputs.
         """
-        in_queue: CloseableQueue[InputT] = CloseableQueue()
-        out_queue: CloseableQueue[ChunkT] = CloseableQueue()
-        if input is not None:
-            await in_queue.put(input)
-        in_queue.close()
-
-        async def run() -> OutputT:
-            try:
-                return await self.bidi_fn(cast(InitT, ctx.init), in_queue, out_queue)
-            finally:
-                out_queue.close()
-
-        run_task = asyncio.create_task(run())
-
-        async def cancel_run() -> None:
-            if not run_task.done():
-                run_task.cancel()
-                try:
-                    await run_task
-                except asyncio.CancelledError:
-                    pass
-
-        try:
-            # Forward chunks to Action's streaming callback.
-            async for chunk in out_queue:
-                ctx.send_chunk(chunk)
-            return await run_task
-        except asyncio.CancelledError:
-            # Our single-turn view was cancelled, so tear down the bidi fn task
-            # too — otherwise it keeps running detached, writing into an out_queue
-            # nobody is draining.
-            await cancel_run()
-            raise
-        except Exception:
-            await cancel_run()
-            raise
+        if ctx.input_stream is not None:
+            # ctx carries the stream as AsyncIterator[object]; here we know it's
+            # this action's InputT. (ty collapses InputT to object and sees this
+            # as redundant; pyright needs it.)
+            input_stream = cast('AsyncIterator[InputT]', ctx.input_stream)  # ty: ignore[redundant-cast]
+        else:
+            input_stream = single_item_stream(input)
+        return await self.bidi_fn(cast(InitT, ctx.init), input_stream, ctx.send_chunk)
 
     async def stream_bidi(
         self,
         init: InitT | None = None,
         context: dict[str, object] | None = None,
-        on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
         telemetry_labels: dict[str, object] | None = None,
     ) -> BidiConnection[InputT, ChunkT, OutputT]:
-        """Start a bidirectional streaming session.
+        """Start a bidirectional streaming session over the single stream() primitive.
 
-        Launches the bidi fn as a background asyncio task and returns a
-        BidiConnection the caller uses to send per-turn inputs and receive
-        chunks. ``init`` is the session identity for the whole connection;
-        per-turn inputs arrive later via ``BidiConnection.send``.
+        Opens an input channel, kicks off ``stream(input_stream=channel)``, and
+        returns a BidiConnection whose send/close push per-turn inputs into that
+        channel while receive/output read the run's chunks and final result.
+        ``init`` is the session identity for the whole connection; per-turn
+        inputs arrive later via ``BidiConnection.send``. It's sugar — all
+        execution goes through the same run()/stream() path as any other action.
         """
-        init = self._validate_init(init)
-
-        # in_queue and out_queue are unbounded. Turn-level backpressure is
-        # managed at the agent runtime intake layer.
+        # Unbounded: turn-level backpressure is managed at the agent runtime intake.
         in_queue: CloseableQueue[InputT] = CloseableQueue()
-        out_queue: CloseableQueue[ChunkT] = CloseableQueue()
-        result_future: asyncio.Future[OutputT] = asyncio.Future()
-        conn = BidiConnection(in_queue, out_queue, result_future)
-
-        token = None
-        if context:
-            token = _action_context.set(context)
-
-        async def trace_start_cb(trace_id: str, span_id: str) -> None:
-            conn.trace_id = trace_id
-            if on_trace_start is not None:
-                await on_trace_start(trace_id, span_id)
-
-        async def run() -> None:
-            try:
-                response = await self._run_with_telemetry(
-                    # A connection has no single input to record on the span; the
-                    # per-turn messages arrive later via send(). init is the
-                    # session identity and rides ctx, not the input slot.
-                    None,
-                    ActionRunContext(context=_action_context.get(None), init=init),
-                    trace_start_cb,
-                    telemetry_labels,
-                    execute=lambda: self.bidi_fn(cast(InitT, init), in_queue, out_queue),
-                )
-                result_future.set_result(response.response)
-            except asyncio.CancelledError:
-                # The connection was torn down (e.g. loop shutdown on a session that
-                # was never closed), not errored. Marking the result future cancelled
-                # dies quietly; set_exception() would instead dump an "exception was
-                # never retrieved" traceback at exit when nobody awaited it.
-                if not result_future.done():
-                    result_future.cancel()
-                raise
-            except Exception as e:  # noqa: BLE001
-                # Standard exceptions are forwarded to the client's result_future.
-                # We swallow them here to prevent asyncio from duplicate-logging
-                # "exception was never retrieved" warnings on the background task.
-                # Guard against a client that already cancelled the future, so we
-                # don't turn a normal error into an InvalidStateError.
-                if not result_future.done():
-                    result_future.set_exception(e)
-            finally:
-                # Close out_queue to signal the end of the streaming iterator.
-                out_queue.close()
-
-        try:
-            asyncio.create_task(run())
-            return conn
-        finally:
-            if token is not None:
-                _action_context.reset(token)
+        stream_response = self.stream(
+            init=init,
+            context=context,
+            telemetry_labels=telemetry_labels,
+            input_stream=in_queue,
+        )
+        return BidiConnection(in_queue, stream_response)
 
 
 def get_current_context() -> dict[str, object] | None:

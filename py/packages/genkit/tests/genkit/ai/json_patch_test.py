@@ -112,7 +112,7 @@ async def test_runtime_emits_custom_patch() -> None:
         parent_snapshot=None,
         store=None,
         client_transform=None,
-        session_outputs=out_queue,
+        emit_chunk=out_queue.put_nowait,
     )
 
     await session.update_custom(lambda c: {**(c or {}), 'status': 'working'})
@@ -135,7 +135,7 @@ async def test_runtime_incremental_custom_patch_within_turn() -> None:
         parent_snapshot=None,
         store=None,
         client_transform=None,
-        session_outputs=out_queue,
+        emit_chunk=out_queue.put_nowait,
     )
 
     await session.update_custom(lambda c: {**(c or {}), 'status': 'working'})
@@ -172,7 +172,7 @@ async def test_runtime_custom_patch_honors_state_transform() -> None:
         parent_snapshot=None,
         store=None,
         client_transform={'state': redact},
-        session_outputs=out_queue,
+        emit_chunk=out_queue.put_nowait,
     )
 
     await session.update_custom(lambda c: c)
@@ -191,7 +191,7 @@ async def test_runtime_chunk_transform_can_drop_chunks() -> None:
         parent_snapshot=None,
         store=None,
         client_transform={'chunk': lambda _chunk: None},
-        session_outputs=out_queue,
+        emit_chunk=out_queue.put_nowait,
     )
 
     rt.send_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='hi'))])))
@@ -220,7 +220,7 @@ async def test_runtime_chunk_transform_can_redact_model_chunks() -> None:
                 else chunk
             )
         },
-        session_outputs=out_queue,
+        emit_chunk=out_queue.put_nowait,
     )
 
     rt.send_chunk(AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='secret'))])))

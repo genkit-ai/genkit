@@ -37,7 +37,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from genkit._core._action import Action, ActionResponse, BidiAction
+from genkit._core._action import Action, BidiAction
 from genkit._core._agent_reflection import resolve_agent_init, resolve_agent_input
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import get_reflection_json
@@ -97,42 +97,29 @@ class ActionRunner:
                 if self.stream
                 else None
             )
+            # A bidi action's fn already gives a single-turn view of a connection
+            # when driven through run() (seed one input, stream chunks, return the
+            # output), so the HTTP path just needs run(). The only bidi-specific
+            # step is normalizing the agent payload: minting a session id for a
+            # server-store agent and defaulting an absent turn to an empty input.
+            input_val = self.payload.get('input')
+            init = None
             if isinstance(self.action, BidiAction):
                 # isinstance narrows BidiAction's generics to Never, so cast them to
-                # Any to keep the init/input args typed. pyrefly reads the cast as
+                # Any to keep resolve_agent_init typed. pyrefly reads the cast as
                 # redundant (it already backfills Any) but ty needs it.
                 action = cast(BidiAction[Any, Any, Any], self.action)  # pyrefly: ignore[redundant-cast]
                 init = resolve_agent_init(action, self.payload.get('init'))
-                conn = await action.stream_bidi(
-                    init=init,
-                    context=self.payload.get('context', {}),
-                    on_trace_start=self.on_trace_start,
-                    telemetry_labels=self.payload.get('telemetryLabels'),
-                )
-                try:
-                    inp = resolve_agent_input(self.payload.get('input'))
+                input_val = resolve_agent_input(input_val)
 
-                    await conn.send(inp)
-                    await conn.close()
-
-                    async for chunk in conn.receive():
-                        if on_chunk:
-                            on_chunk(chunk)
-
-                    resp = await conn.output()
-                    output = ActionResponse(response=resp, trace_id=self.trace_id or '', span_id=self.span_id or '')
-                finally:
-                    # Close the send side so the background agent task winds down even
-                    # if we bail mid-turn — otherwise it blocks forever on the next input.
-                    await conn.close()
-            else:
-                output = await self.action.run(
-                    input=self.payload.get('input'),
-                    on_chunk=on_chunk,
-                    context=self.payload.get('context', {}),
-                    on_trace_start=self.on_trace_start,
-                    telemetry_labels=self.payload.get('telemetryLabels'),
-                )
+            output = await self.action.run(
+                input=input_val,
+                on_chunk=on_chunk,
+                context=self.payload.get('context', {}),
+                on_trace_start=self.on_trace_start,
+                telemetry_labels=self.payload.get('telemetryLabels'),
+                init=init,
+            )
             result = (
                 output.response.model_dump(by_alias=True, exclude_none=True)
                 if isinstance(output.response, BaseModel)

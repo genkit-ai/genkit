@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Any, Generic
 
 from opentelemetry import trace as trace_api
@@ -62,7 +62,6 @@ from genkit._ai._prompt import (
 )
 from genkit._ai._tools import Tool
 from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction, BidiFn
-from genkit._core._channel import CloseableQueue
 from genkit._core._error import GenkitError
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import Message, ModelConfig
@@ -216,8 +215,8 @@ def define_custom_agent(
 
     async def bidi_fn(
         init: AgentInit,
-        in_queue: CloseableQueue[AgentInput],
-        out_queue: CloseableQueue[AgentStreamChunk],
+        input_stream: AsyncIterator[AgentInput],
+        send_chunk: Callable[[AgentStreamChunk], None],
     ) -> AgentOutput:
         session, parent = await load_session(init=init, store=store, agent_name=name, state_schema=state_schema)
         state = await session.state()
@@ -232,10 +231,10 @@ def define_custom_agent(
             parent_snapshot=parent,
             store=store,
             client_transform=resolved_transform,
-            session_outputs=out_queue,
+            emit_chunk=send_chunk,
         )
         await rt.session_runner.seed_last_good_state()
-        return await rt.run(fn=fn, client_inputs=in_queue)
+        return await rt.run(fn=fn, client_inputs=input_stream)
 
     agent = Agent(
         name=name,

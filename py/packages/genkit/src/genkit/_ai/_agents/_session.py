@@ -41,7 +41,7 @@ SessionContextT = TypeVarExt('SessionContextT', default=Any)
 StateT_co = TypeVarExt('StateT_co', covariant=True, default=Any)
 
 
-_STORE_LOCK_GETTERS: weakref.WeakKeyDictionary[object, Callable[[], asyncio.Lock]] = weakref.WeakKeyDictionary()
+STORE_LOCK_GETTERS: weakref.WeakKeyDictionary[object, Callable[[], asyncio.Lock]] = weakref.WeakKeyDictionary()
 
 
 class SessionStore(Protocol, Generic[StateT_co]):
@@ -88,10 +88,10 @@ class SessionStore(Protocol, Generic[StateT_co]):
     def lock(self) -> asyncio.Lock:
         """Return a loop-local asyncio.Lock for this store instance."""
         try:
-            getter = _STORE_LOCK_GETTERS.get(self)
+            getter = STORE_LOCK_GETTERS.get(self)
             if getter is None:
                 getter = _loop_local_client(lambda: asyncio.Lock())
-                _STORE_LOCK_GETTERS[self] = getter
+                STORE_LOCK_GETTERS[self] = getter
             return getter()
         except TypeError:
             # Fallback for classes that disallow weak references

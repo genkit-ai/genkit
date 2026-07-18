@@ -488,11 +488,11 @@ def _register_echo_agent(registry: Registry, name: str = 'test/echo') -> str:
     resolution, chunk forwarding, final output) without the full agent runtime.
     """
 
-    async def echo_agent(_init: Any, in_queue: Any, out_queue: Any) -> dict[str, Any]:
+    async def echo_agent(_init: Any, input_stream: Any, send_chunk: Any) -> dict[str, Any]:
         turns = 0
-        async for _inp in in_queue:
+        async for _inp in input_stream:
             turns += 1
-            await out_queue.put({'turn': turns})
+            send_chunk({'turn': turns})
         return {'turns': turns}
 
     registry.register_action_from_instance(
@@ -609,9 +609,9 @@ async def test_reflection_server_v2_bidi_action_cleans_up_active_actions(
 ) -> None:
     """A finished agent turn leaves nothing behind in the cancel/connection registries.
 
-    Regression: `_run_bidi_action` used to drop only `_bidi_connections`, so each
-    turn's trace id lingered in `_active_actions` (a late cancelAction would then
-    falsely succeed against a completed turn).
+    Regression: `_run_bidi_action` used to drop only the bidi stream registry, so
+    each turn's trace id lingered in `_active_actions` (a late cancelAction would
+    then falsely succeed against a completed turn).
     """
     registry = Registry()
     key = _register_echo_agent(registry, 'test/echo_cleanup')
@@ -636,7 +636,7 @@ async def test_reflection_server_v2_bidi_action_cleans_up_active_actions(
         # Let the run's `finally` run before inspecting the registries.
         await asyncio.sleep(0)
         assert client._active_actions == {}
-        assert client._bidi_connections == {}
+        assert client._bidi_input_streams == {}
     finally:
         await _stop_client(client, task)
 

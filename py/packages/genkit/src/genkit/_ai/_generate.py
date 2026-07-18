@@ -85,8 +85,13 @@ DEFAULT_MAX_TURNS = 5
 logger = get_logger(__name__)
 
 
-class _ScopedGenkit:
-    """Scoped GenkitLike proxy wrapping a call-scoped registry for a generate invocation."""
+class ScopedGenkitView:
+    """A GenkitLike view over the call-scoped registry for one generate invocation.
+
+    Middleware reads ``ctx.ai.registry`` expecting the per-call child registry
+    (with this call's middleware/tool registrations), not the global one, so we
+    hand it this thin wrapper instead of the full Genkit veneer.
+    """
 
     def __init__(self, reg: RegistryLike) -> None:
         self.registry: RegistryLike = reg
@@ -406,7 +411,7 @@ def _redact_data_uris(obj: Any) -> Any:  # noqa: ANN401
     return obj
 
 
-def _raise_if_aborted(abort_signal: asyncio.Event) -> None:
+def raise_if_aborted(abort_signal: asyncio.Event) -> None:
     if abort_signal.is_set():
         raise GenkitError(status='ABORTED', message='Generation aborted.')
 
@@ -489,7 +494,7 @@ async def generate_with_request(
 
     middleware = resolve_middleware_from_use(registry, raw_request.use)
     run_ctx = GenerateMiddlewareContext(
-        ai=_ScopedGenkit(registry),
+        ai=ScopedGenkitView(registry),
         custom_context=dict(context or {}),
         on_chunk=on_chunk,
         abort_signal=abort_signal if abort_signal is not None else asyncio.Event(),
@@ -606,7 +611,7 @@ async def _generate_action_turn(
     """Run one model call plus tool resolution, then recurse for the next turn."""
     middleware = mw_pipeline.middleware
     run_ctx = mw_pipeline.ctx
-    _raise_if_aborted(run_ctx.abort_signal)
+    raise_if_aborted(run_ctx.abort_signal)
 
     model, tools, format_def = await resolve_parameters(registry, raw_request)
 
@@ -799,7 +804,7 @@ async def _generate_action_turn(
                 details={'request': request},
             )
 
-        _raise_if_aborted(ctx.abort_signal)
+        raise_if_aborted(ctx.abort_signal)
 
         revised_model_msg, tool_msg = await resolve_tool_requests(
             registry=registry,
@@ -1177,11 +1182,11 @@ async def resolve_tool_requests(
             mw_pipeline.ctx
             if mw_pipeline is not None
             else GenerateMiddlewareContext(
-                ai=_ScopedGenkit(registry),
+                ai=ScopedGenkitView(registry),
                 abort_signal=abort_signal,
             )
         )
-        _raise_if_aborted(ctx.abort_signal)
+        raise_if_aborted(ctx.abort_signal)
         params = ToolHookParams(tool_request_part=trp, tool=tool)
 
         async def next_fn(p: ToolHookParams, c: GenerateMiddlewareContext) -> MultipartToolResponse:
@@ -1200,7 +1205,7 @@ async def resolve_tool_requests(
                     mw_pipeline.ctx
                     if mw_pipeline
                     else GenerateMiddlewareContext(
-                        ai=_ScopedGenkit(registry),
+                        ai=ScopedGenkitView(registry),
                         abort_signal=abort_signal,
                     ),
                 )

@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any, Generic, TypeVar, cast
 from uuid import uuid4
@@ -351,7 +351,7 @@ class AgentRuntime:
         parent_snapshot: SessionSnapshot | None,
         store: SessionStore | None,
         client_transform: ClientTransform | None,
-        session_outputs: CloseableQueue[AgentStreamChunk],
+        emit_chunk: Callable[[AgentStreamChunk], None],
     ) -> None:
         self.name = name
         self.session = session
@@ -363,7 +363,7 @@ class AgentRuntime:
         self.first_custom_patch_in_turn: bool = True
         self.last_sent_custom: object | None = None  # Cache of last streamed custom state to compute JSON Patch deltas
 
-        self.session_outputs = session_outputs
+        self._emit_chunk = emit_chunk
 
         # Separate turn inputs queue: runtime controls its lifecycle,
         # BidiAction's client_inputs is forwarded here by run().
@@ -647,7 +647,7 @@ class AgentRuntime:
             # to the last good turn. Log it so a stuck detach is at least visible.
             logger.exception("Agent '%s' failed to finalize detached snapshot %s", self.name, pending_snap.snapshot_id)
 
-    async def run(self, *, fn: AgentFn, client_inputs: CloseableQueue[AgentInput]) -> AgentOutput:
+    async def run(self, *, fn: AgentFn, client_inputs: AsyncIterator[AgentInput]) -> AgentOutput:
         """Drive fn to completion, return AgentOutput.
 
         Two terminal paths (v1):
@@ -828,12 +828,13 @@ class AgentRuntime:
         return out
 
     def send_chunk(self, chunk: AgentStreamChunk) -> None:
+        # A detached client has stopped reading, so drop chunks rather than
+        # emit into a stream nobody drains.
+        if self.detached:
+            return
         transformed = self.transform_chunk(chunk)
         if transformed is not None:
-            try:
-                self.session_outputs.put_nowait(transformed)
-            except QueueShutDown:
-                pass
+            self._emit_chunk(transformed)
 
 
 # ---------------------------------------------------------------------------

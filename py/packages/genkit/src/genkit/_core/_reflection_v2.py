@@ -42,8 +42,9 @@ from opentelemetry.sdk.trace import TracerProvider
 from pydantic import BaseModel, JsonValue, ValidationError
 from websockets.exceptions import ConnectionClosed
 
-from genkit._core._action import Action, BidiAction, BidiConnection
+from genkit._core._action import Action, BidiAction
 from genkit._core._agent_reflection import resolve_agent_init, resolve_agent_input
+from genkit._core._channel import CloseableQueue
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
 from genkit._core._logger import get_logger
@@ -136,8 +137,9 @@ class ReflectionServerV2:
         # GC them mid-flight (asyncio only weakly references tasks) and so they
         # can be cancelled when the connection drops.
         self._background_tasks: set[asyncio.Task[Any]] = set()
-        # request_id → AgentConnection for active bidi (agent) sessions
-        self._bidi_connections: dict[str, BidiConnection] = {}
+        # request_id → live input stream feeding an active bidi (agent) run.
+        # sendInputStreamChunk puts turns on it; endInputStream closes it.
+        self._bidi_input_streams: dict[str, CloseableQueue[Any]] = {}
         self._stop = False
         self._reflection_handshake_telemetry_applied = False
 
@@ -182,12 +184,11 @@ class ReflectionServerV2:
                 # running against a dead socket after the connection drops.
                 for t in list(self._background_tasks):
                     t.cancel()
-                for _rid, conn in list(self._bidi_connections.items()):
-                    try:
-                        await conn.close()
-                    except Exception as e:
-                        logger.debug('reflection V2: error closing bidi connection', err=e)
-                self._bidi_connections.clear()
+                # Close each live input stream so its run's feeder ends the turn
+                # loop instead of hanging waiting for turns that can't arrive.
+                for _rid, stream in list(self._bidi_input_streams.items()):
+                    stream.close()
+                self._bidi_input_streams.clear()
 
             if self._stop:
                 return
@@ -374,8 +375,8 @@ class ReflectionServerV2:
                 await self._send_error(str(req_id), JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
             return
 
-        conn = self._bidi_connections.get(p.request_id)
-        if conn is None:
+        stream = self._bidi_input_streams.get(p.request_id)
+        if stream is None:
             if req_id is not None:
                 await self._send_error(
                     str(req_id),
@@ -386,7 +387,7 @@ class ReflectionServerV2:
 
         try:
             inp = resolve_agent_input(p.chunk)
-            await conn.send(inp)
+            await stream.put(inp)
         except Exception as e:  # noqa: BLE001
             logger.error('reflection V2: sendInputStreamChunk error', err=e)
 
@@ -399,13 +400,10 @@ class ReflectionServerV2:
                 await self._send_error(str(req_id), JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
             return
 
-        conn = self._bidi_connections.get(p.request_id)
-        if conn is None:
+        stream = self._bidi_input_streams.get(p.request_id)
+        if stream is None:
             return  # already gone or never existed — no-op
-        try:
-            await conn.close()
-        except Exception as e:  # noqa: BLE001
-            logger.error('reflection V2: endInputStream error', err=e)
+        stream.close()
 
     async def _flush_tracing(self) -> None:
         provider = trace_api.get_tracer_provider()
@@ -570,13 +568,13 @@ class ReflectionServerV2:
         p: ReflectionRunActionParams,
         action: BidiAction[Any, Any, Any],
     ) -> None:
-        """Start a bidi (agent) session and wire up input/output streams.
+        """Drive a bidi (agent) runAction through action.run() with a per-turn input stream.
 
-        Protocol:
-          1. Call action.stream_bidi(init) → BidiConnection
-          2. Store connection under sid in _bidi_connections
-          3. Background task reads receive() → sends streamChunk notifications
-          4. When output() resolves, send final runAction response
+        A one-shot call passes the single resolved input; a ``streamInput`` call
+        registers a live stream under ``sid`` so ``sendInputStreamChunk`` /
+        ``endInputStream`` can feed and close it while the run is in flight.
+        Output chunks stream back as ``streamChunk`` notifications, then the fn's
+        return value becomes the final runAction response.
         """
         try:
             init = resolve_agent_init(action, p.init)
@@ -588,33 +586,50 @@ class ReflectionServerV2:
         trace_holder: list[str | None] = [None]
         on_trace_start = self._trace_start_callback(sid, trace_holder, register_for_cancel=True)
 
+        stream_chunk_tasks: list[asyncio.Task[Any]] = []
+
+        def on_chunk(chunk: object) -> None:
+            # Ordering matches the one-shot path: tasks start in FIFO order and
+            # _send_message serializes with no await before it, so chunks reach
+            # the client in emission order.
+            stream_chunk_tasks.append(asyncio.create_task(self._notify_stream_chunk(sid, chunk)))
+
+        async def _drain_chunks() -> None:
+            if stream_chunk_tasks:
+                await asyncio.gather(*stream_chunk_tasks, return_exceptions=True)
+
+        input_val: object | None = None
+        input_stream: CloseableQueue[Any] | None = None
+        if p.stream_input:
+            # Register before the run starts so sendInputStreamChunk can find the
+            # stream while run() is in flight (the client waits for runActionState
+            # before sending turns, and that fires from on_trace_start inside run).
+            input_stream = CloseableQueue()
+            self._bidi_input_streams[sid] = input_stream
+        else:
+            input_val = resolve_agent_input(p.input)
+
         try:
-            conn = await action.stream_bidi(
-                init,
+            output = await action.run(
+                input=input_val,
+                input_stream=input_stream,
+                init=init,
+                on_chunk=on_chunk,
                 context=ctx or None,
                 on_trace_start=on_trace_start,
                 telemetry_labels=labels,
             )
-            self._bidi_connections[sid] = conn
-
-            if not p.stream_input:
-                inp = resolve_agent_input(p.input)
-                await conn.send(inp)
-                await conn.close()
-
-            async for chunk in conn.receive():
-                await self._notify_stream_chunk(sid, chunk)
-
-            out = await conn.output()
+            await _drain_chunks()
             await self._respond_run_action_success(
                 sid,
-                out,
-                conn.trace_id or trace_holder[0],
+                output.response,
+                output.trace_id or trace_holder[0],
             )
         except (asyncio.CancelledError, Exception) as e:
+            await _drain_chunks()
             await self._send_run_action_error(sid, e, trace_holder)
         finally:
-            self._bidi_connections.pop(sid, None)
+            self._bidi_input_streams.pop(sid, None)
             # Drop the cancel registration too, or a finished turn's trace id
             # lingers in _active_actions and a late cancelAction would falsely
             # report success against a task that already completed.
