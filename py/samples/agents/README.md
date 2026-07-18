@@ -1,9 +1,9 @@
 # Genkit Agents Samples
 
-Single-file Python examples for the Genkit agents runtime, one per concept:
-stores, interrupt/resume, custom state, artifacts, detach/abort, timeouts,
-branching, and time-travel. Each example defines its agent inline, so you can
-read one file top to bottom to learn an API.
+Two sets of Python samples for the Genkit agents runtime, split by how you'd use them:
+
+- **`basic/`** — small, single-file examples, one per concept (stores, interrupt/resume, custom state, artifacts, detach/abort, timeouts, branching, time-travel). Start here to learn the APIs.
+- **`testapps/`** — a full agent app that integrates with the testapp in `js/testapps/agents`. Its `server.py` puts every agent behind an HTTP endpoint, so you can swap the Node backend out for this Python one and the existing web frontend keeps working unchanged. Use this to see the agents working end-to-end.
 
 All examples require `GEMINI_API_KEY`.
 
@@ -13,6 +13,9 @@ All examples require `GEMINI_API_KEY`.
 cd py/samples/agents
 uv sync
 
-# any example in the Dev UI
+# a basic example in the Dev UI
 genkit start -- uv run basic/01_define_agent_with_store.py
+
+# the full testapp (Dev UI + HTTP API)
+genkit start -- uv run testapps/server.py
 ```
