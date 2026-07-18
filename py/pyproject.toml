@@ -425,7 +425,6 @@ project_includes = [
 # Search path for first-party code import resolution.
 search-path = [
   ".",
-  "samples/agents/branching_examples",
   "packages/genkit/src",
   "packages/genkit-anthropic/src",
   "packages/genkit-openai/src",

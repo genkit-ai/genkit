@@ -15,15 +15,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fork one conversation into two siblings from the same checkpoint.
+"""Branch a conversation: fork one turn into sibling timelines.
 
-Run a shared setup turn, then start two branches from that turn's snapshot with
-different follow-ups. You get sibling timelines instead of one linear history —
-the move when someone wants to compare directions without losing the setup.
+Every store-backed turn is a snapshot you can fork from. Run a shared setup turn,
+then start two branches from that turn's snapshot with different follow-ups. You
+get sibling timelines instead of one linear history — the move when someone wants
+to compare directions, or hit "try again" on a turn, without losing the setup or
+overwriting the first answer.
 
-Once the tree forks, "the latest turn for this session" is ambiguous, so looking
-the session up by id surfaces a structured, recoverable error instead of guessing.
-Requires GEMINI_API_KEY.
+Once the tree forks, "the latest turn for this session" is ambiguous, so a
+session-id lookup surfaces a structured, recoverable error instead of guessing.
+You resolve it by continuing from the specific leaf you mean — and from there
+it's a normal linear chat again. Requires GEMINI_API_KEY.
 """
 
 from __future__ import annotations
@@ -34,9 +37,9 @@ from genkit import Genkit, GenkitError
 from genkit.agent import InMemorySessionStore
 
 ai = Genkit(plugins=[GoogleAI()])
-# reject_ambiguous_session makes a session-id lookup over a forked history
-# raise instead of silently picking the newest branch — which is what lets this
-# sample surface the ambiguous-branch error below.
+# reject_ambiguous_session makes a session-id lookup over a forked history raise
+# instead of silently picking the newest branch — that's what surfaces the
+# ambiguous-branch error below.
 store = InMemorySessionStore(reject_ambiguous_session=True)
 
 agent = ai.define_agent(
@@ -55,26 +58,30 @@ async def main() -> None:
     session_id = root.session_id
     assert checkpoint and session_id
 
-    # Two branches off the same checkpoint; neither sees the other.
+    # Fork the checkpoint twice into sibling timelines; neither sees the other.
+    # This is also the "try again" / edit-and-resubmit move: re-run the turn with
+    # different input while the first answer stays put as its own sibling.
     # → minimal gets a whitespace-heavy take; bold gets a dark, high-contrast one.
     minimal = await agent.load_chat(snapshot_id=checkpoint)
     await minimal.send('Direction: minimal.')
     bold = await agent.load_chat(snapshot_id=checkpoint)
     await bold.send('Direction: bold.')
-    bold_leaf = bold.snapshot_id
-    assert bold_leaf
+    chosen_leaf = bold.snapshot_id
+    assert chosen_leaf
 
-    # The tree has two leaves now, so a session-id lookup can't pick "the latest"
-    # turn. Genkit raises FAILED_PRECONDITION rather than silently guessing; you
-    # resolve it by continuing from the specific leaf you mean.
+    # Two leaves now, so a session-id lookup can't pick "the latest" turn. Genkit
+    # raises FAILED_PRECONDITION rather than silently guessing which branch you meant.
     try:
         await store.get_snapshot(session_id=session_id)
+        raise AssertionError('expected an ambiguous-session lookup to fail')
     except GenkitError as exc:
-        # → the lookup is ambiguous, so resume the specific leaf you want
         assert exc.status == 'FAILED_PRECONDITION'
-        resumed = await agent.load_chat(snapshot_id=bold_leaf)
-        # → continues the bold timeline, extending it with a pricing section
-        await resumed.send('Add a pricing section.')
+
+    # Resolve by resuming the specific leaf you want. From here it's a normal
+    # linear chat again — this extends the bold timeline with a pricing section,
+    # and the minimal sibling is left untouched.
+    resumed = await agent.load_chat(snapshot_id=chosen_leaf)
+    await resumed.send('Add a pricing section.')
 
 
 if __name__ == '__main__':
