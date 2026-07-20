@@ -14,11 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""In-memory, full-snapshot session store for local development and tests.
-
-See :mod:`genkit._ai._agents.session_stores.util` for the flat, full-snapshot
-design these stores share.
-"""
+"""In-memory, full-snapshot session store for local development and tests."""
 
 from __future__ import annotations
 
@@ -30,7 +26,7 @@ from genkit._ai._agents._session import (
     SnapshotSubscriber,
     StateT,
 )
-from genkit._ai._agents.session_stores.util import (
+from genkit._ai._agents._session_stores._util import (
     SaveFn,
     Subs,
     apply_save,

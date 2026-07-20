@@ -21,8 +21,8 @@ import pytest
 import genkit._ai._agents._runtime as runtime_mod
 from genkit._ai._agents._runtime import AgentRuntime, SessionRunner, agent_input_has_payload
 from genkit._ai._agents._session import Session
+from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
 from genkit._ai._agents._snapshot import abort_snapshot_in_store
-from genkit._ai._agents.session_stores.inmemory_store import InMemorySessionStore
 from genkit._ai._aio import Genkit
 from genkit._ai._generate import generate_action
 from genkit._ai._testing import define_programmable_model

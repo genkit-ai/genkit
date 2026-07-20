@@ -21,12 +21,10 @@ from __future__ import annotations
 import atexit
 import json
 import os
-import signal
 import sys
-from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from types import FrameType, TracebackType
+from types import TracebackType
 
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._logger import get_logger
@@ -35,32 +33,6 @@ from genkit._core._reflection import ServerSpec
 logger = get_logger(__name__)
 
 DEFAULT_RUNTIME_DIR_NAME = '.genkit/runtimes'
-ACTIVE_CLEANUPS: list[Callable[[], None]] = []
-SIGNALS_REGISTERED = False
-
-
-def setup_signal_handlers() -> None:
-    """Setup global signal handlers once on the main thread."""
-    global SIGNALS_REGISTERED
-    if SIGNALS_REGISTERED:
-        return
-
-    def handle_signal(signum: int, frame: FrameType | None) -> None:
-        cleanups = list(ACTIVE_CLEANUPS)
-        for cleanup_fn in cleanups:
-            try:
-                cleanup_fn()
-            except Exception:  # noqa: S110
-                pass
-        sys.exit(128 + signum)
-
-    try:
-        signal.signal(signal.SIGINT, handle_signal)
-        signal.signal(signal.SIGTERM, handle_signal)
-        SIGNALS_REGISTERED = True
-    except ValueError:
-        # Ignore if called from a background thread
-        pass
 
 
 def _remove_file(file_path: Path | None) -> bool:
@@ -275,15 +247,10 @@ class RuntimeManager:
 
         self._runtime_file_path = _create_and_write_runtime_file(self._runtime_dir, self.spec)
         _register_atexit_cleanup_handler(self._runtime_file_path)
-        ACTIVE_CLEANUPS.append(self.cleanup)
         return self._runtime_file_path
 
     def cleanup(self) -> None:
         """Explicitly cleanup the runtime file."""
-        if self.cleanup in ACTIVE_CLEANUPS:
-            ACTIVE_CLEANUPS.remove(self.cleanup)
-
         if self._runtime_file_path:
             logger.debug(f'Cleaning up runtime file: {self._runtime_file_path}')
             _ = _remove_file(self._runtime_file_path)
-            self._runtime_file_path = None

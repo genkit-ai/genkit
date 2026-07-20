@@ -312,7 +312,7 @@ async def test_run_tool_after_restart_pipes_generate_context() -> None:
         tool_request=ToolRequest(name='ctx_restart_tool', ref='r1', input={}),
         metadata={'resumed': True},
     )
-    mw_ctx = GenerateMiddlewareContext(ai.registry, custom_context={'auth_role': 'admin'})
+    mw_ctx = GenerateMiddlewareContext(ai, custom_context={'auth_role': 'admin'})
     await run_tool_after_restart(tool=action, restart_trp=restart_trp, ctx=mw_ctx)
 
     assert seen == [{'auth_role': 'admin'}]
