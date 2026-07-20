@@ -16,15 +16,17 @@
 
 """Reflection API v2 (WebSocket JSON-RPC client) for Genkit Dev UI / CLI.
 
-Connects out to the CLI reflection manager and serves its JSON-RPC requests:
-``listActions``, ``listValues``, ``runAction``, ``cancelAction``, ``configure``,
-and the bidi input-stream methods (``sendInputStreamChunk`` / ``endInputStream``).
+This connects out to the CLI's reflection manager and answers the JSON-RPC
+requests it sends. The methods it handles are:
 
-``runAction`` with ``stream: true`` emits ``streamChunk`` notifications as output
-is produced. Agents (bidi actions) additionally accept streamed *input*: the
-client drives the turn with ``sendInputStreamChunk`` and ends it with
-``endInputStream``. Unknown methods that carry an ``id`` get a JSON-RPC ``-32601``
-(method not found); notifications without an ``id`` are logged and ignored.
+- ``listActions`` / ``listValues`` — enumerate what the app exposes.
+- ``runAction`` — run one action. With ``stream: true`` the output comes back
+  as ``streamChunk`` notifications while the action runs.
+- ``cancelAction`` — stop an in-flight run.
+- ``configure`` — set up the connection.
+- ``sendInputStreamChunk`` / ``endInputStream`` — feed and close a streamed
+  *input*. Agents (bidi actions) use these: the client drives a turn by pushing
+  input chunks and ending the stream, on top of the streamed output above.
 """
 
 from __future__ import annotations
