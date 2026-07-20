@@ -1693,16 +1693,24 @@ class GeminiModel:
         # The plugin's kwargs may carry project=None when the project comes
         # from ADC. Resolve it here, off the event loop: the SDK's own
         # resolution would block the loop, and it skips resolution entirely
-        # when a base_url is set.
-        if self._client.vertexai and not kwargs.get('project'):
+        # when a base_url is set. Express mode (api_key) takes no project --
+        # the SDK rejects the two together -- so the probe is skipped there.
+        if self._client.vertexai and not kwargs.get('project') and not kwargs.get('api_key'):
             kwargs['project'] = getattr(kwargs.get('credentials'), 'project_id', None) or await _adc_project()
-            if not kwargs.get('project') and is_multi_regional_location(kwargs.get('location')):
+        if self._client.vertexai and not kwargs.get('project') and is_multi_regional_location(kwargs.get('location')):
+            if kwargs.get('api_key'):
                 raise GenkitError(
                     status='FAILED_PRECONDITION',
-                    message='A project is required when overriding the location with a '
-                    'multi-region. Set the project parameter or GOOGLE_CLOUD_PROJECT '
-                    'environment variable.',
+                    message='Multi-region locations are not available in Vertex AI express '
+                    'mode (api_key). Configure the plugin with a project and credentials '
+                    'to use multi-region locations.',
                 )
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message='A project is required when overriding the location with a '
+                'multi-region. Set the project parameter or GOOGLE_CLOUD_PROJECT '
+                'environment variable.',
+            )
 
         try:
             return genai.Client(**kwargs)

@@ -557,6 +557,52 @@ class TestResolveRequestClient:
         assert kwargs['http_options'].base_url == 'https://corp-proxy.example.com/'
 
     @pytest.mark.asyncio
+    async def test_express_mode_override_skips_adc_probe(self) -> None:
+        """Express mode (api_key) never resolves a project for an override.
+
+        The SDK rejects api_key and project together, so a resolved ADC
+        project on the developer's machine would make an otherwise valid
+        apiVersion override fail client construction.
+        """
+        with patch.dict(os.environ, {}, clear=True):
+            with patch('genkit_google_genai.google.genai.client.Client'):
+                plugin = VertexAI(api_key='k', location='us-central1')
+        client = MagicMock()
+        client.vertexai = True
+        model = GeminiModel(
+            'gemini-2.5-flash',
+            client,
+            client_kwargs=plugin._client_kwargs,
+            base_url_pinned=plugin._base_url_pinned,
+        )
+        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
+            with patch('genkit_google_genai.models.gemini.google_auth_default', return_value=(None, 'adc-p')) as adc:
+                await model._resolve_request_client(_text_request({'api_version': 'v1'}))
+        adc.assert_not_called()
+        kwargs = mock_ctor.call_args.kwargs
+        assert kwargs['api_key'] == 'k'
+        assert kwargs.get('project') is None
+
+    @pytest.mark.asyncio
+    async def test_express_mode_multi_region_override_raises(self) -> None:
+        """A multi-region override in express mode fails with a clear error."""
+        with patch.dict(os.environ, {}, clear=True):
+            with patch('genkit_google_genai.google.genai.client.Client'):
+                plugin = VertexAI(api_key='k', location='us-central1')
+        client = MagicMock()
+        client.vertexai = True
+        model = GeminiModel(
+            'gemini-2.5-flash',
+            client,
+            client_kwargs=plugin._client_kwargs,
+            base_url_pinned=plugin._base_url_pinned,
+        )
+        with patch('genkit_google_genai.models.gemini.google_auth_default') as adc:
+            with pytest.raises(GenkitError, match='express'):
+                await model._resolve_request_client(_text_request({'location': 'eu'}))
+        adc.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_credentials_project_id_used_before_adc(self) -> None:
         """A credentials object carrying project_id avoids the ADC probe."""
         model = _vertex_model()
