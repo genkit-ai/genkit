@@ -131,9 +131,11 @@ The following models are currently supported by VertexAI API:
 | `gemini-2.5-pro-preview-05-06`       | Gemini 2.5 Pro Preview 05-06         | Supported  |
 """
 
+import asyncio
 import sys
 from datetime import datetime, timedelta, timezone
 
+from genkit_google_genai.constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai.models.context_caching.constants import DEFAULT_TTL
 from genkit_google_genai.models.context_caching.utils import generate_cache_key, validate_context_cache_request
 
@@ -146,6 +148,8 @@ from functools import cached_property
 from typing import Annotated, Any, Any as JsonAny, cast
 
 from google import genai
+from google.auth import default as google_auth_default
+from google.auth.exceptions import DefaultCredentialsError
 from google.genai import types as genai_types
 from google.genai.errors import ClientError
 from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema
@@ -357,6 +361,14 @@ class GeminiConfigSchema(ModelConfig):
     )
     api_version: str | None = Field(
         None, description='Overrides the plugin-configured or default apiVersion, if specified.', alias='apiVersion'
+    )
+    location: str | None = Field(
+        None,
+        description=(
+            'Overrides the plugin-configured location/region for this request '
+            "(Vertex AI only). Accepts regions (e.g. 'us-central1'), "
+            "multi-regions ('us', 'eu'), or 'global'."
+        ),
     )
 
     safety_settings: Annotated[
@@ -1331,6 +1343,26 @@ def google_model_info(
     )
 
 
+_adc_project_cache: str | None = None
+
+
+async def _adc_project() -> str | None:
+    """Resolve the project from application default credentials, cached.
+
+    ADC resolution can do file and metadata-server IO, so it runs in a thread.
+    Only a successful resolution is cached, so a fixed environment is picked
+    up without a restart; concurrent first calls may duplicate the probe,
+    which is benign.
+    """
+    global _adc_project_cache
+    if _adc_project_cache is None:
+        try:
+            _, _adc_project_cache = await asyncio.to_thread(google_auth_default)
+        except DefaultCredentialsError:
+            return None
+    return _adc_project_cache
+
+
 class GeminiModel:
     """Gemini model."""
 
@@ -1338,15 +1370,24 @@ class GeminiModel:
         self,
         version: str | GoogleAIGeminiVersion | VertexAIGeminiVersion,
         client: genai.Client,
+        client_kwargs: dict[str, Any] | None = None,
+        base_url_pinned: bool = False,
     ) -> None:
         """Initialize Gemini model.
 
         Args:
             version: Gemini version
             client: Google AI client
+            client_kwargs: The plugin-level kwargs the client was constructed
+                from. Required for per-request config overrides (api_key,
+                api_version, base_url, location).
+            base_url_pinned: Whether the plugin caller explicitly pinned a
+                base URL (as opposed to one derived from the location).
         """
         self._version = version
         self._client = client
+        self._client_kwargs = client_kwargs
+        self._base_url_pinned = base_url_pinned
 
     def _get_tools(self, request: ModelRequest) -> list[genai_types.Tool]:
         """Generates VertexAI Gemini compatible tool definitions.
@@ -1465,7 +1506,12 @@ class GeminiModel:
         return schema
 
     async def _retrieve_cached_content(
-        self, request: ModelRequest, model_name: str, cache_config: dict, contents: list[genai_types.Content]
+        self,
+        request: ModelRequest,
+        model_name: str,
+        cache_config: dict,
+        contents: list[genai_types.Content],
+        client: genai.Client | None = None,
     ) -> genai_types.CachedContent:
         """Retrieves cached content from the Google API if exists.
 
@@ -1477,11 +1523,14 @@ class GeminiModel:
             model_name: name of the generation model to use
             cache_config: user-defined cache configuration (e.g. ttl_seconds)
             contents: content to submit for cached context creation
+            client: client to use for cache operations. Defaults to the
+                plugin-configured client.
 
         Returns:
             Cached Content instance based on provided params
         """
         validate_context_cache_request(request=request, model_name=model_name)
+        cache_client = client if client is not None else self._client
 
         ttl_value = cache_config.get('ttl_seconds', DEFAULT_TTL)
         ttl: float = float(ttl_value) if ttl_value is not None else DEFAULT_TTL
@@ -1489,7 +1538,7 @@ class GeminiModel:
 
         iterator_config = genai_types.ListCachedContentsConfig()
         cache = None
-        pages = await self._client.aio.caches.list(config=iterator_config)
+        pages = await cache_client.aio.caches.list(config=iterator_config)
 
         async for item in pages:
             if item.display_name == cache_key:
@@ -1497,11 +1546,11 @@ class GeminiModel:
                 break
         if cache and cache.name:
             updated_expiration_time = datetime.now(timezone.utc) + timedelta(seconds=ttl)
-            cache = await self._client.aio.caches.update(
+            cache = await cache_client.aio.caches.update(
                 name=cache.name, config=genai_types.UpdateCachedContentConfig(expire_time=updated_expiration_time)
             )
         else:
-            cache = await self._client.aio.caches.create(
+            cache = await cache_client.aio.caches.create(
                 model=model_name,
                 config=genai_types.CreateCachedContentConfig(
                     contents=cast(genai_types.ContentListUnion, contents),
@@ -1543,81 +1592,19 @@ class GeminiModel:
                 request_cfg = genai_types.GenerateContentConfig()
             request_cfg.response_modalities = ['TEXT', 'IMAGE']
 
-        request_contents, cached_content = await self._build_messages(request=request, model_name=model_name)
+        # Resolve the client before building messages so context-cache
+        # operations run against the same (possibly overridden) region as the
+        # generate call.
+        client = await self._resolve_request_client(request)
+
+        request_contents, cached_content = await self._build_messages(
+            request=request, model_name=model_name, client=client
+        )
 
         if cached_content and cached_content.name:
             if not request_cfg:
                 request_cfg = genai_types.GenerateContentConfig()
             request_cfg.cached_content = cached_content.name
-
-        client = self._client
-        # If config specifies api_key, base_url, or api_version different from default,
-        # create a temporary client with those settings.
-        api_version = None
-        api_key_override = None
-        base_url_override = None
-
-        if request.config:
-            if isinstance(request.config, dict):
-                api_version = request.config.get('api_version')
-                api_key_override = request.config.get('api_key')
-                base_url_override = request.config.get('base_url')
-            else:
-                api_version = getattr(request.config, 'api_version', None)
-                api_key_override = getattr(request.config, 'api_key', None)
-                base_url_override = getattr(request.config, 'base_url', None)
-
-        if api_version or api_key_override or base_url_override:
-            # TODO(#4362): Request public API from google-genai maintainers.
-            # Currently, there is no public way to access the configured api_key, project, or location
-            # from an existing Client instance. We need to access the private _api_client to
-            # clone the configuration when overriding these settings.
-            # This is brittle and relies on internal implementation details of the google-genai library.
-            # If the library changes its internal structure (e.g. renames _api_client or _credentials),
-            # this code WILL BREAK.
-            api_client = self._client._api_client
-            kwargs: dict[str, Any] = {
-                'vertexai': api_client.vertexai,
-            }
-
-            # Set http_options if we have api_version or base_url
-            http_options = {}
-            if api_version:
-                http_options['api_version'] = api_version
-            if base_url_override:
-                http_options['base_url'] = base_url_override
-            if http_options:
-                kwargs['http_options'] = http_options
-
-            if api_client.vertexai:
-                # Vertex AI mode: requires project/location (api_key is optional/unlikely)
-                if api_client.project:
-                    kwargs['project'] = api_client.project
-                if api_client.location:
-                    kwargs['location'] = api_client.location
-                if api_client._credentials:
-                    kwargs['credentials'] = api_client._credentials
-                # Don't pass api_key if we are in Vertex AI mode with credentials/project
-            else:
-                # Google AI mode: primarily uses api_key
-                # Use override if provided, otherwise fall back to existing client's api_key
-                if api_key_override:
-                    kwargs['api_key'] = api_key_override
-                elif api_client.api_key:
-                    kwargs['api_key'] = api_client.api_key
-                # Do NOT pass project/location/credentials if in Google AI mode to be safe
-                if api_client._credentials and not kwargs.get('api_key'):
-                    # Fallback if no api_key but credentials present (unlikely for pure Google AI but possible)
-                    kwargs['credentials'] = api_client._credentials
-
-            try:
-                client = genai.Client(**kwargs)
-            except Exception as e:
-                # If client creation fails (e.g., invalid API key format), raise a clear error
-                raise GenkitError(
-                    status='INVALID_ARGUMENT',
-                    message=f'Failed to create Google AI client: {str(e)}',
-                ) from e
 
         if ctx.is_streaming:
             response = await self._streaming_generate(
@@ -1635,6 +1622,92 @@ class GeminiModel:
         response.usage = self._create_usage_stats(request=request, response=response)
 
         return response
+
+    async def _resolve_request_client(self, request: ModelRequest) -> genai.Client:
+        """Resolve the client to use for a request.
+
+        If the request config overrides api_key, base_url, api_version, or
+        location, a temporary client is created with those settings; otherwise
+        the plugin-configured client is returned.
+        """
+        api_version = None
+        api_key_override = None
+        base_url_override = None
+        location_override = None
+
+        if request.config:
+            if isinstance(request.config, dict):
+                api_version = request.config.get('api_version')
+                api_key_override = request.config.get('api_key')
+                base_url_override = request.config.get('base_url')
+                location_override = request.config.get('location')
+            else:
+                api_version = getattr(request.config, 'api_version', None)
+                api_key_override = getattr(request.config, 'api_key', None)
+                base_url_override = getattr(request.config, 'base_url', None)
+                location_override = getattr(request.config, 'location', None)
+
+        if location_override and not self._client.vertexai:
+            # Location is a Vertex AI concept; ignore it for the Gemini API backend.
+            location_override = None
+
+        if not (api_version or api_key_override or base_url_override or location_override):
+            return self._client
+
+        if self._client_kwargs is None:
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message='Per-request api_key/api_version/base_url/location overrides require '
+                'a model constructed with client_kwargs.',
+            )
+
+        # Clone the plugin-level client kwargs so the temporary client keeps the
+        # plugin's credentials, endpoint, headers, and timeouts.
+        kwargs = dict(self._client_kwargs)
+        plugin_opts = kwargs.get('http_options')
+        opts = plugin_opts.model_copy() if plugin_opts is not None else genai_types.HttpOptions()
+
+        if api_version:
+            opts.api_version = api_version
+        if location_override:
+            kwargs['location'] = location_override
+            if not self._base_url_pinned and not base_url_override:
+                if is_multi_regional_location(location_override):
+                    # Multi-regions are served from dedicated endpoints the SDK
+                    # does not derive itself.
+                    opts.base_url = multi_regional_base_url(location_override)
+                else:
+                    opts.base_url = None
+        if base_url_override:
+            opts.base_url = base_url_override
+        if api_key_override and not self._client.vertexai:
+            kwargs['api_key'] = api_key_override
+            # The SDK rejects credentials and api_key together.
+            kwargs['credentials'] = None
+        kwargs['http_options'] = opts
+
+        # The plugin's kwargs may carry project=None when the project comes
+        # from ADC. Resolve it here, off the event loop: the SDK's own
+        # resolution would block the loop, and it skips resolution entirely
+        # when a base_url is set.
+        if self._client.vertexai and not kwargs.get('project'):
+            kwargs['project'] = getattr(kwargs.get('credentials'), 'project_id', None) or await _adc_project()
+            if not kwargs.get('project') and is_multi_regional_location(kwargs.get('location')):
+                raise GenkitError(
+                    status='FAILED_PRECONDITION',
+                    message='A project is required when overriding the location with a '
+                    'multi-region. Set the project parameter or GOOGLE_CLOUD_PROJECT '
+                    'environment variable.',
+                )
+
+        try:
+            return genai.Client(**kwargs)
+        except Exception as e:
+            # If client creation fails (e.g., invalid API key format), raise a clear error
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'Failed to create google-genai client: {str(e)}',
+            ) from e
 
     async def _generate(
         self,
@@ -1832,13 +1905,15 @@ class GeminiModel:
         }
 
     async def _build_messages(
-        self, request: ModelRequest, model_name: str
+        self, request: ModelRequest, model_name: str, client: genai.Client | None = None
     ) -> tuple[list[genai_types.Content], genai_types.CachedContent | None]:
         """Build google-genai request contents from Genkit request.
 
         Args:
             request: Genkit request.
             model_name: name of generation model to use
+            client: client to use for context-cache operations. Defaults to
+                the plugin-configured client.
 
         Returns:
             list of google-genai contents.
@@ -1864,6 +1939,7 @@ class GeminiModel:
                     model_name=model_name,
                     cache_config=msg.metadata['cache'],
                     contents=request_contents,
+                    client=client,
                 )
                 # The prefix up to this message is now stored in the cache.
                 # Only post-cache messages should be sent in the generate call.
@@ -1986,7 +2062,7 @@ class GeminiModel:
 
     # Keys that are Genkit-specific and must not be forwarded to the API.
     # 'version' overrides the model name, others are client-level settings.
-    _GENKIT_ONLY_KEYS = frozenset(['version', 'api_version', 'api_key', 'base_url', 'context_cache'])
+    _GENKIT_ONLY_KEYS = frozenset(['version', 'api_version', 'api_key', 'base_url', 'location', 'context_cache'])
 
     # Keys that may not be supported by older google-genai SDK versions.
     _SDK_GATED_KEYS = frozenset(['image_config', 'thinking_config', 'response_modalities'])

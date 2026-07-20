@@ -73,6 +73,7 @@ from pydantic import BaseModel, ConfigDict
 from genkit import GenkitError
 from genkit.evaluator import BaseDataPoint, Details, EvalFnResponse, Score
 from genkit.plugin_api import GENKIT_CLIENT_HEADER, Action, get_cached_client
+from genkit_google_genai.constants import GLOBAL_LOCATION, is_multi_regional_location, vertex_api_host
 
 if TYPE_CHECKING:
     from genkit import Genkit as GenkitRegistry
@@ -162,6 +163,23 @@ class EvaluatorFactory:
         self.project_id = project_id
         self.location = location
 
+    def _api_host(self) -> str:
+        """Vertex AI host for the configured location.
+
+        The Vertex Evaluation Service is only served regionally, so
+        multi-region and global locations are rejected up front.
+
+        Raises:
+            GenkitError: If the location is a multi-region or 'global'.
+        """
+        if is_multi_regional_location(self.location) or self.location == GLOBAL_LOCATION:
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message=f"The Vertex Evaluation Service does not support the '{self.location}' "
+                'location. Configure a regional location (e.g. us-central1) to use evaluators.',
+            )
+        return vertex_api_host(self.location)
+
     async def evaluate_instances(self, request_body: dict[str, Any]) -> dict[str, Any]:
         """Call the Vertex AI evaluateInstances API.
 
@@ -175,7 +193,7 @@ class EvaluatorFactory:
             GenkitError: If the API call fails.
         """
         location_name = f'projects/{self.project_id}/locations/{self.location}'
-        url = f'https://{self.location}-aiplatform.googleapis.com/v1beta1/{location_name}:evaluateInstances'
+        url = f'https://{self._api_host()}/v1beta1/{location_name}:evaluateInstances'
 
         # Get authentication token
         # Use asyncio.to_thread to avoid blocking the event loop during token refresh

@@ -97,7 +97,9 @@ from collections.abc import Callable
 from typing import Any
 
 from google import genai
+from google.auth import default as google_auth_default
 from google.auth.credentials import Credentials
+from google.auth.exceptions import DefaultCredentialsError
 from google.genai.client import DebugConfig
 from google.genai.types import HttpOptions, HttpOptionsDict
 
@@ -447,6 +449,7 @@ class GoogleAI(Plugin):
             'debug_config': debug_config,
             'http_options': _inject_attribution_headers(http_options, base_url, api_version),
         }
+        self._base_url_pinned = bool(self._client_kwargs['http_options'].base_url)
         # Single loop-local client accessor used everywhere in plugin runtime paths.
         self._runtime_client = loop_local_client(lambda: genai.client.Client(**self._client_kwargs))
         self._list_actions_cache: list[ActionMetadata] | None = None
@@ -628,7 +631,12 @@ class GoogleAI(Plugin):
             if clean_name.lower().startswith('image'):
                 model = ImagenModel(clean_name, self._runtime_client())
             else:
-                model = GeminiModel(clean_name, self._runtime_client())
+                model = GeminiModel(
+                    clean_name,
+                    self._runtime_client(),
+                    client_kwargs=self._client_kwargs,
+                    base_url_pinned=self._base_url_pinned,
+                )
             return await model.generate(request, ctx)
 
         return Action(
@@ -769,7 +777,7 @@ class VertexAI(Plugin):
         self,
         credentials: Credentials | None = None,
         project: str | None = None,
-        location: str | None = 'us-central1',
+        location: str | None = None,
         debug_config: DebugConfig | None = None,
         http_options: HttpOptions | HttpOptionsDict | None = None,
         api_key: str | None = None,
@@ -783,7 +791,10 @@ class VertexAI(Plugin):
                 Defaults to None, in which case the client uses default authentication
                 mechanisms (e.g., application default credentials or API key).
             project: Name of the Google Cloud project.
-            location: Location of the Google Cloud project.
+            location: Location of the Google Cloud project. Accepts regions
+                (e.g. 'us-central1'), multi-regions ('us', 'eu'), or 'global'.
+                Falls back to the GOOGLE_CLOUD_LOCATION or GCLOUD_LOCATION
+                environment variable, then 'us-central1'.
             debug_config: Configuration for debugging the client. Defaults to None.
             http_options: HTTP options for configuring the client's network requests.
                 Can be an instance of HttpOptions or a dictionary. Defaults to None.
@@ -793,10 +804,37 @@ class VertexAI(Plugin):
             api_version: The API version to use. Defaults to None.
             base_url: The base URL for the API. Defaults to None.
         """
-        # Store project and location on the plugin for reranker resolution.
-        # This avoids reaching into client internals.
-        self._project = project if project else os.getenv(const.GCLOUD_PROJECT)
-        self._location = location if location else const.DEFAULT_REGION
+        # Store project and location on the plugin for evaluator registration
+        # and multi-region routing. This avoids reaching into client internals.
+        self._project = project or os.getenv(const.GCLOUD_PROJECT) or os.getenv(const.GOOGLE_CLOUD_PROJECT)
+        self._location = (
+            location
+            or os.getenv(const.GOOGLE_CLOUD_LOCATION)
+            or os.getenv(const.GCLOUD_LOCATION)
+            or const.DEFAULT_REGION
+        )
+
+        opts = _inject_attribution_headers(http_options, base_url, api_version)
+        self._base_url_pinned = bool(opts.base_url)
+        if const.is_multi_regional_location(self._location):
+            if not self._base_url_pinned:
+                # Multi-regions ('us', 'eu') are served from dedicated endpoints
+                # that the google-genai SDK does not derive itself.
+                opts.base_url = const.multi_regional_base_url(self._location)
+            # With an explicit base_url the SDK skips its ADC project lookup,
+            # so the plugin must resolve the project itself.
+            if not self._project and credentials is not None:
+                self._project = getattr(credentials, 'project_id', None)
+            if not self._project:
+                try:
+                    _, self._project = google_auth_default()
+                except DefaultCredentialsError:
+                    self._project = None
+            if not self._project:
+                raise ValueError(
+                    'VertexAI plugin requires a project when using a multi-region location. '
+                    'Set the project parameter or GOOGLE_CLOUD_PROJECT environment variable.'
+                )
 
         self._client_kwargs: dict[str, Any] = {
             'vertexai': self._vertexai,
@@ -805,7 +843,7 @@ class VertexAI(Plugin):
             'project': self._project,
             'location': self._location,
             'debug_config': debug_config,
-            'http_options': _inject_attribution_headers(http_options, base_url, api_version),
+            'http_options': opts,
         }
         # Single loop-local client accessor used everywhere in plugin runtime paths.
         self._runtime_client = loop_local_client(lambda: genai.client.Client(**self._client_kwargs))
@@ -964,13 +1002,23 @@ class VertexAI(Plugin):
 
         async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
             if is_tuned_gemini_name(clean_name):
-                model = GeminiModel(clean_name, self._runtime_client())
+                model = GeminiModel(
+                    clean_name,
+                    self._runtime_client(),
+                    client_kwargs=self._client_kwargs,
+                    base_url_pinned=self._base_url_pinned,
+                )
             elif clean_name.lower().startswith('image'):
                 model = ImagenModel(clean_name, self._runtime_client())
             elif is_veo_model(clean_name):
                 model = VeoModel(clean_name, self._runtime_client())
             else:
-                model = GeminiModel(clean_name, self._runtime_client())
+                model = GeminiModel(
+                    clean_name,
+                    self._runtime_client(),
+                    client_kwargs=self._client_kwargs,
+                    base_url_pinned=self._base_url_pinned,
+                )
             return await model.generate(request, ctx)
 
         return Action(
@@ -1075,7 +1123,9 @@ def _inject_attribution_headers(
     if not http_options:
         opts = HttpOptions()
     elif isinstance(http_options, HttpOptions):
-        opts = http_options
+        # Copy so plugin-derived settings never mutate the caller's object
+        # (which may be shared across plugin instances).
+        opts = http_options.model_copy(deep=True)
     else:
         opts = HttpOptions.model_validate(http_options)
 
