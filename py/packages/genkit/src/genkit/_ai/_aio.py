@@ -131,7 +131,7 @@ from genkit._core._typing import (
 )
 
 from ._decorators import _FlowDecorator, _FlowDecoratorWithChunk
-from ._runtime import RuntimeManager, setup_signal_handlers
+from ._runtime import RuntimeManager
 
 logger = get_logger(__name__)
 
@@ -183,7 +183,6 @@ class Genkit:
         # daemon thread so it's available regardless of which web framework (or
         # none) the user chooses.
         if is_dev_environment():
-            setup_signal_handlers()
             self._start_reflection_background()
 
         # Load prompts

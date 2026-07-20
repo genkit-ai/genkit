@@ -20,8 +20,6 @@ from genkit._core._error import (
     GenkitError,
     PublicError,
     ReflectionError,
-    genkit_error_from_http,
-    genkit_error_from_wire,
     get_callable_json,
     get_error_stack,
     get_http_status,
@@ -108,29 +106,3 @@ def test_get_error_stack() -> None:
     except ValueError as e:
         tb = get_error_stack(e)
         assert tb == ''
-
-
-def test_genkit_error_from_wire_callable_format() -> None:
-    err = genkit_error_from_wire({'status': 'UNAVAILABLE', 'message': 'down', 'details': {'x': 1}})
-    assert err.status == 'UNAVAILABLE'
-    assert err.original_message == 'down'
-    assert err.details['x'] == 1
-
-
-def test_genkit_error_from_wire_reflection_format() -> None:
-    err = genkit_error_from_wire({'code': 13, 'message': 'boom', 'details': {'stack': ''}})
-    assert err.status == 'INTERNAL'
-    assert err.original_message == 'boom'
-
-
-def test_genkit_error_from_http_json_body() -> None:
-    body = '{"error": {"status": "INVALID_ARGUMENT", "message": "bad input", "details": {}}}'
-    err = genkit_error_from_http(status_code=400, body=body)
-    assert err.status == 'INVALID_ARGUMENT'
-    assert err.original_message == 'bad input'
-
-
-def test_genkit_error_from_http_fallback() -> None:
-    err = genkit_error_from_http(status_code=503, body='service unavailable')
-    assert err.status == 'UNAVAILABLE'
-    assert 'service unavailable' in err.original_message

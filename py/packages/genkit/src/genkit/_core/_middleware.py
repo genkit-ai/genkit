@@ -97,24 +97,6 @@ class GenerateHookParams(BaseModel):
 
     Covers one full iteration of the tool loop: a model call plus optional tool
     resolution. ``message_index`` tracks streaming position for this turn.
-
-    ``options`` is the accumulating generate envelope. ``options.messages`` holds
-    the caller input plus each model and tool message appended as the loop runs —
-    it's the durable conversation transcript for this ``generate()`` call and the
-    thing that gets persisted.
-
-    ``request`` is built from ``options`` for this iteration and handed to the
-    model. The engine discards it after the iteration and rebuilds it from
-    ``options`` on the next pass, so it's per-call scratch space for customizing
-    this one model call without touching the saved conversation.
-
-    Rule of thumb for middleware that changes messages (reassigning the field or
-    mutating it in place both take effect):
-
-    - To persist a change across later tool-loop iterations and into history,
-      update ``options.messages``. If the current model call should see it too,
-      update ``request.messages`` as well.
-    - To affect only the current model call, update ``request.messages`` only.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
@@ -196,19 +178,33 @@ class BaseMiddleware(Generic[TConfig]):
             max_retries: int = 3
 
     2. Extend BaseMiddleware with your config model, e.g. Retry:
+        ai = Genkit()
 
+        @ai.middleware(
+            name="retry",
+            description="Configures smart retry logic with exponential backoff and a jitter."
+        )
         class Retry(BaseMiddleware[RetryConfig]):
             async def wrap_model(self, params, next_fn, ctx):
                 for attempt in range(self.config.max_retries + 1):
                     ...
 
-        use=[Retry(max_retries=5)]
-        use=[Retry(config=RetryConfig(max_retries=5))]
-
-    3. Wrap your subclass with the ``@ai.middleware`` decorator to make it available
+    Wrap your subclass with the ``@ai.middleware`` decorator to make it available
     in your local Dev UI.
 
-    Keep in mind that ctx and config are not meant to be mutated from within hooks.
+    3.Use the Retry middleware in your `generate` call:
+        ai.generate(
+            ...,
+            use=[Retry(max_retries=5)]
+        )
+
+        # Or alternatively, for full keyword auto-complete in your preferred IDE:
+        ai.generate(
+            ...,
+            use=[Retry(config=RetryConfig(max_retries=5))]
+        )
+
+    Keep in mind that config are not meant to be mutated from within hooks.
     """
 
     Config: ClassVar[type[BaseModel]] = _EmptyMiddlewareConfig

@@ -24,9 +24,8 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from genkit._ai._model import Message
-from genkit._ai._tools import define_tool
+from genkit._ai._tools import tool
 from genkit._core._model import GenerateActionOptions, ModelResponse
-from genkit._core._registry import Registry
 from genkit._core._typing import Artifact, Part, Role, TextPart
 from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
 
@@ -144,7 +143,6 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
     """Session artifact tools plus an injected artifact listing in the system prompt."""
 
     def tools(self, ctx: GenerateMiddlewareContext) -> list[Any]:
-        scratch = Registry()
         tools: list[Any] = []
 
         async def read_artifact(input: ReadArtifactInput) -> ReadArtifactOutput:
@@ -175,8 +173,7 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
             )
 
         tools.append(
-            define_tool(
-                scratch,
+            tool(
                 read_artifact,
                 name='read_artifact',
                 description=(
@@ -198,8 +195,7 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
                 return WriteArtifactOutput(status=f'Artifact "{input.name}" saved successfully.')
 
             tools.append(
-                define_tool(
-                    scratch,
+                tool(
                     write_artifact,
                     name='write_artifact',
                     description=(

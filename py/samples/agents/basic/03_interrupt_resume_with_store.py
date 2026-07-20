@@ -54,7 +54,7 @@ tool_approval = ToolApproval(allowed_tools=[])  # empty list ⇒ every tool need
 
 
 @ai.tool(name='transferMoney', description='Transfer money between accounts.')
-async def transfer_money(_input: TransferInput) -> TransferOutput:
+async def transfer_money(input: TransferInput) -> TransferOutput:
     return TransferOutput(success=True, transactionId=f'txn-{uuid4().hex[:12]}')
 
 

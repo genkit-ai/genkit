@@ -34,14 +34,14 @@ from genkit._ai._agents._session import (
     SessionStore,
     SnapshotSubscriber,
 )
+from genkit._ai._agents._session_stores._file_store import FileSessionStore
+from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
 from genkit._ai._agents._transports._http import HttpAgentTransport, remote_agent
 from genkit._ai._agents._types import (
     ChunkTransform,
     StateTransform,
     TurnResult,
 )
-from genkit._ai._agents.session_stores.file_store import FileSessionStore
-from genkit._ai._agents.session_stores.inmemory_store import InMemorySessionStore
 from genkit._core._typing import (
     AgentFinishReason,
     AgentInit,

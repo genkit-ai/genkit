@@ -438,8 +438,7 @@ search-path = [
   "packages/genkit-ollama/src",
   "packages/genkit-vertexai/src",
 ]
-ignore-missing-imports = ["genkit.plugins.*"]
-python_version         = "3.10"
+python_version = "3.10"
 
 # Treat warnings as errors.
 [tool.pyrefly.errors]

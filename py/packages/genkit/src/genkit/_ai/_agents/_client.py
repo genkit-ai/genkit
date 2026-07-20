@@ -19,6 +19,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import inspect
+import json
+import re
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Generator, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Generic, Protocol, TypeVar, cast
@@ -30,7 +32,12 @@ from genkit._ai._agents._snapshot import lookup_label
 from genkit._ai._agents._types import StateManagement
 from genkit._ai._json_patch import apply_json_patch
 from genkit._core._channel import CloseableQueue
-from genkit._core._error import GenkitError, genkit_error_from_exception
+from genkit._core._error import (
+    _STATUS_CODE_MAP,
+    GenkitError,
+    StatusCodes,
+    StatusName,
+)
 from genkit._core._model import Message
 from genkit._core._typing import (
     AgentFinishReason,
@@ -296,6 +303,77 @@ class AgentError(Exception):
         self.response = response
 
 
+_HTTP_TO_STATUS: dict[int, StatusName] = {code: name for name, code in _STATUS_CODE_MAP.items()}
+
+
+def _coerce_status_name(raw: str | None) -> StatusName:
+    if raw and raw in _STATUS_CODE_MAP:
+        return raw  # type: ignore[return-value]
+    return 'INTERNAL'
+
+
+def _error_from_wire(error: dict[str, Any] | str | GenkitError) -> GenkitError:
+    """Parse a reflection or callable wire error payload into GenkitError."""
+    if isinstance(error, GenkitError):
+        return error
+    if isinstance(error, str):
+        return GenkitError(status='INTERNAL', message=error)
+
+    # Callable format: {message, status, details}
+    if isinstance(error.get('status'), str):
+        return GenkitError(
+            status=_coerce_status_name(error['status']),
+            message=str(error.get('message', '')),
+            details=error.get('details'),
+        )
+
+    # Reflection format: {message, code, details}
+    if 'code' in error:
+        try:
+            status_name = StatusCodes(int(error['code'])).name
+        except (TypeError, ValueError):
+            status_name = 'INTERNAL'
+        details = error.get('details')
+        if details is not None and hasattr(details, 'model_dump'):
+            details = details.model_dump(by_alias=True)
+        return GenkitError(
+            status=_coerce_status_name(status_name),
+            message=str(error.get('message', '')),
+            details=details,
+        )
+
+    message = str(error.get('message', error))
+    return GenkitError(status='INTERNAL', message=message)
+
+
+def _error_from_http(*, status_code: int, body: str) -> GenkitError:
+    """Build GenkitError from a non-2xx HTTP response body."""
+    if body:
+        try:
+            parsed = json.loads(body)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            if 'error' in parsed:
+                return _error_from_wire(parsed['error'])
+            if 'message' in parsed and ('status' in parsed or 'code' in parsed):
+                return _error_from_wire(parsed)
+
+    status = _HTTP_TO_STATUS.get(status_code, 'INTERNAL')
+    message = body.strip() or f'HTTP {status_code}'
+    return GenkitError(status=status, message=message)
+
+
+def _error_from_exception(e: Exception) -> GenkitError:
+    """Normalize an arbitrary exception into GenkitError for transport boundaries."""
+    if isinstance(e, GenkitError):
+        return e
+    message = str(e)
+    match = re.match(r'^([A-Z_]+):', message)
+    status = _coerce_status_name(match.group(1) if match else None)
+    return GenkitError(status=status, message=message, cause=e)
+
+
 def to_agent_error(
     e: Exception,
     *,
@@ -312,7 +390,7 @@ def to_agent_error(
         details = e.details
     else:
         message = str(e)
-        wrapped = genkit_error_from_exception(e)
+        wrapped = _error_from_exception(e)
         status = wrapped.status
         details = e
     raw = AgentOutput(

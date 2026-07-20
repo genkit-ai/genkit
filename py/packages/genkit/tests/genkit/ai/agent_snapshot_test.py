@@ -22,9 +22,9 @@ import pytest
 from genkit._ai._agents._base import define_custom_agent
 from genkit._ai._agents._client import AgentError
 from genkit._ai._agents._runtime import SessionRunner
+from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
 from genkit._ai._agents._snapshot import is_heartbeat_expired, resolve_snapshot
 from genkit._ai._agents._types import TurnResult
-from genkit._ai._agents.session_stores.inmemory_store import InMemorySessionStore
 from genkit._core._action import ActionKind, ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._registry import Registry
