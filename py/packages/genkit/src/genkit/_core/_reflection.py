@@ -27,6 +27,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, cast
+from uuid import uuid4
 
 import uvicorn
 from pydantic import BaseModel
@@ -38,16 +39,43 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from genkit._core._action import Action, BidiAction
-from genkit._core._agent_reflection import resolve_agent_init, resolve_agent_input
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import get_reflection_json
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
 from genkit._core._registry import Registry
+from genkit._core._typing import AgentInit, AgentInput
 
 logger = get_logger(__name__)
 
 LifecycleHook = Callable[[], Awaitable[None]]
+
+
+def agent_has_server_store(action: BidiAction[Any, Any, Any]) -> bool:
+    """True when the agent keeps session state on the server rather than the client."""
+    agent_meta = (action.metadata or {}).get('agent')
+    agent_dict = cast(dict[str, Any], agent_meta) if isinstance(agent_meta, dict) else {}
+    return agent_dict.get('stateManagement') == 'server'
+
+
+def resolve_agent_init(action: BidiAction[Any, Any, Any], init_val: object) -> AgentInit:
+    """Validate a raw init payload into an ``AgentInit``, normalized for the agent's store.
+
+    For a server-store agent we mint a session id when the caller didn't supply
+    one, and drop any caller-provided state — the store owns state, so a client
+    copy could otherwise overwrite the server's history with a stale snapshot.
+    """
+    init = AgentInit.model_validate(init_val) if isinstance(init_val, dict) else AgentInit()
+    if agent_has_server_store(action):
+        if not init.session_id and not init.snapshot_id:
+            init.session_id = str(uuid4())
+        init.state = None
+    return init
+
+
+def resolve_agent_input(input_val: object) -> AgentInput:
+    """Validate a raw per-turn input payload into an ``AgentInput`` (empty when absent)."""
+    return AgentInput.model_validate(input_val) if input_val is not None else AgentInput()
 
 
 @dataclass
