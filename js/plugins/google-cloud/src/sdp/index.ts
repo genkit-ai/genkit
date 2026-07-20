@@ -88,7 +88,7 @@ export interface SdpOptionsBase {
   credentials?: any; // (Optional) Explicitly set the Google Cloud credentials
 }
 
-export async function createDlpClient(
+async function createDlpClient(
   options: SdpOptions
 ): Promise<v2.DlpServiceClient> {
   let dlpModule;
@@ -123,7 +123,7 @@ export type SdpOptions = SdpOptionsBase &
   );
 
 // 1. Inspect config
-export function buildInspectConfig(
+function buildInspectConfig(
   options: SdpOptions
 ): protos.google.privacy.dlp.v2.IInspectConfig {
   const defaultInfoTypes = [
@@ -150,7 +150,7 @@ export function buildInspectConfig(
 }
 
 // 2. De-identify config
-export function buildDeidentifyConfig(
+function buildDeidentifyConfig(
   options: SdpOptions
 ): protos.google.privacy.dlp.v2.IDeidentifyConfig {
   const inlineConfig =
@@ -182,14 +182,113 @@ export function buildDeidentifyConfig(
   };
 }
 
+async function sanitizeInput(
+  dlp: v2.DlpServiceClient,
+  text: string,
+  options: SdpOptions,
+  projectId: string
+): Promise<string> {
+  const request: protos.google.privacy.dlp.v2.IDeidentifyContentRequest = {
+    parent: `projects/${projectId}/locations/global`,
+    item: { value: text },
+  };
+
+  if (options.templates) {
+    request.inspectTemplateName = options.templates.inspectTemplateName;
+    request.deidentifyTemplateName = options.templates.deidentifyTemplateName;
+  } else {
+    request.inspectConfig = buildInspectConfig(options);
+    request.deidentifyConfig = buildDeidentifyConfig(options);
+  }
+
+  const [response] = await dlp.deidentifyContent(request);
+  return response.item?.value ?? text;
+}
+
 export const sensitiveDataProtection = generateMiddleware<SdpOptions>(
   { name: 'sensitiveDataProtection' },
   ({ config, pluginConfig }) => {
+    const options = { ...pluginConfig, ...config } as SdpOptions;
+    let clientPromise: Promise<{
+      client: v2.DlpServiceClient;
+      projectId: string;
+    }> | null = null;
     return {
       generate: async (envelope, ctx, next) => {
+        const opts = options || {};
+        if (!clientPromise) {
+          clientPromise = (async () => {
+            const envAuth = await credentialsFromEnvironment();
+            const projectId = opts.projectId || envAuth.projectId;
+            const credentials = opts.credentials || envAuth.credentials;
+
+            if (!projectId) {
+              throw new Error(
+                'Project ID is required for Sensitive Data Protection. Please set the projectId option or configure it in your environment.'
+              );
+            }
+
+            const client = await createDlpClient({
+              ...opts,
+              projectId,
+              credentials,
+            });
+
+            return { client, projectId };
+          })().catch((err) => {
+            clientPromise = null;
+            throw err;
+          });
+        }
+
+        const { client, projectId } = await clientPromise;
+
         // Intercept input
+        if (envelope.request?.messages) {
+          const redactionPromises = envelope.request.messages
+            // ignore empty messages
+            .filter((message) => !!message.content)
+            // extract all message content into a single array
+            // @ts-ignore - flatMap creates a flat array of content parts
+            .flatMap((message) => message.content!)
+            // ignore multimedia content and content that has been cleaned already
+            .filter((part) => part.text && !part.metadata?.isCleaned)
+            // de-identify message content
+            .map(async (part): Promise<void> => {
+              part.text = await sanitizeInput(
+                client,
+                part.text!,
+                opts,
+                projectId
+              );
+              part.metadata = { ...part.metadata, isCleaned: true };
+            });
+
+          // Wait for all network calls to finish in parallel
+          await Promise.all(redactionPromises);
+        }
+
         const res = await next(envelope, ctx);
+
         // Intercept output
+        if (res.message?.content) {
+          const outputRedactionPromises = res.message.content
+            // ignore multimedia content and content that has been cleaned already
+            .filter((part) => part.text && !part.metadata?.isCleaned)
+            // de-identify message content
+            .map(async (part): Promise<void> => {
+              part.text = await sanitizeInput(
+                client,
+                part.text!,
+                opts,
+                projectId
+              );
+              part.metadata = { ...part.metadata, isCleaned: true };
+            });
+
+          await Promise.all(outputRedactionPromises);
+        }
+
         return res;
       },
     };
