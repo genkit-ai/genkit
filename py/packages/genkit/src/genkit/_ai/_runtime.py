@@ -23,6 +23,7 @@ import json
 import os
 import signal
 import sys
+import threading
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +37,7 @@ logger = get_logger(__name__)
 
 DEFAULT_RUNTIME_DIR_NAME = '.genkit/runtimes'
 ACTIVE_CLEANUPS: list[Callable[[], None]] = []
+ACTIVE_CLEANUPS_LOCK = threading.Lock()
 SIGNALS_REGISTERED = False
 
 
@@ -45,16 +47,28 @@ def setup_signal_handlers() -> None:
     if SIGNALS_REGISTERED:
         return
 
-    def handle_signal(signum: int, frame: FrameType | None) -> None:
-        cleanups = list(ACTIVE_CLEANUPS)
-        for cleanup_fn in cleanups:
-            try:
-                cleanup_fn()
-            except Exception:  # noqa: S110
-                pass
-        sys.exit(128 + signum)
-
     try:
+        original_sigint = signal.getsignal(signal.SIGINT)
+        original_sigterm = signal.getsignal(signal.SIGTERM)
+
+        def handle_signal(signum: int, frame: FrameType | None) -> None:
+            handler = original_sigint if signum == signal.SIGINT else original_sigterm
+            if handler == signal.SIG_IGN:
+                return
+
+            with ACTIVE_CLEANUPS_LOCK:
+                cleanups = list(ACTIVE_CLEANUPS)
+            for cleanup_fn in cleanups:
+                try:
+                    cleanup_fn()
+                except Exception:  # noqa: S110
+                    pass
+
+            if callable(handler):
+                handler(signum, frame)
+            elif handler == signal.SIG_DFL:
+                sys.exit(128 + signum)
+
         signal.signal(signal.SIGINT, handle_signal)
         signal.signal(signal.SIGTERM, handle_signal)
         SIGNALS_REGISTERED = True
@@ -275,13 +289,15 @@ class RuntimeManager:
 
         self._runtime_file_path = _create_and_write_runtime_file(self._runtime_dir, self.spec)
         _register_atexit_cleanup_handler(self._runtime_file_path)
-        ACTIVE_CLEANUPS.append(self.cleanup)
+        with ACTIVE_CLEANUPS_LOCK:
+            ACTIVE_CLEANUPS.append(self.cleanup)
         return self._runtime_file_path
 
     def cleanup(self) -> None:
         """Explicitly cleanup the runtime file."""
-        if self.cleanup in ACTIVE_CLEANUPS:
-            ACTIVE_CLEANUPS.remove(self.cleanup)
+        with ACTIVE_CLEANUPS_LOCK:
+            if self.cleanup in ACTIVE_CLEANUPS:
+                ACTIVE_CLEANUPS.remove(self.cleanup)
 
         if self._runtime_file_path:
             logger.debug(f'Cleaning up runtime file: {self._runtime_file_path}')
