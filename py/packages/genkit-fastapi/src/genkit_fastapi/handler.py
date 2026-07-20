@@ -28,14 +28,50 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from genkit import Action, ActionKind, Genkit, GenkitError
-from genkit._ai._agents._snapshot import parse_abort_input, parse_snapshot_lookup_input
 from genkit.agent import Agent, SessionSnapshot
 from genkit.plugin_api import ContextProvider, RequestData, get_callable_json
+
+
+def parse_snapshot_lookup_input(input_val: dict[str, Any] | str | None) -> tuple[str | None, str | None]:
+    """Parse snapshot lookup params from payload dict or bare snapshot ID string."""
+    if isinstance(input_val, str):
+        return input_val, None
+    if isinstance(input_val, dict):
+        sid = input_val.get('snapshotId') or input_val.get('snapshot_id')
+        sess_id = input_val.get('sessionId') or input_val.get('session_id')
+        if bool(sid) == bool(sess_id):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    "getSnapshot requires exactly one of 'snapshotId' (or 'snapshot_id') "
+                    "or 'sessionId' (or 'session_id')."
+                ),
+            )
+        return sid, sess_id
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message="getSnapshot input must be a dictionary or snapshot ID string.",
+    )
+
+
+def parse_abort_input(input_val: dict[str, Any] | str | None) -> str:
+    """Parse snapshot ID from payload dict or bare snapshot ID string."""
+    if isinstance(input_val, str):
+        return input_val
+    if isinstance(input_val, dict):
+        sid = input_val.get('snapshotId') or input_val.get('snapshot_id')
+        if sid:
+            return sid
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message="abort requires 'snapshotId' (or 'snapshot_id') in input.",
+    )
+
 
 # Compact JSON (no spaces) for smaller wire payload.
 JSON_SEPARATORS = (',', ':')
 
-StateT = TypeVar('StateT')
+StateT = TypeVar('StateT', bound=BaseModel)
 InputT = TypeVar('InputT')
 OutputT = TypeVar('OutputT')
 ChunkT = TypeVar('ChunkT')
