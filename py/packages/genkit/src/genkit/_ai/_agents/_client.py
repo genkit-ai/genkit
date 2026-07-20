@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import inspect
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Generator, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Generic, Protocol, TypeVar, cast
 
@@ -398,6 +398,12 @@ class AgentTurn(Generic[StateT]):
         except asyncio.CancelledError:
             await self.abort()
             raise
+
+    def __aiter__(self) -> AsyncIterator[AgentChunk[StateT]]:
+        return self.stream
+
+    def __await__(self) -> Generator[Any, None, AgentResponse[StateT]]:
+        return self.response.__await__()
 
     async def abort(self) -> None:
         """Detaches the client from this turn: stops streaming and settles the result now.
