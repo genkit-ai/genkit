@@ -19,12 +19,12 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Any
 
 from pydantic import BaseModel, Field
 
 from genkit._ai._model import Message
 from genkit._ai._tools import tool
+from genkit._core._action import Action
 from genkit._core._model import GenerateActionOptions, ModelResponse
 from genkit._core._typing import Artifact, Part, Role, TextPart
 from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
@@ -142,8 +142,8 @@ def inject_artifact_listing(options: GenerateActionOptions, listing: str) -> Gen
 class Artifacts(BaseMiddleware[ArtifactsConfig]):
     """Session artifact tools plus an injected artifact listing in the system prompt."""
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Any]:
-        tools: list[Any] = []
+    def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
+        tools: list[Action] = []
 
         async def read_artifact(input: ReadArtifactInput) -> ReadArtifactOutput:
             session = ctx.ai.current_session()

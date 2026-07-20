@@ -41,6 +41,7 @@ from typing import Any
 from pydantic import BaseModel as PydanticBaseModel
 
 from genkit._ai._tools import Interrupt, define_tool
+from genkit._core._action import Action
 from genkit._core._model import Message, ModelResponse, ModelResponseChunk
 from genkit._core._registry import Registry
 from genkit._core._typing import (
@@ -268,7 +269,7 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
             fh.write(content)
         return f'File {file_path} edited successfully.'
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Any]:
+    def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
         """Return filesystem tool actions for this generate() call."""
         scratch = Registry()
 
