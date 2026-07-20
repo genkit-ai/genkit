@@ -36,13 +36,7 @@ from genkit._core._typing import (
 
 
 class AgentAction(Protocol):
-    """The action-side surface the in-process transport drives.
-
-    A local agent runs its own turns and owns its snapshots, so the transport
-    only needs these three things off it. Agent satisfies this structurally,
-    which keeps the transport from having to import the concrete Agent class
-    (and lets a non-Agent action stand in).
-    """
+    """The action-side surface that the in-process transport calls."""
 
     async def stream_bidi(
         self,
