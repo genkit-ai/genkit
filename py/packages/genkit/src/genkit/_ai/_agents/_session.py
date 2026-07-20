@@ -22,6 +22,7 @@ from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from typing import Any, Generic, Protocol, cast, runtime_checkable
 
+from pydantic import BaseModel
 from typing_extensions import TypeVar as TypeVarExt
 
 from genkit._core._error import GenkitError
@@ -34,11 +35,13 @@ from genkit._core._typing import (
     SnapshotStatus,
 )
 
-StateT = TypeVarExt('StateT', default=Any)
+# Custom state is a Pydantic model, so StateT is bound to BaseModel; the Any
+# default covers schemaless (client-managed) sessions where custom is plain JSON.
+StateT = TypeVarExt('StateT', bound=BaseModel, default=Any)
 SessionContextT = TypeVarExt('SessionContextT', default=Any)
 # A store only ever hands custom state back out (it's a phantom over the wire
 # format), so its parameter is covariant.
-StateT_co = TypeVarExt('StateT_co', covariant=True, default=Any)
+StateT_co = TypeVarExt('StateT_co', covariant=True, bound=BaseModel, default=Any)
 
 
 STORE_LOCK_GETTERS: weakref.WeakKeyDictionary[object, Callable[[], asyncio.Lock]] = weakref.WeakKeyDictionary()
@@ -162,15 +165,9 @@ class Session(Generic[StateT]):
     snapshot writes without deep-comparing state.
     """
 
-    def __init__(
-        self,
-        initial_state: SessionState | None = None,
-        *,
-        store: SessionStore | None = None,
-    ) -> None:
+    def __init__(self, initial_state: SessionState | None = None) -> None:
         self.lock = asyncio.Lock()
         self.session_state: SessionState = initial_state or SessionState()
-        self.store = store
         self.version: int = 0
         self.custom_changed_listeners: list[Callable[[], Awaitable[None]]] = []
         self.artifact_changed_listeners: list[Callable[[Artifact], Awaitable[None]]] = []
@@ -212,11 +209,6 @@ class Session(Generic[StateT]):
             self.session_state.messages = list(messages)
             self.version += 1
 
-    async def update_messages(self, fn: Callable[[list[MessageData]], list[MessageData]]) -> None:
-        async with self.lock:
-            self.session_state.messages = fn(list(self.session_state.messages or []))
-            self.version += 1
-
     async def get_custom(self) -> StateT | None:
         async with self.lock:
             return cast(StateT | None, self.session_state.custom)
@@ -249,16 +241,6 @@ class Session(Generic[StateT]):
                     self.session_state.artifacts.append(art)
                 changed.append(art)
             self.version += 1
-        for art in changed:
-            await self.notify_artifact_changed(art)
-
-    async def update_artifacts(self, fn: Callable[[list[Artifact]], list[Artifact]]) -> None:
-        async with self.lock:
-            before = list(self.session_state.artifacts or [])
-            updated = fn(before)
-            self.session_state.artifacts = updated
-            self.version += 1
-            changed = [art for art in updated if art not in before]
         for art in changed:
             await self.notify_artifact_changed(art)
 

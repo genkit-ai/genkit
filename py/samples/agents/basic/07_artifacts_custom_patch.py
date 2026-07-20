@@ -86,14 +86,14 @@ async def main() -> None:
     # chunk.custom is the Progress model after each patch, so reading
     # chunk.custom.turns is typed attribute access, never chunk.custom['turns'].
     turn = chat.send('Go')
-    async for chunk in turn:
+    async for chunk in turn.stream:
         if chunk.custom is not None:
             print(f'\rturn {chunk.custom.turns} · {chunk.accumulated_text}', end='', flush=True)
     print()
 
     # state_schema materializes the wire blob into the model on the way out, so
     # the awaited response and the chat handle both expose .turns, not ['turns'].
-    res = await turn
+    res = await turn.response
     if res.state is not None:
         print(f'{res.state.turns} turn(s), {len(chat.artifacts)} artifact(s)')
 

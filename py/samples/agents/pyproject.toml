@@ -29,10 +29,10 @@ dependencies = [
   "pydantic>=2.10.5",
 ]
 
-[build-system]
-build-backend = "hatchling.build"
-requires = ["hatchling"]
-
-[tool.hatch.build.targets.wheel]
-packages = ["src"]
+[tool.uv]
+# These samples are runnable scripts, not an importable library — `uv run basic/...`
+# just needs the dependency set resolved, there's nothing to build or install. (The
+# other samples ship a src/ package and keep a build backend; this one lays its
+# scripts out under basic/ and testapps/ instead.)
+package = false
 

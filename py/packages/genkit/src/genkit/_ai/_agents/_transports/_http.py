@@ -21,7 +21,10 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable
-from typing import Any, TypeVar
+from typing import Any
+
+from pydantic import BaseModel
+from typing_extensions import TypeVar as TypeVarExt
 
 from genkit._ai._agents._client import AgentClient, AgentTransport
 from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
@@ -29,9 +32,17 @@ from genkit._ai._agents._types import StateManagement
 from genkit._core._channel import CloseableQueue
 from genkit._core._error import GenkitError
 from genkit._core._http_client import get_cached_client
-from genkit._core._typing import AgentInit, AgentInput, AgentOutput, AgentStreamChunk, SessionSnapshot, SnapshotStatus
+from genkit._core._typing import (
+    AgentAbortResponse,
+    AgentInit,
+    AgentInput,
+    AgentOutput,
+    AgentStreamChunk,
+    SessionSnapshot,
+    SnapshotStatus,
+)
 
-StateT = TypeVar('StateT')
+StateT = TypeVarExt('StateT', bound=BaseModel, default=Any)
 
 
 class HttpAgentTransport(AgentTransport[StateT]):
@@ -63,7 +74,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
         self.state_management: StateManagement = state_management
         self._background_tasks: set[asyncio.Task[Any]] = set()
 
-    async def _post_json(self, url: str, input_val: dict[str, Any]) -> Any:  # noqa: ANN401
+    async def _post_json(self, *, url: str, input_val: dict[str, Any]) -> Any:  # noqa: ANN401
         """POST JSON to a one-shot action endpoint and return the parsed body."""
         client = get_cached_client('agent_transport')
         response = await client.post(url, json=input_val)
@@ -179,8 +190,8 @@ class HttpAgentTransport(AgentTransport[StateT]):
     ) -> SessionSnapshot | None:
         """Retrieves a session snapshot from the server."""
         result = await self._post_json(
-            self.get_snapshot_url,
-            self._lookup_payload(snapshot_id=snapshot_id, session_id=session_id),
+            url=self.get_snapshot_url,
+            input_val=self._lookup_payload(snapshot_id=snapshot_id, session_id=session_id),
         )
         if result is None:
             return None
@@ -188,14 +199,10 @@ class HttpAgentTransport(AgentTransport[StateT]):
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
         """Aborts the specified snapshot on the server."""
-        result = await self._post_json(self.abort_url, {'snapshotId': snapshot_id})
-        if not isinstance(result, dict):
+        result = await self._post_json(url=self.abort_url, input_val={'snapshotId': snapshot_id})
+        if result is None:
             return None
-        status_val = result.get('status')
-        if not status_val:
-            return None
-        out: Any = SnapshotStatus(status_val)
-        return out
+        return AgentAbortResponse.model_validate(result).status
 
 
 def remote_agent(
@@ -205,13 +212,14 @@ def remote_agent(
     get_snapshot_url: str | None = None,
     abort_url: str | None = None,
     state_management: StateManagement,
-) -> AgentClient[Any]:
-    """Create a remote agent client over HTTP (JS ``remoteAgent`` equivalent)."""
-    transport = HttpAgentTransport(
+    state_schema: type[StateT] | None = None,
+) -> AgentClient[StateT]:
+    """Create a remote agent client over HTTP."""
+    transport: HttpAgentTransport[StateT] = HttpAgentTransport(
         url=url,
         agent_name=agent_name,
         get_snapshot_url=get_snapshot_url,
         abort_url=abort_url,
         state_management=state_management,
     )
-    return AgentClient(transport)
+    return AgentClient(transport, state_schema=state_schema)

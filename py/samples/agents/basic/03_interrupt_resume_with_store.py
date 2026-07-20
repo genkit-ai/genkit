@@ -77,7 +77,7 @@ agent = ai.define_agent(
 async def main() -> None:
     chat = agent.chat()
 
-    out1 = await chat.send('Transfer $500 to account 12345 for rent.')
+    out1 = await chat.send('Transfer $500 to account 12345 for rent.').response
     # → finish_reason INTERRUPTED; transferMoney is pending, not executed yet
     assert out1.finish_reason == AgentFinishReason.INTERRUPTED
 
@@ -85,7 +85,7 @@ async def main() -> None:
     restart_parts: list[ToolRequestPart] = [
         intr.restart(resumed_metadata={'tool_approved': True}) for intr in out1.interrupts
     ]
-    out2 = await chat.resume(restart=restart_parts)
+    out2 = await chat.resume(restart=restart_parts).response
     assert out2.finish_reason == AgentFinishReason.STOP
 
 

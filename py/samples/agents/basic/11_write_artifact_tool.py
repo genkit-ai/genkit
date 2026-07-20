@@ -45,7 +45,7 @@ async def main() -> None:
     chat = agent.chat()
 
     # The model writes a named file; the Artifacts middleware captures it on the chat.
-    await chat.send('Write poem.txt with a short poem about Python agents.')
+    await chat.send('Write poem.txt with a short poem about Python agents.').response
     # → chat.artifacts now contains poem.txt holding the generated poem
     assert any(a.name == 'poem.txt' for a in chat.artifacts)
 

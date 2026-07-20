@@ -23,11 +23,12 @@ import contextlib
 import copy
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime, timezone
-from typing import Any, Generic, TypeVar, cast
+from typing import Any, Generic, cast
 from uuid import uuid4
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
+from genkit._ai._agents._preamble import PREAMBLE_KEY, coerce_message
 from genkit._ai._agents._session import (
     Session,
     SessionStore,
@@ -36,7 +37,7 @@ from genkit._ai._agents._session import (
     run_with_session,
 )
 from genkit._ai._agents._snapshot import walk_back_to_resumable
-from genkit._ai._agents._types import ClientTransform, TurnResult
+from genkit._ai._agents._types import ChunkTransform, StateTransform, TurnResult
 from genkit._ai._generate import generate_action
 from genkit._ai._json_patch import diff_json
 from genkit._core._action import ActionRunContext, StreamingCallback, get_current_context
@@ -68,17 +69,10 @@ from genkit._core._typing import (
 
 logger = get_logger(__name__)
 
-PREAMBLE_KEY = '_genkit_agent_preamble'
-
 # How often a detached (background) turn refreshes its pending snapshot's
 # heartbeat. Comfortably under the read-side staleness timeout so a single
 # missed beat doesn't trip a live turn into `expired`.
 DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000
-
-InT = TypeVar('InT')
-OutT = TypeVar('OutT')
-StreamOutT = TypeVar('StreamOutT')
-StreamInT = TypeVar('StreamInT')
 
 
 class SessionRunner(Generic[StateT]):
@@ -206,19 +200,13 @@ AgentFn = Callable[
     Awaitable[AgentResult],
 ]
 
-# BidiFunc — low-level bidi action handler (asyncio queues for in/out streams).
-BidiFunc = Callable[
-    [InT, asyncio.Queue[StreamInT], asyncio.Queue[StreamOutT]],
-    Awaitable[OutT],
-]
-
 
 # ---------------------------------------------------------------------------
 # AgentRuntime
 # ---------------------------------------------------------------------------
 
 
-def validate_custom_state(*, custom: Any, state_schema: type[Any] | None, agent_name: str) -> None:  # noqa: ANN401
+def validate_custom_state(*, custom: Any, state_schema: type[BaseModel] | None, agent_name: str) -> None:  # noqa: ANN401
     """Reject custom state that doesn't match the agent's declared shape.
 
     Runs at load time on the state about to seed a turn — whether it came from a
@@ -227,7 +215,7 @@ def validate_custom_state(*, custom: Any, state_schema: type[Any] | None, agent_
     no schema is declared, and skips a never-set state so a required field doesn't
     trip a session that simply hasn't written state yet.
     """
-    if state_schema is None or custom is None or not hasattr(state_schema, 'model_validate'):
+    if state_schema is None or custom is None:
         return
     try:
         state_schema.model_validate(custom)
@@ -251,7 +239,7 @@ async def load_session(
     init: AgentInit,
     store: SessionStore | None,
     agent_name: str = '',
-    state_schema: type[Any] | None = None,
+    state_schema: type[BaseModel] | None = None,
 ) -> tuple[Session[Any], SessionSnapshot | None]:
     """Construct a Session from AgentInit payload.
 
@@ -350,13 +338,15 @@ class AgentRuntime:
         session: Session[Any],
         parent_snapshot: SessionSnapshot | None,
         store: SessionStore | None,
-        client_transform: ClientTransform | None,
+        state_transform: StateTransform | None,
+        chunk_transform: ChunkTransform | None,
         emit_chunk: Callable[[AgentStreamChunk], None],
     ) -> None:
         self.name = name
         self.session = session
         self.store = store
-        self.client_transform = client_transform
+        self.state_transform = state_transform
+        self.chunk_transform = chunk_transform
         self.last_snapshot: SessionSnapshot | None = parent_snapshot
         self.last_snapshot_version: int = self.session.version if parent_snapshot is not None else -1
         self.detached: bool = False
@@ -386,22 +376,19 @@ class AgentRuntime:
         # never had the baseline) gets re-synced before we resume sending deltas.
         self.first_custom_patch_in_turn = True
 
-    def transform_state(self, state: SessionState) -> SessionState | None:
-        state_fn = self.client_transform.get('state') if self.client_transform else None
-        if state_fn is None:
+    def transform_state(self, state: SessionState) -> SessionState:
+        if self.state_transform is None:
             return state
-        return state_fn(state)
+        return self.state_transform(state)
 
     def transform_chunk(self, chunk: AgentStreamChunk) -> AgentStreamChunk | None:
-        chunk_fn = self.client_transform.get('chunk') if self.client_transform else None
-        if chunk_fn is None:
+        if self.chunk_transform is None:
             return chunk
-        return chunk_fn(chunk)
+        return self.chunk_transform(chunk)
 
     async def client_custom(self) -> object | None:
         state = await self.session.state()
-        client_state = self.transform_state(state)
-        return client_state.custom if client_state is not None else None
+        return self.transform_state(state).custom
 
     async def emit_custom_patch(self) -> None:
         """Stream custom state updates to the client as JSON Patch deltas."""
@@ -669,7 +656,7 @@ class AgentRuntime:
             is_detached = False
             try:
                 async for item in client_inputs:
-                    if getattr(item, 'detach', False):
+                    if item.detach:
                         is_detached = True
                         # Forward the detach input's payload (if any) into the turn
                         # loop and close it *before* signaling detach. Doing it in
@@ -788,6 +775,12 @@ class AgentRuntime:
 
         # --- Normal completion path ---
         await fn_task
+        # If the client closed its input stream, the forward pump already finished
+        # on its own and this is skipped. But a still-open stream (interactive
+        # client that hasn't hung up) leaves the pump parked waiting for input the
+        # finished turn no longer needs, so cancel it to avoid a leaked task. The
+        # CancelledError below is just our own cancel coming back — swallow it so it
+        # doesn't look like run() itself was cancelled.
         if not forward_task.done():
             forward_task.cancel()
             try:
@@ -907,10 +900,6 @@ def to_agent_finish_reason(fr: FinishReason | None) -> AgentFinishReason | None:
     return AgentFinishReason.UNKNOWN
 
 
-def coerce_message(msg: MessageData) -> Message:
-    return msg if isinstance(msg, Message) else Message.model_validate(msg.model_dump())
-
-
 async def persist_turn_messages(
     *,
     session_runner: SessionRunner,
@@ -921,7 +910,7 @@ async def persist_turn_messages(
     if response is not None and response.request is not None and response.request.messages:
         clean: list[MessageData] = []
         for m in response.request.messages:
-            meta = getattr(m, 'metadata', None) or {}
+            meta = m.metadata or {}
             if meta.get(PREAMBLE_KEY):
                 continue
             clean.append(coerce_message(m))

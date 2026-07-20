@@ -43,7 +43,7 @@ agent = ai.define_prompt_agent(name='greeterPrompt', store=store)
 async def main() -> None:
     chat = agent.chat()
     # → the greeter prompt drives the turn; you get a warm, brief hello back
-    await chat.send('Hello!')
+    await chat.send('Hello!').response
 
 
 if __name__ == '__main__':

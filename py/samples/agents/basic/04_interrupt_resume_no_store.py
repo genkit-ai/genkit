@@ -69,12 +69,12 @@ agent = ai.define_agent(
 async def main() -> None:
     chat = agent.chat()
 
-    out1 = await chat.send('Transfer $100 to account 999 for lunch.')
+    out1 = await chat.send('Transfer $100 to account 999 for lunch.').response
     assert out1.finish_reason == AgentFinishReason.INTERRUPTED
 
     # Approve each pending tool call, then one resume continues the turn.
     restart_parts = [intr.restart(resumed_metadata={'tool_approved': True}) for intr in out1.interrupts]
-    out2 = await chat.resume(restart=restart_parts)
+    out2 = await chat.resume(restart=restart_parts).response
     assert out2.finish_reason == AgentFinishReason.STOP
 
 

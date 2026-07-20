@@ -601,6 +601,19 @@ class ChunkAccumulator:
             ctx.replace_on_chunk(previous)
 
 
+def _persist_threaded_conversation(response: ModelResponse, messages: list[Message]) -> ModelResponse:
+    """Persist the threaded conversation onto the response's request.
+
+    We save the conversation threaded through the loop, not the request the model
+    saw — that one carries per-call extras (docs/format injection, middleware edits)
+    we don't want in saved history. Copies onto a fresh request so the object the
+    model saw stays intact for tracing.
+    """
+    if response.request is not None:
+        response.request = response.request.model_copy(update={'messages': list(messages)})
+    return response
+
+
 async def _generate_action_turn(
     registry: Registry,
     raw_request: GenerateActionOptions,
@@ -760,13 +773,7 @@ async def _generate_action_turn(
         generated_msg = response.message
 
         if generated_msg is None:
-            # We persist the conversation we threaded through the loop, not the
-            # request the model saw — that one carries per-call extras (docs/format
-            # injection, middleware edits) we don't want in saved history. Copy onto
-            # a fresh request so we leave the object the model saw intact for tracing.
-            if response.request is not None:
-                response.request = response.request.model_copy(update={'messages': list(turn_options.messages)})
-            return response
+            return _persist_threaded_conversation(response, turn_options.messages)
 
         # Stamp output format metadata on message so the Dev UI can render formatted JSON vs plain text.
         out = turn_options.output
@@ -789,10 +796,7 @@ async def _generate_action_turn(
         if turn_options.return_tool_requests or len(tool_requests) == 0:
             if len(tool_requests) == 0:
                 response.assert_valid_schema()
-            # Persist the threaded conversation, not the augmented request the model saw.
-            if response.request is not None:
-                response.request = response.request.model_copy(update={'messages': list(turn_options.messages)})
-            return response
+            return _persist_threaded_conversation(response, turn_options.messages)
 
         max_iters = turn_options.max_turns if turn_options.max_turns is not None else DEFAULT_MAX_TURNS
 
@@ -821,12 +825,7 @@ async def _generate_action_turn(
             interrupted_resp.finish_reason = FinishReason.INTERRUPTED
             interrupted_resp.finish_message = 'One or more tool calls resulted in interrupts.'
             interrupted_resp.message = Message(revised_model_msg)
-            # Persist the threaded conversation, not the augmented request the model saw.
-            if interrupted_resp.request is not None:
-                interrupted_resp.request = interrupted_resp.request.model_copy(
-                    update={'messages': copy.copy(turn_options.messages)}
-                )
-            return interrupted_resp
+            return _persist_threaded_conversation(interrupted_resp, turn_options.messages)
 
         # If the loop will continue, stream out the tool response message...
         if tool_msg:
@@ -1037,7 +1036,7 @@ def _tool_short_name_for_model(name: str) -> str:
     return name[name.rfind('/') + 1 :]
 
 
-def assert_valid_tool_names(tools: list[Action[Any, Any, Any]]) -> None:
+def assert_valid_tool_names(tools: list[Action]) -> None:
     """Reject overlapping model-facing tool names before the model is called.
 
     Two resolved tools that share the same short name (segment after the last ``/``)
@@ -1059,12 +1058,12 @@ def assert_valid_tool_names(tools: list[Action[Any, Any, Any]]) -> None:
 async def resolve_tools_from_options(
     registry: Registry,
     tool_names: list[str] | None,
-) -> list[Action[Any, Any, Any]]:
+) -> list[Action]:
     """Expand wildcards and resolve tool actions for a list of tool names."""
     if not tool_names:
         return []
     expanded = await expand_wildcard_tools(registry, tool_names)
-    actions: list[Action[Any, Any, Any]] = []
+    actions: list[Action] = []
     for t_name in expanded:
         actions.append(await resolve_tool(registry, t_name))
     return actions
@@ -1072,7 +1071,7 @@ async def resolve_tools_from_options(
 
 async def resolve_parameters(
     registry: Registry, request: GenerateActionOptions
-) -> tuple[Action[Any, Any, Any], list[Action[Any, Any, Any]], FormatDef | None]:
+) -> tuple[Action, list[Action], FormatDef | None]:
     """Resolve model, tools, and format from registry for a generation request."""
     model = (
         request.model
@@ -1101,7 +1100,7 @@ async def resolve_parameters(
 
 
 async def action_to_generate_request(
-    options: GenerateActionOptions, resolved_tools: list[Action[Any, Any, Any]], _model: Action[Any, Any, Any]
+    options: GenerateActionOptions, resolved_tools: list[Action], _model: Action
 ) -> ModelRequest[Any]:
     """Convert GenerateActionOptions to a ModelRequest with tool definitions."""
     # TODO(#4340): add warning when tools are not supported in ModelInfo
@@ -1200,15 +1199,7 @@ async def resolve_tool_requests(
             if mw_list and mw_pipeline is not None:
                 multipart = await dispatch_tool(mw_list, params, mw_pipeline.ctx, next_fn)
             else:
-                multipart = await next_fn(
-                    params,
-                    mw_pipeline.ctx
-                    if mw_pipeline
-                    else GenerateMiddlewareContext(
-                        ai=ScopedGenkitView(registry),
-                        abort_signal=abort_signal,
-                    ),
-                )
+                multipart = await next_fn(params, ctx)
             return (multipart, None)
         except Exception as e:
             # Interrupts (raised by the tool body or by middleware) become a
@@ -1300,6 +1291,11 @@ async def _resolve_tool_request(
     try:
         tool_response = await tool_task
     except asyncio.CancelledError:
+        # An outer cancel (deadline / gather teardown) is delivered to *us*, not to
+        # the detached tool_task — cancel it so the tool body actually winds down
+        # instead of running to completion after the caller is gone. (Idempotent on
+        # the abort path, where the watcher already cancelled it.)
+        tool_task.cancel()
         if abort_signal.is_set():
             raise GenkitError(status='ABORTED', message='Task aborted') from None
         raise

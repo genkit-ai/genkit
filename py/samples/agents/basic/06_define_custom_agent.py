@@ -72,7 +72,7 @@ agent = ai.define_custom_agent(name='customCoder', fn=custom_coder_fn, store=sto
 async def main() -> None:
     chat = agent.chat()
     # → the custom fn streams a concise explanation and persists it to history
-    await chat.send('What is a Python list comprehension?')
+    await chat.send('What is a Python list comprehension?').response
 
 
 if __name__ == '__main__':

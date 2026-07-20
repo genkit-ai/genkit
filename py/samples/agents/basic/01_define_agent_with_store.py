@@ -39,7 +39,7 @@ from pydantic import BaseModel
 from genkit import Genkit
 from genkit.agent import AgentChat, AgentResponse, InMemorySessionStore
 
-StateT = TypeVar('StateT')
+StateT = TypeVar('StateT', bound=BaseModel)
 
 
 class WeatherInput(BaseModel):
@@ -83,12 +83,12 @@ async def render(chat: AgentChat[StateT], prompt: str) -> AgentResponse[StateT]:
     snapshot_id, media, data). Identical whether the chat is new or rehydrated.
     """
     turn = chat.send(prompt)
-    async for chunk in turn:
+    async for chunk in turn.stream:
         for call in chunk.tool_requests:
             print(f'  → {call.tool_request.name}')  # tools light up as they're called
         if chunk.text:
             print(chunk.accumulated_text, end='\r', flush=True)  # the frame a UI re-renders
-    res = await turn
+    res = await turn.response
     res.assert_valid()  # raises if the turn was blocked or produced no message
     print(f'\n{res.text}\n')
     return res

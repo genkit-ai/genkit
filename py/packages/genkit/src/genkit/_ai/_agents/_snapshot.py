@@ -19,10 +19,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
 
 from genkit._ai._agents._session import SessionStore
-from genkit._ai._agents._types import ClientTransform
+from genkit._ai._agents._types import StateTransform
 from genkit._core._error import GenkitError
 from genkit._core._typing import SessionSnapshot, SnapshotStatus
 
@@ -62,11 +61,18 @@ def parse_snapshot_lookup_kw(
     snapshot_id: str | None = None,
     session_id: str | None = None,
 ) -> tuple[str | None, str | None]:
-    """Require exactly one of ``snapshot_id`` or ``session_id``."""
+    """Require exactly one of ``snapshot_id`` or ``session_id``.
+
+    A bad selector is a caller mistake, so it raises ``INVALID_ARGUMENT`` — over a
+    transport that surfaces as a 400, not a 500 the way a bare ``ValueError`` would.
+    """
     if bool(snapshot_id) == bool(session_id):
-        raise ValueError(
-            "get_snapshot requires exactly one of 'snapshot_id' or 'session_id' "
-            f'(got snapshot_id={snapshot_id!r}, session_id={session_id!r}).'
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=(
+                "get_snapshot requires exactly one of 'snapshot_id' or 'session_id' "
+                f'(got snapshot_id={snapshot_id!r}, session_id={session_id!r}).'
+            ),
         )
     return snapshot_id, session_id
 
@@ -76,45 +82,6 @@ def lookup_label(*, snapshot_id: str | None = None, session_id: str | None = Non
         return snapshot_id
     assert session_id is not None
     return f'session {session_id}'
-
-
-def snapshot_id_from_input(input_val: Any) -> str | None:  # noqa: ANN401
-    if isinstance(input_val, str):
-        return input_val
-    if isinstance(input_val, dict):
-        val = input_val.get('snapshotId') or input_val.get('snapshot_id')
-        return val if isinstance(val, str) else None
-    val = getattr(input_val, 'snapshotId', None) or getattr(input_val, 'snapshot_id', None)
-    return val if isinstance(val, str) else None
-
-
-def parse_snapshot_lookup_input(input_val: Any) -> tuple[str | None, str | None]:  # noqa: ANN401
-    """Parse getSnapshot action input (camelCase or snake_case)."""
-    snapshot_id: str | None = None
-    session_id: str | None = None
-    if isinstance(input_val, dict):
-        snapshot_id = input_val.get('snapshotId') or input_val.get('snapshot_id')
-        session_id = input_val.get('sessionId') or input_val.get('session_id')
-    else:
-        snapshot_id = getattr(input_val, 'snapshotId', None) or getattr(input_val, 'snapshot_id', None)
-        session_id = getattr(input_val, 'sessionId', None) or getattr(input_val, 'session_id', None)
-    if isinstance(snapshot_id, str):
-        snapshot_id = snapshot_id or None
-    else:
-        snapshot_id = None
-    if isinstance(session_id, str):
-        session_id = session_id or None
-    else:
-        session_id = None
-    return parse_snapshot_lookup_kw(snapshot_id=snapshot_id, session_id=session_id)
-
-
-def parse_abort_input(input_val: Any) -> str:  # noqa: ANN401
-    """Parse abort action input; returns snapshot_id."""
-    snapshot_id = snapshot_id_from_input(input_val)
-    if snapshot_id is None:
-        raise ValueError(f"'snapshot_id' is required and must be a string, got {type(input_val).__name__}.")
-    return snapshot_id
 
 
 def is_heartbeat_expired(
@@ -139,14 +106,14 @@ def is_heartbeat_expired(
 def to_client_snapshot(
     *,
     snapshot: SessionSnapshot,
-    client_transform: ClientTransform | None,
+    state_transform: StateTransform | None,
 ) -> SessionSnapshot:
-    state_fn = client_transform.get('state') if client_transform else None
-    if state_fn is None or snapshot.state is None:
+    if state_transform is None or snapshot.state is None:
         return snapshot
-    transformed = state_fn(snapshot.state)
+    transformed = state_transform(snapshot.state)
     if transformed is snapshot.state:
         return snapshot
+    # Only this outbound copy is reshaped; the stored snapshot is untouched.
     return snapshot.model_copy(update={'state': transformed})
 
 
@@ -155,7 +122,7 @@ async def resolve_snapshot(
     store: SessionStore,
     snapshot_id: str | None = None,
     session_id: str | None = None,
-    client_transform: ClientTransform | None = None,
+    state_transform: StateTransform | None = None,
 ) -> SessionSnapshot | None:
     snapshot_id, session_id = parse_snapshot_lookup_kw(snapshot_id=snapshot_id, session_id=session_id)
     if snapshot_id is not None:
@@ -170,7 +137,7 @@ async def resolve_snapshot(
     effective = (
         snapshot.model_copy(update={'status': SnapshotStatus.EXPIRED}) if is_heartbeat_expired(snapshot) else snapshot
     )
-    return to_client_snapshot(snapshot=effective, client_transform=client_transform)
+    return to_client_snapshot(snapshot=effective, state_transform=state_transform)
 
 
 def abort_if_pending(existing: SessionSnapshot | None) -> SessionSnapshot | None:

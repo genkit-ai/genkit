@@ -19,10 +19,11 @@ from __future__ import annotations
 import asyncio
 import copy
 import inspect
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Generator, Iterator
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Generic, Protocol, TypeVar, cast
 
+from pydantic import BaseModel
 from typing_extensions import TypeVar as TypeVarExt
 
 from genkit._ai._agents._snapshot import lookup_label
@@ -54,12 +55,14 @@ from genkit._core._typing import (
     ToolResponsePart,
 )
 
-StateT = TypeVarExt('StateT', default=Any)
+# Custom state is a Pydantic model, so StateT is bound to BaseModel; the Any
+# default covers schemaless (client-managed) sessions where custom is plain JSON.
+StateT = TypeVarExt('StateT', bound=BaseModel, default=Any)
 InputT = TypeVar('InputT')
 OutputT = TypeVar('OutputT')
 # The transport protocol only ever hands this type back out (in the sessions it
 # returns), never takes it in, so it's covariant.
-StateT_co = TypeVar('StateT_co', covariant=True)
+StateT_co = TypeVar('StateT_co', bound=BaseModel, covariant=True)
 
 
 class SessionState(SessionStateSchema, Generic[StateT]):
@@ -71,7 +74,9 @@ class SessionState(SessionStateSchema, Generic[StateT]):
 class SessionSnapshot(SessionSnapshotSchema, Generic[StateT]):
     """Session snapshot generic over custom state."""
 
-    state: SessionState[StateT] | None = None
+    # Narrows the wire model's plain SessionState to the typed one so snap.state.custom
+    # reads as the declared model; the runtime shape is identical (same JSON fields).
+    state: SessionState[StateT] | None = None  # pyrefly: ignore[bad-override]
 
 
 # ===========================================================================
@@ -282,10 +287,15 @@ def agent_interrupts_from_message(message: MessageData | None) -> list[AgentInte
 
 
 class AgentTurn(Generic[StateT]):
-    """A single in-flight turn — iterate for chunks, await for the final response."""
+    """A single in-flight turn — read ``.stream`` for chunks, ``.response`` for the result.
+
+    Same handle shape as ``action.stream()``: the turn runs whether or not you read
+    ``.stream``, and ``.response`` resolves to the final result either way.
+    """
 
     def __init__(
         self,
+        *,
         stream: AsyncIterable[AgentChunk[StateT]],
         output: Awaitable[AgentResponse[StateT]],
         abort_fn: Callable[[], Awaitable[None] | None] | None = None,
@@ -294,17 +304,18 @@ class AgentTurn(Generic[StateT]):
         self._output = output
         self._abort_fn = abort_fn
 
-    def __aiter__(self) -> AsyncIterator[AgentChunk[StateT]]:
+    @property
+    def stream(self) -> AsyncIterator[AgentChunk[StateT]]:
+        """The turn's chunk stream.
+
+        Cancelling the consumer (``asyncio.timeout(...)`` or a task cancel around the
+        loop) detaches the turn like ``turn.abort()`` — the client stops listening and
+        the server finishes in the background — then the cancellation propagates so the
+        deadline still surfaces.
+        """
         return self._stream_detaching_on_cancel()
 
     async def _stream_detaching_on_cancel(self) -> AsyncIterator[AgentChunk[StateT]]:
-        """Yields chunks, detaching the turn if the consumer is cancelled.
-
-        Wrapping the stream means ``async with asyncio.timeout(...)`` or a plain
-        task cancel around the loop behaves like ``turn.abort()`` — the client
-        stops listening and the server finishes in the background — then the
-        cancellation propagates so the deadline/cancel still surfaces.
-        """
         try:
             async for chunk in self._stream:
                 yield chunk
@@ -312,30 +323,17 @@ class AgentTurn(Generic[StateT]):
             await self.abort()
             raise
 
-    def __await__(self) -> Generator[Any, None, AgentResponse[StateT]]:
-        """Return the completed turn result. The turn runs whether or not you stream."""
-        return self._await_detaching_on_cancel().__await__()
-
-    @property
-    def stream(self) -> AsyncIterator[AgentChunk[StateT]]:
-        """The turn's chunk stream — the same thing ``async for turn`` iterates.
-
-        Offered so a turn reads like the SDK's other streaming handles, where you
-        reach for ``.stream`` / ``.response`` when you want both halves explicitly.
-        """
-        return self._stream_detaching_on_cancel()
-
     @property
     def response(self) -> Awaitable[AgentResponse[StateT]]:
-        """The turn's final result — the same thing ``await turn`` resolves to."""
+        """The turn's final result. The turn runs whether or not you read ``.stream``."""
         return self._await_detaching_on_cancel()
 
     async def _await_detaching_on_cancel(self) -> AgentResponse[StateT]:
         """Awaits the result, detaching the turn if the awaiter is cancelled.
 
-        Lets ``async with asyncio.timeout(...): await turn`` (or any task cancel)
-        detach the client the same way ``turn.abort()`` would, then re-raises so
-        the deadline still surfaces as a TimeoutError/CancelledError.
+        Lets ``async with asyncio.timeout(...): await turn.response`` (or any task
+        cancel) detach the client the same way ``turn.abort()`` would, then re-raises
+        so the deadline still surfaces as a TimeoutError/CancelledError.
         """
         try:
             return await self._output
@@ -425,7 +423,7 @@ class AgentClient(Generic[StateT]):
         self,
         transport: AgentTransport[StateT],
         *,
-        state_schema: type[Any] | None = None,
+        state_schema: type[StateT] | None = None,
     ) -> None:
         self._transport = transport
         self._state_schema = state_schema
@@ -443,7 +441,13 @@ class AgentClient(Generic[StateT]):
         session_transport = copy.copy(self._transport)
         return AgentChat(
             session_transport,
-            init_from(snapshot_id, session_id, messages, artifacts, state),
+            init_from(
+                snapshot_id=snapshot_id,
+                session_id=session_id,
+                messages=messages,
+                artifacts=artifacts,
+                state=state,
+            ),
             state_schema=self._state_schema,
         )
 
@@ -489,6 +493,7 @@ def to_agent_input(input: str | AgentInput) -> AgentInput:  # noqa: A002
 
 
 def init_from(
+    *,
     snapshot_id: str | None,
     session_id: str | None,
     messages: list[MessageData] | None,
@@ -604,9 +609,9 @@ class TurnDriver(Generic[StateT]):
 
     def __init__(
         self,
+        *,
         inp: AgentInput,
         init: AgentInit,
-        *,
         run_turn: RunTurnFn,
         commit_output: Callable[[AgentOutput], AgentResponse[StateT]],
         commit_custom_patch: Callable[[Any], StateT | None],
@@ -680,7 +685,7 @@ class TurnDriver(Generic[StateT]):
             tool_requests=tool_requests_of(content),
             data=first_data_of(content),
             media=first_media_of(content),
-            artifact=getattr(chunk, 'artifact', None),
+            artifact=chunk.artifact,
             custom=custom,
             raw=chunk,
         )
@@ -698,7 +703,7 @@ class TurnDriver(Generic[StateT]):
         """Detaches the client from the turn, leaving the server turn to finish.
 
         We cancel the local pump and result so the caller stops streaming and
-        ``await turn`` settles immediately. The transport keeps draining its
+        ``await turn.response`` settles immediately. The transport keeps draining its
         in-flight turn in the background, so this is a client-side abort only.
         The optimistic user message stays in history — the prompt was still
         asked, so the running view keeps it like any other turn.
@@ -731,7 +736,7 @@ class AgentChat(Generic[StateT]):
         transport: AgentTransport[StateT],
         init: AgentInit | None = None,
         *,
-        state_schema: type[Any] | None = None,
+        state_schema: type[StateT] | None = None,
     ) -> None:
         self._transport = transport
         self._state_schema = state_schema
@@ -818,12 +823,12 @@ class AgentChat(Generic[StateT]):
     ) -> AgentTurn[StateT]:
         """Sends a message to the agent and returns a handle to the in-flight turn.
 
-        Stream it with ``async for`` or ``await`` it for the final result. To stop
-        a turn, call ``turn.abort()`` for a client-side detach (the server finishes
-        in the background), or wrap the await/stream in ``asyncio.timeout(...)`` /
-        cancel the surrounding task — both detach the same way and then surface the
-        deadline. Use ``chat.abort()`` to halt server-side work on a store-backed
-        agent.
+        Read ``turn.stream`` for chunks or await ``turn.response`` for the final
+        result. To stop a turn, call ``turn.abort()`` for a client-side detach (the
+        server finishes in the background), or wrap the stream/response in
+        ``asyncio.timeout(...)`` / cancel the surrounding task — both detach the same
+        way and then surface the deadline. Use ``chat.abort()`` to halt server-side
+        work on a store-backed agent.
         """
         inp = to_agent_input(input)
 
@@ -845,7 +850,7 @@ class AgentChat(Generic[StateT]):
             inp=inp,
             init=init,
             run_turn=self._transport.run_turn,
-            commit_output=lambda raw: self._commit_output(raw, message_count_before),
+            commit_output=lambda raw: self._commit_output(raw=raw, message_count_before=message_count_before),
             commit_custom_patch=self._commit_custom_patch,
             accumulate_chunk=self._turn_accumulator.add,
         )
@@ -856,14 +861,17 @@ class AgentChat(Generic[StateT]):
         *,
         respond: list[ToolResponsePart] | None = None,
         restart: list[ToolRequestPart] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> AgentTurn[StateT]:
         """Continues a conversation from an interrupt.
 
         ``respond`` answers paused tool requests; ``restart`` re-runs them with
         new metadata. Build each part with the interrupt's ``respond`` / ``restart``
-        helpers. Sugar for ``send`` with a resume payload.
+        helpers. ``metadata`` rides along on the resumed tool message (the same
+        ``resume_metadata`` a plain ``generate`` call takes). Sugar for ``send``
+        with a resume payload.
         """
-        inp = AgentInput(resume=Resume(respond=respond, restart=restart))
+        inp = AgentInput(resume=Resume(respond=respond, restart=restart, metadata=metadata))
         return self.send(inp)
 
     async def get_snapshot(self) -> SessionSnapshotSchema | None:
@@ -901,7 +909,7 @@ class AgentChat(Generic[StateT]):
         # snapshot that never settled. _snapshot_id still tracks the detached turn
         # so abort()/get_snapshot() act on it.
         resume_before_detach = self._resume_snapshot_id
-        self._update_from_output(raw_output, message_count_before)
+        self._update_from_output(raw=raw_output, message_count_before=message_count_before)
         self._resume_snapshot_id = resume_before_detach
 
         if not raw_output.snapshot_id:
@@ -983,9 +991,9 @@ class AgentChat(Generic[StateT]):
         patch_list = patch.root if hasattr(patch, 'root') else patch
         self._custom = apply_json_patch(doc=self._custom, patch=patch_list)
 
-    def _commit_output(self, raw: AgentOutput, message_count_before: int) -> AgentResponse[StateT]:
+    def _commit_output(self, *, raw: AgentOutput, message_count_before: int) -> AgentResponse[StateT]:
         """Folds a turn's final output into the session and builds the turn result."""
-        self._update_from_output(raw, message_count_before)
+        self._update_from_output(raw=raw, message_count_before=message_count_before)
         return AgentResponse(raw=raw, messages=list(self.messages), state=self.state)
 
     def _commit_custom_patch(self, patch: Any) -> StateT | None:  # noqa: ANN401
@@ -1006,16 +1014,14 @@ class AgentChat(Generic[StateT]):
     def _merge_artifacts(self, artifacts: list[Artifact]) -> None:
         """Merge a turn's artifacts into the running view, replacing by name."""
         for art in artifacts:
-            name = getattr(art, 'name', None)
-            idx = (
-                next((i for i, x in enumerate(self.artifacts) if getattr(x, 'name', None) == name), -1) if name else -1
-            )
+            name = art.name
+            idx = next((i for i, x in enumerate(self.artifacts) if x.name == name), -1) if name else -1
             if idx >= 0:
                 self.artifacts[idx] = art
             else:
                 self.artifacts.append(art)
 
-    def _update_from_output(self, raw: AgentOutput, message_count_before: int) -> None:
+    def _update_from_output(self, *, raw: AgentOutput, message_count_before: int) -> None:
         # message_count_before is the history length captured before this turn's
         # optimistic user-message push, so a turn that lands no reply can roll
         # that push back (see send()).
@@ -1113,14 +1119,9 @@ class DetachedTask(Generic[StateT]):
         if raw is None:
             return None
         snap = SessionSnapshot[StateT].model_validate(raw.model_dump(by_alias=True))
-        if (
-            snap.state is not None
-            and snap.state.custom is not None
-            and self._state_schema is not None
-            and hasattr(self._state_schema, 'model_validate')
-        ):
+        if snap.state is not None and snap.state.custom is not None and self._state_schema is not None:
             try:
-                snap.state.custom = cast(Any, self._state_schema).model_validate(snap.state.custom)
+                snap.state.custom = self._state_schema.model_validate(snap.state.custom)
             except Exception:
                 if snap.status is not None and snap.status in TERMINAL_SNAPSHOT_STATUSES:
                     raise

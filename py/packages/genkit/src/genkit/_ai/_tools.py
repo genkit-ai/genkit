@@ -71,7 +71,7 @@ class Tool:
             output_schema=self.output_schema,
         )
 
-    def action(self) -> Action[Any, Any, Any]:
+    def action(self) -> Action:
         """Return the underlying :class:`~genkit._core._action.Action` registered for this tool."""
         return self._action
 
@@ -241,7 +241,7 @@ def _resume_context_from_tool_request_part(
 
 async def run_tool_request(
     *,
-    tool: Action[Any, Any, Any],
+    tool: Action,
     tool_request_part: ToolRequestPart,
     ctx: GenerateMiddlewareContext | None = None,
 ) -> Any:  # noqa: ANN401 - tool output follows registered handler
@@ -272,7 +272,7 @@ async def run_tool_request(
 
 async def run_tool_after_restart(
     *,
-    tool: Action[Any, Any, Any],
+    tool: Action,
     restart_trp: ToolRequestPart,
     ctx: GenerateMiddlewareContext | None = None,
 ) -> ToolResponsePart:

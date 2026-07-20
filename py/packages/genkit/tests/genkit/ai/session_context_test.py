@@ -96,7 +96,8 @@ async def test_agent_runtime_binds_session_during_handler() -> None:
         session=session,
         parent_snapshot=None,
         store=None,
-        client_transform=None,
+        state_transform=None,
+        chunk_transform=None,
         emit_chunk=out_queue.put_nowait,
     )
     seen: list[Session | None] = []

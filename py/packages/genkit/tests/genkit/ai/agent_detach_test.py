@@ -70,7 +70,8 @@ def _runtime(session: Session, store: InMemorySessionStore | None) -> tuple[Agen
         session=session,
         parent_snapshot=None,
         store=store,
-        client_transform=None,
+        state_transform=None,
+        chunk_transform=None,
         emit_chunk=out_queue.put_nowait,
     )
     return rt, out_queue

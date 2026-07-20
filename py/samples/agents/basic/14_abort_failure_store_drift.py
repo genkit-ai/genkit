@@ -96,7 +96,7 @@ def turns(chat: object) -> list[str]:
 async def client_side_abort() -> None:
     """turn.abort(): the server finishes anyway; only the client detaches."""
     chat = agent.chat()
-    await chat.send('q1')
+    await chat.send('q1').response
     session_id = chat.session_id
 
     turn = chat.send('slow q2')
@@ -117,7 +117,7 @@ async def client_side_abort() -> None:
 async def server_side_task_abort() -> None:
     """task.abort(): the snapshot settles ABORTED and is not a resume point."""
     chat = agent.chat()
-    await chat.send('a1')
+    await chat.send('a1').response
     session_id = chat.session_id
 
     task = await chat.detach('slow a2')
@@ -136,7 +136,7 @@ async def server_side_task_abort() -> None:
     chat = await agent.load_chat(session_id=session_id)
     assert turns(chat) == ['a1/user', 'reply/model']
 
-    out = await chat.send('a3')
+    out = await chat.send('a3').response
     assert out.finish_reason == AgentFinishReason.STOP
     assert turns(chat) == ['a1/user', 'reply/model', 'a3/user', 'reply/model']
 
@@ -144,10 +144,10 @@ async def server_side_task_abort() -> None:
 async def server_side_failure() -> None:
     """A real server error: FAILED, prompt rolled back, resume stays on last good."""
     chat = agent.chat()
-    await chat.send('b1')
+    await chat.send('b1').response
     last_good = chat.snapshot_id
 
-    out = await chat.send('please fail')
+    out = await chat.send('please fail').response
     assert out.finish_reason == AgentFinishReason.FAILED
     # No reply landed, so the prompt is dropped and the resume handle holds.
     assert turns(chat) == ['b1/user', 'reply/model']
@@ -155,7 +155,7 @@ async def server_side_failure() -> None:
 
     # The next turn picks up from that last good parent, as if the failure never
     # branched the conversation.
-    out2 = await chat.send('b2')
+    out2 = await chat.send('b2').response
     assert out2.finish_reason == AgentFinishReason.STOP
     assert turns(chat) == ['b1/user', 'reply/model', 'b2/user', 'reply/model']
 
@@ -163,7 +163,7 @@ async def server_side_failure() -> None:
 async def detached_turn_reload_to_resync() -> None:
     """A detached turn that succeeds: its reply lands in the store, not the chat."""
     chat = agent.chat()
-    await chat.send('c1')
+    await chat.send('c1').response
     session_id = chat.session_id
 
     # Run a turn in the background and let it finish.
@@ -181,7 +181,7 @@ async def detached_turn_reload_to_resync() -> None:
     chat = await agent.load_chat(session_id=session_id)
     assert turns(chat) == ['c1/user', 'reply/model', 'c2/user', 'reply/model']
 
-    out = await chat.send('c3')
+    out = await chat.send('c3').response
     assert out.finish_reason == AgentFinishReason.STOP
     assert turns(chat) == ['c1/user', 'reply/model', 'c2/user', 'reply/model', 'c3/user', 'reply/model']
 

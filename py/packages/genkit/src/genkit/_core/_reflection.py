@@ -288,7 +288,6 @@ def create_reflection_asgi_app(
         ],
         lifespan=lifespan,
     )
-    app.active_actions = active_actions  # type: ignore[attr-defined]
     return app
 
 

@@ -17,9 +17,9 @@
 
 """Put a deadline on a turn with plain asyncio.
 
-A turn is a normal awaitable/async-iterable, so the native Python tools work on
-it: wrap `await turn` (or the stream) in `asyncio.wait_for(...)`, or cancel the
-surrounding task, and the turn detaches just like turn.abort() — the client
+A turn's `.response` is a normal awaitable, so the native Python tools work on
+it: wrap `await turn.response` (or the `.stream`) in `asyncio.wait_for(...)`, or
+cancel the surrounding task, and the turn detaches just like turn.abort() — the client
 stops listening, the server finishes in the background, and the prompt you sent
 stays in history. The deadline then surfaces as TimeoutError. Requires
 GEMINI_API_KEY.
@@ -44,19 +44,19 @@ agent = ai.define_agent(
 
 async def main() -> None:
     chat = agent.chat()
-    await chat.send('My name is Ada.')  # turn 1 establishes context the session should keep
+    await chat.send('My name is Ada.').response  # turn 1 establishes context the session should keep
 
     # Give the turn 1.5s to finish; if it overruns, the deadline cancels the await,
     # the turn detaches, and we get a TimeoutError — no genkit-specific cancel API.
     turn = chat.send('Write a very long, multi-paragraph essay about the history of tea.')
     try:
-        await asyncio.wait_for(turn, 1.5)
+        await asyncio.wait_for(turn.response, 1.5)
     except asyncio.TimeoutError:
         print('deadline hit — detached from the essay turn')
 
     # Detach is client-side only: the prompt stays in history (it was still asked),
     # and turn 1's context is intact, so the next turn continues cleanly.
-    answer = await chat.send('What is my name? One word.')
+    answer = await chat.send('What is my name? One word.').response
     assert 'Ada' in answer.text  # → still remembers turn 1
 
 
