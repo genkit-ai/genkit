@@ -50,7 +50,7 @@ def parse_snapshot_lookup_input(input_val: dict[str, Any] | str | None) -> tuple
         return sid, sess_id
     raise GenkitError(
         status='INVALID_ARGUMENT',
-        message="getSnapshot input must be a dictionary or snapshot ID string.",
+        message='getSnapshot input must be a dictionary or snapshot ID string.',
     )
 
 
