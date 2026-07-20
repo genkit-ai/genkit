@@ -33,6 +33,9 @@ dependencies = [
 # These samples are runnable scripts, not an importable library — `uv run basic/...`
 # just needs the dependency set resolved, there's nothing to build or install. (The
 # other samples ship a src/ package and keep a build backend; this one lays its
-# scripts out under basic/ and testapps/ instead.)
+# scripts out under basic/ and testapp/ instead.)
 package = false
+
+[tool.setuptools.packages.find]
+include = ["basic*", "testapp*"]
 
