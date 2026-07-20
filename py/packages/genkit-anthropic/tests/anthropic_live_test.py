@@ -16,6 +16,8 @@
 
 """Live tests against the real Anthropic API.
 
+Requests go through a ``Genkit`` instance with the plugin registered, so
+plugin resolution and the framework config path are exercised end to end.
 Skipped unless ``ANTHROPIC_API_KEY`` is set.
 
 Run from ``py/`` with:
@@ -25,21 +27,12 @@ Run from ``py/`` with:
 
 import os
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
-from anthropic import AsyncAnthropic
-from genkit_anthropic.models import AnthropicModel
+from anthropic import BadRequestError
+from genkit_anthropic import Anthropic
 
-from genkit import (
-    Message,
-    ModelRequest,
-    ModelResponseChunk,
-    Part,
-    ReasoningPart,
-    Role,
-    TextPart,
-)
+from genkit import Genkit, GenkitError, Message, ReasoningPart
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -55,95 +48,95 @@ _ENABLED_THINKING_CONFIG: dict[str, Any] = {
 }
 
 
-def _request(prompt: str, config: Any) -> ModelRequest:
-    return ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text=prompt))])],
-        config=config,
-    )
-
-
-def _text_of(message: Message) -> str:
-    return ''.join(part.root.text for part in message.content if isinstance(part.root, TextPart))
+@pytest.fixture
+def ai() -> Genkit:
+    """Genkit instance with the Anthropic plugin registered."""
+    return Genkit(plugins=[Anthropic()])
 
 
 def _reasoning_of(message: Message) -> list[ReasoningPart]:
     return [part.root for part in message.content if isinstance(part.root, ReasoningPart)]
 
 
-async def test_thinking_enabled_budget() -> None:
+async def test_thinking_enabled_budget(ai: Genkit) -> None:
     """A manual thinking budget returns reasoning with a signature."""
-    model = AnthropicModel(model_name='claude-haiku-4-5', client=AsyncAnthropic())
-
-    response = await model.generate(
-        _request(
-            'What is 15 + 27? Think it through, then answer with just the number.',
-            _ENABLED_THINKING_CONFIG,
-        )
+    response = await ai.generate(
+        model='anthropic/claude-haiku-4-5',
+        prompt='What is 15 + 27? Think it through, then answer with just the number.',
+        config=_ENABLED_THINKING_CONFIG,
     )
 
     assert response.message is not None
-    assert _text_of(response.message).strip()
+    assert response.text.strip()
     reasoning = _reasoning_of(response.message)
     assert ''.join(part.reasoning for part in reasoning)
     assert any(part.metadata and part.metadata.get('thoughtSignature') for part in reasoning)
 
 
-async def test_thinking_enabled_budget_streaming() -> None:
+async def test_thinking_enabled_budget_streaming(ai: Genkit) -> None:
     """Thinking deltas stream as reasoning chunks and match the final reasoning."""
-    model = AnthropicModel(model_name='claude-haiku-4-5', client=AsyncAnthropic())
-    ctx = MagicMock()
-    ctx.is_streaming = True
-    chunks: list[ModelResponseChunk] = []
-    ctx.send_chunk = chunks.append
-
-    response = await model.generate(
-        _request(
-            'What is 12 * 12? Think it through, then answer with just the number.',
-            _ENABLED_THINKING_CONFIG,
-        ),
-        ctx,
+    stream_response = ai.generate_stream(
+        model='anthropic/claude-haiku-4-5',
+        prompt='What is 12 * 12? Think it through, then answer with just the number.',
+        config=_ENABLED_THINKING_CONFIG,
     )
 
-    streamed_reasoning = ''.join(
-        part.root.reasoning for chunk in chunks for part in chunk.content if isinstance(part.root, ReasoningPart)
-    )
-    streamed_text = ''.join(
-        part.root.text for chunk in chunks for part in chunk.content if isinstance(part.root, TextPart)
-    )
-    assert streamed_reasoning
-    assert streamed_text.strip()
+    streamed_reasoning: list[str] = []
+    streamed_text: list[str] = []
+    async for chunk in stream_response.stream:
+        for part in chunk.content:
+            if isinstance(part.root, ReasoningPart):
+                streamed_reasoning.append(part.root.reasoning)
+        if chunk.text:
+            streamed_text.append(chunk.text)
+    response = await stream_response.response
+
+    assert ''.join(streamed_reasoning)
+    assert ''.join(streamed_text).strip()
 
     assert response.message is not None
     final_reasoning = ''.join(part.reasoning for part in _reasoning_of(response.message))
-    assert streamed_reasoning == final_reasoning
-    assert streamed_text == _text_of(response.message)
+    assert ''.join(streamed_reasoning) == final_reasoning
+    assert ''.join(streamed_text) == response.text
     assert response.usage is not None
     assert (response.usage.output_tokens or 0) > 0
 
 
-async def test_thinking_adaptive() -> None:
+async def test_thinking_adaptive(ai: Genkit) -> None:
     """Adaptive thinking with display is accepted by Opus 4.7+ models."""
-    model = AnthropicModel(model_name='claude-opus-4-8', client=AsyncAnthropic())
-
-    response = await model.generate(
-        _request(
-            'Write a one-sentence story about a robot.',
-            {'thinking': {'adaptive': True, 'display': 'summarized'}},
-        )
+    response = await ai.generate(
+        model='anthropic/claude-opus-4-8',
+        prompt='Write a one-sentence story about a robot.',
+        config={'thinking': {'adaptive': True, 'display': 'summarized'}},
     )
 
     assert response.message is not None
-    assert _text_of(response.message).strip()
+    assert response.text.strip()
 
 
-async def test_thinking_disabled() -> None:
+async def test_thinking_disabled(ai: Genkit) -> None:
     """Disabled thinking is accepted and yields no reasoning parts."""
-    model = AnthropicModel(model_name='claude-haiku-4-5', client=AsyncAnthropic())
-
-    response = await model.generate(
-        _request('What is 2 + 2? Answer with just the number.', {'thinking': {'enabled': False}})
+    response = await ai.generate(
+        model='anthropic/claude-haiku-4-5',
+        prompt='What is 2 + 2? Answer with just the number.',
+        config={'thinking': {'enabled': False}},
     )
 
     assert response.message is not None
-    assert _text_of(response.message).strip()
+    assert response.text.strip()
     assert not _reasoning_of(response.message)
+
+
+async def test_thinking_budget_rejected_on_adaptive_only_model(ai: Genkit) -> None:
+    """Models that only support adaptive thinking reject a manual budget with a 400."""
+    with pytest.raises(GenkitError) as excinfo:
+        await ai.generate(
+            model='anthropic/claude-opus-4-8',
+            prompt='What is 2 + 2? Answer with just the number.',
+            config=_ENABLED_THINKING_CONFIG,
+        )
+
+    cause: BaseException | None = excinfo.value
+    while isinstance(cause, GenkitError):
+        cause = cause.cause
+    assert isinstance(cause, BadRequestError)
