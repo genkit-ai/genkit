@@ -1344,22 +1344,26 @@ def google_model_info(
 
 
 _adc_project_cache: str | None = None
+_adc_project_probed: bool = False
 
 
 async def _adc_project() -> str | None:
     """Resolve the project from application default credentials, cached.
 
-    ADC resolution can do file and metadata-server IO, so it runs in a thread.
-    Only a successful resolution is cached, so a fixed environment is picked
-    up without a restart; concurrent first calls may duplicate the probe,
-    which is benign.
+    ADC resolution can do file and metadata-server IO, so it runs in a thread
+    and is attempted only once per process. A failed or empty resolution is
+    cached too: without ADC configured (express mode, say) every overridden
+    request would otherwise pay for a probe that can stall on the metadata
+    server. Concurrent first calls may duplicate the probe, which is benign.
     """
-    global _adc_project_cache
-    if _adc_project_cache is None:
+    global _adc_project_cache, _adc_project_probed
+    if not _adc_project_probed:
         try:
-            _, _adc_project_cache = await asyncio.to_thread(google_auth_default)
+            _, project = await asyncio.to_thread(google_auth_default)
+            _adc_project_cache = project
         except DefaultCredentialsError:
-            return None
+            _adc_project_cache = None
+        _adc_project_probed = True
     return _adc_project_cache
 
 

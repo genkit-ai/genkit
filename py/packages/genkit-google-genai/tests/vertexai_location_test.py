@@ -49,10 +49,16 @@ def _text_request(config: dict[str, Any] | None = None) -> ModelRequest[Any]:
 
 @pytest.fixture(autouse=True)
 def _reset_adc_project_cache():
-    """Reset the module-level ADC project cache between tests."""
+    """Reset the module-level ADC project cache between tests.
+
+    The probed flag matters as much as the value: leaving it set would make a
+    later test silently skip the ADC lookup it means to exercise.
+    """
     gemini_module._adc_project_cache = None
+    gemini_module._adc_project_probed = False
     yield
     gemini_module._adc_project_cache = None
+    gemini_module._adc_project_probed = False
 
 
 class TestMultiRegionConstants:
@@ -481,6 +487,52 @@ class TestResolveRequestClient:
         ):
             with pytest.raises(GenkitError, match='project is required'):
                 await model._resolve_request_client(_text_request({'location': 'eu'}))
+
+    @pytest.mark.asyncio
+    async def test_failed_adc_probe_is_not_repeated(self) -> None:
+        """A missing ADC setup is probed once, not on every overridden request.
+
+        ADC resolution does blocking file and metadata-server IO, so an
+        environment without ADC (express mode, say) must not pay for a probe
+        per request.
+        """
+        from google.auth.exceptions import DefaultCredentialsError
+
+        model = _vertex_model()
+        model._client_kwargs = dict(model._client_kwargs, project=None)
+        with patch('genkit_google_genai.models.gemini.genai.Client'):
+            with patch(
+                'genkit_google_genai.models.gemini.google_auth_default',
+                side_effect=DefaultCredentialsError('no adc'),
+            ) as mock_adc:
+                await model._resolve_request_client(_text_request({'api_version': 'v1'}))
+                await model._resolve_request_client(_text_request({'api_version': 'v1'}))
+        assert mock_adc.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_adc_project_is_not_repeated(self) -> None:
+        """ADC resolving to no project is also cached, not re-probed."""
+        model = _vertex_model()
+        model._client_kwargs = dict(model._client_kwargs, project=None)
+        with patch('genkit_google_genai.models.gemini.genai.Client'):
+            with patch('genkit_google_genai.models.gemini.google_auth_default', return_value=(None, None)) as mock_adc:
+                await model._resolve_request_client(_text_request({'api_version': 'v1'}))
+                await model._resolve_request_client(_text_request({'api_version': 'v1'}))
+        assert mock_adc.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_successful_adc_probe_is_not_repeated(self) -> None:
+        """A successful resolution stays cached across requests."""
+        model = _vertex_model()
+        model._client_kwargs = dict(model._client_kwargs, project=None)
+        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
+            with patch(
+                'genkit_google_genai.models.gemini.google_auth_default', return_value=(None, 'adc-p')
+            ) as mock_adc:
+                await model._resolve_request_client(_text_request({'api_version': 'v1'}))
+                await model._resolve_request_client(_text_request({'api_version': 'v1'}))
+        assert mock_adc.call_count == 1
+        assert mock_ctor.call_args.kwargs['project'] == 'adc-p'
 
     @pytest.mark.asyncio
     async def test_api_version_override_prefills_adc_project(self) -> None:
