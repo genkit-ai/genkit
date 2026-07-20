@@ -587,7 +587,7 @@ class AgentRuntime:
         pending_snap: SessionSnapshot,
         fn_task: asyncio.Task,
         forward_task: asyncio.Task,
-        err_holder: list[BaseException],
+        err_holder: list[Exception],
         result_holder: list[AgentResult],
         heartbeat_task: asyncio.Task,
     ) -> None:
@@ -682,7 +682,7 @@ class AgentRuntime:
         forward_task = asyncio.create_task(forward_inbound_stream())
 
         result_holder: list[AgentResult] = []
-        err_holder: list[BaseException] = []
+        err_holder: list[Exception] = []
 
         async def run_agent_loop() -> None:
             try:
@@ -874,7 +874,10 @@ async def generate_prompt_agent_turn(
         )
 
     # Return the turn result wrapping the model finish reason
-    return TurnResult(finish_reason=to_agent_finish_reason(response.finish_reason))
+    finish_reason = (
+        to_agent_finish_reason(response.finish_reason) if response.finish_reason is not None else None
+    )
+    return TurnResult(finish_reason=finish_reason)
 
 
 # ---------------------------------------------------------------------------
@@ -882,7 +885,7 @@ async def generate_prompt_agent_turn(
 # ---------------------------------------------------------------------------
 
 
-def to_error_details(exc: BaseException) -> GenkitRuntimeError:
+def to_error_details(exc: Exception) -> GenkitRuntimeError:
     status = getattr(exc, 'status', None) or 'INTERNAL'
     if isinstance(exc, GenkitError):
         message = exc.original_message
@@ -894,9 +897,7 @@ def to_error_details(exc: BaseException) -> GenkitRuntimeError:
     return GenkitRuntimeError(status=str(status), message=message, details=details)
 
 
-def to_agent_finish_reason(fr: FinishReason | None) -> AgentFinishReason | None:
-    if fr is None:
-        return None
+def to_agent_finish_reason(fr: FinishReason) -> AgentFinishReason:
     for reason in AgentFinishReason:
         if reason.value == fr.value:
             return reason

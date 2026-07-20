@@ -43,12 +43,12 @@ from pydantic import BaseModel, JsonValue, ValidationError
 from websockets.exceptions import ConnectionClosed
 
 from genkit._core._action import Action, BidiAction
-from genkit._core._agent_reflection import resolve_agent_init, resolve_agent_input
 from genkit._core._channel import CloseableQueue
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
+from genkit._core._reflection import resolve_agent_init, resolve_agent_input
 from genkit._core._registry import Registry
 from genkit._core._trace._default_exporter import TraceServerExporter
 from genkit._core._tracing import add_custom_exporter
