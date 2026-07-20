@@ -1669,7 +1669,7 @@ class GeminiModel:
         # plugin's credentials, endpoint, headers, and timeouts.
         kwargs = dict(self._client_kwargs)
         plugin_opts = kwargs.get('http_options')
-        opts = plugin_opts.model_copy() if plugin_opts is not None else genai_types.HttpOptions()
+        opts = plugin_opts.model_copy(deep=True) if plugin_opts is not None else genai_types.HttpOptions()
 
         if api_version:
             opts.api_version = api_version
