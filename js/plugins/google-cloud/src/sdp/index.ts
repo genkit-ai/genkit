@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { v2 } from '@google-cloud/dlp';
+import type { protos, v2 } from '@google-cloud/dlp';
 import { generateMiddleware } from 'genkit';
 import { credentialsFromEnvironment } from '../auth.js';
 
@@ -56,7 +56,8 @@ export type SdpInlineConfig = SdpInlineConfigBase &
     | {
         /** Replaces characters with a symbol (e.g., *****) */
         transformation: 'MASK';
-        /** Masking configuration when transformation is 'MASK'. Defaults to '*' }
+        /**
+         * Masking configuration when transformation is 'MASK'. Defaults to '*'
          * Note: The masking string must be a single character.
          */
         maskConfig?: { maskingCharacter: string };
@@ -120,6 +121,66 @@ export type SdpOptions = SdpOptionsBase &
     | { templates: SdpTemplateConfig; inline?: SdpInlineConfig }
     | { inline: SdpInlineConfig; templates?: SdpTemplateConfig }
   );
+
+// 1. Inspect config
+export function buildInspectConfig(
+  options: SdpOptions
+): protos.google.privacy.dlp.v2.IInspectConfig {
+  const defaultInfoTypes = [
+    'CREDIT_CARD_NUMBER',
+    'EMAIL_ADDRESS',
+    'PHONE_NUMBER',
+  ];
+
+  if (!('inline' in options) || !options.inline) {
+    return { infoTypes: defaultInfoTypes.map((name) => ({ name })) };
+  }
+
+  const infoTypes =
+    options.inline.infoTypes && options.inline.infoTypes.length > 0
+      ? options.inline.infoTypes
+      : defaultInfoTypes;
+
+  return {
+    infoTypes: infoTypes.map((infoType) => {
+      if (typeof infoType === 'string') return { name: infoType };
+      return { name: infoType.name, version: infoType.version };
+    }),
+  };
+}
+
+// 2. De-identify config
+export function buildDeidentifyConfig(
+  options: SdpOptions
+): protos.google.privacy.dlp.v2.IDeidentifyConfig {
+  const inlineConfig =
+    'inline' in options && options.inline ? options.inline : {};
+
+  let primitiveTransformation: protos.google.privacy.dlp.v2.IPrimitiveTransformation =
+    {
+      replaceWithInfoTypeConfig: {}, // Default behavior
+    };
+
+  if (inlineConfig.transformation === 'CUSTOM_STRING') {
+    primitiveTransformation = {
+      replaceConfig: {
+        newValue: { stringValue: inlineConfig.customConfig ?? '[REDACTED]' },
+      },
+    };
+  } else if (inlineConfig.transformation === 'MASK') {
+    primitiveTransformation = {
+      characterMaskConfig: inlineConfig.maskConfig || {
+        maskingCharacter: '*',
+      },
+    };
+  }
+
+  return {
+    infoTypeTransformations: {
+      transformations: [{ primitiveTransformation }],
+    },
+  };
+}
 
 export const sensitiveDataProtection = generateMiddleware<SdpOptions>(
   { name: 'sensitiveDataProtection' },
