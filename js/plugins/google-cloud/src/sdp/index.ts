@@ -14,9 +14,6 @@
  * limitations under the License.
  */
 
-export {
-  FirestoreSessionStore,
-  type FirestoreSessionStoreOptions,
-} from './session-store/firestore.js';
+export interface SdpOptions { }
 
-export { sensitiveDataProtection, type SdpOptions } from './sdp/index.js';
+export function sensitiveDataProtection(options?: SdpOptions): void { }
