@@ -53,7 +53,7 @@ agent = ai.define_agent(
 async def main() -> None:
     # One shared setup turn. Its snapshot is the fork point for both siblings.
     root = agent.chat()
-    await root.send('Plan a landing page for a note-taking app.')
+    await root.send('Plan a landing page for a note-taking app.').response
     checkpoint = root.snapshot_id
     session_id = root.session_id
     assert checkpoint and session_id
@@ -63,9 +63,9 @@ async def main() -> None:
     # different input while the first answer stays put as its own sibling.
     # → minimal gets a whitespace-heavy take; bold gets a dark, high-contrast one.
     minimal = await agent.load_chat(snapshot_id=checkpoint)
-    await minimal.send('Direction: minimal.')
+    await minimal.send('Direction: minimal.').response
     bold = await agent.load_chat(snapshot_id=checkpoint)
-    await bold.send('Direction: bold.')
+    await bold.send('Direction: bold.').response
     chosen_leaf = bold.snapshot_id
     assert chosen_leaf
 
@@ -81,7 +81,7 @@ async def main() -> None:
     # linear chat again — this extends the bold timeline with a pricing section,
     # and the minimal sibling is left untouched.
     resumed = await agent.load_chat(snapshot_id=chosen_leaf)
-    await resumed.send('Add a pricing section.')
+    await resumed.send('Add a pricing section.').response
 
 
 if __name__ == '__main__':

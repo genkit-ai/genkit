@@ -68,12 +68,12 @@ async def main() -> None:
     chat = agent.chat()
 
     # A normal turn succeeds and becomes the session's last good parent.
-    out_ok = await chat.send('hello')
+    out_ok = await chat.send('hello').response
     assert out_ok.finish_reason == AgentFinishReason.STOP
     last_good_parent = chat.snapshot_id
 
     # This turn raises inside the agent — but the failure is contained.
-    out_fail = await chat.send('please fail now')
+    out_fail = await chat.send('please fail now').response
     # → resolves as FAILED instead of throwing; the session stays usable
     assert out_fail.finish_reason == AgentFinishReason.FAILED
     # → the failure didn't advance the session: the resume handle is still the
@@ -82,7 +82,7 @@ async def main() -> None:
 
     # The next send picks up from that last good parent, as if the failure never
     # branched the conversation.
-    out_ok2 = await chat.send('hello again')
+    out_ok2 = await chat.send('hello again').response
     assert out_ok2.finish_reason == AgentFinishReason.STOP
 
 

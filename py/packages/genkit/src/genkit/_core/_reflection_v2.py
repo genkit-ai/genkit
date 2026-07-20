@@ -213,7 +213,7 @@ class ReflectionServerV2:
         if not task.cancelled() and (exc := task.exception()) is not None:
             logger.debug('reflection V2: background task error', err=exc)
 
-    def _drain_pending(self, exc: BaseException) -> None:
+    def _drain_pending(self, exc: Exception) -> None:
         for _rid, fut in list(self._pending.items()):
             if not fut.done():
                 fut.set_exception(exc)
@@ -237,7 +237,6 @@ class ReflectionServerV2:
         data: object | None = None,
     ) -> None:
         """Emit a JSON-RPC error."""
-        logger.error(f'reflection V2 error: {message} (code={code}, id={req_id})')
         err: dict[str, Any] = {'code': code, 'message': _coerce_json_rpc_message(message)}
         if data is not None:
             err['data'] = data
@@ -377,6 +376,10 @@ class ReflectionServerV2:
 
         stream = self._bidi_input_streams.get(p.request_id)
         if stream is None:
+            # A chunk for a requestId with no live turn means the client is writing
+            # to a turn that already ended (or never started). Surface it as an
+            # INVALID_PARAMS error so a mis-wired Dev UI notices, same as the
+            # bad-params branch above.
             if req_id is not None:
                 await self._send_error(
                     str(req_id),
@@ -389,7 +392,7 @@ class ReflectionServerV2:
             inp = resolve_agent_input(p.chunk)
             await stream.put(inp)
         except Exception as e:  # noqa: BLE001
-            logger.error('reflection V2: sendInputStreamChunk error', err=e)
+            logger.warning('reflection V2: sendInputStreamChunk error', err=e)
 
     async def _handle_end_input_stream(self, req_id: str | int | None, params: dict[str, Any]) -> None:
         """Close the input stream for an active bidi (agent) session."""
@@ -557,6 +560,11 @@ class ReflectionServerV2:
         except (asyncio.CancelledError, Exception) as e:
             await _drain_chunks()
             await self._send_run_action_error(sid, e, trace_holder)
+            # Report the cancellation to the Dev UI, then let it propagate so the
+            # task actually winds down (swallowing it fakes a clean completion and
+            # breaks cooperative cancellation on shutdown).
+            if isinstance(e, asyncio.CancelledError):
+                raise
         finally:
             tid = trace_holder[0]
             if tid:
@@ -628,6 +636,11 @@ class ReflectionServerV2:
         except (asyncio.CancelledError, Exception) as e:
             await _drain_chunks()
             await self._send_run_action_error(sid, e, trace_holder)
+            # Report the cancellation to the Dev UI, then let it propagate so the
+            # task actually winds down (swallowing it fakes a clean completion and
+            # breaks cooperative cancellation on shutdown).
+            if isinstance(e, asyncio.CancelledError):
+                raise
         finally:
             self._bidi_input_streams.pop(sid, None)
             # Drop the cancel registration too, or a finished turn's trace id

@@ -21,6 +21,7 @@ from genkit._ai._agents._client import (
     AgentChat,
     AgentChunk,
     AgentClient,
+    AgentError,
     AgentInterrupt,
     AgentResponse,
     AgentTransport,
@@ -36,7 +37,6 @@ from genkit._ai._agents._session import (
 from genkit._ai._agents._transports._http import HttpAgentTransport, remote_agent
 from genkit._ai._agents._types import (
     ChunkTransform,
-    ClientTransform,
     StateTransform,
     TurnResult,
 )
@@ -57,12 +57,14 @@ from genkit._core._typing import (
 )
 
 __all__ = [
+    # Agent handles
     'Agent',
     'AgentClient',
     # Agent Client APIs
     'AgentChat',
     'AgentTurn',
     'AgentChunk',
+    'AgentError',
     'AgentInterrupt',
     'AgentResponse',
     'DetachedTask',
@@ -82,7 +84,6 @@ __all__ = [
     # Callbacks and transforms
     'StateTransform',
     'ChunkTransform',
-    'ClientTransform',
     # Wire types
     'AgentFinishReason',
     'AgentInit',

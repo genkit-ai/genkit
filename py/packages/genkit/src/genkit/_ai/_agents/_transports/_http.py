@@ -21,17 +21,56 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable
-from typing import Any, TypeVar
+from typing import Any
+
+from pydantic import BaseModel
+from typing_extensions import TypeVar as TypeVarExt
 
 from genkit._ai._agents._client import AgentClient, AgentTransport
 from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
 from genkit._ai._agents._types import StateManagement
 from genkit._core._channel import CloseableQueue
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, genkit_error_from_exception, genkit_error_from_http, genkit_error_from_wire
 from genkit._core._http_client import get_cached_client
-from genkit._core._typing import AgentInit, AgentInput, AgentOutput, AgentStreamChunk, SessionSnapshot, SnapshotStatus
+from genkit._core._typing import (
+    AgentAbortResponse,
+    AgentInit,
+    AgentInput,
+    AgentOutput,
+    AgentStreamChunk,
+    SessionSnapshot,
+    SnapshotStatus,
+)
 
-StateT = TypeVar('StateT')
+StateT = TypeVarExt('StateT', bound=BaseModel, default=Any)
+
+
+def parse_stream_line(line: str) -> dict[str, Any] | None:
+    """Parse one reflection JSON line or SSE ``data:`` / ``error:`` event."""
+    stripped = line.strip()
+    if not stripped:
+        return None
+    if stripped.startswith('data:'):
+        stripped = stripped[5:].strip()
+    elif stripped.startswith('error:'):
+        stripped = stripped[6:].strip()
+    if not stripped:
+        return None
+    parsed = json.loads(stripped)
+    if not isinstance(parsed, dict):
+        raise GenkitError(status='INTERNAL', message=f'unexpected stream payload: {parsed!r}')
+    return parsed
+
+
+def stream_error_from_payload(data: dict[str, Any]) -> GenkitError:
+    """Extract a GenkitError from a streamed error event."""
+    error = data.get('error')
+    if error is None:
+        raise GenkitError(status='INTERNAL', message=f'stream event missing error field: {data!r}')
+    # FastAPI wraps callable errors as {"error": {"error": {...}}}.
+    if isinstance(error, dict) and 'error' in error:
+        error = error['error']
+    return genkit_error_from_wire(error)
 
 
 class HttpAgentTransport(AgentTransport[StateT]):
@@ -63,16 +102,20 @@ class HttpAgentTransport(AgentTransport[StateT]):
         self.state_management: StateManagement = state_management
         self._background_tasks: set[asyncio.Task[Any]] = set()
 
-    async def _post_json(self, url: str, input_val: dict[str, Any]) -> Any:  # noqa: ANN401
+    async def _post_json(self, *, url: str, input_val: dict[str, Any]) -> Any:  # noqa: ANN401
         """POST JSON to a one-shot action endpoint and return the parsed body."""
         client = get_cached_client('agent_transport')
         response = await client.post(url, json=input_val)
         if response.status_code == 404:
             return None
-        response.raise_for_status()
+        if response.status_code != 200:
+            body = response.text
+            raise genkit_error_from_http(status_code=response.status_code, body=body)
         if not response.content:
             return None
         body = response.json()
+        if isinstance(body, dict) and 'error' in body:
+            raise genkit_error_from_wire(body['error'])
         if isinstance(body, dict) and 'result' in body:
             return body['result']
         return body
@@ -106,7 +149,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
             payload['key'] = self.agent_name
 
         output_future: asyncio.Future[AgentOutput] = asyncio.Future()
-        stream_queue = CloseableQueue[AgentStreamChunk | BaseException]()
+        stream_queue = CloseableQueue[AgentStreamChunk | Exception]()
 
         async def fetch_stream() -> None:
             try:
@@ -119,32 +162,24 @@ class HttpAgentTransport(AgentTransport[StateT]):
                     headers={'accept': 'text/event-stream'},
                 ) as response:
                     if response.status_code != 200:
-                        body = await response.aread()
-                        raise RuntimeError(
-                            f'HTTP request failed ({response.status_code}): {body.decode(errors="ignore")}'
-                        )
+                        body = (await response.aread()).decode(errors='ignore')
+                        raise genkit_error_from_http(status_code=response.status_code, body=body)
 
                     async for line in response.aiter_lines():
-                        line = line.strip()
-                        if not line or line.startswith(':'):
+                        data = parse_stream_line(line)
+                        if data is None:
                             continue
-                        if line.startswith('data: '):
-                            line = line[6:].strip()
-                        elif line.startswith('error: '):
-                            line = line[7:].strip()
 
-                        data = json.loads(line)
                         if 'result' in data:
                             output_val = AgentOutput.model_validate(data['result'])
                             if not output_future.done():
                                 output_future.set_result(output_val)
                             break
                         if 'error' in data:
-                            raise RuntimeError(f'Agent execution error: {data["error"]}')
-                        if 'message' in data and isinstance(data['message'], dict):
-                            chunk = AgentStreamChunk.model_validate(data['message'])
-                        else:
-                            chunk = AgentStreamChunk.model_validate(data)
+                            raise stream_error_from_payload(data)
+
+                        chunk_payload = data['message'] if 'message' in data else data
+                        chunk = AgentStreamChunk.model_validate(chunk_payload)
                         stream_queue.put_nowait(chunk)
                     else:
                         err = GenkitError(
@@ -154,10 +189,11 @@ class HttpAgentTransport(AgentTransport[StateT]):
                         if not output_future.done():
                             output_future.set_exception(err)
                         stream_queue.put_nowait(err)
-            except BaseException as e:
+            except Exception as e:
+                err = e if isinstance(e, GenkitError) else genkit_error_from_exception(e)
                 if not output_future.done():
-                    output_future.set_exception(e)
-                stream_queue.put_nowait(e)
+                    output_future.set_exception(err)
+                stream_queue.put_nowait(err)
             finally:
                 # Wakes the stream consumer once buffered chunks drain, so the
                 # generator ends cleanly on every path, not just the success one.
@@ -173,7 +209,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
 
         async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
             async for chunk in stream_queue:
-                if isinstance(chunk, BaseException):
+                if isinstance(chunk, Exception):
                     raise chunk
                 yield chunk
 
@@ -187,8 +223,8 @@ class HttpAgentTransport(AgentTransport[StateT]):
     ) -> SessionSnapshot | None:
         """Retrieves a session snapshot from the server."""
         result = await self._post_json(
-            self.get_snapshot_url,
-            self._lookup_payload(snapshot_id=snapshot_id, session_id=session_id),
+            url=self.get_snapshot_url,
+            input_val=self._lookup_payload(snapshot_id=snapshot_id, session_id=session_id),
         )
         if result is None:
             return None
@@ -196,14 +232,10 @@ class HttpAgentTransport(AgentTransport[StateT]):
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
         """Aborts the specified snapshot on the server."""
-        result = await self._post_json(self.abort_url, {'snapshotId': snapshot_id})
-        if not isinstance(result, dict):
+        result = await self._post_json(url=self.abort_url, input_val={'snapshotId': snapshot_id})
+        if result is None:
             return None
-        status_val = result.get('status')
-        if not status_val:
-            return None
-        out: Any = SnapshotStatus(status_val)
-        return out
+        return AgentAbortResponse.model_validate(result).status
 
 
 def remote_agent(
@@ -213,13 +245,14 @@ def remote_agent(
     get_snapshot_url: str | None = None,
     abort_url: str | None = None,
     state_management: StateManagement,
-) -> AgentClient[Any]:
-    """Create a remote agent client over HTTP (JS ``remoteAgent`` equivalent)."""
-    transport = HttpAgentTransport(
+    state_schema: type[StateT] | None = None,
+) -> AgentClient[StateT]:
+    """Create a remote agent client over HTTP."""
+    transport: HttpAgentTransport[StateT] = HttpAgentTransport(
         url=url,
         agent_name=agent_name,
         get_snapshot_url=get_snapshot_url,
         abort_url=abort_url,
         state_management=state_management,
     )
-    return AgentClient(transport)
+    return AgentClient(transport, state_schema=state_schema)

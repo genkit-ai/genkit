@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from genkit._ai._agents._base import define_custom_agent
+from genkit._ai._agents._client import AgentError
 from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._snapshot import is_heartbeat_expired, resolve_snapshot
 from genkit._ai._agents._types import TurnResult
@@ -73,7 +74,7 @@ async def test_resolve_snapshot_applies_client_transform() -> None:
         custom = state.custom if isinstance(state.custom, dict) else {}
         return state.model_copy(update={'custom': {'public': custom.get('public')}})
 
-    result = await resolve_snapshot(store=store, snapshot_id=saved.snapshot_id, client_transform={'state': redact})
+    result = await resolve_snapshot(store=store, snapshot_id=saved.snapshot_id, state_transform=redact)
     assert result is not None
     assert result.state is not None
     assert result.state.custom == {'public': 'ok'}
@@ -114,9 +115,9 @@ async def test_define_custom_agent_registers_snapshot_and_abort_actions() -> Non
 
     chat = agent.chat()
     turn = chat.send('hello')
-    async for _ in turn:
+    async for _ in turn.stream:
         pass
-    out = await turn
+    out = await turn.response
     assert out.snapshot_id
 
     via_method = await agent.get_snapshot_data(snapshot_id=out.snapshot_id)
@@ -167,15 +168,18 @@ async def test_custom_agent_turn_that_raises_resolves_as_failed() -> None:
     agent = define_custom_agent(registry, 'flakyTest', fn, store=store)
     chat = agent.chat()
 
-    out_ok = await chat.send('hello')
+    out_ok = await chat.send('hello').response
     assert out_ok.finish_reason == AgentFinishReason.STOP
     last_good_parent = chat.snapshot_id
     history_before_failure = list(chat.messages)
 
-    out_fail = await chat.send('please fail now')
-    assert out_fail.finish_reason == AgentFinishReason.FAILED
+    with pytest.raises(AgentError) as exc_info:
+        await chat.send('please fail now').response
+    assert exc_info.value.status == 'INTERNAL'
+    assert exc_info.value.message == 'boom'
     # The failed turn is a dead end: the resume handle stays on the last good
     # parent and the unanswered prompt is dropped from the running view.
+    assert exc_info.value.snapshot_id == last_good_parent
     assert chat.snapshot_id == last_good_parent
     assert chat.messages == history_before_failure
 
@@ -201,7 +205,7 @@ async def test_chat_resumes_from_last_good_after_detached_turn_is_aborted() -> N
     agent = define_custom_agent(registry, 'detachAbortTest', fn, store=store)
     chat = agent.chat()
 
-    await chat.send('hello')
+    await chat.send('hello').response
     last_good_parent = chat.snapshot_id
     history_before_detach = list(chat.messages)
 
@@ -220,7 +224,7 @@ async def test_chat_resumes_from_last_good_after_detached_turn_is_aborted() -> N
 
     # The chat is still usable: the next turn branches off the last good parent
     # rather than the aborted snapshot, which is not resumable.
-    out = await chat.send('are you there?')
+    out = await chat.send('are you there?').response
     assert out.finish_reason == AgentFinishReason.STOP
     assert chat._resume_snapshot_id == chat.snapshot_id  # noqa: SLF001
     assert chat.snapshot_id not in (None, last_good_parent, task.snapshot_id)
@@ -246,7 +250,7 @@ async def test_load_chat_by_session_skips_aborted_leaf_to_last_resumable() -> No
 
     agent = define_custom_agent(registry, 'loadAfterAbortTest', fn, store=store)
     chat = agent.chat()
-    await chat.send('hello')
+    await chat.send('hello').response
     session_id = chat.session_id
     last_good_parent = chat.snapshot_id
 
@@ -257,5 +261,5 @@ async def test_load_chat_by_session_skips_aborted_leaf_to_last_resumable() -> No
     reloaded = await agent.load_chat(session_id=session_id)
     # Landed on the last completed turn, not the aborted leaf.
     assert reloaded.snapshot_id == last_good_parent
-    out = await reloaded.send('still there?')
+    out = await reloaded.send('still there?').response
     assert out.finish_reason == AgentFinishReason.STOP

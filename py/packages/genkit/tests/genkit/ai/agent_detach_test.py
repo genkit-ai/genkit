@@ -18,6 +18,7 @@ import asyncio
 
 import pytest
 
+import genkit._ai._agents._runtime as runtime_mod
 from genkit._ai._agents._runtime import AgentRuntime, SessionRunner, agent_input_has_payload
 from genkit._ai._agents._session import Session
 from genkit._ai._agents._snapshot import abort_snapshot_in_store
@@ -70,7 +71,8 @@ def _runtime(session: Session, store: InMemorySessionStore | None) -> tuple[Agen
         session=session,
         parent_snapshot=None,
         store=store,
-        client_transform=None,
+        state_transform=None,
+        chunk_transform=None,
         emit_chunk=out_queue.put_nowait,
     )
     return rt, out_queue
@@ -200,8 +202,6 @@ async def test_detach_stamps_and_refreshes_pending_heartbeat(monkeypatch: pytest
     presumed dead), so the runtime stamps an initial heartbeat and refreshes it
     while the turn runs, then stops once the turn settles.
     """
-    import genkit._ai._agents._runtime as runtime_mod
-
     # Beat far faster than the 30s default so the test observes a refresh quickly.
     monkeypatch.setattr(runtime_mod, 'DEFAULT_HEARTBEAT_INTERVAL_MS', 10)
 

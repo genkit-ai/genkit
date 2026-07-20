@@ -5,11 +5,10 @@
 
 import pytest
 
+from genkit import Genkit
 from genkit.middleware import GenerateMiddlewareContext
 
 
 @pytest.fixture
 def ctx() -> GenerateMiddlewareContext:
-    from genkit import Genkit
-
     return GenerateMiddlewareContext(ai=Genkit())

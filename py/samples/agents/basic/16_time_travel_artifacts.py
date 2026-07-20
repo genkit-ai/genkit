@@ -60,15 +60,15 @@ def page(chat) -> str:
 
 async def main() -> None:
     chat = writer.chat()
-    await chat.send('Start a landing page for "Quill", an AI note-taking app: punchy headline + subhead.')
+    await chat.send('Start a landing page for "Quill", an AI note-taking app: punchy headline + subhead.').response
     checkpoint = chat.snapshot_id  # bookmark this exact moment
     assert checkpoint  # populated once the turn is store-backed
     headline_page = page(chat)  # landing.md as it stands at the checkpoint
     assert headline_page
 
     # The main line drifts corporate, rewriting landing.md twice...
-    await chat.send('Add enterprise feature bullets: SOC 2, SSO, audit logs.')
-    await chat.send('Add an enterprise pricing table with "Contact Sales".')
+    await chat.send('Add enterprise feature bullets: SOC 2, SSO, audit logs.').response
+    await chat.send('Add an enterprise pricing table with "Contact Sales".').response
     # → landing.md now carries an enterprise section; it's moved past the checkpoint
     assert page(chat) != headline_page
 
@@ -80,8 +80,8 @@ async def main() -> None:
 
     # Build a different, playful timeline from that same headline. The enterprise
     # page is untouched — both landing.md timelines coexist off one checkpoint.
-    await alt.send('Add playful, indie feature bullets with emoji.')
-    await alt.send('Add a warm "why we built this" founder note instead of pricing.')
+    await alt.send('Add playful, indie feature bullets with emoji.').response
+    await alt.send('Add a warm "why we built this" founder note instead of pricing.').response
     assert page(alt) != page(chat)
 
 

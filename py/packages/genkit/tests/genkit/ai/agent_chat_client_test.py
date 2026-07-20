@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from genkit._ai._agents._client import (
     AgentChat,
+    AgentError,
     AgentInterrupt,
     AgentTransport,
 )
@@ -55,6 +56,7 @@ from genkit._core._typing import (
     ToolResponsePart,
     TurnEnd,
 )
+from genkit.agent import InMemorySessionStore
 
 # ---------------------------------------------------------------------------
 # Unit tests for JSON patch application
@@ -93,7 +95,7 @@ def test_apply_json_patch_array_remove() -> None:
 # ---------------------------------------------------------------------------
 
 
-class MockAgentTransport(AgentTransport[dict[str, Any]]):
+class MockAgentTransport(AgentTransport[Any]):
     def __init__(self, *, state_management: StateManagement = 'server') -> None:
         self.connect_init: AgentInit | None = None
         self.send_payloads: list[AgentInput] = []
@@ -205,7 +207,7 @@ async def test_wire_init_derives_from_live_session_state() -> None:
 
     turn = chat.send('Hello')
     transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-1', finish_reason=AgentFinishReason.STOP)))
-    await turn
+    await turn.response
 
     # First turn (no snapshot yet) resumes by the bootstrap session id.
     assert transport.connect_init == AgentInit(session_id='sess-bootstrap')
@@ -258,7 +260,7 @@ async def test_session_sends_input_and_aggregates_state() -> None:
 
     # Consume stream chunks
     chunks = []
-    async for chunk in turn:
+    async for chunk in turn.stream:
         chunks.append(chunk)
 
     assert len(chunks) == 4
@@ -270,7 +272,7 @@ async def test_session_sends_input_and_aggregates_state() -> None:
     assert chat.state == {'unit': 'celsius'}
 
     # Await output to verify final response resolved correctly
-    output = await turn
+    output = await turn.response
     assert output.finish_reason == AgentFinishReason.STOP
     assert output.message is not None
     assert output.message.content is not None
@@ -307,8 +309,8 @@ async def test_state_schema_coerces_custom_into_model() -> None:
     )
     transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-1', finish_reason=AgentFinishReason.STOP)))
 
-    streamed = [chunk.custom async for chunk in turn if chunk.custom is not None]
-    res = await turn
+    streamed = [chunk.custom async for chunk in turn.stream if chunk.custom is not None]
+    res = await turn.response
 
     assert isinstance(chat.state, _Progress) and chat.state.turns == 1
     assert isinstance(res.state, _Progress) and res.state.turns == 1
@@ -329,7 +331,7 @@ async def test_no_state_schema_leaves_custom_as_dict() -> None:
     chat = AgentChat(transport)
     turn = chat.send('go')
     transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-1', finish_reason=AgentFinishReason.STOP)))
-    res = await turn
+    res = await turn.response
 
     assert chat.state == {'turns': 1}
     assert res.state == {'turns': 1}
@@ -349,7 +351,7 @@ async def test_server_managed_appends_messages_incrementally() -> None:
     )
     turn = chat.send('U1')
     transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-1', finish_reason=AgentFinishReason.STOP)))
-    await turn
+    await turn.response
 
     assert chat.snapshot_id == 'snap-1'
     assert [m.content[0].root.text for m in chat.messages] == ['U1', 'A1']
@@ -361,7 +363,7 @@ async def test_server_managed_appends_messages_incrementally() -> None:
     )
     turn2 = chat.send('U2')
     transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-2', finish_reason=AgentFinishReason.STOP)))
-    await turn2
+    await turn2.response
 
     assert chat.snapshot_id == 'snap-2'
     assert [m.content[0].root.text for m in chat.messages] == ['U1', 'A1', 'U2', 'A2']
@@ -430,7 +432,7 @@ async def test_server_managed_reconstructs_intermediate_tool_messages() -> None:
         )
     )
     transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-1', finish_reason=AgentFinishReason.STOP)))
-    await turn
+    await turn.response
 
     roles = [m.role for m in chat.messages]
     assert roles == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
@@ -501,7 +503,7 @@ async def test_client_managed_stitches_tool_messages_from_chunks_not_output_stat
         )
     )
     transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(finish_reason=AgentFinishReason.STOP)))
-    await turn
+    await turn.response
 
     # Same stitched shape as the server-managed tool loop: the tool steps are
     # present even though raw.state never carried them.
@@ -526,8 +528,6 @@ async def test_server_managed_running_view_matches_snapshot_over_real_tool_loop(
     rebuilt from chunks must line up with the authoritative store snapshot."""
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
-
-    from genkit.agent import InMemorySessionStore
 
     store = InMemorySessionStore()
 
@@ -565,7 +565,7 @@ async def test_server_managed_running_view_matches_snapshot_over_real_tool_loop(
     ]
 
     chat = agent.chat()
-    await chat.send('Weather in Tokyo?')
+    await chat.send('Weather in Tokyo?').response
 
     # The running view carries the whole turn, not just user + final reply.
     assert [m.role for m in chat.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
@@ -599,8 +599,10 @@ async def test_server_managed_failed_turn_rolls_back_optimistic_user_message() -
     transport.push_chunk(
         AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-good', finish_reason=AgentFinishReason.FAILED))
     )
-    await turn
+    with pytest.raises(AgentError) as exc_info:
+        await turn.response
 
+    assert exc_info.value.snapshot_id == 'snap-good'
     assert chat.messages == []
     assert chat.snapshot_id == 'snap-good'
 
@@ -625,7 +627,7 @@ async def test_no_store_inprocess_transport_assembles_output_message() -> None:
 
     agent = ai.define_agent(name='noStoreAgent', model='programmableModel', system='Reply briefly.')
     chat = agent.chat()
-    out = await chat.send('Hello')
+    out = await chat.send('Hello').response
 
     assert out.text == 'Hi there!'
     assert len(chat.messages) == 2
@@ -639,7 +641,7 @@ async def test_no_store_inprocess_transport_assembles_output_message() -> None:
     assert saved.custom == chat.state
 
 
-class _ServerEmulatingClientManagedTransport(AgentTransport[dict[str, Any]]):
+class _ServerEmulatingClientManagedTransport(AgentTransport[Any]):
     """Stateless client-managed transport that mimics the real server round-trip.
 
     On each turn it loads history from ``init.state``, appends the turn's input
@@ -702,12 +704,12 @@ async def test_client_managed_does_not_double_append_messages() -> None:
     transport = _ServerEmulatingClientManagedTransport()
     chat = AgentChat(transport, AgentInit())
 
-    await chat.send('hello')
+    await chat.send('hello').response
     # The new message must NOT ride along in init — the server records it from input.
     assert transport.init_histories[0] == []
     assert [m.content[0].root.text for m in chat.messages] == ['hello', 'reply-1']
 
-    await chat.send('again')
+    await chat.send('again').response
     # Turn 2's init replays the prior two messages, never the message in flight.
     assert transport.init_histories[1] == ['hello', 'reply-1']
     assert [m.content[0].root.text for m in chat.messages] == ['hello', 'reply-1', 'again', 'reply-2']
@@ -735,7 +737,7 @@ async def test_session_id_populated_from_output_state() -> None:
     transport.push_chunk(
         AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.STOP))
     )
-    await turn
+    await turn.response
 
     assert chat.session_id == 'session_abc'
 
@@ -781,7 +783,7 @@ async def test_session_handling_tool_interrupt() -> None:
         AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.INTERRUPTED))
     )
 
-    out = await turn
+    out = await turn.response
 
     assert len(out.interrupts) == 1
     assert out.interrupts[0].name == 'userApproval'
@@ -804,7 +806,7 @@ async def test_session_handling_tool_interrupt() -> None:
     )
 
     # Consume resume turn stream to trigger execution
-    async for _chunk in resume_turn:
+    async for _chunk in resume_turn.stream:
         pass
 
     # Verify transport received the ToolResponse payload
@@ -866,7 +868,7 @@ async def test_session_handling_multiple_tool_interrupts() -> None:
         AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.INTERRUPTED))
     )
 
-    out = await turn
+    out = await turn.response
 
     assert len(out.interrupts) == 2
     assert {i.name for i in out.interrupts} == {'transferA', 'transferB'}
@@ -880,7 +882,7 @@ async def test_session_handling_multiple_tool_interrupts() -> None:
     transport.push_chunk(
         AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_2', finish_reason=AgentFinishReason.STOP))
     )
-    await resume_turn
+    await resume_turn.response
 
     sent_resume = transport.send_payloads[1].resume
     assert sent_resume is not None
@@ -893,8 +895,6 @@ async def test_session_handling_multiple_tool_interrupts() -> None:
 async def test_in_process_persistent_connection() -> None:
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
-
-    from genkit.agent import InMemorySessionStore
 
     store = InMemorySessionStore()
 
@@ -918,9 +918,9 @@ async def test_in_process_persistent_connection() -> None:
     # Turn 1
     turn1 = chat.send('Hello')
     chunks1 = []
-    async for chunk in turn1:
+    async for chunk in turn1.stream:
         chunks1.append(chunk)
-    res1 = await turn1
+    res1 = await turn1.response
     assert res1.message is not None
     assert res1.message.content is not None
     assert res1.message.content[0].root.text == 'Echo 1'
@@ -928,9 +928,9 @@ async def test_in_process_persistent_connection() -> None:
     # Turn 2
     turn2 = chat.send('World')
     chunks2 = []
-    async for chunk in turn2:
+    async for chunk in turn2.stream:
         chunks2.append(chunk)
-    res2 = await turn2
+    res2 = await turn2.response
     assert res2.message is not None
     assert res2.message.content is not None
     assert res2.message.content[0].root.text == 'Echo 2'
@@ -940,8 +940,6 @@ async def test_in_process_persistent_connection() -> None:
 async def test_attached_turn_abort() -> None:
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
-
-    from genkit.agent import InMemorySessionStore
 
     store = InMemorySessionStore()
 
@@ -970,7 +968,7 @@ async def test_attached_turn_abort() -> None:
 
     # Verify awaiting the turn raises CancelledError
     with pytest.raises(asyncio.CancelledError):
-        await turn
+        await turn.response
 
     # Abort is a client-side detach only: the prompt was still asked, so the
     # optimistic user message stays in history (just without a reply).
@@ -988,7 +986,7 @@ async def test_attached_turn_abort() -> None:
 
     # We can keep going; the next turn appends onto the kept history.
     turn2 = chat.send('Continue conversation')
-    res2 = await turn2
+    res2 = await turn2.response
 
     # The detached turn's 'Hello' is still there, followed by the new exchange.
     texts = [p.root.text for m in chat.messages for p in (m.content or []) if hasattr(p.root, 'text')]
@@ -1000,12 +998,10 @@ async def test_attached_turn_abort() -> None:
 
 @pytest.mark.asyncio
 async def test_await_turn_under_timeout_detaches() -> None:
-    """A deadline around `await turn` detaches like turn.abort(): the deadline
+    """A deadline around `await turn.response` detaches like turn.abort(): the deadline
     surfaces as TimeoutError, the prompt stays in history, and the next turn works."""
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
-
-    from genkit.agent import InMemorySessionStore
 
     ai.define_prompt(name='timeoutAgent', model='programmableModel', system='Hello')
     agent = ai.define_prompt_agent(name='timeoutAgent', store=InMemorySessionStore())
@@ -1024,7 +1020,7 @@ async def test_await_turn_under_timeout_detaches() -> None:
 
     # The deadline fires before the slow model responds → surfaces as TimeoutError.
     async def _await_turn() -> None:
-        await turn
+        await turn.response
 
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(_await_turn(), 0.2)
@@ -1041,7 +1037,7 @@ async def test_await_turn_under_timeout_detaches() -> None:
             message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Second turn echo'))]),
         )
     )
-    res2 = await chat.send('Continue conversation')
+    res2 = await chat.send('Continue conversation').response
     assert res2.message is not None
     assert res2.message.content[0].root.text == 'Second turn echo'
 
@@ -1051,8 +1047,6 @@ async def test_stream_turn_under_timeout_detaches() -> None:
     """A deadline around `async for chunk in turn` detaches the same way."""
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
-
-    from genkit.agent import InMemorySessionStore
 
     ai.define_prompt(name='streamTimeoutAgent', model='programmableModel', system='Hello')
     agent = ai.define_prompt_agent(name='streamTimeoutAgent', store=InMemorySessionStore())
@@ -1070,7 +1064,7 @@ async def test_stream_turn_under_timeout_detaches() -> None:
     turn = chat.send('Hello')
 
     async def _drain() -> None:
-        async for _chunk in turn:
+        async for _chunk in turn.stream:
             pass
 
     with pytest.raises(asyncio.TimeoutError):
@@ -1084,8 +1078,6 @@ async def test_stream_turn_under_timeout_detaches() -> None:
 async def test_session_abort() -> None:
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
-
-    from genkit.agent import InMemorySessionStore
 
     store = InMemorySessionStore()
 
@@ -1183,7 +1175,7 @@ async def test_agent_turn_direct_async_iteration() -> None:
 
     # Consume chunks by iterating directly over the turn!
     chunks = []
-    async for chunk in turn:
+    async for chunk in turn.stream:
         chunks.append(chunk)
 
     assert len(chunks) == 3
@@ -1192,7 +1184,7 @@ async def test_agent_turn_direct_async_iteration() -> None:
     assert chunks[2].text is None
 
     # Verify we can still await the turn after streaming
-    output = await turn
+    output = await turn.response
     assert output.message is not None
     assert output.message.content is not None
     assert output.message.content[0].root.text == 'Final output!'
@@ -1219,7 +1211,7 @@ async def test_agent_turn_direct_await() -> None:
     )
 
     # Awaiting the turn alone drives it to completion — no need to iterate first.
-    output = await turn
+    output = await turn.response
 
     assert output.message is not None
     assert output.message.content is not None
@@ -1228,11 +1220,10 @@ async def test_agent_turn_direct_await() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_turn_stream_and_response_accessors() -> None:
-    """`turn.stream` / `turn.response` mirror `async for turn` / `await turn`.
+    """`turn.stream` yields the chunks and `turn.response` resolves the result.
 
     Genkit's other streaming handles expose these, so a turn offers the same
-    surface. Both must route through the detach-on-cancel wrappers, i.e. behave
-    identically to the dunder forms."""
+    surface. Both route through the detach-on-cancel wrappers."""
     transport = MockAgentTransport()
     transport.final_output = AgentOutput(
         snapshot_id='snapshot_1',

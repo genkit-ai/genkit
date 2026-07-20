@@ -42,7 +42,7 @@ from genkit._ai._agents._base import (
 )
 from genkit._ai._agents._runtime import AgentFn
 from genkit._ai._agents._session import SessionStore, StateT, get_current_session
-from genkit._ai._agents._types import ClientTransform, StateTransform
+from genkit._ai._agents._types import ChunkTransform, StateTransform
 from genkit._ai._embedding import EmbedderFn, EmbedderOptions, EmbedderRef, define_embedder
 from genkit._ai._evaluator import (
     BatchEvaluatorFn,
@@ -703,8 +703,8 @@ class Genkit:
         fn: AgentFn,
         *,
         store: SessionStore[StateT] | None = None,
-        client_transform: ClientTransform | None = None,
-        transform: StateTransform | None = None,
+        state_transform: StateTransform | None = None,
+        chunk_transform: ChunkTransform | None = None,
         state_schema: type[StateT] | None = None,
         description: str | None = None,
         metadata: dict[str, object] | None = None,
@@ -723,8 +723,8 @@ class Genkit:
             name=name,
             fn=fn,
             store=store,
-            client_transform=client_transform,
-            transform=transform,
+            state_transform=state_transform,
+            chunk_transform=chunk_transform,
             state_schema=state_schema,
             description=description,
             metadata=metadata,
@@ -743,8 +743,8 @@ class Genkit:
         description: str | None = None,
         metadata: dict[str, object] | None = None,
         store: SessionStore[StateT] | None = None,
-        client_transform: ClientTransform | None = None,
-        transform: StateTransform | None = None,
+        state_transform: StateTransform | None = None,
+        chunk_transform: ChunkTransform | None = None,
         state_schema: type[StateT] | None = None,
     ) -> Agent[StateT]:
         """Define a prompt-backed agent.
@@ -768,8 +768,8 @@ class Genkit:
             description=description,
             metadata=metadata,
             store=store,
-            client_transform=client_transform,
-            transform=transform,
+            state_transform=state_transform,
+            chunk_transform=chunk_transform,
             state_schema=state_schema,
         )
 
@@ -778,8 +778,8 @@ class Genkit:
         name: str,
         *,
         store: SessionStore[StateT] | None = None,
-        client_transform: ClientTransform | None = None,
-        transform: StateTransform | None = None,
+        state_transform: StateTransform | None = None,
+        chunk_transform: ChunkTransform | None = None,
         state_schema: type[StateT] | None = None,
         description: str | None = None,
         metadata: dict[str, object] | None = None,
@@ -793,8 +793,8 @@ class Genkit:
             registry=self.registry,
             name=name,
             store=store,
-            client_transform=client_transform,
-            transform=transform,
+            state_transform=state_transform,
+            chunk_transform=chunk_transform,
             state_schema=state_schema,
             description=description,
             metadata=metadata,

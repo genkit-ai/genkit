@@ -20,12 +20,16 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Callable, Sequence
-from typing import Any, Generic
+from typing import Generic
 
 from opentelemetry import trace as trace_api
 
 # Internal imports from sibling modules
 from genkit._ai._agents._client import AgentClient, part_roots
+from genkit._ai._agents._preamble import (
+    apply_preamble_tags,
+    tag_history_for_render,
+)
 from genkit._ai._agents._runtime import (
     AgentFn,
     AgentRuntime,
@@ -39,17 +43,15 @@ from genkit._ai._agents._session import (
 )
 from genkit._ai._agents._snapshot import (
     abort_snapshot_in_store,
-    parse_abort_input,
-    parse_snapshot_lookup_input,
+    parse_snapshot_lookup_kw,
     resolve_snapshot,
 )
 from genkit._ai._agents._transports._inprocess import InProcessTransport
 from genkit._ai._agents._types import (
-    ClientTransform,
+    ChunkTransform,
     StateManagement,
     StateTransform,
     TurnResult,
-    resolve_client_transform,
 )
 
 # Imports from other genkit subsystems
@@ -64,14 +66,17 @@ from genkit._ai._tools import Tool
 from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction, BidiFn
 from genkit._core._error import GenkitError
 from genkit._core._middleware import BaseMiddleware
-from genkit._core._model import Message, ModelConfig
+from genkit._core._model import ModelConfig
 from genkit._core._registry import Registry
 from genkit._core._typing import (
+    AgentAbortRequest,
+    AgentAbortResponse,
     AgentInit,
     AgentInput,
     AgentOutput,
     AgentResult,
     AgentStreamChunk,
+    GetSnapshotRequest,
     MessageData,
     MiddlewareRef,
     Part,
@@ -112,16 +117,18 @@ class Agent(
         name: str,
         bidi_fn: BidiFn[AgentInit, AgentInput, AgentStreamChunk, AgentOutput],
         store: SessionStore | None = None,
-        client_transform: ClientTransform | None = None,
-        state_schema: type[Any] | None = None,
+        state_transform: StateTransform | None = None,
+        state_schema: type[StateT] | None = None,
         description: str | None = None,
         metadata: dict[str, object] | None = None,
     ) -> None:
         """Initialise Agent; transport is inferred from the action + store."""
         agent_meta: dict[str, object] = {'stateManagement': 'server' if store is not None else 'client'}
         # Publish the state shape so tooling (e.g. the Dev UI) can inspect and
-        # validate custom state the same way it does tool/prompt schemas.
-        if state_schema is not None and hasattr(state_schema, 'model_json_schema'):
+        # validate custom state the same way it does tool/prompt schemas. StateT is
+        # bound to BaseModel, so a non-Pydantic schema is a type error at the call
+        # site — nothing to shape-check at runtime here.
+        if state_schema is not None:
             agent_meta['stateSchema'] = state_schema.model_json_schema()
         # BidiAction is inited via super() (not an explicit BidiAction.__init__)
         # so the type checker keeps Agent's bound generics; calling it explicitly
@@ -145,22 +152,18 @@ class Agent(
             input_schema=AgentInput,
         )
         self.store = store
-        self._client_transform = client_transform
+        self._state_transform = state_transform
         # The AgentClient half (chat/load_chat/get_snapshot/abort rides along)
         # runs against an in-process transport that drives this very action — the
         # way remote_agent runs against an HTTP one.
         AgentClient.__init__(self, self._in_process_transport(), state_schema=state_schema)
 
     def _in_process_transport(self) -> InProcessTransport:
+        # Agent satisfies AgentAction (stream_bidi + get/abort_snapshot_data), so
+        # the transport drives it directly. With no store the snapshot methods
+        # just return None, so there's nothing to special-case here.
         state_management: StateManagement = 'server' if self.store is not None else 'client'
-        if self.store is None:
-            return InProcessTransport(action=self, state_management=state_management)
-        return InProcessTransport(
-            action=self,
-            get_snapshot=self.get_snapshot_data,
-            abort_snapshot=self.abort_snapshot_data,
-            state_management=state_management,
-        )
+        return InProcessTransport(action=self, state_management=state_management)
 
     async def get_snapshot_data(
         self,
@@ -175,7 +178,7 @@ class Agent(
             store=self.store,
             snapshot_id=snapshot_id,
             session_id=session_id,
-            client_transform=self._client_transform,
+            state_transform=self._state_transform,
         )
 
     async def abort_snapshot_data(self, snapshot_id: str) -> SnapshotStatus | None:
@@ -196,8 +199,8 @@ def define_custom_agent(
     fn: AgentFn,
     *,
     store: SessionStore[StateT] | None = None,
-    client_transform: ClientTransform | None = None,
-    transform: StateTransform | None = None,
+    state_transform: StateTransform | None = None,
+    chunk_transform: ChunkTransform | None = None,
     state_schema: type[StateT] | None = None,
     description: str | None = None,
     metadata: dict[str, object] | None = None,
@@ -207,11 +210,11 @@ def define_custom_agent(
     Pass ``state_schema`` (a Pydantic model) to type the custom state: the chat's
     ``state``, each turn's ``response.state``, and streamed ``chunk.custom`` come
     back as that model, validated on the way in, instead of a bare dict.
+
+    ``state_transform`` / ``chunk_transform`` are egress hooks that reshape or redact
+    what the client sees (snapshot state and streamed chunks) without touching what's
+    persisted.
     """
-    resolved_transform = resolve_client_transform(
-        client_transform=client_transform,
-        transform=transform,
-    )
 
     async def bidi_fn(
         init: AgentInit,
@@ -230,7 +233,8 @@ def define_custom_agent(
             session=session,
             parent_snapshot=parent,
             store=store,
-            client_transform=resolved_transform,
+            state_transform=state_transform,
+            chunk_transform=chunk_transform,
             emit_chunk=send_chunk,
         )
         await rt.session_runner.seed_last_good_state()
@@ -242,20 +246,23 @@ def define_custom_agent(
         description=description,
         metadata=metadata,
         store=store,
-        client_transform=resolved_transform,
+        state_transform=state_transform,
         state_schema=state_schema,
     )
     registry.register_action_from_instance(agent)
 
     if store is not None:
-        _register_snapshot_actions(registry, name, agent)
+        register_snapshot_actions(registry=registry, name=name, agent=agent)
 
     return agent
 
 
-def _register_snapshot_actions(registry: Registry, name: str, agent: Agent) -> None:
-    async def snapshot_fn(input_val: Any) -> SessionSnapshot:  # noqa: ANN401
-        sid, sess_id = parse_snapshot_lookup_input(input_val)
+def register_snapshot_actions(*, registry: Registry, name: str, agent: Agent) -> None:
+    async def snapshot_fn(req: GetSnapshotRequest) -> SessionSnapshot:
+        # The action layer already coerced the wire payload into the typed model
+        # (camelCase aliases and all); we only enforce the "exactly one selector"
+        # rule the schema can't express and treat empty strings as unset.
+        sid, sess_id = parse_snapshot_lookup_kw(snapshot_id=req.snapshot_id or None, session_id=req.session_id or None)
         snap = await agent.get_snapshot_data(snapshot_id=sid, session_id=sess_id)
         if snap is None:
             # A poller asking for a snapshot that isn't there is a lookup miss, not
@@ -265,10 +272,9 @@ def _register_snapshot_actions(registry: Registry, name: str, agent: Agent) -> N
             raise GenkitError(status='NOT_FOUND', message=f'Snapshot {target!r} not found for agent {name!r}.')
         return snap
 
-    async def abort_fn(input_val: Any) -> dict[str, object]:  # noqa: ANN401
-        snapshot_id = parse_abort_input(input_val)
-        status = await agent.abort_snapshot_data(snapshot_id)
-        return {'snapshotId': snapshot_id, 'status': status}
+    async def abort_fn(req: AgentAbortRequest) -> AgentAbortResponse:
+        status = await agent.abort_snapshot_data(req.snapshot_id)
+        return AgentAbortResponse(snapshot_id=req.snapshot_id, status=status)
 
     registry.register_action_from_instance(
         Action(
@@ -301,8 +307,8 @@ def define_agent(
     description: str | None = None,
     metadata: dict[str, object] | None = None,
     store: SessionStore[StateT] | None = None,
-    client_transform: ClientTransform | None = None,
-    transform: StateTransform | None = None,
+    state_transform: StateTransform | None = None,
+    chunk_transform: ChunkTransform | None = None,
     state_schema: type[StateT] | None = None,
 ) -> Agent[StateT]:
     """Register a prompt-backed agent.
@@ -332,8 +338,8 @@ def define_agent(
         registry=registry,
         name=name,
         store=store,
-        client_transform=client_transform,
-        transform=transform,
+        state_transform=state_transform,
+        chunk_transform=chunk_transform,
         state_schema=state_schema,
         description=description,
         metadata=metadata,
@@ -345,8 +351,8 @@ def define_prompt_agent(
     name: str,
     *,
     store: SessionStore[StateT] | None = None,
-    client_transform: ClientTransform | None = None,
-    transform: StateTransform | None = None,
+    state_transform: StateTransform | None = None,
+    chunk_transform: ChunkTransform | None = None,
     state_schema: type[StateT] | None = None,
     description: str | None = None,
     metadata: dict[str, object] | None = None,
@@ -365,16 +371,19 @@ def define_prompt_agent(
             history = await session_runner.get_messages()
             resume_respond = None
             resume_restart = None
+            resume_metadata = None
             if inp.resume is not None:
                 validate_resume_against_history(inp.resume, history)
                 resume_respond = inp.resume.respond or None
                 resume_restart = inp.resume.restart or None
+                resume_metadata = inp.resume.metadata or None
 
             executable = await lookup_prompt(registry, name)
             call_opts: PromptGenerateOptions = {
                 'messages': tag_history_for_render(history),
                 'resume_respond': resume_respond,
                 'resume_restart': resume_restart,
+                'resume_metadata': resume_metadata,
                 'context': ctx.context,
             }
             child_registry, gen_options = await _prepare(executable, {}, call_opts)
@@ -399,15 +408,15 @@ def define_prompt_agent(
         name=name,
         fn=agent_fn,
         store=store,
-        client_transform=client_transform,
-        transform=transform,
+        state_transform=state_transform,
+        chunk_transform=chunk_transform,
         state_schema=state_schema,
         description=description,
         metadata=metadata,
     )
 
 
-def _tool_input_key(value: object) -> str:
+def tool_input_key(value: object) -> str:
     """Canonical JSON form of a tool input for order-insensitive deep comparison."""
     return json.dumps(value, sort_keys=True, default=str)
 
@@ -448,7 +457,7 @@ def validate_resume_against_history(resume: Resume, history: list[MessageData]) 
                     'which was not found in session history.'
                 ),
             )
-        if _tool_input_key(tr.input) != _tool_input_key(match.input):
+        if tool_input_key(tr.input) != tool_input_key(match.input):
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=(
@@ -468,46 +477,3 @@ def validate_resume_against_history(resume: Resume, history: list[MessageData]) 
                     'which was not found in session history.'
                 ),
             )
-
-
-# ---------------------------------------------------------------------------
-# Internal Prompt Preamble Tagging Helpers
-# ---------------------------------------------------------------------------
-
-HISTORY_TAG = '_genkit_history'
-PREAMBLE_KEY = '_genkit_agent_preamble'
-
-
-def coerce_message(msg: MessageData) -> Message:
-    return msg if isinstance(msg, Message) else Message.model_validate(msg.model_dump())
-
-
-def message_with_metadata(msg: MessageData, metadata: dict[str, object]) -> Message:
-    base = coerce_message(msg)
-    merged = {**(base.metadata or {}), **metadata}
-    return base.model_copy(update={'metadata': merged})
-
-
-def message_without_metadata_key(msg: MessageData, key: str) -> Message:
-    base = coerce_message(msg)
-    if not base.metadata or key not in base.metadata:
-        return base
-    remaining = {k: v for k, v in base.metadata.items() if k != key}
-    return base.model_copy(update={'metadata': remaining or None})
-
-
-def tag_history_for_render(messages: list[MessageData]) -> list[Message]:
-    """Mark session messages so prompt render can tell them apart from template output."""
-    return [message_with_metadata(m, {HISTORY_TAG: True}) for m in messages]
-
-
-def apply_preamble_tags(messages: Sequence[MessageData]) -> list[Message]:
-    """After render: tag prompt-template messages and strip the internal history marker."""
-    tagged: list[Message] = []
-    for msg in messages:
-        meta = getattr(msg, 'metadata', None) or {}
-        if meta.get(HISTORY_TAG):
-            tagged.append(message_without_metadata_key(msg, HISTORY_TAG))
-        else:
-            tagged.append(message_with_metadata(msg, {PREAMBLE_KEY: True}))
-    return tagged

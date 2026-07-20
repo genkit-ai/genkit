@@ -19,11 +19,11 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable
 from typing import Any, Protocol
 
 from genkit._ai._agents._types import StateManagement
-from genkit._core._action import BidiAction
+from genkit._core._action import BidiConnection
 from genkit._core._channel import CloseableQueue
 from genkit._core._typing import (
     AgentInit,
@@ -35,16 +35,22 @@ from genkit._core._typing import (
 )
 
 
-class GetSnapshotFn(Protocol):
-    async def __call__(
+class AgentAction(Protocol):
+    """The action-side surface that the in-process transport calls."""
+
+    async def stream_bidi(
+        self,
+        init: AgentInit | None = None,
+    ) -> BidiConnection[AgentInput, AgentStreamChunk, AgentOutput]: ...
+
+    async def get_snapshot_data(
         self,
         *,
         snapshot_id: str | None = None,
         session_id: str | None = None,
     ) -> SessionSnapshot | None: ...
 
-
-AbortSnapshotFn = Callable[[str], Awaitable[SnapshotStatus | None]]
+    async def abort_snapshot_data(self, snapshot_id: str) -> SnapshotStatus | None: ...
 
 
 class InProcessTransport:
@@ -53,14 +59,10 @@ class InProcessTransport:
     def __init__(
         self,
         *,
-        action: BidiAction[Any, Any, Any, Any],
-        get_snapshot: GetSnapshotFn | None = None,
-        abort_snapshot: AbortSnapshotFn | None = None,
+        action: AgentAction,
         state_management: StateManagement,
     ) -> None:
         self.action = action
-        self._get_snapshot = get_snapshot
-        self._abort_snapshot = abort_snapshot
         self.state_management: StateManagement = state_management
         self._background_tasks: set[asyncio.Task[Any]] = set()
 
@@ -86,7 +88,7 @@ class InProcessTransport:
         await conn.close()
 
         output_future: asyncio.Future[AgentOutput] = asyncio.Future()
-        stream_queue = CloseableQueue[AgentStreamChunk | BaseException]()
+        stream_queue = CloseableQueue[AgentStreamChunk | Exception]()
 
         # Aborting a turn is a client-side detach: the caller stops listening,
         # but this drain keeps running to completion so the in-flight turn's work
@@ -98,7 +100,7 @@ class InProcessTransport:
                     stream_queue.put_nowait(chunk)
                 if not output_future.done():
                     output_future.set_result(await conn.output())
-            except BaseException as e:
+            except Exception as e:
                 if not output_future.done():
                     output_future.set_exception(e)
                 stream_queue.put_nowait(e)
@@ -111,7 +113,7 @@ class InProcessTransport:
 
         async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
             async for chunk in stream_queue:
-                if isinstance(chunk, BaseException):
+                if isinstance(chunk, Exception):
                     raise chunk
                 yield chunk
 
@@ -123,11 +125,7 @@ class InProcessTransport:
         snapshot_id: str | None = None,
         session_id: str | None = None,
     ) -> SessionSnapshot | None:
-        if self._get_snapshot is None:
-            return None
-        return await self._get_snapshot(snapshot_id=snapshot_id, session_id=session_id)
+        return await self.action.get_snapshot_data(snapshot_id=snapshot_id, session_id=session_id)
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
-        if self._abort_snapshot is None:
-            return None
-        return await self._abort_snapshot(snapshot_id)
+        return await self.action.abort_snapshot_data(snapshot_id)

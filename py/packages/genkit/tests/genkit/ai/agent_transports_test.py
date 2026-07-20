@@ -90,11 +90,11 @@ async def test_http_transport_integration() -> None:
             turn = chat.send('Hello Genkit!')
 
             chunks = []
-            async for chunk in turn:
+            async for chunk in turn.stream:
                 if chunk.text:
                     chunks.append(chunk.text)
 
-            res = await turn
+            res = await turn.response
             assert res.text == 'Echo: Hello Genkit!'
             assert res.finish_reason == AgentFinishReason.STOP
         finally:

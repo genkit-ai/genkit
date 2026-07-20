@@ -43,9 +43,9 @@ async def main() -> None:
     turn = chat.send('My name is Ada. Remember it.')
 
     # Two ways to consume a turn:
-    #   await chat.send(msg)            output only, skip the stream
-    #   async for chunk in turn: ...       stream chunks, then await turn
-    out = await turn
+    #   await chat.send(msg).response          output only, skip the stream
+    #   async for chunk in turn.stream: ...    stream chunks, then await turn.response
+    out = await turn.response
     assert out.text
 
     # → no server-managed ids — resume by passing the state blob you saved
@@ -57,7 +57,7 @@ async def main() -> None:
     messages, state, artifacts = chat.messages, chat.state, chat.artifacts
 
     resumed = agent.chat(messages=messages, state=state, artifacts=artifacts)
-    await resumed.send('What is my name? One word.')
+    await resumed.send('What is my name? One word.').response
 
 
 if __name__ == '__main__':

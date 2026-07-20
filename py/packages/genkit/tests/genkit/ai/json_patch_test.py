@@ -111,7 +111,8 @@ async def test_runtime_emits_custom_patch() -> None:
         session=session,
         parent_snapshot=None,
         store=None,
-        client_transform=None,
+        state_transform=None,
+        chunk_transform=None,
         emit_chunk=out_queue.put_nowait,
     )
 
@@ -134,7 +135,8 @@ async def test_runtime_incremental_custom_patch_within_turn() -> None:
         session=session,
         parent_snapshot=None,
         store=None,
-        client_transform=None,
+        state_transform=None,
+        chunk_transform=None,
         emit_chunk=out_queue.put_nowait,
     )
 
@@ -171,7 +173,8 @@ async def test_runtime_custom_patch_honors_state_transform() -> None:
         session=session,
         parent_snapshot=None,
         store=None,
-        client_transform={'state': redact},
+        state_transform=redact,
+        chunk_transform=None,
         emit_chunk=out_queue.put_nowait,
     )
 
@@ -190,7 +193,8 @@ async def test_runtime_chunk_transform_can_drop_chunks() -> None:
         session=session,
         parent_snapshot=None,
         store=None,
-        client_transform={'chunk': lambda _chunk: None},
+        state_transform=None,
+        chunk_transform=lambda _chunk: None,
         emit_chunk=out_queue.put_nowait,
     )
 
@@ -207,19 +211,18 @@ async def test_runtime_chunk_transform_can_redact_model_chunks() -> None:
         session=session,
         parent_snapshot=None,
         store=None,
-        client_transform={
-            'chunk': lambda chunk: (
-                chunk.model_copy(
-                    update={
-                        'model_chunk': ModelResponseChunk(
-                            content=[Part(root=TextPart(text='[redacted]'))],
-                        )
-                    }
-                )
-                if chunk.model_chunk is not None
-                else chunk
+        state_transform=None,
+        chunk_transform=lambda chunk: (
+            chunk.model_copy(
+                update={
+                    'model_chunk': ModelResponseChunk(
+                        content=[Part(root=TextPart(text='[redacted]'))],
+                    )
+                }
             )
-        },
+            if chunk.model_chunk is not None
+            else chunk
+        ),
         emit_chunk=out_queue.put_nowait,
     )
 

@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from genkit._ai._agents._session import select_leaf_snapshot
+from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
 from genkit._core._error import GenkitError
 from genkit._core._typing import SessionSnapshot, SnapshotStatus
 
@@ -53,15 +54,7 @@ def session_id_of(snapshot: SessionSnapshot) -> str | None:
 
 def require_one_selector(*, snapshot_id: str | None, session_id: str | None) -> None:
     """Enforce that a get_snapshot call names exactly one of snapshot_id / session_id."""
-    if bool(snapshot_id) == bool(session_id):
-        raise GenkitError(
-            status='INVALID_ARGUMENT',
-            message=(
-                "get_snapshot requires exactly one of 'snapshot_id' or "
-                f"'session_id' (got {'snapshot_id' if snapshot_id else 'neither'}"
-                f'{" and session_id" if session_id else ""}).'
-            ),
-        )
+    parse_snapshot_lookup_kw(snapshot_id=snapshot_id, session_id=session_id)
 
 
 def select_leaf(
