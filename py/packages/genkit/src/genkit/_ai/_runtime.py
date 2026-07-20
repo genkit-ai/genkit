@@ -37,7 +37,7 @@ logger = get_logger(__name__)
 
 DEFAULT_RUNTIME_DIR_NAME = '.genkit/runtimes'
 ACTIVE_CLEANUPS: list[Callable[[], None]] = []
-ACTIVE_CLEANUPS_LOCK = threading.Lock()
+ACTIVE_CLEANUPS_LOCK = threading.RLock()
 SIGNALS_REGISTERED = False
 
 
@@ -66,7 +66,7 @@ def setup_signal_handlers() -> None:
 
             if callable(handler):
                 handler(signum, frame)
-            elif handler == signal.SIG_DFL:
+            else:
                 sys.exit(128 + signum)
 
         signal.signal(signal.SIGINT, handle_signal)
