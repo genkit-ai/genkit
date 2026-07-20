@@ -34,7 +34,7 @@ export interface AgentLike {
  * Reads the agent's registered name (from its `__action` metadata).
  */
 export function getAgentName(agent: AgentLike): string {
-  const name = agent.__action?.name;
+  const name = agent?.__action?.name;
   if (!name) {
     throw new Error(
       'Unable to derive an A2A agent card: the provided agent has no name. ' +
@@ -48,7 +48,7 @@ export function getAgentName(agent: AgentLike): string {
  * Reads the agent's registered description (from its `__action` metadata).
  */
 export function getAgentDescription(agent: AgentLike): string | undefined {
-  return agent.__action?.description;
+  return agent?.__action?.description;
 }
 
 /**

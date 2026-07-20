@@ -38,6 +38,7 @@ import {
   type DeriveAgentCardOptions,
 } from './agent-card.js';
 import {
+  a2aMessageToGenkit,
   a2aMessageToResumeInput,
   genkitPartToA2A,
   genkitPartsToA2A,
@@ -192,6 +193,12 @@ export class GenkitA2ARequestHandler implements A2ARequestHandler {
       history: [userMessage],
     };
     this.tasks.set(taskId, task);
+    if (this.tasks.size > 10000) {
+      const oldestKey = this.tasks.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.tasks.delete(oldestKey);
+      }
+    }
     yield task;
 
     // Transition to `working`.
@@ -449,9 +456,7 @@ function userFacingParts(
  * {@link a2aMessageToResumeInput} can stay focused on the resume path.
  */
 function a2aMessageToResumeInputFresh(message: A2AMessage) {
-  const input = a2aMessageToResumeInput(message);
-  // `a2aMessageToResumeInput` returns `{ message }` for a fresh turn.
-  return input.message!;
+  return a2aMessageToGenkit(message);
 }
 
 /**

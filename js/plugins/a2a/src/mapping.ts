@@ -116,13 +116,16 @@ function buildPartMetadata(
 function parseDataUri(
   url: string
 ): { mimeType?: string; bytes: string } | undefined {
-  const match = /^data:([^;,]*)?(;base64)?,(.*)$/s.exec(url);
-  if (!match) return undefined;
-  const [, mimeType, isBase64, data] = match;
+  if (!url.startsWith('data:')) return undefined;
+  const commaIdx = url.indexOf(',');
+  if (commaIdx === -1) return undefined;
+  const meta = url.substring(5, commaIdx);
+  const parts = meta.split(';');
   // Only base64 inline data maps cleanly to A2A `bytes`; percent-encoded text
   // data uris are left as a uri reference.
-  if (!isBase64) return undefined;
-  return { mimeType: mimeType || undefined, bytes: data };
+  if (!parts.includes('base64')) return undefined;
+  const mimeType = parts[0] && parts[0] !== 'base64' ? parts[0] : undefined;
+  return { mimeType, bytes: url.substring(commaIdx + 1) };
 }
 
 /**
