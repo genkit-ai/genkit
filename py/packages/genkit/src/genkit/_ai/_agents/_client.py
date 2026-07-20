@@ -30,6 +30,7 @@ from genkit._ai._agents._snapshot import lookup_label
 from genkit._ai._agents._types import StateManagement
 from genkit._ai._json_patch import apply_json_patch
 from genkit._core._channel import CloseableQueue
+from genkit._core._error import GenkitError, genkit_error_from_exception
 from genkit._core._model import Message
 from genkit._core._typing import (
     AgentFinishReason,
@@ -38,6 +39,7 @@ from genkit._core._typing import (
     AgentOutput,
     AgentStreamChunk,
     Artifact,
+    GenkitRuntimeError,
     Media,
     MediaPart,
     MessageData,
@@ -270,6 +272,62 @@ class AgentResponse(Generic[StateT]):
             raise ValueError(f'Generation blocked{detail}.')
         if self.raw.message is None:
             raise ValueError('Agent response has no message.')
+
+
+class AgentError(Exception):
+    """Raised when a turn fails. Carries the last-good state so the session is recoverable."""
+
+    def __init__(
+        self,
+        *,
+        message: str,
+        status: str,
+        details: Any = None,  # noqa: ANN401
+        state: Any = None,  # noqa: ANN401
+        snapshot_id: str | None = None,
+        response: AgentResponse[Any],
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status = status
+        self.details = details
+        self.state = state
+        self.snapshot_id = snapshot_id
+        self.response = response
+
+
+def to_agent_error(
+    e: Exception,
+    *,
+    messages: list[MessageData],
+    state: Any,  # noqa: ANN401
+    snapshot_id: str | None,
+) -> AgentError:
+    """Wrap a transport or runtime failure as an AgentError with last-good session context."""
+    if isinstance(e, AgentError):
+        return e
+    if isinstance(e, GenkitError):
+        message = e.original_message
+        status = e.status
+        details = e.details
+    else:
+        message = str(e)
+        wrapped = genkit_error_from_exception(e)
+        status = wrapped.status
+        details = e
+    raw = AgentOutput(
+        finish_reason=AgentFinishReason.FAILED,
+        error=GenkitRuntimeError(status=status, message=message, details=details),
+    )
+    response = AgentResponse(raw=raw, messages=list(messages), state=state)
+    return AgentError(
+        message=message,
+        status=status,
+        details=details,
+        state=state,
+        snapshot_id=snapshot_id,
+        response=response,
+    )
 
 
 def agent_interrupts_from_message(message: MessageData | None) -> list[AgentInterrupt[Any, Any]]:
@@ -616,6 +674,7 @@ class TurnDriver(Generic[StateT]):
         commit_output: Callable[[AgentOutput], AgentResponse[StateT]],
         commit_custom_patch: Callable[[Any], StateT | None],
         accumulate_chunk: Callable[[AgentStreamChunk], None] | None = None,
+        on_turn_error: Callable[[Exception], Exception] | None = None,
     ) -> None:
         self.inp = inp
         self.init = init
@@ -623,9 +682,10 @@ class TurnDriver(Generic[StateT]):
         self.commit_output = commit_output
         self.commit_custom_patch = commit_custom_patch
         self.accumulate_chunk = accumulate_chunk
+        self.on_turn_error = on_turn_error
         self.accumulated_text = ''
         self.output: asyncio.Future[AgentResponse[StateT]] = asyncio.get_running_loop().create_future()
-        self.chunks: CloseableQueue[AgentChunk[StateT] | BaseException] = CloseableQueue()
+        self.chunks: CloseableQueue[AgentChunk[StateT] | Exception] = CloseableQueue()
         self.run_task: asyncio.Task[None] | None = None
         self.turn: AgentTurn[StateT] = AgentTurn(
             stream=self.stream(),
@@ -659,10 +719,11 @@ class TurnDriver(Generic[StateT]):
             raw = await output
             if not self.output.done():
                 self.output.set_result(self.commit_output(raw))
-        except BaseException as e:
+        except Exception as e:
+            wrapped = self.on_turn_error(e) if self.on_turn_error is not None else e
             if not self.output.done():
-                self.output.set_exception(e)
-            self.chunks.put_nowait(e)
+                self.output.set_exception(wrapped)
+            self.chunks.put_nowait(wrapped)
         finally:
             # Closing wakes the stream consumer once buffered chunks drain, so the
             # turn ends without a sentinel value threading through the queue.
@@ -678,7 +739,7 @@ class TurnDriver(Generic[StateT]):
         text = text_of(content)
         self.accumulated_text += text
 
-        agent_chunk: AgentChunk[Any] = AgentChunk(
+        agent_chunk: AgentChunk[StateT] = AgentChunk(
             text=text or None,
             reasoning=reasoning_of(content) or None,
             accumulated_text=self.accumulated_text,
@@ -695,7 +756,7 @@ class TurnDriver(Generic[StateT]):
     async def stream(self) -> AsyncIterator[AgentChunk[StateT]]:
         """Yields transformed chunks until the turn ends, re-raising any failure."""
         async for item in self.chunks:
-            if isinstance(item, BaseException):
+            if isinstance(item, Exception):
                 raise item
             yield item
 
@@ -853,6 +914,7 @@ class AgentChat(Generic[StateT]):
             commit_output=lambda raw: self._commit_output(raw=raw, message_count_before=message_count_before),
             commit_custom_patch=self._commit_custom_patch,
             accumulate_chunk=self._turn_accumulator.add,
+            on_turn_error=self._on_turn_error,
         )
         return driver.start()
 
@@ -994,7 +1056,26 @@ class AgentChat(Generic[StateT]):
     def _commit_output(self, *, raw: AgentOutput, message_count_before: int) -> AgentResponse[StateT]:
         """Folds a turn's final output into the session and builds the turn result."""
         self._update_from_output(raw=raw, message_count_before=message_count_before)
-        return AgentResponse(raw=raw, messages=list(self.messages), state=self.state)
+        response = AgentResponse(raw=raw, messages=list(self.messages), state=self.state)
+        if raw.finish_reason == AgentFinishReason.FAILED:
+            err = raw.error
+            raise AgentError(
+                message=err.message if err else 'Agent turn failed.',
+                status=err.status if err and err.status else 'UNKNOWN',
+                details=err.details if err else None,
+                state=self.state,
+                snapshot_id=self._snapshot_id,
+                response=response,
+            )
+        return response
+
+    def _on_turn_error(self, e: Exception) -> Exception:
+        return to_agent_error(
+            e,
+            messages=self.messages,
+            state=self.state,
+            snapshot_id=self._snapshot_id,
+        )
 
     def _commit_custom_patch(self, patch: Any) -> StateT | None:  # noqa: ANN401
         """Applies a streamed custom-state patch and returns the new custom state."""

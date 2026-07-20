@@ -43,14 +43,10 @@ class TransferInput(BaseModel):
     amount: float
     to_account: str = Field(alias='toAccount')
 
-    model_config = {'populate_by_name': True}
-
 
 class TransferOutput(BaseModel):
     success: bool
     transaction_id: str = Field(alias='transactionId')
-
-    model_config = {'populate_by_name': True}
 
 
 ai = Genkit(plugins=[GoogleAI(), Middleware()])

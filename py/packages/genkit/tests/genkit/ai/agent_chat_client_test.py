@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from genkit._ai._agents._client import (
     AgentChat,
+    AgentError,
     AgentInterrupt,
     AgentTransport,
 )
@@ -599,8 +600,10 @@ async def test_server_managed_failed_turn_rolls_back_optimistic_user_message() -
     transport.push_chunk(
         AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-good', finish_reason=AgentFinishReason.FAILED))
     )
-    await turn.response
+    with pytest.raises(AgentError) as exc_info:
+        await turn.response
 
+    assert exc_info.value.snapshot_id == 'snap-good'
     assert chat.messages == []
     assert chat.snapshot_id == 'snap-good'
 

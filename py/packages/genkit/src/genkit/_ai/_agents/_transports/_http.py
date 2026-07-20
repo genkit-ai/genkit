@@ -30,7 +30,7 @@ from genkit._ai._agents._client import AgentClient, AgentTransport
 from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
 from genkit._ai._agents._types import StateManagement
 from genkit._core._channel import CloseableQueue
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, genkit_error_from_exception, genkit_error_from_http, genkit_error_from_wire
 from genkit._core._http_client import get_cached_client
 from genkit._core._typing import (
     AgentAbortResponse,
@@ -43,6 +43,34 @@ from genkit._core._typing import (
 )
 
 StateT = TypeVarExt('StateT', bound=BaseModel, default=Any)
+
+
+def parse_stream_line(line: str) -> dict[str, Any] | None:
+    """Parse one reflection JSON line or SSE ``data:`` / ``error:`` event."""
+    stripped = line.strip()
+    if not stripped:
+        return None
+    if stripped.startswith('data:'):
+        stripped = stripped[5:].strip()
+    elif stripped.startswith('error:'):
+        stripped = stripped[6:].strip()
+    if not stripped:
+        return None
+    parsed = json.loads(stripped)
+    if not isinstance(parsed, dict):
+        raise GenkitError(status='INTERNAL', message=f'unexpected stream payload: {parsed!r}')
+    return parsed
+
+
+def stream_error_from_payload(data: dict[str, Any]) -> GenkitError:
+    """Extract a GenkitError from a streamed error event."""
+    error = data.get('error')
+    if error is None:
+        raise GenkitError(status='INTERNAL', message=f'stream event missing error field: {data!r}')
+    # FastAPI wraps callable errors as {"error": {"error": {...}}}.
+    if isinstance(error, dict) and 'error' in error:
+        error = error['error']
+    return genkit_error_from_wire(error)
 
 
 class HttpAgentTransport(AgentTransport[StateT]):
@@ -80,10 +108,14 @@ class HttpAgentTransport(AgentTransport[StateT]):
         response = await client.post(url, json=input_val)
         if response.status_code == 404:
             return None
-        response.raise_for_status()
+        if response.status_code != 200:
+            body = response.text
+            raise genkit_error_from_http(status_code=response.status_code, body=body)
         if not response.content:
             return None
         body = response.json()
+        if isinstance(body, dict) and 'error' in body:
+            raise genkit_error_from_wire(body['error'])
         if isinstance(body, dict) and 'result' in body:
             return body['result']
         return body
@@ -117,7 +149,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
             payload['key'] = self.agent_name
 
         output_future: asyncio.Future[AgentOutput] = asyncio.Future()
-        stream_queue = CloseableQueue[AgentStreamChunk | BaseException]()
+        stream_queue = CloseableQueue[AgentStreamChunk | Exception]()
 
         async def fetch_stream() -> None:
             try:
@@ -130,24 +162,24 @@ class HttpAgentTransport(AgentTransport[StateT]):
                     headers={'accept': 'text/event-stream'},
                 ) as response:
                     if response.status_code != 200:
-                        body = await response.aread()
-                        raise RuntimeError(
-                            f'HTTP request failed ({response.status_code}): {body.decode(errors="ignore")}'
-                        )
+                        body = (await response.aread()).decode(errors='ignore')
+                        raise genkit_error_from_http(status_code=response.status_code, body=body)
 
                     async for line in response.aiter_lines():
-                        if not line.strip():
+                        data = parse_stream_line(line)
+                        if data is None:
                             continue
 
-                        data = json.loads(line)
                         if 'result' in data:
                             output_val = AgentOutput.model_validate(data['result'])
                             if not output_future.done():
                                 output_future.set_result(output_val)
                             break
                         if 'error' in data:
-                            raise RuntimeError(f'Agent execution error: {data["error"]}')
-                        chunk = AgentStreamChunk.model_validate(data)
+                            raise stream_error_from_payload(data)
+
+                        chunk_payload = data['message'] if 'message' in data else data
+                        chunk = AgentStreamChunk.model_validate(chunk_payload)
                         stream_queue.put_nowait(chunk)
                     else:
                         err = GenkitError(
@@ -157,10 +189,11 @@ class HttpAgentTransport(AgentTransport[StateT]):
                         if not output_future.done():
                             output_future.set_exception(err)
                         stream_queue.put_nowait(err)
-            except BaseException as e:
+            except Exception as e:
+                err = e if isinstance(e, GenkitError) else genkit_error_from_exception(e)
                 if not output_future.done():
-                    output_future.set_exception(e)
-                stream_queue.put_nowait(e)
+                    output_future.set_exception(err)
+                stream_queue.put_nowait(err)
             finally:
                 # Wakes the stream consumer once buffered chunks drain, so the
                 # generator ends cleanly on every path, not just the success one.
@@ -176,7 +209,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
 
         async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
             async for chunk in stream_queue:
-                if isinstance(chunk, BaseException):
+                if isinstance(chunk, Exception):
                     raise chunk
                 yield chunk
 

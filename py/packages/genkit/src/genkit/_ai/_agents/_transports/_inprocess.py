@@ -94,7 +94,7 @@ class InProcessTransport:
         await conn.close()
 
         output_future: asyncio.Future[AgentOutput] = asyncio.Future()
-        stream_queue = CloseableQueue[AgentStreamChunk | BaseException]()
+        stream_queue = CloseableQueue[AgentStreamChunk | Exception]()
 
         # Aborting a turn is a client-side detach: the caller stops listening,
         # but this drain keeps running to completion so the in-flight turn's work
@@ -106,7 +106,7 @@ class InProcessTransport:
                     stream_queue.put_nowait(chunk)
                 if not output_future.done():
                     output_future.set_result(await conn.output())
-            except BaseException as e:
+            except Exception as e:
                 if not output_future.done():
                     output_future.set_exception(e)
                 stream_queue.put_nowait(e)
@@ -119,7 +119,7 @@ class InProcessTransport:
 
         async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
             async for chunk in stream_queue:
-                if isinstance(chunk, BaseException):
+                if isinstance(chunk, Exception):
                     raise chunk
                 yield chunk
 

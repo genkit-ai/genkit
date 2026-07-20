@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from genkit._ai._agents._base import define_custom_agent
+from genkit._ai._agents._client import AgentError
 from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._snapshot import is_heartbeat_expired, resolve_snapshot
 from genkit._ai._agents._types import TurnResult
@@ -172,10 +173,13 @@ async def test_custom_agent_turn_that_raises_resolves_as_failed() -> None:
     last_good_parent = chat.snapshot_id
     history_before_failure = list(chat.messages)
 
-    out_fail = await chat.send('please fail now').response
-    assert out_fail.finish_reason == AgentFinishReason.FAILED
+    with pytest.raises(AgentError) as exc_info:
+        await chat.send('please fail now').response
+    assert exc_info.value.status == 'INTERNAL'
+    assert exc_info.value.message == 'boom'
     # The failed turn is a dead end: the resume handle stays on the last good
     # parent and the unanswered prompt is dropped from the running view.
+    assert exc_info.value.snapshot_id == last_good_parent
     assert chat.snapshot_id == last_good_parent
     assert chat.messages == history_before_failure
 
