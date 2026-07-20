@@ -122,12 +122,81 @@ export function buildDeidentifyConfig(options: SdpOptions): any {
   };
 }
 
+export async function sanitizeInput(
+  dlp: v2.DlpServiceClient,
+  text: string,
+  options: SdpOptions,
+  projectId: string
+) {
+  const request: any = {
+    parent: `projects/${projectId}/locations/global`,
+    item: { value: text },
+  };
+
+  if (options.templates) {
+    request.inspectTemplateName = options.templates.inspectTemplateName;
+    request.deidentifyTemplateName = options.templates.deidentifyTemplateName;
+  } else {
+    request.inspectConfig = buildInspectConfig(options);
+    request.deidentifyConfig = buildDeidentifyConfig(options);
+  }
+
+  const [response] = await dlp.deidentifyContent(request);
+  return response.item?.value || text;
+}
+
 export const sensitiveDataProtection = generateMiddleware<SdpOptions>(
   { name: 'sensitiveDataProtection' },
   ({ config, pluginConfig }) => {
+    const options = { ...pluginConfig, ...config } as SdpOptions;
+    let clientPromise: Promise<{
+      client: v2.DlpServiceClient;
+      projectId: string;
+    }> | null = null;
     return {
       generate: async (envelope, ctx, next) => {
+        const opts = options || {};
+        if (!clientPromise) {
+          clientPromise = Promise.all([
+            createDlpClient(opts),
+            credentialsFromEnvironment(),
+          ]).then(([client, envAuth]) => {
+            return {
+              client,
+              projectId: opts.projectId || envAuth.projectId || '',
+            };
+          });
+        }
+
+        const { client, projectId } = await clientPromise;
+
         // Intercept input
+        const redactionPromises: Promise<void>[] = [];
+
+        if (envelope.request?.messages) {
+          for (const message of envelope.request.messages) {
+            if (message.content) {
+              for (const part of message.content) {
+                if (part.text && !part.metadata?.isCleaned) {
+                  const promise = sanitizeInput(
+                    client,
+                    part.text,
+                    opts,
+                    projectId
+                  ).then((sanitizedText) => {
+                    part.text = sanitizedText;
+                    part.metadata = { ...part.metadata, isCleaned: true }; // Tag the part as cleaned
+                  });
+                  redactionPromises.push(promise);
+                }
+              }
+            }
+          }
+        }
+
+        // Wait for all network calls to finish in parallel
+        await Promise.all(redactionPromises);
+
         const res = await next(envelope, ctx);
         // Intercept output
         return res;
