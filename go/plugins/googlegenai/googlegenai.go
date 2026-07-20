@@ -136,7 +136,9 @@ func (v *VertexAI) Init(ctx context.Context) []api.Action {
 		}
 	}
 
-	if v.APIVersion != "" && v.APIVersion != "v1" && v.APIVersion != "v1beta1" {
+	switch v.APIVersion {
+	case "", "v1", "v1beta1":
+	default:
 		panic(fmt.Sprintf("Vertex AI APIVersion must be %q or %q, got %q", "v1", "v1beta1", v.APIVersion))
 	}
 
