@@ -16,8 +16,6 @@
 
 """Error classes and utilities for the Genkit framework."""
 
-import json
-import re
 from enum import IntEnum
 from typing import Any, ClassVar, Literal
 
@@ -296,77 +294,6 @@ def get_reflection_json(error: object) -> ReflectionError:
         code=StatusCodes.INTERNAL.value,
         details=ReflectionErrorDetails(stack=get_error_stack(error)),
     )
-
-
-_HTTP_TO_STATUS: dict[int, StatusName] = {code: name for name, code in _STATUS_CODE_MAP.items()}
-
-
-def _coerce_status_name(raw: str | None) -> StatusName:
-    if raw and raw in _STATUS_CODE_MAP:
-        return raw  # type: ignore[return-value]
-    return 'INTERNAL'
-
-
-def genkit_error_from_wire(error: dict[str, Any] | str | GenkitError) -> GenkitError:
-    """Parse a reflection or callable wire error payload into GenkitError."""
-    if isinstance(error, GenkitError):
-        return error
-    if isinstance(error, str):
-        return GenkitError(status='INTERNAL', message=error)
-
-    # Callable format: {message, status, details}
-    if isinstance(error.get('status'), str):
-        return GenkitError(
-            status=_coerce_status_name(error['status']),
-            message=str(error.get('message', '')),
-            details=error.get('details'),
-        )
-
-    # Reflection format: {message, code, details}
-    if 'code' in error:
-        try:
-            status_name = StatusCodes(int(error['code'])).name
-        except (TypeError, ValueError):
-            status_name = 'INTERNAL'
-        details = error.get('details')
-        if details is not None and hasattr(details, 'model_dump'):
-            details = details.model_dump(by_alias=True)
-        return GenkitError(
-            status=_coerce_status_name(status_name),
-            message=str(error.get('message', '')),
-            details=details,
-        )
-
-    message = str(error.get('message', error))
-    return GenkitError(status='INTERNAL', message=message)
-
-
-def genkit_error_from_http(*, status_code: int, body: str) -> GenkitError:
-    """Build GenkitError from a non-2xx HTTP response body."""
-    if body:
-        try:
-            parsed = json.loads(body)
-        except json.JSONDecodeError:
-            parsed = None
-        if isinstance(parsed, dict):
-            if 'error' in parsed:
-                return genkit_error_from_wire(parsed['error'])
-            if 'message' in parsed and ('status' in parsed or 'code' in parsed):
-                return genkit_error_from_wire(parsed)
-
-    status = _HTTP_TO_STATUS.get(status_code, 'INTERNAL')
-    message = body.strip() or f'HTTP {status_code}'
-    return GenkitError(status=status, message=message)
-
-
-def genkit_error_from_exception(e: Exception) -> GenkitError:
-    """Normalize an arbitrary exception into GenkitError for transport boundaries."""
-    if isinstance(e, GenkitError):
-        return e
-    message = str(e)
-    match = re.match(r'^([A-Z_]+):', message)
-    status = _coerce_status_name(match.group(1) if match else None)
-    return GenkitError(status=status, message=message, cause=e)
 
 
 def get_callable_json(error: object) -> dict[str, Any]:
