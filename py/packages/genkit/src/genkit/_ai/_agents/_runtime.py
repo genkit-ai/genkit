@@ -874,9 +874,7 @@ async def generate_prompt_agent_turn(
         )
 
     # Return the turn result wrapping the model finish reason
-    finish_reason = (
-        to_agent_finish_reason(response.finish_reason) if response.finish_reason is not None else None
-    )
+    finish_reason = to_agent_finish_reason(response.finish_reason) if response.finish_reason is not None else None
     return TurnResult(finish_reason=finish_reason)
 
 

@@ -1056,7 +1056,7 @@ class AgentChat(Generic[StateT]):
     def _commit_output(self, *, raw: AgentOutput, message_count_before: int) -> AgentResponse[StateT]:
         """Folds a turn's final output into the session and builds the turn result."""
         self._update_from_output(raw=raw, message_count_before=message_count_before)
-        response = AgentResponse(raw=raw, messages=list(self.messages), state=self.state)
+        response: AgentResponse[StateT] = AgentResponse(raw=raw, messages=list(self.messages), state=self.state)
         if raw.finish_reason == AgentFinishReason.FAILED:
             err = raw.error
             raise AgentError(
