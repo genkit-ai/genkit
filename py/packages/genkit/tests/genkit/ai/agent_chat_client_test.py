@@ -56,6 +56,7 @@ from genkit._core._typing import (
     ToolResponsePart,
     TurnEnd,
 )
+from genkit.agent import InMemorySessionStore
 
 # ---------------------------------------------------------------------------
 # Unit tests for JSON patch application
@@ -528,8 +529,6 @@ async def test_server_managed_running_view_matches_snapshot_over_real_tool_loop(
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
 
-    from genkit.agent import InMemorySessionStore
-
     store = InMemorySessionStore()
 
     @ai.tool()
@@ -897,8 +896,6 @@ async def test_in_process_persistent_connection() -> None:
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
 
-    from genkit.agent import InMemorySessionStore
-
     store = InMemorySessionStore()
 
     ai.define_prompt(name='testEchoAgent', model='programmableModel', system='You echo things.')
@@ -943,8 +940,6 @@ async def test_in_process_persistent_connection() -> None:
 async def test_attached_turn_abort() -> None:
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
-
-    from genkit.agent import InMemorySessionStore
 
     store = InMemorySessionStore()
 
@@ -1008,8 +1003,6 @@ async def test_await_turn_under_timeout_detaches() -> None:
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
 
-    from genkit.agent import InMemorySessionStore
-
     ai.define_prompt(name='timeoutAgent', model='programmableModel', system='Hello')
     agent = ai.define_prompt_agent(name='timeoutAgent', store=InMemorySessionStore())
 
@@ -1055,8 +1048,6 @@ async def test_stream_turn_under_timeout_detaches() -> None:
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
 
-    from genkit.agent import InMemorySessionStore
-
     ai.define_prompt(name='streamTimeoutAgent', model='programmableModel', system='Hello')
     agent = ai.define_prompt_agent(name='streamTimeoutAgent', store=InMemorySessionStore())
 
@@ -1087,8 +1078,6 @@ async def test_stream_turn_under_timeout_detaches() -> None:
 async def test_session_abort() -> None:
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
-
-    from genkit.agent import InMemorySessionStore
 
     store = InMemorySessionStore()
 

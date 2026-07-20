@@ -1253,7 +1253,7 @@ def _to_pending_response(request: ToolRequestPart, response: ToolResponsePart) -
     )
 
 
-def _interrupt_from_tool_exc(exc: BaseException) -> Interrupt | None:
+def _interrupt_from_tool_exc(exc: Exception) -> Interrupt | None:
     """If ``exc`` is (or wraps) an Interrupt exception, return that interrupt."""
     if isinstance(exc, Interrupt):
         return exc

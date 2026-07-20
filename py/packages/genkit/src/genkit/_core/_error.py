@@ -307,14 +307,12 @@ def _coerce_status_name(raw: str | None) -> StatusName:
     return 'INTERNAL'
 
 
-def genkit_error_from_wire(error: object) -> GenkitError:
+def genkit_error_from_wire(error: dict[str, Any] | str | GenkitError) -> GenkitError:
     """Parse a reflection or callable wire error payload into GenkitError."""
     if isinstance(error, GenkitError):
         return error
     if isinstance(error, str):
         return GenkitError(status='INTERNAL', message=error)
-    if not isinstance(error, dict):
-        return GenkitError(status='INTERNAL', message=str(error))
 
     # Callable format: {message, status, details}
     if isinstance(error.get('status'), str):
@@ -331,7 +329,7 @@ def genkit_error_from_wire(error: object) -> GenkitError:
         except (TypeError, ValueError):
             status_name = 'INTERNAL'
         details = error.get('details')
-        if hasattr(details, 'model_dump'):
+        if details is not None and hasattr(details, 'model_dump'):
             details = details.model_dump(by_alias=True)
         return GenkitError(
             status=_coerce_status_name(status_name),
@@ -361,14 +359,14 @@ def genkit_error_from_http(*, status_code: int, body: str) -> GenkitError:
     return GenkitError(status=status, message=message)
 
 
-def genkit_error_from_exception(e: BaseException) -> GenkitError:
+def genkit_error_from_exception(e: Exception) -> GenkitError:
     """Normalize an arbitrary exception into GenkitError for transport boundaries."""
     if isinstance(e, GenkitError):
         return e
     message = str(e)
     match = re.match(r'^([A-Z_]+):', message)
     status = _coerce_status_name(match.group(1) if match else None)
-    return GenkitError(status=status, message=message, cause=e if isinstance(e, Exception) else None)
+    return GenkitError(status=status, message=message, cause=e)
 
 
 def get_callable_json(error: object) -> dict[str, Any]:

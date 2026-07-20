@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pytest
 
+from genkit import Genkit
 from genkit._ai._agents._runtime import AgentRuntime, SessionRunner
 from genkit._ai._agents._session import Session, get_current_session, run_with_session
 from genkit._core._action import ActionRunContext
@@ -31,14 +32,11 @@ async def test_get_current_session_outside_bind() -> None:
 
 @pytest.mark.asyncio
 async def test_middleware_context_session_field() -> None:
-    from genkit import Genkit
-
     ai = Genkit()
     ctx = GenerateMiddlewareContext(ai=ai)
     assert ctx.ai.current_session() is None
 
     session = Session(SessionState(custom={'bound': True}))
-    from genkit._ai._agents._session import run_with_session
 
     async def check() -> None:
         assert ctx.ai.current_session() is session

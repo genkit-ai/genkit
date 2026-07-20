@@ -213,7 +213,7 @@ class ReflectionServerV2:
         if not task.cancelled() and (exc := task.exception()) is not None:
             logger.debug('reflection V2: background task error', err=exc)
 
-    def _drain_pending(self, exc: BaseException) -> None:
+    def _drain_pending(self, exc: Exception) -> None:
         for _rid, fut in list(self._pending.items()):
             if not fut.done():
                 fut.set_exception(exc)
