@@ -73,7 +73,10 @@ def setup_signal_handlers() -> None:
         signal.signal(signal.SIGTERM, handle_signal)
         SIGNALS_REGISTERED = True
     except ValueError:
-        # Ignore if called from a background thread
+        # In Python, signal.signal() can only be invoked from the primary main thread
+        # of the main process; calling it from a background worker thread raises ValueError.
+        # OS termination signals are only ever delivered to the main thread anyway, so
+        # registering handlers on background threads is both impossible and unnecessary.
         pass
 
 
