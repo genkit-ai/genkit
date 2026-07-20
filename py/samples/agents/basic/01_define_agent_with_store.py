@@ -22,24 +22,20 @@ reconnect or a server restart — rehydrate the whole conversation from that id 
 keep going; the agent still remembers turn 1. The store is the source of truth, so
 your app only has to hold onto a string.
 
-The same ``render`` view drives the fresh chat and the rehydrated one: a UI only
-ever needs the chat handle, because everything it shows rides on the streamed
-chunks and the settled response. With a store, session_id is minted server-side
-and arrives when the first turn completes. Requires GEMINI_API_KEY.
+With a store, session_id and snapshot_id are minted server-side and arrive when
+the first turn completes. To resume the exact conversation state later,
+you just need the snapshot_id. Requires GEMINI_API_KEY.
 """
 
 from __future__ import annotations
 
 import random
-from typing import TypeVar
 
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
 from genkit import Genkit
-from genkit.agent import AgentChat, AgentResponse, InMemorySessionStore
-
-StateT = TypeVar('StateT', bound=BaseModel)
+from genkit.agent import InMemorySessionStore
 
 
 class WeatherInput(BaseModel):
@@ -72,41 +68,34 @@ agent = ai.define_agent(
 )
 
 
-async def render(chat: AgentChat[StateT], prompt: str) -> AgentResponse[StateT]:
-    """Render one turn the way a UI would — handed nothing but the chat handle.
+async def main() -> None:
+    chat = agent.chat()
+    turn = chat.send('Weather in Paris?')
 
-    Generic over the chat's state, so it's the one view a dumb component needs:
-    pass any agent's handle and the turn's typed state flows straight through to
-    the AgentResponse. A view binds to two things, both reachable from the handle:
-    the streaming chunk (accumulated_text is the reply so far; tool_requests are
-    the calls in flight) and the settled response (text, finish_reason,
-    snapshot_id, media, data). Identical whether the chat is new or rehydrated.
-    """
-    turn = chat.send(prompt)
+    # Two ways to consume a turn:
+    #   await chat.send(msg).response          output only, skip the stream
+    #   async for chunk in turn.stream: ...    stream chunks, then await turn.response
     async for chunk in turn.stream:
         for call in chunk.tool_requests:
             print(f'  → {call.tool_request.name}')  # tools light up as they're called
         if chunk.text:
-            print(chunk.accumulated_text, end='\r', flush=True)  # the frame a UI re-renders
+            print(chunk.accumulated_text, end='\r', flush=True)
+
     res = await turn.response
-    res.assert_valid()  # raises if the turn was blocked or produced no message
+    assert res.text
     print(f'\n{res.text}\n')
-    return res
 
-
-async def main() -> None:
-    chat = agent.chat()
-    res = await render(chat, 'Weather in Paris?')
     # With a store the server mints these, and they arrive on the settled turn.
     assert res.session_id and res.snapshot_id
 
     # Hold onto snapshot_id — it's the resume handle after disconnect/restart.
     checkpoint = res.snapshot_id
 
-    # Same view, now driving a chat rehydrated from just that one string.
+    # Rehydrate chat directly from that snapshot string.
     resumed = await agent.load_chat(snapshot_id=checkpoint)
     # → answers "Paris" — the resumed session still has turn 1's context
-    await render(resumed, 'What city did I ask about? One word.')
+    res2 = await resumed.send('What city did I ask about? One word.').response
+    print(f'{res2.text}\n')
 
 
 if __name__ == '__main__':
