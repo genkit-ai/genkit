@@ -200,6 +200,13 @@ export interface AgentChunk<State = unknown> {
    * moment this chunk is yielded.
    */
   readonly custom?: State;
+  /**
+   * The snapshotId this turn will be persisted under, present only on the
+   * `turnStart` chunk that opens each turn (and only for server-managed
+   * agents). Lets a consumer correlate the streaming turn with its (eventual)
+   * snapshot before any content arrives; `undefined` on all other chunks.
+   */
+  readonly snapshotId?: string;
   readonly raw: AgentStreamChunk;
 }
 
@@ -546,6 +553,10 @@ class AgentChunkImpl<State = unknown> implements AgentChunk<State> {
 
   get custom(): State | undefined {
     return this._custom;
+  }
+
+  get snapshotId(): string | undefined {
+    return this._raw.turnStart?.snapshotId;
   }
 
   get raw(): AgentStreamChunk {

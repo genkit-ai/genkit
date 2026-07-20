@@ -554,6 +554,27 @@ func assertChunks(t *testing.T, label string, actual []*exp.AgentStreamChunk, ex
 	for i, c := range actual {
 		actualCanon[i] = canon(t, c)
 	}
+	// turnStart is emitted at the start of every turn. A spec opts into
+	// asserting it by including turnStart chunks in expectChunks; specs that
+	// don't (the majority, which focus on content/turnEnd) have the actual
+	// turnStart chunks filtered out so they stay concise.
+	expectsTurnStart := false
+	for _, e := range expected {
+		if em, ok := e.(map[string]any); ok && hasKey(em, "turnStart") {
+			expectsTurnStart = true
+			break
+		}
+	}
+	if !expectsTurnStart {
+		filtered := actualCanon[:0]
+		for _, c := range actualCanon {
+			if cm, ok := c.(map[string]any); ok && hasKey(cm, "turnStart") {
+				continue
+			}
+			filtered = append(filtered, c)
+		}
+		actualCanon = filtered
+	}
 	if len(actualCanon) != len(expected) {
 		t.Errorf("%s: expected %d chunks, got %d.\n  expected: %s\n  actual:   %s",
 			label, len(expected), len(actualCanon), mustJSON(expected), mustJSON(actualCanon))
@@ -574,6 +595,21 @@ func matchChunk(actual, expected any) error {
 	}
 	am, _ := actual.(map[string]any)
 	switch {
+	case hasKey(em, "turnStart"):
+		ts, ok := am["turnStart"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("expected turnStart chunk")
+		}
+		// snapshotId / parentSnapshotId are dynamic; only turnIndex is asserted
+		// when specified.
+		if exTS, _ := em["turnStart"].(map[string]any); exTS != nil {
+			if ti, ok := exTS["turnIndex"]; ok {
+				if !reflect.DeepEqual(ts["turnIndex"], ti) {
+					return fmt.Errorf("turnStart.turnIndex: want %v, got %v", ti, ts["turnIndex"])
+				}
+			}
+		}
+		return nil
 	case hasKey(em, "turnEnd"):
 		te, ok := am["turnEnd"].(map[string]any)
 		if !ok {
