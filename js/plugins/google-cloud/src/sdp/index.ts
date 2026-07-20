@@ -78,6 +78,50 @@ export async function createDlpClient(
   });
 }
 
+// 1. Inspect config
+export function buildInspectConfig(options: SdpOptions) {
+  const defaultInfoTypes = [
+    'CREDIT_CARD_NUMBER',
+    'EMAIL_ADDRESS',
+    'PHONE_NUMBER',
+  ];
+  const inlineConfig = options.inline || {};
+  const infoTypes =
+    inlineConfig.infoTypes && inlineConfig.infoTypes.length > 0
+      ? inlineConfig.infoTypes
+      : defaultInfoTypes;
+
+  return {
+    infoTypes: infoTypes.map((name) => ({ name })),
+  };
+}
+
+// 2. De-identify config
+export function buildDeidentifyConfig(options: SdpOptions): any {
+  const inlineConfig = options.inline || {};
+  let primitiveTransformation: any = {
+    replaceWithInfoTypeConfig: {}, // Default behavior
+  };
+
+  if (inlineConfig.transformation === 'CUSTOM_STRING') {
+    primitiveTransformation = {
+      replaceConfig: {
+        newValue: { stringValue: inlineConfig.customConfig || '[REDACTED]' },
+      },
+    };
+  } else if (inlineConfig.transformation === 'MASK') {
+    primitiveTransformation = {
+      characterMaskConfig: inlineConfig.maskConfig || { maskingCharacter: '*' },
+    };
+  }
+
+  return {
+    infoTypeTransformations: {
+      transformations: [{ primitiveTransformation }],
+    },
+  };
+}
+
 export const sensitiveDataProtection = generateMiddleware<SdpOptions>(
   { name: 'sensitiveDataProtection' },
   ({ config, pluginConfig }) => {
