@@ -1,0 +1,67 @@
+{
+  "name": "@genkit-ai/a2a",
+  "version": "0.1.0",
+  "description": "A Genkit plugin that exposes Genkit Agents over the A2A (Agent2Agent) protocol via the @a2a-js/sdk.",
+  "keywords": [
+    "genkit",
+    "genkit-plugin",
+    "a2a",
+    "agent2agent",
+    "agents",
+    "streaming",
+    "ai",
+    "genai",
+    "generative-ai"
+  ],
+  "homepage": "https://github.com/genkit-ai/genkit/tree/main/js/plugins/a2a#readme",
+  "bugs": {
+    "url": "https://github.com/genkit-ai/genkit/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/genkit-ai/genkit.git",
+    "directory": "js/plugins/a2a"
+  },
+  "license": "Apache-2.0",
+  "author": "genkit",
+  "type": "commonjs",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./lib/index.js",
+      "import": "./lib/index.mjs",
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": [
+    "lib",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "tsc",
+    "compile": "tsup-node",
+    "build:clean": "rimraf ./lib",
+    "build": "npm-run-all build:clean check compile",
+    "build:watch": "tsup-node --watch",
+    "test": "tsx --test ./tests/*_test.ts"
+  },
+  "peerDependencies": {
+    "@a2a-js/sdk": "^0.3.0",
+    "genkit": "workspace:^"
+  },
+  "devDependencies": {
+    "@a2a-js/sdk": "^0.3.13",
+    "@types/node": "^20.11.16",
+    "npm-run-all": "^4.1.5",
+    "rimraf": "^6.0.1",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
