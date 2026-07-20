@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+import type { v2 } from '@google-cloud/dlp';
 import { generateMiddleware } from 'genkit';
+import { credentialsFromEnvironment } from '../auth.js';
 
 // Option 1: Configure redaction options inline.
 export interface SdpInlineConfig {
@@ -53,6 +55,27 @@ export interface SdpOptions {
   inline?: SdpInlineConfig;
 
   projectId?: string; // (Optional) Explicitly set the Google Cloud Project ID
+}
+
+export async function createDlpClient(
+  options: SdpOptions
+): Promise<v2.DlpServiceClient> {
+  let dlpModule;
+  try {
+    dlpModule = await import('@google-cloud/dlp');
+  } catch (e) {
+    throw new Error(
+      'Please install the @google-cloud/dlp package to use the SDP middleware.'
+    );
+  }
+
+  const envAuth = await credentialsFromEnvironment();
+  const projectId = options.projectId || envAuth.projectId;
+
+  return new dlpModule.v2.DlpServiceClient({
+    credentials: envAuth.credentials as any,
+    projectId: projectId,
+  });
 }
 
 export const sensitiveDataProtection = generateMiddleware<SdpOptions>(
