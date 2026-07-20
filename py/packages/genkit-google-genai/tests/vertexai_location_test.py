@@ -17,6 +17,7 @@
 """Tests for Vertex AI multi-region location and per-request location support."""
 
 import os
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -33,15 +34,15 @@ from google import genai
 from google.genai import types as genai_types
 from google.genai.types import HttpOptions
 
-from genkit import GenkitError, Message, ModelRequest, Role, TextPart
+from genkit import GenkitError, Message, ModelRequest, Part, Role, TextPart
 
 US_REP_URL = 'https://aiplatform.us.rep.googleapis.com'
 EU_REP_URL = 'https://aiplatform.eu.rep.googleapis.com'
 
 
-def _text_request(config: dict | None = None) -> ModelRequest:
+def _text_request(config: dict[str, Any] | None = None) -> ModelRequest[Any]:
     return ModelRequest(
-        messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
         config=config,
     )
 
@@ -117,7 +118,9 @@ class TestVertexAIPluginLocation:
     def test_camel_case_base_url_wins_over_multi_region(self) -> None:
         """A camelCase baseUrl inside http_options is honored, not clobbered."""
         with patch('genkit_google_genai.google.genai.client.Client'):
-            plugin = VertexAI(project='p', location='us', http_options={'baseUrl': 'https://example.com/'})
+            # cast: the camelCase alias is what a JS-shaped config passes; the
+            # SDK accepts it at runtime but HttpOptionsDict only spells snake_case.
+            plugin = VertexAI(project='p', location='us', http_options=cast(Any, {'baseUrl': 'https://example.com/'}))
         assert plugin._client_kwargs['http_options'].base_url == 'https://example.com/'
         assert plugin._base_url_pinned is True
 
@@ -176,6 +179,52 @@ class TestVertexAIPluginProject:
                 plugin = VertexAI(location='us')
         assert plugin._project == 'env-p'
         assert plugin._client_kwargs['project'] == 'env-p'
+
+    def test_regional_resolves_project_from_adc(self) -> None:
+        """A regional plugin resolves the project via ADC when none is configured.
+
+        Evaluator registration in init() needs a concrete project, so leaving
+        it unresolved would fail a deployment that relies purely on ADC.
+        """
+        with patch.dict(os.environ, {}, clear=True):
+            with patch('genkit_google_genai.google.genai.client.Client'):
+                with patch('genkit_google_genai.google.google_auth_default', return_value=(None, 'adc-p')):
+                    plugin = VertexAI(location='us-central1')
+        assert plugin._project == 'adc-p'
+        assert plugin._client_kwargs['project'] == 'adc-p'
+
+    def test_regional_without_adc_project_does_not_raise(self) -> None:
+        """A regional plugin with no resolvable project still constructs.
+
+        Unlike multi-regions, regional endpoints are usable in express mode and
+        the SDK raises its own error later, so construction must not fail here.
+        """
+        from google.auth.exceptions import DefaultCredentialsError
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch('genkit_google_genai.google.genai.client.Client'):
+                with patch(
+                    'genkit_google_genai.google.google_auth_default', side_effect=DefaultCredentialsError('no adc')
+                ):
+                    plugin = VertexAI(location='us-central1')
+        assert plugin._project is None
+
+    def test_api_key_skips_adc_probe(self) -> None:
+        """Express mode (api_key, no project) does not probe ADC."""
+        with patch.dict(os.environ, {}, clear=True):
+            with patch('genkit_google_genai.google.genai.client.Client'):
+                with patch('genkit_google_genai.google.google_auth_default') as mock_adc:
+                    plugin = VertexAI(location='us-central1', api_key='k')
+        mock_adc.assert_not_called()
+        assert plugin._project is None
+
+    def test_explicit_project_skips_adc_probe(self) -> None:
+        """An explicit project short-circuits the ADC probe."""
+        with patch.dict(os.environ, {}, clear=True):
+            with patch('genkit_google_genai.google.genai.client.Client'):
+                with patch('genkit_google_genai.google.google_auth_default') as mock_adc:
+                    VertexAI(project='p', location='us-central1')
+        mock_adc.assert_not_called()
 
     def test_multi_region_resolves_project_from_adc(self) -> None:
         """With no project configured, a multi-region plugin resolves it via ADC."""
@@ -307,6 +356,11 @@ def _vertex_model(location: str = 'us-central1', base_url: str | None = None, pr
         client_kwargs=plugin._client_kwargs,
         base_url_pinned=plugin._base_url_pinned,
     )
+
+
+def _plugin_client(model: GeminiModel) -> MagicMock:
+    """The mock client the model was constructed with, typed for assertions."""
+    return cast(MagicMock, model._client)
 
 
 class TestResolveRequestClient:
@@ -540,7 +594,8 @@ class TestGenerateUsesResolvedClient:
         with patch('genkit_google_genai.models.gemini.genai.Client', return_value=temp_client):
             result = await model.generate(_text_request({'location': 'europe-west1'}), ctx)
         temp_client.aio.models.generate_content.assert_awaited_once()
-        model._client.aio.models.generate_content.assert_not_called()
+        _plugin_client(model).aio.models.generate_content.assert_not_called()
+        assert result.message is not None
         assert result.message.content[0].root.text == 'ok'
 
     @pytest.mark.asyncio
@@ -566,7 +621,7 @@ class TestGenerateUsesResolvedClient:
         with patch('genkit_google_genai.models.gemini.genai.Client', return_value=temp_client):
             await model.generate(_text_request({'location': 'europe-west1'}), ctx)
         temp_client.aio.models.generate_content_stream.assert_awaited_once()
-        model._client.aio.models.generate_content_stream.assert_not_called()
+        _plugin_client(model).aio.models.generate_content_stream.assert_not_called()
         ctx.send_chunk.assert_called()
 
     @pytest.mark.asyncio
@@ -617,8 +672,8 @@ class TestCachedContentClientRouting:
         )
         cache_client.aio.caches.list.assert_awaited_once()
         cache_client.aio.caches.create.assert_awaited_once()
-        model._client.aio.caches.list.assert_not_called()
-        model._client.aio.caches.create.assert_not_called()
+        _plugin_client(model).aio.caches.list.assert_not_called()
+        _plugin_client(model).aio.caches.create.assert_not_called()
         assert cache.name == 'caches/x'
 
 
@@ -640,7 +695,7 @@ class TestLocationConfigThroughPipeline:
         """Same for a typed GeminiConfigSchema config."""
         model = _vertex_model()
         request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
             config=GeminiConfigSchema(location='us', temperature=0.1),
         )
         cfg = await model._genkit_to_googleai_cfg(request=request)

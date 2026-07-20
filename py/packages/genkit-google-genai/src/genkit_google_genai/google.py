@@ -816,25 +816,31 @@ class VertexAI(Plugin):
 
         opts = _inject_attribution_headers(http_options, base_url, api_version)
         self._base_url_pinned = bool(opts.base_url)
-        if const.is_multi_regional_location(self._location):
-            if not self._base_url_pinned:
-                # Multi-regions ('us', 'eu') are served from dedicated endpoints
-                # that the google-genai SDK does not derive itself.
-                opts.base_url = const.multi_regional_base_url(self._location)
-            # With an explicit base_url the SDK skips its ADC project lookup,
-            # so the plugin must resolve the project itself.
-            if not self._project and credentials is not None:
+        multi_region = const.is_multi_regional_location(self._location)
+        if multi_region and not self._base_url_pinned:
+            # Multi-regions ('us', 'eu') are served from dedicated endpoints
+            # that the google-genai SDK does not derive itself.
+            opts.base_url = const.multi_regional_base_url(self._location)
+
+        # Resolve the project here rather than leaving it to the SDK: with any
+        # base_url set the SDK skips its own ADC lookup, evaluator registration
+        # needs a concrete project, and doing it now keeps the blocking ADC IO
+        # off the event loop. Express mode (api_key) needs no project, so it
+        # only pays for the probe where a multi-region demands one.
+        if not self._project and (api_key is None or multi_region):
+            if credentials is not None:
                 self._project = getattr(credentials, 'project_id', None)
             if not self._project:
                 try:
                     _, self._project = google_auth_default()
                 except DefaultCredentialsError:
                     self._project = None
-            if not self._project:
-                raise ValueError(
-                    'VertexAI plugin requires a project when using a multi-region location. '
-                    'Set the project parameter or GOOGLE_CLOUD_PROJECT environment variable.'
-                )
+
+        if multi_region and not self._project:
+            raise ValueError(
+                'VertexAI plugin requires a project when using a multi-region location. '
+                'Set the project parameter or GOOGLE_CLOUD_PROJECT environment variable.'
+            )
 
         self._client_kwargs: dict[str, Any] = {
             'vertexai': self._vertexai,
