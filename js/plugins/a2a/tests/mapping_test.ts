@@ -24,7 +24,9 @@ import {
   a2aMessageToGenkit,
   a2aMessageToResumeInput,
   a2aPartToGenkit,
+  a2aStateToFinishReason,
   genkitPartToA2A,
+  genkitResumeToA2AParts,
 } from '../src/mapping.js';
 
 // ---------------------------------------------------------------------------
@@ -251,5 +253,88 @@ describe('a2aMessageToResumeInput', () => {
         ],
       },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Genkit resume payload -> A2A parts (outbound, client side)
+// ---------------------------------------------------------------------------
+
+describe('genkitResumeToA2AParts', () => {
+  it('maps a respond entry to a tagged toolResponse data part', () => {
+    assert.deepStrictEqual(
+      genkitResumeToA2AParts({
+        respond: [
+          {
+            toolResponse: { ref: 'r1', name: 'approve', output: { ok: true } },
+          },
+        ],
+      }),
+      [
+        {
+          kind: 'data',
+          data: { ref: 'r1', name: 'approve', output: { ok: true } },
+          metadata: { [A2A_METADATA.TYPE]: GenkitPartType.TOOL_RESPONSE },
+        },
+      ]
+    );
+  });
+
+  it('maps a restart entry to a tagged toolRequest data part', () => {
+    assert.deepStrictEqual(
+      genkitResumeToA2AParts({
+        restart: [
+          {
+            toolRequest: { ref: 'r1', name: 'getRate', input: { from: 'USD' } },
+            metadata: { resumed: { confirmedAt: 123 } },
+          },
+        ],
+      }),
+      [
+        {
+          kind: 'data',
+          data: { ref: 'r1', name: 'getRate', input: { from: 'USD' } },
+          metadata: {
+            [A2A_METADATA.TYPE]: GenkitPartType.TOOL_REQUEST,
+            [A2A_METADATA.RESTART]: { confirmedAt: 123 },
+          },
+        },
+      ]
+    );
+  });
+
+  it('round-trips through a2aMessageToResumeInput', () => {
+    const resume = {
+      respond: [
+        { toolResponse: { ref: 'r1', name: 'approve', output: { ok: true } } },
+      ],
+    };
+    const parts = genkitResumeToA2AParts(resume);
+    const roundTripped = a2aMessageToResumeInput({
+      kind: 'message',
+      messageId: 'm1',
+      role: 'user',
+      parts,
+    });
+    assert.deepStrictEqual(roundTripped, { resume });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A2A task state -> Genkit finish reason
+// ---------------------------------------------------------------------------
+
+describe('a2aStateToFinishReason', () => {
+  it('maps terminal states to finish reasons', () => {
+    assert.strictEqual(a2aStateToFinishReason('completed'), 'stop');
+    assert.strictEqual(a2aStateToFinishReason('input-required'), 'interrupted');
+    assert.strictEqual(a2aStateToFinishReason('failed'), 'failed');
+    assert.strictEqual(a2aStateToFinishReason('canceled'), 'aborted');
+    assert.strictEqual(a2aStateToFinishReason('rejected'), 'blocked');
+  });
+
+  it('falls back to unknown for non-terminal states', () => {
+    assert.strictEqual(a2aStateToFinishReason('working'), 'unknown');
+    assert.strictEqual(a2aStateToFinishReason('submitted'), 'unknown');
   });
 });

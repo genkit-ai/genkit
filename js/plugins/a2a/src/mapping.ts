@@ -19,10 +19,16 @@ import type {
   FilePart as A2AFilePart,
   Message as A2AMessage,
   Part as A2APart,
+  Task as A2ATask,
   TextPart as A2ATextPart,
 } from '@a2a-js/sdk';
 import type { ToolRequestPart, ToolResponsePart } from 'genkit';
-import type { AgentInput, MessageData, Part } from 'genkit/beta';
+import type {
+  AgentFinishReason,
+  AgentInput,
+  MessageData,
+  Part,
+} from 'genkit/beta';
 
 /**
  * Metadata keys used to carry Genkit-specific information across the A2A wire.
@@ -422,4 +428,78 @@ export function a2aMessageToResumeInput(message: A2AMessage): AgentInput {
       ...(restart.length > 0 && { restart }),
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Genkit resume payload -> A2A parts (outbound, client side)
+// ---------------------------------------------------------------------------
+
+/**
+ * Maps a Genkit {@link AgentInput.resume} payload to A2A {@link A2APart}s,
+ * the inverse of {@link a2aMessageToResumeInput}.
+ *
+ * `respond` entries become `toolResponse` data parts and `restart` entries
+ * become `toolRequest` data parts tagged with {@link A2A_METADATA.RESTART}, so
+ * a Genkit A2A server (see `a2aMessageToResumeInput`) can reconstruct the
+ * resume payload on the other side. Used when a client resumes an
+ * `input-required` task on a remote A2A agent.
+ */
+export function genkitResumeToA2AParts(
+  resume: NonNullable<AgentInput['resume']>
+): A2APart[] {
+  const parts: A2APart[] = [];
+
+  for (const respond of resume.respond ?? []) {
+    parts.push({
+      kind: 'data',
+      data: { ...respond.toolResponse } as Record<string, unknown>,
+      metadata: { [A2A_METADATA.TYPE]: GenkitPartType.TOOL_RESPONSE },
+    });
+  }
+
+  for (const restart of resume.restart ?? []) {
+    const resumed = (restart.metadata as Metadata | undefined)?.resumed;
+    parts.push({
+      kind: 'data',
+      data: { ...restart.toolRequest } as Record<string, unknown>,
+      metadata: {
+        [A2A_METADATA.TYPE]: GenkitPartType.TOOL_REQUEST,
+        [A2A_METADATA.RESTART]: resumed !== undefined ? resumed : true,
+      },
+    });
+  }
+
+  return parts;
+}
+
+// ---------------------------------------------------------------------------
+// A2A task state -> Genkit finish reason
+// ---------------------------------------------------------------------------
+
+/**
+ * Maps an A2A terminal task state to a Genkit {@link AgentFinishReason}.
+ *
+ * The inverse of the finish-reason mapping the Genkit A2A server applies (see
+ * `request-handler.ts`): `completed → stop`, `input-required → interrupted`,
+ * `failed → failed`, `canceled → aborted`, `rejected → blocked`. Non-terminal
+ * or unknown states fall back to `unknown`.
+ */
+export function a2aStateToFinishReason(
+  state: A2ATask['status']['state']
+): AgentFinishReason {
+  switch (state) {
+    case 'completed':
+      return 'stop';
+    case 'input-required':
+    case 'auth-required':
+      return 'interrupted';
+    case 'failed':
+      return 'failed';
+    case 'canceled':
+      return 'aborted';
+    case 'rejected':
+      return 'blocked';
+    default:
+      return 'unknown';
+  }
 }

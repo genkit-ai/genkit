@@ -17,10 +17,10 @@ npm install @genkit-ai/a2a @a2a-js/sdk
 
 ### Peer dependencies
 
-| Package | Required | Notes |
-| ------- | -------- | ----- |
-| `genkit` | ✅ | `>=1.0.0` — the agent API lives in the `genkit/beta` subpath. |
-| `@a2a-js/sdk` | ✅ | `^0.3.0` — provides the A2A server handler interfaces and Express adapters. |
+| Package       | Required | Notes                                                                       |
+| ------------- | -------- | --------------------------------------------------------------------------- |
+| `genkit`      | ✅       | `>=1.0.0` — the agent API lives in the `genkit/beta` subpath.               |
+| `@a2a-js/sdk` | ✅       | `^0.3.0` — provides the A2A server handler interfaces and Express adapters. |
 
 ## Quick start
 
@@ -41,7 +41,9 @@ const weatherAgent = ai.defineAgent({
   name: 'weatherAgent',
   description: 'Tells you the weather.',
   model: 'googleai/gemini-flash-latest',
-  tools: [/* your tools here */],
+  tools: [
+    /* your tools here */
+  ],
 });
 
 const PORT = 3000;
@@ -75,6 +77,46 @@ app.use(
 app.listen(PORT);
 ```
 
+## Consuming a remote A2A agent as a Genkit agent
+
+The reverse direction is also supported: `defineA2aAgent` takes a **remote A2A
+agent endpoint** and registers it as a first-class Genkit agent (built on
+`ai.defineCustomAgent`). Because it is a real registered action, it shows up in
+the Dev UI, participates in tracing/observability, can be used as a
+sub-agent/tool, and can even be re-exposed over A2A with
+`GenkitA2ARequestHandler`.
+
+```ts
+import { defineA2aAgent } from '@genkit-ai/a2a';
+import { genkit } from 'genkit/beta';
+
+const ai = genkit({});
+
+// Resolves the remote agent card from
+// `https://some-host/.well-known/agent-card.json`.
+const weather = await defineA2aAgent(ai, {
+  url: 'https://some-host',
+  // Optional: override the registry name/description (defaults to the card's).
+  // name: 'weatherAgent',
+  // Optional: auth headers (static or a function invoked per request).
+  // headers: { authorization: 'Bearer …' },
+  // Optional: pass a pre-fetched AgentCard instead of `url`.
+  // card: myAgentCard,
+});
+
+const chat = weather.chat();
+const res = await chat.send('Weather in Tokyo?');
+console.log(res.text);
+```
+
+Each Genkit turn drives one turn against the remote A2A agent. The Genkit
+`sessionId` is used as the A2A `contextId`, so multi-turn conversations thread
+continuity to the remote. Interrupts on the remote (`input-required`) surface as
+Genkit interrupts and can be resumed with `chat.resume(...)`.
+
+> `defineA2aAgent` is client-managed (no `store`); conversation history lives in
+> the Genkit session and is replayed to the remote via the `contextId`.
+
 ## How it works
 
 `GenkitA2ARequestHandler` implements the `@a2a-js/sdk` `A2ARequestHandler`
@@ -88,10 +130,10 @@ incoming message it:
 
 ### Identifiers
 
-| A2A | Genkit | Notes |
-| --- | --- | ----- |
-| `contextId` | `sessionId` | A server-managed agent (one with a `store`) resumes its session across A2A tasks that share a `contextId`. |
-| `taskId` | one agent turn | Each task maps to a single turn. The handler keeps an in-memory record of tasks so `getTask` works. |
+| A2A         | Genkit         | Notes                                                                                                      |
+| ----------- | -------------- | ---------------------------------------------------------------------------------------------------------- |
+| `contextId` | `sessionId`    | A server-managed agent (one with a `store`) resumes its session across A2A tasks that share a `contextId`. |
+| `taskId`    | one agent turn | Each task maps to a single turn. The handler keeps an in-memory record of tasks so `getTask` works.        |
 
 > Conversation state is owned by the **agent's own `SessionStore`**, not by
 > A2A. The handler's task map is only for `getTask` and interrupt-resume
@@ -112,12 +154,12 @@ For each turn the handler emits:
 4. A terminal `TaskStatusUpdateEvent` (`final: true`) whose state is derived
    from the Genkit finish reason:
 
-| Genkit `finishReason` | A2A terminal state |
-| --------------------- | ------------------ |
-| `stop` / `length` / `other` / `unknown` | `completed` (final message echoed in `status.message`) |
-| `interrupted` | `input-required` (interrupt tool requests carried in `status.message.parts`) |
-| `failed` | `failed` (error text in `status.message`) |
-| `aborted` | `canceled` |
+| Genkit `finishReason`                   | A2A terminal state                                                           |
+| --------------------------------------- | ---------------------------------------------------------------------------- |
+| `stop` / `length` / `other` / `unknown` | `completed` (final message echoed in `status.message`)                       |
+| `interrupted`                           | `input-required` (interrupt tool requests carried in `status.message.parts`) |
+| `failed`                                | `failed` (error text in `status.message`)                                    |
+| `aborted`                               | `canceled`                                                                   |
 
 ### Part mapping
 
@@ -127,15 +169,15 @@ namespace. This keeps a **Genkit ↔ Genkit** round-trip lossless while staying
 interoperable with generic A2A clients (which see plain text / file / data
 parts and ignore the metadata).
 
-| Genkit part | A2A part |
-| ----------- | -------- |
-| `text` | `TextPart` |
-| `reasoning` | `TextPart` + `metadata['genkit:reasoning'] = true` |
-| `media` (remote url) | `FilePart` (`FileWithUri`) |
-| `media` (base64 `data:` url) | `FilePart` (`FileWithBytes`) |
-| `toolRequest` | `DataPart` + `metadata['genkit:type'] = 'toolRequest'` |
-| `toolResponse` | `DataPart` + `metadata['genkit:type'] = 'toolResponse'` |
-| `data` / `custom` | `DataPart` + `metadata['genkit:type'] = 'data' \| 'custom'` |
+| Genkit part                  | A2A part                                                    |
+| ---------------------------- | ----------------------------------------------------------- |
+| `text`                       | `TextPart`                                                  |
+| `reasoning`                  | `TextPart` + `metadata['genkit:reasoning'] = true`          |
+| `media` (remote url)         | `FilePart` (`FileWithUri`)                                  |
+| `media` (base64 `data:` url) | `FilePart` (`FileWithBytes`)                                |
+| `toolRequest`                | `DataPart` + `metadata['genkit:type'] = 'toolRequest'`      |
+| `toolResponse`               | `DataPart` + `metadata['genkit:type'] = 'toolResponse'`     |
+| `data` / `custom`            | `DataPart` + `metadata['genkit:type'] = 'data' \| 'custom'` |
 
 On the way back in, the `genkit:type` discriminator reconstructs the exact
 Genkit part; parts from non-Genkit clients fall back to a structural
@@ -164,10 +206,10 @@ converts these into the Genkit `resume` payload (`{ respond, restart }`).
 
 ```ts
 new GenkitA2ARequestHandler({
-  agent,           // the Genkit agent (from ai.defineAgent)
-  url,             // base URL where the agent is hosted (for the card)
-  card,            // optional: partial/full AgentCard to override/extend
-  version,         // optional: the agent's version string (default '0.0.0')
+  agent, // the Genkit agent (from ai.defineAgent)
+  url, // base URL where the agent is hosted (for the card)
+  card, // optional: partial/full AgentCard to override/extend
+  version, // optional: the agent's version string (default '0.0.0')
 });
 ```
 
@@ -177,29 +219,54 @@ Implements the full `A2ARequestHandler` interface. `sendMessage`,
 notification configuration, and `resubscribe` currently throw
 ("not supported").
 
+### `defineA2aAgent`
+
+```ts
+const agent = await defineA2aAgent(ai, {
+  url, // remote A2A agent endpoint (its agent card is resolved)
+  card, // or: a pre-fetched AgentCard (instead of url)
+  agentCardPath, // optional: agent card path (default: well-known path)
+  name, // optional: registry name (default: remote card's name)
+  description, // optional: registry description (default: card's)
+  headers, // optional: auth headers (static or a function)
+});
+```
+
+Returns a registered Genkit `Agent` (an `AgentAPI` with `chat`, `loadChat`,
+etc.). Built on `ai.defineCustomAgent`, so it is a first-class registered
+action (Dev UI, tracing, usable as a sub-agent, re-exposable over A2A).
+
+The underlying single-turn engine is also exported for advanced use / building a
+future client-only transport:
+
+| Function                         | Description                                                                                       |
+| -------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `createA2aClient(options)`       | Resolve an `A2AClient` + `AgentCard` from `url`/`card` (+ optional auth `headers`)                |
+| `runA2aTurn(client, input, ctx)` | Drive one turn against a remote A2A agent, yielding Genkit parts and returning an `A2aTurnResult` |
+
 ### Mapping utilities
 
 The package also exports the low-level mapping helpers, useful for building
 custom handlers or A2A clients that talk to Genkit agents:
 
-| Function | Direction | Description |
-| -------- | --------- | ----------- |
-| `genkitPartToA2A` / `genkitPartsToA2A` | Genkit → A2A | Map Genkit parts to A2A parts |
-| `a2aPartToGenkit` / `a2aPartsToGenkit` | A2A → Genkit | Map A2A parts to Genkit parts |
-| `a2aMessageToGenkit` | A2A → Genkit | Map an A2A message to a Genkit `MessageData` |
-| `genkitMessageToA2AParts` | Genkit → A2A | Map a Genkit message's content to A2A parts |
-| `a2aMessageToResumeInput` | A2A → Genkit | Build the Genkit `AgentInput` (message or resume) for an incoming A2A message |
-| `genkitRoleToA2A` | Genkit → A2A | Map a Genkit role to an A2A role |
+| Function                               | Direction    | Description                                                                   |
+| -------------------------------------- | ------------ | ----------------------------------------------------------------------------- |
+| `genkitPartToA2A` / `genkitPartsToA2A` | Genkit → A2A | Map Genkit parts to A2A parts                                                 |
+| `a2aPartToGenkit` / `a2aPartsToGenkit` | A2A → Genkit | Map A2A parts to Genkit parts                                                 |
+| `a2aMessageToGenkit`                   | A2A → Genkit | Map an A2A message to a Genkit `MessageData`                                  |
+| `genkitMessageToA2AParts`              | Genkit → A2A | Map a Genkit message's content to A2A parts                                   |
+| `a2aMessageToResumeInput`              | A2A → Genkit | Build the Genkit `AgentInput` (message or resume) for an incoming A2A message |
+| `genkitRoleToA2A`                      | Genkit → A2A | Map a Genkit role to an A2A role                                              |
 
 Plus the `A2A_METADATA` key constants and the `GenkitPartType` discriminator
 values.
 
 ### Agent card
 
-| Function | Description |
-| -------- | ----------- |
-| `deriveAgentCard(agent, options)` | Build an `AgentCard` from a Genkit agent and options (`url`, `version`, partial `card`) |
-| `getAgentName(agent)` / `getAgentDescription(agent)` | Read the agent's registered name / description |
+| Function                                             | Description                                                                             |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `deriveAgentCard(agent, options)`                    | Build an `AgentCard` from a Genkit agent and options (`url`, `version`, partial `card`) |
+| `getAgentName(agent)` / `getAgentDescription(agent)` | Read the agent's registered name / description                                          |
 
 ## Limitations
 

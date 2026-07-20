@@ -20,6 +20,15 @@ export {
   type GenkitAgent,
 } from './request-handler.js';
 
+export { defineA2aAgent, type A2aAgentOptions } from './a2a-agent.js';
+
+export {
+  createA2aClient,
+  runA2aTurn,
+  type A2aConnectionOptions,
+  type A2aTurnResult,
+} from './a2a-client-turn.js';
+
 export {
   A2A_PROTOCOL_VERSION,
   deriveAgentCard,
@@ -36,8 +45,10 @@ export {
   a2aMessageToResumeInput,
   a2aPartToGenkit,
   a2aPartsToGenkit,
+  a2aStateToFinishReason,
   genkitMessageToA2AParts,
   genkitPartToA2A,
   genkitPartsToA2A,
+  genkitResumeToA2AParts,
   genkitRoleToA2A,
 } from './mapping.js';
