@@ -12,6 +12,7 @@ exercise every part of the A2A mapping:
 | ------- | -------------------- |
 | `getWeather` / `searchFlights` tools + streamed text | Genkit model chunks → A2A `artifact-update` events |
 | `confirmBooking` interrupt | A turn pausing → A2A terminal `input-required`, then **resuming the same task** |
+| Snapshot-native task identity | An A2A `taskId` **is** the originating turn's Genkit snapshot id; `getTask` reads straight from the agent's `SessionStore` |
 | Shared `contextId` across turns | A2A `contextId` ↔ Genkit `sessionId`, so the agent remembers the conversation |
 | Agent card discovery | `deriveAgentCard` served at `/.well-known/agent-card.json` |
 
@@ -46,7 +47,9 @@ The client will:
    `input-required`, carrying the `confirmBooking` interrupt.
 4. **Turn 3** — resume the *same task* with a `toolResponse` data part approving
    the booking; the task streams to `completed` with a confirmation code.
-5. **Turn 4** — a follow-up question proving the session remembers the trip.
+5. **getTask** — fetch the resumed task by id, showing the handler rebuilds it
+   from the agent's snapshot store (see *Task identity* below).
+6. **Turn 4** — a follow-up question proving the session remembers the trip.
 
 ## Files
 
@@ -91,3 +94,21 @@ with the resolved tool output as a `toolResponse` data part:
 
 The handler detects the task is `input-required`, converts this into the Genkit
 `resume.respond` payload, and continues the turn.
+
+## Task identity & the task store
+
+Because `conciergeAgent` is **server-managed** (it has a `SessionStore`), the
+A2A handler is snapshot-native: an A2A `taskId` is the Genkit snapshot id of the
+turn that originated it (reserved up front and surfaced on the turn's
+`turnStart` stream chunk). `getTask` and interrupt-resume therefore read
+straight from the agent's own store via `agent.getSnapshot` — there is no
+separate copy of task state.
+
+Resuming an interrupted turn (Turn 3) produces a **new** snapshot, so the task
+"advances" past its originating snapshot. That single advancement is the only
+thing recorded in the handler's `taskStore` (`taskId → { contextId, snapshotId
+}`), which `src/server.ts` configures explicitly with the default
+`InMemoryA2ATaskStore`. Supply a durable implementation to survive restarts or
+span processes; durable conversation state itself lives in the agent's own
+`SessionStore`.
+

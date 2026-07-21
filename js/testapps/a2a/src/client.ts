@@ -23,7 +23,8 @@
  *   2. Stream a planning turn (tool calls -> artifact updates -> completed).
  *   3. Trigger and resolve a human-in-the-loop interrupt
  *      (terminal `input-required` -> resume the same task -> completed).
- *   4. A follow-up turn on the same contextId to show session memory.
+ *   4. Fetch the resumed task with getTask (rebuilt from the agent snapshot).
+ *   5. A follow-up turn on the same contextId to show session memory.
  *
  * Start the server first (`pnpm server`), then run `pnpm client`.
  */
@@ -226,7 +227,27 @@ async function main() {
     'Turn 3: resume with approval (expect completed)'
   );
 
-  // 5. Follow-up turn on the same context — shows session memory.
+  // 5. Inspect the task via getTask. For a server-managed agent the task id is
+  //    the originating turn's Genkit snapshot id, and the resume advanced its
+  //    pointer to a new snapshot. The handler resolves that and rebuilds the
+  //    Task straight from the agent's SessionStore — no separate task copy.
+  console.log('\n=== getTask: inspect the resumed task ===');
+  const response = await client.getTask({ id: bookingTask.id });
+  if ('error' in response) {
+    console.log(`  ⚠️  getTask failed: ${response.error.message}`);
+  } else {
+    const fetched = response.result;
+    console.log(
+      `  · task ${fetched.id.slice(0, 8)} [${fetched.status.state}], ` +
+        `${fetched.history?.length ?? 0} history message(s)`
+    );
+    const lastMsg = fetched.history?.at(-1);
+    if (lastMsg) {
+      console.log(`    last: ${lastMsg.role}: ${renderParts(lastMsg.parts)}`);
+    }
+  }
+
+  // 6. Follow-up turn on the same context — shows session memory.
   await streamTurn(
     client,
     {

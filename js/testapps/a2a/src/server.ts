@@ -27,7 +27,7 @@ import {
   jsonRpcHandler,
   UserBuilder,
 } from '@a2a-js/sdk/server/express';
-import { GenkitA2ARequestHandler } from '@genkit-ai/a2a';
+import { GenkitA2ARequestHandler, InMemoryA2ATaskStore } from '@genkit-ai/a2a';
 import express from 'express';
 import { conciergeAgent } from './concierge-agent.js';
 
@@ -37,10 +37,19 @@ const URL = process.env.A2A_URL ?? `http://localhost:${PORT}`;
 // Build the A2A request handler around the Genkit agent. The agent card is
 // derived automatically from the agent's name/description; `url` tells the card
 // where the agent is hosted.
+//
+// Because `conciergeAgent` is server-managed (it has a `store`), the handler is
+// snapshot-native: an A2A `taskId` is the Genkit snapshot id of the turn that
+// originated it, and `getTask` reads straight from the agent's SessionStore.
+// The `taskStore` below only records an advancement pointer when an interrupted
+// task is resumed (a resumed turn writes a new snapshot). It defaults to
+// `InMemoryA2ATaskStore`; passing it explicitly here makes that visible — swap
+// in a durable implementation to survive restarts or span processes.
 const a2aHandler = new GenkitA2ARequestHandler({
   agent: conciergeAgent,
   url: URL,
   version: '1.0.0',
+  taskStore: new InMemoryA2ATaskStore(),
 });
 
 const app = express();
