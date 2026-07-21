@@ -15,81 +15,123 @@
  */
 
 import type { protos, v2 } from '@google-cloud/dlp';
-import { generateMiddleware } from 'genkit';
+import {
+  generateMiddleware,
+  z,
+  type GenerateMiddleware,
+  type Part,
+} from 'genkit';
 import { credentialsFromEnvironment } from '../auth.js';
 
 // Option 1: Configure redaction options inline.
-export interface SdpInfoType {
-  name: string;
-  version?: string;
-}
+export const SdpInfoTypeSchema = z.object({
+  name: z.string().describe('The name of the infoType.'),
+  version: z.string().optional().describe('The version of the infoType.'),
+});
 
-interface SdpInlineConfigBase {
+export const SdpInlineConfigSchema = z.object({
   /**
    * Which infoTypes to inspect and replace.
    * Default: ['CREDIT_CARD_NUMBER', 'EMAIL_ADDRESS', 'PHONE_NUMBER']
    * All available infoTypes: https://cloud.google.com/sensitive-data-protection/docs/infotypes-reference#descriptions
    */
-  infoTypes?: (
-    | 'CREDIT_CARD_NUMBER'
-    | 'EMAIL_ADDRESS'
-    | 'PHONE_NUMBER'
-    | 'STREET_ADDRESS'
-    | 'US_SOCIAL_SECURITY_NUMBER'
-    | 'IP_ADDRESS'
-    | 'PASSPORT'
-    | 'FINANCIAL_ACCOUNT_NUMBER'
-    | (string & {})
-    | SdpInfoType
-  )[];
-}
-
-/**
- * The transformation method.
- */
-export type SdpInlineConfig = SdpInlineConfigBase &
-  (
-    | {
-        /** Replaces with the type name (e.g., [EMAIL_ADDRESS]) */
-        transformation?: 'INFOTYPE';
-      }
-    | {
-        /** Replaces characters with a symbol (e.g., *****) */
-        transformation: 'MASK';
-        /**
-         * Masking configuration when transformation is 'MASK'. Defaults to '*'
-         * Note: The masking string must be a single character.
-         */
-        maskConfig?: { maskingCharacter: string };
-      }
-    | {
-        /** Replaces with a fixed string (e.g., [REDACTED]) */
-        transformation: 'CUSTOM_STRING';
-        /** Custom string configuration when transformation is 'CUSTOM_STRING'. Defaults to '[REDACTED]' */
-        customConfig?: string;
-      }
-  );
+  infoTypes: z
+    .array(z.union([z.string(), SdpInfoTypeSchema]))
+    .optional()
+    .describe(
+      'Which infoTypes to inspect and replace. Default: [CREDIT_CARD_NUMBER, EMAIL_ADDRESS, PHONE_NUMBER]'
+    ),
+  /**
+   * The transformation method.
+   */
+  transformation: z
+    .enum(['INFOTYPE', 'MASK', 'CUSTOM_STRING'])
+    .optional()
+    .describe('The transformation method: INFOTYPE, MASK, or CUSTOM_STRING'),
+  /**
+   * Masking configuration when transformation is 'MASK'. Defaults to '*'
+   * Note: The masking string must be a single character.
+   */
+  maskConfig: z
+    .object({
+      maskingCharacter: z.string(),
+    })
+    .optional()
+    .describe(
+      "Masking configuration when transformation is 'MASK'. Defaults to '*'"
+    ),
+  /**
+   * Custom string configuration when transformation is 'CUSTOM_STRING'. Defaults to '[REDACTED]'
+   */
+  customConfig: z
+    .string()
+    .optional()
+    .describe(
+      "Custom string configuration when transformation is 'CUSTOM_STRING'. Defaults to '[REDACTED]'"
+    ),
+});
 
 // Option 2: Create a custom config template in the Google Cloud Console.
 // Create in Google Cloud Console > Security > Sensitive Data Protection > Configuration.
 // Instructions: https://docs.cloud.google.com/sensitive-data-protection/docs/create-inspection-template
-export type SdpTemplateConfig =
-  | {
-      inspectTemplateName: string;
-      deidentifyTemplateName?: string;
-    }
-  | {
-      inspectTemplateName?: string;
-      deidentifyTemplateName: string;
-    };
+export const SdpTemplateConfigSchema = z.union([
+  z.object({
+    inspectTemplateName: z
+      .string()
+      .describe('Resource name of the inspect template'),
+    deidentifyTemplateName: z
+      .string()
+      .optional()
+      .describe('Resource name of the deidentify template'),
+  }),
+  z.object({
+    inspectTemplateName: z
+      .string()
+      .optional()
+      .describe('Resource name of the inspect template'),
+    deidentifyTemplateName: z
+      .string()
+      .describe('Resource name of the deidentify template'),
+  }),
+]);
 
-export interface SdpOptionsBase {
-  projectId?: string; // (Optional) Explicitly set the Google Cloud Project ID
-  credentials?: any; // (Optional) Explicitly set the Google Cloud credentials
-}
+export const SdpOptionsBaseSchema = z.object({
+  projectId: z
+    .string()
+    .optional()
+    .describe('(Optional) Explicitly set the Google Cloud Project ID'),
+  credentials: z
+    .any()
+    .optional()
+    .describe('(Optional) Explicitly set the Google Cloud credentials'),
+});
+
+export const SdpOptionsSchema = z.intersection(
+  SdpOptionsBaseSchema,
+  z.union([
+    z.object({
+      templates: SdpTemplateConfigSchema,
+      inline: SdpInlineConfigSchema.optional(),
+    }),
+    z.object({
+      inline: SdpInlineConfigSchema,
+      templates: SdpTemplateConfigSchema.optional(),
+    }),
+    z.object({
+      inline: SdpInlineConfigSchema.optional(),
+      templates: SdpTemplateConfigSchema.optional(),
+    }),
+  ])
+);
+
+export type SdpInfoType = z.infer<typeof SdpInfoTypeSchema>;
+export type SdpInlineConfig = z.infer<typeof SdpInlineConfigSchema>;
+export type SdpTemplateConfig = z.infer<typeof SdpTemplateConfigSchema>;
+export type SdpOptionsBase = z.infer<typeof SdpOptionsBaseSchema>;
+export type SdpOptions = z.infer<typeof SdpOptionsSchema>;
 
 async function createDlpClient(
-  options: SdpOptions
+  options: SdpOptionsBase
 ): Promise<v2.DlpServiceClient> {
   let dlpModule;
   try {
@@ -100,27 +142,11 @@ async function createDlpClient(
     );
   }
 
-  let envAuth;
-  if (!options.projectId || !options.credentials) {
-    envAuth = await credentialsFromEnvironment();
-  }
-
-  const projectId = options.projectId || envAuth?.projectId;
-  const credentials = options.credentials || envAuth?.credentials;
-
   return new dlpModule.v2.DlpServiceClient({
-    credentials: credentials as any as NonNullable<
-      ConstructorParameters<typeof v2.DlpServiceClient>[0]
-    >['credentials'],
-    projectId: projectId,
+    credentials: options.credentials as any,
+    projectId: options.projectId,
   });
 }
-
-export type SdpOptions = SdpOptionsBase &
-  (
-    | { templates: SdpTemplateConfig; inline?: SdpInlineConfig }
-    | { inline: SdpInlineConfig; templates?: SdpTemplateConfig }
-  );
 
 // 1. Inspect config
 function buildInspectConfig(
@@ -205,10 +231,23 @@ async function sanitizeInput(
   return response.item?.value ?? text;
 }
 
-export const sensitiveDataProtection = generateMiddleware<SdpOptions>(
-  { name: 'sensitiveDataProtection' },
+/**
+ * **Warning:** In streaming mode, chunks are streamed from the model before redaction runs and will not be redacted.
+ */
+export const sensitiveDataProtection: GenerateMiddleware<
+  typeof SdpOptionsSchema
+> = generateMiddleware(
+  {
+    name: 'sensitiveDataProtection',
+    description:
+      'Intercepts prompt inputs and model outputs to redact sensitive data using Google Cloud Sensitive Data Protection (DLP). Note: In streaming mode, chunks emitted in real time are not redacted.',
+    configSchema: SdpOptionsSchema,
+  },
   ({ config, pluginConfig }) => {
-    const options = { ...pluginConfig, ...config } as SdpOptions;
+    const options = {
+      ...(pluginConfig as object | undefined),
+      ...config,
+    } as SdpOptions;
     let clientPromise: Promise<{
       client: v2.DlpServiceClient;
       projectId: string;
@@ -229,7 +268,6 @@ export const sensitiveDataProtection = generateMiddleware<SdpOptions>(
             }
 
             const client = await createDlpClient({
-              ...opts,
               projectId,
               credentials,
             });
@@ -249,8 +287,7 @@ export const sensitiveDataProtection = generateMiddleware<SdpOptions>(
             // ignore empty messages
             .filter((message) => !!message.content)
             // extract all message content into a single array
-            // @ts-ignore - flatMap creates a flat array of content parts
-            .flatMap((message) => message.content!)
+            .flatMap((message): Part[] => message.content!)
             // ignore multimedia content and content that has been cleaned already
             .filter((part) => part.text && !part.metadata?.isCleaned)
             // de-identify message content
