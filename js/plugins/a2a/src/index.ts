@@ -20,6 +20,12 @@ export {
   type GenkitAgent,
 } from './request-handler.js';
 
+export {
+  InMemoryA2ATaskStore,
+  type A2ATaskStore,
+  type TaskRecord,
+} from './task-store.js';
+
 export { defineA2aAgent, type A2aAgentOptions } from './a2a-agent.js';
 
 export {
@@ -46,6 +52,7 @@ export {
   a2aPartToGenkit,
   a2aPartsToGenkit,
   a2aStateToFinishReason,
+  finishReasonToA2AState,
   genkitMessageToA2AParts,
   genkitPartToA2A,
   genkitPartsToA2A,

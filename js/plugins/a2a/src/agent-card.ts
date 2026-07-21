@@ -27,7 +27,14 @@ export const A2A_PROTOCOL_VERSION = '0.3.0';
  * `__action`.
  */
 export interface AgentLike {
-  __action?: { name?: string; description?: string };
+  __action?: {
+    name?: string;
+    description?: string;
+    metadata?: {
+      agent?: { stateManagement?: 'server' | 'client' };
+      [k: string]: unknown;
+    };
+  };
 }
 
 /**

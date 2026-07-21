@@ -503,3 +503,28 @@ export function a2aStateToFinishReason(
       return 'unknown';
   }
 }
+
+/**
+ * Maps a Genkit {@link AgentFinishReason} to an A2A terminal task state.
+ *
+ * The inverse of {@link a2aStateToFinishReason}: `interrupted → input-required`,
+ * `failed → failed`, `aborted → canceled`, `blocked → rejected`, and everything
+ * else (`stop`, `length`, `other`, `unknown`, or absent) → `completed`. Used by
+ * the request handler to derive a task's status from a snapshot's finish reason.
+ */
+export function finishReasonToA2AState(
+  reason: AgentFinishReason | undefined
+): A2ATask['status']['state'] {
+  switch (reason) {
+    case 'interrupted':
+      return 'input-required';
+    case 'failed':
+      return 'failed';
+    case 'aborted':
+      return 'canceled';
+    case 'blocked':
+      return 'rejected';
+    default:
+      return 'completed';
+  }
+}

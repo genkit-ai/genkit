@@ -130,14 +130,32 @@ incoming message it:
 
 ### Identifiers
 
-| A2A         | Genkit         | Notes                                                                                                      |
-| ----------- | -------------- | ---------------------------------------------------------------------------------------------------------- |
-| `contextId` | `sessionId`    | A server-managed agent (one with a `store`) resumes its session across A2A tasks that share a `contextId`. |
-| `taskId`    | one agent turn | Each task maps to a single turn. The handler keeps an in-memory record of tasks so `getTask` works.        |
+| A2A         | Genkit          | Notes                                                                                                       |
+| ----------- | --------------- | --------------------------------------------------------------------------------------------------------- |
+| `contextId` | `sessionId`     | A server-managed agent (one with a `store`) resumes its session across A2A tasks that share a `contextId`. |
+| `taskId`    | a Genkit snapshot | For a server-managed agent an A2A `taskId` **is** the Genkit snapshot id of the turn that originated it.  |
+
+For a **server-managed** agent (one with a `store`) the handler is
+snapshot-native: it uses the snapshot id reserved at the start of a turn (read
+from the turn's `turnStart` stream chunk) as the A2A `taskId`. `getTask` and
+interrupt-resume therefore read straight from the agent's own `SessionStore`
+via `agent.getSnapshot` — there is no separate copy of task state.
+
+Resuming an interrupted turn produces a **new** snapshot, so the task then
+"advances" past its originating snapshot. That single advancement (per resume)
+is the only thing recorded in the pluggable `taskStore`
+(`taskId → { contextId, snapshotId }`); resolving a task is
+`taskStore.get(taskId)?.snapshotId ?? taskId`. A purely non-interrupting agent
+therefore never writes to the task store at all.
+
+For a **client-managed** agent (no `store`) there are no snapshots to read back,
+so the handler keeps a best-effort in-memory record of tasks (lost on restart)
+so `getTask` still works within a single process.
 
 > Conversation state is owned by the **agent's own `SessionStore`**, not by
-> A2A. The handler's task map is only for `getTask` and interrupt-resume
-> detection.
+> A2A. The `taskStore` holds only the id-to-id advancement pointer for resumed
+> (interrupt) tasks; supply a durable implementation to survive restarts.
+
 
 ### Streaming event model
 
@@ -210,6 +228,9 @@ new GenkitA2ARequestHandler({
   url, // base URL where the agent is hosted (for the card)
   card, // optional: partial/full AgentCard to override/extend
   version, // optional: the agent's version string (default '0.0.0')
+  taskStore, // optional: A2ATaskStore for taskId→snapshot advancement pointers
+  //            (default: InMemoryA2ATaskStore; supply a durable one to
+  //            survive restarts / span processes)
 });
 ```
 
@@ -272,8 +293,13 @@ values.
 
 - **Task cancellation**, **push notifications**, and **stream resubscription**
   are not yet supported.
-- The task store is **in-memory** (per handler instance); durable conversation
-  state lives in the agent's own `SessionStore`.
+- The `taskStore` defaults to **in-memory** (per handler instance). It only
+  holds `taskId → snapshot` advancement pointers for resumed (interrupt) tasks;
+  supply a durable `A2ATaskStore` to survive restarts or span processes.
+  Durable conversation state itself lives in the agent's own `SessionStore`.
+- For a **client-managed** agent (no `store`), `getTask` and interrupt-resume
+  are backed by a best-effort in-memory task cache (lost on restart), since
+  there are no snapshots to read back.
 - Genkit `customPatch` (live custom-state) chunks are **not** surfaced over
   A2A, as A2A has no direct equivalent.
 
