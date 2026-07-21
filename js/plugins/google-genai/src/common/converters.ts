@@ -318,7 +318,7 @@ function toGeminiRole(
         throw new Error('system role is not supported');
       }
     case 'tool':
-      return 'function';
+      return 'user';
     default:
       return 'user';
   }
