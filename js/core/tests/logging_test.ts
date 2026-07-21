@@ -131,9 +131,9 @@ describe('logging consolidated api', () => {
     ]);
   });
 
-  it('should support logStructured* backward compatibility', () => {
+  it('should support warn with message + metadata + error', () => {
     const error = new Error('fail');
-    logger.logStructuredWarn('Failed structured', { sku: 'SKU-492' }, error);
+    logger.warn('Failed structured', { sku: 'SKU-492' }, error);
     assert.strictEqual(loggedArgs.length, 1);
     assert.strictEqual(loggedArgs[0][0], 'warn');
     assert.strictEqual(loggedArgs[0][1], 'Failed structured');

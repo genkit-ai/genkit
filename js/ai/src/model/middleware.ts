@@ -388,7 +388,7 @@ export function retry(options: RetryOptions = {}): ModelMiddleware {
             if (!noJitter) {
               delay = delay + 1000 * Math.pow(2, i) * Math.random();
             }
-            logger.logStructuredWarn(
+            logger.warn(
               `Retry ${i + 1} of ${maxRetries} in ${Math.round(delay)}ms due to error: ${error?.message || String(error)}`,
               {
                 'genkit.middleware.name': 'retry',
@@ -402,7 +402,7 @@ export function retry(options: RetryOptions = {}): ModelMiddleware {
             currentDelay = Math.min(currentDelay * backoffFactor, maxDelayMs);
             continue;
           } else {
-            logger.logStructuredWarn(
+            logger.warn(
               `Retry skipped for ${error?.message || String(error)} because of ${reason}`,
               {
                 'genkit.middleware.name': 'retry',
@@ -413,7 +413,7 @@ export function retry(options: RetryOptions = {}): ModelMiddleware {
             );
           }
         } else {
-          logger.logStructuredWarn(
+          logger.warn(
             `Retry attempts exhausted (${maxRetries}). Last error: ${error?.message || String(error)}`,
             {
               'genkit.middleware.name': 'retry',
@@ -488,7 +488,7 @@ export function fallback(
             const resolved = await resolveModel(ai.registry, model);
             targetModelName =
               resolved.modelAction?.__action?.name || targetModelName;
-            logger.logStructuredWarn(
+            logger.warn(
               `Falling back to model ${targetModelName} due to error ${lastError.status} ${lastError.message}`,
               {
                 'genkit.middleware.name': 'fallback',
@@ -503,7 +503,7 @@ export function fallback(
               onError?.(e2);
               continue;
             }
-            logger.logStructuredWarn(
+            logger.warn(
               `Aborting fallback sequence for unrecoverable error: ${e2.message || String(e2)}`,
               {
                 'genkit.middleware.name': 'fallback',
@@ -514,7 +514,7 @@ export function fallback(
             throw e2;
           }
         }
-        logger.logStructuredWarn(
+        logger.warn(
           `Fallback options exhausted. Last error: ${lastError.message || String(lastError)}`,
           {
             'genkit.middleware.name': 'fallback',
@@ -523,7 +523,7 @@ export function fallback(
         );
         throw lastError;
       } else {
-        logger.logStructuredWarn(
+        logger.warn(
           `Skipping fallback for unhandled error: ${e.message || String(e)}`,
           {
             'genkit.middleware.name': 'fallback',

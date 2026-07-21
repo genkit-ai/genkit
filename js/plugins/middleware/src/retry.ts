@@ -196,7 +196,7 @@ export const retry: GenerateMiddleware<typeof RetryOptionsSchema> =
                   if (!noJitter) {
                     delay = delay + 1000 * Math.pow(2, i) * Math.random();
                   }
-                  logger.logStructuredWarn(
+                  logger.warn(
                     `Retry ${i + 1} of ${maxRetries} in ${Math.round(delay)}ms due to error: ${error?.message || String(error)}`,
                     {
                       'genkit.middleware.name': 'retry',
@@ -213,7 +213,7 @@ export const retry: GenerateMiddleware<typeof RetryOptionsSchema> =
                   );
                   continue;
                 } else {
-                  logger.logStructuredWarn(
+                  logger.warn(
                     `Retry skipped for ${error?.message || String(error)} because of ${reason}`,
                     {
                       'genkit.middleware.name': 'retry',
@@ -224,7 +224,7 @@ export const retry: GenerateMiddleware<typeof RetryOptionsSchema> =
                   );
                 }
               } else {
-                logger.logStructuredWarn(
+                logger.warn(
                   `Retry attempts exhausted (${maxRetries}). Last error: ${error?.message || String(error)}`,
                   {
                     'genkit.middleware.name': 'retry',

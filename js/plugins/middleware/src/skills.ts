@@ -100,7 +100,7 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
                       });
                     } catch (e: any) {
                       if (e.code !== 'ENOENT') {
-                        logger.logStructuredWarn(
+                        logger.warn(
                           `Failed to read skill file "${skillMdPath}": ${e.message || String(e)}`,
                           {
                             'genkit.middleware.name': 'skills',
@@ -117,7 +117,7 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
               }
             }
             if (skillCache.size > 0) {
-              logger.logStructuredInfo(
+              logger.info(
                 `Loaded ${skillCache.size} skills from disk (${Array.from(skillCache.keys()).join(', ')}).`,
                 {
                   'genkit.middleware.name': 'skills',

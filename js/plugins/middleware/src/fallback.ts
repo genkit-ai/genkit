@@ -117,7 +117,7 @@ export const fallback: GenerateMiddleware<typeof FallbackOptionsSchema> =
             if (isHandled) {
               let lastError: any = e;
               for (const model of models) {
-                logger.logStructuredWarn(
+                logger.warn(
                   `Falling back to model ${model.name} due to error: ${lastError.status} ${lastError.message}`,
                   {
                     'genkit.middleware.name': 'fallback',
@@ -147,7 +147,7 @@ export const fallback: GenerateMiddleware<typeof FallbackOptionsSchema> =
                   ) {
                     continue;
                   }
-                  logger.logStructuredWarn(
+                  logger.warn(
                     `Aborting fallback sequence for unrecoverable error: ${e2.message || String(e2)}`,
                     {
                       'genkit.middleware.name': 'fallback',
@@ -158,7 +158,7 @@ export const fallback: GenerateMiddleware<typeof FallbackOptionsSchema> =
                   throw e2;
                 }
               }
-              logger.logStructuredWarn(
+              logger.warn(
                 `Fallback options exhausted. Last error: ${lastError.message || String(lastError)}`,
                 {
                   'genkit.middleware.name': 'fallback',
@@ -167,7 +167,7 @@ export const fallback: GenerateMiddleware<typeof FallbackOptionsSchema> =
               );
               throw lastError;
             } else {
-              logger.logStructuredWarn(
+              logger.warn(
                 `Skipping fallback for unhandled error:: ${e.message || String(e)}`,
                 {
                   'genkit.middleware.name': 'fallback',

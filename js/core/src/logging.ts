@@ -222,24 +222,12 @@ class Logger {
     return mergedMetadata;
   }
 
-  logStructuredInfo(msg: string, metadata: any, err?: any) {
-    this.info(msg, metadata, err);
-  }
-
   logStructured(msg: string, metadata: any, err?: any) {
     this.info(msg, metadata, err);
   }
 
   logStructuredError(msg: string, metadata: any, err?: any) {
     this.error(msg, metadata, err);
-  }
-
-  logStructuredWarn(msg: string, metadata: any, err?: any) {
-    this.warn(msg, metadata, err);
-  }
-
-  logStructuredDebug(msg: string, metadata: any, err?: any) {
-    this.debug(msg, metadata, err);
   }
 }
 
