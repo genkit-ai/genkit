@@ -72,7 +72,6 @@ class Retry(BaseMiddleware[RetryConfig]):
                     raise
 
                 delay_ms = current_delay_ms
-                retry_after_ms: float | None = None
                 if isinstance(e, GenkitError) and e.response_metadata is not None:
                     retry_after_ms = e.response_metadata.get('retry_after_ms')
                     if retry_after_ms is not None:
@@ -80,8 +79,8 @@ class Retry(BaseMiddleware[RetryConfig]):
 
                 if not self.config.no_jitter:
                     delay_ms += 1000.0 * math.pow(2, attempt) * random.random()
-                if retry_after_ms is None or retry_after_ms <= self.config.max_delay_ms:
-                    delay_ms = min(delay_ms, self.config.max_delay_ms)
+                # The provider delay is a floor within max_delay_ms, never an override of it.
+                delay_ms = min(delay_ms, self.config.max_delay_ms)
 
                 await asyncio.sleep(delay_ms / 1000.0)
                 current_delay_ms = min(current_delay_ms * self.config.backoff_factor, self.config.max_delay_ms)

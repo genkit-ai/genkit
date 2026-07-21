@@ -124,8 +124,8 @@ async def test_retry_non_genkit_error(ctx: GenerateMiddlewareContext) -> None:
 
 @pytest.mark.asyncio
 async def test_retry_after_is_delay_floor(ctx: GenerateMiddlewareContext) -> None:
-    """Provider retry delay overrides a smaller capped local delay."""
-    retry = Retry(max_retries=1, initial_delay_ms=100, max_delay_ms=1000, no_jitter=True)
+    """Provider retry delay overrides a smaller local delay."""
+    retry = Retry(max_retries=1, initial_delay_ms=100, max_delay_ms=10000, no_jitter=True)
 
     call_count = 0
 
@@ -203,7 +203,7 @@ async def test_zero_retry_after_preserves_local_delay(ctx: GenerateMiddlewareCon
 @pytest.mark.asyncio
 async def test_retry_after_floor_is_applied_before_jitter(ctx: GenerateMiddlewareContext) -> None:
     """Apply jitter after the provider floor, matching the JavaScript middleware."""
-    retry = Retry(max_retries=1, initial_delay_ms=100, max_delay_ms=1000)
+    retry = Retry(max_retries=1, initial_delay_ms=100, max_delay_ms=10000)
 
     call_count = 0
 
@@ -227,6 +227,32 @@ async def test_retry_after_floor_is_applied_before_jitter(ctx: GenerateMiddlewar
     assert result is not None
     assert call_count == 2
     sleep.assert_awaited_once_with(5.5)
+
+
+@pytest.mark.asyncio
+async def test_retry_after_is_capped_by_max_delay(ctx: GenerateMiddlewareContext) -> None:
+    """A provider delay beyond the configured ceiling does not extend the wait."""
+    retry = Retry(max_retries=1, initial_delay_ms=100, max_delay_ms=60000, no_jitter=True)
+
+    call_count = 0
+
+    async def next_fn(params, ctx):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise GenkitError(
+                message='Rate limited',
+                status='RESOURCE_EXHAUSTED',
+                response_metadata={'retry_after_ms': 86_400_000},
+            )
+        return ModelResponse(message=None)
+
+    with patch('genkit_middleware._retry.asyncio.sleep', new_callable=AsyncMock) as sleep:
+        result = await retry.wrap_model(_make_params(), ctx, next_fn)
+
+    assert result is not None
+    assert call_count == 2
+    sleep.assert_awaited_once_with(60.0)
 
 
 @pytest.mark.asyncio
