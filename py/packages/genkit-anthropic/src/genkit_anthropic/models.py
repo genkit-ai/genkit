@@ -113,10 +113,7 @@ def _parse_retry_after_ms(value: str) -> float | None:
             return retry_after_ms
 
     try:
-        retry_at = parsedate_to_datetime(value)
-        if retry_at is None:
-            return None
-        retry_at_ms = retry_at.timestamp() * 1000
+        retry_at_ms = parsedate_to_datetime(value).timestamp() * 1000
     except (OSError, OverflowError, TypeError, ValueError):
         return None
     return max(0.0, retry_at_ms - time.time() * 1000)
