@@ -997,8 +997,9 @@ Genkit provides a unified interface across all major AI providers. Use whichever
 | **Google AI** | `googlegenai.GoogleAI` | Gemini 3.5 Flash, Gemini 3.1 Pro, and more |
 | **Vertex AI** | `vertexai.VertexAI` | Gemini 3.5 Flash, Gemini 3.1 Pro via Google Cloud |
 | **Anthropic** | `anthropic.Anthropic` | Claude Opus 4.8, Claude Sonnet 4.6, Claude Haiku 4.5 |
-| **Ollama** | `ollama.Ollama` | Llama 4, Qwen 3, DeepSeek, and other local models |
-| **OpenAI Compatible** | `compat_oai` | GPT-5.5, and any OpenAI-compatible API |
+| **OpenAI** | `openai.OpenAI` | GPT and reasoning models via OpenAI's Responses API |
+| **Ollama** | `ollama.Ollama` | Llama, Mistral, and other open models |
+| **OpenAI Compatible** | `compat_oai` | Any OpenAI-compatible API |
 
 ```go
 // Google AI
@@ -1006,6 +1007,9 @@ g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
 // Anthropic
 g := genkit.Init(ctx, genkit.WithPlugins(&anthropic.Anthropic{}))
+
+// OpenAI
+g := genkit.Init(ctx, genkit.WithPlugins(&openai.OpenAI{}))
 
 // Ollama (local models)
 g := genkit.Init(ctx, genkit.WithPlugins(&ollama.Ollama{
