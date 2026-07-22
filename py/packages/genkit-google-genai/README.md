@@ -7,7 +7,7 @@ This Genkit plugin provides a unified interface for Google AI (Gemini) and Verte
 ```bash
 uv venv
 source .venv/bin/activate
-pip install genkit-plugins-google-genai
+pip install genkit-google-genai
 ```
 
 ## Configuration

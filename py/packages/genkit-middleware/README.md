@@ -37,7 +37,7 @@ These pre-packaged middlewares will be available to play with in the Dev UI by d
 ## Installation
 
 ```bash
-pip install genkit-plugin-middleware
+pip install genkit-middleware
 ```
 
 ## Usage
