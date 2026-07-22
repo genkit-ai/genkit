@@ -6,7 +6,7 @@ dependencies = [
   "genkit",
   "genkit-evaluators",
   "genkit-google-genai",
-  "pydantic>=2.10.5",
+  "pydantic>=2.13.4",
 ]
 
 [build-system]

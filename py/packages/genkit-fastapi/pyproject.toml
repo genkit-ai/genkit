@@ -34,7 +34,7 @@ classifiers = [
   "Typing :: Typed",
   "License :: OSI Approved :: Apache Software License",
 ]
-dependencies = ["genkit", "pydantic>=2.10.5", "fastapi>=0.100.0"]
+dependencies = ["genkit", "pydantic>=2.10.5", "fastapi>=0.139.2"]
 description = "Genkit FastAPI Plugin"
 keywords = [
   "genkit",
