@@ -106,7 +106,9 @@ from google.genai.types import HttpOptions, HttpOptionsDict
 import genkit_google_genai.constants as const
 from genkit import ModelInfo
 from genkit._core._action import ActionRunContext
+from genkit._core._background import define_background_model
 from genkit._core._model import ModelRequest, ModelResponse
+from genkit._core._registry import Registry
 from genkit.embedder import embedder_action_metadata
 from genkit.evaluator import EvalFnResponse, EvalRequest
 from genkit.model import BackgroundAction, model_action_metadata
@@ -533,6 +535,10 @@ class GoogleAI(Plugin):
             Action object if found, None otherwise.
         """
         if action_type == ActionKind.MODEL:
+            prefix = GOOGLEAI_PLUGIN_NAME + '/'
+            clean_name = name.replace(prefix, '') if name.startswith(prefix) else name
+            if is_veo_model(clean_name):
+                return None
             return self._resolve_model(name)
         elif action_type == ActionKind.BACKGROUND_MODEL:
             # For Veo models, return the start action
@@ -567,43 +573,27 @@ class GoogleAI(Plugin):
             BackgroundAction for the Veo model.
         """
         clean_name = name.replace(GOOGLEAI_PLUGIN_NAME + '/', '') if name.startswith(GOOGLEAI_PLUGIN_NAME) else name
-
-        # Create actions manually since we don't have registry access here
-
-        async def _start(request: Any, ctx: Any) -> Any:  # noqa: ANN401
-            veo = VeoModel(clean_name, self._runtime_client())
-            return await veo.start(request, ctx)
-
-        async def _check(op: Any, _ctx: Any) -> Any:  # noqa: ANN401
-            veo = VeoModel(clean_name, self._runtime_client())
-            return await veo.check(op)
-
-        # Prepare metadata matching model_action_metadata structure
-        info = veo_model_info(clean_name).model_dump(by_alias=True)
-        config_schema = VeoConfigSchema
-
-        start_action = Action(
-            kind=ActionKind.BACKGROUND_MODEL,
+        veo = VeoModel(clean_name, self._runtime_client())
+        # Build actions via define_background_model; plugin init registers them on the app registry.
+        bg_action = define_background_model(
+            registry=Registry(),
             name=name,
-            fn=_start,
-            metadata={
-                'model': {**info, 'customOptions': to_json_schema(config_schema)},
-                'type': 'background-model',
-            },
+            start=veo.start,
+            check=veo.check,
+            cancel=None,
+            info=veo_model_info(clean_name),
+            config_schema=VeoConfigSchema,
         )
-
-        check_action = Action(
-            kind=ActionKind.CHECK_OPERATION,
-            name=f'{name}/check',
-            fn=_check,
-            metadata={'type': 'check-operation'},
-        )
-
-        return BackgroundAction(
-            start_action=start_action,
-            check_action=check_action,
-            cancel_action=None,
-        )
+        # define_background_model stores supports with snake_case keys; generate_operation
+        # checks the camelCase wire name when metadata is a dict.
+        model_meta = bg_action.start_action.metadata
+        if model_meta:
+            model_block = model_meta.get('model')
+            if isinstance(model_block, dict):
+                supports = model_block.get('supports')
+                if isinstance(supports, dict) and supports.get('long_running'):
+                    supports['longRunning'] = supports['long_running']
+        return bg_action
 
     def _resolve_model(self, name: str) -> Action:
         """Create an Action object for a Google AI model.
