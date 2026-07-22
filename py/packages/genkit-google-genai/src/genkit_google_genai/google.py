@@ -111,7 +111,7 @@ from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._registry import Registry
 from genkit.embedder import embedder_action_metadata
 from genkit.evaluator import EvalFnResponse, EvalRequest
-from genkit.model import BackgroundAction, model_action_metadata
+from genkit.model import BackgroundAction, ModelRef, model_action_metadata
 from genkit.plugin_api import (
     GENKIT_CLIENT_HEADER,
     Action,
@@ -136,6 +136,7 @@ from genkit_google_genai.models.antigravity import (
 from genkit_google_genai.models.deep_research import (
     DeepResearchConfigSchema,
     create_deep_research_background_action,
+    deep_research_model,
     deep_research_model_info,
     is_deep_research_model_name,
     list_known_deep_research_models,
@@ -521,8 +522,8 @@ class GoogleAI(Plugin):
         # Interactions-backed models (known catalog)
         client_options = self._interactions_client_options()
         plugin_api_key = self._plugin_api_key()
-        for name in list_known_deep_research_models():
-            bg_action = self._resolve_deep_research_model(googleai_name(name), client_options, plugin_api_key)
+        for ref in list_known_deep_research_models():
+            bg_action = self._resolve_deep_research_model(ref, client_options, plugin_api_key)
             actions.append(bg_action.start_action)
             actions.append(bg_action.check_action)
             if bg_action.cancel_action is not None:
@@ -602,7 +603,8 @@ class GoogleAI(Plugin):
         if action_type == ActionKind.MODEL:
             prefix = GOOGLEAI_PLUGIN_NAME + '/'
             clean_name = name.replace(prefix, '') if name.startswith(prefix) else name
-            if is_veo_model(clean_name):
+            # Background-only families: leave MODEL empty so resolve_model falls back.
+            if is_veo_model(clean_name) or is_deep_research_model_name(clean_name):
                 return None
             return self._resolve_model(name)
         elif action_type == ActionKind.BACKGROUND_MODEL:
@@ -613,7 +615,7 @@ class GoogleAI(Plugin):
                 return bg_action.start_action
             if is_deep_research_model_name(clean_name):
                 bg_action = self._resolve_deep_research_model(
-                    name,
+                    deep_research_model(name),
                     self._interactions_client_options(),
                     self._plugin_api_key(),
                 )
@@ -629,7 +631,7 @@ class GoogleAI(Plugin):
                     return bg_action.check_action
                 if is_deep_research_model_name(clean_name):
                     bg_action = self._resolve_deep_research_model(
-                        model_name,
+                        deep_research_model(model_name),
                         self._interactions_client_options(),
                         self._plugin_api_key(),
                     )
@@ -642,7 +644,7 @@ class GoogleAI(Plugin):
                 clean_name = model_name.replace(prefix, '') if model_name.startswith(prefix) else model_name
                 if is_deep_research_model_name(clean_name):
                     bg_action = self._resolve_deep_research_model(
-                        model_name,
+                        deep_research_model(model_name),
                         self._interactions_client_options(),
                         self._plugin_api_key(),
                     )
@@ -664,7 +666,7 @@ class GoogleAI(Plugin):
         clean_name = name.replace(GOOGLEAI_PLUGIN_NAME + '/', '') if name.startswith(GOOGLEAI_PLUGIN_NAME) else name
         veo = VeoModel(clean_name, self._runtime_client())
         # Build actions via define_background_model; plugin init registers them on the app registry.
-        bg_action = define_background_model(
+        return define_background_model(
             registry=Registry(),
             name=name,
             start=veo.start,
@@ -673,26 +675,16 @@ class GoogleAI(Plugin):
             info=veo_model_info(clean_name),
             config_schema=VeoConfigSchema,
         )
-        # define_background_model stores supports with snake_case keys; generate_operation
-        # checks the camelCase wire name when metadata is a dict.
-        model_meta = bg_action.start_action.metadata
-        if model_meta:
-            model_block = model_meta.get('model')
-            if isinstance(model_block, dict):
-                supports = model_block.get('supports')
-                if isinstance(supports, dict) and supports.get('long_running'):
-                    supports['longRunning'] = supports['long_running']
-        return bg_action
 
     def _resolve_deep_research_model(
         self,
-        name: str,
+        ref: ModelRef,
         client_options: ClientOptions,
         plugin_api_key: str | None,
     ) -> BackgroundAction:
-        """Create a BackgroundAction for a Deep Research model."""
+        """Create a BackgroundAction for a Deep Research ModelRef (Interactions)."""
         return create_deep_research_background_action(
-            name,
+            ref,
             plugin_api_key=plugin_api_key,
             client_options=client_options,
         )
@@ -808,11 +800,11 @@ class GoogleAI(Plugin):
                 )
             )
 
-        for name in list_known_deep_research_models():
+        for ref in list_known_deep_research_models():
             actions_list.append(
                 model_action_metadata(
-                    name=googleai_name(name),
-                    info=deep_research_model_info(name).model_dump(by_alias=True),
+                    name=ref.name,
+                    info=deep_research_model_info(ref.name).model_dump(by_alias=True),
                     config_schema=DeepResearchConfigSchema,
                 )
             )

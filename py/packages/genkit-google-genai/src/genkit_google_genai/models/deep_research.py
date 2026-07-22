@@ -23,8 +23,10 @@ from typing import Any, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field
 
 from genkit import ModelInfo, ModelRequest, Supports
-from genkit.model import BackgroundAction, Operation
-from genkit.plugin_api import Action, ActionKind, ActionRunContext, model_action_metadata, to_json_schema
+from genkit._core._background import define_background_model
+from genkit._core._registry import Registry
+from genkit.model import BackgroundAction, ModelRef, Operation, model_ref
+from genkit.plugin_api import ActionRunContext
 from genkit_google_genai._interactions.client import InteractionsClient
 from genkit_google_genai._interactions.converters import (
     clean_schema,
@@ -75,12 +77,6 @@ ADVANCED_DEEP_RESEARCH_INFO = ModelInfo(
     ),
 )
 
-KNOWN_DEEP_RESEARCH_MODELS: dict[str, ModelInfo] = {
-    'deep-research-pro-preview-12-2025': GENERIC_DEEP_RESEARCH_INFO,
-    'deep-research-preview-04-2026': ADVANCED_DEEP_RESEARCH_INFO,
-    'deep-research-max-preview-04-2026': ADVANCED_DEEP_RESEARCH_INFO,
-}
-
 
 class McpServerConfig(BaseModel):
     """MCP server configuration for Deep Research."""
@@ -122,28 +118,63 @@ class DeepResearchConfigSchema(BaseModel):
     mcp_servers: list[McpServerConfig | dict[str, Any]] | None = Field(default=None, alias='mcpServers')
 
 
+def _common_ref(name: str, info: ModelInfo | None = None) -> ModelRef:
+    """Build a googleai/ ModelRef for a Deep Research version."""
+    resolved = info or GENERIC_DEEP_RESEARCH_INFO
+    # Prefer a version-specific label when callers pass ADVANCED/GENERIC without one.
+    if resolved.label is None or resolved.label == GENERIC_DEEP_RESEARCH_INFO.label:
+        resolved = ModelInfo(label=f'Google AI - {name}', supports=resolved.supports)
+    return model_ref(
+        name=name,
+        namespace='googleai',
+        info=resolved,
+    ).model_copy(update={'config_schema': DeepResearchConfigSchema})
+
+
+KNOWN_DEEP_RESEARCH_MODELS: dict[str, ModelRef] = {
+    'deep-research-pro-preview-12-2025': _common_ref('deep-research-pro-preview-12-2025'),
+    'deep-research-preview-04-2026': _common_ref(
+        'deep-research-preview-04-2026',
+        ADVANCED_DEEP_RESEARCH_INFO,
+    ),
+    'deep-research-max-preview-04-2026': _common_ref(
+        'deep-research-max-preview-04-2026',
+        ADVANCED_DEEP_RESEARCH_INFO,
+    ),
+}
+
+
 def is_deep_research_model_name(name: str | None) -> bool:
     """Return True when the model name belongs to the Deep Research family."""
     return bool(name and name.startswith('deep-research-'))
 
 
+def deep_research_model(version: str) -> ModelRef:
+    """Return a ModelRef for a Deep Research version (namespaced or bare)."""
+    clean = extract_version(version)
+    known = KNOWN_DEEP_RESEARCH_MODELS.get(clean)
+    if known is not None:
+        return known
+    return _common_ref(clean)
+
+
 def deep_research_model_info(version: str) -> ModelInfo:
     """Return capability metadata for a Deep Research model."""
-    known = KNOWN_DEEP_RESEARCH_MODELS.get(version)
-    if known is not None:
-        return ModelInfo(
-            label=f'Google AI - {version}',
-            supports=known.supports,
-        )
+    ref = deep_research_model(version)
+    info = ref.info
+    if isinstance(info, ModelInfo):
+        return info
+    if isinstance(info, dict):
+        return ModelInfo.model_validate(info)
     return ModelInfo(
-        label=f'Google AI - {version}',
+        label=f'Google AI - {extract_version(version)}',
         supports=GENERIC_DEEP_RESEARCH_INFO.supports,
     )
 
 
-def list_known_deep_research_models() -> list[str]:
-    """Return statically known Deep Research model names."""
-    return list(KNOWN_DEEP_RESEARCH_MODELS.keys())
+def list_known_deep_research_models() -> list[ModelRef]:
+    """Return statically known Deep Research ModelRefs."""
+    return list(KNOWN_DEEP_RESEARCH_MODELS.values())
 
 
 def _build_tools(request: ModelRequest, config: dict[str, Any]) -> list[InteractionTool]:
@@ -334,51 +365,26 @@ class DeepResearchModel:
 
 
 def create_deep_research_background_action(
-    name: str,
+    ref: ModelRef,
     *,
     plugin_api_key: str | None,
     client_options: ClientOptions,
 ) -> BackgroundAction:
-    """Build start/check/cancel actions for a Deep Research model."""
-    clean_name = extract_version(name)
-    model = DeepResearchModel(clean_name, plugin_api_key=plugin_api_key, client_options=client_options)
-    info = deep_research_model_info(clean_name)
+    """Wire Deep Research Interactions start/check/cancel through define_background_model."""
+    version = extract_version(ref.name)
+    model = DeepResearchModel(version, plugin_api_key=plugin_api_key, client_options=client_options)
+    info = deep_research_model_info(version)
+    label = info.label or ref.name
 
-    async def _start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
-        return await model.start(request, ctx)
-
-    async def _check(operation: Operation, _ctx: ActionRunContext) -> Operation:
-        return await model.check(operation)
-
-    async def _cancel(operation: Operation, _ctx: ActionRunContext) -> Operation:
-        return await model.cancel(operation)
-
-    metadata = model_action_metadata(
-        name=name,
-        info=info.model_dump(by_alias=True),
+    # Throwaway registry: plugin init re-registers the returned actions on the app registry.
+    # define_background_model stamps Operation.action so check_operation/cancel_operation work.
+    return define_background_model(
+        registry=Registry(),
+        name=ref.name,
+        start=model.start,
+        check=model.check,
+        cancel=model.cancel,
+        label=label,
+        info=info,
         config_schema=DeepResearchConfigSchema,
-    ).metadata
-
-    start_action = Action(
-        kind=ActionKind.BACKGROUND_MODEL,
-        name=name,
-        fn=_start,
-        metadata={**metadata, 'type': 'background-model'},
-    )
-    check_action = Action(
-        kind=ActionKind.CHECK_OPERATION,
-        name=f'{name}/check',
-        fn=_check,
-        metadata={'type': 'check-operation', 'outputSchema': to_json_schema(Operation)},
-    )
-    cancel_action = Action(
-        kind=ActionKind.CANCEL_OPERATION,
-        name=f'{name}/cancel',
-        fn=_cancel,
-        metadata={'type': 'cancel-operation', 'outputSchema': to_json_schema(Operation)},
-    )
-    return BackgroundAction(
-        start_action=start_action,
-        check_action=check_action,
-        cancel_action=cancel_action,
     )

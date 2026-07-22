@@ -25,11 +25,16 @@ import httpx
 import pytest
 from genkit_google_genai.google import GoogleAI, googleai_name
 from genkit_google_genai.models.antigravity import AntigravityModel
-from genkit_google_genai.models.deep_research import DeepResearchModel
+from genkit_google_genai.models.deep_research import (
+    DeepResearchModel,
+    create_deep_research_background_action,
+    deep_research_model,
+)
 from genkit_google_genai.models.googleai_lyria import GoogleAILyriaModel
 from genkit_google_genai.models.interactions_utils import downgrade_system_messages
 
 from genkit import ActionKind, Message, ModelRequest, Part, Role, TextPart
+from genkit.model import Operation
 
 
 def test_downgrade_system_messages_maps_system_to_user() -> None:
@@ -208,6 +213,59 @@ async def test_googleai_lyria_defaults_audio_and_text_modalities() -> None:
     assert body['model'] == 'lyria-3-clip-preview'
     assert body['response_modalities'] == ['audio', 'text']
     assert response.message is not None
+
+
+def test_deep_research_model_ref_is_namespaced() -> None:
+    ref = deep_research_model('deep-research-preview-04-2026')
+    assert ref.name == 'googleai/deep-research-preview-04-2026'
+    assert ref.config_schema is not None
+
+
+@pytest.mark.asyncio
+async def test_deep_research_define_background_model_sets_action() -> None:
+    """define_background_model must stamp Operation.action for check/cancel."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={'id': 'dr-action-1', 'status': 'in_progress'})
+
+    transport = httpx.MockTransport(handler)
+    ref = deep_research_model('deep-research-preview-04-2026')
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        bg = create_deep_research_background_action(
+            ref,
+            plugin_api_key='plugin-key',
+            client_options={},
+        )
+        with patch(
+            'genkit_google_genai.models.deep_research.InteractionsClient',
+            wraps=lambda **kwargs: __import__(
+                'genkit_google_genai._interactions.client', fromlist=['InteractionsClient']
+            ).InteractionsClient(http_client=http_client, **kwargs),
+        ):
+            operation = await bg.start(
+                ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='q'))])]),
+            )
+
+    assert isinstance(operation, Operation)
+    assert operation.action == f'/background-model/{ref.name}'
+    assert operation.id == 'dr-action-1'
+    supports = (bg.start_action.metadata or {}).get('model', {}).get('supports', {})
+    assert supports.get('longRunning') is True
+
+
+@pytest.mark.asyncio
+async def test_googleai_resolve_model_skips_deep_research_foreground() -> None:
+    mock_client = MagicMock()
+    mock_client.models.list.return_value = iter([])
+
+    with patch('genkit_google_genai.google.genai.client.Client', return_value=mock_client):
+        plugin = GoogleAI(api_key='test-key')
+
+    dr_name = googleai_name('deep-research-preview-04-2026')
+    assert await plugin.resolve(ActionKind.MODEL, dr_name) is None
+    bg = await plugin.resolve(ActionKind.BACKGROUND_MODEL, dr_name)
+    assert bg is not None
+    assert bg.kind == ActionKind.BACKGROUND_MODEL
 
 
 @pytest.mark.asyncio
