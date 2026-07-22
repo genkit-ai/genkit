@@ -190,22 +190,9 @@ func generate(
 		return nil, err
 	}
 
-	var contents []*genai.Content
-	for _, m := range input.Messages {
-		// system parts are handled separately
-		if m.Role == ai.RoleSystem {
-			continue
-		}
-
-		parts, err := toGeminiParts(m.Content)
-		if err != nil {
-			return nil, err
-		}
-
-		contents = append(contents, &genai.Content{
-			Parts: parts,
-			Role:  string(m.Role),
-		})
+	contents, err := toGeminiContents(input)
+	if err != nil {
+		return nil, err
 	}
 	if len(contents) == 0 {
 		return nil, fmt.Errorf("at least one message is required in generate request")
@@ -290,6 +277,44 @@ func generate(
 	}
 
 	return r, nil
+}
+
+// toGeminiContents converts the non-system messages of an [*ai.ModelRequest]
+// to a slice of [*genai.Content]. System messages are handled separately via
+// the request's system instruction.
+func toGeminiContents(input *ai.ModelRequest) ([]*genai.Content, error) {
+	var contents []*genai.Content
+	for _, m := range input.Messages {
+		// system parts are handled separately
+		if m.Role == ai.RoleSystem {
+			continue
+		}
+
+		parts, err := toGeminiParts(m.Content)
+		if err != nil {
+			return nil, err
+		}
+
+		contents = append(contents, &genai.Content{
+			Parts: parts,
+			Role:  toGeminiRole(m.Role),
+		})
+	}
+	return contents, nil
+}
+
+// toGeminiRole maps a Genkit [ai.Role] to a Gemini content role. The Gemini
+// Content API only accepts "user" or "model"; tool responses are sent under
+// the "user" role.
+func toGeminiRole(role ai.Role) string {
+	switch role {
+	case ai.RoleModel:
+		return string(ai.RoleModel)
+	case ai.RoleTool:
+		return string(ai.RoleUser)
+	default:
+		return string(ai.RoleUser)
+	}
 }
 
 // toGeminiRequest translates an [*ai.ModelRequest] to
