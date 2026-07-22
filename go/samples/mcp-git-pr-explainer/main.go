@@ -22,6 +22,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -40,7 +41,10 @@ func main() {
 	flag.Parse()
 
 	ctx := context.Background()
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	ghToken := os.Getenv("GITHUB_PERSONAL_ACCESS_TOKEN")
 	if ghToken == "" {

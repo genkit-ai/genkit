@@ -45,7 +45,7 @@ func TestGenkit(t *testing.T) {
 
 	ctx := context.Background()
 
-	g := genkit.Init(context.Background())
+	g := genkit.MustInit(context.Background())
 
 	// Make two very similar vectors and one different vector.
 	// Arrange for a fake embedder to return those vectors

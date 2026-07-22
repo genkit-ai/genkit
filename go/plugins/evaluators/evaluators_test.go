@@ -36,7 +36,7 @@ func TestEvaluators(t *testing.T) {
 			MetricType: evaluators.EvaluatorJsonata,
 		},
 	}
-	g := genkit.Init(ctx,
+	g := genkit.MustInit(ctx,
 		genkit.WithPlugins(&evaluators.GenkitEval{Metrics: metrics}))
 
 	t.Run("deep equal", func(t *testing.T) {

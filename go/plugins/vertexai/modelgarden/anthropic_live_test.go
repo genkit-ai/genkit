@@ -40,7 +40,7 @@ func TestAnthropicLive(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	g := genkit.Init(ctx, genkit.WithPlugins(&modelgarden.Anthropic{}))
+	g := genkit.MustInit(ctx, genkit.WithPlugins(&modelgarden.Anthropic{}))
 
 	t.Run("invalid model", func(t *testing.T) {
 		m := modelgarden.AnthropicModel(g, "claude-not-valid-v2")

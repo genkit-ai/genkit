@@ -40,7 +40,7 @@ func TestGenkit(t *testing.T) {
 
 	ctx := context.Background()
 
-	g := genkit.Init(context.Background(), genkit.WithPlugins(&Pinecone{APIKey: *testAPIKey}))
+	g := genkit.MustInit(context.Background(), genkit.WithPlugins(&Pinecone{APIKey: *testAPIKey}))
 
 	// Get information about the index.
 

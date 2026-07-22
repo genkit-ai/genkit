@@ -958,7 +958,10 @@ func TestLoadPrompt_FileNotFound(t *testing.T) {
 
 	// Call loadPrompt with a non-existent file in a valid temp directory
 	tempDir := t.TempDir()
-	LoadPromptFromFS(reg, os.DirFS(tempDir), ".", "missing.prompt", "test-namespace")
+	_, err := LoadPromptFromFS(reg, os.DirFS(tempDir), ".", "missing.prompt", "test-namespace")
+	if err == nil {
+		t.Fatalf("Expected an error for a missing prompt file, got nil")
+	}
 
 	// Verify that the prompt was not registered
 	prompt := LookupPrompt(reg, "missing")
@@ -982,10 +985,13 @@ func TestLoadPrompt_InvalidPromptFile(t *testing.T) {
 	// Initialize a mock registry
 	reg := registry.New()
 
-	// Call loadPrompt
-	LoadPromptFromFS(reg, os.DirFS(tempDir), ".", "invalid.prompt", "test-namespace")
+	// Call loadPrompt. Note: content without frontmatter parses as a plain
+	// template, so this does not error; it registers under the namespace.
+	if _, err = LoadPromptFromFS(reg, os.DirFS(tempDir), ".", "invalid.prompt", "test-namespace"); err != nil {
+		t.Fatalf("LoadPromptFromFS returned an unexpected error: %v", err)
+	}
 
-	// Verify that the prompt was not registered
+	// Verify that the prompt was not registered under the un-namespaced key.
 	prompt := LookupPrompt(reg, "invalid")
 	if prompt != nil {
 		t.Fatalf("Prompt should not have been registered for an invalid file")
@@ -1257,13 +1263,9 @@ Hello from variant!
 func TestLoadPromptFS_NilFS(t *testing.T) {
 	reg := registry.New()
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("Expected panic for nil filesystem")
-		}
-	}()
-
-	LoadPromptDirFromFS(reg, nil, "prompts", "test-namespace")
+	if err := LoadPromptDirFromFS(reg, nil, "prompts", "test-namespace"); err == nil {
+		t.Errorf("Expected an error for nil filesystem, got nil")
+	}
 }
 
 func TestLoadPromptFS_InvalidRoot(t *testing.T) {
@@ -1273,13 +1275,9 @@ func TestLoadPromptFS_InvalidRoot(t *testing.T) {
 
 	reg := registry.New()
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("Expected panic for invalid root directory")
-		}
-	}()
-
-	LoadPromptDirFromFS(reg, fsys, "nonexistent", "test-namespace")
+	if err := LoadPromptDirFromFS(reg, fsys, "nonexistent", "test-namespace"); err == nil {
+		t.Errorf("Expected an error for invalid root directory, got nil")
+	}
 }
 
 func TestLoadPromptFromFS(t *testing.T) {
@@ -1297,9 +1295,9 @@ Test content
 
 	reg := registry.New()
 
-	prompt := LoadPromptFromFS(reg, fsys, "prompts", "single.prompt", "ns")
-	if prompt == nil {
-		t.Fatalf("LoadPromptFromFS failed to load prompt")
+	_, err := LoadPromptFromFS(reg, fsys, "prompts", "single.prompt", "ns")
+	if err != nil {
+		t.Fatalf("LoadPromptFromFS failed to load prompt: %v", err)
 	}
 
 	lookedUp := LookupPrompt(reg, "ns/single")
@@ -1526,7 +1524,10 @@ Hello!
 	ConfigureFormats(reg)
 	definePromptModel(reg)
 
-	prompt := LoadPromptFromFS(reg, os.DirFS(tempDir), ".", "example.prompt", "multi-namespace")
+	prompt, err := LoadPromptFromFS(reg, os.DirFS(tempDir), ".", "example.prompt", "multi-namespace")
+	if err != nil {
+		t.Fatalf("LoadPromptFromFS failed to load prompt: %v", err)
+	}
 
 	result, err := prompt.Execute(context.Background())
 	if err != nil {
@@ -1587,9 +1588,9 @@ Generate a recipe for {{food}}.
 	})
 
 	// this should succeed and create a placeholder schema in the registry
-	prompt := LoadPrompt(reg, tempDir, "deferred.prompt", "test")
-	if prompt == nil {
-		t.Fatal("Failed to load prompt with undefined schema")
+	prompt, err := LoadPrompt(reg, tempDir, "deferred.prompt", "test")
+	if err != nil {
+		t.Fatalf("Failed to load prompt with undefined schema: %v", err)
 	}
 
 	// verify the prompt is loaded with a schema reference
@@ -1695,12 +1696,12 @@ Generate a recipe.
 		}, nil
 	})
 
-	prompt := LoadPrompt(reg, tempDir, "deferred_missing.prompt", "test")
-	if prompt == nil {
-		t.Fatal("Failed to load prompt")
+	prompt, err := LoadPrompt(reg, tempDir, "deferred_missing.prompt", "test")
+	if err != nil {
+		t.Fatalf("Failed to load prompt: %v", err)
 	}
 
-	_, err := prompt.Execute(context.Background())
+	_, err = prompt.Execute(context.Background())
 	if err == nil {
 		t.Fatal("Expected error when executing prompt with missing schema")
 	}
@@ -3223,7 +3224,10 @@ Hello {{name}}, welcome to {{place}}!
 			t.Fatalf("Failed to create mock prompt file: %v", err)
 		}
 
-		prompt := LoadPrompt(registry.New(), tempDir, "greeting.prompt", "template-var-test")
+		prompt, err := LoadPrompt(registry.New(), tempDir, "greeting.prompt", "template-var-test")
+		if err != nil {
+			t.Fatalf("Failed to load prompt: %v", err)
+		}
 
 		// Test with first set of input values
 		actionOpts1, err := prompt.Render(context.Background(), map[string]any{
@@ -3295,7 +3299,10 @@ Hello {{name}}, please help me with {{task}}.
 			t.Fatalf("Failed to create mock prompt file: %v", err)
 		}
 
-		prompt := LoadPrompt(registry.New(), tempDir, "handlebars_role.prompt", "handlebars-role-test")
+		prompt, err := LoadPrompt(registry.New(), tempDir, "handlebars_role.prompt", "handlebars-role-test")
+		if err != nil {
+			t.Fatalf("Failed to load prompt: %v", err)
+		}
 
 		// Test with first set of input values
 		actionOpts1, err := prompt.Render(context.Background(), map[string]any{

@@ -34,7 +34,10 @@ func main() {
 	ctx := context.Background()
 
 	// Initialize with Vertex AI plugin. Ensure GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION are set.
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	genkit.DefineFlow(g, "text-to-video", func(ctx context.Context, input string) (string, error) {
 		if input == "" {

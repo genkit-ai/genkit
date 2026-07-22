@@ -134,7 +134,7 @@ func WithDefaultModel(model string) GenkitOption {
 // `//go:embed prompts/*`, set the directory to "prompts" to match.
 //
 // Invalid prompt files will result in logged errors during initialization,
-// while valid files that define invalid prompts will cause [Init] to panic.
+// while valid files that define invalid prompts will cause [Init] to return an error.
 func WithPromptDir(dir string) GenkitOption {
 	return &genkitOptions{PromptDir: dir}
 }
@@ -155,14 +155,17 @@ func WithPromptDir(dir string) GenkitOption {
 //	var promptsFS embed.FS
 //
 //	func main() {
-//		g := genkit.Init(ctx,
+//		g, err := genkit.Init(ctx,
 //			genkit.WithPromptFS(promptsFS),
 //			genkit.WithPromptDir("prompts"),
 //		)
+//		if err != nil {
+//			log.Fatal(err)
+//		}
 //	}
 //
 // Invalid prompt files will result in logged errors during initialization,
-// while valid files that define invalid prompts will cause [Init] to panic.
+// while valid files that define invalid prompts will cause [Init] to return an error.
 func WithPromptFS(fsys fs.FS) GenkitOption {
 	return &genkitOptions{PromptFS: fsys}
 }
@@ -211,11 +214,14 @@ func WithExperimental() GenkitOption {
 //		ctx := context.Background()
 //
 //		// Assumes a prompt file at ./prompts/jokePrompt.prompt
-//		g := genkit.Init(ctx,
+//		g, err := genkit.Init(ctx,
 //			genkit.WithPlugins(&googlegenai.GoogleAI{}),
 //			genkit.WithDefaultModel("googleai/gemini-3-flash-preview"),
 //			genkit.WithPromptDir("./prompts"),
 //		)
+//		if err != nil {
+//			log.Fatalf("genkit.Init failed: %v", err)
+//		}
 //
 //		// Generate text using the default model
 //		funFact, err := genkit.GenerateText(ctx, g, ai.WithPrompt("Tell me a fake fun fact!"))
@@ -236,18 +242,33 @@ func WithExperimental() GenkitOption {
 //		}
 //		log.Println("Generated joke:", resp.Text())
 //	}
-func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
+func Init(ctx context.Context, opts ...GenkitOption) (g *Genkit, err error) {
+	// Registration (plugins, actions, values, partials) and third-party
+	// plugin.Init implementations signal failure by panicking, and the Plugin
+	// interface has no error return to propagate through. Recover here so that
+	// no panic escapes Init: every initialization failure is returned as an error.
+	defer func() {
+		if rec := recover(); rec != nil {
+			g = nil
+			if e, ok := rec.(error); ok {
+				err = fmt.Errorf("genkit.Init: %w", e)
+			} else {
+				err = fmt.Errorf("genkit.Init: %v", rec)
+			}
+		}
+	}()
+
 	ctx, _ = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 
 	gOpts := &genkitOptions{}
 	for _, opt := range opts {
 		if err := opt.apply(gOpts); err != nil {
-			panic(fmt.Errorf("genkit.Init: error applying options: %w", err))
+			return nil, fmt.Errorf("genkit.Init: error applying options: %w", err)
 		}
 	}
 
 	r := registry.New()
-	g := &Genkit{reg: r}
+	g = &Genkit{reg: r}
 
 	for _, plugin := range gOpts.Plugins {
 		actions := plugin.Init(ctx)
@@ -259,7 +280,7 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 		if mp, ok := plugin.(ai.MiddlewarePlugin); ok {
 			descs, err := mp.Middlewares(ctx)
 			if err != nil {
-				panic(fmt.Errorf("genkit.Init: plugin %q Middlewares failed: %w", plugin.Name(), err))
+				return nil, fmt.Errorf("genkit.Init: plugin %q Middlewares failed: %w", plugin.Name(), err)
 			}
 			for _, d := range descs {
 				d.Register(r)
@@ -274,9 +295,13 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 		if dir == "" {
 			dir = "prompts"
 		}
-		ai.LoadPromptDirFromFS(r, gOpts.PromptFS, dir, "")
+		if err := ai.LoadPromptDirFromFS(r, gOpts.PromptFS, dir, ""); err != nil {
+			return nil, fmt.Errorf("genkit.Init: %w", err)
+		}
 	} else {
-		loadPromptDirOS(r, gOpts.PromptDir, "")
+		if err := loadPromptDirOS(r, gOpts.PromptDir, ""); err != nil {
+			return nil, fmt.Errorf("genkit.Init: %w", err)
+		}
 	}
 
 	r.RegisterValue(api.DefaultModelKey, gOpts.DefaultModel)
@@ -304,14 +329,29 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 
 		select {
 		case err := <-errCh:
-			panic(fmt.Errorf("genkit.Init: reflection server startup failed: %w", err))
+			return nil, fmt.Errorf("genkit.Init: reflection server startup failed: %w", err)
 		case <-serverStartCh:
 			slog.Debug("reflection server started successfully")
 		case <-ctx.Done():
-			panic(ctx.Err())
+			return nil, ctx.Err()
 		}
 	}
 
+	return g, nil
+}
+
+// MustInit is like [Init] but panics if initialization fails. It is a
+// convenience wrapper for tests, examples, and programs that treat a failed
+// Genkit initialization as fatal.
+//
+// Example:
+//
+//	g := genkit.MustInit(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+func MustInit(ctx context.Context, opts ...GenkitOption) *Genkit {
+	g, err := Init(ctx, opts...)
+	if err != nil {
+		panic(err)
+	}
 	return g
 }
 
@@ -1442,7 +1482,7 @@ func Evaluate(ctx context.Context, g *Genkit, opts ...ai.EvaluatorOption) (*ai.E
 // executable prompts but can be included in other prompts.
 //
 // If `dir` is empty, it defaults to "./prompts". If the directory doesn't exist,
-// it logs a debug message (if using the default) or panics (if specified).
+// it logs a debug message (if using the default) or returns an error (if specified).
 // The `namespace` acts as a prefix to the prompt name (e.g., namespace "myApp" and
 // file "greeting.prompt" results in prompt name "myApp/greeting"). Use an empty
 // string for no namespace.
@@ -1450,12 +1490,14 @@ func Evaluate(ctx context.Context, g *Genkit, opts ...ai.EvaluatorOption) (*ai.E
 // This function is often called implicitly by [Init] using the directory specified
 // by [WithPromptDir], but can be called explicitly to load prompts from other
 // locations or with different namespaces.
-func LoadPromptDir(g *Genkit, dir, namespace string) {
-	loadPromptDirOS(g.reg, dir, namespace)
+func LoadPromptDir(g *Genkit, dir, namespace string) error {
+	return loadPromptDirOS(g.reg, dir, namespace)
 }
 
 // loadPromptDirOS loads prompts from an OS directory by converting to os.DirFS.
-func loadPromptDirOS(r api.Registry, dir, namespace string) {
+// It returns an error if an explicitly specified directory cannot be resolved.
+// A missing default directory is not an error; it is skipped.
+func loadPromptDirOS(r api.Registry, dir, namespace string) error {
 	useDefaultDir := false
 	if dir == "" {
 		dir = "./prompts"
@@ -1465,21 +1507,21 @@ func loadPromptDirOS(r api.Registry, dir, namespace string) {
 	absPath, err := filepath.Abs(dir)
 	if err != nil {
 		if !useDefaultDir {
-			panic(fmt.Errorf("failed to resolve prompt directory %q: %w", dir, err))
+			return fmt.Errorf("failed to resolve prompt directory %q: %w", dir, err)
 		}
 		slog.Debug("default prompt directory not found, skipping loading .prompt files", "dir", dir)
-		return
+		return nil
 	}
 
 	if _, err := os.Stat(absPath); os.IsNotExist(err) {
 		if !useDefaultDir {
-			panic(fmt.Errorf("failed to resolve prompt directory %q: %w", dir, err))
+			return fmt.Errorf("failed to resolve prompt directory %q: %w", dir, err)
 		}
 		slog.Debug("Default prompt directory not found, skipping loading .prompt files", "dir", dir)
-		return
+		return nil
 	}
 
-	ai.LoadPromptDirFromFS(r, os.DirFS(absPath), ".", namespace)
+	return ai.LoadPromptDirFromFS(r, os.DirFS(absPath), ".", namespace)
 }
 
 // LoadPromptDirFromFS loads all `.prompt` files from the specified embedded filesystem `fsys`
@@ -1506,11 +1548,16 @@ func loadPromptDirOS(r api.Registry, dir, namespace string) {
 //	var promptsFS embed.FS
 //
 //	func main() {
-//		g := genkit.Init(ctx)
-//		genkit.LoadPromptDirFromFS(g, promptsFS, "prompts", "myNamespace")
+//		g, err := genkit.Init(ctx)
+//		if err != nil {
+//			log.Fatal(err)
+//		}
+//		if err := genkit.LoadPromptDirFromFS(g, promptsFS, "prompts", "myNamespace"); err != nil {
+//			log.Fatal(err)
+//		}
 //	}
-func LoadPromptDirFromFS(g *Genkit, fsys fs.FS, dir, namespace string) {
-	ai.LoadPromptDirFromFS(g.reg, fsys, dir, namespace)
+func LoadPromptDirFromFS(g *Genkit, fsys fs.FS, dir, namespace string) error {
+	return ai.LoadPromptDirFromFS(g.reg, fsys, dir, namespace)
 }
 
 // LoadPrompt loads a single `.prompt` file specified by `path` into the registry,
@@ -1527,15 +1574,15 @@ func LoadPromptDirFromFS(g *Genkit, fsys fs.FS, dir, namespace string) {
 // Example:
 //
 //	// Load a specific prompt file with a namespace
-//	customPrompt := genkit.LoadPrompt(g, "./prompts/analyzer.prompt", "analysis")
-//	if customPrompt == nil {
-//		log.Fatal("Custom prompt not found or failed to parse.")
+//	customPrompt, err := genkit.LoadPrompt(g, "./prompts/analyzer.prompt", "analysis")
+//	if err != nil {
+//		log.Fatalf("Custom prompt not found or failed to parse: %v", err)
 //	}
 //
 //	// Execute the loaded prompt
 //	resp, err := customPrompt.Execute(ctx, ai.WithInput(map[string]any{"text": "some data"}))
 //	// ... handle response and error ...
-func LoadPrompt(g *Genkit, path, namespace string) ai.Prompt {
+func LoadPrompt(g *Genkit, path, namespace string) (ai.Prompt, error) {
 	dir, filename := filepath.Split(path)
 	if dir == "" {
 		dir = "."

@@ -81,7 +81,10 @@ func main() {
 	dataURI := fmt.Sprintf("data:%s;base64,%s", contentType, base64Image)
 
 	// Create a new Genkit instance
-	g := genkit.Init(context.Background())
+	g, err := genkit.Init(context.Background())
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Initialize the Ollama plugin
 	ollamaPlugin := &ollama.Ollama{

@@ -34,10 +34,13 @@ func main() {
 		"name":     "John Doe",
 	})
 
-	g := genkit.Init(ctx,
+	g, err := genkit.Init(ctx,
 		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 	)
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	genkit.DefinePartial(g, "header", "Welcome {{@name}}!")
 	genkit.DefineHelper(g, "uppercase", func(s string) string {

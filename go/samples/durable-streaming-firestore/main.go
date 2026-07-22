@@ -57,7 +57,10 @@ import (
 func main() {
 	ctx := context.Background()
 
-	g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	type CountdownChunk struct {
 		Count     int    `json:"count"`

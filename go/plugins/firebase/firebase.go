@@ -35,7 +35,7 @@ const provider = "firebase"
 const projectIdEnv = "FIREBASE_PROJECT_ID"
 
 const pluginInstruction = "Pass the Firebase plugin to genkit.Init():\n" +
-	"  g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: \"your-project\"}))"
+	"  g, err := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: \"your-project\"}))"
 
 var errPluginNotInitialized = errors.New("firebase: plugin not initialized. " + pluginInstruction)
 var errPluginNotFound = errors.New("firebase: plugin not found. " + pluginInstruction)
@@ -46,11 +46,11 @@ var errCredentials = "Ensure you have proper credentials. For local development,
 //
 // Usage:
 //
-//	g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: "my-project"}))
+//	g, err := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: "my-project"}))
 //
 // Or with an existing Firebase app:
 //
-//	g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{App: myFirebaseApp}))
+//	g, err := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{App: myFirebaseApp}))
 type Firebase struct {
 	// ProjectId is the Firebase/GCP project ID. If set, a Firebase app is created automatically.
 	// Can also be set via the FIREBASE_PROJECT_ID environment variable.

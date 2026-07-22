@@ -29,9 +29,12 @@ For comprehensive documentation, tutorials, and examples, visit https://genkit.d
 Initialize Genkit with a plugin to connect to an AI provider:
 
 	ctx := context.Background()
-	g := genkit.Init(ctx,
+	g, err := genkit.Init(ctx,
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 	)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 Generate text with a simple prompt:
 
@@ -57,10 +60,13 @@ referenced by name and can include provider-specific configuration:
 
 You can set a default model during initialization:
 
-	g := genkit.Init(ctx,
+	g, err := genkit.Init(ctx,
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
 	)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 # Flows
 
@@ -156,10 +162,13 @@ For type-safe prompts with structured input and output, use [DefineDataPrompt]:
 
 Load prompts from .prompt files by specifying a prompt directory:
 
-	g := genkit.Init(ctx,
+	g, err := genkit.Init(ctx,
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 		genkit.WithPromptDir("./prompts"),
 	)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Look up a loaded prompt
 	jokePrompt := genkit.LookupPrompt(g, "joke")
@@ -302,12 +311,15 @@ retrievers, and other capabilities. Common plugins include:
 
 Initialize plugins during [Init]:
 
-	g := genkit.Init(ctx,
+	g, err := genkit.Init(ctx,
 		genkit.WithPlugins(
 			&googlegenai.GoogleAI{},
 			&vertexai.VertexAI{ProjectID: "my-project"},
 		),
 	)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 # Messages and Parts
 

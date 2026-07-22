@@ -63,7 +63,7 @@ type agentHTTPResult struct {
 // caller keeps the last-good state), while init-tier failures (a rejected
 // session source) are hard HTTP errors.
 func TestHandlerAgent(t *testing.T) {
-	g := genkit.Init(context.Background(), genkit.WithExperimental())
+	g := genkit.MustInit(context.Background(), genkit.WithExperimental())
 	var modelCalls atomic.Int64
 
 	// Replies "echo <n>" where n is the number of messages the model saw,
@@ -308,7 +308,7 @@ func TestHandlerAgent(t *testing.T) {
 // routes. Together they pin the detach → poll → abort story over plain
 // HTTP.
 func TestHandlerAgentRef(t *testing.T) {
-	g := genkit.Init(context.Background(), genkit.WithExperimental())
+	g := genkit.MustInit(context.Background(), genkit.WithExperimental())
 
 	genkit.DefineModel(g, "test/echo", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {

@@ -682,63 +682,65 @@ func convertToPartPointers(parts []dotprompt.Part) ([]*Part, error) {
 // LoadPromptDirFromFS loads prompts and partials from a filesystem for the given namespace.
 // The fsys parameter should be an fs.FS implementation (e.g., embed.FS or os.DirFS).
 // The dir parameter specifies the directory within the filesystem where prompts are located.
-func LoadPromptDirFromFS(r api.Registry, fsys fs.FS, dir, namespace string) {
+func LoadPromptDirFromFS(r api.Registry, fsys fs.FS, dir, namespace string) error {
 	if fsys == nil {
-		panic(errors.New("no prompt filesystem provided"))
+		return errors.New("no prompt filesystem provided")
 	}
 
 	if _, err := fs.Stat(fsys, dir); err != nil {
-		panic(fmt.Errorf("failed to access prompt directory %q in filesystem: %w", dir, err))
+		return fmt.Errorf("failed to access prompt directory %q in filesystem: %w", dir, err)
 	}
 
 	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {
-		panic(fmt.Errorf("failed to read prompt directory structure: %w", err))
+		return fmt.Errorf("failed to read prompt directory structure: %w", err)
 	}
 
 	for _, entry := range entries {
 		filename := entry.Name()
 		filePath := path.Join(dir, filename)
 		if entry.IsDir() {
-			LoadPromptDirFromFS(r, fsys, filePath, namespace)
+			if err := LoadPromptDirFromFS(r, fsys, filePath, namespace); err != nil {
+				return err
+			}
 		} else if strings.HasSuffix(filename, ".prompt") {
 			if strings.HasPrefix(filename, "_") {
 				partialName := strings.TrimSuffix(filename[1:], ".prompt")
 				source, err := fs.ReadFile(fsys, filePath)
 				if err != nil {
-					slog.Error("Failed to read partial file", "error", err)
-					continue
+					return fmt.Errorf("failed to read partial file %q: %w", filePath, err)
 				}
 				r.RegisterPartial(partialName, string(source))
 				slog.Debug("Registered Dotprompt partial", "name", partialName, "file", filePath)
 			} else {
-				LoadPromptFromFS(r, fsys, dir, filename, namespace)
+				if _, err := LoadPromptFromFS(r, fsys, dir, filename, namespace); err != nil {
+					return err
+				}
 			}
 		}
 	}
+	return nil
 }
 
 // LoadPromptFromFS loads a single prompt from a filesystem into the registry.
 // The fsys parameter should be an fs.FS implementation (e.g., embed.FS or os.DirFS).
 // The dir parameter specifies the directory within the filesystem where the prompt is located.
-func LoadPromptFromFS(r api.Registry, fsys fs.FS, dir, filename, namespace string) Prompt {
+func LoadPromptFromFS(r api.Registry, fsys fs.FS, dir, filename, namespace string) (Prompt, error) {
 	name := strings.TrimSuffix(filename, ".prompt")
 
 	sourceFile := path.Join(dir, filename)
 	source, err := fs.ReadFile(fsys, sourceFile)
 	if err != nil {
-		slog.Error("Failed to read prompt file", "file", sourceFile, "error", err)
-		return nil
+		return nil, fmt.Errorf("failed to read prompt file %q: %w", sourceFile, err)
 	}
 
 	p, err := LoadPromptFromSource(r, string(source), name, namespace)
 	if err != nil {
-		slog.Error("Failed to load prompt", "file", sourceFile, "error", err)
-		return nil
+		return nil, fmt.Errorf("failed to load prompt %q: %w", sourceFile, err)
 	}
 
 	slog.Debug("Registered Dotprompt", "name", p.Name(), "file", sourceFile)
-	return p
+	return p, nil
 }
 
 // LoadPromptFromSource loads a prompt from raw .prompt file content.
@@ -899,12 +901,12 @@ func parseDotpromptUse(raw any) ([]Middleware, error) {
 }
 
 // LoadPromptDir loads prompts and partials from a directory on the local filesystem.
-func LoadPromptDir(r api.Registry, dir string, namespace string) {
-	LoadPromptDirFromFS(r, os.DirFS(dir), ".", namespace)
+func LoadPromptDir(r api.Registry, dir string, namespace string) error {
+	return LoadPromptDirFromFS(r, os.DirFS(dir), ".", namespace)
 }
 
 // LoadPrompt loads a single prompt from a directory on the local filesystem into the registry.
-func LoadPrompt(r api.Registry, dir, filename, namespace string) Prompt {
+func LoadPrompt(r api.Registry, dir, filename, namespace string) (Prompt, error) {
 	return LoadPromptFromFS(r, os.DirFS(dir), ".", filename, namespace)
 }
 

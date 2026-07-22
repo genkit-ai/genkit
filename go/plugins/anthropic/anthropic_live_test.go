@@ -41,7 +41,7 @@ func TestAnthropicLive(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	g := genkit.Init(ctx, genkit.WithPlugins(&anthropicPlugin.Anthropic{}))
+	g := genkit.MustInit(ctx, genkit.WithPlugins(&anthropicPlugin.Anthropic{}))
 	t.Run("model version ok", func(t *testing.T) {
 		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
 		resp, err := genkit.Generate(ctx, g,

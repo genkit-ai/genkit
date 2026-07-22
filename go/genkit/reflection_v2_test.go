@@ -161,7 +161,7 @@ func TestReflectionServerV2_Register(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 	_, cancel := startRuntime(t, g, m)
 	defer cancel()
 
@@ -203,7 +203,7 @@ func TestReflectionServerV2_RegisterHandshakeTelemetry(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 	_, cancel := startRuntime(t, g, m)
 	defer cancel()
 
@@ -225,7 +225,7 @@ func TestReflectionServerV2_ListActions(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 	core.DefineAction(g.reg, "test/inc", api.ActionTypeCustom, nil, nil, inc)
 	core.DefineAction(g.reg, "test/dec", api.ActionTypeCustom, nil, nil, dec)
 
@@ -264,7 +264,7 @@ func TestReflectionServerV2_ListValues(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 	g.reg.RegisterValue("defaultModel", "my-model")
 
 	ctx, cancel := startRuntime(t, g, m)
@@ -301,7 +301,7 @@ func TestReflectionServerV2_ListValuesRejectsUnsupportedType(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 	ctx, cancel := startRuntime(t, g, m)
 	defer cancel()
 
@@ -329,7 +329,7 @@ func TestReflectionServerV2_RunAction(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 	core.DefineAction(g.reg, "test/inc", api.ActionTypeCustom, nil, nil, inc)
 
 	ctx, cancel := startRuntime(t, g, m)
@@ -385,7 +385,7 @@ func TestReflectionServerV2_HandlerPanicRecovered(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 	DefineFlow(g, "panicky", func(ctx context.Context, _ string) (string, error) {
 		panic("boom")
 	})
@@ -445,7 +445,7 @@ func TestReflectionServerV2_StreamingRunAction(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 	streamInc := func(_ context.Context, x int, cb streamingCallback[json.RawMessage]) (int, error) {
 		for i := range x {
 			msg, _ := json.Marshal(i)
@@ -510,7 +510,7 @@ func TestReflectionServerV2_RunActionNotFound(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 	ctx, cancel := startRuntime(t, g, m)
 	defer cancel()
 
@@ -548,7 +548,7 @@ func TestReflectionServerV2_CancelAction(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 	started := make(chan struct{})
 	core.DefineAction(g.reg, "test/slow", api.ActionTypeCustom, nil, nil,
 		func(ctx context.Context, _ any) (any, error) {
@@ -613,7 +613,7 @@ func TestReflectionServerV2_BidiRunAction(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 
 	type initConfig struct {
 		Prefix string `json:"prefix"`
@@ -714,7 +714,7 @@ func TestReflectionServerV2_PromptAgentRejectsEmptyStreamInput(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 	var modelCalls atomic.Int64
 	DefineModel(g, "test/agent-empty-guard", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
@@ -808,7 +808,7 @@ func TestReflectionServerV2_BidiRunActionDropsAfterEnd(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 
 	// The action records every chunk it sees so the test can assert that
 	// chunks after endInputStream were dropped.
@@ -897,7 +897,7 @@ func TestReflectionServerV2_BidiRunActionErrors(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 
 	core.DefineBidiAction(g.reg, "test/bidi-fail", api.ActionTypeCustom, nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
@@ -956,7 +956,7 @@ func TestReflectionServerV2_BidiInvalidChunkFailsRun(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 
 	core.DefineBidiAction(g.reg, "test/bidi-strict", api.ActionTypeCustom, nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
@@ -1059,7 +1059,7 @@ func TestReflectionServerV2_MethodNotFound(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 	ctx, cancel := startRuntime(t, g, m)
 	defer cancel()
 
@@ -1089,7 +1089,7 @@ func TestReflectionServerV2_BidiRunActionNoStream(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 
 	core.DefineBidiAction(g.reg, "test/bidi-quiet", api.ActionTypeCustom, nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
@@ -1168,7 +1168,7 @@ func TestReflectionServerV2_BidiInputClosedOnDisconnect(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()
 
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 
 	inputEnded := make(chan struct{})
 	core.DefineBidiAction(g.reg, "test/bidi-hang", api.ActionTypeCustom, nil,

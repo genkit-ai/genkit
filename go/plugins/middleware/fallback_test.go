@@ -29,7 +29,7 @@ import (
 
 func newTestGenkit(t *testing.T) *genkit.Genkit {
 	t.Helper()
-	return genkit.Init(context.Background())
+	return genkit.MustInit(context.Background())
 }
 
 func defineTestModel(t *testing.T, g *genkit.Genkit, name string, fn ai.ModelFunc) ai.Model {

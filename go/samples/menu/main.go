@@ -60,7 +60,10 @@ type textMenuQuestionInput struct {
 
 func main() {
 	ctx := context.Background()
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	model := googlegenai.VertexAIModel(g, "gemini-2.5-flash")
 	embedder := googlegenai.VertexAIEmbedder(g, "text-embedding-004")

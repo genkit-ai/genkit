@@ -37,9 +37,12 @@ func main() {
 	})
 
 	// Initialize Genkit with plugins
-	g := genkit.Init(ctx, genkit.WithPlugins(
+	g, err := genkit.Init(ctx, genkit.WithPlugins(
 		&googlegenai.GoogleAI{},
 	))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Define a simple joke flow
 	genkit.DefineFlow(g, "jokeFlow", func(ctx context.Context, topic string) (string, error) {

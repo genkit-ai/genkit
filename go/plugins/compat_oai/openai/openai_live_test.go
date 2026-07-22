@@ -43,7 +43,7 @@ func TestPlugin(t *testing.T) {
 	oai := &compat_oai.OpenAI{
 		APIKey: apiKey,
 	}
-	g := genkit.Init(context.Background(),
+	g := genkit.MustInit(context.Background(),
 		genkit.WithDefaultModel("openai/gpt-4o-mini"),
 		genkit.WithPlugins(oai),
 	)

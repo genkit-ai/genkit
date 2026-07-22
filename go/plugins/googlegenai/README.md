@@ -36,11 +36,14 @@ import (
 func main() {
  ctx := context.Background()
 
- g := genkit.Init(ctx,
+ g, err := genkit.Init(ctx,
   genkit.WithPlugins(&googlegenai.GoogleAI{
    APIKey: "your-api-key", // Optional: defaults to GEMINI_API_KEY or GOOGLE_API_KEY env var
   }),
  )
+ if err != nil {
+  log.Fatal(err)
+ }
 }
 ```
 
@@ -58,13 +61,16 @@ import (
 func main() {
  ctx := context.Background()
 
- g := genkit.Init(ctx,
+ g, err := genkit.Init(ctx,
   genkit.WithPlugins(&googlegenai.VertexAI{
    ProjectID:  "your-project-id", // Optional: defaults to GOOGLE_CLOUD_PROJECT
    Location:   "us-central1",     // Optional: defaults to GOOGLE_CLOUD_LOCATION. Also accepts multi-region ("us", "eu") or "global".
    APIVersion: "v1",              // Optional: defaults to v1beta1. Can be overridden per-request via config.HTTPOptions.APIVersion.
   }),
  )
+ if err != nil {
+  log.Fatal(err)
+ }
 }
 ```
 

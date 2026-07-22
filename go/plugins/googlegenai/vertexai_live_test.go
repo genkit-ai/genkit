@@ -43,7 +43,7 @@ func TestVertexAILive(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	g := genkit.Init(ctx,
+	g := genkit.MustInit(ctx,
 		genkit.WithDefaultModel("vertexai/gemini-2.5-flash"),
 		genkit.WithPlugins(&googlegenai.VertexAI{ProjectID: projectID, Location: location}),
 	)
@@ -404,7 +404,7 @@ func TestVertexAILive(t *testing.T) {
 		// Use a fresh Genkit instance so we can DefineModel on the Vertex
 		// plugin before Generate runs.
 		plugin := &googlegenai.VertexAI{ProjectID: projectID, Location: location}
-		gTuned := genkit.Init(ctx, genkit.WithPlugins(plugin))
+		gTuned := genkit.MustInit(ctx, genkit.WithPlugins(plugin))
 		m, err := plugin.DefineModel(gTuned, modelName, nil)
 		if err != nil {
 			t.Fatalf("failed to register tuned model %q: %v", modelName, err)
@@ -433,7 +433,7 @@ func TestVertexAILive(t *testing.T) {
 		// "us" and "eu" are multi-region locations routed to
 		// aiplatform.{location}.rep.googleapis.com by the genai SDK.
 		plugin := &googlegenai.VertexAI{ProjectID: projectID, Location: multiRegion}
-		gMultiRegion := genkit.Init(ctx, genkit.WithPlugins(plugin))
+		gMultiRegion := genkit.MustInit(ctx, genkit.WithPlugins(plugin))
 		resp, err := genkit.Generate(ctx, gMultiRegion,
 			ai.WithModelName("vertexai/gemini-2.5-flash"),
 			ai.WithPrompt("Say hello in one short sentence."),
@@ -447,7 +447,7 @@ func TestVertexAILive(t *testing.T) {
 	})
 	t.Run("plugin-level apiVersion override", func(t *testing.T) {
 		plugin := &googlegenai.VertexAI{ProjectID: projectID, Location: location, APIVersion: "v1"}
-		gAPIVersion := genkit.Init(ctx, genkit.WithPlugins(plugin))
+		gAPIVersion := genkit.MustInit(ctx, genkit.WithPlugins(plugin))
 		resp, err := genkit.Generate(ctx, gAPIVersion,
 			ai.WithModelName("vertexai/gemini-2.5-flash"),
 			ai.WithPrompt("Say hello in one short sentence."),

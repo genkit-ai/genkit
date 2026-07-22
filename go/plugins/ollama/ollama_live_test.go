@@ -45,7 +45,7 @@ func TestLive(t *testing.T) {
 	ctx := context.Background()
 
 	o := &ollamaPlugin.Ollama{ServerAddress: *serverAddress, Timeout: 60}
-	g := genkit.Init(ctx, genkit.WithPlugins(o))
+	g := genkit.MustInit(ctx, genkit.WithPlugins(o))
 
 	// Define the model
 	o.DefineModel(g, ollamaPlugin.ModelDefinition{Name: *modelName, Type: "chat"}, nil)
@@ -89,7 +89,7 @@ func TestLiveDynamicDiscovery(t *testing.T) {
 
 	ctx := context.Background()
 	o := &ollamaPlugin.Ollama{ServerAddress: *serverAddress}
-	g := genkit.Init(ctx, genkit.WithPlugins(o))
+	g := genkit.MustInit(ctx, genkit.WithPlugins(o))
 
 	// Verify ListActions discovers local models
 	actions := o.ListActions(ctx)

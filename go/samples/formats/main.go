@@ -36,10 +36,13 @@ type StoryCharacter struct {
 
 func main() {
 	ctx := context.Background()
-	g := genkit.Init(ctx,
+	g, err := genkit.Init(ctx,
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
 	)
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	var callback func(context.Context, *ai.ModelResponseChunk) error
 

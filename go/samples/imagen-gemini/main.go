@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -108,7 +109,10 @@ func main() {
 	if hasVertex {
 		plugins = append(plugins, &googlegenai.VertexAI{})
 	}
-	g := genkit.Init(ctx, genkit.WithPlugins(plugins...))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(plugins...))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Define a simple flow that generates an image of a given topic
 	genkit.DefineFlow(g, "imageFlow", func(ctx context.Context, input string) ([]string, error) {

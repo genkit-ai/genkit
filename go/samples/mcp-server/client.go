@@ -19,6 +19,7 @@ package main
 
 import (
 	"context"
+	"log"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/logger"
@@ -31,7 +32,10 @@ func client() {
 	ctx := context.Background()
 
 	// Initialize Genkit with Google AI
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Connect to server
 	client, err := mcp.NewGenkitMCPClient(mcp.MCPClientOptions{

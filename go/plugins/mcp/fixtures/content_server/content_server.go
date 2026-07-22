@@ -24,7 +24,7 @@ import (
 )
 
 func main() {
-	g := genkit.Init(context.Background())
+	g := genkit.MustInit(context.Background())
 
 	// Resource that provides different content based on filename
 	genkit.DefineResource(g, "content-provider", &ai.ResourceOptions{

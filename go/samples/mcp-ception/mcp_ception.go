@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -41,7 +42,10 @@ func createMCPServer() {
 	logger.FromContext(ctx).Info("Starting Genkit MCP Server")
 
 	// Initialize Genkit for the server
-	g := genkit.Init(ctx)
+	g, err := genkit.Init(ctx)
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Define a tool that generates creative content (this will be auto-exposed via MCP)
 	genkit.DefineTool(g, "genkit-brainstorm", "Generate creative ideas about a topic",
@@ -135,10 +139,13 @@ func mcpSelfConnection() {
 	logger.FromContext(ctx).Info("Connecting to local MCP server (the sample will spawn it for you)")
 
 	// Initialize Genkit with Google AI for the client
-	g := genkit.Init(ctx,
+	g, err := genkit.Init(ctx,
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
 	)
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Server process is spawned automatically via stdio
 

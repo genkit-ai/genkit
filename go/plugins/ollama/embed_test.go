@@ -399,6 +399,6 @@ func newTestGenkit(t *testing.T, serverAddress string) (*genkit.Genkit, *Ollama)
 	t.Helper()
 
 	o := &Ollama{ServerAddress: serverAddress}
-	g := genkit.Init(context.Background(), genkit.WithPlugins(o))
+	g := genkit.MustInit(context.Background(), genkit.WithPlugins(o))
 	return g, o
 }

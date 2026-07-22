@@ -67,7 +67,7 @@ func TestPostgres(t *testing.T) {
 		engine: pEngine,
 	}
 
-	g := genkit.Init(ctx, genkit.WithPlugins(postgres))
+	g := genkit.MustInit(ctx, genkit.WithPlugins(postgres))
 
 	// Create test schema and table
 	_, err = pEngine.Pool.Exec(ctx, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", SchemaName))

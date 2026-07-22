@@ -33,11 +33,14 @@ import (
 
 func main() {
 	ctx := context.Background()
-	g := genkit.Init(ctx,
+	g, err := genkit.Init(ctx,
 		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 		genkit.WithPromptDir("prompts"),
 	)
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	SimplePrompt(ctx, g)
 	PromptWithMultiMessage(ctx, g)
@@ -139,9 +142,9 @@ func PromptWithOutputTypeDotprompt(ctx context.Context, g *genkit.Genkit) {
 		Countries []countryData `json:"countries"`
 	}
 
-	prompt := genkit.LoadPrompt(g, "./prompts/countries.prompt", "countries")
-	if prompt == nil {
-		fmt.Printf("empty prompt")
+	prompt, err := genkit.LoadPrompt(g, "./prompts/countries.prompt", "countries")
+	if err != nil {
+		fmt.Printf("failed to load prompt: %v", err)
 		return
 	}
 
@@ -203,9 +206,9 @@ func PromptWithComplexOutputType(ctx context.Context, g *genkit.Genkit) {
 }
 
 func PromptWithMultiMessage(ctx context.Context, g *genkit.Genkit) {
-	prompt := genkit.LoadPrompt(g, "./prompts/multi-msg.prompt", "multi-space")
-	if prompt == nil {
-		log.Fatal("empty prompt")
+	prompt, err := genkit.LoadPrompt(g, "./prompts/multi-msg.prompt", "multi-space")
+	if err != nil {
+		log.Fatalf("failed to load prompt: %v", err)
 	}
 	resp, err := prompt.Execute(ctx,
 		ai.WithModelName("googleai/gemini-2.5-pro"),
@@ -333,9 +336,9 @@ func PromptWithMediaType(ctx context.Context, g *genkit.Genkit) {
 		log.Fatal(err)
 	}
 
-	prompt := genkit.LoadPrompt(g, "./prompts/media.prompt", "mediaspace")
-	if prompt == nil {
-		log.Fatal("empty prompt")
+	prompt, err := genkit.LoadPrompt(g, "./prompts/media.prompt", "mediaspace")
+	if err != nil {
+		log.Fatalf("failed to load prompt: %v", err)
 	}
 	resp, err := prompt.Execute(ctx,
 		ai.WithModelName("googleai/gemini-2.5-flash"),
@@ -348,9 +351,9 @@ func PromptWithMediaType(ctx context.Context, g *genkit.Genkit) {
 }
 
 func PromptWithOutputSchemaName(ctx context.Context, g *genkit.Genkit) {
-	prompt := genkit.LoadPrompt(g, "./prompts/recipe.prompt", "recipes")
-	if prompt == nil {
-		log.Fatal("empty prompt")
+	prompt, err := genkit.LoadPrompt(g, "./prompts/recipe.prompt", "recipes")
+	if err != nil {
+		log.Fatalf("failed to load prompt: %v", err)
 	}
 
 	// prompt schemas can be referenced at any time

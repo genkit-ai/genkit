@@ -50,7 +50,10 @@ import (
 
 func main() {
     ctx := context.Background()
-    g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+    g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+    if err != nil {
+        log.Fatal(err)
+    }
 
     answer, err := genkit.GenerateText(ctx, g,
         ai.WithModelName("googleai/gemini-flash-latest"),
@@ -645,10 +648,13 @@ Middleware wraps generation, model calls, and tool execution to add cross-cuttin
 ```go
 import "github.com/firebase/genkit/go/plugins/middleware"
 
-g := genkit.Init(ctx, genkit.WithPlugins(
+g, err := genkit.Init(ctx, genkit.WithPlugins(
     &googlegenai.GoogleAI{},
     &middleware.Middleware{},
 ))
+if err != nil {
+    log.Fatal(err)
+}
 
 // Retry transient failures, then fall back to a secondary model if the primary
 // stays down. Middleware composes outer-to-inner: Retry { Fallback { model } }.
@@ -883,10 +889,13 @@ var promptsFS embed.FS
 
 func main() {
     ctx := context.Background()
-    g := genkit.Init(ctx,
+    g, err := genkit.Init(ctx,
         genkit.WithPlugins(&googlegenai.GoogleAI{}),
         genkit.WithPromptFS(promptsFS),
     )
+    if err != nil {
+        log.Fatal(err)
+    }
 
     prompt := genkit.LookupPrompt(g, "greeting")
     response, _ := prompt.Execute(ctx)
@@ -1002,18 +1011,18 @@ Genkit provides a unified interface across all major AI providers. Use whichever
 
 ```go
 // Google AI
-g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
 // Anthropic
-g := genkit.Init(ctx, genkit.WithPlugins(&anthropic.Anthropic{}))
+g, err := genkit.Init(ctx, genkit.WithPlugins(&anthropic.Anthropic{}))
 
 // Ollama (local models)
-g := genkit.Init(ctx, genkit.WithPlugins(&ollama.Ollama{
+g, err := genkit.Init(ctx, genkit.WithPlugins(&ollama.Ollama{
     ServerAddress: "http://localhost:11434",
 }))
 
 // Multiple providers at once
-g := genkit.Init(ctx, genkit.WithPlugins(
+g, err := genkit.Init(ctx, genkit.WithPlugins(
     &googlegenai.GoogleAI{},
     &anthropic.Anthropic{},
 ))

@@ -53,7 +53,10 @@ var (
 func main() {
 	flag.Parse()
 	ctx := context.Background()
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{APIKey: *apiKey}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{APIKey: *apiKey}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 	if err := run(g); err != nil {
 		log.Fatal(err)
 	}

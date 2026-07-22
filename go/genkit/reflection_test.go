@@ -45,7 +45,7 @@ func dec(_ context.Context, x int) (int, error) {
 
 func TestReflectionServer(t *testing.T) {
 	t.Run("server startup and shutdown", func(t *testing.T) {
-		g := Init(context.Background())
+		g := MustInit(context.Background())
 
 		tc := tracing.NewTestOnlyTelemetryClient()
 		tracing.WriteTelemetryImmediate(tc)
@@ -84,7 +84,7 @@ func TestReflectionServer(t *testing.T) {
 }
 
 func TestServeMux(t *testing.T) {
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 
 	tc := tracing.NewTestOnlyTelemetryClient()
 	tracing.WriteTelemetryImmediate(tc)
@@ -346,7 +346,7 @@ func TestServeMux(t *testing.T) {
 // The key thing we're testing: headers arrive while the action is still running, not after.
 // This allows clients to get the trace ID immediately for cancellation or logging.
 func TestEarlyTraceIDTransmission(t *testing.T) {
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 	tc := tracing.NewTestOnlyTelemetryClient()
 	tracing.WriteTelemetryImmediate(tc)
 
@@ -488,7 +488,7 @@ func TestEarlyTraceIDTransmission(t *testing.T) {
 //  2. Call POST /api/cancelAction with that trace ID
 //  3. Verify: cancel endpoint returns 200, action's ctx.Done() fires, response has error code 1 (gRPC CANCELLED)
 func TestActionCancellation(t *testing.T) {
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 	tc := tracing.NewTestOnlyTelemetryClient()
 	tracing.WriteTelemetryImmediate(tc)
 
@@ -570,7 +570,7 @@ func TestActionCancellation(t *testing.T) {
 }
 
 func TestCancelActionEndpoint(t *testing.T) {
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 
 	s := &reflectionServer{
 		Server:        &http.Server{},
@@ -669,7 +669,7 @@ func TestCancelActionEndpoint(t *testing.T) {
 // request's init payload to the action (matching the JS runtime) and that
 // init on an action without init support fails loudly.
 func TestRunActionWithInit(t *testing.T) {
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 
 	tc := tracing.NewTestOnlyTelemetryClient()
 	tracing.WriteTelemetryImmediate(tc)

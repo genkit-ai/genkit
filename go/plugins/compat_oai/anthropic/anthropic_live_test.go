@@ -35,7 +35,7 @@ func TestPlugin(t *testing.T) {
 	ctx := context.Background()
 
 	// Initialize genkit with claude-4-5-sonnet as default model
-	g := genkit.Init(
+	g := genkit.MustInit(
 		ctx,
 		genkit.WithDefaultModel("anthropic/claude-sonnet-4-5-20250929"),
 		genkit.WithPlugins(&anthropic.Anthropic{

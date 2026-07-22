@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
@@ -28,9 +29,12 @@ func main() {
 
 	// Llama MaaS is served from us-central1. Override Location if your project
 	// has Llama enabled in a different region.
-	g := genkit.Init(ctx, genkit.WithPlugins(
+	g, err := genkit.Init(ctx, genkit.WithPlugins(
 		&modelgarden.Llama{Location: "us-central1"},
 	))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Define a flow that uses Llama 3.3 70B to describe a topic.
 	genkit.DefineFlow(g, "llamaFlow", func(ctx context.Context, input string) (string, error) {

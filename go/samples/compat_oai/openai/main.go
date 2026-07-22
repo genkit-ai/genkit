@@ -32,7 +32,10 @@ func main() {
 	oai := &oai.OpenAI{
 		APIKey: apiKey,
 	}
-	g := genkit.Init(ctx, genkit.WithPlugins(oai))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(oai))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	genkit.DefineFlow(g, "basic", func(ctx context.Context, subject string) (string, error) {
 		gpt4o := oai.Model(g, "gpt-4o")

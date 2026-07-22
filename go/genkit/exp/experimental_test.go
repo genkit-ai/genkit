@@ -44,7 +44,7 @@ func TestExperimentalGate(t *testing.T) {
 	t.Run("panics without WithExperimental", func(t *testing.T) {
 		for name, call := range constructors {
 			t.Run(name, func(t *testing.T) {
-				g := genkit.Init(context.Background())
+				g := genkit.MustInit(context.Background())
 				defer func() {
 					r := recover()
 					if r == nil {
@@ -62,7 +62,7 @@ func TestExperimentalGate(t *testing.T) {
 	t.Run("opens the gate with WithExperimental", func(t *testing.T) {
 		// DefineStreamingFlow has no model or prompt dependency, so once the
 		// guard passes it constructs cleanly: a good proxy for "the gate opened".
-		g := genkit.Init(context.Background(), genkit.WithExperimental())
+		g := genkit.MustInit(context.Background(), genkit.WithExperimental())
 		flow := DefineStreamingFlow(g, "test/gated", func(ctx context.Context, n int, stream chan<- int) (string, error) {
 			return "ok", nil
 		})

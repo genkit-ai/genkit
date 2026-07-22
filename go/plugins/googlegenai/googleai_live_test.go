@@ -65,7 +65,7 @@ func TestGoogleAILive(t *testing.T) {
 
 	ctx := context.Background()
 
-	g := genkit.Init(ctx,
+	g := genkit.MustInit(ctx,
 		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
 		genkit.WithPlugins(&googlegenai.GoogleAI{APIKey: apiKey}),
 	)

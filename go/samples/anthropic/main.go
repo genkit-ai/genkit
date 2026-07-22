@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"log"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/firebase/genkit/go/ai"
@@ -26,7 +27,10 @@ import (
 func main() {
 	ctx := context.Background()
 
-	g := genkit.Init(ctx, genkit.WithPlugins(&ant.Anthropic{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&ant.Anthropic{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Define a simple flow that generates a short story about a given topic.
 	genkit.DefineStreamingFlow(g, "storyFlow", func(ctx context.Context, input string, cb ai.ModelStreamCallback) (string, error) {

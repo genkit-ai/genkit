@@ -26,6 +26,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -42,7 +43,10 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	g := genkit.Init(ctx)
+	g, err := genkit.Init(ctx)
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Tool 1: Encode/decode text
 	genkit.DefineTool(g, "text_encode", "Encode or decode text using various methods",

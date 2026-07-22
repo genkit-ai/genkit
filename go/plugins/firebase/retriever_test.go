@@ -141,7 +141,7 @@ func TestFirestoreRetriever(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	g := genkit.Init(ctx)
+	g := genkit.MustInit(ctx)
 
 	// Initialize Firebase app
 	app, err := firebasev4.NewApp(ctx, &firebasev4.Config{ProjectID: *testProjectID})

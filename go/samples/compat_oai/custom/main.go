@@ -33,12 +33,15 @@ func main() {
 		log.Fatalf("OPENROUTER_API_KEY environment variable not set")
 	}
 
-	g := genkit.Init(ctx, genkit.WithPlugins(&oai.OpenAICompatible{
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&oai.OpenAICompatible{
 		Provider: "openrouter",
 		APIKey:   apiKey,
 		BaseURL:  "https://openrouter.ai/api/v1",
 	}),
 		genkit.WithDefaultModel("openrouter/tngtech/deepseek-r1t2-chimera:free"))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	prompt := "tell me a joke"
 	config := &openai.ChatCompletionNewParams{

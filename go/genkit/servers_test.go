@@ -38,7 +38,7 @@ func FakeContextProvider(ctx context.Context, req core.RequestData) (core.Action
 }
 
 func TestHandler(t *testing.T) {
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 
 	successFlow := DefineFlow(g, "handlerSuccess", func(ctx context.Context, input string) (string, error) {
 		return "success", nil
@@ -209,7 +209,7 @@ func TestHandler(t *testing.T) {
 }
 
 func TestHandlerFunc(t *testing.T) {
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 
 	echoFlow := DefineFlow(g, "echo", func(ctx context.Context, input string) (string, error) {
 		return input, nil
@@ -354,7 +354,7 @@ func TestHandlerFunc(t *testing.T) {
 }
 
 func TestStreamingHandlerFunc(t *testing.T) {
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 
 	streamingFlow := DefineStreamingFlow(g, "streaming",
 		func(ctx context.Context, input string, cb func(context.Context, string) error) (string, error) {
@@ -433,7 +433,7 @@ data: {"result":"hello-end"}
 }
 
 func TestDurableStreamingHandlerFunc(t *testing.T) {
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 
 	streamingFlow := DefineStreamingFlow(g, "durableStreaming",
 		func(ctx context.Context, input string, cb func(context.Context, string) error) (string, error) {
@@ -563,7 +563,7 @@ data: {"result":"ab-done"}
 // the existing "data" field. This is the production HTTP path for bidi
 // actions invoked as one-shots.
 func TestHandlerBidiInitEnvelope(t *testing.T) {
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 
 	type Config struct {
 		Prefix string `json:"prefix"`

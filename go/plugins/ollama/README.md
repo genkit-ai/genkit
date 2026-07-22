@@ -36,7 +36,10 @@ func main() {
   Timeout:       60,                       // Optional: Response timeout in seconds (default: 30)
  }
 
- g := genkit.Init(ctx, genkit.WithPlugins(o))
+ g, err := genkit.Init(ctx, genkit.WithPlugins(o))
+ if err != nil {
+  log.Fatal(err)
+ }
 }
 ```
 

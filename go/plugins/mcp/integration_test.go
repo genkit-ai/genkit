@@ -49,7 +49,7 @@ func TestMCPConnectionAndTranslation(t *testing.T) {
 	}
 
 	// SETUP: Genkit client
-	g := genkit.Init(ctx)
+	g := genkit.MustInit(ctx)
 
 	host, err := NewMCPHost(g, MCPHostOptions{
 		Name: "test-host",
@@ -117,7 +117,7 @@ func TestMCPAIIntegration(t *testing.T) {
 	}
 
 	// SETUP: Genkit with MCP and mock model
-	g := genkit.Init(ctx)
+	g := genkit.MustInit(ctx)
 
 	// Define a mock model that echoes the input (like in resource_test.go)
 	genkit.DefineModel(g, "echo-model", &ai.ModelOptions{
@@ -212,7 +212,7 @@ func TestMCPURIMatching(t *testing.T) {
 	}
 
 	// SETUP: Genkit with MCP
-	g := genkit.Init(ctx)
+	g := genkit.MustInit(ctx)
 
 	host, err := NewMCPHost(g, MCPHostOptions{Name: "test-host"})
 	if err != nil {
@@ -287,7 +287,7 @@ func TestMCPContentFetch(t *testing.T) {
 	}
 
 	// SETUP: Genkit with MCP
-	g := genkit.Init(ctx)
+	g := genkit.MustInit(ctx)
 
 	host, err := NewMCPHost(g, MCPHostOptions{Name: "test-host"})
 	if err != nil {
@@ -406,7 +406,7 @@ func TestMCPMultipleServers(t *testing.T) {
 	}
 
 	// SETUP: Genkit with MCP host
-	g := genkit.Init(ctx)
+	g := genkit.MustInit(ctx)
 
 	host, err := NewMCPHost(g, MCPHostOptions{Name: "multi-host"})
 	if err != nil {
@@ -483,7 +483,7 @@ func TestMCPMultipleServers(t *testing.T) {
 // This covers the most common real-world failure scenarios.
 func TestMCPErrorResilience(t *testing.T) {
 	ctx := context.Background()
-	g := genkit.Init(ctx)
+	g := genkit.MustInit(ctx)
 
 	// TEST 1: Server connection failure (fast!)
 	t.Run("connection_failure", func(t *testing.T) {

@@ -83,7 +83,10 @@ func main() {
 			MetricType: evaluators.EvaluatorJsonata,
 		},
 	}
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &evaluators.GenkitEval{Metrics: metrics}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &evaluators.GenkitEval{Metrics: metrics}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	embedder := googlegenai.GoogleAIEmbedder(g, "embedding-001")
 	if embedder == nil {

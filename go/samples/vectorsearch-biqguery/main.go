@@ -78,11 +78,14 @@ func main() {
 		ProjectID: "${GOOGLE_CLOUD_PROJECT_ID}",       // Replace with your Google Cloud project ID
 		Location:  "${GOOGLE_CLOUD_PROJECT_LOCATION}", // Replace with your desired location
 	}
-	g := genkit.Init(ctx,
+	g, err := genkit.Init(ctx,
 		genkit.WithPlugins(&googlegenai.VertexAI{
 			ProjectID: vectorsearchPlugin.ProjectID,
 			Location:  vectorsearchPlugin.Location,
 		}, vectorsearchPlugin))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	model := googlegenai.VertexAIModel(g, "gemini-2.5-flash")
 

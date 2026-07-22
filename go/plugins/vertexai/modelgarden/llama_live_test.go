@@ -35,7 +35,7 @@ func TestLlamaLive(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	g := genkit.Init(ctx, genkit.WithPlugins(&modelgarden.Llama{}))
+	g := genkit.MustInit(ctx, genkit.WithPlugins(&modelgarden.Llama{}))
 
 	t.Run("invalid model", func(t *testing.T) {
 		m := modelgarden.LlamaModel(g, "meta/llama-does-not-exist")

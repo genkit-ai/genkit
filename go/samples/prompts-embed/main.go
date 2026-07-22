@@ -23,6 +23,7 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"log"
 
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
@@ -37,10 +38,13 @@ var promptsFS embed.FS
 func main() {
 	ctx := context.Background()
 
-	g := genkit.Init(ctx,
+	g, err := genkit.Init(ctx,
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 		genkit.WithPromptFS(promptsFS),
 	)
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	genkit.DefineFlow(g, "sayHello", func(ctx context.Context, name string) (string, error) {
 		prompt := genkit.LookupPrompt(g, "example")

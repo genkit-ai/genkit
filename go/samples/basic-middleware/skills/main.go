@@ -88,7 +88,10 @@ func main() {
 	// Initialize Genkit with the Google AI plugin and the Middleware plugin.
 	// Registering the Middleware plugin exposes the built-in middleware
 	// (Skills, Filesystem, Retry, Fallback, ...) to the Dev UI.
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &middleware.Middleware{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &middleware.Middleware{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	DefineAskFlow(g)
 

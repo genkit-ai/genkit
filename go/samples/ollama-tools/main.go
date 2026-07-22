@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
@@ -46,7 +47,10 @@ func main() {
 		Timeout:       60,                       // Response timeout in seconds
 	}
 
-	g := genkit.Init(ctx, genkit.WithPlugins(ollamaPlugin))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(ollamaPlugin))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Define the Ollama model
 	model := ollamaPlugin.DefineModel(g,

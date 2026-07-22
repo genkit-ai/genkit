@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 
 	"github.com/firebase/genkit/go/ai"
@@ -31,7 +32,10 @@ func clientExample() {
 	ctx := context.Background()
 
 	// Initialize Genkit with Google AI
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Create and connect to MCP time server
 	client, err := mcp.NewGenkitMCPClient(mcp.MCPClientOptions{
@@ -79,7 +83,10 @@ func managerExample() {
 	ctx := context.Background()
 
 	// Initialize Genkit with Google AI
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Create and connect to MCP time server
 	host, _ := mcp.NewMCPHost(g, mcp.MCPHostOptions{

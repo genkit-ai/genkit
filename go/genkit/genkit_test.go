@@ -18,14 +18,26 @@ package genkit
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"testing/fstest"
 
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/api"
 )
 
+// panickingPlugin is a plugin whose Init panics, used to verify that Init
+// converts escaped panics into returned errors rather than crashing.
+type panickingPlugin struct{}
+
+func (panickingPlugin) Name() string { return "panicking" }
+
+func (panickingPlugin) Init(ctx context.Context) []api.Action {
+	panic("boom during plugin init")
+}
+
 func TestStreamFlow(t *testing.T) {
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 
 	f := DefineStreamingFlow(g, "count", count)
 	iter := f.Stream(context.Background(), 2)
@@ -61,7 +73,7 @@ func count(ctx context.Context, n int, cb func(context.Context, int) error) (int
 }
 
 func TestDefineSchemaWithType(t *testing.T) {
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 
 	type UserInfo struct {
 		Name string `json:"name"`
@@ -109,7 +121,7 @@ func TestDefineSchemaWithType(t *testing.T) {
 }
 
 func TestDefineSchemaWithType_Error(t *testing.T) {
-	g := Init(context.Background())
+	g := MustInit(context.Background())
 
 	// We expect a panic because DefineSchemaWithType panics on error
 	defer func() {
@@ -175,12 +187,44 @@ input:
 				opts = append(opts, WithPromptDir(tt.promptDir))
 			}
 
-			g := Init(ctx, opts...)
+			g := MustInit(ctx, opts...)
 
 			prompt := LookupPrompt(g, tt.promptName)
 			if prompt == nil {
 				t.Fatalf("Expected prompt %q to be loaded", tt.promptName)
 			}
 		})
+	}
+}
+
+func TestInitReturnsErrorForMissingPromptDir(t *testing.T) {
+	g, err := Init(context.Background(), WithPromptDir("./does-not-exist-prompts"))
+	if err == nil {
+		t.Fatal("expected an error for a missing explicit prompt directory, got nil")
+	}
+	if g != nil {
+		t.Errorf("expected nil Genkit on error, got %v", g)
+	}
+}
+
+func TestMustInitPanicsOnError(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected MustInit to panic on initialization error")
+		}
+	}()
+	MustInit(context.Background(), WithPromptDir("./does-not-exist-prompts"))
+}
+
+func TestInitConvertsPluginPanicToError(t *testing.T) {
+	g, err := Init(context.Background(), WithPlugins(panickingPlugin{}))
+	if err == nil {
+		t.Fatal("expected an error when a plugin's Init panics, got nil")
+	}
+	if g != nil {
+		t.Errorf("expected nil Genkit on error, got %v", g)
+	}
+	if !strings.Contains(err.Error(), "boom during plugin init") {
+		t.Errorf("expected error to wrap the panic value, got: %v", err)
 	}
 }

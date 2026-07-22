@@ -31,7 +31,7 @@ import (
 func TestLocalVec(t *testing.T) {
 	ctx := context.Background()
 
-	g := genkit.Init(context.Background())
+	g := genkit.MustInit(context.Background())
 
 	// Make two very similar vectors and one different vector.
 	// Arrange for a fake embedder to return those vector
@@ -103,7 +103,7 @@ func TestLocalVec(t *testing.T) {
 func TestPersistentIndexing(t *testing.T) {
 	ctx := context.Background()
 
-	g := genkit.Init(context.Background())
+	g := genkit.MustInit(context.Background())
 
 	const dim = 32
 	v1 := make([]float32, dim)
@@ -204,7 +204,7 @@ func TestSimilarity(t *testing.T) {
 }
 
 func TestInit(t *testing.T) {
-	g := genkit.Init(context.Background())
+	g := genkit.MustInit(context.Background())
 	emdOpts := &ai.EmbedderOptions{
 		Dimensions: 768,
 		Label:      "",

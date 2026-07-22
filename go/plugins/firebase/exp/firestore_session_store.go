@@ -21,7 +21,7 @@
 // Firestore. It resolves its Firestore client from the Firebase plugin
 // registered with the Genkit instance, then wires into an agent:
 //
-//	g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: "my-project"}))
+//	g, err := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: "my-project"}))
 //
 //	store, err := exp.NewFirestoreSessionStore[MyState](ctx, g)
 //	// handle err
@@ -163,7 +163,7 @@ func resolveFirestoreClient(ctx context.Context, g *genkit.Genkit) (*firestore.C
 	if plugin == nil {
 		return nil, errors.New("Firebase plugin not found.\n" +
 			"  Pass the Firebase plugin to genkit.Init():\n" +
-			"    g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: \"your-project\"}))")
+			"    g, err := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: \"your-project\"}))")
 	}
 	f, ok := plugin.(*firebase.Firebase)
 	if !ok {

@@ -21,7 +21,10 @@ import (
 
 func main() {
   ctx := context.Background()
-  g := genkit.Init(ctx)
+  g, err := genkit.Init(ctx)
+  if err != nil {
+    log.Fatal(err)
+  }
 
   // Connect to the MCP everything server
   client, err := mcp.NewGenkitMCPClient(mcp.MCPClientOptions{
@@ -66,7 +69,10 @@ import (
 
 func main() {
     ctx := context.Background()
-    g, _ := genkit.Init(ctx)
+    g, err := genkit.Init(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
 
     // Create manager with multiple servers
     manager, err := mcp.NewMCPManager(mcp.MCPManagerOptions{
@@ -136,7 +142,10 @@ import (
 
 func main() {
   ctx := context.Background()
-  g := genkit.Init(ctx)
+  g, err := genkit.Init(ctx)
+  if err != nil {
+    log.Fatal(err)
+  }
 
   // Create a host with multiple servers
   host, err := mcp.NewMCPHost(g, mcp.MCPHostOptions{
