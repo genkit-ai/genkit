@@ -1437,4 +1437,3 @@ func TestToGeminiContents(t *testing.T) {
 		}
 	}
 }
-
