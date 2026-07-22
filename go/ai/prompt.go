@@ -931,9 +931,12 @@ func contentType(ct, uri string) (string, []byte, error) {
 	}
 
 	if strings.HasPrefix(uri, "gs://") || strings.HasPrefix(uri, "http") {
-		if ct == "" {
-			return "", nil, errors.New("must supply contentType when using media from gs:// or http(s):// URLs")
-		}
+		// The content type may be unknown at render time for URL-based media.
+		// For http(s) URLs the download middleware fetches the resource and
+		// fills in the content type; for gs:// and other natively-supported
+		// URLs (e.g. YouTube) the model resolves it. Defer content-type
+		// validation to the model/plugin layer instead of failing to render
+		// the prompt, matching the behavior of the JS and Python SDKs.
 		return ct, []byte(uri), nil
 	}
 	if contents, isData := strings.CutPrefix(uri, "data:"); isData {
