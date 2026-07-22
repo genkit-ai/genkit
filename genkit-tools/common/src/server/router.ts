@@ -33,6 +33,7 @@ import * as evals from '../types/eval';
 import type { PromptFrontmatter } from '../types/prompt';
 import {
   PageViewEvent,
+  SelectContentEvent,
   createToolsRequestEvent,
   record,
   recordRequestEvent,
@@ -282,6 +283,19 @@ export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
       .input(apis.PageViewSchema)
       .query(async ({ input }) => {
         await record(new PageViewEvent(input.pageTitle));
+      }),
+
+    /** Send a select content analytics event */
+    sendSelectContent: t.procedure
+      .input(apis.SelectContentSchema)
+      .query(async ({ input }) => {
+        await record(
+          new SelectContentEvent(
+            input.contentType,
+            input.contentId,
+            input.pageTitle
+          )
+        );
       }),
 
     /** Genkit Environment Information */

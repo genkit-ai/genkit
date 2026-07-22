@@ -58,6 +58,20 @@ export class PageViewEvent extends GAEvent {
   }
 }
 
+export class SelectContentEvent extends GAEvent {
+  name = 'select_content';
+  duration = 1;
+
+  constructor(content_type: string, content_id: string, page_title: string) {
+    super();
+    this.parameters = {
+      content_type,
+      content_id,
+      page_title,
+    };
+  }
+}
+
 export class FirstUsageEvent extends GAEvent {
   name = 'first_visit';
   duration = 1;

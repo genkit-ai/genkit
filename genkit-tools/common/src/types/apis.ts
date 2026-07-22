@@ -188,6 +188,14 @@ export const PageViewSchema = z.object({
 
 export type PageView = z.infer<typeof PageViewSchema>;
 
+export const SelectContentSchema = z.object({
+  contentType: z.string().describe('Type of content selected.'),
+  contentId: z.string().describe('ID of the selected content.'),
+  pageTitle: z.string().describe('Page where content selection occurred.'),
+});
+
+export type SelectContent = z.infer<typeof SelectContentSchema>;
+
 // TODO: Add return types if deemed necessary.
 
 export const ListEvalKeysRequestSchema = z.object({
