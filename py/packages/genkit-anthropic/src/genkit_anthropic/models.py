@@ -70,7 +70,6 @@ from genkit_anthropic.utils import (
 logger = structlog.get_logger(__name__)
 
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
-# Keep in sync with ``js/plugins/anthropic/src/runner/beta.ts``.
 BETA_APIS: tuple[str, ...] = (
     'files-api-2025-04-14',
     'effort-2025-11-24',
@@ -443,7 +442,9 @@ class AnthropicModel:
         params.pop('stream', None)
 
         if use_beta:
-            beta_headers = betas if betas is not None else list(BETA_APIS)
+            # Resold surfaces (Vertex, Bedrock) do not offer every default beta, so only the direct API gets them.
+            default_betas = list(BETA_APIS) if isinstance(self.client, AsyncAnthropic) else []
+            beta_headers = betas if betas is not None else default_betas
             # The Python SDK serializes [] as an empty anthropic-beta header,
             # which the API rejects. Omit the kwarg to request no beta headers.
             if beta_headers:
