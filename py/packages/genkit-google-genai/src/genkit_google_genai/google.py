@@ -119,9 +119,24 @@ from genkit.plugin_api import (
     loop_local_client,
     to_json_schema,
 )
+from genkit_google_genai._interactions.types import ClientOptions
 from genkit_google_genai.evaluators import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
+)
+from genkit_google_genai.models.antigravity import (
+    AntigravityConfigSchema,
+    antigravity_model_info,
+    create_antigravity_action,
+    is_antigravity_model_name,
+    list_known_antigravity_models,
+)
+from genkit_google_genai.models.deep_research import (
+    DeepResearchConfigSchema,
+    create_deep_research_background_action,
+    deep_research_model_info,
+    is_deep_research_model_name,
+    list_known_deep_research_models,
 )
 from genkit_google_genai.models.embedder import (
     VERTEX_KNOWN_EMBEDDERS,
@@ -135,6 +150,13 @@ from genkit_google_genai.models.gemini import (
     get_model_config_schema,
     google_model_info,
     is_tuned_gemini_name,
+)
+from genkit_google_genai.models.googleai_lyria import (
+    GoogleAILyriaConfigSchema,
+    create_googleai_lyria_action,
+    googleai_lyria_model_info,
+    is_googleai_lyria_model_name,
+    list_known_googleai_lyria_models,
 )
 from genkit_google_genai.models.imagen import (
     SUPPORTED_MODELS as IMAGE_SUPPORTED_MODELS,
@@ -454,6 +476,22 @@ class GoogleAI(Plugin):
         self._runtime_client = loop_local_client(lambda: genai.client.Client(**self._client_kwargs))
         self._list_actions_cache: list[ActionMetadata] | None = None
 
+    def _interactions_client_options(self) -> ClientOptions:
+        """Build non-secret Interactions client options from plugin init settings."""
+        http_options = self._client_kwargs.get('http_options')
+        options: ClientOptions = {}
+        if http_options is not None:
+            if getattr(http_options, 'api_version', None):
+                options['api_version'] = http_options.api_version
+            if getattr(http_options, 'base_url', None):
+                options['base_url'] = http_options.base_url
+            if getattr(http_options, 'headers', None):
+                options['custom_headers'] = dict(http_options.headers)
+        return options
+
+    def _plugin_api_key(self) -> str | None:
+        return self._client_kwargs.get('api_key')
+
     async def init(self) -> list[Action]:
         """Initialize the plugin.
 
@@ -476,6 +514,32 @@ class GoogleAI(Plugin):
             bg_action = self._resolve_veo_model(googleai_name(name))
             actions.append(bg_action.start_action)
             actions.append(bg_action.check_action)
+
+        # Interactions-backed models (known catalog)
+        client_options = self._interactions_client_options()
+        plugin_api_key = self._plugin_api_key()
+        for name in list_known_deep_research_models():
+            bg_action = self._resolve_deep_research_model(googleai_name(name), client_options, plugin_api_key)
+            actions.append(bg_action.start_action)
+            actions.append(bg_action.check_action)
+            if bg_action.cancel_action is not None:
+                actions.append(bg_action.cancel_action)
+        for name in list_known_antigravity_models():
+            actions.append(
+                create_antigravity_action(
+                    googleai_name(name),
+                    plugin_api_key=plugin_api_key,
+                    client_options=client_options,
+                )
+            )
+        for name in list_known_googleai_lyria_models():
+            actions.append(
+                create_googleai_lyria_action(
+                    googleai_name(name),
+                    plugin_api_key=plugin_api_key,
+                    client_options=client_options,
+                )
+            )
 
         # Embedders
         for name in genai_models.embedders:
@@ -535,23 +599,47 @@ class GoogleAI(Plugin):
         if action_type == ActionKind.MODEL:
             return self._resolve_model(name)
         elif action_type == ActionKind.BACKGROUND_MODEL:
-            # For Veo models, return the start action
             prefix = GOOGLEAI_PLUGIN_NAME + '/'
             clean_name = name.replace(prefix, '') if name.startswith(prefix) else name
             if is_veo_model(clean_name):
                 bg_action = self._resolve_veo_model(name)
                 return bg_action.start_action
+            if is_deep_research_model_name(clean_name):
+                bg_action = self._resolve_deep_research_model(
+                    name,
+                    self._interactions_client_options(),
+                    self._plugin_api_key(),
+                )
+                return bg_action.start_action
             return None
         elif action_type == ActionKind.CHECK_OPERATION:
-            # Check action names are in format {model_name}/check
-            # Extract the model name and resolve if it's a Veo model
             if name.endswith('/check'):
-                model_name = name[:-6]  # Remove '/check' suffix
+                model_name = name[:-6]
                 prefix = GOOGLEAI_PLUGIN_NAME + '/'
                 clean_name = model_name.replace(prefix, '') if model_name.startswith(prefix) else model_name
                 if is_veo_model(clean_name):
                     bg_action = self._resolve_veo_model(model_name)
                     return bg_action.check_action
+                if is_deep_research_model_name(clean_name):
+                    bg_action = self._resolve_deep_research_model(
+                        model_name,
+                        self._interactions_client_options(),
+                        self._plugin_api_key(),
+                    )
+                    return bg_action.check_action
+            return None
+        elif action_type == ActionKind.CANCEL_OPERATION:
+            if name.endswith('/cancel'):
+                model_name = name[:-7]
+                prefix = GOOGLEAI_PLUGIN_NAME + '/'
+                clean_name = model_name.replace(prefix, '') if model_name.startswith(prefix) else model_name
+                if is_deep_research_model_name(clean_name):
+                    bg_action = self._resolve_deep_research_model(
+                        model_name,
+                        self._interactions_client_options(),
+                        self._plugin_api_key(),
+                    )
+                    return bg_action.cancel_action
             return None
         elif action_type == ActionKind.EMBEDDER:
             return self._resolve_embedder(name)
@@ -605,6 +693,19 @@ class GoogleAI(Plugin):
             cancel_action=None,
         )
 
+    def _resolve_deep_research_model(
+        self,
+        name: str,
+        client_options: ClientOptions,
+        plugin_api_key: str | None,
+    ) -> BackgroundAction:
+        """Create a BackgroundAction for a Deep Research model."""
+        return create_deep_research_background_action(
+            name,
+            plugin_api_key=plugin_api_key,
+            client_options=client_options,
+        )
+
     def _resolve_model(self, name: str) -> Action:
         """Create an Action object for a Google AI model.
 
@@ -616,6 +717,19 @@ class GoogleAI(Plugin):
         """
         # Extract local name (remove plugin prefix)
         clean_name = name.replace(GOOGLEAI_PLUGIN_NAME + '/', '') if name.startswith(GOOGLEAI_PLUGIN_NAME) else name
+
+        if is_antigravity_model_name(clean_name):
+            return create_antigravity_action(
+                name,
+                plugin_api_key=self._plugin_api_key(),
+                client_options=self._interactions_client_options(),
+            )
+        if is_googleai_lyria_model_name(clean_name):
+            return create_googleai_lyria_action(
+                name,
+                plugin_api_key=self._plugin_api_key(),
+                client_options=self._interactions_client_options(),
+            )
 
         # Determine model type and create model metadata/config schema
         if clean_name.lower().startswith('image'):
@@ -700,6 +814,33 @@ class GoogleAI(Plugin):
                     name=googleai_name(name),
                     info=veo_model_info(name).model_dump(by_alias=True),
                     config_schema=VeoConfigSchema,
+                )
+            )
+
+        for name in list_known_deep_research_models():
+            actions_list.append(
+                model_action_metadata(
+                    name=googleai_name(name),
+                    info=deep_research_model_info(name).model_dump(by_alias=True),
+                    config_schema=DeepResearchConfigSchema,
+                )
+            )
+
+        for name in list_known_antigravity_models():
+            actions_list.append(
+                model_action_metadata(
+                    name=googleai_name(name),
+                    info=antigravity_model_info(name).model_dump(by_alias=True),
+                    config_schema=AntigravityConfigSchema,
+                )
+            )
+
+        for name in list_known_googleai_lyria_models():
+            actions_list.append(
+                model_action_metadata(
+                    name=googleai_name(name),
+                    info=googleai_lyria_model_info(name).model_dump(by_alias=True),
+                    config_schema=GoogleAILyriaConfigSchema,
                 )
             )
 
