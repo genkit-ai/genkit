@@ -406,13 +406,14 @@ class GoogleAI(Plugin):
         ... )
         >>>
         >>> # Video generation (background model)
-        >>> op = await ai.generate(
+        >>> operation = await ai.generate_operation(
         ...     model='googleai/veo-2.0-generate-001',
         ...     prompt='A sunset over mountains',
         ... )
-        >>> while not op.done:
+        >>> while not operation.done:
         ...     await asyncio.sleep(5)
-        ...     op = await ai.check_operation(op)
+        ...     operation = await ai.check_operation(operation)
+        >>> print(operation.output.message.content[0].root.media.url)
 
     Attributes:
         name: The plugin name ('googleai').
