@@ -17,6 +17,7 @@
 package core
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/firebase/genkit/go/internal/registry"
@@ -194,16 +195,108 @@ func TestResolveSchema(t *testing.T) {
 		}
 	})
 
+	t.Run("resolves multi-level genkit ref", func(t *testing.T) {
+		r := registry.New()
+		innerInnerSchema := map[string]any{
+			"type": "string",
+		}
+		r.RegisterSchema("InnerInner", innerInnerSchema)
+
+		innerSchema := map[string]any{
+			"$ref": "genkit:InnerInner",
+		}
+		r.RegisterSchema("Inner", innerSchema)
+
+		outerSchema := map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"field": map[string]any{
+					"$ref": "genkit:Inner",
+				},
+			},
+		}
+
+		resolved, err := ResolveSchema(r, outerSchema)
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		props := resolved["properties"].(map[string]any)
+		field := props["field"].(map[string]any)
+		if diff := cmp.Diff(innerInnerSchema, field); diff != "" {
+			t.Errorf("multi-level schema mismatch (-want +got):\n%s", diff)
+		}
+	})
+
 	t.Run("returns error for missing schema", func(t *testing.T) {
 		r := registry.New()
 		refSchema := map[string]any{
 			"$ref": "genkit:NonExistent",
 		}
-
 		_, err := ResolveSchema(r, refSchema)
-
 		if err == nil {
 			t.Error("expected error for missing schema, got nil")
+		}
+	})
+
+	t.Run("handles circular genkit ref without stack overflow", func(t *testing.T) {
+		r := registry.New()
+		nodeSchema := map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"child": map[string]any{
+					"$ref": "genkit:Node",
+				},
+			},
+		}
+		r.RegisterSchema("Node", nodeSchema)
+
+		resolved, err := ResolveSchema(r, nodeSchema)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		props := resolved["properties"].(map[string]any)
+		child := props["child"].(map[string]any)
+		if ref, ok := child["$ref"].(string); !ok || ref != "genkit:Node" {
+			t.Errorf("expected child to remain a ref, got %v", child)
+		}
+	})
+
+	t.Run("resolves ref in nested array", func(t *testing.T) {
+		r := registry.New()
+		r.RegisterSchema("Item", map[string]any{"type": "string"})
+		schema := map[string]any{
+			"type": "array",
+			"items": []any{
+				map[string]any{"$ref": "genkit:Item"},
+			},
+		}
+		resolved, err := ResolveSchema(r, schema)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		items := resolved["items"].([]any)
+		item := items[0].(map[string]any)
+		if item["type"] != "string" {
+			t.Errorf("expected type string, got %v", item["type"])
+		}
+	})
+
+	t.Run("returns same instance when no resolution needed", func(t *testing.T) {
+		r := registry.New()
+		schema := map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"foo": map[string]any{"type": "string"},
+			},
+		}
+		resolved, err := ResolveSchema(r, schema)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if reflect.ValueOf(schema).Pointer() != reflect.ValueOf(resolved).Pointer() {
+			t.Error("expected same schema instance, but it was cloned")
 		}
 	})
 }
