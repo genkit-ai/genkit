@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import * as fsSync from 'fs';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import type { Runtime } from '../manager/types';
@@ -122,20 +123,52 @@ export function projectNameFromGenkitFilePath(filePath: string): string {
 }
 
 /**
+ * Maps a filename to a Genkit SDK runtime if it is a recognized marker file.
+ */
+function matchRuntimeMarker(file: string, isFile: boolean): Runtime {
+  if (!isFile) return undefined;
+  if (path.extname(file) === '.go' || file === 'go.mod') {
+    return 'go';
+  }
+  if (file === 'pyproject.toml' || file === 'requirements.txt') {
+    return 'python';
+  }
+  if (file === 'pubspec.yaml') {
+    return 'dart';
+  }
+  return undefined;
+}
+
+/**
  * Detects what runtime is used in the current directory.
  * @returns Runtime of the project directory.
  */
 export async function detectRuntime(directory: string): Promise<Runtime> {
-  const files = await fs.readdir(directory);
-  for (const file of files) {
-    const filePath = path.join(directory, file);
-    const stat = await fs.stat(filePath);
-    if (stat.isFile() && (path.extname(file) === '.go' || file === 'go.mod')) {
-      return 'go';
-    }
-  }
   try {
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const runtime = matchRuntimeMarker(entry.name, entry.isFile());
+      if (runtime) return runtime;
+    }
     await fs.access(path.join(directory, 'package.json'));
+    return 'nodejs';
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Synchronously detects what runtime is used in the current directory.
+ * @returns Runtime of the project directory.
+ */
+export function detectRuntimeSync(directory: string): Runtime {
+  try {
+    const entries = fsSync.readdirSync(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const runtime = matchRuntimeMarker(entry.name, entry.isFile());
+      if (runtime) return runtime;
+    }
+    fsSync.accessSync(path.join(directory, 'package.json'));
     return 'nodejs';
   } catch {
     return undefined;

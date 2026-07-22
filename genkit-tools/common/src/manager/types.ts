@@ -16,7 +16,7 @@
 
 import type { GenkitError } from '../types/error';
 
-export type Runtime = 'nodejs' | 'go' | undefined;
+export type Runtime = 'nodejs' | 'go' | 'python' | 'dart' | undefined;
 
 export class GenkitToolsError extends Error {
   public data?: GenkitError;

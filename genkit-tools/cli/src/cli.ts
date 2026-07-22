@@ -17,6 +17,8 @@
 import { ToolPluginSubCommandsSchema } from '@genkit-ai/tools-common/plugin';
 import {
   RunCommandEvent,
+  detectRuntime,
+  findProjectRoot,
   logger,
   notifyAnalyticsIfFirstRun,
   record,
@@ -110,8 +112,14 @@ export async function startCLI(): Promise<void> {
       }
 
       const { isCompiledBinary } = detectCLIRuntime();
+      const projectRoot = await findProjectRoot();
+      const projectRuntime = await detectRuntime(projectRoot);
       await record(
-        new RunCommandEvent(commandName, isCompiledBinary ? 'binary' : 'node')
+        new RunCommandEvent(
+          commandName,
+          isCompiledBinary ? 'binary' : 'node',
+          projectRuntime
+        )
       );
     });
 

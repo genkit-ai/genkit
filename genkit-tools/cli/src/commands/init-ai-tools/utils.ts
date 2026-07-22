@@ -154,7 +154,7 @@ export function getGenkitContext(runtime: Runtime): string {
     case 'go':
       return GoContext;
     default:
-      throw new Error('Unexpected runtime provided', runtime);
+      throw new Error(`Unexpected runtime provided: ${runtime}`);
   }
 }
 
