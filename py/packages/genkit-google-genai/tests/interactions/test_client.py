@@ -52,9 +52,10 @@ async def test_create_interaction_posts_with_headers() -> None:
     assert captured['method'] == 'POST'
     assert captured['url'] == 'https://generativelanguage.googleapis.com/v1beta/interactions'
     headers = captured['headers']
-    assert headers['x-goog-api-key'] == 'test-key'
-    assert headers['api-revision'] == API_REVISION
-    assert GENKIT_CLIENT_HEADER in headers['x-goog-api-client']
+    assert isinstance(headers, dict)
+    assert headers.get('x-goog-api-key') == 'test-key'
+    assert headers.get('api-revision') == API_REVISION
+    assert GENKIT_CLIENT_HEADER in str(headers.get('x-goog-api-client', ''))
 
 
 @pytest.mark.asyncio

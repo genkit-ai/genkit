@@ -156,8 +156,10 @@ class TestFromVeoOperation:
         assert op.output.finish_reason == FinishReason.STOP
         content = op.output.message.content if op.output.message else []
         assert len(content) == 2
-        assert content[0].root.media.url == 'https://example.com/v1.mp4'
-        assert content[1].root.media.url == 'https://example.com/v2.mp4'
+        media0 = content[0].root.media
+        media1 = content[1].root.media
+        assert media0 is not None and media0.url == 'https://example.com/v1.mp4'
+        assert media1 is not None and media1.url == 'https://example.com/v2.mp4'
 
     def test_pydantic_response_with_videos(self) -> None:
         """Pydantic GenerateVideosResponse extracts video URIs (check path).
@@ -188,8 +190,10 @@ class TestFromVeoOperation:
         assert op.output.finish_reason == FinishReason.STOP
         content = op.output.message.content if op.output.message else []
         assert len(content) == 2
-        assert content[0].root.media.url == 'https://example.com/video_a.mp4'
-        assert content[1].root.media.url == 'https://example.com/video_b.mp4'
+        media0 = content[0].root.media
+        media1 = content[1].root.media
+        assert media0 is not None and media0.url == 'https://example.com/video_a.mp4'
+        assert media1 is not None and media1.url == 'https://example.com/video_b.mp4'
 
     def test_pydantic_response_empty_videos(self) -> None:
         """Pydantic response with no generated_videos produces no output."""
@@ -298,4 +302,5 @@ async def test_veo_generate_operation_poll_loop(mock_list_models: MagicMock, moc
     assert operation.output.finish_reason == FinishReason.STOP
     content = operation.output.message.content if operation.output.message else []
     assert len(content) == 1
-    assert content[0].root.media.url == 'https://example.com/generated.mp4'
+    media = content[0].root.media
+    assert media is not None and media.url == 'https://example.com/generated.mp4'

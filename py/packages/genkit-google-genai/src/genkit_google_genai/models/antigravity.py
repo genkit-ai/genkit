@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -126,19 +126,23 @@ class AntigravityModel:
         request_options.pop('response_modalities', None)
 
         messages = downgrade_system_messages(request.messages or [])
-        req: CreateInteractionRequest = {
+        req_dict: dict[str, Any] = {
             'agent': extract_version(self._version),
             'input': to_interaction_steps(ensure_tool_ids(messages)),
-            **({'previous_interaction_id': previous_interaction_id} if previous_interaction_id else {}),
-            **({'store': store} if store is not None else {}),
-            **({'environment': environment} if environment is not None else {}),
-            **request_options,
         }
+        if previous_interaction_id:
+            req_dict['previous_interaction_id'] = previous_interaction_id
+        if store is not None:
+            req_dict['store'] = store
+        if environment is not None:
+            req_dict['environment'] = environment
+        req_dict.update(request_options)
 
         response_modalities = response_modalities_from_config(config)
         if response_modalities is not None:
-            req['response_modalities'] = response_modalities
+            req_dict['response_modalities'] = response_modalities
 
+        req = cast(CreateInteractionRequest, req_dict)
         client = InteractionsClient(api_key=api_key, client_options=client_options)
         try:
             interaction = await client.create_interaction(req)

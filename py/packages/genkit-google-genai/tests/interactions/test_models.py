@@ -86,7 +86,10 @@ async def test_deep_research_start_sends_background_request() -> None:
         'thinking_summaries': 'auto',
     }
     assert body['tools'] == [{'type': 'google_search'}]
-    assert body['input'][0]['type'] == 'user_input'
+    input_steps = body['input']
+    assert isinstance(input_steps, list)
+    assert isinstance(input_steps[0], dict)
+    assert input_steps[0]['type'] == 'user_input'
     assert operation.id == 'dr-1'
     assert operation.done is False
     assert 'apiKey' not in (operation.metadata or {}).get('clientOptions', {})
@@ -249,7 +252,10 @@ async def test_deep_research_define_background_model_sets_action() -> None:
     assert isinstance(operation, Operation)
     assert operation.action == f'/background-model/{ref.name}'
     assert operation.id == 'dr-action-1'
-    supports = (bg.start_action.metadata or {}).get('model', {}).get('supports', {})
+    model_meta = (bg.start_action.metadata or {}).get('model')
+    assert isinstance(model_meta, dict)
+    supports = model_meta.get('supports')
+    assert isinstance(supports, dict)
     assert supports.get('longRunning') is True
 
 

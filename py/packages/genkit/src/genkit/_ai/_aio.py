@@ -1261,7 +1261,7 @@ class Genkit:
             )
 
         # Check if model supports long-running operations
-        if not _model_supports_long_running(model_action):
+        if not _model_supports_long_running(cast(Action, model_action)):
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f"Model '{model_action.name}' does not support long running operations.",

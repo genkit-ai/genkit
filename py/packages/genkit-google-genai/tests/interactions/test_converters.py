@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 from genkit_google_genai._interactions.converters import (
     ensure_tool_ids,
@@ -30,7 +32,7 @@ from genkit_google_genai._interactions.converters import (
     to_interaction_steps,
     to_interaction_tool,
 )
-from genkit_google_genai._interactions.types import GeminiInteraction
+from genkit_google_genai._interactions.types import Content, GeminiInteraction
 
 from genkit import (
     CustomPart,
@@ -282,7 +284,7 @@ class TestFromInteractionContent:
 
     def test_thought(self) -> None:
         content = {'type': 'thought', 'signature': 'SIG', 'summary': [{'type': 'text', 'text': 'Thinking...'}]}
-        result = from_interaction_content(content)
+        result = from_interaction_content(cast(Content, content))
         assert _part_dict(result) == {
             'reasoning': 'Thinking...',
             'metadata': {'thoughtSignature': 'SIG'},

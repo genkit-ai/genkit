@@ -119,7 +119,7 @@ class InteractionsClient:
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._api_key = api_key
-        self._client_options = client_options or {}
+        self._client_options: ClientOptions = client_options or {}
         self._http_client = http_client
         self._owns_client = http_client is None
 

@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel
 
@@ -95,7 +95,7 @@ def merge_client_options(
     config: dict[str, Any],
 ) -> ClientOptions:
     """Apply per-request client overrides from model config."""
-    merged: ClientOptions = dict(base)
+    merged = cast(ClientOptions, dict(base))
     if base_url := config.get('baseUrl') or config.get('base_url'):
         merged['base_url'] = str(base_url)
     if api_version := config.get('apiVersion') or config.get('api_version'):
@@ -114,7 +114,7 @@ def remove_client_option_overrides(config: dict[str, Any]) -> dict[str, Any]:
 
 def client_options_for_operation(client_options: ClientOptions) -> ClientOptions:
     """Persist only reconstructable client settings on an Operation (DB10)."""
-    return dict(client_options)
+    return cast(ClientOptions, dict(client_options))
 
 
 def response_modalities_from_config(

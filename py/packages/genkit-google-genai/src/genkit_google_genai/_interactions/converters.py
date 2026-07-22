@@ -306,7 +306,7 @@ def from_interaction_content(content: Content) -> Part:
     if content_type == 'image':
         return from_image_content(cast(ImageContent, content))
     if content_type in ('audio', 'document'):
-        return Part(root=from_media_content(content))
+        return Part(root=from_media_content(cast(AudioContent | DocumentContent, content)))
     if content_type == 'video':
         return from_video_content(cast(VideoContent, content))
     if content_type == 'thought':
@@ -499,7 +499,7 @@ def from_thought_content(content: ThoughtContent) -> Part:
         chunks: list[str] = []
         for item in summary:
             if item.get('type') == 'text':
-                chunks.append(item.get('text') or '')
+                chunks.append(str(item.get('text') or ''))
             else:
                 chunks.append('[Image]')
         reasoning = '\n'.join(chunks)
@@ -567,6 +567,8 @@ def _usage_from_interaction(usage: Usage) -> ModelUsage:
                 response_usage.input_images = modality_token.get('tokens')
             case 'audio':
                 response_usage.input_audio_files = modality_token.get('tokens')
+            case _:
+                pass
     for modality_token in usage.get('output_tokens_by_modality') or []:
         match modality_token.get('modality'):
             case 'text':
@@ -575,6 +577,8 @@ def _usage_from_interaction(usage: Usage) -> ModelUsage:
                 response_usage.output_images = modality_token.get('tokens')
             case 'audio':
                 response_usage.output_audio_files = modality_token.get('tokens')
+            case _:
+                pass
     return response_usage
 
 

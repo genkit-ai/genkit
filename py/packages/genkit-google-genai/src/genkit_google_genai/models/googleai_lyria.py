@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -118,13 +118,14 @@ class GoogleAILyriaModel:
 
         messages = request.messages or []
         default_modalities: list[ResponseModality] = ['audio', 'text']
-        req: CreateInteractionRequest = {
+        req_dict: dict[str, Any] = {
             'model': extract_version(self._version),
             'input': to_interaction_steps(ensure_tool_ids(messages)),
             'response_modalities': response_modalities_from_config(config, default=default_modalities)
             or default_modalities,
-            **passthrough,
         }
+        req_dict.update(passthrough)
+        req = cast(CreateInteractionRequest, req_dict)
 
         client = InteractionsClient(api_key=api_key, client_options=client_options)
         try:

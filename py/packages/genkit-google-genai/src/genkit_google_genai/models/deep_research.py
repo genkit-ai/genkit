@@ -180,29 +180,29 @@ def list_known_deep_research_models() -> list[ModelRef]:
 def _build_tools(request: ModelRequest, config: dict[str, Any]) -> list[InteractionTool]:
     tools: list[InteractionTool] = []
     if request.tools:
-        for tool in request.tools:
-            tools.append(to_interaction_tool(tool))
+        for tool_def in request.tools:
+            tools.append(to_interaction_tool(tool_def))
 
     google_search = config.get('googleSearch') or config.get('google_search')
     if google_search:
-        tool: InteractionTool = {'type': 'google_search'}
+        builtin: InteractionTool = {'type': 'google_search'}
         if isinstance(google_search, dict):
-            tool = cast(InteractionTool, {'type': 'google_search', **google_search})
-        tools.append(tool)
+            builtin = cast(InteractionTool, {'type': 'google_search', **google_search})
+        tools.append(builtin)
 
     url_context = config.get('urlContext') or config.get('url_context')
     if url_context:
-        tool = {'type': 'url_context'}
+        builtin = {'type': 'url_context'}
         if isinstance(url_context, dict):
-            tool = cast(InteractionTool, {'type': 'url_context', **url_context})
-        tools.append(tool)
+            builtin = cast(InteractionTool, {'type': 'url_context', **url_context})
+        tools.append(builtin)
 
     code_execution = config.get('codeExecution') or config.get('code_execution')
     if code_execution:
-        tool = {'type': 'code_execution'}
+        builtin = {'type': 'code_execution'}
         if isinstance(code_execution, dict):
-            tool = cast(InteractionTool, {'type': 'code_execution', **code_execution})
-        tools.append(tool)
+            builtin = cast(InteractionTool, {'type': 'code_execution', **code_execution})
+        tools.append(builtin)
 
     file_search = config.get('fileSearch') or config.get('file_search')
     if isinstance(file_search, dict):
@@ -212,15 +212,16 @@ def _build_tools(request: ModelRequest, config: dict[str, Any]) -> list[Interact
             for key, value in file_search.items()
             if key not in {'fileSearchStoreNames', 'file_search_store_names'}
         }
-        tool = cast(
-            InteractionTool,
-            {
-                'type': 'file_search',
-                'file_search_store_names': store_names,
-                **rest,
-            },
+        tools.append(
+            cast(
+                InteractionTool,
+                {
+                    'type': 'file_search',
+                    'file_search_store_names': store_names,
+                    **rest,
+                },
+            )
         )
-        tools.append(tool)
 
     mcp_servers = config.get('mcpServers') or config.get('mcp_servers') or []
     for mcp_server in mcp_servers:
@@ -228,15 +229,16 @@ def _build_tools(request: ModelRequest, config: dict[str, Any]) -> list[Interact
             continue
         allowed_tools = mcp_server.get('allowedTools') or mcp_server.get('allowed_tools')
         rest_mcp = {key: value for key, value in mcp_server.items() if key not in {'allowedTools', 'allowed_tools'}}
-        tool = cast(
-            InteractionTool,
-            {
-                'type': 'mcp_server',
-                **rest_mcp,
-                **({'allowed_tools': allowed_tools} if allowed_tools else {}),
-            },
+        tools.append(
+            cast(
+                InteractionTool,
+                {
+                    'type': 'mcp_server',
+                    **rest_mcp,
+                    **({'allowed_tools': allowed_tools} if allowed_tools else {}),
+                },
+            )
         )
-        tools.append(tool)
 
     return tools
 
@@ -290,23 +292,27 @@ def _build_create_request(request: ModelRequest, version: str, config: dict[str,
     tools = _build_tools(request, config)
     messages = downgrade_system_messages(request.messages or [])
 
-    req: CreateInteractionRequest = {
+    req_dict: dict[str, Any] = {
         'agent': extract_version(version),
         'input': to_interaction_steps(ensure_tool_ids(messages)),
         'background': True,
         'agent_config': agent_config,
-        **({'previous_interaction_id': previous_interaction_id} if previous_interaction_id else {}),
-        **({'store': store} if store is not None else {}),
-        **({'tools': tools} if tools else {}),
-        **({'response_format': response_format} if response_format else {}),
-        **passthrough,
     }
+    if previous_interaction_id:
+        req_dict['previous_interaction_id'] = previous_interaction_id
+    if store is not None:
+        req_dict['store'] = store
+    if tools:
+        req_dict['tools'] = tools
+    if response_format is not None:
+        req_dict['response_format'] = response_format
+    req_dict.update(passthrough)
 
     response_modalities = response_modalities_from_config(config)
     if response_modalities is not None:
-        req['response_modalities'] = response_modalities
+        req_dict['response_modalities'] = response_modalities
 
-    return req
+    return cast(CreateInteractionRequest, req_dict)
 
 
 class DeepResearchModel:
@@ -341,8 +347,9 @@ class DeepResearchModel:
 
     async def check(self, operation: Operation) -> Operation:
         """Poll a Deep Research interaction for completion."""
-        stored_options = cast(ClientOptions | None, (operation.metadata or {}).get('clientOptions'))
-        check_options = merge_client_options(self._client_options, dict(stored_options or {}))
+        stored_raw = (operation.metadata or {}).get('clientOptions')
+        stored_dict: dict[str, Any] = cast(dict[str, Any], stored_raw) if isinstance(stored_raw, dict) else {}
+        check_options = merge_client_options(self._client_options, stored_dict)
         api_key = calculate_api_key(self._plugin_api_key, None)
         client = InteractionsClient(api_key=api_key, client_options=check_options)
         try:
@@ -353,8 +360,9 @@ class DeepResearchModel:
 
     async def cancel(self, operation: Operation) -> Operation:
         """Cancel an in-progress Deep Research interaction."""
-        stored_options = cast(ClientOptions | None, (operation.metadata or {}).get('clientOptions'))
-        cancel_options = merge_client_options(self._client_options, dict(stored_options or {}))
+        stored_raw = (operation.metadata or {}).get('clientOptions')
+        stored_dict: dict[str, Any] = cast(dict[str, Any], stored_raw) if isinstance(stored_raw, dict) else {}
+        cancel_options = merge_client_options(self._client_options, stored_dict)
         api_key = calculate_api_key(self._plugin_api_key, None)
         client = InteractionsClient(api_key=api_key, client_options=cancel_options)
         try:
