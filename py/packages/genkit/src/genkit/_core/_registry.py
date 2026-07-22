@@ -767,6 +767,9 @@ class Registry:
         """
         action = await self.resolve_action(ActionKind.MODEL, name)
         if action is None:
+            # background-only models (Veo, Deep Research) live under a different kind
+            action = await self.resolve_action(ActionKind.BACKGROUND_MODEL, name)
+        if action is None:
             return None
         return cast(
             Action[ModelRequest, ModelResponse, ModelResponseChunk],

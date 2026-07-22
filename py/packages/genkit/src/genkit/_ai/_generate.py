@@ -68,6 +68,7 @@ from genkit._core._typing import (
     FinishReason,
     MiddlewareRef,
     MultipartToolResponse,
+    Operation,
     Part,
     Role,
     TextPart,
@@ -702,6 +703,12 @@ async def _generate_action_turn(
                 ctx,
                 next_fn,
             )
+
+        # Background models return an Operation to poll, not a finished message.
+        # The tool loop below assumes response.message exists, so branch out first.
+        if model.kind == ActionKind.BACKGROUND_MODEL:
+            operation = cast(Operation, model_response)
+            return ModelResponse(operation=operation, request=request)
 
         def message_parser(msg: Message) -> Any:  # noqa: ANN401
             if formatter is None:
