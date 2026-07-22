@@ -47,7 +47,7 @@ type ollamaChatRequest struct {
 	Images    []string         `json:"images,omitempty"`
 	Model     string           `json:"model"`
 	Stream    bool             `json:"stream"`
-	Format    string           `json:"format,omitempty"`
+	Format    any              `json:"format,omitempty"`
 	Tools     []ollamaTool     `json:"tools,omitempty"`
 	Think     *ThinkOption     `json:"think,omitempty"`
 	Options   map[string]any   `json:"options,omitempty"`
