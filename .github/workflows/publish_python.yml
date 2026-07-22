@@ -100,4 +100,4 @@ jobs:
           VERSION="${TAG#py/v}"
           [[ "$VERSION" == "$TAG" ]] && VERSION="${TAG#release/py/}"
           pip install "genkit==${VERSION}"
-          python -c "from genkit.ai import Genkit; print('ok')"
+          python -c "from genkit import Genkit; Genkit(); print('ok')"

@@ -1527,7 +1527,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit"
-version = "0.8.0"
+version = "0.8.1"
 source = { editable = "packages/genkit" }
 dependencies = [
     { name = "anyio" },
@@ -1551,6 +1551,7 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "uvicorn" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
+    { name = "websockets" },
 ]
 
 [package.optional-dependencies]
@@ -1602,12 +1603,13 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "uvicorn", specifier = ">=0.34.0" },
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0" },
+    { name = "websockets", specifier = ">=13.0.0" },
 ]
 provides-extras = ["flask", "google-cloud", "google-genai", "ollama", "openai", "vertex-ai"]
 
 [[package]]
 name = "genkit-anthropic"
-version = "0.8.0"
+version = "0.8.1"
 source = { editable = "packages/genkit-anthropic" }
 dependencies = [
     { name = "anthropic" },
@@ -1622,7 +1624,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-django"
-version = "0.8.0"
+version = "0.8.1"
 source = { editable = "packages/genkit-django" }
 dependencies = [
     { name = "django", version = "5.2.14", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1640,7 +1642,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-evaluators"
-version = "0.8.0"
+version = "0.8.1"
 source = { editable = "packages/genkit-evaluators" }
 dependencies = [
     { name = "genkit" },
@@ -1655,7 +1657,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-fastapi"
-version = "0.8.0"
+version = "0.8.1"
 source = { editable = "packages/genkit-fastapi" }
 dependencies = [
     { name = "fastapi" },
@@ -1672,7 +1674,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-flask"
-version = "0.8.0"
+version = "0.8.1"
 source = { editable = "packages/genkit-flask" }
 dependencies = [
     { name = "flask" },
@@ -1691,7 +1693,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-google-cloud"
-version = "0.8.0"
+version = "0.8.1"
 source = { editable = "packages/genkit-google-cloud" }
 dependencies = [
     { name = "genkit" },
@@ -1712,7 +1714,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-google-genai"
-version = "0.8.0"
+version = "0.8.1"
 source = { editable = "packages/genkit-google-genai" }
 dependencies = [
     { name = "genkit" },
@@ -1733,7 +1735,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-middleware"
-version = "0.8.0"
+version = "0.8.1"
 source = { editable = "packages/genkit-middleware" }
 dependencies = [
     { name = "genkit" },
@@ -1761,7 +1763,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "genkit-ollama"
-version = "0.8.0"
+version = "0.8.1"
 source = { editable = "packages/genkit-ollama" }
 dependencies = [
     { name = "genkit" },
@@ -1778,7 +1780,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-openai"
-version = "0.8.0"
+version = "0.8.1"
 source = { editable = "packages/genkit-openai" }
 dependencies = [
     { name = "genkit" },
@@ -1795,7 +1797,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-vertexai"
-version = "0.8.0"
+version = "0.8.1"
 source = { editable = "packages/genkit-vertexai" }
 dependencies = [
     { name = "anthropic" },

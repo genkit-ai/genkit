@@ -38,7 +38,7 @@ license = "Apache-2.0"
 name = "genkit-evaluators"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.8.0"
+version = "0.8.1"
 
 [project.urls]
 "Homepage" = "https://github.com/genkit-ai/genkit"
