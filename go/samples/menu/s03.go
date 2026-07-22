@@ -58,7 +58,7 @@ func (ch *chatHistoryStore) Retrieve(sessionID string) chatHistory {
 }
 
 func setup03(g *genkit.Genkit, m ai.Model) error {
-	chatPreamblePrompt := genkit.DefinePrompt(g, "s03_chatPreamble",
+	chatPreamblePrompt := g.DefinePrompt("s03_chatPreamble",
 		ai.WithMessages(
 			ai.NewUserTextMessage("Hi. What's on the menu today?"),
 			ai.NewModelTextMessage(`
@@ -98,7 +98,7 @@ Do you have any questions about the menu?`),
 		sessions: make(map[string]chatHistory),
 	}
 
-	genkit.DefineFlow(g, "s03_multiTurnChat",
+	g.DefineFlow("s03_multiTurnChat",
 		func(ctx context.Context, input *chatSessionInput) (*chatSessionOutput, error) {
 			history := storedHistory.Retrieve(input.SessionID)
 			msg := &ai.Message{
@@ -108,7 +108,7 @@ Do you have any questions about the menu?`),
 				Role: ai.RoleUser,
 			}
 			messages := append(slices.Clip(history), msg)
-			resp, err := genkit.Generate(ctx, g, ai.WithModel(m), ai.WithMessages(messages...))
+			resp, err := g.Generate(ctx, ai.WithModel(m), ai.WithMessages(messages...))
 			if err != nil {
 				return nil, err
 			}

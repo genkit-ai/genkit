@@ -24,7 +24,6 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
-	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
 
@@ -143,7 +142,7 @@ func TestArtifactsSystemPromptListing(t *testing.T) {
 					Name:  "notes.md",
 					Parts: []*ai.Part{ai.NewTextPart("some notes here")},
 				})
-				if _, err := genkit.Generate(ctx, g,
+				if _, err := g.Generate(ctx,
 					ai.WithModel(capture),
 					ai.WithMessages(input.Message),
 					ai.WithUse(&Artifacts{}),
@@ -188,7 +187,7 @@ func TestArtifactsNoSession(t *testing.T) {
 		return toolReqResp(req, &ai.ToolRequest{Name: "read_artifact", Input: map[string]any{"name": "x"}}), nil
 	})
 
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(model), ai.WithPrompt("read x"), ai.WithUse(&Artifacts{}))
+	resp, err := g.Generate(ctx, ai.WithModel(model), ai.WithPrompt("read x"), ai.WithUse(&Artifacts{}))
 	if err != nil {
 		t.Fatal(err)
 	}

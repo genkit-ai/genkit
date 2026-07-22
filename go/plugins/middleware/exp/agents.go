@@ -58,9 +58,9 @@ const (
 // than the registry directly.
 func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (api.BidiAction, error) {
 	if g == nil {
-		return nil, fmt.Errorf("no Genkit instance on the context (the agents middleware must run within genkit.Generate or a genkit-defined agent)")
+		return nil, fmt.Errorf("no Genkit instance on the context (the agents middleware must run within a Genkit Generate call or a genkit-defined agent)")
 	}
-	action := genkit.LookupAction(g, "/agent/"+ref.Name)
+	action := g.LookupAction("/agent/" + ref.Name)
 	if action == nil {
 		return nil, fmt.Errorf("agent %q not found in registry", ref.Name)
 	}
@@ -97,9 +97,9 @@ func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (api.BidiAction, error) {
 // interaction is a future feature.
 //
 // The middleware resolves agents through genkit.FromContext, which is seeded by
-// genkit.Generate and by agents defined via the genkit/exp constructors
+// [genkit.Genkit.Generate] and by agents defined via the genkit/exp constructors
 // (genkitx.DefineAgent and friends). It is therefore typically attached to an
-// orchestrator agent (or a genkit.Generate call).
+// orchestrator agent (or a [genkit.Genkit.Generate] call).
 //
 // Usage:
 //
@@ -286,7 +286,7 @@ func (a *Agents) delegate(ref aix.AgentRef, st *agentsState) func(context.Contex
 		if len(subArtifacts) > 0 {
 			invocationID := fmt.Sprintf("%s_%d", ref.Name, invocationNum)
 			// Merge into the parent session under both strategies (no-op if there
-			// is no active session, e.g. a plain genkit.Generate call).
+			// is no active session, e.g. a plain genkit.Genkit.Generate call).
 			mergeArtifacts(ctx, ref.Name, invocationID, subArtifacts)
 			result.Artifacts = delegatedArtifacts(invocationID, subArtifacts, a.strategy())
 		}
@@ -447,7 +447,7 @@ func buildAgentsInstructions(g *genkit.Genkit, refs []aix.AgentRef, prefix strin
 // descriptor, falling back to the backing prompt's description, or "" if none.
 func discoverDescription(g *genkit.Genkit, name string) string {
 	for _, key := range []string{"/agent/" + name, "/prompt/" + name} {
-		if action := genkit.LookupAction(g, key); action != nil {
+		if action := g.LookupAction(key); action != nil {
 			if d := action.Desc().Description; d != "" {
 				return d
 			}

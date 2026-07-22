@@ -34,8 +34,7 @@ func setup05(g *genkit.Genkit, model ai.Model) error {
 	text := `Extract _all_ of the text, in order, from the following image of a restaurant menu.
 
 {{media url=imageUrl}}`
-	readMenuPrompt := genkit.DefinePrompt(
-		g, "s05_readMenu",
+	readMenuPrompt := g.DefinePrompt("s05_readMenu",
 		ai.WithPrompt(text),
 		ai.WithModel(model),
 		ai.WithInputType(imageURLInput{}),
@@ -45,8 +44,7 @@ func setup05(g *genkit.Genkit, model ai.Model) error {
 		}),
 	)
 
-	textMenuPrompt := genkit.DefinePrompt(
-		g, "s05_textMenu",
+	textMenuPrompt := g.DefinePrompt("s05_textMenu",
 		ai.WithPrompt(`
 You are acting as Walt, a helpful AI assistant here at the restaurant.
 You can answer questions about the food on the menu or any other questions
@@ -70,7 +68,7 @@ Answer this customer's question:
 	// and extracts all of the text from the photo of the menu.
 	// Note that this example uses a hard-coded image file, as image input
 	// is not currently available in the Development UI runners.
-	readMenuFlow := genkit.DefineFlow(g, "s05_readMenuFlow",
+	readMenuFlow := g.DefineFlow("s05_readMenuFlow",
 		func(ctx context.Context, _ struct{}) (string, error) {
 			image, err := os.ReadFile("testdata/menu.jpeg")
 			if err != nil {
@@ -95,7 +93,7 @@ Answer this customer's question:
 
 	// Define a flow that generates a response to the question.
 	// Just returns the LLM's text response to the question.
-	textMenuQuestionFlow := genkit.DefineFlow(g, "s05_textMenuQuestion",
+	textMenuQuestionFlow := g.DefineFlow("s05_textMenuQuestion",
 		func(ctx context.Context, input *textMenuQuestionInput) (*answerOutput, error) {
 			presp, err := textMenuPrompt.Execute(ctx, ai.WithInput(input))
 			if err != nil {
@@ -109,7 +107,7 @@ Answer this customer's question:
 	)
 
 	// Define a third composite flow that chains the first two flows.
-	genkit.DefineFlow(g, "s05_visionMenuQuestion",
+	g.DefineFlow("s05_visionMenuQuestion",
 		func(ctx context.Context, input *menuQuestionInput) (*answerOutput, error) {
 			menuText, err := readMenuFlow.Run(ctx, struct{}{})
 			if err != nil {

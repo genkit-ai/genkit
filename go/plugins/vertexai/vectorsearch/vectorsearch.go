@@ -87,17 +87,17 @@ func (v *VertexAIVectorSearch) Init(ctx context.Context) []api.Action {
 
 // DefineRetriever defines a Retriever with the given configuration.
 func DefineRetriever(ctx context.Context, g *genkit.Genkit, cfg Config, opts *ai.RetrieverOptions) (ai.Retriever, error) {
-	v := genkit.LookupPlugin(g, vectorsearchProvider).(*VertexAIVectorSearch)
+	v := g.LookupPlugin(vectorsearchProvider).(*VertexAIVectorSearch)
 	if v == nil {
 		return nil, errors.New("vectorsearch plugin not found; did you call genkit.Init with the vectorsearch plugin?")
 	}
 
-	return genkit.DefineRetriever(g, api.NewName(vectorsearchProvider, cfg.IndexID), opts, v.Retrieve), nil
+	return g.DefineRetriever(api.NewName(vectorsearchProvider, cfg.IndexID), opts, v.Retrieve), nil
 }
 
 // Index indexes documents into a Vertex AI index.
 func Index(ctx context.Context, g *genkit.Genkit, params IndexParams, documentIndexer DocumentIndexer) error {
-	v := genkit.LookupPlugin(g, vectorsearchProvider).(*VertexAIVectorSearch)
+	v := g.LookupPlugin(vectorsearchProvider).(*VertexAIVectorSearch)
 	if len(params.Docs) == 0 {
 		return nil
 	}

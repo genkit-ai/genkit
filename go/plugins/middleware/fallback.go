@@ -48,7 +48,7 @@ var defaultFallbackStatuses = []core.StatusName{
 //
 // Usage:
 //
-//	resp, err := genkit.Generate(ctx, g,
+//	resp, err := g.Generate(ctx,
 //	    ai.WithModel(primary),
 //	    ai.WithPrompt("hello"),
 //	    ai.WithUse(&middleware.Fallback{Models: []ai.ModelRef{
@@ -97,7 +97,7 @@ func (f *Fallback) wrapModel(ctx context.Context, params *ai.ModelParams, next a
 	lastErr := err
 	for _, ref := range f.Models {
 		name := ref.Name()
-		m := genkit.LookupModel(genkit.FromContext(ctx), name)
+		m := genkit.FromContext(ctx).LookupModel(name)
 		if m == nil {
 			return nil, core.NewError(core.NOT_FOUND, "fallback: model %q not found", name)
 		}

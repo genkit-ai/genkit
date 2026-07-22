@@ -143,12 +143,12 @@ func (a *Anthropic) ListActions(ctx context.Context) []api.ActionDesc {
 
 // Model returns a previously registered model
 func Model(g *genkit.Genkit, name string) ai.Model {
-	return genkit.LookupModel(g, api.NewName(provider, name))
+	return g.LookupModel(api.NewName(provider, name))
 }
 
 // IsDefinedModel returns whether a model is already defined
 func IsDefinedModel(g *genkit.Genkit, name string) bool {
-	return genkit.LookupModel(g, api.NewName(provider, name)) != nil
+	return g.LookupModel(api.NewName(provider, name)) != nil
 }
 
 // ResolveAction resolves an action with the given name

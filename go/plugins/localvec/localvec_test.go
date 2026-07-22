@@ -64,7 +64,7 @@ func TestLocalVec(t *testing.T) {
 		},
 		ConfigSchema: nil,
 	}
-	embedAction := genkit.DefineEmbedder(g, "fake/embedder1", emdOpts, embedder.Embed)
+	embedAction := g.DefineEmbedder("fake/embedder1", emdOpts, embedder.Embed)
 	ds, err := newDocStore(t.TempDir(), "testLocalVec", embedAction, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +132,7 @@ func TestPersistentIndexing(t *testing.T) {
 		},
 		ConfigSchema: nil,
 	}
-	embedAction := genkit.DefineEmbedder(g, "fake/embedder2", emdOpts, embedder.Embed)
+	embedAction := g.DefineEmbedder("fake/embedder2", emdOpts, embedder.Embed)
 
 	tDir := t.TempDir()
 
@@ -213,7 +213,7 @@ func TestInit(t *testing.T) {
 		},
 		ConfigSchema: nil,
 	}
-	embedder := genkit.DefineEmbedder(g, "fake/embedder3", emdOpts, fakeembedder.New().Embed)
+	embedder := g.DefineEmbedder("fake/embedder3", emdOpts, fakeembedder.New().Embed)
 	if err := Init(); err != nil {
 		t.Fatal(err)
 	}

@@ -44,7 +44,7 @@ func TestAnthropicLive(t *testing.T) {
 	g := genkit.MustInit(ctx, genkit.WithPlugins(&anthropicPlugin.Anthropic{}))
 	t.Run("model version ok", func(t *testing.T) {
 		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
 				MaxTokens:   1024,
@@ -65,7 +65,7 @@ func TestAnthropicLive(t *testing.T) {
 		for _, modelName := range []string{"claude-opus-4-7", "claude-opus-4-8"} {
 			t.Run(modelName, func(t *testing.T) {
 				m := anthropicPlugin.Model(g, modelName)
-				resp, err := genkit.Generate(ctx, g,
+				resp, err := g.Generate(ctx,
 					ai.WithConfig(&anthropic.MessageNewParams{
 						MaxTokens: 64,
 					}),
@@ -83,7 +83,7 @@ func TestAnthropicLive(t *testing.T) {
 	})
 	t.Run("model version not ok", func(t *testing.T) {
 		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
-		_, err := genkit.Generate(ctx, g,
+		_, err := g.Generate(ctx,
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
 				MaxTokens:   1024,
@@ -100,7 +100,7 @@ func TestAnthropicLive(t *testing.T) {
 			t.Fatal(err)
 		}
 		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithSystem("You are a professional image detective that talks like an evil pirate that loves animals, your task is to tell the name of the animal in the image but be very short"),
 			ai.WithModel(m),
 			ai.WithConfig(&anthropic.MessageNewParams{
@@ -125,7 +125,7 @@ func TestAnthropicLive(t *testing.T) {
 		}
 		out := ""
 		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithSystem("You are a professional image detective that talks like an evil pirate that loves animals, your task is to tell the name of the animal in the image but be very short"),
 			ai.WithModel(m),
 			ai.WithConfig(&anthropic.MessageNewParams{
@@ -157,7 +157,7 @@ func TestAnthropicLive(t *testing.T) {
 		}
 		out := ""
 		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithSystem(`You are a professional image detective that
 			talks like an evil pirate that loves animals, your task is to tell the name
 			of the animal in the image but be very short`),
@@ -198,15 +198,14 @@ func TestAnthropicLive(t *testing.T) {
 	})
 	t.Run("tools", func(t *testing.T) {
 		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
-		myJokeTool := genkit.DefineTool(
-			g,
+		myJokeTool := g.DefineTool(
 			"myJoke",
 			"When the user asks for a joke, this tool must be used to generate a joke, try to come up with a joke that uses the output of the tool",
 			func(ctx *ai.ToolContext, input *any) (string, error) {
 				return "why did the chicken cross the road?", nil
 			},
 		)
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModel(m),
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
@@ -229,8 +228,7 @@ func TestAnthropicLive(t *testing.T) {
 			Location string `json:"location"`
 		}
 
-		weatherTool := genkit.DefineTool(
-			g,
+		weatherTool := g.DefineTool(
 			"weather",
 			"Returns the weather for the given location",
 			func(ctx *ai.ToolContext, input *WeatherInput) (string, error) {
@@ -238,7 +236,7 @@ func TestAnthropicLive(t *testing.T) {
 			},
 		)
 
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModel(m),
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
@@ -258,7 +256,7 @@ func TestAnthropicLive(t *testing.T) {
 		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
 		out := ""
 
-		final, err := genkit.Generate(ctx, g,
+		final, err := g.Generate(ctx,
 			ai.WithPrompt("Tell me a short story about a frog and a princess"),
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
@@ -291,7 +289,7 @@ func TestAnthropicLive(t *testing.T) {
 		out := ""
 		reasoningStream := ""
 
-		final, err := genkit.Generate(ctx, g,
+		final, err := g.Generate(ctx,
 			ai.WithPrompt("Tell me a short story about a frog and a princess"),
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
@@ -342,8 +340,7 @@ func TestAnthropicLive(t *testing.T) {
 		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
 		out := ""
 
-		myStoryTool := genkit.DefineTool(
-			g,
+		myStoryTool := g.DefineTool(
 			"myStory",
 			"When the user asks for a story, create a story about a frog and a fox that are good friends",
 			func(ctx *ai.ToolContext, input *any) (string, error) {
@@ -351,7 +348,7 @@ func TestAnthropicLive(t *testing.T) {
 			},
 		)
 
-		final, err := genkit.Generate(ctx, g,
+		final, err := g.Generate(ctx,
 			ai.WithPrompt("Tell me a short story about a frog and a fox, do no mention anything else, only the short story"),
 			ai.WithModel(m),
 			ai.WithConfig(&anthropic.MessageNewParams{
@@ -384,7 +381,7 @@ func TestAnthropicLive(t *testing.T) {
 	})
 	t.Run("constrained generation", func(t *testing.T) {
 		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModel(m),
 			ai.WithConfig(&anthropic.MessageNewParams{MaxTokens: 1024}),
 			ai.WithPrompt("Which country was Napoleon the emperor of?"),
@@ -407,7 +404,7 @@ func TestAnthropicLive(t *testing.T) {
 		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
 
 		var streamedContent strings.Builder
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModel(m),
 			ai.WithConfig(&anthropic.MessageNewParams{MaxTokens: 1024}),
 			ai.WithPrompt("Which country was Napoleon the emperor of?"),
@@ -436,8 +433,7 @@ func TestAnthropicLive(t *testing.T) {
 	})
 	t.Run("tools streaming with constrained gen", func(t *testing.T) {
 		m := anthropicPlugin.Model(g, "claude-opus-4-6")
-		answerOfEverythingTool := genkit.DefineTool(
-			g,
+		answerOfEverythingTool := g.DefineTool(
 			"answerOfEverythingTool",
 			"use this tool when the user asks for the answer of everything or the universe",
 			func(ctx *ai.ToolContext, input *any) (int, error) {
@@ -448,7 +444,7 @@ func TestAnthropicLive(t *testing.T) {
 			AnswerOfEverything int `json:"answer_of_everything"`
 		}
 
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithPrompt("what's the answer of everything?"),
 			ai.WithModel(m),
 			ai.WithConfig(&anthropic.MessageNewParams{

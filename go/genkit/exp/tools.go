@@ -26,7 +26,7 @@ import (
 // DefineTool defines a tool with a simplified function signature, registers it
 // as an action of type Tool, and returns an [aix.Tool].
 //
-// Unlike [genkit.DefineTool], the function receives a plain context.Context
+// Unlike [genkit.Genkit.DefineTool], the function receives a plain context.Context
 // instead of [ai.ToolContext]. Use [tool.AttachParts] inside the function to
 // return additional content parts alongside the output.
 //
@@ -53,7 +53,7 @@ import (
 //		},
 //	)
 //
-//	resp, err := genkit.Generate(ctx, g,
+//	resp, err := g.Generate(ctx,
 //		ai.WithPrompt("What's the weather like in Paris?"),
 //		ai.WithTools(weatherTool),
 //	)
@@ -129,7 +129,7 @@ func DefineTool[In, Out any](g *genkit.Genkit, name, description string, fn aix.
 //	)
 //
 //	// In a generate loop, handle the interrupt:
-//	resp, _ := genkit.Generate(ctx, g,
+//	resp, _ := g.Generate(ctx,
 //		ai.WithPrompt("Transfer $200 to Alice"),
 //		ai.WithTools(transferTool),
 //	)
@@ -137,7 +137,7 @@ func DefineTool[In, Out any](g *genkit.Genkit, name, description string, fn aix.
 //		for _, interrupt := range resp.Interrupts() {
 //			// Ask the user for confirmation.
 //			restart, _ := tool.Resume(interrupt, Confirmation{Approved: true})
-//			resp, _ = genkit.Generate(ctx, g,
+//			resp, _ = g.Generate(ctx,
 //				ai.WithMessages(resp.History()...),
 //				ai.WithTools(transferTool),
 //				ai.WithToolRestarts(restart),

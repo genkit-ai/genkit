@@ -24,7 +24,7 @@ import (
 
 func main() {
 	g := genkit.MustInit(context.Background())
-	genkit.DefineResource(g, "server-b-files", &ai.ResourceOptions{
+	g.DefineResource("server-b-files", &ai.ResourceOptions{
 		Template: "b://files/{path}",
 	}, func(ctx context.Context, input *ai.ResourceInput) (*ai.ResourceOutput, error) {
 		return &ai.ResourceOutput{

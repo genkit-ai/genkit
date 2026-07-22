@@ -27,7 +27,7 @@ func main() {
 	g := genkit.MustInit(context.Background())
 
 	// Resource that provides different content based on filename
-	genkit.DefineResource(g, "content-provider", &ai.ResourceOptions{
+	g.DefineResource("content-provider", &ai.ResourceOptions{
 		Template: "file://data/{filename}",
 	}, func(ctx context.Context, input *ai.ResourceInput) (*ai.ResourceOutput, error) {
 		filename := input.Variables["filename"]

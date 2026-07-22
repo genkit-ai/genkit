@@ -57,7 +57,7 @@ func TestLive(t *testing.T) {
 	}
 
 	// Generate a response from the model
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithModel(m),
 		ai.WithConfig(&ollamaPlugin.GenerateContentConfig{Temperature: ollamaPlugin.Ptr(1.0), Think: ollamaPlugin.ThinkEnabled(true)}),
 		ai.WithPrompt("I'm hungry what should I eat?"),
@@ -109,7 +109,7 @@ func TestLiveDynamicDiscovery(t *testing.T) {
 	}
 
 	// Generate a response from the dynamically resolved model
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithModel(m),
 		ai.WithConfig(&ai.GenerationCommonConfig{Temperature: 1}),
 		ai.WithPrompt("Say hello in one sentence."),

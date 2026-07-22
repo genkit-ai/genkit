@@ -40,27 +40,27 @@ func FakeContextProvider(ctx context.Context, req core.RequestData) (core.Action
 func TestHandler(t *testing.T) {
 	g := MustInit(context.Background())
 
-	successFlow := DefineFlow(g, "handlerSuccess", func(ctx context.Context, input string) (string, error) {
+	successFlow := g.DefineFlow("handlerSuccess", func(ctx context.Context, input string) (string, error) {
 		return "success", nil
 	})
 
-	genericErrorFlow := DefineFlow(g, "handlerGenericError", func(ctx context.Context, input string) (string, error) {
+	genericErrorFlow := g.DefineFlow("handlerGenericError", func(ctx context.Context, input string) (string, error) {
 		return "", errors.New("generic error message")
 	})
 
-	genkitErrorInvalidArgFlow := DefineFlow(g, "handlerGenkitErrorInvalidArg", func(ctx context.Context, input string) (string, error) {
+	genkitErrorInvalidArgFlow := g.DefineFlow("handlerGenkitErrorInvalidArg", func(ctx context.Context, input string) (string, error) {
 		return "", core.NewError(core.INVALID_ARGUMENT, "invalid argument")
 	})
 
-	genkitErrorNotFoundFlow := DefineFlow(g, "handlerGenkitErrorNotFound", func(ctx context.Context, input string) (string, error) {
+	genkitErrorNotFoundFlow := g.DefineFlow("handlerGenkitErrorNotFound", func(ctx context.Context, input string) (string, error) {
 		return "", core.NewError(core.NOT_FOUND, "resource not found")
 	})
 
-	genkitErrorPermissionDeniedFlow := DefineFlow(g, "handlerGenkitErrorPermissionDenied", func(ctx context.Context, input string) (string, error) {
+	genkitErrorPermissionDeniedFlow := g.DefineFlow("handlerGenkitErrorPermissionDenied", func(ctx context.Context, input string) (string, error) {
 		return "", core.NewError(core.PERMISSION_DENIED, "permission denied")
 	})
 
-	userFacingErrorFlow := DefineFlow(g, "handlerUserFacingError", func(ctx context.Context, input string) (string, error) {
+	userFacingErrorFlow := g.DefineFlow("handlerUserFacingError", func(ctx context.Context, input string) (string, error) {
 		return "", core.NewPublicError(core.INVALID_ARGUMENT, "public error message", nil)
 	})
 
@@ -211,15 +211,15 @@ func TestHandler(t *testing.T) {
 func TestHandlerFunc(t *testing.T) {
 	g := MustInit(context.Background())
 
-	echoFlow := DefineFlow(g, "echo", func(ctx context.Context, input string) (string, error) {
+	echoFlow := g.DefineFlow("echo", func(ctx context.Context, input string) (string, error) {
 		return input, nil
 	})
 
-	errorFlow := DefineFlow(g, "error", func(ctx context.Context, input string) (string, error) {
+	errorFlow := g.DefineFlow("error", func(ctx context.Context, input string) (string, error) {
 		return "", errors.New("flow error")
 	})
 
-	contextReaderFlow := DefineFlow(g, "contextReader", func(ctx context.Context, input []string) (string, error) {
+	contextReaderFlow := g.DefineFlow("contextReader", func(ctx context.Context, input []string) (string, error) {
 		actionCtx := core.FromContext(ctx)
 		if actionCtx == nil {
 			return "", errors.New("no action context")
@@ -356,7 +356,7 @@ func TestHandlerFunc(t *testing.T) {
 func TestStreamingHandlerFunc(t *testing.T) {
 	g := MustInit(context.Background())
 
-	streamingFlow := DefineStreamingFlow(g, "streaming",
+	streamingFlow := g.DefineStreamingFlow("streaming",
 		func(ctx context.Context, input string, cb func(context.Context, string) error) (string, error) {
 			for _, c := range input {
 				if err := cb(ctx, string(c)); err != nil {
@@ -366,7 +366,7 @@ func TestStreamingHandlerFunc(t *testing.T) {
 			return input + "-end", nil
 		})
 
-	errorStreamingFlow := DefineStreamingFlow(g, "errorStreaming",
+	errorStreamingFlow := g.DefineStreamingFlow("errorStreaming",
 		func(ctx context.Context, input string, cb func(context.Context, string) error) (string, error) {
 			return "", errors.New("streaming error")
 		})
@@ -435,7 +435,7 @@ data: {"result":"hello-end"}
 func TestDurableStreamingHandlerFunc(t *testing.T) {
 	g := MustInit(context.Background())
 
-	streamingFlow := DefineStreamingFlow(g, "durableStreaming",
+	streamingFlow := g.DefineStreamingFlow("durableStreaming",
 		func(ctx context.Context, input string, cb func(context.Context, string) error) (string, error) {
 			for _, c := range input {
 				if err := cb(ctx, string(c)); err != nil {
@@ -661,7 +661,7 @@ func TestHandlerBidiInitEnvelope(t *testing.T) {
 	})
 
 	t.Run("init on non-bidi flow returns 400", func(t *testing.T) {
-		plainFlow := DefineFlow(g, "envelopePlain",
+		plainFlow := g.DefineFlow("envelopePlain",
 			func(ctx context.Context, in string) (string, error) {
 				return "out:" + in, nil
 			})
@@ -682,7 +682,7 @@ func TestHandlerBidiInitEnvelope(t *testing.T) {
 	})
 
 	t.Run("init on non-bidi flow returns 400 on streaming requests", func(t *testing.T) {
-		plainFlow := DefineFlow(g, "envelopePlainStream",
+		plainFlow := g.DefineFlow("envelopePlainStream",
 			func(ctx context.Context, in string) (string, error) {
 				return "out:" + in, nil
 			})

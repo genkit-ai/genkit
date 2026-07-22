@@ -37,33 +37,33 @@ func main() {
 		log.Fatalf("failed to initialize Genkit: %v", err)
 	}
 
-	genkit.DefineFlow(g, "basic", func(ctx context.Context, subject string) (string, error) {
+	g.DefineFlow("basic", func(ctx context.Context, subject string) (string, error) {
 		gpt4o := oai.Model(g, "gpt-4o")
 
 		prompt := fmt.Sprintf("tell me a joke about %s", subject)
 		config := &openai.ChatCompletionNewParams{Temperature: openai.Float(0.5), MaxTokens: openai.Int(100)}
-		resp, err := genkit.Generate(ctx, g, ai.WithModel(gpt4o), ai.WithPrompt(prompt), ai.WithConfig(config))
+		resp, err := g.Generate(ctx, ai.WithModel(gpt4o), ai.WithPrompt(prompt), ai.WithConfig(config))
 		if err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("resp: %s", resp.Text()), nil
 	})
 
-	genkit.DefineFlow(g, "defined-model", func(ctx context.Context, subject string) (string, error) {
+	g.DefineFlow("defined-model", func(ctx context.Context, subject string) (string, error) {
 		gpt4oMini := oai.Model(g, "gpt-4o-mini")
 		prompt := fmt.Sprintf("tell me a joke about %s", subject)
 		config := &openai.ChatCompletionNewParams{Temperature: openai.Float(0.5)}
-		resp, err := genkit.Generate(ctx, g, ai.WithModel(gpt4oMini), ai.WithPrompt(prompt), ai.WithConfig(config))
+		resp, err := g.Generate(ctx, ai.WithModel(gpt4oMini), ai.WithPrompt(prompt), ai.WithConfig(config))
 		if err != nil {
 			return "", err
 		}
 		return resp.Text(), nil
 	})
 
-	genkit.DefineFlow(g, "media", func(ctx context.Context, subject string) (string, error) {
+	g.DefineFlow("media", func(ctx context.Context, subject string) (string, error) {
 		gpt4oMini := oai.Model(g, "gpt-4o-mini")
 		config := &openai.ChatCompletionNewParams{Temperature: openai.Float(0.5)}
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModel(gpt4oMini),
 			ai.WithConfig(config),
 			ai.WithMessages(
@@ -79,7 +79,7 @@ func main() {
 	})
 
 	mux := http.NewServeMux()
-	for _, a := range genkit.ListFlows(g) {
+	for _, a := range g.ListFlows() {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
 	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))

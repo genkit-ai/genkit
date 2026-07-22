@@ -55,7 +55,7 @@ func main() {
 		log.Fatalf("failed to initialize Genkit: %v", err)
 	}
 
-	basic := genkit.DefineFlow(g, "basic", func(ctx context.Context, subject string) (string, error) {
+	basic := g.DefineFlow("basic", func(ctx context.Context, subject string) (string, error) {
 		foo, err := genkit.Run(ctx, "call-llm", func() (string, error) { return "subject: " + subject, nil })
 		if err != nil {
 			return "", err
@@ -63,7 +63,7 @@ func main() {
 		return genkit.Run(ctx, "call-llm", func() (string, error) { return "foo: " + foo, nil })
 	})
 
-	genkit.DefineFlow(g, "parent", func(ctx context.Context, _ any) (string, error) {
+	g.DefineFlow("parent", func(ctx context.Context, _ any) (string, error) {
 		return basic.Run(ctx, "foo")
 	})
 
@@ -72,7 +72,7 @@ func main() {
 		Value int    `json:"value"`
 	}
 
-	genkit.DefineFlow(g, "complex", func(ctx context.Context, c complex) (string, error) {
+	g.DefineFlow("complex", func(ctx context.Context, c complex) (string, error) {
 		foo, err := core.Run(ctx, "call-llm", func() (string, error) { return c.Key + ": " + strconv.Itoa(c.Value), nil })
 		if err != nil {
 			return "", err
@@ -80,7 +80,7 @@ func main() {
 		return foo, nil
 	})
 
-	genkit.DefineFlow(g, "throwy", func(ctx context.Context, err string) (string, error) {
+	g.DefineFlow("throwy", func(ctx context.Context, err string) (string, error) {
 		return "", errors.New(err)
 	})
 
@@ -88,7 +88,7 @@ func main() {
 		Count int `json:"count"`
 	}
 
-	genkit.DefineStreamingFlow(g, "streamy", func(ctx context.Context, count int, cb func(context.Context, chunk) error) (string, error) {
+	g.DefineStreamingFlow("streamy", func(ctx context.Context, count int, cb func(context.Context, chunk) error) (string, error) {
 		i := 0
 		if cb != nil {
 			for ; i < count; i++ {
@@ -100,7 +100,7 @@ func main() {
 		return fmt.Sprintf("done: %d, streamed: %d times", count, i), nil
 	})
 
-	genkit.DefineStreamingFlow(g, "streamyThrowy", func(ctx context.Context, count int, cb func(context.Context, chunk) error) (string, error) {
+	g.DefineStreamingFlow("streamyThrowy", func(ctx context.Context, count int, cb func(context.Context, chunk) error) (string, error) {
 		i := 0
 		if cb != nil {
 			for ; i < count; i++ {
@@ -136,7 +136,7 @@ func main() {
 		Timeline       []stepResult `json:"timeline"`
 	}
 
-	genkit.DefineStreamingFlow(g, "longRunning",
+	g.DefineStreamingFlow("longRunning",
 		func(ctx context.Context, steps int, cb func(context.Context, stepResult) error) (longRunningResult, error) {
 			if steps <= 0 {
 				steps = 3
@@ -232,7 +232,7 @@ func main() {
 		})
 
 	mux := http.NewServeMux()
-	for _, a := range genkit.ListFlows(g) {
+	for _, a := range g.ListFlows() {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
 	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))

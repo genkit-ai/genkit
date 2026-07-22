@@ -40,11 +40,11 @@ func main() {
 		log.Fatalf("failed to initialize Genkit: %v", err)
 	}
 
-	genkit.DefineFlow(g, "text-to-video", func(ctx context.Context, input string) (string, error) {
+	g.DefineFlow("text-to-video", func(ctx context.Context, input string) (string, error) {
 		if input == "" {
 			input = "Cat racing mouse"
 		}
-		operation, err := genkit.GenerateOperation(ctx, g,
+		operation, err := g.GenerateOperation(ctx,
 			ai.WithMessages(ai.NewUserTextMessage(input)),
 			ai.WithModelName("googleai/veo-3.1-generate-preview"),
 			ai.WithConfig(&genai.GenerateVideosConfig{
@@ -77,12 +77,12 @@ func main() {
 		return uri, nil
 	})
 
-	genkit.DefineFlow(g, "image-to-video", func(ctx context.Context, input any) (string, error) {
+	g.DefineFlow("image-to-video", func(ctx context.Context, input any) (string, error) {
 		imgb64, err := fetchImgAsBase64()
 		if err != nil {
 			return "", fmt.Errorf("unable to download image: %w", err)
 		}
-		operation, err := genkit.GenerateOperation(ctx, g,
+		operation, err := g.GenerateOperation(ctx,
 			ai.WithModelName("googleai/veo-3.1-generate-preview"),
 			ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("Generate a video of the following image, the cat should wake up and start accelerating the go-kart as if it just acquired a mushroom from Mario Kart"),
 				ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,"+imgb64),
@@ -111,14 +111,14 @@ func main() {
 		return "Video successfully downloaded to veo3_video.mp4", nil
 	})
 
-	genkit.DefineFlow(g, "video-to-video", func(ctx context.Context, inputURI string) (string, error) {
+	g.DefineFlow("video-to-video", func(ctx context.Context, inputURI string) (string, error) {
 		if inputURI == "" {
 			return "", fmt.Errorf("input URI is required for video extension")
 		}
 
 		log.Printf("Extending video from URI: %s", inputURI)
 
-		operation, err := genkit.GenerateOperation(ctx, g,
+		operation, err := g.GenerateOperation(ctx,
 			ai.WithModelName("googleai/veo-3.1-generate-preview"),
 			ai.WithMessages(ai.NewUserMessage(
 				ai.NewTextPart("Edit the original video background to be a rainforest, also change the video style to be a cartoon from 1950, make the transition smooth. You must keep the characters from the original video"),
@@ -160,7 +160,7 @@ func waitForCompletion(ctx context.Context, g *genkit.Genkit, op *core.Operation
 		case <-ctx.Done():
 			return nil, fmt.Errorf("context cancelled: %w", ctx.Err())
 		case <-ticker.C:
-			updatedOp, err := genkit.CheckModelOperation(ctx, g, op)
+			updatedOp, err := g.CheckModelOperation(ctx, op)
 			if err != nil {
 				return nil, fmt.Errorf("failed to check status: %w", err)
 			}

@@ -57,7 +57,7 @@ const useSkillToolName = "use_skill"
 //
 // Usage:
 //
-//	resp, err := genkit.Generate(ctx, g,
+//	resp, err := g.Generate(ctx,
 //	    ai.WithModel(m),
 //	    ai.WithPrompt("use the python skill to compute ..."),
 //	    ai.WithUse(&middleware.Skills{SkillPaths: []string{"skills"}}),

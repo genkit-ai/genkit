@@ -138,7 +138,7 @@ func defineFirestoreRetriever(g *genkit.Genkit, cfg RetrieverOptions, client *fi
 		},
 	}
 
-	return genkit.DefineRetriever(g, api.NewName(provider, cfg.Name), retOpts, retrieve), nil
+	return g.DefineRetriever(api.NewName(provider, cfg.Name), retOpts, retrieve), nil
 }
 
 func resolveFirestoreCollection(collectionName string) (string, error) {

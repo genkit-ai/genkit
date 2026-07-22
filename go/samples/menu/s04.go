@@ -27,7 +27,7 @@ import (
 )
 
 func setup04(ctx context.Context, g *genkit.Genkit, docStore *localvec.DocStore, retriever ai.Retriever, model ai.Model) error {
-	ragDataMenuPrompt := genkit.DefinePrompt(g, "s04_ragDataMenu",
+	ragDataMenuPrompt := g.DefinePrompt("s04_ragDataMenu",
 		ai.WithPrompt(`
 You are acting as Walt, a helpful AI assistant here at the restaurant.
 You can answer questions about the food on the menu or any other questions
@@ -55,7 +55,7 @@ Answer this customer's question:
 		Rows int `json:"rows"`
 	}
 
-	genkit.DefineFlow(g, "s04_indexMenuItems",
+	g.DefineFlow("s04_indexMenuItems",
 		func(ctx context.Context, input []*menuItem) (*flowOutput, error) {
 			var docs []*ai.Document
 			for _, m := range input {
@@ -78,9 +78,9 @@ Answer this customer's question:
 		},
 	)
 
-	genkit.DefineFlow(g, "s04_ragMenuQuestion",
+	g.DefineFlow("s04_ragMenuQuestion",
 		func(ctx context.Context, input *menuQuestionInput) (*answerOutput, error) {
-			resp, err := genkit.Retrieve(ctx, g,
+			resp, err := g.Retrieve(ctx,
 				ai.WithRetriever(retriever),
 				ai.WithTextDocs(input.Question),
 				ai.WithConfig(&localvec.RetrieverOptions{

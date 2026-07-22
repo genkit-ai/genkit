@@ -173,24 +173,24 @@ func (o *OpenAICompatible) DefineEmbedder(provider, name string, embedOpts *ai.E
 
 // IsDefinedEmbedder reports whether the named [Embedder] is defined by this plugin.
 func (o *OpenAICompatible) IsDefinedEmbedder(g *genkit.Genkit, name string) bool {
-	return genkit.LookupEmbedder(g, name) != nil
+	return g.LookupEmbedder(name) != nil
 }
 
 // Embedder returns the [ai.Embedder] with the given name.
 // It returns nil if the embedder was not defined.
 func (o *OpenAICompatible) Embedder(g *genkit.Genkit, name string) ai.Embedder {
-	return genkit.LookupEmbedder(g, name)
+	return g.LookupEmbedder(name)
 }
 
 // Model returns the [ai.Model] with the given name.
 // It returns nil if the model was not defined.
 func (o *OpenAICompatible) Model(g *genkit.Genkit, name string) ai.Model {
-	return genkit.LookupModel(g, name)
+	return g.LookupModel(name)
 }
 
 // IsDefinedModel reports whether the named [Model] is defined by this plugin.
 func (o *OpenAICompatible) IsDefinedModel(g *genkit.Genkit, name string) bool {
-	return genkit.LookupModel(g, name) != nil
+	return g.LookupModel(name) != nil
 }
 
 func (o *OpenAICompatible) ListActions(ctx context.Context) []api.ActionDesc {

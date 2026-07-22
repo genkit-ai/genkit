@@ -39,7 +39,7 @@ func (panickingPlugin) Init(ctx context.Context) []api.Action {
 func TestStreamFlow(t *testing.T) {
 	g := MustInit(context.Background())
 
-	f := DefineStreamingFlow(g, "count", count)
+	f := g.DefineStreamingFlow("count", count)
 	iter := f.Stream(context.Background(), 2)
 	want := 0
 	iter(func(val *core.StreamingFlowValue[int, int], err error) bool {
@@ -80,7 +80,7 @@ func TestDefineSchemaWithType(t *testing.T) {
 		Age  int    `json:"age,omitempty"`
 	}
 
-	DefineSchemaFor[UserInfo](g)
+	g.DefineSchemaFor[UserInfo]()
 
 	schema := g.reg.LookupSchema("UserInfo")
 	if schema == nil {
@@ -134,7 +134,7 @@ func TestDefineSchemaWithType_Error(t *testing.T) {
 		Foo func() `json:"foo"`
 	}
 
-	DefineSchemaFor[Invalid](g)
+	g.DefineSchemaFor[Invalid]()
 }
 
 func TestWithPromptFS(t *testing.T) {
@@ -189,7 +189,7 @@ input:
 
 			g := MustInit(ctx, opts...)
 
-			prompt := LookupPrompt(g, tt.promptName)
+			prompt := g.LookupPrompt(tt.promptName)
 			if prompt == nil {
 				t.Fatalf("Expected prompt %q to be loaded", tt.promptName)
 			}

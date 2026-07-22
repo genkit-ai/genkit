@@ -143,7 +143,7 @@ func (p *pathLocks) lock(path string) func() {
 //
 // Usage:
 //
-//	resp, err := genkit.Generate(ctx, g,
+//	resp, err := g.Generate(ctx,
 //	    ai.WithModel(m),
 //	    ai.WithPrompt("summarise docs/ and save the summary to out.md"),
 //	    ai.WithUse(&middleware.Filesystem{

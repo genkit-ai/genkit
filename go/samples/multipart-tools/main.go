@@ -34,7 +34,7 @@ func main() {
 
 	// Define a multipart tool.
 	// This simulates a tool that takes a screenshot
-	screenshot := genkit.DefineMultipartTool(g, "screenshot", "Takes a screenshot",
+	screenshot := g.DefineMultipartTool("screenshot", "Takes a screenshot",
 		func(ctx *ai.ToolContext, input any) (*ai.MultipartToolResponse, error) {
 			rectangle := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHIAAABUAQMAAABk5vEVAAAABlBMVEX///8AAABVwtN+" +
 				"AAAAI0lEQVR4nGNgGHaA/z8UHIDwOWASDqP8Uf7w56On/1FAQwAAVM0exw1hqwkAAAAASUVORK5CYII="
@@ -48,8 +48,8 @@ func main() {
 	)
 
 	// Define a simple flow that uses the multipart tool
-	genkit.DefineStreamingFlow(g, "cardFlow", func(ctx context.Context, input any, cb ai.ModelStreamCallback) (string, error) {
-		resp, err := genkit.Generate(ctx, g,
+	g.DefineStreamingFlow("cardFlow", func(ctx context.Context, input any, cb ai.ModelStreamCallback) (string, error) {
+		resp, err := g.Generate(ctx,
 			ai.WithModelName("googleai/gemini-3-pro-preview"),
 			ai.WithConfig(&genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](1.0),

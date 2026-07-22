@@ -120,7 +120,7 @@ func TestMCPAIIntegration(t *testing.T) {
 	g := genkit.MustInit(ctx)
 
 	// Define a mock model that echoes the input (like in resource_test.go)
-	genkit.DefineModel(g, "echo-model", &ai.ModelOptions{
+	g.DefineModel("echo-model", &ai.ModelOptions{
 		Label:    "Mock Echo Model for Testing",
 		Supports: &ai.ModelSupports{},
 	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
@@ -160,7 +160,7 @@ func TestMCPAIIntegration(t *testing.T) {
 	}
 
 	// TEST: AI generation with MCP resources (like resource_test.go)
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithModelName("echo-model"),
 		ai.WithMessages(ai.NewUserMessage(
 			ai.NewTextPart("Policy summary:"),
@@ -327,7 +327,7 @@ func TestMCPContentFetch(t *testing.T) {
 	}
 
 	// ASSERT 2: Content can be fetched via AI integration (end-to-end test)
-	genkit.DefineModel(g, "echo-model", &ai.ModelOptions{
+	g.DefineModel("echo-model", &ai.ModelOptions{
 		Supports: &ai.ModelSupports{},
 	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		// Echo back all content to verify resources were included
@@ -344,7 +344,7 @@ func TestMCPContentFetch(t *testing.T) {
 	})
 
 	// TEST: AI generation with MCP resource to verify content fetch
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithModelName("echo-model"),
 		ai.WithMessages(ai.NewUserMessage(
 			ai.NewTextPart("Content:"),

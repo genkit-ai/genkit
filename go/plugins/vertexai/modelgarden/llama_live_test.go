@@ -49,7 +49,7 @@ func TestLlamaLive(t *testing.T) {
 		if m == nil {
 			t.Fatal("meta/llama-3.3-70b-instruct-maas model was not registered")
 		}
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModel(m),
 			ai.WithSystem("You are a helpful assistant. Reply in one short sentence."),
 			ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("Say hello."))),
@@ -65,7 +65,7 @@ func TestLlamaLive(t *testing.T) {
 	t.Run("streaming", func(t *testing.T) {
 		m := modelgarden.LlamaModel(g, "meta/llama-3.3-70b-instruct-maas")
 		out := ""
-		final, err := genkit.Generate(ctx, g,
+		final, err := g.Generate(ctx,
 			ai.WithModel(m),
 			ai.WithPrompt("Count from one to three."),
 			ai.WithStreaming(func(ctx context.Context, c *ai.ModelResponseChunk) error {

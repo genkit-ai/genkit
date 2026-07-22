@@ -76,7 +76,7 @@ func main() {
 	DefineResilientFlow(g)
 
 	mux := http.NewServeMux()
-	for _, a := range genkit.ListFlows(g) {
+	for _, a := range g.ListFlows() {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
 	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
@@ -86,12 +86,12 @@ func main() {
 // in Retry + Fallback. The primary model id is intentionally bogus so the
 // fallback path runs every time.
 func DefineResilientFlow(g *genkit.Genkit) {
-	genkit.DefineFlow(g, "resilientFlow", func(ctx context.Context, topic string) (string, error) {
+	g.DefineFlow("resilientFlow", func(ctx context.Context, topic string) (string, error) {
 		if topic == "" {
 			topic = "photosynthesis"
 		}
 
-		return genkit.GenerateText(ctx, g,
+		return g.GenerateText(ctx,
 			// Primary model is deliberately non-existent — this forces the
 			// Fallback middleware to kick in on every request so the sample
 			// is observably using the fallback path.

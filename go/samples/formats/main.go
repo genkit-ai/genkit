@@ -46,7 +46,7 @@ func main() {
 
 	var callback func(context.Context, *ai.ModelResponseChunk) error
 
-	gablorkenTool := genkit.DefineTool(g, "gablorken", "use when need to calculate a gablorken",
+	gablorkenTool := g.DefineTool("gablorken", "use when need to calculate a gablorken",
 		func(ctx *ai.ToolContext, input struct {
 			Value float64
 			Over  float64
@@ -56,20 +56,20 @@ func main() {
 		},
 	)
 
-	defaultPrompt := genkit.DefinePrompt(g, "defaultInstructions",
+	defaultPrompt := g.DefinePrompt("defaultInstructions",
 		ai.WithPrompt("Generate a children's book story character about someone named {{name}} and generate the gablorken of 2 over 3."),
 		ai.WithTools(gablorkenTool),
 		ai.WithOutputType([]StoryCharacter{}),
 		ai.WithOutputFormat(ai.OutputFormatJSONL),
 	)
 
-	customPrompt := genkit.DefinePrompt(g, "customInstructions",
+	customPrompt := g.DefinePrompt("customInstructions",
 		ai.WithPrompt("Generate a children's book story character about someone named {{name}}."),
 		ai.WithOutputInstructions("The output should be JSON and match the schema of the following object: "+
 			"{name: string, age: number, homeTown: string, profession: string}"),
 	)
 
-	genkit.DefineStreamingFlow(g, "defaultInstructionsFlow", func(ctx context.Context, _ any, cb func(context.Context, string) error) ([]*StoryCharacter, error) {
+	g.DefineStreamingFlow("defaultInstructionsFlow", func(ctx context.Context, _ any, cb func(context.Context, string) error) ([]*StoryCharacter, error) {
 		if cb != nil {
 			callback = func(ctx context.Context, c *ai.ModelResponseChunk) error {
 				return cb(ctx, c.Text())
@@ -102,7 +102,7 @@ func main() {
 	})
 
 	mux := http.NewServeMux()
-	for _, a := range genkit.ListFlows(g) {
+	for _, a := range g.ListFlows() {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
 	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))

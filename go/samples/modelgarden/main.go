@@ -34,13 +34,13 @@ func main() {
 	}
 
 	// Define a simple flow that generates jokes about a given topic
-	genkit.DefineFlow(g, "jokesFlow", func(ctx context.Context, input string) (string, error) {
+	g.DefineFlow("jokesFlow", func(ctx context.Context, input string) (string, error) {
 		m := modelgarden.AnthropicModel(g, "claude-3-5-sonnet-v2")
 		if m == nil {
 			return "", errors.New("jokesFlow: failed to find model")
 		}
 
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModel(m),
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1.0),

@@ -36,7 +36,7 @@ func Example() {
 	g := genkit.MustInit(ctx)
 
 	// Define a simple flow
-	greetFlow := genkit.DefineFlow(g, "greet",
+	greetFlow := g.DefineFlow("greet",
 		func(ctx context.Context, name string) (string, error) {
 			return fmt.Sprintf("Hello, %s!", name), nil
 		},
@@ -52,12 +52,12 @@ func Example() {
 }
 
 // This example demonstrates defining a simple non-streaming flow.
-func ExampleDefineFlow() {
+func ExampleGenkit_DefineFlow() {
 	ctx := context.Background()
 	g := genkit.MustInit(ctx)
 
 	// Define a flow that processes input
-	uppercaseFlow := genkit.DefineFlow(g, "uppercase",
+	uppercaseFlow := g.DefineFlow("uppercase",
 		func(ctx context.Context, input string) (string, error) {
 			return strings.ToUpper(input), nil
 		},
@@ -74,12 +74,12 @@ func ExampleDefineFlow() {
 
 // This example demonstrates defining a streaming flow that sends
 // chunks to the caller as they are produced.
-func ExampleDefineStreamingFlow() {
+func ExampleGenkit_DefineStreamingFlow() {
 	ctx := context.Background()
 	g := genkit.MustInit(ctx)
 
 	// Define a streaming flow that counts down
-	countdownFlow := genkit.DefineStreamingFlow(g, "countdown",
+	countdownFlow := g.DefineStreamingFlow("countdown",
 		func(ctx context.Context, start int, sendChunk func(context.Context, int) error) (string, error) {
 			for i := start; i > 0; i-- {
 				if err := sendChunk(ctx, i); err != nil {
@@ -117,7 +117,7 @@ func ExampleRun() {
 	g := genkit.MustInit(ctx)
 
 	// Define a flow with traced sub-steps
-	pipelineFlow := genkit.DefineFlow(g, "pipeline",
+	pipelineFlow := g.DefineFlow("pipeline",
 		func(ctx context.Context, input string) (string, error) {
 			// Each Run call creates a traced step visible in the Dev UI
 			upper, err := genkit.Run(ctx, "uppercase", func() (string, error) {
@@ -144,12 +144,12 @@ func ExampleRun() {
 
 // This example demonstrates defining a tool that models can call
 // during generation.
-func ExampleDefineTool() {
+func ExampleGenkit_DefineTool() {
 	ctx := context.Background()
 	g := genkit.MustInit(ctx)
 
 	// Define a tool that adds two numbers
-	_ = genkit.DefineTool(g, "add",
+	_ = g.DefineTool("add",
 		"Adds two numbers together",
 		func(ctx *ai.ToolContext, input struct {
 			A float64 `json:"a" jsonschema:"description=First number"`
@@ -160,18 +160,18 @@ func ExampleDefineTool() {
 	)
 
 	// The tool is now registered and can be used with ai.WithTools()
-	// when calling genkit.Generate()
+	// when calling g.Generate()
 	fmt.Println("Tool registered: add")
 	// Output: Tool registered: add
 }
 
 // This example demonstrates defining a reusable prompt with a template.
-func ExampleDefinePrompt() {
+func ExampleGenkit_DefinePrompt() {
 	ctx := context.Background()
 	g := genkit.MustInit(ctx)
 
 	// Define a prompt with Handlebars template syntax
-	prompt := genkit.DefinePrompt(g, "greeting",
+	prompt := g.DefinePrompt("greeting",
 		ai.WithPrompt("Say hello to {{name}} in a {{style}} way."),
 	)
 
@@ -189,7 +189,7 @@ func ExampleDefinePrompt() {
 }
 
 // This example demonstrates registering a Go type as a named schema.
-func ExampleDefineSchemaFor() {
+func ExampleGenkit_DefineSchemaFor() {
 	ctx := context.Background()
 	g := genkit.MustInit(ctx)
 
@@ -201,7 +201,7 @@ func ExampleDefineSchemaFor() {
 
 	// Register the schema - this makes it available for .prompt files
 	// that reference it by name (e.g., "output: { schema: Person }")
-	genkit.DefineSchemaFor[Person](g)
+	g.DefineSchemaFor[Person]()
 
 	fmt.Println("Schema registered: Person")
 	// Output: Schema registered: Person
@@ -209,16 +209,16 @@ func ExampleDefineSchemaFor() {
 
 // This example demonstrates creating an HTTP server that exposes
 // all registered flows as endpoints.
-func ExampleListFlows_httpServer() {
+func ExampleGenkit_ListFlows_httpServer() {
 	ctx := context.Background()
 	g := genkit.MustInit(ctx)
 
 	// Define some flows
-	genkit.DefineFlow(g, "echo", func(ctx context.Context, s string) (string, error) {
+	g.DefineFlow("echo", func(ctx context.Context, s string) (string, error) {
 		return s, nil
 	})
 
-	genkit.DefineFlow(g, "reverse", func(ctx context.Context, s string) (string, error) {
+	g.DefineFlow("reverse", func(ctx context.Context, s string) (string, error) {
 		runes := []rune(s)
 		for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
 			runes[i], runes[j] = runes[j], runes[i]
@@ -228,14 +228,14 @@ func ExampleListFlows_httpServer() {
 
 	// Create HTTP handlers for all flows
 	mux := http.NewServeMux()
-	for _, flow := range genkit.ListFlows(g) {
+	for _, flow := range g.ListFlows() {
 		mux.HandleFunc("POST /"+flow.Name(), genkit.Handler(flow))
 	}
 
 	// The mux now has:
 	// - POST /echo
 	// - POST /reverse
-	fmt.Printf("Registered %d flow handlers\n", len(genkit.ListFlows(g)))
+	fmt.Printf("Registered %d flow handlers\n", len(g.ListFlows()))
 	// Output: Registered 2 flow handlers
 }
 
@@ -246,7 +246,7 @@ func ExampleHandler() {
 	g := genkit.MustInit(ctx)
 
 	// Define a flow
-	greetFlow := genkit.DefineFlow(g, "greet",
+	greetFlow := g.DefineFlow("greet",
 		func(ctx context.Context, name string) (string, error) {
 			return fmt.Sprintf("Hello, %s!", name), nil
 		},
@@ -264,7 +264,7 @@ func ExampleHandler() {
 
 // This example demonstrates using type-safe data prompts with
 // strongly-typed input and output.
-func ExampleDefineDataPrompt() {
+func ExampleGenkit_DefineDataPrompt() {
 	ctx := context.Background()
 	g := genkit.MustInit(ctx)
 
@@ -280,7 +280,7 @@ func ExampleDefineDataPrompt() {
 
 	// Define a type-safe prompt
 	// Note: In production, you'd also set ai.WithModel(...)
-	_ = genkit.DefineDataPrompt[JokeRequest, *Joke](g, "joke",
+	_ = g.DefineDataPrompt[JokeRequest, *Joke]("joke",
 		ai.WithPrompt("Tell a joke about {{topic}}. Return JSON with setup and punchline."),
 	)
 
@@ -298,7 +298,7 @@ func ExampleDefineDataPrompt() {
 
 // This example demonstrates looking up a prompt that was loaded
 // from a .prompt file.
-func ExampleLookupPrompt() {
+func ExampleGenkit_LookupPrompt() {
 	ctx := context.Background()
 
 	// In production, you would initialize with a prompt directory:
@@ -307,12 +307,12 @@ func ExampleLookupPrompt() {
 	g := genkit.MustInit(ctx)
 
 	// Define a prompt programmatically (simulating a loaded prompt)
-	genkit.DefinePrompt(g, "greeting",
+	g.DefinePrompt("greeting",
 		ai.WithPrompt("Hello {{name}}!"),
 	)
 
 	// Look up the prompt by name
-	prompt := genkit.LookupPrompt(g, "greeting")
+	prompt := g.LookupPrompt("greeting")
 	if prompt == nil {
 		log.Fatal("Prompt not found")
 	}

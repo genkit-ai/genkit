@@ -28,7 +28,7 @@ can churn without touching genkit's stable namespace. It currently provides:
 
   - Tool constructors with a plain context.Context signature: [DefineTool] and
     [DefineInterruptibleTool] (typed interrupt/resume). These complement the
-    stable [genkit.DefineTool], whose function instead receives an ai.ToolContext.
+    stable [genkit.Genkit.DefineTool], whose function instead receives an ai.ToolContext.
 
   - An HTTP route layout for serving agents and flows: the [Route] value and
     the [AgentRoutes] / [AllAgentRoutes] / [FlowRoutes] / [AllFlowRoutes]
@@ -39,7 +39,7 @@ can churn without touching genkit's stable namespace. It currently provides:
     layer can evolve without touching genkit's stable surface.
 
   - A channel-based streaming flow constructor, [DefineStreamingFlow]: an
-    alternative to the callback-based [genkit.DefineStreamingFlow] for logic
+    alternative to the callback-based [genkit.Genkit.DefineStreamingFlow] for logic
     that is more naturally expressed by writing chunks to a channel.
 
 Every constructor here requires opting in: initialize Genkit with

@@ -42,12 +42,12 @@ func main() {
 		log.Fatalf("failed to initialize Genkit: %v", err)
 	}
 
-	genkit.DefinePartial(g, "header", "Welcome {{@name}}!")
-	genkit.DefineHelper(g, "uppercase", func(s string) string {
+	g.DefinePartial("header", "Welcome {{@name}}!")
+	g.DefineHelper("uppercase", func(s string) string {
 		return strings.ToUpper(s)
 	})
 
-	p := genkit.DefinePrompt(g, "test", ai.WithPrompt(`{{> header}} {{uppercase @greeting}}`))
+	p := g.DefinePrompt("test", ai.WithPrompt(`{{> header}} {{uppercase @greeting}}`))
 
 	result, err := p.Execute(ctx)
 	if err != nil {

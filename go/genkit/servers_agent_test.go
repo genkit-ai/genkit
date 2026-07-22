@@ -68,7 +68,7 @@ func TestHandlerAgent(t *testing.T) {
 
 	// Replies "echo <n>" where n is the number of messages the model saw,
 	// so resumed history is observable; fails when asked to.
-	genkit.DefineModel(g, "test/echo", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
+	g.DefineModel("test/echo", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			modelCalls.Add(1)
 			if len(req.Messages) == 0 {
@@ -100,7 +100,7 @@ func TestHandlerAgent(t *testing.T) {
 	// Agents register under their own action type, so they surface through
 	// ListAgents (and not ListFlows) and Handler serves them like any other
 	// action.
-	for _, a := range genkit.ListFlows(g) {
+	for _, a := range g.ListFlows() {
 		if a.Name() == "agentClient" || a.Name() == "agentServer" {
 			t.Fatalf("agent %q unexpectedly listed as a flow", a.Name())
 		}
@@ -310,7 +310,7 @@ func TestHandlerAgent(t *testing.T) {
 func TestHandlerAgentRef(t *testing.T) {
 	g := genkit.MustInit(context.Background(), genkit.WithExperimental())
 
-	genkit.DefineModel(g, "test/echo", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
+	g.DefineModel("test/echo", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return &ai.ModelResponse{
 				Message:      ai.NewModelTextMessage(fmt.Sprintf("echo %d", len(req.Messages))),

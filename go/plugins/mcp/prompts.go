@@ -32,7 +32,7 @@ func (c *GenkitMCPClient) GetPrompt(ctx context.Context, g *genkit.Genkit, promp
 
 	// Check if prompt already exists
 	namespacedPromptName := c.GetPromptNameWithNamespace(promptName)
-	if existingPrompt := genkit.LookupPrompt(g, namespacedPromptName); existingPrompt != nil {
+	if existingPrompt := g.LookupPrompt(namespacedPromptName); existingPrompt != nil {
 		return existingPrompt, nil
 	}
 
@@ -78,7 +78,7 @@ func (c *GenkitMCPClient) createGenkitPrompt(g *genkit.Genkit, promptName string
 		promptOpts = append(promptOpts, ai.WithMessages(messages...))
 	}
 
-	prompt := genkit.DefinePrompt(g, promptName, promptOpts...)
+	prompt := g.DefinePrompt(promptName, promptOpts...)
 
 	return prompt, nil
 }

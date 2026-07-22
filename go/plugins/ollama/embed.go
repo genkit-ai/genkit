@@ -163,7 +163,7 @@ func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, 
 
 	meta.Dimensions = dimensions
 
-	return genkit.DefineEmbedder(g, api.NewName(provider, model), meta, func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
+	return g.DefineEmbedder(api.NewName(provider, model), meta, func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
 		normalizedReq := *req
 
 		if req.Options == nil {
@@ -188,11 +188,11 @@ func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, 
 
 // IsDefinedEmbedder reports whether the embedder with the given model is defined by this plugin.
 func IsDefinedEmbedder(g *genkit.Genkit, model string) bool {
-	return genkit.LookupEmbedder(g, api.NewName(provider, model)) != nil
+	return g.LookupEmbedder(api.NewName(provider, model)) != nil
 }
 
 // Embedder returns the [ai.Embedder] with the given model.
 // It returns nil if the embedder was not defined.
 func Embedder(g *genkit.Genkit, model string) ai.Embedder {
-	return genkit.LookupEmbedder(g, api.NewName(provider, model))
+	return g.LookupEmbedder(api.NewName(provider, model))
 }

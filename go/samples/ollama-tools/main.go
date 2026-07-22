@@ -61,7 +61,7 @@ func main() {
 		nil)
 
 	// Define tools
-	weatherTool := genkit.DefineTool(g, "weather", "Get current weather for a location",
+	weatherTool := g.DefineTool("weather", "Get current weather for a location",
 		func(ctx *ai.ToolContext, input WeatherInput) (WeatherData, error) {
 			// Get weather data (simulated)
 			return simulateWeather(input.Location), nil
@@ -79,7 +79,7 @@ func main() {
 	// Generate response with tools
 	fmt.Println("Generating response with weather tool...")
 
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithModel(model),
 		ai.WithMessages(systemMsg, userMsg),
 		ai.WithTools(weatherTool),

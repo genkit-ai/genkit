@@ -50,7 +50,7 @@ func main() {
 		TopP:        openai.Float(0.9),
 	}
 
-	resp, err := genkit.Generate(context.Background(), g,
+	resp, err := g.Generate(context.Background(),
 		ai.WithConfig(config),
 		ai.WithPrompt(prompt))
 	if err != nil {

@@ -64,7 +64,7 @@ func main() {
 	reader := bufio.NewReader(os.Stdin)
 
 	// Define the transfer tool with interrupt logic
-	transferMoney := genkit.DefineTool(g, "transferMoney",
+	transferMoney := g.DefineTool("transferMoney",
 		"Transfers money to another account. Use this when the user wants to send money.",
 		func(ctx *ai.ToolContext, input TransferInput) (TransferOutput, error) {
 			if input.Amount > accountBalance {
@@ -92,8 +92,8 @@ func main() {
 		})
 
 	// Define the payment agent flow
-	paymentAgent := genkit.DefineFlow(g, "paymentAgent", func(ctx context.Context, request string) (string, error) {
-		resp, err := genkit.Generate(ctx, g,
+	paymentAgent := g.DefineFlow("paymentAgent", func(ctx context.Context, request string) (string, error) {
+		resp, err := g.Generate(ctx,
 			ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
 				ThinkingConfig: &genai.ThinkingConfig{ThinkingBudget: genai.Ptr[int32](0)},
 			})),
@@ -160,7 +160,7 @@ func main() {
 				}
 			}
 
-			resp, err = genkit.Generate(ctx, g,
+			resp, err = g.Generate(ctx,
 				ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
 					ThinkingConfig: &genai.ThinkingConfig{ThinkingBudget: genai.Ptr[int32](0)},
 				})),

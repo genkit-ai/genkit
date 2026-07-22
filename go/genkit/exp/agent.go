@@ -79,7 +79,7 @@ func DefineAgent[State any](
 // name and registers it as an action. Returns an [aix.Agent].
 //
 // By default the agent uses the prompt registered under its own name (e.g. one
-// defined via [genkit.DefinePrompt] or loaded from a .prompt file), so no source
+// defined via [genkit.Genkit.DefinePrompt] or loaded from a .prompt file), so no source
 // option is required. Pass [aix.WithNamedPrompt] to reference a differently
 // named prompt and supply its render input from code, so a single prompt can
 // back many agents.
@@ -154,7 +154,7 @@ func DefinePromptAgent[State any](
 //			var lastMessage *ai.Message
 //			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
 //				var reason aix.AgentFinishReason
-//				for result, err := range genkit.GenerateStream(ctx, g,
+//				for result, err := range g.GenerateStream(ctx,
 //					ai.WithModelName("googleai/gemini-3-flash-preview"),
 //					ai.WithMessages(sess.Messages()...),
 //				) {
@@ -190,7 +190,7 @@ func DefineCustomAgent[State any](
 }
 
 // ListAgents returns a slice of all [api.Action] instances that represent
-// agents registered with the Genkit instance g. Like [genkit.ListFlows], this
+// agents registered with the Genkit instance g. Like [genkit.Genkit.ListFlows], this
 // is useful for introspection or for dynamically exposing agent endpoints in an
 // HTTP server; an agent served via [genkit.Handler] runs one turn per request.
 func ListAgents(g *genkit.Genkit) []api.Action {

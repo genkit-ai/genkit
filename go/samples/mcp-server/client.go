@@ -69,7 +69,7 @@ func client() {
 	// Use tools with AI
 	logger.FromContext(ctx).Info("Starting demo: Fetch and summarize content")
 
-	response, err := genkit.Generate(ctx, g,
+	response, err := g.Generate(ctx,
 		ai.WithModelName("googleai/gemini-2.5-pro"),
 		ai.WithPrompt("Fetch content from https://httpbin.org/json and give me a summary of what you find"),
 		ai.WithTools(toolRefs...),

@@ -48,7 +48,7 @@ func createMCPServer() {
 	}
 
 	// Define a tool that generates creative content (this will be auto-exposed via MCP)
-	genkit.DefineTool(g, "genkit-brainstorm", "Generate creative ideas about a topic",
+	g.DefineTool("genkit-brainstorm", "Generate creative ideas about a topic",
 		func(ctx *ai.ToolContext, input struct {
 			Topic string `json:"topic" description:"The topic to brainstorm about"`
 		}) (map[string]interface{}, error) {
@@ -76,7 +76,7 @@ These ideas can be mixed, matched, and customized for "%s".`, input.Topic, input
 		})
 
 	// Define a resource that contains Genkit knowledge (this will be auto-exposed via MCP)
-	genkit.DefineResource(g, "genkit-knowledge", &ai.ResourceOptions{
+	g.DefineResource("genkit-knowledge", &ai.ResourceOptions{
 		URI: "knowledge://genkit-docs",
 	}, func(ctx context.Context, input *ai.ResourceInput) (*ai.ResourceOutput, error) {
 		knowledge := `# Genkit Knowledge Base
@@ -244,7 +244,7 @@ func runResourceDemo(ctx context.Context, g *genkit.Genkit, resources []ai.Resou
 	logger.FromContext(ctx).Info("resource_demo: selected_resource", "uri", selectedURI, "matched", matched, "resource", matchedName)
 
 	// Call generate using resource
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithMessages(ai.NewUserMessage(
 			ai.NewTextPart("Based on this Genkit knowledge:"),
 			ai.NewResourcePart(selectedURI),
@@ -286,7 +286,7 @@ func runToolDemo(ctx context.Context, g *genkit.Genkit, toolRefs []ai.ToolRef) {
 	}
 
 	// Call generate with tools enabled
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithMessages(ai.NewUserMessage(
 			ai.NewTextPart("Use the brainstorm tool to generate creative ideas for \"AI-powered cooking assistant\""),
 		)),

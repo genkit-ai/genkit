@@ -99,7 +99,7 @@ func TestGenkit(t *testing.T) {
 
 	classCfg := ClassConfig{
 		Class:    *testClass,
-		Embedder: genkit.DefineEmbedder(g, "fake/embedder3", emdOpts, embedder.Embed),
+		Embedder: g.DefineEmbedder("fake/embedder3", emdOpts, embedder.Embed),
 	}
 	retOpts := &ai.RetrieverOptions{
 		ConfigSchema: core.InferSchemaMap(RetrieverOptions{}),
@@ -122,7 +122,7 @@ func TestGenkit(t *testing.T) {
 		Count:        2,
 		MetadataKeys: []string{"name"},
 	}
-	retrieverResp, err := genkit.Retrieve(ctx, g,
+	retrieverResp, err := g.Retrieve(ctx,
 		ai.WithRetriever(retriever),
 		ai.WithDocs(d1),
 		ai.WithConfig(retrieverOptions))

@@ -159,7 +159,7 @@ func newFirestoreSessionStore[State any](client *firestore.Client, opts ...Sessi
 // resolveFirestoreClient resolves the Firestore client from the Firebase plugin
 // registered with g, mirroring NewFirestoreStreamManager's plugin resolution.
 func resolveFirestoreClient(ctx context.Context, g *genkit.Genkit) (*firestore.Client, error) {
-	plugin := genkit.LookupPlugin(g, "firebase")
+	plugin := g.LookupPlugin("firebase")
 	if plugin == nil {
 		return nil, errors.New("Firebase plugin not found.\n" +
 			"  Pass the Firebase plugin to genkit.Init():\n" +

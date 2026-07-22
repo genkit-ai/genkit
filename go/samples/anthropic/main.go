@@ -33,8 +33,8 @@ func main() {
 	}
 
 	// Define a simple flow that generates a short story about a given topic.
-	genkit.DefineStreamingFlow(g, "storyFlow", func(ctx context.Context, input string, cb ai.ModelStreamCallback) (string, error) {
-		resp, err := genkit.Generate(ctx, g,
+	g.DefineStreamingFlow("storyFlow", func(ctx context.Context, input string, cb ai.ModelStreamCallback) (string, error) {
+		resp, err := g.Generate(ctx,
 			ai.WithModelName("anthropic/claude-sonnet-4-20250514"),
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
@@ -57,8 +57,8 @@ func main() {
 	// Same story flow on the latest Opus model. Opus 4.8 uses adaptive thinking;
 	// note we do NOT set Temperature or a fixed thinking budget — both are
 	// rejected by Opus 4.7+ in favour of adaptive thinking.
-	genkit.DefineStreamingFlow(g, "opusStoryFlow", func(ctx context.Context, input string, cb ai.ModelStreamCallback) (string, error) {
-		resp, err := genkit.Generate(ctx, g,
+	g.DefineStreamingFlow("opusStoryFlow", func(ctx context.Context, input string, cb ai.ModelStreamCallback) (string, error) {
+		resp, err := g.Generate(ctx,
 			ai.WithModelName("anthropic/claude-opus-4-8"),
 			ai.WithConfig(&anthropic.MessageNewParams{
 				MaxTokens: 8000,
@@ -78,8 +78,8 @@ func main() {
 	// Structured-output flow on the latest Sonnet model. This exercises the JSON
 	// output capability that the known Claude models now advertise; Genkit
 	// constrains the response to the Character schema.
-	genkit.DefineFlow(g, "characterFlow", func(ctx context.Context, topic string) (*Character, error) {
-		resp, err := genkit.Generate(ctx, g,
+	g.DefineFlow("characterFlow", func(ctx context.Context, topic string) (*Character, error) {
+		resp, err := g.Generate(ctx,
 			ai.WithModelName("anthropic/claude-sonnet-4-6"),
 			ai.WithConfig(&anthropic.MessageNewParams{MaxTokens: 2000}),
 			ai.WithOutputType(Character{}),

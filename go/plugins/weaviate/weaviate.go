@@ -151,7 +151,7 @@ func DefineRetriever(ctx context.Context, g *genkit.Genkit, cfg ClassConfig, opt
 		return nil, nil, errors.New("weaviate: class required")
 	}
 
-	w := genkit.LookupPlugin(g, provider).(*Weaviate)
+	w := g.LookupPlugin(provider).(*Weaviate)
 	if w == nil {
 		return nil, nil, errors.New("weaviate plugin not found; did you call genkit.Init with the weaviate plugin?")
 	}
@@ -160,7 +160,7 @@ func DefineRetriever(ctx context.Context, g *genkit.Genkit, cfg ClassConfig, opt
 	if err != nil {
 		return nil, nil, err
 	}
-	retriever := genkit.DefineRetriever(g, api.NewName(provider, cfg.Class), opts, ds.Retrieve)
+	retriever := g.DefineRetriever(api.NewName(provider, cfg.Class), opts, ds.Retrieve)
 	return ds, retriever, nil
 }
 
@@ -206,7 +206,7 @@ func (w *Weaviate) newDocstore(ctx context.Context, cfg *ClassConfig) (*Docstore
 
 // Retriever returns the retriever for the given class.
 func Retriever(g *genkit.Genkit, class string) ai.Retriever {
-	return genkit.LookupRetriever(g, api.NewName(provider, class))
+	return g.LookupRetriever(api.NewName(provider, class))
 }
 
 // RetrieverOptions may be passed in the Options field

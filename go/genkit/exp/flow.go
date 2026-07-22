@@ -41,7 +41,7 @@ type StreamingFunc[In, Out, Stream any] = func(ctx context.Context, input In, st
 // DefineStreamingFlow defines a streaming flow that uses a channel for streaming,
 // registers it as a [core.Action] of type Flow, and returns a [core.Flow] runner.
 //
-// Unlike [genkit.DefineStreamingFlow] which uses a callback, this function accepts
+// Unlike [genkit.Genkit.DefineStreamingFlow] which uses a callback, this function accepts
 // a [StreamingFunc] that writes stream chunks to a channel. This can be
 // more ergonomic when integrating with other channel-based APIs or when the
 // streaming logic is more naturally expressed with channels.
@@ -132,5 +132,5 @@ func DefineStreamingFlow[In, Out, Stream any](g *genkit.Genkit, name string, fn 
 		return res.output, res.err
 	}
 
-	return genkit.DefineStreamingFlow(g, name, wrappedFn)
+	return g.DefineStreamingFlow(name, wrappedFn)
 }

@@ -65,7 +65,7 @@ func main() {
 
 	// Use Files API URI directly with Genkit (now supported!)
 	fmt.Println("Analyzing image with Genkit using Files API URI...")
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithModelName("googleai/gemini-2.5-flash"),
 		ai.WithMessages(
 			ai.NewUserMessage(

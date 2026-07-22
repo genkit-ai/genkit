@@ -108,7 +108,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	simpleQaPrompt := genkit.DefinePrompt(g, "simpleQaPrompt",
+	simpleQaPrompt := g.DefinePrompt("simpleQaPrompt",
 		ai.WithModelName("googleai/gemini-2.5-flash"),
 		ai.WithPrompt(simpleQaPromptTemplate),
 		ai.WithInputType(simpleQaPromptInput{}),
@@ -122,7 +122,7 @@ func main() {
 		IsBilled:    false,
 	}
 
-	genkit.DefineEvaluator(g, api.NewName("custom", "simpleEvaluator"), &evalOptions, func(ctx context.Context, req *ai.EvaluatorCallbackRequest) (*ai.EvaluatorCallbackResponse, error) {
+	g.DefineEvaluator(api.NewName("custom", "simpleEvaluator"), &evalOptions, func(ctx context.Context, req *ai.EvaluatorCallbackRequest) (*ai.EvaluatorCallbackResponse, error) {
 		m := make(map[string]any)
 		m["reasoning"] = "No good reason"
 		score := ai.Score{
@@ -138,7 +138,7 @@ func main() {
 		return &callbackResponse, nil
 	})
 
-	genkit.DefineBatchEvaluator(g, api.NewName("custom", "simpleBatchEvaluator"), &evalOptions, func(ctx context.Context, req *ai.EvaluatorRequest) (*ai.EvaluatorResponse, error) {
+	g.DefineBatchEvaluator(api.NewName("custom", "simpleBatchEvaluator"), &evalOptions, func(ctx context.Context, req *ai.EvaluatorRequest) (*ai.EvaluatorResponse, error) {
 		var evalResponses []ai.EvaluationResult
 		for _, datapoint := range req.Dataset {
 			m := make(map[string]any)
@@ -158,7 +158,7 @@ func main() {
 		return &evalResponses, nil
 	})
 
-	genkit.DefineFlow(g, "simpleQaFlow", func(ctx context.Context, input *simpleQaInput) (string, error) {
+	g.DefineFlow("simpleQaFlow", func(ctx context.Context, input *simpleQaInput) (string, error) {
 		d1 := ai.DocumentFromText("Paris is the capital of France", nil)
 		d4 := ai.DocumentFromText("India will become a new capital of France", nil)
 		d2 := ai.DocumentFromText("USA is the largest importer of coffee", nil)
@@ -170,7 +170,7 @@ func main() {
 		}
 
 		dRequest := ai.DocumentFromText(input.Question, nil)
-		response, err := genkit.Retrieve(ctx, g,
+		response, err := g.Retrieve(ctx,
 			ai.WithRetriever(retriever),
 			ai.WithDocs(dRequest),
 			ai.WithConfig(&localvec.RetrieverOptions{K: 2}))
@@ -196,7 +196,7 @@ func main() {
 		return resp.Text(), nil
 	})
 
-	genkit.DefineFlow(g, "echoFlow", func(ctx context.Context, input string) (string, error) {
+	g.DefineFlow("echoFlow", func(ctx context.Context, input string) (string, error) {
 		return input, nil
 	})
 

@@ -651,7 +651,7 @@ func (a *Agent[State]) Register(r api.Registry) {
 	// builders consume without knowing about the Agent type.
 	//
 	// The companion actions register independently under their own keys, so
-	// registry consumers recover them by key (genkit.LookupAction) rather
+	// registry consumers recover them by key (genkit.Genkit.LookupAction) rather
 	// than by reaching through the agent action; see newSnapshotActions.
 	a.action.Register(r)
 	if a.getSnapshot != nil {
@@ -802,7 +802,7 @@ func DefinePromptAgent[State any](
 
 // NewCustomAgent creates an agent with full control over the conversation
 // loop without registering it. Register it later with the registry (e.g.
-// genkit.RegisterAction), which also registers its companion actions; see
+// genkit.Genkit.RegisterAction), which also registers its companion actions; see
 // [Agent.Register]. fn receives a [Responder] for streaming output and a
 // [SessionRunner] for turn and state management; call [SessionRunner.Run]
 // to enter the per-turn loop.
@@ -840,7 +840,7 @@ func newCustomAgent[State any](
 	cfg *agentOptions[State],
 ) *Agent[State] {
 	// Typed under ActionTypeAgent so agents surface as their own action
-	// kind rather than as flows (genkit/exp.ListAgents vs genkit.ListFlows). Built on
+	// kind rather than as flows (genkit/exp.ListAgents vs genkit.Genkit.ListFlows). Built on
 	// NewBidiAction so the agent capability metadata is set at construction
 	// time; actions must be immutable once registered. WithFlowContext
 	// below preserves the flow-context wrapping that makes core.Run work

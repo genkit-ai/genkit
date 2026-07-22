@@ -44,7 +44,7 @@ func definePromptAgent(g *genkit.Genkit) *aix.Agent[any] {
 	// chef.prompt's frontmatter references ChatPromptInput by name, so the
 	// schema must be registered before DefinePromptAgent renders the prompt
 	// at definition time.
-	genkit.DefineSchemaFor[ChatPromptInput](g)
+	g.DefineSchemaFor[ChatPromptInput]()
 	return genkitx.DefinePromptAgent(g, name,
 		aix.WithSessionStore(mustStore(name)),
 		aix.WithDescription[any]("Michelin-starred chef (prompt loaded from ./prompts/chef.prompt)"),

@@ -48,7 +48,7 @@ func TestPlugin(t *testing.T) {
 
 	t.Run("basic completion", func(t *testing.T) {
 		t.Log("generating basic completion response")
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithPrompt("What is the capital of France?"),
 		)
 		if err != nil {
@@ -71,7 +71,7 @@ func TestPlugin(t *testing.T) {
 		var streamedOutput string
 		chunks := 0
 
-		final, err := genkit.Generate(ctx, g,
+		final, err := g.Generate(ctx,
 			ai.WithPrompt("Write a short paragraph about artificial intelligence."),
 			ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
 				chunks++
@@ -103,7 +103,7 @@ func TestPlugin(t *testing.T) {
 	})
 
 	t.Run("system message", func(t *testing.T) {
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithPrompt("What are you?"),
 			ai.WithSystem("You are a helpful math tutor who loves numbers."),
 		)

@@ -82,7 +82,7 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 // AnthropicModel returns the [ai.Model] with the given id.
 // It returns nil if the model was not defined
 func AnthropicModel(g *genkit.Genkit, id string) ai.Model {
-	return genkit.LookupModel(g, api.NewName(provider, id))
+	return g.LookupModel(api.NewName(provider, id))
 }
 
 // DefineModel adds the model to the registry

@@ -32,7 +32,7 @@ import (
 // toolModel defines a model with full tool/multiturn support backed by fn.
 func toolModel(t *testing.T, g *genkit.Genkit, name string, fn ai.ModelFunc) ai.Model {
 	t.Helper()
-	return genkit.DefineModel(g, name, &ai.ModelOptions{
+	return g.DefineModel(name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
 	}, fn)
 }
@@ -148,7 +148,7 @@ func TestAgentsInjectsSystemPrompt(t *testing.T) {
 		{Name: "researcher"},                            // discovered description
 		{Name: "coder", Description: "Writes Go code."}, // explicit override (agent need not exist for the listing)
 	}}
-	if _, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("hi"), ai.WithUse(mw)); err != nil {
+	if _, err := g.Generate(ctx, ai.WithModel(orch), ai.WithPrompt("hi"), ai.WithUse(mw)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -180,7 +180,7 @@ func TestAgentsDelegationRunsSubAgent(t *testing.T) {
 	orch := delegateOnceModel(t, g, "test/orch", "delegate_to_researcher", "look into X")
 	mw := &Agents{Agents: []aix.AgentRef{{Name: "researcher"}}}
 
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("research X"), ai.WithUse(mw))
+	resp, err := g.Generate(ctx, ai.WithModel(orch), ai.WithPrompt("research X"), ai.WithUse(mw))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestAgentsUnknownAgentReportsError(t *testing.T) {
 	orch := delegateOnceModel(t, g, "test/orch", "delegate_to_ghost", "do it")
 	mw := &Agents{Agents: []aix.AgentRef{{Name: "ghost"}}} // never defined
 
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
+	resp, err := g.Generate(ctx, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestAgentsToolPrefix(t *testing.T) {
 			orch := delegateOnceModel(t, g, "test/orch-"+tc.name, tc.want, "task")
 			mw := &Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, ToolPrefix: tc.prefix}
 
-			resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
+			resp, err := g.Generate(ctx, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -266,7 +266,7 @@ func TestAgentsMaxDelegations(t *testing.T) {
 	})
 
 	mw := &Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, MaxDelegations: 1}
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
+	resp, err := g.Generate(ctx, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestAgentsForwardsHistory(t *testing.T) {
 	orch := delegateOnceModel(t, g, "test/orch", "delegate_to_researcher", "summarize the discussion")
 	mw := &Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, HistoryLength: 4}
 
-	_, err := genkit.Generate(ctx, g,
+	_, err := g.Generate(ctx,
 		ai.WithModel(orch),
 		ai.WithMessages(
 			ai.NewUserTextMessage("the secret code is platypus"),
@@ -348,7 +348,7 @@ func TestAgentsSubAgentFailureReported(t *testing.T) {
 	orch := delegateOnceModel(t, g, "test/orch", "delegate_to_researcher", "go")
 	mw := &Agents{Agents: []aix.AgentRef{{Name: "researcher"}}}
 
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
+	resp, err := g.Generate(ctx, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +397,7 @@ func TestAgentsArtifactStrategies(t *testing.T) {
 				func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 					var last *ai.Message
 					err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
-						r, err := genkit.Generate(ctx, g,
+						r, err := g.Generate(ctx,
 							ai.WithModel(delegating),
 							ai.WithMessages(input.Message),
 							ai.WithUse(&Agents{
@@ -474,7 +474,7 @@ func TestAgentsDelegatesViaRef(t *testing.T) {
 	orch := delegateOnceModel(t, g, "test/orch", "delegate_to_researcher", "go")
 	mw := &Agents{Agents: []aix.AgentRef{researcher.Ref()}}
 
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("research"), ai.WithUse(mw))
+	resp, err := g.Generate(ctx, ai.WithModel(orch), ai.WithPrompt("research"), ai.WithUse(mw))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,7 +502,7 @@ func TestAgentsRefDescriptionTakesPrecedence(t *testing.T) {
 		return textResp(req, "ok"), nil
 	})
 
-	if _, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("hi"), ai.WithUse(&Agents{Agents: []aix.AgentRef{ref}})); err != nil {
+	if _, err := g.Generate(ctx, ai.WithModel(orch), ai.WithPrompt("hi"), ai.WithUse(&Agents{Agents: []aix.AgentRef{ref}})); err != nil {
 		t.Fatal(err)
 	}
 	text := systemText(findSystem(captured))

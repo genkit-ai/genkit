@@ -89,7 +89,7 @@ func main() {
 	}
 
 	// Define the index flow: Insert 10 documents about famous films
-	genkit.DefineFlow(g, "flow-index-documents", func(ctx context.Context, _ struct{}) (string, error) {
+	g.DefineFlow("flow-index-documents", func(ctx context.Context, _ struct{}) (string, error) {
 		for i, filmText := range films {
 			docID := fmt.Sprintf("doc-%d", i+1)
 			embedRequest := &ai.EmbedRequest{Input: []*ai.Document{ai.DocumentFromText(filmText, nil)}}
@@ -121,7 +121,7 @@ func main() {
 	})
 
 	// Define the retrieval flow: Retrieve documents based on user query
-	genkit.DefineFlow(g, "flow-retrieve-documents", func(ctx context.Context, query string) (string, error) {
+	g.DefineFlow("flow-retrieve-documents", func(ctx context.Context, query string) (string, error) {
 
 		if err != nil {
 			log.Fatalf("%v", err)

@@ -58,7 +58,7 @@ func main() {
 	// Define a simple flow that generates audio from text.
 	// Gemini TTS commonly returns raw PCM as audio/L16. The flow writes a
 	// playable WAV file by wrapping those PCM bytes with a WAV header.
-	genkit.DefineFlow(g, "text-to-speech-flow", func(ctx context.Context, input textToSpeechInput) (string, error) {
+	g.DefineFlow("text-to-speech-flow", func(ctx context.Context, input textToSpeechInput) (string, error) {
 		text := input.Text
 		if text == "" {
 			text = "Say: Genkit is the best Gen AI library!"
@@ -76,7 +76,7 @@ func main() {
 			outputPath = "./generated-tts.wav"
 		}
 
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModelName(model),
 			ai.WithConfig(&genai.GenerateContentConfig{
 				SpeechConfig: &genai.SpeechConfig{
@@ -103,7 +103,7 @@ func main() {
 	})
 
 	// Define a simple flow that generates audio transcripts from a given audio
-	genkit.DefineFlow(g, "speech-to-text-flow", func(ctx context.Context, input any) (string, error) {
+	g.DefineFlow("speech-to-text-flow", func(ctx context.Context, input any) (string, error) {
 		audio, err := os.Open("./genkit.wav")
 		if err != nil {
 			return "", err
@@ -114,7 +114,7 @@ func main() {
 		if err != nil {
 			return "", err
 		}
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModelName("googleai/gemini-2.5-flash"),
 			ai.WithMessages(ai.NewUserMessage(
 				ai.NewTextPart("Can you transcribe the next audio?"),

@@ -68,7 +68,7 @@ func main() {
 		Timestamp string `json:"timestamp"`
 	}
 
-	countdown := genkit.DefineStreamingFlow(g, "countdown",
+	countdown := g.DefineStreamingFlow("countdown",
 		func(ctx context.Context, count int, sendChunk func(context.Context, CountdownChunk) error) (string, error) {
 			if count <= 0 {
 				count = 5

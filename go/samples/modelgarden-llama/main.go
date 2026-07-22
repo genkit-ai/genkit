@@ -37,13 +37,13 @@ func main() {
 	}
 
 	// Define a flow that uses Llama 3.3 70B to describe a topic.
-	genkit.DefineFlow(g, "llamaFlow", func(ctx context.Context, input string) (string, error) {
+	g.DefineFlow("llamaFlow", func(ctx context.Context, input string) (string, error) {
 		m := modelgarden.LlamaModel(g, "meta/llama-3.3-70b-instruct-maas")
 		if m == nil {
 			return "", errors.New("llamaFlow: failed to find model")
 		}
 
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModel(m),
 			ai.WithPrompt("In one short sentence, describe %s", input))
 		if err != nil {

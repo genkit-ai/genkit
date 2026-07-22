@@ -70,7 +70,7 @@ func setupTestStreamManager(t *testing.T) (*FirestoreStreamManager, *firestore.C
 	ctx := context.Background()
 	g := genkit.MustInit(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: *testStreamProjectID}))
 
-	f := genkit.LookupPlugin(g, "firebase").(*firebase.Firebase)
+	f := g.LookupPlugin("firebase").(*firebase.Firebase)
 	client, err := f.Firestore(ctx)
 	if err != nil {
 		t.Fatalf("Failed to get Firestore client: %v", err)
@@ -481,7 +481,7 @@ func TestFirestoreStreamManager_Timeout(t *testing.T) {
 	ctx := context.Background()
 	g := genkit.MustInit(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: *testStreamProjectID}))
 
-	f := genkit.LookupPlugin(g, "firebase").(*firebase.Firebase)
+	f := g.LookupPlugin("firebase").(*firebase.Firebase)
 	client, err := f.Firestore(ctx)
 	if err != nil {
 		t.Fatalf("Failed to get Firestore client: %v", err)

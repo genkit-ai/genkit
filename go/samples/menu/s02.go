@@ -39,9 +39,9 @@ func menu(ctx *ai.ToolContext, _ any) ([]*menuItem, error) {
 }
 
 func setup02(g *genkit.Genkit, m ai.Model) error {
-	menuTool := genkit.DefineTool(g, "todaysMenu", "Use this tool to retrieve all the items on today's menu", menu)
+	menuTool := g.DefineTool("todaysMenu", "Use this tool to retrieve all the items on today's menu", menu)
 
-	dataMenuPrompt := genkit.DefinePrompt(g, "s02_dataMenu",
+	dataMenuPrompt := g.DefinePrompt("s02_dataMenu",
 		ai.WithPrompt(`
 You are acting as a helpful AI assistant named Walt that can answer
 questions about the food available on the menu at Walt's Burgers.
@@ -58,7 +58,7 @@ Question:
 		ai.WithTools(menuTool),
 	)
 
-	genkit.DefineFlow(g, "s02_menuQuestion",
+	g.DefineFlow("s02_menuQuestion",
 		func(ctx context.Context, input *menuQuestionInput) (*answerOutput, error) {
 			resp, err := dataMenuPrompt.Execute(ctx, ai.WithInput(input))
 			if err != nil {

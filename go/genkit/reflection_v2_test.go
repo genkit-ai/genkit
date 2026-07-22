@@ -386,7 +386,7 @@ func TestReflectionServerV2_HandlerPanicRecovered(t *testing.T) {
 	defer m.close()
 
 	g := MustInit(context.Background())
-	DefineFlow(g, "panicky", func(ctx context.Context, _ string) (string, error) {
+	g.DefineFlow("panicky", func(ctx context.Context, _ string) (string, error) {
 		panic("boom")
 	})
 
@@ -716,7 +716,7 @@ func TestReflectionServerV2_PromptAgentRejectsEmptyStreamInput(t *testing.T) {
 
 	g := MustInit(context.Background())
 	var modelCalls atomic.Int64
-	DefineModel(g, "test/agent-empty-guard", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
+	g.DefineModel("test/agent-empty-guard", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			modelCalls.Add(1)
 			return &ai.ModelResponse{Message: ai.NewModelTextMessage("unexpected")}, nil

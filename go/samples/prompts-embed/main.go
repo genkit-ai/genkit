@@ -46,8 +46,8 @@ func main() {
 		log.Fatalf("failed to initialize Genkit: %v", err)
 	}
 
-	genkit.DefineFlow(g, "sayHello", func(ctx context.Context, name string) (string, error) {
-		prompt := genkit.LookupPrompt(g, "example")
+	g.DefineFlow("sayHello", func(ctx context.Context, name string) (string, error) {
+		prompt := g.LookupPrompt("example")
 		if prompt == nil {
 			return "", errors.New("prompt not found")
 		}

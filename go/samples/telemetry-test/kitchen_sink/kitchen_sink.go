@@ -54,7 +54,7 @@ func main() {
 	}
 
 	// Define a tool for web search simulation - using struct input for model compatibility
-	searchTool := genkit.DefineTool(g, "webSearch",
+	searchTool := g.DefineTool("webSearch",
 		"Search the web for information about a topic",
 		func(ctx *ai.ToolContext, input SearchInput) (*SearchResult, error) {
 			// Simulate search with some realistic results
@@ -66,12 +66,12 @@ func main() {
 	)
 
 	// Flow 1: Text with Tools
-	genkit.DefineFlow(g, "textFlow", func(ctx context.Context, topic string) (string, error) {
+	g.DefineFlow("textFlow", func(ctx context.Context, topic string) (string, error) {
 		if topic == "" {
 			topic = "artificial intelligence"
 		}
 
-		searchResp, err := genkit.Generate(ctx, g,
+		searchResp, err := g.Generate(ctx,
 			ai.WithModelName("googleai/gemini-2.5-flash"),
 			ai.WithTools(searchTool),
 			ai.WithConfig(&genai.GenerateContentConfig{
@@ -90,13 +90,13 @@ func main() {
 		Prompt   string `json:"prompt,omitempty"`
 	}
 
-	genkit.DefineFlow(g, "imageFlow", func(ctx context.Context, req ImageRequest) (string, error) {
+	g.DefineFlow("imageFlow", func(ctx context.Context, req ImageRequest) (string, error) {
 		prompt := req.Prompt
 		if prompt == "" {
 			prompt = "Describe what you see in this image"
 		}
 
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModelName("googleai/gemini-2.5-flash"),
 			ai.WithMessages(
 				ai.NewUserMessage(
@@ -114,11 +114,11 @@ func main() {
 	})
 
 	// Flow 3: Batch processing flow
-	genkit.DefineFlow(g, "batchFlow", func(ctx context.Context, topics []string) (map[string]string, error) {
+	g.DefineFlow("batchFlow", func(ctx context.Context, topics []string) (map[string]string, error) {
 		results := make(map[string]string)
 
 		for _, topic := range topics {
-			resp, err := genkit.Generate(ctx, g,
+			resp, err := g.Generate(ctx,
 				ai.WithModelName("googleai/gemini-2.5-flash"),
 				ai.WithConfig(&genai.GenerateContentConfig{
 					Temperature: genai.Ptr[float32](0.8),
@@ -155,7 +155,7 @@ func main() {
 	fmt.Println(`curl -X POST http://localhost:3400/batchFlow -H 'Content-Type: application/json' -d '{"data": ["AI", "robotics", "quantum"]}'`)
 
 	mux := http.NewServeMux()
-	for _, flow := range genkit.ListFlows(g) {
+	for _, flow := range g.ListFlows() {
 		fmt.Printf("Registered flow: %s\n", flow.Name())
 		mux.HandleFunc("POST /"+flow.Name(), genkit.Handler(flow))
 	}

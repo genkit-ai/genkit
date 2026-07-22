@@ -50,7 +50,7 @@ func TestVertexAILive(t *testing.T) {
 
 	embedder := googlegenai.VertexAIEmbedder(g, "gemini-embedding-001")
 
-	gablorkenTool := genkit.DefineTool(g, "gablorken", "use this tool when the user asks to calculate a gablorken",
+	gablorkenTool := g.DefineTool("gablorken", "use this tool when the user asks to calculate a gablorken",
 		func(ctx *ai.ToolContext, input struct {
 			Value float64
 			Over  float64
@@ -60,7 +60,7 @@ func TestVertexAILive(t *testing.T) {
 		},
 	)
 	t.Run("model", func(t *testing.T) {
-		resp, err := genkit.Generate(ctx, g, ai.WithPrompt("Which country was Napoleon the emperor of?"))
+		resp, err := g.Generate(ctx, ai.WithPrompt("Which country was Napoleon the emperor of?"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -78,7 +78,7 @@ func TestVertexAILive(t *testing.T) {
 	t.Run("streaming", func(t *testing.T) {
 		out := ""
 		parts := 0
-		final, err := genkit.Generate(ctx, g,
+		final, err := g.Generate(ctx,
 			ai.WithPrompt("Write one paragraph about the Golden State Warriors."),
 			ai.WithStreaming(func(ctx context.Context, c *ai.ModelResponseChunk) error {
 				parts++
@@ -110,7 +110,7 @@ func TestVertexAILive(t *testing.T) {
 		}
 	})
 	t.Run("tool", func(t *testing.T) {
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithPrompt("what is a gablorken of value 2 over 3.5?"),
 			ai.WithTools(gablorkenTool))
 		if err != nil {
@@ -123,7 +123,7 @@ func TestVertexAILive(t *testing.T) {
 		}
 	})
 	t.Run("embedder", func(t *testing.T) {
-		res, err := genkit.Embed(ctx, g,
+		res, err := g.Embed(ctx,
 			ai.WithEmbedder(embedder),
 			ai.WithTextDocs("time flies like an arrow", "fruit flies like a banana"),
 		)
@@ -155,7 +155,7 @@ func TestVertexAILive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithMessages(
 				ai.NewUserTextMessage(string(textContent)).WithCacheTTL(360),
 			),
@@ -178,7 +178,7 @@ func TestVertexAILive(t *testing.T) {
 		} else {
 			t.Fatalf("cache name should be a map but got %T", cache)
 		}
-		resp, err = genkit.Generate(ctx, g,
+		resp, err = g.Generate(ctx,
 			ai.WithMessages(resp.History()...),
 			ai.WithPrompt("rewrite the previous summary but now talking like a pirate, say Ahoy a lot of times"),
 		)
@@ -210,7 +210,7 @@ func TestVertexAILive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithSystem("You are a pirate expert in animals, your response should include the name of the animal in the provided image"),
 			ai.WithMessages(
 				ai.NewUserMessage(
@@ -227,7 +227,7 @@ func TestVertexAILive(t *testing.T) {
 		}
 	})
 	t.Run("media content", func(t *testing.T) {
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithMessages(
 				ai.NewUserMessage(
 					ai.NewTextPart("do you know what's the video about?"),
@@ -247,7 +247,7 @@ func TestVertexAILive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithSystem("You are a pirate expert in animals, your response should include the name of the animal in the image provided"),
 			ai.WithMessages(
 				ai.NewUserMessage(
@@ -268,7 +268,7 @@ func TestVertexAILive(t *testing.T) {
 			t.Skipf("image generation in Vertex AI is only supported in region: global, got: %s", location)
 		}
 		m := googlegenai.VertexAIModel(g, "gemini-2.5-flash-image")
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithConfig(genai.GenerateContentConfig{
 				ResponseModalities: []string{"IMAGE", "TEXT"},
 			}),
@@ -303,7 +303,7 @@ func TestVertexAILive(t *testing.T) {
 		type outFormat struct {
 			Country string
 		}
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithPrompt("Which country was Napoleon the emperor of?"),
 			ai.WithOutputType(outFormat{}),
 		)
@@ -333,7 +333,7 @@ func TestVertexAILive(t *testing.T) {
 		}
 
 		m := googlegenai.VertexAIModel(g, "gemini-2.5-flash")
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithConfig(
 				genai.GenerateContentConfig{
 					Temperature: genai.Ptr[float32](1),
@@ -365,7 +365,7 @@ func TestVertexAILive(t *testing.T) {
 		}
 
 		m := googlegenai.VertexAIModel(g, "gemini-2.5-flash")
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithConfig(
 				genai.GenerateContentConfig{
 					Temperature: genai.Ptr[float32](1),
@@ -410,7 +410,7 @@ func TestVertexAILive(t *testing.T) {
 			t.Fatalf("failed to register tuned model %q: %v", modelName, err)
 		}
 
-		resp, err := genkit.Generate(ctx, gTuned,
+		resp, err := gTuned.Generate(ctx,
 			ai.WithModel(m),
 			ai.WithPrompt("Say hello in one short sentence."),
 		)
@@ -434,7 +434,7 @@ func TestVertexAILive(t *testing.T) {
 		// aiplatform.{location}.rep.googleapis.com by the genai SDK.
 		plugin := &googlegenai.VertexAI{ProjectID: projectID, Location: multiRegion}
 		gMultiRegion := genkit.MustInit(ctx, genkit.WithPlugins(plugin))
-		resp, err := genkit.Generate(ctx, gMultiRegion,
+		resp, err := gMultiRegion.Generate(ctx,
 			ai.WithModelName("vertexai/gemini-2.5-flash"),
 			ai.WithPrompt("Say hello in one short sentence."),
 		)
@@ -448,7 +448,7 @@ func TestVertexAILive(t *testing.T) {
 	t.Run("plugin-level apiVersion override", func(t *testing.T) {
 		plugin := &googlegenai.VertexAI{ProjectID: projectID, Location: location, APIVersion: "v1"}
 		gAPIVersion := genkit.MustInit(ctx, genkit.WithPlugins(plugin))
-		resp, err := genkit.Generate(ctx, gAPIVersion,
+		resp, err := gAPIVersion.Generate(ctx,
 			ai.WithModelName("vertexai/gemini-2.5-flash"),
 			ai.WithPrompt("Say hello in one short sentence."),
 		)

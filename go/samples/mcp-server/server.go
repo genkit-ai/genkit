@@ -49,7 +49,7 @@ func main() {
 	}
 
 	// Tool 1: Encode/decode text
-	genkit.DefineTool(g, "text_encode", "Encode or decode text using various methods",
+	g.DefineTool("text_encode", "Encode or decode text using various methods",
 		func(ctx *ai.ToolContext, input struct {
 			Text   string `json:"text" description:"Text to encode/decode"`
 			Method string `json:"method" description:"Method: base64_encode, base64_decode, url_encode"`
@@ -88,7 +88,7 @@ func main() {
 		})
 
 	// Tool 2: Generate hashes
-	genkit.DefineTool(g, "hash_generate", "Generate hash values for text",
+	g.DefineTool("hash_generate", "Generate hash values for text",
 		func(ctx *ai.ToolContext, input struct {
 			Text string `json:"text" description:"Text to hash"`
 			Type string `json:"type" description:"Hash type: md5, sha256"`
@@ -116,7 +116,7 @@ func main() {
 		})
 
 	// Tool 3: Fetch URL content
-	genkit.DefineTool(g, "fetch_url", "Fetch content from a URL",
+	g.DefineTool("fetch_url", "Fetch content from a URL",
 		func(ctx *ai.ToolContext, input struct {
 			URL string `json:"url" description:"URL to fetch content from"`
 		}) (map[string]interface{}, error) {

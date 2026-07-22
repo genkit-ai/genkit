@@ -38,7 +38,7 @@ Initialize Genkit with a plugin to connect to an AI provider:
 
 Generate text with a simple prompt:
 
-	text, err := genkit.GenerateText(ctx, g,
+	text, err := g.GenerateText(ctx,
 		ai.WithModelName("googleai/gemini-2.5-flash"),
 		ai.WithPrompt("Tell me a joke"),
 	)
@@ -53,7 +53,7 @@ Models represent AI language models that generate content. Use plugins to access
 models from providers like Google AI, Vertex AI, Anthropic, or Ollama. Models are
 referenced by name and can include provider-specific configuration:
 
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithModelName("googleai/gemini-2.5-flash"),
 		ai.WithPrompt("Explain quantum computing in simple terms"),
 	)
@@ -76,9 +76,9 @@ streaming and non-streaming execution.
 
 Define a simple flow:
 
-	jokesFlow := genkit.DefineFlow(g, "jokesFlow",
+	jokesFlow := g.DefineFlow("jokesFlow",
 		func(ctx context.Context, topic string) (string, error) {
-			return genkit.GenerateText(ctx, g,
+			return g.GenerateText(ctx,
 				ai.WithPrompt("Share a joke about %s.", topic),
 			)
 		},
@@ -88,9 +88,9 @@ Define a simple flow:
 
 Define a streaming flow that sends chunks as they're generated:
 
-	streamingFlow := genkit.DefineStreamingFlow(g, "streamingJokes",
+	streamingFlow := g.DefineStreamingFlow("streamingJokes",
 		func(ctx context.Context, topic string, sendChunk ai.ModelStreamCallback) (string, error) {
-			resp, err := genkit.Generate(ctx, g,
+			resp, err := g.Generate(ctx,
 				ai.WithPrompt("Share a joke about %s.", topic),
 				ai.WithStreaming(sendChunk),
 			)
@@ -103,7 +103,7 @@ Define a streaming flow that sends chunks as they're generated:
 
 Use [Run] within flows to create traced sub-steps for observability:
 
-	genkit.DefineFlow(g, "pipeline",
+	g.DefineFlow("pipeline",
 		func(ctx context.Context, input string) (string, error) {
 			result, err := genkit.Run(ctx, "processStep", func() (string, error) {
 				return process(input), nil
@@ -119,7 +119,7 @@ They encapsulate model configuration, input schemas, and template logic for reus
 
 Define a prompt in code:
 
-	jokePrompt := genkit.DefinePrompt(g, "joke",
+	jokePrompt := g.DefinePrompt("joke",
 		ai.WithModelName("googleai/gemini-2.5-flash"),
 		ai.WithInputType(JokeRequest{Topic: "default topic"}),
 		ai.WithPrompt("Share a joke about {{topic}}."),
@@ -149,7 +149,7 @@ For type-safe prompts with structured input and output, use [DefineDataPrompt]:
 		Instructions []string `json:"instructions"`
 	}
 
-	recipePrompt := genkit.DefineDataPrompt[RecipeRequest, *Recipe](g, "recipe",
+	recipePrompt := g.DefineDataPrompt[RecipeRequest, *Recipe]("recipe",
 		ai.WithSystem("You are an experienced chef."),
 		ai.WithPrompt("Create a {{cuisine}} {{dish}} recipe for {{servingSize}} people."),
 	)
@@ -171,21 +171,21 @@ Load prompts from .prompt files by specifying a prompt directory:
 	}
 
 	// Look up a loaded prompt
-	jokePrompt := genkit.LookupPrompt(g, "joke")
+	jokePrompt := g.LookupPrompt("joke")
 
 	// Or with type parameters for structured I/O
-	recipePrompt := genkit.LookupDataPrompt[RecipeRequest, *Recipe](g, "recipe")
+	recipePrompt := g.LookupDataPrompt[RecipeRequest, *Recipe]("recipe")
 
 When using .prompt files with custom output schemas, register the schema first:
 
-	genkit.DefineSchemaFor[Recipe](g)
+	g.DefineSchemaFor[Recipe]()
 
 # Tools
 
 Tools extend model capabilities by allowing them to call functions during generation.
 Define tools that the model can invoke to perform actions or retrieve information:
 
-	weatherTool := genkit.DefineTool(g, "getWeather",
+	weatherTool := g.DefineTool("getWeather",
 		"Gets the current weather for a city",
 		func(ctx *ai.ToolContext, city string) (string, error) {
 			// Fetch weather data...
@@ -193,7 +193,7 @@ Define tools that the model can invoke to perform actions or retrieve informatio
 		},
 	)
 
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithPrompt("What's the weather in Paris?"),
 		ai.WithTools(weatherTool),
 	)
@@ -209,13 +209,13 @@ constraints that help the model understand the expected output:
 		Category string `json:"category" jsonschema:"description=The joke category"`
 	}
 
-	joke, resp, err := genkit.GenerateData[*Joke](ctx, g,
+	joke, resp, err := g.GenerateData[*Joke](ctx,
 		ai.WithPrompt("Tell me a programming joke"),
 	)
 
 For streaming structured output:
 
-	stream := genkit.GenerateDataStream[*Recipe](ctx, g,
+	stream := g.GenerateDataStream[*Recipe](ctx,
 		ai.WithPrompt("Create a pasta recipe"),
 	)
 	for result, err := range stream {
@@ -234,7 +234,7 @@ For streaming structured output:
 Genkit supports streaming at multiple levels. Use [GenerateStream] for streaming
 model responses:
 
-	stream := genkit.GenerateStream(ctx, g,
+	stream := g.GenerateStream(ctx,
 		ai.WithPrompt("Write a short story"),
 	)
 	for result, err := range stream {
@@ -250,7 +250,7 @@ model responses:
 
 Use [DefineStreamingFlow] for flows that stream custom data types:
 
-	genkit.DefineStreamingFlow(g, "countdown",
+	g.DefineStreamingFlow("countdown",
 		func(ctx context.Context, count int, sendChunk func(context.Context, int) error) (string, error) {
 			for i := count; i > 0; i-- {
 				if err := sendChunk(ctx, i); err != nil {
@@ -285,7 +285,7 @@ The Dev UI provides:
 Expose flows as HTTP endpoints for production deployment using [Handler]:
 
 	mux := http.NewServeMux()
-	for _, flow := range genkit.ListFlows(g) {
+	for _, flow := range g.ListFlows() {
 		mux.HandleFunc("POST /"+flow.Name(), genkit.Handler(flow))
 	}
 	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
@@ -333,7 +333,7 @@ are used with [ai.WithMessages] or when building custom conversation flows:
 		ai.NewModelTextMessage("Hi there! How can I help?"),
 	}
 
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithMessages(messages...),
 		ai.WithPrompt("What can you do?"),
 	)
@@ -387,7 +387,7 @@ Streaming:
 
 Example combining multiple options:
 
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithModelName("googleai/gemini-2.5-flash"),
 		ai.WithSystem("You are a helpful coding assistant."),
 		ai.WithMessages(conversationHistory...),

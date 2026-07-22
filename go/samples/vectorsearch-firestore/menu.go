@@ -28,7 +28,7 @@ import (
 )
 
 func menu(ctx context.Context, g *genkit.Genkit, retriever ai.Retriever, model ai.Model, vectorsearchParams *VectorsearchConfig) error {
-	ragDataMenuPrompt := genkit.DefinePrompt(g, "ragDataMenu",
+	ragDataMenuPrompt := g.DefinePrompt("ragDataMenu",
 		ai.WithPrompt(`
 You are acting as Walt, a helpful AI assistant here at the restaurant.
 You can answer questions about the food on the menu or any other questions
@@ -56,7 +56,7 @@ Answer this customer's question:
 		Rows int `json:"rows"`
 	}
 
-	genkit.DefineFlow(g, "indexMenuItems",
+	g.DefineFlow("indexMenuItems",
 		func(ctx context.Context, input []*menuItem) (*flowOutput, error) {
 			var docs []*ai.Document
 			for _, m := range input {
@@ -86,7 +86,7 @@ Answer this customer's question:
 		},
 	)
 
-	genkit.DefineFlow(g, "ragMenuQuestion",
+	g.DefineFlow("ragMenuQuestion",
 		func(ctx context.Context, input *menuQuestionInput) (*answerOutput, error) {
 			resp, err := retriever.Retrieve(ctx, &ai.RetrieverRequest{
 				Query: ai.DocumentFromText(input.Question, nil),

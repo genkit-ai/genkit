@@ -37,7 +37,7 @@ func main() {
 	}
 
 	// Define a flow to demonstrate code execution
-	genkit.DefineFlow(g, "codeExecutionFlow", func(ctx context.Context, _ any) (string, error) {
+	g.DefineFlow("codeExecutionFlow", func(ctx context.Context, _ any) (string, error) {
 		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
 		if m == nil {
 			return "", errors.New("failed to find model")
@@ -48,7 +48,7 @@ func main() {
 
 		// Generate response with code execution enabled
 		fmt.Println("Sending request to Gemini...")
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModel(m),
 			ai.WithConfig(&genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](0.2),

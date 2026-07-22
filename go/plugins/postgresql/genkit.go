@@ -89,12 +89,12 @@ func DefineRetriever(ctx context.Context, g *genkit.Genkit, p *Postgres, cfg *Co
 		return nil, nil, err
 	}
 
-	return ds, genkit.DefineRetriever(g, api.NewName(provider, ds.config.TableName), &ai.RetrieverOptions{}, ds.Retrieve), nil
+	return ds, g.DefineRetriever(api.NewName(provider, ds.config.TableName), &ai.RetrieverOptions{}, ds.Retrieve), nil
 }
 
 // Retriever returns the retriever with the given index id.
 func Retriever(g *genkit.Genkit, id string) ai.Retriever {
-	return genkit.LookupRetriever(g, api.NewName(provider, id))
+	return g.LookupRetriever(api.NewName(provider, id))
 }
 
 /* +++++++++++++++++++++++

@@ -104,7 +104,7 @@ func (l *Llama) Init(ctx context.Context) []api.Action {
 // LlamaModel returns the Llama [ai.Model] with the given id, or nil if it was
 // not defined.
 func LlamaModel(g *genkit.Genkit, id string) ai.Model {
-	return genkit.LookupModel(g, api.NewName(provider, id))
+	return g.LookupModel(api.NewName(provider, id))
 }
 
 // DefineModel adds a Llama model to the registry.

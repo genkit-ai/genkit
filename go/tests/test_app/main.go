@@ -41,9 +41,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to initialize Genkit: %v", err)
 	}
-	model := genkit.DefineModel(g, "customReflector", nil, echo)
-	genkit.DefineFlow(g, "testFlow", func(ctx context.Context, in string) (string, error) {
-		res, err := genkit.Generate(ctx, g, ai.WithModel(model), ai.WithPrompt(in))
+	model := g.DefineModel("customReflector", nil, echo)
+	g.DefineFlow("testFlow", func(ctx context.Context, in string) (string, error) {
+		res, err := g.Generate(ctx, ai.WithModel(model), ai.WithPrompt(in))
 		if err != nil {
 			return "", err
 		}
@@ -51,7 +51,7 @@ func main() {
 		return "TBD", nil
 	})
 
-	genkit.DefineStreamingFlow(g, "streamy", func(ctx context.Context, count int, cb func(context.Context, chunk) error) (string, error) {
+	g.DefineStreamingFlow("streamy", func(ctx context.Context, count int, cb func(context.Context, chunk) error) (string, error) {
 		i := 0
 		if cb != nil {
 			for ; i < count; i++ {
@@ -64,7 +64,7 @@ func main() {
 	})
 
 	mux := http.NewServeMux()
-	for _, a := range genkit.ListFlows(g) {
+	for _, a := range g.ListFlows() {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
 	log.Fatal(server.Start(ctx, "127.0.0.1:3400", mux))

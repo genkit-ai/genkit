@@ -60,7 +60,7 @@ func clientExample() {
 		toolRefs = append(toolRefs, tool)
 	}
 
-	response, err := genkit.Generate(ctx, g,
+	response, err := g.Generate(ctx,
 		ai.WithModelName("googleai/gemini-2.5-pro"),
 		ai.WithPrompt("Convert the current time from New York to London timezone."),
 		ai.WithTools(toolRefs...),
@@ -115,7 +115,7 @@ func managerExample() {
 		toolRefs = append(toolRefs, tool)
 	}
 
-	response, err := genkit.Generate(ctx, g,
+	response, err := g.Generate(ctx,
 		ai.WithModelName("googleai/gemini-2.5-pro"),
 		ai.WithPrompt("What time is it in New York and Tokyo?"),
 		ai.WithTools(toolRefs...),

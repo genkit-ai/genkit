@@ -180,7 +180,7 @@ func resolveProjectId(projectId string) string {
 
 // resolvePlugin resolves the Firebase plugin from the Genkit registry.
 func resolvePlugin(g *genkit.Genkit) (*Firebase, error) {
-	plugin := genkit.LookupPlugin(g, provider)
+	plugin := g.LookupPlugin(provider)
 	if plugin == nil {
 		return nil, errPluginNotFound
 	}

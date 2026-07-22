@@ -126,7 +126,7 @@ func TestPostgres(t *testing.T) {
 		IDColumn:              CustomIdColumn,
 		MetadataJSONColumn:    CustomMetadataColumn,
 		IgnoreMetadataColumns: []string{"created_at", "updated_at"},
-		Embedder:              genkit.DefineEmbedder(g, "fake/embedder3", nil, embedder.Embed),
+		Embedder:              g.DefineEmbedder("fake/embedder3", nil, embedder.Embed),
 		EmbedderOptions:       nil,
 	}
 

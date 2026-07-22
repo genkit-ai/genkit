@@ -140,18 +140,18 @@ func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.M
 		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
 	}
 	gen := &generator{model: model, serverAddress: o.ServerAddress, timeout: o.Timeout}
-	return genkit.DefineModel(g, api.NewName(provider, model.Name), meta, gen.generate)
+	return g.DefineModel(api.NewName(provider, model.Name), meta, gen.generate)
 }
 
 // IsDefinedModel reports whether a model is defined.
 func IsDefinedModel(g *genkit.Genkit, name string) bool {
-	return genkit.LookupModel(g, api.NewName(provider, name)) != nil
+	return g.LookupModel(api.NewName(provider, name)) != nil
 }
 
 // Model returns the [ai.Model] with the given name.
 // It returns nil if the model was not configured.
 func Model(g *genkit.Genkit, name string) ai.Model {
-	return genkit.LookupModel(g, api.NewName(provider, name))
+	return g.LookupModel(api.NewName(provider, name))
 }
 
 // ModelDefinition represents a model with its name and api.

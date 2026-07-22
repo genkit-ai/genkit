@@ -40,7 +40,7 @@ import (
 var genkitCtxKey = base.NewContextKey[*Genkit]()
 
 // FromContext returns the [*Genkit] instance stored in the context.
-// This is set automatically by [Generate] and related functions, and seeded
+// This is set automatically by [Genkit.Generate] and related functions, and seeded
 // into each agent turn by the agent constructors in
 // [github.com/firebase/genkit/go/genkit/exp]. Middleware implementations can
 // use this to access the Genkit instance during generation.
@@ -118,7 +118,7 @@ func WithPlugins(plugins ...api.Plugin) GenkitOption {
 
 // WithDefaultModel sets the default model name to use for generation tasks
 // when no specific model is provided in the request options. The name should
-// correspond to a model registered either by a plugin or via [DefineModel].
+// correspond to a model registered either by a plugin or via [Genkit.DefineModel].
 // This option can only be applied once.
 func WithDefaultModel(model string) GenkitOption {
 	return &genkitOptions{DefaultModel: model}
@@ -224,14 +224,14 @@ func WithExperimental() GenkitOption {
 //		}
 //
 //		// Generate text using the default model
-//		funFact, err := genkit.GenerateText(ctx, g, ai.WithPrompt("Tell me a fake fun fact!"))
+//		funFact, err := g.GenerateText(ctx, ai.WithPrompt("Tell me a fake fun fact!"))
 //		if err != nil {
 //			log.Fatalf("GenerateText failed: %v", err)
 //		}
 //		log.Println("Generated Fact:", funFact)
 //
 //		// Look up and execute a loaded prompt
-//		jokePrompt := genkit.LookupPrompt(g, "jokePrompt")
+//		jokePrompt := g.LookupPrompt("jokePrompt")
 //		if jokePrompt == nil {
 //			log.Fatalf("Prompt 'jokePrompt' not found.")
 //		}
@@ -361,8 +361,8 @@ func MustInit(ctx context.Context, opts ...GenkitOption) *Genkit {
 // Example:
 //
 //	model := ai.NewModel(...)
-//	genkit.RegisterAction(g, model)
-func RegisterAction(g *Genkit, action api.Registerable) {
+//	g.RegisterAction(model)
+func (g *Genkit) RegisterAction(action api.Registerable) {
 	action.Register(g.reg)
 }
 
@@ -373,9 +373,9 @@ func RegisterAction(g *Genkit, action api.Registerable) {
 // by api.KeyFromName(api.ActionTypeAgentSnapshot, agentName).
 //
 // This is the generic, type-agnostic lookup. Prefer a typed accessor
-// ([LookupModel], [LookupPrompt], etc.) when one exists for the kind of
+// ([Genkit.LookupModel], [Genkit.LookupPrompt], etc.) when one exists for the kind of
 // action you need.
-func LookupAction(g *Genkit, key string) api.Action {
+func (g *Genkit) LookupAction(key string) api.Action {
 	return g.reg.LookupAction(key)
 }
 
@@ -387,7 +387,7 @@ func LookupAction(g *Genkit, key string) api.Action {
 //
 // Example:
 //
-//	myFlow := genkit.DefineFlow(g, "mySimpleFlow",
+//	myFlow := g.DefineFlow("mySimpleFlow",
 //		func(ctx context.Context, name string) (string, error) {
 //			greeting := fmt.Sprintf("Hello, %s!", name)
 //			// You could add more steps here, potentially using genkit.Run()
@@ -401,7 +401,7 @@ func LookupAction(g *Genkit, key string) api.Action {
 //		// handle error
 //	}
 //	fmt.Println(result) // Output: Hello, World!
-func DefineFlow[In, Out any](g *Genkit, name string, fn core.Func[In, Out]) *core.Flow[In, Out, struct{}] {
+func (g *Genkit) DefineFlow[In, Out any](name string, fn core.Func[In, Out]) *core.Flow[In, Out, struct{}] {
 	return core.DefineFlow(g.reg, name, fn)
 }
 
@@ -420,7 +420,7 @@ func DefineFlow[In, Out any](g *Genkit, name string, fn core.Func[In, Out]) *cor
 //
 // Example:
 //
-//	counterFlow := genkit.DefineStreamingFlow(g, "counter",
+//	counterFlow := g.DefineStreamingFlow("counter",
 //		func(ctx context.Context, limit int, stream core.StreamCallback[int]) (string, error) {
 //			if stream == nil { // Non-streaming case
 //				return fmt.Sprintf("Counted up to %d", limit), nil
@@ -452,31 +452,31 @@ func DefineFlow[In, Out any](g *Genkit, name string, fn core.Func[In, Out]) *cor
 //			fmt.Println("Stream Chunk:", result.Stream) // Outputs: 1, 2, 3, 4, 5
 //		}
 //	}
-func DefineStreamingFlow[In, Out, Stream any](g *Genkit, name string, fn core.StreamingFunc[In, Out, Stream]) *core.Flow[In, Out, Stream] {
+func (g *Genkit) DefineStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In, Out, Stream]) *core.Flow[In, Out, Stream] {
 	return core.DefineStreamingFlow(g.reg, name, fn)
 }
 
 // NewFlow creates a [core.Flow] without registering it as an action.
-// To register the flow later, call [RegisterAction].
+// To register the flow later, call [Genkit.RegisterAction].
 func NewFlow[In, Out any](name string, fn core.Func[In, Out]) *core.Flow[In, Out, struct{}] {
 	return core.NewFlow(name, fn)
 }
 
 // NewStreamingFlow creates a streaming [core.Flow] without registering it as an action.
-// To register the flow later, call [RegisterAction].
+// To register the flow later, call [Genkit.RegisterAction].
 func NewStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In, Out, Stream]) *core.Flow[In, Out, Stream] {
 	return core.NewStreamingFlow(name, fn)
 }
 
 // Run executes the given function `fn` within the context of the current flow run,
 // creating a distinct trace span for this step. It's used to add observability
-// to specific sub-operations within a flow defined by [DefineFlow] or [DefineStreamingFlow].
+// to specific sub-operations within a flow defined by [Genkit.DefineFlow] or [Genkit.DefineStreamingFlow].
 // The `name` parameter provides a label for the trace span.
 // It returns the output of `fn` and any error it produces.
 //
 // Example (within a DefineFlow function):
 //
-//	complexFlow := genkit.DefineFlow(g, "complexTask",
+//	complexFlow := g.DefineFlow("complexTask",
 //		func(ctx context.Context, input string) (string, error) {
 //			// Step 1: Process input (traced as "process-input")
 //			processedInput, err := genkit.Run(ctx, "process-input", func() (string, error) {
@@ -507,7 +507,7 @@ func Run[Out any](ctx context.Context, name string, fn func() (Out, error)) (Out
 // flows registered with the Genkit instance `g`.
 // This is useful for introspection or for dynamically exposing flow endpoints,
 // for example, in an HTTP server.
-func ListFlows(g *Genkit) []api.Action {
+func (g *Genkit) ListFlows() []api.Action {
 	acts := listActions(g)
 	flows := []api.Action{}
 	for _, act := range acts {
@@ -521,11 +521,11 @@ func ListFlows(g *Genkit) []api.Action {
 // ListTools returns a slice of all [ai.Tool] instances that are registered
 // with the Genkit instance `g`. This is useful for introspection and for
 // exposing tools to external systems like MCP servers.
-func ListTools(g *Genkit) []ai.Tool {
+func (g *Genkit) ListTools() []ai.Tool {
 	acts := g.reg.ListActions()
 	tools := []ai.Tool{}
 	for _, action := range acts {
-		tool := LookupTool(g, action.Desc().Name)
+		tool := g.LookupTool(action.Desc().Name)
 		if tool != nil {
 			tools = append(tools, tool)
 		}
@@ -547,7 +547,7 @@ func ListTools(g *Genkit) []ai.Tool {
 //
 // Example:
 //
-//	echoModel := genkit.DefineModel(g, "custom/echo",
+//	echoModel := g.DefineModel("custom/echo",
 //		&ai.ModelOptions{
 //			Label:    "Echo Model",
 //			Supports: &ai.ModelSupports{Multiturn: true},
@@ -590,7 +590,7 @@ func ListTools(g *Genkit) []ai.Tool {
 //			return resp, nil
 //		},
 //	)
-func DefineModel(g *Genkit, name string, opts *ai.ModelOptions, fn ai.ModelFunc) ai.Model {
+func (g *Genkit) DefineModel(name string, opts *ai.ModelOptions, fn ai.ModelFunc) ai.Model {
 	return ai.DefineModel(g.reg, name, opts, fn)
 }
 
@@ -600,23 +600,23 @@ func DefineModel(g *Genkit, name string, opts *ai.ModelOptions, fn ai.ModelFunc)
 // The `name` is the identifier the model uses to request the background model. The `opts`
 // are the options for the background model. The `startFn` is the function that starts the background model.
 // The `checkFn` is the function that checks the status of the background model.
-func DefineBackgroundModel(g *Genkit, name string, opts *ai.BackgroundModelOptions, startFn ai.StartModelOpFunc, checkFn ai.CheckModelOpFunc) ai.BackgroundModel {
+func (g *Genkit) DefineBackgroundModel(name string, opts *ai.BackgroundModelOptions, startFn ai.StartModelOpFunc, checkFn ai.CheckModelOpFunc) ai.BackgroundModel {
 	return ai.DefineBackgroundModel(g.reg, name, opts, startFn, checkFn)
 }
 
 // LookupModel retrieves a registered [ai.Model] by its provider and name.
 // It returns the model instance if found, or `nil` if no model with the
-// given identifier is registered (e.g., via [DefineModel] or a plugin).
+// given identifier is registered (e.g., via [Genkit.DefineModel] or a plugin).
 // It will try to resolve the model dynamically by matching the provider name;
 // this does not necessarily mean the model is valid.
-func LookupModel(g *Genkit, name string) ai.Model {
+func (g *Genkit) LookupModel(name string) ai.Model {
 	return ai.LookupModel(g.reg, name)
 }
 
 // LookupBackgroundModel retrieves a registered background model by its provider and name.
 // It returns the background action instance if found, or `nil` if no background model with the
 // given identifier is registered.
-func LookupBackgroundModel(g *Genkit, name string) ai.BackgroundModel {
+func (g *Genkit) LookupBackgroundModel(name string) ai.BackgroundModel {
 	return ai.LookupBackgroundModel(g.reg, name)
 }
 
@@ -641,7 +641,7 @@ func LookupBackgroundModel(g *Genkit, name string) ai.BackgroundModel {
 //
 // Example:
 //
-//	weatherTool := genkit.DefineTool(g, "getWeather", "Fetches the weather for a given city",
+//	weatherTool := g.DefineTool("getWeather", "Fetches the weather for a given city",
 //		func(ctx *ai.ToolContext, city string) (string, error) {
 //			// In a real scenario, call a weather API
 //			log.Printf("Tool: Fetching weather for %s", city)
@@ -653,7 +653,7 @@ func LookupBackgroundModel(g *Genkit, name string) ai.BackgroundModel {
 //	)
 //
 //	// Use the tool in a generation request:
-//	resp, err := genkit.Generate(ctx, g,
+//	resp, err := g.Generate(ctx,
 //		ai.WithPrompt("What's the weather like in Paris?"),
 //		ai.WithTools(weatherTool), // Make the tool available
 //		// Optionally use ai.WithToolChoice(...)
@@ -663,14 +663,14 @@ func LookupBackgroundModel(g *Genkit, name string) ai.BackgroundModel {
 //	}
 //
 //	fmt.Println(resp.Text()) // Might output something like "The weather in Paris is Sunny, 25°C."
-func DefineTool[In, Out any](g *Genkit, name, description string, fn ai.ToolFunc[In, Out], opts ...ai.ToolOption) *ai.ToolDef[In, Out] {
+func (g *Genkit) DefineTool[In, Out any](name, description string, fn ai.ToolFunc[In, Out], opts ...ai.ToolOption) *ai.ToolDef[In, Out] {
 	return ai.DefineTool(g.reg, name, description, fn, opts...)
 }
 
 // DefineToolWithInputSchema defines a tool with a custom input schema that can be used by models during generation,
 // registers it as a [core.Action] of type Tool, and returns an [*ai.ToolDef].
 //
-// This variant of [DefineTool] allows specifying a JSON Schema for the tool's input, providing more
+// This variant of [Genkit.DefineTool] allows specifying a JSON Schema for the tool's input, providing more
 // control over input validation and model guidance. The input parameter to the tool function will be
 // of type `any` and should be validated/processed according to the schema.
 //
@@ -679,7 +679,7 @@ func DefineTool[In, Out any](g *Genkit, name, description string, fn ai.ToolFunc
 // of the input. The function `fn` implements the tool's logic, taking an [ai.ToolContext] and an
 // input of type `any`, and returning an output of type `Out`.
 //
-// Deprecated: Use [DefineTool] with [ai.WithInputSchema] instead.
+// Deprecated: Use [Genkit.DefineTool] with [ai.WithInputSchema] instead.
 //
 // Example:
 //
@@ -697,7 +697,7 @@ func DefineTool[In, Out any](g *Genkit, name, description string, fn ai.ToolFunc
 //	}
 //
 //	// Define the tool with the schema
-//	weatherTool := genkit.DefineTool(g, "getWeather",
+//	weatherTool := g.DefineTool("getWeather",
 //		"Fetches the weather for a given city with unit preference",
 //		func(ctx *ai.ToolContext, input any) (string, error) {
 //			// Parse and validate input
@@ -712,7 +712,7 @@ func DefineTool[In, Out any](g *Genkit, name, description string, fn ai.ToolFunc
 //		},
 //		ai.WithToolInputSchema(inputSchema),
 //	)
-func DefineToolWithInputSchema[Out any](g *Genkit, name, description string, inputSchema map[string]any, fn ai.ToolFunc[any, Out]) *ai.ToolDef[any, Out] {
+func (g *Genkit) DefineToolWithInputSchema[Out any](name, description string, inputSchema map[string]any, fn ai.ToolFunc[any, Out]) *ai.ToolDef[any, Out] {
 	return ai.DefineTool(g.reg, name, description, fn, ai.WithInputSchema(inputSchema))
 }
 
@@ -742,7 +742,7 @@ func DefineToolWithInputSchema[Out any](g *Genkit, name, description string, inp
 //		Style  string `json:"style,omitempty"`
 //	}
 //
-//	imageGenTool := genkit.DefineMultipartTool(g, "generateImage", "Generates an image from a text prompt",
+//	imageGenTool := g.DefineMultipartTool("generateImage", "Generates an image from a text prompt",
 //		func(ctx *ai.ToolContext, input ImageGenInput) (*ai.MultipartToolResponse, error) {
 //			// In a real scenario, call an image generation API
 //			log.Printf("Tool: Generating image for prompt: %s", input.Prompt)
@@ -763,7 +763,7 @@ func DefineToolWithInputSchema[Out any](g *Genkit, name, description string, inp
 //	)
 //
 //	// Use the tool in a generation request:
-//	resp, err := genkit.Generate(ctx, g,
+//	resp, err := g.Generate(ctx,
 //		ai.WithPrompt("Create an image of a sunset over mountains"),
 //		ai.WithTools(imageGenTool),
 //	)
@@ -772,15 +772,15 @@ func DefineToolWithInputSchema[Out any](g *Genkit, name, description string, inp
 //	}
 //
 //	fmt.Println(resp.Text())
-func DefineMultipartTool[In any](g *Genkit, name, description string, fn ai.MultipartToolFunc[In], opts ...ai.ToolOption) *ai.ToolDef[In, *ai.MultipartToolResponse] {
+func (g *Genkit) DefineMultipartTool[In any](name, description string, fn ai.MultipartToolFunc[In], opts ...ai.ToolOption) *ai.ToolDef[In, *ai.MultipartToolResponse] {
 	return ai.DefineMultipartTool(g.reg, name, description, fn, opts...)
 }
 
 // LookupTool retrieves a registered tool by its name.
 // It returns the tool instance if found, or `nil` if no tool with the
-// given name is registered (e.g., via [DefineTool]).
+// given name is registered (e.g., via [Genkit.DefineTool]).
 // Since the types are not known at lookup time, it returns a type-erased tool.
-func LookupTool(g *Genkit, name string) ai.Tool {
+func (g *Genkit) LookupTool(name string) ai.Tool {
 	return ai.LookupTool(g.reg, name)
 }
 
@@ -827,22 +827,22 @@ func LookupTool(g *Genkit, name string) ai.Tool {
 //	}
 //
 //	// Register so it appears in the Dev UI and can be called by name:
-//	genkit.DefineMiddleware(g, "logs model call latency", Trace{})
+//	g.DefineMiddleware("logs model call latency", Trace{})
 //
 //	// Use it per-call:
-//	resp, err := genkit.Generate(ctx, g,
+//	resp, err := g.Generate(ctx,
 //		ai.WithPrompt("hello"),
 //		ai.WithUse(Trace{Label: "debug"}),
 //	)
-func DefineMiddleware[M ai.Middleware](g *Genkit, description string, prototype M) *ai.MiddlewareDesc {
+func (g *Genkit) DefineMiddleware[M ai.Middleware](description string, prototype M) *ai.MiddlewareDesc {
 	return ai.DefineMiddleware(g.reg, description, prototype)
 }
 
 // LookupMiddleware retrieves a registered middleware descriptor by its name.
 // It returns the descriptor if found, or `nil` if no middleware with the
-// given name is registered (e.g., via [DefineMiddleware] or through a
+// given name is registered (e.g., via [Genkit.DefineMiddleware] or through a
 // plugin's [ai.MiddlewarePlugin.Middlewares] method).
-func LookupMiddleware(g *Genkit, name string) *ai.MiddlewareDesc {
+func (g *Genkit) LookupMiddleware(name string) *ai.MiddlewareDesc {
 	return ai.LookupMiddleware(g.reg, name)
 }
 
@@ -855,7 +855,7 @@ func LookupMiddleware(g *Genkit, name string) *ai.MiddlewareDesc {
 //
 // Prompts can be executed in two main ways:
 //  1. Render + Generate: Call [ai.Prompt.Render] to get [ai.GenerateActionOptions],
-//     modify them if needed, and pass them to [GenerateWithRequest].
+//     modify them if needed, and pass them to [Genkit.GenerateWithRequest].
 //  2. Execute: Call [ai.Prompt.Execute] directly, passing input and execution options.
 //
 // For prompts that don't need to be registered (e.g., for single-use or testing),
@@ -908,7 +908,7 @@ func LookupMiddleware(g *Genkit, name string) *ai.MiddlewareDesc {
 //	}
 //
 //	// Define the prompt
-//	capitalPrompt := genkit.DefinePrompt(g, "findCapital",
+//	capitalPrompt := g.DefinePrompt("findCapital",
 //		ai.WithDescription("Finds the capital of a country."),
 //		ai.WithModelName("googleai/gemini-3-flash-preview"),
 //		ai.WithSystem("You are a helpful geography assistant."),
@@ -923,7 +923,7 @@ func LookupMiddleware(g *Genkit, name string) *ai.MiddlewareDesc {
 //	if err != nil {
 //		log.Fatalf("Render failed: %v", err)
 //	}
-//	resp1, err := genkit.GenerateWithRequest(ctx, g, actionOpts, nil, nil)
+//	resp1, err := g.GenerateWithRequest(ctx, actionOpts, nil, nil)
 //	if err != nil {
 //		log.Fatalf("GenerateWithRequest failed: %v", err)
 //	}
@@ -943,15 +943,15 @@ func LookupMiddleware(g *Genkit, name string) *ai.MiddlewareDesc {
 //		log.Fatalf("Output failed: %v", err)
 //	}
 //	fmt.Printf("Capital of France: %s\n", out2.Capital) // Output: Capital of France: Paris
-func DefinePrompt(g *Genkit, name string, opts ...ai.PromptOption) ai.Prompt {
+func (g *Genkit) DefinePrompt(name string, opts ...ai.PromptOption) ai.Prompt {
 	return ai.DefinePrompt(g.reg, name, opts...)
 }
 
 // LookupPrompt retrieves a registered [ai.Prompt] by its name.
-// Prompts can be registered via [DefinePrompt] or loaded automatically from
-// `.prompt` files in the directory specified by [WithPromptDir] or [LoadPromptDir].
+// Prompts can be registered via [Genkit.DefinePrompt] or loaded automatically from
+// `.prompt` files in the directory specified by [WithPromptDir] or [Genkit.LoadPromptDir].
 // It returns the prompt instance if found, or `nil` otherwise.
-func LookupPrompt(g *Genkit, name string) ai.Prompt {
+func (g *Genkit) LookupPrompt(name string) ai.Prompt {
 	return ai.LookupPrompt(g.reg, name)
 }
 
@@ -963,7 +963,7 @@ func LookupPrompt(g *Genkit, name string) ai.Prompt {
 //
 // Example:
 //
-//	genkit.DefineSchema(g, "User", map[string]any{
+//	g.DefineSchema("User", map[string]any{
 //	    "type": "object",
 //	    "properties": map[string]any{
 //	        "name": map[string]any{"type": "string"},
@@ -972,15 +972,15 @@ func LookupPrompt(g *Genkit, name string) ai.Prompt {
 //	    "required": []string{"name"}
 //	})
 //
-//	genkit.Generate(ctx, g, ai.WithOutputSchemaName("User"), ai.WithPrompt("What is your name?"))
-func DefineSchema(g *Genkit, name string, schema map[string]any) {
+//	g.Generate(ctx, ai.WithOutputSchemaName("User"), ai.WithPrompt("What is your name?"))
+func (g *Genkit) DefineSchema(name string, schema map[string]any) {
 	core.DefineSchema(g.reg, name, schema)
 }
 
 // DefineSchemaFor defines a named JSON schema derived from a Go type
 // and registers it in the registry.
 //
-// This is an alternative to [DefineSchema].
+// This is an alternative to [Genkit.DefineSchema].
 //
 // Example:
 //
@@ -989,10 +989,10 @@ func DefineSchema(g *Genkit, name string, schema map[string]any) {
 //	    Age int `json:"age"`
 //	}
 //
-//	genkit.DefineSchemaFor[User](g)
+//	g.DefineSchemaFor[User]()
 //
-//	genkit.Generate(ctx, g, ai.WithOutputSchemaName("User"), ai.WithPrompt("What is your name?"))
-func DefineSchemaFor[T any](g *Genkit) {
+//	g.Generate(ctx, ai.WithOutputSchemaName("User"), ai.WithPrompt("What is your name?"))
+func (g *Genkit) DefineSchemaFor[T any]() {
 	core.DefineSchemaFor[T](g.reg)
 }
 
@@ -1000,11 +1000,11 @@ func DefineSchemaFor[T any](g *Genkit) {
 // It automatically infers input schema from the In type parameter and configures
 // output schema and JSON format from the Out type parameter (unless Out is string).
 //
-// This is a convenience wrapper around [DefinePrompt] that provides compile-time
+// This is a convenience wrapper around [Genkit.DefinePrompt] that provides compile-time
 // type safety for both input and output. For prompts that don't need to be registered,
 // use [ai.NewDataPrompt] instead.
 //
-// DefineDataPrompt accepts the same options as [DefinePrompt]. See [DefinePrompt] for
+// DefineDataPrompt accepts the same options as [Genkit.DefinePrompt]. See [Genkit.DefinePrompt] for
 // the full list of available options. Note that input and output schemas are automatically
 // inferred from the type parameters.
 //
@@ -1018,7 +1018,7 @@ func DefineSchemaFor[T any](g *Genkit) {
 //		Capital string `json:"capital"`
 //	}
 //
-//	capitalPrompt := genkit.DefineDataPrompt[GeoInput, GeoOutput](g, "findCapital",
+//	capitalPrompt := g.DefineDataPrompt[GeoInput, GeoOutput]("findCapital",
 //		ai.WithModelName("googleai/gemini-3-flash-preview"),
 //		ai.WithSystem("You are a helpful geography assistant."),
 //		ai.WithPrompt("What is the capital of {{country}}?"),
@@ -1029,20 +1029,20 @@ func DefineSchemaFor[T any](g *Genkit) {
 //		log.Fatalf("Execute failed: %v", err)
 //	}
 //	fmt.Printf("Capital: %s\n", output.Capital)
-func DefineDataPrompt[In, Out any](g *Genkit, name string, opts ...ai.PromptOption) *ai.DataPrompt[In, Out] {
+func (g *Genkit) DefineDataPrompt[In, Out any](name string, opts ...ai.PromptOption) *ai.DataPrompt[In, Out] {
 	return ai.DefineDataPrompt[In, Out](g.reg, name, opts...)
 }
 
 // LookupDataPrompt looks up a prompt by name and wraps it with type information.
 // This is useful for wrapping prompts loaded from .prompt files with strong types.
 // It returns nil if the prompt was not found.
-func LookupDataPrompt[In, Out any](g *Genkit, name string) *ai.DataPrompt[In, Out] {
+func (g *Genkit) LookupDataPrompt[In, Out any](name string) *ai.DataPrompt[In, Out] {
 	return ai.LookupDataPrompt[In, Out](g.reg, name)
 }
 
 // GenerateWithRequest performs a model generation request using explicitly provided
 // [ai.GenerateActionOptions]. This function is typically used in conjunction with
-// prompts defined via [DefinePrompt], where [ai.prompt.Render] produces the
+// prompts defined via [Genkit.DefinePrompt], where [ai.prompt.Render] produces the
 // `actionOpts`. It allows fine-grained control over the request sent to the model.
 //
 // It accepts optional model middleware (`mw`) for intercepting/modifying the request/response,
@@ -1051,7 +1051,7 @@ func LookupDataPrompt[In, Out any](g *Genkit, name string) *ai.DataPrompt[In, Ou
 //
 // Example (using options rendered from a prompt):
 //
-//	myPrompt := genkit.LookupPrompt(g, "myDefinedPrompt")
+//	myPrompt := g.LookupPrompt("myDefinedPrompt")
 //	actionOpts, err := myPrompt.Render(ctx, map[string]any{"topic": "go programming"})
 //	if err != nil {
 //		// handle error
@@ -1059,12 +1059,12 @@ func LookupDataPrompt[In, Out any](g *Genkit, name string) *ai.DataPrompt[In, Ou
 //
 //	// Optional: Modify actionOpts here if needed (config is provider-specific)
 //
-//	resp, err := genkit.GenerateWithRequest(ctx, g, actionOpts, nil, nil) // No middleware or streaming
+//	resp, err := g.GenerateWithRequest(ctx, actionOpts, nil, nil) // No middleware or streaming
 //	if err != nil {
 //		// handle error
 //	}
 //	fmt.Println(resp.Text())
-func GenerateWithRequest(ctx context.Context, g *Genkit, actionOpts *ai.GenerateActionOptions, mw []ai.ModelMiddleware, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+func (g *Genkit) GenerateWithRequest(ctx context.Context, actionOpts *ai.GenerateActionOptions, mw []ai.ModelMiddleware, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 	return ai.GenerateWithRequest(ctx, g.reg, actionOpts, mw, cb)
 }
 
@@ -1113,7 +1113,7 @@ func GenerateWithRequest(ctx context.Context, g *Genkit, actionOpts *ai.Generate
 //
 // Example:
 //
-//	resp, err := genkit.Generate(ctx, g,
+//	resp, err := g.Generate(ctx,
 //		ai.WithModelName("googleai/gemini-3-flash-preview"),
 //		ai.WithPrompt("Write a short poem about clouds."),
 //	)
@@ -1122,7 +1122,7 @@ func GenerateWithRequest(ctx context.Context, g *Genkit, actionOpts *ai.Generate
 //	}
 //
 //	fmt.Println(resp.Text())
-func Generate(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (*ai.ModelResponse, error) {
+func (g *Genkit) Generate(ctx context.Context, opts ...ai.GenerateOption) (*ai.ModelResponse, error) {
 	return ai.Generate(genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
@@ -1137,12 +1137,12 @@ func Generate(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (*ai.Mo
 //
 // Otherwise the Chunk field of the passed [ai.ModelStreamValue] holds a streamed chunk.
 //
-// GenerateStream accepts the same options as [Generate]. See [Generate] for the full
+// GenerateStream accepts the same options as [Genkit.Generate]. See [Genkit.Generate] for the full
 // list of available options.
 //
 // Example:
 //
-//	for result, err := range genkit.GenerateStream(ctx, g,
+//	for result, err := range g.GenerateStream(ctx,
 //		ai.WithPrompt("Tell me a story about a brave knight."),
 //	) {
 //		if err != nil {
@@ -1154,7 +1154,7 @@ func Generate(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (*ai.Mo
 //			fmt.Print(result.Chunk.Text())
 //		}
 //	}
-func GenerateStream(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) iter.Seq2[*ai.ModelStreamValue, error] {
+func (g *Genkit) GenerateStream(ctx context.Context, opts ...ai.GenerateOption) iter.Seq2[*ai.ModelStreamValue, error] {
 	return ai.GenerateStream(genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
@@ -1162,16 +1162,16 @@ func GenerateStream(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) i
 // provided via [ai.GenerateOption] arguments. It's designed for long-running generation
 // tasks that may not complete immediately.
 //
-// Unlike [Generate], this function returns a [ai.ModelOperation] which can be used to
-// check the status of the operation and get the result. Use [CheckModelOperation] to
+// Unlike [Genkit.Generate], this function returns a [ai.ModelOperation] which can be used to
+// check the status of the operation and get the result. Use [Genkit.CheckModelOperation] to
 // poll for completion.
 //
-// GenerateOperation accepts the same options as [Generate]. See [Generate] for the full
+// GenerateOperation accepts the same options as [Genkit.Generate]. See [Genkit.Generate] for the full
 // list of available options.
 //
 // Example:
 //
-//	op, err := genkit.GenerateOperation(ctx, g,
+//	op, err := g.GenerateOperation(ctx,
 //		ai.WithModelName("googleai/veo-2.0-generate-001"),
 //		ai.WithPrompt("A banana riding a bicycle."),
 //	)
@@ -1182,7 +1182,7 @@ func GenerateStream(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) i
 //	fmt.Println(op.ID)
 //
 //	// Check the status of the operation
-//	op, err = genkit.CheckModelOperation(ctx, g, op)
+//	op, err = g.CheckModelOperation(ctx, op)
 //	if err != nil {
 //		log.Fatalf("failed to check operation status: %v", err)
 //	}
@@ -1191,32 +1191,32 @@ func GenerateStream(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) i
 //
 //	// Get the result of the operation
 //	fmt.Println(op.Output.Text())
-func GenerateOperation(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (*ai.ModelOperation, error) {
+func (g *Genkit) GenerateOperation(ctx context.Context, opts ...ai.GenerateOption) (*ai.ModelOperation, error) {
 	return ai.GenerateOperation(genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // CheckModelOperation checks the status of a background model operation by looking up the model and calling its Check method.
-func CheckModelOperation(ctx context.Context, g *Genkit, op *ai.ModelOperation) (*ai.ModelOperation, error) {
+func (g *Genkit) CheckModelOperation(ctx context.Context, op *ai.ModelOperation) (*ai.ModelOperation, error) {
 	return ai.CheckModelOperation(ctx, g.reg, op)
 }
 
-// GenerateText performs a model generation request similar to [Generate], but
+// GenerateText performs a model generation request similar to [Genkit.Generate], but
 // directly returns the generated text content as a string. It's a convenience
 // wrapper for cases where only the textual output is needed.
 //
-// GenerateText accepts the same options as [Generate]. See [Generate] for the full
+// GenerateText accepts the same options as [Genkit.Generate]. See [Genkit.Generate] for the full
 // list of available options.
 //
 // Example:
 //
-//	joke, err := genkit.GenerateText(ctx, g,
+//	joke, err := g.GenerateText(ctx,
 //		ai.WithPrompt("Tell me a funny programming joke."),
 //	)
 //	if err != nil {
 //		log.Fatalf("GenerateText failed: %v", err)
 //	}
 //	fmt.Println(joke)
-func GenerateText(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (string, error) {
+func (g *Genkit) GenerateText(ctx context.Context, opts ...ai.GenerateOption) (string, error) {
 	return ai.GenerateText(genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
@@ -1225,7 +1225,7 @@ func GenerateText(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (st
 // It automatically sets output type and JSON format, unmarshals the response, and
 // returns the typed result.
 //
-// GenerateData accepts the same options as [Generate]. See [Generate] for the full
+// GenerateData accepts the same options as [Genkit.Generate]. See [Genkit.Generate] for the full
 // list of available options. Note that output options like [ai.WithOutputType] are
 // automatically applied based on the Out type parameter.
 //
@@ -1237,7 +1237,7 @@ func GenerateText(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (st
 //		Year   int    `json:"year"`
 //	}
 //
-//	book, _, err := genkit.GenerateData[BookInfo](ctx, g,
+//	book, _, err := g.GenerateData[BookInfo](ctx,
 //		ai.WithPrompt("Tell me about 'The Hitchhiker's Guide to the Galaxy'."),
 //	)
 //	if err != nil {
@@ -1245,7 +1245,7 @@ func GenerateText(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (st
 //	}
 //
 //	log.Printf("Book: %+v\n", book) // Output: Book: {Title:The Hitchhiker's Guide to the Galaxy Author:Douglas Adams Year:1979}
-func GenerateData[Out any](ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (*Out, *ai.ModelResponse, error) {
+func (g *Genkit) GenerateData[Out any](ctx context.Context, opts ...ai.GenerateOption) (*Out, *ai.ModelResponse, error) {
 	return ai.GenerateData[Out](genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
@@ -1261,7 +1261,7 @@ func GenerateData[Out any](ctx context.Context, g *Genkit, opts ...ai.GenerateOp
 //
 // Otherwise the Chunk field of the passed [ai.StreamValue] holds a streamed chunk.
 //
-// GenerateDataStream accepts the same options as [Generate]. See [Generate] for the full
+// GenerateDataStream accepts the same options as [Genkit.Generate]. See [Genkit.Generate] for the full
 // list of available options. Note that output options are automatically applied based on
 // the Out type parameter.
 //
@@ -1272,7 +1272,7 @@ func GenerateData[Out any](ctx context.Context, g *Genkit, opts ...ai.GenerateOp
 //		Content string `json:"content"`
 //	}
 //
-//	for result, err := range genkit.GenerateDataStream[Story](ctx, g,
+//	for result, err := range g.GenerateDataStream[Story](ctx,
 //		ai.WithPrompt("Write a short story about a brave knight."),
 //	) {
 //		if err != nil {
@@ -1284,7 +1284,7 @@ func GenerateData[Out any](ctx context.Context, g *Genkit, opts ...ai.GenerateOp
 //			fmt.Print(result.Chunk.Text())
 //		}
 //	}
-func GenerateDataStream[Out any](ctx context.Context, g *Genkit, opts ...ai.GenerateOption) iter.Seq2[*ai.StreamValue[Out, Out], error] {
+func (g *Genkit) GenerateDataStream[Out any](ctx context.Context, opts ...ai.GenerateOption) iter.Seq2[*ai.StreamValue[Out, Out], error] {
 	return ai.GenerateDataStream[Out](genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
@@ -1303,7 +1303,7 @@ func GenerateDataStream[Out any](ctx context.Context, g *Genkit, opts ...ai.Gene
 //
 // Example:
 //
-//	resp, err := genkit.Retrieve(ctx, g,
+//	resp, err := g.Retrieve(ctx,
 //		ai.WithRetrieverName("myRetriever"),
 //		ai.WithTextDocs("What is the capital of France?"),
 //	)
@@ -1314,7 +1314,7 @@ func GenerateDataStream[Out any](ctx context.Context, g *Genkit, opts ...ai.Gene
 //	for _, doc := range resp.Documents {
 //		fmt.Printf("Document: %+v\n", doc)
 //	}
-func Retrieve(ctx context.Context, g *Genkit, opts ...ai.RetrieverOption) (*ai.RetrieverResponse, error) {
+func (g *Genkit) Retrieve(ctx context.Context, opts ...ai.RetrieverOption) (*ai.RetrieverResponse, error) {
 	return ai.Retrieve(ctx, g.reg, opts...)
 }
 
@@ -1332,7 +1332,7 @@ func Retrieve(ctx context.Context, g *Genkit, opts ...ai.RetrieverOption) (*ai.R
 //
 // Example:
 //
-//	resp, err := genkit.Embed(ctx, g,
+//	resp, err := g.Embed(ctx,
 //		ai.WithEmbedderName("myEmbedder"),
 //		ai.WithTextDocs("Hello, world!"),
 //	)
@@ -1343,7 +1343,7 @@ func Retrieve(ctx context.Context, g *Genkit, opts ...ai.RetrieverOption) (*ai.R
 //	for i, embedding := range resp.Embeddings {
 //		fmt.Printf("Embedding %d: %v\n", i, embedding.Embedding)
 //	}
-func Embed(ctx context.Context, g *Genkit, opts ...ai.EmbedderOption) (*ai.EmbedResponse, error) {
+func (g *Genkit) Embed(ctx context.Context, opts ...ai.EmbedderOption) (*ai.EmbedResponse, error) {
 	return ai.Embed(ctx, g.reg, opts...)
 }
 
@@ -1358,14 +1358,14 @@ func Embed(ctx context.Context, g *Genkit, opts ...ai.EmbedderOption) (*ai.Embed
 //
 // For retrievers that don't need to be registered (e.g., for plugin development),
 // use [ai.NewRetriever] instead.
-func DefineRetriever(g *Genkit, name string, opts *ai.RetrieverOptions, fn ai.RetrieverFunc) ai.Retriever {
+func (g *Genkit) DefineRetriever(name string, opts *ai.RetrieverOptions, fn ai.RetrieverFunc) ai.Retriever {
 	return ai.DefineRetriever(g.reg, name, opts, fn)
 }
 
 // LookupRetriever retrieves a registered [ai.Retriever] by its provider and name.
 // It returns the retriever instance if found, or `nil` if no retriever with the
-// given identifier is registered (e.g., via [DefineRetriever] or a plugin).
-func LookupRetriever(g *Genkit, name string) ai.Retriever {
+// given identifier is registered (e.g., via [Genkit.DefineRetriever] or a plugin).
+func (g *Genkit) LookupRetriever(name string) ai.Retriever {
 	return ai.LookupRetriever(g.reg, name)
 }
 
@@ -1379,15 +1379,15 @@ func LookupRetriever(g *Genkit, name string) ai.Retriever {
 //
 // For embedders that don't need to be registered (e.g., for plugin development),
 // use [ai.NewEmbedder] instead.
-func DefineEmbedder(g *Genkit, name string, opts *ai.EmbedderOptions, fn ai.EmbedderFunc) ai.Embedder {
+func (g *Genkit) DefineEmbedder(name string, opts *ai.EmbedderOptions, fn ai.EmbedderFunc) ai.Embedder {
 	return ai.DefineEmbedder(g.reg, name, opts, fn)
 }
 
 // LookupEmbedder retrieves a registered [ai.Embedder] by its provider and name.
 // It returns the embedder instance if found, or `nil` if no embedder with the
-// given identifier is registered (e.g., via [DefineEmbedder] or a plugin).
+// given identifier is registered (e.g., via [Genkit.DefineEmbedder] or a plugin).
 // It will try to resolve the embedder dynamically if the embedder is not found.
-func LookupEmbedder(g *Genkit, name string) ai.Embedder {
+func (g *Genkit) LookupEmbedder(name string) ai.Embedder {
 	return ai.LookupEmbedder(g.reg, name)
 }
 
@@ -1396,7 +1396,7 @@ func LookupEmbedder(g *Genkit, name string) ai.Embedder {
 // It returns the plugin instance as `Plugin` if found, or `nil` otherwise.
 // The caller is responsible for type-asserting the returned value to the
 // specific plugin api.
-func LookupPlugin(g *Genkit, name string) api.Plugin {
+func (g *Genkit) LookupPlugin(name string) api.Plugin {
 	return g.reg.LookupPlugin(name)
 }
 
@@ -1412,7 +1412,7 @@ func LookupPlugin(g *Genkit, name string) api.Plugin {
 // metadata about the evaluator ([ai.EvaluatorOptions]). The `eval` function
 // implements the logic to score a single test case and returns the results
 // in an [ai.EvaluatorCallbackResponse].
-func DefineEvaluator(g *Genkit, name string, opts *ai.EvaluatorOptions, fn ai.EvaluatorFunc) ai.Evaluator {
+func (g *Genkit) DefineEvaluator(name string, opts *ai.EvaluatorOptions, fn ai.EvaluatorFunc) ai.Evaluator {
 	return ai.DefineEvaluator(g.reg, name, opts, fn)
 }
 
@@ -1427,15 +1427,15 @@ func DefineEvaluator(g *Genkit, name string, opts *ai.EvaluatorOptions, fn ai.Ev
 // metadata about the evaluator ([ai.EvaluatorOptions]). The `eval` function
 // implements the logic to score the dataset and returns the aggregated results
 // in an [ai.EvaluatorResponse].
-func DefineBatchEvaluator(g *Genkit, name string, opts *ai.EvaluatorOptions, fn ai.BatchEvaluatorFunc) ai.Evaluator {
+func (g *Genkit) DefineBatchEvaluator(name string, opts *ai.EvaluatorOptions, fn ai.BatchEvaluatorFunc) ai.Evaluator {
 	return ai.DefineBatchEvaluator(g.reg, name, opts, fn)
 }
 
 // LookupEvaluator retrieves a registered [ai.Evaluator] by its provider and name.
 // It returns the evaluator instance if found, or `nil` if no evaluator with the
-// given identifier is registered (e.g., via [DefineEvaluator], [DefineBatchEvaluator],
+// given identifier is registered (e.g., via [Genkit.DefineEvaluator], [Genkit.DefineBatchEvaluator],
 // or a plugin).
-func LookupEvaluator(g *Genkit, name string) ai.Evaluator {
+func (g *Genkit) LookupEvaluator(name string) ai.Evaluator {
 	return ai.LookupEvaluator(g.reg, name)
 }
 
@@ -1461,7 +1461,7 @@ func LookupEvaluator(g *Genkit, name string) ai.Evaluator {
 //		},
 //	}
 //
-//	resp, err := genkit.Evaluate(ctx, g,
+//	resp, err := g.Evaluate(ctx,
 //		ai.WithEvaluatorName("myEvaluator"),
 //		ai.WithDataset(dataset...),
 //	)
@@ -1472,7 +1472,7 @@ func LookupEvaluator(g *Genkit, name string) ai.Evaluator {
 //	for _, result := range *resp {
 //		fmt.Printf("Evaluation result: %+v\n", result)
 //	}
-func Evaluate(ctx context.Context, g *Genkit, opts ...ai.EvaluatorOption) (*ai.EvaluatorResponse, error) {
+func (g *Genkit) Evaluate(ctx context.Context, opts ...ai.EvaluatorOption) (*ai.EvaluatorResponse, error) {
 	return ai.Evaluate(ctx, g.reg, opts...)
 }
 
@@ -1490,7 +1490,7 @@ func Evaluate(ctx context.Context, g *Genkit, opts ...ai.EvaluatorOption) (*ai.E
 // This function is often called implicitly by [Init] using the directory specified
 // by [WithPromptDir], but can be called explicitly to load prompts from other
 // locations or with different namespaces.
-func LoadPromptDir(g *Genkit, dir, namespace string) error {
+func (g *Genkit) LoadPromptDir(dir, namespace string) error {
 	return loadPromptDirOS(g.reg, dir, namespace)
 }
 
@@ -1536,7 +1536,7 @@ func loadPromptDirOS(r api.Registry, dir, namespace string) error {
 // file "greeting.prompt" results in prompt name "myApp/greeting"). Use an empty
 // string for no namespace.
 //
-// This function provides an alternative to [LoadPromptDir] for loading prompts
+// This function provides an alternative to [Genkit.LoadPromptDir] for loading prompts
 // from embedded filesystems, enabling self-contained binaries without external
 // prompt files.
 //
@@ -1552,11 +1552,11 @@ func loadPromptDirOS(r api.Registry, dir, namespace string) error {
 //		if err != nil {
 //			log.Fatal(err)
 //		}
-//		if err := genkit.LoadPromptDirFromFS(g, promptsFS, "prompts", "myNamespace"); err != nil {
+//		if err := g.LoadPromptDirFromFS(promptsFS, "prompts", "myNamespace"); err != nil {
 //			log.Fatal(err)
 //		}
 //	}
-func LoadPromptDirFromFS(g *Genkit, fsys fs.FS, dir, namespace string) error {
+func (g *Genkit) LoadPromptDirFromFS(fsys fs.FS, dir, namespace string) error {
 	return ai.LoadPromptDirFromFS(g.reg, fsys, dir, namespace)
 }
 
@@ -1569,12 +1569,12 @@ func LoadPromptDirFromFS(g *Genkit, fsys fs.FS, dir, namespace string) error {
 // empty string for no namespace.
 //
 // This provides a way to load specific prompt files programmatically, outside of the
-// automatic loading done by [Init] or [LoadPromptDir].
+// automatic loading done by [Init] or [Genkit.LoadPromptDir].
 //
 // Example:
 //
 //	// Load a specific prompt file with a namespace
-//	customPrompt, err := genkit.LoadPrompt(g, "./prompts/analyzer.prompt", "analysis")
+//	customPrompt, err := g.LoadPrompt("./prompts/analyzer.prompt", "analysis")
 //	if err != nil {
 //		log.Fatalf("Custom prompt not found or failed to parse: %v", err)
 //	}
@@ -1582,7 +1582,7 @@ func LoadPromptDirFromFS(g *Genkit, fsys fs.FS, dir, namespace string) error {
 //	// Execute the loaded prompt
 //	resp, err := customPrompt.Execute(ctx, ai.WithInput(map[string]any{"text": "some data"}))
 //	// ... handle response and error ...
-func LoadPrompt(g *Genkit, path, namespace string) (ai.Prompt, error) {
+func (g *Genkit) LoadPrompt(path, namespace string) (ai.Prompt, error) {
 	dir, filename := filepath.Split(path)
 	if dir == "" {
 		dir = "."
@@ -1616,20 +1616,20 @@ func LoadPrompt(g *Genkit, path, namespace string) (ai.Prompt, error) {
 //	Hello, {{name}}!
 //	`
 //
-//	prompt, err := genkit.LoadPromptFromSource(g, promptSource, "greeting", "myApp")
+//	prompt, err := g.LoadPromptFromSource(promptSource, "greeting", "myApp")
 //	if err != nil {
 //		log.Fatalf("Failed to load prompt: %v", err)
 //	}
 //
 //	resp, err := prompt.Execute(ctx, ai.WithInput(map[string]any{"name": "World"}))
 //	// ...
-func LoadPromptFromSource(g *Genkit, source, name, namespace string) (ai.Prompt, error) {
+func (g *Genkit) LoadPromptFromSource(source, name, namespace string) (ai.Prompt, error) {
 	return ai.LoadPromptFromSource(g.reg, source, name, namespace)
 }
 
 // DefinePartial wraps DefinePartial to register a partial template with the given name and source.
 // Partials can be referenced in templates with the syntax {{>partialName}}.
-func DefinePartial(g *Genkit, name string, source string) {
+func (g *Genkit) DefinePartial(name string, source string) {
 	g.reg.RegisterPartial(name, source)
 }
 
@@ -1638,14 +1638,14 @@ func DefinePartial(g *Genkit, name string, source string) {
 //
 // Example usage:
 //
-//	genkit.DefineHelper(g, "uppercase", func(s string) string {
+//	g.DefineHelper("uppercase", func(s string) string {
 //		return strings.ToUpper(s)
 //	})
 //
 // In a template, you would use it as:
 //
 //	{{uppercase "hello"}} => "HELLO"
-func DefineHelper(g *Genkit, name string, fn any) {
+func (g *Genkit) DefineHelper(name string, fn any) {
 	g.reg.RegisterHelper(name, fn)
 }
 
@@ -1671,19 +1671,19 @@ func DefineHelper(g *Genkit, name string, fn any) {
 //	}
 //
 //	// Register the formatter
-//	genkit.DefineFormat(g, "csv", csvFormatter{})
+//	g.DefineFormat("csv", csvFormatter{})
 //
 //	// Use the formatter in a generation request
-//	resp, err := genkit.Generate(ctx, g,
+//	resp, err := g.Generate(ctx,
 //		ai.WithPrompt("List 3 countries and their capitals"),
 //		ai.WithOutputFormat("csv"), // Use the custom formatter
 //	)
-func DefineFormat(g *Genkit, name string, formatter ai.Formatter) {
+func (g *Genkit) DefineFormat(name string, formatter ai.Formatter) {
 	ai.DefineFormat(g.reg, name, formatter)
 }
 
 // IsDefinedFormat checks if a formatter with the given name is registered in the registry.
-func IsDefinedFormat(g *Genkit, name string) bool {
+func (g *Genkit) IsDefinedFormat(name string) bool {
 	return g.reg.LookupValue("/format/"+name) != nil
 }
 
@@ -1704,12 +1704,12 @@ func IsDefinedFormat(g *Genkit, name string) bool {
 //	    Content: []*ai.Part{ai.NewTextPart(string(content))},
 //	  }, nil
 //	})
-func DefineResource(g *Genkit, name string, opts *ai.ResourceOptions, fn ai.ResourceFunc) ai.Resource {
+func (g *Genkit) DefineResource(name string, opts *ai.ResourceOptions, fn ai.ResourceFunc) ai.Resource {
 	return ai.DefineResource(g.reg, name, opts, fn)
 }
 
 // FindMatchingResource finds a resource that matches the given URI.
-func FindMatchingResource(g *Genkit, uri string) (ai.Resource, *ai.ResourceInput, error) {
+func (g *Genkit) FindMatchingResource(uri string) (ai.Resource, *ai.ResourceInput, error) {
 	return ai.FindMatchingResource(g.reg, uri)
 }
 
@@ -1739,7 +1739,7 @@ func NewResource(name string, opts *ai.ResourceOptions, fn ai.ResourceFunc) ai.R
 }
 
 // ListResources returns a slice of all resource actions
-func ListResources(g *Genkit) []ai.Resource {
+func (g *Genkit) ListResources() []ai.Resource {
 	acts := g.reg.ListActions()
 	resources := []ai.Resource{}
 	for _, action := range acts {

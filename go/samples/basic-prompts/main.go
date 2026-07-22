@@ -113,11 +113,11 @@ func main() {
 	// Define schemas for the expected input and output types so that the Dotprompt files can reference them.
 	// Alternatively, you can specify the JSON schema by hand in the Dotprompt metadata.
 	// Code-defined prompts do not need to have schemas defined in advance but they too can reference them.
-	genkit.DefineSchemaFor[JokeRequest](g)
-	genkit.DefineSchemaFor[Joke](g)
-	genkit.DefineSchemaFor[RecipeRequest](g)
-	genkit.DefineSchemaFor[Recipe](g)
-	genkit.DefineSchemaFor[AssistantRequest](g)
+	g.DefineSchemaFor[JokeRequest]()
+	g.DefineSchemaFor[Joke]()
+	g.DefineSchemaFor[RecipeRequest]()
+	g.DefineSchemaFor[Recipe]()
+	g.DefineSchemaFor[AssistantRequest]()
 
 	// TODO: Include partials and helpers.
 
@@ -133,7 +133,7 @@ func main() {
 
 	// Optionally, start a web server to make the flows callable via HTTP.
 	mux := http.NewServeMux()
-	for _, a := range genkit.ListFlows(g) {
+	for _, a := range g.ListFlows() {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
 	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
@@ -143,8 +143,7 @@ func main() {
 // The prompt has no output schema defined so it will always return a string.
 // When executing the prompt, we pass in a map[string]any with the input fields.
 func DefineSimpleJokeWithInlinePrompt(g *genkit.Genkit) {
-	jokePrompt := genkit.DefinePrompt(
-		g, "joke.code",
+	jokePrompt := g.DefinePrompt("joke.code",
 		ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
 			ThinkingConfig: &genai.ThinkingConfig{
 				ThinkingBudget: genai.Ptr[int32](0),
@@ -155,7 +154,7 @@ func DefineSimpleJokeWithInlinePrompt(g *genkit.Genkit) {
 		ai.WithPrompt("Share a long joke about {{topic}}."),
 	)
 
-	genkit.DefineStreamingFlow(g, "simpleJokePromptFlow",
+	g.DefineStreamingFlow("simpleJokePromptFlow",
 		func(ctx context.Context, topic string, sendChunk core.StreamCallback[string]) (string, error) {
 			// One way to pass input is using a map[string]any. This is useful when there is no structured input type.
 			stream := jokePrompt.ExecuteStream(ctx, ai.WithInput(map[string]any{"topic": topic}))
@@ -178,9 +177,9 @@ func DefineSimpleJokeWithInlinePrompt(g *genkit.Genkit) {
 // LoadPrompt. The prompt configuration (model, input schema, defaults) is defined in the
 // file. Input is passed as a map since the .prompt file defines its own schema.
 func DefineSimpleJokeWithDotprompt(g *genkit.Genkit) {
-	genkit.DefineStreamingFlow(g, "simpleJokeDotpromptFlow",
+	g.DefineStreamingFlow("simpleJokeDotpromptFlow",
 		func(ctx context.Context, topic string, sendChunk core.StreamCallback[string]) (string, error) {
-			jokePrompt := genkit.LookupPrompt(g, "joke")
+			jokePrompt := g.LookupPrompt("joke")
 			// One way to pass input is using a map[string]any. This is useful when there is no structured input type.
 			stream := jokePrompt.ExecuteStream(ctx, ai.WithInput(map[string]any{"topic": topic}))
 			for result, err := range stream {
@@ -202,8 +201,7 @@ func DefineSimpleJokeWithDotprompt(g *genkit.Genkit) {
 // input and output. The type parameters automatically configure input/output schemas
 // and JSON output format. ExecuteStream returns typed chunks and final output.
 func DefineStructuredJokeWithInlinePrompt(g *genkit.Genkit) {
-	jokePrompt := genkit.DefineDataPrompt[JokeRequest, *Joke](
-		g, "structured-joke.code",
+	jokePrompt := g.DefineDataPrompt[JokeRequest, *Joke]("structured-joke.code",
 		ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
 			ThinkingConfig: &genai.ThinkingConfig{
 				ThinkingBudget: genai.Ptr[int32](0),
@@ -212,7 +210,7 @@ func DefineStructuredJokeWithInlinePrompt(g *genkit.Genkit) {
 		ai.WithPrompt("Share a long joke about {{topic}}."),
 	)
 
-	genkit.DefineStreamingFlow(g, "structuredJokePromptFlow",
+	g.DefineStreamingFlow("structuredJokePromptFlow",
 		func(ctx context.Context, input JokeRequest, sendChunk core.StreamCallback[*Joke]) (*Joke, error) {
 			for result, err := range jokePrompt.ExecuteStream(ctx, input) {
 				if err != nil {
@@ -233,9 +231,9 @@ func DefineStructuredJokeWithInlinePrompt(g *genkit.Genkit) {
 // with Go type information. The .prompt file references registered schemas by name
 // (e.g., "schema: Joke"), which must be defined via DefineSchemaFor before loading.
 func DefineStructuredJokeWithDotprompt(g *genkit.Genkit) {
-	genkit.DefineStreamingFlow(g, "structuredJokeDotpromptFlow",
+	g.DefineStreamingFlow("structuredJokeDotpromptFlow",
 		func(ctx context.Context, input JokeRequest, sendChunk core.StreamCallback[*Joke]) (*Joke, error) {
-			jokePrompt := genkit.LookupDataPrompt[JokeRequest, *Joke](g, "structured-joke")
+			jokePrompt := g.LookupDataPrompt[JokeRequest, *Joke]("structured-joke")
 			stream := jokePrompt.ExecuteStream(ctx, input)
 			for result, err := range stream {
 				if err != nil {
@@ -255,8 +253,7 @@ func DefineStructuredJokeWithDotprompt(g *genkit.Genkit) {
 // and Handlebars conditionals/loops in the prompt template. The streaming flow applies
 // default values before execution and streams partial ingredients as they arrive.
 func DefineRecipeWithInlinePrompt(g *genkit.Genkit) {
-	recipePrompt := genkit.DefineDataPrompt[RecipeRequest, *Recipe](
-		g, "recipe.code",
+	recipePrompt := g.DefineDataPrompt[RecipeRequest, *Recipe]("recipe.code",
 		ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
 			ThinkingConfig: &genai.ThinkingConfig{
 				ThinkingBudget: genai.Ptr[int32](0),
@@ -267,7 +264,7 @@ func DefineRecipeWithInlinePrompt(g *genkit.Genkit) {
 			"{{#if dietaryRestrictions}}Dietary restrictions: {{#each dietaryRestrictions}}{{this}}{{#unless @last}}, {{/unless}}{{/each}}.{{/if}}"),
 	)
 
-	genkit.DefineStreamingFlow(g, "recipePromptFlow",
+	g.DefineStreamingFlow("recipePromptFlow",
 		func(ctx context.Context, input RecipeRequest, sendChunk core.StreamCallback[*Ingredient]) (*Recipe, error) {
 			// This is not necessary for this example but it shows how to easily have more control over what you stream.
 			filterNew := newIngredientFilter()
@@ -291,11 +288,11 @@ func DefineRecipeWithInlinePrompt(g *genkit.Genkit) {
 // multi-message format (system/user roles) and references registered schemas.
 // Streams partial ingredients as they arrive via ExecuteStream.
 func DefineRecipeWithDotprompt(g *genkit.Genkit) {
-	genkit.DefineStreamingFlow(g, "recipeDotpromptFlow",
+	g.DefineStreamingFlow("recipeDotpromptFlow",
 		func(ctx context.Context, input RecipeRequest, sendChunk core.StreamCallback[*Ingredient]) (*Recipe, error) {
 			// This is not necessary for this example but it shows how to easily have more control over what you stream.
 			filterNew := newIngredientFilter()
-			recipePrompt := genkit.LookupDataPrompt[RecipeRequest, *Recipe](g, "recipe")
+			recipePrompt := g.LookupDataPrompt[RecipeRequest, *Recipe]("recipe")
 			stream := recipePrompt.ExecuteStream(ctx, input)
 			for result, err := range stream {
 				if err != nil {
@@ -333,8 +330,7 @@ func newIngredientFilter() func([]*Ingredient) []*Ingredient {
 // This creates a highly capable and resilient prompt that is also fully
 // transparent in the Dev UI metadata.
 func DefineAssistantWithInlinePrompt(g *genkit.Genkit) {
-	assistantPrompt := genkit.DefinePrompt(
-		g, "assistant.code",
+	assistantPrompt := g.DefinePrompt("assistant.code",
 		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithPrompt("{{query}}"),
 		ai.WithInputType(AssistantRequest{}),
@@ -353,7 +349,7 @@ func DefineAssistantWithInlinePrompt(g *genkit.Genkit) {
 		),
 	)
 
-	genkit.DefineStreamingFlow(g, "assistantPromptFlow",
+	g.DefineStreamingFlow("assistantPromptFlow",
 		func(ctx context.Context, query string, sendChunk core.StreamCallback[string]) (string, error) {
 			stream := assistantPrompt.ExecuteStream(ctx, ai.WithInput(&AssistantRequest{Query: query}))
 			for result, err := range stream {
@@ -373,10 +369,10 @@ func DefineAssistantWithInlinePrompt(g *genkit.Genkit) {
 // DefineAssistantWithDotprompt demonstrates loading a prompt from a .prompt file
 // that includes a full suite of middleware configuration in its YAML frontmatter.
 func DefineAssistantWithDotprompt(g *genkit.Genkit) {
-	genkit.DefineStreamingFlow(g, "assistantDotpromptFlow",
+	g.DefineStreamingFlow("assistantDotpromptFlow",
 		func(ctx context.Context, query string, sendChunk core.StreamCallback[string]) (string, error) {
 			// The "assistant" prompt file includes all middleware in its frontmatter.
-			assistantPrompt := genkit.LookupPrompt(g, "assistant")
+			assistantPrompt := g.LookupPrompt("assistant")
 			stream := assistantPrompt.ExecuteStream(ctx, ai.WithInput(&AssistantRequest{Query: query}))
 			for result, err := range stream {
 				if err != nil {

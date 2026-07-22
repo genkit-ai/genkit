@@ -89,7 +89,7 @@ func TestGenkit(t *testing.T) {
 
 	cfg := Config{
 		IndexID:  *testIndex,
-		Embedder: genkit.DefineEmbedder(g, "fake/embedder3", emdOpts, embedder.Embed),
+		Embedder: g.DefineEmbedder("fake/embedder3", emdOpts, embedder.Embed),
 	}
 
 	retOpts := &ai.RetrieverOptions{
@@ -138,7 +138,7 @@ func TestGenkit(t *testing.T) {
 		K:         2,
 		Namespace: namespace,
 	}
-	retrieverResp, err := genkit.Retrieve(ctx, g,
+	retrieverResp, err := g.Retrieve(ctx,
 		ai.WithRetriever(retriever),
 		ai.WithDocs(d1),
 		ai.WithConfig(retrieverOptions))

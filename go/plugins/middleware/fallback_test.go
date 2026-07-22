@@ -34,7 +34,7 @@ func newTestGenkit(t *testing.T) *genkit.Genkit {
 
 func defineTestModel(t *testing.T, g *genkit.Genkit, name string, fn ai.ModelFunc) ai.Model {
 	t.Helper()
-	return genkit.DefineModel(g, name, &ai.ModelOptions{
+	return g.DefineModel(name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true},
 	}, fn)
 }
@@ -55,7 +55,7 @@ func TestFallbackNotTriggeredOnSuccess(t *testing.T) {
 
 	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
 
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
+	resp, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestFallbackTriggeredOnRetryableError(t *testing.T) {
 
 	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
 
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
+	resp, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestFallbackTriesMultipleModels(t *testing.T) {
 
 	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil), ai.NewModelRef(tertiary.Name(), nil)}}
 
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
+	resp, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestFallbackAllModelsFail(t *testing.T) {
 
 	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
 
-	_, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
+	_, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -163,7 +163,7 @@ func TestFallbackDoesNotTriggerOnNonRetryableError(t *testing.T) {
 
 	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
 
-	_, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
+	_, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -189,7 +189,7 @@ func TestFallbackDoesNotTriggerOnNonGenkitError(t *testing.T) {
 
 	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
 
-	_, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
+	_, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -215,7 +215,7 @@ func TestFallbackStopsOnNonRetryableFallbackError(t *testing.T) {
 
 	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil), ai.NewModelRef(tertiary.Name(), nil)}}
 
-	_, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
+	_, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -242,7 +242,7 @@ func TestFallbackCustomStatuses(t *testing.T) {
 		Statuses: []core.StatusName{core.PERMISSION_DENIED},
 	}
 
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
+	resp, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func TestFallbackUsesRefConfig(t *testing.T) {
 	refConfig := map[string]any{"temperature": 0.5, "source": "ref"}
 	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), refConfig)}}
 
-	_, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithConfig(map[string]any{"temperature": 0.9, "source": "req"}), ai.WithUse(fb))
+	_, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithConfig(map[string]any{"temperature": 0.9, "source": "req"}), ai.WithUse(fb))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestFallbackPassesNilConfigWhenRefHasNone(t *testing.T) {
 
 	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
 
-	_, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithConfig(map[string]any{"source": "req"}), ai.WithUse(fb))
+	_, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithConfig(map[string]any{"source": "req"}), ai.WithUse(fb))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestFallbackDoesNotMutateOriginalRequest(t *testing.T) {
 	refConfig := map[string]any{"source": "ref"}
 	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), refConfig)}}
 
-	_, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithConfig(map[string]any{"source": "req"}), ai.WithUse(fb))
+	_, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithConfig(map[string]any{"source": "req"}), ai.WithUse(fb))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestFallbackModelNotFound(t *testing.T) {
 
 	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef("test/nonexistent", nil)}}
 
-	_, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
+	_, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

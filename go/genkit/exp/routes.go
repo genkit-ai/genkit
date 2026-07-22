@@ -78,8 +78,8 @@ func AllAgentRoutes(g *genkit.Genkit) []Route {
 		// LookupAction returns nil for a capability the agent lacks (a
 		// client-managed agent has no companions), and buildAgentRoutes omits
 		// the route for a nil companion.
-		snapshot := genkit.LookupAction(g, api.KeyFromName(api.ActionTypeAgentSnapshot, name))
-		abort := genkit.LookupAction(g, api.KeyFromName(api.ActionTypeAgentAbort, name))
+		snapshot := g.LookupAction(api.KeyFromName(api.ActionTypeAgentSnapshot, name))
+		abort := g.LookupAction(api.KeyFromName(api.ActionTypeAgentAbort, name))
 		routes = append(routes, buildAgentRoutes(name, act, snapshot, abort)...)
 	}
 	return routes
@@ -132,7 +132,7 @@ func buildAgentRoutes(name string, run, snapshot, abort api.Action) []Route {
 // Mount the result onto an [http.ServeMux], or onto a router of your choice.
 func AllFlowRoutes(g *genkit.Genkit) []Route {
 	var routes []Route
-	for _, f := range genkit.ListFlows(g) {
+	for _, f := range g.ListFlows() {
 		routes = append(routes, buildFlowRoute(f))
 	}
 	return routes

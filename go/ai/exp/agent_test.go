@@ -4716,7 +4716,7 @@ func TestAgent_RegisterCarriesCompanions(t *testing.T) {
 
 // TestNewCustomAgent_UnregisteredUntilRegister verifies the non-registering
 // constructor: the agent is fully usable before it touches a registry, and
-// registering it later (the genkit.RegisterAction path) surfaces the run
+// registering it later (the genkit.Genkit.RegisterAction path) surfaces the run
 // action and its companions together.
 func TestNewCustomAgent_UnregisteredUntilRegister(t *testing.T) {
 	ctx := context.Background()

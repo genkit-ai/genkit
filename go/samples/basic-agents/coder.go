@@ -37,7 +37,7 @@ func defineCustomAgent(g *genkit.Genkit) *aix.Agent[any] {
 	return genkitx.DefineCustomAgent(g, name,
 		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 			if err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
-				for chunk, err := range genkit.GenerateStream(ctx, g,
+				for chunk, err := range g.GenerateStream(ctx,
 					ai.WithModel(flashModel),
 					ai.WithSystem("You are a senior software engineer. Answer in as few words as possible. Use fenced code blocks for any code."),
 					ai.WithMessages(sess.Messages()...),

@@ -110,8 +110,8 @@ func (s *GenkitMCPServer) setup() error {
 // discoverAndCategorizeActions discovers all actions from Genkit registry and categorizes them
 func (s *GenkitMCPServer) discoverAndCategorizeActions() ([]ai.Tool, []api.Action, error) {
 	// Use the existing List functions which properly handle the registry access
-	toolActions := genkit.ListTools(s.genkit)
-	resources := genkit.ListResources(s.genkit)
+	toolActions := s.genkit.ListTools()
+	resources := s.genkit.ListResources()
 
 	// Convert ai.Resource to api.Action
 	resourceActions := make([]api.Action, len(resources))
@@ -209,7 +209,7 @@ func (s *GenkitMCPServer) registerResourceWithMCP(resourceAction api.Action) err
 	handler := func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
 
 		// Find matching resource for the URI and execute it
-		resourceAction, input, err := genkit.FindMatchingResource(s.genkit, request.Params.URI)
+		resourceAction, input, err := s.genkit.FindMatchingResource(request.Params.URI)
 		if err != nil {
 			return nil, fmt.Errorf("no resource found for URI %s: %w", request.Params.URI, err)
 		}

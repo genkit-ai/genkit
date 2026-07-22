@@ -44,7 +44,7 @@ func main() {
 		log.Fatalf("failed to initialize Genkit: %v", err)
 	}
 
-	genkit.DefineFlow(g, "duneFlowGeminiAI", func(ctx context.Context, input *duneQuestionInput) (string, error) {
+	g.DefineFlow("duneFlowGeminiAI", func(ctx context.Context, input *duneQuestionInput) (string, error) {
 		prompt := "What is the text I provided you with?"
 		if input == nil {
 			return "", errors.New("empty flow input, provide at least a source file to read")
@@ -59,7 +59,7 @@ func main() {
 		}
 
 		// generate a request with a large text content to be cached
-		resp, err := genkit.Generate(ctx, g, ai.WithConfig(&genai.GenerateContentConfig{
+		resp, err := g.Generate(ctx, ai.WithConfig(&genai.GenerateContentConfig{
 			Temperature: genai.Ptr[float32](0.7),
 		}),
 			ai.WithMessages(
@@ -72,7 +72,7 @@ func main() {
 		}
 		// use previous messages to keep the conversation going and keep
 		// asking questions related to the large content that was cached
-		resp, err = genkit.Generate(ctx, g, ai.WithConfig(&genai.GenerateContentConfig{
+		resp, err = g.Generate(ctx, ai.WithConfig(&genai.GenerateContentConfig{
 			Temperature: genai.Ptr[float32](0.7),
 		}),
 			ai.WithMessages(resp.History()...),

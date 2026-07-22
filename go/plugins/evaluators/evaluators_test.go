@@ -61,7 +61,7 @@ func TestEvaluators(t *testing.T) {
 			EvaluationId: "testrun",
 		}
 
-		evalAction := genkit.LookupEvaluator(g, "genkitEval/deep_equal")
+		evalAction := g.LookupEvaluator("genkitEval/deep_equal")
 		if evalAction == nil {
 			t.Fatal("evalAction is nil")
 		}
@@ -103,7 +103,7 @@ func TestEvaluators(t *testing.T) {
 			EvaluationId: "testrun",
 		}
 
-		evalAction := genkit.LookupEvaluator(g, "genkitEval/regex")
+		evalAction := g.LookupEvaluator("genkitEval/regex")
 		resp, err := evalAction.Evaluate(ctx, &testRequest)
 		if err != nil {
 			t.Fatal(err)
@@ -151,7 +151,7 @@ func TestEvaluators(t *testing.T) {
 			EvaluationId: "testrun",
 		}
 
-		evalAction := genkit.LookupEvaluator(g, "genkitEval/jsonata")
+		evalAction := g.LookupEvaluator("genkitEval/jsonata")
 		resp, err := evalAction.Evaluate(ctx, &testRequest)
 		if err != nil {
 			t.Fatal(err)

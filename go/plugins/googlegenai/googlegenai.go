@@ -270,42 +270,42 @@ func (v *VertexAI) DefineEmbedder(g *genkit.Genkit, name string, embedOpts *ai.E
 
 // IsDefinedEmbedder reports whether the named [Embedder] is defined by this plugin.
 func (ga *GoogleAI) IsDefinedEmbedder(g *genkit.Genkit, name string) bool {
-	return genkit.LookupEmbedder(g, api.NewName(googleAIProvider, name)) != nil
+	return g.LookupEmbedder(api.NewName(googleAIProvider, name)) != nil
 }
 
 // IsDefinedEmbedder reports whether the named [Embedder] is defined by this plugin.
 func (v *VertexAI) IsDefinedEmbedder(g *genkit.Genkit, name string) bool {
-	return genkit.LookupEmbedder(g, api.NewName(vertexAIProvider, name)) != nil
+	return g.LookupEmbedder(api.NewName(vertexAIProvider, name)) != nil
 }
 
 // GoogleAIModel returns the [ai.Model] with the given name.
 // It returns nil if the model was not defined.
 //
-// Deprecated: Use genkit.LookupModel instead.
+// Deprecated: Use the [genkit.Genkit.LookupModel] method instead.
 func GoogleAIModel(g *genkit.Genkit, name string) ai.Model {
-	return genkit.LookupModel(g, api.NewName(googleAIProvider, name))
+	return g.LookupModel(api.NewName(googleAIProvider, name))
 }
 
 // VertexAIModel returns the [ai.Model] with the given name.
 // It returns nil if the model was not defined.
 //
-// Deprecated: Use genkit.LookupModel instead.
+// Deprecated: Use the [genkit.Genkit.LookupModel] method instead.
 func VertexAIModel(g *genkit.Genkit, name string) ai.Model {
-	return genkit.LookupModel(g, api.NewName(vertexAIProvider, name))
+	return g.LookupModel(api.NewName(vertexAIProvider, name))
 }
 
 // GoogleAIEmbedder returns the [ai.Embedder] with the given name.
 // It returns nil if the embedder was not defined.
 //
-// Deprecated: Use genkit.LookupEmbedder instead.
+// Deprecated: Use the [genkit.Genkit.LookupEmbedder] method instead.
 func GoogleAIEmbedder(g *genkit.Genkit, name string) ai.Embedder {
-	return genkit.LookupEmbedder(g, api.NewName(googleAIProvider, name))
+	return g.LookupEmbedder(api.NewName(googleAIProvider, name))
 }
 
 // VertexAIEmbedder returns the [ai.Embedder] with the given name.
 // It returns nil if the embedder was not defined.
 //
-// Deprecated: Use genkit.LookupEmbedder instead.
+// Deprecated: Use the [genkit.Genkit.LookupEmbedder] method instead.
 func VertexAIEmbedder(g *genkit.Genkit, name string) ai.Embedder {
-	return genkit.LookupEmbedder(g, api.NewName(vertexAIProvider, name))
+	return g.LookupEmbedder(api.NewName(vertexAIProvider, name))
 }

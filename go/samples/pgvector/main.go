@@ -103,8 +103,8 @@ func run(g *genkit.Genkit) error {
 		Show     string
 	}
 
-	genkit.DefineFlow(g, "askQuestion", func(ctx context.Context, in input) (string, error) {
-		res, err := genkit.Retrieve(ctx, g,
+	g.DefineFlow("askQuestion", func(ctx context.Context, in input) (string, error) {
+		res, err := g.Retrieve(ctx,
 			ai.WithRetriever(retriever),
 			ai.WithConfig(in.Show),
 			ai.WithTextDocs(in.Question))
@@ -128,7 +128,7 @@ const provider = "pgvector"
 // [START retr]
 func defineRetriever(g *genkit.Genkit, db *sql.DB, embedder ai.Embedder, retOpts *ai.RetrieverOptions) ai.Retriever {
 	f := func(ctx context.Context, req *ai.RetrieverRequest) (*ai.RetrieverResponse, error) {
-		eres, err := genkit.Embed(ctx, g,
+		eres, err := g.Embed(ctx,
 			ai.WithEmbedder(embedder),
 			ai.WithDocs(req.Query))
 		if err != nil {
@@ -168,7 +168,7 @@ func defineRetriever(g *genkit.Genkit, db *sql.DB, embedder ai.Embedder, retOpts
 		}
 		return res, nil
 	}
-	return genkit.DefineRetriever(g, api.NewName(provider, "shows"), retOpts, f)
+	return g.DefineRetriever(api.NewName(provider, "shows"), retOpts, f)
 }
 
 // [END retr]
@@ -182,7 +182,7 @@ func Index(ctx context.Context, g *genkit.Genkit, db *sql.DB, embedder ai.Embedd
 			SET embedding = $4
 			WHERE show_id = $1 AND season_number = $2 AND episode_id = $3
 		`
-	res, err := genkit.Embed(ctx, g,
+	res, err := g.Embed(ctx,
 		ai.WithEmbedder(embedder),
 		ai.WithDocs(docs...))
 	if err != nil {
