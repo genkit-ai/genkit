@@ -1,6 +1,6 @@
 module github.com/firebase/genkit/go
 
-go 1.25.0
+go 1.27rc2
 
 retract (
 	v0.1.4 // Retraction only.
