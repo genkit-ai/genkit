@@ -50,19 +50,12 @@ jobs:
         run: |
           set -uo pipefail
 
+          # Scoped 0.8.0 release: publish only core + google-genai. The other plugins
+          # stay at 0.7.0 on PyPI (verified compatible with core 0.8.0). Restore the
+          # full list for the next full release.
           PACKAGES=(
             py/packages/genkit
-            py/packages/genkit-anthropic
-            py/packages/genkit-django
-            py/packages/genkit-evaluators
-            py/packages/genkit-fastapi
-            py/packages/genkit-flask
             py/packages/genkit-google-genai
-            py/packages/genkit-google-cloud
-            py/packages/genkit-middleware
-            py/packages/genkit-ollama
-            py/packages/genkit-openai
-            py/packages/genkit-vertexai
           )
 
           FAILED=()
