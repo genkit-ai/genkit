@@ -19,9 +19,9 @@ package exp
 import (
 	"net/http"
 
+	genkit "github.com/firebase/genkit/go"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/genkit"
 )
 
 // Base paths for the built-in serving layouts.

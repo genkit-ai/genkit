@@ -53,7 +53,7 @@ const artifactsMarker = "artifacts-listing"
 //
 // Artifacts live on the active agent session, so this middleware only has an
 // effect when generation runs inside an agent invocation (see
-// [github.com/firebase/genkit/go/genkit/exp.DefineAgent]). With no active
+// [github.com/firebase/genkit/go/exp.DefineAgent]). With no active
 // session the tools report that gracefully and the listing is empty.
 //
 // Usage:

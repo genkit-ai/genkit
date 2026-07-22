@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 )
 
 // TestMCPConnectionAndTranslation tests the full integration between

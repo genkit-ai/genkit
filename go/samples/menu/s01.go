@@ -17,8 +17,8 @@
 package main
 
 import (
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 )
 
 func setup01(g *genkit.Genkit, m ai.Model) error {

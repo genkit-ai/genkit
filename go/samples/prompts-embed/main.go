@@ -25,7 +25,7 @@ import (
 	"errors"
 	"log"
 
-	"github.com/firebase/genkit/go/genkit"
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 )
 

@@ -48,7 +48,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/firebase/genkit/go/genkit"
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/plugins/firebase"
 	firebasex "github.com/firebase/genkit/go/plugins/firebase/exp"
 	"github.com/firebase/genkit/go/plugins/server"

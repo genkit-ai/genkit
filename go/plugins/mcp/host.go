@@ -18,9 +18,9 @@ import (
 	"context"
 	"fmt"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/logger"
-	"github.com/firebase/genkit/go/genkit"
 )
 
 // MCPServerConfig holds configuration for a single MCP server

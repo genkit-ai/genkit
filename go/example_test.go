@@ -23,9 +23,9 @@ import (
 	"net/http"
 	"strings"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
-	"github.com/firebase/genkit/go/genkit"
 )
 
 // This example shows basic initialization and flow definition.

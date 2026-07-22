@@ -17,9 +17,9 @@
 package exp
 
 import (
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/genkitbridge"
 )
 

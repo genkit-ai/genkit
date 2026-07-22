@@ -42,9 +42,9 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	genkit "github.com/firebase/genkit/go"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/core"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/firebase"
 	"github.com/google/uuid"
 )

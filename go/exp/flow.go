@@ -19,8 +19,8 @@ package exp
 import (
 	"context"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/core"
-	"github.com/firebase/genkit/go/genkit"
 )
 
 // StreamingFunc is a streaming function that uses a channel instead of a callback.

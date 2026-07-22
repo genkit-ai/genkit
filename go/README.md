@@ -44,7 +44,7 @@ import (
     "fmt"
 
     "github.com/firebase/genkit/go/ai"
-    "github.com/firebase/genkit/go/genkit"
+    genkit "github.com/firebase/genkit/go"
     "github.com/firebase/genkit/go/plugins/googlegenai"
 )
 
@@ -87,7 +87,7 @@ Beyond a plain chat loop, agents give you:
 > [!WARNING]
 > This API is in preview and may experience breaking changes in minor releases.
 
-The constructors (`DefineAgent`, `DefinePromptAgent`, `DefineCustomAgent`) live in `github.com/firebase/genkit/go/genkit/exp` (aliased `genkitx` below); the agent types and options live in `github.com/firebase/genkit/go/ai/exp` (aliased `aix`). Initialize Genkit with `genkit.WithExperimental()` to enable the `genkit/exp` surface.
+The constructors (`DefineAgent`, `DefinePromptAgent`, `DefineCustomAgent`) live in `github.com/firebase/genkit/go/exp` (aliased `genkitx` below); the agent types and options live in `github.com/firebase/genkit/go/ai/exp` (aliased `aix`). Initialize Genkit with `genkit.WithExperimental()` to enable the `exp` surface.
 
 ### Define an Agent
 
@@ -98,8 +98,8 @@ import (
     "github.com/firebase/genkit/go/ai"
     aix "github.com/firebase/genkit/go/ai/exp"
     "github.com/firebase/genkit/go/ai/exp/localstore"
-    "github.com/firebase/genkit/go/genkit"
-    genkitx "github.com/firebase/genkit/go/genkit/exp"
+    genkit "github.com/firebase/genkit/go"
+    genkitx "github.com/firebase/genkit/go/exp"
 )
 
 chatAgent := genkitx.DefineAgent(g, "chat",
@@ -316,7 +316,7 @@ import (
     "github.com/firebase/genkit/go/ai"
     aix "github.com/firebase/genkit/go/ai/exp"
     "github.com/firebase/genkit/go/ai/exp/localstore"
-    genkitx "github.com/firebase/genkit/go/genkit/exp"
+    genkitx "github.com/firebase/genkit/go/exp"
     middlewarex "github.com/firebase/genkit/go/plugins/middleware/exp"
 )
 
@@ -358,7 +358,7 @@ An `Agent` is an `api.BidiAction`, so it serves over HTTP one turn per request. 
 
 ```go
 import (
-    genkitx "github.com/firebase/genkit/go/genkit/exp"
+    genkitx "github.com/firebase/genkit/go/exp"
     "github.com/firebase/genkit/go/plugins/server"
 )
 
@@ -569,7 +569,7 @@ The experimental tool constructors in `genkit/exp` (aliased `genkitx`) hand your
 import (
     "github.com/firebase/genkit/go/ai"
     "github.com/firebase/genkit/go/ai/exp/tool"
-    genkitx "github.com/firebase/genkit/go/genkit/exp"
+    genkitx "github.com/firebase/genkit/go/exp"
 )
 
 type AnalyzeInput struct {

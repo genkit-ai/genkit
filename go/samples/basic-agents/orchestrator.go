@@ -15,10 +15,10 @@
 package main
 
 import (
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
-	"github.com/firebase/genkit/go/genkit"
-	genkitx "github.com/firebase/genkit/go/genkit/exp"
+	genkitx "github.com/firebase/genkit/go/exp"
 	middlewarex "github.com/firebase/genkit/go/plugins/middleware/exp"
 )
 

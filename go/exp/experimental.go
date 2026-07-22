@@ -19,8 +19,8 @@ package exp
 import (
 	"fmt"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/genkitbridge"
 )
 

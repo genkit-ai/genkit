@@ -21,10 +21,10 @@ import (
 	"os"
 
 	"cloud.google.com/go/firestore"
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/genkit"
 )
 
 const firestoreCollectionEnv = "FIRESTORE_COLLECTION"

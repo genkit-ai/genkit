@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/firebase/genkit/go/genkit"
+	genkit "github.com/firebase/genkit/go"
 )
 
 func TestDefineStreamingFlow(t *testing.T) {

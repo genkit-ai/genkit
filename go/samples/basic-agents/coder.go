@@ -17,10 +17,10 @@ package main
 import (
 	"context"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
-	"github.com/firebase/genkit/go/genkit"
-	genkitx "github.com/firebase/genkit/go/genkit/exp"
+	genkitx "github.com/firebase/genkit/go/exp"
 )
 
 // defineCustomAgent demonstrates DefineCustomAgent. The per-turn function

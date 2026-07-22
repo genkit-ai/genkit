@@ -22,8 +22,8 @@ import (
 
 	"cloud.google.com/go/firestore"
 	firebasev4 "firebase.google.com/go/v4"
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/firebase"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 )

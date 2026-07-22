@@ -15,9 +15,9 @@
 package main
 
 import (
+	genkit "github.com/firebase/genkit/go"
 	aix "github.com/firebase/genkit/go/ai/exp"
-	"github.com/firebase/genkit/go/genkit"
-	genkitx "github.com/firebase/genkit/go/genkit/exp"
+	genkitx "github.com/firebase/genkit/go/exp"
 )
 
 // ChatPromptInput is the input schema referenced by ./prompts/chef.prompt.

@@ -15,7 +15,7 @@ import (
   "context"
   "log"
 
-  "github.com/firebase/genkit/go/genkit"
+  genkit "github.com/firebase/genkit/go"
   "github.com/firebase/genkit/go/plugins/mcp"
 )
 
@@ -63,7 +63,7 @@ import (
     "context"
     "log"
 
-    "github.com/firebase/genkit/go/genkit"
+    genkit "github.com/firebase/genkit/go"
     "github.com/firebase/genkit/go/plugins/mcp"
 )
 
@@ -136,7 +136,7 @@ import (
   "context"
   "log"
 
-  "github.com/firebase/genkit/go/genkit"
+  genkit "github.com/firebase/genkit/go"
   "github.com/firebase/genkit/go/plugins/mcp"
 )
 

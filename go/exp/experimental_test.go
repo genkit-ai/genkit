@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/firebase/genkit/go/genkit"
+	genkit "github.com/firebase/genkit/go"
 )
 
 // constructors holds one closure per exported Define* entry point in this

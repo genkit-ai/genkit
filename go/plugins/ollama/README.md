@@ -23,7 +23,7 @@ You can configure the Ollama plugin with your server address. By default, Ollama
 import (
  "context"
 
- "github.com/firebase/genkit/go/genkit"
+ genkit "github.com/firebase/genkit/go"
  "github.com/firebase/genkit/go/plugins/ollama"
 )
 
@@ -71,7 +71,7 @@ import (
  "log"
 
  "github.com/firebase/genkit/go/ai"
- "github.com/firebase/genkit/go/genkit"
+ genkit "github.com/firebase/genkit/go"
  "github.com/firebase/genkit/go/plugins/ollama"
 )
 

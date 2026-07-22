@@ -23,9 +23,9 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/x/streaming"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/firebase"
 	"google.golang.org/api/iterator"
 )

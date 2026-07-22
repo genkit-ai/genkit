@@ -21,8 +21,8 @@ import (
 	"encoding/json"
 	"os"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 )
 
 func menu(ctx *ai.ToolContext, _ any) ([]*menuItem, error) {

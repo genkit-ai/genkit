@@ -26,8 +26,8 @@ import (
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	anthropicPlugin "github.com/firebase/genkit/go/plugins/anthropic"
 )
 

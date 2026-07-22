@@ -20,8 +20,8 @@ import (
 	"context"
 	"slices"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"google.golang.org/genai"
 )
 

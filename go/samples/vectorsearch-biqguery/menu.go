@@ -21,8 +21,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/vertexai/vectorsearch"
 	"google.golang.org/genai"
 )

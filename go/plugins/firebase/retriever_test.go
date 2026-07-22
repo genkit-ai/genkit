@@ -21,9 +21,9 @@ import (
 
 	"cloud.google.com/go/firestore"
 	firebasev4 "firebase.google.com/go/v4"
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/genkit"
 	"google.golang.org/api/iterator"
 )
 

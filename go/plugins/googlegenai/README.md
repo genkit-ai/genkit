@@ -29,7 +29,7 @@ import (
  "context"
  "log"
 
- "github.com/firebase/genkit/go/genkit"
+ genkit "github.com/firebase/genkit/go"
  "github.com/firebase/genkit/go/plugins/googlegenai"
 )
 
@@ -54,7 +54,7 @@ import (
  "context"
  "log"
 
- "github.com/firebase/genkit/go/genkit"
+ genkit "github.com/firebase/genkit/go"
  "github.com/firebase/genkit/go/plugins/googlegenai"
 )
 
@@ -105,7 +105,7 @@ import (
  "log"
 
  "github.com/firebase/genkit/go/ai"
- "github.com/firebase/genkit/go/genkit"
+ genkit "github.com/firebase/genkit/go"
 )
 
 func main() {

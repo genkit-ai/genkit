@@ -36,9 +36,9 @@ import (
 	"fmt"
 	"log"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	_ "github.com/lib/pq"
 	pgv "github.com/pgvector/pgvector-go"

@@ -21,8 +21,8 @@ import (
 	"flag"
 	"testing"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	ollamaPlugin "github.com/firebase/genkit/go/plugins/ollama"
 )
 

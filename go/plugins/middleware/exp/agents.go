@@ -23,10 +23,10 @@ import (
 	"strings"
 	"sync"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/genkit"
 )
 
 // agentsMarker tags the system prompt part injected by this middleware. The
@@ -80,7 +80,7 @@ func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (api.BidiAction, error) {
 // system prompt.
 //
 // When the model calls a delegation tool the middleware resolves the target
-// agent from the registry (via the [github.com/firebase/genkit/go/genkit.Genkit]
+// agent from the registry (via the [github.com/firebase/genkit/go.Genkit]
 // instance carried on the context), optionally forwards recent conversation
 // history, runs the sub-agent with the task, and returns its response as the
 // tool result.

@@ -19,9 +19,9 @@ package exp
 import (
 	"sort"
 
+	genkit "github.com/firebase/genkit/go"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/genkitbridge"
 )
 

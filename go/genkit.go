@@ -42,7 +42,7 @@ var genkitCtxKey = base.NewContextKey[*Genkit]()
 // FromContext returns the [*Genkit] instance stored in the context.
 // This is set automatically by [Genkit.Generate] and related functions, and seeded
 // into each agent turn by the agent constructors in
-// [github.com/firebase/genkit/go/genkit/exp]. Middleware implementations can
+// [github.com/firebase/genkit/go/exp]. Middleware implementations can
 // use this to access the Genkit instance during generation.
 func FromContext(ctx context.Context) *Genkit {
 	return genkitCtxKey.FromContext(ctx)
@@ -205,8 +205,8 @@ func WithExperimental() GenkitOption {
 //		"context"
 //		"log"
 //
+//		genkit "github.com/firebase/genkit/go"
 //		"github.com/firebase/genkit/go/ai"
-//		"github.com/firebase/genkit/go/genkit"
 //		"github.com/firebase/genkit/go/plugins/googlegenai" // Example plugin
 //	)
 //

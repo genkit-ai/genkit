@@ -21,9 +21,9 @@ import (
 	"errors"
 	"slices"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
-	"github.com/firebase/genkit/go/genkit"
 )
 
 // defaultFallbackStatuses are the status codes that trigger a fallback by default.

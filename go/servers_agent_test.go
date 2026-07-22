@@ -31,12 +31,12 @@ import (
 	"testing"
 	"time"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
 	"github.com/firebase/genkit/go/core"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/genkit/exp"
+	"github.com/firebase/genkit/go/exp"
 )
 
 // agentHTTPResult mirrors the AgentOutput fields the agent handler tests

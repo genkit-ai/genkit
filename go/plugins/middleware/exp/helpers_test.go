@@ -20,8 +20,8 @@ import (
 	"context"
 	"testing"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 )
 
 var ctx = context.Background()
