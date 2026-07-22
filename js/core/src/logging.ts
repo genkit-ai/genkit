@@ -127,7 +127,12 @@ class Logger {
     let msg = args[0];
     let metadata: any = {};
 
-    if (typeof msg === 'object' && msg !== null && !(msg instanceof Error)) {
+    if (
+      typeof msg === 'object' &&
+      msg !== null &&
+      !(msg instanceof Error) &&
+      'message' in msg
+    ) {
       metadata = this._mergeErrorMetadata(msg.metadata, msg.error);
       msg = msg.message;
     } else if (msg instanceof Error) {
@@ -152,9 +157,17 @@ class Logger {
         this._emitOtel(level, args);
         return;
       }
+    } else {
+      getLogger()[level].apply(getLogger(), args);
+      this._emitOtel(level, args);
+      return;
     }
 
-    getLogger()[level](msg, metadata);
+    if (Object.keys(metadata).length > 0) {
+      getLogger()[level](msg, metadata);
+    } else {
+      getLogger()[level](msg);
+    }
     this._emitOtel(level, [], msg, metadata);
   }
 
@@ -167,8 +180,7 @@ class Logger {
     metadata?: Record<string, any>;
     error?: any;
   }): void;
-  info(message: string, metadata: Record<string, any>, error?: any): void;
-  info(message: any, ...args: any[]): void;
+  info(message: any, metadata?: Record<string, any>, error?: any): void;
   info(...args: any[]) {
     this._log('info', ...args);
   }
@@ -178,8 +190,7 @@ class Logger {
     metadata?: Record<string, any>;
     error?: any;
   }): void;
-  debug(message: string, metadata: Record<string, any>, error?: any): void;
-  debug(message: any, ...args: any[]): void;
+  debug(message: any, metadata?: Record<string, any>, error?: any): void;
   debug(...args: any[]) {
     this._log('debug', ...args);
   }
@@ -189,8 +200,7 @@ class Logger {
     metadata?: Record<string, any>;
     error?: any;
   }): void;
-  error(message: string, metadata: Record<string, any>, error?: any): void;
-  error(message: any, ...args: any[]): void;
+  error(message: any, metadata?: Record<string, any>, error?: any): void;
   error(...args: any[]) {
     this._log('error', ...args);
   }
@@ -200,8 +210,7 @@ class Logger {
     metadata?: Record<string, any>;
     error?: any;
   }): void;
-  warn(message: string, metadata: Record<string, any>, error?: any): void;
-  warn(message: any, ...args: any[]): void;
+  warn(message: any, metadata?: Record<string, any>, error?: any): void;
   warn(...args: any[]) {
     this._log('warn', ...args);
   }
@@ -222,10 +231,16 @@ class Logger {
     return mergedMetadata;
   }
 
+  /**
+   * @deprecated Use `logger.info(...)` instead.
+   */
   logStructured(msg: string, metadata: any, err?: any) {
     this.info(msg, metadata, err);
   }
 
+  /**
+   * @deprecated Use `logger.error(...)` instead.
+   */
   logStructuredError(msg: string, metadata: any, err?: any) {
     this.error(msg, metadata, err);
   }

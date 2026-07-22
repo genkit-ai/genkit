@@ -54,8 +54,13 @@ describe('logging consolidated api', () => {
     assert.deepStrictEqual(loggedArgs[0], [
       'info',
       'Database connection established',
-      {},
     ]);
+  });
+
+  it('should support bare object without message property', () => {
+    logger.info({ foo: 'bar' });
+    assert.strictEqual(loggedArgs.length, 1);
+    assert.deepStrictEqual(loggedArgs[0], ['info', { foo: 'bar' }]);
   });
 
   it('should support message + metadata', () => {
@@ -119,15 +124,17 @@ describe('logging consolidated api', () => {
     assert.ok(metadata['exception.stacktrace']);
   });
 
-  it('should support formatting string with args', () => {
-    logger.info('Attempting retry %d of %d in %dms', 1, 3, 1000);
+  it('should support structured message string with metadata', () => {
+    logger.info('Attempting retry 1 of 3 in 1000ms', {
+      attempt: 1,
+      maxRetries: 3,
+      delayMs: 1000,
+    });
     assert.strictEqual(loggedArgs.length, 1);
     assert.deepStrictEqual(loggedArgs[0], [
       'info',
-      'Attempting retry %d of %d in %dms',
-      1,
-      3,
-      1000,
+      'Attempting retry 1 of 3 in 1000ms',
+      { attempt: 1, maxRetries: 3, delayMs: 1000 },
     ]);
   });
 
@@ -154,5 +161,19 @@ describe('logging consolidated api', () => {
     assert.strictEqual(metadata['exception.type'], 'Error');
     assert.strictEqual(metadata['exception.message'], 'direct fail');
     assert.ok(metadata['exception.stacktrace']);
+  });
+
+  it('should support deprecated logStructured* shims', () => {
+    logger.logStructured('Structured log', { key: 'val' });
+    assert.strictEqual(loggedArgs.length, 1);
+    assert.strictEqual(loggedArgs[0][0], 'info');
+    assert.strictEqual(loggedArgs[0][1], 'Structured log');
+    assert.deepStrictEqual(loggedArgs[0][2], { key: 'val' });
+
+    logger.logStructuredError('Error log', { key: 'val' });
+    assert.strictEqual(loggedArgs.length, 2);
+    assert.strictEqual(loggedArgs[1][0], 'error');
+    assert.strictEqual(loggedArgs[1][1], 'Error log');
+    assert.deepStrictEqual(loggedArgs[1][2], { key: 'val' });
   });
 });

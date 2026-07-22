@@ -168,7 +168,7 @@ export const fallback: GenerateMiddleware<typeof FallbackOptionsSchema> =
               throw lastError;
             } else {
               logger.warn(
-                `Skipping fallback for unhandled error:: ${e.message || String(e)}`,
+                `Skipping fallback for unhandled error: ${e.message || String(e)}`,
                 {
                   'genkit.middleware.name': 'fallback',
                 },
