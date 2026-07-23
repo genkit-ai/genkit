@@ -197,7 +197,7 @@ def _to_veo_parameters(config: Any) -> dict[str, Any]:  # noqa: ANN401
     if config is None:
         return {}
 
-    if isinstance(config, VeoConfig):
+    if isinstance(config, BaseModel):
         params = config.model_dump(by_alias=True, exclude_none=True)
     elif isinstance(config, dict):
         params = {k: v for k, v in config.items() if v is not None}
