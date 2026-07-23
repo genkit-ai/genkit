@@ -33,23 +33,17 @@ from genkit_google_genai import (
     lyria_model,
     veo_model,
 )
-from genkit_google_genai.models.gemini import (
-    GeminiConfigSchema,
-    GeminiImageConfigSchema,
-    GeminiTtsConfigSchema,
-    GemmaConfigSchema,
-)
-from genkit_google_genai.models.imagen import ImagenConfigSchema, is_imagen_model
+from genkit_google_genai.models.imagen import is_imagen_model
 
 
 @pytest.mark.parametrize(
     ('helper', 'unknown_name', 'schema'),
     [
-        (gemini_model, 'gemini-flash-pro-whatever-99', GeminiConfigSchema),
-        (gemini_tts_model, 'gemini-9.9-flash-preview-tts', GeminiTtsConfigSchema),
-        (gemini_image_model, 'gemini-9.9-flash-image-preview', GeminiImageConfigSchema),
-        (gemma_model, 'gemma-9-99b-it', GemmaConfigSchema),
-        (imagen_model, 'imagen-99.0-generate-001', ImagenConfigSchema),
+        (gemini_model, 'gemini-flash-pro-whatever-99', GeminiConfig),
+        (gemini_tts_model, 'gemini-9.9-flash-preview-tts', GeminiTtsConfig),
+        (gemini_image_model, 'gemini-9.9-flash-image-preview', GeminiImageConfig),
+        (gemma_model, 'gemma-9-99b-it', GemmaConfig),
+        (imagen_model, 'imagen-99.0-generate-001', ImagenConfig),
         (veo_model, 'veo-9.9-generate-001', VeoConfig),
         (lyria_model, 'lyria-999', LyriaConfig),
     ],
@@ -65,19 +59,12 @@ def test_family_helper_unknown_version_still_typed_schema(
     assert ref.config_schema is schema
 
 
-def test_imagen_model_namespace_vertex() -> None:
-    """Imagen refs accept an alternate namespace for Vertex AI."""
-    ref = imagen_model('imagen-3.0-generate-001', namespace='vertexai')
-    assert ref.name == 'vertexai/imagen-3.0-generate-001'
-    assert ref.config_schema is ImagenConfigSchema
-
-
 def test_gemini_model_stamps_default_config() -> None:
     """Default config on the ref is preserved for later generate calls."""
-    config = GeminiConfig(temperature=0.2)
+    config = GeminiConfig.model_validate({'temperature': 0.2})
     ref = gemini_model('gemini-flash-latest', config=config)
     assert ref.config == config
-    assert ref.config_schema is GeminiConfigSchema
+    assert ref.config_schema is GeminiConfig
 
 
 def test_namespace_idempotent_when_already_prefixed() -> None:
@@ -106,12 +93,3 @@ def test_gemini_image_models_are_not_imagen() -> None:
     """Gemini native image helpers stay separate from Imagen."""
     assert not is_imagen_model('gemini-2.5-flash-image')
     assert not is_imagen_model('gemini-3-pro-image')
-
-
-def test_public_config_aliases_match_schemas() -> None:
-    """Public config aliases re-export the underlying schema classes."""
-    assert GeminiConfig is GeminiConfigSchema
-    assert GeminiTtsConfig is GeminiTtsConfigSchema
-    assert GeminiImageConfig is GeminiImageConfigSchema
-    assert GemmaConfig is GemmaConfigSchema
-    assert ImagenConfig is ImagenConfigSchema

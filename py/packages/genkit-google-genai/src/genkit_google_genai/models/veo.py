@@ -124,7 +124,7 @@ def is_veo_model(name: str) -> bool:
     return name.lower().startswith('veo')
 
 
-class VeoConfigSchema(BaseModel):
+class VeoConfig(BaseModel):
     """Veo Config Schema."""
 
     model_config = ConfigDict(extra='allow', populate_by_name=True)
@@ -144,7 +144,7 @@ class VeoConfigSchema(BaseModel):
 
 
 # Alias for backwards compatibility with __init__.py exports
-VeoConfig = VeoConfigSchema
+VeoConfig = VeoConfig
 
 
 DEFAULT_VEO_SUPPORT = Supports(
@@ -193,7 +193,7 @@ def _to_veo_parameters(config: Any) -> dict[str, Any]:  # noqa: ANN401
     """Convert config to Veo API parameters.
 
     Args:
-        config: The model configuration (VeoConfigSchema or dict).
+        config: The model configuration (VeoConfig or dict).
 
     Returns:
         Dictionary of Veo API parameters.
@@ -201,7 +201,7 @@ def _to_veo_parameters(config: Any) -> dict[str, Any]:  # noqa: ANN401
     if config is None:
         return {}
 
-    if isinstance(config, VeoConfigSchema):
+    if isinstance(config, VeoConfig):
         params = config.model_dump(by_alias=True, exclude_none=True)
     elif isinstance(config, dict):
         params = {k: v for k, v in config.items() if v is not None}

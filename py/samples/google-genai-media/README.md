@@ -26,11 +26,7 @@ await ai.generate(
     model=veo_model('veo-3.1-generate-preview'),
     config=VeoConfig(aspect_ratio='16:9', duration_seconds=5),
     prompt='A paper airplane gliding through a classroom',
-)
 ```
-
-The sample code below uses bare model strings for readability; both styles work at runtime.
-
 ```bash
 export GEMINI_API_KEY=your-api-key
 uv sync

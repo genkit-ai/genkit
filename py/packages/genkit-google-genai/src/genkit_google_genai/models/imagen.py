@@ -138,7 +138,7 @@ def vertexai_image_model_info(
     )
 
 
-class ImagenConfigSchema(BaseModel):
+class ImagenConfig(BaseModel):
     """Imagen Config Schema."""
 
     model_config = ConfigDict(extra='allow')

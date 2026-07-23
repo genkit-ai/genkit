@@ -40,4 +40,5 @@ def test_ollama_model_stamps_default_config() -> None:
     config = OllamaConfig(temperature=0.5)
     ref = ollama_model('mistral', config=config)
     assert ref.config is config
+    assert ref.config is not None
     assert ref.config.temperature == 0.5

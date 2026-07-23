@@ -8,6 +8,7 @@
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from genkit._ai._prompt import PromptConfig
 from genkit.model import ModelConfig, model_ref
 
 
@@ -44,13 +45,11 @@ def test_model_ref_stamps_typed_config() -> None:
     ref = model_ref('gemini-pro-latest', namespace='googleai', config_schema=CustomConfig, config=config)
     assert ref.config is config
     assert ref.config_schema is CustomConfig
+    assert ref.config is not None
     assert ref.config.temperature == 0.7
 
 
 def test_prompt_config_keeps_plugin_specific_fields() -> None:
-    """A typed config's own fields survive the model_dump round-trip a prompt call makes."""
-    from genkit._ai._prompt import PromptConfig
-
     pc = PromptConfig(config=CustomConfig(temperature=0.7, safety_settings={'HARM': 'BLOCK'}))
     dumped = pc.model_dump()['config']
     # safety_settings isn't part of the common config; without SerializeAsAny it

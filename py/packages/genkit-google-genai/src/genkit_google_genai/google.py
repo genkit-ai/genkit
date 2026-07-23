@@ -129,7 +129,7 @@ from genkit_google_genai.models.embedder import (
 )
 from genkit_google_genai.models.gemini import (
     SUPPORTED_MODELS,
-    GeminiConfigSchema,
+    GeminiConfig,
     GeminiModel,
     get_model_config_schema,
     google_model_info,
@@ -137,12 +137,12 @@ from genkit_google_genai.models.gemini import (
 )
 from genkit_google_genai.models.imagen import (
     SUPPORTED_MODELS as IMAGE_SUPPORTED_MODELS,
-    ImagenConfigSchema,
+    ImagenConfig,
     ImagenModel,
     vertexai_image_model_info,
 )
 from genkit_google_genai.models.veo import (
-    VeoConfigSchema,
+    VeoConfig,
     VeoModel,
     is_veo_model,
     veo_model_info,
@@ -580,7 +580,7 @@ class GoogleAI(Plugin):
 
         # Prepare metadata matching model_action_metadata structure
         info = veo_model_info(clean_name).model_dump(by_alias=True)
-        config_schema = VeoConfigSchema
+        config_schema = VeoConfig
 
         start_action = Action(
             kind=ActionKind.BACKGROUND_MODEL,
@@ -621,7 +621,7 @@ class GoogleAI(Plugin):
         if clean_name.lower().startswith('image'):
             model_ref = vertexai_image_model_info(clean_name)
             IMAGE_SUPPORTED_MODELS[clean_name] = model_ref  # pyright: ignore[reportArgumentType]
-            config_schema = ImagenConfigSchema
+            config_schema = ImagenConfig
         else:
             model_ref = google_model_info(clean_name)
             SUPPORTED_MODELS[clean_name] = model_ref
@@ -690,7 +690,7 @@ class GoogleAI(Plugin):
                 model_action_metadata(
                     name=googleai_name(name),
                     info=vertexai_image_model_info(name).model_dump(by_alias=True),
-                    config_schema=ImagenConfigSchema,
+                    config_schema=ImagenConfig,
                 )
             )
 
@@ -699,7 +699,7 @@ class GoogleAI(Plugin):
                 model_action_metadata(
                     name=googleai_name(name),
                     info=veo_model_info(name).model_dump(by_alias=True),
-                    config_schema=VeoConfigSchema,
+                    config_schema=VeoConfig,
                 )
             )
 
@@ -745,19 +745,19 @@ class VertexAI(Plugin):
 
     Example:
         >>> from genkit import Genkit
-        >>> from genkit_google_genai import ImagenConfig, VertexAI, gemini_model, imagen_model
+        >>> from genkit_google_genai import ImagenConfig, VertexAI
         >>>
         >>> ai = Genkit(plugins=[VertexAI(project='my-project')])
         >>>
         >>> # Text generation
         >>> response = await ai.generate(
-        ...     model=gemini_model('gemini-flash-latest', namespace='vertexai'),
+        ...     model='vertexai/gemini-flash-latest',
         ...     prompt='Explain quantum computing',
         ... )
         >>>
         >>> # Image generation (Vertex AI only)
         >>> response = await ai.generate(
-        ...     model=imagen_model('imagen-3.0-generate-002', namespace='vertexai'),
+        ...     model='vertexai/imagen-3.0-generate-002',
         ...     config=ImagenConfig(number_of_images=1),
         ...     prompt='A serene mountain landscape',
         ... )
@@ -994,14 +994,14 @@ class VertexAI(Plugin):
                 label=f'{PLUGIN_DISPLAY_NAME[VERTEXAI_PLUGIN_NAME]} - {clean_name}',
                 supports=google_model_info('gemini').supports,
             )
-            config_schema = GeminiConfigSchema
+            config_schema = GeminiConfig
         elif clean_name.lower().startswith('image'):
             model_ref = vertexai_image_model_info(clean_name)
             IMAGE_SUPPORTED_MODELS[clean_name] = model_ref  # pyright: ignore[reportArgumentType]
-            config_schema = ImagenConfigSchema
+            config_schema = ImagenConfig
         elif is_veo_model(clean_name):
             model_ref = veo_model_info(clean_name)
-            config_schema = VeoConfigSchema
+            config_schema = VeoConfig
         else:
             model_ref = google_model_info(clean_name)
             SUPPORTED_MODELS[clean_name] = model_ref
@@ -1079,7 +1079,7 @@ class VertexAI(Plugin):
                 model_action_metadata(
                     name=vertexai_name(name),
                     info=vertexai_image_model_info(name).model_dump(by_alias=True),
-                    config_schema=ImagenConfigSchema,
+                    config_schema=ImagenConfig,
                 )
             )
 
@@ -1088,7 +1088,7 @@ class VertexAI(Plugin):
                 model_action_metadata(
                     name=vertexai_name(name),
                     info=veo_model_info(name).model_dump(by_alias=True),
-                    config_schema=VeoConfigSchema,
+                    config_schema=VeoConfig,
                 )
             )
 

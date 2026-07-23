@@ -348,7 +348,7 @@ class VoiceConfigSchema(BaseModel):
     prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(None, alias='prebuiltVoiceConfig')
 
 
-class GeminiConfigSchema(ModelConfig):
+class GeminiConfig(ModelConfig):
     """Gemini Config Schema."""
 
     model_config = ConfigDict(extra='allow', populate_by_name=True)
@@ -571,13 +571,13 @@ class SpeechConfigSchema(BaseModel):
     response_json_schema: Any | None = Field(None, exclude=True)
 
 
-class GeminiTtsConfigSchema(GeminiConfigSchema):
+class GeminiTtsConfig(GeminiConfig):
     """Gemini TTS Config Schema."""
 
     speech_config: SpeechConfigSchema | None = Field(None, alias='speechConfig')
 
 
-class GeminiImageConfigSchema(GeminiConfigSchema):
+class GeminiImageConfig(GeminiConfig):
     """Gemini Image Config Schema."""
 
     image_config: Annotated[
@@ -593,10 +593,10 @@ class GeminiImageConfigSchema(GeminiConfigSchema):
     ] = Field(None, alias='imageConfig')
 
 
-class GemmaConfigSchema(GeminiConfigSchema):
+class GemmaConfig(GeminiConfig):
     """Gemma Config Schema."""
 
-    # Inherits temperature from GeminiConfigSchema
+    # Inherits temperature from GeminiConfig
     temperature: float | None = None
 
 
@@ -1178,7 +1178,7 @@ def is_gemini_model(name: str) -> bool:
 def is_tts_model(name: str) -> bool:
     """Check if the model is a text-to-speech (TTS) model.
 
-    TTS models output audio instead of text and use GeminiTtsConfigSchema.
+    TTS models output audio instead of text and use GeminiTtsConfig.
 
     Args:
         name: The model name to check.
@@ -1196,7 +1196,7 @@ def is_tts_model(name: str) -> bool:
 def is_image_model(name: str) -> bool:
     """Check if the model is a Gemini image generation model.
 
-    Image models output images instead of text and use GeminiImageConfigSchema.
+    Image models output images instead of text and use GeminiImageConfig.
 
     Args:
         name: The model name to check.
@@ -1287,7 +1287,7 @@ def resolve_vertex_model_name(client: genai.Client, name: str) -> str:
     return f'projects/{project}/locations/{location}/{name}'
 
 
-def get_model_config_schema(name: str) -> type[GeminiConfigSchema]:
+def get_model_config_schema(name: str) -> type[GeminiConfig]:
     """Get the appropriate config schema for a dynamically discovered model.
 
     Different model types (TTS, image, Gemma, standard) have different
@@ -1299,18 +1299,18 @@ def get_model_config_schema(name: str) -> type[GeminiConfigSchema]:
 
     Returns:
         The appropriate config schema class:
-        - GeminiTtsConfigSchema for TTS models
-        - GeminiImageConfigSchema for image models
-        - GemmaConfigSchema for Gemma models
-        - GeminiConfigSchema for standard Gemini models
+        - GeminiTtsConfig for TTS models
+        - GeminiImageConfig for image models
+        - GemmaConfig for Gemma models
+        - GeminiConfig for standard Gemini models
     """
     if is_tts_model(name):
-        return GeminiTtsConfigSchema
+        return GeminiTtsConfig
     if is_image_model(name):
-        return GeminiImageConfigSchema
+        return GeminiImageConfig
     if is_gemma_model(name):
-        return GemmaConfigSchema
-    return GeminiConfigSchema
+        return GemmaConfig
+    return GeminiConfig
 
 
 def google_model_info(
@@ -2082,11 +2082,11 @@ class GeminiModel:
 
     def _normalize_config_to_dict(
         self,
-        config: GeminiConfigSchema | ModelConfig | dict,
+        config: GeminiConfig | ModelConfig | dict,
     ) -> dict[str, Any] | None:
         """Return the config as a snake_case dict for the rest of the pipeline.
 
-        Callers can hand us three shapes: a typed ``GeminiConfigSchema``, the
+        Callers can hand us three shapes: a typed ``GeminiConfig``, the
         generic ``GenerationCommonConfig`` (which keeps plugin-specific keys
         as alias-form extras), or a raw dict in either casing. Only the
         plugin schema knows the alias mapping (e.g. ``codeExecution`` <->
@@ -2096,7 +2096,7 @@ class GeminiModel:
 
         Returns ``None`` if the config has no meaningful values.
         """
-        if isinstance(config, GeminiConfigSchema):
+        if isinstance(config, GeminiConfig):
             schema = config
         elif isinstance(config, ModelConfig):
             # Re-route through the plugin schema so the alias machinery folds
@@ -2110,7 +2110,7 @@ class GeminiModel:
         dumped = schema.model_dump(exclude_none=True, by_alias=False)
         return dumped or None
 
-    def _pick_plugin_schema(self, data: dict[str, Any]) -> GeminiConfigSchema:
+    def _pick_plugin_schema(self, data: dict[str, Any]) -> GeminiConfig:
         """Validate ``data`` through whichever subclass matches the model.
 
         Routing is purely by model name so each family gets its own

@@ -20,14 +20,14 @@ from typing import Literal
 
 from genkit.model import ModelRef, model_ref
 from genkit_google_genai.models.gemini import (
-    GeminiConfigSchema,
-    GeminiImageConfigSchema,
-    GeminiTtsConfigSchema,
-    GemmaConfigSchema,
+    GeminiConfig,
+    GeminiImageConfig,
+    GeminiTtsConfig,
+    GemmaConfig,
 )
-from genkit_google_genai.models.imagen import ImagenConfigSchema
+from genkit_google_genai.models.imagen import ImagenConfig
 from genkit_google_genai.models.lyria import LyriaConfig
-from genkit_google_genai.models.veo import VeoConfigSchema
+from genkit_google_genai.models.veo import VeoConfig
 
 # Short *-latest aliases exist only for Gemini text (same as the JS plugin).
 # Other families have no latest shortcuts today — list their known IDs instead.
@@ -103,14 +103,13 @@ KnownLyria = Literal[
 def gemini_model(
     name: KnownGemini | str,
     *,
-    namespace: str = 'googleai',
-    config: GeminiConfigSchema | None = None,
-) -> ModelRef[GeminiConfigSchema]:
+    config: GeminiConfig | None = None,
+) -> ModelRef[GeminiConfig]:
     """Return a typed ref for standard Gemini text models."""
     return model_ref(
         name,
-        config_schema=GeminiConfigSchema,
-        namespace=namespace,
+        config_schema=GeminiConfig,
+        namespace='googleai',
         config=config,
     )
 
@@ -118,14 +117,13 @@ def gemini_model(
 def gemini_tts_model(
     name: KnownGeminiTts | str,
     *,
-    namespace: str = 'googleai',
-    config: GeminiTtsConfigSchema | None = None,
-) -> ModelRef[GeminiTtsConfigSchema]:
+    config: GeminiTtsConfig | None = None,
+) -> ModelRef[GeminiTtsConfig]:
     """Return a typed ref for Gemini text-to-speech models."""
     return model_ref(
         name,
-        config_schema=GeminiTtsConfigSchema,
-        namespace=namespace,
+        config_schema=GeminiTtsConfig,
+        namespace='googleai',
         config=config,
     )
 
@@ -133,14 +131,13 @@ def gemini_tts_model(
 def gemini_image_model(
     name: KnownGeminiImage | str,
     *,
-    namespace: str = 'googleai',
-    config: GeminiImageConfigSchema | None = None,
-) -> ModelRef[GeminiImageConfigSchema]:
+    config: GeminiImageConfig | None = None,
+) -> ModelRef[GeminiImageConfig]:
     """Return a typed ref for Gemini native image generation models."""
     return model_ref(
         name,
-        config_schema=GeminiImageConfigSchema,
-        namespace=namespace,
+        config_schema=GeminiImageConfig,
+        namespace='googleai',
         config=config,
     )
 
@@ -148,14 +145,13 @@ def gemini_image_model(
 def gemma_model(
     name: KnownGemma | str,
     *,
-    namespace: str = 'googleai',
-    config: GemmaConfigSchema | None = None,
-) -> ModelRef[GemmaConfigSchema]:
+    config: GemmaConfig | None = None,
+) -> ModelRef[GemmaConfig]:
     """Return a typed ref for Gemma open-weight models."""
     return model_ref(
         name,
-        config_schema=GemmaConfigSchema,
-        namespace=namespace,
+        config_schema=GemmaConfig,
+        namespace='googleai',
         config=config,
     )
 
@@ -163,14 +159,13 @@ def gemma_model(
 def imagen_model(
     name: KnownImagen | str,
     *,
-    namespace: str = 'googleai',
-    config: ImagenConfigSchema | None = None,
-) -> ModelRef[ImagenConfigSchema]:
+    config: ImagenConfig | None = None,
+) -> ModelRef[ImagenConfig]:
     """Return a typed ref for Imagen text-to-image models."""
     return model_ref(
         name,
-        config_schema=ImagenConfigSchema,
-        namespace=namespace,
+        config_schema=ImagenConfig,
+        namespace='googleai',
         config=config,
     )
 
@@ -178,14 +173,13 @@ def imagen_model(
 def veo_model(
     name: KnownVeo | str,
     *,
-    namespace: str = 'googleai',
-    config: VeoConfigSchema | None = None,
-) -> ModelRef[VeoConfigSchema]:
+    config: VeoConfig | None = None,
+) -> ModelRef[VeoConfig]:
     """Return a typed ref for Veo video generation models."""
     return model_ref(
         name,
-        config_schema=VeoConfigSchema,
-        namespace=namespace,
+        config_schema=VeoConfig,
+        namespace='googleai',
         config=config,
     )
 
@@ -193,13 +187,12 @@ def veo_model(
 def lyria_model(
     name: KnownLyria | str,
     *,
-    namespace: str = 'googleai',
     config: LyriaConfig | None = None,
 ) -> ModelRef[LyriaConfig]:
     """Return a typed ref for Lyria audio generation models."""
     return model_ref(
         name,
         config_schema=LyriaConfig,
-        namespace=namespace,
+        namespace='googleai',
         config=config,
     )

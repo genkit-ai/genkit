@@ -59,9 +59,9 @@ The plugin automatically discovers available models from the API upon initializa
 New or experimental parameters can be passed flexibly using `model_validate` to bypass strict schema checks:
 
 ```python
-from genkit_google_genai import GeminiConfigSchema
+from genkit_google_genai import GeminiConfig
 
-config = GeminiConfigSchema.model_validate({
+config = GeminiConfig.model_validate({
     'temperature': 1.0,
     'response_modalities': ['TEXT', 'IMAGE'],
 })

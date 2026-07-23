@@ -41,9 +41,6 @@ async def plan_trip(destination: str) -> str:
     return response.text  # => "Based on the sunny weather in Seattle..."
 ```
 
-For quick experiments you can also pass a bare model string with a dict config:
-`model="googleai/gemini-flash-latest", config={"temperature": 0.7}`.
-
 ## Why Genkit?
 
 - **Type-Safe by Design:** Leverage Python type annotations and Pydantic models for structured inputs, outputs, and tool definitions.

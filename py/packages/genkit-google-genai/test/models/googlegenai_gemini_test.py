@@ -30,11 +30,11 @@ else:
 import pytest
 from genkit_google_genai.models.gemini import (
     DEFAULT_SUPPORTS_MODEL,
-    GeminiConfigSchema,
-    GeminiImageConfigSchema,
+    GeminiConfig,
+    GeminiImageConfig,
     GeminiModel,
-    GeminiTtsConfigSchema,
-    GemmaConfigSchema,
+    GeminiTtsConfig,
+    GemmaConfig,
     GoogleAIGeminiVersion,
     VertexAIGeminiVersion,
     google_model_info,
@@ -1037,7 +1037,7 @@ async def test_gemini_model__retrieve_cached_content(
             'GenerationCommonConfig with alias-form extra',
             GenerationCommonConfig.model_validate({'codeExecution': True}),
         ),
-        ('GeminiConfigSchema instance', GeminiConfigSchema.model_validate({'code_execution': True})),
+        ('GeminiConfig instance', GeminiConfig.model_validate({'code_execution': True})),
     ],
 )
 def test_gemini_model__normalize_config_canonicalizes_aliases(
@@ -1057,13 +1057,13 @@ async def test_gemini_model__camelcase_code_execution_translates_to_tool(
 ) -> None:
     """A camelCase convenience flag is translated into a tool, not leaked.
 
-    Reproduces the bug where ``ai.generate(config=GeminiConfigSchema(...).model_dump())``
+    Reproduces the bug where ``ai.generate(config=GeminiConfig(...).model_dump())``
     produced an alias-form dict that fell through to the SDK's strict
     ``GenerateContentConfig`` and raised ``extra_forbidden``.
     """
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
-        config=GeminiConfigSchema.model_validate({'code_execution': True}).model_dump(),
+        config=GeminiConfig.model_validate({'code_execution': True}).model_dump(),
     )
 
     cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
@@ -1109,21 +1109,21 @@ def test_gemini_model__normalize_config_respects_version_override() -> None:
 @pytest.mark.parametrize(
     ('version', 'expected_schema'),
     [
-        ('gemini-2.5-flash-preview-tts', GeminiTtsConfigSchema),
-        ('gemini-2.0-flash-preview-image-generation', GeminiImageConfigSchema),
-        ('gemini-3-pro-image', GeminiImageConfigSchema),
-        ('gemini-3.1-flash-image', GeminiImageConfigSchema),
-        ('gemini-3.1-flash-image-preview', GeminiImageConfigSchema),
-        ('gemini-3-pro-image-preview', GeminiImageConfigSchema),
-        ('gemini-2.5-flash-image', GeminiImageConfigSchema),
-        ('gemini-2.5-flash-image-preview', GeminiImageConfigSchema),
-        ('gemma-2-27b-it', GemmaConfigSchema),
-        ('gemini-2.0-flash-001', GeminiConfigSchema),
+        ('gemini-2.5-flash-preview-tts', GeminiTtsConfig),
+        ('gemini-2.0-flash-preview-image-generation', GeminiImageConfig),
+        ('gemini-3-pro-image', GeminiImageConfig),
+        ('gemini-3.1-flash-image', GeminiImageConfig),
+        ('gemini-3.1-flash-image-preview', GeminiImageConfig),
+        ('gemini-3-pro-image-preview', GeminiImageConfig),
+        ('gemini-2.5-flash-image', GeminiImageConfig),
+        ('gemini-2.5-flash-image-preview', GeminiImageConfig),
+        ('gemma-2-27b-it', GemmaConfig),
+        ('gemini-2.0-flash-001', GeminiConfig),
     ],
 )
 def test_gemini_model__pick_plugin_schema_routes_by_model_family(
     version: str,
-    expected_schema: type[GeminiConfigSchema],
+    expected_schema: type[GeminiConfig],
 ) -> None:
     """Each model family lands on its own schema based on the bound version.
 

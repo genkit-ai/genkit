@@ -129,7 +129,7 @@ Example:
     from genkit import Genkit
     from genkit_ollama import Ollama, OllamaConfig, ollama_model
 
-    ai = Genkit(plugins=[Ollama(models=['llama3.2', 'mistral'])])
+    ai = Genkit(plugins=[Ollama()])
 
     response = await ai.generate(
         model=ollama_model('llama3.2'),
