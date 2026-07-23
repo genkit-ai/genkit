@@ -117,12 +117,31 @@ def _resolve_model_arg(
                 default_dict = model.config.model_dump(exclude_unset=True)
                 call_dict = config.model_dump(exclude_unset=True) if isinstance(config, BaseModel) else dict(config)  # type: ignore[arg-type]  # pyrefly: ignore
                 merged = {**default_dict, **call_dict}
-                if (
-                    isinstance(model.config_schema, type)
-                    and issubclass(model.config_schema, BaseModel)
-                    and model.config_schema is not BaseModel
+                target_schema: type[BaseModel] | Any = getattr(model, 'config_schema', None)
+                if not (
+                    isinstance(target_schema, type)
+                    and issubclass(target_schema, BaseModel)
+                    and target_schema is not BaseModel
+                    and target_schema.__name__ != '_FallbackModelConfig'
                 ):
-                    config = model.config_schema.model_validate(merged)
+                    if (
+                        isinstance(model.config, BaseModel)
+                        and type(model.config) is not BaseModel
+                        and type(model.config).__name__ != '_FallbackModelConfig'
+                    ):
+                        target_schema = type(model.config)
+                    elif (
+                        isinstance(config, BaseModel)
+                        and type(config) is not BaseModel
+                        and type(config).__name__ != '_FallbackModelConfig'
+                    ):
+                        target_schema = type(config)
+                if (
+                    isinstance(target_schema, type)
+                    and issubclass(target_schema, BaseModel)
+                    and target_schema is not BaseModel
+                ):
+                    config = target_schema.model_validate(merged)
                 else:
                     config = merged
         return model.name, config

@@ -134,7 +134,9 @@ class ModelRef(BaseModel, Generic[ConfigT]):
             if config is not None and config_schema is not None:
                 if isinstance(config, dict):
                     data['config'] = config_schema.model_validate(config)
-                elif not isinstance(config, config_schema) and not isinstance(config, _FallbackModelConfig):
+                elif config_schema is _FallbackModelConfig and isinstance(config, BaseModel):
+                    pass
+                elif not isinstance(config, config_schema):
                     raise TypeError(
                         f'config must conform to {getattr(config_schema, "__name__", str(config_schema))}, '
                         f'got {type(config).__name__}'
