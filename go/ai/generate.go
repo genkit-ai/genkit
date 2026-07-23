@@ -242,7 +242,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 
 		toolDefMap[t] = tool.Definition()
 	}
-	var middlewareTools []Tool
+	var middlewareTools []AnyTool
 	for _, mw := range mws {
 		if mw == nil {
 			continue
@@ -534,7 +534,7 @@ func buildModelChain(mws []*Hooks, fn ModelFunc) ModelFunc {
 // invoke from concurrent goroutines; each invocation threads its own params
 // through the shared hook chain. When no WrapTool hooks are configured, the
 // tool is invoked directly without allocating a ToolParams wrapper.
-func buildToolRunner(mws []*Hooks) func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error) {
+func buildToolRunner(mws []*Hooks) func(ctx context.Context, tool AnyTool, req *ToolRequest) (*MultipartToolResponse, error) {
 	hasHook := false
 	for _, mw := range mws {
 		if mw != nil && mw.WrapTool != nil {
@@ -543,12 +543,13 @@ func buildToolRunner(mws []*Hooks) func(ctx context.Context, tool Tool, req *Too
 		}
 	}
 	if !hasHook {
-		return func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error) {
-			return tool.RunRawMultipart(ctx, req.Input)
+		return func(ctx context.Context, tool AnyTool, req *ToolRequest) (*MultipartToolResponse, error) {
+			return tool.RunRaw(ctx, req.Input)
 		}
 	}
 	chain := func(ctx context.Context, params *ToolParams) (*MultipartToolResponse, error) {
-		return params.Tool.RunRawMultipart(ctx, params.Request.Input)
+		params.ran = true
+		return params.Tool.RunRaw(ctx, params.Request.Input)
 	}
 	for i := len(mws) - 1; i >= 0; i-- {
 		mw := mws[i]
@@ -561,9 +562,32 @@ func buildToolRunner(mws []*Hooks) func(ctx context.Context, tool Tool, req *Too
 			return hook(ctx, params, next)
 		}
 	}
-	return func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error) {
-		return chain(ctx, &ToolParams{Request: req, Tool: tool})
+	return func(ctx context.Context, tool AnyTool, req *ToolRequest) (*MultipartToolResponse, error) {
+		params := &ToolParams{Request: req, Tool: tool}
+		resp, err := chain(ctx, params)
+		if !params.ran {
+			return recordToolShortCircuit(ctx, tool.Name(), req.Input, resp, err)
+		}
+		return resp, err
 	}
+}
+
+// recordToolShortCircuit emits the tool-shaped span that core/action.go would
+// have created, attributing a WrapTool outcome (interrupt, cached response,
+// injected error) to the tool in traces even though the tool never ran. The
+// span wraps the already-known outcome and returns it unchanged.
+func recordToolShortCircuit(ctx context.Context, name string, input any, resp *MultipartToolResponse, err error) (*MultipartToolResponse, error) {
+	spanMeta := &tracing.SpanMetadata{
+		Name:     name,
+		Type:     "action",
+		Subtype:  "tool",
+		Metadata: map[string]string{},
+	}
+	if flowName := core.FlowNameFromContext(ctx); flowName != "" {
+		spanMeta.Metadata["flow:name"] = flowName
+	}
+	return tracing.RunInNewSpan(ctx, spanMeta, input,
+		func(context.Context, any) (*MultipartToolResponse, error) { return resp, err })
 }
 
 // Generate generates a model response based on the provided options.
@@ -932,7 +956,7 @@ func clone[T any](obj *T) *T {
 
 // toolRunnerFunc runs a tool through the WrapTool hook chain and returns the
 // raw [MultipartToolResponse]. Returned by [buildToolRunner].
-type toolRunnerFunc = func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error)
+type toolRunnerFunc = func(ctx context.Context, tool AnyTool, req *ToolRequest) (*MultipartToolResponse, error)
 
 // handleToolRequests processes any tool requests in the response, returning
 // either a new request to continue the conversation or nil if no tool requests
@@ -1004,19 +1028,16 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 
 			multipartResp, err := runTool(toolCtx, tool, toolReq)
 			if err != nil {
-				var tie *toolInterruptError
+				var tie *InterruptError
 				if errors.As(err, &tie) {
-					logger.FromContext(ctx).Debug("tool %q triggered an interrupt: %v", toolReq.Name, tie.Metadata)
+					if vErr := validateInterruptPayload(tie.Data, "interrupt data"); vErr != nil {
+						resultChan <- result[*MultipartToolResponse]{index: idx, err: core.NewError(core.INTERNAL, "tool %q failed: %v", toolReq.Name, vErr)}
+						return
+					}
+					logger.FromContext(ctx).Debug("tool %q triggered an interrupt: %v", toolReq.Name, tie.Data)
 
 					newPart := clone(p)
-					if newPart.Metadata == nil {
-						newPart.Metadata = make(map[string]any)
-					}
-					if tie.Metadata != nil {
-						newPart.Metadata["interrupt"] = tie.Metadata
-					} else {
-						newPart.Metadata["interrupt"] = true
-					}
+					newPart.Interrupt = &ToolInterrupt{Data: tie.Data}
 
 					revisedMsg.Content[idx] = newPart
 
@@ -1032,7 +1053,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 			if newPart.Metadata == nil {
 				newPart.Metadata = make(map[string]any)
 			}
-			newPart.Metadata["pendingOutput"] = multipartResp.Output
+			newPart.Metadata[base.ToolMetaPendingOutput] = multipartResp.Output
 			revisedMsg.Content[idx] = newPart
 
 			resultChan <- result[*MultipartToolResponse]{index: idx, value: multipartResp}
@@ -1047,7 +1068,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 	for range toolCount {
 		res := <-resultChan
 		if res.err != nil {
-			var tie *toolInterruptError
+			var tie *InterruptError
 			if errors.As(res.err, &tie) {
 				hasInterrupts = true
 				continue
@@ -1353,7 +1374,7 @@ func (m *Message) Text() string {
 // NewResume constructs a [GenerateActionResume] from Part slices.
 // This is useful when building [GenerateActionOptions] directly (e.g., from a
 // rendered prompt) and need to set the Resume field from [*Part] values
-// produced by [ToolDef.RestartWith] or [ToolDef.RespondWith].
+// produced by [tool.Restart] or [tool.Respond].
 func NewResume(restarts, responds []*Part) *GenerateActionResume {
 	return &GenerateActionResume{
 		Restart: restarts,
@@ -1436,6 +1457,13 @@ func (ModelRef) JSONSchema() *jsonschema.Schema {
 	}
 }
 
+// Tool response part metadata marking a response synthesized from pending
+// output when generation resumes (mirrors the JS runtime).
+const (
+	partMetaSource    = "source"
+	partSourcePending = "pending"
+)
+
 // handleResumedToolRequest resolves a tool request from a previous, interrupted model turn,
 // when generation is being resumed. It determines the outcome of the tool request based on
 // pending output, or explicit 'respond' or 'restart' directives in the resume options.
@@ -1444,12 +1472,15 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 		return nil, core.NewError(core.INVALID_ARGUMENT, "handleResumedToolRequest: part is not a tool request")
 	}
 
-	if pendingOutputVal, ok := p.Metadata["pendingOutput"]; ok {
+	if pendingOutputVal, ok := p.Metadata[base.ToolMetaPendingOutput]; ok {
 		newReqPart := clone(p)
-		delete(newReqPart.Metadata, "pendingOutput")
+		delete(newReqPart.Metadata, base.ToolMetaPendingOutput)
 
-		newRespPart := NewResponseForToolRequest(p, pendingOutputVal)
-		newRespPart.Metadata = map[string]any{"source": "pending"}
+		newRespPart, err := NewResponseForToolRequest(p, pendingOutputVal)
+		if err != nil {
+			return nil, err
+		}
+		newRespPart.Metadata = map[string]any{partMetaSource: partSourcePending}
 
 		return &resumedToolRequestOutput{
 			toolRequest:  newReqPart,
@@ -1465,9 +1496,8 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 				respondPart.ToolResponse.Name == toolReq.Name &&
 				respondPart.ToolResponse.Ref == toolReq.Ref {
 				newToolReq := clone(p)
-				if interruptVal, ok := newToolReq.Metadata["interrupt"]; ok {
-					delete(newToolReq.Metadata, "interrupt")
-					newToolReq.Metadata["resolvedInterrupt"] = interruptVal
+				if newToolReq.Interrupt != nil {
+					newToolReq.Interrupt.Resolved = true
 				}
 
 				tool := LookupTool(r, toolReq.Name)
@@ -1512,19 +1542,16 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 				}
 
 				resumedCtx := ctx
-				if resumedVal, ok := restartPart.Metadata["resumed"]; ok {
-					// TODO: Better handling here or in tools.go.
-					switch resumedVal := resumedVal.(type) {
-					case map[string]any:
-						resumedCtx = resumedCtxKey.NewContext(resumedCtx, resumedVal)
-					case bool:
-						if resumedVal {
-							resumedCtx = resumedCtxKey.NewContext(resumedCtx, map[string]any{})
-						}
+				if rs := restartPart.Restart; rs != nil {
+					resume := rs.Resume
+					if resume == nil {
+						// A bare restart still marks the call as a resumption.
+						resume = map[string]any{}
 					}
-				}
-				if originalInputVal, ok := restartPart.Metadata["replacedInput"]; ok {
-					resumedCtx = origInputCtxKey.NewContext(resumedCtx, originalInputVal)
+					resumedCtx = base.ToolResumeKey.NewContext(resumedCtx, resume)
+					if rs.OriginalInput != nil {
+						resumedCtx = base.ToolOriginalInputKey.NewContext(resumedCtx, rs.OriginalInput)
+					}
 				}
 
 				restartToolReq := &ToolRequest{
@@ -1534,15 +1561,15 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 				}
 				multipartResp, err := runTool(resumedCtx, tool, restartToolReq)
 				if err != nil {
-					var tie *toolInterruptError
+					var tie *InterruptError
 					if errors.As(err, &tie) {
-						logger.FromContext(ctx).Debug("tool %q triggered an interrupt: %v", restartPart.ToolRequest.Name, tie.Metadata)
+						if vErr := validateInterruptPayload(tie.Data, "interrupt data"); vErr != nil {
+							return nil, core.NewError(core.INTERNAL, "tool %q failed: %v", restartPart.ToolRequest.Name, vErr)
+						}
+						logger.FromContext(ctx).Debug("tool %q triggered an interrupt: %v", restartPart.ToolRequest.Name, tie.Data)
 
 						interruptPart := clone(p)
-						if interruptPart.Metadata == nil {
-							interruptPart.Metadata = make(map[string]any)
-						}
-						interruptPart.Metadata["interrupt"] = tie.Metadata
+						interruptPart.Interrupt = &ToolInterrupt{Data: tie.Data}
 
 						return &resumedToolRequestOutput{
 							interrupt: interruptPart,
@@ -1553,9 +1580,8 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 				}
 
 				newToolReq := clone(p)
-				if interruptVal, ok := newToolReq.Metadata["interrupt"]; ok {
-					delete(newToolReq.Metadata, "interrupt")
-					newToolReq.Metadata["resolvedInterrupt"] = interruptVal
+				if newToolReq.Interrupt != nil {
+					newToolReq.Interrupt.Resolved = true
 				}
 
 				newToolResp := NewToolResponsePart(&ToolResponse{
@@ -1682,11 +1708,11 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 		Role:    RoleTool,
 		Content: toolResps,
 		Metadata: map[string]any{
-			"resumed": true,
+			base.ToolMetaResumed: true,
 		},
 	}
 	if genOpts.Resume.Metadata != nil {
-		toolMessage.Metadata["resumed"] = genOpts.Resume.Metadata
+		toolMessage.Metadata[base.ToolMetaResumed] = genOpts.Resume.Metadata
 	}
 	revisedMessages := append(slices.Clone(messages), toolMessage)
 

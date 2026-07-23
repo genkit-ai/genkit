@@ -131,8 +131,8 @@ func (h *MCPHost) Reconnect(ctx context.Context, serverName string) error {
 }
 
 // GetActiveTools retrieves all tools from all connected and enabled MCP clients
-func (h *MCPHost) GetActiveTools(ctx context.Context, gk *genkit.Genkit) ([]ai.Tool, error) {
-	var allTools []ai.Tool
+func (h *MCPHost) GetActiveTools(ctx context.Context, gk *genkit.Genkit) ([]ai.AnyTool, error) {
+	var allTools []ai.AnyTool
 
 	for name, client := range h.clients {
 		if !client.IsEnabled() {

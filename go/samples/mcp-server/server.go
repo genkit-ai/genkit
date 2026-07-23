@@ -34,7 +34,6 @@ import (
 	"syscall"
 
 	genkit "github.com/firebase/genkit/go"
-	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/plugins/mcp"
 )
@@ -50,11 +49,11 @@ func main() {
 
 	// Tool 1: Encode/decode text
 	g.DefineTool("text_encode", "Encode or decode text using various methods",
-		func(ctx *ai.ToolContext, input struct {
+		func(ctx context.Context, input struct {
 			Text   string `json:"text" description:"Text to encode/decode"`
 			Method string `json:"method" description:"Method: base64_encode, base64_decode, url_encode"`
 		}) (map[string]interface{}, error) {
-			logger.FromContext(ctx.Context).Debug("Executing text_encode tool", "method", input.Method, "textLength", len(input.Text))
+			logger.FromContext(ctx).Debug("Executing text_encode tool", "method", input.Method, "textLength", len(input.Text))
 
 			switch input.Method {
 			case "base64_encode":
@@ -89,11 +88,11 @@ func main() {
 
 	// Tool 2: Generate hashes
 	g.DefineTool("hash_generate", "Generate hash values for text",
-		func(ctx *ai.ToolContext, input struct {
+		func(ctx context.Context, input struct {
 			Text string `json:"text" description:"Text to hash"`
 			Type string `json:"type" description:"Hash type: md5, sha256"`
 		}) (map[string]interface{}, error) {
-			logger.FromContext(ctx.Context).Debug("Executing hash_generate tool", "type", input.Type, "textLength", len(input.Text))
+			logger.FromContext(ctx).Debug("Executing hash_generate tool", "type", input.Type, "textLength", len(input.Text))
 
 			switch input.Type {
 			case "md5":
@@ -117,10 +116,10 @@ func main() {
 
 	// Tool 3: Fetch URL content
 	g.DefineTool("fetch_url", "Fetch content from a URL",
-		func(ctx *ai.ToolContext, input struct {
+		func(ctx context.Context, input struct {
 			URL string `json:"url" description:"URL to fetch content from"`
 		}) (map[string]interface{}, error) {
-			logger.FromContext(ctx.Context).Debug("Executing fetch_url tool", "url", input.URL)
+			logger.FromContext(ctx).Debug("Executing fetch_url tool", "url", input.URL)
 
 			resp, err := http.Get(input.URL)
 			if err != nil {
@@ -133,7 +132,7 @@ func main() {
 				return nil, fmt.Errorf("failed to read response body: %v", err)
 			}
 
-			logger.FromContext(ctx.Context).Debug("Successfully fetched URL content", "url", input.URL, "status", resp.StatusCode, "contentLength", len(body))
+			logger.FromContext(ctx).Debug("Successfully fetched URL content", "url", input.URL, "status", resp.StatusCode, "contentLength", len(body))
 
 			return map[string]interface{}{
 				"url":     input.URL,

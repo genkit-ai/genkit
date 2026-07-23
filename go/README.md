@@ -483,9 +483,9 @@ type WeatherInput struct {
     Location string `json:"location"`
 }
 
-weatherTool := genkit.DefineTool(g, "getWeather",
+weatherTool := g.DefineTool("getWeather",
     "Gets the current weather for a location",
-    func(ctx *ai.ToolContext, input WeatherInput) (string, error) {
+    func(ctx context.Context, input WeatherInput) (string, error) {
         // Call your weather API here
         return fmt.Sprintf("Weather in %s: 72°F and sunny", input.Location), nil
     },
@@ -499,91 +499,19 @@ response, _ := genkit.Generate(ctx, g,
 fmt.Println(response.Text())
 ```
 
-[See full example](samples/basic)
-
-### Tool Interrupts
-
-Pause execution for human approval, then resume with modified inputs or direct responses:
+Inside the tool, helpers from the `ai/tool` package add capabilities without changing the function signature: `tool.SendPartial` streams partial results to the client mid-execution and `tool.AttachParts` adds extra content parts (like media) to the response:
 
 ```go
-type TransferInput struct {
-    ToAccount string  `json:"toAccount"`
-    Amount    float64 `json:"amount"`
-}
+import "github.com/firebase/genkit/go/ai/tool"
 
-type TransferInterrupt struct {
-    Reason  string  `json:"reason"`
-    Amount  float64 `json:"amount"`
-    Balance float64 `json:"balance"`
-}
-
-transferTool := genkit.DefineTool(g, "transfer",
-    "Transfer money to an account",
-    func(ctx *ai.ToolContext, input TransferInput) (string, error) {
-        // Confirm large transfers
-        if !ctx.IsResumed() && input.Amount > 1000 {
-            return "", ai.InterruptWith(ctx, TransferInterrupt{
-                Reason:  "confirm_large",
-                Amount:  input.Amount,
-                Balance: currentBalance,
-            })
-        }
-        return "Transfer completed", nil
-    },
-)
-
-// Handle interrupts in your flow
-resp, _ := genkit.Generate(ctx, g,
-    ai.WithModelName("googleai/gemini-flash-latest"),
-    ai.WithPrompt("Transfer $5000 to account ABC123"),
-    ai.WithTools(transferTool),
-)
-
-if resp.FinishReason == ai.FinishReasonInterrupted {
-    for _, interrupt := range resp.Interrupts() {
-        meta, _ := ai.InterruptAs[TransferInterrupt](interrupt)
-
-        // Get user confirmation, then resume
-        part, _ := transferTool.RestartWith(interrupt)
-        resp, _ = genkit.Generate(ctx, g,
-            ai.WithMessages(resp.History()...),
-            ai.WithTools(transferTool),
-            ai.WithToolRestarts(part),
-        )
-    }
-}
-```
-
-[See full example](samples/intermediate-interrupts)
-
-### Streaming, Multipart, and Interruptible Tools
-
-> [!WARNING]
-> This API is in preview and may experience breaking changes in minor releases.
-
-The experimental tool constructors in `genkit/exp` (aliased `genkitx`) hand your function a plain `context.Context` instead of `ai.ToolContext`, with helpers in `ai/exp/tool` for streaming progress, attaching media, and typed interrupts. This is a preview of Genkit Go's next-generation tools API: it is slated to replace the current `genkit.DefineTool` (shown above) as the default in the next major version. Initialize Genkit with `genkit.WithExperimental()` to enable them.
-
-`genkitx.DefineTool` infers its input and output types from the function. Inside the tool, `tool.SendPartial` streams partial results mid-execution and `tool.AttachParts` adds extra content parts to the response, neither of which changes the function signature:
-
-```go
-import (
-    "github.com/firebase/genkit/go/ai"
-    "github.com/firebase/genkit/go/ai/exp/tool"
-    genkitx "github.com/firebase/genkit/go/exp"
-)
-
-type AnalyzeInput struct {
-    Symbol string `json:"symbol"`
-}
-
-analyzeTool := genkitx.DefineTool(g, "analyzeStock",
+analyzeTool := g.DefineTool("analyzeStock",
     "Analyzes a stock and returns a summary with a chart.",
     func(ctx context.Context, input AnalyzeInput) (string, error) {
         // Stream progress to the client while the tool runs. It is a no-op when
         // the caller isn't streaming; the return value is always authoritative.
         tool.SendPartial(ctx, map[string]any{"status": "fetching prices", "progress": 50})
 
-        // Attach media to the tool's response without a multipart signature.
+        // Attach media to the tool's response.
         tool.AttachParts(ctx, ai.NewMediaPart("image/png", chartDataURI))
 
         return fmt.Sprintf("%s closed up 4%% this week.", input.Symbol), nil
@@ -591,16 +519,32 @@ analyzeTool := genkitx.DefineTool(g, "analyzeStock",
 )
 ```
 
-`genkitx.DefineInterruptibleTool` adds a typed resume parameter: it is `nil` on the first call and carries the caller's decision when the tool resumes. Reusing the `TransferInput`/`TransferInterrupt` types from above, the tool pauses with `tool.Interrupt` and the caller resumes it with typed data via the tool's `Resume`:
+[See full example](samples/basic)
+
+### Tool Interrupts
+
+Pause execution for human approval, then resume with modified inputs or direct responses:
 
 ```go
+import "github.com/firebase/genkit/go/ai/tool"
+
+type TransferInput struct {
+    ToAccount string  `json:"toAccount"`
+    Amount    float64 `json:"amount"`
+}
+
+type TransferInterrupt struct {
+    Reason string  `json:"reason"`
+    Amount float64 `json:"amount"`
+}
+
 type Confirmation struct {
     Approved bool `json:"approved"`
 }
 
 // The third parameter (*Confirmation) is the resume payload: nil on the first
 // call, populated when the caller resumes after an interrupt.
-transferTool := genkitx.DefineInterruptibleTool(g, "transfer",
+transferTool := g.DefineInterruptibleTool("transfer",
     "Transfers money to another account.",
     func(ctx context.Context, input TransferInput, confirm *Confirmation) (string, error) {
         if confirm == nil && input.Amount > 1000 {
@@ -614,7 +558,7 @@ transferTool := genkitx.DefineInterruptibleTool(g, "transfer",
     },
 )
 
-resp, _ := genkit.Generate(ctx, g,
+resp, _ := g.Generate(ctx,
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Transfer $5000 to account ABC123"),
     ai.WithTools(transferTool),
@@ -627,11 +571,11 @@ for _, interrupt := range resp.Interrupts() {
 
     // Use meta to ask the user for a decision, then resume with their answer.
     // The typed data arrives as the tool's *Confirmation parameter.
-    restart, _ := transferTool.Resume(interrupt, Confirmation{Approved: true})
+    restart, _ := transferTool.Restart(interrupt, &Confirmation{Approved: true})
     restarts = append(restarts, restart)
 }
 if len(restarts) > 0 {
-    resp, _ = genkit.Generate(ctx, g,
+    resp, _ = g.Generate(ctx,
         ai.WithMessages(resp.History()...),
         ai.WithTools(transferTool),
         ai.WithToolRestarts(restarts...),
@@ -639,7 +583,7 @@ if len(restarts) > 0 {
 }
 ```
 
-[See the banker example](samples/basic-agents) for an interruptible tool wired into an agent.
+[See full example](samples/intermediate-interrupts)
 
 ### Middleware
 

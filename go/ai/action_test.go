@@ -98,7 +98,7 @@ func TestGenerateAction(t *testing.T) {
 			pm := defineProgrammableModel(r)
 
 			DefineTool(r, "testTool", "description",
-				func(ctx *ToolContext, input any) (any, error) {
+				func(ctx context.Context, input any) (any, error) {
 					return "tool called", nil
 				})
 

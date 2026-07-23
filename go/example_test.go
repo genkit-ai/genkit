@@ -151,7 +151,7 @@ func ExampleGenkit_DefineTool() {
 	// Define a tool that adds two numbers
 	_ = g.DefineTool("add",
 		"Adds two numbers together",
-		func(ctx *ai.ToolContext, input struct {
+		func(ctx context.Context, input struct {
 			A float64 `json:"a" jsonschema:"description=First number"`
 			B float64 `json:"b" jsonschema:"description=Second number"`
 		}) (float64, error) {

@@ -119,14 +119,14 @@ func injectInstructions(messages []*Message, instructions string) []*Message {
 	// bail out if an output part is already present
 	for _, m := range messages {
 		for _, p := range m.Content {
-			if p.Metadata != nil && p.Metadata["purpose"] == "output" {
+			if p.Metadata != nil && p.Metadata[PartMetaPurpose] == PartPurposeOutput {
 				return messages
 			}
 		}
 	}
 
 	part := NewTextPart(instructions)
-	part.Metadata = map[string]any{"purpose": "output"}
+	part.Metadata = map[string]any{PartMetaPurpose: PartPurposeOutput}
 
 	targetIndex := -1
 

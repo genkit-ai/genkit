@@ -30,6 +30,7 @@ import (
 
 	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
+	gtool "github.com/firebase/genkit/go/ai/tool"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"google.golang.org/genai"
 )
@@ -71,7 +72,7 @@ func TestGoogleAILive(t *testing.T) {
 	)
 
 	gablorkenTool := g.DefineTool("gablorken", "use this tool when the user asks to calculate a gablorken, carefuly inspect the user input to determine which value from the prompt corresponds to the input structure",
-		func(ctx *ai.ToolContext, input struct {
+		func(ctx context.Context, input struct {
 			Value int
 			Over  float64
 		},
@@ -81,7 +82,7 @@ func TestGoogleAILive(t *testing.T) {
 	)
 
 	answerOfEverythingTool := g.DefineTool("answerOfEverything", "use this tool when the user asks for the answer of life, the universe and everything",
-		func(ctx *ai.ToolContext, input any) (int, error) {
+		func(ctx context.Context, input any) (int, error) {
 			return 42, nil
 		},
 	)
@@ -273,7 +274,7 @@ func TestGoogleAILive(t *testing.T) {
 
 		weatherTool := g.DefineTool("weatherTool",
 			"Use this tool to get the weather report for a specific location",
-			func(ctx *ai.ToolContext, input weatherQuery) (string, error) {
+			func(ctx context.Context, input weatherQuery) (string, error) {
 				report := fmt.Sprintf("The weather in %s is sunny and 70 degrees today.", input.Location)
 				return report, nil
 			},
@@ -457,7 +458,7 @@ func TestGoogleAILive(t *testing.T) {
 			if part.ContentType == "image/png" {
 				foundMediaPart = true
 				if part.Kind != ai.PartMedia {
-					t.Errorf("expecting part to be Media type but got: %q", part.Kind)
+					t.Errorf("expecting part to be Media type but got: %v", part.Kind)
 				}
 				if part.Text == "" {
 					t.Error("empty response")
@@ -587,14 +588,10 @@ func TestGoogleAILive(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		tool := g.DefineMultipartTool("getImage", "returns a misterious image",
-			func(ctx *ai.ToolContext, input any) (*ai.MultipartToolResponse, error) {
-				return &ai.MultipartToolResponse{
-					Output: map[string]any{"status": "success"},
-					Content: []*ai.Part{
-						ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,"+img64),
-					},
-				}, nil
+		tool := g.DefineTool("getImage", "returns a misterious image",
+			func(ctx context.Context, input any) (map[string]any, error) {
+				gtool.AttachParts(ctx, ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,"+img64))
+				return map[string]any{"status": "success"}, nil
 			},
 		)
 

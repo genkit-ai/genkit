@@ -232,15 +232,15 @@ func (p *prompt) Execute(ctx context.Context, opts ...PromptExecuteOption) (*Mod
 		actionOpts.Messages = append(actionOpts.Messages, msgs...)
 	}
 
-	toolRefs := execOpts.Tools
-	if len(toolRefs) == 0 {
-		toolRefs = make([]ToolRef, 0, len(actionOpts.Tools))
+	toolArgs := execOpts.Tools
+	if len(toolArgs) == 0 {
+		toolArgs = make([]ToolArg, 0, len(actionOpts.Tools))
 		for _, toolName := range actionOpts.Tools {
-			toolRefs = append(toolRefs, ToolName(toolName))
+			toolArgs = append(toolArgs, ToolName(toolName))
 		}
 	}
 
-	toolNames, newTools, err := resolveUniqueTools(p.registry, toolRefs)
+	toolNames, newTools, err := resolveUniqueTools(p.registry, toolArgs)
 	if err != nil {
 		return nil, err
 	}
@@ -756,9 +756,9 @@ func LoadPromptFromSource(r api.Registry, source, name, namespace string) (Promp
 		return nil, fmt.Errorf("failed to render dotprompt metadata: %w", err)
 	}
 
-	toolRefs := make([]ToolRef, len(metadata.Tools))
+	toolArgs := make([]ToolArg, len(metadata.Tools))
 	for i, tool := range metadata.Tools {
-		toolRefs[i] = ToolName(tool)
+		toolArgs[i] = ToolName(tool)
 	}
 
 	promptOptMetadata := metadata.Metadata
@@ -785,7 +785,7 @@ func LoadPromptFromSource(r api.Registry, source, name, namespace string) (Promp
 				Config: (map[string]any)(metadata.Config),
 			},
 			Model: NewModelRef(metadata.Model, nil),
-			Tools: toolRefs,
+			Tools: toolArgs,
 		},
 		inputOptions: inputOptions{
 			DefaultInput: metadata.Input.Default,

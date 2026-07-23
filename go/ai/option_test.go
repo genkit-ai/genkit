@@ -400,7 +400,7 @@ func TestGenerateOptionsComplete(t *testing.T) {
 				Config: &GenerationCommonConfig{Temperature: 0.7},
 			},
 			Model:              model,
-			Tools:              []ToolRef{tool},
+			Tools:              []ToolArg{tool},
 			ToolChoice:         ToolChoiceAuto,
 			MaxTurns:           3,
 			ReturnToolRequests: &returnToolRequests,
@@ -497,7 +497,7 @@ func TestPromptOptionsComplete(t *testing.T) {
 				Config: &GenerationCommonConfig{Temperature: 0.7},
 			},
 			Model:              model,
-			Tools:              []ToolRef{tool},
+			Tools:              []ToolArg{tool},
 			ToolChoice:         ToolChoiceAuto,
 			MaxTurns:           3,
 			ReturnToolRequests: &returnToolRequests,
@@ -592,7 +592,7 @@ func TestPromptExecuteOptionsComplete(t *testing.T) {
 				Config: &GenerationCommonConfig{Temperature: 0.7},
 			},
 			Model:              model,
-			Tools:              []ToolRef{tool},
+			Tools:              []ToolArg{tool},
 			ToolChoice:         ToolChoiceAuto,
 			MaxTurns:           3,
 			ReturnToolRequests: &returnToolRequests,
@@ -651,11 +651,7 @@ func (t *mockTool) Definition() *ToolDefinition {
 	return &ToolDefinition{Name: t.name}
 }
 
-func (t *mockTool) RunRaw(ctx context.Context, input any) (any, error) {
-	return nil, nil
-}
-
-func (t *mockTool) RunRawMultipart(ctx context.Context, input any) (*MultipartToolResponse, error) {
+func (t *mockTool) RunRaw(ctx context.Context, input any) (*MultipartToolResponse, error) {
 	return nil, nil
 }
 

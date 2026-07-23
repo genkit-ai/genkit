@@ -36,9 +36,9 @@ type InputOutput struct {
 	Text string `json:"text"`
 }
 
-func testTool(reg api.Registry, name string) Tool {
+func testTool(reg api.Registry, name string) AnyTool {
 	return DefineTool(reg, name, "use when need to execute a test",
-		func(ctx *ToolContext, input struct {
+		func(ctx context.Context, input struct {
 			Test string
 		},
 		) (string, error) {
@@ -236,7 +236,7 @@ func TestValidPrompt(t *testing.T) {
 		promptFn       PromptFn
 		messages       []*Message
 		messagesFn     MessagesFn
-		tools          []ToolRef
+		tools          []ToolArg
 		config         *GenerationCommonConfig
 		inputType      any
 		input          any
@@ -456,7 +456,7 @@ func TestValidPrompt(t *testing.T) {
 			inputType:  HelloPromptInput{},
 			systemText: "say hello",
 			promptText: "my name is foo",
-			tools:      []ToolRef{testTool(reg, "testTool")},
+			tools:      []ToolArg{testTool(reg, "testTool")},
 			input:      HelloPromptInput{Name: "foo"},
 			executeOptions: []PromptExecuteOption{
 				WithInput(HelloPromptInput{Name: "foo"}),
@@ -500,7 +500,7 @@ func TestValidPrompt(t *testing.T) {
 						},
 						OutputSchema: map[string]any{"type": string("string")},
 						Metadata: map[string]any{
-							"multipart": false,
+							"multipart": true,
 						},
 					},
 				},
@@ -550,7 +550,7 @@ func TestValidPrompt(t *testing.T) {
 			inputType:  HelloPromptInput{},
 			systemText: "say hello",
 			promptText: "my name is foo",
-			tools:      []ToolRef{testTool(reg, "promptTool")},
+			tools:      []ToolArg{testTool(reg, "promptTool")},
 			input:      HelloPromptInput{Name: "foo"},
 			executeOptions: []PromptExecuteOption{
 				WithInput(HelloPromptInput{Name: "foo"}),
@@ -595,7 +595,7 @@ func TestValidPrompt(t *testing.T) {
 						},
 						OutputSchema: map[string]any{"type": string("string")},
 						Metadata: map[string]any{
-							"multipart": false,
+							"multipart": true,
 						},
 					},
 				},

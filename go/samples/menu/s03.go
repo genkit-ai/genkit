@@ -80,7 +80,7 @@ Do you have any questions about the menu?`),
 		}),
 	)
 
-	menuData, err := menu(&ai.ToolContext{Context: context.Background()}, nil)
+	menuData, err := menu(context.Background(), nil)
 	if err != nil {
 		return err
 	}

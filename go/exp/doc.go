@@ -26,10 +26,6 @@ can churn without touching genkit's stable namespace. It currently provides:
     stateful, multi-turn conversational action built on bidirectional streaming;
     serve one with [genkit.Handler] or the route builders below.
 
-  - Tool constructors with a plain context.Context signature: [DefineTool] and
-    [DefineInterruptibleTool] (typed interrupt/resume). These complement the
-    stable [genkit.Genkit.DefineTool], whose function instead receives an ai.ToolContext.
-
   - An HTTP route layout for serving agents and flows: the [Route] value and
     the [AgentRoutes] / [AllAgentRoutes] / [FlowRoutes] / [AllFlowRoutes]
     builders. Range over the routes and wire each onto an [http.ServeMux] (or

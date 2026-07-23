@@ -392,13 +392,7 @@ func toAnthropicParts(parts []*ai.Part) ([]anthropic.ContentBlockParamUnion, err
 			}
 			blocks = append(blocks, anthropic.NewToolResultBlock(toolResp.Ref, string(output), false))
 		case p.IsReasoning():
-			signature := []byte{}
-			if p.Metadata != nil {
-				if sig, ok := p.Metadata["signature"].([]byte); ok {
-					signature = sig
-				}
-			}
-			blocks = append(blocks, anthropic.NewThinkingBlock(string(signature), p.Text))
+			blocks = append(blocks, anthropic.NewThinkingBlock(string(p.ThoughtSignature()), p.Text))
 		default:
 			return nil, errors.New("unknown part type in the request")
 		}

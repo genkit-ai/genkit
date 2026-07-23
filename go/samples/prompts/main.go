@@ -221,7 +221,7 @@ func PromptWithMultiMessage(ctx context.Context, g *genkit.Genkit) {
 
 func PromptWithTool(ctx context.Context, g *genkit.Genkit) {
 	gablorkenTool := g.DefineTool("gablorken", "use when need to calculate a gablorken",
-		func(ctx *ai.ToolContext, input struct {
+		func(ctx context.Context, input struct {
 			Value float64
 			Over  float64
 		},
@@ -231,7 +231,7 @@ func PromptWithTool(ctx context.Context, g *genkit.Genkit) {
 	)
 
 	answerOfEverythingTool := g.DefineTool("answerOfEverything", "use this tool when the user asks for the answer of life, the universe and everything",
-		func(ctx *ai.ToolContext, input any) (int, error) {
+		func(ctx context.Context, input any) (int, error) {
 			return 42, nil
 		},
 	)

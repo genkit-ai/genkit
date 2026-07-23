@@ -51,7 +51,7 @@ func TestVertexAILive(t *testing.T) {
 	embedder := googlegenai.VertexAIEmbedder(g, "gemini-embedding-001")
 
 	gablorkenTool := g.DefineTool("gablorken", "use this tool when the user asks to calculate a gablorken",
-		func(ctx *ai.ToolContext, input struct {
+		func(ctx context.Context, input struct {
 			Value float64
 			Over  float64
 		},
@@ -288,7 +288,7 @@ func TestVertexAILive(t *testing.T) {
 			if part.ContentType == "image/png" {
 				foundMediaPart = true
 				if part.Kind != ai.PartMedia {
-					t.Errorf("expecting part to be Media type but got: %q", part.Kind)
+					t.Errorf("expecting part to be Media type but got: %v", part.Kind)
 				}
 				if part.Text == "" {
 					t.Error("empty response")

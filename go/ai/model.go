@@ -360,13 +360,13 @@ func augmentWithContext(modelOpts *ModelOptions, augOpts *AugmentWithContextOpti
 			// if there is already a context part, no-op
 			contextPartIndex := -1
 			for i, part := range userMessage.Content {
-				if part.Metadata != nil && part.Metadata["purpose"] == "context" {
+				if part.Metadata != nil && part.Metadata[PartMetaPurpose] == PartPurposeContext {
 					contextPartIndex = i
 					break
 				}
 			}
 
-			if contextPartIndex >= 0 && userMessage.Content[contextPartIndex].Metadata["pending"] == nil {
+			if contextPartIndex >= 0 && userMessage.Content[contextPartIndex].Metadata[PartMetaPending] == nil {
 				return next(ctx, input, cb)
 			}
 
@@ -376,16 +376,12 @@ func augmentWithContext(modelOpts *ModelOptions, augOpts *AugmentWithContextOpti
 			}
 			out += "\n"
 
+			contextPart := NewTextPart(out)
+			contextPart.Metadata = map[string]any{PartMetaPurpose: PartPurposeContext}
 			if contextPartIndex >= 0 {
-				userMessage.Content[contextPartIndex] = &Part{
-					Text:     out,
-					Metadata: map[string]any{"purpose": "context"},
-				}
+				userMessage.Content[contextPartIndex] = contextPart
 			} else {
-				userMessage.Content = append(userMessage.Content, &Part{
-					Text:     out,
-					Metadata: map[string]any{"purpose": "context"},
-				})
+				userMessage.Content = append(userMessage.Content, contextPart)
 			}
 			return next(ctx, input, cb)
 		}

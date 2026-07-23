@@ -30,7 +30,7 @@ type Hooks struct {
 	// Tools are additional tools to register during the generation this
 	// middleware is attached to. They are available to the model alongside
 	// any user-supplied tools.
-	Tools []Tool
+	Tools []AnyTool
 	// WrapGenerate wraps each iteration of the tool loop. It sees the
 	// accumulated request, the iteration index, and the streaming callback.
 	// A single Generate() with N tool-call turns invokes this hook N+1 times.
@@ -41,7 +41,10 @@ type Hooks struct {
 	// WrapTool wraps each tool execution. It may be called concurrently when
 	// multiple tools execute in parallel for the same Generate() call; any
 	// state closed over from the enclosing scope that this hook mutates must
-	// be guarded with sync primitives.
+	// be guarded with sync primitives. Pass the received params through to
+	// next (mutate its fields rather than replacing the struct): the engine
+	// carries per-call state on it, e.g. to attribute short-circuits in
+	// traces.
 	WrapTool func(ctx context.Context, params *ToolParams, next ToolNext) (*MultipartToolResponse, error)
 }
 
@@ -77,7 +80,12 @@ type ToolParams struct {
 	// Request is the tool request about to be executed.
 	Request *ToolRequest
 	// Tool is the resolved tool being called.
-	Tool Tool
+	Tool AnyTool
+
+	// ran records whether the innermost runner actually executed the tool,
+	// letting the engine attribute hook short-circuits (interrupts, cached
+	// responses) to the tool in traces.
+	ran bool
 }
 
 // GenerateNext is the next function in the WrapGenerate hook chain.

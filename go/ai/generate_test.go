@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/registry"
 	test_utils "github.com/firebase/genkit/go/tests/utils"
 	"github.com/google/go-cmp/cmp"
@@ -83,7 +84,7 @@ var (
 
 // with tools
 var gablorkenTool = DefineTool(r, "gablorken", "use when need to calculate a gablorken",
-	func(ctx *ToolContext, input struct {
+	func(ctx context.Context, input struct {
 		Value float64
 		Over  float64
 	},
@@ -98,7 +99,7 @@ func TestStreamingChunksHaveRoleAndIndex(t *testing.T) {
 	ctx := context.Background()
 
 	convertTempTool := DefineTool(r, "convertTemp", "converts temperature",
-		func(ctx *ToolContext, input struct {
+		func(ctx context.Context, input struct {
 			From        string
 			To          string
 			Temperature float64
@@ -235,9 +236,8 @@ func TestGenerate(t *testing.T) {
 					Content: []*Part{
 						NewTextPart("You are a helpful assistant."),
 						{
-							ContentType: "plain/text",
-							Text:        "ignored (conformance message)",
-							Metadata:    map[string]any{"purpose": string("output")},
+							Text:     "ignored (conformance message)",
+							Metadata: map[string]any{"purpose": string("output")},
 						},
 					},
 				},
@@ -276,7 +276,7 @@ func TestGenerate(t *testing.T) {
 					Name:         "gablorken",
 					OutputSchema: map[string]any{"type": string("number")},
 					Metadata: map[string]any{
-						"multipart": false,
+						"multipart": true,
 					},
 				},
 			},
@@ -327,12 +327,10 @@ func TestGenerate(t *testing.T) {
 
 	t.Run("handles tool interrupts", func(t *testing.T) {
 		interruptTool := DefineTool(r, "interruptor", "always interrupts",
-			func(ctx *ToolContext, input any) (any, error) {
-				return nil, ctx.Interrupt(&InterruptOptions{
-					Metadata: map[string]any{
-						"reason": "test interrupt",
-					},
-				})
+			func(ctx context.Context, input any) (any, error) {
+				return nil, &InterruptError{Data: map[string]any{
+					"reason": "test interrupt",
+				}}
 			},
 		)
 
@@ -377,17 +375,17 @@ func TestGenerate(t *testing.T) {
 			t.Fatalf("expected 1 content part, got %d", len(res.Message.Content))
 		}
 
-		metadata := res.Message.Content[0].Metadata
-		if metadata == nil {
-			t.Fatal("expected metadata in content part")
+		it := res.Message.Content[0].Interrupt
+		if it == nil {
+			t.Fatal("expected interrupt state on content part")
 		}
 
-		interrupt, ok := metadata["interrupt"].(map[string]any)
+		data, ok := it.Data.(map[string]any)
 		if !ok {
-			t.Fatal("expected interrupt metadata")
+			t.Fatalf("interrupt data = %T, want map[string]any", it.Data)
 		}
 
-		reason, ok := interrupt["reason"].(string)
+		reason, ok := data["reason"].(string)
 		if !ok || reason != "test interrupt" {
 			t.Errorf("expected interrupt reason 'test interrupt', got %v", reason)
 		}
@@ -599,7 +597,7 @@ func TestGenerate(t *testing.T) {
 	t.Run("registers dynamic tools", func(t *testing.T) {
 		// Create a tool that is NOT registered in the global registry
 		dynamicTool := NewTool("dynamicTestTool", "a tool that is dynamically registered",
-			func(ctx *ToolContext, input struct {
+			func(ctx context.Context, input struct {
 				Message string
 			},
 			) (string, error) {
@@ -690,12 +688,12 @@ func TestGenerate(t *testing.T) {
 	t.Run("handles duplicate dynamic tools", func(t *testing.T) {
 		// Create two tools with the same name
 		dynamicTool1 := NewTool("duplicateTool", "first tool",
-			func(ctx *ToolContext, input any) (string, error) {
+			func(ctx context.Context, input any) (string, error) {
 				return "tool1", nil
 			},
 		)
 		dynamicTool2 := NewTool("duplicateTool", "second tool",
-			func(ctx *ToolContext, input any) (string, error) {
+			func(ctx context.Context, input any) (string, error) {
 				return "tool2", nil
 			},
 		)
@@ -824,287 +822,6 @@ func errorContains(t *testing.T, err error, want string) {
 	} else if !strings.Contains(err.Error(), want) {
 		t.Errorf("got error message %q, want it to contain %q", err, want)
 	}
-}
-
-type conditionalToolInput struct {
-	Value     string
-	Interrupt bool
-}
-
-type resumableToolInput struct {
-	Action string
-	Data   string
-}
-
-func TestToolInterruptsAndResume(t *testing.T) {
-	conditionalTool := DefineTool(r, "conditional", "tool that may interrupt based on input",
-		func(ctx *ToolContext, input conditionalToolInput) (string, error) {
-			if input.Interrupt {
-				return "", ctx.Interrupt(&InterruptOptions{
-					Metadata: map[string]any{
-						"reason":      "user_intervention_required",
-						"value":       input.Value,
-						"interrupted": true,
-					},
-				})
-			}
-			return fmt.Sprintf("processed: %s", input.Value), nil
-		},
-	)
-
-	resumableTool := DefineTool(r, "resumable", "tool that can be resumed",
-		func(ctx *ToolContext, input resumableToolInput) (string, error) {
-			if ctx.Resumed != nil {
-				resumedData, ok := ctx.Resumed["data"].(string)
-				if ok {
-					return fmt.Sprintf("resumed with: %s, original: %s", resumedData, input.Data), nil
-				}
-				return fmt.Sprintf("resumed: %s", input.Data), nil
-			}
-			return fmt.Sprintf("first run: %s", input.Data), nil
-		},
-	)
-
-	info := &ModelOptions{
-		Supports: &ModelSupports{
-			Multiturn: true,
-			Tools:     true,
-		},
-	}
-
-	toolModel := DefineModel(r, "test/toolmodel", info,
-		func(ctx context.Context, mr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
-			return &ModelResponse{
-				Request: mr,
-				Message: &Message{
-					Role: RoleModel,
-					Content: []*Part{
-						NewTextPart("I need to use some tools."),
-						NewToolRequestPart(&ToolRequest{
-							Name: "conditional",
-							Ref:  "tool1",
-							Input: map[string]any{
-								"Value":     "test_data",
-								"Interrupt": true,
-							},
-						}),
-						NewToolRequestPart(&ToolRequest{
-							Name: "resumable",
-							Ref:  "tool2",
-							Input: map[string]any{
-								"Action": "process",
-								"Data":   "initial_data",
-							},
-						}),
-					},
-				},
-			}, nil
-		})
-
-	t.Run("basic interrupt flow", func(t *testing.T) {
-		res, err := Generate(context.Background(), r,
-			WithModel(toolModel),
-			WithPrompt("use tools"),
-			WithTools(conditionalTool, resumableTool),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if res.FinishReason != "interrupted" {
-			t.Errorf("expected finish reason 'interrupted', got %q", res.FinishReason)
-		}
-
-		if len(res.Message.Content) != 3 {
-			t.Fatalf("expected 3 content parts, got %d", len(res.Message.Content))
-		}
-
-		interruptedPart := res.Message.Content[1]
-		if !interruptedPart.IsToolRequest() {
-			t.Fatal("expected second part to be a tool request")
-		}
-
-		interruptMeta, ok := interruptedPart.Metadata["interrupt"].(map[string]any)
-		if !ok {
-			t.Fatal("expected interrupt metadata in tool request")
-		}
-
-		if reason, ok := interruptMeta["reason"].(string); !ok || reason != "user_intervention_required" {
-			t.Errorf("expected interrupt reason 'user_intervention_required', got %v", reason)
-		}
-	})
-
-	t.Run("tool.Respond functionality", func(t *testing.T) {
-		res, err := Generate(context.Background(), r,
-			WithModel(toolModel),
-			WithPrompt("use tools"),
-			WithTools(conditionalTool, resumableTool),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		interruptedPart := res.Message.Content[1]
-
-		responsePart := conditionalTool.Respond(interruptedPart, "manual_response_data", &RespondOptions{
-			Metadata: map[string]any{
-				"manual": true,
-				"source": "user",
-			},
-		})
-
-		if !responsePart.IsToolResponse() {
-			t.Fatal("expected response part to be a tool response")
-		}
-
-		if responsePart.ToolResponse.Name != "conditional" {
-			t.Errorf("expected tool response name 'conditional', got %q", responsePart.ToolResponse.Name)
-		}
-
-		if responsePart.ToolResponse.Ref != "tool1" {
-			t.Errorf("expected tool response ref 'tool1', got %q", responsePart.ToolResponse.Ref)
-		}
-
-		if responsePart.ToolResponse.Output != "manual_response_data" {
-			t.Errorf("expected output 'manual_response_data', got %v", responsePart.ToolResponse.Output)
-		}
-
-		interruptResponseMeta, ok := responsePart.Metadata["interruptResponse"].(map[string]any)
-		if !ok {
-			t.Fatal("expected interruptResponse metadata")
-		}
-
-		if manual, ok := interruptResponseMeta["manual"].(bool); !ok || !manual {
-			t.Errorf("expected manual metadata to be true")
-		}
-	})
-
-	t.Run("tool.Restart functionality", func(t *testing.T) {
-		res, err := Generate(context.Background(), r,
-			WithModel(toolModel),
-			WithPrompt("use tools"),
-			WithTools(conditionalTool, resumableTool),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		interruptedPart := res.Message.Content[1]
-
-		newInput := conditionalToolInput{
-			Value:     "new_test_data",
-			Interrupt: false,
-		}
-		restartPart := conditionalTool.Restart(interruptedPart, &RestartOptions{
-			ReplaceInput: newInput,
-			ResumedMetadata: map[string]any{
-				"data":   "resumed_data",
-				"source": "restart",
-			},
-		})
-
-		if !restartPart.IsToolRequest() {
-			t.Fatal("expected restart part to be a tool request")
-		}
-
-		if restartPart.ToolRequest.Name != "conditional" {
-			t.Errorf("expected tool request name 'conditional', got %q", restartPart.ToolRequest.Name)
-		}
-
-		replacedInput, ok := restartPart.ToolRequest.Input.(conditionalToolInput)
-		if !ok {
-			t.Fatalf("expected input to be conditionalInput, got %T", restartPart.ToolRequest.Input)
-		}
-
-		if replacedInput.Value != "new_test_data" {
-			t.Errorf("expected new input value 'new_test_data', got %v", replacedInput.Value)
-		}
-
-		if replacedInput.Interrupt != false {
-			t.Errorf("expected interrupt to be false, got %v", replacedInput.Interrupt)
-		}
-
-		if _, hasInterrupt := restartPart.Metadata["interrupt"]; hasInterrupt {
-			t.Error("expected interrupt metadata to be removed")
-		}
-
-		resumedMeta, ok := restartPart.Metadata["resumed"].(map[string]any)
-		if !ok {
-			t.Fatal("expected resumed metadata")
-		}
-
-		if resumedMeta["data"] != "resumed_data" {
-			t.Errorf("expected resumed data 'resumed_data', got %v", resumedMeta["data"])
-		}
-	})
-
-	t.Run("resume with respond directive", func(t *testing.T) {
-		res, err := Generate(context.Background(), r,
-			WithModel(toolModel),
-			WithPrompt("use tools"),
-			WithTools(conditionalTool, resumableTool),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		interruptedPart := res.Message.Content[1]
-		responsePart := conditionalTool.Respond(interruptedPart, "user_provided_response", nil)
-
-		history := res.History()
-		resumeRes, err := Generate(context.Background(), r,
-			WithModel(NewModelRef("test/echo", nil)),
-			WithMessages(history...),
-			WithTools(conditionalTool, resumableTool),
-			WithToolResponses(responsePart),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if resumeRes.FinishReason == "interrupted" {
-			t.Error("expected generation to not be interrupted after responding")
-		}
-	})
-
-	t.Run("resume with restart directive", func(t *testing.T) {
-		res, err := Generate(context.Background(), r,
-			WithModel(toolModel),
-			WithPrompt("use tools"),
-			WithTools(conditionalTool, resumableTool),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		interruptedPart := res.Message.Content[1]
-
-		newInput := conditionalToolInput{
-			Value:     "restarted_data",
-			Interrupt: false,
-		}
-		restartPart := conditionalTool.Restart(interruptedPart, &RestartOptions{
-			ReplaceInput: newInput,
-			ResumedMetadata: map[string]any{
-				"data": "restart_context",
-			},
-		})
-
-		history := res.History()
-		resumeRes, err := Generate(context.Background(), r,
-			WithModel(NewModelRef("test/echo", nil)),
-			WithMessages(history...),
-			WithTools(conditionalTool, resumableTool),
-			WithToolRestarts(restartPart),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if resumeRes.FinishReason == "interrupted" {
-			t.Error("expected generation to not be interrupted after restarting")
-		}
-	})
 }
 
 func TestResourceProcessing(t *testing.T) {
@@ -1404,88 +1121,54 @@ func TestModelResponseOutput(t *testing.T) {
 	})
 }
 
-func TestMultipartTools(t *testing.T) {
-	t.Run("define multipart tool registers as tool.v2 only", func(t *testing.T) {
-		r := registry.New()
-
-		DefineMultipartTool(r, "multipartTest", "a multipart tool",
-			func(ctx *ToolContext, input struct{ Query string }) (*MultipartToolResponse, error) {
-				return &MultipartToolResponse{
-					Output:  "main output",
-					Content: []*Part{NewTextPart("content part 1")},
-				}, nil
-			},
-		)
-
-		// Should be found via LookupTool
-		tool := LookupTool(r, "multipartTest")
-		if tool == nil {
-			t.Fatal("expected multipart tool to be found via LookupTool")
+func TestMultipartToolResponses(t *testing.T) {
+	// attachPart mimics tool.AttachParts from within package ai tests (the
+	// ai/tool package cannot be imported here without a cycle).
+	attachPart := func(ctx context.Context, p *Part) {
+		if sink := base.ToolPartSinkKey.FromContext(ctx); sink != nil {
+			sink(p)
 		}
+	}
 
-		// Should be able to produce response with content
-		resp, err := tool.RunRawMultipart(context.Background(), struct{ Query string }{Query: "Q"})
-		if err != nil {
-			t.Fatalf("failed running multipart tool: %v", err)
-		}
-		if len(resp.Content) == 0 {
-			t.Error("expected tool response to have content")
-		}
-	})
-
-	t.Run("regular tool registers as both tool and tool.v2", func(t *testing.T) {
+	t.Run("tools register under tool.v2 only", func(t *testing.T) {
 		r := registry.New()
 
 		DefineTool(r, "regularTestTool", "a regular tool",
-			func(ctx *ToolContext, input struct{ Value int }) (int, error) {
+			func(ctx context.Context, input struct{ Value int }) (int, error) {
 				return input.Value * 2, nil
 			},
 		)
 
-		// Should be found via LookupTool
-		tool := LookupTool(r, "regularTestTool")
-		if tool == nil {
-			t.Fatal("expected regular tool to be found via LookupTool")
+		if LookupTool(r, "regularTestTool") == nil {
+			t.Fatal("expected tool to be found via LookupTool")
 		}
-
-		// Should produce response without content by default
-		resp, err := tool.RunRawMultipart(context.Background(), struct{ Value int }{Value: 21})
-		if err != nil {
-			t.Fatalf("failed running regular tool: %v", err)
+		if a := r.ResolveAction("/tool.v2/regularTestTool"); a == nil {
+			t.Error("expected action under /tool.v2/")
 		}
-		if len(resp.Content) > 0 {
-			t.Error("expected regular tool response to have no content")
+		if a := r.ResolveAction("/tool/regularTestTool"); a != nil {
+			t.Error("expected no legacy /tool/ registration")
 		}
 	})
 
-	t.Run("multipart tool returns metadata and content in response", func(t *testing.T) {
+	t.Run("attached parts flow through Generate to the model", func(t *testing.T) {
 		r := registry.New()
 		ConfigureFormats(r)
 		DefineGenerateAction(context.Background(), r)
 
-		multipartTool := DefineMultipartTool(r, "imageGenerator", "generates images",
-			func(ctx *ToolContext, input struct{ Prompt string }) (*MultipartToolResponse, error) {
-				return &MultipartToolResponse{
-					Output:   map[string]any{"description": "generated image"},
-					Metadata: map[string]any{"size": 1},
-					Content: []*Part{
-						NewMediaPart("image/png", "data:image/png;base64,iVBORw0..."),
-					},
-				}, nil
+		imageTool := DefineTool(r, "imageGenerator", "generates images",
+			func(ctx context.Context, input struct{ Prompt string }) (map[string]any, error) {
+				attachPart(ctx, NewMediaPart("image/png", "data:image/png;base64,iVBORw0..."))
+				return map[string]any{"description": "generated image"}, nil
 			},
 		)
 
 		// Create a model that requests the tool
-		multipartToolModel := DefineModel(r, "test/multipartToolModel", &metadata, func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
+		imageToolModel := DefineModel(r, "test/multipartToolModel", &metadata, func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
 			// Check if we already have a tool response
 			for _, msg := range gr.Messages {
 				if msg.Role == RoleTool {
 					for _, part := range msg.Content {
 						if part.IsToolResponse() {
-							// Verify the metadata and content are present
-							if len(part.Metadata) == 0 {
-								return nil, fmt.Errorf("expected tool response to have metadata")
-							}
 							if len(part.ToolResponse.Content) == 0 {
 								return nil, fmt.Errorf("expected tool response to have content")
 							}
@@ -1513,9 +1196,9 @@ func TestMultipartTools(t *testing.T) {
 		})
 
 		resp, err := Generate(context.Background(), r,
-			WithModel(multipartToolModel),
+			WithModel(imageToolModel),
 			WithPrompt("Generate an image of a cat"),
-			WithTools(multipartTool),
+			WithTools(imageTool),
 		)
 		if err != nil {
 			t.Fatalf("Generate failed: %v", err)
@@ -1526,18 +1209,18 @@ func TestMultipartTools(t *testing.T) {
 		}
 	})
 
-	t.Run("RunRawMultipart returns MultipartToolResponse for regular tool", func(t *testing.T) {
+	t.Run("RunRaw wraps plain output with nil content", func(t *testing.T) {
 		r := registry.New()
 
 		tool := DefineTool(r, "multipartWrapperTest", "test multipart wrapper",
-			func(ctx *ToolContext, input struct{ Value int }) (int, error) {
+			func(ctx context.Context, input struct{ Value int }) (int, error) {
 				return input.Value * 3, nil
 			},
 		)
 
-		resp, err := tool.RunRawMultipart(context.Background(), map[string]any{"Value": 5})
+		resp, err := tool.RunRaw(context.Background(), map[string]any{"Value": 5})
 		if err != nil {
-			t.Fatalf("RunRawMultipart failed: %v", err)
+			t.Fatalf("RunRaw failed: %v", err)
 		}
 
 		// Output should be wrapped in MultipartToolResponse
@@ -1549,27 +1232,25 @@ func TestMultipartTools(t *testing.T) {
 			t.Errorf("expected output 15, got %v", output)
 		}
 
-		// Content should be nil for regular tools
+		// Content should be nil when nothing was attached
 		if resp.Content != nil {
-			t.Errorf("expected nil content for regular tool, got %v", resp.Content)
+			t.Errorf("expected nil content, got %v", resp.Content)
 		}
 	})
 
-	t.Run("RunRawMultipart returns full response for multipart tool", func(t *testing.T) {
+	t.Run("RunRaw returns attached parts", func(t *testing.T) {
 		r := registry.New()
 
-		tool := DefineMultipartTool(r, "multipartFullTest", "test multipart",
-			func(ctx *ToolContext, input struct{ Query string }) (*MultipartToolResponse, error) {
-				return &MultipartToolResponse{
-					Output:  "result",
-					Content: []*Part{NewTextPart("additional content")},
-				}, nil
+		tool := DefineTool(r, "multipartFullTest", "test multipart",
+			func(ctx context.Context, input struct{ Query string }) (string, error) {
+				attachPart(ctx, NewTextPart("additional content"))
+				return "result", nil
 			},
 		)
 
-		resp, err := tool.RunRawMultipart(context.Background(), map[string]any{"Query": "test"})
+		resp, err := tool.RunRaw(context.Background(), map[string]any{"Query": "test"})
 		if err != nil {
-			t.Fatalf("RunRawMultipart failed: %v", err)
+			t.Fatalf("RunRaw failed: %v", err)
 		}
 
 		if resp.Output != "result" {
@@ -1929,12 +1610,10 @@ func TestGenerateDataStream(t *testing.T) {
 
 	t.Run("handles tool interrupts", func(t *testing.T) {
 		interruptTool := DefineTool(r, "streamInterruptor", "always interrupts",
-			func(ctx *ToolContext, input any) (any, error) {
-				return nil, ctx.Interrupt(&InterruptOptions{
-					Metadata: map[string]any{
-						"reason": "needs confirmation",
-					},
-				})
+			func(ctx context.Context, input any) (any, error) {
+				return nil, &InterruptError{Data: map[string]any{
+					"reason": "needs confirmation",
+				}}
 			},
 		)
 
@@ -1997,7 +1676,7 @@ func TestGenerateDataStream(t *testing.T) {
 
 	t.Run("handles returnToolRequests", func(t *testing.T) {
 		greetTool := DefineTool(r, "streamGreeter", "greets",
-			func(ctx *ToolContext, input any) (any, error) {
+			func(ctx context.Context, input any) (any, error) {
 				return "hello", nil
 			},
 		)
@@ -2210,7 +1889,7 @@ func TestModelResponseInterrupts(t *testing.T) {
 			Name:  "confirmAction",
 			Input: map[string]any{},
 		})
-		interruptPart.Metadata = map[string]any{"interrupt": true}
+		interruptPart.Interrupt = &ToolInterrupt{}
 
 		resp := &ModelResponse{
 			Message: &Message{
@@ -2383,14 +2062,14 @@ func TestGenerateNoGoroutineLeak(t *testing.T) {
 	done := make(chan struct{})
 
 	slowTool := DefineTool(r, "slow", "slow",
-		func(*ToolContext, any) (any, error) {
+		func(context.Context, any) (any, error) {
 			<-done
 			return nil, nil
 		},
 	)
 
 	failTool := DefineTool(r, "fail", "fail",
-		func(*ToolContext, any) (any, error) {
+		func(context.Context, any) (any, error) {
 			return nil, errors.New("boom")
 		},
 	)

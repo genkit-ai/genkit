@@ -27,7 +27,7 @@ import (
 )
 
 // GetActiveTools retrieves all tools available from the MCP server
-func (c *GenkitMCPClient) GetActiveTools(ctx context.Context, g *genkit.Genkit) ([]ai.Tool, error) {
+func (c *GenkitMCPClient) GetActiveTools(ctx context.Context, g *genkit.Genkit) ([]ai.AnyTool, error) {
 	if !c.IsEnabled() || c.server == nil {
 		return nil, nil
 	}
@@ -43,8 +43,8 @@ func (c *GenkitMCPClient) GetActiveTools(ctx context.Context, g *genkit.Genkit) 
 }
 
 // createTools creates Genkit tools from MCP tools
-func (c *GenkitMCPClient) createTools(mcpTools []mcp.Tool) ([]ai.Tool, error) {
-	var tools []ai.Tool
+func (c *GenkitMCPClient) createTools(mcpTools []mcp.Tool) ([]ai.AnyTool, error) {
+	var tools []ai.AnyTool
 	for _, mcpTool := range mcpTools {
 		tool, err := c.createTool(mcpTool)
 		if err != nil {
@@ -75,7 +75,7 @@ func (c *GenkitMCPClient) getInputSchema(mcpTool mcp.Tool) (map[string]any, erro
 }
 
 // createTool converts a single MCP tool to a Genkit tool
-func (c *GenkitMCPClient) createTool(mcpTool mcp.Tool) (ai.Tool, error) {
+func (c *GenkitMCPClient) createTool(mcpTool mcp.Tool) (ai.AnyTool, error) {
 	// Use namespaced tool name
 	namespacedToolName := c.GetToolNameWithNamespace(mcpTool.Name)
 
@@ -84,7 +84,7 @@ func (c *GenkitMCPClient) createTool(mcpTool mcp.Tool) (ai.Tool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get input schema for tool %s: %w", mcpTool.Name, err)
 	}
-	var tool ai.Tool
+	var tool ai.AnyTool
 	if len(inputSchema) > 0 {
 		tool = ai.NewTool(
 			namespacedToolName,
@@ -148,14 +148,12 @@ func (c *GenkitMCPClient) fetchToolsPage(ctx context.Context, cursor mcp.Cursor)
 }
 
 // createToolFunction creates a Genkit tool function that will execute the MCP tool
-func (c *GenkitMCPClient) createToolFunction(mcpTool mcp.Tool) func(*ai.ToolContext, interface{}) (interface{}, error) {
+func (c *GenkitMCPClient) createToolFunction(mcpTool mcp.Tool) func(context.Context, any) (any, error) {
 	// Capture mcpTool by value for the closure
 	currentMCPTool := mcpTool
 	client := c.server.Client
 
-	return func(toolCtx *ai.ToolContext, args interface{}) (interface{}, error) {
-		ctx := toolCtx.Context // Get context from tool context
-
+	return func(ctx context.Context, args any) (any, error) {
 		// Convert the arguments to the format expected by MCP
 		callToolArgs, err := prepareToolArguments(currentMCPTool, args)
 		if err != nil {

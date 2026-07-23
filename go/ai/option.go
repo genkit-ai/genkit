@@ -98,7 +98,7 @@ type commonGenOptions struct {
 	configOptions
 	Model              ModelArg     // Model to use.
 	MessagesFn         MessagesFn   // Function to generate messages.
-	Tools              []ToolRef    // References to tools to use.
+	Tools              []ToolArg    // References to tools to use.
 	Resources          []Resource   // Resources to be temporarily available during generation.
 	ToolChoice         ToolChoice   // Whether tool calls are required, disabled, or optional.
 	MaxTurns           int          // Maximum number of tool call iterations.
@@ -210,7 +210,7 @@ func WithMessagesFn(fn MessagesFn) CommonGenOption {
 }
 
 // WithTools sets the tools to use for the generate request.
-func WithTools(tools ...ToolRef) CommonGenOption {
+func WithTools(tools ...ToolArg) CommonGenOption {
 	return &commonGenOptions{Tools: tools}
 }
 

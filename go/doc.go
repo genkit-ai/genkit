@@ -187,7 +187,7 @@ Define tools that the model can invoke to perform actions or retrieve informatio
 
 	weatherTool := g.DefineTool("getWeather",
 		"Gets the current weather for a city",
-		func(ctx *ai.ToolContext, city string) (string, error) {
+		func(ctx context.Context, city string) (string, error) {
 			// Fetch weather data...
 			return "Sunny, 72°F", nil
 		},

@@ -37,7 +37,7 @@ import (
 	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
-	"github.com/firebase/genkit/go/ai/exp/tool"
+	"github.com/firebase/genkit/go/ai/tool"
 	genkitx "github.com/firebase/genkit/go/exp"
 )
 
@@ -85,7 +85,7 @@ func defineBankerAgent(g *genkit.Genkit) *aix.Agent[any] {
 	// result, it can pause (tool.Interrupt) to get the user's approval. Its
 	// third parameter (*Confirmation) is the resume payload — nil on the
 	// first call, populated when the client resumes.
-	genkitx.DefineInterruptibleTool(g, "transferMoney",
+	g.DefineInterruptibleTool("transferMoney",
 		"Transfers money to another account. Use when the user wants to send money.",
 		func(ctx context.Context, input TransferInput, confirm *Confirmation) (*TransferOutput, error) {
 			if confirm != nil {
@@ -132,11 +132,11 @@ func defineBankerAgent(g *genkit.Genkit) *aix.Agent[any] {
 
 // handleTransferInterrupt is the banker's InterruptHandler. It reads the
 // typed interrupt payload, asks the user through the Prompter, and returns
-// a restart part (tool.Resume) carrying their decision. Returning a resume
+// a restart part (tool.Restart) carrying their decision. Returning a resume
 // part — instead of touching the connection — is what keeps the handler
 // decoupled from the CLI's streaming loop.
 func handleTransferInterrupt(p *Prompter, part *ai.Part) (*ai.Part, error) {
-	meta, ok := tool.InterruptAs[TransferInterrupt](part)
+	meta, ok := tool.InterruptData[TransferInterrupt](part)
 	if !ok {
 		// Not our interrupt type; let the CLI report it as unresolved.
 		return nil, nil
@@ -150,17 +150,17 @@ func handleTransferInterrupt(p *Prompter, part *ai.Part) (*ai.Part, error) {
 			fmt.Sprintf("Transfer $%.2f instead", meta.Balance),
 			"Cancel the transfer") {
 		case 0:
-			return tool.Resume(part, Confirmation{Approved: true, AdjustedAmount: &meta.Balance})
+			return tool.Restart(part, ai.WithResume(Confirmation{Approved: true, AdjustedAmount: &meta.Balance}))
 		default:
-			return tool.Resume(part, Confirmation{Approved: false})
+			return tool.Restart(part, ai.WithResume(Confirmation{Approved: false}))
 		}
 
 	case "confirm_large":
 		approved := p.Confirm(fmt.Sprintf("Confirm large transfer of $%.2f to %s?", meta.Amount, meta.ToAccount))
-		return tool.Resume(part, Confirmation{Approved: approved})
+		return tool.Restart(part, ai.WithResume(Confirmation{Approved: approved}))
 
 	default:
 		p.Printf("Unrecognized approval request (%q); cancelling the transfer.\n", meta.Reason)
-		return tool.Resume(part, Confirmation{Approved: false})
+		return tool.Restart(part, ai.WithResume(Confirmation{Approved: false}))
 	}
 }

@@ -518,12 +518,12 @@ func (g *Genkit) ListFlows() []api.Action {
 	return flows
 }
 
-// ListTools returns a slice of all [ai.Tool] instances that are registered
+// ListTools returns a slice of all [ai.AnyTool] instances that are registered
 // with the Genkit instance `g`. This is useful for introspection and for
 // exposing tools to external systems like MCP servers.
-func (g *Genkit) ListTools() []ai.Tool {
+func (g *Genkit) ListTools() []ai.AnyTool {
 	acts := g.reg.ListActions()
-	tools := []ai.Tool{}
+	tools := []ai.AnyTool{}
 	for _, action := range acts {
 		tool := g.LookupTool(action.Desc().Name)
 		if tool != nil {
@@ -621,15 +621,19 @@ func (g *Genkit) LookupBackgroundModel(name string) ai.BackgroundModel {
 }
 
 // DefineTool defines a tool that can be used by models during generation,
-// registers it as a [core.Action] of type Tool, and returns an [ai.Tool].
+// registers it as a [core.Action] of type Tool, and returns an [*ai.Tool].
 // Tools allow models to interact with external systems or perform specific computations.
 //
 // The `name` is the identifier the model uses to request the tool. The `description`
 // helps the model understand when to use the tool. The function `fn` implements
-// the tool's logic, taking an [ai.ToolContext] and an input of type `In`, and
+// the tool's logic, taking a [context.Context] and an input of type `In`, and
 // returning an output of type `Out`. The input and output types determine the
 // `inputSchema` and `outputSchema` in the tool's definition, which guide the model
 // on how to provide input and interpret output.
+//
+// Use [tool.AttachParts] inside the function to return additional content
+// parts (e.g. media) alongside the output, and [tool.SendPartial] to stream
+// progress while the tool runs.
 //
 // For tools that don't need to be registered (e.g., dynamically created tools),
 // use [ai.NewTool] instead.
@@ -638,11 +642,12 @@ func (g *Genkit) LookupBackgroundModel(name string) ai.BackgroundModel {
 //
 //   - [ai.WithInputSchema]: Provide a custom JSON schema instead of inferring from the type parameter
 //   - [ai.WithInputSchemaName]: Reference a pre-registered schema by name
+//   - [ai.WithStrictSchema]: Control provider-side strict schema validation
 //
 // Example:
 //
 //	weatherTool := g.DefineTool("getWeather", "Fetches the weather for a given city",
-//		func(ctx *ai.ToolContext, city string) (string, error) {
+//		func(ctx context.Context, city string) (string, error) {
 //			// In a real scenario, call a weather API
 //			log.Printf("Tool: Fetching weather for %s", city)
 //			if city == "Paris" {
@@ -663,124 +668,87 @@ func (g *Genkit) LookupBackgroundModel(name string) ai.BackgroundModel {
 //	}
 //
 //	fmt.Println(resp.Text()) // Might output something like "The weather in Paris is Sunny, 25°C."
-func (g *Genkit) DefineTool[In, Out any](name, description string, fn ai.ToolFunc[In, Out], opts ...ai.ToolOption) *ai.ToolDef[In, Out] {
+func (g *Genkit) DefineTool[In, Out any](name, description string, fn ai.ToolFunc[In, Out], opts ...ai.ToolOption) *ai.Tool[In, Out] {
 	return ai.DefineTool(g.reg, name, description, fn, opts...)
 }
 
-// DefineToolWithInputSchema defines a tool with a custom input schema that can be used by models during generation,
-// registers it as a [core.Action] of type Tool, and returns an [*ai.ToolDef].
+// DefineInterruptibleTool defines a tool that supports typed interrupt/resume,
+// registers it as a [core.Action] of type Tool, and returns an
+// [*ai.InterruptibleTool].
 //
-// This variant of [Genkit.DefineTool] allows specifying a JSON Schema for the tool's input, providing more
-// control over input validation and model guidance. The input parameter to the tool function will be
-// of type `any` and should be validated/processed according to the schema.
+// The function receives a [context.Context], the tool input, and a resumed
+// parameter that is non-nil when the tool is being re-executed after an
+// interrupt. Inside the function, call [tool.Interrupt] to pause execution
+// and send data to the caller. The caller can inspect the interrupt with
+// [tool.InterruptData] and restart the tool with [ai.InterruptibleTool.Restart],
+// or resolve it with a pre-computed output via [ai.InterruptibleTool.Respond].
 //
-// The `name` is the identifier the model uses to request the tool. The `description` helps the model
-// understand when to use the tool. The `inputSchema` defines the expected structure and constraints
-// of the input. The function `fn` implements the tool's logic, taking an [ai.ToolContext] and an
-// input of type `any`, and returning an output of type `Out`.
+// The interrupt and resume payloads (the Res type parameter and the value
+// passed to [tool.Interrupt]) must each serialize to a JSON object, i.e. a
+// struct or a map, since they travel as structured metadata on the tool
+// request.
 //
-// Deprecated: Use [Genkit.DefineTool] with [ai.WithInputSchema] instead.
+// For tools that don't need to be registered (e.g., dynamically created tools),
+// use [ai.NewInterruptibleTool] instead.
 //
 // Example:
 //
-//	// Define a custom input schema
-//	inputSchema := map[string]any{
-//		"type": "object",
-//		"properties": map[string]any{
-//			"city": map[string]any{"type": "string"},
-//			"unit": map[string]any{
-//				"type": "string",
-//				"enum": []any{"C", "F"},
-//			},
-//		},
-//		"required": []string{"city"},
+//	type TransferInput struct {
+//		ToAccount string  `json:"toAccount"`
+//		Amount    float64 `json:"amount"`
 //	}
 //
-//	// Define the tool with the schema
-//	weatherTool := g.DefineTool("getWeather",
-//		"Fetches the weather for a given city with unit preference",
-//		func(ctx *ai.ToolContext, input any) (string, error) {
-//			// Parse and validate input
-//			data := input.(map[string]any)
-//			city := data["city"].(string)
-//			unit := "C" // default
-//			if u, ok := data["unit"].(string); ok {
-//				unit = u
+//	type TransferInterrupt struct {
+//		Reason string  `json:"reason"`
+//		Amount float64 `json:"amount"`
+//	}
+//
+//	type Confirmation struct {
+//		Approved bool `json:"approved"`
+//	}
+//
+//	transferTool := g.DefineInterruptibleTool("transfer",
+//		"Transfers money to another account.",
+//		func(ctx context.Context, input TransferInput, confirm *Confirmation) (string, error) {
+//			if confirm != nil && !confirm.Approved {
+//				return "cancelled", nil
 //			}
-//			// Implementation...
-//			return fmt.Sprintf("Weather in %s: 25°%s", city, unit), nil
-//		},
-//		ai.WithToolInputSchema(inputSchema),
-//	)
-func (g *Genkit) DefineToolWithInputSchema[Out any](name, description string, inputSchema map[string]any, fn ai.ToolFunc[any, Out]) *ai.ToolDef[any, Out] {
-	return ai.DefineTool(g.reg, name, description, fn, ai.WithInputSchema(inputSchema))
-}
-
-// DefineMultipartTool defines a multipart tool that can be used by models during generation,
-// registers it as a [core.Action] of type Tool, and returns an [*ai.ToolDef].
-// Unlike regular tools that return just an output value, multipart tools can return
-// both an output value and additional content parts (like images or other media).
-//
-// The `name` is the identifier the model uses to request the tool. The `description`
-// helps the model understand when to use the tool. The function `fn` implements
-// the tool's logic, taking an [ai.ToolContext] and an input of type `In`, and
-// returning an [ai.MultipartToolResponse] which contains both the output and optional
-// content parts.
-//
-// For multipart tools that don't need to be registered (e.g., dynamically created tools),
-// use [ai.NewMultipartTool] instead.
-//
-// # Options
-//
-//   - [ai.WithInputSchema]: Provide a custom JSON schema instead of inferring from the type parameter
-//   - [ai.WithInputSchemaName]: Reference a pre-registered schema by name
-//
-// Example:
-//
-//	type ImageGenInput struct {
-//		Prompt string `json:"prompt"`
-//		Style  string `json:"style,omitempty"`
-//	}
-//
-//	imageGenTool := g.DefineMultipartTool("generateImage", "Generates an image from a text prompt",
-//		func(ctx *ai.ToolContext, input ImageGenInput) (*ai.MultipartToolResponse, error) {
-//			// In a real scenario, call an image generation API
-//			log.Printf("Tool: Generating image for prompt: %s", input.Prompt)
-//
-//			// Generate image bytes (placeholder)
-//			imageBytes := []byte{...}
-//
-//			return &ai.MultipartToolResponse{
-//				Output: map[string]any{
-//					"status": "success",
-//					"prompt": input.Prompt,
-//				},
-//				Content: []*ai.Part{
-//					ai.NewMediaPart("image/png", string(imageBytes)),
-//				},
-//			}, nil
+//			if confirm == nil && input.Amount > 100 {
+//				// Pause and ask the caller for confirmation.
+//				return "", tool.Interrupt(TransferInterrupt{
+//					Reason: "large_amount",
+//					Amount: input.Amount,
+//				})
+//			}
+//			return "completed", nil
 //		},
 //	)
 //
-//	// Use the tool in a generation request:
-//	resp, err := g.Generate(ctx,
-//		ai.WithPrompt("Create an image of a sunset over mountains"),
-//		ai.WithTools(imageGenTool),
+//	// In a generate loop, handle the interrupt:
+//	resp, _ := g.Generate(ctx,
+//		ai.WithPrompt("Transfer $200 to Alice"),
+//		ai.WithTools(transferTool),
 //	)
-//	if err != nil {
-//		log.Fatalf("Generate failed: %v", err)
+//	if resp.FinishReason == ai.FinishReasonInterrupted {
+//		for _, interrupt := range resp.Interrupts() {
+//			// Ask the user for confirmation, then resume.
+//			restart, _ := transfer.Restart(interrupt, &Confirmation{Approved: true})
+//			resp, _ = g.Generate(ctx,
+//				ai.WithMessages(resp.History()...),
+//				ai.WithTools(transferTool),
+//				ai.WithToolRestarts(restart),
+//			)
+//		}
 //	}
-//
-//	fmt.Println(resp.Text())
-func (g *Genkit) DefineMultipartTool[In any](name, description string, fn ai.MultipartToolFunc[In], opts ...ai.ToolOption) *ai.ToolDef[In, *ai.MultipartToolResponse] {
-	return ai.DefineMultipartTool(g.reg, name, description, fn, opts...)
+func (g *Genkit) DefineInterruptibleTool[In, Out, Res any](name, description string, fn ai.InterruptibleToolFunc[In, Out, Res], opts ...ai.ToolOption) *ai.InterruptibleTool[In, Out, Res] {
+	return ai.DefineInterruptibleTool(g.reg, name, description, fn, opts...)
 }
 
 // LookupTool retrieves a registered tool by its name.
 // It returns the tool instance if found, or `nil` if no tool with the
 // given name is registered (e.g., via [Genkit.DefineTool]).
 // Since the types are not known at lookup time, it returns a type-erased tool.
-func (g *Genkit) LookupTool(name string) ai.Tool {
+func (g *Genkit) LookupTool(name string) ai.AnyTool {
 	return ai.LookupTool(g.reg, name)
 }
 

@@ -20,6 +20,7 @@ import (
 
 	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/ai/tool"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"google.golang.org/genai"
 )
@@ -32,18 +33,16 @@ func main() {
 		log.Fatalf("failed to initialize Genkit: %v", err)
 	}
 
-	// Define a multipart tool.
-	// This simulates a tool that takes a screenshot
-	screenshot := g.DefineMultipartTool("screenshot", "Takes a screenshot",
-		func(ctx *ai.ToolContext, input any) (*ai.MultipartToolResponse, error) {
+	// Define a tool that returns media alongside its output.
+	// This simulates a tool that takes a screenshot: the structured output
+	// reports success, and tool.AttachParts adds the image itself to the
+	// tool's multipart response.
+	screenshot := g.DefineTool("screenshot", "Takes a screenshot",
+		func(ctx context.Context, input any) (map[string]any, error) {
 			rectangle := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHIAAABUAQMAAABk5vEVAAAABlBMVEX///8AAABVwtN+" +
 				"AAAAI0lEQVR4nGNgGHaA/z8UHIDwOWASDqP8Uf7w56On/1FAQwAAVM0exw1hqwkAAAAASUVORK5CYII="
-			return &ai.MultipartToolResponse{
-				Output: map[string]any{"success": true},
-				Content: []*ai.Part{
-					ai.NewMediaPart("image/png", rectangle),
-				},
-			}, nil
+			tool.AttachParts(ctx, ai.NewMediaPart("image/png", rectangle))
+			return map[string]any{"success": true}, nil
 		},
 	)
 

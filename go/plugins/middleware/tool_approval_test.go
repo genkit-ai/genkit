@@ -32,10 +32,10 @@ func defineToolModel(t *testing.T, r *registry.Registry, name string, fn ai.Mode
 	}, fn)
 }
 
-func defineTool(t *testing.T, r api.Registry, name string) ai.Tool {
+func defineTool(t *testing.T, r api.Registry, name string) ai.AnyTool {
 	t.Helper()
 	return ai.DefineTool(r, name, "test tool",
-		func(ctx *ai.ToolContext, input struct {
+		func(ctx context.Context, input struct {
 			V string `json:"v"`
 		}) (string, error) {
 			return "result:" + input.V, nil
@@ -223,7 +223,7 @@ func TestToolApprovalResumedCallRuns(t *testing.T) {
 	var restarts []*ai.Part
 	for _, p := range resp.Interrupts() {
 		restart := ai.NewToolRequestPart(p.ToolRequest)
-		restart.Metadata = map[string]any{"resumed": map[string]any{"toolApproved": true}}
+		restart.Restart = &ai.ToolRestart{Resume: Approval{ToolApproved: true}}
 		restarts = append(restarts, restart)
 	}
 
@@ -289,7 +289,7 @@ func TestToolApprovalResumedWithoutApprovalInterrupts(t *testing.T) {
 	var restarts []*ai.Part
 	for _, p := range resp.Interrupts() {
 		restart := ai.NewToolRequestPart(p.ToolRequest)
-		restart.Metadata = map[string]any{"resumed": true}
+		restart.Restart = &ai.ToolRestart{}
 		restarts = append(restarts, restart)
 	}
 

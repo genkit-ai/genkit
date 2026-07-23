@@ -42,7 +42,7 @@ type GenkitMCPServer struct {
 	mcpServer *server.MCPServer
 
 	// Discovered actions from Genkit registry
-	toolActions     []ai.Tool
+	toolActions     []ai.AnyTool
 	resourceActions []api.Action
 	actionsResolved bool
 }
@@ -108,7 +108,7 @@ func (s *GenkitMCPServer) setup() error {
 }
 
 // discoverAndCategorizeActions discovers all actions from Genkit registry and categorizes them
-func (s *GenkitMCPServer) discoverAndCategorizeActions() ([]ai.Tool, []api.Action, error) {
+func (s *GenkitMCPServer) discoverAndCategorizeActions() ([]ai.AnyTool, []api.Action, error) {
 	// Use the existing List functions which properly handle the registry access
 	toolActions := s.genkit.ListTools()
 	resources := s.genkit.ListResources()
@@ -127,7 +127,7 @@ func (s *GenkitMCPServer) discoverAndCategorizeActions() ([]ai.Tool, []api.Actio
 }
 
 // convertGenkitToolToMCP converts a Genkit tool to MCP format
-func (s *GenkitMCPServer) convertGenkitToolToMCP(tool ai.Tool) mcp.Tool {
+func (s *GenkitMCPServer) convertGenkitToolToMCP(tool ai.AnyTool) mcp.Tool {
 	def := tool.Definition()
 
 	// Start with basic options
@@ -159,16 +159,16 @@ func (s *GenkitMCPServer) convertGenkitToolToMCP(tool ai.Tool) mcp.Tool {
 }
 
 // createToolHandler creates an MCP tool handler for a Genkit tool
-func (s *GenkitMCPServer) createToolHandler(tool ai.Tool) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *GenkitMCPServer) createToolHandler(tool ai.AnyTool) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Execute the Genkit tool
-		result, err := tool.RunRaw(ctx, request.Params.Arguments)
+		resp, err := tool.RunRaw(ctx, request.Params.Arguments)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		// Convert result to MCP format
-		switch v := result.(type) {
+		switch v := resp.Output.(type) {
 		case string:
 			return mcp.NewToolResultText(v), nil
 		case nil:

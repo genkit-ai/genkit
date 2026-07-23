@@ -49,10 +49,10 @@ func createMCPServer() {
 
 	// Define a tool that generates creative content (this will be auto-exposed via MCP)
 	g.DefineTool("genkit-brainstorm", "Generate creative ideas about a topic",
-		func(ctx *ai.ToolContext, input struct {
+		func(ctx context.Context, input struct {
 			Topic string `json:"topic" description:"The topic to brainstorm about"`
 		}) (map[string]interface{}, error) {
-			logger.FromContext(ctx.Context).Debug("Executing genkit-brainstorm tool", "topic", input.Topic)
+			logger.FromContext(ctx).Debug("Executing genkit-brainstorm tool", "topic", input.Topic)
 
 			ideas := fmt.Sprintf(`Creative Ideas for "%s":
 
@@ -206,15 +206,15 @@ func mcpSelfConnection() {
 	logger.FromContext(ctx).Info("")
 
 	// Convert tools to refs
-	var toolRefs []ai.ToolRef
+	var toolArgs []ai.ToolArg
 	for _, tool := range tools {
-		toolRefs = append(toolRefs, tool)
+		toolArgs = append(toolArgs, tool)
 	}
 
 	// Guided demos
 	runResourceDemo(ctx, g, resources)
 	logger.FromContext(ctx).Info("")
-	runToolDemo(ctx, g, toolRefs)
+	runToolDemo(ctx, g, toolArgs)
 	logger.FromContext(ctx).Info("")
 
 	logger.FromContext(ctx).Info("MCP demos finished")
@@ -269,7 +269,7 @@ func runResourceDemo(ctx context.Context, g *genkit.Genkit, resources []ai.Resou
 }
 
 // runToolDemo demonstrates enabling and calling a tool from the MCP server.
-func runToolDemo(ctx context.Context, g *genkit.Genkit, toolRefs []ai.ToolRef) {
+func runToolDemo(ctx context.Context, g *genkit.Genkit, toolArgs []ai.ToolArg) {
 	// Explain
 	logger.FromContext(ctx).Info("")
 	logger.FromContext(ctx).Info("Tool demo: Use a tool from our own MCP server")
@@ -277,10 +277,10 @@ func runToolDemo(ctx context.Context, g *genkit.Genkit, toolRefs []ai.ToolRef) {
 
 	// List tools we are enabling
 	toolNames := []string{}
-	for _, t := range toolRefs {
+	for _, t := range toolArgs {
 		toolNames = append(toolNames, t.Name())
 	}
-	logger.FromContext(ctx).Info("tool_demo: starting", "tool_choice", string(ai.ToolChoiceAuto), "tool_count", len(toolRefs), "tools", toolNames)
+	logger.FromContext(ctx).Info("tool_demo: starting", "tool_choice", string(ai.ToolChoiceAuto), "tool_count", len(toolArgs), "tools", toolNames)
 	for _, n := range toolNames {
 		logger.FromContext(ctx).Info("tool_demo: tool_enabled", "name", n)
 	}
@@ -290,7 +290,7 @@ func runToolDemo(ctx context.Context, g *genkit.Genkit, toolRefs []ai.ToolRef) {
 		ai.WithMessages(ai.NewUserMessage(
 			ai.NewTextPart("Use the brainstorm tool to generate creative ideas for \"AI-powered cooking assistant\""),
 		)),
-		ai.WithTools(toolRefs...),
+		ai.WithTools(toolArgs...),
 		ai.WithToolChoice(ai.ToolChoiceAuto),
 	)
 	if err != nil {

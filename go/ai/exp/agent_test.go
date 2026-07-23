@@ -2056,14 +2056,14 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 
 	// Define two tools so the model can call them across multiple rounds.
 	ai.DefineTool(reg, "greet", "returns a greeting",
-		func(ctx *ai.ToolContext, input struct {
+		func(ctx context.Context, input struct {
 			Name string `json:"name"`
 		}) (string, error) {
 			return "hello " + input.Name, nil
 		},
 	)
 	ai.DefineTool(reg, "farewell", "returns a farewell",
-		func(ctx *ai.ToolContext, input struct {
+		func(ctx context.Context, input struct {
 			Name string `json:"name"`
 		}) (string, error) {
 			return "goodbye " + input.Name, nil
@@ -5881,10 +5881,8 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 	ai.ConfigureFormats(reg)
 
 	interruptTool := ai.DefineTool(reg, "interruptor", "always interrupts",
-		func(tc *ai.ToolContext, input any) (any, error) {
-			return nil, tc.Interrupt(&ai.InterruptOptions{
-				Metadata: map[string]any{"reason": "needs approval"},
-			})
+		func(tc context.Context, input any) (any, error) {
+			return nil, &ai.InterruptError{Data: map[string]any{"reason": "needs approval"}}
 		},
 	)
 	ai.DefineModel(reg, "test/interrupt", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},

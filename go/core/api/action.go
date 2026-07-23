@@ -112,15 +112,18 @@ const (
 	ActionTypeBackgroundModel  ActionType = "background-model"
 	ActionTypeExecutablePrompt ActionType = "executable-prompt"
 	ActionTypeResource         ActionType = "resource"
-	ActionTypeTool             ActionType = "tool"
-	ActionTypeToolV2           ActionType = "tool.v2"
-	ActionTypeUtil             ActionType = "util"
-	ActionTypeCustom           ActionType = "custom"
-	ActionTypeAgentSnapshot    ActionType = "agent-snapshot"
-	ActionTypeAgentAbort       ActionType = "agent-abort"
-	ActionTypeCheckOperation   ActionType = "check-operation"
-	ActionTypeCancelOperation  ActionType = "cancel-operation"
-	ActionTypeAgent            ActionType = "agent"
+	// ActionTypeTool is the legacy tool action type. Go registers all tools
+	// under [ActionTypeToolV2]; this value remains in the cross-runtime
+	// taxonomy because other runtimes still register plain tools under it.
+	ActionTypeTool            ActionType = "tool"
+	ActionTypeToolV2          ActionType = "tool.v2"
+	ActionTypeUtil            ActionType = "util"
+	ActionTypeCustom          ActionType = "custom"
+	ActionTypeAgentSnapshot   ActionType = "agent-snapshot"
+	ActionTypeAgentAbort      ActionType = "agent-abort"
+	ActionTypeCheckOperation  ActionType = "check-operation"
+	ActionTypeCancelOperation ActionType = "cancel-operation"
+	ActionTypeAgent           ActionType = "agent"
 )
 
 // ActionDesc is a descriptor of an action.

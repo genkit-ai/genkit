@@ -62,7 +62,7 @@ func main() {
 
 	// Define tools
 	weatherTool := g.DefineTool("weather", "Get current weather for a location",
-		func(ctx *ai.ToolContext, input WeatherInput) (WeatherData, error) {
+		func(ctx context.Context, input WeatherInput) (WeatherData, error) {
 			// Get weather data (simulated)
 			return simulateWeather(input.Location), nil
 		},

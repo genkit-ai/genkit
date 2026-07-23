@@ -2726,8 +2726,7 @@ func (c *AgentConnection[State]) SendText(text string) error {
 }
 
 // SendResume sends a resume payload to continue an interrupted generation.
-// Construct the payload with [ai.ToolDef.RestartWith] or
-// [ai.ToolDef.RespondWith] parts.
+// Construct the payload with [tool.Restart] or [tool.Respond] parts.
 func (c *AgentConnection[State]) SendResume(resume *ToolResume) error {
 	return c.conn.Send(&AgentInput{Resume: resume})
 }

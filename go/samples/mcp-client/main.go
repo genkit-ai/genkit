@@ -55,15 +55,15 @@ func clientExample() {
 	tools, _ := client.GetActiveTools(ctx, g)
 	logger.FromContext(ctx).Info("Found MCP time tools", "count", len(tools), "client", "mcp-time")
 
-	var toolRefs []ai.ToolRef
+	var toolArgs []ai.ToolArg
 	for _, tool := range tools {
-		toolRefs = append(toolRefs, tool)
+		toolArgs = append(toolArgs, tool)
 	}
 
 	response, err := g.Generate(ctx,
 		ai.WithModelName("googleai/gemini-2.5-pro"),
 		ai.WithPrompt("Convert the current time from New York to London timezone."),
-		ai.WithTools(toolRefs...),
+		ai.WithTools(toolArgs...),
 		ai.WithToolChoice(ai.ToolChoiceAuto),
 	)
 	if err != nil {
@@ -110,15 +110,15 @@ func managerExample() {
 	tools, _ := host.GetActiveTools(ctx, g)
 	logger.FromContext(ctx).Info("Found MCP tools", "count", len(tools))
 
-	var toolRefs []ai.ToolRef
+	var toolArgs []ai.ToolArg
 	for _, tool := range tools {
-		toolRefs = append(toolRefs, tool)
+		toolArgs = append(toolArgs, tool)
 	}
 
 	response, err := g.Generate(ctx,
 		ai.WithModelName("googleai/gemini-2.5-pro"),
 		ai.WithPrompt("What time is it in New York and Tokyo?"),
-		ai.WithTools(toolRefs...),
+		ai.WithTools(toolArgs...),
 		ai.WithToolChoice(ai.ToolChoiceAuto),
 	)
 	if err != nil {

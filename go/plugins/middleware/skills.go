@@ -96,7 +96,7 @@ func (s *Skills) New(ctx context.Context) (*ai.Hooks, error) {
 	useSkill := ai.NewTool(
 		useSkillToolName,
 		"Use a skill by its name.",
-		func(_ *ai.ToolContext, in struct {
+		func(_ context.Context, in struct {
 			SkillName string `json:"skillName" jsonschema:"description=The name of the skill to use."`
 		}) (string, error) {
 			si, ok := info[in.SkillName]
@@ -120,7 +120,7 @@ func (s *Skills) New(ctx context.Context) (*ai.Hooks, error) {
 	}
 
 	return &ai.Hooks{
-		Tools:        []ai.Tool{useSkill},
+		Tools:        []ai.AnyTool{useSkill},
 		WrapGenerate: wrapGenerate,
 	}, nil
 }

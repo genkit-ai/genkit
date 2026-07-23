@@ -174,13 +174,13 @@ func (a *Agents) New(ctx context.Context) (*ai.Hooks, error) {
 	prefix := a.prefix()
 	st := &agentsState{}
 
-	tools := make([]ai.Tool, 0, len(a.Agents))
+	tools := make([]ai.AnyTool, 0, len(a.Agents))
 	for _, ref := range a.Agents {
 		desc := ref.Description
 		if desc == "" {
 			desc = fmt.Sprintf("Delegates a task to the %q sub-agent.", ref.Name)
 		}
-		tools = append(tools, aix.NewTool(makeToolName(prefix, ref.Name), desc, a.delegate(ref, st)))
+		tools = append(tools, ai.NewTool(makeToolName(prefix, ref.Name), desc, a.delegate(ref, st)))
 	}
 
 	wrapGenerate := func(ctx context.Context, params *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
@@ -223,9 +223,8 @@ type delegatedArtifact struct {
 }
 
 // delegate builds the delegation tool function for one sub-agent. The function
-// uses the experimental [aix.NewTool] signature: a plain [context.Context]
-// rather than an [ai.ToolContext], since delegation needs only the context for
-// agent resolution, sub-agent execution, and artifact merging.
+// needs only the context for agent resolution, sub-agent execution, and
+// artifact merging.
 func (a *Agents) delegate(ref aix.AgentRef, st *agentsState) func(context.Context, delegateInput) (delegationResult, error) {
 	return func(ctx context.Context, in delegateInput) (delegationResult, error) {
 		// Guard rail: enforce the delegation cap and reserve this delegation's

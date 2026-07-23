@@ -179,6 +179,24 @@ func anyStructSchema(t reflect.Type) *jsonschema.Schema {
 	}
 }
 
+// ConvertToStrict converts v to T via type assertion or JSON round-trip.
+// Unlike [ConvertTo], it returns the decode error on failure instead of
+// reporting only a bool.
+func ConvertToStrict[T any](v any) (T, error) {
+	if typed, ok := v.(T); ok {
+		return typed, nil
+	}
+	var result T
+	data, err := json.Marshal(v)
+	if err != nil {
+		return result, err
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
 // MapToStruct converts a map[string]any to a struct of type T via JSON round-trip.
 func MapToStruct[T any](m map[string]any) (T, error) {
 	var result T

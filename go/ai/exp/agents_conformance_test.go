@@ -149,25 +149,23 @@ func setupHarness(t *testing.T) *harness {
 	// --- Tools ---
 
 	testTool := ai.DefineTool(reg, "testTool", "A simple test tool",
-		func(tc *ai.ToolContext, _ struct{}) (string, error) {
+		func(tc context.Context, _ struct{}) (string, error) {
 			return "tool called", nil
 		})
 
 	// interruptTool always pauses the turn, returning the tool request to the
 	// client for external resolution (resume.respond).
 	interruptTool := ai.DefineTool(reg, "interruptTool", "An interrupt tool",
-		func(tc *ai.ToolContext, _ interruptIn) (interruptOut, error) {
-			return interruptOut{}, tc.Interrupt(&ai.InterruptOptions{})
+		func(tc context.Context, _ interruptIn) (interruptOut, error) {
+			return interruptOut{}, &ai.InterruptError{}
 		})
 
 	// restartTool interrupts on first call and succeeds when restarted with
 	// resumed metadata (resume.restart).
-	restartTool := ai.DefineTool(reg, "restartTool", "A tool that requires confirmation before executing",
-		func(tc *ai.ToolContext, in restartIn) (restartOut, error) {
-			if tc.Resumed == nil {
-				return restartOut{}, tc.Interrupt(&ai.InterruptOptions{
-					Metadata: map[string]any{"requiresConfirmation": true},
-				})
+	restartTool := ai.DefineInterruptibleTool(reg, "restartTool", "A tool that requires confirmation before executing",
+		func(tc context.Context, in restartIn, resumed *struct{}) (restartOut, error) {
+			if resumed == nil {
+				return restartOut{}, &ai.InterruptError{Data: map[string]any{"requiresConfirmation": true}}
 			}
 			return restartOut{Result: "confirmed: " + in.Action}, nil
 		})

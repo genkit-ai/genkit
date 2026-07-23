@@ -21,22 +21,46 @@ import (
 	"slices"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
-	"github.com/firebase/genkit/go/core/tracing"
+	"github.com/firebase/genkit/go/ai/tool"
 )
+
+// ApprovalRequest is the interrupt payload [ToolApproval] emits when a tool
+// call requires approval. Read it from the interrupted part with
+// [tool.InterruptData], then resume with [Approval]:
+//
+//	req, ok := tool.InterruptData[middleware.ApprovalRequest](interruptPart)
+type ApprovalRequest struct {
+	// Tool is the name of the tool awaiting approval.
+	Tool string `json:"tool"`
+	// Message is a human-readable description of the request.
+	Message string `json:"message"`
+}
+
+// Approval is the resume payload recognized by [ToolApproval]. Embed it in
+// your own resume struct to combine approval with data for the tool:
+//
+//	type myResume struct {
+//		middleware.Approval
+//		Note string `json:"note"`
+//	}
+//
+// The matching is by JSON shape, not Go type: any resume payload carrying a
+// "toolApproved" key (e.g. map[string]any{"toolApproved": true} from a
+// generic or cross-runtime caller) works the same.
+type Approval struct {
+	ToolApproved bool `json:"toolApproved"`
+}
 
 // ToolApproval is a middleware that interrupts tool execution unless the tool
 // is in [AllowedTools] or the call has been explicitly approved on resume.
 //
-// To approve on resume, attach a "toolApproved" flag to the restart metadata:
+// To approve on resume, pass [Approval] as the resume data:
 //
-//	restart := tool.Restart(interruptPart, &ai.RestartOptions{
-//	    ResumedMetadata: map[string]any{"toolApproved": true},
-//	})
+//	restart, err := tool.Restart(interruptPart, ai.WithResume(middleware.Approval{ToolApproved: true}))
 //
-// The bare [ai.IsToolResumed] flag alone is NOT treated as approval; callers
-// must opt in so that unrelated resume flows (e.g. respond-only turns) cannot
-// bypass approval.
+// A bare resumption alone is NOT treated as approval; callers must opt in so
+// that unrelated resume flows (e.g. respond-only turns) cannot bypass
+// approval.
 //
 // Usage:
 //
@@ -69,26 +93,12 @@ func (t *ToolApproval) wrapTool(ctx context.Context, params *ai.ToolParams, next
 		return next(ctx, params)
 	}
 
-	if approved, _ := ai.ResumedValue[bool](ctx, "toolApproved"); approved {
+	if resumed, ok := tool.ResumeData[Approval](ctx); ok && resumed.ToolApproved {
 		return next(ctx, params)
 	}
 
-	// Emit a tool-shaped span so the interrupt is attributed to the tool in traces,
-	// mirroring the span that core/action.go would create if the tool had run.
-	spanMeta := &tracing.SpanMetadata{
-		Name:     name,
-		Type:     "action",
-		Subtype:  "tool",
-		Metadata: map[string]string{},
-	}
-	if flowName := core.FlowNameFromContext(ctx); flowName != "" {
-		spanMeta.Metadata["flow:name"] = flowName
-	}
-	_, err := tracing.RunInNewSpan(ctx, spanMeta, params.Request.Input,
-		func(ctx context.Context, _ any) (any, error) {
-			return nil, ai.NewToolInterruptError(map[string]any{
-				"message": "Tool not in approved list: " + name,
-			})
-		})
-	return nil, err
+	return nil, tool.Interrupt(ApprovalRequest{
+		Tool:    name,
+		Message: "Tool not in approved list: " + name,
+	})
 }

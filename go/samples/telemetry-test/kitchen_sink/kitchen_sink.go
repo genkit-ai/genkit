@@ -56,7 +56,7 @@ func main() {
 	// Define a tool for web search simulation - using struct input for model compatibility
 	searchTool := g.DefineTool("webSearch",
 		"Search the web for information about a topic",
-		func(ctx *ai.ToolContext, input SearchInput) (*SearchResult, error) {
+		func(ctx context.Context, input SearchInput) (*SearchResult, error) {
 			// Simulate search with some realistic results
 			return &SearchResult{
 				Title:   fmt.Sprintf("Search results for: %s", input.Query),

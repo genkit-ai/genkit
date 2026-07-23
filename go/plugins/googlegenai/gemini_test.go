@@ -1000,7 +1000,7 @@ func TestThoughtSignatureRoundTrip(t *testing.T) {
 	t.Run("text part preserves signature", func(t *testing.T) {
 		// Create a Genkit text part with a signature
 		genkitPart := ai.NewTextPart("Hello world")
-		genkitPart.Metadata = map[string]any{"signature": testSignature}
+		genkitPart.SetThoughtSignature(testSignature)
 
 		// Convert to Gemini part
 		geminiPart, err := toGeminiPart(genkitPart)
@@ -1047,7 +1047,7 @@ func TestThoughtSignatureRoundTrip(t *testing.T) {
 			Name:  "myTool",
 			Input: map[string]any{"arg": "value"},
 		})
-		genkitPart.Metadata = map[string]any{"signature": testSignature}
+		genkitPart.SetThoughtSignature(testSignature)
 
 		// Convert to Gemini part
 		geminiPart, err := toGeminiPart(genkitPart)
@@ -1075,7 +1075,7 @@ func TestThoughtSignatureRoundTrip(t *testing.T) {
 			Name:   "myTool",
 			Output: map[string]any{"result": "success"},
 		})
-		genkitPart.Metadata = map[string]any{"signature": testSignature}
+		genkitPart.SetThoughtSignature(testSignature)
 
 		// Convert to Gemini part
 		geminiPart, err := toGeminiPart(genkitPart)
@@ -1106,10 +1106,8 @@ func TestThoughtSignatureRoundTrip(t *testing.T) {
 				ai.NewMediaPart("image/png", "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="),
 			},
 		})
-		genkitPart.Metadata = map[string]any{
-			"multipart": true,
-			"signature": testSignature,
-		}
+		genkitPart.Metadata = map[string]any{"multipart": true}
+		genkitPart.SetThoughtSignature(testSignature)
 
 		// Convert to Gemini part
 		geminiPart, err := toGeminiPart(genkitPart)
@@ -1161,16 +1159,8 @@ func TestTranslateCandidateThoughtSignature(t *testing.T) {
 		}
 
 		part := resp.Message.Content[0]
-		if part.Metadata == nil {
-			t.Fatal("expected Metadata to be set")
-		}
-
-		sig, ok := part.Metadata["signature"].([]byte)
-		if !ok {
-			t.Fatal("expected signature in metadata")
-		}
-		if string(sig) != string(testSignature) {
-			t.Errorf("signature mismatch: got %q, want %q", sig, testSignature)
+		if string(part.ThoughtSignature()) != string(testSignature) {
+			t.Errorf("signature = %q, want %q", part.ThoughtSignature(), testSignature)
 		}
 	})
 
@@ -1202,16 +1192,8 @@ func TestTranslateCandidateThoughtSignature(t *testing.T) {
 		if !part.IsReasoning() {
 			t.Error("expected part to be reasoning")
 		}
-		if part.Metadata == nil {
-			t.Fatal("expected Metadata to be set")
-		}
-
-		sig, ok := part.Metadata["signature"].([]byte)
-		if !ok {
-			t.Fatal("expected signature in metadata")
-		}
-		if string(sig) != string(testSignature) {
-			t.Errorf("signature mismatch: got %q, want %q", sig, testSignature)
+		if string(part.ThoughtSignature()) != string(testSignature) {
+			t.Errorf("signature = %q, want %q", part.ThoughtSignature(), testSignature)
 		}
 	})
 
@@ -1245,16 +1227,8 @@ func TestTranslateCandidateThoughtSignature(t *testing.T) {
 		if !part.IsToolRequest() {
 			t.Error("expected part to be tool request")
 		}
-		if part.Metadata == nil {
-			t.Fatal("expected Metadata to be set")
-		}
-
-		sig, ok := part.Metadata["signature"].([]byte)
-		if !ok {
-			t.Fatal("expected signature in metadata")
-		}
-		if string(sig) != string(testSignature) {
-			t.Errorf("signature mismatch: got %q, want %q", sig, testSignature)
+		if string(part.ThoughtSignature()) != string(testSignature) {
+			t.Errorf("signature = %q, want %q", part.ThoughtSignature(), testSignature)
 		}
 	})
 }
@@ -1325,12 +1299,11 @@ func TestTranslateCandidateMultiFieldPart(t *testing.T) {
 		if got, want := len(resp.Message.Content), 2; got != want {
 			t.Fatalf("expected %d parts, got %d", want, got)
 		}
-		sig, ok := resp.Message.Content[0].Metadata["signature"].([]byte)
-		if !ok || string(sig) != string(testSignature) {
-			t.Errorf("expected signature on first part, got metadata %#v", resp.Message.Content[0].Metadata)
+		if sig := resp.Message.Content[0].ThoughtSignature(); string(sig) != string(testSignature) {
+			t.Errorf("expected signature on first part, got %q", sig)
 		}
-		if _, ok := resp.Message.Content[1].Metadata["signature"]; ok {
-			t.Errorf("did not expect signature on second part, got metadata %#v", resp.Message.Content[1].Metadata)
+		if sig := resp.Message.Content[1].ThoughtSignature(); sig != nil {
+			t.Errorf("did not expect signature on second part, got %q", sig)
 		}
 	})
 }

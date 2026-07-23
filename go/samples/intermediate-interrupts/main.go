@@ -14,7 +14,7 @@
 
 // Tool-interrupts demonstrates the tool interrupts feature in Genkit.
 // It shows how to pause generation for human-in-the-loop interactions
-// and resume with user input using RestartWith and RespondWith.
+// and resume with user input using Resume and Respond.
 package main
 
 import (
@@ -28,6 +28,7 @@ import (
 
 	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/ai/tool"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"google.golang.org/genai"
 )
@@ -53,6 +54,12 @@ type TransferInterrupt struct {
 	Balance   float64 `json:"balance,omitempty"`
 }
 
+// Confirmation is the resume payload the user sends back when approving a
+// paused transfer. It arrives as the tool function's resume parameter.
+type Confirmation struct {
+	Approved bool `json:"approved"`
+}
+
 var accountBalance = 150.00
 
 func main() {
@@ -63,28 +70,29 @@ func main() {
 	}
 	reader := bufio.NewReader(os.Stdin)
 
-	// Define the transfer tool with interrupt logic
-	transferMoney := g.DefineTool("transferMoney",
+	// Define the transfer tool with interrupt logic. The confirm parameter is
+	// nil on the first pass and carries the user's decision on resume.
+	transferMoney := g.DefineInterruptibleTool("transferMoney",
 		"Transfers money to another account. Use this when the user wants to send money.",
-		func(ctx *ai.ToolContext, input TransferInput) (TransferOutput, error) {
+		func(ctx context.Context, input TransferInput, confirm *Confirmation) (TransferOutput, error) {
 			if input.Amount > accountBalance {
 				if accountBalance <= 0 {
 					return TransferOutput{"rejected", "Account balance is 0. Please add funds.", accountBalance}, nil
 				}
-				return TransferOutput{}, ai.InterruptWith(ctx, TransferInterrupt{
+				return TransferOutput{}, tool.Interrupt(TransferInterrupt{
 					"insufficient_balance", input.ToAccount, input.Amount, accountBalance,
 				})
 			}
 
-			if !ctx.IsResumed() && input.Amount > 100 {
-				return TransferOutput{}, ai.InterruptWith(ctx, TransferInterrupt{
+			if confirm == nil && input.Amount > 100 {
+				return TransferOutput{}, tool.Interrupt(TransferInterrupt{
 					"confirm_large", input.ToAccount, input.Amount, accountBalance,
 				})
 			}
 
 			accountBalance -= input.Amount
 			message := fmt.Sprintf("Transferred $%.2f to %s", input.Amount, input.ToAccount)
-			if orig, ok := ai.OriginalInputAs[TransferInput](ctx); ok {
+			if orig, ok := tool.OriginalInput[TransferInput](ctx); ok {
 				message = fmt.Sprintf("Transferred $%.2f to %s (adjusted from $%.2f due to insufficient balance)", input.Amount, input.ToAccount, orig.Amount)
 			}
 
@@ -109,7 +117,7 @@ func main() {
 			var restarts, responses []*ai.Part
 
 			for _, interrupt := range resp.Interrupts() {
-				meta, ok := ai.InterruptAs[TransferInterrupt](interrupt)
+				meta, ok := tool.InterruptData[TransferInterrupt](interrupt)
 				if !ok {
 					continue
 				}
@@ -121,19 +129,20 @@ func main() {
 					fmt.Print("Choice: ")
 
 					if promptChoice(reader, 1, 2) == 1 {
-						// RestartWith + WithNewInput: Retry with adjusted amount
-						part, err := transferMoney.RestartWith(interrupt,
-							ai.WithNewInput(TransferInput{meta.ToAccount, meta.Balance}))
+						// Restart + WithNewInput: retry with adjusted amount
+						part, err := transferMoney.Restart(interrupt,
+							transferMoney.WithResume(Confirmation{Approved: true}),
+							transferMoney.WithNewInput(TransferInput{meta.ToAccount, meta.Balance}))
 						if err != nil {
-							return "", fmt.Errorf("RestartWith: %w", err)
+							return "", fmt.Errorf("Restart: %w", err)
 						}
 						restarts = append(restarts, part)
 					} else {
-						// RespondWith: Provide cancelled output directly
-						part, err := transferMoney.RespondWith(interrupt,
+						// Respond: Provide cancelled output directly
+						part, err := transferMoney.Respond(interrupt,
 							TransferOutput{"cancelled", "Transfer cancelled by user.", accountBalance})
 						if err != nil {
-							return "", fmt.Errorf("RespondWith: %w", err)
+							return "", fmt.Errorf("Respond: %w", err)
 						}
 						responses = append(responses, part)
 					}
@@ -142,18 +151,18 @@ func main() {
 					fmt.Printf("\n[Confirm Large Transfer] Send $%.2f to %s? (yes/no): ", meta.Amount, meta.ToAccount)
 
 					if promptYesNo(reader) {
-						// RestartWith: Re-execute the tool with approval
-						part, err := transferMoney.RestartWith(interrupt)
+						// Resume: Re-execute the tool with approval
+						part, err := transferMoney.Restart(interrupt, transferMoney.WithResume(Confirmation{Approved: true}))
 						if err != nil {
-							return "", fmt.Errorf("RestartWith: %w", err)
+							return "", fmt.Errorf("Restart: %w", err)
 						}
 						restarts = append(restarts, part)
 					} else {
-						// RespondWith: Provide cancelled output directly
-						part, err := transferMoney.RespondWith(interrupt,
+						// Respond: Provide cancelled output directly
+						part, err := transferMoney.Respond(interrupt,
 							TransferOutput{"cancelled", "Transfer cancelled by user.", accountBalance})
 						if err != nil {
-							return "", fmt.Errorf("RespondWith: %w", err)
+							return "", fmt.Errorf("Respond: %w", err)
 						}
 						responses = append(responses, part)
 					}

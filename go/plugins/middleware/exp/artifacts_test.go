@@ -201,7 +201,7 @@ func TestArtifactsNoSession(t *testing.T) {
 	}
 }
 
-func toolNames(tools []ai.Tool) []string {
+func toolNames(tools []ai.AnyTool) []string {
 	names := make([]string, 0, len(tools))
 	for _, tl := range tools {
 		names = append(names, tl.Name())

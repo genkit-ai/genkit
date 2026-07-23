@@ -47,7 +47,7 @@ func main() {
 	var callback func(context.Context, *ai.ModelResponseChunk) error
 
 	gablorkenTool := g.DefineTool("gablorken", "use when need to calculate a gablorken",
-		func(ctx *ai.ToolContext, input struct {
+		func(ctx context.Context, input struct {
 			Value float64
 			Over  float64
 		},

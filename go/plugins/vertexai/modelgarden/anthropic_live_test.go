@@ -136,7 +136,7 @@ func TestAnthropicLive(t *testing.T) {
 		myJokeTool := g.DefineTool(
 			"myJoke",
 			"When the user asks for a joke, this tool must be used to generate a joke, try to come up with a joke that uses the output of the tool",
-			func(ctx *ai.ToolContext, input *any) (string, error) {
+			func(ctx context.Context, input *any) (string, error) {
 				return "why did the chicken cross the road?", nil
 			},
 		)
@@ -242,7 +242,7 @@ func TestAnthropicLive(t *testing.T) {
 		myStoryTool := g.DefineTool(
 			"myStory",
 			"When the user asks for a story, create a story about a frog and a fox that are good friends",
-			func(ctx *ai.ToolContext, input *any) (string, error) {
+			func(ctx context.Context, input *any) (string, error) {
 				return "the fox is named Goph and the frog is called Fred", nil
 			},
 		)

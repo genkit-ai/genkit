@@ -89,9 +89,9 @@ func main() {
 		logger.FromContext(ctx).Error("failed to list GitHub tools", "error", err)
 		os.Exit(1)
 	}
-	var toolRefs []ai.ToolRef
+	var toolArgs []ai.ToolArg
 	for _, t := range tools {
-		toolRefs = append(toolRefs, t)
+		toolArgs = append(toolArgs, t)
 	}
 
 	owner, name := splitRepo(repo)
@@ -114,7 +114,7 @@ Always pass owner='%s' repo='%s' pull_number='%d'.`,
 	resp, err := g.Generate(ctx,
 		ai.WithModel(m),
 		ai.WithPrompt(prompt),
-		ai.WithTools(toolRefs...),
+		ai.WithTools(toolArgs...),
 		ai.WithToolChoice(ai.ToolChoiceAuto),
 	)
 	if err != nil {

@@ -43,11 +43,57 @@ func (k ContextKey[T]) FromContext(ctx context.Context) T {
 }
 
 // ToolPartialSenderKey is the context key for streaming partial tool responses.
-// Set by ai/generate.go (handleToolRequests), read by ai/exp/tool (SendPartial).
+// Set by ai/generate.go (handleToolRequests), read by ai/tool (SendPartial).
 var ToolPartialSenderKey = NewContextKey[func(context.Context, any)]()
 
 // ToolChunkSenderKey is the context key for streaming raw model response chunks
 // from within a tool. Set by ai/generate.go (handleToolRequests), read by
-// ai/exp/tool (SendChunk). The any value is *ai.ModelResponseChunk (typed as any
+// ai/tool (SendChunk). The any value is *ai.ModelResponseChunk (typed as any
 // to avoid a circular import).
 var ToolChunkSenderKey = NewContextKey[func(context.Context, any)]()
+
+// ToolPartSinkKey is the context key for attaching content parts to a tool's
+// response. Set by the tool wrapper in ai/tool.go for the duration of one tool
+// invocation, read by ai/tool (AttachParts). The any value is *ai.Part (typed
+// as any to avoid a circular import).
+var ToolPartSinkKey = NewContextKey[func(part any)]()
+
+// ToolResumeKey is the context key for the resume payload of a restarted tool
+// call. Set by ai/generate.go when re-executing an interrupted tool, read by
+// the interruptible tool wrapper in ai/tool.go and by ai/tool (ResumeData). A
+// non-nil value (an empty map for a bare restart) means the call is a
+// resumption.
+var ToolResumeKey = NewContextKey[any]()
+
+// ToolOriginalInputKey is the context key for a tool's original input when the
+// caller replaced it during restart. Set by ai/generate.go, read by ai/tool
+// (OriginalInput).
+var ToolOriginalInputKey = NewContextKey[any]()
+
+// Part metadata keys of the interrupt/resume wire contract. In memory this
+// state lives on typed ai.Part fields (Interrupt, Restart, Signature); Part
+// marshaling folds it into these metadata keys and unmarshaling lifts it back
+// out. The keys and values mirror the JS runtime for cross-runtime message
+// compatibility.
+const (
+	// ToolMetaInterrupt marks a tool request part as interrupted. Holds the
+	// interrupt data object, or true for a bare interrupt.
+	ToolMetaInterrupt = "interrupt"
+	// ToolMetaResolvedInterrupt preserves the original interrupt data on a
+	// tool request part once its interrupt has been resolved.
+	ToolMetaResolvedInterrupt = "resolvedInterrupt"
+	// ToolMetaResumed marks a tool request part as a restart of an interrupted
+	// call. Holds the resume data object, or true for a bare restart. Also
+	// used on tool message metadata to carry resume metadata.
+	ToolMetaResumed = "resumed"
+	// ToolMetaReplacedInput preserves the original input on a restart part
+	// when the caller replaced it.
+	ToolMetaReplacedInput = "replacedInput"
+	// ToolMetaInterruptResponse marks a caller-provided tool response part
+	// that resolves an interrupt in place of re-executing the tool.
+	ToolMetaInterruptResponse = "interruptResponse"
+	// ToolMetaPendingOutput holds the output of a completed tool call on its
+	// request part while sibling tool calls remain interrupted; consumed when
+	// generation resumes.
+	ToolMetaPendingOutput = "pendingOutput"
+)

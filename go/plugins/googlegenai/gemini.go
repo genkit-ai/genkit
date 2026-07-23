@@ -545,11 +545,7 @@ func translateCandidate(cand *genai.Candidate) (*ai.ModelResponse, error) {
 		// Attach the thought signature to the first emitted part so that a
 		// subsequent request round-trips a single signature per genai.Part.
 		if len(part.ThoughtSignature) > 0 {
-			first := emitted[0]
-			if first.Metadata == nil {
-				first.Metadata = make(map[string]any)
-			}
-			first.Metadata["signature"] = part.ThoughtSignature
+			emitted[0].SetThoughtSignature(part.ThoughtSignature)
 		}
 
 		msg.Content = append(msg.Content, emitted...)
@@ -669,36 +665,13 @@ func toGeminiPart(p *ai.Part) (*genai.Part, error) {
 			}
 		}
 		fc := genai.NewPartFromFunctionCall(toolReq.Name, input)
-		// Restore ThoughtSignature if present in metadata.
-		if p.Metadata != nil {
-			fc.ThoughtSignature = metadataSignature(p.Metadata)
-		}
+		fc.ThoughtSignature = p.ThoughtSignature()
 		return fc, nil
 	default:
-		return nil, fmt.Errorf("unknown part in the request: %q", p.Kind)
+		return nil, fmt.Errorf("unknown part in the request: %v", p.Kind)
 	}
 
-	// Restore ThoughtSignature if present in metadata.
-	if p.Metadata != nil {
-		gp.ThoughtSignature = metadataSignature(p.Metadata)
-	}
+	gp.ThoughtSignature = p.ThoughtSignature()
 
 	return gp, nil
-}
-
-// metadataSignature extracts the thought signature from part metadata.
-// It handles both []byte (original value) and string (base64-encoded
-// after a JSON clone roundtrip).
-func metadataSignature(metadata map[string]any) []byte {
-	switch sig := metadata["signature"].(type) {
-	case []byte:
-		return sig
-	case string:
-		decoded, err := base64.StdEncoding.DecodeString(sig)
-		if err != nil {
-			return nil
-		}
-		return decoded
-	}
-	return nil
 }

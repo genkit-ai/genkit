@@ -51,7 +51,7 @@ func TestPlugin(t *testing.T) {
 
 	// Define a tool for calculating gablorkens
 	gablorkenTool := g.DefineTool("gablorken", "use when need to calculate a gablorken",
-		func(ctx *ai.ToolContext, input struct {
+		func(ctx context.Context, input struct {
 			Value float64
 			Over  float64
 		},

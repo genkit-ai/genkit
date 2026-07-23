@@ -60,10 +60,10 @@ func client() {
 
 	logger.FromContext(ctx).Info("Connected to MCP server", "tools", getToolNames(tools))
 
-	// Convert to ToolRef
-	var toolRefs []ai.ToolRef
+	// Convert to ToolArg values
+	var toolArgs []ai.ToolArg
 	for _, tool := range tools {
-		toolRefs = append(toolRefs, tool)
+		toolArgs = append(toolArgs, tool)
 	}
 
 	// Use tools with AI
@@ -72,7 +72,7 @@ func client() {
 	response, err := g.Generate(ctx,
 		ai.WithModelName("googleai/gemini-2.5-pro"),
 		ai.WithPrompt("Fetch content from https://httpbin.org/json and give me a summary of what you find"),
-		ai.WithTools(toolRefs...),
+		ai.WithTools(toolArgs...),
 		ai.WithToolChoice(ai.ToolChoiceAuto),
 	)
 
@@ -83,7 +83,7 @@ func client() {
 	}
 }
 
-func getToolNames(tools []ai.Tool) []string {
+func getToolNames(tools []ai.AnyTool) []string {
 	var names []string
 	for _, tool := range tools {
 		names = append(names, tool.Name())
