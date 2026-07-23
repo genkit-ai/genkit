@@ -80,7 +80,7 @@ func TestDefineSchemaWithType(t *testing.T) {
 		Age  int    `json:"age,omitempty"`
 	}
 
-	g.DefineSchemaFor[UserInfo]()
+	g.DefineSchemasFor(UserInfo{})
 
 	schema := g.reg.LookupSchema("UserInfo")
 	if schema == nil {
@@ -134,7 +134,7 @@ func TestDefineSchemaWithType_Error(t *testing.T) {
 		Foo func() `json:"foo"`
 	}
 
-	g.DefineSchemaFor[Invalid]()
+	g.DefineSchemasFor(Invalid{})
 }
 
 func TestWithPromptFS(t *testing.T) {

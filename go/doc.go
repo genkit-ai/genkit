@@ -177,7 +177,7 @@ Load prompts from .prompt files by specifying a prompt directory:
 
 When using .prompt files with custom output schemas, register the schema first:
 
-	g.DefineSchemaFor[Recipe]()
+	g.DefineSchemasFor(Recipe{})
 
 # Tools
 

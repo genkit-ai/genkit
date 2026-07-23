@@ -42,16 +42,23 @@ func DefineSchema(r api.Registry, name string, schema map[string]any) {
 	r.RegisterSchema(name, schema)
 }
 
-// DefineSchemaFor defines a named JSON schema derived from a Go type
-// and registers it in the registry using the type's name.
-func DefineSchemaFor[T any](r api.Registry) {
-	var v T
-	t := reflect.TypeOf(v)
-	for t.Kind() == reflect.Ptr {
-		t = t.Elem()
+// DefineSchemasFor defines named JSON schemas derived from the given values'
+// Go types and registers them in the registry, each under its type's name.
+// It panics if a value is a map, nil, or of an unnamed type.
+func DefineSchemasFor(r api.Registry, values ...any) {
+	for _, v := range values {
+		t := reflect.TypeOf(v)
+		for t != nil && t.Kind() == reflect.Ptr {
+			t = t.Elem()
+		}
+		switch {
+		case t != nil && t.Kind() == reflect.Map:
+			panic("core.DefineSchemasFor: got a map; use DefineSchema(name, schema) to register a raw JSON schema")
+		case t == nil || t.Name() == "":
+			panic("core.DefineSchemasFor: value must be of a named type; use DefineSchema(name, schema) to name it explicitly")
+		}
+		r.RegisterSchema(t.Name(), InferSchemaMap(v))
 	}
-	name := t.Name()
-	r.RegisterSchema(name, InferSchemaMap(v))
 }
 
 // SchemaRef returns a JSON schema reference map for the given name.

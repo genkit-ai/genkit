@@ -924,10 +924,13 @@ func (g *Genkit) DefineSchema(name string, schema map[string]any) {
 	core.DefineSchema(g.reg, name, schema)
 }
 
-// DefineSchemaFor defines a named JSON schema derived from a Go type
-// and registers it in the registry.
+// DefineSchemasFor defines named JSON schemas derived from the given values'
+// Go types and registers them, each under its type's name.
 //
-// This is an alternative to [Genkit.DefineSchema].
+// This is an alternative to [Genkit.DefineSchema] for schemas that mirror
+// existing Go types. It panics if a value is a map, nil, or of an unnamed
+// type; use [Genkit.DefineSchema] to register a raw JSON schema under an
+// explicit name.
 //
 // Example:
 //
@@ -936,11 +939,11 @@ func (g *Genkit) DefineSchema(name string, schema map[string]any) {
 //	    Age int `json:"age"`
 //	}
 //
-//	g.DefineSchemaFor[User]()
+//	g.DefineSchemasFor(User{}, Order{})
 //
 //	g.Generate(ctx, ai.WithOutputSchemaName("User"), ai.WithPrompt("What is your name?"))
-func (g *Genkit) DefineSchemaFor[T any]() {
-	core.DefineSchemaFor[T](g.reg)
+func (g *Genkit) DefineSchemasFor(values ...any) {
+	core.DefineSchemasFor(g.reg, values...)
 }
 
 // DefineDataPrompt creates a new [ai.DataPrompt] with strongly-typed input and
@@ -1542,7 +1545,8 @@ func (g *Genkit) DefineHelper(name string, fn any) {
 	g.reg.RegisterHelper(name, fn)
 }
 
-// DefineFormat defines a new [ai.Formatter] and registers it in the registry.
+// DefineFormats defines new [ai.Formatter]s and registers them in the registry,
+// each under the name returned by its Name method.
 // Formatters control how model responses are structured and parsed.
 //
 // Formatters can be used with [ai.WithOutputFormat] to inject specific formatting
@@ -1564,15 +1568,15 @@ func (g *Genkit) DefineHelper(name string, fn any) {
 //	}
 //
 //	// Register the formatter
-//	g.DefineFormat(csvFormatter{})
+//	g.DefineFormats(csvFormatter{})
 //
 //	// Use the formatter in a generation request
 //	resp, err := g.Generate(ctx,
 //		ai.WithPrompt("List 3 countries and their capitals"),
 //		ai.WithOutputFormat("csv"), // Use the custom formatter
 //	)
-func (g *Genkit) DefineFormat(formatter ai.Formatter) {
-	ai.DefineFormat(g.reg, formatter)
+func (g *Genkit) DefineFormats(formatters ...ai.Formatter) {
+	ai.DefineFormats(g.reg, formatters...)
 }
 
 // IsDefinedFormat checks if a formatter with the given name is registered in the registry.
