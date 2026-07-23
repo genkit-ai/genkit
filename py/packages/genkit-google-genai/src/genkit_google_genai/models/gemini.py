@@ -563,21 +563,19 @@ class SpeechConfig(BaseModel):
     """Speech config schema."""
 
     model_config = ConfigDict(extra='allow', populate_by_name=True)
-
     voice_config: VoiceConfig | None = Field(default=None, alias='voiceConfig')
 
-    http_options: Any | None = Field(default=None, exclude=True)
-    tools: Any | None = Field(default=None, exclude=True)
-    tool_config: Any | None = Field(default=None, exclude=True)
-    response_schema: Any | None = Field(default=None, exclude=True)
-    response_json_schema: Any | None = Field(default=None, exclude=True)
+    http_options: Any | None = Field(None, exclude=True)
+    tools: Any | None = Field(None, exclude=True)
+    tool_config: Any | None = Field(None, exclude=True)
+    response_schema: Any | None = Field(None, exclude=True)
+    response_json_schema: Any | None = Field(None, exclude=True)
 
 
 class GeminiTtsConfig(GeminiConfig):
     """Gemini TTS Config Schema."""
 
     model_config = ConfigDict(extra='allow', populate_by_name=True)
-
     speech_config: SpeechConfig | None = Field(default=None, alias='speechConfig')
 
 
