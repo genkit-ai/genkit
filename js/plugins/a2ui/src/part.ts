@@ -64,7 +64,10 @@ export function isA2uiPart(part: unknown): part is A2uiPart {
 export function a2uiEnvelopes(value: unknown): A2uiEnvelope[] {
   if (!value || typeof value !== 'object') return [];
 
-  const v = value as Record<string, any>;
+  const v = value as {
+    modelChunk?: { content?: unknown };
+    content?: unknown;
+  };
 
   // AgentChunk: { modelChunk: { content: Part[] } }
   if (v.modelChunk?.content) {
@@ -75,8 +78,8 @@ export function a2uiEnvelopes(value: unknown): A2uiEnvelope[] {
     return collectFromParts(v.content);
   }
   // A single part.
-  if (isA2uiPart(v)) {
-    return [...v.data];
+  if (isA2uiPart(value)) {
+    return [...value.data];
   }
   return [];
 }

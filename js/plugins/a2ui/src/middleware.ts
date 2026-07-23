@@ -42,7 +42,9 @@ import type {
   GenerateResponseData,
   MessageData,
   Part,
+  TextPart,
 } from 'genkit/model';
+import { randomUUID } from 'node:crypto';
 import {
   DEFAULT_CATALOG_ID,
   renderCatalogInstructions,
@@ -95,19 +97,16 @@ export const A2uiOptionsSchema = z.object({
 /** Configuration for the {@link a2ui} middleware. */
 export type A2uiOptions = z.infer<typeof A2uiOptionsSchema>;
 
-/** Generates a RFC-4122 UUID, falling back if `crypto` is unavailable. */
-function uuid(): string {
-  const c = (globalThis as any).crypto;
-  if (c?.randomUUID) return c.randomUUID();
-  // Non-crypto fallback (sufficient for surface ids).
-  return 'sfc-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+/** Type guard: is this part a text part? */
+function isTextPart(part: Part): part is TextPart {
+  return typeof (part as { text?: unknown }).text === 'string';
 }
 
 /** Resolves the configured surface-id policy into a factory. */
 function surfaceIdFactory(policy: A2uiOptions['surfaceId']): () => string {
   if (typeof policy === 'string') return () => policy;
   if (typeof policy === 'function') return policy;
-  return uuid;
+  return randomUUID;
 }
 
 /**
@@ -118,7 +117,7 @@ function partsFromParse(prose: string, batches: A2uiEnvelope[][]): Part[] {
   const out: Part[] = [];
   if (prose) out.push({ text: prose });
   for (const batch of batches) {
-    out.push(a2uiPart(batch) as unknown as Part);
+    out.push(a2uiPart(batch));
   }
   return out;
 }
@@ -237,8 +236,8 @@ function transformChunk(
   if (!chunk?.content || chunk.content.length === 0) return chunk;
   const newContent: Part[] = [];
   for (const part of chunk.content) {
-    if (typeof (part as any).text === 'string' && (part as any).text !== '') {
-      const { prose, envelopeBatches } = parser.push((part as any).text);
+    if (isTextPart(part) && part.text !== '') {
+      const { prose, envelopeBatches } = parser.push(part.text);
       newContent.push(...partsFromParse(prose, envelopeBatches));
     } else {
       newContent.push(part);
@@ -264,8 +263,8 @@ function transformResponse(
   const parser = new A2uiStreamParser(opts);
   const newContent: Part[] = [];
   for (const part of message.content) {
-    if (typeof (part as any).text === 'string') {
-      const pushed = parser.push((part as any).text);
+    if (isTextPart(part)) {
+      const pushed = parser.push(part.text);
       const flushed = parser.flush();
       newContent.push(
         ...partsFromParse(pushed.prose + flushed.prose, [
@@ -315,21 +314,31 @@ function sanitizeInboundA2ui(req: GenerateRequest): GenerateRequest {
   return changed ? { ...req, messages } : req;
 }
 
+/** The shapes {@link summarizeA2uiPart} narrows inbound envelope values into. */
+interface SummarizableEnvelope {
+  action?: A2uiClientAction;
+  createSurface?: { surfaceId: string };
+  updateComponents?: unknown;
+  updateDataModel?: unknown;
+  deleteSurface?: unknown;
+}
+
 /** Summarizes an array of a2ui envelopes / actions into a short text string. */
 function summarizeA2uiPart(envelopes: unknown[]): string {
   const lines: string[] = [];
   for (const env of envelopes) {
-    const e = env as Record<string, any>;
-    if (e?.action) {
-      const a = e.action as A2uiClientAction;
+    if (!env || typeof env !== 'object') continue;
+    const e = env as SummarizableEnvelope;
+    if (e.action) {
+      const a = e.action;
       const ctx =
         a.context && Object.keys(a.context).length
           ? ` context=${JSON.stringify(a.context)}`
           : '';
       lines.push(`[UI action "${a.name}" on surface ${a.surfaceId}${ctx}]`);
-    } else if (e?.createSurface) {
+    } else if (e.createSurface) {
       lines.push(`[UI surface ${e.createSurface.surfaceId} created]`);
-    } else if (e?.updateComponents || e?.updateDataModel || e?.deleteSurface) {
+    } else if (e.updateComponents || e.updateDataModel || e.deleteSurface) {
       // Prior assistant surface content — summarize as a rendered surface.
       lines.push('[rendered UI surface]');
     }

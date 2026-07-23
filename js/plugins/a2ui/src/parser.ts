@@ -36,7 +36,19 @@ import {
   type A2uiComponent,
   type A2uiEnvelope,
   type CreateSurfaceEnvelope,
+  type DeleteSurfaceEnvelope,
+  type UpdateComponentsEnvelope,
+  type UpdateDataModelEnvelope,
 } from './types.js';
+
+/** A parsed-but-not-yet-normalized envelope, as read from the model's JSON. */
+interface RawEnvelope {
+  version?: string;
+  createSurface?: CreateSurfaceEnvelope['createSurface'];
+  updateComponents?: UpdateComponentsEnvelope['updateComponents'];
+  updateDataModel?: UpdateDataModelEnvelope['updateDataModel'];
+  deleteSurface?: DeleteSurfaceEnvelope['deleteSurface'];
+}
 
 /** Opening fence, matched case-insensitively (```a2ui). */
 const OPEN_FENCE_RE = /```[ \t]*a2ui[ \t]*\r?\n/i;
@@ -208,10 +220,10 @@ export class A2uiStreamParser {
       if (strict) throw new Error('A2UI: envelope must be an object.');
       return null;
     }
-    const e = env as Record<string, any>;
+    const e = env as RawEnvelope;
     const version = e.version ?? this.options.version ?? A2UI_VERSION;
 
-    const swapSurfaceId = (payload: Record<string, any> | undefined) => {
+    const swapSurfaceId = (payload: { surfaceId?: string } | undefined) => {
       if (!payload) return;
       if (
         payload.surfaceId === undefined ||

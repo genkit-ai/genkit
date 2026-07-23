@@ -105,10 +105,10 @@ export async function* streamA2uiAgent(
   });
 
   for await (const chunk of response.stream) {
-    const mc = (chunk as any)?.modelChunk;
+    const mc = chunk?.modelChunk;
     if (!mc?.content) continue;
     for (const part of mc.content) {
-      if (typeof part.text === 'string' && part.text !== '') {
+      if ('text' in part && typeof part.text === 'string' && part.text !== '') {
         yield { type: 'text', text: part.text };
       }
     }
