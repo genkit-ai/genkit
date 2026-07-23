@@ -191,7 +191,7 @@ async def thinking_budget_story(data: TopicInput, ctx: ActionRunContext) -> dict
         prompt=f'Tell me a very short story about {data.topic}.',
         config={
             'thinking': {'enabled': True, 'budgetTokens': 1024},
-            'maxOutputTokens': 2048,
+            'max_output_tokens': 2048,
         },
     )
 
