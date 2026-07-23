@@ -152,8 +152,8 @@ func (h *MCPHost) GetActiveTools(ctx context.Context, gk *genkit.Genkit) ([]ai.A
 }
 
 // GetActiveResources retrieves detached resources from all connected and enabled MCP clients
-func (h *MCPHost) GetActiveResources(ctx context.Context) ([]ai.Resource, error) {
-	var allResources []ai.Resource
+func (h *MCPHost) GetActiveResources(ctx context.Context) ([]*ai.Resource, error) {
+	var allResources []*ai.Resource
 
 	for name, client := range h.clients {
 		if !client.IsEnabled() {

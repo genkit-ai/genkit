@@ -50,6 +50,8 @@ type Prompt[In, Out, Stream any] struct {
 	registry api.Registry
 }
 
+var _ api.Action = (*TextPrompt[any])(nil)
+
 // TextPrompt is a prompt that produces text output. Execute returns the
 // response text and ExecuteStream yields raw [*ModelResponseChunk] values.
 // It is the type returned by [DefinePrompt] and [LookupPrompt].
@@ -122,8 +124,8 @@ func definePrompt[In, Out, Stream any](r api.Registry, name string, opts []Promp
 		modelName = pOpts.Model.Name()
 	}
 
-	if modelRef, ok := pOpts.Model.(ModelRef); ok && pOpts.Config == nil {
-		pOpts.Config = modelRef.Config()
+	if ref, ok := pOpts.Model.(ActionRef); ok && pOpts.Config == nil {
+		pOpts.Config = ref.Config()
 	}
 
 	var tools []string
@@ -262,8 +264,8 @@ func (p *Prompt[In, Out, Stream]) execute(ctx context.Context, input In, opts []
 		return nil, err
 	}
 
-	if modelRef, ok := execOpts.Model.(ModelRef); ok && execOpts.Config == nil {
-		execOpts.Config = modelRef.Config()
+	if ref, ok := execOpts.Model.(ActionRef); ok && execOpts.Config == nil {
+		execOpts.Config = ref.Config()
 	}
 
 	if execOpts.Config != nil {
@@ -326,7 +328,7 @@ func (p *Prompt[In, Out, Stream]) execute(ctx context.Context, input In, opts []
 
 	toolArgs := execOpts.Tools
 	if len(toolArgs) == 0 {
-		toolArgs = make([]ToolArg, 0, len(actionOpts.Tools))
+		toolArgs = make([]Named, 0, len(actionOpts.Tools))
 		for _, toolName := range actionOpts.Tools {
 			toolArgs = append(toolArgs, ToolName(toolName))
 		}
@@ -572,8 +574,8 @@ func (p *Prompt[In, Out, Stream]) buildRequest(ctx context.Context, input any) (
 	}
 
 	config := p.Config
-	if modelRef, ok := p.Model.(ModelRef); ok && config == nil {
-		config = modelRef.Config()
+	if ref, ok := p.Model.(ActionRef); ok && config == nil {
+		config = ref.Config()
 	}
 
 	var modelName string
@@ -878,7 +880,7 @@ func LoadPromptFromSource(r api.Registry, source, name, namespace string) (*Text
 		return nil, fmt.Errorf("failed to render dotprompt metadata: %w", err)
 	}
 
-	toolArgs := make([]ToolArg, len(metadata.Tools))
+	toolArgs := make([]Named, len(metadata.Tools))
 	for i, tool := range metadata.Tools {
 		toolArgs[i] = ToolName(tool)
 	}
@@ -906,7 +908,7 @@ func LoadPromptFromSource(r api.Registry, source, name, namespace string) (*Text
 			configOptions: configOptions{
 				Config: (map[string]any)(metadata.Config),
 			},
-			Model: NewModelRef(metadata.Model, nil),
+			Model: NewActionRef(metadata.Model, nil),
 			Tools: toolArgs,
 		},
 		inputOptions: inputOptions{

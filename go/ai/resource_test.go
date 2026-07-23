@@ -63,7 +63,7 @@ func TestDynamicResourceWithTemplate(t *testing.T) {
 	})
 
 	// Register the resource to set up tracing state properly
-	dynResource.(*resource).Register(r)
+	dynResource.Register(r)
 
 	// Test URI matching
 	if !dynResource.Matches("user://profile/123") {

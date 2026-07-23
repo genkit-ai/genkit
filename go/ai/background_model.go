@@ -25,30 +25,23 @@ import (
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
-// BackgroundModel represents a model that can run operations in the background.
-type BackgroundModel interface {
-	// Name returns the registry name of the background model.
-	Name() string
-	// Register registers the model with the given registry.
-	Register(r api.Registry)
-	// Start starts a background operation.
-	Start(ctx context.Context, req *ModelRequest) (*ModelOperation, error)
-	// Check checks the status of a background operation.
-	Check(ctx context.Context, op *ModelOperation) (*ModelOperation, error)
-	// Cancel cancels a background operation.
-	Cancel(ctx context.Context, op *ModelOperation) (*ModelOperation, error)
-	// SupportsCancel returns whether the background action supports cancellation.
-	SupportsCancel() bool
-}
-
 // backgroundAction is an unexported alias of [core.BackgroundAction] used as
-// the embedded field in backgroundModel, mirroring the `action` alias.
+// the embedded field in [BackgroundModel], mirroring the `action` alias.
 type backgroundAction[In, Out any] = core.BackgroundAction[In, Out]
 
-// backgroundModel is the concrete implementation of BackgroundModel interface.
-type backgroundModel struct {
+// BackgroundModel is a model that runs operations in the background, backed
+// by a registry background action. Create one with [DefineBackgroundModel] or
+// [NewBackgroundModel], or fetch a registered one with
+// [LookupBackgroundModel]. Use Start to begin an operation and Check/Cancel
+// to manage it.
+type BackgroundModel struct {
 	backgroundAction[*ModelRequest, *ModelResponse]
 }
+
+var (
+	_ api.Action = (*BackgroundModel)(nil)
+	_ Named      = (*BackgroundModel)(nil)
+)
 
 // ModelOperation is a background operation for a model.
 type ModelOperation = core.Operation[*ModelResponse]
@@ -71,17 +64,19 @@ type BackgroundModelOptions struct {
 
 // LookupBackgroundModel looks up a BackgroundAction registered by [DefineBackgroundModel].
 // It returns nil if the background model was not found.
-func LookupBackgroundModel(r api.Registry, name string) BackgroundModel {
+func LookupBackgroundModel(r api.Registry, name string) *BackgroundModel {
 	key := api.KeyFromName(api.ActionTypeBackgroundModel, name)
 	action := core.LookupBackgroundAction[*ModelRequest, *ModelResponse](r, key)
 	if action == nil {
 		return nil
 	}
-	return &backgroundModel{*action}
+	return &BackgroundModel{*action}
 }
 
-// NewBackgroundModel defines a new model that runs in the background.
-func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn StartModelOpFunc, checkFn CheckModelOpFunc) BackgroundModel {
+// NewBackgroundModel creates a new unregistered [BackgroundModel]. Register
+// it with [BackgroundModel.Register] or use [DefineBackgroundModel] to define
+// and register in one step.
+func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn StartModelOpFunc, checkFn CheckModelOpFunc) *BackgroundModel {
 	if name == "" {
 		panic("ai.NewBackgroundModel: name is required")
 	}
@@ -146,14 +141,23 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 		return modelOpFromResponse(resp)
 	}
 
-	return &backgroundModel{*core.NewBackgroundAction(api.ActionTypeBackgroundModel, name, &core.ActionOptions{Metadata: metadata}, wrappedFn, checkFn, opts.Cancel)}
+	return &BackgroundModel{*core.NewBackgroundAction(api.ActionTypeBackgroundModel, name, &core.ActionOptions{Metadata: metadata}, wrappedFn, checkFn, opts.Cancel)}
 }
 
 // DefineBackgroundModel defines and registers a new model that runs in the background.
-func DefineBackgroundModel(r *registry.Registry, name string, opts *BackgroundModelOptions, fn StartModelOpFunc, checkFn CheckModelOpFunc) BackgroundModel {
+func DefineBackgroundModel(r *registry.Registry, name string, opts *BackgroundModelOptions, fn StartModelOpFunc, checkFn CheckModelOpFunc) *BackgroundModel {
 	m := NewBackgroundModel(name, opts, fn, checkFn)
 	m.Register(r)
 	return m
+}
+
+// Name returns the registry name of the background model, or the empty
+// string if the model is nil (e.g. from a failed lookup).
+func (m *BackgroundModel) Name() string {
+	if m == nil {
+		return ""
+	}
+	return m.backgroundAction.Name()
 }
 
 // GenerateOperation generates a model response as a long-running operation based on the provided options.

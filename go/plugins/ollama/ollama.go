@@ -109,7 +109,7 @@ func (o *Ollama) listLocalModels(ctx context.Context) ([]ollamaLocalModel, error
 	return tagsResp.Models, nil
 }
 
-func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.ModelOptions) ai.Model {
+func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.ModelOptions) *ai.Model {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if !o.initted {
@@ -150,7 +150,7 @@ func IsDefinedModel(g *genkit.Genkit, name string) bool {
 
 // Model returns the [ai.Model] with the given name.
 // It returns nil if the model was not configured.
-func Model(g *genkit.Genkit, name string) ai.Model {
+func Model(g *genkit.Genkit, name string) *ai.Model {
 	return g.LookupModel(api.NewName(provider, name))
 }
 
@@ -343,7 +343,7 @@ func (o *Ollama) Init(ctx context.Context) []api.Action {
 
 // newModel creates an Ollama model without registering it in the Genkit registry.
 // It is used by ListActions (to generate ActionDesc) and ResolveAction (to return an Action).
-func (o *Ollama) newModel(name string, opts ai.ModelOptions) ai.Model {
+func (o *Ollama) newModel(name string, opts ai.ModelOptions) *ai.Model {
 	meta := &ai.ModelOptions{
 		Label:        "Ollama - " + name,
 		Supports:     opts.Supports,
@@ -374,9 +374,7 @@ func (o *Ollama) ListActions(ctx context.Context) []api.ActionDesc {
 			continue
 		}
 		model := o.newModel(name, ai.ModelOptions{Supports: &defaultOllamaSupports})
-		if action, ok := model.(api.Action); ok {
-			actions = append(actions, action.Desc())
-		}
+		actions = append(actions, model.Desc())
 	}
 	return actions
 }
@@ -386,11 +384,7 @@ func (o *Ollama) ResolveAction(atype api.ActionType, name string) api.Action {
 	if atype != api.ActionTypeModel {
 		return nil
 	}
-	model := o.newModel(name, ai.ModelOptions{Supports: &defaultOllamaSupports})
-	if action, ok := model.(api.Action); ok {
-		return action
-	}
-	return nil
+	return o.newModel(name, ai.ModelOptions{Supports: &defaultOllamaSupports})
 }
 
 // Ptr returns a pointer to the given value.

@@ -105,39 +105,28 @@ type ResourceOptions struct {
 // ResourceFunc is a function that loads content for a resource.
 type ResourceFunc = func(context.Context, *ResourceInput) (*ResourceOutput, error)
 
-// resource is the internal implementation of the Resource interface.
-// It holds the underlying core action and allows looking up resources
-// by name without knowing their specific input/output api.
-type resource struct {
+// Resource is a URI-addressed content provider backed by a registry action.
+// Create one with [DefineResource] or [NewResource], or fetch a registered
+// one with [LookupResource]. Pass it to [WithResources] to make it available
+// during generation.
+type Resource struct {
 	action[*ResourceInput, *ResourceOutput, struct{}]
 }
 
-// Resource represents an instance of a resource.
-type Resource interface {
-	// Name returns the name of the resource.
-	Name() string
-	// Matches reports whether this resource matches the given URI.
-	Matches(uri string) bool
-	// ExtractVariables extracts variables from a URI using this resource's template.
-	ExtractVariables(uri string) (map[string]string, error)
-	// Execute runs the resource with the given input.
-	Execute(ctx context.Context, input *ResourceInput) (*ResourceOutput, error)
-	// Register registers the resource with the given registry.
-	Register(r api.Registry)
-}
+var _ api.Action = (*Resource)(nil)
 
 // DefineResource creates a resource and registers it with the given Registry.
-func DefineResource(r api.Registry, name string, opts *ResourceOptions, fn ResourceFunc) Resource {
+func DefineResource(r api.Registry, name string, opts *ResourceOptions, fn ResourceFunc) *Resource {
 	metadata := resourceMetadata(name, opts)
-	return &resource{action: *core.DefineAction(r, api.ActionTypeResource, name, &core.ActionOptions{Metadata: metadata}, fn)}
+	return &Resource{action: *core.DefineAction(r, api.ActionTypeResource, name, &core.ActionOptions{Metadata: metadata}, fn)}
 }
 
 // NewResource creates a resource but does not register it in the registry.
 // It can be registered later via the Register method.
-func NewResource(name string, opts *ResourceOptions, fn ResourceFunc) Resource {
+func NewResource(name string, opts *ResourceOptions, fn ResourceFunc) *Resource {
 	metadata := resourceMetadata(name, opts)
 	metadata["dynamic"] = true
-	return &resource{action: *core.NewAction(api.ActionTypeResource, name, &core.ActionOptions{Metadata: metadata}, fn)}
+	return &Resource{action: *core.NewAction(api.ActionTypeResource, name, &core.ActionOptions{Metadata: metadata}, fn)}
 }
 
 // resourceMetadata creates the metadata common to both DefineResource and NewResource.
@@ -172,8 +161,17 @@ func resourceMetadata(name string, opts *ResourceOptions) map[string]any {
 	return metadata
 }
 
+// Name returns the registry name of the resource, or the empty string if the
+// resource is nil (e.g. from a failed lookup).
+func (r *Resource) Name() string {
+	if r == nil {
+		return ""
+	}
+	return r.action.Name()
+}
+
 // Matches reports whether this resource matches the given URI.
-func (r *resource) Matches(uri string) bool {
+func (r *Resource) Matches(uri string) bool {
 	resourceMeta, ok := r.Desc().Metadata["resource"].(map[string]any)
 	if !ok {
 		return false
@@ -197,7 +195,7 @@ func (r *resource) Matches(uri string) bool {
 }
 
 // ExtractVariables extracts variables from a URI using this resource's template.
-func (r *resource) ExtractVariables(uri string) (map[string]string, error) {
+func (r *Resource) ExtractVariables(uri string) (map[string]string, error) {
 	resourceMeta, ok := r.Desc().Metadata["resource"].(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("no resource metadata found")
@@ -220,15 +218,15 @@ func (r *resource) ExtractVariables(uri string) (map[string]string, error) {
 }
 
 // Execute runs the resource with the given input.
-func (r *resource) Execute(ctx context.Context, input *ResourceInput) (*ResourceOutput, error) {
+func (r *Resource) Execute(ctx context.Context, input *ResourceInput) (*ResourceOutput, error) {
 	return r.Run(ctx, input, nil)
 }
 
 // FindMatchingResource finds a resource that matches the given URI.
-func FindMatchingResource(r api.Registry, uri string) (Resource, *ResourceInput, error) {
+func FindMatchingResource(r api.Registry, uri string) (*Resource, *ResourceInput, error) {
 	for _, a := range r.ListActions() {
 		if action, ok := a.(*core.Action[*ResourceInput, *ResourceOutput, struct{}]); ok {
-			res := &resource{action: *action}
+			res := &Resource{action: *action}
 			if res.Matches(uri) {
 				variables, err := res.ExtractVariables(uri)
 				if err != nil {
@@ -243,10 +241,10 @@ func FindMatchingResource(r api.Registry, uri string) (Resource, *ResourceInput,
 }
 
 // LookupResource looks up the resource in the registry by provided name and returns it.
-func LookupResource(r api.Registry, name string) Resource {
+func LookupResource(r api.Registry, name string) *Resource {
 	action := core.ResolveActionFor[*ResourceInput, *ResourceOutput, struct{}](r, api.ActionTypeResource, name)
 	if action == nil {
 		return nil
 	}
-	return &resource{action: *action}
+	return &Resource{action: *action}
 }

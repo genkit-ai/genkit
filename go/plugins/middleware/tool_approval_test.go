@@ -25,7 +25,7 @@ import (
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
-func defineToolModel(t *testing.T, r *registry.Registry, name string, fn ai.ModelFunc) ai.Model {
+func defineToolModel(t *testing.T, r *registry.Registry, name string, fn ai.ModelFunc) *ai.Model {
 	t.Helper()
 	return ai.DefineModel(r, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},

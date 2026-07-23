@@ -44,7 +44,7 @@ func newFlowRegistry(t *testing.T) api.Registry {
 // defineRoundTripModel defines a model that emits reqs (typically tool
 // requests) on the first turn and the final text "done" once a tool response
 // is in history, driving a single tool round per Generate.
-func defineRoundTripModel(r api.Registry, name string, reqs ...*ai.Part) ai.Model {
+func defineRoundTripModel(r api.Registry, name string, reqs ...*ai.Part) *ai.Model {
 	return ai.DefineModel(r, name,
 		&ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {

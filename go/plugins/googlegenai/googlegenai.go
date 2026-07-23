@@ -189,7 +189,7 @@ func (v *VertexAI) Init(ctx context.Context) []api.Action {
 // The second argument describes the capability of the model.
 // Use [IsDefinedModel] to determine if a model is already defined.
 // After [Init] is called, only the known models are defined.
-func (ga *GoogleAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
+func (ga *GoogleAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (*ai.Model, error) {
 	ga.mu.Lock()
 	defer ga.mu.Unlock()
 	if !ga.initted {
@@ -221,7 +221,7 @@ func (ga *GoogleAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOpt
 // `endpoints/ID` or the full resource path
 // `projects/PROJECT/locations/LOCATION/endpoints/ID`. When opts is nil the
 // caller gets the default Gemini capability set.
-func (v *VertexAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
+func (v *VertexAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (*ai.Model, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if !v.initted {
@@ -249,7 +249,7 @@ func (v *VertexAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOpti
 }
 
 // DefineEmbedder defines an embedder with a given name.
-func (ga *GoogleAI) DefineEmbedder(g *genkit.Genkit, name string, embedOpts *ai.EmbedderOptions) (ai.Embedder, error) {
+func (ga *GoogleAI) DefineEmbedder(g *genkit.Genkit, name string, embedOpts *ai.EmbedderOptions) (*ai.Embedder, error) {
 	ga.mu.Lock()
 	defer ga.mu.Unlock()
 	if !ga.initted {
@@ -259,7 +259,7 @@ func (ga *GoogleAI) DefineEmbedder(g *genkit.Genkit, name string, embedOpts *ai.
 }
 
 // DefineEmbedder defines an embedder with a given name.
-func (v *VertexAI) DefineEmbedder(g *genkit.Genkit, name string, embedOpts *ai.EmbedderOptions) (ai.Embedder, error) {
+func (v *VertexAI) DefineEmbedder(g *genkit.Genkit, name string, embedOpts *ai.EmbedderOptions) (*ai.Embedder, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if !v.initted {
@@ -282,7 +282,7 @@ func (v *VertexAI) IsDefinedEmbedder(g *genkit.Genkit, name string) bool {
 // It returns nil if the model was not defined.
 //
 // Deprecated: Use the [genkit.Genkit.LookupModel] method instead.
-func GoogleAIModel(g *genkit.Genkit, name string) ai.Model {
+func GoogleAIModel(g *genkit.Genkit, name string) *ai.Model {
 	return g.LookupModel(api.NewName(googleAIProvider, name))
 }
 
@@ -290,7 +290,7 @@ func GoogleAIModel(g *genkit.Genkit, name string) ai.Model {
 // It returns nil if the model was not defined.
 //
 // Deprecated: Use the [genkit.Genkit.LookupModel] method instead.
-func VertexAIModel(g *genkit.Genkit, name string) ai.Model {
+func VertexAIModel(g *genkit.Genkit, name string) *ai.Model {
 	return g.LookupModel(api.NewName(vertexAIProvider, name))
 }
 
@@ -298,7 +298,7 @@ func VertexAIModel(g *genkit.Genkit, name string) ai.Model {
 // It returns nil if the embedder was not defined.
 //
 // Deprecated: Use the [genkit.Genkit.LookupEmbedder] method instead.
-func GoogleAIEmbedder(g *genkit.Genkit, name string) ai.Embedder {
+func GoogleAIEmbedder(g *genkit.Genkit, name string) *ai.Embedder {
 	return g.LookupEmbedder(api.NewName(googleAIProvider, name))
 }
 
@@ -306,6 +306,6 @@ func GoogleAIEmbedder(g *genkit.Genkit, name string) ai.Embedder {
 // It returns nil if the embedder was not defined.
 //
 // Deprecated: Use the [genkit.Genkit.LookupEmbedder] method instead.
-func VertexAIEmbedder(g *genkit.Genkit, name string) ai.Embedder {
+func VertexAIEmbedder(g *genkit.Genkit, name string) *ai.Embedder {
 	return g.LookupEmbedder(api.NewName(vertexAIProvider, name))
 }

@@ -107,7 +107,7 @@ func (o *OpenAICompatible) Name() string {
 }
 
 // DefineModel defines a model in the registry
-func (o *OpenAICompatible) DefineModel(provider, id string, opts ai.ModelOptions) ai.Model {
+func (o *OpenAICompatible) DefineModel(provider, id string, opts ai.ModelOptions) *ai.Model {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if !o.initted {
@@ -133,7 +133,7 @@ func (o *OpenAICompatible) DefineModel(provider, id string, opts ai.ModelOptions
 }
 
 // DefineEmbedder defines an embedder with a given name.
-func (o *OpenAICompatible) DefineEmbedder(provider, name string, embedOpts *ai.EmbedderOptions) ai.Embedder {
+func (o *OpenAICompatible) DefineEmbedder(provider, name string, embedOpts *ai.EmbedderOptions) *ai.Embedder {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if !o.initted {
@@ -178,13 +178,13 @@ func (o *OpenAICompatible) IsDefinedEmbedder(g *genkit.Genkit, name string) bool
 
 // Embedder returns the [ai.Embedder] with the given name.
 // It returns nil if the embedder was not defined.
-func (o *OpenAICompatible) Embedder(g *genkit.Genkit, name string) ai.Embedder {
+func (o *OpenAICompatible) Embedder(g *genkit.Genkit, name string) *ai.Embedder {
 	return g.LookupEmbedder(name)
 }
 
 // Model returns the [ai.Model] with the given name.
 // It returns nil if the model was not defined.
-func (o *OpenAICompatible) Model(g *genkit.Genkit, name string) ai.Model {
+func (o *OpenAICompatible) Model(g *genkit.Genkit, name string) *ai.Model {
 	return g.LookupModel(name)
 }
 
@@ -237,7 +237,7 @@ func (o *OpenAICompatible) ResolveAction(atype api.ActionType, name string) api.
 			Versions: []string{},
 			Supports: &Multimodal,
 		}); model != nil {
-			return model.(api.Action)
+			return model
 		}
 	}
 

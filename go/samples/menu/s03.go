@@ -57,7 +57,7 @@ func (ch *chatHistoryStore) Retrieve(sessionID string) chatHistory {
 	return ch.preamble
 }
 
-func setup03(g *genkit.Genkit, m ai.Model) error {
+func setup03(g *genkit.Genkit, m *ai.Model) error {
 	chatPreamblePrompt := g.DefinePrompt[dataMenuQuestionInput]("s03_chatPreamble",
 		ai.WithMessages(
 			ai.NewUserTextMessage("Hi. What's on the menu today?"),

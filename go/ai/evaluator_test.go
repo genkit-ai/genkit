@@ -211,7 +211,7 @@ func TestBatchEvaluator(t *testing.T) {
 func TestNewEvaluatorRef(t *testing.T) {
 	t.Run("creates evaluator reference with name and config", func(t *testing.T) {
 		config := map[string]any{"threshold": 0.8}
-		ref := NewEvaluatorRef("test/myEvaluator", config)
+		ref := NewActionRef("test/myEvaluator", config)
 
 		if ref.Name() != "test/myEvaluator" {
 			t.Errorf("Name() = %q, want %q", ref.Name(), "test/myEvaluator")
@@ -225,7 +225,7 @@ func TestNewEvaluatorRef(t *testing.T) {
 	})
 
 	t.Run("creates evaluator reference with nil config", func(t *testing.T) {
-		ref := NewEvaluatorRef("test/simpleEvaluator", nil)
+		ref := NewActionRef("test/simpleEvaluator", nil)
 
 		if ref.Name() != "test/simpleEvaluator" {
 			t.Errorf("Name() = %q, want %q", ref.Name(), "test/simpleEvaluator")
@@ -235,9 +235,9 @@ func TestNewEvaluatorRef(t *testing.T) {
 		}
 	})
 
-	t.Run("implements EvaluatorArg interface", func(t *testing.T) {
-		ref := NewEvaluatorRef("test/interface", nil)
-		var _ EvaluatorArg = ref // compile-time check
+	t.Run("implements Named interface", func(t *testing.T) {
+		ref := NewActionRef("test/interface", nil)
+		var _ Named = ref // compile-time check
 
 		if ref.Name() != "test/interface" {
 			t.Errorf("Name() = %q, want %q", ref.Name(), "test/interface")
@@ -262,8 +262,8 @@ func TestEvaluatorRefUsedWithEvaluate(t *testing.T) {
 		}, nil
 	})
 
-	// Use EvaluatorRef instead of direct evaluator
-	ref := NewEvaluatorRef("test/configEvaluator", "ref-config-value")
+	// Use ActionRef instead of direct evaluator
+	ref := NewActionRef("test/configEvaluator", "ref-config-value")
 
 	resp, err := Evaluate(context.Background(), r,
 		WithEvaluator(ref),
@@ -355,7 +355,7 @@ func TestEvaluateNilEvaluator(t *testing.T) {
 	t.Run("returns error for non-existent evaluator", func(t *testing.T) {
 		r := registry.New()
 
-		ref := NewEvaluatorRef("test/nonexistent", nil)
+		ref := NewActionRef("test/nonexistent", nil)
 		_, err := Evaluate(context.Background(), r,
 			WithEvaluator(ref),
 			WithDataset(&Example{Input: "test"}))

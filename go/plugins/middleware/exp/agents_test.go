@@ -30,7 +30,7 @@ import (
 )
 
 // toolModel defines a model with full tool/multiturn support backed by fn.
-func toolModel(t *testing.T, g *genkit.Genkit, name string, fn ai.ModelFunc) ai.Model {
+func toolModel(t *testing.T, g *genkit.Genkit, name string, fn ai.ModelFunc) *ai.Model {
 	t.Helper()
 	return g.DefineModel(name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
@@ -77,7 +77,7 @@ func hasToolResponse(msgs []*ai.Message) bool {
 
 // delegateOnceModel calls toolName once with the given task, then returns
 // "done" after it sees any tool response.
-func delegateOnceModel(t *testing.T, g *genkit.Genkit, name, toolName, task string) ai.Model {
+func delegateOnceModel(t *testing.T, g *genkit.Genkit, name, toolName, task string) *ai.Model {
 	return toolModel(t, g, name, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		if hasToolResponse(req.Messages) {
 			return textResp(req, "done"), nil

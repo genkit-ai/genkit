@@ -74,12 +74,12 @@ func (ge *GenkitEval) Init(ctx context.Context) []api.Action {
 
 	var actions []api.Action
 	for _, metric := range ge.Metrics {
-		actions = append(actions, ConfigureMetric(metric).(api.Action))
+		actions = append(actions, ConfigureMetric(metric))
 	}
 	return actions
 }
 
-func ConfigureMetric(metric MetricConfig) ai.Evaluator {
+func ConfigureMetric(metric MetricConfig) *ai.Evaluator {
 	switch metric.MetricType {
 	case EvaluatorDeepEqual:
 		return configureDeepEqualEvaluator()
@@ -92,7 +92,7 @@ func ConfigureMetric(metric MetricConfig) ai.Evaluator {
 	}
 }
 
-func configureRegexEvaluator() ai.Evaluator {
+func configureRegexEvaluator() *ai.Evaluator {
 	evalOptions := ai.EvaluatorOptions{
 		DisplayName: "RegExp",
 		Definition:  "Tests output against the regexp provided as reference",
@@ -140,7 +140,7 @@ func configureRegexEvaluator() ai.Evaluator {
 	})
 }
 
-func configureDeepEqualEvaluator() ai.Evaluator {
+func configureDeepEqualEvaluator() *ai.Evaluator {
 	evalOptions := ai.EvaluatorOptions{
 		DisplayName: "Deep Equal",
 		Definition:  "Tests equality of output against the provided reference",
@@ -175,7 +175,7 @@ func configureDeepEqualEvaluator() ai.Evaluator {
 	})
 }
 
-func configureJsonataEvaluator() ai.Evaluator {
+func configureJsonataEvaluator() *ai.Evaluator {
 	evalOptions := ai.EvaluatorOptions{
 		DisplayName: "JSONata",
 		Definition:  "Tests JSONata expression (provided in reference) against output",

@@ -289,11 +289,7 @@ func TestDynamicPlugin(t *testing.T) {
 		if model == nil {
 			t.Fatal("newModel() returned nil")
 		}
-		action, ok := model.(api.Action)
-		if !ok {
-			t.Fatal("newModel() result does not implement api.Action")
-		}
-		desc := action.Desc()
+		desc := model.Desc()
 		if desc.Name != "ollama/test-model" {
 			t.Errorf("newModel() name = %q, want %q", desc.Name, "ollama/test-model")
 		}

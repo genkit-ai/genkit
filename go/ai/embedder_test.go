@@ -25,9 +25,9 @@ import (
 )
 
 func TestEmbedderRef(t *testing.T) {
-	t.Run("NewEmbedderRef creates ref with name and config", func(t *testing.T) {
+	t.Run("NewActionRef creates ref with name and config", func(t *testing.T) {
 		config := map[string]any{"dimension": 768}
-		ref := NewEmbedderRef("test/embedder", config)
+		ref := NewActionRef("test/embedder", config)
 
 		if ref.Name() != "test/embedder" {
 			t.Errorf("Name() = %q, want %q", ref.Name(), "test/embedder")
@@ -37,8 +37,8 @@ func TestEmbedderRef(t *testing.T) {
 		}
 	})
 
-	t.Run("NewEmbedderRef with nil config", func(t *testing.T) {
-		ref := NewEmbedderRef("test/embedder", nil)
+	t.Run("NewActionRef with nil config", func(t *testing.T) {
+		ref := NewActionRef("test/embedder", nil)
 
 		if ref.Name() != "test/embedder" {
 			t.Errorf("Name() = %q, want %q", ref.Name(), "test/embedder")
@@ -199,7 +199,7 @@ func TestEmbedderEmbed(t *testing.T) {
 	})
 
 	t.Run("returns error on nil embedder", func(t *testing.T) {
-		var e *embedder
+		var e *Embedder
 		_, err := e.Embed(context.Background(), &EmbedRequest{})
 		if err == nil {
 			t.Error("expected error for nil embedder")
@@ -272,7 +272,7 @@ func TestEmbedFunction(t *testing.T) {
 			}, nil
 		})
 
-		ref := NewEmbedderRef("test/embedFuncRef", nil)
+		ref := NewActionRef("test/embedFuncRef", nil)
 		resp, err := Embed(context.Background(), r,
 			WithEmbedder(ref),
 			WithTextDocs("test document"),
@@ -303,7 +303,7 @@ func TestEmbedFunction(t *testing.T) {
 		}
 	})
 
-	t.Run("uses config from EmbedderRef", func(t *testing.T) {
+	t.Run("uses config from ActionRef", func(t *testing.T) {
 		r := newTestRegistry(t)
 		var capturedOpts any
 
@@ -313,7 +313,7 @@ func TestEmbedFunction(t *testing.T) {
 		})
 
 		config := map[string]any{"dimension": 768}
-		ref := NewEmbedderRef("test/embedRefConfig", config)
+		ref := NewActionRef("test/embedRefConfig", config)
 
 		_, err := Embed(context.Background(), r,
 			WithEmbedder(ref),
@@ -326,7 +326,7 @@ func TestEmbedFunction(t *testing.T) {
 		}
 	})
 
-	t.Run("explicit config overrides EmbedderRef config", func(t *testing.T) {
+	t.Run("explicit config overrides ActionRef config", func(t *testing.T) {
 		r := newTestRegistry(t)
 		var capturedOpts any
 
@@ -337,7 +337,7 @@ func TestEmbedFunction(t *testing.T) {
 
 		refConfig := map[string]any{"dimension": 768}
 		explicitConfig := map[string]any{"dimension": 512}
-		ref := NewEmbedderRef("test/embedOverrideConfig", refConfig)
+		ref := NewActionRef("test/embedOverrideConfig", refConfig)
 
 		_, err := Embed(context.Background(), r,
 			WithEmbedder(ref),

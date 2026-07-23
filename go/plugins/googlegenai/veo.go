@@ -37,7 +37,7 @@ func newVeoModel(
 	client *genai.Client,
 	name string,
 	info ai.ModelOptions,
-) ai.BackgroundModel {
+) *ai.BackgroundModel {
 	provider := googleAIProvider
 	if client.ClientConfig().Backend == genai.BackendVertexAI {
 		provider = vertexAIProvider

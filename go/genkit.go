@@ -537,7 +537,7 @@ func (g *Genkit) ListTools() []ai.AnyTool {
 }
 
 // DefineModel defines a custom model implementation, registers it as a [core.Action]
-// of type Model, and returns an [ai.Model] interface.
+// of type Model, and returns the concrete [*ai.Model].
 //
 // The `name` argument is the unique identifier for the model (e.g., "myProvider/myModel").
 // The `opts` argument provides metadata about the model's capabilities ([ai.ModelOptions]).
@@ -593,7 +593,7 @@ func (g *Genkit) ListTools() []ai.AnyTool {
 //			return resp, nil
 //		},
 //	)
-func (g *Genkit) DefineModel(name string, opts *ai.ModelOptions, fn ai.ModelFunc) ai.Model {
+func (g *Genkit) DefineModel(name string, opts *ai.ModelOptions, fn ai.ModelFunc) *ai.Model {
 	return ai.DefineModel(g.reg, name, opts, fn)
 }
 
@@ -603,7 +603,7 @@ func (g *Genkit) DefineModel(name string, opts *ai.ModelOptions, fn ai.ModelFunc
 // The `name` is the identifier the model uses to request the background model. The `opts`
 // are the options for the background model. The `startFn` is the function that starts the background model.
 // The `checkFn` is the function that checks the status of the background model.
-func (g *Genkit) DefineBackgroundModel(name string, opts *ai.BackgroundModelOptions, startFn ai.StartModelOpFunc, checkFn ai.CheckModelOpFunc) ai.BackgroundModel {
+func (g *Genkit) DefineBackgroundModel(name string, opts *ai.BackgroundModelOptions, startFn ai.StartModelOpFunc, checkFn ai.CheckModelOpFunc) *ai.BackgroundModel {
 	return ai.DefineBackgroundModel(g.reg, name, opts, startFn, checkFn)
 }
 
@@ -612,14 +612,14 @@ func (g *Genkit) DefineBackgroundModel(name string, opts *ai.BackgroundModelOpti
 // given identifier is registered (e.g., via [Genkit.DefineModel] or a plugin).
 // It will try to resolve the model dynamically by matching the provider name;
 // this does not necessarily mean the model is valid.
-func (g *Genkit) LookupModel(name string) ai.Model {
+func (g *Genkit) LookupModel(name string) *ai.Model {
 	return ai.LookupModel(g.reg, name)
 }
 
 // LookupBackgroundModel retrieves a registered background model by its provider and name.
 // It returns the background action instance if found, or `nil` if no background model with the
 // given identifier is registered.
-func (g *Genkit) LookupBackgroundModel(name string) ai.BackgroundModel {
+func (g *Genkit) LookupBackgroundModel(name string) *ai.BackgroundModel {
 	return ai.LookupBackgroundModel(g.reg, name)
 }
 
@@ -835,7 +835,7 @@ func (g *Genkit) LookupMiddleware(name string) *ai.MiddlewareDesc {
 // # Options
 //
 // Model and Configuration:
-//   - [ai.WithModel]: Specify the model (accepts [ai.Model] or [ai.ModelRef])
+//   - [ai.WithModel]: Specify the model (accepts [*ai.Model] or [ai.ActionRef])
 //   - [ai.WithModelName]: Specify model by name string
 //   - [ai.WithConfig]: Set generation parameters (temperature, max tokens, etc.)
 //
@@ -1023,7 +1023,7 @@ func (g *Genkit) GenerateWithRequest(ctx context.Context, actionOpts *ai.Generat
 // # Options
 //
 // Model and Configuration:
-//   - [ai.WithModel]: Specify the model (accepts [ai.Model] or [ai.ModelRef])
+//   - [ai.WithModel]: Specify the model (accepts [*ai.Model] or [ai.ActionRef])
 //   - [ai.WithModelName]: Specify model by name string (e.g., "googleai/gemini-3-flash-preview")
 //   - [ai.WithConfig]: Set generation parameters (temperature, max tokens, etc.)
 //
@@ -1246,7 +1246,7 @@ func (g *Genkit) GenerateDataStream[Out any](ctx context.Context, opts ...ai.Gen
 //
 // # Options
 //
-//   - [ai.WithEmbedder]: Specify the embedder (accepts [ai.Embedder] or [ai.EmbedderRef])
+//   - [ai.WithEmbedder]: Specify the embedder (accepts [*ai.Embedder] or [ai.ActionRef])
 //   - [ai.WithEmbedderName]: Specify embedder by name string
 //   - [ai.WithConfig]: Set embedder-specific configuration
 //   - [ai.WithTextDocs]: Provide text to embed
@@ -1279,7 +1279,7 @@ func (g *Genkit) Embed(ctx context.Context, opts ...ai.EmbedderOption) (*ai.Embe
 //
 // For embedders that don't need to be registered (e.g., for plugin development),
 // use [ai.NewEmbedder] instead.
-func (g *Genkit) DefineEmbedder(name string, opts *ai.EmbedderOptions, fn ai.EmbedderFunc) ai.Embedder {
+func (g *Genkit) DefineEmbedder(name string, opts *ai.EmbedderOptions, fn ai.EmbedderFunc) *ai.Embedder {
 	return ai.DefineEmbedder(g.reg, name, opts, fn)
 }
 
@@ -1287,7 +1287,7 @@ func (g *Genkit) DefineEmbedder(name string, opts *ai.EmbedderOptions, fn ai.Emb
 // It returns the embedder instance if found, or `nil` if no embedder with the
 // given identifier is registered (e.g., via [Genkit.DefineEmbedder] or a plugin).
 // It will try to resolve the embedder dynamically if the embedder is not found.
-func (g *Genkit) LookupEmbedder(name string) ai.Embedder {
+func (g *Genkit) LookupEmbedder(name string) *ai.Embedder {
 	return ai.LookupEmbedder(g.reg, name)
 }
 
@@ -1312,7 +1312,7 @@ func (g *Genkit) LookupPlugin(name string) api.Plugin {
 // metadata about the evaluator ([ai.EvaluatorOptions]). The `eval` function
 // implements the logic to score a single test case and returns the results
 // in an [ai.EvaluatorCallbackResponse].
-func (g *Genkit) DefineEvaluator(name string, opts *ai.EvaluatorOptions, fn ai.EvaluatorFunc) ai.Evaluator {
+func (g *Genkit) DefineEvaluator(name string, opts *ai.EvaluatorOptions, fn ai.EvaluatorFunc) *ai.Evaluator {
 	return ai.DefineEvaluator(g.reg, name, opts, fn)
 }
 
@@ -1327,7 +1327,7 @@ func (g *Genkit) DefineEvaluator(name string, opts *ai.EvaluatorOptions, fn ai.E
 // metadata about the evaluator ([ai.EvaluatorOptions]). The `eval` function
 // implements the logic to score the dataset and returns the aggregated results
 // in an [ai.EvaluatorResponse].
-func (g *Genkit) DefineBatchEvaluator(name string, opts *ai.EvaluatorOptions, fn ai.BatchEvaluatorFunc) ai.Evaluator {
+func (g *Genkit) DefineBatchEvaluator(name string, opts *ai.EvaluatorOptions, fn ai.BatchEvaluatorFunc) *ai.Evaluator {
 	return ai.DefineBatchEvaluator(g.reg, name, opts, fn)
 }
 
@@ -1335,7 +1335,7 @@ func (g *Genkit) DefineBatchEvaluator(name string, opts *ai.EvaluatorOptions, fn
 // It returns the evaluator instance if found, or `nil` if no evaluator with the
 // given identifier is registered (e.g., via [Genkit.DefineEvaluator], [Genkit.DefineBatchEvaluator],
 // or a plugin).
-func (g *Genkit) LookupEvaluator(name string) ai.Evaluator {
+func (g *Genkit) LookupEvaluator(name string) *ai.Evaluator {
 	return ai.LookupEvaluator(g.reg, name)
 }
 
@@ -1346,7 +1346,7 @@ func (g *Genkit) LookupEvaluator(name string) ai.Evaluator {
 //
 // # Options
 //
-//   - [ai.WithEvaluator]: Specify the evaluator (accepts [ai.Evaluator] or [ai.EvaluatorRef])
+//   - [ai.WithEvaluator]: Specify the evaluator (accepts [*ai.Evaluator] or [ai.ActionRef])
 //   - [ai.WithEvaluatorName]: Specify evaluator by name string
 //   - [ai.WithDataset]: Provide the dataset of examples to evaluate
 //   - [ai.WithID]: Set a unique identifier for this evaluation run
@@ -1605,12 +1605,12 @@ func (g *Genkit) IsDefinedFormat(name string) bool {
 //	    Content: []*ai.Part{ai.NewTextPart(string(content))},
 //	  }, nil
 //	})
-func (g *Genkit) DefineResource(name string, opts *ai.ResourceOptions, fn ai.ResourceFunc) ai.Resource {
+func (g *Genkit) DefineResource(name string, opts *ai.ResourceOptions, fn ai.ResourceFunc) *ai.Resource {
 	return ai.DefineResource(g.reg, name, opts, fn)
 }
 
 // FindMatchingResource finds a resource that matches the given URI.
-func (g *Genkit) FindMatchingResource(uri string) (ai.Resource, *ai.ResourceInput, error) {
+func (g *Genkit) FindMatchingResource(uri string) (*ai.Resource, *ai.ResourceInput, error) {
 	return ai.FindMatchingResource(g.reg, uri)
 }
 
@@ -1635,14 +1635,14 @@ func (g *Genkit) FindMatchingResource(uri string) (ai.Resource, *ai.ResourceInpu
 //	  }),
 //	  ai.WithResources(resource),
 //	)
-func NewResource(name string, opts *ai.ResourceOptions, fn ai.ResourceFunc) ai.Resource {
+func NewResource(name string, opts *ai.ResourceOptions, fn ai.ResourceFunc) *ai.Resource {
 	return ai.NewResource(name, opts, fn)
 }
 
 // ListResources returns a slice of all resource actions
-func (g *Genkit) ListResources() []ai.Resource {
+func (g *Genkit) ListResources() []*ai.Resource {
 	acts := g.reg.ListActions()
-	resources := []ai.Resource{}
+	resources := []*ai.Resource{}
 	for _, action := range acts {
 		actionDesc := action.Desc()
 		if actionDesc.Type == api.ActionTypeResource {

@@ -120,23 +120,10 @@ func TestDefineEmbedderRegistersDistinctModelsOnSameServer(t *testing.T) {
 		t.Fatalf("expected lookup for %q to succeed", secondModel)
 	}
 
-	firstDefinedAction, ok := firstDefined.(api.Action)
-	if !ok {
-		t.Fatalf("expected %q embedder to implement api.Action", firstModel)
-	}
-	secondDefinedAction, ok := secondDefined.(api.Action)
-	if !ok {
-		t.Fatalf("expected %q embedder to implement api.Action", secondModel)
-	}
-
-	firstLookupAction, ok := firstLookup.(api.Action)
-	if !ok {
-		t.Fatalf("expected lookup for %q to implement api.Action", firstModel)
-	}
-	secondLookupAction, ok := secondLookup.(api.Action)
-	if !ok {
-		t.Fatalf("expected lookup for %q to implement api.Action", secondModel)
-	}
+	var firstDefinedAction api.Action = firstDefined
+	var secondDefinedAction api.Action = secondDefined
+	var firstLookupAction api.Action = firstLookup
+	var secondLookupAction api.Action = secondLookup
 
 	if got, want := firstDefinedAction.Desc().Name, api.NewName(provider, firstModel); got != want {
 		t.Fatalf("first Desc().Name = %q, want %q", got, want)
@@ -168,10 +155,7 @@ func TestDefineEmbedderSetsDefaultMetadata(t *testing.T) {
 	g, o := newTestGenkit(t, server.URL)
 	embedder := o.DefineEmbedder(g, model, 768, nil)
 
-	action, ok := embedder.(api.Action)
-	if !ok {
-		t.Fatal("expected embedder to implement api.Action")
-	}
+	var action api.Action = embedder
 
 	desc := action.Desc()
 	if got, want := desc.Name, api.NewName(provider, model); got != want {
@@ -221,8 +205,7 @@ func TestDefineEmbedderPreservesProvidedMetadata(t *testing.T) {
 		ConfigSchema: map[string]any{"type": "object"},
 	})
 
-	action := embedder.(api.Action)
-	desc := action.Desc()
+	desc := embedder.Desc()
 
 	info := desc.Metadata["info"].(map[string]any)
 	if got, want := info["label"], "Custom Label"; got != want {

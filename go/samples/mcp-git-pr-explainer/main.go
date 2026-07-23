@@ -89,7 +89,7 @@ func main() {
 		logger.FromContext(ctx).Error("failed to list GitHub tools", "error", err)
 		os.Exit(1)
 	}
-	var toolArgs []ai.ToolArg
+	var toolArgs []ai.Named
 	for _, t := range tools {
 		toolArgs = append(toolArgs, t)
 	}

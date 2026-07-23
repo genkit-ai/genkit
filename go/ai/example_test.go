@@ -133,10 +133,10 @@ func ExampleNewMediaPart() {
 }
 
 // This example demonstrates creating a model reference with configuration.
-func ExampleNewModelRef() {
+func ExampleNewActionRef() {
 	// Create a reference to a model with custom configuration
 	// The config type depends on the model provider
-	modelRef := ai.NewModelRef("googleai/gemini-2.5-flash", map[string]any{
+	modelRef := ai.NewActionRef("googleai/gemini-2.5-flash", map[string]any{
 		"temperature": 0.7,
 	})
 

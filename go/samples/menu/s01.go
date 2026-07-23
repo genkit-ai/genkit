@@ -21,7 +21,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 )
 
-func setup01(g *genkit.Genkit, m ai.Model) error {
+func setup01(g *genkit.Genkit, m *ai.Model) error {
 	g.DefinePrompt[menuQuestionInput]("s01_vanillaPrompt",
 		ai.WithPrompt(`
 You are acting as a helpful AI assistant named "Walt" that can answer

@@ -34,46 +34,18 @@ type EvaluatorFunc = func(context.Context, *EvaluatorCallbackRequest) (*Evaluato
 // BatchEvaluatorFunc is the function type for batch evaluator implementations.
 type BatchEvaluatorFunc = func(context.Context, *EvaluatorRequest) (*EvaluatorResponse, error)
 
-// Evaluator represents a evaluator action.
-type Evaluator interface {
-	// Name returns the name of the evaluator.
-	Name() string
-	// Evaluates a dataset.
-	Evaluate(ctx context.Context, req *EvaluatorRequest) (*EvaluatorResponse, error)
-	// Register registers the evaluator with the given registry.
-	Register(r api.Registry)
-}
-
-// EvaluatorArg is the interface for evaluator arguments. It can either be the evaluator action itself or a reference to be looked up.
-type EvaluatorArg interface {
-	Name() string
-}
-
-// EvaluatorRef is a struct to hold evaluator name and configuration.
-type EvaluatorRef struct {
-	name   string
-	config any
-}
-
-// NewEvaluatorRef creates a new EvaluatorRef with the given name and configuration.
-func NewEvaluatorRef(name string, config any) EvaluatorRef {
-	return EvaluatorRef{name: name, config: config}
-}
-
-// Name returns the name of the evaluator.
-func (e EvaluatorRef) Name() string {
-	return e.name
-}
-
-// Config returns the configuration to use by default for this evaluator.
-func (e EvaluatorRef) Config() any {
-	return e.config
-}
-
-// evaluator is an action with functions specific to evaluating a dataset.
-type evaluator struct {
+// Evaluator is a dataset evaluator backed by a registry action. Create one
+// with [DefineEvaluator], [DefineBatchEvaluator], or their New* equivalents,
+// or fetch a registered one with [LookupEvaluator]. Pass it to
+// [WithEvaluator] to use it with [Evaluate].
+type Evaluator struct {
 	action[*EvaluatorRequest, *EvaluatorResponse, struct{}]
 }
+
+var (
+	_ api.Action = (*Evaluator)(nil)
+	_ Named      = (*Evaluator)(nil)
+)
 
 // Example is a single example that requires evaluation
 type Example struct {
@@ -161,9 +133,9 @@ type EvaluatorCallbackRequest struct {
 // EvaluatorCallbackResponse is the result on evaluating a single [Example]
 type EvaluatorCallbackResponse = EvaluationResult
 
-// NewEvaluator creates a new [Evaluator].
+// NewEvaluator creates a new unregistered [Evaluator].
 // This method processes the input dataset one-by-one.
-func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluator {
+func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) *Evaluator {
 	if name == "" {
 		panic("ai.NewEvaluator: evaluator name is required")
 	}
@@ -189,7 +161,7 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 		}
 	}
 
-	return &evaluator{
+	return &Evaluator{
 		action: *core.NewAction(api.ActionTypeEvaluator, name, &core.ActionOptions{
 			Metadata:    metadata,
 			InputSchema: inputSchema,
@@ -250,16 +222,16 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 
 // DefineEvaluator creates a new [Evaluator] and registers it.
 // This method processes the input dataset one-by-one.
-func DefineEvaluator(r api.Registry, name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluator {
+func DefineEvaluator(r api.Registry, name string, opts *EvaluatorOptions, fn EvaluatorFunc) *Evaluator {
 	e := NewEvaluator(name, opts, fn)
 	e.Register(r)
 	return e
 }
 
-// NewBatchEvaluator creates a new [Evaluator].
+// NewBatchEvaluator creates a new unregistered [Evaluator].
 // This method provides the full [EvaluatorRequest] to the callback function,
 // giving more flexibility to the user for processing the data, such as batching or parallelization.
-func NewBatchEvaluator(name string, opts *EvaluatorOptions, fn BatchEvaluatorFunc) Evaluator {
+func NewBatchEvaluator(name string, opts *EvaluatorOptions, fn BatchEvaluatorFunc) *Evaluator {
 	if name == "" {
 		panic("ai.NewBatchEvaluator: batch evaluator name is required")
 	}
@@ -277,7 +249,7 @@ func NewBatchEvaluator(name string, opts *EvaluatorOptions, fn BatchEvaluatorFun
 		},
 	}
 
-	return &evaluator{
+	return &Evaluator{
 		action: *core.NewAction(api.ActionTypeEvaluator, name, &core.ActionOptions{Metadata: metadata}, fn),
 	}
 }
@@ -285,26 +257,35 @@ func NewBatchEvaluator(name string, opts *EvaluatorOptions, fn BatchEvaluatorFun
 // DefineBatchEvaluator creates a new [Evaluator] and registers it.
 // This method provides the full [EvaluatorRequest] to the callback function,
 // giving more flexibility to the user for processing the data, such as batching or parallelization.
-func DefineBatchEvaluator(r api.Registry, name string, opts *EvaluatorOptions, fn BatchEvaluatorFunc) Evaluator {
+func DefineBatchEvaluator(r api.Registry, name string, opts *EvaluatorOptions, fn BatchEvaluatorFunc) *Evaluator {
 	e := NewBatchEvaluator(name, opts, fn)
-	e.(*evaluator).Register(r)
+	e.Register(r)
 	return e
 }
 
 // LookupEvaluator looks up an [Evaluator] registered by [DefineEvaluator].
 // It returns nil if the evaluator was not defined.
-func LookupEvaluator(r api.Registry, name string) Evaluator {
+func LookupEvaluator(r api.Registry, name string) *Evaluator {
 	action := core.ResolveActionFor[*EvaluatorRequest, *EvaluatorResponse, struct{}](r, api.ActionTypeEvaluator, name)
 	if action == nil {
 		return nil
 	}
-	return &evaluator{
+	return &Evaluator{
 		action: *action,
 	}
 }
 
+// Name returns the registry name of the evaluator, or the empty string if the
+// evaluator is nil (e.g. from a failed lookup).
+func (e *Evaluator) Name() string {
+	if e == nil {
+		return ""
+	}
+	return e.action.Name()
+}
+
 // Evaluate runs the given [Evaluator].
-func (e *evaluator) Evaluate(ctx context.Context, req *EvaluatorRequest) (*EvaluatorResponse, error) {
+func (e *Evaluator) Evaluate(ctx context.Context, req *EvaluatorRequest) (*EvaluatorResponse, error) {
 	if e == nil {
 		return nil, core.NewError(core.INVALID_ARGUMENT, "Evaluator.Evaluate: evaluator called on a nil evaluator; check that all evaluators are defined")
 	}
@@ -324,7 +305,7 @@ func Evaluate(ctx context.Context, r api.Registry, opts ...EvaluatorOption) (*Ev
 	if evalOpts.Evaluator == nil {
 		return nil, fmt.Errorf("ai.Evaluate: evaluator must be set")
 	}
-	e, ok := evalOpts.Evaluator.(Evaluator)
+	e, ok := evalOpts.Evaluator.(*Evaluator)
 	if !ok {
 		e = LookupEvaluator(r, evalOpts.Evaluator.Name())
 	}
@@ -332,8 +313,8 @@ func Evaluate(ctx context.Context, r api.Registry, opts ...EvaluatorOption) (*Ev
 		return nil, fmt.Errorf("ai.Evaluate: evaluator not found: %s", evalOpts.Evaluator.Name())
 	}
 
-	if evalRef, ok := evalOpts.Evaluator.(EvaluatorRef); ok && evalOpts.Config == nil {
-		evalOpts.Config = evalRef.Config()
+	if ref, ok := evalOpts.Evaluator.(ActionRef); ok && evalOpts.Config == nil {
+		evalOpts.Config = ref.Config()
 	}
 
 	req := &EvaluatorRequest{

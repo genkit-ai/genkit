@@ -30,7 +30,7 @@ type imageURLInput struct {
 	ImageURL string `json:"imageUrl"`
 }
 
-func setup05(g *genkit.Genkit, model ai.Model) error {
+func setup05(g *genkit.Genkit, model *ai.Model) error {
 	text := `Extract _all_ of the text, in order, from the following image of a restaurant menu.
 
 {{media url=imageUrl}}`

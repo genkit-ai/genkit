@@ -113,14 +113,10 @@ func (s *GenkitMCPServer) discoverAndCategorizeActions() ([]ai.AnyTool, []api.Ac
 	toolActions := s.genkit.ListTools()
 	resources := s.genkit.ListResources()
 
-	// Convert ai.Resource to api.Action
+	// Convert *ai.Resource to api.Action
 	resourceActions := make([]api.Action, len(resources))
 	for i, resource := range resources {
-		if resourceAction, ok := resource.(api.Action); ok {
-			resourceActions[i] = resourceAction
-		} else {
-			return nil, nil, fmt.Errorf("resource %s does not implement api.Action", resource.Name())
-		}
+		resourceActions[i] = resource
 	}
 
 	return toolActions, resourceActions, nil

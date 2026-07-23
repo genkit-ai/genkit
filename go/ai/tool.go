@@ -42,15 +42,9 @@ type ToolFunc[In, Out any] = func(ctx context.Context, input In) (Out, error)
 // the data the caller passed when restarting.
 type InterruptibleToolFunc[In, Out, Res any] = func(ctx context.Context, input In, resume *Res) (Out, error)
 
-// ToolArg is the interface for tool arguments to generate calls (e.g.
-// [WithTools]). It can either be a tool value ([*Tool], [*InterruptibleTool],
-// or any [AnyTool]) or a [ToolName] to be looked up.
-type ToolArg interface {
-	Name() string
-}
-
 // ToolName is a distinct type for a tool name.
-// It is meant to be passed where a ToolArg is expected but no tool value is had.
+// It is meant to be passed where a [Named] is expected (e.g. [WithTools]) but
+// no tool value is had.
 type ToolName string
 
 // Name returns the name of the tool.
@@ -200,9 +194,16 @@ type InterruptibleTool[In, Out, Res any] struct {
 	tool[In, Out]
 }
 
+// Tools are registerable and can be passed as [Named] (e.g. to [WithTools]),
+// but are intentionally not [api.Action]: the raw action surface (RunJSON,
+// Desc) speaks the internal multipart envelope, which [Tool.RunRaw] and
+// [Tool.Definition] translate out of.
 var (
-	_ AnyTool = (*Tool[any, any])(nil)
-	_ AnyTool = (*InterruptibleTool[any, any, any])(nil)
+	_ AnyTool          = (*Tool[any, any])(nil)
+	_ AnyTool          = (*InterruptibleTool[any, any, any])(nil)
+	_ api.Registerable = (*Tool[any, any])(nil)
+	_ Named            = (*Tool[any, any])(nil)
+	_ Named            = ToolName("")
 )
 
 // DefineTool creates a new [Tool] and registers it.
@@ -546,7 +547,7 @@ func LookupTool(r api.Registry, name string) AnyTool {
 
 // resolveUniqueTools resolves the list of tool refs to a list of all tool names and new tools that must be registered.
 // Returns an error if there are tool refs with duplicate names.
-func resolveUniqueTools(r api.Registry, toolArgs []ToolArg) (toolNames []string, newTools []AnyTool, err error) {
+func resolveUniqueTools(r api.Registry, toolArgs []Named) (toolNames []string, newTools []AnyTool, err error) {
 	toolMap := make(map[string]bool)
 
 	for _, toolRef := range toolArgs {

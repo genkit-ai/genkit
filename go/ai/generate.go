@@ -32,33 +32,7 @@ import (
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/uuid"
-	"github.com/invopop/jsonschema"
 )
-
-// Model represents a model that can generate content based on a request.
-type Model interface {
-	// Name returns the registry name of the model.
-	Name() string
-	// Generate applies the [Model] to provided request, handling tool requests and handles streaming.
-	Generate(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error)
-	// Register registers the model with the given registry.
-	Register(r api.Registry)
-}
-
-// ModelArg is the interface for model arguments. It can either be the model action itself or a reference to be looked up.
-type ModelArg interface {
-	Name() string
-}
-
-// ModelRef is a struct to hold model name and configuration.
-//
-// ModelRef supports JSON marshaling: it serializes as a plain string when
-// only a name is present, or as {"name": "...", "config": ...} when
-// configuration is also set.
-type ModelRef struct {
-	name   string
-	config any
-}
 
 // ToolConfig handles configuration around tool calls during generation.
 type ToolConfig struct {
@@ -78,10 +52,20 @@ type ModelStreamCallback = func(context.Context, *ModelResponseChunk) error
 // field itself, so the containment stays an internal detail of each primitive.
 type action[In, Out, Stream any] = core.Action[In, Out, Stream]
 
-// model is an action with functions specific to model generation such as Generate().
-type model struct {
+// Model is a generative model backed by a registry action. Create one with
+// [DefineModel] or [NewModel], or fetch a registered one with [LookupModel].
+// Pass it to [WithModel] to use it for generation.
+type Model struct {
 	action[*ModelRequest, *ModelResponse, *ModelResponseChunk]
 }
+
+// Model is a full registry action and can be passed anywhere an [api.Action]
+// is accepted (e.g. [genkit.Handler]) as well as anywhere a [Named] is
+// accepted (e.g. [WithModel]).
+var (
+	_ api.Action = (*Model)(nil)
+	_ Named      = (*Model)(nil)
+)
 
 // generateAction is the type for a utility model generation action that takes in a GenerateActionOptions instead of a ModelRequest.
 type generateAction = core.Action[*GenerateActionOptions, *ModelResponse, *ModelResponseChunk]
@@ -134,8 +118,10 @@ func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 		}))
 }
 
-// NewModel creates a new [Model].
-func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
+// NewModel creates a new unregistered [Model]. Register it with
+// [Model.Register] or pass it to [DefineModel] instead to define and register
+// in one step.
+func NewModel(name string, opts *ModelOptions, fn ModelFunc) *Model {
 	if name == "" {
 		panic("ai.NewModel: name is required")
 	}
@@ -185,14 +171,14 @@ func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
 		addAutomaticTelemetry(),
 	)(fn)
 
-	return &model{*core.NewStreamingAction(api.ActionTypeModel, name, &core.ActionOptions{
+	return &Model{*core.NewStreamingAction(api.ActionTypeModel, name, &core.ActionOptions{
 		Metadata:    metadata,
 		InputSchema: inputSchema,
 	}, fn)}
 }
 
 // DefineModel creates a new [Model] and registers it.
-func DefineModel(r api.Registry, name string, opts *ModelOptions, fn ModelFunc) Model {
+func DefineModel(r api.Registry, name string, opts *ModelOptions, fn ModelFunc) *Model {
 	m := NewModel(name, opts, fn)
 	m.Register(r)
 	return m
@@ -201,12 +187,12 @@ func DefineModel(r api.Registry, name string, opts *ModelOptions, fn ModelFunc) 
 // LookupModel looks up a [Model] registered by [DefineModel].
 // It will try to resolve the model dynamically if the model is not found.
 // It returns nil if the model was not resolved.
-func LookupModel(r api.Registry, name string) Model {
+func LookupModel(r api.Registry, name string) *Model {
 	action := core.ResolveActionFor[*ModelRequest, *ModelResponse, *ModelResponseChunk](r, api.ActionTypeModel, name)
 	if action == nil {
 		return nil
 	}
-	return &model{
+	return &Model{
 		action: *action,
 	}
 }
@@ -303,7 +289,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		// Native constrained output is enabled only when the user has
 		// requested it, the model supports it, and there's a JSON schema.
 		outputCfg.Constrained = opts.Output.JsonSchema != nil &&
-			opts.Output.Constrained && outputCfg.Constrained && m != nil && m.(*model).supportsConstrained(len(toolDefs) > 0)
+			opts.Output.Constrained && outputCfg.Constrained && m.supportsConstrained(len(toolDefs) > 0)
 
 		// Add schema instructions to prompt when not using native constraints.
 		// This is a no-op for unstructured output requests.
@@ -673,8 +659,8 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 		messages = append(messages, NewUserTextMessage(prompt))
 	}
 
-	if modelRef, ok := genOpts.Model.(ModelRef); ok && genOpts.Config == nil {
-		if cfg := modelRef.Config(); !base.IsNil(cfg) {
+	if ref, ok := genOpts.Model.(ActionRef); ok && genOpts.Config == nil {
+		if cfg := ref.Config(); !base.IsNil(cfg) {
 			genOpts.Config = cfg
 		}
 	}
@@ -887,8 +873,18 @@ func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...Ge
 	}
 }
 
-// Generate applies the [Action] to provided request.
-func (m *model) Generate(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+// Name returns the registry name of the model, or the empty string if the
+// model is nil (e.g. from a failed lookup).
+func (m *Model) Name() string {
+	if m == nil {
+		return ""
+	}
+	return m.action.Name()
+}
+
+// Generate applies the [Model] to the provided request, optionally streaming
+// chunks through cb.
+func (m *Model) Generate(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 	if m == nil {
 		return nil, core.NewError(core.INVALID_ARGUMENT, "Model.Generate: generate called on a nil model; check that all models are defined")
 	}
@@ -897,7 +893,7 @@ func (m *model) Generate(ctx context.Context, req *ModelRequest, cb ModelStreamC
 }
 
 // supportsConstrained returns whether the model supports constrained output.
-func (m *model) supportsConstrained(hasTools bool) bool {
+func (m *Model) supportsConstrained(hasTools bool) bool {
 	if m == nil {
 		return false
 	}
@@ -1389,81 +1385,6 @@ func NewResume(restarts, responds []*Part) *GenerateActionResume {
 	return &GenerateActionResume{
 		Restart: restarts,
 		Respond: responds,
-	}
-}
-
-// NewModelRef creates a new ModelRef with the given name and configuration.
-func NewModelRef(name string, config any) ModelRef {
-	return ModelRef{name: name, config: config}
-}
-
-// Name returns the name of the model.
-func (m ModelRef) Name() string {
-	return m.name
-}
-
-// Config returns the configuration to use by default for this model.
-func (m ModelRef) Config() any {
-	return m.config
-}
-
-// MarshalJSON implements [json.Marshaler]. ModelRef always marshals as a
-// JSON object with "name" and optional "config" fields.
-func (m ModelRef) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		Name   string `json:"name"`
-		Config any    `json:"config,omitempty"`
-	}{
-		Name:   m.name,
-		Config: m.config,
-	})
-}
-
-// UnmarshalJSON implements [json.Unmarshaler]. It accepts either a JSON
-// object with "name" and optional "config" fields, or a plain string
-// (interpreted as the model name).
-func (m *ModelRef) UnmarshalJSON(data []byte) error {
-	// Try string shorthand first.
-	var name string
-	if err := json.Unmarshal(data, &name); err == nil {
-		m.name = name
-		m.config = nil
-		return nil
-	}
-	var obj struct {
-		Name   string          `json:"name"`
-		Config json.RawMessage `json:"config,omitempty"`
-	}
-	if err := json.Unmarshal(data, &obj); err != nil {
-		return err
-	}
-	m.name = obj.Name
-	if len(obj.Config) > 0 {
-		var config any
-		if err := json.Unmarshal(obj.Config, &config); err != nil {
-			return err
-		}
-		m.config = config
-	}
-	return nil
-}
-
-// JSONSchema implements the invopop/jsonschema customSchemaImpl interface
-// so that schema reflection produces the correct object schema instead of
-// an empty object (ModelRef has only unexported fields).
-func (ModelRef) JSONSchema() *jsonschema.Schema {
-	props := jsonschema.NewProperties()
-	props.Set("name", &jsonschema.Schema{
-		Type:        "string",
-		Description: "Model name (e.g. \"googleai/gemini-2.5-flash\")",
-	})
-	props.Set("config", &jsonschema.Schema{
-		Description: "Optional model configuration",
-	})
-	return &jsonschema.Schema{
-		Type:       "object",
-		Properties: props,
-		Required:   []string{"name"},
 	}
 }
 

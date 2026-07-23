@@ -145,16 +145,16 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 
 	// define default models
 	for model, opts := range supportedModels {
-		actions = append(actions, a.DefineModel(model, opts).(api.Action))
+		actions = append(actions, a.DefineModel(model, opts))
 	}
 
 	return actions
 }
 
-func (a *Anthropic) Model(g *genkit.Genkit, id string) ai.Model {
+func (a *Anthropic) Model(g *genkit.Genkit, id string) *ai.Model {
 	return a.openAICompatible.Model(g, api.NewName(provider, id))
 }
 
-func (a *Anthropic) DefineModel(id string, opts ai.ModelOptions) ai.Model {
+func (a *Anthropic) DefineModel(id string, opts ai.ModelOptions) *ai.Model {
 	return a.openAICompatible.DefineModel(provider, id, opts)
 }

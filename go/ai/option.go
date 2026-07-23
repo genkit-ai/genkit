@@ -96,10 +96,10 @@ func WithConfig(config any) ConfigOption {
 // commonGenOptions are common options for model generation, prompt definition, and prompt execution.
 type commonGenOptions struct {
 	configOptions
-	Model              ModelArg     // Model to use.
+	Model              Named        // Model to use.
 	MessagesFn         MessagesFn   // Function to generate messages.
-	Tools              []ToolArg    // References to tools to use.
-	Resources          []Resource   // Resources to be temporarily available during generation.
+	Tools              []Named      // References to tools to use.
+	Resources          []*Resource  // Resources to be temporarily available during generation.
 	ToolChoice         ToolChoice   // Whether tool calls are required, disabled, or optional.
 	MaxTurns           int          // Maximum number of tool call iterations.
 	ReturnToolRequests *bool        // Whether to return tool requests instead of making the tool calls and continuing the generation.
@@ -210,20 +210,22 @@ func WithMessagesFn(fn MessagesFn) CommonGenOption {
 }
 
 // WithTools sets the tools to use for the generate request.
-func WithTools(tools ...ToolArg) CommonGenOption {
+// Accepts tool values ([*Tool], [*InterruptibleTool]) or [ToolName]
+// references to registered tools.
+func WithTools(tools ...Named) CommonGenOption {
 	return &commonGenOptions{Tools: tools}
 }
 
-// WithModel sets either a [Model] or a [ModelRef] that may contain a config.
+// WithModel sets either a [*Model] or an [ActionRef] that may contain a config.
 // Passing [WithConfig] will take precedence over the config in WithModel.
-func WithModel(model ModelArg) CommonGenOption {
+func WithModel(model Named) CommonGenOption {
 	return &commonGenOptions{Model: model}
 }
 
 // WithModelName sets the model name to call for generation.
 // The model name will be resolved to a [Model] and may error if the reference is invalid.
 func WithModelName(name string) CommonGenOption {
-	return &commonGenOptions{Model: NewModelRef(name, nil)}
+	return &commonGenOptions{Model: NewActionRef(name, nil)}
 }
 
 // WithUse sets middleware to apply to generation. Middleware hooks wrap
@@ -261,7 +263,7 @@ func WithToolChoice(toolChoice ToolChoice) CommonGenOption {
 // WithResources specifies resources to be temporarily available during generation.
 // Resources are unregistered resources that get attached to a temporary registry
 // during the generation request and cleaned up afterward.
-func WithResources(resources ...Resource) CommonGenOption {
+func WithResources(resources ...*Resource) CommonGenOption {
 	return &commonGenOptions{Resources: resources}
 }
 
@@ -705,9 +707,9 @@ func WithDocs(docs ...*Document) DocumentOption {
 // evaluatorOptions are options for providing a dataset to evaluate.
 type evaluatorOptions struct {
 	configOptions
-	Dataset   []*Example   // Dataset to evaluate.
-	ID        string       // ID of the evaluation.
-	Evaluator EvaluatorArg // Evaluator to use.
+	Dataset   []*Example // Dataset to evaluate.
+	ID        string     // ID of the evaluation.
+	Evaluator Named      // Evaluator to use.
 }
 
 // EvaluatorOption is an option for providing a dataset to evaluate.
@@ -756,23 +758,23 @@ func WithID(ID string) EvaluatorOption {
 	return &evaluatorOptions{ID: ID}
 }
 
-// WithEvaluator sets either a [Evaluator] or a [EvaluatorRef] that may contain a config.
+// WithEvaluator sets either an [*Evaluator] or an [ActionRef] that may contain a config.
 // Passing [WithConfig] will take precedence over the config in WithEvaluator.
-func WithEvaluator(evaluator EvaluatorArg) EvaluatorOption {
+func WithEvaluator(evaluator Named) EvaluatorOption {
 	return &evaluatorOptions{Evaluator: evaluator}
 }
 
 // WithEvaluatorName sets the evaluator name to call for document evaluation.
 // The evaluator name will be resolved to a [Evaluator] and may error if the reference is invalid.
 func WithEvaluatorName(name string) EvaluatorOption {
-	return &evaluatorOptions{Evaluator: NewEvaluatorRef(name, nil)}
+	return &evaluatorOptions{Evaluator: NewActionRef(name, nil)}
 }
 
 // embedderOptions holds configuration and input for an embedder request.
 type embedderOptions struct {
 	configOptions
 	documentOptions
-	Embedder EmbedderArg // Embedder to use.
+	Embedder Named // Embedder to use.
 }
 
 // EmbedderOption is an option for configuring an embedder request.
@@ -801,16 +803,16 @@ func (o *embedderOptions) applyEmbedder(embedOpts *embedderOptions) error {
 	return nil
 }
 
-// WithEmbedder sets either a [Embedder] or a [EmbedderRef] that may contain a config.
+// WithEmbedder sets either an [*Embedder] or an [ActionRef] that may contain a config.
 // Passing [WithConfig] will take precedence over the config in WithEmbedder.
-func WithEmbedder(embedder EmbedderArg) EmbedderOption {
+func WithEmbedder(embedder Named) EmbedderOption {
 	return &embedderOptions{Embedder: embedder}
 }
 
 // WithEmbedderName sets the embedder name to call for document embedding.
 // The embedder name will be resolved to a [Embedder] and may error if the reference is invalid.
 func WithEmbedderName(name string) EmbedderOption {
-	return &embedderOptions{Embedder: NewEmbedderRef(name, nil)}
+	return &embedderOptions{Embedder: NewActionRef(name, nil)}
 }
 
 // generateOptions are options for generating a model response by calling a model directly.

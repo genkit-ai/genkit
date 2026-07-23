@@ -13,7 +13,7 @@ import (
 )
 
 // newEmbedder creates an embedder without registering it.
-func newEmbedder(client *genai.Client, name string, embedOpts *ai.EmbedderOptions) ai.Embedder {
+func newEmbedder(client *genai.Client, name string, embedOpts *ai.EmbedderOptions) *ai.Embedder {
 	provider := googleAIProvider
 	if client.ClientConfig().Backend == genai.BackendVertexAI {
 		provider = vertexAIProvider

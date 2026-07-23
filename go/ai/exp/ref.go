@@ -17,7 +17,7 @@
 package exp
 
 // AgentRef refers to an agent by name, optionally carrying a description. It is
-// the agent analog of [ai.ModelRef] / [ai.ToolName]: a small, JSON-serializable
+// the agent analog of [ai.ActionRef] / [ai.ToolName]: a small, JSON-serializable
 // value that names an agent for resolution against a registry. Like those, it
 // resolves by name (the path the Dev UI, HTTP serving, and ListAgents all use),
 // so the referenced agent must be registered wherever the ref is consumed.

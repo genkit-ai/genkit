@@ -89,7 +89,7 @@ func configFromRequest(input *ai.ModelRequest) (*genai.GenerateContentConfig, er
 }
 
 // newModel creates a model without registering it.
-func newModel(client *genai.Client, name string, opts ai.ModelOptions) ai.Model {
+func newModel(client *genai.Client, name string, opts ai.ModelOptions) *ai.Model {
 	provider := googleAIProvider
 	if client.ClientConfig().Backend == genai.BackendVertexAI {
 		provider = vertexAIProvider

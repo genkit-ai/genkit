@@ -27,41 +27,17 @@ import (
 // EmbedderFunc is the function type for embedding documents.
 type EmbedderFunc = func(context.Context, *EmbedRequest) (*EmbedResponse, error)
 
-// Embedder represents an embedder that can perform content embedding.
-type Embedder interface {
-	// Name returns the registry name of the embedder.
-	Name() string
-	// Embed embeds to content as part of the [EmbedRequest].
-	Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error)
-	// Register registers the embedder with the given registry.
-	Register(r api.Registry)
+// Embedder is a content embedder backed by a registry action. Create one
+// with [DefineEmbedder] or [NewEmbedder], or fetch a registered one with
+// [LookupEmbedder]. Pass it to [WithEmbedder] to use it with [Embed].
+type Embedder struct {
+	action[*EmbedRequest, *EmbedResponse, struct{}]
 }
 
-// EmbedderArg is the interface for embedder arguments. It can either be the embedder action itself or a reference to be looked up.
-type EmbedderArg interface {
-	Name() string
-}
-
-// EmbedderRef is a struct to hold embedder name and configuration.
-type EmbedderRef struct {
-	name   string
-	config any
-}
-
-// NewEmbedderRef creates a new EmbedderRef with the given name and configuration.
-func NewEmbedderRef(name string, config any) EmbedderRef {
-	return EmbedderRef{name: name, config: config}
-}
-
-// Name returns the name of the embedder.
-func (e EmbedderRef) Name() string {
-	return e.name
-}
-
-// Config returns the configuration to use by default for this embedder.
-func (e EmbedderRef) Config() any {
-	return e.config
-}
+var (
+	_ api.Action = (*Embedder)(nil)
+	_ Named      = (*Embedder)(nil)
+)
 
 // EmbedderSupports represents the supported capabilities of the embedder model.
 type EmbedderSupports struct {
@@ -83,13 +59,10 @@ type EmbedderOptions struct {
 	Dimensions int `json:"dimensions,omitempty"`
 }
 
-// embedder is an action with functions specific to converting documents to multidimensional vectors such as Embed().
-type embedder struct {
-	action[*EmbedRequest, *EmbedResponse, struct{}]
-}
-
-// NewEmbedder creates a new [Embedder].
-func NewEmbedder(name string, opts *EmbedderOptions, fn EmbedderFunc) Embedder {
+// NewEmbedder creates a new unregistered [Embedder]. Register it with
+// [Embedder.Register] or use [DefineEmbedder] to define and register in one
+// step.
+func NewEmbedder(name string, opts *EmbedderOptions, fn EmbedderFunc) *Embedder {
 	if name == "" {
 		panic("ai.NewEmbedder: name is required")
 	}
@@ -126,7 +99,7 @@ func NewEmbedder(name string, opts *EmbedderOptions, fn EmbedderFunc) Embedder {
 		}
 	}
 
-	return &embedder{
+	return &Embedder{
 		action: *core.NewAction(api.ActionTypeEmbedder, name, &core.ActionOptions{
 			Metadata:    metadata,
 			InputSchema: inputSchema,
@@ -136,7 +109,7 @@ func NewEmbedder(name string, opts *EmbedderOptions, fn EmbedderFunc) Embedder {
 
 // DefineEmbedder registers the given embed function as an action, and returns an
 // [Embedder] that runs it.
-func DefineEmbedder(r api.Registry, name string, opts *EmbedderOptions, fn EmbedderFunc) Embedder {
+func DefineEmbedder(r api.Registry, name string, opts *EmbedderOptions, fn EmbedderFunc) *Embedder {
 	e := NewEmbedder(name, opts, fn)
 	e.Register(r)
 	return e
@@ -145,18 +118,27 @@ func DefineEmbedder(r api.Registry, name string, opts *EmbedderOptions, fn Embed
 // LookupEmbedder looks up an [Embedder] registered by [DefineEmbedder].
 // It will try to resolve the embedder dynamically if the embedder is not found.
 // It returns nil if the embedder was not resolved.
-func LookupEmbedder(r api.Registry, name string) Embedder {
+func LookupEmbedder(r api.Registry, name string) *Embedder {
 	action := core.ResolveActionFor[*EmbedRequest, *EmbedResponse, struct{}](r, api.ActionTypeEmbedder, name)
 	if action == nil {
 		return nil
 	}
-	return &embedder{
+	return &Embedder{
 		action: *action,
 	}
 }
 
+// Name returns the registry name of the embedder, or the empty string if the
+// embedder is nil (e.g. from a failed lookup).
+func (e *Embedder) Name() string {
+	if e == nil {
+		return ""
+	}
+	return e.action.Name()
+}
+
 // Embed runs the given [Embedder].
-func (e *embedder) Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+func (e *Embedder) Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
 	if e == nil {
 		return nil, core.NewError(core.INVALID_ARGUMENT, "Embedder.Embed: embedder called on a nil embedder; check that all embedders are defined")
 	}
@@ -176,7 +158,7 @@ func Embed(ctx context.Context, r api.Registry, opts ...EmbedderOption) (*EmbedR
 	if embedOpts.Embedder == nil {
 		return nil, fmt.Errorf("ai.Embed: embedder must be set")
 	}
-	e, ok := embedOpts.Embedder.(Embedder)
+	e, ok := embedOpts.Embedder.(*Embedder)
 	if !ok {
 		e = LookupEmbedder(r, embedOpts.Embedder.Name())
 	}
@@ -184,8 +166,8 @@ func Embed(ctx context.Context, r api.Registry, opts ...EmbedderOption) (*EmbedR
 		return nil, fmt.Errorf("ai.Embed: embedder not found: %s", embedOpts.Embedder.Name())
 	}
 
-	if embedRef, ok := embedOpts.Embedder.(EmbedderRef); ok && embedOpts.Config == nil {
-		embedOpts.Config = embedRef.Config()
+	if ref, ok := embedOpts.Embedder.(ActionRef); ok && embedOpts.Config == nil {
+		embedOpts.Config = ref.Config()
 	}
 
 	req := &EmbedRequest{

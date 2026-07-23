@@ -208,7 +208,7 @@ func (o *OpenAI) Init(ctx context.Context) []api.Action {
 
 	// define default models
 	for model, opts := range supportedModels {
-		actions = append(actions, o.DefineModel(model, opts).(api.Action))
+		actions = append(actions, o.DefineModel(model, opts))
 	}
 
 	// define default embedders
@@ -219,25 +219,25 @@ func (o *OpenAI) Init(ctx context.Context) []api.Action {
 			Supports:     embedder.Supports,
 			Dimensions:   embedder.Dimensions,
 		}
-		actions = append(actions, o.DefineEmbedder(embedder.Name, opts).(api.Action))
+		actions = append(actions, o.DefineEmbedder(embedder.Name, opts))
 	}
 
 	return actions
 }
 
-func (o *OpenAI) Model(g *genkit.Genkit, name string) ai.Model {
+func (o *OpenAI) Model(g *genkit.Genkit, name string) *ai.Model {
 	return o.openAICompatible.Model(g, api.NewName(provider, name))
 }
 
-func (o *OpenAI) DefineModel(id string, opts ai.ModelOptions) ai.Model {
+func (o *OpenAI) DefineModel(id string, opts ai.ModelOptions) *ai.Model {
 	return o.openAICompatible.DefineModel(provider, id, opts)
 }
 
-func (o *OpenAI) DefineEmbedder(id string, opts *ai.EmbedderOptions) ai.Embedder {
+func (o *OpenAI) DefineEmbedder(id string, opts *ai.EmbedderOptions) *ai.Embedder {
 	return o.openAICompatible.DefineEmbedder(provider, id, opts)
 }
 
-func (o *OpenAI) Embedder(g *genkit.Genkit, name string) ai.Embedder {
+func (o *OpenAI) Embedder(g *genkit.Genkit, name string) *ai.Embedder {
 	return o.openAICompatible.Embedder(g, api.NewName(provider, name))
 }
 

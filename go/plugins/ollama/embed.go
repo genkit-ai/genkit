@@ -129,7 +129,7 @@ func concatenateText(doc *ai.Document) string {
 }
 
 // DefineEmbedder defines an embedder with a given model.
-func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, embedOpts *ai.EmbedderOptions) ai.Embedder {
+func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, embedOpts *ai.EmbedderOptions) *ai.Embedder {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if !o.initted {
@@ -193,6 +193,6 @@ func IsDefinedEmbedder(g *genkit.Genkit, model string) bool {
 
 // Embedder returns the [ai.Embedder] with the given model.
 // It returns nil if the embedder was not defined.
-func Embedder(g *genkit.Genkit, model string) ai.Embedder {
+func Embedder(g *genkit.Genkit, model string) *ai.Embedder {
 	return g.LookupEmbedder(api.NewName(provider, model))
 }

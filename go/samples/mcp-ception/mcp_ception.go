@@ -206,7 +206,7 @@ func mcpSelfConnection() {
 	logger.FromContext(ctx).Info("")
 
 	// Convert tools to refs
-	var toolArgs []ai.ToolArg
+	var toolArgs []ai.Named
 	for _, tool := range tools {
 		toolArgs = append(toolArgs, tool)
 	}
@@ -224,7 +224,7 @@ func mcpSelfConnection() {
 }
 
 // runResourceDemo demonstrates referencing a resource from the MCP server in a model request.
-func runResourceDemo(ctx context.Context, g *genkit.Genkit, resources []ai.Resource) {
+func runResourceDemo(ctx context.Context, g *genkit.Genkit, resources []*ai.Resource) {
 	// Explain
 	logger.FromContext(ctx).Info("")
 	logger.FromContext(ctx).Info("Resource demo: Use a resource from our own MCP server")
@@ -269,7 +269,7 @@ func runResourceDemo(ctx context.Context, g *genkit.Genkit, resources []ai.Resou
 }
 
 // runToolDemo demonstrates enabling and calling a tool from the MCP server.
-func runToolDemo(ctx context.Context, g *genkit.Genkit, toolArgs []ai.ToolArg) {
+func runToolDemo(ctx context.Context, g *genkit.Genkit, toolArgs []ai.Named) {
 	// Explain
 	logger.FromContext(ctx).Info("")
 	logger.FromContext(ctx).Info("Tool demo: Use a tool from our own MCP server")

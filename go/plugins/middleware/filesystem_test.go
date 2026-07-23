@@ -68,7 +68,7 @@ type modelTurn struct {
 	Text string
 }
 
-func scriptedModel(t *testing.T, r *registry.Registry, name string, script []modelTurn) (ai.Model, *[]*ai.ModelRequest) {
+func scriptedModel(t *testing.T, r *registry.Registry, name string, script []modelTurn) (*ai.Model, *[]*ai.ModelRequest) {
 	t.Helper()
 	var seen []*ai.ModelRequest
 	idx := 0

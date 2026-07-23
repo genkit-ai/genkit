@@ -39,7 +39,7 @@ const (
 	ToolNameRegex = `^[a-zA-Z0-9_-]{1,64}$`
 )
 
-func DefineModel(client anthropic.Client, provider, name string, info ai.ModelOptions) ai.Model {
+func DefineModel(client anthropic.Client, provider, name string, info ai.ModelOptions) *ai.Model {
 	label := "Anthropic"
 
 	if provider == "vertexai" {

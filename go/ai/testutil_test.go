@@ -54,7 +54,7 @@ func defaultModelSupports() *ModelSupports {
 }
 
 // defineFakeModel creates a configurable fake model for testing.
-func defineFakeModel(t *testing.T, r api.Registry, cfg fakeModelConfig) Model {
+func defineFakeModel(t *testing.T, r api.Registry, cfg fakeModelConfig) *Model {
 	t.Helper()
 	if cfg.name == "" {
 		cfg.name = "test/fakeModel"
@@ -284,7 +284,7 @@ func defineFakeTool(t *testing.T, r api.Registry, name, description string) AnyT
 }
 
 // defineFakeEmbedder creates a simple embedder for testing.
-func defineFakeEmbedder(t *testing.T, r api.Registry, name string) Embedder {
+func defineFakeEmbedder(t *testing.T, r api.Registry, name string) *Embedder {
 	t.Helper()
 	return DefineEmbedder(r, name, nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
 		embeddings := make([]*Embedding, len(req.Input))

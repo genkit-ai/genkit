@@ -36,36 +36,28 @@ func listActions(ctx context.Context, client *genai.Client, provider string) []a
 	for _, name := range models.gemini {
 		opts := GetModelOptions(name, provider)
 		model := newModel(client, name, opts)
-		if actionDef, ok := model.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
+		actions = append(actions, model.Desc())
 	}
 
 	// Imagen models
 	for _, name := range models.imagen {
 		opts := GetModelOptions(name, provider)
 		model := newModel(client, name, opts)
-		if actionDef, ok := model.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
+		actions = append(actions, model.Desc())
 	}
 
 	// Veo models (background models)
 	for _, name := range models.veo {
 		opts := GetModelOptions(name, provider)
 		veoModel := newVeoModel(client, name, opts)
-		if actionDef, ok := veoModel.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
+		actions = append(actions, veoModel.Desc())
 	}
 
 	// Embedders
 	for _, name := range models.embedders {
 		opts := GetEmbedderOptions(name, provider)
 		embedder := newEmbedder(client, name, &opts)
-		if actionDef, ok := embedder.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
+		actions = append(actions, embedder.Desc())
 	}
 
 	return actions
@@ -88,7 +80,7 @@ func resolveAction(client *genai.Client, provider string, atype api.ActionType, 
 	switch atype {
 	case api.ActionTypeEmbedder:
 		opts := GetEmbedderOptions(name, provider)
-		return newEmbedder(client, name, &opts).(api.Action)
+		return newEmbedder(client, name, &opts)
 
 	case api.ActionTypeModel:
 		// Veo models should not be resolved as regular models
@@ -96,7 +88,7 @@ func resolveAction(client *genai.Client, provider string, atype api.ActionType, 
 			return nil
 		}
 		opts := GetModelOptions(name, provider)
-		return newModel(client, name, opts).(api.Action)
+		return newModel(client, name, opts)
 
 	case api.ActionTypeBackgroundModel:
 		if mt != ModelTypeVeo {

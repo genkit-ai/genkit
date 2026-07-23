@@ -313,7 +313,7 @@ func TestMCPContentFetch(t *testing.T) {
 
 	// Find resource that matches our test URI
 	testURI := "file://data/example.txt"
-	var matchingResource ai.Resource
+	var matchingResource *ai.Resource
 	for _, res := range resources {
 		if res.Matches(testURI) {
 			matchingResource = res

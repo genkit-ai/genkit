@@ -34,7 +34,7 @@ func newTestRegistry(t *testing.T) *registry.Registry {
 	return r
 }
 
-func defineModel(t *testing.T, r *registry.Registry, name string, fn ai.ModelFunc) ai.Model {
+func defineModel(t *testing.T, r *registry.Registry, name string, fn ai.ModelFunc) *ai.Model {
 	t.Helper()
 	return ai.DefineModel(r, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true},

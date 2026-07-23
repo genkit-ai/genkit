@@ -100,7 +100,7 @@ func DefineResilientFlow(g *genkit.Genkit) {
 			ai.WithUse(
 				&middleware.Retry{MaxRetries: 1},
 				&middleware.Fallback{
-					Models: []ai.ModelRef{
+					Models: []ai.ActionRef{
 						googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 							ThinkingConfig: &genai.ThinkingConfig{
 								ThinkingBudget: genai.Ptr[int32](0),

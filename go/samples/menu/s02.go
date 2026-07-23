@@ -38,7 +38,7 @@ func menu(ctx context.Context, _ any) ([]*menuItem, error) {
 	return s, nil
 }
 
-func setup02(g *genkit.Genkit, m ai.Model) error {
+func setup02(g *genkit.Genkit, m *ai.Model) error {
 	menuTool := g.DefineTool("todaysMenu", "Use this tool to retrieve all the items on today's menu", menu)
 
 	dataMenuPrompt := g.DefinePrompt[*menuQuestionInput]("s02_dataMenu",
