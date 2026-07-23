@@ -65,8 +65,10 @@ export interface A2uiCatalog {
 
 /**
  * The set of icon names the basic catalog's `Icon` component supports. Names
- * outside this list render as literal text, so the middleware validates against
- * it and the prompt lists it.
+ * outside this list render as literal text (the renderer degrades gracefully),
+ * so the prompt lists them to steer the model toward valid names. Note the
+ * middleware validates component *types* against the catalog but does not
+ * validate individual `Icon` name values.
  */
 export const BASIC_ICON_NAMES = [
   'accountCircle',
@@ -218,6 +220,83 @@ export const basicCatalog: A2uiCatalog = {
 };
 
 /**
+ * Builds the "make it look good" styling tips, scoped to the components the
+ * catalog actually provides so a custom catalog is never told to emit
+ * components it lacks (which would then fail `validate: 'strict'`).
+ */
+function renderStyleTips(has: Set<string>): string {
+  const tips: string[] = [];
+  const containers = ['Card', 'Column', 'Row'].filter((c) => has.has(c));
+  if (containers.length) {
+    tips.push(
+      `- Group related content with layout components (${containers.join(
+        '/'
+      )}) and give it a clear hierarchy.`
+    );
+  }
+  if (has.has('Text')) {
+    tips.push(
+      '- Give titles a heading `variant` (e.g. h2/h3) and secondary text the ' +
+        '`caption` variant instead of embedding "#"/"##" heading markers in ' +
+        'the text.'
+    );
+  }
+  const accents = ['Icon', 'Divider', 'Image'].filter((c) => has.has(c));
+  if (accents.length) {
+    tips.push(
+      `- Use ${accents.join(
+        '/'
+      )} to add visual meaning and separate sections where it helps.`
+    );
+  }
+  if (has.has('Button')) {
+    tips.push('- Give primary buttons `variant: "primary"`.');
+  }
+  return tips.length
+    ? `\n\nMake it look good, not bland:\n${tips.join('\n')}`
+    : '';
+}
+
+/**
+ * Builds a worked example. Uses a rich Card/Column/Text layout when the catalog
+ * supports it (the common case, e.g. the basic catalog); otherwise falls back
+ * to a minimal example built only from components the catalog provides, so the
+ * example never references unknown components.
+ */
+function renderExample(catalog: A2uiCatalog, has: Set<string>): string {
+  if (has.has('Card') && has.has('Column') && has.has('Text')) {
+    return `
+
+Example (a small weather card):
+\`\`\`a2ui
+[
+  { "createSurface": { "surfaceId": "SURFACE_ID", "catalogId": "${catalog.id}" } },
+  { "updateComponents": { "surfaceId": "SURFACE_ID", "components": [
+    { "id": "root", "component": "Card", "child": "body" },
+    { "id": "body", "component": "Column", "children": ["title", "temp"] },
+    { "id": "title", "component": "Text", "text": "Weather in Tokyo", "variant": "h3" },
+    { "id": "temp", "component": "Text", "text": { "path": "/temp" } }
+  ] } },
+  { "updateDataModel": { "surfaceId": "SURFACE_ID", "path": "/temp", "value": "18°C" } }
+]
+\`\`\``;
+  }
+  // Minimal fallback: root uses whatever the catalog's first component is.
+  const rootComponent = catalog.components[0]?.name ?? 'Text';
+  return `
+
+Example (a minimal surface):
+\`\`\`a2ui
+[
+  { "createSurface": { "surfaceId": "SURFACE_ID", "catalogId": "${catalog.id}" } },
+  { "updateComponents": { "surfaceId": "SURFACE_ID", "components": [
+    { "id": "root", "component": "${rootComponent}" }
+  ] } }
+]
+\`\`\``;
+}
+
+/**
  * Renders a catalog into model-facing instructions describing the A2UI protocol
  * and the available components. Injected into the system prompt by the
  * middleware when `instructions !== 'none'`.
@@ -226,6 +305,27 @@ export function renderCatalogInstructions(catalog: A2uiCatalog): string {
   const componentDocs = catalog.components
     .map((c) => `- ${c.name}: ${c.description} Props: ${c.props}`)
     .join('\n');
+
+  const has = new Set(catalog.components.map((c) => c.name));
+  const styleSection = renderStyleTips(has);
+  const exampleSection = renderExample(catalog, has);
+
+  // Forms guidance only applies if the catalog has input components.
+  const inputs = ['TextField', 'CheckBox', 'Slider'].filter((c) => has.has(c));
+  const inputList = inputs.join(', ');
+  const formsSection = inputs.length
+    ? `
+- Forms: input components (${inputList}) do NOT send their values automatically.
+  To capture what the user entered you MUST do BOTH of these:
+  1. Bind each input's \`value\` to a data-model path, e.g.
+     \`{ "component": "TextField", "label": "Email", "value": { "path": "/email" } }\`.
+     Typing updates the data model at that path.
+  2. On the submit \`Button\`, echo those same paths in
+     \`action.event.context\` so their current values are sent back to you, e.g.
+     \`"context": { "email": { "path": "/email" }, "name": { "path": "/name" } }\`.
+  Without the \`{ path }\` bindings and the button \`context\`, the action arrives
+  with an empty \`context\` and the entered values are lost.`
+    : '';
 
   return `# Rendering UI with A2UI
 
@@ -241,59 +341,25 @@ Rules:
   string \`id\` references, NOT nested objects. Exactly one component MUST have
   \`id: "root"\`.
 - Every component has a \`component\` (type name) and an \`id\`. Container
-  components (Row, Column, List) reference their children by id via the
-  \`children\` array. Card/Button reference a single \`child\` id.
+  components reference their children by id via a \`children\` array; single-child
+  wrappers reference one \`child\` id.
 - Values can be literals, or a data-model binding \`{ "path": "/somePath" }\`.
 - Use \`createSurface\` first (with \`catalogId\`), then \`updateComponents\` to add
   the component list, then optionally \`updateDataModel\` to set data. You may
   combine them in one array, in order.
-- Interactive components (Button) fire an \`action\` with an event \`name\`; that
-  name is sent back to you when the user interacts, so choose meaningful names.
-- Forms: input components (TextField, CheckBox, Slider) do NOT send their values
-  automatically. To capture what the user entered you MUST do BOTH of these:
-  1. Bind each input's \`value\` to a data-model path, e.g.
-     \`{ "component": "TextField", "label": "Email", "value": { "path": "/email" } }\`.
-     Typing updates the data model at that path.
-  2. On the submit \`Button\`, echo those same paths in
-     \`action.event.context\` so their current values are sent back to you, e.g.
-     \`"context": { "email": { "path": "/email" }, "name": { "path": "/name" } }\`.
-  Without the \`{ path }\` bindings and the button \`context\`, the action arrives
-  with an empty \`context\` and the entered values are lost.
+- Interactive components fire an \`action\` with an event \`name\`; that name is
+  sent back to you when the user interacts, so choose meaningful names.${formsSection}
 - When a user interacts with a surface (e.g. presses a button) and you respond
   with updated UI, RE-RENDER THE WHOLE SURFACE: start again with
   \`createSurface\` followed by \`updateComponents\`. Do not emit a bare
   \`updateDataModel\`/\`updateComponents\` expecting a previous surface to still
-  exist.
-
-Make it look good, not bland:
-- Wrap surfaces in a \`Card\` and use a \`Column\`/\`Row\` layout with clear
-  hierarchy.
-- Give titles a heading \`variant\` (e.g. h2/h3) and secondary text the
-  \`caption\` variant instead of embedding "#"/"##" heading markers in the text.
-- Use \`Icon\`s to add visual meaning (e.g. an icon next to a value), a
-  \`Divider\` to separate sections, and \`Image\`s where a picture helps.
-- Prefer labeled key/value \`Row\`s over dumping plain lines of text, and give
-  primary buttons \`variant: "primary"\`.
+  exist.${styleSection}
 
 The catalogId to use is:
 "${catalog.id}"
 
 Available components:
-${componentDocs}
-
-Example (a small weather card):
-\`\`\`a2ui
-[
-  { "createSurface": { "surfaceId": "SURFACE_ID", "catalogId": "${catalog.id}" } },
-  { "updateComponents": { "surfaceId": "SURFACE_ID", "components": [
-    { "id": "root", "component": "Card", "child": "body" },
-    { "id": "body", "component": "Column", "children": ["title", "temp"] },
-    { "id": "title", "component": "Text", "text": "Weather in Tokyo", "variant": "h3" },
-    { "id": "temp", "component": "Text", "text": { "path": "/temp" } }
-  ] } },
-  { "updateDataModel": { "surfaceId": "SURFACE_ID", "path": "/temp", "value": "18°C" } }
-]
-\`\`\`
+${componentDocs}${exampleSection}
 
 Do not explain the JSON; just render the block. Use "SURFACE_ID" literally as a
 placeholder for the surface id — the system replaces it with a real id.`;

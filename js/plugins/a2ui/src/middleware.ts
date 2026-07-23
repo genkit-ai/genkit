@@ -112,9 +112,43 @@ function surfaceIdFactory(policy: A2uiOptions['surfaceId']): () => string {
 }
 
 /**
+ * Wraps a surface-id factory so a single model turn's streamed parse and its
+ * final-message parse mint the *same* surface ids.
+ *
+ * A turn is parsed twice: once incrementally over the streamed chunks, and once
+ * over the aggregated final message (so consumers that read `response.message`
+ * see a2ui parts too). Each parse pulls surface ids from the factory. With the
+ * default `randomUUID` policy those two parses would otherwise produce different
+ * ids for the same surface. So while streaming we generate and record ids in
+ * order (`next`); before re-parsing the final message we `reset`, then
+ * `replayNext` hands back the recorded ids in the same order (only generating a
+ * fresh id if the final parse yields more blocks than the stream did).
+ */
+function replayableSurfaceIds(base: () => string): {
+  next: () => string;
+  replayNext: () => string;
+  reset: () => void;
+} {
+  const generated: string[] = [];
+  let cursor = 0;
+  const next = () => {
+    const id = base();
+    generated.push(id);
+    return id;
+  };
+  const replayNext = () =>
+    cursor < generated.length ? generated[cursor++] : next();
+  const reset = () => {
+    cursor = 0;
+  };
+  return { next, replayNext, reset };
+}
+
+/**
  * Turns a text run into prose + a2ui parts using a parser, preserving order.
  * Returns the new parts to substitute for the original text part.
  */
+
 function partsFromParse(prose: string, batches: A2uiEnvelope[][]): Part[] {
   const out: Part[] = [];
   if (prose) out.push({ text: prose });
@@ -165,6 +199,11 @@ export const a2ui: GenerateMiddleware<typeof A2uiOptionsSchema> =
           // bundled basic catalog for the default id).
           const catalog = await resolveCatalog(ai, catalogId);
 
+          // Share surface ids between the streamed parse and the final-message
+          // parse of this single turn, so the same surface gets the same id in
+          // both (see replayableSurfaceIds).
+          const surfaceIds = replayableSurfaceIds(nextSurfaceId);
+
           // 0) Sanitize any inbound a2ui data parts (e.g. a surface action sent
           //    back as the next turn, or replayed history) into model-readable
           //    text, so the underlying model's converter never sees the a2ui
@@ -183,7 +222,7 @@ export const a2ui: GenerateMiddleware<typeof A2uiOptionsSchema> =
             catalog,
             validate,
             version,
-            surfaceId: nextSurfaceId,
+            surfaceId: surfaceIds.next,
           });
 
           const originalOnChunk = ctx?.onChunk;
@@ -197,13 +236,15 @@ export const a2ui: GenerateMiddleware<typeof A2uiOptionsSchema> =
               }
             : ctx;
 
-          // 3) Run downstream model, then transform the final message.
+          // 3) Run downstream model, then transform the final message. The
+          //    final parse replays the same surface ids the stream minted.
           const response = await next(request, wrappedCtx);
+          surfaceIds.reset();
           return transformResponse(response, {
             catalog,
             validate,
             version,
-            surfaceId: nextSurfaceId,
+            surfaceId: surfaceIds.replayNext,
           });
         },
       };

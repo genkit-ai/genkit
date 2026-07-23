@@ -37,8 +37,10 @@ import { join } from 'path';
 
 logger.setLogLevel('debug');
 
+// The whole A2UI integration is the `a2ui()` middleware in the agent's `use`
+// array below; `use` auto-registers it, so no plugin entry is required here.
 const ai = genkit({
-  plugins: [googleAI(), a2ui.plugin()],
+  plugins: [googleAI()],
 });
 
 /** A demo tool the model can call to fetch (fake) weather data. */

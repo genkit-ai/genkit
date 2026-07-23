@@ -230,8 +230,39 @@ describe('a2ui() middleware', () => {
     assert.match(joined, /Tokyo/);
   });
 
+  it('mints the same surface id in the stream and the final message', async () => {
+    // Default surface-id policy (random UUID). The stream parse and the final
+    // parse must agree on the id for the same surface.
+    const mw = modelHook({});
+    let streamedId: string | undefined;
+    const ctx = {
+      onChunk: (c: any) => {
+        const envs = a2uiEnvelopes(c);
+        const create = envs.find((e: any) => e.createSurface);
+        if (create) streamedId = (create as any).createSurface.surfaceId;
+      },
+    };
+    const res = await mw(
+      req('sys'),
+      ctx as any,
+      async (_r: any, wrapped: any) => {
+        // Stream the whole block, then return it as the final message too.
+        wrapped.onChunk({ content: [{ text: SAMPLE_TEXT }] });
+        return { message: { role: 'model', content: [{ text: SAMPLE_TEXT }] } };
+      }
+    );
+    const finalEnvelopes = a2uiEnvelopes({
+      content: (res as any).message.content,
+    });
+    const finalCreate = finalEnvelopes.find((e: any) => e.createSurface) as any;
+    assert.ok(streamedId, 'expected a streamed surface id');
+    assert.ok(finalCreate, 'expected a final createSurface');
+    assert.strictEqual(finalCreate.createSurface.surfaceId, streamedId);
+  });
+
   it('transforms streamed chunks via onChunk', async () => {
     const mw = modelHook({ surfaceId: () => 'sfc' });
+
     const emitted: any[] = [];
     const ctx = { onChunk: (c: any) => emitted.push(c) };
     // Simulate the runtime calling next() with a wrapped ctx, then streaming.
