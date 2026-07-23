@@ -348,11 +348,12 @@ func newTool[In, Out any](fnName, name, description string, fn ToolFunc[In, Out]
 		return resp, nil
 	}
 
-	a := core.NewAction(name, api.ActionTypeToolV2, &core.ActionOptions{
+	a := core.NewAction(api.ActionTypeToolV2, name, &core.ActionOptions{
 		Description: description,
 		Metadata:    metadata,
 		InputSchema: toolOpts.InputSchema,
 	}, wrapped)
+
 	return &Tool[In, Out]{action: a}
 }
 

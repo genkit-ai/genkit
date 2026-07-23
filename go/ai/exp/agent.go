@@ -849,7 +849,7 @@ func newCustomAgent[State any](
 	if cfg.description != "" {
 		metadata["description"] = cfg.description
 	}
-	action := core.NewBidiAction(name, api.ActionTypeAgent,
+	action := core.NewBidiAction(api.ActionTypeAgent, name,
 		&core.BidiActionOptions{Metadata: metadata},
 		func(
 			ctx context.Context,
@@ -858,20 +858,13 @@ func newCustomAgent[State any](
 			outCh chan<- *AgentStreamChunk,
 		) (*AgentOutput[State], error) {
 			ctx = core.WithFlowContext(ctx, name)
-			// Apply any context decorators (e.g. the genkit package seeding its
-			// instance) before the runtime derives the per-turn work context, so
-			// the decorated values reach each turn's prompt, tools, and middleware.
+
 			if cfg.contextFunc != nil {
 				ctx = cfg.contextFunc(ctx)
 			}
 			rt, err := newAgentRuntime(ctx, name, cfg, in, inCh, outCh)
 			if err != nil {
-				// Init failures (a rejected init payload, a failed
-				// snapshot load) fail the action outright rather than
-				// resolving as a failed output: the invocation never
-				// reached the input phase of its lifecycle, so there is
-				// no conversation state to hand back and nothing to
-				// snapshot.
+
 				return nil, err
 			}
 			return rt.run(ctx, fn)

@@ -288,7 +288,7 @@ func newSnapshotActions[State any](
 	if store == nil {
 		return nil, nil
 	}
-	getSnapshotAction := core.NewAction(agentName, api.ActionTypeAgentSnapshot, nil,
+	getSnapshotAction := core.NewAction(api.ActionTypeAgentSnapshot, agentName, nil,
 		func(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[State], error) {
 			if req == nil || (req.SnapshotID == "" && req.SessionID == "") {
 				return nil, core.NewError(core.INVALID_ARGUMENT, "getSnapshot: snapshotId or sessionId is required")
@@ -302,13 +302,12 @@ func newSnapshotActions[State any](
 		// abort lifecycle is unsupported; don't surface the action.
 		return getSnapshotAction, nil
 	}
-	abortAction := core.NewAction(agentName, api.ActionTypeAgentAbort, nil,
+	abortAction := core.NewAction(api.ActionTypeAgentAbort, agentName, nil,
 		func(ctx context.Context, req *AgentAbortRequest) (*AgentAbortResponse, error) {
 			if req == nil || req.SnapshotID == "" {
 				return nil, core.NewError(core.INVALID_ARGUMENT, "abort: snapshotId is required")
 			}
-			// Aborting is an ordinary SaveSnapshot that flips a pending row to
-			// aborted; the store has no dedicated abort method.
+
 			status, err := abortPendingSnapshot(ctx, store, req.SnapshotID)
 			if err != nil {
 				return nil, core.NewError(core.INTERNAL, "abort: %v", err)
@@ -318,6 +317,7 @@ func newSnapshotActions[State any](
 			}
 			return &AgentAbortResponse{SnapshotID: req.SnapshotID, Status: status}, nil
 		})
+
 	return getSnapshotAction, abortAction
 }
 

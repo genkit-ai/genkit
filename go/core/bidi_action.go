@@ -84,8 +84,8 @@ type BidiActionOptions struct {
 //
 // Experimental: bidirectional streaming is experimental and subject to change.
 func NewBidiAction[In, Out, Stream, Init any](
-	name string,
 	atype api.ActionType,
+	name string,
 	opts *BidiActionOptions,
 	fn BidiFunc[In, Out, Stream, Init],
 ) *BidiAction[In, Out, Stream, Init] {
@@ -98,7 +98,7 @@ func NewBidiAction[In, Out, Stream, Init any](
 	metadata["bidi"] = true
 
 	b := &BidiAction[In, Out, Stream, Init]{
-		action: newAction[In, Out, Stream](name, atype, &ActionOptions{
+		action: newAction[In, Out, Stream](atype, name, &ActionOptions{
 			Description:  opts.Description,
 			Metadata:     metadata,
 			InputSchema:  opts.InputSchema,
@@ -120,12 +120,12 @@ func NewBidiAction[In, Out, Stream, Init any](
 // Experimental: bidirectional streaming is experimental and subject to change.
 func DefineBidiAction[In, Out, Stream, Init any](
 	r api.Registry,
-	name string,
 	atype api.ActionType,
+	name string,
 	opts *BidiActionOptions,
 	fn BidiFunc[In, Out, Stream, Init],
 ) *BidiAction[In, Out, Stream, Init] {
-	b := NewBidiAction(name, atype, opts, fn)
+	b := NewBidiAction(atype, name, opts, fn)
 	b.Register(r)
 	return b
 }

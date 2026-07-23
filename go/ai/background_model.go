@@ -146,7 +146,7 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 		return modelOpFromResponse(resp)
 	}
 
-	return &backgroundModel{*core.NewBackgroundAction(name, api.ActionTypeBackgroundModel, &core.ActionOptions{Metadata: metadata}, wrappedFn, checkFn, opts.Cancel)}
+	return &backgroundModel{*core.NewBackgroundAction(api.ActionTypeBackgroundModel, name, &core.ActionOptions{Metadata: metadata}, wrappedFn, checkFn, opts.Cancel)}
 }
 
 // DefineBackgroundModel defines and registers a new model that runs in the background.

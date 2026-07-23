@@ -34,7 +34,7 @@ provide:
 
 Define a non-streaming action:
 
-	action := core.DefineAction(registry, "myAction", api.ActionTypeCustom, nil,
+	action := core.DefineAction(registry, api.ActionTypeCustom, "myAction", nil,
 		func(ctx context.Context, input string) (string, error) {
 			return "processed: " + input, nil
 		},
@@ -45,7 +45,7 @@ Define a non-streaming action:
 Optional attributes (description, metadata, schema overrides) are passed via
 [ActionOptions]:
 
-	action := core.DefineAction(registry, "myAction", api.ActionTypeCustom,
+	action := core.DefineAction(registry, api.ActionTypeCustom, "myAction",
 		&core.ActionOptions{Description: "processes strings"},
 		func(ctx context.Context, input string) (string, error) {
 			return "processed: " + input, nil
@@ -54,7 +54,7 @@ Optional attributes (description, metadata, schema overrides) are passed via
 
 Define a streaming action that sends chunks during execution:
 
-	streamingAction := core.DefineStreamingAction(registry, "countdown", api.ActionTypeCustom, nil,
+	streamingAction := core.DefineStreamingAction(registry, api.ActionTypeCustom, "countdown", nil,
 		func(ctx context.Context, start int, cb core.StreamCallback[string]) (string, error) {
 			for i := start; i > 0; i-- {
 				if cb != nil {
@@ -194,7 +194,7 @@ from an API), implement [api.DynamicPlugin]:
 For long-running operations, use background actions that return immediately
 with an operation ID that can be polled for completion:
 
-	bgAction := core.DefineBackgroundAction(registry, "longTask", api.ActionTypeCustom, nil,
+	bgAction := core.DefineBackgroundAction(registry, api.ActionTypeCustom, "longTask", nil,
 		func(ctx context.Context, input Input) (*core.Operation[Output], error) {
 			// Start the operation
 			return startLongOperation(input)

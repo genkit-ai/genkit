@@ -118,7 +118,7 @@ type ModelOptions struct {
 
 // DefineGenerateAction defines a utility generate action.
 func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
-	return (*generateAction)(core.DefineStreamingAction(r, "generate", api.ActionTypeUtil, nil,
+	return (*generateAction)(core.DefineStreamingAction(r, api.ActionTypeUtil, "generate", nil,
 		func(ctx context.Context, actionOpts *GenerateActionOptions, cb ModelStreamCallback) (resp *ModelResponse, err error) {
 			actionOptsBytes, _ := json.Marshal(actionOpts)
 			logger.FromContext(ctx).Debug("GenerateAction",
@@ -185,7 +185,7 @@ func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
 		addAutomaticTelemetry(),
 	)(fn)
 
-	return &model{*core.NewStreamingAction(name, api.ActionTypeModel, &core.ActionOptions{
+	return &model{*core.NewStreamingAction(api.ActionTypeModel, name, &core.ActionOptions{
 		Metadata:    metadata,
 		InputSchema: inputSchema,
 	}, fn)}

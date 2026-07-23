@@ -103,25 +103,26 @@ type noStream = func(context.Context, struct{}) error
 
 // NewAction creates a new non-streaming [Action] without registering it.
 func NewAction[In, Out any](
-	name string,
 	atype api.ActionType,
+	name string,
 	opts *ActionOptions,
 	fn Func[In, Out],
 ) *Action[In, Out, struct{}] {
-	return NewStreamingAction(name, atype, opts,
+	return NewStreamingAction(atype, name, opts,
 		func(ctx context.Context, in In, _ noStream) (Out, error) {
 			return fn(ctx, in)
 		})
+
 }
 
 // NewStreamingAction creates a new streaming [Action] without registering it.
 func NewStreamingAction[In, Out, Stream any](
-	name string,
 	atype api.ActionType,
+	name string,
 	opts *ActionOptions,
 	fn StreamingFunc[In, Out, Stream],
 ) *Action[In, Out, Stream] {
-	a := newAction[In, Out, Stream](name, atype, opts)
+	a := newAction[In, Out, Stream](atype, name, opts)
 	a.fn = fn
 	return a
 }
@@ -129,12 +130,12 @@ func NewStreamingAction[In, Out, Stream any](
 // DefineAction creates a new non-streaming [Action] and registers it.
 func DefineAction[In, Out any](
 	r api.Registry,
-	name string,
 	atype api.ActionType,
+	name string,
 	opts *ActionOptions,
 	fn Func[In, Out],
 ) *Action[In, Out, struct{}] {
-	a := NewAction(name, atype, opts, fn)
+	a := NewAction(atype, name, opts, fn)
 	a.Register(r)
 	return a
 }
@@ -142,19 +143,19 @@ func DefineAction[In, Out any](
 // DefineStreamingAction creates a new streaming [Action] and registers it.
 func DefineStreamingAction[In, Out, Stream any](
 	r api.Registry,
-	name string,
 	atype api.ActionType,
+	name string,
 	opts *ActionOptions,
 	fn StreamingFunc[In, Out, Stream],
 ) *Action[In, Out, Stream] {
-	a := NewStreamingAction(name, atype, opts, fn)
+	a := NewStreamingAction(atype, name, opts, fn)
 	a.Register(r)
 	return a
 }
 
 // newAction builds an Action's descriptor from opts, inferring any schema not
 // explicitly provided. The caller is expected to assign a.fn.
-func newAction[In, Out, Stream any](name string, atype api.ActionType, opts *ActionOptions) *Action[In, Out, Stream] {
+func newAction[In, Out, Stream any](atype api.ActionType, name string, opts *ActionOptions) *Action[In, Out, Stream] {
 	if opts == nil {
 		opts = &ActionOptions{}
 	}

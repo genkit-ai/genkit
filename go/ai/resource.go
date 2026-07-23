@@ -129,7 +129,7 @@ type Resource interface {
 // DefineResource creates a resource and registers it with the given Registry.
 func DefineResource(r api.Registry, name string, opts *ResourceOptions, fn ResourceFunc) Resource {
 	metadata := resourceMetadata(name, opts)
-	return &resource{action: *core.DefineAction(r, name, api.ActionTypeResource, &core.ActionOptions{Metadata: metadata}, fn)}
+	return &resource{action: *core.DefineAction(r, api.ActionTypeResource, name, &core.ActionOptions{Metadata: metadata}, fn)}
 }
 
 // NewResource creates a resource but does not register it in the registry.
@@ -137,7 +137,7 @@ func DefineResource(r api.Registry, name string, opts *ResourceOptions, fn Resou
 func NewResource(name string, opts *ResourceOptions, fn ResourceFunc) Resource {
 	metadata := resourceMetadata(name, opts)
 	metadata["dynamic"] = true
-	return &resource{action: *core.NewAction(name, api.ActionTypeResource, &core.ActionOptions{Metadata: metadata}, fn)}
+	return &resource{action: *core.NewAction(api.ActionTypeResource, name, &core.ActionOptions{Metadata: metadata}, fn)}
 }
 
 // resourceMetadata creates the metadata common to both DefineResource and NewResource.

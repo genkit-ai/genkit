@@ -569,7 +569,7 @@ func TestHandlerBidiInitEnvelope(t *testing.T) {
 		Prefix string `json:"prefix"`
 	}
 
-	bidiAction := core.DefineBidiAction(g.reg, "envelopeBidi", api.ActionTypeCustom, nil,
+	bidiAction := core.DefineBidiAction(g.reg, api.ActionTypeCustom, "envelopeBidi", nil,
 		func(ctx context.Context, cfg Config, inCh <-chan string, outCh chan<- string) (string, error) {
 			for in := range inCh {
 				outCh <- cfg.Prefix + in

@@ -190,7 +190,7 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 	}
 
 	return &evaluator{
-		action: *core.NewAction(name, api.ActionTypeEvaluator, &core.ActionOptions{
+		action: *core.NewAction(api.ActionTypeEvaluator, name, &core.ActionOptions{
 			Metadata:    metadata,
 			InputSchema: inputSchema,
 		}, func(ctx context.Context, req *EvaluatorRequest) (output *EvaluatorResponse, err error) {
@@ -227,7 +227,7 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 								SpanID:     spanId,
 							}
 							results = append(results, failedResult)
-							// return error to mark span as failed
+
 							return nil, err
 						}
 
@@ -278,7 +278,7 @@ func NewBatchEvaluator(name string, opts *EvaluatorOptions, fn BatchEvaluatorFun
 	}
 
 	return &evaluator{
-		action: *core.NewAction(name, api.ActionTypeEvaluator, &core.ActionOptions{Metadata: metadata}, fn),
+		action: *core.NewAction(api.ActionTypeEvaluator, name, &core.ActionOptions{Metadata: metadata}, fn),
 	}
 }
 

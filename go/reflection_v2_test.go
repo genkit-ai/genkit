@@ -226,8 +226,8 @@ func TestReflectionServerV2_ListActions(t *testing.T) {
 	defer m.close()
 
 	g := MustInit(context.Background())
-	core.DefineAction(g.reg, "test/inc", api.ActionTypeCustom, nil, inc)
-	core.DefineAction(g.reg, "test/dec", api.ActionTypeCustom, nil, dec)
+	core.DefineAction(g.reg, api.ActionTypeCustom, "test/inc", nil, inc)
+	core.DefineAction(g.reg, api.ActionTypeCustom, "test/dec", nil, dec)
 
 	ctx, cancel := startRuntime(t, g, m)
 	defer cancel()
@@ -330,7 +330,7 @@ func TestReflectionServerV2_RunAction(t *testing.T) {
 	defer m.close()
 
 	g := MustInit(context.Background())
-	core.DefineAction(g.reg, "test/inc", api.ActionTypeCustom, nil, inc)
+	core.DefineAction(g.reg, api.ActionTypeCustom, "test/inc", nil, inc)
 
 	ctx, cancel := startRuntime(t, g, m)
 	defer cancel()
@@ -455,7 +455,7 @@ func TestReflectionServerV2_StreamingRunAction(t *testing.T) {
 		}
 		return x, nil
 	}
-	core.DefineStreamingAction(g.reg, "test/streaming", api.ActionTypeCustom, nil, streamInc)
+	core.DefineStreamingAction(g.reg, api.ActionTypeCustom, "test/streaming", nil, streamInc)
 
 	ctx, cancel := startRuntime(t, g, m)
 	defer cancel()
@@ -550,7 +550,7 @@ func TestReflectionServerV2_CancelAction(t *testing.T) {
 
 	g := MustInit(context.Background())
 	started := make(chan struct{})
-	core.DefineAction(g.reg, "test/slow", api.ActionTypeCustom, nil,
+	core.DefineAction(g.reg, api.ActionTypeCustom, "test/slow", nil,
 		func(ctx context.Context, _ any) (any, error) {
 			close(started)
 			<-ctx.Done()
@@ -619,7 +619,7 @@ func TestReflectionServerV2_BidiRunAction(t *testing.T) {
 		Prefix string `json:"prefix"`
 	}
 
-	core.DefineBidiAction(g.reg, "test/bidi-echo", api.ActionTypeCustom, nil,
+	core.DefineBidiAction(g.reg, api.ActionTypeCustom, "test/bidi-echo", nil,
 		func(ctx context.Context, cfg initConfig, inCh <-chan string, outCh chan<- string) (string, error) {
 			var n int
 			for chunk := range inCh {
@@ -815,7 +815,7 @@ func TestReflectionServerV2_BidiRunActionDropsAfterEnd(t *testing.T) {
 	var seenMu sync.Mutex
 	var seen []string
 
-	core.DefineBidiAction(g.reg, "test/bidi-record", api.ActionTypeCustom, nil,
+	core.DefineBidiAction(g.reg, api.ActionTypeCustom, "test/bidi-record", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			for chunk := range inCh {
 				seenMu.Lock()
@@ -899,7 +899,7 @@ func TestReflectionServerV2_BidiRunActionErrors(t *testing.T) {
 
 	g := MustInit(context.Background())
 
-	core.DefineBidiAction(g.reg, "test/bidi-fail", api.ActionTypeCustom, nil,
+	core.DefineBidiAction(g.reg, api.ActionTypeCustom, "test/bidi-fail", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			for range inCh {
 			}
@@ -958,7 +958,7 @@ func TestReflectionServerV2_BidiInvalidChunkFailsRun(t *testing.T) {
 
 	g := MustInit(context.Background())
 
-	core.DefineBidiAction(g.reg, "test/bidi-strict", api.ActionTypeCustom, nil,
+	core.DefineBidiAction(g.reg, api.ActionTypeCustom, "test/bidi-strict", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			for {
 				select {
@@ -1091,7 +1091,7 @@ func TestReflectionServerV2_BidiRunActionNoStream(t *testing.T) {
 
 	g := MustInit(context.Background())
 
-	core.DefineBidiAction(g.reg, "test/bidi-quiet", api.ActionTypeCustom, nil,
+	core.DefineBidiAction(g.reg, api.ActionTypeCustom, "test/bidi-quiet", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			var last string
 			for chunk := range inCh {
@@ -1171,7 +1171,7 @@ func TestReflectionServerV2_BidiInputClosedOnDisconnect(t *testing.T) {
 	g := MustInit(context.Background())
 
 	inputEnded := make(chan struct{})
-	core.DefineBidiAction(g.reg, "test/bidi-hang", api.ActionTypeCustom, nil,
+	core.DefineBidiAction(g.reg, api.ActionTypeCustom, "test/bidi-hang", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			for range inCh {
 			}

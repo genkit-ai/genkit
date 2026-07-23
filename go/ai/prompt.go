@@ -168,7 +168,7 @@ func definePrompt[In, Out, Stream any](r api.Registry, name string, opts []Promp
 		metadata["prompt"] = promptMetadata
 	}
 
-	p.action = *core.DefineAction(r, name, api.ActionTypeExecutablePrompt, &core.ActionOptions{
+	p.action = *core.DefineAction(r, api.ActionTypeExecutablePrompt, name, &core.ActionOptions{
 		Metadata:    metadata,
 		InputSchema: p.InputSchema,
 	}, p.buildRequest)

@@ -87,22 +87,22 @@ func (b *BackgroundAction[In, Out]) Register(r api.Registry) {
 // DefineBackgroundAction creates and registers a background action with three component actions
 func DefineBackgroundAction[In, Out any](
 	r api.Registry,
-	name string,
 	atype api.ActionType,
+	name string,
 	opts *ActionOptions,
 	startFn StartOpFunc[In, Out],
 	checkFn CheckOpFunc[Out],
 	cancelFn CancelOpFunc[Out],
 ) *BackgroundAction[In, Out] {
-	a := NewBackgroundAction(name, atype, opts, startFn, checkFn, cancelFn)
+	a := NewBackgroundAction(atype, name, opts, startFn, checkFn, cancelFn)
 	a.Register(r)
 	return a
 }
 
 // NewBackgroundAction creates a new background action without registering it.
 func NewBackgroundAction[In, Out any](
-	name string,
 	atype api.ActionType,
+	name string,
 	opts *ActionOptions,
 	startFn StartOpFunc[In, Out],
 	checkFn CheckOpFunc[Out],
@@ -120,7 +120,7 @@ func NewBackgroundAction[In, Out any](
 
 	key := api.KeyFromName(atype, name)
 
-	startAction := NewAction(name, atype, opts,
+	startAction := NewAction(atype, name, opts,
 		func(ctx context.Context, input In) (*Operation[Out], error) {
 			op, err := startFn(ctx, input)
 			if err != nil {
@@ -130,7 +130,7 @@ func NewBackgroundAction[In, Out any](
 			return op, nil
 		})
 
-	checkAction := NewAction(name, api.ActionTypeCheckOperation, opts,
+	checkAction := NewAction(api.ActionTypeCheckOperation, name, opts,
 		func(ctx context.Context, op *Operation[Out]) (*Operation[Out], error) {
 			updatedOp, err := checkFn(ctx, op)
 			if err != nil {
@@ -142,7 +142,7 @@ func NewBackgroundAction[In, Out any](
 
 	var cancelAction *Action[*Operation[Out], *Operation[Out], struct{}]
 	if cancelFn != nil {
-		cancelAction = NewAction(name, api.ActionTypeCancelOperation, opts,
+		cancelAction = NewAction(api.ActionTypeCancelOperation, name, opts,
 			func(ctx context.Context, op *Operation[Out]) (*Operation[Out], error) {
 				cancelledOp, err := cancelFn(ctx, op)
 				if err != nil {
@@ -151,6 +151,7 @@ func NewBackgroundAction[In, Out any](
 				cancelledOp.Action = key
 				return cancelledOp, nil
 			})
+
 	}
 
 	return &BackgroundAction[In, Out]{
