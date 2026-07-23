@@ -115,17 +115,6 @@ class ModelRef(Generic[ModelRefConfigT]):
     version: str | None = None
     config: ModelRefConfigT | None = None
 
-    def __post_init__(self) -> None:
-        if self.config is not None:
-            schema = cast(Any, self.config_schema)
-            if isinstance(self.config, dict):
-                object.__setattr__(self, 'config', schema.model_validate(self.config))
-            elif not isinstance(self.config, schema):
-                raise TypeError(
-                    f'config must conform to {getattr(schema, "__name__", str(schema))}, '
-                    f'got {type(self.config).__name__}'
-                )
-
 
 class Message(MessageData):
     """Message wrapper with utility properties for text and tool requests."""
