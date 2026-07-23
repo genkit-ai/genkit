@@ -51,7 +51,7 @@ func TestEmbedderRef(t *testing.T) {
 
 func TestNewEmbedder(t *testing.T) {
 	t.Run("creates embedder with valid name", func(t *testing.T) {
-		e := NewEmbedder("test/embedder", nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+		e := NewEmbedder("test/embedder", nil, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
 			return &EmbedResponse{}, nil
 		})
 
@@ -65,7 +65,7 @@ func TestNewEmbedder(t *testing.T) {
 
 	t.Run("panics with empty name", func(t *testing.T) {
 		assertPanic(t, func() {
-			NewEmbedder("", nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+			NewEmbedder("", nil, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
 				return &EmbedResponse{}, nil
 			})
 		}, "name is required")
@@ -87,7 +87,7 @@ func TestNewEmbedder(t *testing.T) {
 			},
 		}
 
-		e := NewEmbedder("test/embedder", opts, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+		e := NewEmbedder("test/embedder", opts, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
 			return &EmbedResponse{}, nil
 		})
 
@@ -97,7 +97,7 @@ func TestNewEmbedder(t *testing.T) {
 	})
 
 	t.Run("uses defaults when options nil", func(t *testing.T) {
-		e := NewEmbedder("test/embedder", nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+		e := NewEmbedder("test/embedder", nil, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
 			return &EmbedResponse{}, nil
 		})
 
@@ -112,7 +112,7 @@ func TestDefineEmbedder(t *testing.T) {
 		r := newTestRegistry(t)
 		called := false
 
-		e := DefineEmbedder(r, "test/defineEmbedder", nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+		e := DefineEmbedder(r, "test/defineEmbedder", nil, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
 			called = true
 			return &EmbedResponse{
 				Embeddings: []*Embedding{{Embedding: []float32{0.1, 0.2, 0.3}}},
@@ -146,7 +146,7 @@ func TestDefineEmbedder(t *testing.T) {
 func TestLookupEmbedder(t *testing.T) {
 	t.Run("returns embedder when found", func(t *testing.T) {
 		r := newTestRegistry(t)
-		DefineEmbedder(r, "test/lookupEmbedder", nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+		DefineEmbedder(r, "test/lookupEmbedder", nil, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
 			return &EmbedResponse{}, nil
 		})
 
@@ -171,7 +171,7 @@ func TestEmbedderEmbed(t *testing.T) {
 		r := newTestRegistry(t)
 		var capturedReq *EmbedRequest
 
-		e := DefineEmbedder(r, "test/embedDocuments", nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+		e := DefineEmbedder(r, "test/embedDocuments", nil, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
 			capturedReq = req
 			embeddings := make([]*Embedding, len(req.Input))
 			for i := range req.Input {
@@ -210,7 +210,7 @@ func TestEmbedderEmbed(t *testing.T) {
 		r := newTestRegistry(t)
 		expectedErr := errors.New("embedding failed")
 
-		e := DefineEmbedder(r, "test/embedError", nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+		e := DefineEmbedder(r, "test/embedError", nil, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
 			return nil, expectedErr
 		})
 
@@ -226,15 +226,15 @@ func TestEmbedderEmbed(t *testing.T) {
 		r := newTestRegistry(t)
 		var capturedOpts any
 
-		e := DefineEmbedder(r, "test/embedOpts", nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
-			capturedOpts = req.Options
+		e := DefineEmbedder(r, "test/embedOpts", nil, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
+			capturedOpts = req.Config
 			return &EmbedResponse{Embeddings: []*Embedding{{Embedding: []float32{0.1}}}}, nil
 		})
 
 		opts := map[string]any{"dimension": 768}
 		_, err := e.Embed(context.Background(), &EmbedRequest{
-			Input:   []*Document{DocumentFromText("test", nil)},
-			Options: opts,
+			Input:  []*Document{DocumentFromText("test", nil)},
+			Config: opts,
 		})
 		assertNoError(t, err)
 
@@ -247,7 +247,7 @@ func TestEmbedderEmbed(t *testing.T) {
 func TestEmbedFunction(t *testing.T) {
 	t.Run("embeds with embedder directly", func(t *testing.T) {
 		r := newTestRegistry(t)
-		e := DefineEmbedder(r, "test/embedFunc", nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+		e := DefineEmbedder(r, "test/embedFunc", nil, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
 			return &EmbedResponse{
 				Embeddings: []*Embedding{{Embedding: []float32{0.1, 0.2, 0.3}}},
 			}, nil
@@ -266,7 +266,7 @@ func TestEmbedFunction(t *testing.T) {
 
 	t.Run("embeds with embedder ref", func(t *testing.T) {
 		r := newTestRegistry(t)
-		DefineEmbedder(r, "test/embedFuncRef", nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+		DefineEmbedder(r, "test/embedFuncRef", nil, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
 			return &EmbedResponse{
 				Embeddings: []*Embedding{{Embedding: []float32{0.1, 0.2, 0.3}}},
 			}, nil
@@ -286,7 +286,7 @@ func TestEmbedFunction(t *testing.T) {
 
 	t.Run("embeds with embedder name", func(t *testing.T) {
 		r := newTestRegistry(t)
-		DefineEmbedder(r, "test/embedFuncName", nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+		DefineEmbedder(r, "test/embedFuncName", nil, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
 			return &EmbedResponse{
 				Embeddings: []*Embedding{{Embedding: []float32{0.1, 0.2, 0.3}}},
 			}, nil
@@ -307,8 +307,8 @@ func TestEmbedFunction(t *testing.T) {
 		r := newTestRegistry(t)
 		var capturedOpts any
 
-		DefineEmbedder(r, "test/embedRefConfig", nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
-			capturedOpts = req.Options
+		DefineEmbedder(r, "test/embedRefConfig", nil, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
+			capturedOpts = req.Config
 			return &EmbedResponse{Embeddings: []*Embedding{{Embedding: []float32{0.1}}}}, nil
 		})
 
@@ -330,8 +330,8 @@ func TestEmbedFunction(t *testing.T) {
 		r := newTestRegistry(t)
 		var capturedOpts any
 
-		DefineEmbedder(r, "test/embedOverrideConfig", nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
-			capturedOpts = req.Options
+		DefineEmbedder(r, "test/embedOverrideConfig", nil, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
+			capturedOpts = req.Config
 			return &EmbedResponse{Embeddings: []*Embedding{{Embedding: []float32{0.1}}}}, nil
 		})
 
@@ -374,7 +374,7 @@ func TestEmbedFunction(t *testing.T) {
 		r := newTestRegistry(t)
 		var capturedDocs []*Document
 
-		DefineEmbedder(r, "test/embedDocs", nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+		DefineEmbedder(r, "test/embedDocs", nil, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
 			capturedDocs = req.Input
 			embeddings := make([]*Embedding, len(req.Input))
 			for i := range req.Input {

@@ -74,7 +74,7 @@ func scriptedModel(t *testing.T, r *registry.Registry, name string, script []mod
 	idx := 0
 	m := ai.DefineModel(r, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true, Media: true},
-	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	}, func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		seen = append(seen, req)
 		if idx >= len(script) {
 			return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("unexpected extra turn")}, nil
@@ -296,7 +296,7 @@ func TestFilesystemStreamsInjectedFileContents(t *testing.T) {
 	turn := 0
 	m := ai.DefineModel(r, "test/fs-stream", &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true, Media: true},
-	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	}, func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		turn++
 		if turn == 1 {
 			content := []*ai.Part{ai.NewToolRequestPart(&ai.ToolRequest{
@@ -870,7 +870,7 @@ func TestFilesystemEditFileDetectsExternalModification(t *testing.T) {
 	turn := 0
 	m := ai.DefineModel(r, "test/fs-edit-stale", &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
-	}, func(ctx context.Context, req *ai.ModelRequest, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	}, func(ctx context.Context, req *ai.ModelRequest, _ any, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		// Between the read and the edit, simulate the user editing the file.
 		if turn == 1 {
 			// Make sure the new mtime is strictly after the cached one.

@@ -47,7 +47,13 @@ var (
 type ModelOperation = core.Operation[*ModelResponse]
 
 // StartModelOpFunc starts a background model operation.
-type StartModelOpFunc = func(ctx context.Context, req *ModelRequest) (*ModelOperation, error)
+// Config is the model's typed configuration: the framework deserializes the
+// request's raw config into it before calling the function (see [DefineBackgroundModel]).
+type StartModelOpFunc[Config any] = func(ctx context.Context, req *ModelRequest, config Config) (*ModelOperation, error)
+
+// rawStartModelOpFunc is the untyped start function shape used internally:
+// the request's config still rides along as `any` inside the [ModelRequest].
+type rawStartModelOpFunc = func(ctx context.Context, req *ModelRequest) (*ModelOperation, error)
 
 // CheckModelOpFunc checks the status of a background model operation.
 type CheckModelOpFunc = func(ctx context.Context, op *ModelOperation) (*ModelOperation, error)
@@ -76,7 +82,11 @@ func LookupBackgroundModel(r api.Registry, name string) *BackgroundModel {
 // NewBackgroundModel creates a new unregistered [BackgroundModel]. Register
 // it with [BackgroundModel.Register] or use [DefineBackgroundModel] to define
 // and register in one step.
-func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn StartModelOpFunc, checkFn CheckModelOpFunc) *BackgroundModel {
+//
+// Config is the model's typed configuration; it is usually inferred from
+// startFn's signature. See [NewModel] for how the request's config is
+// deserialized.
+func NewBackgroundModel[Config any](name string, opts *BackgroundModelOptions, startFn StartModelOpFunc[Config], checkFn CheckModelOpFunc) *BackgroundModel {
 	if name == "" {
 		panic("ai.NewBackgroundModel: name is required")
 	}
@@ -97,6 +107,8 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 		opts.Supports = &ModelSupports{}
 	}
 
+	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, ModelRequest{}, "config")
+
 	metadata := map[string]any{
 		"type": api.ActionTypeBackgroundModel,
 		"model": map[string]any{
@@ -115,22 +127,28 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 			},
 			"versions":      opts.Versions,
 			"stage":         opts.Stage,
-			"customOptions": opts.ConfigSchema,
+			"customOptions": configSchema,
 		},
 	}
 
-	inputSchema := core.InferSchemaMap(ModelRequest{})
-	if inputSchema != nil && opts.ConfigSchema != nil {
-		if props, ok := inputSchema["properties"].(map[string]any); ok {
-			props["config"] = opts.ConfigSchema
+	typedStartFn := func(ctx context.Context, req *ModelRequest) (*ModelOperation, error) {
+		// req.Config was normalized to the exact Config type by
+		// normalizeConfig below, so this hits the fast path.
+		cfg, err := resolveConfig[Config](req.Config)
+		if err != nil {
+			return nil, err
 		}
+		return startFn(ctx, req, cfg)
 	}
 
+	// normalizeConfig runs outermost so that the built-in wrappers and the
+	// start function all see the typed, converted config on the request.
 	fn := core.ChainMiddleware(
+		normalizeConfig[Config](name, opts.Versions),
 		simulateSystemPrompt(&opts.ModelOptions, nil),
 		augmentWithContext(&opts.ModelOptions, nil),
 		validateSupport(name, &opts.ModelOptions),
-	)(backgroundModelToModelFn(startFn))
+	)(backgroundModelToModelFn(typedStartFn))
 
 	wrappedFn := func(ctx context.Context, req *ModelRequest) (*ModelOperation, error) {
 		resp, err := fn(ctx, req, nil)
@@ -141,11 +159,17 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 		return modelOpFromResponse(resp)
 	}
 
-	return &BackgroundModel{*core.NewBackgroundAction(api.ActionTypeBackgroundModel, name, &core.ActionOptions{Metadata: metadata}, wrappedFn, checkFn, opts.Cancel)}
+	return &BackgroundModel{*core.NewBackgroundAction(api.ActionTypeBackgroundModel, name, &core.ActionOptions{
+		Metadata:    metadata,
+		InputSchema: inputSchema,
+	}, wrappedFn, checkFn, opts.Cancel)}
 }
 
 // DefineBackgroundModel defines and registers a new model that runs in the background.
-func DefineBackgroundModel(r *registry.Registry, name string, opts *BackgroundModelOptions, fn StartModelOpFunc, checkFn CheckModelOpFunc) *BackgroundModel {
+//
+// Config is the model's typed configuration; it is usually inferred from fn's
+// signature. See [NewModel] for how the request's config is deserialized.
+func DefineBackgroundModel[Config any](r *registry.Registry, name string, opts *BackgroundModelOptions, fn StartModelOpFunc[Config], checkFn CheckModelOpFunc) *BackgroundModel {
 	m := NewBackgroundModel(name, opts, fn, checkFn)
 	m.Register(r)
 	return m
@@ -175,8 +199,8 @@ func CheckModelOperation(ctx context.Context, r api.Registry, op *ModelOperation
 	return core.CheckOperation[*ModelRequest](ctx, r, op)
 }
 
-// backgroundModelToModelFn wraps a background model start function into a [ModelFunc] for middleware compatibility.
-func backgroundModelToModelFn(startFn StartModelOpFunc) ModelFunc {
+// backgroundModelToModelFn wraps a background model start function into a [rawModelFunc] for middleware compatibility.
+func backgroundModelToModelFn(startFn rawStartModelOpFunc) rawModelFunc {
 	return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		op, err := startFn(ctx, req)
 		if err != nil {
@@ -196,7 +220,7 @@ func backgroundModelToModelFn(startFn StartModelOpFunc) ModelFunc {
 		return &ModelResponse{
 			Operation: &Operation{
 				Action:   op.Action,
-				Id:       op.ID,
+				ID:       op.ID,
 				Done:     op.Done,
 				Output:   op.Output,
 				Error:    opError,
@@ -215,7 +239,7 @@ func modelOpFromResponse(resp *ModelResponse) (*ModelOperation, error) {
 
 	op := &ModelOperation{
 		Action:   resp.Operation.Action,
-		ID:       resp.Operation.Id,
+		ID:       resp.Operation.ID,
 		Done:     resp.Operation.Done,
 		Metadata: resp.Operation.Metadata,
 	}

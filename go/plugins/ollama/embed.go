@@ -30,7 +30,10 @@ import (
 )
 
 type EmbedOptions struct {
-	Model string `json:"model"`
+	// Model is optional in requests; the embedder defaults it to the model
+	// it was defined with (omitempty also keeps the inferred config schema
+	// from marking it required).
+	Model string `json:"model,omitempty"`
 }
 
 type ollamaEmbedRequest struct {
@@ -43,11 +46,7 @@ type ollamaEmbedResponse struct {
 	Embeddings [][]float32 `json:"embeddings"`
 }
 
-func embed(ctx context.Context, serverAddress string, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
-	options, ok := req.Options.(*EmbedOptions)
-	if !ok && req.Options != nil {
-		return nil, fmt.Errorf("invalid options type: expected *EmbedOptions")
-	}
+func embed(ctx context.Context, serverAddress string, req *ai.EmbedRequest, options *EmbedOptions) (*ai.EmbedResponse, error) {
 	if options == nil || options.Model == "" {
 		return nil, fmt.Errorf("invalid embedding model: model must be specified")
 	}
@@ -163,26 +162,14 @@ func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, 
 
 	meta.Dimensions = dimensions
 
-	return g.DefineEmbedder(api.NewName(provider, model), meta, func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
-		normalizedReq := *req
-
-		if req.Options == nil {
-			normalizedReq.Options = &EmbedOptions{Model: model}
-		} else if opts, ok := req.Options.(*EmbedOptions); ok {
-			if opts == nil {
-				normalizedReq.Options = &EmbedOptions{Model: model}
-			} else {
-				normalisedOpts := *opts
-				if normalisedOpts.Model == "" {
-					normalisedOpts.Model = model
-				} else if normalisedOpts.Model != model {
-					return nil, fmt.Errorf("invalid embedding model: embedder bound to model %q, got %q", model, opts.Model)
-				}
-				normalizedReq.Options = &normalisedOpts
-			}
+	return g.DefineEmbedder(api.NewName(provider, model), meta, func(ctx context.Context, req *ai.EmbedRequest, cfg EmbedOptions) (*ai.EmbedResponse, error) {
+		if cfg.Model == "" {
+			cfg.Model = model
+		} else if cfg.Model != model {
+			return nil, fmt.Errorf("invalid embedding model: embedder bound to model %q, got %q", model, cfg.Model)
 		}
 
-		return embed(ctx, o.ServerAddress, &normalizedReq)
+		return embed(ctx, o.ServerAddress, req, &cfg)
 	})
 }
 

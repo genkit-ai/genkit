@@ -112,7 +112,7 @@ func (pm *programmableModel) setHandler(h func(ctx context.Context, req *ai.Mode
 	pm.handler = h
 }
 
-func (pm *programmableModel) generate(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+func (pm *programmableModel) generate(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 	pm.mu.Lock()
 	h := pm.handler
 	pm.mu.Unlock()

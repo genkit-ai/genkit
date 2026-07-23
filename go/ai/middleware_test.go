@@ -533,7 +533,7 @@ func TestWrapToolValidationErrorReturnedToModel(t *testing.T) {
 
 	var callCount int32
 
-	modelHandler := func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	modelHandler := func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		c := atomic.AddInt32(&callCount, 1)
 
 		if c <= 2 {

@@ -65,7 +65,7 @@ func captureModel(t *testing.T, r *registry.Registry, name string) (*ai.Model, *
 	var captured []*ai.Message
 	m := ai.DefineModel(r, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
-	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	}, func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		captured = req.Messages
 		return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("mock response")}, nil
 	})
@@ -79,7 +79,7 @@ func toolCallingModel(t *testing.T, r *registry.Registry, name, toolName string,
 	t.Helper()
 	return ai.DefineModel(r, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
-	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	}, func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		for _, msg := range req.Messages {
 			for _, part := range msg.Content {
 				if part.IsToolResponse() {

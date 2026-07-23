@@ -38,21 +38,22 @@ func TestConvertRequest(t *testing.T) {
 		OutputSchema: map[string]any{"type": string("string")},
 	}
 
-	req := &ai.ModelRequest{
-		Config: genai.GenerateContentConfig{
-			MaxOutputTokens: 10,
-			StopSequences:   []string{"stop"},
-			Temperature:     genai.Ptr[float32](0.4),
-			TopK:            genai.Ptr[float32](0.1),
-			TopP:            genai.Ptr[float32](1.0),
-			Tools: []*genai.Tool{
-				{GoogleSearch: &genai.GoogleSearch{}},
-			},
-			ThinkingConfig: &genai.ThinkingConfig{
-				IncludeThoughts: false,
-				ThinkingBudget:  genai.Ptr[int32](0),
-			},
+	cfg := genai.GenerateContentConfig{
+		MaxOutputTokens: 10,
+		StopSequences:   []string{"stop"},
+		Temperature:     genai.Ptr[float32](0.4),
+		TopK:            genai.Ptr[float32](0.1),
+		TopP:            genai.Ptr[float32](1.0),
+		Tools: []*genai.Tool{
+			{GoogleSearch: &genai.GoogleSearch{}},
 		},
+		ThinkingConfig: &genai.ThinkingConfig{
+			IncludeThoughts: false,
+			ThinkingBudget:  genai.Ptr[int32](0),
+		},
+	}
+
+	req := &ai.ModelRequest{
 		Tools:      []*ai.ToolDefinition{tool},
 		ToolChoice: ai.ToolChoiceAuto,
 		Output: &ai.ModelOutputConfig{
@@ -122,7 +123,7 @@ func TestConvertRequest(t *testing.T) {
 		},
 	}
 	t.Run("convert request", func(t *testing.T) {
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequest(req, cfg, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -139,10 +140,7 @@ func TestConvertRequest(t *testing.T) {
 		if gcc.CandidateCount == 0 {
 			t.Error("candidate count: got: 0, want: 1")
 		}
-		ogCfg, ok := req.Config.(genai.GenerateContentConfig)
-		if !ok {
-			t.Fatalf("request config should have been of type: genai.GenerateContentConfig, got: %T", req.Config)
-		}
+		ogCfg := cfg
 		if gcc.MaxOutputTokens == 0 {
 			t.Errorf("max output tokens: got: 0, want %d", ogCfg.MaxOutputTokens)
 		}
@@ -204,10 +202,8 @@ func TestConvertRequest(t *testing.T) {
 				},
 			},
 		}
-		req := ai.ModelRequest{
-			Config: badCfg,
-		}
-		_, err := toGeminiRequest(&req, nil)
+		req := ai.ModelRequest{}
+		_, err := toGeminiRequest(&req, badCfg, nil)
 		if err != nil {
 			t.Fatalf("expected nil, got: %v", err)
 		}
@@ -267,44 +263,31 @@ func TestConvertRequest(t *testing.T) {
 
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
-				req := ai.ModelRequest{
-					Config: tc.cfg,
-				}
-				_, err := toGeminiRequest(&req, nil)
+				req := ai.ModelRequest{}
+				_, err := toGeminiRequest(&req, tc.cfg, nil)
 				if err == nil {
 					t.Fatalf("expected an error: '%v' but got nil", tc.err)
 				}
 			})
 		}
 	})
-	t.Run("invalid config map", func(t *testing.T) {
-		req := ai.ModelRequest{
-			Config: map[string]any{
-				"temperature": "not a number", // This should fail map->struct conversion
-			},
-		}
-		_, err := toGeminiRequest(&req, nil)
-		if err == nil {
-			t.Fatal("expected error for invalid config map")
-		}
-	})
 	t.Run("convert request for TTS model", func(t *testing.T) {
-		req := &ai.ModelRequest{
-			Config: &genai.GenerateContentConfig{
-				SpeechConfig: &genai.SpeechConfig{
-					VoiceConfig: &genai.VoiceConfig{
-						PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{
-							VoiceName: "Algenib",
-						},
+		cfg := genai.GenerateContentConfig{
+			SpeechConfig: &genai.SpeechConfig{
+				VoiceConfig: &genai.VoiceConfig{
+					PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{
+						VoiceName: "Algenib",
 					},
 				},
 			},
+		}
+		req := &ai.ModelRequest{
 			Messages: []*ai.Message{
 				ai.NewUserMessage(ai.NewTextPart("say hello")),
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequest(req, cfg, nil, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -331,7 +314,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequest(req, genai.GenerateContentConfig{}, nil, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -345,18 +328,18 @@ func TestConvertRequest(t *testing.T) {
 		}
 	})
 	t.Run("convert request for TTS model defaults voice when speech config has no voice", func(t *testing.T) {
-		req := &ai.ModelRequest{
-			Config: &genai.GenerateContentConfig{
-				SpeechConfig: &genai.SpeechConfig{
-					LanguageCode: "en-US",
-				},
+		cfg := genai.GenerateContentConfig{
+			SpeechConfig: &genai.SpeechConfig{
+				LanguageCode: "en-US",
 			},
+		}
+		req := &ai.ModelRequest{
 			Messages: []*ai.Message{
 				ai.NewUserMessage(ai.NewTextPart("say hello")),
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequest(req, cfg, nil, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -372,18 +355,18 @@ func TestConvertRequest(t *testing.T) {
 		}
 	})
 	t.Run("convert request for TTS model defaults voice when voice config has no voice", func(t *testing.T) {
-		req := &ai.ModelRequest{
-			Config: &genai.GenerateContentConfig{
-				SpeechConfig: &genai.SpeechConfig{
-					VoiceConfig: &genai.VoiceConfig{},
-				},
+		cfg := genai.GenerateContentConfig{
+			SpeechConfig: &genai.SpeechConfig{
+				VoiceConfig: &genai.VoiceConfig{},
 			},
+		}
+		req := &ai.ModelRequest{
 			Messages: []*ai.Message{
 				ai.NewUserMessage(ai.NewTextPart("say hello")),
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequest(req, cfg, nil, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -412,18 +395,18 @@ func TestConvertRequest(t *testing.T) {
 				},
 			},
 		}
-		req := &ai.ModelRequest{
-			Config: &genai.GenerateContentConfig{
-				SpeechConfig: &genai.SpeechConfig{
-					MultiSpeakerVoiceConfig: msvc,
-				},
+		cfg := genai.GenerateContentConfig{
+			SpeechConfig: &genai.SpeechConfig{
+				MultiSpeakerVoiceConfig: msvc,
 			},
+		}
+		req := &ai.ModelRequest{
 			Messages: []*ai.Message{
 				ai.NewUserMessage(ai.NewTextPart("say hello")),
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequest(req, cfg, nil, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -442,7 +425,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-2.5-flash")
+		gcc, err := toGeminiRequest(req, genai.GenerateContentConfig{}, nil, "googleai/gemini-2.5-flash")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -505,26 +488,26 @@ func TestToolMerging(t *testing.T) {
 	}
 
 	t.Run("preserves Retrieval when adding Genkit tools", func(t *testing.T) {
-		req := &ai.ModelRequest{
-			Config: genai.GenerateContentConfig{
-				Temperature: genai.Ptr[float32](0.5),
-				Tools: []*genai.Tool{
-					{
-						Retrieval: &genai.Retrieval{
-							VertexAISearch: &genai.VertexAISearch{
-								Datastore: "test-datastore",
-							},
+		cfg := genai.GenerateContentConfig{
+			Temperature: genai.Ptr[float32](0.5),
+			Tools: []*genai.Tool{
+				{
+					Retrieval: &genai.Retrieval{
+						VertexAISearch: &genai.VertexAISearch{
+							Datastore: "test-datastore",
 						},
 					},
 				},
 			},
+		}
+		req := &ai.ModelRequest{
 			Tools: []*ai.ToolDefinition{genkitTool},
 			Messages: []*ai.Message{
 				{Role: ai.RoleUser, Content: []*ai.Part{{Text: "test"}}},
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequest(req, cfg, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -555,20 +538,20 @@ func TestToolMerging(t *testing.T) {
 	})
 
 	t.Run("preserves GoogleSearch when adding Genkit tools", func(t *testing.T) {
-		req := &ai.ModelRequest{
-			Config: genai.GenerateContentConfig{
-				Temperature: genai.Ptr[float32](0.5),
-				Tools: []*genai.Tool{
-					{GoogleSearch: &genai.GoogleSearch{}},
-				},
+		cfg := genai.GenerateContentConfig{
+			Temperature: genai.Ptr[float32](0.5),
+			Tools: []*genai.Tool{
+				{GoogleSearch: &genai.GoogleSearch{}},
 			},
+		}
+		req := &ai.ModelRequest{
 			Tools: []*ai.ToolDefinition{genkitTool},
 			Messages: []*ai.Message{
 				{Role: ai.RoleUser, Content: []*ai.Part{{Text: "test"}}},
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequest(req, cfg, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -587,20 +570,20 @@ func TestToolMerging(t *testing.T) {
 	})
 
 	t.Run("preserves CodeExecution when adding Genkit tools", func(t *testing.T) {
-		req := &ai.ModelRequest{
-			Config: genai.GenerateContentConfig{
-				Temperature: genai.Ptr[float32](0.5),
-				Tools: []*genai.Tool{
-					{CodeExecution: &genai.ToolCodeExecution{}},
-				},
+		cfg := genai.GenerateContentConfig{
+			Temperature: genai.Ptr[float32](0.5),
+			Tools: []*genai.Tool{
+				{CodeExecution: &genai.ToolCodeExecution{}},
 			},
+		}
+		req := &ai.ModelRequest{
 			Tools: []*ai.ToolDefinition{genkitTool},
 			Messages: []*ai.Message{
 				{Role: ai.RoleUser, Content: []*ai.Part{{Text: "test"}}},
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequest(req, cfg, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -619,28 +602,28 @@ func TestToolMerging(t *testing.T) {
 	})
 
 	t.Run("preserves multiple Gemini tools when adding Genkit tools", func(t *testing.T) {
-		req := &ai.ModelRequest{
-			Config: genai.GenerateContentConfig{
-				Temperature: genai.Ptr[float32](0.5),
-				Tools: []*genai.Tool{
-					{
-						Retrieval: &genai.Retrieval{
-							VertexAISearch: &genai.VertexAISearch{
-								Datastore: "test-datastore",
-							},
+		cfg := genai.GenerateContentConfig{
+			Temperature: genai.Ptr[float32](0.5),
+			Tools: []*genai.Tool{
+				{
+					Retrieval: &genai.Retrieval{
+						VertexAISearch: &genai.VertexAISearch{
+							Datastore: "test-datastore",
 						},
 					},
-					{GoogleSearch: &genai.GoogleSearch{}},
-					{CodeExecution: &genai.ToolCodeExecution{}},
 				},
+				{GoogleSearch: &genai.GoogleSearch{}},
+				{CodeExecution: &genai.ToolCodeExecution{}},
 			},
+		}
+		req := &ai.ModelRequest{
 			Tools: []*ai.ToolDefinition{genkitTool},
 			Messages: []*ai.Message{
 				{Role: ai.RoleUser, Content: []*ai.Part{{Text: "test"}}},
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequest(req, cfg, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -680,17 +663,17 @@ func TestToolMerging(t *testing.T) {
 	})
 
 	t.Run("works when no existing tools in config", func(t *testing.T) {
+		cfg := genai.GenerateContentConfig{
+			Temperature: genai.Ptr[float32](0.5),
+		}
 		req := &ai.ModelRequest{
-			Config: genai.GenerateContentConfig{
-				Temperature: genai.Ptr[float32](0.5),
-			},
 			Tools: []*ai.ToolDefinition{genkitTool},
 			Messages: []*ai.Message{
 				{Role: ai.RoleUser, Content: []*ai.Part{{Text: "test"}}},
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequest(req, cfg, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -718,26 +701,26 @@ func TestToolMerging(t *testing.T) {
 			InputSchema: map[string]any{"type": "object"},
 		}
 
-		req := &ai.ModelRequest{
-			Config: genai.GenerateContentConfig{
-				Temperature: genai.Ptr[float32](0.5),
-				Tools: []*genai.Tool{
-					{
-						Retrieval: &genai.Retrieval{
-							VertexAISearch: &genai.VertexAISearch{
-								Datastore: "test-datastore",
-							},
+		cfg := genai.GenerateContentConfig{
+			Temperature: genai.Ptr[float32](0.5),
+			Tools: []*genai.Tool{
+				{
+					Retrieval: &genai.Retrieval{
+						VertexAISearch: &genai.VertexAISearch{
+							Datastore: "test-datastore",
 						},
 					},
 				},
 			},
+		}
+		req := &ai.ModelRequest{
 			Tools: []*ai.ToolDefinition{genkitTool, anotherTool},
 			Messages: []*ai.Message{
 				{Role: ai.RoleUser, Content: []*ai.Part{{Text: "test"}}},
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequest(req, cfg, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -767,25 +750,25 @@ func TestToolMerging(t *testing.T) {
 		// registered with the Genkit tool registry. Passing them via config
 		// would skip registration and the model would call something with no
 		// handler attached.
-		req := &ai.ModelRequest{
-			Config: genai.GenerateContentConfig{
-				Temperature: genai.Ptr[float32](0.5),
-				Tools: []*genai.Tool{
-					{
-						FunctionDeclarations: []*genai.FunctionDeclaration{
-							{Name: "config_function", Description: "A function from config"},
-						},
-						GoogleSearch: &genai.GoogleSearch{},
+		cfg := genai.GenerateContentConfig{
+			Temperature: genai.Ptr[float32](0.5),
+			Tools: []*genai.Tool{
+				{
+					FunctionDeclarations: []*genai.FunctionDeclaration{
+						{Name: "config_function", Description: "A function from config"},
 					},
+					GoogleSearch: &genai.GoogleSearch{},
 				},
 			},
+		}
+		req := &ai.ModelRequest{
 			Tools: []*ai.ToolDefinition{genkitTool},
 			Messages: []*ai.Message{
 				{Role: ai.RoleUser, Content: []*ai.Part{{Text: "test"}}},
 			},
 		}
 
-		if _, err := toGeminiRequest(req, nil); err == nil {
+		if _, err := toGeminiRequest(req, cfg, nil); err == nil {
 			t.Fatal("expected error rejecting FunctionDeclarations in config tools, got nil")
 		}
 	})
@@ -800,18 +783,18 @@ func TestToolMerging(t *testing.T) {
 			},
 			IncludeServerSideToolInvocations: genai.Ptr(true),
 		}
+		cfg := genai.GenerateContentConfig{
+			Temperature: genai.Ptr[float32](0.5),
+			ToolConfig:  userToolConfig,
+		}
 		req := &ai.ModelRequest{
-			Config: genai.GenerateContentConfig{
-				Temperature: genai.Ptr[float32](0.5),
-				ToolConfig:  userToolConfig,
-			},
 			Tools: []*ai.ToolDefinition{genkitTool},
 			Messages: []*ai.Message{
 				{Role: ai.RoleUser, Content: []*ai.Part{{Text: "test"}}},
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequest(req, cfg, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}

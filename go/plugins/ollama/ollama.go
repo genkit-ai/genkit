@@ -137,7 +137,7 @@ func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.M
 		Label:        "Ollama - " + model.Name,
 		Supports:     modelOpts.Supports,
 		Versions:     []string{},
-		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
+		ConfigSchema: generateContentConfigSchema(),
 	}
 	gen := &generator{model: model, serverAddress: o.ServerAddress, timeout: o.Timeout}
 	return g.DefineModel(api.NewName(provider, model.Name), meta, gen.generate)
@@ -341,6 +341,13 @@ func (o *Ollama) Init(ctx context.Context) []api.Action {
 	return []api.Action{}
 }
 
+// generateContentConfigSchema caches the config schema shared by every
+// Ollama model so that ListActions/ResolveAction, which construct a model
+// per discovered name on every call, don't re-run schema reflection.
+var generateContentConfigSchema = sync.OnceValue(func() map[string]any {
+	return core.InferSchemaMap(GenerateContentConfig{})
+})
+
 // newModel creates an Ollama model without registering it in the Genkit registry.
 // It is used by ListActions (to generate ActionDesc) and ResolveAction (to return an Action).
 func (o *Ollama) newModel(name string, opts ai.ModelOptions) *ai.Model {
@@ -348,7 +355,7 @@ func (o *Ollama) newModel(name string, opts ai.ModelOptions) *ai.Model {
 		Label:        "Ollama - " + name,
 		Supports:     opts.Supports,
 		Versions:     []string{},
-		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
+		ConfigSchema: generateContentConfigSchema(),
 	}
 	gen := &generator{
 		model:         ModelDefinition{Name: name, Type: "chat"},
@@ -393,7 +400,7 @@ func Ptr[T any](v T) *T {
 }
 
 // Generate makes a request to the Ollama API and processes the response.
-func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
+func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, config GenerateContentConfig, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
 	stream := cb != nil
 	var payload any
 	var thinkingEnabled bool
@@ -431,9 +438,7 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			Stream:   stream,
 			Images:   images,
 		}
-		if err := chatReq.ApplyOptions(input.Config); err != nil {
-			return nil, fmt.Errorf("failed to apply options: %v", err)
-		}
+		chatReq.applyGenerateContentConfig(&config)
 		thinkingEnabled = chatReq.Think.IsEnabled()
 
 		if len(input.Tools) > 0 {

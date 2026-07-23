@@ -74,12 +74,12 @@ func (d *DownloadRequestMedia) wrapModel(ctx context.Context, params *ai.ModelPa
 // are downloaded and inlined as base64 data URLs before fn runs. Provider
 // plugins use this to bake the behavior into a model at definition time; end
 // users can instead attach the middleware to a single call via [ai.WithUse].
-func (d *DownloadRequestMedia) WrapModelFunc(fn ai.ModelFunc) ai.ModelFunc {
-	return func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+func (d *DownloadRequestMedia) WrapModelFunc[Config any](fn ai.ModelFunc[Config]) ai.ModelFunc[Config] {
+	return func(ctx context.Context, req *ai.ModelRequest, cfg Config, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		if err := d.download(req); err != nil {
 			return nil, err
 		}
-		return fn(ctx, req, cb)
+		return fn(ctx, req, cfg, cb)
 	}
 }
 

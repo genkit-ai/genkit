@@ -69,7 +69,7 @@ func TestHandlerAgent(t *testing.T) {
 	// Replies "echo <n>" where n is the number of messages the model saw,
 	// so resumed history is observable; fails when asked to.
 	g.DefineModel("test/echo", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			modelCalls.Add(1)
 			if len(req.Messages) == 0 {
 				return nil, core.NewError(core.INTERNAL, "model saw empty messages")
@@ -311,7 +311,7 @@ func TestHandlerAgentRef(t *testing.T) {
 	g := genkit.MustInit(context.Background(), genkit.WithExperimental())
 
 	g.DefineModel("test/echo", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return &ai.ModelResponse{
 				Message:      ai.NewModelTextMessage(fmt.Sprintf("echo %d", len(req.Messages))),
 				FinishReason: ai.FinishReasonStop,

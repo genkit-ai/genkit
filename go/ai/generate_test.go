@@ -63,7 +63,7 @@ var (
 		Stage:    ModelStageDeprecated,
 	}
 
-	echoModel = DefineModel(r, "test/"+modelName, &metadata, func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
+	echoModel = DefineModel(r, "test/"+modelName, &metadata, func(ctx context.Context, gr *ModelRequest, _ any, msc ModelStreamCallback) (*ModelResponse, error) {
 		if msc != nil {
 			msc(ctx, &ModelResponseChunk{
 				Content: []*Part{NewTextPart("stream!")},
@@ -112,7 +112,7 @@ func TestStreamingChunksHaveRoleAndIndex(t *testing.T) {
 		},
 	)
 
-	toolModel := DefineModel(r, "test/toolModel", &metadata, func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
+	toolModel := DefineModel(r, "test/toolModel", &metadata, func(ctx context.Context, gr *ModelRequest, _ any, msc ModelStreamCallback) (*ModelResponse, error) {
 		hasToolResponse := false
 		for _, msg := range gr.Messages {
 			if msg.Role == RoleTool {
@@ -213,7 +213,7 @@ func TestGenerate(t *testing.T) {
 	JSON := "{\"subject\": \"bananas\", \"location\": \"tropics\"}"
 	JSONmd := "```json" + JSON + "```"
 
-	bananaModel := DefineModel(r, "test/banana", &metadata, func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
+	bananaModel := DefineModel(r, "test/banana", &metadata, func(ctx context.Context, gr *ModelRequest, _ any, msc ModelStreamCallback) (*ModelResponse, error) {
 		if msc != nil {
 			msc(ctx, &ModelResponseChunk{
 				Content: []*Part{NewTextPart("stream!")},
@@ -341,7 +341,7 @@ func TestGenerate(t *testing.T) {
 			},
 		}
 		interruptModel := DefineModel(r, "test/interrupt", info,
-			func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
+			func(ctx context.Context, gr *ModelRequest, _ any, msc ModelStreamCallback) (*ModelResponse, error) {
 				return &ModelResponse{
 					Request: gr,
 					Message: &Message{
@@ -400,7 +400,7 @@ func TestGenerate(t *testing.T) {
 			},
 		}
 		parallelModel := DefineModel(r, "test/parallel", info,
-			func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
+			func(ctx context.Context, gr *ModelRequest, _ any, msc ModelStreamCallback) (*ModelResponse, error) {
 				roundCount++
 				if roundCount == 1 {
 					return &ModelResponse{
@@ -465,7 +465,7 @@ func TestGenerate(t *testing.T) {
 			},
 		}
 		multiRoundModel := DefineModel(r, "test/multiround", info,
-			func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
+			func(ctx context.Context, gr *ModelRequest, _ any, msc ModelStreamCallback) (*ModelResponse, error) {
 				roundCount++
 				if roundCount == 1 {
 					return &ModelResponse{
@@ -533,7 +533,7 @@ func TestGenerate(t *testing.T) {
 			},
 		}
 		infiniteModel := DefineModel(r, "test/infinite", info,
-			func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
+			func(ctx context.Context, gr *ModelRequest, _ any, msc ModelStreamCallback) (*ModelResponse, error) {
 				return &ModelResponse{
 					Request: gr,
 					Message: &Message{
@@ -619,7 +619,7 @@ func TestGenerate(t *testing.T) {
 			},
 		}
 		toolCallModel := DefineModel(r, "test/toolcall", info,
-			func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
+			func(ctx context.Context, gr *ModelRequest, _ any, msc ModelStreamCallback) (*ModelResponse, error) {
 				roundCount++
 				if roundCount == 1 {
 					// First response: call the dynamic tool
@@ -721,7 +721,7 @@ func TestGenerateWithOutputSchemaName(t *testing.T) {
 	// Define a model that supports constrained output
 	model := DefineModel(r, "test/constrained", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
-	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		// Mock response
 		return &ModelResponse{
 			Message: NewModelTextMessage(`{"foo": "bar"}`),
@@ -1163,7 +1163,7 @@ func TestMultipartToolResponses(t *testing.T) {
 		)
 
 		// Create a model that requests the tool
-		imageToolModel := DefineModel(r, "test/multipartToolModel", &metadata, func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
+		imageToolModel := DefineModel(r, "test/multipartToolModel", &metadata, func(ctx context.Context, gr *ModelRequest, _ any, msc ModelStreamCallback) (*ModelResponse, error) {
 			// Check if we already have a tool response
 			for _, msg := range gr.Messages {
 				if msg.Role == RoleTool {
@@ -1284,7 +1284,7 @@ func TestGenerateStream(t *testing.T) {
 
 		streamModel := DefineModel(r, "test/streamModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			if cb != nil {
 				for _, text := range chunkTexts {
 					cb(ctx, &ModelResponseChunk{
@@ -1337,7 +1337,7 @@ func TestGenerateStream(t *testing.T) {
 	t.Run("handles no streaming callback gracefully", func(t *testing.T) {
 		noStreamModel := DefineModel(r, "test/noStreamModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			return &ModelResponse{
 				Request: req,
 				Message: NewModelTextMessage("response without streaming"),
@@ -1377,7 +1377,7 @@ func TestGenerateStream(t *testing.T) {
 
 		errorModel := DefineModel(r, "test/errorModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			return nil, expectedErr
 		})
 
@@ -1406,7 +1406,7 @@ func TestGenerateStream(t *testing.T) {
 
 		streamModel := DefineModel(r, "test/cancelModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			if cb != nil {
 				for i := 0; i < 100; i++ {
 					err := cb(ctx, &ModelResponseChunk{
@@ -1454,7 +1454,7 @@ func TestGenerateStream(t *testing.T) {
 			Supports: &ModelSupports{
 				Multiturn: true,
 			},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			for range 3 {
 				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart("chunk")}}); err != nil {
 					return nil, err
@@ -1486,7 +1486,7 @@ func TestGenerateDataStream(t *testing.T) {
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
 			},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			if cb != nil {
 				cb(ctx, &ModelResponseChunk{
 					Content: []*Part{NewJSONPart(`{"name":"partial","value":1}`)},
@@ -1541,7 +1541,7 @@ func TestGenerateDataStream(t *testing.T) {
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
 			},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			return &ModelResponse{
 				Request: req,
 				Message: &Message{
@@ -1583,7 +1583,7 @@ func TestGenerateDataStream(t *testing.T) {
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
 			},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			capturedRequest = req
 			return &ModelResponse{
 				Request: req,
@@ -1623,7 +1623,7 @@ func TestGenerateDataStream(t *testing.T) {
 				Tools:       true,
 				Constrained: ConstrainedSupportAll,
 			},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			if cb != nil {
 				cb(ctx, &ModelResponseChunk{
 					Content: []*Part{NewTextPart("thinking...")},
@@ -1687,7 +1687,7 @@ func TestGenerateDataStream(t *testing.T) {
 				Tools:       true,
 				Constrained: ConstrainedSupportAll,
 			},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			return &ModelResponse{
 				Request: req,
 				Message: &Message{
@@ -1737,7 +1737,7 @@ func TestGenerateDataStream(t *testing.T) {
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
 			},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			if cb != nil {
 				cb(ctx, &ModelResponseChunk{
 					Content: []*Part{NewTextPart("not valid json")},
@@ -1771,7 +1771,7 @@ func TestGenerateDataStream(t *testing.T) {
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
 			},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			for i := range 3 {
 				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewJSONPart(fmt.Sprintf(`{"name":"chunk","value":%d}`, i))}}); err != nil {
 					return nil, err
@@ -1798,7 +1798,7 @@ func TestGenerateDataStream(t *testing.T) {
 func TestGenerateText(t *testing.T) {
 	r := newTestRegistry(t)
 
-	echoModel := DefineModel(r, "test/echoTextModel", nil, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	echoModel := DefineModel(r, "test/echoTextModel", nil, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{
 			Request: req,
 			Message: NewModelTextMessage("echo: " + req.Messages[0].Content[0].Text),
@@ -1830,7 +1830,7 @@ func TestGenerateData(t *testing.T) {
 		Supports: &ModelSupports{
 			Constrained: ConstrainedSupportAll,
 		},
-	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{
 			Request: req,
 			Message: NewModelTextMessage(`{"value": 42}`),
@@ -1855,7 +1855,7 @@ func TestGenerateData(t *testing.T) {
 
 		errorModel := DefineModel(r, "test/jsonErrorModel", &ModelOptions{
 			Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			return nil, expectedErr
 		})
 
@@ -1883,7 +1883,7 @@ func TestGenerateData(t *testing.T) {
 
 		toolRequestModel := DefineModel(r, "test/jsonToolRequestModel", &ModelOptions{
 			Supports: &ModelSupports{Constrained: ConstrainedSupportAll, Tools: true},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			return &ModelResponse{
 				Request: req,
 				Message: &Message{
@@ -2051,7 +2051,7 @@ func TestGenerateWithMarkdownJSON(t *testing.T) {
 	// A model that returns JSON wrapped in markdown
 	markdownModel := DefineModel(r, "test/markdownJson", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
-	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		jsonContent := "{\"name\": \"test\", \"value\": 123}"
 		return &ModelResponse{
 			Request: req,
@@ -2062,7 +2062,7 @@ func TestGenerateWithMarkdownJSON(t *testing.T) {
 	// A model that returns JSON wrapped in markdown with loose formatting (spaces)
 	looseMarkdownModel := DefineModel(r, "test/looseMarkdownJson", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
-	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		jsonContent := "{\"name\": \"test\", \"value\": 123}"
 		return &ModelResponse{
 			Request: req,
@@ -2141,7 +2141,7 @@ func TestGenerateNoGoroutineLeak(t *testing.T) {
 			Multiturn: true,
 			Tools:     true,
 		},
-	}, func(_ context.Context, req *ModelRequest, _ ModelStreamCallback) (*ModelResponse, error) {
+	}, func(_ context.Context, req *ModelRequest, _ any, _ ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{
 			Request: req,
 			Message: &Message{

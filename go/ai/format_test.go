@@ -778,7 +778,7 @@ func TestConstrainedGenerateWithFormats(t *testing.T) {
 		},
 	}
 
-	formatModel := DefineModel(r, "test/format", &modelOpts, func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
+	formatModel := DefineModel(r, "test/format", &modelOpts, func(ctx context.Context, gr *ModelRequest, _ any, msc ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{
 			Request: gr,
 			Message: NewModelTextMessage(JSONmd),

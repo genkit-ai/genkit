@@ -185,14 +185,14 @@ func TestDownloadRequestMedia(t *testing.T) {
 				defer ts.Close()
 
 			}
-			next := func(ctx context.Context, input *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			next := func(ctx context.Context, input *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 				return &ai.ModelResponse{}, nil
 			}
 			mw := tc.mw
 			if mw == nil {
 				mw = &DownloadRequestMedia{}
 			}
-			_, err := mw.WrapModelFunc(next)(context.Background(), tc.input, nil)
+			_, err := mw.WrapModelFunc(next)(context.Background(), tc.input, nil, nil)
 
 			if err != nil {
 				t.Errorf("Expected no error, but got: %v", err)

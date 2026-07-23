@@ -39,7 +39,7 @@ func newTestRegistry(t *testing.T) api.Registry {
 type fakeModelConfig struct {
 	name     string
 	supports *ModelSupports
-	handler  func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error)
+	handler  func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error)
 }
 
 // defaultModelSupports returns a ModelSupports with common capabilities enabled.
@@ -63,7 +63,7 @@ func defineFakeModel(t *testing.T, r api.Registry, cfg fakeModelConfig) *Model {
 		cfg.supports = defaultModelSupports()
 	}
 	if cfg.handler == nil {
-		cfg.handler = func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		cfg.handler = func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			return &ModelResponse{
 				Request: req,
 				Message: NewModelTextMessage("fake response"),
@@ -75,8 +75,8 @@ func defineFakeModel(t *testing.T, r api.Registry, cfg fakeModelConfig) *Model {
 
 // echoModelHandler creates a handler that echoes back information about the request.
 // Useful for verifying that options are properly passed through.
-func echoModelHandler() func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
-	return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+func echoModelHandler() func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
+	return func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		var parts []string
 
 		// Echo messages
@@ -114,8 +114,8 @@ func echoModelHandler() func(ctx context.Context, req *ModelRequest, cb ModelStr
 }
 
 // capturingModelHandler returns a handler that captures the request for inspection.
-func capturingModelHandler(captured **ModelRequest) func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
-	return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+func capturingModelHandler(captured **ModelRequest) func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
+	return func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		*captured = req
 		return &ModelResponse{
 			Request: req,
@@ -125,8 +125,8 @@ func capturingModelHandler(captured **ModelRequest) func(ctx context.Context, re
 }
 
 // streamingModelHandler creates a handler that sends chunks before returning.
-func streamingModelHandler(chunks []string, finalText string) func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
-	return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+func streamingModelHandler(chunks []string, finalText string) func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
+	return func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		if cb != nil {
 			for _, chunk := range chunks {
 				if err := cb(ctx, &ModelResponseChunk{
@@ -144,8 +144,8 @@ func streamingModelHandler(chunks []string, finalText string) func(ctx context.C
 }
 
 // jsonModelHandler creates a handler that returns JSON output.
-func jsonModelHandler(jsonOutput string) func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
-	return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+func jsonModelHandler(jsonOutput string) func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
+	return func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{
 			Request: req,
 			Message: &Message{
@@ -158,9 +158,9 @@ func jsonModelHandler(jsonOutput string) func(ctx context.Context, req *ModelReq
 
 // toolCallingModelHandler creates a handler that makes a tool call on first request,
 // then returns the final response after receiving the tool response.
-func toolCallingModelHandler(toolName string, toolInput map[string]any, finalResponse string) func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+func toolCallingModelHandler(toolName string, toolInput map[string]any, finalResponse string) func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 	callCount := 0
-	return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	return func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		callCount++
 
 		// Check if we already have a tool response
@@ -286,7 +286,7 @@ func defineFakeTool(t *testing.T, r api.Registry, name, description string) AnyT
 // defineFakeEmbedder creates a simple embedder for testing.
 func defineFakeEmbedder(t *testing.T, r api.Registry, name string) *Embedder {
 	t.Helper()
-	return DefineEmbedder(r, name, nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+	return DefineEmbedder(r, name, nil, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
 		embeddings := make([]*Embedding, len(req.Input))
 		for i := range req.Input {
 			embeddings[i] = &Embedding{

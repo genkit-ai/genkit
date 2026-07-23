@@ -717,7 +717,7 @@ func TestReflectionServerV2_PromptAgentRejectsEmptyStreamInput(t *testing.T) {
 	g := MustInit(context.Background())
 	var modelCalls atomic.Int64
 	g.DefineModel("test/agent-empty-guard", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			modelCalls.Add(1)
 			return &ai.ModelResponse{Message: ai.NewModelTextMessage("unexpected")}, nil
 		},

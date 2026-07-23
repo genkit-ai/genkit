@@ -53,8 +53,8 @@ type dataPart struct {
 type EmbedRequest struct {
 	// Input is the array of documents to generate embeddings for.
 	Input []*Document `json:"input,omitempty"`
-	// Options contains embedder-specific configuration parameters.
-	Options any `json:"options,omitempty"`
+	// Config contains embedder-specific configuration parameters.
+	Config any `json:"options,omitempty"`
 }
 
 // EmbedResponse contains the generated embeddings from an embed request.
@@ -205,8 +205,8 @@ type GenerationUsage struct {
 type Media struct {
 	// ContentType specifies the MIME type of the media. Inferred from the data URI if not provided.
 	ContentType string `json:"contentType,omitempty"`
-	// Url is a "data:" or "https:" URI containing the media content.
-	Url string `json:"url,omitempty"`
+	// URL is a "data:" or "https:" URI containing the media content.
+	URL string `json:"url,omitempty"`
 }
 
 type mediaPart struct {
@@ -386,8 +386,8 @@ type Operation struct {
 	Done bool `json:"done"`
 	// Error contains error information if the operation failed.
 	Error *OperationError `json:"error,omitempty"`
-	// Id is the unique identifier for this operation.
-	Id string `json:"id"`
+	// ID is the unique identifier for this operation.
+	ID string `json:"id"`
 	// Metadata contains additional information about the operation.
 	Metadata map[string]any `json:"metadata,omitempty"`
 	// Output contains the result of the operation if it has completed successfully.
@@ -441,8 +441,8 @@ type resourcePart struct {
 }
 
 type ResourcePart struct {
-	// Uri is the URI of the external resource.
-	Uri string `json:"uri,omitempty"`
+	// URI is the URI of the external resource.
+	URI string `json:"uri,omitempty"`
 }
 
 // Role indicates which entity is responsible for the content of a message.

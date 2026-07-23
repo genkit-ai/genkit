@@ -158,7 +158,7 @@ func definePromptModel(reg api.Registry) *Model {
 			ToolChoice: true,
 			SystemRole: true,
 		}},
-		func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
+		func(ctx context.Context, gr *ModelRequest, _ any, msc ModelStreamCallback) (*ModelResponse, error) {
 			toolCalled := false
 			for _, msg := range gr.Messages {
 				if msg.Content[0].IsToolResponse() {
@@ -649,7 +649,7 @@ func TestValidPrompt(t *testing.T) {
 	}
 }
 
-func testGenerate(ctx context.Context, req *ModelRequest, cb func(context.Context, *ModelResponseChunk) error) (*ModelResponse, error) {
+func testGenerate(ctx context.Context, req *ModelRequest, _ any, cb func(context.Context, *ModelResponseChunk) error) (*ModelResponse, error) {
 	input := req.Messages[0].Content[0].Text
 	output := fmt.Sprintf("AI reply to %q", input)
 
@@ -1566,7 +1566,7 @@ Generate a recipe for {{food}}.
 
 	DefineModel(reg, "test-model", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
-	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		// Mock response that matches the expected schema structure
 		return &ModelResponse{
 			Message: NewModelTextMessage(`{"title": "Tacos", "ingredients": [{"name": "Tortilla", "quantity": "3"}]}`),
@@ -1676,7 +1676,7 @@ Generate a recipe.
 
 	DefineModel(reg, "test-model", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
-	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{
 			Message: NewModelTextMessage(`{}`),
 			Request: req,
@@ -1704,7 +1704,7 @@ func TestWithOutputSchemaName_DefinePrompt(t *testing.T) {
 
 	DefineModel(reg, "test-model", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
-	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{
 			Message: NewModelTextMessage(`{"foo": "bar"}`),
 			Request: req,
@@ -1742,7 +1742,7 @@ func TestWithOutputSchemaName_DefinePrompt_Missing(t *testing.T) {
 
 	DefineModel(reg, "test-model", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
-	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{
 			Message: NewModelTextMessage(`{}`),
 			Request: req,
@@ -1787,7 +1787,7 @@ func TestDataPromptExecute(t *testing.T) {
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
 			},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			capturedInput = req.Messages[0].Text()
 			return &ModelResponse{
 				Request: req,
@@ -1826,7 +1826,7 @@ func TestDataPromptExecute(t *testing.T) {
 	t.Run("string output type", func(t *testing.T) {
 		testModel := DefineModel(r, "test/stringDataPromptModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			return &ModelResponse{
 				Request: req,
 				Message: NewModelTextMessage("Hello, World!"),
@@ -1868,7 +1868,7 @@ func TestDataPromptExecute(t *testing.T) {
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
 			},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			capturedConfig = req.Config
 			return &ModelResponse{
 				Request: req,
@@ -1906,7 +1906,7 @@ func TestDataPromptExecute(t *testing.T) {
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
 			},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			return &ModelResponse{
 				Request: req,
 				Message: NewModelTextMessage("not valid json"),
@@ -1945,7 +1945,7 @@ func TestDataPromptExecuteStream(t *testing.T) {
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
 			},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			if cb != nil {
 				cb(ctx, &ModelResponseChunk{
 					Content: []*Part{NewJSONPart(`{"text":"chunk1","index":1}`)},
@@ -1999,7 +1999,7 @@ func TestDataPromptExecuteStream(t *testing.T) {
 	t.Run("string output streaming", func(t *testing.T) {
 		testModel := DefineModel(r, "test/stringStreamDataPromptModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			if cb != nil {
 				cb(ctx, &ModelResponseChunk{
 					Content: []*Part{NewTextPart("First ")},
@@ -2072,7 +2072,7 @@ func TestDataPromptExecuteStream(t *testing.T) {
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
 			},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			capturedConfig = req.Config
 			if cb != nil {
 				cb(ctx, &ModelResponseChunk{
@@ -2112,7 +2112,7 @@ func TestDataPromptExecuteStream(t *testing.T) {
 
 		testModel := DefineModel(r, "test/errorStreamDataPromptModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			return nil, expectedErr
 		})
 
@@ -2143,7 +2143,7 @@ func TestDataPromptExecuteStream(t *testing.T) {
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
 			},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			for i := range 3 {
 				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewJSONPart(fmt.Sprintf(`{"text":"chunk","index":%d}`, i))}}); err != nil {
 					return nil, err
@@ -2182,7 +2182,7 @@ func TestPromptExecuteStream(t *testing.T) {
 
 		testModel := DefineModel(r, "test/promptStreamModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			if cb != nil {
 				for _, text := range chunkTexts {
 					cb(ctx, &ModelResponseChunk{
@@ -2258,7 +2258,7 @@ func TestPromptExecuteStream(t *testing.T) {
 
 		testModel := DefineModel(r, "test/optionsPromptExecModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			capturedConfig = req.Config
 			if cb != nil {
 				cb(ctx, &ModelResponseChunk{
@@ -2296,7 +2296,7 @@ func TestPromptExecuteStream(t *testing.T) {
 			Supports: &ModelSupports{
 				Multiturn: true,
 			},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			for range 3 {
 				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart("chunk")}}); err != nil {
 					return nil, err
@@ -2336,7 +2336,7 @@ func TestSessionStateInjection(t *testing.T) {
 
 		testModel := DefineModel(r, "test/sessionStateModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			capturedPrompt = req.Messages[0].Text()
 			return &ModelResponse{
 				Request: req,
@@ -2375,7 +2375,7 @@ func TestSessionStateInjection(t *testing.T) {
 
 		testModel := DefineModel(r, "test/noSessionModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			capturedPrompt = req.Messages[0].Text()
 			return &ModelResponse{
 				Request: req,
@@ -2410,7 +2410,7 @@ func TestSessionStateInjection(t *testing.T) {
 
 		testModel := DefineModel(r, "test/mixedModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
-		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			capturedPrompt = req.Messages[0].Text()
 			return &ModelResponse{
 				Request: req,
@@ -2515,7 +2515,7 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 
 		model := defineFakeModel(t, r, fakeModelConfig{
 			name: "test/maxTurnsModel",
-			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			handler: func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 				callCount++
 				// Always request tool call to test max turns
 				if callCount < 10 {
@@ -2568,7 +2568,7 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 
 		model := defineFakeModel(t, r, fakeModelConfig{
 			name: "test/returnToolReqsModel",
-			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			handler: func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 				return &ModelResponse{
 					Request: req,
 					Message: &Message{
@@ -2748,7 +2748,7 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 
 		defineModel := defineFakeModel(t, r, fakeModelConfig{
 			name: "test/defineModel",
-			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			handler: func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 				return &ModelResponse{
 					Request: req,
 					Message: NewModelTextMessage("from define model"),
@@ -2758,7 +2758,7 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 
 		executeModel := defineFakeModel(t, r, fakeModelConfig{
 			name: "test/executeModel",
-			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			handler: func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 				return &ModelResponse{
 					Request: req,
 					Message: NewModelTextMessage("from execute model"),

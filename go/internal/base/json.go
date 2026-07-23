@@ -148,6 +148,38 @@ func InferJSONSchema(x any) *jsonschema.Schema {
 	return s
 }
 
+// ErrTypeMismatch reports that a value's Go type is incompatible with the
+// requested type in [ConvertToExact]. Callers wrap it with domain-specific
+// error messages.
+var ErrTypeMismatch = errors.New("type mismatch")
+
+// ConvertToExact converts a dynamically typed value to T without coercing
+// between mismatched Go types. It accepts a value of exactly T, a *T (a nil
+// pointer yields the zero value), or a map[string]any (the wire form produced
+// by JSON callers) decoded into T via a JSON round-trip; nil yields the zero
+// value. Any other type returns an error wrapping [ErrTypeMismatch]; a map
+// that fails to decode returns the decode error. Use [ConvertTo] or
+// [ConvertToStrict] when lenient cross-type coercion is acceptable.
+func ConvertToExact[T any](v any) (T, error) {
+	var result T
+	if v == nil {
+		return result, nil
+	}
+	if typed, ok := v.(T); ok {
+		return typed, nil
+	}
+	if p, ok := v.(*T); ok {
+		if p == nil {
+			return result, nil
+		}
+		return *p, nil
+	}
+	if m, ok := v.(map[string]any); ok {
+		return MapToStruct[T](m)
+	}
+	return result, fmt.Errorf("%w: got %T, want %T", ErrTypeMismatch, v, result)
+}
+
 // ConvertTo attempts to convert a value to type T. It tries a direct type
 // assertion first, then falls back to a JSON round-trip for values that were
 // deserialized from JSON (e.g., map[string]any instead of a concrete struct).
@@ -221,6 +253,17 @@ func StructToMap[T any](v T) (map[string]any, error) {
 		return nil, err
 	}
 	return m, nil
+}
+
+// SchemaMapFor returns the JSON schema inferred from type T as a map, or nil
+// for interface types (e.g. `any`), whose zero value carries no type
+// information to infer from.
+func SchemaMapFor[T any]() map[string]any {
+	var v T
+	if reflect.ValueOf(v).Kind() == reflect.Invalid {
+		return nil
+	}
+	return SchemaAsMap(InferJSONSchema(v))
 }
 
 // SchemaAsMap converts json schema struct to a map (JSON representation).

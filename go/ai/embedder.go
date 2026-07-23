@@ -25,7 +25,9 @@ import (
 )
 
 // EmbedderFunc is the function type for embedding documents.
-type EmbedderFunc = func(context.Context, *EmbedRequest) (*EmbedResponse, error)
+// Config is the embedder's typed configuration: the framework deserializes the
+// request's raw config into it before calling the function (see [DefineEmbedder]).
+type EmbedderFunc[Config any] = func(context.Context, *EmbedRequest, Config) (*EmbedResponse, error)
 
 // Embedder is a content embedder backed by a registry action. Create one
 // with [DefineEmbedder] or [NewEmbedder], or fetch a registered one with
@@ -62,7 +64,14 @@ type EmbedderOptions struct {
 // NewEmbedder creates a new unregistered [Embedder]. Register it with
 // [Embedder.Register] or use [DefineEmbedder] to define and register in one
 // step.
-func NewEmbedder(name string, opts *EmbedderOptions, fn EmbedderFunc) *Embedder {
+//
+// Config is the embedder's typed configuration; it is usually inferred from
+// fn's signature. The framework deserializes the request's raw config into
+// Config before calling fn: the exact Config type (or a pointer to it) and
+// map[string]any (from the Dev UI and other JSON callers) are accepted, and
+// mismatched types are rejected. The config's JSON schema is inferred from
+// Config unless [EmbedderOptions.ConfigSchema] overrides it.
+func NewEmbedder[Config any](name string, opts *EmbedderOptions, fn EmbedderFunc[Config]) *Embedder {
 	if name == "" {
 		panic("ai.NewEmbedder: name is required")
 	}
@@ -76,6 +85,8 @@ func NewEmbedder(name string, opts *EmbedderOptions, fn EmbedderFunc) *Embedder 
 		opts.Supports = &EmbedderSupports{}
 	}
 
+	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, EmbedRequest{}, "options")
+
 	metadata := map[string]any{
 		"type": api.ActionTypeEmbedder,
 		// TODO: This should be under "embedder" but JS has it as "info".
@@ -88,28 +99,35 @@ func NewEmbedder(name string, opts *EmbedderOptions, fn EmbedderFunc) *Embedder 
 			},
 		},
 		"embedder": map[string]any{
-			"customOptions": opts.ConfigSchema,
+			"customOptions": configSchema,
 		},
 	}
 
-	inputSchema := core.InferSchemaMap(EmbedRequest{})
-	if inputSchema != nil && opts.ConfigSchema != nil {
-		if props, ok := inputSchema["properties"].(map[string]any); ok {
-			props["options"] = opts.ConfigSchema
+	rawFn := func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+		cfg, err := resolveConfig[Config](req.Config)
+		if err != nil {
+			return nil, err
 		}
+		// Normalize the request so its type-erased Config always carries the
+		// same converted value the typed parameter does.
+		req.Config = cfg
+		return fn(ctx, req, cfg)
 	}
 
 	return &Embedder{
 		action: *core.NewAction(api.ActionTypeEmbedder, name, &core.ActionOptions{
 			Metadata:    metadata,
 			InputSchema: inputSchema,
-		}, fn),
+		}, rawFn),
 	}
 }
 
 // DefineEmbedder registers the given embed function as an action, and returns an
 // [Embedder] that runs it.
-func DefineEmbedder(r api.Registry, name string, opts *EmbedderOptions, fn EmbedderFunc) *Embedder {
+//
+// Config is the embedder's typed configuration; it is usually inferred from
+// fn's signature. See [NewEmbedder] for how the request's config is deserialized.
+func DefineEmbedder[Config any](r api.Registry, name string, opts *EmbedderOptions, fn EmbedderFunc[Config]) *Embedder {
 	e := NewEmbedder(name, opts, fn)
 	e.Register(r)
 	return e
@@ -171,8 +189,8 @@ func Embed(ctx context.Context, r api.Registry, opts ...EmbedderOption) (*EmbedR
 	}
 
 	req := &EmbedRequest{
-		Input:   embedOpts.Documents,
-		Options: embedOpts.Config,
+		Input:  embedOpts.Documents,
+		Config: embedOpts.Config,
 	}
 
 	return e.Embed(ctx, req)

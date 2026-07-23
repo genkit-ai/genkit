@@ -280,7 +280,7 @@ func (p *Part) SetThoughtSignature(signature []byte) {
 
 // NewResourcePart returns a Part containing a resource reference.
 func NewResourcePart(uri string) *Part {
-	return &Part{Kind: PartResource, Resource: &ResourcePart{Uri: uri}}
+	return &Part{Kind: PartResource, Resource: &ResourcePart{URI: uri}}
 }
 
 // IsText reports whether the [Part] contains plain text.
@@ -388,7 +388,7 @@ func (p *Part) MarshalJSON() ([]byte, error) {
 		v := mediaPart{
 			Media: &Media{
 				ContentType: p.ContentType,
-				Url:         p.Text,
+				URL:         p.Text,
 			},
 			Metadata: p.wireMetadata(),
 		}
@@ -577,7 +577,7 @@ func (p *Part) unmarshalPartFromSchema(s partSchema) {
 	switch {
 	case s.Media != nil:
 		p.Kind = PartMedia
-		p.Text = s.Media.Url
+		p.Text = s.Media.URL
 		p.ContentType = s.Media.ContentType
 	case s.ToolRequest != nil:
 		p.Kind = PartToolRequest

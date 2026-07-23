@@ -1652,7 +1652,7 @@ func setupPromptTestRegistry(t *testing.T) *registry.Registry {
 
 	ai.ConfigureFormats(reg)
 	ai.DefineModel(reg, "test/echo", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			// Echo back the last user message text.
 			var text string
 			for i := len(req.Messages) - 1; i >= 0; i-- {
@@ -1702,7 +1702,7 @@ func TestPromptAgent_NamedPromptSharedAcrossAgents(t *testing.T) {
 	var mu sync.Mutex
 	var renderedSystems []string
 	ai.DefineModel(reg, "test/capture", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			mu.Lock()
 			for _, m := range req.Messages {
 				if m.Role == ai.RoleSystem {
@@ -1766,7 +1766,7 @@ func TestDefinePromptAgent_DefaultAndNamed(t *testing.T) {
 	var mu sync.Mutex
 	var renderedSystems []string
 	ai.DefineModel(reg, "test/capture", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			mu.Lock()
 			for _, m := range req.Messages {
 				if m.Role == ai.RoleSystem {
@@ -1909,7 +1909,7 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 
 	// Use a model that echoes all message count so we can verify history grows.
 	ai.DefineModel(reg, "test/history", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			// Count total messages received (includes prompt-rendered + history).
 			var parts []string
 			for _, m := range req.Messages {
@@ -2075,7 +2075,7 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 	//   Round 2: after seeing greet response, request "farewell" tool
 	//   Round 3: after seeing farewell response, return final text
 	ai.DefineModel(reg, "test/toolmodel", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			// Count tool responses to determine which round we're in.
 			toolResps := 0
 			for _, msg := range req.Messages {
@@ -2363,7 +2363,7 @@ func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 	reg := setupPromptTestRegistry(t)
 	var modelCalls atomic.Int64
 	ai.DefineModel(reg, "test/reject", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			modelCalls.Add(1)
 			return &ai.ModelResponse{Message: ai.NewModelTextMessage("unexpected")}, nil
 		},
@@ -2540,7 +2540,7 @@ func TestPromptAgent_RejectsResumeForUnrequestedTool(t *testing.T) {
 
 	var modelCalls atomic.Int32
 	ai.DefineModel(reg, "test/plain", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			modelCalls.Add(1)
 			return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("hello")}, nil
 		})
@@ -5489,7 +5489,7 @@ func TestPromptAgent_ForwardsFinishReason(t *testing.T) {
 	reg := registry.New()
 	ai.ConfigureFormats(reg)
 	ai.DefineModel(reg, "test/length", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return &ai.ModelResponse{
 				Request:      req,
 				Message:      ai.NewModelTextMessage("partial"),
@@ -5886,7 +5886,7 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 		},
 	)
 	ai.DefineModel(reg, "test/interrupt", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return &ai.ModelResponse{
 				Request: req,
 				Message: &ai.Message{

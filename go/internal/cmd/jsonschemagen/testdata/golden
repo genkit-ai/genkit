@@ -154,7 +154,7 @@ type GenerationUsage struct {
 
 type InstrumentationLibrary struct {
 	Name      string `json:"name,omitempty"`
-	SchemaUrl string `json:"schemaUrl,omitempty"`
+	SchemaURL string `json:"schemaUrl,omitempty"`
 	Version   string `json:"version,omitempty"`
 }
 
@@ -170,7 +170,7 @@ type MediaPart struct {
 
 type MediaPartMedia struct {
 	ContentType string `json:"contentType,omitempty"`
-	Url         string `json:"url,omitempty"`
+	URL         string `json:"url,omitempty"`
 }
 
 type Message struct {

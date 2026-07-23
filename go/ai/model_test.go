@@ -251,7 +251,13 @@ func TestValidateSupport(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := validateSupport("test-model", tt.opts)(mockModelFunc)
+			// Version validation lives in normalizeConfig (it must see the
+			// raw config), so chain it the way NewModel does.
+			var versions []string
+			if tt.opts != nil {
+				versions = tt.opts.Versions
+			}
+			handler := normalizeConfig[any]("test-model", versions)(validateSupport("test-model", tt.opts)(mockModelFunc))
 			_, err := handler(context.Background(), tt.input, nil)
 
 			if (err != nil) != tt.wantErr {

@@ -54,7 +54,7 @@ func newRouteTestGenkit(t *testing.T) *genkit.Genkit {
 	g := genkit.MustInit(context.Background(), genkit.WithExperimental())
 
 	g.DefineModel("test/echo", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return &ai.ModelResponse{
 				Message:      ai.NewModelTextMessage(fmt.Sprintf("echo %d", len(req.Messages))),
 				FinishReason: ai.FinishReasonStop,
@@ -105,7 +105,7 @@ func TestAllAgentRoutes(t *testing.T) {
 func TestAgentRoutes_PicksOneAgentAndMirrorsCapabilities(t *testing.T) {
 	g := genkit.MustInit(context.Background(), genkit.WithExperimental())
 	g.DefineModel("test/echo", &ai.ModelOptions{},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return &ai.ModelResponse{Message: ai.NewModelTextMessage("ok"), FinishReason: ai.FinishReasonStop}, nil
 		})
 	store, err := localstore.NewFileSessionStore[any](t.TempDir())

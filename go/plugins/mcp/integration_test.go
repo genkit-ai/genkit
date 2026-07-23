@@ -123,7 +123,7 @@ func TestMCPAIIntegration(t *testing.T) {
 	g.DefineModel("echo-model", &ai.ModelOptions{
 		Label:    "Mock Echo Model for Testing",
 		Supports: &ai.ModelSupports{},
-	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	}, func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		// Echo back all the content to verify resources were included
 		var parts []*ai.Part
 		for _, msg := range req.Messages {
@@ -329,7 +329,7 @@ func TestMCPContentFetch(t *testing.T) {
 	// ASSERT 2: Content can be fetched via AI integration (end-to-end test)
 	g.DefineModel("echo-model", &ai.ModelOptions{
 		Supports: &ai.ModelSupports{},
-	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	}, func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		// Echo back all content to verify resources were included
 		var parts []*ai.Part
 		for _, msg := range req.Messages {

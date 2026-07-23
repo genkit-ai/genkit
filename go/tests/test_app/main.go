@@ -70,7 +70,7 @@ func main() {
 	log.Fatal(server.Start(ctx, "127.0.0.1:3400", mux))
 }
 
-func echo(ctx context.Context, req *ai.ModelRequest, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
+func echo(ctx context.Context, req *ai.ModelRequest, _ any, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
 	jsonBytes, err := json.Marshal(req)
 	if err != nil {
 		return nil, err

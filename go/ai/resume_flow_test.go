@@ -47,7 +47,7 @@ func newFlowRegistry(t *testing.T) api.Registry {
 func defineRoundTripModel(r api.Registry, name string, reqs ...*ai.Part) *ai.Model {
 	return ai.DefineModel(r, name,
 		&ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			for _, m := range req.Messages {
 				if m.Role == ai.RoleTool {
 					return &ai.ModelResponse{
@@ -287,7 +287,7 @@ func TestInterruptResume_MixedToolRequests(t *testing.T) {
 	// Always emits both tool requests; the resume turns use finishModel below.
 	toolModel := ai.DefineModel(r, "test/toolmodel",
 		&ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return &ai.ModelResponse{
 				Request: req,
 				Message: &ai.Message{
@@ -312,7 +312,7 @@ func TestInterruptResume_MixedToolRequests(t *testing.T) {
 
 	finishModel := ai.DefineModel(r, "test/finish",
 		&ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return &ai.ModelResponse{
 				Request:      req,
 				Message:      ai.NewModelTextMessage("done"),

@@ -25,7 +25,7 @@ import (
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
-func defineToolModel(t *testing.T, r *registry.Registry, name string, fn ai.ModelFunc) *ai.Model {
+func defineToolModel(t *testing.T, r *registry.Registry, name string, fn ai.ModelFunc[any]) *ai.Model {
 	t.Helper()
 	return ai.DefineModel(r, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
@@ -44,8 +44,8 @@ func defineTool(t *testing.T, r api.Registry, name string) ai.AnyTool {
 
 // twoToolModelHandler returns a model handler that requests two tools on the first call,
 // then returns a final text response when it sees tool responses.
-func twoToolModelHandler(tool1, tool2 string) ai.ModelFunc {
-	return func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+func twoToolModelHandler(tool1, tool2 string) ai.ModelFunc[any] {
+	return func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		for _, msg := range req.Messages {
 			for _, part := range msg.Content {
 				if part.IsToolResponse() {
@@ -141,7 +141,7 @@ func TestToolApprovalInterruptsUnapprovedTools(t *testing.T) {
 func TestToolApprovalEmptyListInterruptsAll(t *testing.T) {
 	r := newTestRegistry(t)
 
-	singleToolHandler := func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	singleToolHandler := func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		for _, msg := range req.Messages {
 			for _, part := range msg.Content {
 				if part.IsToolResponse() {
@@ -183,7 +183,7 @@ func TestToolApprovalEmptyListInterruptsAll(t *testing.T) {
 func TestToolApprovalResumedCallRuns(t *testing.T) {
 	r := newTestRegistry(t)
 
-	m := defineToolModel(t, r, "test/singletool", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	m := defineToolModel(t, r, "test/singletool", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		for _, msg := range req.Messages {
 			for _, part := range msg.Content {
 				if part.IsToolResponse() {
@@ -247,7 +247,7 @@ func TestToolApprovalResumedCallRuns(t *testing.T) {
 func TestToolApprovalResumedWithoutApprovalInterrupts(t *testing.T) {
 	r := newTestRegistry(t)
 
-	m := defineToolModel(t, r, "test/singletool", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	m := defineToolModel(t, r, "test/singletool", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		for _, msg := range req.Messages {
 			for _, part := range msg.Content {
 				if part.IsToolResponse() {

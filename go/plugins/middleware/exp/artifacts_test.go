@@ -75,7 +75,7 @@ func TestArtifactsWriteThenRead(t *testing.T) {
 	g := newTestGenkit(t)
 
 	// The model writes an artifact, reads it back, then finishes.
-	model := toolModel(t, g, "test/artifact-model", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	model := toolModel(t, g, "test/artifact-model", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		var wrote, read bool
 		for _, m := range req.Messages {
 			for _, p := range m.Content {
@@ -128,7 +128,7 @@ func TestArtifactsSystemPromptListing(t *testing.T) {
 	g := newTestGenkit(t)
 
 	var captured []*ai.Message
-	capture := toolModel(t, g, "test/capture", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	capture := toolModel(t, g, "test/capture", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		captured = req.Messages
 		return textResp(req, "ok"), nil
 	})
@@ -176,7 +176,7 @@ func TestArtifactsNoSession(t *testing.T) {
 	g := newTestGenkit(t)
 
 	// With a plain Generate call there is no agent session.
-	model := toolModel(t, g, "test/no-session", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	model := toolModel(t, g, "test/no-session", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		for _, m := range req.Messages {
 			for _, p := range m.Content {
 				if p.IsToolResponse() {

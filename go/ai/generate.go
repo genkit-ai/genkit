@@ -41,7 +41,15 @@ type ToolConfig struct {
 }
 
 // ModelFunc is a streaming function that takes in a ModelRequest and generates a ModelResponse, optionally streaming ModelResponseChunks.
-type ModelFunc = core.StreamingFunc[*ModelRequest, *ModelResponse, *ModelResponseChunk]
+// Config is the model's typed configuration: the framework deserializes the
+// request's raw config into it before calling the function (see [DefineModel]).
+type ModelFunc[Config any] = func(context.Context, *ModelRequest, Config, ModelStreamCallback) (*ModelResponse, error)
+
+// rawModelFunc is the untyped model function shape used at the action layer
+// and by the built-in request-processing middleware: the request's config
+// still rides along as `any` inside the [ModelRequest]. The typed [ModelFunc]
+// a model is defined with is wrapped into this shape by [NewModel].
+type rawModelFunc = core.StreamingFunc[*ModelRequest, *ModelResponse, *ModelResponseChunk]
 
 // ModelStreamCallback is a stream callback of a ModelAction.
 type ModelStreamCallback = func(context.Context, *ModelResponseChunk) error
@@ -121,7 +129,22 @@ func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 // NewModel creates a new unregistered [Model]. Register it with
 // [Model.Register] or pass it to [DefineModel] instead to define and register
 // in one step.
-func NewModel(name string, opts *ModelOptions, fn ModelFunc) *Model {
+//
+// Config is the model's typed configuration; it is usually inferred from fn's
+// signature. The framework deserializes the request's raw config into Config
+// before calling fn: the exact Config type (or a pointer to it) and
+// map[string]any (from the Dev UI and other JSON callers) are accepted, and
+// mismatched types are rejected. The request's [ModelRequest.Config] is
+// normalized to the converted value, so it always matches the typed
+// parameter. The config's JSON schema is inferred from Config unless
+// [ModelOptions.ConfigSchema] overrides it.
+//
+// The config schema is enforced by input validation on every call, so if
+// Config's JSON marshaling diverges from its reflected schema (e.g. SDK
+// wrapper types like Opt[float64] that marshal to primitives but reflect as
+// objects), set [ModelOptions.ConfigSchema] explicitly or requests will be
+// rejected at the action boundary.
+func NewModel[Config any](name string, opts *ModelOptions, fn ModelFunc[Config]) *Model {
 	if name == "" {
 		panic("ai.NewModel: name is required")
 	}
@@ -134,6 +157,8 @@ func NewModel(name string, opts *ModelOptions, fn ModelFunc) *Model {
 	if opts.Supports == nil {
 		opts.Supports = &ModelSupports{}
 	}
+
+	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, ModelRequest{}, "config")
 
 	metadata := map[string]any{
 		"type": api.ActionTypeModel,
@@ -153,32 +178,41 @@ func NewModel(name string, opts *ModelOptions, fn ModelFunc) *Model {
 			},
 			"versions":      opts.Versions,
 			"stage":         opts.Stage,
-			"customOptions": opts.ConfigSchema,
+			"customOptions": configSchema,
 		},
 	}
 
-	inputSchema := core.InferSchemaMap(ModelRequest{})
-	if inputSchema != nil && opts.ConfigSchema != nil {
-		if props, ok := inputSchema["properties"].(map[string]any); ok {
-			props["config"] = opts.ConfigSchema
+	typedFn := func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		// req.Config was normalized to the exact Config type by
+		// normalizeConfig below, so this hits the fast path.
+		cfg, err := resolveConfig[Config](req.Config)
+		if err != nil {
+			return nil, err
 		}
+		return fn(ctx, req, cfg, cb)
 	}
 
-	fn = core.ChainMiddleware(
+	// normalizeConfig runs outermost so that the built-in wrappers and the
+	// model function all see the typed, converted config on the request.
+	rawFn := core.ChainMiddleware(
+		normalizeConfig[Config](name, opts.Versions),
 		simulateSystemPrompt(opts, nil),
 		augmentWithContext(opts, nil),
 		validateSupport(name, opts),
 		addAutomaticTelemetry(),
-	)(fn)
+	)(typedFn)
 
 	return &Model{*core.NewStreamingAction(api.ActionTypeModel, name, &core.ActionOptions{
 		Metadata:    metadata,
 		InputSchema: inputSchema,
-	}, fn)}
+	}, rawFn)}
 }
 
 // DefineModel creates a new [Model] and registers it.
-func DefineModel(r api.Registry, name string, opts *ModelOptions, fn ModelFunc) *Model {
+//
+// Config is the model's typed configuration; it is usually inferred from fn's
+// signature. See [NewModel] for how the request's config is deserialized.
+func DefineModel[Config any](r api.Registry, name string, opts *ModelOptions, fn ModelFunc[Config]) *Model {
 	m := NewModel(name, opts, fn)
 	m.Register(r)
 	return m
@@ -318,7 +352,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		Output:     &outputCfg,
 	}
 
-	var fn ModelFunc
+	var fn rawModelFunc
 	if bm != nil {
 		if cb != nil {
 			logger.FromContext(ctx).Warn("background model does not support streaming", "model", bm.Name())
@@ -505,7 +539,7 @@ func buildGenerateChain(mws []*Hooks, run func(ctx context.Context, params *Gene
 
 // buildModelChain composes the WrapModel hooks from mws (outer-to-inner)
 // around fn. Middleware with a nil WrapModel hook is skipped.
-func buildModelChain(mws []*Hooks, fn ModelFunc) ModelFunc {
+func buildModelChain(mws []*Hooks, fn rawModelFunc) rawModelFunc {
 	chain := fn
 	for i := len(mws) - 1; i >= 0; i-- {
 		mw := mws[i]
@@ -1673,7 +1707,7 @@ func processResources(ctx context.Context, r api.Registry, messages []*Message) 
 		for _, part := range msg.Content {
 			if part.IsResource() {
 				// Find and execute the matching resource
-				resourceParts, err := executeResourcePart(ctx, r, part.Resource.Uri)
+				resourceParts, err := executeResourcePart(ctx, r, part.Resource.URI)
 				if err != nil {
 					return nil, fmt.Errorf("failed to process resource %q: %w", part.Resource, err)
 				}

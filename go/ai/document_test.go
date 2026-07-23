@@ -442,7 +442,7 @@ func TestPartClone(t *testing.T) {
 		// Normally a Part wouldn't have both ToolRequest and ToolResponse,
 		// but we populate everything to catch missing fields.
 		ToolResponse: &ToolResponse{Name: "tool", Output: "ok"},
-		Resource:     &ResourcePart{Uri: "res://x"},
+		Resource:     &ResourcePart{URI: "res://x"},
 		Custom:       map[string]any{"ck": "cv"},
 		Interrupt:    &ToolInterrupt{Data: map[string]any{"reason": "why"}},
 		Restart:      &ToolRestart{Resume: map[string]any{"approved": true}},

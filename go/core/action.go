@@ -197,7 +197,7 @@ func schemaFor[T any](override map[string]any, unitMeansNone bool) map[string]an
 	if unitMeansNone && isUnitType[T]() {
 		return nil
 	}
-	return inferSchema[T]()
+	return base.SchemaMapFor[T]()
 }
 
 // isUnitType reports whether T is exactly struct{}, the sentinel type
@@ -220,17 +220,6 @@ func isNilValue(v any) bool {
 	default:
 		return false
 	}
-}
-
-// inferSchema returns the JSON schema inferred from T's zero value, or nil
-// for interface types, whose zero value carries no type information to infer
-// from.
-func inferSchema[T any]() map[string]any {
-	var v T
-	if reflect.ValueOf(v).Kind() == reflect.Invalid {
-		return nil
-	}
-	return InferSchemaMap(v)
 }
 
 // Name returns the Action's Name.

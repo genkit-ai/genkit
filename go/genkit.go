@@ -545,17 +545,26 @@ func (g *Genkit) ListTools() []ai.AnyTool {
 // input requests ([ai.ModelRequest]) and producing responses ([ai.ModelResponse]),
 // potentially streaming chunks ([ai.ModelResponseChunk]) via the callback.
 //
+// Config is the model's typed configuration; it is usually inferred from fn's
+// signature. The framework deserializes the request's raw config into Config
+// before calling fn, and infers the config's JSON schema from Config unless
+// [ai.ModelOptions.ConfigSchema] overrides it.
+//
 // For models that don't need to be registered (e.g., for plugin development or testing),
 // use [ai.NewModel] instead.
 //
 // Example:
+//
+//	type EchoConfig struct {
+//		Suffix string `json:"suffix,omitempty"`
+//	}
 //
 //	echoModel := g.DefineModel("custom/echo",
 //		&ai.ModelOptions{
 //			Label:    "Echo Model",
 //			Supports: &ai.ModelSupports{Multiturn: true},
 //		},
-//		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+//		func(ctx context.Context, req *ai.ModelRequest, cfg EchoConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 //			// Simple echo implementation
 //			resp := &ai.ModelResponse{
 //				Message: &ai.Message{
@@ -593,7 +602,7 @@ func (g *Genkit) ListTools() []ai.AnyTool {
 //			return resp, nil
 //		},
 //	)
-func (g *Genkit) DefineModel(name string, opts *ai.ModelOptions, fn ai.ModelFunc) *ai.Model {
+func (g *Genkit) DefineModel[Config any](name string, opts *ai.ModelOptions, fn ai.ModelFunc[Config]) *ai.Model {
 	return ai.DefineModel(g.reg, name, opts, fn)
 }
 
@@ -603,7 +612,11 @@ func (g *Genkit) DefineModel(name string, opts *ai.ModelOptions, fn ai.ModelFunc
 // The `name` is the identifier the model uses to request the background model. The `opts`
 // are the options for the background model. The `startFn` is the function that starts the background model.
 // The `checkFn` is the function that checks the status of the background model.
-func (g *Genkit) DefineBackgroundModel(name string, opts *ai.BackgroundModelOptions, startFn ai.StartModelOpFunc, checkFn ai.CheckModelOpFunc) *ai.BackgroundModel {
+//
+// Config is the model's typed configuration; it is usually inferred from
+// startFn's signature. See [Genkit.DefineModel] for how the request's config
+// is deserialized.
+func (g *Genkit) DefineBackgroundModel[Config any](name string, opts *ai.BackgroundModelOptions, startFn ai.StartModelOpFunc[Config], checkFn ai.CheckModelOpFunc) *ai.BackgroundModel {
 	return ai.DefineBackgroundModel(g.reg, name, opts, startFn, checkFn)
 }
 
@@ -1277,9 +1290,13 @@ func (g *Genkit) Embed(ctx context.Context, opts ...ai.EmbedderOption) (*ai.Embe
 // The `fn` function contains the logic to process an [ai.EmbedRequest] (containing documents or a query)
 // and return an [ai.EmbedResponse] (containing the corresponding embeddings).
 //
+// Config is the embedder's typed configuration; it is usually inferred from
+// fn's signature. See [Genkit.DefineModel] for how the request's config is
+// deserialized.
+//
 // For embedders that don't need to be registered (e.g., for plugin development),
 // use [ai.NewEmbedder] instead.
-func (g *Genkit) DefineEmbedder(name string, opts *ai.EmbedderOptions, fn ai.EmbedderFunc) *ai.Embedder {
+func (g *Genkit) DefineEmbedder[Config any](name string, opts *ai.EmbedderOptions, fn ai.EmbedderFunc[Config]) *ai.Embedder {
 	return ai.DefineEmbedder(g.reg, name, opts, fn)
 }
 
@@ -1312,7 +1329,11 @@ func (g *Genkit) LookupPlugin(name string) api.Plugin {
 // metadata about the evaluator ([ai.EvaluatorOptions]). The `eval` function
 // implements the logic to score a single test case and returns the results
 // in an [ai.EvaluatorCallbackResponse].
-func (g *Genkit) DefineEvaluator(name string, opts *ai.EvaluatorOptions, fn ai.EvaluatorFunc) *ai.Evaluator {
+//
+// Config is the evaluator's typed configuration; it is usually inferred from
+// fn's signature. See [Genkit.DefineModel] for how the request's config is
+// deserialized.
+func (g *Genkit) DefineEvaluator[Config any](name string, opts *ai.EvaluatorOptions, fn ai.EvaluatorFunc[Config]) *ai.Evaluator {
 	return ai.DefineEvaluator(g.reg, name, opts, fn)
 }
 
@@ -1327,7 +1348,11 @@ func (g *Genkit) DefineEvaluator(name string, opts *ai.EvaluatorOptions, fn ai.E
 // metadata about the evaluator ([ai.EvaluatorOptions]). The `eval` function
 // implements the logic to score the dataset and returns the aggregated results
 // in an [ai.EvaluatorResponse].
-func (g *Genkit) DefineBatchEvaluator(name string, opts *ai.EvaluatorOptions, fn ai.BatchEvaluatorFunc) *ai.Evaluator {
+//
+// Config is the evaluator's typed configuration; it is usually inferred from
+// fn's signature. See [Genkit.DefineModel] for how the request's config is
+// deserialized.
+func (g *Genkit) DefineBatchEvaluator[Config any](name string, opts *ai.EvaluatorOptions, fn ai.BatchEvaluatorFunc[Config]) *ai.Evaluator {
 	return ai.DefineBatchEvaluator(g.reg, name, opts, fn)
 }
 

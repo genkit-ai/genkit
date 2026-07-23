@@ -17,11 +17,15 @@ package compat_oai
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"strings"
 	"sync"
 
 	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/internal/base"
+	"github.com/invopop/jsonschema"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 )
@@ -106,6 +110,45 @@ func (o *OpenAICompatible) Name() string {
 	return o.Provider
 }
 
+// ConfigSchema converts a config struct to a map[string]any JSON schema.
+// The default schema reflection renders the openai SDK's Opt[T] wrapper
+// types as objects, but they marshal to their underlying primitives, so a
+// custom mapper flattens them to the primitive schema types.
+func ConfigSchema(config any) map[string]any {
+	r := jsonschema.Reflector{
+		DoNotReference:             true, // Prevent $ref usage
+		ExpandedStruct:             true, // Include all fields directly
+		RequiredFromJSONSchemaTags: true, // The SDK's params are all optional
+	}
+	r.Mapper = func(t reflect.Type) *jsonschema.Schema {
+		switch t.Name() {
+		case "Opt[float64]":
+			return &jsonschema.Schema{Type: "number"}
+		case "Opt[int64]":
+			return &jsonschema.Schema{Type: "integer"}
+		case "Opt[string]":
+			return &jsonschema.Schema{Type: "string"}
+		case "Opt[bool]":
+			return &jsonschema.Schema{Type: "boolean"}
+		}
+		// The SDK's union params (e.g. stop, response_format) marshal to one
+		// of several shapes; permit any value rather than reflecting their
+		// wrapper struct.
+		if strings.HasSuffix(t.Name(), "Union") || strings.HasSuffix(t.Name(), "UnionParam") {
+			return &jsonschema.Schema{}
+		}
+		return nil
+	}
+	return base.SchemaAsMap(r.Reflect(config))
+}
+
+// chatCompletionConfigSchema caches the reflected ChatCompletionNewParams
+// schema; it is identical for every model and reflection over the SDK's
+// param structs is expensive.
+var chatCompletionConfigSchema = sync.OnceValue(func() map[string]any {
+	return ConfigSchema(openai.ChatCompletionNewParams{})
+})
+
 // DefineModel defines a model in the registry
 func (o *OpenAICompatible) DefineModel(provider, id string, opts ai.ModelOptions) *ai.Model {
 	o.mu.Lock()
@@ -114,13 +157,18 @@ func (o *OpenAICompatible) DefineModel(provider, id string, opts ai.ModelOptions
 		panic("OpenAICompatible.Init not called")
 	}
 
+	if opts.ConfigSchema == nil {
+		opts.ConfigSchema = chatCompletionConfigSchema()
+	}
+
 	return ai.NewModel(api.NewName(provider, id), &opts, func(
 		ctx context.Context,
 		input *ai.ModelRequest,
+		config openai.ChatCompletionNewParams,
 		cb func(context.Context, *ai.ModelResponseChunk) error,
 	) (*ai.ModelResponse, error) {
 		// Configure the response generator with input
-		generator := NewModelGenerator(o.client, id).WithMessages(input.Messages).WithConfig(input.Config).WithTools(input.Tools)
+		generator := NewModelGenerator(o.client, id).WithMessages(input.Messages).WithConfig(config).WithTools(input.Tools)
 
 		// Generate response
 		resp, err := generator.Generate(ctx, input, cb)
@@ -140,7 +188,7 @@ func (o *OpenAICompatible) DefineEmbedder(provider, name string, embedOpts *ai.E
 		panic("OpenAICompatible.Init not called")
 	}
 
-	return ai.NewEmbedder(api.NewName(provider, name), embedOpts, func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
+	return ai.NewEmbedder(api.NewName(provider, name), embedOpts, func(ctx context.Context, req *ai.EmbedRequest, _ any) (*ai.EmbedResponse, error) {
 		var data openai.EmbeddingNewParamsInputUnion
 		for _, doc := range req.Input {
 			for _, p := range doc.Content {

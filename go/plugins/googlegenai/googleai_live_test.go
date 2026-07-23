@@ -67,7 +67,7 @@ func TestGoogleAILive(t *testing.T) {
 	ctx := context.Background()
 
 	g := genkit.MustInit(ctx,
-		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+		genkit.WithDefaultModel("googleai/gemini-flash-latest"),
 		genkit.WithPlugins(&googlegenai.GoogleAI{APIKey: apiKey}),
 	)
 
@@ -135,7 +135,7 @@ func TestGoogleAILive(t *testing.T) {
 			ai.WithPrompt("Write one paragraph about the North Pole."),
 			ai.WithStreaming(func(ctx context.Context, c *ai.ModelResponseChunk) error {
 				parts++
-				out += c.Content[0].Text
+				out += c.Text()
 				return nil
 			}))
 		if err != nil {
@@ -183,7 +183,7 @@ func TestGoogleAILive(t *testing.T) {
 			ai.WithTools(gablorkenTool),
 			ai.WithStreaming(func(ctx context.Context, c *ai.ModelResponseChunk) error {
 				parts++
-				out += c.Content[0].Text
+				out += c.Text()
 				return nil
 			}))
 		if err != nil {
@@ -204,7 +204,7 @@ func TestGoogleAILive(t *testing.T) {
 	})
 
 	t.Run("tool with thinking", func(t *testing.T) {
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
+		m := googlegenai.GoogleAIModel(g, "gemini-flash-latest")
 		resp, err := g.Generate(ctx,
 			ai.WithConfig(&genai.GenerateContentConfig{
 				ThinkingConfig: &genai.ThinkingConfig{
@@ -225,7 +225,7 @@ func TestGoogleAILive(t *testing.T) {
 		}
 	})
 	t.Run("api side tools", func(t *testing.T) {
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
+		m := googlegenai.GoogleAIModel(g, "gemini-flash-latest")
 		_, err := g.Generate(ctx,
 			ai.WithConfig(&genai.GenerateContentConfig{
 				Tools: []*genai.Tool{
@@ -244,7 +244,7 @@ func TestGoogleAILive(t *testing.T) {
 		// This test verifies that tools are properly merged (not silently dropped),
 		// even though the API will reject this specific combination.
 		// See: https://github.com/google/adk-python/issues/53
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
+		m := googlegenai.GoogleAIModel(g, "gemini-flash-latest")
 		_, err := g.Generate(ctx,
 			ai.WithConfig(&genai.GenerateContentConfig{
 				Tools: []*genai.Tool{
@@ -499,7 +499,7 @@ func TestGoogleAILive(t *testing.T) {
 		}
 	})
 	t.Run("thinking", func(t *testing.T) {
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
+		m := googlegenai.GoogleAIModel(g, "gemini-flash-latest")
 		resp, err := g.Generate(ctx,
 			ai.WithConfig(genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](0.4),
@@ -525,7 +525,7 @@ func TestGoogleAILive(t *testing.T) {
 			Text string `json:"text"`
 		}
 
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
+		m := googlegenai.GoogleAIModel(g, "gemini-flash-latest")
 		resp, err := g.Generate(ctx,
 			ai.WithConfig(genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](0.4),
@@ -560,7 +560,9 @@ func TestGoogleAILive(t *testing.T) {
 		}
 	})
 	t.Run("thinking disabled", func(t *testing.T) {
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
+		// Use a model that supports fully disabling thinking; the latest
+		// flash models reject a zero thinking budget.
+		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash-lite")
 		resp, err := g.Generate(ctx,
 			ai.WithConfig(genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](0.4),
@@ -582,7 +584,7 @@ func TestGoogleAILive(t *testing.T) {
 		}
 	})
 	t.Run("multipart tool", func(t *testing.T) {
-		m := googlegenai.GoogleAIModel(g, "gemini-3-pro-preview")
+		m := googlegenai.GoogleAIModel(g, "gemini-pro-latest")
 		img64, err := fetchImgAsBase64()
 		if err != nil {
 			t.Fatal(err)

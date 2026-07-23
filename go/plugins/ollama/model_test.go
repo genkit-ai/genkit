@@ -21,8 +21,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/firebase/genkit/go/ai"
 )
 
 func TestOllamaChatRequest_MarshalJSON(t *testing.T) {
@@ -48,15 +46,14 @@ func TestOllamaChatRequest_MarshalJSON(t *testing.T) {
 	}
 }
 
-func TestOllamaChatRequest_ApplyOptions(t *testing.T) {
+func TestOllamaChatRequest_ApplyGenerateContentConfig(t *testing.T) {
 	tests := []struct {
-		name    string
-		cfg     any
-		want    *ollamaChatRequest
-		wantErr bool
+		name string
+		cfg  *GenerateContentConfig
+		want *ollamaChatRequest
 	}{
 		{
-			name: "GenerateContentConfig pointer",
+			name: "seed, temperature, and think",
 			cfg: &GenerateContentConfig{
 				Seed:        Ptr(42),
 				Temperature: Ptr(0.7),
@@ -71,7 +68,7 @@ func TestOllamaChatRequest_ApplyOptions(t *testing.T) {
 			},
 		},
 		{
-			name: "GenerateContentConfig with zero values",
+			name: "zero values are preserved",
 			cfg: &GenerateContentConfig{
 				Seed:        Ptr(0),
 				Temperature: Ptr(0.0),
@@ -86,20 +83,37 @@ func TestOllamaChatRequest_ApplyOptions(t *testing.T) {
 			},
 		},
 		{
-			name: "GenerateContentConfig value",
-			cfg: GenerateContentConfig{
-				Seed:  Ptr(42),
-				Think: ThinkEnabled(true),
+			name: "sampling options",
+			cfg: &GenerateContentConfig{
+				TopK: Ptr(40),
+				TopP: Ptr(0.9),
+				MinP: Ptr(0.05),
 			},
 			want: &ollamaChatRequest{
-				Think: ThinkEnabled(true),
 				Options: map[string]any{
-					"seed": 42,
+					"top_k": 40,
+					"top_p": 0.9,
+					"min_p": 0.05,
 				},
 			},
 		},
 		{
-			name: "GenerateContentConfig with ThinkEffort",
+			name: "stop, context, and prediction limits",
+			cfg: &GenerateContentConfig{
+				Stop:       []string{"END"},
+				NumCtx:     Ptr(2048),
+				NumPredict: Ptr(128),
+			},
+			want: &ollamaChatRequest{
+				Options: map[string]any{
+					"stop":        []string{"END"},
+					"num_ctx":     2048,
+					"num_predict": 128,
+				},
+			},
+		},
+		{
+			name: "think effort (GPT-OSS)",
 			cfg: &GenerateContentConfig{
 				Think: ThinkEffort("high"),
 			},
@@ -108,64 +122,12 @@ func TestOllamaChatRequest_ApplyOptions(t *testing.T) {
 			},
 		},
 		{
-			name: "map[string]any with opts only",
-			cfg: map[string]any{
-				"temperature": 0.5,
-				"top_k":       40,
-			},
-			want: &ollamaChatRequest{
-				Options: map[string]any{
-					"temperature": 0.5,
-					"top_k":       40,
-				},
-			},
-		},
-		{
-			name: "map[string]any with top level fields",
-			cfg: map[string]any{
-				"think":      true,
-				"keep_alive": "10m",
-			},
-			want: &ollamaChatRequest{
-				Think:     ThinkEnabled(true),
+			name: "keep alive",
+			cfg: &GenerateContentConfig{
 				KeepAlive: "10m",
 			},
-		},
-		{
-			name: "map[string]any mixed main and opts",
-			cfg: map[string]any{
-				"temperature": 0.9,
-				"think":       true,
-			},
 			want: &ollamaChatRequest{
-				Think: ThinkEnabled(true),
-				Options: map[string]any{
-					"temperature": 0.9,
-				},
-			},
-		},
-		{
-			name: "map[string]any with string think (GPT-OSS)",
-			cfg: map[string]any{
-				"think": "medium",
-			},
-			want: &ollamaChatRequest{
-				Think: ThinkEffort("medium"),
-			},
-		},
-		{
-			name: "GenerationCommonConfig pointer",
-			cfg: &ai.GenerationCommonConfig{
-				Temperature: 0.7,
-				TopK:        1,
-				TopP:        2.0,
-			},
-			want: &ollamaChatRequest{
-				Options: map[string]any{
-					"temperature": 0.7,
-					"top_k":       1,
-					"top_p":       2.0,
-				},
+				KeepAlive: "10m",
 			},
 		},
 		{
@@ -179,18 +141,7 @@ func TestOllamaChatRequest_ApplyOptions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := &ollamaChatRequest{}
 
-			err := req.ApplyOptions(tt.cfg)
-
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error, got nil")
-				}
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			req.applyGenerateContentConfig(tt.cfg)
 
 			if !reflect.DeepEqual(req, tt.want) {
 				t.Errorf(

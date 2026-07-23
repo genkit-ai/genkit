@@ -58,7 +58,7 @@ func TestEvaluators(t *testing.T) {
 		}
 		var testRequest = ai.EvaluatorRequest{
 			Dataset:      dataset,
-			EvaluationId: "testrun",
+			EvaluationID: "testrun",
 		}
 
 		evalAction := g.LookupEvaluator("genkitEval/deep_equal")
@@ -100,7 +100,7 @@ func TestEvaluators(t *testing.T) {
 		}
 		var testRequest = ai.EvaluatorRequest{
 			Dataset:      dataset,
-			EvaluationId: "testrun",
+			EvaluationID: "testrun",
 		}
 
 		evalAction := g.LookupEvaluator("genkitEval/regex")
@@ -148,7 +148,7 @@ func TestEvaluators(t *testing.T) {
 		}
 		var testRequest = ai.EvaluatorRequest{
 			Dataset:      dataset,
-			EvaluationId: "testrun",
+			EvaluationID: "testrun",
 		}
 
 		evalAction := g.LookupEvaluator("genkitEval/jsonata")

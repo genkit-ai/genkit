@@ -83,8 +83,8 @@ func CalculateInputOutputUsage(req *ModelRequest, resp *ModelResponse) {
 
 // addAutomaticTelemetry wraps a model function to automatically measure latency
 // and calculate character and media counts.
-func addAutomaticTelemetry() func(next ModelFunc) ModelFunc {
-	return func(fn ModelFunc) ModelFunc {
+func addAutomaticTelemetry() func(next rawModelFunc) rawModelFunc {
+	return func(fn rawModelFunc) rawModelFunc {
 		return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			startTime := time.Now()
 
@@ -178,8 +178,8 @@ func countOutputCharacters(resp *ModelResponse) int {
 }
 
 // simulateSystemPrompt provides a simulated system prompt for models that don't support it natively.
-func simulateSystemPrompt(modelOpts *ModelOptions, opts map[string]string) func(next ModelFunc) ModelFunc {
-	return func(next ModelFunc) ModelFunc {
+func simulateSystemPrompt(modelOpts *ModelOptions, opts map[string]string) func(next rawModelFunc) rawModelFunc {
+	return func(next rawModelFunc) rawModelFunc {
 		return func(ctx context.Context, input *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			// Short-circuiting middleware if system role is supported in model.
 			if modelOpts.Supports.SystemRole {
@@ -218,8 +218,8 @@ func simulateSystemPrompt(modelOpts *ModelOptions, opts map[string]string) func(
 }
 
 // validateSupport validates whether a model supports the features used in the model request.
-func validateSupport(model string, opts *ModelOptions) func(next ModelFunc) ModelFunc {
-	return func(next ModelFunc) ModelFunc {
+func validateSupport(model string, opts *ModelOptions) func(next rawModelFunc) rawModelFunc {
+	return func(next rawModelFunc) rawModelFunc {
 		return func(ctx context.Context, input *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			if opts == nil {
 				opts = &ModelOptions{
@@ -269,17 +269,20 @@ func validateSupport(model string, opts *ModelOptions) func(next ModelFunc) Mode
 				return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support native constrained output, but constrained output was requested. Request: %+v", model, input)
 			}
 
-			if err := validateVersion(model, opts.Versions, input.Config); err != nil {
-				return nil, err
-			}
-
 			return next(ctx, input, cb)
 		}
 	}
 }
 
 // validateVersion validates that the requested model version is supported.
+// It runs against the raw, pre-conversion config (see [normalizeConfig])
+// because conversion into a Config type without a version field would
+// silently drop the key.
 func validateVersion(model string, versions []string, config any) error {
+	if config == nil {
+		return nil
+	}
+
 	var configMap map[string]any
 
 	switch c := config.(type) {
@@ -331,8 +334,8 @@ func contextItemTemplate(d Document, index int, options *AugmentWithContextOptio
 }
 
 // augmentWithContext augments a request with context documents.
-func augmentWithContext(modelOpts *ModelOptions, augOpts *AugmentWithContextOptions) func(next ModelFunc) ModelFunc {
-	return func(next ModelFunc) ModelFunc {
+func augmentWithContext(modelOpts *ModelOptions, augOpts *AugmentWithContextOptions) func(next rawModelFunc) rawModelFunc {
+	return func(next rawModelFunc) rawModelFunc {
 		return func(ctx context.Context, input *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			// Short-circuiting middleware if context is supported in model.
 			if modelOpts.Supports.Context {

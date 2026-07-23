@@ -61,82 +61,9 @@ func TestAnthropic(t *testing.T) {
 type modelRequestTestCase struct {
 	name        string
 	req         *ai.ModelRequest
+	config      anthropic.MessageNewParams
 	expected    *anthropic.MessageNewParams
 	expectedErr string
-}
-
-func TestAnthropicConfig(t *testing.T) {
-	emptyConfig := anthropic.MessageNewParams{}
-	expectedConfig := anthropic.MessageNewParams{
-		Temperature: anthropic.Float(1.0),
-		TopK:        anthropic.Int(1),
-	}
-
-	tests := []modelRequestTestCase{
-		{
-			name: "Input is anthropic.MessageNewParams struct",
-			req: &ai.ModelRequest{
-				Config: anthropic.MessageNewParams{
-					Temperature: anthropic.Float(1.0),
-					TopK:        anthropic.Int(1),
-				},
-			},
-			expected: &expectedConfig,
-		},
-		{
-			name: "Input is *anthropic.MessageNewParams struct",
-			req: &ai.ModelRequest{
-				Config: &anthropic.MessageNewParams{
-					Temperature: anthropic.Float(1.0),
-					TopK:        anthropic.Int(1),
-				},
-			},
-			expected: &expectedConfig,
-		},
-		{
-			name: "Input is map[string]any",
-			req: &ai.ModelRequest{
-				Config: map[string]any{
-					"temperature": 1.0,
-					"top_k":       1,
-				},
-			},
-			expected: &expectedConfig,
-		},
-		{
-			name: "Input is map[string]any (empty)",
-			req: &ai.ModelRequest{
-				Config: map[string]any{},
-			},
-			expected: &emptyConfig,
-		},
-		{
-			name: "Input is nil",
-			req: &ai.ModelRequest{
-				Config: nil,
-			},
-			expected: &emptyConfig,
-		},
-		{
-			name: "Input is an unexpected type",
-			req: &ai.ModelRequest{
-				Config: 123,
-			},
-			expectedErr: "unexpected config type: int",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := configFromRequest(tt.req)
-			if checkError(t, err, tt.expectedErr) {
-				return
-			}
-			if !reflect.DeepEqual(tt.expected, got) {
-				t.Errorf("configFromRequest() got = %+v, want %+v", got, tt.expected)
-			}
-		})
-	}
 }
 
 func TestToAnthropicTools(t *testing.T) {
@@ -435,9 +362,9 @@ func TestToAnthropicRequest(t *testing.T) {
 						Content: []*ai.Part{ai.NewTextPart("hello")},
 					},
 				},
-				Config: map[string]any{
-					"max_tokens": 10,
-				},
+			},
+			config: anthropic.MessageNewParams{
+				MaxTokens: 10,
 			},
 			expected: &anthropic.MessageNewParams{
 				MaxTokens: 10,
@@ -460,9 +387,9 @@ func TestToAnthropicRequest(t *testing.T) {
 						Content: []*ai.Part{ai.NewTextPart("hello")},
 					},
 				},
-				Config: map[string]any{
-					"max_tokens": 10,
-				},
+			},
+			config: anthropic.MessageNewParams{
+				MaxTokens: 10,
 			},
 			expected: &anthropic.MessageNewParams{
 				MaxTokens: 10,
@@ -490,7 +417,7 @@ func TestToAnthropicRequest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := toAnthropicRequest("anthropic", tt.req)
+			got, err := toAnthropicRequest("anthropic", tt.req, tt.config)
 			if checkError(t, err, tt.expectedErr) {
 				return
 			}
@@ -523,9 +450,6 @@ func TestToAnthropicRequest_StructuredOutput(t *testing.T) {
 				Content: []*ai.Part{ai.NewTextPart("hello")},
 			},
 		},
-		Config: map[string]any{
-			"max_tokens": 100,
-		},
 		Output: &ai.ModelOutputConfig{
 			Format:      "json",
 			Schema:      schema,
@@ -533,7 +457,7 @@ func TestToAnthropicRequest_StructuredOutput(t *testing.T) {
 		},
 	}
 
-	got, err := toAnthropicRequest("anthropic", req)
+	got, err := toAnthropicRequest("anthropic", req, anthropic.MessageNewParams{MaxTokens: 100})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

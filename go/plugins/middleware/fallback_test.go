@@ -32,7 +32,7 @@ func newTestGenkit(t *testing.T) *genkit.Genkit {
 	return genkit.MustInit(context.Background())
 }
 
-func defineTestModel(t *testing.T, g *genkit.Genkit, name string, fn ai.ModelFunc) *ai.Model {
+func defineTestModel(t *testing.T, g *genkit.Genkit, name string, fn ai.ModelFunc[any]) *ai.Model {
 	t.Helper()
 	return g.DefineModel(name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true},
@@ -44,11 +44,11 @@ func TestFallbackNotTriggeredOnSuccess(t *testing.T) {
 	primaryCalls := 0
 	secondaryCalls := 0
 
-	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		primaryCalls++
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("primary")}, nil
 	})
-	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		secondaryCalls++
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary")}, nil
 	})
@@ -73,10 +73,10 @@ func TestFallbackNotTriggeredOnSuccess(t *testing.T) {
 func TestFallbackTriggeredOnRetryableError(t *testing.T) {
 	g := newTestGenkit(t)
 
-	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return nil, core.NewError(core.UNAVAILABLE, "primary down")
 	})
-	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary ok")}, nil
 	})
 
@@ -95,15 +95,15 @@ func TestFallbackTriesMultipleModels(t *testing.T) {
 	g := newTestGenkit(t)
 	var callOrder []string
 
-	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		callOrder = append(callOrder, "primary")
 		return nil, core.NewError(core.UNAVAILABLE, "primary down")
 	})
-	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		callOrder = append(callOrder, "secondary")
 		return nil, core.NewError(core.RESOURCE_EXHAUSTED, "secondary exhausted")
 	})
-	tertiary := defineTestModel(t, g, "test/tertiary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	tertiary := defineTestModel(t, g, "test/tertiary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		callOrder = append(callOrder, "tertiary")
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("tertiary ok")}, nil
 	})
@@ -131,10 +131,10 @@ func TestFallbackTriesMultipleModels(t *testing.T) {
 func TestFallbackAllModelsFail(t *testing.T) {
 	g := newTestGenkit(t)
 
-	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return nil, core.NewError(core.UNAVAILABLE, "primary down")
 	})
-	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return nil, core.NewError(core.UNAVAILABLE, "secondary down")
 	})
 
@@ -153,10 +153,10 @@ func TestFallbackDoesNotTriggerOnNonRetryableError(t *testing.T) {
 	g := newTestGenkit(t)
 	secondaryCalls := 0
 
-	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return nil, core.NewError(core.INVALID_ARGUMENT, "bad input")
 	})
-	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		secondaryCalls++
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary")}, nil
 	})
@@ -179,10 +179,10 @@ func TestFallbackDoesNotTriggerOnNonGenkitError(t *testing.T) {
 	g := newTestGenkit(t)
 	secondaryCalls := 0
 
-	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return nil, fmt.Errorf("plain error")
 	})
-	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		secondaryCalls++
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary")}, nil
 	})
@@ -202,13 +202,13 @@ func TestFallbackStopsOnNonRetryableFallbackError(t *testing.T) {
 	g := newTestGenkit(t)
 	tertiaryCalls := 0
 
-	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return nil, core.NewError(core.UNAVAILABLE, "primary down")
 	})
-	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return nil, core.NewError(core.INVALID_ARGUMENT, "bad request from secondary")
 	})
-	tertiary := defineTestModel(t, g, "test/tertiary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	tertiary := defineTestModel(t, g, "test/tertiary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		tertiaryCalls++
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("tertiary")}, nil
 	})
@@ -230,10 +230,10 @@ func TestFallbackStopsOnNonRetryableFallbackError(t *testing.T) {
 func TestFallbackCustomStatuses(t *testing.T) {
 	g := newTestGenkit(t)
 
-	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return nil, core.NewError(core.PERMISSION_DENIED, "forbidden")
 	})
-	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary ok")}, nil
 	})
 
@@ -255,10 +255,10 @@ func TestFallbackUsesRefConfig(t *testing.T) {
 	g := newTestGenkit(t)
 	var secondaryConfig any
 
-	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return nil, core.NewError(core.UNAVAILABLE, "primary down")
 	})
-	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		secondaryConfig = req.Config
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary ok")}, nil
 	})
@@ -283,10 +283,10 @@ func TestFallbackPassesNilConfigWhenRefHasNone(t *testing.T) {
 	g := newTestGenkit(t)
 	var secondaryConfig any
 
-	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return nil, core.NewError(core.UNAVAILABLE, "primary down")
 	})
-	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		secondaryConfig = req.Config
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary ok")}, nil
 	})
@@ -306,11 +306,11 @@ func TestFallbackDoesNotMutateOriginalRequest(t *testing.T) {
 	g := newTestGenkit(t)
 	var primaryConfig any
 
-	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		primaryConfig = req.Config
 		return nil, core.NewError(core.UNAVAILABLE, "primary down")
 	})
-	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary ok")}, nil
 	})
 
@@ -333,7 +333,7 @@ func TestFallbackDoesNotMutateOriginalRequest(t *testing.T) {
 func TestFallbackModelNotFound(t *testing.T) {
 	g := newTestGenkit(t)
 
-	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return nil, core.NewError(core.UNAVAILABLE, "primary down")
 	})
 

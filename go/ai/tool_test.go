@@ -42,7 +42,7 @@ func TestToolName(t *testing.T) {
 func defineToolThenFinishModel(r api.Registry, reqs ...*Part) {
 	DefineModel(r, "test/model",
 		&ModelOptions{Supports: &ModelSupports{Multiturn: true, Tools: true}},
-		func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 			for _, m := range req.Messages {
 				if m.Role == RoleTool {
 					return &ModelResponse{

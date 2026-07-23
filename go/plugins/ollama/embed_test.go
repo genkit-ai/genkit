@@ -43,10 +43,9 @@ func TestEmbedValidRequest(t *testing.T) {
 		Input: []*ai.Document{
 			ai.DocumentFromText("test", nil),
 		},
-		Options: &EmbedOptions{Model: "all-minilm"},
 	}
 
-	resp, err := embed(context.Background(), server.URL, req)
+	resp, err := embed(context.Background(), server.URL, req, &EmbedOptions{Model: "all-minilm"})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -61,10 +60,9 @@ func TestEmbedInvalidServerAddress(t *testing.T) {
 		Input: []*ai.Document{
 			ai.DocumentFromText("test", nil),
 		},
-		Options: &EmbedOptions{Model: "all-minilm"},
 	}
 
-	_, err := embed(context.Background(), "", req)
+	_, err := embed(context.Background(), "", req, &EmbedOptions{Model: "all-minilm"})
 	if err == nil || !strings.Contains(err.Error(), "invalid server address") {
 		t.Fatalf("expected invalid server address error, got %v", err)
 	}
@@ -303,10 +301,10 @@ func TestDefineEmbedderRequestOptionsHandling(t *testing.T) {
 			wantHTTPCalls: 0,
 		},
 		{
-			name:          "wrong options type preserves existing error",
+			name:          "map config deserializes to typed options",
 			options:       map[string]any{"model": model},
-			wantErr:       "invalid options type: expected *EmbedOptions",
-			wantHTTPCalls: 0,
+			wantModel:     model,
+			wantHTTPCalls: 1,
 		},
 	}
 
@@ -317,7 +315,7 @@ func TestDefineEmbedderRequestOptionsHandling(t *testing.T) {
 				Input: []*ai.Document{
 					ai.DocumentFromText("test", nil),
 				},
-				Options: tt.options,
+				Config: tt.options,
 			})
 
 			if tt.wantErr != "" {

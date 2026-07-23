@@ -130,7 +130,16 @@ func NewBackgroundAction[In, Out any](
 			return op, nil
 		})
 
-	checkAction := NewAction(api.ActionTypeCheckOperation, name, opts,
+	// The schema slots in opts describe the start action's In/Out types; the
+	// check and cancel actions operate on Operation values, so they keep the
+	// shared description and metadata but infer their own schemas.
+	opOpts := &ActionOptions{}
+	if opts != nil {
+		opOpts.Description = opts.Description
+		opOpts.Metadata = opts.Metadata
+	}
+
+	checkAction := NewAction(api.ActionTypeCheckOperation, name, opOpts,
 		func(ctx context.Context, op *Operation[Out]) (*Operation[Out], error) {
 			updatedOp, err := checkFn(ctx, op)
 			if err != nil {
@@ -142,7 +151,7 @@ func NewBackgroundAction[In, Out any](
 
 	var cancelAction *Action[*Operation[Out], *Operation[Out], struct{}]
 	if cancelFn != nil {
-		cancelAction = NewAction(api.ActionTypeCancelOperation, name, opts,
+		cancelAction = NewAction(api.ActionTypeCancelOperation, name, opOpts,
 			func(ctx context.Context, op *Operation[Out]) (*Operation[Out], error) {
 				cancelledOp, err := cancelFn(ctx, op)
 				if err != nil {
