@@ -34,6 +34,11 @@ KnownClaude = Literal[
     'claude-opus-4-7',
     'claude-opus-4-8',
     'claude-fable-5',
+    'claude-3-5-sonnet',
+    'claude-3-5-haiku',
+    'claude-3-opus',
+    'claude-3-sonnet',
+    'claude-3-haiku',
 ]
 
 

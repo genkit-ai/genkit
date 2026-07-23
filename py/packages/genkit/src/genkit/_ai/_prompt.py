@@ -110,8 +110,21 @@ def _resolve_model_arg(
 ) -> tuple[str | None, dict[str, Any] | BaseModel | None]:
     """Unwrap a ModelRef to its wire name and apply default config when omitted."""
     if isinstance(model, ModelRef):
-        if config is None and model.config is not None:
-            config = model.config
+        if model.config is not None:
+            if config is None:
+                config = model.config
+            else:
+                default_dict = (
+                    model.config.model_dump(exclude_unset=True)
+                    if isinstance(model.config, BaseModel)
+                    else dict(model.config)  # type: ignore[arg-type]  # pyrefly: ignore
+                )
+                call_dict = config.model_dump(exclude_unset=True) if isinstance(config, BaseModel) else dict(config)  # type: ignore[arg-type]  # pyrefly: ignore
+                merged = {**default_dict, **call_dict}
+                if issubclass(model.config_schema, BaseModel):
+                    config = model.config_schema.model_validate(merged)
+                else:
+                    config = merged
         return model.name, config
     if isinstance(model, str):
         return model, config

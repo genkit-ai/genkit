@@ -8,7 +8,7 @@
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from genkit._ai._prompt import PromptConfig
+from genkit._ai._prompt import PromptConfig, _resolve_model_arg
 from genkit.model import ModelConfig, model_ref
 
 
@@ -42,7 +42,7 @@ def test_model_ref_is_frozen() -> None:
 def test_model_ref_requires_config_schema() -> None:
     """model_ref rejects calls that omit config_schema."""
     with pytest.raises(TypeError):
-        model_ref('gemini-pro-latest', namespace='googleai')  # type: ignore  # ty: ignore  # pyrefly: ignore  # pyright: ignore
+        model_ref('gemini-pro-latest', namespace='googleai')  # type: ignore  # pyrefly: ignore  # pyright: ignore
 
 
 def test_model_ref_stamps_typed_config() -> None:
@@ -53,6 +53,21 @@ def test_model_ref_stamps_typed_config() -> None:
     assert ref.config_schema is CustomConfig
     assert ref.config is not None
     assert ref.config.temperature == 0.7
+
+
+def test_model_ref_config_merging() -> None:
+    """Call-time config merges over ModelRef default config instead of overwriting."""
+    ref = model_ref(
+        'gemini-pro-latest',
+        namespace='googleai',
+        config_schema=CustomConfig,
+        config=CustomConfig(temperature=0.7, safety_settings={'HARM': 'BLOCK'}),
+    )
+    name, resolved_cfg = _resolve_model_arg(ref, CustomConfig(temperature=0.2))
+    assert name == 'googleai/gemini-pro-latest'
+    assert isinstance(resolved_cfg, CustomConfig)
+    assert resolved_cfg.temperature == 0.2
+    assert resolved_cfg.safety_settings == {'HARM': 'BLOCK'}
 
 
 def test_prompt_config_keeps_plugin_specific_fields() -> None:

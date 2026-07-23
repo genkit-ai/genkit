@@ -356,11 +356,11 @@ class VeoModel:
             raise ValueError('Veo requires a text prompt')
 
         # Call the generateVideos API
+        config = _to_veo_parameters(request.config)
         response = await self._client.aio.models.generate_videos(
             model=self._version,
             prompt=prompt,
-            # pyrefly: ignore[bad-argument-type] - config dict matches GenerateVideosConfigDict
-            config=request.config if isinstance(request.config, dict) else None,  # pyright: ignore[reportArgumentType]
+            config=cast(genai_types.GenerateVideosConfigOrDict, config or None),
         )
 
         # Convert to Operation
@@ -401,7 +401,7 @@ class VeoModel:
     def _get_config(self, request: ModelRequest) -> genai_types.GenerateVideosConfigOrDict | None:
         if not request.config:
             return None
-        return cast(genai_types.GenerateVideosConfigOrDict, request.config)
+        return cast(genai_types.GenerateVideosConfigOrDict, _to_veo_parameters(request.config) or None)
 
     def _contents_from_response(self, response: genai_types.GenerateVideosResponse) -> list[Part]:
         content = []

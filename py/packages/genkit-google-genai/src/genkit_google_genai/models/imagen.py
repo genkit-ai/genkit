@@ -229,6 +229,8 @@ class ImagenModel:
 
         if request.config:
             request_config = request.config
+            if isinstance(request_config, BaseModel):
+                request_config = request_config.model_dump(by_alias=True, exclude_none=True)
             ta = TypeAdapter(genai_types.GenerateImagesConfigOrDict)
             try:
                 cfg = ta.validate_python(request_config)

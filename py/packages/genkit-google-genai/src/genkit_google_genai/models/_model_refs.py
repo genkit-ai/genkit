@@ -45,12 +45,17 @@ KnownGemini = Literal[
     'gemini-2.5-pro',
     'gemini-2.5-flash',
     'gemini-2.5-flash-lite',
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
+    'gemini-2.0-pro-exp-02-05',
+    'gemini-2.0-flash-thinking-exp-01-21',
 ]
 
 KnownGeminiTts = Literal[
     'gemini-2.5-flash-preview-tts',
     'gemini-2.5-pro-preview-tts',
     'gemini-3.1-flash-tts-preview',
+    'gemini-2.0-flash-tts',
 ]
 
 KnownGeminiImage = Literal[
@@ -70,6 +75,9 @@ KnownGemma = Literal[
     'gemma-3-12b-it',
     'gemma-3-27b-it',
     'gemma-3n-e4b-it',
+    'gemma-2-2b-it',
+    'gemma-2-9b-it',
+    'gemma-2-27b-it',
 ]
 
 KnownImagen = Literal[
