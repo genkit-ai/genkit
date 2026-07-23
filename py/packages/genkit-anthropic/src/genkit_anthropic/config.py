@@ -339,6 +339,3 @@ class AnthropicConfig(ModelConfig):
             names = ', '.join(sorted(beta_only))
             raise ValueError(f"{names} require the beta API surface; remove them or set apiVersion to 'beta'")
         return self
-
-
-AnthropicConfigSchema = AnthropicConfig

@@ -157,9 +157,6 @@ class ImagenConfig(BaseModel):
     )
 
 
-ImagenConfigSchema = ImagenConfig
-
-
 class ImagenModel:
     """Imagen text-to-image model."""
 

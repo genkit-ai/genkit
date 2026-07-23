@@ -602,15 +602,6 @@ class GemmaConfig(GeminiConfig):
     temperature: float | None = None
 
 
-# Backwards compatibility aliases for older imports
-GeminiConfigSchema = GeminiConfig
-GeminiTtsConfigSchema = GeminiTtsConfig
-GeminiImageConfigSchema = GeminiImageConfig
-GemmaConfigSchema = GemmaConfig
-SpeechConfigSchema = SpeechConfig
-VoiceConfigSchema = VoiceConfig
-
-
 GEMINI_1_5_PRO = ModelInfo(
     label='Google AI - Gemini 1.5 Pro',
     stage=Stage.DEPRECATED,

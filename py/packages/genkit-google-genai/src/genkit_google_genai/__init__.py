@@ -227,24 +227,18 @@ from genkit_google_genai.models.embedder import (
 )
 from genkit_google_genai.models.gemini import (
     GeminiConfig,
-    GeminiConfigSchema,
     GeminiImageConfig,
-    GeminiImageConfigSchema,
     GeminiTtsConfig,
-    GeminiTtsConfigSchema,
     GemmaConfig,
-    GemmaConfigSchema,
     GoogleAIGeminiVersion,
     PrebuiltVoiceConfig,
     SpeechConfig,
-    SpeechConfigSchema,
     VertexAIGeminiVersion,
     VoiceConfig,
-    VoiceConfigSchema,
 )
-from genkit_google_genai.models.imagen import ImagenConfig, ImagenConfigSchema, ImagenVersion
-from genkit_google_genai.models.lyria import LyriaConfig, LyriaConfigSchema, LyriaVersion
-from genkit_google_genai.models.veo import VeoConfig, VeoConfigSchema, VeoVersion
+from genkit_google_genai.models.imagen import ImagenConfig, ImagenVersion
+from genkit_google_genai.models.lyria import LyriaConfig, LyriaVersion
+from genkit_google_genai.models.veo import VeoConfig, VeoVersion
 
 
 def package_name() -> str:
@@ -259,33 +253,24 @@ def package_name() -> str:
 __all__ = [
     'EmbeddingTaskType',
     'GeminiConfig',
-    'GeminiConfigSchema',
     'GeminiEmbeddingModels',
     'GeminiImageConfig',
-    'GeminiImageConfigSchema',
     'GeminiTtsConfig',
-    'GeminiTtsConfigSchema',
     'GemmaConfig',
-    'GemmaConfigSchema',
     'GoogleAI',
     'GoogleAIGeminiVersion',
     'ImagenConfig',
-    'ImagenConfigSchema',
     'ImagenVersion',
     'LyriaConfig',
-    'LyriaConfigSchema',
     'LyriaVersion',
     'PrebuiltVoiceConfig',
     'SpeechConfig',
-    'SpeechConfigSchema',
     'VeoConfig',
-    'VeoConfigSchema',
     'VeoVersion',
     'VertexAI',
     'VertexAIGeminiVersion',
     'VertexEmbeddingModels',
     'VoiceConfig',
-    'VoiceConfigSchema',
     'gemini_image_model',
     'gemini_model',
     'gemini_tts_model',

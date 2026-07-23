@@ -119,9 +119,6 @@ class LyriaConfig(BaseModel):
     model_config = {'populate_by_name': True}
 
 
-LyriaConfigSchema = LyriaConfig
-
-
 LYRIA_MODEL_INFO = ModelInfo(
     label='Vertex AI - Lyria',
     supports=Supports(

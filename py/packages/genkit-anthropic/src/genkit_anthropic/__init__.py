@@ -183,7 +183,6 @@ See Also:
 from genkit_anthropic._model_refs import KnownClaude, claude_model
 from genkit_anthropic.config import (
     AnthropicConfig,
-    AnthropicConfigSchema,
     AnyToolChoice,
     AutoToolChoice,
     OutputConfig,
@@ -199,7 +198,6 @@ from genkit_anthropic.plugin import Anthropic, anthropic_name
 __all__ = [
     'Anthropic',
     'AnthropicConfig',
-    'AnthropicConfigSchema',
     'AutoToolChoice',
     'AnyToolChoice',
     'KnownClaude',

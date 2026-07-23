@@ -143,9 +143,6 @@ class VeoConfig(BaseModel):
     enhance_prompt: bool | None = Field(default=None, alias='enhancePrompt', description='Enable prompt enhancement.')
 
 
-VeoConfigSchema = VeoConfig
-
-
 DEFAULT_VEO_SUPPORT = Supports(
     media=True,
     multiturn=False,

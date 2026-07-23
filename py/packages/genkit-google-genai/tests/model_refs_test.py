@@ -100,30 +100,3 @@ def test_is_imagen_model_path_prefixes() -> None:
     assert is_imagen_model('models/imagen-3.0-generate-002')
     assert is_imagen_model('googleai/imagen-3.0-generate-002')
     assert is_imagen_model('vertexai/imagegeneration@006')
-
-
-def test_backward_compatibility_schema_aliases() -> None:
-    """Verify older *Schema aliases continue to reference clean config schemas."""
-    from genkit_google_genai import (
-        GeminiConfigSchema,
-        GeminiImageConfigSchema,
-        GeminiTtsConfigSchema,
-        GemmaConfigSchema,
-        ImagenConfigSchema,
-        LyriaConfigSchema,
-        SpeechConfig,
-        SpeechConfigSchema,
-        VeoConfigSchema,
-        VoiceConfig,
-        VoiceConfigSchema,
-    )
-
-    assert GeminiConfigSchema is GeminiConfig
-    assert GeminiTtsConfigSchema is GeminiTtsConfig
-    assert GeminiImageConfigSchema is GeminiImageConfig
-    assert GemmaConfigSchema is GemmaConfig
-    assert ImagenConfigSchema is ImagenConfig
-    assert LyriaConfigSchema is LyriaConfig
-    assert VeoConfigSchema is VeoConfig
-    assert SpeechConfigSchema is SpeechConfig
-    assert VoiceConfigSchema is VoiceConfig
