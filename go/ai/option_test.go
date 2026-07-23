@@ -41,7 +41,7 @@ func TestCommonOptions(t *testing.T) {
 				WithToolChoice(ToolChoiceAuto),
 				WithMaxTurns(3),
 				WithReturnToolRequests(true),
-				WithMiddleware(func(next ModelFunc) ModelFunc { return next }),
+				WithUse(MiddlewareFunc(func(ctx context.Context) (*Hooks, error) { return &Hooks{}, nil })),
 			},
 			wantErr: false,
 		},
@@ -364,7 +364,7 @@ func TestPromptGenerateOptions(t *testing.T) {
 func TestGenerateOptionsComplete(t *testing.T) {
 	opts := &generateOptions{}
 
-	mw := func(next ModelFunc) ModelFunc { return next }
+	mw := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) { return &Hooks{}, nil })
 	model := &mockModel{name: "test/model"}
 	tool := &mockTool{name: "test/tool"}
 	streamFunc := func(context.Context, *ModelResponseChunk) error { return nil }
@@ -377,7 +377,7 @@ func TestGenerateOptionsComplete(t *testing.T) {
 		WithToolChoice(ToolChoiceAuto),
 		WithMaxTurns(3),
 		WithReturnToolRequests(true),
-		WithMiddleware(mw),
+		WithUse(mw),
 		WithSystem("system prompt"),
 		WithPrompt("user prompt"),
 		WithDocs(doc),
@@ -404,7 +404,7 @@ func TestGenerateOptionsComplete(t *testing.T) {
 			ToolChoice:         ToolChoiceAuto,
 			MaxTurns:           3,
 			ReturnToolRequests: &returnToolRequests,
-			Middleware:         []ModelMiddleware{mw},
+			Use:                []Middleware{mw},
 		},
 		promptingOptions: promptingOptions{
 			SystemFn: opts.SystemFn,
@@ -428,7 +428,7 @@ func TestGenerateOptionsComplete(t *testing.T) {
 	}
 
 	if diff := cmp.Diff(expected, opts,
-		cmpopts.IgnoreFields(commonGenOptions{}, "MessagesFn", "Middleware"),
+		cmpopts.IgnoreFields(commonGenOptions{}, "MessagesFn", "Use"),
 		cmpopts.IgnoreFields(promptingOptions{}, "SystemFn", "PromptFn"),
 		cmpopts.IgnoreFields(executionOptions{}, "Stream"),
 		cmpopts.IgnoreUnexported(mockModel{}, mockTool{}),
@@ -440,8 +440,8 @@ func TestGenerateOptionsComplete(t *testing.T) {
 	if opts.MessagesFn == nil {
 		t.Errorf("MessagesFn should not be nil")
 	}
-	if len(opts.Middleware) == 0 {
-		t.Errorf("Middleware should not be empty")
+	if len(opts.Use) == 0 {
+		t.Errorf("Use should not be empty")
 	}
 	if opts.SystemFn == nil {
 		t.Errorf("SystemFn should not be nil")
@@ -456,7 +456,7 @@ func TestGenerateOptionsComplete(t *testing.T) {
 func TestPromptOptionsComplete(t *testing.T) {
 	opts := &promptOptions{}
 
-	mw := func(next ModelFunc) ModelFunc { return next }
+	mw := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) { return &Hooks{}, nil })
 	model := &mockModel{name: "test/model"}
 	tool := &mockTool{name: "test/tool"}
 	input := struct {
@@ -473,7 +473,7 @@ func TestPromptOptionsComplete(t *testing.T) {
 		WithToolChoice(ToolChoiceAuto),
 		WithMaxTurns(3),
 		WithReturnToolRequests(true),
-		WithMiddleware(mw),
+		WithUse(mw),
 		WithSystem("system prompt"),
 		WithPrompt("user prompt"),
 		WithDescription("test description"),
@@ -501,7 +501,7 @@ func TestPromptOptionsComplete(t *testing.T) {
 			ToolChoice:         ToolChoiceAuto,
 			MaxTurns:           3,
 			ReturnToolRequests: &returnToolRequests,
-			Middleware:         []ModelMiddleware{mw},
+			Use:                []Middleware{mw},
 		},
 		promptingOptions: promptingOptions{
 			SystemFn: opts.SystemFn,
@@ -525,7 +525,7 @@ func TestPromptOptionsComplete(t *testing.T) {
 	}
 
 	if diff := cmp.Diff(expected, opts,
-		cmpopts.IgnoreFields(commonGenOptions{}, "MessagesFn", "Middleware"),
+		cmpopts.IgnoreFields(commonGenOptions{}, "MessagesFn", "Use"),
 		cmpopts.IgnoreFields(promptingOptions{}, "SystemFn", "PromptFn"),
 		cmpopts.IgnoreFields(outputOptions{}, "OutputSchema"),
 		cmpopts.IgnoreFields(inputOptions{}, "InputSchema"),
@@ -538,8 +538,8 @@ func TestPromptOptionsComplete(t *testing.T) {
 	if opts.MessagesFn == nil {
 		t.Errorf("MessagesFn should not be nil")
 	}
-	if len(opts.Middleware) == 0 {
-		t.Errorf("Middleware should not be empty")
+	if len(opts.Use) == 0 {
+		t.Errorf("Use should not be empty")
 	}
 	if opts.SystemFn == nil {
 		t.Errorf("SystemFn should not be nil")
@@ -558,7 +558,7 @@ func TestPromptOptionsComplete(t *testing.T) {
 func TestPromptExecuteOptionsComplete(t *testing.T) {
 	opts := &promptExecutionOptions{}
 
-	mw := func(next ModelFunc) ModelFunc { return next }
+	mw := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) { return &Hooks{}, nil })
 	model := &mockModel{name: "test/model"}
 	tool := &mockTool{name: "test/tool"}
 	streamFunc := func(context.Context, *ModelResponseChunk) error { return nil }
@@ -573,7 +573,7 @@ func TestPromptExecuteOptionsComplete(t *testing.T) {
 		WithToolChoice(ToolChoiceAuto),
 		WithMaxTurns(3),
 		WithReturnToolRequests(true),
-		WithMiddleware(mw),
+		WithUse(mw),
 		WithDocs(doc),
 		WithStreaming(streamFunc),
 		WithInput(input),
@@ -596,7 +596,7 @@ func TestPromptExecuteOptionsComplete(t *testing.T) {
 			ToolChoice:         ToolChoiceAuto,
 			MaxTurns:           3,
 			ReturnToolRequests: &returnToolRequests,
-			Middleware:         []ModelMiddleware{mw},
+			Use:                []Middleware{mw},
 		},
 		executionOptions: executionOptions{
 			Stream: streamFunc,
@@ -608,7 +608,7 @@ func TestPromptExecuteOptionsComplete(t *testing.T) {
 	}
 
 	if diff := cmp.Diff(expected, opts,
-		cmpopts.IgnoreFields(commonGenOptions{}, "MessagesFn", "Middleware"),
+		cmpopts.IgnoreFields(commonGenOptions{}, "MessagesFn", "Use"),
 		cmpopts.IgnoreFields(executionOptions{}, "Stream"),
 		cmpopts.IgnoreUnexported(mockModel{}, mockTool{}),
 		cmp.AllowUnexported(promptExecutionOptions{}, commonGenOptions{},
@@ -619,8 +619,8 @@ func TestPromptExecuteOptionsComplete(t *testing.T) {
 	if opts.MessagesFn == nil {
 		t.Errorf("MessagesFn should not be nil")
 	}
-	if opts.Middleware == nil {
-		t.Errorf("Middleware should not be nil")
+	if opts.Use == nil {
+		t.Errorf("Use should not be nil")
 	}
 	if opts.Stream == nil {
 		t.Errorf("Stream should not be nil")

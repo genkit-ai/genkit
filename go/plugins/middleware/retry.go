@@ -15,7 +15,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package middleware provides reusable middleware for Genkit model generation,
-// including retry with exponential backoff and model fallback.
+// such as retry with exponential backoff, model fallback, tool approval,
+// skills, scoped filesystem access, and downloading remote request media.
 package middleware
 
 import (

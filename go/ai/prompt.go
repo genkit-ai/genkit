@@ -31,7 +31,6 @@ import (
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/dotprompt/go/dotprompt"
 	"github.com/invopop/jsonschema"
@@ -265,7 +264,7 @@ func (p *prompt) Execute(ctx context.Context, opts ...PromptExecuteOption) (*Mod
 		actionOpts.Use = refs
 	}
 
-	return GenerateWithRequest(ctx, r, actionOpts, execOpts.Middleware, execOpts.Stream)
+	return GenerateWithRequest(ctx, r, actionOpts, execOpts.Stream)
 }
 
 // ExecuteStream executes the prompt with streaming and returns an iterator.
@@ -317,10 +316,6 @@ func (p *prompt) ExecuteStream(ctx context.Context, opts ...PromptExecuteOption)
 func (p *prompt) Render(ctx context.Context, input any) (*GenerateActionOptions, error) {
 	if p == nil {
 		return nil, core.NewError(core.INVALID_ARGUMENT, "Prompt.Render: prompt is nil")
-	}
-
-	if len(p.Middleware) > 0 {
-		logger.FromContext(ctx).Warn(fmt.Sprintf("middleware set on prompt %q will be ignored during Prompt.Render", p.Name()))
 	}
 
 	// TODO: This is hacky; we should have a helper that fetches the metadata.

@@ -32,6 +32,7 @@ import (
 	"github.com/firebase/genkit/go/internal"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
+	"github.com/firebase/genkit/go/plugins/middleware"
 	"github.com/invopop/jsonschema"
 	"google.golang.org/genai"
 )
@@ -125,7 +126,7 @@ func newModel(client *genai.Client, name string, opts ai.ModelOptions) ai.Model 
 
 	// the gemini api doesn't support downloading media from http(s)
 	if opts.Supports.Media {
-		fn = core.ChainMiddleware(ai.DownloadRequestMedia(&ai.DownloadMediaOptions{
+		fn = (&middleware.DownloadRequestMedia{
 			MaxBytes: 1024 * 1024 * 20, // 20MB
 			Filter: func(part *ai.Part) bool {
 				u, err := url.Parse(part.Text)
@@ -141,7 +142,7 @@ func newModel(client *genai.Client, name string, opts ai.ModelOptions) ai.Model 
 					u.Hostname(),
 				)
 			},
-		}))(fn)
+		}).WrapModelFunc(fn)
 	}
 	return ai.NewModel(api.NewName(provider, name), meta, fn)
 }

@@ -648,7 +648,7 @@ func TestFilesystemRespectsConfigOverride(t *testing.T) {
 		}},
 	}
 
-	if _, err := ai.GenerateWithRequest(ctx, r, actionOpts, nil, nil); err != nil {
+	if _, err := ai.GenerateWithRequest(ctx, r, actionOpts, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(*seen) < 2 {

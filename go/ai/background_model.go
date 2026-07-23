@@ -127,12 +127,11 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 		}
 	}
 
-	mws := []ModelMiddleware{
+	fn := core.ChainMiddleware(
 		simulateSystemPrompt(&opts.ModelOptions, nil),
 		augmentWithContext(&opts.ModelOptions, nil),
 		validateSupport(name, &opts.ModelOptions),
-	}
-	fn := core.ChainMiddleware(mws...)(backgroundModelToModelFn(startFn))
+	)(backgroundModelToModelFn(startFn))
 
 	wrappedFn := func(ctx context.Context, req *ModelRequest) (*ModelOperation, error) {
 		resp, err := fn(ctx, req, nil)

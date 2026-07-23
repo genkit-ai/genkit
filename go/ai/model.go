@@ -18,11 +18,8 @@ package ai
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,6 +28,14 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/logger"
 )
+
+// This file holds the built-in request/response processing that every model
+// defined via [NewModel] (and [NewBackgroundModel]) is wrapped with. These
+// wrappers run at the model boundary so they apply on every model call,
+// including direct [Model.Generate] invocations that bypass [Generate] and its
+// user-supplied [Middleware]. They are internal to the model implementation and
+// are intentionally not part of the public middleware surface (see
+// middleware.go for the user-facing [Middleware] system).
 
 // AugmentWithContextOptions configures how a request is augmented with context.
 type AugmentWithContextOptions struct {
@@ -42,12 +47,10 @@ type AugmentWithContextOptions struct {
 // contextPreface is the default preface for context augmentation.
 const contextPreface = "\n\nUse the following information to complete your task:\n\n"
 
-// DownloadMediaOptions configures how media is downloaded in the [DownloadRequestMedia] middleware.
-type DownloadMediaOptions struct {
-	MaxBytes int64                 // Maximum number of bytes to download.
-	Filter   func(part *Part) bool // Filter to apply to parts that are media URLs.
-}
-
+// CalculateInputOutputUsage populates resp.Usage with character and media
+// counts derived from the request and response when those counts are not
+// already set by the model. It is exported for background models and other
+// providers that need to compute usage outside the normal telemetry wrapper.
 func CalculateInputOutputUsage(req *ModelRequest, resp *ModelResponse) {
 	if resp.Usage == nil {
 		resp.Usage = &GenerationUsage{}
@@ -78,8 +81,9 @@ func CalculateInputOutputUsage(req *ModelRequest, resp *ModelResponse) {
 	}
 }
 
-// addAutomaticTelemetry creates middleware that automatically measures latency and calculates character and media counts.
-func addAutomaticTelemetry() ModelMiddleware {
+// addAutomaticTelemetry wraps a model function to automatically measure latency
+// and calculate character and media counts.
+func addAutomaticTelemetry() func(next ModelFunc) ModelFunc {
 	return func(fn ModelFunc) ModelFunc {
 		return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			startTime := time.Now()
@@ -174,7 +178,7 @@ func countOutputCharacters(resp *ModelResponse) int {
 }
 
 // simulateSystemPrompt provides a simulated system prompt for models that don't support it natively.
-func simulateSystemPrompt(modelOpts *ModelOptions, opts map[string]string) ModelMiddleware {
+func simulateSystemPrompt(modelOpts *ModelOptions, opts map[string]string) func(next ModelFunc) ModelFunc {
 	return func(next ModelFunc) ModelFunc {
 		return func(ctx context.Context, input *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			// Short-circuiting middleware if system role is supported in model.
@@ -214,7 +218,7 @@ func simulateSystemPrompt(modelOpts *ModelOptions, opts map[string]string) Model
 }
 
 // validateSupport validates whether a model supports the features used in the model request.
-func validateSupport(model string, opts *ModelOptions) ModelMiddleware {
+func validateSupport(model string, opts *ModelOptions) func(next ModelFunc) ModelFunc {
 	return func(next ModelFunc) ModelFunc {
 		return func(ctx context.Context, input *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			if opts == nil {
@@ -308,7 +312,7 @@ func validateVersion(model string, versions []string, config any) error {
 	return core.NewError(core.INVALID_ARGUMENT, "model %q does not support version %q, supported versions: %v", model, version, versions)
 }
 
-// ContextItemTemplate is the default item template for context augmentation.
+// contextItemTemplate is the default item template for context augmentation.
 func contextItemTemplate(d Document, index int, options *AugmentWithContextOptions) string {
 	out := "- "
 	if options != nil && options.CitationKey != nil {
@@ -327,7 +331,7 @@ func contextItemTemplate(d Document, index int, options *AugmentWithContextOptio
 }
 
 // augmentWithContext augments a request with context documents.
-func augmentWithContext(modelOpts *ModelOptions, augOpts *AugmentWithContextOptions) ModelMiddleware {
+func augmentWithContext(modelOpts *ModelOptions, augOpts *AugmentWithContextOptions) func(next ModelFunc) ModelFunc {
 	return func(next ModelFunc) ModelFunc {
 		return func(ctx context.Context, input *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			// Short-circuiting middleware if context is supported in model.
@@ -407,52 +411,4 @@ func (d *Document) concatText() string {
 		}
 	}
 	return builder.String()
-}
-
-// DownloadRequestMedia downloads media from a URL and replaces the media part with a base64 encoded string.
-func DownloadRequestMedia(opts *DownloadMediaOptions) ModelMiddleware {
-	return func(next ModelFunc) ModelFunc {
-		return func(ctx context.Context, input *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
-			client := &http.Client{}
-			for _, message := range input.Messages {
-				for j, part := range message.Content {
-					if !part.IsMedia() || !strings.HasPrefix(part.Text, "http") || (opts != nil && opts.Filter != nil && !opts.Filter(part)) {
-						continue
-					}
-
-					mediaUrl := part.Text
-
-					resp, err := client.Get(mediaUrl)
-					if err != nil {
-						return nil, core.NewError(core.INVALID_ARGUMENT, "HTTP error downloading media %q: %v", mediaUrl, err)
-					}
-					defer resp.Body.Close()
-
-					if resp.StatusCode != http.StatusOK {
-						body, _ := io.ReadAll(resp.Body)
-						return nil, core.NewError(core.UNKNOWN, "HTTP error downloading media %q: %s", mediaUrl, string(body))
-					}
-
-					contentType := part.ContentType
-					if contentType == "" {
-						contentType = resp.Header.Get("Content-Type")
-					}
-
-					var data []byte
-					if opts != nil && opts.MaxBytes > 0 {
-						limitedReader := io.LimitReader(resp.Body, int64(opts.MaxBytes))
-						data, err = io.ReadAll(limitedReader)
-					} else {
-						data, err = io.ReadAll(resp.Body)
-					}
-					if err != nil {
-						return nil, core.NewError(core.UNKNOWN, "error reading media %q: %v", mediaUrl, err)
-					}
-
-					message.Content[j] = NewMediaPart(contentType, fmt.Sprintf("data:%s;base64,%s", contentType, base64.StdEncoding.EncodeToString(data)))
-				}
-			}
-			return next(ctx, input, cb)
-		}
-	}
 }

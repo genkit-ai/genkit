@@ -72,11 +72,6 @@ type ModelFunc = core.StreamingFunc[*ModelRequest, *ModelResponse, *ModelRespons
 // ModelStreamCallback is a stream callback of a ModelAction.
 type ModelStreamCallback = func(context.Context, *ModelResponseChunk) error
 
-// ModelMiddleware is middleware for model generate requests that takes in a ModelFunc, does something, then returns another ModelFunc.
-//
-// Deprecated: Use [Middleware] interface with [WithUse] instead, which supports Generate, Model, and Tool hooks.
-type ModelMiddleware = core.Middleware[*ModelRequest, *ModelResponse, *ModelResponseChunk]
-
 // model is an action with functions specific to model generation such as Generate().
 type model struct {
 	core.Action[*ModelRequest, *ModelResponse, *ModelResponseChunk]
@@ -129,7 +124,7 @@ func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 					"err", err)
 			}()
 
-			return GenerateWithRequest(ctx, r, actionOpts, nil, cb)
+			return GenerateWithRequest(ctx, r, actionOpts, cb)
 		}))
 }
 
@@ -177,13 +172,12 @@ func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
 		}
 	}
 
-	mws := []ModelMiddleware{
+	fn = core.ChainMiddleware(
 		simulateSystemPrompt(opts, nil),
 		augmentWithContext(opts, nil),
 		validateSupport(name, opts),
 		addAutomaticTelemetry(),
-	}
-	fn = core.ChainMiddleware(mws...)(fn)
+	)(fn)
 
 	return &model{*core.NewStreamingAction(name, api.ActionTypeModel, metadata, inputSchema, fn)}
 }
@@ -209,7 +203,9 @@ func LookupModel(r api.Registry, name string) Model {
 }
 
 // GenerateWithRequest is the central generation implementation for ai.Generate(), prompt.Execute(), and the GenerateAction direct call.
-func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActionOptions, mmws []ModelMiddleware, cb ModelStreamCallback) (*ModelResponse, error) {
+//
+// Middleware is supplied through opts.Use (see [Middleware] and [WithUse]).
+func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActionOptions, cb ModelStreamCallback) (*ModelResponse, error) {
 	if opts.Model == "" {
 		if defaultModel, ok := r.LookupValue(api.DefaultModelKey).(string); ok && defaultModel != "" {
 			opts.Model = defaultModel
@@ -342,7 +338,6 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	// with WrapGenerate hooks. These chains are reused across every tool-loop
 	// iteration rather than rebuilt each turn.
 	fn = buildModelChain(mws, fn)
-	fn = core.ChainMiddleware(mmws...)(fn)
 
 	// middlewareCb is the callback given to WrapGenerate hooks. It attaches the
 	// shared format handler so middleware-emitted chunks can be parsed and
@@ -690,7 +685,7 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 	}
 	actionOpts.Messages = processedMessages
 
-	return GenerateWithRequest(ctx, r, actionOpts, genOpts.Middleware, genOpts.Stream)
+	return GenerateWithRequest(ctx, r, actionOpts, genOpts.Stream)
 }
 
 // GenerateText run generate request for this model. Returns generated text only.

@@ -2547,7 +2547,7 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 				}
 			}
 
-			modelResp, err := ai.GenerateWithRequest(ctx, r, actionOpts, nil,
+			modelResp, err := ai.GenerateWithRequest(ctx, r, actionOpts,
 				func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
 					resp.SendModelChunk(chunk)
 					return nil

@@ -567,18 +567,20 @@ func TestGenerate(t *testing.T) {
 
 	t.Run("applies middleware", func(t *testing.T) {
 		middlewareCalled := false
-		testMiddleware := func(next ModelFunc) ModelFunc {
-			return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
-				middlewareCalled = true
-				req.Messages = append(req.Messages, NewUserTextMessage("middleware was here"))
-				return next(ctx, req, cb)
-			}
-		}
+		testMiddleware := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			return &Hooks{
+				WrapModel: func(ctx context.Context, params *ModelParams, next ModelNext) (*ModelResponse, error) {
+					middlewareCalled = true
+					params.Request.Messages = append(params.Request.Messages, NewUserTextMessage("middleware was here"))
+					return next(ctx, params)
+				},
+			}, nil
+		})
 
 		res, err := Generate(context.Background(), r,
 			WithModel(echoModel),
 			WithPrompt("test middleware"),
-			WithMiddleware(testMiddleware),
+			WithUse(testMiddleware),
 		)
 		if err != nil {
 			t.Fatal(err)

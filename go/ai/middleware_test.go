@@ -115,7 +115,7 @@ func TestPluginStateCarriedThroughPrototype(t *testing.T) {
 			Model:    m.Name(),
 			Messages: []*Message{NewUserTextMessage("go")},
 			Use:      refs,
-		}, nil, nil)
+		}, nil)
 		assertNoError(t, err)
 	}
 	if got := atomic.LoadInt32(&shared); got != 3 {

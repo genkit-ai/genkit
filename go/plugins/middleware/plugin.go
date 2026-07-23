@@ -40,5 +40,6 @@ func (p *Middleware) Middlewares(ctx context.Context) ([]*ai.MiddlewareDesc, err
 		ai.NewMiddleware("Require explicit approval before executing tools", &ToolApproval{}),
 		ai.NewMiddleware("Expose a local library of skills as loadable system instructions", &Skills{}),
 		ai.NewMiddleware("Grant the model file access scoped to a directory", &Filesystem{}),
+		ai.NewMiddleware("Download HTTP media URLs and inline them as base64 before the model call", &DownloadRequestMedia{}),
 	}, nil
 }

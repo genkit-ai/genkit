@@ -923,7 +923,7 @@ func (g *Genkit) LookupMiddleware(name string) *ai.MiddlewareDesc {
 //	if err != nil {
 //		log.Fatalf("Render failed: %v", err)
 //	}
-//	resp1, err := g.GenerateWithRequest(ctx, actionOpts, nil, nil)
+//	resp1, err := g.GenerateWithRequest(ctx, actionOpts, nil)
 //	if err != nil {
 //		log.Fatalf("GenerateWithRequest failed: %v", err)
 //	}
@@ -1045,9 +1045,9 @@ func (g *Genkit) LookupDataPrompt[In, Out any](name string) *ai.DataPrompt[In, O
 // prompts defined via [Genkit.DefinePrompt], where [ai.prompt.Render] produces the
 // `actionOpts`. It allows fine-grained control over the request sent to the model.
 //
-// It accepts optional model middleware (`mw`) for intercepting/modifying the request/response,
-// and an optional streaming callback (`cb`) of type [ai.ModelStreamCallback] to receive
-// response chunks as they arrive.
+// Middleware is supplied through actionOpts.Use (see [ai.Middleware] and
+// [ai.WithUse]). It accepts an optional streaming callback (`cb`) of type
+// [ai.ModelStreamCallback] to receive response chunks as they arrive.
 //
 // Example (using options rendered from a prompt):
 //
@@ -1059,13 +1059,13 @@ func (g *Genkit) LookupDataPrompt[In, Out any](name string) *ai.DataPrompt[In, O
 //
 //	// Optional: Modify actionOpts here if needed (config is provider-specific)
 //
-//	resp, err := g.GenerateWithRequest(ctx, actionOpts, nil, nil) // No middleware or streaming
+//	resp, err := g.GenerateWithRequest(ctx, actionOpts, nil) // No streaming
 //	if err != nil {
 //		// handle error
 //	}
 //	fmt.Println(resp.Text())
-func (g *Genkit) GenerateWithRequest(ctx context.Context, actionOpts *ai.GenerateActionOptions, mw []ai.ModelMiddleware, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-	return ai.GenerateWithRequest(ctx, g.reg, actionOpts, mw, cb)
+func (g *Genkit) GenerateWithRequest(ctx context.Context, actionOpts *ai.GenerateActionOptions, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	return ai.GenerateWithRequest(ctx, g.reg, actionOpts, cb)
 }
 
 // Generate performs a model generation request using a flexible set of options
@@ -1105,7 +1105,7 @@ func (g *Genkit) GenerateWithRequest(ctx context.Context, actionOpts *ai.Generat
 //   - [ai.WithDocs]: Provide context documents
 //   - [ai.WithTextDocs]: Provide context as text strings
 //   - [ai.WithStreaming]: Enable streaming with a callback function
-//   - [ai.WithMiddleware]: Apply middleware to the model request/response
+//   - [ai.WithUse]: Apply middleware to generation (Generate, Model, and Tool hooks)
 //
 // Tool Continuation:
 //   - [ai.WithToolResponses]: Resume generation with tool response parts

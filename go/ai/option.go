@@ -96,15 +96,14 @@ func WithConfig(config any) ConfigOption {
 // commonGenOptions are common options for model generation, prompt definition, and prompt execution.
 type commonGenOptions struct {
 	configOptions
-	Model              ModelArg          // Model to use.
-	MessagesFn         MessagesFn        // Function to generate messages.
-	Tools              []ToolRef         // References to tools to use.
-	Resources          []Resource        // Resources to be temporarily available during generation.
-	ToolChoice         ToolChoice        // Whether tool calls are required, disabled, or optional.
-	MaxTurns           int               // Maximum number of tool call iterations.
-	ReturnToolRequests *bool             // Whether to return tool requests instead of making the tool calls and continuing the generation.
-	Middleware         []ModelMiddleware // Deprecated: Use WithUse instead. Middleware to apply to the model request and model response.
-	Use                []Middleware      // Middleware to apply to generation (Generate, Model, and Tool hooks).
+	Model              ModelArg     // Model to use.
+	MessagesFn         MessagesFn   // Function to generate messages.
+	Tools              []ToolRef    // References to tools to use.
+	Resources          []Resource   // Resources to be temporarily available during generation.
+	ToolChoice         ToolChoice   // Whether tool calls are required, disabled, or optional.
+	MaxTurns           int          // Maximum number of tool call iterations.
+	ReturnToolRequests *bool        // Whether to return tool requests instead of making the tool calls and continuing the generation.
+	Use                []Middleware // Middleware to apply to generation (Generate, Model, and Tool hooks).
 }
 
 type CommonGenOption interface {
@@ -169,13 +168,6 @@ func (o *commonGenOptions) applyCommonGen(opts *commonGenOptions) error {
 		opts.ReturnToolRequests = o.ReturnToolRequests
 	}
 
-	if o.Middleware != nil {
-		if opts.Middleware != nil {
-			return errors.New("cannot set middleware more than once (WithMiddleware)")
-		}
-		opts.Middleware = o.Middleware
-	}
-
 	if o.Use != nil {
 		if opts.Use != nil {
 			return errors.New("cannot set middleware more than once (WithUse)")
@@ -232,13 +224,6 @@ func WithModel(model ModelArg) CommonGenOption {
 // The model name will be resolved to a [Model] and may error if the reference is invalid.
 func WithModelName(name string) CommonGenOption {
 	return &commonGenOptions{Model: NewModelRef(name, nil)}
-}
-
-// WithMiddleware sets middleware to apply to the model request.
-//
-// Deprecated: Use [WithUse] instead, which supports Generate, Model, and Tool hooks.
-func WithMiddleware(middleware ...ModelMiddleware) CommonGenOption {
-	return &commonGenOptions{Middleware: middleware}
 }
 
 // WithUse sets middleware to apply to generation. Middleware hooks wrap
