@@ -66,11 +66,11 @@ ModelUsage = GenerationUsage  # public name for GenerationUsage
 
 # TypeVars for generic types
 OutputT = TypeVar('OutputT', default=object)
-# Untyped without a default so any config schema (Pydantic models, dicts, custom options)
-# is supported across ModelRef and ModelRequest without forcing assumptions.
-# Covariant so a ModelRef[GeminiConfig] is accepted wherever a generic ModelRef[Any]
-# is expected, letting plugin family helpers flow through naturally.
+# Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
+# Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
 ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
+# Unbounded so ModelRequest supports any config payload (BaseModel instances, dicts, custom options)
+# across action execution boundaries without forcing assumptions.
 ModelRequestConfigT = TypeVar('ModelRequestConfigT', covariant=True)
 
 
