@@ -40,4 +40,5 @@ def test_claude_model_stamps_default_config() -> None:
     config = AnthropicConfig(temperature=0.7)
     ref = claude_model('claude-haiku-4-5', config=config)
     assert ref.config is config
+    assert ref.config is not None
     assert ref.config.temperature == 0.7

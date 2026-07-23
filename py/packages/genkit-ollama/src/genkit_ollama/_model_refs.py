@@ -23,13 +23,12 @@ from genkit_ollama.models import OllamaConfig
 def ollama_model(
     name: str,
     *,
-    namespace: str = 'ollama',
     config: OllamaConfig | None = None,
 ) -> ModelRef[OllamaConfig]:
     """Return a typed reference to an Ollama model."""
     return model_ref(
         name,
         config_schema=OllamaConfig,
-        namespace=namespace,
+        namespace='ollama',
         config=config,
     )

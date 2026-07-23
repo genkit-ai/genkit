@@ -139,6 +139,7 @@ from genkit_google_genai.models.imagen import (
     SUPPORTED_MODELS as IMAGE_SUPPORTED_MODELS,
     ImagenConfig,
     ImagenModel,
+    is_imagen_model,
     vertexai_image_model_info,
 )
 from genkit_google_genai.models.veo import (
@@ -237,7 +238,7 @@ def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
             lower_name = name.lower()
             if 'embedding' in lower_name:
                 continue
-            elif 'imagen' in lower_name:
+            elif is_imagen_model(name):
                 models.imagen.append(name)
             elif 'veo' in lower_name:
                 models.veo.append(name)
@@ -253,7 +254,7 @@ def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
             models.embedders.append(name)
 
         # Imagen (Vertex mostly)
-        if 'predict' in m.supported_actions and 'imagen' in name.lower():
+        if 'predict' in m.supported_actions and is_imagen_model(name):
             models.imagen.append(name)
 
         # Veo
@@ -618,7 +619,7 @@ class GoogleAI(Plugin):
         clean_name = name.replace(GOOGLEAI_PLUGIN_NAME + '/', '') if name.startswith(GOOGLEAI_PLUGIN_NAME) else name
 
         # Determine model type and create model metadata/config schema
-        if clean_name.lower().startswith('image'):
+        if is_imagen_model(clean_name):
             model_ref = vertexai_image_model_info(clean_name)
             IMAGE_SUPPORTED_MODELS[clean_name] = model_ref  # pyright: ignore[reportArgumentType]
             config_schema = ImagenConfig
@@ -628,7 +629,7 @@ class GoogleAI(Plugin):
             config_schema = get_model_config_schema(clean_name)
 
         async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-            if clean_name.lower().startswith('image'):
+            if is_imagen_model(clean_name):
                 model = ImagenModel(clean_name, self._runtime_client())
             else:
                 model = GeminiModel(
@@ -995,7 +996,7 @@ class VertexAI(Plugin):
                 supports=google_model_info('gemini').supports,
             )
             config_schema = GeminiConfig
-        elif clean_name.lower().startswith('image'):
+        elif is_imagen_model(clean_name):
             model_ref = vertexai_image_model_info(clean_name)
             IMAGE_SUPPORTED_MODELS[clean_name] = model_ref  # pyright: ignore[reportArgumentType]
             config_schema = ImagenConfig
@@ -1015,7 +1016,7 @@ class VertexAI(Plugin):
                     client_kwargs=self._client_kwargs,
                     base_url_pinned=self._base_url_pinned,
                 )
-            elif clean_name.lower().startswith('image'):
+            elif is_imagen_model(clean_name):
                 model = ImagenModel(clean_name, self._runtime_client())
             elif is_veo_model(clean_name):
                 model = VeoModel(clean_name, self._runtime_client())

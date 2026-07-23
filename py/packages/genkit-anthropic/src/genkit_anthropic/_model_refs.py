@@ -40,13 +40,12 @@ KnownClaude = Literal[
 def claude_model(
     name: KnownClaude | str,
     *,
-    namespace: str = 'anthropic',
     config: AnthropicConfig | None = None,
 ) -> ModelRef[AnthropicConfig]:
     """Return a typed reference to a Claude model."""
     return model_ref(
         name,
         config_schema=AnthropicConfig,
-        namespace=namespace,
+        namespace='anthropic',
         config=config,
     )
