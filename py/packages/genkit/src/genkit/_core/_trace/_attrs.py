@@ -67,4 +67,6 @@ class Subtype(StrEnum):
 
 def metadata_key(key: str) -> str:
     """Prefix a short metadata key: ``flow:name`` → ``genkit:metadata:flow:name``."""
+    if key.startswith(METADATA_PREFIX):
+        return key
     return f'{METADATA_PREFIX}{key}'

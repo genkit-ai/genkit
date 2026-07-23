@@ -156,13 +156,14 @@ def start_attributes(
     in-progress entry until the span ends. State/output are excluded — they
     aren't known until the body finishes.
     """
-    attrs: dict[str, str | bool] = {
+    attrs: dict[str, str | bool] = {}
+    if metadata.telemetry_labels:
+        attrs.update(metadata.telemetry_labels)
+    attrs.update({
         Attr.NAME: metadata.name,
         Attr.PATH: qualified_path,
         Attr.QUALIFIED_PATH: qualified_path,
-    }
-    if metadata.telemetry_labels:
-        attrs.update(metadata.telemetry_labels)
+    })
     if metadata.type:
         attrs[Attr.TYPE] = metadata.type
     if metadata.subtype:

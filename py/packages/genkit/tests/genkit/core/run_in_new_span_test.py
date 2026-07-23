@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from genkit._core._action import Action, ActionKind
 from genkit._core._error import GenkitError
+from genkit._core._trace._attrs import metadata_key
 from genkit._core._trace._realtime_processor import RealtimeSpanProcessor
 from genkit._core._tracing import SpanMetadata, _parent_path_context, run_in_new_span, start_attributes
 
@@ -363,3 +364,24 @@ async def test_action_context_telemetry_circular_references(exporter: InMemorySp
 
     # 'key' is serializable, and 'self' circular reference should be safely cut off with '[Circular]'
     assert context_json == {'key': 'val', 'self': '[Circular]'}
+
+
+def test_metadata_key_prevents_double_prefix() -> None:
+    assert metadata_key('flow:name') == 'genkit:metadata:flow:name'
+    assert metadata_key('genkit:metadata:flow:name') == 'genkit:metadata:flow:name'
+
+
+def test_start_attributes_precedence_over_telemetry_labels() -> None:
+    meta = SpanMetadata(
+        name='realName',
+        telemetry_labels={
+            'genkit:name': 'fakeName',
+            'genkit:path': 'fakePath',
+            'user:label': 'custom',
+        },
+    )
+    attrs = start_attributes(meta, qualified_path='/realPath')
+    assert attrs['genkit:name'] == 'realName'
+    assert attrs['genkit:path'] == '/realPath'
+    assert attrs['genkit:qualifiedPath'] == '/realPath'
+    assert attrs['user:label'] == 'custom'
