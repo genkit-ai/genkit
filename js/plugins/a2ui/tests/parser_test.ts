@@ -24,6 +24,21 @@ function fixedId() {
   return 'surface-1';
 }
 
+/** Runs `fn` while capturing `console.warn` output, restoring it afterwards. */
+function captureWarnings(fn: () => void): string[] {
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map(String).join(' '));
+  };
+  try {
+    fn();
+  } finally {
+    console.warn = original;
+  }
+  return warnings;
+}
+
 function collect(parser: A2uiStreamParser, chunks: string[]) {
   let prose = '';
   const batches: A2uiEnvelope[][] = [];
@@ -163,6 +178,45 @@ describe('A2uiStreamParser', () => {
     const bad = '```a2ui\n{not json}\n```\n';
     const { batches } = collect(parser, [bad]);
     assert.strictEqual(batches.length, 0);
+  });
+
+  it('validate:warn drops an unknown component without throwing', () => {
+    const parser = new A2uiStreamParser({
+      catalog: basicCatalog,
+      surfaceId: fixedId,
+      validate: 'warn',
+    });
+    const bad = `\`\`\`a2ui
+[{ "updateComponents": { "surfaceId": "SURFACE_ID", "components": [
+  { "id": "root", "component": "NotAThing" }
+] } }]
+\`\`\`
+`;
+    const warnings = captureWarnings(() => {
+      const { batches } = collect(parser, [bad]);
+      assert.strictEqual(batches.length, 0);
+    });
+    assert.ok(
+      warnings.some((w) => /not in catalog/.test(w)),
+      'expected a warning about the unknown component'
+    );
+  });
+
+  it('validate:warn drops bad JSON without throwing', () => {
+    const parser = new A2uiStreamParser({
+      catalog: basicCatalog,
+      surfaceId: fixedId,
+      validate: 'warn',
+    });
+    const bad = '```a2ui\n{not json}\n```\n';
+    const warnings = captureWarnings(() => {
+      const { batches } = collect(parser, [bad]);
+      assert.strictEqual(batches.length, 0);
+    });
+    assert.ok(
+      warnings.some((w) => /JSON/.test(w)),
+      'expected a warning about the malformed JSON'
+    );
   });
 
   it('prepends a createSurface when a block only has updates', () => {

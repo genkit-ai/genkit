@@ -69,8 +69,11 @@ export interface ParseResult {
 export interface A2uiParserOptions {
   /** Catalog used to validate component references. */
   catalog?: A2uiCatalog;
-  /** `'strict'` throws on unknown components / bad JSON; `'off'` skips. */
-  validate?: 'strict' | 'off';
+  /**
+   * `'strict'` throws on unknown components / bad JSON; `'warn'` logs a warning
+   * and drops the offending block/envelope; `'off'` skips validation entirely.
+   */
+  validate?: 'strict' | 'warn' | 'off';
   /** Protocol version stamped onto envelopes lacking one. */
   version?: string;
   /** Produces the surface id substituted for the model's placeholder. */
@@ -158,11 +161,27 @@ export class A2uiStreamParser {
     return { prose, envelopeBatches };
   }
 
+  /**
+   * Handles a validation failure according to the configured `validate` mode:
+   * throws in `'strict'` (the default), logs a warning in `'warn'`, and is
+   * silent in `'off'`. Always returns `null` so callers can
+   * `return this.reject(...)`.
+   */
+  private reject(message: string): null {
+    const full = `A2UI: ${message}`;
+    if (this.options.validate === 'off') return null;
+    if (this.options.validate === 'warn') {
+      // Keep this module Node-free / browser-safe: use console, not the logger.
+      console.warn(`${full} (dropping block/envelope)`);
+      return null;
+    }
+    throw new Error(full);
+  }
+
   /** Parses, validates, and normalizes one block's JSON into envelopes. */
   private finalizeBlock(raw: string): A2uiEnvelope[] | null {
     const surfaceId = this.currentSurfaceId ?? this.options.surfaceId();
     this.currentSurfaceId = null;
-    const strict = this.options.validate !== 'off';
 
     const text = raw.trim();
     if (!text) return null;
@@ -171,18 +190,15 @@ export class A2uiStreamParser {
     try {
       parsed = JSON.parse(text);
     } catch (e) {
-      if (strict) {
-        throw new Error(
-          `A2UI: failed to parse envelope block as JSON: ${(e as Error).message}`
-        );
-      }
-      return null;
+      return this.reject(
+        `failed to parse envelope block as JSON: ${(e as Error).message}`
+      );
     }
 
     const envelopes: unknown[] = Array.isArray(parsed) ? parsed : [parsed];
     const out: A2uiEnvelope[] = [];
     for (const env of envelopes) {
-      const normalized = this.normalizeEnvelope(env, surfaceId, strict);
+      const normalized = this.normalizeEnvelope(env, surfaceId);
       if (normalized) out.push(normalized);
     }
     if (out.length === 0) return null;
@@ -213,12 +229,10 @@ export class A2uiStreamParser {
    */
   private normalizeEnvelope(
     env: unknown,
-    surfaceId: string,
-    strict: boolean
+    surfaceId: string
   ): A2uiEnvelope | null {
     if (typeof env !== 'object' || env === null) {
-      if (strict) throw new Error('A2UI: envelope must be an object.');
-      return null;
+      return this.reject('envelope must be an object.');
     }
     const e = env as RawEnvelope;
     const version = e.version ?? this.options.version ?? A2UI_VERSION;
@@ -240,7 +254,10 @@ export class A2uiStreamParser {
     }
     if (e.updateComponents) {
       swapSurfaceId(e.updateComponents);
-      if (strict) this.validateComponents(e.updateComponents.components);
+      if (this.options.validate !== 'off') {
+        const err = this.validateComponents(e.updateComponents.components);
+        if (err) return this.reject(err);
+      }
       return { version, updateComponents: e.updateComponents };
     }
     if (e.updateDataModel) {
@@ -251,39 +268,36 @@ export class A2uiStreamParser {
       swapSurfaceId(e.deleteSurface);
       return { version, deleteSurface: e.deleteSurface };
     }
-    if (strict) {
-      throw new Error(
-        `A2UI: unknown envelope type (keys: ${Object.keys(e).join(', ')}).`
-      );
-    }
-    return null;
+    return this.reject(
+      `unknown envelope type (keys: ${Object.keys(e).join(', ')}).`
+    );
   }
 
-  /** Ensures every component references a known catalog component. */
-  private validateComponents(components: unknown): void {
+  /**
+   * Ensures every component references a known catalog component. Returns an
+   * error message describing the first problem found, or `null` if valid.
+   */
+  private validateComponents(components: unknown): string | null {
     const catalog = this.options.catalog;
-    if (!catalog) return;
+    if (!catalog) return null;
     if (!Array.isArray(components)) {
-      throw new Error('A2UI: updateComponents.components must be an array.');
+      return 'updateComponents.components must be an array.';
     }
     const known = new Set(catalog.components.map((c) => c.name));
     const hasRoot = (components as A2uiComponent[]).some(
       (c) => c.id === 'root'
     );
     if (!hasRoot) {
-      throw new Error(
-        'A2UI: component list must contain a component id "root".'
-      );
+      return 'component list must contain a component id "root".';
     }
     for (const c of components as A2uiComponent[]) {
       if (!c || typeof c.component !== 'string') {
-        throw new Error('A2UI: every component needs a "component" type name.');
+        return 'every component needs a "component" type name.';
       }
       if (!known.has(c.component)) {
-        throw new Error(
-          `A2UI: component "${c.component}" is not in catalog "${catalog.id}".`
-        );
+        return `component "${c.component}" is not in catalog "${catalog.id}".`;
       }
     }
+    return null;
   }
 }

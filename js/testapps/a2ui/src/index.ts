@@ -96,7 +96,6 @@ app.use(express.json({ limit: '10mb' }));
 // The agent is a bidi action; `expressHandler` serves it directly. `remoteAgent`
 // in the browser hits this endpoint (proxied at /api/uiAgent by Vite in dev).
 app.post('/api/uiAgent', expressHandler(uiAgent));
-app.post('/uiAgent', expressHandler(uiAgent));
 
 // Serve the Vite build output if present (production / `pnpm start`).
 // Resolved from the process CWD (the testapp dir when run via pnpm scripts).

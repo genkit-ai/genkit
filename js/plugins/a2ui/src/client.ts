@@ -30,6 +30,7 @@ import type { AgentOutput, AgentStreamChunk } from 'genkit/beta';
 import { streamFlow } from 'genkit/beta/client';
 import { a2uiEnvelopes } from './part.js';
 import type { A2uiClientAction, A2uiEnvelope } from './types.js';
+import { A2UI_MIME_TYPE } from './types.js';
 
 export { a2uiEnvelopes, a2uiPart, isA2uiPart } from './part.js';
 export {
@@ -141,7 +142,7 @@ export function actionToMessage(action: A2uiClientAction) {
       { text: summary },
       {
         data: [{ action }],
-        metadata: { mimeType: 'application/a2ui+json' },
+        metadata: { mimeType: A2UI_MIME_TYPE },
       },
     ],
   };

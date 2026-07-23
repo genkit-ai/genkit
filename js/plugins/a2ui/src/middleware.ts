@@ -77,9 +77,11 @@ export const A2uiOptionsSchema = z.object({
 
   /**
    * Validate emitted envelopes against the catalog. `'strict'` (default) throws
-   * on malformed JSON or unknown components; `'off'` passes them through.
+   * on malformed JSON or unknown components; `'warn'` logs a warning and drops
+   * the offending block/envelope (keeping the turn alive); `'off'` passes them
+   * through unchecked.
    */
-  validate: z.enum(['strict', 'off']).optional(),
+  validate: z.enum(['strict', 'warn', 'off']).optional(),
 
   /**
    * Surface id policy. Provide a fixed id, or a factory called once per surface.
@@ -252,7 +254,7 @@ function transformResponse(
   response: GenerateResponseData,
   opts: {
     catalog: A2uiCatalog;
-    validate: 'strict' | 'off';
+    validate: 'strict' | 'warn' | 'off';
     version: string;
     surfaceId: () => string;
   }
