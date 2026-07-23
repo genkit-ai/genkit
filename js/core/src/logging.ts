@@ -180,7 +180,7 @@ class Logger {
     metadata?: Record<string, any>;
     error?: any;
   }): void;
-  info(message: any, metadata?: Record<string, any>, error?: any): void;
+  info(message: any, metadata?: any, error?: any): void;
   info(...args: any[]) {
     this._log('info', ...args);
   }
@@ -190,7 +190,7 @@ class Logger {
     metadata?: Record<string, any>;
     error?: any;
   }): void;
-  debug(message: any, metadata?: Record<string, any>, error?: any): void;
+  debug(message: any, metadata?: any, error?: any): void;
   debug(...args: any[]) {
     this._log('debug', ...args);
   }
@@ -200,7 +200,7 @@ class Logger {
     metadata?: Record<string, any>;
     error?: any;
   }): void;
-  error(message: any, metadata?: Record<string, any>, error?: any): void;
+  error(message: any, metadata?: any, error?: any): void;
   error(...args: any[]) {
     this._log('error', ...args);
   }
@@ -210,7 +210,7 @@ class Logger {
     metadata?: Record<string, any>;
     error?: any;
   }): void;
-  warn(message: any, metadata?: Record<string, any>, error?: any): void;
+  warn(message: any, metadata?: any, error?: any): void;
   warn(...args: any[]) {
     this._log('warn', ...args);
   }
