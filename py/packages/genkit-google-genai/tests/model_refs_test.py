@@ -16,6 +16,8 @@
 
 """Tests for Google GenAI family model ref helpers."""
 
+from typing import Any
+
 import pytest
 from genkit_google_genai import (
     GeminiConfig,
@@ -32,6 +34,13 @@ from genkit_google_genai import (
     imagen_model,
     lyria_model,
     veo_model,
+    vertexai_gemini_image_model,
+    vertexai_gemini_model,
+    vertexai_gemini_tts_model,
+    vertexai_gemma_model,
+    vertexai_imagen_model,
+    vertexai_lyria_model,
+    vertexai_veo_model,
 )
 from genkit_google_genai.models.imagen import is_imagen_model
 
@@ -100,3 +109,33 @@ def test_is_imagen_model_path_prefixes() -> None:
     assert is_imagen_model('models/imagen-3.0-generate-002')
     assert is_imagen_model('googleai/imagen-3.0-generate-002')
     assert is_imagen_model('vertexai/imagegeneration@006')
+
+
+@pytest.mark.parametrize(
+    ('helper', 'name', 'expected_schema'),
+    [
+        (vertexai_gemini_model, 'gemini-2.5-flash', GeminiConfig),
+        (vertexai_gemini_tts_model, 'gemini-2.5-flash-preview-tts', GeminiTtsConfig),
+        (vertexai_gemini_image_model, 'gemini-3.1-flash-image', GeminiImageConfig),
+        (vertexai_gemma_model, 'gemma-3-27b-it', GemmaConfig),
+        (vertexai_imagen_model, 'imagen-3.0-generate-002', ImagenConfig),
+        (vertexai_veo_model, 'veo-3.1-generate-001', VeoConfig),
+        (vertexai_lyria_model, 'lyria-002', LyriaConfig),
+    ],
+)
+def test_vertexai_model_helpers(helper: Any, name: str, expected_schema: Any) -> None:
+    """Verify vertexai_*_model family helpers stamp vertexai namespace and correct schema."""
+    ref = helper(name)
+    assert ref.name == f'vertexai/{name}'
+    assert ref.config_schema is expected_schema
+
+
+def test_model_ref_deserialization_from_dump() -> None:
+    """Verify ModelRef deserializes cleanly from dictionary dump where config_schema is excluded."""
+    ref = gemini_model('gemini-2.5-flash', config=GeminiConfig(temperature=0.4))
+    dumped = ref.model_dump()
+    assert 'config_schema' not in dumped
+    restored = type(ref).model_validate(dumped)
+    assert restored.name == 'googleai/gemini-2.5-flash'
+    assert restored.config is not None
+    assert restored.config.temperature == 0.4

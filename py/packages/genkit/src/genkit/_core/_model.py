@@ -86,6 +86,12 @@ class ModelConfigDict(TypedDict, total=False):
     api_key: str
 
 
+class _FallbackModelConfig(BaseModel):
+    """Fallback concrete config class when deserializing ModelRef without an explicit schema."""
+
+    model_config = ConfigDict(extra='allow', populate_by_name=True)
+
+
 class ModelRef(BaseModel, Generic[ConfigT]):
     """Frozen reference to a model, optionally tied to a config schema.
 
@@ -117,12 +123,18 @@ class ModelRef(BaseModel, Generic[ConfigT]):
     @classmethod
     def _validate_config_conforms_to_schema(cls, data: Any) -> Any:  # noqa: ANN401
         if isinstance(data, dict):
+            if (
+                'config_schema' not in data
+                or data.get('config_schema') is None
+                or data.get('config_schema') is BaseModel
+            ):
+                data['config_schema'] = _FallbackModelConfig
             config = data.get('config')
             config_schema = data.get('config_schema')
             if config is not None and config_schema is not None:
                 if isinstance(config, dict):
                     data['config'] = config_schema.model_validate(config)
-                elif not isinstance(config, config_schema):
+                elif not isinstance(config, config_schema) and not isinstance(config, _FallbackModelConfig):
                     raise TypeError(
                         f'config must conform to {getattr(config_schema, "__name__", str(config_schema))}, '
                         f'got {type(config).__name__}'

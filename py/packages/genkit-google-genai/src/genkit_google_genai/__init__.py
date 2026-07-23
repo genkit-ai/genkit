@@ -133,8 +133,8 @@ Supported Models:
     ┌─────────────────────────────────────────────────────────────────────────┐
     │ Plugin     │ Models                                                     │
     ├────────────┼─────────────────────────────────────────────────────────────┤
-    │ GoogleAI   │ gemini-flash-latest, gemini-pro-latest, etc.              │
-    │ VertexAI   │ Same Gemini models + imagen-4.0-generate-001               │
+    │ GoogleAI   │ gemini-2.5-flash, gemini-2.5-pro, etc.                      │
+    │ VertexAI   │ Same Gemini models + imagen-3.0-generate-002                │
     └────────────┴─────────────────────────────────────────────────────────────┘
 
 Key Components:
@@ -159,7 +159,7 @@ Example:
     ai = Genkit(plugins=[GoogleAI()])
 
     response = await ai.generate(
-        model=gemini_model('gemini-flash-latest'),
+        model=gemini_model('gemini-2.5-flash'),
         config=GeminiConfig(temperature=0.7),
         prompt='Hello, world!',
     )
@@ -176,21 +176,21 @@ Example:
 
     ```python
     from genkit import Genkit
-    from genkit_google_genai import ImagenConfig, VertexAI
+    from genkit_google_genai import ImagenConfig, VertexAI, vertexai_gemini_model, vertexai_imagen_model
 
     ai = Genkit(
         plugins=[VertexAI(project='my-project', location='us-central1')],
     )
 
     response = await ai.generate(
-        model='vertexai/gemini-flash-latest',
+        model=vertexai_gemini_model('gemini-2.5-flash'),
         prompt='Hello, world!',
     )
     print(response.text)
 
     # Image generation with Imagen
     response = await ai.generate(
-        model='vertexai/imagen-4.0-generate-001',
+        model=vertexai_imagen_model('imagen-3.0-generate-002'),
         config=ImagenConfig(number_of_images=1),
         prompt='A beautiful sunset over mountains',
     )
@@ -219,6 +219,13 @@ from genkit_google_genai.models._model_refs import (
     imagen_model,
     lyria_model,
     veo_model,
+    vertexai_gemini_image_model,
+    vertexai_gemini_model,
+    vertexai_gemini_tts_model,
+    vertexai_gemma_model,
+    vertexai_imagen_model,
+    vertexai_lyria_model,
+    vertexai_veo_model,
 )
 from genkit_google_genai.models.embedder import (
     EmbeddingTaskType,
@@ -279,4 +286,11 @@ __all__ = [
     'lyria_model',
     'package_name',
     'veo_model',
+    'vertexai_gemini_image_model',
+    'vertexai_gemini_model',
+    'vertexai_gemini_tts_model',
+    'vertexai_gemma_model',
+    'vertexai_imagen_model',
+    'vertexai_lyria_model',
+    'vertexai_veo_model',
 ]

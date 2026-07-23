@@ -204,3 +204,101 @@ def lyria_model(
         namespace='googleai',
         config=config,
     )
+
+
+def vertexai_gemini_model(
+    name: KnownGemini | str,
+    *,
+    config: GeminiConfig | None = None,
+) -> ModelRef[GeminiConfig]:
+    """Return a typed ref for Vertex AI Gemini text/multimodal generation models."""
+    return model_ref(
+        name,
+        config_schema=GeminiConfig,
+        namespace='vertexai',
+        config=config,
+    )
+
+
+def vertexai_gemini_tts_model(
+    name: KnownGeminiTts | str,
+    *,
+    config: GeminiTtsConfig | None = None,
+) -> ModelRef[GeminiTtsConfig]:
+    """Return a typed ref for Vertex AI Gemini text-to-speech models."""
+    return model_ref(
+        name,
+        config_schema=GeminiTtsConfig,
+        namespace='vertexai',
+        config=config,
+    )
+
+
+def vertexai_gemini_image_model(
+    name: KnownGeminiImage | str,
+    *,
+    config: GeminiImageConfig | None = None,
+) -> ModelRef[GeminiImageConfig]:
+    """Return a typed ref for Vertex AI Gemini native image generation models."""
+    return model_ref(
+        name,
+        config_schema=GeminiImageConfig,
+        namespace='vertexai',
+        config=config,
+    )
+
+
+def vertexai_gemma_model(
+    name: KnownGemma | str,
+    *,
+    config: GemmaConfig | None = None,
+) -> ModelRef[GemmaConfig]:
+    """Return a typed ref for Vertex AI Gemma open-weight models."""
+    return model_ref(
+        name,
+        config_schema=GemmaConfig,
+        namespace='vertexai',
+        config=config,
+    )
+
+
+def vertexai_imagen_model(
+    name: KnownImagen | str,
+    *,
+    config: ImagenConfig | None = None,
+) -> ModelRef[ImagenConfig]:
+    """Return a typed ref for Vertex AI Imagen text-to-image models."""
+    return model_ref(
+        name,
+        config_schema=ImagenConfig,
+        namespace='vertexai',
+        config=config,
+    )
+
+
+def vertexai_veo_model(
+    name: KnownVeo | str,
+    *,
+    config: VeoConfig | None = None,
+) -> ModelRef[VeoConfig]:
+    """Return a typed ref for Vertex AI Veo video generation models."""
+    return model_ref(
+        name,
+        config_schema=VeoConfig,
+        namespace='vertexai',
+        config=config,
+    )
+
+
+def vertexai_lyria_model(
+    name: KnownLyria | str,
+    *,
+    config: LyriaConfig | None = None,
+) -> ModelRef[LyriaConfig]:
+    """Return a typed ref for Vertex AI Lyria audio generation models."""
+    return model_ref(
+        name,
+        config_schema=LyriaConfig,
+        namespace='vertexai',
+        config=config,
+    )
