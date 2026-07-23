@@ -27,7 +27,7 @@ response = await ai.generate(
     prompt='Hello!',
     use=[
         Retry(max_retries=5),
-        Fallback(models=['googleai/gemini-2.5-pro']),
+        Fallback(models=['googleai/gemini-pro-latest']),
     ],
 )
 ```
@@ -73,12 +73,12 @@ Falls back to alternative models on retryable errors:
 from genkit_middleware import Fallback
 
 fallback = Fallback(
-    models=['googleai/gemini-2.5-pro', 'googleai/gemini-flash-latest'],
+    models=['googleai/gemini-pro-latest', 'googleai/gemini-flash-latest'],
     statuses=['UNAVAILABLE', 'DEADLINE_EXCEEDED'],
 )
 
 response = await ai.generate(
-    model='googleai/gemini-2.5-ultra',
+    model='googleai/gemini-pro-latest',
     prompt='Hello!',
     use=[fallback],
 )

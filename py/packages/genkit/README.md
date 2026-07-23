@@ -11,19 +11,18 @@ you can use Genkit independently of any Google services.
 ## Setup Instructions
 
 ```bash
-pip install genkit
-pip install genkit-plugin-google-genai
+pip install genkit genkit-google-genai
 ```
 
 
 ```python
 from pydantic import BaseModel, Field
 from genkit import Genkit
-from genkit.plugins.google_genai import GoogleAI
+from genkit_google_genai import GeminiConfig, GoogleAI, gemini_model
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-2.0-flash',
+    model=gemini_model('gemini-flash-latest'),
 )
 
 
@@ -38,6 +37,8 @@ class RpgCharacter(BaseModel):
 @ai.flow()
 async def generate_character(name: str) -> RpgCharacter:
     result = await ai.generate(
+        model=gemini_model('gemini-flash-latest'),
+        config=GeminiConfig(temperature=0.8),
         prompt=f'generate an RPG character named {name}',
         output_schema=RpgCharacter,
     )

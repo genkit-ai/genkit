@@ -190,8 +190,8 @@ async def thinking_budget_story(data: TopicInput, ctx: ActionRunContext) -> dict
         model='anthropic/claude-haiku-4-5',
         prompt=f'Tell me a very short story about {data.topic}.',
         config={
-            'thinking': {'enabled': True, 'budgetTokens': 1024},
-            'maxOutputTokens': 2048,
+            'thinking': {'enabled': True, 'budget_tokens': 1024},
+            'max_output_tokens': 2048,
         },
     )
 

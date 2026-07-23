@@ -37,10 +37,10 @@ from genkit._ai._testing import (
 )
 from genkit._core._action import ActionKind
 from genkit._core._error import GenkitError
-from genkit._core._model import GenerateActionOptions, ModelConfig
+from genkit._core._model import GenerateActionOptions
 from genkit._core._typing import Part, Role, TextPart, ToolChoice
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
-from genkit.plugin_api import MiddlewarePlugin, new_middleware
+from genkit.plugin_api import MiddlewarePlugin, ModelConfig, new_middleware
 
 
 class _PreMiddleware(BaseMiddleware):
@@ -125,7 +125,8 @@ async def test_simple_prompt_with_override_config() -> None:
     # Config is MERGED: prompt config (banana: true) + opts config (temperature: 12)
     want_txt = '[ECHO] user: "hi" {"temperature":12.0,"banana":true}'
 
-    my_prompt = ai.define_prompt(prompt='hi', config={'banana': True})
+    prompt_cfg: dict[str, Any] = {'banana': True}
+    my_prompt = ai.define_prompt(prompt='hi', config=prompt_cfg)
 
     # Pass config via kwargs — this MERGES with prompt config
     response = await my_prompt(config={'temperature': 12})
@@ -522,9 +523,10 @@ async def test_config_merge_priority() -> None:
     """
     ai, *_ = setup_test()
 
+    prompt_cfg: dict[str, Any] = {'temperature': 0.5, 'banana': 'yellow'}
     my_prompt = ai.define_prompt(
         prompt='test',
-        config={'temperature': 0.5, 'banana': 'yellow'},
+        config=prompt_cfg,
     )
 
     # New API: runtime config is MERGED with prompt config

@@ -35,7 +35,6 @@ from genkit import (
     MediaPart,
     Message,
     Metadata,
-    ModelConfig,
     ModelInfo,
     ModelRequest,
     ModelResponseChunk,
@@ -47,6 +46,7 @@ from genkit import (
     ToolDefinition,
     ToolRequestPart,
 )
+from genkit.plugin_api import ModelConfig
 
 
 def _create_sample_request() -> ModelRequest:

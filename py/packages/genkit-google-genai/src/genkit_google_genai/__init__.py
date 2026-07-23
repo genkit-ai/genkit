@@ -96,7 +96,7 @@ Architecture Overview::
     │  ├── GoogleAI - Plugin for Gemini API (api_key auth)                    │
     │  ├── VertexAI - Plugin for Vertex AI (GCP auth)                         │
     │  ├── Model version enums (GoogleAIGeminiVersion, VertexAIGeminiVersion) │
-    │  └── Config schemas (GeminiConfigSchema, etc.)                          │
+    │  └── Config schemas (GeminiConfig, etc.)                          │
     ├─────────────────────────────────────────────────────────────────────────┤
     │  google.py - Plugin Implementation                                      │
     │  ├── GoogleAI class (Gemini API integration)                            │
@@ -134,7 +134,7 @@ Supported Models:
     │ Plugin     │ Models                                                     │
     ├────────────┼─────────────────────────────────────────────────────────────┤
     │ GoogleAI   │ gemini-flash-latest, gemini-pro-latest, etc.              │
-    │ VertexAI   │ Same Gemini models + imagen-4.0-generate-001               │
+    │ VertexAI   │ Same Gemini models + imagen-3.0-generate-002                │
     └────────────┴─────────────────────────────────────────────────────────────┘
 
 Key Components:
@@ -143,7 +143,7 @@ Key Components:
     ├───────────────────────┼─────────────────────────────────────────────────┤
     │ GoogleAI              │ Plugin for Gemini API (api_key auth)            │
     │ VertexAI              │ Plugin for Vertex AI (GCP project auth)         │
-    │ GeminiConfigSchema    │ Configuration schema for Gemini models          │
+    │ GeminiConfig    │ Configuration schema for Gemini models          │
     │ GeminiEmbeddingModels │ Enum of available GoogleAI embedding models     │
     │ VertexEmbeddingModels │ Enum of available VertexAI embedding models     │
     │ EmbeddingTaskType     │ Task types for embeddings (CLUSTERING, etc.)    │
@@ -154,12 +154,15 @@ Example:
 
     ```python
     from genkit import Genkit
-    from genkit_google_genai import GoogleAI
+    from genkit_google_genai import GeminiConfig, GoogleAI, gemini_model
 
-    # Uses GEMINI_API_KEY env var or pass api_key explicitly
-    ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
+    ai = Genkit(plugins=[GoogleAI()])
 
-    response = await ai.generate(prompt='Hello, world!')
+    response = await ai.generate(
+        model=gemini_model('gemini-flash-latest'),
+        config=GeminiConfig(temperature=0.7),
+        prompt='Hello, world!',
+    )
     print(response.text)
 
     # Embeddings
@@ -173,20 +176,22 @@ Example:
 
     ```python
     from genkit import Genkit
-    from genkit_google_genai import VertexAI
+    from genkit_google_genai import ImagenConfig, VertexAI, vertexai_gemini_model, vertexai_imagen_model
 
-    # Uses default GCP credentials; optionally pass project/location
     ai = Genkit(
         plugins=[VertexAI(project='my-project', location='us-central1')],
-        model='vertexai/gemini-flash-latest',
     )
 
-    response = await ai.generate(prompt='Hello, world!')
+    response = await ai.generate(
+        model=vertexai_gemini_model('gemini-pro-latest'),
+        prompt='Hello, world!',
+    )
     print(response.text)
 
     # Image generation with Imagen
     response = await ai.generate(
-        model='vertexai/imagen-4.0-generate-001',
+        model=vertexai_imagen_model('imagen-3.0-generate-002'),
+        config=ImagenConfig(number_of_images=1),
         prompt='A beautiful sunset over mountains',
     )
     ```
@@ -206,19 +211,39 @@ from genkit_google_genai.google import (
     GoogleAI,
     VertexAI,
 )
+from genkit_google_genai.models._model_refs import (
+    gemini_image_model,
+    gemini_model,
+    gemini_tts_model,
+    gemma_model,
+    imagen_model,
+    lyria_model,
+    veo_model,
+    vertexai_gemini_image_model,
+    vertexai_gemini_model,
+    vertexai_gemini_tts_model,
+    vertexai_gemma_model,
+    vertexai_imagen_model,
+    vertexai_lyria_model,
+    vertexai_veo_model,
+)
 from genkit_google_genai.models.embedder import (
     EmbeddingTaskType,
     GeminiEmbeddingModels,
     VertexEmbeddingModels,
 )
 from genkit_google_genai.models.gemini import (
-    GeminiConfigSchema,
-    GeminiImageConfigSchema,
-    GeminiTtsConfigSchema,
+    GeminiConfig,
+    GeminiImageConfig,
+    GeminiTtsConfig,
+    GemmaConfig,
     GoogleAIGeminiVersion,
+    PrebuiltVoiceConfig,
+    SpeechConfig,
     VertexAIGeminiVersion,
+    VoiceConfig,
 )
-from genkit_google_genai.models.imagen import ImagenVersion
+from genkit_google_genai.models.imagen import ImagenConfig, ImagenVersion
 from genkit_google_genai.models.lyria import LyriaConfig, LyriaVersion
 from genkit_google_genai.models.veo import VeoConfig, VeoVersion
 
@@ -234,19 +259,38 @@ def package_name() -> str:
 
 __all__ = [
     'EmbeddingTaskType',
-    'GeminiConfigSchema',
+    'GeminiConfig',
     'GeminiEmbeddingModels',
-    'GeminiImageConfigSchema',
-    'GeminiTtsConfigSchema',
+    'GeminiImageConfig',
+    'GeminiTtsConfig',
+    'GemmaConfig',
     'GoogleAI',
     'GoogleAIGeminiVersion',
+    'ImagenConfig',
     'ImagenVersion',
     'LyriaConfig',
     'LyriaVersion',
+    'PrebuiltVoiceConfig',
+    'SpeechConfig',
     'VeoConfig',
     'VeoVersion',
     'VertexAI',
     'VertexAIGeminiVersion',
     'VertexEmbeddingModels',
+    'VoiceConfig',
+    'gemini_image_model',
+    'gemini_model',
+    'gemini_tts_model',
+    'gemma_model',
+    'imagen_model',
+    'lyria_model',
     'package_name',
+    'veo_model',
+    'vertexai_gemini_image_model',
+    'vertexai_gemini_model',
+    'vertexai_gemini_tts_model',
+    'vertexai_gemma_model',
+    'vertexai_imagen_model',
+    'vertexai_lyria_model',
+    'vertexai_veo_model',
 ]

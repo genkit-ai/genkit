@@ -29,7 +29,7 @@ from genkit_google_genai.constants import (
 )
 from genkit_google_genai.evaluators.evaluation import EvaluatorFactory
 from genkit_google_genai.models import gemini as gemini_module
-from genkit_google_genai.models.gemini import GeminiConfigSchema, GeminiModel
+from genkit_google_genai.models.gemini import GeminiConfig, GeminiModel
 from google import genai
 from google.genai import types as genai_types
 from google.genai.types import HttpOptions
@@ -338,13 +338,13 @@ class TestEvaluatorApiHost:
             factory._api_host()
 
 
-class TestGeminiConfigSchemaLocation:
+class TestGeminiConfigLocation:
     """Tests for the per-request location config field."""
 
     def test_location_field(self) -> None:
         """The schema accepts a location override."""
-        assert GeminiConfigSchema(location='eu').location == 'eu'
-        assert GeminiConfigSchema().location is None
+        assert GeminiConfig(location='eu').location == 'eu'
+        assert GeminiConfig().location is None
 
 
 def _vertex_plugin(location: str = 'us-central1', base_url: str | None = None, project: str | None = 'p') -> VertexAI:
@@ -790,11 +790,11 @@ class TestLocationConfigThroughPipeline:
 
     @pytest.mark.asyncio
     async def test_typed_config_location_stripped(self) -> None:
-        """Same for a typed GeminiConfigSchema config."""
+        """Same for a typed GeminiConfig config."""
         model = _vertex_model()
         request = ModelRequest(
             messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
-            config=GeminiConfigSchema(location='us', temperature=0.1),
+            config=GeminiConfig(location='us', temperature=0.1),
         )
         cfg = await model._genkit_to_googleai_cfg(request=request)
         assert cfg is not None

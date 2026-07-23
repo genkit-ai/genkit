@@ -42,13 +42,13 @@ Note:
 
 Example:
     >>> from genkit import Genkit
-    >>> from genkit_google_genai import GoogleAI
+    >>> from genkit_google_genai import GoogleAI, veo_model
     >>>
     >>> ai = Genkit(plugins=[GoogleAI()])
     >>>
     >>> # Start video generation
     >>> response = await ai.generate(
-    ...     model='googleai/veo-2.0-generate-001',
+    ...     model=veo_model('veo-2.0-generate-001'),
     ...     prompt='A cat playing piano in a jazz club',
     ... )
     >>>
@@ -78,6 +78,7 @@ else:
 from google import genai
 from google.genai import types as genai_types
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
 
 from genkit import (
     Media,
@@ -121,30 +122,22 @@ def is_veo_model(name: str) -> bool:
     Returns:
         True if this is a Veo model name.
     """
-    return name.lower().startswith('veo')
+    return name.split('/')[-1].lower().startswith('veo')
 
 
-class VeoConfigSchema(BaseModel):
+class VeoConfig(BaseModel):
     """Veo Config Schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
-    negative_prompt: str | None = Field(
-        default=None, alias='negativePrompt', description='Negative prompt for video generation.'
-    )
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    negative_prompt: str | None = Field(default=None, description='Negative prompt for video generation.')
     aspect_ratio: str | None = Field(
-        default=None, alias='aspectRatio', description='Desired aspect ratio of the output video (e.g. "16:9").'
+        default=None, description='Desired aspect ratio of the output video (e.g. "16:9").'
     )
-    person_generation: str | None = Field(default=None, alias='personGeneration', description='Person generation mode.')
-    duration_seconds: int | None = Field(
-        default=None, alias='durationSeconds', description='Length of video in seconds.'
-    )
+    person_generation: str | None = Field(default=None, description='Person generation mode.')
+    duration_seconds: int | None = Field(default=None, description='Length of video in seconds.')
     resolution: str | None = Field(default=None, description='Desired output resolution (e.g. "720p").')
     seed: int | None = Field(default=None, description='Random seed for deterministic generation.')
-    enhance_prompt: bool | None = Field(default=None, alias='enhancePrompt', description='Enable prompt enhancement.')
-
-
-# Alias for backwards compatibility with __init__.py exports
-VeoConfig = VeoConfigSchema
+    enhance_prompt: bool | None = Field(default=None, description='Enable prompt enhancement.')
 
 
 DEFAULT_VEO_SUPPORT = Supports(
@@ -193,7 +186,7 @@ def _to_veo_parameters(config: Any) -> dict[str, Any]:  # noqa: ANN401
     """Convert config to Veo API parameters.
 
     Args:
-        config: The model configuration (VeoConfigSchema or dict).
+        config: The model configuration (VeoConfig or dict).
 
     Returns:
         Dictionary of Veo API parameters.
@@ -201,7 +194,7 @@ def _to_veo_parameters(config: Any) -> dict[str, Any]:  # noqa: ANN401
     if config is None:
         return {}
 
-    if isinstance(config, VeoConfigSchema):
+    if isinstance(config, BaseModel):
         params = config.model_dump(by_alias=True, exclude_none=True)
     elif isinstance(config, dict):
         params = {k: v for k, v in config.items() if v is not None}
@@ -360,11 +353,11 @@ class VeoModel:
             raise ValueError('Veo requires a text prompt')
 
         # Call the generateVideos API
+        config = _to_veo_parameters(request.config)
         response = await self._client.aio.models.generate_videos(
             model=self._version,
             prompt=prompt,
-            # pyrefly: ignore[bad-argument-type] - config dict matches GenerateVideosConfigDict
-            config=request.config if isinstance(request.config, dict) else None,  # pyright: ignore[reportArgumentType]
+            config=cast(genai_types.GenerateVideosConfigOrDict, config or None),
         )
 
         # Convert to Operation
@@ -405,7 +398,7 @@ class VeoModel:
     def _get_config(self, request: ModelRequest) -> genai_types.GenerateVideosConfigOrDict | None:
         if not request.config:
             return None
-        return cast(genai_types.GenerateVideosConfigOrDict, request.config)
+        return cast(genai_types.GenerateVideosConfigOrDict, _to_veo_parameters(request.config) or None)
 
     def _contents_from_response(self, response: genai_types.GenerateVideosResponse) -> list[Part]:
         content = []

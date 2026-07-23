@@ -45,7 +45,10 @@ class JsonlFormat(FormatDef):
     3.  Parsing the response line-by-line to recover objects.
 
     Usage:
+        from genkit_google_genai import gemini_model
+
         ai.generate(
+            model=gemini_model('gemini-flash-latest'),
             output=OutputConfig(
                 format='jsonl',
                 schema={

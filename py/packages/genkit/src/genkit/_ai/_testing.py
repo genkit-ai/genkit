@@ -14,7 +14,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Internal testing utilities for Genkit AI (mock models, test_models)."""
+"""Internal testing utilities for Genkit AI (mock models, test_models).
+
+Test doubles are registered under plain string names (``testEcho``,
+``testPM``, …). Pass those strings to ``ai.generate(model=...)`` in tests::
+
+    from genkit._ai._testing import define_echo_model
+
+    echo, _ = define_echo_model(ai, name='testEcho')
+    response = await ai.generate(model='testEcho', prompt='hi')
+
+App code should prefer plugin family helpers (``gemini_model``, …) for typed
+refs; these helpers exist so tests can stay free of provider packages.
+"""
 
 import json
 from collections.abc import Callable
@@ -23,6 +35,7 @@ from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field
 
+from genkit._ai._model import ModelConfig
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
@@ -102,7 +115,7 @@ class EchoModel:
 
     async def model_fn(
         self,
-        request: ModelRequest,
+        request: ModelRequest[ModelConfig],
         ctx: ActionRunContext,
     ) -> ModelResponse:
         self.last_request = request
@@ -159,12 +172,12 @@ def define_echo_model(
     echo = EchoModel(stream_countdown=stream_countdown)
 
     async def model_fn(
-        request: ModelRequest,
+        request: ModelRequest[ModelConfig],
         ctx: ActionRunContext,
     ) -> ModelResponse:
         return await echo.model_fn(request, ctx)
 
-    action = ai.define_model(name=name, fn=model_fn)
+    action = ai.define_model(name=name, fn=model_fn, config_schema=ModelConfig)
 
     return (echo, action)
 
@@ -238,7 +251,12 @@ class GablorkenInput(BaseModel):
 
 
 async def test_models(ai: Genkit, models: list[str]) -> TestReport:
-    """Run a standard test suite against one or more models."""
+    """Run a standard test suite against one or more models.
+
+    ``models`` is a list of registered model action names (strings), including
+    test doubles like ``testEcho``. Production call sites prefer family helpers
+    such as ``gemini_model(...)``; this harness keeps the wire name explicit.
+    """
 
     @ai.tool(name='gablorkenTool')
     async def gablorken_tool(input: GablorkenInput) -> float:

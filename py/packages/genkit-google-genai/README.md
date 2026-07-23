@@ -30,6 +30,23 @@ gcloud auth application-default login
 
 ## Features
 
+### Typed model refs
+
+Use family helpers for provider-specific config autocomplete and validation:
+
+```python
+from genkit import Genkit
+from genkit_google_genai import GeminiConfig, GoogleAI, gemini_model, imagen_model
+
+ai = Genkit(plugins=[GoogleAI()])
+
+response = await ai.generate(
+    model=gemini_model('gemini-flash-latest'),
+    config=GeminiConfig(temperature=0.7),
+    prompt='Hello!',
+)
+```
+
 ### Dynamic Models
 
 The plugin automatically discovers available models from the API upon initialization. You can use any model name supported by the API (e.g., `googleai/gemini-2.0-flash-exp`, `vertexai/gemini-1.5-pro`).
@@ -39,9 +56,9 @@ The plugin automatically discovers available models from the API upon initializa
 New or experimental parameters can be passed flexibly using `model_validate` to bypass strict schema checks:
 
 ```python
-from genkit_google_genai import GeminiConfigSchema
+from genkit_google_genai import GeminiConfig
 
-config = GeminiConfigSchema.model_validate({
+config = GeminiConfig.model_validate({
     'temperature': 1.0,
     'response_modalities': ['TEXT', 'IMAGE'],
 })

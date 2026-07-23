@@ -20,7 +20,16 @@ import asyncio
 import time
 from typing import Any, Literal
 
-from genkit_google_genai import GoogleAI
+from genkit_google_genai import (
+    GeminiTtsConfig,
+    GoogleAI,
+    ImagenConfig,
+    PrebuiltVoiceConfig,
+    SpeechConfig,
+    VoiceConfig,
+    gemini_tts_model,
+    imagen_model,
+)
 from pydantic import BaseModel, Field
 
 from genkit import Genkit
@@ -86,9 +95,13 @@ async def tts_speech_generator(input: SpeechInput) -> dict[str, str | None]:
     """Turn text into speech with one TTS call."""
 
     response = await ai.generate(
-        model='googleai/gemini-2.5-flash-preview-tts',
+        model=gemini_tts_model('gemini-2.5-flash-preview-tts'),
         prompt=input.text,
-        config={'speech_config': {'voice_config': {'prebuilt_voice_config': {'voice_name': input.voice}}}},
+        config=GeminiTtsConfig(
+            speech_config=SpeechConfig(
+                voice_config=VoiceConfig(prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=input.voice))
+            )
+        ),
     )
     return {'model': 'googleai/gemini-2.5-flash-preview-tts', 'audio_url': _first_media_url(response)}
 
@@ -98,9 +111,9 @@ async def imagen_image_generator(input: ImageInput) -> dict[str, str | None]:
     """Generate one image with Imagen."""
 
     response = await ai.generate(
-        model='googleai/imagen-3.0-generate-002',
+        model=imagen_model('imagen-3.0-generate-002'),
         prompt=input.prompt,
-        config={'number_of_images': 1},
+        config=ImagenConfig(number_of_images=1),
     )
     return {'model': 'googleai/imagen-3.0-generate-002', 'image_url': _first_media_url(response)}
 

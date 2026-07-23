@@ -30,7 +30,8 @@ from typing import Any
 
 from google import genai
 from google.genai import types as genai_types
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic.alias_generators import to_camel
 
 from genkit import (
     Media,
@@ -102,6 +103,22 @@ DEFAULT_IMAGE_SUPPORT = Supports(
 )
 
 
+def is_imagen_model(name: str) -> bool:
+    """Check if the model is an Imagen text-to-image model.
+
+    Imagen uses its own ``imagen-`` prefix (or legacy ``imagegeneration@`` names),
+    separate from Gemini native image models.
+
+    Args:
+        name: The model name to check.
+
+    Returns:
+        True if this is an Imagen model.
+    """
+    base_name = name.split('/')[-1].lower()
+    return base_name.startswith(('imagen-', 'imagegeneration@'))
+
+
 def vertexai_image_model_info(
     version: str,
 ) -> ModelInfo:
@@ -122,10 +139,15 @@ def vertexai_image_model_info(
     )
 
 
-class ImagenConfigSchema(BaseModel):
+class ImagenConfig(BaseModel):
     """Imagen Config Schema."""
 
-    model_config = ConfigDict(extra='allow')
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+
+    number_of_images: int | None = Field(default=None, description='Number of images to generate.')
+    aspect_ratio: str | None = Field(default=None, description='Desired aspect ratio (e.g. "1:1", "16:9").')
+    person_generation: str | None = Field(default=None, description='Person generation policy.')
+    output_mime_type: str | None = Field(default=None, description='Output MIME type (e.g. "image/png").')
 
 
 class ImagenModel:
@@ -200,6 +222,8 @@ class ImagenModel:
 
         if request.config:
             request_config = request.config
+            if isinstance(request_config, BaseModel):
+                request_config = request_config.model_dump(by_alias=True, exclude_none=True)
             ta = TypeAdapter(genai_types.GenerateImagesConfigOrDict)
             try:
                 cfg = ta.validate_python(request_config)

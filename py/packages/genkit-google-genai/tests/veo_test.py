@@ -23,7 +23,7 @@ path where the SDK returns a model instance).
 
 import pytest
 from genkit_google_genai.models.veo import (
-    VeoConfigSchema,
+    VeoConfig,
     VeoVersion,
     _from_veo_operation,
     _to_veo_parameters,
@@ -79,15 +79,15 @@ class TestToVeoParameters:
         assert result == {'aspect_ratio': '16:9', 'duration_seconds': 5}
 
     def test_schema_config(self) -> None:
-        """VeoConfigSchema is converted with camelCase keys."""
-        config = VeoConfigSchema(aspect_ratio='16:9', duration_seconds=5)
+        """VeoConfig is converted with camelCase keys."""
+        config = VeoConfig(aspect_ratio='16:9', duration_seconds=5)
         result = _to_veo_parameters(config)
         assert result['aspectRatio'] == '16:9'
         assert result['durationSeconds'] == 5
 
     def test_schema_config_includes_new_fields(self) -> None:
-        """VeoConfigSchema includes newer Veo parameters."""
-        config = VeoConfigSchema(resolution='1080p', seed=7)
+        """VeoConfig includes newer Veo parameters."""
+        config = VeoConfig(resolution='1080p', seed=7)
         result = _to_veo_parameters(config)
         assert result['resolution'] == '1080p'
         assert result['seed'] == 7

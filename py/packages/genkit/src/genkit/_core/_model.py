@@ -24,12 +24,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, ClassVar, Generic, cast
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer
 from pydantic.alias_generators import to_camel
-from typing_extensions import TypeVar
+from typing_extensions import TypedDict, TypeVar
 
 from genkit._core._base import GenkitModel
 from genkit._core._extract_json import extract_json
@@ -48,6 +49,7 @@ from genkit._core._typing import (
     MediaPart,
     MessageData,
     MiddlewareRef,
+    ModelInfo,
     Operation,
     Part,
     Resume,
@@ -64,17 +66,54 @@ ModelUsage = GenerationUsage  # public name for GenerationUsage
 
 # TypeVars for generic types
 OutputT = TypeVar('OutputT', default=object)
-ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
+# Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
+# Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
+ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
+# Unbounded so ModelRequest supports any config payload (BaseModel instances, dicts, custom options)
+# across action execution boundaries without forcing assumptions.
+ModelRequestConfigT = TypeVar('ModelRequestConfigT', covariant=True)
 
 
-class ModelRef(BaseModel):
-    """Reference to a model with configuration."""
+class ModelConfigDict(TypedDict, total=False):
+    """Common knobs for dict-literal autocomplete on ai.generate(config={...})."""
+
+    version: str
+    temperature: float
+    max_output_tokens: int
+    max_tokens: int
+    top_k: int
+    top_p: float
+    stop_sequences: list[str]
+    api_key: str
+    thinking: Any
+    budget_tokens: float
+
+
+@dataclass(frozen=True, kw_only=True)
+class ModelRef(Generic[ModelRefConfigT]):
+    """Frozen reference to a model, optionally tied to a config schema.
+
+    Prefer plugin family helpers for typed refs (they stamp ``config_schema``
+    and namespace for you)::
+
+        from genkit_google_genai import GeminiConfig, gemini_model
+
+        ref = gemini_model('gemini-flash-latest')
+        await ai.generate(
+            model=ref,
+            config=GeminiConfig(temperature=0.7),
+            prompt='Hello',
+        )
+
+    Core ``model_ref`` is the lower-level factory helpers call; app code usually
+    does not need it directly.
+    """
 
     name: str
-    config_schema: object | None = None
-    info: object | None = None
+    config_schema: type[ModelRefConfigT]
+    info: ModelInfo | None = None
     version: str | None = None
-    config: dict[str, object] | None = None
+    config: ModelRefConfigT | None = None
 
 
 class Message(MessageData):
@@ -223,7 +262,7 @@ class Document(DocumentData):
         return None
 
 
-class ModelRequest(GenkitModel, Generic[ConfigT]):
+class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
     """Hand-written model request with flat output fields and veneer types.
 
     Output config is inlined as flat fields (output_format, output_schema, etc.)
@@ -246,7 +285,7 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
     # Veneer types for IDE/typing (validators wrap MessageData->Message, DocumentData->Document)
     messages: list[Message]  # pyright: ignore[reportIncompatibleVariableOverride]
     docs: list[Document] | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
-    config: ConfigT | None = None
+    config: ModelRequestConfigT | None = None
     tools: list[ToolDefinition] | None = None
     tool_choice: ToolChoice | None = Field(default=None)
     # Flat output fields (no nested OutputConfig)

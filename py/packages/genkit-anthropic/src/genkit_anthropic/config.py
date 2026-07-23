@@ -32,7 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, model_validat
 from pydantic.alias_generators import to_camel
 from pydantic.config import JsonDict
 
-from genkit import ModelConfig
+from genkit.plugin_api import ModelConfig
 
 _STABLE_BODY_KEYS = frozenset(MessageCreateParamsBase.__annotations__)
 _BETA_BODY_KEYS = frozenset(BetaMessageCreateParamsBase.__annotations__)
@@ -44,7 +44,7 @@ STABLE_KWARG_KEYS = _STABLE_BODY_KEYS | _REQUEST_KWARG_KEYS
 BETA_KWARG_KEYS = _BETA_BODY_KEYS | _REQUEST_KWARG_KEYS
 BETA_ONLY_KEYS = _BETA_BODY_KEYS - _STABLE_BODY_KEYS
 
-_NESTED_CONFIG = ConfigDict(extra='allow', populate_by_name=True)
+NESTED_CONFIG = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
 
 _THINKING_SCHEMA = {
     'type': 'object',
@@ -179,11 +179,11 @@ class ThinkingConfig(BaseModel):
     ``budgetTokens`` is required when ``enabled`` is true.
     """
 
-    model_config = _NESTED_CONFIG
+    model_config = NESTED_CONFIG
 
     enabled: bool | None = None
     # Adaptive mode allows a fractional budget it ignores; integers enforced only when enabled.
-    budget_tokens: float | None = Field(default=None, alias='budgetTokens', ge=1024)
+    budget_tokens: float | None = Field(default=None, ge=1024)
     adaptive: bool | None = None
     display: Literal['summarized', 'omitted'] | None = None
 
@@ -215,7 +215,7 @@ class ThinkingConfig(BaseModel):
 class TaskBudget(BaseModel):
     """Token budget for output generation."""
 
-    model_config = _NESTED_CONFIG
+    model_config = NESTED_CONFIG
 
     type: Literal['tokens'] = 'tokens'
     total: int = Field(ge=20000)
@@ -224,30 +224,30 @@ class TaskBudget(BaseModel):
 class OutputConfig(BaseModel):
     """Output-generation configuration (effort and task budget)."""
 
-    model_config = _NESTED_CONFIG
+    model_config = NESTED_CONFIG
 
     effort: Literal['low', 'medium', 'high', 'xhigh', 'max'] | None = None
-    task_budget: TaskBudget | None = Field(default=None, alias='task_budget')
+    task_budget: TaskBudget | None = Field(default=None)
 
 
 class AutoToolChoice(BaseModel):
     """Let the model decide whether to call a tool."""
 
-    model_config = _NESTED_CONFIG
+    model_config = NESTED_CONFIG
     type: Literal['auto']
 
 
 class AnyToolChoice(BaseModel):
     """Require the model to call some tool."""
 
-    model_config = _NESTED_CONFIG
+    model_config = NESTED_CONFIG
     type: Literal['any']
 
 
 class SpecificToolChoice(BaseModel):
     """Require the model to call the named tool."""
 
-    model_config = _NESTED_CONFIG
+    model_config = NESTED_CONFIG
     type: Literal['tool']
     name: str
 
@@ -255,7 +255,7 @@ class SpecificToolChoice(BaseModel):
 class ToolChoiceNone(BaseModel):
     """Prevent the model from calling a tool."""
 
-    model_config = _NESTED_CONFIG
+    model_config = NESTED_CONFIG
     type: Literal['none']
 
 
@@ -271,7 +271,7 @@ class RequestMetadata(BaseModel):
     Uses no alias generator, so ``user_id`` stays snake_case.
     """
 
-    model_config = _NESTED_CONFIG
+    model_config = NESTED_CONFIG
 
     user_id: str | None = None
 

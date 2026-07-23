@@ -61,13 +61,10 @@ from genkit.embedder import (
     EmbedRequest,
     EmbedResponse,
 )
-
-# Import model-related types from the model namespace.
 from genkit.model import (
     Constrained,
     FinishReason,
     Message,
-    ModelConfig,
     ModelInfo,
     ModelRequest,
     ModelResponse,
@@ -92,7 +89,6 @@ __all__ = [
     'EmbedResponse',
     'EmbedderOptions',
     'EmbedderRef',
-    'ModelConfig',
     'ModelInfo',
     'ModelStreamResponse',
     # Errors

@@ -96,7 +96,6 @@ from genkit import (
     Media,
     MediaPart,
     Message,
-    ModelConfig,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -110,7 +109,7 @@ from genkit import (
     ToolResponsePart,
 )
 from genkit.model import get_basic_usage_stats
-from genkit.plugin_api import ActionRunContext, get_cached_client
+from genkit.plugin_api import ActionRunContext, ModelConfig, get_cached_client
 from genkit_ollama._errors import wrap_connection_errors
 from genkit_ollama.constants import (
     DEFAULT_OLLAMA_SERVER_URL,

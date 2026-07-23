@@ -33,6 +33,7 @@ from genkit._core._model import (
     Message,
     ModelConfig,
     ModelRef,
+    ModelRefConfigT,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -67,16 +68,39 @@ def model_action_metadata(
 
 def model_ref(
     name: str,
+    *,
+    config_schema: type[ModelRefConfigT],
     namespace: str | None = None,
     info: ModelInfo | None = None,
     version: str | None = None,
-    config: dict[str, object] | None = None,
-) -> ModelRef:
-    """Create a ModelRef, optionally prefixing name with namespace."""
-    # Logic: if (options.namespace && !name.startsWith(options.namespace + '/'))
+    config: ModelRefConfigT | None = None,
+) -> ModelRef[ModelRefConfigT]:
+    """Create a ``ModelRef``, optionally prefixing ``name`` with ``namespace``.
+
+    Plugin authors and family helpers (``gemini_model``, ``claude_model``, …)
+    call this to stamp ``config_schema``. App code usually imports those helpers
+    instead of calling ``model_ref`` directly:
+
+        from genkit_google_genai import gemini_model
+
+        model = gemini_model('gemini-flash-latest')
+    """
     final_name = f'{namespace}/{name}' if namespace and not name.startswith(f'{namespace}/') else name
 
-    return ModelRef(name=final_name, info=info, version=version, config=config)
+    if config is not None:
+        if isinstance(config, dict):
+            config = config_schema.model_validate(config)  # type: ignore[assignment, arg-type]  # pyrefly: ignore
+        elif not isinstance(config, config_schema):
+            raise TypeError(f'config must conform to {config_schema.__name__}, got {type(config).__name__}')
+
+    ref = ModelRef[ModelRefConfigT](
+        name=final_name,
+        config_schema=config_schema,
+        info=info,
+        version=version,
+        config=config,
+    )
+    return ref
 
 
 def define_model(

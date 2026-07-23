@@ -127,20 +127,20 @@ Example:
 
     ```python
     from genkit import Genkit
-    from genkit_ollama import Ollama
+    from genkit_ollama import Ollama, OllamaConfig, ollama_model
 
-    # Configure with model name and optional server URL
-    ai = Genkit(
-        plugins=[Ollama(models=['llama3.2', 'mistral'])],
-        model='ollama/llama3.2',
+    ai = Genkit(plugins=[Ollama()])
+
+    response = await ai.generate(
+        model=ollama_model('llama3.2'),
+        prompt='Hello, Llama!',
     )
-
-    response = await ai.generate(prompt='Hello, Llama!')
     print(response.text)
 
-    # Use a specific model
+    # Use a specific model with typed config
     response = await ai.generate(
-        model='ollama/mistral',
+        model=ollama_model('mistral'),
+        config=OllamaConfig(temperature=0.8),
         prompt='Write a haiku about coding',
     )
     ```
@@ -156,6 +156,7 @@ See Also:
 """
 
 from genkit_ollama._errors import OllamaConnectionError
+from genkit_ollama._model_refs import ollama_model
 from genkit_ollama.embedders import EmbeddingDefinition
 from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaSupports
 from genkit_ollama.plugin_api import (
@@ -186,6 +187,7 @@ __all__ = [
     'RequestHeaderFunction',
     'RequestHeaderParams',
     'RequestHeaders',
+    'ollama_model',
     'ollama_name',
     'package_name',
 ]

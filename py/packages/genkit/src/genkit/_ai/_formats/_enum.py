@@ -40,7 +40,10 @@ class EnumFormat(FormatDef):
     3.  Cleaning the response (removing quotes) to return the raw enum string.
 
     Usage:
+        from genkit_google_genai import gemini_model
+
         ai.generate(
+            model=gemini_model('gemini-flash-latest'),
             output=OutputConfig(
                 format='enum',
                 schema={

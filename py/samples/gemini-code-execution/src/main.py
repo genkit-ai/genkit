@@ -16,7 +16,7 @@
 
 """Code execution - let Gemini write and run Python for a task."""
 
-from genkit_google_genai import GeminiConfigSchema, GoogleAI
+from genkit_google_genai import GeminiConfig, GoogleAI
 from pydantic import BaseModel, Field
 
 from genkit import Genkit, Message
@@ -36,7 +36,7 @@ async def execute_code(input: CodeExecutionInput) -> Message:
 
     response = await ai.generate(
         prompt=f'Write code and run it to solve this task: {input.task}',
-        config=GeminiConfigSchema.model_validate({'code_execution': True}).model_dump(),
+        config=GeminiConfig.model_validate({'code_execution': True}).model_dump(),
     )
     if not response.message:
         raise ValueError('No message returned from model')

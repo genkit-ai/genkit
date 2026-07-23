@@ -153,12 +153,12 @@ from google.auth.exceptions import DefaultCredentialsError
 from google.genai import types as genai_types
 from google.genai.errors import ClientError
 from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema
+from pydantic.alias_generators import to_camel
 
 from genkit import (
     Constrained,
     GenkitError,
     Message,
-    ModelConfig,
     ModelInfo,
     ModelRequest,
     ModelResponse,
@@ -174,6 +174,7 @@ from genkit import (
 from genkit.model import Candidate, FinishReason, get_basic_usage_stats
 from genkit.plugin_api import (
     ActionRunContext,
+    ModelConfig,
     StatusName,
 )
 
@@ -262,8 +263,8 @@ class SafetySettingsSchema(BaseModel):
 class PrebuiltVoiceConfig(BaseModel):
     """Prebuilt voice config."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
-    voice_name: str | None = Field(None, alias='voiceName')
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    voice_name: str | None = None
 
 
 class FunctionCallingMode(StrEnum):
@@ -278,9 +279,9 @@ class FunctionCallingMode(StrEnum):
 class FunctionCallingConfig(BaseModel):
     """Function calling config."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
     mode: FunctionCallingMode | None = None
-    allowed_function_names: list[str] | None = Field(None, alias='allowedFunctionNames')
+    allowed_function_names: list[str] | None = None
 
 
 class ThinkingLevel(StrEnum):
@@ -295,19 +296,19 @@ class ThinkingLevel(StrEnum):
 class ThinkingConfigSchema(BaseModel):
     """Thinking config schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
-    include_thoughts: bool | None = Field(None, alias='includeThoughts')
-    thinking_budget: int | None = Field(None, alias='thinkingBudget')
-    thinking_level: ThinkingLevel | None = Field(None, alias='thinkingLevel')
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    include_thoughts: bool | None = None
+    thinking_budget: int | None = None
+    thinking_level: ThinkingLevel | None = None
 
 
 class FileSearchConfigSchema(BaseModel):
     """File search config schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
-    file_search_store_names: list[str] | None = Field(None, alias='fileSearchStoreNames')
-    metadata_filter: str | None = Field(None, alias='metadataFilter')
-    top_k: int | None = Field(None, alias='topK')
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    file_search_store_names: list[str] | None = None
+    metadata_filter: str | None = None
+    top_k: int | None = None
 
 
 class ImageAspectRatio(StrEnum):
@@ -336,31 +337,29 @@ class ImageSize(StrEnum):
 class ImageConfigSchema(BaseModel):
     """Image config schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
-    aspect_ratio: ImageAspectRatio | None = Field(None, alias='aspectRatio')
-    image_size: ImageSize | None = Field(None, alias='imageSize')
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    aspect_ratio: ImageAspectRatio | None = None
+    image_size: ImageSize | None = None
 
 
-class VoiceConfigSchema(BaseModel):
+class VoiceConfig(BaseModel):
     """Voice config schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
-    prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(None, alias='prebuiltVoiceConfig')
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(default=None)
 
 
-class GeminiConfigSchema(ModelConfig):
+class GeminiConfig(ModelConfig):
     """Gemini Config Schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
 
     api_key: str | None = Field(  # pyright: ignore[reportGeneralTypeIssues]
-        None, description='Overrides the plugin-configured API key, if specified.', alias='apiKey', exclude=True
+        None, description='Overrides the plugin-configured API key, if specified.', exclude=True
     )
-    base_url: str | None = Field(
-        None, description='Overrides the plugin-configured or default baseUrl, if specified.', alias='baseUrl'
-    )
+    base_url: str | None = Field(None, description='Overrides the plugin-configured or default baseUrl, if specified.')
     api_version: str | None = Field(
-        None, description='Overrides the plugin-configured or default apiVersion, if specified.', alias='apiVersion'
+        None, description='Overrides the plugin-configured or default apiVersion, if specified.'
     )
     location: str | None = Field(
         None,
@@ -391,11 +390,10 @@ class GeminiConfigSchema(ModelConfig):
         }),
     ] = Field(
         None,
-        alias='safetySettings',
     )
 
     code_execution: bool | dict[str, Any] | None = Field(
-        None, description='Enables the model to generate and run code.', alias='codeExecution'
+        None, description='Enables the model to generate and run code.'
     )
 
     context_cache: bool | None = Field(
@@ -403,7 +401,6 @@ class GeminiConfigSchema(ModelConfig):
         description=(
             'Context caching allows you to save and reuse precomputed input tokens that you wish to use repeatedly.'
         ),
-        alias='contextCache',
     )
 
     function_calling_config: Annotated[
@@ -425,7 +422,6 @@ class GeminiConfigSchema(ModelConfig):
         }),
     ] = Field(
         None,
-        alias='functionCallingConfig',
     )
 
     response_modalities: list[str] | None = Field(
@@ -433,7 +429,6 @@ class GeminiConfigSchema(ModelConfig):
         description=(
             "The modalities to be used in response. Only supported for 'gemini-2.0-flash-exp' model at present."
         ),
-        alias='responseModalities',
     )
 
     google_search_retrieval: bool | dict[str, Any] | None = Field(
@@ -443,7 +438,6 @@ class GeminiConfigSchema(ModelConfig):
             'Note: This feature is not supported on all models. '
             'If you get an error, use the google_search tool instead.'
         ),
-        alias='googleSearchRetrieval',
     )
 
     file_search: Annotated[
@@ -470,10 +464,10 @@ class GeminiConfigSchema(ModelConfig):
             },
             'additionalProperties': True,
         }),
-    ] = Field(None, alias='fileSearch')
+    ] = Field(None)
 
     url_context: bool | dict[str, Any] | None = Field(
-        None, description='Return grounding metadata from links included in the query', alias='urlContext'
+        None, description='Return grounding metadata from links included in the query'
     )
 
     # inherited from ModelConfig:
@@ -508,13 +502,11 @@ class GeminiConfigSchema(ModelConfig):
         }),
     ] = Field(
         default=None,
-        alias='topP',
         ge=0.0,
         le=1.0,
     )
     top_k: int | None = Field(  # pyrefly: ignore[bad-override]
         default=None,
-        alias='topK',
         description=('The maximum number of tokens to consider when sampling.'),
     )
 
@@ -551,18 +543,19 @@ class GeminiConfigSchema(ModelConfig):
             },
             'additionalProperties': True,
         }),
-    ] = Field(None, alias='thinkingConfig')
+    ] = Field(None)
 
     max_output_tokens: int | None = Field(  # pyrefly: ignore[bad-override]
-        default=None, alias='maxOutputTokens', description='Maximum number of tokens to generate.'
+        default=None, description='Maximum number of tokens to generate.'
     )
-    stop_sequences: list[str] | None = Field(default=None, alias='stopSequences', description='Stop sequences.')
+    stop_sequences: list[str] | None = Field(default=None, description='Stop sequences.')
 
 
-class SpeechConfigSchema(BaseModel):
+class SpeechConfig(BaseModel):
     """Speech config schema."""
 
-    voice_config: VoiceConfigSchema | None = Field(None, alias='voiceConfig')
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    voice_config: VoiceConfig | None = Field(default=None)
 
     http_options: Any | None = Field(None, exclude=True)
     tools: Any | None = Field(None, exclude=True)
@@ -571,13 +564,14 @@ class SpeechConfigSchema(BaseModel):
     response_json_schema: Any | None = Field(None, exclude=True)
 
 
-class GeminiTtsConfigSchema(GeminiConfigSchema):
+class GeminiTtsConfig(GeminiConfig):
     """Gemini TTS Config Schema."""
 
-    speech_config: SpeechConfigSchema | None = Field(None, alias='speechConfig')
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    speech_config: SpeechConfig | None = Field(default=None)
 
 
-class GeminiImageConfigSchema(GeminiConfigSchema):
+class GeminiImageConfig(GeminiConfig):
     """Gemini Image Config Schema."""
 
     image_config: Annotated[
@@ -590,13 +584,13 @@ class GeminiImageConfigSchema(GeminiConfigSchema):
             },
             'additionalProperties': True,
         }),
-    ] = Field(None, alias='imageConfig')
+    ] = Field(None)
 
 
-class GemmaConfigSchema(GeminiConfigSchema):
+class GemmaConfig(GeminiConfig):
     """Gemma Config Schema."""
 
-    # Inherits temperature from GeminiConfigSchema
+    # Inherits temperature from GeminiConfig
     temperature: float | None = None
 
 
@@ -1172,13 +1166,14 @@ def is_gemini_model(name: str) -> bool:
         >>> is_gemini_model('gemini-2.5-flash-preview-tts')
         False
     """
-    return name.startswith('gemini-') and not is_tts_model(name) and not is_image_model(name)
+    base_name = name.split('/')[-1]
+    return base_name.startswith('gemini-') and not is_tts_model(name) and not is_image_model(name)
 
 
 def is_tts_model(name: str) -> bool:
     """Check if the model is a text-to-speech (TTS) model.
 
-    TTS models output audio instead of text and use GeminiTtsConfigSchema.
+    TTS models output audio instead of text and use GeminiTtsConfig.
 
     Args:
         name: The model name to check.
@@ -1190,13 +1185,14 @@ def is_tts_model(name: str) -> bool:
         >>> is_tts_model('gemini-2.5-flash-preview-tts')
         True
     """
-    return (name.startswith('gemini-') and name.endswith('-tts')) or 'tts' in name
+    base_name = name.split('/')[-1]
+    return (base_name.startswith('gemini-') and base_name.endswith('-tts')) or 'tts' in base_name
 
 
 def is_image_model(name: str) -> bool:
     """Check if the model is a Gemini image generation model.
 
-    Image models output images instead of text and use GeminiImageConfigSchema.
+    Image models output images instead of text and use GeminiImageConfig.
 
     Args:
         name: The model name to check.
@@ -1208,7 +1204,8 @@ def is_image_model(name: str) -> bool:
         >>> is_image_model('gemini-2.0-flash-preview-image-generation')
         True
     """
-    return (name.startswith('gemini-') and '-image' in name) or 'image' in name
+    base_name = name.split('/')[-1]
+    return (base_name.startswith('gemini-') and '-image' in base_name) or 'image' in base_name
 
 
 def is_gemma_model(name: str) -> bool:
@@ -1226,7 +1223,7 @@ def is_gemma_model(name: str) -> bool:
         >>> is_gemma_model('gemma-2-27b-it')
         True
     """
-    return name.startswith('gemma-')
+    return name.split('/')[-1].startswith('gemma-')
 
 
 def is_tuned_gemini_name(name: str) -> bool:
@@ -1287,7 +1284,7 @@ def resolve_vertex_model_name(client: genai.Client, name: str) -> str:
     return f'projects/{project}/locations/{location}/{name}'
 
 
-def get_model_config_schema(name: str) -> type[GeminiConfigSchema]:
+def get_model_config_schema(name: str) -> type[GeminiConfig]:
     """Get the appropriate config schema for a dynamically discovered model.
 
     Different model types (TTS, image, Gemma, standard) have different
@@ -1299,18 +1296,18 @@ def get_model_config_schema(name: str) -> type[GeminiConfigSchema]:
 
     Returns:
         The appropriate config schema class:
-        - GeminiTtsConfigSchema for TTS models
-        - GeminiImageConfigSchema for image models
-        - GemmaConfigSchema for Gemma models
-        - GeminiConfigSchema for standard Gemini models
+        - GeminiTtsConfig for TTS models
+        - GeminiImageConfig for image models
+        - GemmaConfig for Gemma models
+        - GeminiConfig for standard Gemini models
     """
     if is_tts_model(name):
-        return GeminiTtsConfigSchema
+        return GeminiTtsConfig
     if is_image_model(name):
-        return GeminiImageConfigSchema
+        return GeminiImageConfig
     if is_gemma_model(name):
-        return GemmaConfigSchema
-    return GeminiConfigSchema
+        return GemmaConfig
+    return GeminiConfig
 
 
 def google_model_info(
@@ -2082,11 +2079,11 @@ class GeminiModel:
 
     def _normalize_config_to_dict(
         self,
-        config: GeminiConfigSchema | ModelConfig | dict,
+        config: GeminiConfig | ModelConfig | dict,
     ) -> dict[str, Any] | None:
         """Return the config as a snake_case dict for the rest of the pipeline.
 
-        Callers can hand us three shapes: a typed ``GeminiConfigSchema``, the
+        Callers can hand us three shapes: a typed ``GeminiConfig``, the
         generic ``GenerationCommonConfig`` (which keeps plugin-specific keys
         as alias-form extras), or a raw dict in either casing. Only the
         plugin schema knows the alias mapping (e.g. ``codeExecution`` <->
@@ -2096,7 +2093,7 @@ class GeminiModel:
 
         Returns ``None`` if the config has no meaningful values.
         """
-        if isinstance(config, GeminiConfigSchema):
+        if isinstance(config, GeminiConfig):
             schema = config
         elif isinstance(config, ModelConfig):
             # Re-route through the plugin schema so the alias machinery folds
@@ -2110,7 +2107,7 @@ class GeminiModel:
         dumped = schema.model_dump(exclude_none=True, by_alias=False)
         return dumped or None
 
-    def _pick_plugin_schema(self, data: dict[str, Any]) -> GeminiConfigSchema:
+    def _pick_plugin_schema(self, data: dict[str, Any]) -> GeminiConfig:
         """Validate ``data`` through whichever subclass matches the model.
 
         Routing is purely by model name so each family gets its own

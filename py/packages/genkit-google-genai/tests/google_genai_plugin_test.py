@@ -25,7 +25,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from genkit_google_genai import (
     EmbeddingTaskType,
-    GeminiConfigSchema,
+    GeminiConfig,
     GeminiEmbeddingModels,
     GoogleAI,
     GoogleAIGeminiVersion,
@@ -310,15 +310,15 @@ def test_vertexai_gemini_version_enum() -> None:
 
 
 def test_gemini_config_schema() -> None:
-    """Test GeminiConfigSchema can be instantiated."""
-    config = GeminiConfigSchema(temperature=0.7, max_output_tokens=1000)
+    """Test GeminiConfig can be instantiated."""
+    config = GeminiConfig(temperature=0.7, max_output_tokens=1000)
     assert config.temperature == 0.7
     assert config.max_output_tokens == 1000
 
 
 def test_gemini_config_schema_defaults() -> None:
-    """Test GeminiConfigSchema has proper defaults."""
-    config = GeminiConfigSchema()
+    """Test GeminiConfig has proper defaults."""
+    config = GeminiConfig()
     # All fields should be optional with None defaults
     assert config.temperature is None
     assert config.max_output_tokens is None
