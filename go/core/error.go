@@ -188,6 +188,14 @@ type SchemaValidationError struct {
 	*GenkitError
 }
 
+// Error is declared on the pointer receiver so that only *SchemaValidationError
+// satisfies error; without it, the promoted method from the embedded *GenkitError
+// would put error in the value type's method set too, with an Unwrap chain that
+// skips *GenkitError.
+func (e *SchemaValidationError) Error() string {
+	return e.GenkitError.Error()
+}
+
 // Unwrap returns the underlying GenkitError so that errors.Is and errors.As
 // continue to match *GenkitError anywhere a SchemaValidationError is returned.
 func (e *SchemaValidationError) Unwrap() error {
