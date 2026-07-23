@@ -960,23 +960,10 @@ class Genkit:
     ) -> ModelResponse[Any]:
         """Generate text or structured data using a language model.
 
-        Pass a bare model string with a dict config for the common case, or a
-        family helper (``gemini_model``, ``claude_model``, …) with a typed
-        Pydantic config when you want provider-specific autocomplete and
-        validation.
+        Use a family helper (``gemini_model``, ``claude_model``, …) with a typed
+        Pydantic config for provider-specific autocomplete and validation.
 
-        Example (dict config — no extra imports):
-
-        ```python
-        response = await ai.generate(
-            model='googleai/gemini-flash-latest',
-            config={'temperature': 0.7},
-            prompt='Hello!',
-        )
-        ```
-
-        Example (typed model ref + config):
-
+        Example:
         ```python
         from genkit_google_genai import GeminiConfig, gemini_model
 
@@ -1163,8 +1150,7 @@ class Genkit:
     ) -> ModelStreamResponse[Any]:
         """Stream generated text, returning a ModelStreamResponse with .stream and .response.
 
-        Accepts the same ``model`` and ``config`` shapes as :meth:`generate` —
-        bare strings with dict configs, or family helpers with typed configs.
+        Accepts the same ``model`` and ``config`` shapes as :meth:`generate`.
 
         Example:
         ```python

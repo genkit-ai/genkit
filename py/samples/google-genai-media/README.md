@@ -2,8 +2,6 @@
 
 Three focused Google media examples: text-to-speech, Imagen image generation, and Veo video generation.
 
-For typed model refs and provider-specific config, prefer family helpers:
-
 ```python
 from genkit_google_genai import ImagenConfig, VeoConfig, gemini_tts_model, imagen_model, veo_model
 
@@ -26,6 +24,7 @@ await ai.generate(
     model=veo_model('veo-3.1-generate-preview'),
     config=VeoConfig(aspect_ratio='16:9', duration_seconds=5),
     prompt='A paper airplane gliding through a classroom',
+)
 ```
 ```bash
 export GEMINI_API_KEY=your-api-key

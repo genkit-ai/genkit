@@ -25,8 +25,6 @@ Typed model refs keep provider-specific config autocomplete on ``GeminiConfig``:
         config=GeminiConfig.model_validate({'code_execution': True}),
         prompt='What is the sum of the first 50 prime numbers?',
     )
-
-Bare strings with dict configs work too for quick experiments.
 """
 
 from genkit_google_genai import GeminiConfig, GoogleAI

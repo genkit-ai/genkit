@@ -165,7 +165,7 @@ Example:
     )
     print(response.text)
 
-    # Embeddings (bare string is fine for embedders)
+    # Embeddings
     embeddings = await ai.embed(
         embedder='googleai/gemini-embedding-001',
         content='Hello, world!',

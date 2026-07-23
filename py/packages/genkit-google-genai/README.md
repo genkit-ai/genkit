@@ -47,9 +47,6 @@ response = await ai.generate(
 )
 ```
 
-Bare model strings with dict configs still work for quick experiments:
-`model='googleai/gemini-flash-latest', config={'temperature': 0.7}`.
-
 ### Dynamic Models
 
 The plugin automatically discovers available models from the API upon initialization. You can use any model name supported by the API (e.g., `googleai/gemini-2.0-flash-exp`, `vertexai/gemini-1.5-pro`).
