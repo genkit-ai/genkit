@@ -447,8 +447,6 @@ class Genkit:
 
     # Overload 1: Both input_schema and output_schema typed -> ExecutablePrompt[InputT, OutputT]
     @overload
-    # Overload 1: Both input_schema and output_schema typed -> ExecutablePrompt[InputT, OutputT]
-    @overload
     def define_prompt(
         self,
         name: str | None = None,
