@@ -37,10 +37,10 @@ from genkit._ai._testing import (
 )
 from genkit._core._action import ActionKind
 from genkit._core._error import GenkitError
-from genkit._core._model import GenerateActionOptions, ModelConfig
+from genkit._core._model import GenerateActionOptions
 from genkit._core._typing import Part, Role, TextPart, ToolChoice
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
-from genkit.plugin_api import MiddlewarePlugin, new_middleware
+from genkit.plugin_api import MiddlewarePlugin, ModelConfig, new_middleware
 
 
 class _PreMiddleware(BaseMiddleware):

@@ -32,7 +32,6 @@ from genkit import (
     Media,
     MediaPart,
     Message,
-    ModelConfig,
     ModelRequest,
     ModelResponseChunk,
     ModelUsage,
@@ -42,6 +41,7 @@ from genkit import (
     TextPart,
     ToolRequestPart,
 )
+from genkit.plugin_api import ModelConfig
 
 
 class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):

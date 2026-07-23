@@ -7,9 +7,10 @@
 
 import pytest
 
-from genkit import Genkit, ModelConfig
+from genkit import Genkit
 from genkit._ai._testing import EchoModel, define_echo_model
 from genkit.model import model_ref
+from genkit.plugin_api import ModelConfig
 
 
 @pytest.fixture

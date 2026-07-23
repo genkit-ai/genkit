@@ -17,9 +17,6 @@
 """Genkit — Build AI-powered applications."""
 
 from genkit._ai._aio import ActionKind, Genkit
-
-# Import model-related types from the model namespace.
-from genkit._ai._model import ModelConfig
 from genkit._ai._prompt import (
     ExecutablePrompt,
     ModelStreamResponse,
@@ -92,7 +89,6 @@ __all__ = [
     'EmbedResponse',
     'EmbedderOptions',
     'EmbedderRef',
-    'ModelConfig',
     'ModelInfo',
     'ModelStreamResponse',
     # Errors

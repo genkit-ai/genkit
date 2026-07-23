@@ -32,7 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, model_validat
 from pydantic.alias_generators import to_camel
 from pydantic.config import JsonDict
 
-from genkit import ModelConfig
+from genkit.plugin_api import ModelConfig
 
 _STABLE_BODY_KEYS = frozenset(MessageCreateParamsBase.__annotations__)
 _BETA_BODY_KEYS = frozenset(BetaMessageCreateParamsBase.__annotations__)

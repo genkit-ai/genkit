@@ -26,7 +26,6 @@ from openai.lib._pydantic import _ensure_strict_json_schema
 
 from genkit import (
     Message,
-    ModelConfig,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -36,7 +35,7 @@ from genkit import (
     TextPart,
     ToolDefinition,
 )
-from genkit.plugin_api import ActionRunContext
+from genkit.plugin_api import ActionRunContext, ModelConfig
 from genkit_openai.models.model_info import SUPPORTED_OPENAI_MODELS
 from genkit_openai.models.utils import (
     DictMessageAdapter,

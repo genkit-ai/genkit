@@ -34,13 +34,13 @@ from genkit import (
     ActionKind,
     Constrained,
     Message,
-    ModelConfig,
     ModelRequest,
     Part,
     Role,
     TextPart,
     ToolDefinition,
 )
+from genkit.plugin_api import ModelConfig
 
 
 def test_anthropic_name() -> None:

@@ -27,7 +27,6 @@ from genkit_openai.typing import OpenAIConfig
 
 from genkit import (
     Message,
-    ModelConfig,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -35,7 +34,7 @@ from genkit import (
     Role,
     TextPart,
 )
-from genkit.plugin_api import ActionRunContext
+from genkit.plugin_api import ActionRunContext, ModelConfig
 
 
 def test_get_messages(sample_request: ModelRequest) -> None:
