@@ -24,10 +24,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, ClassVar, Generic, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypedDict, TypeVar
 
@@ -87,7 +88,8 @@ class ModelConfigDict(TypedDict, total=False):
     budget_tokens: float
 
 
-class ModelRef(BaseModel, Generic[ConfigT]):
+@dataclass(frozen=True, kw_only=True)
+class ModelRef(Generic[ConfigT]):
     """Frozen reference to a model, optionally tied to a config schema.
 
     Prefer plugin family helpers for typed refs (they stamp ``config_schema``
@@ -106,29 +108,22 @@ class ModelRef(BaseModel, Generic[ConfigT]):
     does not need it directly.
     """
 
-    model_config = ConfigDict(frozen=True)
-
     name: str
-    config_schema: type[ConfigT] = Field(..., exclude=True)
+    config_schema: type[ConfigT]
     info: ModelInfo | None = None
     version: str | None = None
     config: ConfigT | None = None
 
-    @model_validator(mode='before')
-    @classmethod
-    def _validate_config_conforms_to_schema(cls, data: Any) -> Any:  # noqa: ANN401
-        if isinstance(data, dict):
-            config = data.get('config')
-            config_schema = data.get('config_schema')
-            if config is not None and config_schema is not None:
-                if isinstance(config, dict):
-                    data['config'] = config_schema.model_validate(config)
-                elif not isinstance(config, config_schema):
-                    raise TypeError(
-                        f'config must conform to {getattr(config_schema, "__name__", str(config_schema))}, '
-                        f'got {type(config).__name__}'
-                    )
-        return data
+    def __post_init__(self) -> None:
+        if self.config is not None:
+            schema = cast(Any, self.config_schema)
+            if isinstance(self.config, dict):
+                object.__setattr__(self, 'config', schema.model_validate(self.config))
+            elif not isinstance(self.config, schema):
+                raise TypeError(
+                    f'config must conform to {getattr(schema, "__name__", str(schema))}, '
+                    f'got {type(self.config).__name__}'
+                )
 
 
 class Message(MessageData):

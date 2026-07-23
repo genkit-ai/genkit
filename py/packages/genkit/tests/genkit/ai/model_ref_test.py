@@ -6,7 +6,7 @@
 """Tests for model_ref and ModelRef."""
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from genkit._ai._prompt import PromptConfig, normalize_config, resolve_model_arg
 from genkit.model import model_ref
@@ -35,9 +35,12 @@ def test_model_ref_idempotent_namespace() -> None:
 
 def test_model_ref_is_frozen() -> None:
     """ModelRef instances cannot be mutated after creation."""
+    from dataclasses import FrozenInstanceError
+    from typing import Any, cast
+
     ref = model_ref('x', namespace='ns', config_schema=ModelConfig)
-    with pytest.raises(ValidationError):
-        ref.name = 'y'  # pyrefly: ignore[read-only]
+    with pytest.raises(FrozenInstanceError):
+        cast(Any, ref).name = 'y'
 
 
 def test_model_ref_requires_config_schema() -> None:

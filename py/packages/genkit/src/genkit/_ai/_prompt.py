@@ -91,7 +91,7 @@ OutputT = TypeVar('OutputT')
 
 
 def normalize_config(
-    config: BaseModel | Mapping[str, Any] | None,
+    config: object,
 ) -> dict[str, Any] | None:
     """Normalize any configuration object (Pydantic schema or mapping) into a plain dict.
 
@@ -102,7 +102,7 @@ def normalize_config(
         return None
     if isinstance(config, BaseModel):
         return config.model_dump(exclude_unset=True)
-    return dict(config)
+    return dict(cast(Any, config))
 
 
 def _to_dict(val: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -132,7 +132,7 @@ def resolve_model_arg(
         return model, normalize_config(config)
 
     wire_name = model.name
-    default_config = model.config
+    default_config: Any = model.config
 
     # No default config on the ref: use whatever was passed at call-time.
     if default_config is None:
