@@ -16,7 +16,11 @@
 
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import { basicCatalog } from '../src/catalog.js';
+import {
+  A2UI_CATALOG_VALUE_TYPE,
+  basicCatalog,
+  type A2uiCatalog,
+} from '../src/catalog.js';
 import { a2ui, type A2uiOptions } from '../src/middleware.js';
 import { a2uiEnvelopes, isA2uiPart } from '../src/part.js';
 
@@ -32,12 +36,35 @@ const SAMPLE_TEXT = `Here is the weather:
 `;
 
 /**
+ * A minimal fake registry supporting the value APIs the middleware uses,
+ * pre-loaded with any catalogs the test needs.
+ */
+function fakeAi(catalogs: Record<string, A2uiCatalog> = {}) {
+  const store: Record<string, Record<string, unknown>> = {
+    [A2UI_CATALOG_VALUE_TYPE]: { ...catalogs },
+  };
+  return {
+    registry: {
+      registerValue(type: string, name: string, value: unknown) {
+        (store[type] ??= {})[name] = value;
+      },
+      async lookupValue<T = unknown>(
+        type: string,
+        name: string
+      ): Promise<T | undefined> {
+        return store[type]?.[name] as T | undefined;
+      },
+    },
+  };
+}
+
+/**
  * Instantiates the a2ui generate-middleware and returns its `model` hook —
  * a `(req, ctx, next)` function — for direct unit testing.
  */
-function modelHook(config: Partial<A2uiOptions>) {
+function modelHook(config: Partial<A2uiOptions>, ai: any = fakeAi()) {
   const def = (a2ui as any).__def ?? a2ui;
-  const impl = def.instantiate({ config });
+  const impl = def.instantiate({ config, ai });
   return impl.model as (req: any, ctx: any, next: any) => Promise<any>;
 }
 
@@ -51,12 +78,53 @@ function req(system?: string) {
 }
 
 describe('a2ui() middleware', () => {
-  it('is required to be given a catalog', () => {
-    assert.throws(() => modelHook({}), /catalog/);
+  it('defaults to the bundled basic catalog when none is configured', async () => {
+    const mw = modelHook({});
+    let seen: any;
+    await mw(req('You are helpful.'), undefined, async (r: any) => {
+      seen = r;
+      return { message: { role: 'model', content: [] } };
+    });
+    const sys = seen.messages.find((m: any) => m.role === 'system');
+    const joined = sys.content.map((p: any) => p.text).join('');
+    assert.match(joined, /Rendering UI with A2UI/);
+  });
+
+  it('resolves a custom catalog registered in the registry by id', async () => {
+    const custom: A2uiCatalog = {
+      id: 'my-catalog',
+      components: [
+        { name: 'Widget', description: 'A widget.', props: 'label: string.' },
+      ],
+    };
+    const mw = modelHook(
+      { catalog: 'my-catalog' },
+      fakeAi({ 'my-catalog': custom })
+    );
+    let seen: any;
+    await mw(req('sys'), undefined, async (r: any) => {
+      seen = r;
+      return { message: { role: 'model', content: [] } };
+    });
+    const sys = seen.messages.find((m: any) => m.role === 'system');
+    const joined = sys.content.map((p: any) => p.text).join('');
+    assert.match(joined, /Widget: A widget\./);
+    assert.match(joined, /my-catalog/);
+  });
+
+  it('throws when an unknown catalog id is configured', async () => {
+    const mw = modelHook({ catalog: 'nope' });
+    await assert.rejects(
+      () =>
+        mw(req('sys'), undefined, async () => ({
+          message: { role: 'model', content: [] },
+        })),
+      /no catalog registered under id "nope"/
+    );
   });
 
   it('injects instructions into an existing system prompt', async () => {
-    const mw = modelHook({ catalog: basicCatalog });
+    const mw = modelHook({});
     let seen: any;
     await mw(req('You are helpful.'), undefined, async (r: any) => {
       seen = r;
@@ -70,7 +138,7 @@ describe('a2ui() middleware', () => {
   });
 
   it('creates a system prompt when none exists', async () => {
-    const mw = modelHook({ catalog: basicCatalog });
+    const mw = modelHook({});
     let seen: any;
     await mw(req(), undefined, async (r: any) => {
       seen = r;
@@ -82,7 +150,7 @@ describe('a2ui() middleware', () => {
   });
 
   it('instructions:none injects nothing', async () => {
-    const mw = modelHook({ catalog: basicCatalog, instructions: 'none' });
+    const mw = modelHook({ instructions: 'none' });
     let seen: any;
     await mw(req('sys'), undefined, async (r: any) => {
       seen = r;
@@ -94,7 +162,7 @@ describe('a2ui() middleware', () => {
   });
 
   it('rewrites the final message: prose text + a2ui part', async () => {
-    const mw = modelHook({ catalog: basicCatalog, surfaceId: () => 'sfc' });
+    const mw = modelHook({ surfaceId: () => 'sfc' });
     const res = await mw(req('sys'), undefined, async () => ({
       message: { role: 'model', content: [{ text: SAMPLE_TEXT }] },
     }));
@@ -111,7 +179,7 @@ describe('a2ui() middleware', () => {
   });
 
   it('leaves plain prose responses untouched (no a2ui parts)', async () => {
-    const mw = modelHook({ catalog: basicCatalog });
+    const mw = modelHook({});
     const res = await mw(req('sys'), undefined, async () => ({
       message: { role: 'model', content: [{ text: 'just chatting' }] },
     }));
@@ -121,7 +189,7 @@ describe('a2ui() middleware', () => {
   });
 
   it('sanitizes inbound a2ui parts into text for the model', async () => {
-    const mw = modelHook({ catalog: basicCatalog });
+    const mw = modelHook({});
     let seen: any;
     await mw(
       {
@@ -163,7 +231,7 @@ describe('a2ui() middleware', () => {
   });
 
   it('transforms streamed chunks via onChunk', async () => {
-    const mw = modelHook({ catalog: basicCatalog, surfaceId: () => 'sfc' });
+    const mw = modelHook({ surfaceId: () => 'sfc' });
     const emitted: any[] = [];
     const ctx = { onChunk: (c: any) => emitted.push(c) };
     // Simulate the runtime calling next() with a wrapped ctx, then streaming.

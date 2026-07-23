@@ -27,12 +27,15 @@
  */
 
 export {
+  A2UI_CATALOG_VALUE_TYPE,
+  DEFAULT_CATALOG_ID,
   SURFACE_ID_PLACEHOLDER,
   basicCatalog,
   renderCatalogInstructions,
   type A2uiCatalog,
   type A2uiCatalogComponent,
 } from './catalog.js';
+export { loadCatalog, type LoadCatalogOptions } from './loader.js';
 export { A2uiOptionsSchema, a2ui, type A2uiOptions } from './middleware.js';
 export {
   A2uiStreamParser,

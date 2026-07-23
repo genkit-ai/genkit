@@ -24,7 +24,7 @@
  * agent's `InMemorySessionStore`.
  */
 
-import { a2ui, basicCatalog } from '@genkit-ai/a2ui';
+import { a2ui } from '@genkit-ai/a2ui';
 import { expressHandler } from '@genkit-ai/express';
 import { googleAI } from '@genkit-ai/google-genai';
 import cors from 'cors';
@@ -82,7 +82,7 @@ prose brief; put the substance in the UI. When asked about weather, call the
 getWeather tool, then render a nice Card/Column summarizing it (temperature,
 condition, humidity). Feel free to add a Button (e.g. "Refresh") when useful.`,
   tools: [getWeather],
-  use: [a2ui({ catalog: basicCatalog })],
+  use: [a2ui()], // defaults to the bundled 'basic' catalog
   store: new InMemorySessionStore(),
 });
 

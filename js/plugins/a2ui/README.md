@@ -28,7 +28,7 @@ agent's (or a one-shot `generate`'s) `use` array. Nothing else changes.
 ```ts
 import { genkit } from 'genkit/beta';
 import { googleAI } from '@genkit-ai/google-genai';
-import { a2ui, basicCatalog } from '@genkit-ai/a2ui';
+import { a2ui } from '@genkit-ai/a2ui';
 
 const ai = genkit({ plugins: [googleAI()] });
 
@@ -36,7 +36,7 @@ export const uiAgent = ai.defineAgent({
   name: 'uiAgent',
   model: 'googleai/gemini-flash-latest',
   system: 'You help users. Render UI when it is clearer than prose.',
-  use: [a2ui({ catalog: basicCatalog })], // <- A2UI support
+  use: [a2ui()], // <- A2UI support (defaults to the bundled 'basic' catalog)
 });
 ```
 
@@ -45,7 +45,7 @@ Works the same on a one-shot generate:
 ```ts
 const res = await ai.generate({
   prompt: 'Show me the weather in Tokyo',
-  use: [a2ui({ catalog: basicCatalog })],
+  use: [a2ui()],
 });
 ```
 
@@ -53,7 +53,7 @@ const res = await ai.generate({
 
 | Option         | Default    | Description                                                        |
 | -------------- | ---------- | ------------------------------------------------------------------ |
-| `catalog`      | (required) | The catalog describing what the agent may render.                  |
+| `catalog`      | `'basic'`  | The id of the catalog describing what the agent may render.        |
 | `instructions` | `'system'` | Where to inject catalog capabilities. `'none'` injects nothing.    |
 | `validate`     | `'strict'` | Validate emitted envelopes against the catalog.                    |
 | `surfaceId`    | UUID       | Surface id policy: a fixed string or a factory.                    |
@@ -62,6 +62,31 @@ const res = await ai.generate({
 The middleware injects the catalog's capabilities into the system prompt, then
 intercepts model output (streamed chunks **and** the final message), extracts
 `a2ui` fenced blocks, validates them, and rewrites them into a2ui data parts.
+
+### Catalogs
+
+`catalog` is a **catalog id** resolved from the Genkit registry. The bundled
+`'basic'` catalog (mirroring `@a2ui/web_core`'s basic catalog) is the default and
+needs no registration. To use your own catalog, register it once with
+`loadCatalog` and reference it by id:
+
+```ts
+import { a2ui, loadCatalog } from '@genkit-ai/a2ui';
+
+// Register an in-memory catalog…
+await loadCatalog(ai, { id: 'my-catalog', catalog: myCatalog });
+// …or load one from a JSON file:
+await loadCatalog(ai, { id: 'my-catalog', file: './my-catalog.json' });
+
+export const uiAgent = ai.defineAgent({
+  name: 'uiAgent',
+  model: 'googleai/gemini-flash-latest',
+  use: [a2ui({ catalog: 'my-catalog' })],
+});
+```
+
+Catalogs live in the registry (value type `a2ui-catalog`) so the middleware can
+resolve them by id and, in the future, tooling can list them.
 
 ## Client
 

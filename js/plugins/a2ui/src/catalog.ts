@@ -28,6 +28,20 @@
 
 import { BASIC_CATALOG_ID } from './types.js';
 
+/**
+ * The registry value type under which A2UI catalogs are stored, so the
+ * {@link a2ui} middleware can look them up by id (and, in the future, tooling
+ * can list them). Register with `ai.registry.registerValue(...)` via
+ * {@link loadCatalog}.
+ */
+export const A2UI_CATALOG_VALUE_TYPE = 'a2ui-catalog';
+
+/**
+ * The default catalog id used by the {@link a2ui} middleware when none is
+ * given. Resolves to the bundled {@link basicCatalog}.
+ */
+export const DEFAULT_CATALOG_ID = 'basic';
+
 /** A component the model may use, plus a short description of its props. */
 export interface A2uiCatalogComponent {
   /** The component type name, e.g. `Text`. */

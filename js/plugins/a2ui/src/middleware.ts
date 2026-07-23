@@ -43,7 +43,12 @@ import type {
   MessageData,
   Part,
 } from 'genkit/model';
-import { renderCatalogInstructions, type A2uiCatalog } from './catalog.js';
+import {
+  DEFAULT_CATALOG_ID,
+  renderCatalogInstructions,
+  type A2uiCatalog,
+} from './catalog.js';
+import { resolveCatalog } from './loader.js';
 import { A2uiStreamParser } from './parser.js';
 import { a2uiPart, isA2uiPart } from './part.js';
 import {
@@ -54,10 +59,12 @@ import {
 
 /** Zod schema for the {@link a2ui} middleware configuration. */
 export const A2uiOptionsSchema = z.object({
-  /** REQUIRED. The catalog describing what the agent may render. */
-  catalog: z.custom<A2uiCatalog>(
-    (v) => !!v && typeof v === 'object' && Array.isArray((v as any).components)
-  ),
+  /**
+   * The id of the catalog describing what the agent may render. Defaults to
+   * `'basic'` (the bundled basic catalog). Register additional catalogs with
+   * `loadCatalog(ai, { id, catalog | file })` and reference them by id here.
+   */
+  catalog: z.string().optional(),
 
   /**
    * Where to inject the catalog's capabilities. `'system'` (default) appends
@@ -121,13 +128,13 @@ function partsFromParse(prose: string, batches: A2uiEnvelope[][]): Part[] {
  *
  * @example
  * ```ts
- * import { a2ui, basicCatalog } from '@genkit-ai/a2ui';
+ * import { a2ui } from '@genkit-ai/a2ui';
  *
  * export const uiAgent = ai.defineAgent({
  *   name: 'uiAgent',
  *   model: 'googleai/gemini-flash-latest',
  *   system: 'You help users. Render UI when it is clearer than prose.',
- *   use: [a2ui({ catalog: basicCatalog })],
+ *   use: [a2ui()], // defaults to the bundled 'basic' catalog
  * });
  * ```
  */
@@ -142,20 +149,21 @@ export const a2ui: GenerateMiddleware<typeof A2uiOptionsSchema> =
       configSchema: A2uiOptionsSchema,
     },
     (options) => {
-      const config = options.config;
-      if (!config?.catalog) {
-        throw new Error('a2ui(): `catalog` is required.');
-      }
+      const { ai, config } = options;
       const {
-        catalog,
+        catalog: catalogId = DEFAULT_CATALOG_ID,
         instructions = 'system',
         validate = 'strict',
         version = A2UI_VERSION,
-      } = config;
-      const nextSurfaceId = surfaceIdFactory(config.surfaceId);
+      } = config ?? {};
+      const nextSurfaceId = surfaceIdFactory(config?.surfaceId);
 
       return {
         model: async (req, ctx, next) => {
+          // Resolve the catalog by id from the registry (falls back to the
+          // bundled basic catalog for the default id).
+          const catalog = await resolveCatalog(ai, catalogId);
+
           // 0) Sanitize any inbound a2ui data parts (e.g. a surface action sent
           //    back as the next turn, or replayed history) into model-readable
           //    text, so the underlying model's converter never sees the a2ui
