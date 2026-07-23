@@ -28,7 +28,7 @@ ollama pull nomic-embed-text
 
 ```python
 from genkit import Genkit
-from genkit_ollama import EmbeddingDefinition, ModelDefinition, Ollama
+from genkit_ollama import EmbeddingDefinition, ModelDefinition, Ollama, OllamaConfig, ollama_model
 
 ai = Genkit(
     plugins=[
@@ -37,10 +37,13 @@ ai = Genkit(
             embedders=[EmbeddingDefinition(name='nomic-embed-text')],
         )
     ],
-    model='ollama/llama3.2',
 )
 
-response = await ai.generate(prompt='Write a haiku about local models.')
+response = await ai.generate(
+    model=ollama_model('llama3.2'),
+    config=OllamaConfig(temperature=0.7),
+    prompt='Write a haiku about local models.',
+)
 print(response.text)
 
 embeddings = await ai.embed(embedder='ollama/nomic-embed-text', content='local inference')

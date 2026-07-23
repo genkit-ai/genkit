@@ -137,22 +137,21 @@ Example:
 
     ```python
     from genkit import Genkit
-    from genkit_anthropic import Anthropic, AnthropicConfig
+    from genkit_anthropic import Anthropic, AnthropicConfig, claude_model
 
-    # Uses ANTHROPIC_API_KEY env var or pass api_key explicitly
-    ai = Genkit(
-        plugins=[Anthropic()],
-        model='anthropic/claude-sonnet-4-5',
+    ai = Genkit(plugins=[Anthropic()])
+
+    response = await ai.generate(
+        model=claude_model('claude-sonnet-4-5'),
+        prompt='Hello, Claude!',
     )
-
-    response = await ai.generate(prompt='Hello, Claude!')
     print(response.text)
 
     # With custom configuration
     response = await ai.generate(
-        model='anthropic/claude-haiku-4-5',
-        prompt='Write a haiku about AI',
+        model=claude_model('claude-haiku-4-5'),
         config=AnthropicConfig(temperature=0.7, max_output_tokens=100),
+        prompt='Write a haiku about AI',
     )
     ```
 
@@ -165,7 +164,7 @@ Example:
 
 
     response = await ai.generate(
-        model='anthropic/claude-sonnet-4-5',
+        model=claude_model('claude-sonnet-4-5'),
         prompt='What is the weather in Paris?',
         tools=['get_weather'],
     )
@@ -181,6 +180,7 @@ See Also:
     - Genkit documentation: https://genkit.dev/
 """
 
+from genkit_anthropic._model_refs import KnownClaude, claude_model
 from genkit_anthropic.config import (
     AnthropicConfig,
     AnyToolChoice,
@@ -200,6 +200,7 @@ __all__ = [
     'AnthropicConfig',
     'AutoToolChoice',
     'AnyToolChoice',
+    'KnownClaude',
     'OutputConfig',
     'RequestMetadata',
     'SpecificToolChoice',
@@ -208,4 +209,5 @@ __all__ = [
     'ToolChoice',
     'ToolChoiceNone',
     'anthropic_name',
+    'claude_model',
 ]

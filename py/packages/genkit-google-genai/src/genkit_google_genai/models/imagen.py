@@ -102,6 +102,22 @@ DEFAULT_IMAGE_SUPPORT = Supports(
 )
 
 
+def is_imagen_model(name: str) -> bool:
+    """Check if the model is an Imagen text-to-image model.
+
+    Imagen uses its own ``imagen-`` prefix (or legacy ``imagegeneration@`` names),
+    separate from Gemini native image models.
+
+    Args:
+        name: The model name to check.
+
+    Returns:
+        True if this is an Imagen model.
+    """
+    lower = name.lower()
+    return lower.startswith('imagen-') or lower.startswith('imagegeneration@')
+
+
 def vertexai_image_model_info(
     version: str,
 ) -> ModelInfo:

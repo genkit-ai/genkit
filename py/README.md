@@ -19,7 +19,7 @@ export GEMINI_API_KEY="your-api-key"
 3. **Create your AI application:**
 ```python
 from genkit import Genkit
-from genkit_google_genai import GoogleAI
+from genkit_google_genai import GeminiConfig, GoogleAI, gemini_model
 
 # 1. Initialize Genkit with the Google AI (Gemini) plugin
 ai = Genkit(plugins=[GoogleAI()])
@@ -33,12 +33,16 @@ def get_weather(city: str) -> str:
 @ai.flow()
 async def plan_trip(destination: str) -> str:
     response = await ai.generate(
-        model="googleai/gemini-flash-latest",
+        model=gemini_model("gemini-flash-latest"),
+        config=GeminiConfig(temperature=0.7),
         prompt=f"Suggest activities in {destination} given the weather.",
         tools=[get_weather],
     )
     return response.text  # => "Based on the sunny weather in Seattle..."
 ```
+
+For quick experiments you can also pass a bare model string with a dict config:
+`model="googleai/gemini-flash-latest", config={"temperature": 0.7}`.
 
 ## Why Genkit?
 

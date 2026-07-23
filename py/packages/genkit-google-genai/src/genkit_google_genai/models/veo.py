@@ -42,13 +42,13 @@ Note:
 
 Example:
     >>> from genkit import Genkit
-    >>> from genkit_google_genai import GoogleAI
+    >>> from genkit_google_genai import GoogleAI, veo_model
     >>>
     >>> ai = Genkit(plugins=[GoogleAI()])
     >>>
     >>> # Start video generation
     >>> response = await ai.generate(
-    ...     model='googleai/veo-2.0-generate-001',
+    ...     model=veo_model('veo-2.0-generate-001'),
     ...     prompt='A cat playing piano in a jazz club',
     ... )
     >>>

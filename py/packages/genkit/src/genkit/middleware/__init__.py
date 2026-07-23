@@ -21,6 +21,7 @@ with ``@ai.middleware``:
 
     from genkit import Genkit
     from genkit.middleware import BaseMiddleware
+    from genkit_google_genai import gemini_model
 
     ai = Genkit()
 
@@ -33,7 +34,7 @@ with ``@ai.middleware``:
             return result
 
     response = await ai.generate(
-        model='your-model-here',
+        model=gemini_model('gemini-flash-latest'),
         prompt='Hello',
         use=[LoggingMiddleware()],
     )

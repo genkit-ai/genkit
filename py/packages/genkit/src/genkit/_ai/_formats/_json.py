@@ -39,7 +39,10 @@ class JsonFormat(FormatDef):
     2.  Parsing the response using `extract_json` to handle potentially noisy output (e.g. markdown code blocks).
 
     Usage:
+        from genkit_google_genai import gemini_model
+
         ai.generate(
+            model=gemini_model('gemini-flash-latest'),
             output=OutputConfig(
                 format='json',
                 schema={'type': 'object', 'properties': {'foo': {'type': 'string'}}}

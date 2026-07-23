@@ -43,7 +43,10 @@ class ArrayFormat(FormatDef):
         to recover valid JSON objects from potentially incomplete or noisy output.
 
     Usage:
+        from genkit_google_genai import gemini_model
+
         ai.generate(
+            model=gemini_model('gemini-flash-latest'),
             output=OutputConfig(
                 format='array',
                 schema={

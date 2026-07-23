@@ -43,13 +43,14 @@ Supported Models:
 
 Example:
     >>> from genkit import Genkit
-    >>> from genkit_google_genai import VertexAI
+    >>> from genkit_google_genai import LyriaConfig, VertexAI, lyria_model
     >>>
     >>> ai = Genkit(plugins=[VertexAI(project='my-project')])
     >>>
     >>> # Generate audio
     >>> response = await ai.generate(
-    ...     model='vertexai/lyria-002',
+    ...     model=lyria_model('lyria-002', namespace='vertexai'),
+    ...     config=LyriaConfig(),
     ...     prompt='A peaceful piano melody with gentle rain sounds',
     ... )
     >>>

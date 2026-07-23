@@ -33,8 +33,11 @@ class TextFormat(FormatDef):
     It does not enforce any schema or structural constraints.
 
     Usage:
+        from genkit_google_genai import gemini_model
+
         ai.generate(
-            output=OutputConfig(format='text')
+            model=gemini_model('gemini-flash-latest'),
+            output=OutputConfig(format='text'),
         )
     """
 

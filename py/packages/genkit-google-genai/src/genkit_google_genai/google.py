@@ -75,14 +75,13 @@ Supported Model Types:
 
 Example:
     >>> from genkit import Genkit
-    >>> from genkit_google_genai import GoogleAI
+    >>> from genkit_google_genai import GeminiConfig, GoogleAI, gemini_model
     >>>
-    >>> # Models are discovered automatically
     >>> ai = Genkit(plugins=[GoogleAI()])
     >>>
-    >>> # Use any available model - no pre-registration needed
     >>> response = await ai.generate(
-    ...     model='googleai/gemini-flash-latest',
+    ...     model=gemini_model('gemini-flash-latest'),
+    ...     config=GeminiConfig(temperature=0.7),
     ...     prompt='Hello, world!',
     ... )
 
@@ -371,19 +370,20 @@ class GoogleAI(Plugin):
 
     Example:
         >>> from genkit import Genkit
-        >>> from genkit_google_genai import GoogleAI
+        >>> from genkit_google_genai import GeminiConfig, GoogleAI, gemini_model, veo_model
         >>>
         >>> ai = Genkit(plugins=[GoogleAI()])
         >>>
         >>> # Text generation
         >>> response = await ai.generate(
-        ...     model='googleai/gemini-flash-latest',
+        ...     model=gemini_model('gemini-flash-latest'),
+        ...     config=GeminiConfig(temperature=0.7),
         ...     prompt='Explain quantum computing',
         ... )
         >>>
         >>> # Video generation (background model)
         >>> op = await ai.generate(
-        ...     model='googleai/veo-2.0-generate-001',
+        ...     model=veo_model('veo-2.0-generate-001'),
         ...     prompt='A sunset over mountains',
         ... )
         >>> while not op.done:
@@ -745,19 +745,20 @@ class VertexAI(Plugin):
 
     Example:
         >>> from genkit import Genkit
-        >>> from genkit_google_genai import VertexAI
+        >>> from genkit_google_genai import ImagenConfig, VertexAI, gemini_model, imagen_model
         >>>
         >>> ai = Genkit(plugins=[VertexAI(project='my-project')])
         >>>
         >>> # Text generation
         >>> response = await ai.generate(
-        ...     model='vertexai/gemini-flash-latest',
+        ...     model=gemini_model('gemini-flash-latest', namespace='vertexai'),
         ...     prompt='Explain quantum computing',
         ... )
         >>>
         >>> # Image generation (Vertex AI only)
         >>> response = await ai.generate(
-        ...     model='vertexai/imagen-3.0-generate-002',
+        ...     model=imagen_model('imagen-3.0-generate-002', namespace='vertexai'),
+        ...     config=ImagenConfig(number_of_images=1),
         ...     prompt='A serene mountain landscape',
         ... )
 

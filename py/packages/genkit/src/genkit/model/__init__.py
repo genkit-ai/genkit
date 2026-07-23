@@ -25,6 +25,7 @@ from genkit._core._background import BackgroundAction
 from genkit._core._model import (
     GenerateActionOptions,
     Message,
+    ModelConfigDict,
     ModelRef,
     ModelRequest,
     ModelResponse,
@@ -76,6 +77,7 @@ __all__ = [
     'ModelRef',
     # Config
     'ModelConfig',
+    'ModelConfigDict',
     # Message
     'Message',
     # Usage

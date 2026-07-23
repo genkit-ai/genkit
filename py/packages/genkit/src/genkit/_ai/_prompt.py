@@ -20,7 +20,7 @@
 import asyncio
 import os
 import weakref
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypedDict, TypeVar, cast
@@ -31,7 +31,7 @@ from dotpromptz.typing import (
     PromptInputConfig,
     PromptMetadata,
 )
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, SerializeAsAny
 from typing_extensions import Never, Unpack
 
 from genkit._ai._generate import (
@@ -59,7 +59,13 @@ from genkit._core._channel import Channel
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._middleware import BaseMiddleware, middleware_class_index
-from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfig
+from genkit._core._model import (
+    Document,
+    GenerateActionOptions,
+    Message,
+    ModelConfigDict,
+    ModelRef,
+)
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
@@ -82,6 +88,34 @@ logger = get_logger(__name__)
 # TypeVars for generic input/output typing
 InputT = TypeVar('InputT')
 OutputT = TypeVar('OutputT')
+
+
+def normalize_config(
+    config: BaseModel | Mapping[str, Any] | None,
+) -> dict[str, Any] | BaseModel | None:
+    """Collapse any mapping (plain dict, ``ModelConfigDict``, …) to a plain dict.
+
+    Pydantic config schemas pass through untouched; a mapping becomes a real dict
+    so it lands on the dict arm of a config field instead of being coerced into an
+    empty model that silently drops keys the schema doesn't declare.
+    """
+    if config is None or isinstance(config, BaseModel):
+        return config
+    return dict(config)
+
+
+def _resolve_model_arg(
+    model: str | ModelRef[BaseModel] | None,
+    config: dict[str, Any] | BaseModel | None,
+) -> tuple[str | None, dict[str, Any] | BaseModel | None]:
+    """Unwrap a ModelRef to its wire name and apply default config when omitted."""
+    if isinstance(model, ModelRef):
+        if config is None and model.config is not None:
+            config = model.config
+        return model.name, config
+    if isinstance(model, str):
+        return model, config
+    return None, config
 
 
 class OutputOptions(TypedDict, total=False):
@@ -128,8 +162,8 @@ def resume_options_to_resume(
 class PromptGenerateOptions(TypedDict, total=False):
     """Runtime options for prompt execution (config, tools, messages, etc.)."""
 
-    model: str | None
-    config: dict[str, Any] | ModelConfig | None
+    model: str | ModelRef[BaseModel] | None
+    config: BaseModel | ModelConfigDict | Mapping[str, Any] | None
     messages: list[Message] | None
     docs: list[Document] | None
     tools: Sequence[str | Tool] | None
@@ -210,8 +244,16 @@ class PromptConfig(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
     variant: str | None = None
-    model: str | None = None
-    config: dict[str, Any] | ModelConfig | None = None
+    model: str | ModelRef[BaseModel] | None = None
+    # The concrete `dict` arm must stay ahead of `BaseModel`: a bare BaseModel
+    # validates any dict into an *empty* model and drops every key, so a config
+    # dict has to land on the dict arm. normalize_config() guarantees any mapping
+    # reaching here is a real dict (not an abstract Mapping) for that reason.
+    # SerializeAsAny makes model_dump() emit a config's real runtime fields —
+    # each executable-prompt call round-trips through model_dump, and without it
+    # pydantic serializes by the declared BaseModel and silently drops any
+    # plugin-specific fields (e.g. a Gemini thinking budget) the base type lacks.
+    config: dict[str, Any] | SerializeAsAny[BaseModel] | None = None
     description: str | None = None
     input_schema: type | dict[str, Any] | str | None = None
     system: str | list[Part] | None = None
@@ -242,8 +284,8 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         self,
         registry: Registry,
         variant: str | None = None,
-        model: str | None = None,
-        config: dict[str, Any] | ModelConfig | None = None,
+        model: str | ModelRef[BaseModel] | None = None,
+        config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
         description: str | None = None,
         input_schema: type | dict[str, Any] | str | None = None,
         system: str | list[Part] | None = None,
@@ -370,7 +412,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
     def _prompt_config_for_call(self, opts: PromptGenerateOptions) -> PromptConfig:
         """Merge this prompt's definition with per-call ``opts`` into a :class:`PromptConfig`."""
         output_opts = opts.get('output') or {}
-        merged_config: dict[str, Any] | ModelConfig | None
+        merged_config: dict[str, Any] | BaseModel | None
         if opts.get('config') is not None:
             base = (
                 self._config.model_dump(exclude_none=True)
@@ -383,7 +425,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             )
             merged_config = {**base, **override} if base or override else None
         else:
-            merged_config = self._config
+            merged_config = normalize_config(self._config)
 
         merged_metadata = (
             {**(self._metadata or {}), **(opts.get('metadata') or {})} if opts.get('metadata') else self._metadata
@@ -392,15 +434,20 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         def _or(opt_val: Any, default: Any) -> Any:  # noqa: ANN401
             return opt_val if opt_val is not None else default
 
+        model_name, resolved_config = _resolve_model_arg(
+            opts.get('model') or self._model,
+            merged_config,
+        )
+
         return PromptConfig(
-            model=opts.get('model') or self._model,
+            model=model_name,
             prompt=self._prompt,
             system=self._system,
             messages=self._messages,
             tools=opts.get('tools') or self._tools,
             return_tool_requests=_or(opts.get('return_tool_requests'), self._return_tool_requests),
             tool_choice=opts.get('tool_choice') or self._tool_choice,
-            config=merged_config,
+            config=resolved_config,
             max_turns=_or(opts.get('max_turns'), self._max_turns),
             output_format=output_opts.get('format') or self._output_format,
             output_content_type=output_opts.get('content_type') or self._output_content_type,
@@ -621,7 +668,8 @@ async def to_generate_action_options(
     options: PromptConfig,
 ) -> GenerateActionOptions:
     """Render ``PromptConfig`` into `GenerateActionOptions`."""
-    model = options.model or cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
+    model_name, config = _resolve_model_arg(options.model, options.config)
+    model = model_name or cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
     if model is None:
         raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')
 
@@ -666,7 +714,7 @@ async def to_generate_action_options(
     return GenerateActionOptions(
         model=model,
         messages=resolved_msgs,  # type: ignore[arg-type]
-        config=options.config,
+        config=config,
         tools=tools_refs,
         return_tool_requests=options.return_tool_requests,
         tool_choice=options.tool_choice,
