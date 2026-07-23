@@ -134,7 +134,7 @@ ChunkT = TypeVar('ChunkT')
 R = TypeVar('R')
 T = TypeVar('T')
 MiddlewareT = TypeVar('MiddlewareT', bound=BaseMiddleware)
-ModelConfigT = TypeVar('ModelConfigT', bound=BaseModel)
+ModelConfigT = TypeVar('ModelConfigT')
 
 
 def _model_supports_long_running(model_action: Action) -> bool:

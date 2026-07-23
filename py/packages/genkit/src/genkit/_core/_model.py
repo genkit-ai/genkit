@@ -65,13 +65,11 @@ ModelUsage = GenerationUsage  # public name for GenerationUsage
 
 # TypeVars for generic types
 OutputT = TypeVar('OutputT', default=object)
-RequestConfigT = TypeVar('RequestConfigT', bound=ModelConfig, default=ModelConfig)
-# Bound to BaseModel (not ModelConfig) so an unparametrized ModelRef validates
-# any plugin config model — some providers ship configs that look nothing like the
-# common generation knobs — while parametrized refs still narrow to their schema.
-# Covariant so a ModelRef[GeminiConfig] is accepted wherever a ModelRef[BaseModel]
-# is expected, which is what lets the family helpers' return values flow through.
-ConfigT = TypeVar('ConfigT', bound=BaseModel, covariant=True)
+# Untyped without a default so any config schema (Pydantic models, dicts, custom options)
+# is supported across ModelRef and ModelRequest without forcing assumptions.
+# Covariant so a ModelRef[GeminiConfig] is accepted wherever a generic ModelRef[Any]
+# is expected, letting plugin family helpers flow through naturally.
+ConfigT = TypeVar('ConfigT', covariant=True)
 
 
 class ModelConfigDict(TypedDict, total=False):
@@ -276,7 +274,7 @@ class Document(DocumentData):
         return None
 
 
-class ModelRequest(GenkitModel, Generic[RequestConfigT]):
+class ModelRequest(GenkitModel, Generic[ConfigT]):
     """Hand-written model request with flat output fields and veneer types.
 
     Output config is inlined as flat fields (output_format, output_schema, etc.)
@@ -299,7 +297,7 @@ class ModelRequest(GenkitModel, Generic[RequestConfigT]):
     # Veneer types for IDE/typing (validators wrap MessageData->Message, DocumentData->Document)
     messages: list[Message]  # pyright: ignore[reportIncompatibleVariableOverride]
     docs: list[Document] | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
-    config: RequestConfigT | None = None
+    config: ConfigT | None = None
     tools: list[ToolDefinition] | None = None
     tool_choice: ToolChoice | None = Field(default=None)
     # Flat output fields (no nested OutputConfig)

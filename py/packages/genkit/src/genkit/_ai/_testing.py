@@ -35,6 +35,7 @@ from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field
 
+from genkit._ai._model import ModelConfig
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
@@ -114,7 +115,7 @@ class EchoModel:
 
     async def model_fn(
         self,
-        request: ModelRequest,
+        request: ModelRequest[ModelConfig],
         ctx: ActionRunContext,
     ) -> ModelResponse:
         self.last_request = request
@@ -171,12 +172,12 @@ def define_echo_model(
     echo = EchoModel(stream_countdown=stream_countdown)
 
     async def model_fn(
-        request: ModelRequest,
+        request: ModelRequest[ModelConfig],
         ctx: ActionRunContext,
     ) -> ModelResponse:
         return await echo.model_fn(request, ctx)
 
-    action = ai.define_model(name=name, fn=model_fn)
+    action = ai.define_model(name=name, fn=model_fn, config_schema=ModelConfig)
 
     return (echo, action)
 
