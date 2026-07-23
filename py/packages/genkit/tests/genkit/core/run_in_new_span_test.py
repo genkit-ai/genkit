@@ -15,13 +15,14 @@ from collections.abc import Generator, Sequence
 import pytest
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import BaseModel
 
 from genkit._core._action import Action, ActionKind
 from genkit._core._error import GenkitError
-from genkit._core._tracing import SpanMetadata, _parent_path_context, run_in_new_span
+from genkit._core._trace._realtime_processor import RealtimeSpanProcessor
+from genkit._core._tracing import SpanMetadata, _parent_path_context, run_in_new_span, start_attributes
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +55,92 @@ def _by_name(spans: Sequence[ReadableSpan], name: str) -> ReadableSpan:
     matches = [s for s in spans if s.name == name]
     assert matches, f'no span named {name!r} in {[s.name for s in spans]}'
     return matches[-1]
+
+
+def test_start_attributes_includes_input_excludes_outcome() -> None:
+    """Start-known attrs include input; state/output wait until the body finishes."""
+    attrs = start_attributes(
+        SpanMetadata(
+            name='myTool',
+            type='action',
+            subtype='tool',
+            input='in',
+            output='out',
+            is_root=True,
+            metadata={'key': 'value'},
+        ),
+        qualified_path='/{chatFlow,t:flow}/{myTool,t:action,s:tool}',
+    )
+    assert attrs == {
+        'genkit:name': 'myTool',
+        'genkit:path': '/{chatFlow,t:flow}/{myTool,t:action,s:tool}',
+        'genkit:qualifiedPath': '/{chatFlow,t:flow}/{myTool,t:action,s:tool}',
+        'genkit:type': 'action',
+        'genkit:metadata:subtype': 'tool',
+        'genkit:isRoot': True,
+        'genkit:metadata:key': 'value',
+        'genkit:input': '"in"',
+    }
+    for forbidden in ('genkit:state', 'genkit:output'):
+        assert forbidden not in attrs
+
+
+def test_start_attributes_json_input() -> None:
+    attrs = start_attributes(
+        SpanMetadata(name='echo', type='action', input={'msg': 'hi'}),
+        qualified_path='/{echo,t:action}',
+    )
+    assert attrs['genkit:input'] == '{"msg": "hi"}'
+
+
+def test_realtime_on_start_export_carries_identity_attrs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RealtimeSpanProcessor.on_start must see name/type/path so Dev UI populates immediately."""
+    monkeypatch.setenv('GENKIT_ENV', 'dev')
+
+    class SnapshotExporter(InMemorySpanExporter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.snapshots: list[dict[str, object]] = []
+
+        def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+            for span in spans:
+                self.snapshots.append(dict(span.attributes or {}))
+            return super().export(spans)
+
+    provider = trace_api.get_tracer_provider()
+    if not isinstance(provider, TracerProvider):
+        provider = TracerProvider()
+        trace_api.set_tracer_provider(provider)
+
+    snap_exporter = SnapshotExporter()
+    processor = RealtimeSpanProcessor(snap_exporter)
+    provider.add_span_processor(processor)
+    try:
+        with run_in_new_span(
+            SpanMetadata(
+                name='liveAction',
+                type='action',
+                subtype='flow',
+                input={'prompt': 'hi'},
+                metadata={'flow:name': 'liveAction'},
+            )
+        ):
+            # on_start already fired; first snapshot is the live export.
+            assert snap_exporter.snapshots, 'expected RealtimeSpanProcessor on_start export'
+            start_attrs = snap_exporter.snapshots[0]
+            assert start_attrs['genkit:name'] == 'liveAction'
+            assert start_attrs['genkit:type'] == 'action'
+            assert start_attrs['genkit:metadata:subtype'] == 'flow'
+            assert start_attrs['genkit:path'] == '/{liveAction,t:action,s:flow}'
+            assert start_attrs['genkit:metadata:flow:name'] == 'liveAction'
+            assert start_attrs['genkit:input'] == '{"prompt": "hi"}'
+            # Run-determined attrs must not leak into the start write.
+            assert 'genkit:state' not in start_attrs
+            assert 'genkit:output' not in start_attrs
+    finally:
+        snap_exporter.clear()
 
 
 def test_writes_name_path_and_state_success(exporter: InMemorySpanExporter) -> None:
