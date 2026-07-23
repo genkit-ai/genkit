@@ -86,12 +86,6 @@ class ModelConfigDict(TypedDict, total=False):
     api_key: str
 
 
-class _FallbackModelConfig(BaseModel):
-    """Fallback concrete config class when deserializing ModelRef without an explicit schema."""
-
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
-
-
 class ModelRef(BaseModel, Generic[ConfigT]):
     """Frozen reference to a model, optionally tied to a config schema.
 
@@ -100,7 +94,7 @@ class ModelRef(BaseModel, Generic[ConfigT]):
 
         from genkit_google_genai import GeminiConfig, gemini_model
 
-        ref = gemini_model('gemini-flash-latest')
+        ref = gemini_model('gemini-2.5-flash')
         await ai.generate(
             model=ref,
             config=GeminiConfig(temperature=0.7),
@@ -123,19 +117,11 @@ class ModelRef(BaseModel, Generic[ConfigT]):
     @classmethod
     def _validate_config_conforms_to_schema(cls, data: Any) -> Any:  # noqa: ANN401
         if isinstance(data, dict):
-            if (
-                'config_schema' not in data
-                or data.get('config_schema') is None
-                or data.get('config_schema') is BaseModel
-            ):
-                data['config_schema'] = _FallbackModelConfig
             config = data.get('config')
             config_schema = data.get('config_schema')
             if config is not None and config_schema is not None:
                 if isinstance(config, dict):
                     data['config'] = config_schema.model_validate(config)
-                elif config_schema is _FallbackModelConfig and isinstance(config, BaseModel):
-                    pass
                 elif not isinstance(config, config_schema):
                     raise TypeError(
                         f'config must conform to {getattr(config_schema, "__name__", str(config_schema))}, '

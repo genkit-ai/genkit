@@ -128,14 +128,3 @@ def test_vertexai_model_helpers(helper: Any, name: str, expected_schema: Any) ->
     ref = helper(name)
     assert ref.name == f'vertexai/{name}'
     assert ref.config_schema is expected_schema
-
-
-def test_model_ref_deserialization_from_dump() -> None:
-    """Verify ModelRef deserializes cleanly from dictionary dump where config_schema is excluded."""
-    ref = gemini_model('gemini-2.5-flash', config=GeminiConfig(temperature=0.4))
-    dumped = ref.model_dump()
-    assert 'config_schema' not in dumped
-    restored = type(ref).model_validate(dumped)
-    assert restored.name == 'googleai/gemini-2.5-flash'
-    assert restored.config is not None
-    assert restored.config.temperature == 0.4
