@@ -82,13 +82,13 @@ type FormatHandler interface {
 // ConfigureFormats registers default formats in the registry
 func ConfigureFormats(reg api.Registry) {
 	for _, format := range defaultFormats {
-		DefineFormat(reg, "/format/"+format.Name(), format)
+		DefineFormat(reg, format)
 	}
 }
 
-// DefineFormat defines and registers a new [Formatter].
-func DefineFormat(r api.Registry, name string, formatter Formatter) {
-	r.RegisterValue(name, formatter)
+// DefineFormat registers a [Formatter] under the name returned by [Formatter.Name].
+func DefineFormat(r api.Registry, formatter Formatter) {
+	r.RegisterValue("/format/"+formatter.Name(), formatter)
 }
 
 // resolveFormat returns a [Formatter], either a default one or one from the registry.

@@ -1564,15 +1564,15 @@ func (g *Genkit) DefineHelper(name string, fn any) {
 //	}
 //
 //	// Register the formatter
-//	g.DefineFormat("csv", csvFormatter{})
+//	g.DefineFormat(csvFormatter{})
 //
 //	// Use the formatter in a generation request
 //	resp, err := g.Generate(ctx,
 //		ai.WithPrompt("List 3 countries and their capitals"),
 //		ai.WithOutputFormat("csv"), // Use the custom formatter
 //	)
-func (g *Genkit) DefineFormat(name string, formatter ai.Formatter) {
-	ai.DefineFormat(g.reg, name, formatter)
+func (g *Genkit) DefineFormat(formatter ai.Formatter) {
+	ai.DefineFormat(g.reg, formatter)
 }
 
 // IsDefinedFormat checks if a formatter with the given name is registered in the registry.
