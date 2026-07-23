@@ -78,10 +78,19 @@ class ModelConfigDict(TypedDict, total=False):
     version: str
     temperature: float
     max_output_tokens: int
+    maxOutputTokens: int
+    max_tokens: int
     top_k: int
+    topK: int
     top_p: float
+    topP: float
     stop_sequences: list[str]
+    stopSequences: list[str]
     api_key: str
+    apiKey: str
+    thinking: Any
+    budgetTokens: float
+    budget_tokens: float
 
 
 class ModelRef(BaseModel, Generic[ConfigT]):
