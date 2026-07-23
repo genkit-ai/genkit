@@ -21,7 +21,11 @@ start path) and Pydantic GenerateVideosResponse objects (from the check
 path where the SDK returns a model instance).
 """
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
+from genkit_google_genai import GoogleAI
+from genkit_google_genai.google import GenaiModels
 from genkit_google_genai.models.veo import (
     VeoConfigSchema,
     VeoVersion,
@@ -30,6 +34,8 @@ from genkit_google_genai.models.veo import (
     is_veo_model,
 )
 from google.genai import types as genai_types
+
+from genkit import FinishReason, Genkit, ModelResponse
 
 
 class TestIsVeoModel:
@@ -118,6 +124,16 @@ class TestFromVeoOperation:
         assert op.output is None
         assert op.error is None
 
+    def test_pending_operation_null_done_normalized(self) -> None:
+        """API null/omitted done is pending, not a missing flag."""
+        for api_op in (
+            {'name': 'operations/null-done', 'done': None},
+            {'name': 'operations/omitted-done'},
+        ):
+            op = _from_veo_operation(api_op)
+            assert op.done is False
+            assert op.output is None
+
     def test_error_operation(self) -> None:
         """An operation with an error populates op.error."""
         op = _from_veo_operation({
@@ -146,12 +162,14 @@ class TestFromVeoOperation:
             },
         })
         assert op.done is True
-        assert op.output is not None
-        assert op.output['finishReason'] == 'stop'
-        content = op.output['message']['content']
+        assert isinstance(op.output, ModelResponse)
+        assert op.output.finish_reason == FinishReason.STOP
+        content = op.output.message.content if op.output.message else []
         assert len(content) == 2
-        assert content[0]['media']['url'] == 'https://example.com/v1.mp4'
-        assert content[1]['media']['url'] == 'https://example.com/v2.mp4'
+        media0 = content[0].root.media
+        media1 = content[1].root.media
+        assert media0 is not None and media0.url == 'https://example.com/v1.mp4'
+        assert media1 is not None and media1.url == 'https://example.com/v2.mp4'
 
     def test_pydantic_response_with_videos(self) -> None:
         """Pydantic GenerateVideosResponse extracts video URIs (check path).
@@ -178,12 +196,14 @@ class TestFromVeoOperation:
             'response': pydantic_response,
         })
         assert op.done is True
-        assert op.output is not None
-        assert op.output['finishReason'] == 'stop'
-        content = op.output['message']['content']
+        assert isinstance(op.output, ModelResponse)
+        assert op.output.finish_reason == FinishReason.STOP
+        content = op.output.message.content if op.output.message else []
         assert len(content) == 2
-        assert content[0]['media']['url'] == 'https://example.com/video_a.mp4'
-        assert content[1]['media']['url'] == 'https://example.com/video_b.mp4'
+        media0 = content[0].root.media
+        media1 = content[1].root.media
+        assert media0 is not None and media0.url == 'https://example.com/video_a.mp4'
+        assert media1 is not None and media1.url == 'https://example.com/video_b.mp4'
 
     def test_pydantic_response_empty_videos(self) -> None:
         """Pydantic response with no generated_videos produces no output."""
@@ -216,3 +236,81 @@ class TestFromVeoOperation:
         })
         assert op.done is True
         assert op.output is None
+
+
+def _mock_veo_client(start_done: bool = False) -> MagicMock:
+    """Build a mocked GenAI client for Veo background-model tests."""
+    client = MagicMock()
+    start_op = MagicMock()
+    start_op.name = 'operations/veo-start'
+    start_op.done = start_done
+
+    completed_response = genai_types.GenerateVideosResponse(
+        generated_videos=[
+            genai_types.GeneratedVideo(
+                video=genai_types.Video(uri='https://example.com/generated.mp4'),
+            ),
+        ],
+    )
+    check_op = MagicMock()
+    check_op.name = 'operations/veo-start'
+    check_op.done = True
+    check_op.error = None
+    check_op.response = completed_response
+
+    client.aio.models.generate_videos = AsyncMock(return_value=start_op)
+    client.aio.operations.get = AsyncMock(return_value=check_op)
+    return client
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_veo_generate_returns_operation(mock_list_models: MagicMock, mock_client_ctor: MagicMock) -> None:
+    """generate() on a Veo model returns an Operation to poll."""
+    models = GenaiModels()
+    models.veo = ['veo-2.0-generate-001']
+    mock_list_models.return_value = models
+    mock_client_ctor.return_value = _mock_veo_client()
+
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+    response = await ai.generate(
+        model='googleai/veo-2.0-generate-001',
+        prompt='a cat surfing',
+    )
+
+    assert response.operation is not None
+    assert response.operation.id == 'operations/veo-start'
+    assert response.operation.done is False
+    assert response.operation.action == '/background-model/googleai/veo-2.0-generate-001'
+    assert response.message is None
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_veo_generate_operation_poll_loop(mock_list_models: MagicMock, mock_client_ctor: MagicMock) -> None:
+    """generate_operation + check_operation poll Veo to a ModelResponse output."""
+    models = GenaiModels()
+    models.veo = ['veo-2.0-generate-001']
+    mock_list_models.return_value = models
+    mock_client_ctor.return_value = _mock_veo_client()
+
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+    operation = await ai.generate_operation(
+        model='googleai/veo-2.0-generate-001',
+        prompt='a cat surfing',
+    )
+
+    assert operation.id == 'operations/veo-start'
+    assert operation.done is False
+
+    operation = await ai.check_operation(operation)
+
+    assert operation.done is True
+    assert isinstance(operation.output, ModelResponse)
+    assert operation.output.finish_reason == FinishReason.STOP
+    content = operation.output.message.content if operation.output.message else []
+    assert len(content) == 1
+    media = content[0].root.media
+    assert media is not None and media.url == 'https://example.com/generated.mp4'

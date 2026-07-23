@@ -250,7 +250,9 @@ def define_background_model(
     model_options: dict[str, Any] = {}
 
     if info:
-        model_options.update(info.model_dump())
+        # camelCase wire keys (e.g. longRunning) so generate_operation's
+        # metadata check sees the same shape Dev UI / JS expect.
+        model_options.update(info.model_dump(by_alias=True))
 
     model_options['label'] = label
     if config_schema:
