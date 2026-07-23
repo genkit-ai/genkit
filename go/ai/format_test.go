@@ -40,14 +40,13 @@ func TestTextFormatter(t *testing.T) {
 
 	t.Run("ParseOutput returns text content", func(t *testing.T) {
 		handler, _ := textFormatter{}.Handler(nil)
-		sfh := handler.(StreamingFormatHandler)
 
 		msg := &Message{
 			Role:    RoleModel,
 			Content: []*Part{NewTextPart("Hello, world!")},
 		}
 
-		got, err := sfh.ParseOutput(msg)
+		got, err := handler.ParseOutput(msg)
 		if err != nil {
 			t.Fatalf("ParseOutput() error = %v", err)
 		}
@@ -58,7 +57,6 @@ func TestTextFormatter(t *testing.T) {
 
 	t.Run("ParseChunk accumulates text across chunks", func(t *testing.T) {
 		handler, _ := textFormatter{}.Handler(nil)
-		sfh := handler.(StreamingFormatHandler)
 
 		chunks := []string{"Hello", ", ", "world!"}
 		var lastResult any
@@ -68,7 +66,7 @@ func TestTextFormatter(t *testing.T) {
 				Content: []*Part{NewTextPart(text)},
 				Index:   0,
 			}
-			got, err := sfh.ParseChunk(chunk)
+			got, err := handler.ParseChunk(chunk)
 			if err != nil {
 				t.Fatalf("ParseChunk() error = %v", err)
 			}
@@ -82,14 +80,13 @@ func TestTextFormatter(t *testing.T) {
 
 	t.Run("ParseChunk resets on index change", func(t *testing.T) {
 		handler, _ := textFormatter{}.Handler(nil)
-		sfh := handler.(StreamingFormatHandler)
 
-		sfh.ParseChunk(&ModelResponseChunk{
+		handler.ParseChunk(&ModelResponseChunk{
 			Content: []*Part{NewTextPart("first turn")},
 			Index:   0,
 		})
 
-		got, _ := sfh.ParseChunk(&ModelResponseChunk{
+		got, _ := handler.ParseChunk(&ModelResponseChunk{
 			Content: []*Part{NewTextPart("second turn")},
 			Index:   1,
 		})
@@ -152,14 +149,13 @@ func TestJSONFormatter(t *testing.T) {
 
 	t.Run("ParseOutput extracts and validates JSON", func(t *testing.T) {
 		handler, _ := jsonFormatter{}.Handler(schema)
-		sfh := handler.(StreamingFormatHandler)
 
 		msg := &Message{
 			Role:    RoleModel,
 			Content: []*Part{NewTextPart(`{"name": "Alice", "age": 30}`)},
 		}
 
-		got, err := sfh.ParseOutput(msg)
+		got, err := handler.ParseOutput(msg)
 		if err != nil {
 			t.Fatalf("ParseOutput() error = %v", err)
 		}
@@ -172,14 +168,13 @@ func TestJSONFormatter(t *testing.T) {
 
 	t.Run("ParseOutput extracts JSON from markdown", func(t *testing.T) {
 		handler, _ := jsonFormatter{}.Handler(schema)
-		sfh := handler.(StreamingFormatHandler)
 
 		msg := &Message{
 			Role:    RoleModel,
 			Content: []*Part{NewTextPart("Here is the result:\n\n```json\n{\"name\": \"Bob\", \"age\": 25}\n```")},
 		}
 
-		got, err := sfh.ParseOutput(msg)
+		got, err := handler.ParseOutput(msg)
 		if err != nil {
 			t.Fatalf("ParseOutput() error = %v", err)
 		}
@@ -192,14 +187,13 @@ func TestJSONFormatter(t *testing.T) {
 
 	t.Run("ParseOutput validates against schema", func(t *testing.T) {
 		handler, _ := jsonFormatter{}.Handler(schema)
-		sfh := handler.(StreamingFormatHandler)
 
 		msg := &Message{
 			Role:    RoleModel,
 			Content: []*Part{NewTextPart(`{"name": "Alice", "unknown_field": "bad"}`)},
 		}
 
-		_, err := sfh.ParseOutput(msg)
+		_, err := handler.ParseOutput(msg)
 		if err == nil {
 			t.Error("ParseOutput() should fail validation for unknown field")
 		}
@@ -207,9 +201,8 @@ func TestJSONFormatter(t *testing.T) {
 
 	t.Run("ParseChunk handles partial JSON", func(t *testing.T) {
 		handler, _ := jsonFormatter{}.Handler(nil)
-		sfh := handler.(StreamingFormatHandler)
 
-		got, err := sfh.ParseChunk(&ModelResponseChunk{
+		got, err := handler.ParseChunk(&ModelResponseChunk{
 			Content: []*Part{NewTextPart(`{"name": "Jo`)},
 			Index:   0,
 		})
@@ -228,14 +221,13 @@ func TestJSONFormatter(t *testing.T) {
 
 	t.Run("ParseChunk accumulates across chunks", func(t *testing.T) {
 		handler, _ := jsonFormatter{}.Handler(nil)
-		sfh := handler.(StreamingFormatHandler)
 
-		sfh.ParseChunk(&ModelResponseChunk{
+		handler.ParseChunk(&ModelResponseChunk{
 			Content: []*Part{NewTextPart(`{"name"`)},
 			Index:   0,
 		})
 
-		got, err := sfh.ParseChunk(&ModelResponseChunk{
+		got, err := handler.ParseChunk(&ModelResponseChunk{
 			Content: []*Part{NewTextPart(`: "Alice", "age": 30}`)},
 			Index:   0,
 		})
@@ -249,38 +241,22 @@ func TestJSONFormatter(t *testing.T) {
 		}
 	})
 
-	t.Run("ParseMessage validates JSON and creates JSON part", func(t *testing.T) {
+	t.Run("ParseOutput does not modify the message", func(t *testing.T) {
 		handler, _ := jsonFormatter{}.Handler(schema)
 
+		text := "```json\n{\"name\": \"Alice\", \"age\": 30}\n```"
+		part := NewTextPart(text)
 		msg := &Message{
 			Role:    RoleModel,
-			Content: []*Part{NewTextPart(`{"name": "Alice", "age": 30}`)},
+			Content: []*Part{part},
 		}
 
-		got, err := handler.ParseMessage(msg)
-		if err != nil {
-			t.Fatalf("ParseMessage() error = %v", err)
+		if _, err := handler.ParseOutput(msg); err != nil {
+			t.Fatalf("ParseOutput() error = %v", err)
 		}
 
-		if len(got.Content) != 1 {
-			t.Fatalf("ParseMessage() returned %d parts, want 1", len(got.Content))
-		}
-		if got.Content[0].ContentType != "application/json" {
-			t.Errorf("Part ContentType = %q, want %q", got.Content[0].ContentType, "application/json")
-		}
-	})
-
-	t.Run("ParseMessage fails on invalid JSON", func(t *testing.T) {
-		handler, _ := jsonFormatter{}.Handler(nil)
-
-		msg := &Message{
-			Role:    RoleModel,
-			Content: []*Part{NewTextPart("not valid json")},
-		}
-
-		_, err := handler.ParseMessage(msg)
-		if err == nil {
-			t.Error("ParseMessage() should fail for invalid JSON")
+		if len(msg.Content) != 1 || msg.Content[0] != part || part.Text != text {
+			t.Error("ParseOutput() should not modify the message content")
 		}
 	})
 }
@@ -331,14 +307,13 @@ func TestJSONLFormatter(t *testing.T) {
 
 	t.Run("ParseOutput parses multiple lines", func(t *testing.T) {
 		handler, _ := jsonlFormatter{}.Handler(schema)
-		sfh := handler.(StreamingFormatHandler)
 
 		msg := &Message{
 			Role:    RoleModel,
 			Content: []*Part{NewTextPart("{\"id\": 1, \"name\": \"Alice\"}\n{\"id\": 2, \"name\": \"Bob\"}")},
 		}
 
-		got, err := sfh.ParseOutput(msg)
+		got, err := handler.ParseOutput(msg)
 		if err != nil {
 			t.Fatalf("ParseOutput() error = %v", err)
 		}
@@ -354,9 +329,8 @@ func TestJSONLFormatter(t *testing.T) {
 
 	t.Run("ParseChunk handles streaming JSONL", func(t *testing.T) {
 		handler, _ := jsonlFormatter{}.Handler(schema)
-		sfh := handler.(StreamingFormatHandler)
 
-		got1, _ := sfh.ParseChunk(&ModelResponseChunk{
+		got1, _ := handler.ParseChunk(&ModelResponseChunk{
 			Content: []*Part{NewTextPart("{\"id\": 1}\n")},
 			Index:   0,
 		})
@@ -366,7 +340,7 @@ func TestJSONLFormatter(t *testing.T) {
 			t.Fatalf("first ParseChunk() should return 1 item, got %v", got1)
 		}
 
-		got2, _ := sfh.ParseChunk(&ModelResponseChunk{
+		got2, _ := handler.ParseChunk(&ModelResponseChunk{
 			Content: []*Part{NewTextPart("{\"id\": 2}")},
 			Index:   0,
 		})
@@ -426,14 +400,13 @@ func TestArrayFormatter(t *testing.T) {
 
 	t.Run("ParseOutput extracts array items", func(t *testing.T) {
 		handler, _ := arrayFormatter{}.Handler(schema)
-		sfh := handler.(StreamingFormatHandler)
 
 		msg := &Message{
 			Role:    RoleModel,
 			Content: []*Part{NewTextPart(`[{"id": 1}, {"id": 2}]`)},
 		}
 
-		got, err := sfh.ParseOutput(msg)
+		got, err := handler.ParseOutput(msg)
 		if err != nil {
 			t.Fatalf("ParseOutput() error = %v", err)
 		}
@@ -449,14 +422,13 @@ func TestArrayFormatter(t *testing.T) {
 
 	t.Run("ParseChunk handles streaming array", func(t *testing.T) {
 		handler, _ := arrayFormatter{}.Handler(schema)
-		sfh := handler.(StreamingFormatHandler)
 
-		sfh.ParseChunk(&ModelResponseChunk{
+		handler.ParseChunk(&ModelResponseChunk{
 			Content: []*Part{NewTextPart(`[{"id": 1},`)},
 			Index:   0,
 		})
 
-		got, _ := sfh.ParseChunk(&ModelResponseChunk{
+		got, _ := handler.ParseChunk(&ModelResponseChunk{
 			Content: []*Part{NewTextPart(` {"id": 2}]`)},
 			Index:   0,
 		})
@@ -536,14 +508,13 @@ func TestEnumFormatter(t *testing.T) {
 
 	t.Run("ParseOutput validates enum value", func(t *testing.T) {
 		handler, _ := enumFormatter{}.Handler(schema)
-		sfh := handler.(StreamingFormatHandler)
 
 		msg := &Message{
 			Role:    RoleModel,
 			Content: []*Part{NewTextPart("green")},
 		}
 
-		got, err := sfh.ParseOutput(msg)
+		got, err := handler.ParseOutput(msg)
 		if err != nil {
 			t.Fatalf("ParseOutput() error = %v", err)
 		}
@@ -554,14 +525,13 @@ func TestEnumFormatter(t *testing.T) {
 
 	t.Run("ParseOutput strips quotes and whitespace", func(t *testing.T) {
 		handler, _ := enumFormatter{}.Handler(schema)
-		sfh := handler.(StreamingFormatHandler)
 
 		msg := &Message{
 			Role:    RoleModel,
 			Content: []*Part{NewTextPart("  \"blue\"  \n")},
 		}
 
-		got, err := sfh.ParseOutput(msg)
+		got, err := handler.ParseOutput(msg)
 		if err != nil {
 			t.Fatalf("ParseOutput() error = %v", err)
 		}
@@ -572,14 +542,13 @@ func TestEnumFormatter(t *testing.T) {
 
 	t.Run("ParseOutput fails on invalid enum", func(t *testing.T) {
 		handler, _ := enumFormatter{}.Handler(schema)
-		sfh := handler.(StreamingFormatHandler)
 
 		msg := &Message{
 			Role:    RoleModel,
 			Content: []*Part{NewTextPart("yellow")},
 		}
 
-		_, err := sfh.ParseOutput(msg)
+		_, err := handler.ParseOutput(msg)
 		if err == nil {
 			t.Error("ParseOutput() should fail for invalid enum value")
 		}
@@ -587,9 +556,8 @@ func TestEnumFormatter(t *testing.T) {
 
 	t.Run("ParseChunk returns valid enum or empty", func(t *testing.T) {
 		handler, _ := enumFormatter{}.Handler(schema)
-		sfh := handler.(StreamingFormatHandler)
 
-		got1, err := sfh.ParseChunk(&ModelResponseChunk{
+		got1, err := handler.ParseChunk(&ModelResponseChunk{
 			Content: []*Part{NewTextPart("re")},
 			Index:   0,
 		})
@@ -600,7 +568,7 @@ func TestEnumFormatter(t *testing.T) {
 			t.Errorf("ParseChunk() with partial = %v, want empty", got1)
 		}
 
-		got2, err := sfh.ParseChunk(&ModelResponseChunk{
+		got2, err := handler.ParseChunk(&ModelResponseChunk{
 			Content: []*Part{NewTextPart("d")},
 			Index:   0,
 		})
@@ -612,40 +580,26 @@ func TestEnumFormatter(t *testing.T) {
 		}
 	})
 
-	t.Run("ParseMessage validates and cleans enum", func(t *testing.T) {
+	t.Run("ParseOutput does not modify the message", func(t *testing.T) {
 		handler, _ := enumFormatter{}.Handler(schema)
 
+		text := "  'green'\n"
+		part := NewTextPart(text)
 		msg := &Message{
 			Role:    RoleModel,
-			Content: []*Part{NewTextPart("  'green'\n")},
+			Content: []*Part{part},
 		}
 
-		got, err := handler.ParseMessage(msg)
+		got, err := handler.ParseOutput(msg)
 		if err != nil {
-			t.Fatalf("ParseMessage() error = %v", err)
+			t.Fatalf("ParseOutput() error = %v", err)
 		}
 
-		if got.Content[0].Text != "green" {
-			t.Errorf("ParseMessage() text = %q, want %q", got.Content[0].Text, "green")
+		if got != "green" {
+			t.Errorf("ParseOutput() = %v, want %q", got, "green")
 		}
-	})
-
-	t.Run("ParseMessage preserves non-text parts", func(t *testing.T) {
-		handler, _ := enumFormatter{}.Handler(schema)
-
-		toolPart := NewToolRequestPart(&ToolRequest{Name: "test"})
-		msg := &Message{
-			Role:    RoleModel,
-			Content: []*Part{NewTextPart("red"), toolPart},
-		}
-
-		got, err := handler.ParseMessage(msg)
-		if err != nil {
-			t.Fatalf("ParseMessage() error = %v", err)
-		}
-
-		if len(got.Content) != 2 {
-			t.Fatalf("ParseMessage() returned %d parts, want 2", len(got.Content))
+		if len(msg.Content) != 1 || msg.Content[0] != part || part.Text != text {
+			t.Error("ParseOutput() should not modify the message content")
 		}
 	})
 }
@@ -805,46 +759,6 @@ func TestObjectEnums(t *testing.T) {
 	})
 }
 
-func TestStreamingFormatHandlerInterface(t *testing.T) {
-	formatters := []Formatter{
-		textFormatter{},
-		jsonFormatter{},
-		jsonlFormatter{},
-		arrayFormatter{},
-		enumFormatter{},
-	}
-
-	arraySchema := map[string]any{
-		"type":  "array",
-		"items": map[string]any{"type": "object"},
-	}
-	enumSchema := map[string]any{
-		"type": "string",
-		"enum": []any{"a", "b"},
-	}
-
-	for _, f := range formatters {
-		t.Run(f.Name()+" implements StreamingFormatHandler", func(t *testing.T) {
-			var schema map[string]any
-			switch f.Name() {
-			case OutputFormatJSONL, OutputFormatArray:
-				schema = arraySchema
-			case OutputFormatEnum:
-				schema = enumSchema
-			}
-
-			handler, err := f.Handler(schema)
-			if err != nil {
-				t.Fatalf("Handler() error = %v", err)
-			}
-
-			if _, ok := handler.(StreamingFormatHandler); !ok {
-				t.Errorf("%s handler does not implement StreamingFormatHandler", f.Name())
-			}
-		})
-	}
-}
-
 func TestConstrainedGenerateWithFormats(t *testing.T) {
 	type FooBar struct {
 		Foo string `json:"foo"`
@@ -993,7 +907,7 @@ func TestConstrainedGenerateWithFormats(t *testing.T) {
 		}
 	})
 
-	t.Run("text response is extracted from markdown", func(t *testing.T) {
+	t.Run("message text is preserved as returned by the model", func(t *testing.T) {
 		res, err := Generate(context.Background(), r,
 			WithModel(formatModel),
 			WithPrompt("generate json"),
@@ -1004,8 +918,8 @@ func TestConstrainedGenerateWithFormats(t *testing.T) {
 		}
 
 		text := res.Text()
-		if text != JSON {
-			t.Errorf("Text() = %q, want %q", text, JSON)
+		if text != JSONmd {
+			t.Errorf("Text() = %q, want %q", text, JSONmd)
 		}
 	})
 }
@@ -1030,73 +944,4 @@ func TestDefaultFormats(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestArrayFormatterParseMessage(t *testing.T) {
-	schema := map[string]any{
-		"type": "array",
-		"items": map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"id": map[string]any{"type": "integer"},
-			},
-		},
-	}
-
-	t.Run("returns message unchanged", func(t *testing.T) {
-		handler, err := arrayFormatter{}.Handler(schema)
-		if err != nil {
-			t.Fatalf("Handler() error = %v", err)
-		}
-
-		msg := &Message{
-			Role:    RoleModel,
-			Content: []*Part{NewTextPart(`[{"id": 1}, {"id": 2}]`)},
-		}
-
-		got, err := handler.ParseMessage(msg)
-		if err != nil {
-			t.Fatalf("ParseMessage() error = %v", err)
-		}
-
-		// Array formatter's ParseMessage returns the message unchanged
-		if got != msg {
-			t.Error("ParseMessage() should return the same message object")
-		}
-	})
-}
-
-func TestJSONLFormatterParseMessage(t *testing.T) {
-	schema := map[string]any{
-		"type": "array",
-		"items": map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"id":   map[string]any{"type": "integer"},
-				"name": map[string]any{"type": "string"},
-			},
-		},
-	}
-
-	t.Run("returns message unchanged", func(t *testing.T) {
-		handler, err := jsonlFormatter{}.Handler(schema)
-		if err != nil {
-			t.Fatalf("Handler() error = %v", err)
-		}
-
-		msg := &Message{
-			Role:    RoleModel,
-			Content: []*Part{NewTextPart("{\"id\": 1, \"name\": \"Alice\"}\n{\"id\": 2, \"name\": \"Bob\"}")},
-		}
-
-		got, err := handler.ParseMessage(msg)
-		if err != nil {
-			t.Fatalf("ParseMessage() error = %v", err)
-		}
-
-		// JSONL formatter's ParseMessage returns the message unchanged
-		if got != msg {
-			t.Error("ParseMessage() should return the same message object")
-		}
-	})
 }

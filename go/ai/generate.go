@@ -344,25 +344,18 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	fn = buildModelChain(mws, fn)
 	fn = core.ChainMiddleware(mmws...)(fn)
 
-	// Share one streaming format handler across middleware- and model-emitted
-	// chunks so its per-index accumulation (e.g. accumulatedText) spans both.
-	var streamingHandler StreamingFormatHandler
-	if sfh, ok := formatHandler.(StreamingFormatHandler); ok {
-		streamingHandler = sfh
-	}
-
 	// middlewareCb is the callback given to WrapGenerate hooks. It attaches the
-	// shared streamingHandler so middleware-emitted chunks can be parsed and
-	// contribute to accumulation, while preserving any Index/Role the middleware
-	// set explicitly (the model path in wrappedCb assigns those from role-based
-	// state).
+	// shared format handler so middleware-emitted chunks can be parsed and
+	// contribute to its per-index accumulation, while preserving any Index/Role
+	// the middleware set explicitly (the model path in wrappedCb assigns those
+	// from role-based state).
 	var middlewareCb ModelStreamCallback
 	if cb != nil {
 		middlewareCb = func(ctx context.Context, chunk *ModelResponseChunk) error {
 			if chunk.Role == "" {
 				chunk.Role = RoleModel
 			}
-			chunk.formatHandler = streamingHandler
+			chunk.formatHandler = formatHandler
 			return cb(ctx, chunk)
 		}
 	}
@@ -401,7 +394,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 					if chunk.Role == "" {
 						chunk.Role = RoleModel
 					}
-					chunk.formatHandler = streamingHandler
+					chunk.formatHandler = formatHandler
 					return cb(ctx, chunk)
 				}
 			}
@@ -457,15 +450,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 				return resp, nil
 			}
 
-			if formatHandler != nil {
-				resp.formatHandler = streamingHandler
-				// This is legacy behavior. New format handlers should implement ParseMessage as a passthrough.
-				resp.Message, err = formatHandler.ParseMessage(resp.Message)
-				if err != nil {
-					logger.FromContext(ctx).Debug("model failed to generate output matching expected schema", "error", err.Error())
-					return nil, core.NewError(core.INTERNAL, "model failed to generate output matching expected schema: %v", err)
-				}
-			}
+			resp.formatHandler = formatHandler
 
 			if len(resp.ToolRequests()) == 0 || opts.ReturnToolRequests {
 				return resp, nil

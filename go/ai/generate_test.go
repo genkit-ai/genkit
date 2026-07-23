@@ -208,159 +208,6 @@ func TestStreamingChunksHaveRoleAndIndex(t *testing.T) {
 	}
 }
 
-func TestValidMessage(t *testing.T) {
-	t.Parallel()
-
-	t.Run("Valid message with text format", func(t *testing.T) {
-		message := &Message{
-			Content: []*Part{
-				NewTextPart("Hello, World!"),
-			},
-		}
-		outputSchema := &ModelOutputConfig{
-			Format: OutputFormatText,
-		}
-		_, err := validTestMessage(message, outputSchema)
-		if err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	t.Run("Valid message with JSON format and matching schema", func(t *testing.T) {
-		json := `{
-			"name": "John",
-			"age": 30,
-			"address": {
-				"street": "123 Main St",
-				"city": "New York",
-				"country": "USA"
-			}
-		}`
-		message := &Message{
-			Content: []*Part{
-				NewTextPart(JSONMarkdown(json)),
-			},
-		}
-		outputSchema := &ModelOutputConfig{
-			Format: OutputFormatJSON,
-			Schema: map[string]any{
-				"type":     "object",
-				"required": []string{"name", "age", "address"},
-				"properties": map[string]any{
-					"name": map[string]any{"type": "string"},
-					"age":  map[string]any{"type": "integer"},
-					"address": map[string]any{
-						"type":     "object",
-						"required": []string{"street", "city", "country"},
-						"properties": map[string]any{
-							"street":  map[string]any{"type": "string"},
-							"city":    map[string]any{"type": "string"},
-							"country": map[string]any{"type": "string"},
-						},
-					},
-					"phone": map[string]any{"type": "string"},
-				},
-			},
-		}
-		message, err := validTestMessage(message, outputSchema)
-		if err != nil {
-			t.Fatal(err)
-		}
-		text := message.Text()
-		if strings.TrimSpace(text) != strings.TrimSpace(json) {
-			t.Fatalf("got %q, want %q", json, text)
-		}
-	})
-
-	t.Run("Invalid message with JSON format and non-matching schema", func(t *testing.T) {
-		message := &Message{
-			Content: []*Part{
-				NewTextPart(JSONMarkdown(`{"name": "John", "age": "30"}`)),
-			},
-		}
-		outputSchema := &ModelOutputConfig{
-			Format: OutputFormatJSON,
-			Schema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"name": map[string]any{"type": "string"},
-					"age":  map[string]any{"type": "integer"},
-				},
-			},
-		}
-		_, err := validTestMessage(message, outputSchema)
-		errorContains(t, err, "data did not match expected schema")
-	})
-
-	t.Run("Message with invalid JSON", func(t *testing.T) {
-		message := &Message{
-			Content: []*Part{
-				NewTextPart(JSONMarkdown(`{"name": "John", "age": 30`)), // Missing trailing }.
-			},
-		}
-		outputSchema := &ModelOutputConfig{
-			Format: OutputFormatJSON,
-		}
-		_, err := validTestMessage(message, outputSchema)
-		t.Log(err)
-		errorContains(t, err, "not a valid JSON")
-	})
-
-	t.Run("No message", func(t *testing.T) {
-		outputSchema := &ModelOutputConfig{
-			Format: OutputFormatJSON,
-		}
-		_, err := validTestMessage(nil, outputSchema)
-		errorContains(t, err, "message is empty")
-	})
-
-	t.Run("Empty message", func(t *testing.T) {
-		message := &Message{}
-		outputSchema := &ModelOutputConfig{
-			Format: OutputFormatJSON,
-		}
-		_, err := validTestMessage(message, outputSchema)
-		errorContains(t, err, "message has no content")
-	})
-
-	t.Run("Candidate contains unexpected field", func(t *testing.T) {
-		message := &Message{
-			Content: []*Part{
-				NewTextPart(JSONMarkdown(`{"name": "John", "height": 190}`)),
-			},
-		}
-		outputSchema := &ModelOutputConfig{
-			Format: OutputFormatJSON,
-			Schema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"name": map[string]any{"type": "string"},
-					"age":  map[string]any{"type": "integer"},
-				},
-				"additionalProperties": false,
-			},
-		}
-		_, err := validTestMessage(message, outputSchema)
-		errorContains(t, err, "data did not match expected schema")
-	})
-
-	t.Run("Invalid expected schema", func(t *testing.T) {
-		message := &Message{
-			Content: []*Part{
-				NewTextPart(JSONMarkdown(`{"name": "John", "age": 30}`)),
-			},
-		}
-		outputSchema := &ModelOutputConfig{
-			Format: OutputFormatJSON,
-			Schema: map[string]any{
-				"type": "invalid",
-			},
-		}
-		_, err := validTestMessage(message, outputSchema)
-		errorContains(t, err, "failed to validate data against expected schema")
-	})
-}
-
 func TestGenerate(t *testing.T) {
 	JSON := "{\"subject\": \"bananas\", \"location\": \"tropics\"}"
 	JSONmd := "```json" + JSON + "```"
@@ -379,7 +226,7 @@ func TestGenerate(t *testing.T) {
 	})
 
 	t.Run("constructs request", func(t *testing.T) {
-		wantText := JSON
+		wantText := JSONmd
 		wantStreamText := "stream!"
 		wantRequest := &ModelRequest{
 			Messages: []*Message{
@@ -968,10 +815,6 @@ func TestLookupModel(t *testing.T) {
 	})
 }
 
-func JSONMarkdown(text string) string {
-	return "```json\n" + text + "\n```"
-}
-
 func errorContains(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil {
@@ -979,20 +822,6 @@ func errorContains(t *testing.T, err error, want string) {
 	} else if !strings.Contains(err.Error(), want) {
 		t.Errorf("got error message %q, want it to contain %q", err, want)
 	}
-}
-
-func validTestMessage(m *Message, output *ModelOutputConfig) (*Message, error) {
-	resolvedFormat, err := resolveFormat(r, output.Schema, output.Format)
-	if err != nil {
-		return nil, err
-	}
-
-	handler, err := resolvedFormat.Handler(output.Schema)
-	if err != nil {
-		return nil, err
-	}
-
-	return handler.ParseMessage(m)
 }
 
 type conditionalToolInput struct {
@@ -1476,7 +1305,6 @@ func TestModelResponseOutput(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Handler() error = %v", err)
 		}
-		streamingHandler := handler.(StreamingFormatHandler)
 
 		mr := &ModelResponse{
 			Message: &Message{
@@ -1485,7 +1313,7 @@ func TestModelResponseOutput(t *testing.T) {
 					NewTextPart("{\"line\":1}\n{\"line\":2}"),
 				},
 			},
-			formatHandler: streamingHandler,
+			formatHandler: handler,
 		}
 
 		var result []struct {
@@ -1515,7 +1343,6 @@ func TestModelResponseOutput(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Handler() error = %v", err)
 		}
-		streamingHandler := handler.(StreamingFormatHandler)
 
 		mr := &ModelResponse{
 			Message: &Message{
@@ -1524,7 +1351,7 @@ func TestModelResponseOutput(t *testing.T) {
 					NewTextPart(`[{"item":"a"},{"item":"b"}]`),
 				},
 			},
-			formatHandler: streamingHandler,
+			formatHandler: handler,
 		}
 
 		var result []struct {
@@ -1551,7 +1378,6 @@ func TestModelResponseOutput(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Handler() error = %v", err)
 		}
-		streamingHandler := handler.(StreamingFormatHandler)
 
 		mr := &ModelResponse{
 			Message: &Message{
@@ -1560,7 +1386,7 @@ func TestModelResponseOutput(t *testing.T) {
 					NewTextPart(`{"key":"value"}`),
 				},
 			},
-			formatHandler: streamingHandler,
+			formatHandler: handler,
 		}
 
 		var result struct {

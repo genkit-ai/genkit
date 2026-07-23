@@ -349,7 +349,7 @@ type ModelResponse struct {
 	Request *ModelRequest `json:"request,omitempty"`
 	// Usage describes how many resources were used by this generation request.
 	Usage         *GenerationUsage `json:"usage,omitempty"`
-	formatHandler StreamingFormatHandler
+	formatHandler FormatHandler
 }
 
 // A ModelResponseChunk is the portion of the ModelResponse
@@ -366,7 +366,7 @@ type ModelResponseChunk struct {
 	Index int `json:"index"`
 	// Role indicates the entity that generated this chunk.
 	Role          Role `json:"role,omitempty"`
-	formatHandler StreamingFormatHandler
+	formatHandler FormatHandler
 }
 
 // MultipartToolResponse represents a tool response with both structured output and content parts.
