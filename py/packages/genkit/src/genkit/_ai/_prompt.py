@@ -104,35 +104,52 @@ def normalize_config(
     return dict(config)
 
 
-def _resolve_model_arg(
-    model: str | ModelRef[BaseModel] | None,
+def _to_dict(val: Any) -> dict[str, Any]:  # noqa: ANN401
+    if isinstance(val, BaseModel):
+        return val.model_dump(exclude_unset=True)
+    return dict(val) if val is not None else {}  # type: ignore[arg-type]  # pyrefly: ignore
+
+
+def _get_concrete_schema(*candidates: object) -> type[BaseModel] | None:
+    """Return the first candidate that is a concrete BaseModel subclass."""
+    for cand in candidates:
+        if isinstance(cand, type) and issubclass(cand, BaseModel) and cand is not BaseModel:
+            return cand
+    return None
+
+
+def resolve_model_arg(
+    model: str | ModelRef[Any] | None,
     config: dict[str, Any] | BaseModel | None,
 ) -> tuple[str | None, dict[str, Any] | BaseModel | None]:
-    """Unwrap a ModelRef to its wire name and apply default config when omitted."""
-    if isinstance(model, ModelRef):
-        if model.config is not None:
-            if config is None:
-                config = model.config
-            else:
-                default_dict = model.config.model_dump(exclude_unset=True)
-                call_dict = config.model_dump(exclude_unset=True) if isinstance(config, BaseModel) else dict(config)  # type: ignore[arg-type]  # pyrefly: ignore
-                merged = {**default_dict, **call_dict}
-                if (
-                    isinstance(model.config_schema, type)
-                    and issubclass(model.config_schema, BaseModel)
-                    and model.config_schema is not BaseModel
-                ):
-                    config = model.config_schema.model_validate(merged)
-                elif isinstance(model.config, BaseModel) and type(model.config) is not BaseModel:
-                    config = type(model.config).model_validate(merged)
-                elif isinstance(config, BaseModel) and type(config) is not BaseModel:
-                    config = type(config).model_validate(merged)
-                else:
-                    config = merged
-        return model.name, config
-    if isinstance(model, str):
+    """Resolve a ModelRef or string model argument to a wire name and merged config.
+
+    If a ModelRef carries default configuration, call-time overrides are cleanly
+    merged on top of it and validated against the ModelRef's concrete schema.
+    """
+    if not isinstance(model, ModelRef):
         return model, config
-    return None, config
+
+    wire_name = model.name
+    default_config = model.config
+
+    # No default config on the ref: use whatever was passed at call-time.
+    if default_config is None:
+        return wire_name, config
+
+    # No call-time overrides provided: inherit the default config directly.
+    if config is None:
+        return wire_name, default_config
+
+    # Merge call-time overrides on top of the ModelRef's default configuration.
+    merged = {**_to_dict(default_config), **_to_dict(config)}
+
+    # Validate back into the concrete Pydantic model if a specific schema exists.
+    schema = _get_concrete_schema(model.config_schema, type(default_config), type(config))
+    if schema:
+        return wire_name, schema.model_validate(merged)
+
+    return wire_name, merged
 
 
 class OutputOptions(TypedDict, total=False):
@@ -451,7 +468,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         def _or(opt_val: Any, default: Any) -> Any:  # noqa: ANN401
             return opt_val if opt_val is not None else default
 
-        model_name, resolved_config = _resolve_model_arg(
+        model_name, resolved_config = resolve_model_arg(
             opts.get('model') or self._model,
             merged_config,
         )
@@ -685,7 +702,7 @@ async def to_generate_action_options(
     options: PromptConfig,
 ) -> GenerateActionOptions:
     """Render ``PromptConfig`` into `GenerateActionOptions`."""
-    model_name, config = _resolve_model_arg(options.model, options.config)
+    model_name, config = resolve_model_arg(options.model, options.config)
     model = model_name or cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
     if model is None:
         raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')

@@ -8,7 +8,7 @@
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from genkit._ai._prompt import PromptConfig, _resolve_model_arg
+from genkit._ai._prompt import PromptConfig, resolve_model_arg
 from genkit.model import model_ref
 from genkit.plugin_api import ModelConfig
 
@@ -64,7 +64,7 @@ def test_model_ref_config_merging() -> None:
         config_schema=CustomConfig,
         config=CustomConfig(temperature=0.7, safety_settings={'HARM': 'BLOCK'}),
     )
-    name, resolved_cfg = _resolve_model_arg(ref, CustomConfig(temperature=0.2))
+    name, resolved_cfg = resolve_model_arg(ref, CustomConfig(temperature=0.2))
     assert name == 'googleai/gemini-pro-latest'
     assert isinstance(resolved_cfg, CustomConfig)
     assert resolved_cfg.temperature == 0.2
