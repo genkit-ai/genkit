@@ -263,7 +263,7 @@ class PrebuiltVoiceConfig(BaseModel):
     """Prebuilt voice config."""
 
     model_config = ConfigDict(extra='allow', populate_by_name=True)
-    voice_name: str | None = Field(None, alias='voiceName')
+    voice_name: str | None = Field(default=None, alias='voiceName')
 
 
 class FunctionCallingMode(StrEnum):
@@ -341,11 +341,11 @@ class ImageConfigSchema(BaseModel):
     image_size: ImageSize | None = Field(None, alias='imageSize')
 
 
-class VoiceConfigSchema(BaseModel):
+class VoiceConfig(BaseModel):
     """Voice config schema."""
 
     model_config = ConfigDict(extra='allow', populate_by_name=True)
-    prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(None, alias='prebuiltVoiceConfig')
+    prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(default=None, alias='prebuiltVoiceConfig')
 
 
 class GeminiConfig(ModelConfig):
@@ -559,22 +559,26 @@ class GeminiConfig(ModelConfig):
     stop_sequences: list[str] | None = Field(default=None, alias='stopSequences', description='Stop sequences.')
 
 
-class SpeechConfigSchema(BaseModel):
+class SpeechConfig(BaseModel):
     """Speech config schema."""
 
-    voice_config: VoiceConfigSchema | None = Field(None, alias='voiceConfig')
+    model_config = ConfigDict(extra='allow', populate_by_name=True)
 
-    http_options: Any | None = Field(None, exclude=True)
-    tools: Any | None = Field(None, exclude=True)
-    tool_config: Any | None = Field(None, exclude=True)
-    response_schema: Any | None = Field(None, exclude=True)
-    response_json_schema: Any | None = Field(None, exclude=True)
+    voice_config: VoiceConfig | None = Field(default=None, alias='voiceConfig')
+
+    http_options: Any | None = Field(default=None, exclude=True)
+    tools: Any | None = Field(default=None, exclude=True)
+    tool_config: Any | None = Field(default=None, exclude=True)
+    response_schema: Any | None = Field(default=None, exclude=True)
+    response_json_schema: Any | None = Field(default=None, exclude=True)
 
 
 class GeminiTtsConfig(GeminiConfig):
     """Gemini TTS Config Schema."""
 
-    speech_config: SpeechConfigSchema | None = Field(None, alias='speechConfig')
+    model_config = ConfigDict(extra='allow', populate_by_name=True)
+
+    speech_config: SpeechConfig | None = Field(default=None, alias='speechConfig')
 
 
 class GeminiImageConfig(GeminiConfig):

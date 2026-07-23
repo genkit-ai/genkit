@@ -231,7 +231,10 @@ from genkit_google_genai.models.gemini import (
     GeminiTtsConfig,
     GemmaConfig,
     GoogleAIGeminiVersion,
+    PrebuiltVoiceConfig,
+    SpeechConfig,
     VertexAIGeminiVersion,
+    VoiceConfig,
 )
 from genkit_google_genai.models.imagen import ImagenConfig, ImagenVersion
 from genkit_google_genai.models.lyria import LyriaConfig, LyriaVersion
@@ -260,11 +263,14 @@ __all__ = [
     'ImagenVersion',
     'LyriaConfig',
     'LyriaVersion',
+    'PrebuiltVoiceConfig',
+    'SpeechConfig',
     'VeoConfig',
     'VeoVersion',
     'VertexAI',
     'VertexAIGeminiVersion',
     'VertexEmbeddingModels',
+    'VoiceConfig',
     'gemini_image_model',
     'gemini_model',
     'gemini_tts_model',

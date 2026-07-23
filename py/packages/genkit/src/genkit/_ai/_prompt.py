@@ -121,7 +121,11 @@ def _resolve_model_arg(
                 )
                 call_dict = config.model_dump(exclude_unset=True) if isinstance(config, BaseModel) else dict(config)  # type: ignore[arg-type]  # pyrefly: ignore
                 merged = {**default_dict, **call_dict}
-                if isinstance(model.config_schema, type) and issubclass(model.config_schema, BaseModel):
+                if (
+                    isinstance(model.config_schema, type)
+                    and issubclass(model.config_schema, BaseModel)
+                    and model.config_schema is not BaseModel
+                ):
                     config = model.config_schema.model_validate(merged)
                 else:
                     config = merged

@@ -3,12 +3,26 @@
 Three focused Google media examples: text-to-speech, Imagen image generation, and Veo video generation.
 
 ```python
-from genkit_google_genai import GeminiTtsConfig, ImagenConfig, VeoConfig, gemini_tts_model, imagen_model, veo_model
+from genkit_google_genai import (
+    GeminiTtsConfig,
+    ImagenConfig,
+    PrebuiltVoiceConfig,
+    SpeechConfig,
+    VeoConfig,
+    VoiceConfig,
+    gemini_tts_model,
+    imagen_model,
+    veo_model,
+)
 
 # TTS
 await ai.generate(
     model=gemini_tts_model('gemini-2.5-flash-preview-tts'),
-    config=GeminiTtsConfig.model_validate({'speech_config': {'voice_config': {'prebuilt_voice_config': {'voice_name': 'Kore'}}}}),
+    config=GeminiTtsConfig(
+        speech_config=SpeechConfig(
+            voice_config=VoiceConfig(prebuilt_voice_config=PrebuiltVoiceConfig(voice_name='Kore'))
+        )
+    ),
     prompt='Hello!',
 )
 

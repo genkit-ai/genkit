@@ -20,7 +20,16 @@ import asyncio
 import time
 from typing import Any, Literal
 
-from genkit_google_genai import GeminiTtsConfig, GoogleAI, ImagenConfig, gemini_tts_model, imagen_model
+from genkit_google_genai import (
+    GeminiTtsConfig,
+    GoogleAI,
+    ImagenConfig,
+    PrebuiltVoiceConfig,
+    SpeechConfig,
+    VoiceConfig,
+    gemini_tts_model,
+    imagen_model,
+)
 from pydantic import BaseModel, Field
 
 from genkit import Genkit
@@ -88,9 +97,11 @@ async def tts_speech_generator(input: SpeechInput) -> dict[str, str | None]:
     response = await ai.generate(
         model=gemini_tts_model('gemini-2.5-flash-preview-tts'),
         prompt=input.text,
-        config=GeminiTtsConfig.model_validate({
-            'speech_config': {'voice_config': {'prebuilt_voice_config': {'voice_name': input.voice}}}
-        }),
+        config=GeminiTtsConfig(
+            speech_config=SpeechConfig(
+                voice_config=VoiceConfig(prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=input.voice))
+            )
+        ),
     )
     return {'model': 'googleai/gemini-2.5-flash-preview-tts', 'audio_url': _first_media_url(response)}
 
