@@ -16,7 +16,9 @@
 
 """Tests for ollama_model family helper."""
 
+import pytest
 from genkit_ollama import OllamaConfig, ollama_model
+from pydantic import ValidationError
 
 
 def test_ollama_model_stamps_namespace_and_schema() -> None:
@@ -42,3 +44,13 @@ def test_ollama_model_stamps_default_config() -> None:
     assert ref.config is config
     assert ref.config is not None
     assert ref.config.temperature == 0.5
+
+
+def test_ollama_model_rejects_incompatible_config_type() -> None:
+    with pytest.raises(TypeError, match='config must conform to OllamaConfig'):
+        ollama_model('mistral', config='not-a-config')  # type: ignore  # pyrefly: ignore  # pyright: ignore
+
+
+def test_ollama_model_rejects_invalid_dict_config() -> None:
+    with pytest.raises(ValidationError):
+        ollama_model('mistral', config={'temperature': 'not-a-float'})  # type: ignore  # pyrefly: ignore  # pyright: ignore

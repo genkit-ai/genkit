@@ -27,7 +27,7 @@ from copy import deepcopy
 from functools import cached_property
 from typing import Any, ClassVar, Generic, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer, model_validator
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypedDict, TypeVar
 
@@ -112,6 +112,22 @@ class ModelRef(BaseModel, Generic[ConfigT]):
     info: ModelInfo | None = None
     version: str | None = None
     config: ConfigT | None = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def _validate_config_conforms_to_schema(cls, data: Any) -> Any:  # noqa: ANN401
+        if isinstance(data, dict):
+            config = data.get('config')
+            config_schema = data.get('config_schema')
+            if config is not None and config_schema is not None:
+                if isinstance(config, dict):
+                    data['config'] = config_schema.model_validate(config)
+                elif not isinstance(config, config_schema):
+                    raise TypeError(
+                        f'config must conform to {getattr(config_schema, "__name__", str(config_schema))}, '
+                        f'got {type(config).__name__}'
+                    )
+        return data
 
 
 class Message(MessageData):
