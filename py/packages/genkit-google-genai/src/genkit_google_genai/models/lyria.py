@@ -14,29 +14,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lyria audio generation model for Google Vertex AI plugin.
+"""Lyria audio generation helpers for Google Vertex AI.
 
-Lyria is Google's music and audio generation model that creates audio from
-text prompts. It is available exclusively through Vertex AI.
-
-Example:
-    ```python
-    from genkit import Genkit
-    from genkit_google_genai import VertexAI
-
-    # 1. Initialize Genkit with VertexAI plugin
-    ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
-
-    # 2. Generate music or audio from a descriptive text prompt
-    res = await ai.generate(
-        model='vertexai/lyria-002',
-        prompt='A peaceful piano melody with gentle rain sounds',
-    )
-
-    # 3. Inspect generated audio media part shape
-    print(res.message.content[0].media.url[:30])
-    # => "data:audio/wav;base64,UklGRiQ..."
-    ```
+Lyria is Google's music and audio generation model available through Vertex AI.
+This module exposes config and request/response helpers for the predict-based
+audio API.
 """
 
 import sys

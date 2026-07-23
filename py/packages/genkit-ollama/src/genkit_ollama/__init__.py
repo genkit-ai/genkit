@@ -29,8 +29,8 @@ Example:
     from genkit import Genkit
     from genkit_ollama import Ollama
 
-    # 1. Initialize Genkit with local Ollama plugin
-    ai = Genkit(plugins=[Ollama(models=['llama3.2'])])
+    # 1. Initialize Genkit with local Ollama plugin (models resolve on demand)
+    ai = Genkit(plugins=[Ollama()])
 
     # 2. Generate content entirely on local hardware
     res = await ai.generate(

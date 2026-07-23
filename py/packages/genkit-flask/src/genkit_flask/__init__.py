@@ -32,17 +32,13 @@ Example:
     ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
 
 
-    # 2. Define an asynchronous Genkit flow
+    # 2. Stack Flask route + Genkit handler + flow on one function
+    @app.post('/api/greet')
+    @genkit_flask_handler(ai)
     @ai.flow()
     async def greet_user(name: str) -> str:
         res = await ai.generate(prompt=f'Say hello to {name} in one sentence.')
         return res.text
-
-
-    # 3. Expose flow as an HTTP endpoint
-    @app.route('/api/greet', methods=['POST'])
-    def greet_endpoint():
-        return genkit_flask_handler(ai, greet_user)
 
 
     # POST /api/greet {"data": "Alice"}

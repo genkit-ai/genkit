@@ -25,12 +25,14 @@ Example:
     from genkit import Genkit
     from genkit_vertexai.model_garden import ModelGarden
 
-    # 1. Initialize Genkit with the Vertex AI Model Garden plugin
-    ai = Genkit(plugins=[ModelGarden(project_id='my-project', location='us-central1')])
+    # 1. Initialize Genkit with the Model Garden plugin
+    ai = Genkit(
+        plugins=[ModelGarden(project_id='my-project', location='us-central1')],
+    )
 
-    # 2. Generate content using a Model Garden model
+    # 2. Call models under the modelgarden/ namespace (not vertexai/)
     res = await ai.generate(
-        model='vertexai/claude-3-5-sonnet-v2',
+        model='modelgarden/anthropic/claude-3-5-sonnet-v2@20241022',
         prompt='Explain recursion in 10 words.',
     )
 

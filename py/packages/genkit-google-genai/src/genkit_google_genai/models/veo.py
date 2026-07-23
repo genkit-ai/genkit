@@ -17,35 +17,6 @@
 """Veo video generation model for Google GenAI plugin.
 
 Veo is Google's video generation model that creates videos from text prompts.
-Because video generation is a long-running asynchronous operation, this model
-implements the background polling operation pattern.
-
-Example:
-    ```python
-    import asyncio
-    from genkit import Genkit
-    from genkit_google_genai import GoogleAI
-
-    # 1. Initialize Genkit with GoogleAI plugin
-    ai = Genkit(plugins=[GoogleAI()])
-
-    # 2. Start asynchronous video generation
-    res = await ai.generate(
-        model='googleai/veo-2.0-generate-001',
-        prompt='A cat playing piano in a cozy jazz club',
-    )
-
-    # 3. Poll the long-running operation until complete
-    op = res.operation
-    while not op.done:
-        await asyncio.sleep(5)
-        op = await ai.check_operation(op)
-
-    # 4. Extract generated video URL from operation output
-    video_part = op.output['message']['content'][0]
-    print(video_part['media']['url'][:30])
-    # => "data:video/mp4;base64,AAAAIGZ..."
-    ```
 """
 
 import asyncio
