@@ -121,7 +121,7 @@ def is_veo_model(name: str) -> bool:
     Returns:
         True if this is a Veo model name.
     """
-    return name.lower().startswith('veo')
+    return name.split('/')[-1].lower().startswith('veo')
 
 
 class VeoConfig(BaseModel):
@@ -141,6 +141,9 @@ class VeoConfig(BaseModel):
     resolution: str | None = Field(default=None, description='Desired output resolution (e.g. "720p").')
     seed: int | None = Field(default=None, description='Random seed for deterministic generation.')
     enhance_prompt: bool | None = Field(default=None, alias='enhancePrompt', description='Enable prompt enhancement.')
+
+
+VeoConfigSchema = VeoConfig
 
 
 DEFAULT_VEO_SUPPORT = Supports(

@@ -98,7 +98,7 @@ def is_lyria_model(name: str) -> bool:
     Returns:
         True if this is a Lyria model name.
     """
-    return name.startswith('lyria-')
+    return name.split('/')[-1].startswith('lyria-')
 
 
 class LyriaConfig(BaseModel):
@@ -117,6 +117,9 @@ class LyriaConfig(BaseModel):
     location: str | None = Field(default=None)
 
     model_config = {'populate_by_name': True}
+
+
+LyriaConfigSchema = LyriaConfig
 
 
 LYRIA_MODEL_INFO = ModelInfo(

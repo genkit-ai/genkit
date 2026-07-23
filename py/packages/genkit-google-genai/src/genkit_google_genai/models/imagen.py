@@ -114,8 +114,8 @@ def is_imagen_model(name: str) -> bool:
     Returns:
         True if this is an Imagen model.
     """
-    lower = name.lower()
-    return lower.startswith('imagen-') or lower.startswith('imagegeneration@')
+    base_name = name.split('/')[-1].lower()
+    return base_name.startswith(('imagen-', 'imagegeneration@'))
 
 
 def vertexai_image_model_info(
@@ -155,6 +155,9 @@ class ImagenConfig(BaseModel):
     output_mime_type: str | None = Field(
         default=None, alias='outputMimeType', description='Output MIME type (e.g. "image/png").'
     )
+
+
+ImagenConfigSchema = ImagenConfig
 
 
 class ImagenModel:

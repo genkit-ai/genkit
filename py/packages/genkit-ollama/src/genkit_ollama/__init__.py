@@ -158,7 +158,7 @@ See Also:
 from genkit_ollama._errors import OllamaConnectionError
 from genkit_ollama._model_refs import ollama_model
 from genkit_ollama.embedders import EmbeddingDefinition
-from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaSupports
+from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaConfigSchema, OllamaSupports
 from genkit_ollama.plugin_api import (
     Ollama,
     RequestHeaderFunction,
@@ -182,6 +182,7 @@ __all__ = [
     'ModelDefinition',
     'Ollama',
     'OllamaConfig',
+    'OllamaConfigSchema',
     'OllamaConnectionError',
     'OllamaSupports',
     'RequestHeaderFunction',

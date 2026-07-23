@@ -604,6 +604,15 @@ class GemmaConfig(GeminiConfig):
     temperature: float | None = None
 
 
+# Backwards compatibility aliases for older imports
+GeminiConfigSchema = GeminiConfig
+GeminiTtsConfigSchema = GeminiTtsConfig
+GeminiImageConfigSchema = GeminiImageConfig
+GemmaConfigSchema = GemmaConfig
+SpeechConfigSchema = SpeechConfig
+VoiceConfigSchema = VoiceConfig
+
+
 GEMINI_1_5_PRO = ModelInfo(
     label='Google AI - Gemini 1.5 Pro',
     stage=Stage.DEPRECATED,
@@ -1176,7 +1185,8 @@ def is_gemini_model(name: str) -> bool:
         >>> is_gemini_model('gemini-2.5-flash-preview-tts')
         False
     """
-    return name.startswith('gemini-') and not is_tts_model(name) and not is_image_model(name)
+    base_name = name.split('/')[-1]
+    return base_name.startswith('gemini-') and not is_tts_model(name) and not is_image_model(name)
 
 
 def is_tts_model(name: str) -> bool:
@@ -1194,7 +1204,8 @@ def is_tts_model(name: str) -> bool:
         >>> is_tts_model('gemini-2.5-flash-preview-tts')
         True
     """
-    return (name.startswith('gemini-') and name.endswith('-tts')) or 'tts' in name
+    base_name = name.split('/')[-1]
+    return (base_name.startswith('gemini-') and base_name.endswith('-tts')) or 'tts' in base_name
 
 
 def is_image_model(name: str) -> bool:
@@ -1212,7 +1223,8 @@ def is_image_model(name: str) -> bool:
         >>> is_image_model('gemini-2.0-flash-preview-image-generation')
         True
     """
-    return (name.startswith('gemini-') and '-image' in name) or 'image' in name
+    base_name = name.split('/')[-1]
+    return (base_name.startswith('gemini-') and '-image' in base_name) or 'image' in base_name
 
 
 def is_gemma_model(name: str) -> bool:
@@ -1230,7 +1242,7 @@ def is_gemma_model(name: str) -> bool:
         >>> is_gemma_model('gemma-2-27b-it')
         True
     """
-    return name.startswith('gemma-')
+    return name.split('/')[-1].startswith('gemma-')
 
 
 def is_tuned_gemini_name(name: str) -> bool:

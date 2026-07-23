@@ -165,6 +165,9 @@ class OllamaConfig(ModelConfig):
     num_predict: int | None = None
 
 
+OllamaConfigSchema = OllamaConfig
+
+
 class OllamaSupports(BaseModel):
     """Supports for Ollama models."""
 
