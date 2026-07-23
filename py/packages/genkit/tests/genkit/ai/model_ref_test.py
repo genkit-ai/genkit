@@ -28,15 +28,21 @@ def test_model_ref_stamps_namespace_and_schema() -> None:
 
 def test_model_ref_idempotent_namespace() -> None:
     """Already-prefixed names are not double-namespaced."""
-    ref = model_ref('googleai/gemini-pro-latest', namespace='googleai')
+    ref = model_ref('googleai/gemini-pro-latest', namespace='googleai', config_schema=ModelConfig)
     assert ref.name == 'googleai/gemini-pro-latest'
 
 
 def test_model_ref_is_frozen() -> None:
     """ModelRef instances cannot be mutated after creation."""
-    ref = model_ref('x', namespace='ns')
+    ref = model_ref('x', namespace='ns', config_schema=ModelConfig)
     with pytest.raises(ValidationError):
         ref.name = 'y'  # pyrefly: ignore[read-only]
+
+
+def test_model_ref_requires_config_schema() -> None:
+    """model_ref rejects calls that omit config_schema."""
+    with pytest.raises(TypeError):
+        model_ref('gemini-pro-latest', namespace='googleai')  # type: ignore  # ty: ignore  # pyrefly: ignore  # pyright: ignore
 
 
 def test_model_ref_stamps_typed_config() -> None:

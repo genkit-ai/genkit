@@ -69,7 +69,7 @@ def model_action_metadata(
 def model_ref(
     name: str,
     *,
-    config_schema: type[ConfigT] | None = None,
+    config_schema: type[ConfigT],
     namespace: str | None = None,
     info: ModelInfo | None = None,
     version: str | None = None,

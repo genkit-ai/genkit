@@ -108,7 +108,7 @@ class ModelRef(BaseModel, Generic[ConfigT]):
     model_config = ConfigDict(frozen=True)
 
     name: str
-    config_schema: type[ConfigT] | None = None
+    config_schema: type[ConfigT]
     info: ModelInfo | None = None
     version: str | None = None
     config: ConfigT | None = None
