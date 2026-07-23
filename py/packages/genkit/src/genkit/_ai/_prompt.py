@@ -31,7 +31,7 @@ from dotpromptz.typing import (
     PromptInputConfig,
     PromptMetadata,
 )
-from pydantic import BaseModel, ConfigDict, SerializeAsAny
+from pydantic import BaseModel, ConfigDict
 from typing_extensions import Never, Unpack
 
 from genkit._ai._generate import (
@@ -92,15 +92,16 @@ OutputT = TypeVar('OutputT')
 
 def normalize_config(
     config: BaseModel | Mapping[str, Any] | None,
-) -> dict[str, Any] | BaseModel | None:
-    """Collapse any mapping (plain dict, ``ModelConfigDict``, …) to a plain dict.
+) -> dict[str, Any] | None:
+    """Normalize any configuration object (Pydantic schema or mapping) into a plain dict.
 
-    Pydantic config schemas pass through untouched; a mapping becomes a real dict
-    so it lands on the dict arm of a config field instead of being coerced into an
-    empty model that silently drops keys the schema doesn't declare.
+    Dumping BaseModel instances guarantees a consistent runtime representation and
+    prevents Pydantic serialization gotchas with inheritance or union ordering.
     """
-    if config is None or isinstance(config, BaseModel):
-        return config
+    if config is None:
+        return None
+    if isinstance(config, BaseModel):
+        return config.model_dump(exclude_unset=True)
     return dict(config)
 
 
@@ -121,33 +122,34 @@ def _get_concrete_schema(*candidates: object) -> type[BaseModel] | None:
 def resolve_model_arg(
     model: str | ModelRef[Any] | None,
     config: dict[str, Any] | BaseModel | None,
-) -> tuple[str | None, dict[str, Any] | BaseModel | None]:
-    """Resolve a ModelRef or string model argument to a wire name and merged config.
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Resolve a ModelRef or string model argument to a wire name and merged config dict.
 
     If a ModelRef carries default configuration, call-time overrides are cleanly
-    merged on top of it and validated against the ModelRef's concrete schema.
+    merged on top of it, validated against the ModelRef's concrete schema, and dumped.
     """
     if not isinstance(model, ModelRef):
-        return model, config
+        return model, normalize_config(config)
 
     wire_name = model.name
     default_config = model.config
 
     # No default config on the ref: use whatever was passed at call-time.
     if default_config is None:
-        return wire_name, config
+        return wire_name, normalize_config(config)
 
     # No call-time overrides provided: inherit the default config directly.
     if config is None:
-        return wire_name, default_config
+        return wire_name, normalize_config(default_config)
 
     # Merge call-time overrides on top of the ModelRef's default configuration.
     merged = {**_to_dict(default_config), **_to_dict(config)}
 
-    # Validate back into the concrete Pydantic model if a specific schema exists.
+    # Validate against the concrete schema to enforce constraints, then dump to dict.
     schema = _get_concrete_schema(model.config_schema, type(default_config), type(config))
     if schema:
-        return wire_name, schema.model_validate(merged)
+        validated = schema.model_validate(merged)
+        return wire_name, validated.model_dump(exclude_unset=True)
 
     return wire_name, merged
 
@@ -279,15 +281,7 @@ class PromptConfig(BaseModel):
 
     variant: str | None = None
     model: str | ModelRef[BaseModel] | None = None
-    # The concrete `dict` arm must stay ahead of `BaseModel`: a bare BaseModel
-    # validates any dict into an *empty* model and drops every key, so a config
-    # dict has to land on the dict arm. normalize_config() guarantees any mapping
-    # reaching here is a real dict (not an abstract Mapping) for that reason.
-    # SerializeAsAny makes model_dump() emit a config's real runtime fields —
-    # each executable-prompt call round-trips through model_dump, and without it
-    # pydantic serializes by the declared BaseModel and silently drops any
-    # plugin-specific fields (e.g. a Gemini thinking budget) the base type lacks.
-    config: dict[str, Any] | SerializeAsAny[BaseModel] | None = None
+    config: dict[str, Any] | None = None
     description: str | None = None
     input_schema: type | dict[str, Any] | str | None = None
     system: str | list[Part] | None = None

@@ -8,7 +8,7 @@
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from genkit._ai._prompt import PromptConfig, resolve_model_arg
+from genkit._ai._prompt import PromptConfig, normalize_config, resolve_model_arg
 from genkit.model import model_ref
 from genkit.plugin_api import ModelConfig
 
@@ -66,15 +66,13 @@ def test_model_ref_config_merging() -> None:
     )
     name, resolved_cfg = resolve_model_arg(ref, CustomConfig(temperature=0.2))
     assert name == 'googleai/gemini-pro-latest'
-    assert isinstance(resolved_cfg, CustomConfig)
-    assert resolved_cfg.temperature == 0.2
-    assert resolved_cfg.safety_settings == {'HARM': 'BLOCK'}
+    assert isinstance(resolved_cfg, dict)
+    assert resolved_cfg['temperature'] == 0.2
+    assert resolved_cfg['safety_settings'] == {'HARM': 'BLOCK'}
 
 
 def test_prompt_config_keeps_plugin_specific_fields() -> None:
-    pc = PromptConfig(config=CustomConfig(temperature=0.7, safety_settings={'HARM': 'BLOCK'}))
+    pc = PromptConfig(config=normalize_config(CustomConfig(temperature=0.7, safety_settings={'HARM': 'BLOCK'})))
     dumped = pc.model_dump()['config']
-    # safety_settings isn't part of the common config; without SerializeAsAny it
-    # would be dropped when a config flows through an executable prompt.
     assert dumped['safety_settings'] == {'HARM': 'BLOCK'}
     assert dumped['temperature'] == 0.7
