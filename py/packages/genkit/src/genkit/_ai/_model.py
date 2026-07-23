@@ -30,10 +30,10 @@ from genkit._core._action import (
     get_func_description,
 )
 from genkit._core._model import (
-    ConfigT,
     Message,
     ModelConfig,
     ModelRef,
+    ModelRefConfigT,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -69,12 +69,12 @@ def model_action_metadata(
 def model_ref(
     name: str,
     *,
-    config_schema: type[ConfigT],
+    config_schema: type[ModelRefConfigT],
     namespace: str | None = None,
     info: ModelInfo | None = None,
     version: str | None = None,
-    config: ConfigT | None = None,
-) -> ModelRef[ConfigT]:
+    config: ModelRefConfigT | None = None,
+) -> ModelRef[ModelRefConfigT]:
     """Create a ``ModelRef``, optionally prefixing ``name`` with ``namespace``.
 
     Plugin authors and family helpers (``gemini_model``, ``claude_model``, …)
@@ -93,7 +93,7 @@ def model_ref(
         elif not isinstance(config, config_schema):
             raise TypeError(f'config must conform to {config_schema.__name__}, got {type(config).__name__}')
 
-    ref = ModelRef[ConfigT](
+    ref = ModelRef[ModelRefConfigT](
         name=final_name,
         config_schema=config_schema,
         info=info,

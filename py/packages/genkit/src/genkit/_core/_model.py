@@ -70,7 +70,8 @@ OutputT = TypeVar('OutputT', default=object)
 # is supported across ModelRef and ModelRequest without forcing assumptions.
 # Covariant so a ModelRef[GeminiConfig] is accepted wherever a generic ModelRef[Any]
 # is expected, letting plugin family helpers flow through naturally.
-ConfigT = TypeVar('ConfigT', covariant=True)
+ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
+ModelRequestConfigT = TypeVar('ModelRequestConfigT', covariant=True)
 
 
 class ModelConfigDict(TypedDict, total=False):
@@ -89,7 +90,7 @@ class ModelConfigDict(TypedDict, total=False):
 
 
 @dataclass(frozen=True, kw_only=True)
-class ModelRef(Generic[ConfigT]):
+class ModelRef(Generic[ModelRefConfigT]):
     """Frozen reference to a model, optionally tied to a config schema.
 
     Prefer plugin family helpers for typed refs (they stamp ``config_schema``
@@ -109,10 +110,10 @@ class ModelRef(Generic[ConfigT]):
     """
 
     name: str
-    config_schema: type[ConfigT]
+    config_schema: type[ModelRefConfigT]
     info: ModelInfo | None = None
     version: str | None = None
-    config: ConfigT | None = None
+    config: ModelRefConfigT | None = None
 
     def __post_init__(self) -> None:
         if self.config is not None:
@@ -272,7 +273,7 @@ class Document(DocumentData):
         return None
 
 
-class ModelRequest(GenkitModel, Generic[ConfigT]):
+class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
     """Hand-written model request with flat output fields and veneer types.
 
     Output config is inlined as flat fields (output_format, output_schema, etc.)
@@ -295,7 +296,7 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
     # Veneer types for IDE/typing (validators wrap MessageData->Message, DocumentData->Document)
     messages: list[Message]  # pyright: ignore[reportIncompatibleVariableOverride]
     docs: list[Document] | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
-    config: ConfigT | None = None
+    config: ModelRequestConfigT | None = None
     tools: list[ToolDefinition] | None = None
     tool_choice: ToolChoice | None = Field(default=None)
     # Flat output fields (no nested OutputConfig)

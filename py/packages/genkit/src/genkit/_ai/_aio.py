@@ -100,7 +100,7 @@ from genkit._core._middleware import (
     GenerateMiddleware,
     _validate_middleware_key_segment,
 )
-from genkit._core._model import ConfigT, Document, ModelConfigDict, ModelRef
+from genkit._core._model import Document, ModelConfigDict, ModelRef, ModelRefConfigT
 from genkit._core._plugin import Plugin
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
 from genkit._core._reflection_v2 import ReflectionServerV2
@@ -452,8 +452,8 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ConfigT] | str | None = None,
-        config: ConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
+        config: ModelRefConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -480,8 +480,8 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ConfigT] | str | None = None,
-        config: ConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
+        config: ModelRefConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -508,8 +508,8 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ConfigT] | str | None = None,
-        config: ConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
+        config: ModelRefConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -536,8 +536,8 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ConfigT] | str | None = None,
-        config: ConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
+        config: ModelRefConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -830,7 +830,7 @@ class Genkit:
     @overload
     async def generate(
         self,
-        model: ModelRef[ConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
         prompt: str | Part | Message | Sequence[Part | Message] | None = None,
         *,
         messages: Sequence[Message] | None = None,
@@ -841,7 +841,7 @@ class Genkit:
         resume_respond: ToolResponsePart | Sequence[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | Sequence[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
+        config: ModelRefConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type[OutputT],
@@ -857,7 +857,7 @@ class Genkit:
     @overload
     async def generate(
         self,
-        model: ModelRef[ConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
         prompt: str | Part | Message | Sequence[Part | Message] | None = None,
         *,
         messages: Sequence[Message] | None = None,
@@ -868,7 +868,7 @@ class Genkit:
         resume_respond: ToolResponsePart | Sequence[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | Sequence[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
+        config: ModelRefConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict[str, Any] | str | None = None,
@@ -961,7 +961,7 @@ class Genkit:
     @overload
     def generate_stream(
         self,
-        model: ModelRef[ConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
         prompt: str | Part | Message | Sequence[Part | Message] | None = None,
         *,
         on_chunk: Callable[[ModelResponseChunk], None] | None = None,
@@ -973,7 +973,7 @@ class Genkit:
         resume_respond: ToolResponsePart | Sequence[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | Sequence[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
+        config: ModelRefConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type[OutputT],
@@ -990,7 +990,7 @@ class Genkit:
     @overload
     def generate_stream(
         self,
-        model: ModelRef[ConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
         prompt: str | Part | Message | Sequence[Part | Message] | None = None,
         *,
         on_chunk: Callable[[ModelResponseChunk], None] | None = None,
@@ -1002,7 +1002,7 @@ class Genkit:
         resume_respond: ToolResponsePart | Sequence[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | Sequence[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
+        config: ModelRefConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict[str, Any] | str | None = None,
