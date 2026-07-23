@@ -72,9 +72,15 @@ type ModelFunc = core.StreamingFunc[*ModelRequest, *ModelResponse, *ModelRespons
 // ModelStreamCallback is a stream callback of a ModelAction.
 type ModelStreamCallback = func(context.Context, *ModelResponseChunk) error
 
+// action is an unexported alias of [core.Action] used as the embedded field
+// in the ai primitives (model, embedder, evaluator, resource, prompt).
+// Embedding via the alias promotes Action's methods without exporting the
+// field itself, so the containment stays an internal detail of each primitive.
+type action[In, Out, Stream any] = core.Action[In, Out, Stream]
+
 // model is an action with functions specific to model generation such as Generate().
 type model struct {
-	core.Action[*ModelRequest, *ModelResponse, *ModelResponseChunk]
+	action[*ModelRequest, *ModelResponse, *ModelResponseChunk]
 }
 
 // generateAction is the type for a utility model generation action that takes in a GenerateActionOptions instead of a ModelRequest.
@@ -112,7 +118,7 @@ type ModelOptions struct {
 
 // DefineGenerateAction defines a utility generate action.
 func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
-	return (*generateAction)(core.DefineStreamingAction(r, "generate", api.ActionTypeUtil, nil, nil,
+	return (*generateAction)(core.DefineStreamingAction(r, "generate", api.ActionTypeUtil, nil,
 		func(ctx context.Context, actionOpts *GenerateActionOptions, cb ModelStreamCallback) (resp *ModelResponse, err error) {
 			actionOptsBytes, _ := json.Marshal(actionOpts)
 			logger.FromContext(ctx).Debug("GenerateAction",
@@ -179,7 +185,10 @@ func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
 		addAutomaticTelemetry(),
 	)(fn)
 
-	return &model{*core.NewStreamingAction(name, api.ActionTypeModel, metadata, inputSchema, fn)}
+	return &model{*core.NewStreamingAction(name, api.ActionTypeModel, &core.ActionOptions{
+		Metadata:    metadata,
+		InputSchema: inputSchema,
+	}, fn)}
 }
 
 // DefineModel creates a new [Model] and registers it.
@@ -198,7 +207,7 @@ func LookupModel(r api.Registry, name string) Model {
 		return nil
 	}
 	return &model{
-		Action: *action,
+		action: *action,
 	}
 }
 
@@ -883,7 +892,7 @@ func (m *model) Generate(ctx context.Context, req *ModelRequest, cb ModelStreamC
 		return nil, core.NewError(core.INVALID_ARGUMENT, "Model.Generate: generate called on a nil model; check that all models are defined")
 	}
 
-	return m.Action.Run(ctx, req, cb)
+	return m.action.Run(ctx, req, cb)
 }
 
 // supportsConstrained returns whether the model supports constrained output.
@@ -892,7 +901,7 @@ func (m *model) supportsConstrained(hasTools bool) bool {
 		return false
 	}
 
-	metadata := m.Action.Desc().Metadata
+	metadata := m.action.Desc().Metadata
 	if metadata == nil {
 		return false
 	}

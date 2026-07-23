@@ -41,9 +41,13 @@ type BackgroundModel interface {
 	SupportsCancel() bool
 }
 
+// backgroundAction is an unexported alias of [core.BackgroundAction] used as
+// the embedded field in backgroundModel, mirroring the `action` alias.
+type backgroundAction[In, Out any] = core.BackgroundAction[In, Out]
+
 // backgroundModel is the concrete implementation of BackgroundModel interface.
 type backgroundModel struct {
-	core.BackgroundActionDef[*ModelRequest, *ModelResponse]
+	backgroundAction[*ModelRequest, *ModelResponse]
 }
 
 // ModelOperation is a background operation for a model.
@@ -142,7 +146,7 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 		return modelOpFromResponse(resp)
 	}
 
-	return &backgroundModel{*core.NewBackgroundAction(name, api.ActionTypeBackgroundModel, metadata, wrappedFn, checkFn, opts.Cancel)}
+	return &backgroundModel{*core.NewBackgroundAction(name, api.ActionTypeBackgroundModel, &core.ActionOptions{Metadata: metadata}, wrappedFn, checkFn, opts.Cancel)}
 }
 
 // DefineBackgroundModel defines and registers a new model that runs in the background.

@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
 
@@ -34,7 +35,7 @@ func inc(_ context.Context, x int, _ noStream) (int, error) {
 
 func TestActionRun(t *testing.T) {
 	r := registry.New()
-	a := DefineStreamingAction(r, "test/inc", api.ActionTypeCustom, nil, nil, inc)
+	a := DefineStreamingAction(r, "test/inc", api.ActionTypeCustom, nil, inc)
 	got, err := a.Run(context.Background(), 3, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -46,15 +47,15 @@ func TestActionRun(t *testing.T) {
 
 func TestActionRunJSON(t *testing.T) {
 	r := registry.New()
-	a := DefineStreamingAction(r, "test/inc", api.ActionTypeCustom, nil, nil, inc)
+	a := DefineStreamingAction(r, "test/inc", api.ActionTypeCustom, nil, inc)
 	input := []byte("3")
 	want := []byte("4")
 	got, err := a.RunJSON(context.Background(), input, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Errorf("got %v, want %v", got, want)
+	if !bytes.Equal(got.Result, want) {
+		t.Errorf("got %v, want %v", got.Result, want)
 	}
 }
 
@@ -73,7 +74,7 @@ func count(ctx context.Context, n int, cb func(context.Context, int) error) (int
 func TestActionStreaming(t *testing.T) {
 	ctx := context.Background()
 	r := registry.New()
-	a := DefineStreamingAction(r, "test/count", api.ActionTypeCustom, nil, nil, count)
+	a := DefineStreamingAction(r, "test/count", api.ActionTypeCustom, nil, count)
 	const n = 3
 
 	// Non-streaming.
@@ -108,7 +109,7 @@ func TestActionTracing(t *testing.T) {
 	tc := tracing.NewTestOnlyTelemetryClient()
 	tracing.WriteTelemetryImmediate(tc)
 	name := api.NewName("test", "TestTracing-inc")
-	a := DefineStreamingAction(r, name, api.ActionTypeCustom, nil, nil, inc)
+	a := DefineStreamingAction(r, name, api.ActionTypeCustom, nil, inc)
 	if _, err := a.Run(context.Background(), 3, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +132,7 @@ func TestNewAction(t *testing.T) {
 		fn := func(ctx context.Context, input string) (string, error) {
 			return "Hello, " + input, nil
 		}
-		a := NewAction("greet", api.ActionTypeCustom, nil, nil, fn)
+		a := NewAction("greet", api.ActionTypeCustom, nil, fn)
 
 		if a == nil {
 			t.Fatal("NewAction returned nil")
@@ -145,7 +146,7 @@ func TestNewAction(t *testing.T) {
 		fn := func(ctx context.Context, input int) (int, error) {
 			return input * 2, nil
 		}
-		a := NewAction("double", api.ActionTypeCustom, nil, nil, fn)
+		a := NewAction("double", api.ActionTypeCustom, nil, fn)
 
 		got, err := a.Run(context.Background(), 5, nil)
 		if err != nil {
@@ -166,7 +167,7 @@ func TestNewAction(t *testing.T) {
 		fn := func(ctx context.Context, input any) (string, error) {
 			return "ok", nil
 		}
-		a := NewAction("withSchema", api.ActionTypeCustom, nil, customSchema, fn)
+		a := NewAction("withSchema", api.ActionTypeCustom, &ActionOptions{InputSchema: customSchema}, fn)
 
 		desc := a.Desc()
 		if desc.InputSchema == nil {
@@ -182,7 +183,7 @@ func TestNewAction(t *testing.T) {
 		fn := func(ctx context.Context, input struct{}) (bool, error) {
 			return true, nil
 		}
-		a := NewAction("withMeta", api.ActionTypeCustom, meta, nil, fn)
+		a := NewAction("withMeta", api.ActionTypeCustom, &ActionOptions{Metadata: meta}, fn)
 
 		desc := a.Desc()
 		if desc.Description != "A test action" {
@@ -203,7 +204,7 @@ func TestNewStreamingAction(t *testing.T) {
 			}
 			return n, nil
 		}
-		a := NewStreamingAction("counter", api.ActionTypeCustom, nil, nil, fn)
+		a := NewStreamingAction("counter", api.ActionTypeCustom, nil, fn)
 
 		if a == nil {
 			t.Fatal("NewStreamingAction returned nil")
@@ -224,7 +225,7 @@ func TestNewStreamingAction(t *testing.T) {
 			}
 			return n, nil
 		}
-		a := NewStreamingAction("streamer", api.ActionTypeCustom, nil, nil, fn)
+		a := NewStreamingAction("streamer", api.ActionTypeCustom, nil, fn)
 
 		var chunks []string
 		got, err := a.Run(context.Background(), 3, func(ctx context.Context, chunk string) error {
@@ -261,7 +262,7 @@ func TestActionDesc(t *testing.T) {
 		}
 
 		r := registry.New()
-		a := DefineAction(r, "test/describe", api.ActionTypeCustom, meta, nil, fn)
+		a := DefineAction(r, "test/describe", api.ActionTypeCustom, &ActionOptions{Metadata: meta}, fn)
 
 		desc := a.Desc()
 
@@ -301,10 +302,10 @@ func TestActionDesc(t *testing.T) {
 		DefineSchema(r, "AgentResponse", outputSchema)
 
 		fn := func(ctx context.Context, input any) (any, error) { return nil, nil }
-		a := NewAction("test/refs", api.ActionTypeCustom, nil, SchemaRef("AgentRequest"), fn)
-		// Override the inferred output schema with a $ref so we can test resolution
-		// of OutputSchema as well.
-		a.desc.OutputSchema = SchemaRef("AgentResponse")
+		a := NewAction("test/refs", api.ActionTypeCustom, &ActionOptions{
+			InputSchema:  SchemaRef("AgentRequest"),
+			OutputSchema: SchemaRef("AgentResponse"),
+		}, fn)
 		a.Register(r)
 
 		desc := a.Desc()
@@ -327,7 +328,7 @@ func TestActionDesc(t *testing.T) {
 		r := registry.New()
 
 		fn := func(ctx context.Context, input any) (any, error) { return nil, nil }
-		a := DefineAction(r, "test/unresolved", api.ActionTypeCustom, nil, SchemaRef("Missing"), fn)
+		a := DefineAction(r, "test/unresolved", api.ActionTypeCustom, &ActionOptions{InputSchema: SchemaRef("Missing")}, fn)
 
 		desc := a.Desc()
 
@@ -347,7 +348,7 @@ func TestActionRegister(t *testing.T) {
 		fn := func(ctx context.Context, input string) (string, error) {
 			return input, nil
 		}
-		a := NewAction("test/register", api.ActionTypeCustom, nil, nil, fn)
+		a := NewAction("test/register", api.ActionTypeCustom, nil, fn)
 
 		a.Register(r)
 
@@ -365,7 +366,7 @@ func TestResolveActionFor(t *testing.T) {
 		fn := func(ctx context.Context, input int) (int, error) {
 			return input + 1, nil
 		}
-		DefineAction(r, "test/resolvable", api.ActionTypeCustom, nil, nil, fn)
+		DefineAction(r, "test/resolvable", api.ActionTypeCustom, nil, fn)
 
 		found := ResolveActionFor[int, int, struct{}](r, api.ActionTypeCustom, "test/resolvable")
 
@@ -388,44 +389,18 @@ func TestResolveActionFor(t *testing.T) {
 	})
 }
 
-func TestLookupActionFor(t *testing.T) {
-	t.Run("finds registered action", func(t *testing.T) {
-		r := registry.New()
-		fn := func(ctx context.Context, input string) (string, error) {
-			return "found: " + input, nil
-		}
-		DefineAction(r, "test/lookupable", api.ActionTypeCustom, nil, nil, fn)
-
-		found := LookupActionFor[string, string, struct{}](r, api.ActionTypeCustom, "test/lookupable")
-
-		if found == nil {
-			t.Fatal("LookupActionFor returned nil")
-		}
-	})
-
-	t.Run("returns nil for non-existent action", func(t *testing.T) {
-		r := registry.New()
-
-		found := LookupActionFor[string, string, struct{}](r, api.ActionTypeCustom, "test/missing")
-
-		if found != nil {
-			t.Errorf("LookupActionFor returned %v, want nil", found)
-		}
-	})
-}
-
-func TestRunJSONWithTelemetry(t *testing.T) {
+func TestRunJSONTelemetry(t *testing.T) {
 	t.Run("returns telemetry info with result", func(t *testing.T) {
 		r := registry.New()
 		fn := func(ctx context.Context, input int) (int, error) {
 			return input * 2, nil
 		}
-		a := DefineAction(r, "test/telemetry", api.ActionTypeCustom, nil, nil, fn)
+		a := DefineAction(r, "test/telemetry", api.ActionTypeCustom, nil, fn)
 
-		result, err := a.RunJSONWithTelemetry(context.Background(), []byte("5"), nil)
+		result, err := a.RunJSON(context.Background(), []byte("5"), nil)
 
 		if err != nil {
-			t.Fatalf("RunJSONWithTelemetry error: %v", err)
+			t.Fatalf("RunJSON error: %v", err)
 		}
 		if result == nil {
 			t.Fatal("result is nil")
@@ -454,7 +429,7 @@ func TestRunJSONWithTelemetry(t *testing.T) {
 			}
 			return n, nil
 		}
-		a := DefineStreamingAction(r, "test/streamTelemetry", api.ActionTypeCustom, nil, nil, fn)
+		a := DefineStreamingAction(r, "test/streamTelemetry", api.ActionTypeCustom, nil, fn)
 
 		var chunks []string
 		cb := func(ctx context.Context, chunk json.RawMessage) error {
@@ -462,10 +437,10 @@ func TestRunJSONWithTelemetry(t *testing.T) {
 			return nil
 		}
 
-		result, err := a.RunJSONWithTelemetry(context.Background(), []byte("3"), cb)
+		result, err := a.RunJSON(context.Background(), []byte("3"), cb)
 
 		if err != nil {
-			t.Fatalf("RunJSONWithTelemetry error: %v", err)
+			t.Fatalf("RunJSON error: %v", err)
 		}
 		if result == nil {
 			t.Fatal("result is nil")
@@ -480,12 +455,103 @@ func TestRunJSONWithTelemetry(t *testing.T) {
 		fn := func(ctx context.Context, input int) (int, error) {
 			return input, nil
 		}
-		a := DefineAction(r, "test/invalidInput", api.ActionTypeCustom, nil, nil, fn)
+		a := DefineAction(r, "test/invalidInput", api.ActionTypeCustom, nil, fn)
 
-		_, err := a.RunJSONWithTelemetry(context.Background(), []byte("not valid json"), nil)
+		_, err := a.RunJSON(context.Background(), []byte("not valid json"), nil)
 
 		if err == nil {
 			t.Error("expected error for invalid JSON, got nil")
 		}
 	})
+}
+
+// countingRegistry wraps a registry and counts schema lookups so tests can
+// observe memoization.
+type countingRegistry struct {
+	api.Registry
+	lookups int
+}
+
+func (c *countingRegistry) LookupSchema(name string) map[string]any {
+	c.lookups++
+	return c.Registry.LookupSchema(name)
+}
+
+func TestResolveSchemaUnregisteredAction(t *testing.T) {
+	fn := func(ctx context.Context, input any) (string, error) { return "ok", nil }
+	a := NewAction("test/unregisteredRef", api.ActionTypeCustom,
+		&ActionOptions{InputSchema: SchemaRef("Missing")}, fn)
+
+	// The action was never registered, so the reference cannot resolve; this
+	// must surface as an error, not a nil-registry panic.
+	_, err := a.Run(context.Background(), map[string]any{"x": 1}, nil)
+	if err == nil {
+		t.Fatal("expected error running unregistered action with a schema ref, got nil")
+	}
+	var gerr *GenkitError
+	if !errors.As(err, &gerr) || gerr.Status != INVALID_ARGUMENT {
+		t.Errorf("err = %v, want INVALID_ARGUMENT GenkitError", err)
+	}
+}
+
+func TestSchemaResolutionMemoized(t *testing.T) {
+	r := &countingRegistry{Registry: registry.New()}
+	DefineSchema(r, "MemoSchema", map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"q": map[string]any{"type": "string"},
+		},
+	})
+	fn := func(ctx context.Context, input any) (any, error) { return nil, nil }
+	a := DefineAction(r, "test/memo", api.ActionTypeCustom,
+		&ActionOptions{InputSchema: SchemaRef("MemoSchema")}, fn)
+
+	if _, err := a.Run(context.Background(), map[string]any{"q": "x"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	first := r.lookups
+	if first == 0 {
+		t.Fatal("expected a schema lookup on the first run")
+	}
+
+	if _, err := a.Run(context.Background(), map[string]any{"q": "y"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if r.lookups != first {
+		t.Errorf("lookups after second run = %d, want %d (resolution should be memoized)", r.lookups, first)
+	}
+	a.Desc()
+	if r.lookups != first {
+		t.Errorf("lookups after Desc = %d, want %d (Desc should hit the memo)", r.lookups, first)
+	}
+
+	// Registering with a different registry must invalidate the memo: the new
+	// registry may define a different schema under the same name.
+	r2 := &countingRegistry{Registry: registry.New()}
+	DefineSchema(r2, "MemoSchema", map[string]any{"type": "object"})
+	a.Register(r2)
+	a.Desc()
+	if r2.lookups == 0 {
+		t.Error("expected a fresh lookup after registering with a new registry (memo should be cleared)")
+	}
+	if r.lookups != first {
+		t.Errorf("old registry lookups = %d, want %d (resolution should use the new registry)", r.lookups, first)
+	}
+}
+
+func TestUnresolvedSchemaRefs(t *testing.T) {
+	desc := &api.ActionDesc{
+		InputSchema:  SchemaRef("A"),
+		OutputSchema: map[string]any{"type": "object"},
+		InitSchema:   SchemaRef("B"),
+	}
+	got := UnresolvedSchemaRefs(desc)
+	want := []string{"A", "B"}
+	if !slices.Equal(got, want) {
+		t.Errorf("UnresolvedSchemaRefs = %v, want %v", got, want)
+	}
+
+	if got := UnresolvedSchemaRefs(&api.ActionDesc{}); len(got) != 0 {
+		t.Errorf("UnresolvedSchemaRefs on empty desc = %v, want none", got)
+	}
 }

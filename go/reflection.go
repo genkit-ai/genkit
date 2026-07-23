@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -644,13 +645,37 @@ func handleListValues(g *Genkit) func(w http.ResponseWriter, r *http.Request) er
 	}
 }
 
+// stampUnresolvedSchemas checks desc for references to schemas that were
+// never defined. Each one is logged as an error and recorded on the
+// descriptor's metadata under "schemaError", so the served payload documents
+// the misconfiguration even if the log scrolls by. The broken action stays in
+// the list (the failure belongs to the action, not the whole list); running
+// it fails with the same named error, so the Dev UI surfaces it on first
+// interaction.
+func stampUnresolvedSchemas(ctx context.Context, desc *api.ActionDesc) {
+	missing := core.UnresolvedSchemaRefs(desc)
+	if len(missing) == 0 {
+		return
+	}
+	msg := fmt.Sprintf("action %q references undefined schema(s) %s; define them with core.DefineSchema",
+		desc.Key, strings.Join(missing, ", "))
+	logger.FromContext(ctx).Error(msg)
+	// Stamp a copy: desc.Metadata is shared with the live action.
+	md := make(map[string]any, len(desc.Metadata)+1)
+	maps.Copy(md, desc.Metadata)
+	md["schemaError"] = msg
+	desc.Metadata = md
+}
+
 // listActions lists all the registered actions.
-func listActions(g *Genkit) []api.ActionDesc {
+func listActions(ctx context.Context, g *Genkit) []api.ActionDesc {
 	ads := []api.ActionDesc{}
 
 	actions := g.reg.ListActions()
 	for _, a := range actions {
-		ads = append(ads, a.Desc())
+		desc := a.Desc()
+		stampUnresolvedSchemas(ctx, &desc)
+		ads = append(ads, desc)
 	}
 
 	sort.Slice(ads, func(i, j int) bool {
@@ -664,7 +689,7 @@ func listActions(g *Genkit) []api.ActionDesc {
 // Schema references in the descriptors are resolved to their concrete schemas
 // so that consumers (e.g., the Dev UI) don't have to perform secondary lookups.
 func listResolvableActions(ctx context.Context, g *Genkit) []api.ActionDesc {
-	ads := listActions(g)
+	ads := listActions(ctx, g)
 	keys := make(map[string]struct{}, len(ads))
 	for _, d := range ads {
 		keys[d.Name] = struct{}{}
@@ -681,6 +706,7 @@ func listResolvableActions(ctx context.Context, g *Genkit) []api.ActionDesc {
 		for _, desc := range dp.ListActions(ctx) {
 			if _, exists := keys[desc.Name]; !exists {
 				resolveDescSchemas(g.reg, &desc)
+				stampUnresolvedSchemas(ctx, &desc)
 				ads = append(ads, desc)
 				keys[desc.Name] = struct{}{}
 			}
@@ -788,7 +814,7 @@ func runActionWithOptionalInit(ctx context.Context, a api.Action, input, init js
 	if bidi, ok := a.(api.BidiAction); ok && base.HasJSONValue(init) {
 		return bidi.RunBidiJSON(ctx, input, cb, &api.BidiJSONOptions{Init: init})
 	}
-	return a.RunJSONWithTelemetry(ctx, input, cb)
+	return a.RunJSON(ctx, input, cb)
 }
 
 // writeJSON writes a JSON-marshaled value to the response writer.

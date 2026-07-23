@@ -669,15 +669,10 @@ func (a *Agent[State]) Desc() api.ActionDesc {
 
 // RunJSON runs a one-shot invocation with no init (a fresh session):
 // input is the turn's [AgentInput] and the result is the final
-// [AgentOutput]. To supply a session source, use [Agent.RunBidiJSON].
-func (a *Agent[State]) RunJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (json.RawMessage, error) {
+// [AgentOutput], with trace information. To supply a session source, use
+// [Agent.RunBidiJSON].
+func (a *Agent[State]) RunJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (*api.ActionRunResult[json.RawMessage], error) {
 	return a.action.RunJSON(ctx, input, cb)
-}
-
-// RunJSONWithTelemetry is [Agent.RunJSON] with trace information on the
-// result.
-func (a *Agent[State]) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (*api.ActionRunResult[json.RawMessage], error) {
-	return a.action.RunJSONWithTelemetry(ctx, input, cb)
 }
 
 // RunBidiJSON runs a one-shot invocation whose session init (the wire

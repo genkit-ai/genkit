@@ -45,7 +45,7 @@ import (
 // structured output (Stream is Out). The [TextPrompt] and [DataPrompt]
 // aliases name those two shapes.
 type Prompt[In, Out, Stream any] struct {
-	core.Action[any, *GenerateActionOptions, struct{}]
+	action[any, *GenerateActionOptions, struct{}]
 	promptOptions
 	registry api.Registry
 }
@@ -168,7 +168,10 @@ func definePrompt[In, Out, Stream any](r api.Registry, name string, opts []Promp
 		metadata["prompt"] = promptMetadata
 	}
 
-	p.Action = *core.DefineAction(r, name, api.ActionTypeExecutablePrompt, metadata, p.InputSchema, p.buildRequest)
+	p.action = *core.DefineAction(r, name, api.ActionTypeExecutablePrompt, &core.ActionOptions{
+		Metadata:    metadata,
+		InputSchema: p.InputSchema,
+	}, p.buildRequest)
 
 	return p
 }
@@ -184,7 +187,7 @@ func LookupPrompt(r api.Registry, name string) *TextPrompt[any] {
 		return nil
 	}
 	return &TextPrompt[any]{
-		Action:   *action,
+		action:   *action,
 		registry: r,
 	}
 }
@@ -447,7 +450,7 @@ func (p *Prompt[In, Out, Stream]) Render(ctx context.Context, input In) (*Genera
 
 // Desc returns a descriptor of the prompt with resolved schema references.
 func (p *Prompt[In, Out, Stream]) Desc() api.ActionDesc {
-	desc := p.Action.Desc()
+	desc := p.action.Desc()
 	descMeta := maps.Clone(desc.Metadata)
 	if promptMeta, ok := descMeta["prompt"].(map[string]any); ok {
 		promptMeta = maps.Clone(promptMeta)

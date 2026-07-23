@@ -89,8 +89,8 @@ func TestServeMux(t *testing.T) {
 	tc := tracing.NewTestOnlyTelemetryClient()
 	tracing.WriteTelemetryImmediate(tc)
 
-	core.DefineAction(g.reg, "test/inc", api.ActionTypeCustom, nil, nil, inc)
-	core.DefineAction(g.reg, "test/dec", api.ActionTypeCustom, nil, nil, dec)
+	core.DefineAction(g.reg, "test/inc", api.ActionTypeCustom, nil, inc)
+	core.DefineAction(g.reg, "test/dec", api.ActionTypeCustom, nil, dec)
 
 	s := &reflectionServer{
 		Server:        &http.Server{},
@@ -160,8 +160,8 @@ func TestServeMux(t *testing.T) {
 				"query": map[string]any{"type": "string"},
 			},
 		})
-		core.DefineAction(g.reg, "test/withRef", api.ActionTypeCustom, nil,
-			core.SchemaRef("AgentRequest"),
+		core.DefineAction(g.reg, "test/withRef", api.ActionTypeCustom,
+			&core.ActionOptions{InputSchema: core.SchemaRef("AgentRequest")},
 			func(ctx context.Context, in any) (any, error) { return nil, nil })
 
 		res, err := http.Get(ts.URL + "/api/actions")
@@ -187,9 +187,51 @@ func TestServeMux(t *testing.T) {
 		}
 	})
 
+	t.Run("list actions stamps undefined schema reference", func(t *testing.T) {
+		// A separate instance so the broken action doesn't show up in the
+		// shared server's action list for the other subtests.
+		g2 := MustInit(context.Background())
+		core.DefineAction(g2.reg, "test/missingRef", api.ActionTypeCustom,
+			&core.ActionOptions{InputSchema: core.SchemaRef("NotDefined")},
+			func(ctx context.Context, in any) (any, error) { return nil, nil })
+
+		s2 := &reflectionServer{
+			Server:        &http.Server{},
+			activeActions: newActiveActionsMap(),
+		}
+		ts2 := httptest.NewServer(serveMux(g2, s2))
+		defer ts2.Close()
+
+		res, err := http.Get(ts2.URL + "/api/actions")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+
+		// One misconfigured action must not fail the whole list.
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("list actions status = %d, want %d", res.StatusCode, http.StatusOK)
+		}
+		var actions map[string]api.ActionDesc
+		if err := json.NewDecoder(res.Body).Decode(&actions); err != nil {
+			t.Fatal(err)
+		}
+		desc, ok := actions["/custom/test/missingRef"]
+		if !ok {
+			t.Fatal("action /custom/test/missingRef not found in response")
+		}
+		schemaErr, _ := desc.Metadata["schemaError"].(string)
+		if !strings.Contains(schemaErr, "NotDefined") {
+			t.Errorf("Metadata[schemaError] = %q, want it to name schema \"NotDefined\"", schemaErr)
+		}
+		// The unresolved reference itself is served as-is.
+		if _, hasRef := desc.InputSchema["$ref"]; !hasRef {
+			t.Errorf("InputSchema = %v, want the unresolved $ref preserved", desc.InputSchema)
+		}
+	})
+
 	t.Run("run action", func(t *testing.T) {
 		core.DefineAction(g.reg, "test/checkLabels", api.ActionTypeCustom, nil,
-			nil,
 			func(ctx context.Context, in any) (any, error) {
 				labels := tracing.TelemetryLabelsFromContext(ctx)
 				if labels == nil {
@@ -276,7 +318,7 @@ func TestServeMux(t *testing.T) {
 			}
 			return x, nil
 		}
-		core.DefineStreamingAction(g.reg, "test/streaming", api.ActionTypeCustom, nil, nil, streamingInc)
+		core.DefineStreamingAction(g.reg, "test/streaming", api.ActionTypeCustom, nil, streamingInc)
 
 		body := `{"key": "/custom/test/streaming", "input": 3}`
 		req, err := http.NewRequest("POST", ts.URL+"/api/runAction?stream=true", strings.NewReader(body))
@@ -362,7 +404,7 @@ func TestEarlyTraceIDTransmission(t *testing.T) {
 		// goroutine, not with the httptest server's request goroutine.
 		actionStarted := make(chan struct{})
 		actionCanProceed := make(chan struct{})
-		core.DefineAction(g.reg, "test/slow", api.ActionTypeCustom, nil, nil,
+		core.DefineAction(g.reg, "test/slow", api.ActionTypeCustom, nil,
 			func(ctx context.Context, input any) (any, error) {
 				close(actionStarted)
 				<-actionCanProceed
@@ -429,7 +471,7 @@ func TestEarlyTraceIDTransmission(t *testing.T) {
 		// previous subtest.
 		actionStarted := make(chan struct{})
 		actionCanProceed := make(chan struct{})
-		core.DefineAction(g.reg, "test/slow2", api.ActionTypeCustom, nil, nil,
+		core.DefineAction(g.reg, "test/slow2", api.ActionTypeCustom, nil,
 			func(ctx context.Context, input any) (any, error) {
 				close(actionStarted)
 				<-actionCanProceed
@@ -496,7 +538,7 @@ func TestActionCancellation(t *testing.T) {
 	gotCancelled := make(chan struct{})
 
 	// Long-running action that respects cancellation
-	core.DefineStreamingAction(g.reg, "test/cancellable", api.ActionTypeCustom, nil, nil,
+	core.DefineStreamingAction(g.reg, "test/cancellable", api.ActionTypeCustom, nil,
 		func(ctx context.Context, input any, cb func(context.Context, any) error) (any, error) {
 			// Send trace ID so test can cancel us
 			gotTraceID <- tracing.SpanTraceInfo(ctx).TraceID
@@ -685,7 +727,7 @@ func TestRunActionWithInit(t *testing.T) {
 			}
 			return out, nil
 		})
-	core.DefineAction(g.reg, "test/no-init", api.ActionTypeCustom, nil, nil, inc)
+	core.DefineAction(g.reg, "test/no-init", api.ActionTypeCustom, nil, inc)
 
 	s := &reflectionServer{
 		Server:        &http.Server{},

@@ -163,7 +163,7 @@ func TestRunBidi(t *testing.T) {
 func TestBidiActionInterfaceDetection(t *testing.T) {
 	r := registry.New()
 
-	DefineAction(r, "plain", api.ActionTypeCustom, nil, nil,
+	DefineAction(r, "plain", api.ActionTypeCustom, nil,
 		func(ctx context.Context, in string) (string, error) {
 			return "out:" + in, nil
 		})
@@ -563,8 +563,8 @@ func TestBidiNilInitSkipsValidation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("RunJSON: %v", err)
 		}
-		if string(out) != `"default: hello"` {
-			t.Errorf("output = %s, want %q", out, "default: hello")
+		if string(out.Result) != `"default: hello"` {
+			t.Errorf("output = %s, want %q", out.Result, "default: hello")
 		}
 	})
 
@@ -1321,13 +1321,23 @@ func TestBidiSendAfterCompletionFails(t *testing.T) {
 	}
 }
 
+// panicLookupRegistry panics on schema lookup, simulating a failure inside
+// the session wrapper (outside the user function).
+type panicLookupRegistry struct {
+	api.Registry
+}
+
+func (p *panicLookupRegistry) LookupSchema(name string) map[string]any {
+	panic("schema lookup boom")
+}
+
 // TestBidiSessionWrapperPanicNotMislabeled verifies that a panic escaping the
 // session wrapper (outside the user function) is reported as a panic, not
 // misattributed to the action closing its output channel.
 func TestBidiSessionWrapperPanicNotMislabeled(t *testing.T) {
-	// An unregistered action with a $ref output schema: schema resolution
-	// dereferences the nil registry after the function returns, panicking
-	// inside the session wrapper.
+	// A $ref output schema resolved through a registry whose lookup panics:
+	// resolution runs after the function returns, so the panic unwinds inside
+	// the session wrapper.
 	action := NewBidiAction(
 		"ref-output", api.ActionTypeCustom,
 		&BidiActionOptions{OutputSchema: SchemaRef("missing")},
@@ -1337,6 +1347,7 @@ func TestBidiSessionWrapperPanicNotMislabeled(t *testing.T) {
 			return "done", nil
 		},
 	)
+	action.Register(&panicLookupRegistry{Registry: registry.New()})
 
 	conn, err := action.Connect(context.Background(), struct{}{})
 	if err != nil {
@@ -1440,7 +1451,7 @@ func TestBidiJSONConnEmptyChunkValidated(t *testing.T) {
 // streaming actions advertise a streamSchema and only bidi actions with a
 // real Init type advertise an initSchema.
 func TestActionDescSchemaSentinels(t *testing.T) {
-	plain := NewAction("plain-desc", api.ActionTypeCustom, nil, nil,
+	plain := NewAction("plain-desc", api.ActionTypeCustom, nil,
 		func(ctx context.Context, in string) (string, error) { return in, nil })
 	if got := plain.Desc().StreamSchema; got != nil {
 		t.Errorf("non-streaming action StreamSchema = %v, want nil", got)
@@ -1449,7 +1460,7 @@ func TestActionDescSchemaSentinels(t *testing.T) {
 		t.Errorf("non-streaming action InitSchema = %v, want nil", got)
 	}
 
-	streaming := NewStreamingAction("streaming-desc", api.ActionTypeCustom, nil, nil,
+	streaming := NewStreamingAction("streaming-desc", api.ActionTypeCustom, nil,
 		func(ctx context.Context, in string, cb StreamCallback[string]) (string, error) { return in, nil })
 	if got := streaming.Desc().StreamSchema; got == nil {
 		t.Error("streaming action StreamSchema = nil, want schema")

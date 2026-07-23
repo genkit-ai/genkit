@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"syscall"
 
 	"github.com/firebase/genkit/go/ai"
@@ -508,13 +509,15 @@ func Run[Out any](ctx context.Context, name string, fn func() (Out, error)) (Out
 // This is useful for introspection or for dynamically exposing flow endpoints,
 // for example, in an HTTP server.
 func (g *Genkit) ListFlows() []api.Action {
-	acts := listActions(g)
 	flows := []api.Action{}
-	for _, act := range acts {
-		if act.Type == api.ActionTypeFlow {
-			flows = append(flows, g.reg.LookupAction(act.Key))
+	for _, act := range g.reg.ListActions() {
+		if act.Desc().Type == api.ActionTypeFlow {
+			flows = append(flows, act)
 		}
 	}
+	sort.Slice(flows, func(i, j int) bool {
+		return flows[i].Name() < flows[j].Name()
+	})
 	return flows
 }
 

@@ -421,7 +421,7 @@ func TestBackgroundActionWithMetadata(t *testing.T) {
 			return &Operation[string]{ID: op.ID, Metadata: map[string]any{}}, nil
 		}
 
-		ba := DefineBackgroundAction(r, "test/meta", api.ActionTypeCustom, meta, startFn, checkFn, nil)
+		ba := DefineBackgroundAction(r, "test/meta", api.ActionTypeCustom, &ActionOptions{Metadata: meta}, startFn, checkFn, nil)
 
 		desc := ba.Desc()
 		if desc.Description != "A test background action" {

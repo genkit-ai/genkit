@@ -34,17 +34,27 @@ provide:
 
 Define a non-streaming action:
 
-	action := core.DefineAction(registry, "myAction",
+	action := core.DefineAction(registry, "myAction", api.ActionTypeCustom, nil,
 		func(ctx context.Context, input string) (string, error) {
 			return "processed: " + input, nil
 		},
 	)
 
-	result, err := action.Run(context.Background(), "hello")
+	result, err := action.Run(context.Background(), "hello", nil)
+
+Optional attributes (description, metadata, schema overrides) are passed via
+[ActionOptions]:
+
+	action := core.DefineAction(registry, "myAction", api.ActionTypeCustom,
+		&core.ActionOptions{Description: "processes strings"},
+		func(ctx context.Context, input string) (string, error) {
+			return "processed: " + input, nil
+		},
+	)
 
 Define a streaming action that sends chunks during execution:
 
-	streamingAction := core.DefineStreamingAction(registry, "countdown",
+	streamingAction := core.DefineStreamingAction(registry, "countdown", api.ActionTypeCustom, nil,
 		func(ctx context.Context, start int, cb core.StreamCallback[string]) (string, error) {
 			for i := start; i > 0; i-- {
 				if cb != nil {
@@ -184,8 +194,8 @@ from an API), implement [api.DynamicPlugin]:
 For long-running operations, use background actions that return immediately
 with an operation ID that can be polled for completion:
 
-	bgAction := core.DefineBackgroundAction(registry, "longTask",
-		func(ctx context.Context, input Input) (Output, error) {
+	bgAction := core.DefineBackgroundAction(registry, "longTask", api.ActionTypeCustom, nil,
+		func(ctx context.Context, input Input) (*core.Operation[Output], error) {
 			// Start the operation
 			return startLongOperation(input)
 		},
@@ -193,6 +203,7 @@ with an operation ID that can be polled for completion:
 			// Check operation status
 			return checkOperationStatus(op)
 		},
+		nil, // cancelFn; nil means cancellation is unsupported
 	)
 
 # Error Handling

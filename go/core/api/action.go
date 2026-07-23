@@ -33,10 +33,11 @@ type Action interface {
 	Registerable
 	// Name returns the name of the action.
 	Name() string
-	// RunJSON runs the action with the given JSON input and streaming callback and returns the output as JSON.
-	RunJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (json.RawMessage, error)
-	// RunJSONWithTelemetry runs the action with the given JSON input and streaming callback and returns the output as JSON along with telemetry info.
-	RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (*ActionRunResult[json.RawMessage], error)
+	// RunJSON runs the action with the given JSON input and streaming callback
+	// and returns the output as JSON along with trace information. Trace
+	// information is populated even when the run fails, so transports can
+	// report the trace of a failed run.
+	RunJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (*ActionRunResult[json.RawMessage], error)
 	// Desc returns a descriptor of the action.
 	Desc() ActionDesc
 }

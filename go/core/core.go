@@ -61,27 +61,54 @@ func SchemaRef(name string) map[string]any {
 	}
 }
 
+// schemaRefName returns the referenced schema name if schema is a named-schema
+// reference ({"$ref": "genkit:Name"}, as produced by [SchemaRef]), or "" if the
+// schema is nil or inline.
+func schemaRefName(schema map[string]any) string {
+	ref, ok := schema["$ref"].(string)
+	if !ok {
+		return ""
+	}
+	name, found := strings.CutPrefix(ref, "genkit:")
+	if !found {
+		return ""
+	}
+	return name
+}
+
 // ResolveSchema resolves a schema that may contain a $ref to a registered schema.
 // If the schema contains a $ref with the "genkit:" prefix, it looks up the schema by name.
 // Returns the original schema if no $ref is present, or the resolved schema if found.
-// Returns an error if the schema reference cannot be resolved.
+// Returns an error if the schema reference cannot be resolved, including when
+// r is nil (e.g. the schema belongs to an action that was never registered).
 func ResolveSchema(r api.Registry, schema map[string]any) (map[string]any, error) {
-	if schema == nil {
-		return nil, nil
-	}
-	ref, ok := schema["$ref"].(string)
-	if !ok {
+	name := schemaRefName(schema)
+	if name == "" {
 		return schema, nil
 	}
-	schemaName, found := strings.CutPrefix(ref, "genkit:")
-	if !found {
-		return schema, nil
+	if r == nil {
+		return nil, fmt.Errorf("schema %q cannot be resolved without a registry; register the action first", name)
 	}
-	resolved := r.LookupSchema(schemaName)
+	resolved := r.LookupSchema(name)
 	if resolved == nil {
-		return nil, fmt.Errorf("schema %q not found", schemaName)
+		return nil, fmt.Errorf("schema %q not found", name)
 	}
 	return resolved, nil
+}
+
+// UnresolvedSchemaRefs returns the names of the named-schema references
+// ({"$ref": "genkit:Name"}) that remain unresolved in desc's schema slots.
+// Serving boundaries (e.g. the reflection servers) use it to reject
+// descriptors that still carry references to schemas that were never defined,
+// instead of silently passing the reference through to consumers.
+func UnresolvedSchemaRefs(desc *api.ActionDesc) []string {
+	var names []string
+	for _, schema := range []map[string]any{desc.InputSchema, desc.OutputSchema, desc.StreamSchema, desc.InitSchema} {
+		if name := schemaRefName(schema); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // InferSchemaMap infers a JSON schema from a Go value and converts it to a map.

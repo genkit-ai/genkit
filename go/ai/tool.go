@@ -348,8 +348,12 @@ func newTool[In, Out any](fnName, name, description string, fn ToolFunc[In, Out]
 		return resp, nil
 	}
 
-	action := core.NewAction(name, api.ActionTypeToolV2, metadata, toolOpts.InputSchema, wrapped)
-	return &Tool[In, Out]{action: action}
+	a := core.NewAction(name, api.ActionTypeToolV2, &core.ActionOptions{
+		Description: description,
+		Metadata:    metadata,
+		InputSchema: toolOpts.InputSchema,
+	}, wrapped)
+	return &Tool[In, Out]{action: a}
 }
 
 // Name returns the name of the tool.
@@ -417,13 +421,13 @@ func (t *Tool[In, Out]) RunRaw(ctx context.Context, input any) (*MultipartToolRe
 	if err != nil {
 		return nil, fmt.Errorf("error marshalling tool input for %v: %v", t.Name(), err)
 	}
-	output, err := t.action.RunJSON(ctx, mi, nil)
+	res, err := t.action.RunJSON(ctx, mi, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error calling tool %v: %w", t.Name(), err)
 	}
 
 	var resp MultipartToolResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
+	if err := json.Unmarshal(res.Result, &resp); err != nil {
 		return nil, fmt.Errorf("error parsing tool output for %v: %v", t.Name(), err)
 	}
 	return &resp, nil

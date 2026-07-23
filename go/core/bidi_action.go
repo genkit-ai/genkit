@@ -61,15 +61,18 @@ type BidiFunc[In, Out, Stream, Init any] = func(ctx context.Context, init Init, 
 //
 // Experimental: bidirectional streaming is experimental and subject to change.
 type BidiAction[In, Out, Stream, Init any] struct {
-	*Action[In, Out, Stream]
+	*action[In, Out, Stream]
 	bidiFn BidiFunc[In, Out, Stream, Init]
 }
 
-// BidiActionOptions configures a bidi action. Nil schema fields are inferred
-// from the corresponding type parameters.
+// BidiActionOptions configures the optional attributes of a [BidiAction]. It
+// is [ActionOptions] plus the init schema slot. A nil options value is valid:
+// schemas are inferred from the action's type parameters and the descriptor
+// carries no metadata.
 //
 // Experimental: bidirectional streaming is experimental and subject to change.
 type BidiActionOptions struct {
+	Description  string         // Human-readable description of the action. Metadata["description"] is used if empty.
 	Metadata     map[string]any // Arbitrary key-value data attached to the action descriptor.
 	InputSchema  map[string]any // JSON schema for messages streamed into the action. Inferred from In if nil.
 	OutputSchema map[string]any // JSON schema for the action's final output. Inferred from Out if nil.
@@ -95,25 +98,19 @@ func NewBidiAction[In, Out, Stream, Init any](
 	metadata["bidi"] = true
 
 	b := &BidiAction[In, Out, Stream, Init]{
-		Action: newAction[In, Out, Stream](name, atype, metadata, opts.InputSchema),
+		action: newAction[In, Out, Stream](name, atype, &ActionOptions{
+			Description:  opts.Description,
+			Metadata:     metadata,
+			InputSchema:  opts.InputSchema,
+			OutputSchema: opts.OutputSchema,
+			StreamSchema: opts.StreamSchema,
+		}),
 		bidiFn: fn,
 	}
 	// The embedded action's fn backs the promoted unary surface (Run,
 	// RunJSON): a one-shot session with the zero Init value.
-	b.Action.fn = b.oneShotFn(base.Zero[Init]())
-
-	if opts.OutputSchema != nil {
-		b.desc.OutputSchema = opts.OutputSchema
-	}
-	if opts.StreamSchema != nil {
-		b.desc.StreamSchema = opts.StreamSchema
-	}
-
-	if opts.InitSchema != nil {
-		b.desc.InitSchema = opts.InitSchema
-	} else if !isUnitType[Init]() {
-		b.desc.InitSchema = inferSchema[Init]()
-	}
+	b.action.fn = b.oneShotFn(base.Zero[Init]())
+	b.desc.InitSchema = schemaFor[Init](opts.InitSchema, true)
 
 	return b
 }
@@ -137,7 +134,7 @@ func DefineBidiAction[In, Out, Stream, Init any](
 // the embedded Action's Register so that the registry holds the BidiAction
 // itself; registry lookups must satisfy api.BidiAction.
 func (b *BidiAction[In, Out, Stream, Init]) Register(r api.Registry) {
-	b.Action.registry = r
+	b.action.setRegistry(r)
 	r.RegisterAction(b.desc.Key, b)
 }
 
@@ -207,7 +204,7 @@ func (b *BidiAction[In, Out, Stream, Init]) spanInitValue(init Init) any {
 //
 // Experimental: bidirectional streaming is experimental and subject to change.
 func (b *BidiAction[In, Out, Stream, Init]) RunBidi(ctx context.Context, init Init, input In, cb StreamCallback[Stream]) (Out, error) {
-	r, err := b.Action.runWithTelemetry(ctx, input, cb, b.oneShotFn(init), b.spanInitValue(init))
+	r, err := b.action.runWithTelemetry(ctx, input, cb, b.oneShotFn(init), b.spanInitValue(init))
 	if err != nil {
 		return base.Zero[Out](), err
 	}
@@ -237,7 +234,7 @@ func (b *BidiAction[In, Out, Stream, Init]) RunBidiJSON(ctx context.Context, inp
 	if hasInit {
 		spanInit = init
 	}
-	return b.Action.runJSONWithTelemetry(ctx, input, cb, b.oneShotFn(init), spanInit)
+	return b.action.runJSON(ctx, input, cb, b.oneShotFn(init), spanInit)
 }
 
 // Connect starts a bidirectional streaming connection with the given
@@ -267,9 +264,9 @@ func (b *BidiAction[In, Out, Stream, Init]) ConnectJSON(ctx context.Context, opt
 	if err := b.validateInit(init); err != nil {
 		return nil, err
 	}
-	inputSchema, err := ResolveSchema(b.registry, b.desc.InputSchema)
+	inputSchema, err := b.resolveSchema("input", b.desc.InputSchema)
 	if err != nil {
-		return nil, NewError(INVALID_ARGUMENT, "invalid input schema for action %q: %v", b.desc.Key, err)
+		return nil, err
 	}
 	// Compiled once per session: Send validates every inbound chunk, and
 	// recompiling the schema per chunk would dominate the streaming hot path.
@@ -312,9 +309,9 @@ func (b *BidiAction[In, Out, Stream, Init]) decodeInit(opts *api.BidiJSONOptions
 	if opts == nil || !base.HasJSONValue(opts.Init) {
 		return init, false, nil
 	}
-	schema, err := ResolveSchema(b.registry, b.desc.InitSchema)
+	schema, err := b.resolveSchema("init", b.desc.InitSchema)
 	if err != nil {
-		return init, false, NewError(INVALID_ARGUMENT, "invalid init schema for action %q: %v", b.desc.Key, err)
+		return init, false, err
 	}
 	init, err = base.UnmarshalAndNormalize[Init](opts.Init, schema)
 	if err != nil {
@@ -339,9 +336,9 @@ func (b *BidiAction[In, Out, Stream, Init]) validateInit(init Init) error {
 	if isNilValue(init) {
 		return nil
 	}
-	schema, err := ResolveSchema(b.registry, b.desc.InitSchema)
+	schema, err := b.resolveSchema("init", b.desc.InitSchema)
 	if err != nil {
-		return NewError(INVALID_ARGUMENT, "invalid init schema for action %q: %v", b.desc.Key, err)
+		return err
 	}
 	if err := base.ValidateValue(init, schema); err != nil {
 		return NewError(INVALID_ARGUMENT, "invalid init for action %q: %v", b.desc.Key, err)
@@ -373,7 +370,7 @@ func (b *BidiAction[In, Out, Stream, Init]) startBidi(ctx context.Context, init 
 				}
 				// Mirror the unary path: the final output is validated
 				// against the action's OutputSchema.
-				outputSchema, err := b.resolveOutputSchema()
+				outputSchema, err := b.resolveSchema("output", b.desc.OutputSchema)
 				if err != nil {
 					return out, err
 				}

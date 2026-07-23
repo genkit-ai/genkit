@@ -288,7 +288,7 @@ func newSnapshotActions[State any](
 	if store == nil {
 		return nil, nil
 	}
-	getSnapshotAction := core.NewAction(agentName, api.ActionTypeAgentSnapshot, nil, nil,
+	getSnapshotAction := core.NewAction(agentName, api.ActionTypeAgentSnapshot, nil,
 		func(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[State], error) {
 			if req == nil || (req.SnapshotID == "" && req.SessionID == "") {
 				return nil, core.NewError(core.INVALID_ARGUMENT, "getSnapshot: snapshotId or sessionId is required")
@@ -302,7 +302,7 @@ func newSnapshotActions[State any](
 		// abort lifecycle is unsupported; don't surface the action.
 		return getSnapshotAction, nil
 	}
-	abortAction := core.NewAction(agentName, api.ActionTypeAgentAbort, nil, nil,
+	abortAction := core.NewAction(agentName, api.ActionTypeAgentAbort, nil,
 		func(ctx context.Context, req *AgentAbortRequest) (*AgentAbortResponse, error) {
 			if req == nil || req.SnapshotID == "" {
 				return nil, core.NewError(core.INVALID_ARGUMENT, "abort: snapshotId is required")
