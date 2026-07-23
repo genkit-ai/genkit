@@ -105,8 +105,6 @@ type Registerable interface {
 type ActionType string
 
 const (
-	ActionTypeRetriever        ActionType = "retriever"
-	ActionTypeIndexer          ActionType = "indexer"
 	ActionTypeEmbedder         ActionType = "embedder"
 	ActionTypeEvaluator        ActionType = "evaluator"
 	ActionTypeFlow             ActionType = "flow"

@@ -33,7 +33,7 @@ type MessagesFn = func(context.Context, any) ([]*Message, error)
 
 // configOptions holds configuration options.
 type configOptions struct {
-	Config any // Primitive (model, embedder, retriever, etc) configuration.
+	Config any // Primitive (model, embedder, etc) configuration.
 }
 
 // ConfigOption is an option for model configuration.
@@ -44,7 +44,6 @@ type ConfigOption interface {
 	applyGenerate(*generateOptions) error
 	applyPromptExecute(*promptExecutionOptions) error
 	applyEmbedder(*embedderOptions) error
-	applyRetriever(*retrieverOptions) error
 	applyEvaluator(*evaluatorOptions) error
 }
 
@@ -81,11 +80,6 @@ func (o *configOptions) applyPromptExecute(opts *promptExecutionOptions) error {
 
 // applyEmbedder applies the option to the embed options.
 func (o *configOptions) applyEmbedder(opts *embedderOptions) error {
-	return o.applyConfig(&opts.configOptions)
-}
-
-// applyRetriever applies the option to the retrieve options.
-func (o *configOptions) applyRetriever(opts *retrieverOptions) error {
 	return o.applyConfig(&opts.configOptions)
 }
 
@@ -680,7 +674,6 @@ type DocumentOption interface {
 	applyGenerate(*generateOptions) error
 	applyPromptExecute(*promptExecutionOptions) error
 	applyEmbedder(*embedderOptions) error
-	applyRetriever(*retrieverOptions) error
 }
 
 // applyDocument applies the option to the context options.
@@ -708,11 +701,6 @@ func (o *documentOptions) applyPromptExecute(pgOpts *promptExecutionOptions) err
 // applyEmbedder applies the option to the embed options.
 func (o *documentOptions) applyEmbedder(embedOpts *embedderOptions) error {
 	return o.applyDocument(&embedOpts.documentOptions)
-}
-
-// applyRetriever applies the option to the retrieve options.
-func (o *documentOptions) applyRetriever(retOpts *retrieverOptions) error {
-	return o.applyDocument(&retOpts.documentOptions)
 }
 
 // WithTextDocs sets the text to be used as context documents for generation or as input to an embedder.
@@ -838,51 +826,6 @@ func WithEmbedder(embedder EmbedderArg) EmbedderOption {
 // The embedder name will be resolved to a [Embedder] and may error if the reference is invalid.
 func WithEmbedderName(name string) EmbedderOption {
 	return &embedderOptions{Embedder: NewEmbedderRef(name, nil)}
-}
-
-// retrieverOptions holds configuration and input for a retriever request.
-type retrieverOptions struct {
-	configOptions
-	documentOptions
-	Retriever RetrieverArg // Retriever to use.
-}
-
-// RetrieverOption is an option for configuring a retriever request.
-// It applies only to [Retriever.Retrieve].
-type RetrieverOption interface {
-	applyRetriever(*retrieverOptions) error
-}
-
-// applyRetriever applies the option to the retrieve options.
-func (o *retrieverOptions) applyRetriever(retOpts *retrieverOptions) error {
-	if err := o.applyConfig(&retOpts.configOptions); err != nil {
-		return err
-	}
-
-	if err := o.applyDocument(&retOpts.documentOptions); err != nil {
-		return err
-	}
-
-	if o.Retriever != nil {
-		if retOpts.Retriever != nil {
-			return errors.New("cannot set retriever more than once (WithRetriever or WithRetrieverName)")
-		}
-		retOpts.Retriever = o.Retriever
-	}
-
-	return nil
-}
-
-// WithRetriever sets either a [Retriever] or a [RetrieverRef] that may contain a config.
-// Passing [WithConfig] will take precedence over the config in WithRetriever.
-func WithRetriever(retriever RetrieverArg) RetrieverOption {
-	return &retrieverOptions{Retriever: retriever}
-}
-
-// WithRetrieverName sets the retriever name to call for document retrieval.
-// The retriever name will be resolved to a [Retriever] and may error if the reference is invalid.
-func WithRetrieverName(name string) RetrieverOption {
-	return &retrieverOptions{Retriever: NewRetrieverRef(name, nil)}
 }
 
 // generateOptions are options for generating a model response by calling a model directly.

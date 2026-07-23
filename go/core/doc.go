@@ -24,7 +24,7 @@ a higher-level, more convenient API.
 # Actions
 
 Actions are the fundamental building blocks of Genkit. Every operation - flows,
-model calls, tool invocations, retrieval - is implemented as an action. Actions
+model calls, tool invocations, embeddings - is implemented as an action. Actions
 provide:
 
   - Type-safe input/output with JSON schema validation
@@ -143,7 +143,7 @@ Schemas can be referenced in .prompt files by name.
 
 # Plugin Development
 
-Plugins extend Genkit's functionality by providing models, tools, retrievers,
+Plugins extend Genkit's functionality by providing models, tools,
 and other capabilities. Implement the [api.Plugin] interface:
 
 	type MyPlugin struct {

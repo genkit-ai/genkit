@@ -45,7 +45,7 @@ type Model interface {
 	Register(r api.Registry)
 }
 
-// ModelArg is the interface for model arguments. It can either be the retriever action itself or a reference to be looked up.
+// ModelArg is the interface for model arguments. It can either be the model action itself or a reference to be looked up.
 type ModelArg interface {
 	Name() string
 }

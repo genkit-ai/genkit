@@ -21,10 +21,7 @@ import (
 	"log"
 
 	genkit "github.com/firebase/genkit/go"
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
-	"github.com/firebase/genkit/go/plugins/localvec"
 )
 
 // menuItem is the data model for an item on the menu.
@@ -66,7 +63,6 @@ func main() {
 	}
 
 	model := googlegenai.VertexAIModel(g, "gemini-2.5-flash")
-	embedder := googlegenai.VertexAIEmbedder(g, "text-embedding-004")
 
 	if err := setup01(g, model); err != nil {
 		log.Fatal(err)
@@ -75,27 +71,6 @@ func main() {
 		log.Fatal(err)
 	}
 	if err := setup03(g, model); err != nil {
-		log.Fatal(err)
-	}
-
-	if err := localvec.Init(); err != nil {
-		log.Fatal(err)
-	}
-
-	retOpts := &ai.RetrieverOptions{
-		ConfigSchema: core.InferSchemaMap(localvec.RetrieverOptions{}),
-		Label:        "go-menu_items",
-		Supports: &ai.RetrieverSupports{
-			Media: false,
-		},
-	}
-	docStore, retriever, err := localvec.DefineRetriever(g, "go-menu_items", localvec.Config{
-		Embedder: embedder,
-	}, retOpts)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if err := setup04(ctx, g, docStore, retriever, model); err != nil {
 		log.Fatal(err)
 	}
 

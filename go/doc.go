@@ -303,7 +303,7 @@ use [WithStreamManager]:
 # Plugins
 
 Genkit's functionality is extended through plugins that provide models, tools,
-retrievers, and other capabilities. Common plugins include:
+and other capabilities. Common plugins include:
 
   - googlegenai: Google AI (Gemini models)
   - vertexai: Google Cloud Vertex AI
@@ -404,7 +404,6 @@ or when you need to pass components directly:
 
   - [ai.NewTool]: Create an unregistered tool
   - [ai.NewModel]: Create an unregistered model
-  - [ai.NewRetriever]: Create an unregistered retriever
   - [ai.NewEmbedder]: Create an unregistered embedder
 
 Use the corresponding Define* functions in this package to create and register

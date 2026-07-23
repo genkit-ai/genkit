@@ -1288,36 +1288,6 @@ func (g *Genkit) GenerateDataStream[Out any](ctx context.Context, opts ...ai.Gen
 	return ai.GenerateDataStream[Out](genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
-// Retrieve performs a document retrieval request using a flexible set of options
-// provided via [ai.RetrieverOption] arguments. It's a convenient way to retrieve
-// relevant documents from registered retrievers without directly calling the
-// retriever instance.
-//
-// # Options
-//
-//   - [ai.WithRetriever]: Specify the retriever (accepts [ai.Retriever] or [ai.RetrieverRef])
-//   - [ai.WithRetrieverName]: Specify retriever by name string
-//   - [ai.WithConfig]: Set retriever-specific configuration
-//   - [ai.WithTextDocs]: Provide query text as documents
-//   - [ai.WithDocs]: Provide query as [ai.Document] instances
-//
-// Example:
-//
-//	resp, err := g.Retrieve(ctx,
-//		ai.WithRetrieverName("myRetriever"),
-//		ai.WithTextDocs("What is the capital of France?"),
-//	)
-//	if err != nil {
-//		log.Fatalf("Retrieve failed: %v", err)
-//	}
-//
-//	for _, doc := range resp.Documents {
-//		fmt.Printf("Document: %+v\n", doc)
-//	}
-func (g *Genkit) Retrieve(ctx context.Context, opts ...ai.RetrieverOption) (*ai.RetrieverResponse, error) {
-	return ai.Retrieve(ctx, g.reg, opts...)
-}
-
 // Embed performs an embedding request using a flexible set of options
 // provided via [ai.EmbedderOption] arguments. It's a convenient way to generate
 // embeddings from registered embedders without directly calling the embedder instance.
@@ -1345,28 +1315,6 @@ func (g *Genkit) Retrieve(ctx context.Context, opts ...ai.RetrieverOption) (*ai.
 //	}
 func (g *Genkit) Embed(ctx context.Context, opts ...ai.EmbedderOption) (*ai.EmbedResponse, error) {
 	return ai.Embed(ctx, g.reg, opts...)
-}
-
-// DefineRetriever defines a custom retriever implementation, registers it as a
-// [core.Action] of type Retriever, and returns an [ai.Retriever].
-// Retrievers are used to find documents relevant to a given query, often by
-// performing similarity searches in a vector database.
-//
-// The `name` is the unique identifier for the retriever. The `fn` function
-// contains the logic to process an [ai.RetrieverRequest] (containing the query)
-// and return an [ai.RetrieverResponse] (containing the relevant documents).
-//
-// For retrievers that don't need to be registered (e.g., for plugin development),
-// use [ai.NewRetriever] instead.
-func (g *Genkit) DefineRetriever(name string, opts *ai.RetrieverOptions, fn ai.RetrieverFunc) ai.Retriever {
-	return ai.DefineRetriever(g.reg, name, opts, fn)
-}
-
-// LookupRetriever retrieves a registered [ai.Retriever] by its provider and name.
-// It returns the retriever instance if found, or `nil` if no retriever with the
-// given identifier is registered (e.g., via [Genkit.DefineRetriever] or a plugin).
-func (g *Genkit) LookupRetriever(name string) ai.Retriever {
-	return ai.LookupRetriever(g.reg, name)
 }
 
 // DefineEmbedder defines a custom text embedding implementation, registers it as a
