@@ -23,9 +23,9 @@ from typing import Any, Literal, TypeAlias, cast
 from openai import AsyncOpenAI
 from openai.types import Model
 
-from genkit import Embedding, EmbedRequest, EmbedResponse, ModelInfo, ModelRequest, ModelResponse, Supports
+from genkit import Embedding, EmbedRequest, EmbedResponse, ModelConfig, ModelInfo, ModelRequest, ModelResponse, Supports
 from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
-from genkit.model import ModelConfig, model_action_metadata
+from genkit.model import model_action_metadata
 from genkit.plugin_api import (
     Action,
     ActionKind,

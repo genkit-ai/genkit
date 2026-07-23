@@ -40,7 +40,7 @@ else:
 
 from pydantic import ConfigDict, Field
 
-from genkit.model import ModelConfig
+from genkit import ModelConfig
 
 
 class ReasoningEffort(StrEnum):

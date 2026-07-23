@@ -17,6 +17,9 @@
 """Genkit — Build AI-powered applications."""
 
 from genkit._ai._aio import ActionKind, Genkit
+
+# Import model-related types from the model namespace.
+from genkit._ai._model import ModelConfig
 from genkit._ai._prompt import (
     ExecutablePrompt,
     ModelStreamResponse,
@@ -61,13 +64,10 @@ from genkit.embedder import (
     EmbedRequest,
     EmbedResponse,
 )
-
-# Import model-related types from the model namespace.
 from genkit.model import (
     Constrained,
     FinishReason,
     Message,
-    ModelConfig,
     ModelInfo,
     ModelRequest,
     ModelResponse,

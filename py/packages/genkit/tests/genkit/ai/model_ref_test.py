@@ -8,8 +8,9 @@
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from genkit import ModelConfig
 from genkit._ai._prompt import PromptConfig, _resolve_model_arg
-from genkit.model import ModelConfig, model_ref
+from genkit.model import model_ref
 
 
 class CustomConfig(BaseModel):

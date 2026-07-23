@@ -48,7 +48,6 @@ from genkit.evaluator import (
 
 # Model domain re-exports
 from genkit.model import (
-    ModelConfigDict,
     ModelRef,
     model_action_metadata,
     model_ref,
@@ -89,7 +88,6 @@ __all__ = [
     'model_action_metadata',
     'model_ref',
     'ModelRef',
-    'ModelConfigDict',
     # Embedder domain
     'embedder_action_metadata',
     'embedder_ref',
