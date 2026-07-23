@@ -732,31 +732,32 @@ func GenerateText(ctx context.Context, r api.Registry, opts ...GenerateOption) (
 }
 
 // GenerateData runs a generate request and returns strongly-typed output.
-// If the response doesn't contain text output (e.g., contains tool requests
-// or interrupts instead), the output will be nil and no error is returned.
-// Check resp.Interrupts() or resp.ToolRequests() to handle these cases.
-func GenerateData[Out any](ctx context.Context, r api.Registry, opts ...GenerateOption) (*Out, *ModelResponse, error) {
-	var value Out
-	opts = append(opts, WithOutputType(value))
+// The output is the zero value of Out whenever it could not be populated: on
+// error, or when the response doesn't contain text output (e.g., contains tool
+// requests or interrupts instead). Check resp.Interrupts() or
+// resp.ToolRequests() to handle those cases.
+func GenerateData[Out any](ctx context.Context, r api.Registry, opts ...GenerateOption) (Out, *ModelResponse, error) {
+	var zero Out
+	opts = append(opts, WithOutputType(zero))
 
 	resp, err := Generate(ctx, r, opts...)
 	if err != nil {
-		return nil, nil, err
+		return zero, nil, err
 	}
 
 	// If there's no text content to parse (e.g., the response contains tool
-	// requests or interrupts), return nil output. The caller should check
+	// requests or interrupts), return the zero value. The caller should check
 	// resp.Interrupts() or resp.ToolRequests() to handle these cases.
 	if resp.Text() == "" {
-		return nil, resp, nil
+		return zero, resp, nil
 	}
 
-	err = resp.Output(&value)
-	if err != nil {
-		return nil, resp, err
+	var value Out
+	if err := resp.Output(&value); err != nil {
+		return zero, resp, err
 	}
 
-	return &value, resp, nil
+	return value, resp, nil
 }
 
 // StreamValue is either a streamed chunk or the final response of a generate request.

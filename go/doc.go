@@ -208,7 +208,7 @@ constraints that help the model understand the expected output:
 		Category string `json:"category" jsonschema:"description=The joke category"`
 	}
 
-	joke, resp, err := g.GenerateData[*Joke](ctx,
+	joke, resp, err := g.GenerateData[Joke](ctx,
 		ai.WithPrompt("Tell me a programming joke"),
 	)
 

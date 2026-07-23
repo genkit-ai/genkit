@@ -1849,6 +1849,68 @@ func TestGenerateData(t *testing.T) {
 			t.Errorf("output.Value = %d, want 42", output.Value)
 		}
 	})
+
+	t.Run("returns zero value on error", func(t *testing.T) {
+		expectedErr := errors.New("generation failed")
+
+		errorModel := DefineModel(r, "test/jsonErrorModel", &ModelOptions{
+			Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			return nil, expectedErr
+		})
+
+		output, resp, err := GenerateData[TestOutput](context.Background(), r,
+			WithModel(errorModel),
+			WithPrompt("get value"),
+		)
+		if !errors.Is(err, expectedErr) {
+			t.Fatalf("GenerateData error = %v, want %v", err, expectedErr)
+		}
+		if resp != nil {
+			t.Errorf("resp = %v, want nil", resp)
+		}
+		if output != (TestOutput{}) {
+			t.Errorf("output = %+v, want zero value", output)
+		}
+	})
+
+	t.Run("returns zero value when response has no text output", func(t *testing.T) {
+		greetTool := DefineTool(r, "jsonGreeter", "greets",
+			func(ctx context.Context, input any) (any, error) {
+				return "hello", nil
+			},
+		)
+
+		toolRequestModel := DefineModel(r, "test/jsonToolRequestModel", &ModelOptions{
+			Supports: &ModelSupports{Constrained: ConstrainedSupportAll, Tools: true},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			return &ModelResponse{
+				Request: req,
+				Message: &Message{
+					Role: RoleModel,
+					Content: []*Part{
+						NewToolRequestPart(&ToolRequest{Name: "jsonGreeter", Input: map[string]any{}}),
+					},
+				},
+			}, nil
+		})
+
+		output, resp, err := GenerateData[TestOutput](context.Background(), r,
+			WithModel(toolRequestModel),
+			WithPrompt("get value"),
+			WithTools(greetTool),
+			WithReturnToolRequests(true),
+		)
+		if err != nil {
+			t.Fatalf("GenerateData error: %v", err)
+		}
+		if resp == nil {
+			t.Fatal("resp = nil, want non-nil")
+		}
+		if output != (TestOutput{}) {
+			t.Errorf("output = %+v, want zero value", output)
+		}
+	})
 }
 
 func TestModelResponseReasoning(t *testing.T) {

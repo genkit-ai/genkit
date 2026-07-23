@@ -405,7 +405,7 @@ type Recipe struct {
     Steps       []string `json:"steps"`
 }
 
-recipe, _ := genkit.GenerateData[Recipe](ctx, g,
+recipe, _, _ := g.GenerateData[Recipe](ctx,
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Create a recipe for chocolate chip cookies."),
 )
@@ -703,21 +703,22 @@ genkit.DefineStreamingFlow(g, "streamStory",
 Add observability to complex flows by breaking them into traced operations:
 
 ```go
-genkit.DefineFlow(g, "processDocument",
+g.DefineFlow("processDocument",
     func(ctx context.Context, doc string) (string, error) {
         // Each Run call creates a traced step visible in the Dev UI
         summary, _ := genkit.Run(ctx, "summarize", func() (string, error) {
-            return genkit.GenerateText(ctx, g,
+            return g.GenerateText(ctx,
                 ai.WithModelName("googleai/gemini-flash-latest"),
                 ai.WithPrompt("Summarize: %s", doc),
             )
         })
 
         keywords, _ := genkit.Run(ctx, "extractKeywords", func() ([]string, error) {
-            return genkit.GenerateData[[]string](ctx, g,
+            keywords, _, err := g.GenerateData[[]string](ctx,
                 ai.WithModelName("googleai/gemini-flash-latest"),
                 ai.WithPrompt("Extract keywords from: %s", summary),
             )
+            return keywords, err
         })
 
         return fmt.Sprintf("Summary: %s\nKeywords: %v", summary, keywords), nil

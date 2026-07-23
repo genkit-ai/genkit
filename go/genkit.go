@@ -1177,6 +1177,10 @@ func (g *Genkit) GenerateText(ctx context.Context, opts ...ai.GenerateOption) (s
 // list of available options. Note that output options like [ai.WithOutputType] are
 // automatically applied based on the Out type parameter.
 //
+// The output is the zero value of Out whenever it could not be populated: on
+// error, or when the response doesn't contain text output (e.g., contains tool
+// requests or interrupts instead).
+//
 // Example:
 //
 //	type BookInfo struct {
@@ -1193,7 +1197,7 @@ func (g *Genkit) GenerateText(ctx context.Context, opts ...ai.GenerateOption) (s
 //	}
 //
 //	log.Printf("Book: %+v\n", book) // Output: Book: {Title:The Hitchhiker's Guide to the Galaxy Author:Douglas Adams Year:1979}
-func (g *Genkit) GenerateData[Out any](ctx context.Context, opts ...ai.GenerateOption) (*Out, *ai.ModelResponse, error) {
+func (g *Genkit) GenerateData[Out any](ctx context.Context, opts ...ai.GenerateOption) (Out, *ai.ModelResponse, error) {
 	return ai.GenerateData[Out](genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
