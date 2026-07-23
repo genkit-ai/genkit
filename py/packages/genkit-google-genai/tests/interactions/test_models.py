@@ -321,6 +321,16 @@ async def test_googleai_resolve_routes_interactions_models() -> None:
     ly = await plugin.resolve(ActionKind.MODEL, googleai_name('lyria-3-pro-preview'))
     assert ly is not None
 
+    # Legacy Vertex name must not fall through to Gemini capabilities metadata.
+    ly_legacy = await plugin.resolve(ActionKind.MODEL, googleai_name('lyria-002'))
+    assert ly_legacy is not None
+    model_meta = (ly_legacy.metadata or {}).get('model')
+    assert isinstance(model_meta, dict)
+    supports = model_meta.get('supports')
+    assert isinstance(supports, dict)
+    assert supports.get('media') is True
+    assert supports.get('multiturn') is not True
+
 
 @pytest.mark.asyncio
 async def test_googleai_list_actions_includes_interactions_models() -> None:

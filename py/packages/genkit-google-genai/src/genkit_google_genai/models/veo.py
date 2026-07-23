@@ -273,9 +273,11 @@ def _from_veo_operation(api_op: dict[str, Any]) -> Operation:
     Returns:
         A Genkit Operation object.
     """
+    # LRO can omit or null `done` while the job is still running. Treat that as
+    # pending so typed clients don't see a missing/null flag mid-poll.
     op = Operation(
         id=api_op.get('name', ''),
-        done=api_op.get('done', False),
+        done=bool(api_op.get('done')),
     )
 
     # Handle error

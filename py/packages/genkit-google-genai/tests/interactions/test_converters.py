@@ -321,17 +321,17 @@ class TestFromInteractionStatusMapping:
         assert result.error is not None
         assert result.error.message == 'boom'
 
-    def test_requires_action_done_with_metadata(self) -> None:
+    def test_requires_action_leaves_done_unset(self) -> None:
         interaction: GeminiInteraction = {
             'id': '123',
             'status': 'requires_action',
             'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'approve plan'}]}],
         }
         result = from_interaction(interaction)
-        assert result.done is True
-        assert result.output is not None
-        assert result.metadata is not None
-        assert result.metadata['interaction_status'] == 'requires_action'
+        assert result.id == '123'
+        assert result.done is None
+        assert result.output is None
+        assert not (result.metadata or {}).get('interaction_status')
 
     def test_in_progress(self) -> None:
         result = from_interaction({'id': '123', 'status': 'in_progress'})

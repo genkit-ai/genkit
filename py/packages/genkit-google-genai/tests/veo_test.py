@@ -124,6 +124,16 @@ class TestFromVeoOperation:
         assert op.output is None
         assert op.error is None
 
+    def test_pending_operation_null_done_normalized(self) -> None:
+        """API null/omitted done is pending, not a missing flag."""
+        for api_op in (
+            {'name': 'operations/null-done', 'done': None},
+            {'name': 'operations/omitted-done'},
+        ):
+            op = _from_veo_operation(api_op)
+            assert op.done is False
+            assert op.output is None
+
     def test_error_operation(self) -> None:
         """An operation with an error populates op.error."""
         op = _from_veo_operation({

@@ -675,14 +675,11 @@ def from_interaction(
         op.done = True
         op.output = _completed_response(interaction)
     elif status == 'failed':
+        # Always exit the poll loop on failure; leaving done unset hangs forever.
         op.done = True
         error_payload = interaction.get('error') or {}
         message = error_payload.get('message') if isinstance(error_payload, dict) else None
         op.error = Error(message=message or 'Interaction failed')
-    elif status == 'requires_action':
-        op.done = True
-        op.output = from_interaction_sync(interaction)
-        metadata = dict(op.metadata or {})
-        metadata['interaction_status'] = 'requires_action'
-        op.metadata = metadata
+    # requires_action: leave done unset (same as the JS converter). Resuming that
+    # turn is a separate product decision; we don't invent interrupt/resume here.
     return op
