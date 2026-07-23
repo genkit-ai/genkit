@@ -17,17 +17,15 @@
 /**
  * Browser-safe client helpers for consuming an A2UI-enabled Genkit agent.
  *
- * This module has NO Node dependencies. It builds directly on Genkit's native
- * streaming HTTP protocol via `streamFlow` from `genkit/beta/client`, filters
- * A2UI parts out of the agent stream, and hands whole envelopes to whatever
- * renderer you use (e.g. `@a2ui/web_core`'s `MessageProcessor`).
+ * This module has NO Node dependencies. It builds on Genkit's agent client
+ * (`remoteAgent` from `genkit/beta/client`), filters A2UI parts out of the
+ * agent stream, and hands whole envelopes to whatever renderer you use (e.g.
+ * `@a2ui/web_core`'s `MessageProcessor`).
  *
  * @module
  */
 
-// Type-only import keeps this module browser-safe (erased at compile time).
-import type { AgentOutput, AgentStreamChunk } from 'genkit/beta';
-import { streamFlow } from 'genkit/beta/client';
+import { remoteAgent } from 'genkit/beta/client';
 import { a2uiEnvelopes } from './part.js';
 import type { A2uiClientAction, A2uiEnvelope } from './types.js';
 import { A2UI_MIME_TYPE } from './types.js';
@@ -91,35 +89,32 @@ function toMessage(message: string | Record<string, unknown>) {
 export async function* streamA2uiAgent(
   options: StreamA2uiAgentOptions
 ): AsyncGenerator<A2uiStreamEvent, void, unknown> {
-  // The agent reads state-management (the session id) from `init`, not the
-  // message payload; `message` carries the actual turn input.
-  const init: Record<string, unknown> | undefined = options.sessionId
-    ? { sessionId: options.sessionId }
-    : undefined;
+  const agent = remoteAgent({ url: options.url, headers: options.headers });
+  // A server-managed session id (when provided) attaches this turn to an
+  // existing conversation; otherwise the agent starts a fresh session.
+  const chat = agent.chat(
+    options.sessionId ? { sessionId: options.sessionId } : undefined
+  );
 
-  const response = streamFlow<AgentOutput, AgentStreamChunk>({
-    url: options.url,
-    input: { message: toMessage(options.message) },
-    init,
-    headers: options.headers,
-    abortSignal: options.abortSignal,
-  });
+  const turn = chat.sendStream(
+    { message: toMessage(options.message) } as Parameters<
+      typeof chat.sendStream
+    >[0],
+    { abortSignal: options.abortSignal }
+  );
 
-  for await (const chunk of response.stream) {
-    const mc = chunk?.modelChunk;
-    if (!mc?.content) continue;
-    for (const part of mc.content) {
-      if ('text' in part && typeof part.text === 'string' && part.text !== '') {
-        yield { type: 'text', text: part.text };
-      }
+  for await (const chunk of turn.stream) {
+    if (chunk.text) {
+      yield { type: 'text', text: chunk.text };
     }
-    const envelopes = a2uiEnvelopes(chunk);
+    // A2UI rides as data parts on the raw chunk; extract whole envelopes.
+    const envelopes = a2uiEnvelopes(chunk.raw);
     if (envelopes.length > 0) {
       yield { type: 'envelopes', envelopes };
     }
   }
-  // Surface any server error / drain the stream.
-  await response.output;
+  // Surface any server error / finalize the turn.
+  await turn.response;
 }
 
 /**
