@@ -14,18 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Code execution - let Gemini write and run Python for a task.
-
-Typed model refs keep provider-specific config autocomplete on ``GeminiConfig``:
-
-    from genkit_google_genai import GeminiConfig, gemini_model
-
-    response = await ai.generate(
-        model=gemini_model('gemini-pro-latest'),
-        config=GeminiConfig.model_validate({'code_execution': True}),
-        prompt='What is the sum of the first 50 prime numbers?',
-    )
-"""
+"""Code execution - let Gemini write and run Python for a task."""
 
 from genkit_google_genai import GeminiConfig, GoogleAI
 from pydantic import BaseModel, Field
