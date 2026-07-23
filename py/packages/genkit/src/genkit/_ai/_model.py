@@ -79,7 +79,7 @@ def model_ref(
 
     Plugin authors and family helpers (``gemini_model``, ``claude_model``, …)
     call this to stamp ``config_schema``. App code usually imports those helpers
-    instead of calling ``model_ref`` directly::
+    instead of calling ``model_ref`` directly:
 
         from genkit_google_genai import gemini_model
 
