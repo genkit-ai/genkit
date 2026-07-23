@@ -84,13 +84,10 @@ export const A2uiOptionsSchema = z.object({
   validate: z.enum(['strict', 'warn', 'off']).optional(),
 
   /**
-   * Surface id policy. Provide a fixed id, or a factory called once per surface.
-   * Defaults to a fresh UUID per surface. (A function is not serializable, so it
-   * only applies for in-process `use`.)
+   * Surface id policy. Provide a fixed id to reuse for every surface. Defaults
+   * to a fresh UUID per surface.
    */
-  surfaceId: z
-    .union([z.string(), z.custom<() => string>((v) => typeof v === 'function')])
-    .optional(),
+  surfaceId: z.string().optional(),
 
   /** Protocol version stamped on emitted envelopes. Defaults to `'v0.9'`. */
   version: z.string().optional(),
@@ -107,7 +104,6 @@ function isTextPart(part: Part): part is TextPart {
 /** Resolves the configured surface-id policy into a factory. */
 function surfaceIdFactory(policy: A2uiOptions['surfaceId']): () => string {
   if (typeof policy === 'string') return () => policy;
-  if (typeof policy === 'function') return policy;
   return randomUUID;
 }
 
@@ -344,7 +340,7 @@ function sanitizeInboundA2ui(req: GenerateRequest): GenerateRequest {
     for (const part of message.content) {
       if (isA2uiPart(part)) {
         msgChanged = true;
-        const text = summarizeA2uiPart(part.data);
+        const text = summarizeA2uiPart(part.data.envelopes);
         if (text) content.push({ text });
       } else {
         content.push(part as Part);

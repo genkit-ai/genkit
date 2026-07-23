@@ -111,11 +111,17 @@ export type A2uiEnvelope =
   | DeleteSurfaceEnvelope;
 
 /**
- * The canonical "a2ui part": a Genkit `data` part whose `data` is an array of
- * A2UI envelopes and whose `metadata.mimeType` is {@link A2UI_MIME_TYPE}.
+ * The canonical "a2ui part": a Genkit `data` part whose `data` is an object
+ * `{ envelopes }` wrapping the array of A2UI envelopes, and whose
+ * `metadata.mimeType` is {@link A2UI_MIME_TYPE}.
+ *
+ * The array is wrapped in an object (rather than being the `data` value
+ * directly) so the payload is a `Map<String, dynamic>`-shaped object on every
+ * runtime — some (e.g. Dart) expect a data part's `data` to be an object, not a
+ * bare array.
  */
 export interface A2uiPart {
-  data: A2uiEnvelope[];
+  data: { envelopes: A2uiEnvelope[] };
   metadata: {
     mimeType: typeof A2UI_MIME_TYPE;
     [key: string]: unknown;

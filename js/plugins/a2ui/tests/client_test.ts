@@ -51,9 +51,10 @@ describe('actionToMessage', () => {
       (dataPart as { metadata: { mimeType: string } }).metadata.mimeType,
       A2UI_MIME_TYPE
     );
-    assert.deepStrictEqual((dataPart as { data: unknown[] }).data, [
-      { action },
-    ]);
+    assert.deepStrictEqual(
+      (dataPart as { data: { envelopes: unknown[] } }).data,
+      { envelopes: [{ action }] }
+    );
   });
 
   it('includes the context in the summary when present', () => {

@@ -141,7 +141,7 @@ export function actionToMessage(action: A2uiClientAction) {
     content: [
       { text: summary },
       {
-        data: [{ action }],
+        data: { envelopes: [{ action }] },
         metadata: { mimeType: A2UI_MIME_TYPE },
       },
     ],

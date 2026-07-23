@@ -11,9 +11,9 @@ An A2UI-enabled agent can stream not just prose, but rich, interactive UI
 ## Design principle: one representation
 
 A2UI rides on its own part channel — a Genkit `data` part carrying the mime type
-`application/a2ui+json` whose `data` is an **array of A2UI envelope messages**.
-This maps 1:1 onto the A2A binding of the A2UI spec, so an A2A/MCP binding can
-drop in later for free.
+`application/a2ui+json` whose `data` is an object `{ envelopes }` wrapping an
+**array of A2UI envelope messages**. This maps 1:1 onto the A2A binding of the
+A2UI spec, so an A2A/MCP binding can drop in later for free.
 
 - A **mixed** turn is a message whose content is `[textPart, a2uiPart, …]`.
 - A **pure-surface** turn is the special case with no text parts.
@@ -56,7 +56,7 @@ const res = await ai.generate({
 | `catalog`      | `'basic'`  | The id of the catalog describing what the agent may render.                                                   |
 | `instructions` | `'system'` | Where to inject catalog capabilities. `'none'` injects nothing.                                               |
 | `validate`     | `'strict'` | Validate emitted envelopes against the catalog. `'warn'` logs and drops bad blocks; `'off'` skips validation. |
-| `surfaceId`    | UUID       | Surface id policy: a fixed string or a factory.                                                               |
+| `surfaceId`    | UUID       | Surface id policy: a fixed string reused for every surface.                                                   |
 | `version`      | `'v0.9'`   | Protocol version stamped on envelopes.                                                                        |
 
 The middleware injects the catalog's capabilities into the system prompt, then

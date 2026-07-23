@@ -26,7 +26,7 @@ const sampleEnvelope: A2uiEnvelope = {
 describe('a2uiPart', () => {
   it('wraps envelopes in a data part tagged with the a2ui mime type', () => {
     const part = a2uiPart([sampleEnvelope]);
-    assert.deepStrictEqual(part.data, [sampleEnvelope]);
+    assert.deepStrictEqual(part.data, { envelopes: [sampleEnvelope] });
     assert.strictEqual(part.metadata.mimeType, A2UI_MIME_TYPE);
   });
 });
@@ -42,14 +42,27 @@ describe('isA2uiPart', () => {
 
   it('rejects a data part with a different mime type', () => {
     assert.strictEqual(
-      isA2uiPart({ data: [], metadata: { mimeType: 'application/json' } }),
+      isA2uiPart({
+        data: { envelopes: [] },
+        metadata: { mimeType: 'application/json' },
+      }),
       false
     );
   });
 
-  it('rejects a data part whose data is not an array', () => {
+  it('rejects a data part whose data.envelopes is not an array', () => {
     assert.strictEqual(
-      isA2uiPart({ data: {}, metadata: { mimeType: A2UI_MIME_TYPE } }),
+      isA2uiPart({
+        data: { envelopes: {} },
+        metadata: { mimeType: A2UI_MIME_TYPE },
+      }),
+      false
+    );
+  });
+
+  it('rejects the legacy bare-array data shape', () => {
+    assert.strictEqual(
+      isA2uiPart({ data: [], metadata: { mimeType: A2UI_MIME_TYPE } }),
       false
     );
   });

@@ -162,7 +162,8 @@ describe('a2ui() middleware', () => {
   });
 
   it('rewrites the final message: prose text + a2ui part', async () => {
-    const mw = modelHook({ surfaceId: () => 'sfc' });
+    const mw = modelHook({ surfaceId: 'sfc' });
+
     const res = await mw(req('sys'), undefined, async () => ({
       message: { role: 'model', content: [{ text: SAMPLE_TEXT }] },
     }));
@@ -199,17 +200,19 @@ describe('a2ui() middleware', () => {
             content: [
               { text: 'clicked:' },
               {
-                data: [
-                  {
-                    action: {
-                      name: 'refresh',
-                      surfaceId: 's1',
-                      sourceComponentId: 'btn',
-                      timestamp: 't',
-                      context: { city: 'Tokyo' },
+                data: {
+                  envelopes: [
+                    {
+                      action: {
+                        name: 'refresh',
+                        surfaceId: 's1',
+                        sourceComponentId: 'btn',
+                        timestamp: 't',
+                        context: { city: 'Tokyo' },
+                      },
                     },
-                  },
-                ],
+                  ],
+                },
                 metadata: { mimeType: 'application/a2ui+json' },
               },
             ],
@@ -261,9 +264,9 @@ describe('a2ui() middleware', () => {
   });
 
   it('transforms streamed chunks via onChunk', async () => {
-    const mw = modelHook({ surfaceId: () => 'sfc' });
-
+    const mw = modelHook({ surfaceId: 'sfc' });
     const emitted: any[] = [];
+
     const ctx = { onChunk: (c: any) => emitted.push(c) };
     // Simulate the runtime calling next() with a wrapped ctx, then streaming.
     await mw(req('sys'), ctx as any, async (_r: any, wrappedCtx: any) => {

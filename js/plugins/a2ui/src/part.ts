@@ -16,7 +16,8 @@
 
 /**
  * Helpers for working with the canonical "a2ui part" — a Genkit `data` part
- * carrying an array of A2UI envelopes tagged with {@link A2UI_MIME_TYPE}.
+ * whose `data` is an object `{ envelopes }` wrapping an array of A2UI envelopes,
+ * tagged with {@link A2UI_MIME_TYPE}.
  *
  * These helpers operate on plain part-shaped objects (no Genkit runtime import),
  * so they are safe to use on both the server and the browser.
@@ -36,7 +37,7 @@ interface PartLike {
 /** Builds an a2ui data part wrapping the given envelopes. */
 export function a2uiPart(envelopes: A2uiEnvelope[]): A2uiPart {
   return {
-    data: envelopes,
+    data: { envelopes },
     metadata: { mimeType: A2UI_MIME_TYPE },
   };
 }
@@ -44,10 +45,13 @@ export function a2uiPart(envelopes: A2uiEnvelope[]): A2uiPart {
 /** Type guard: is this part an a2ui data part? */
 export function isA2uiPart(part: unknown): part is A2uiPart {
   const p = part as PartLike | null | undefined;
+  const data = p?.data as { envelopes?: unknown } | undefined;
   return (
     !!p &&
     typeof p === 'object' &&
-    Array.isArray((p as PartLike).data) &&
+    !!data &&
+    typeof data === 'object' &&
+    Array.isArray(data.envelopes) &&
     (p as PartLike).metadata?.mimeType === A2UI_MIME_TYPE
   );
 }
@@ -79,7 +83,7 @@ export function a2uiEnvelopes(value: unknown): A2uiEnvelope[] {
   }
   // A single part.
   if (isA2uiPart(value)) {
-    return [...value.data];
+    return [...value.data.envelopes];
   }
   return [];
 }
@@ -88,7 +92,7 @@ function collectFromParts(parts: unknown): A2uiEnvelope[] {
   if (!Array.isArray(parts)) return [];
   const out: A2uiEnvelope[] = [];
   for (const part of parts) {
-    if (isA2uiPart(part)) out.push(...part.data);
+    if (isA2uiPart(part)) out.push(...part.data.envelopes);
   }
   return out;
 }
