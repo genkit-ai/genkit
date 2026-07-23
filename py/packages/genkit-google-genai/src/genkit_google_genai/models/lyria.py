@@ -72,7 +72,8 @@ else:
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
 
 from genkit import ModelInfo, Supports
 
@@ -111,12 +112,12 @@ class LyriaConfig(BaseModel):
         location: Must be 'global' for Lyria. Override if plugin uses different region.
     """
 
-    negative_prompt: str | None = Field(default=None, alias='negativePrompt')
-    seed: int | None = Field(default=None)
-    sample_count: int | None = Field(default=None, ge=1, alias='sampleCount')
-    location: str | None = Field(default=None)
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
 
-    model_config = {'populate_by_name': True}
+    negative_prompt: str | None = Field(default=None)
+    seed: int | None = Field(default=None)
+    sample_count: int | None = Field(default=None, ge=1)
+    location: str | None = Field(default=None)
 
 
 LYRIA_MODEL_INFO = ModelInfo(

@@ -44,7 +44,7 @@ STABLE_KWARG_KEYS = _STABLE_BODY_KEYS | _REQUEST_KWARG_KEYS
 BETA_KWARG_KEYS = _BETA_BODY_KEYS | _REQUEST_KWARG_KEYS
 BETA_ONLY_KEYS = _BETA_BODY_KEYS - _STABLE_BODY_KEYS
 
-_NESTED_CONFIG = ConfigDict(extra='allow', populate_by_name=True)
+_NESTED_CONFIG = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
 
 _THINKING_SCHEMA = {
     'type': 'object',
@@ -183,7 +183,7 @@ class ThinkingConfig(BaseModel):
 
     enabled: bool | None = None
     # Adaptive mode allows a fractional budget it ignores; integers enforced only when enabled.
-    budget_tokens: float | None = Field(default=None, alias='budgetTokens', ge=1024)
+    budget_tokens: float | None = Field(default=None, ge=1024)
     adaptive: bool | None = None
     display: Literal['summarized', 'omitted'] | None = None
 
@@ -227,7 +227,7 @@ class OutputConfig(BaseModel):
     model_config = _NESTED_CONFIG
 
     effort: Literal['low', 'medium', 'high', 'xhigh', 'max'] | None = None
-    task_budget: TaskBudget | None = Field(default=None, alias='task_budget')
+    task_budget: TaskBudget | None = Field(default=None)
 
 
 class AutoToolChoice(BaseModel):

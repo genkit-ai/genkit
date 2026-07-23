@@ -31,6 +31,7 @@ from typing import Any
 from google import genai
 from google.genai import types as genai_types
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic.alias_generators import to_camel
 
 from genkit import (
     Media,
@@ -141,20 +142,12 @@ def vertexai_image_model_info(
 class ImagenConfig(BaseModel):
     """Imagen Config Schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
 
-    number_of_images: int | None = Field(
-        default=None, alias='numberOfImages', description='Number of images to generate.'
-    )
-    aspect_ratio: str | None = Field(
-        default=None, alias='aspectRatio', description='Desired aspect ratio (e.g. "1:1", "16:9").'
-    )
-    person_generation: str | None = Field(
-        default=None, alias='personGeneration', description='Person generation policy.'
-    )
-    output_mime_type: str | None = Field(
-        default=None, alias='outputMimeType', description='Output MIME type (e.g. "image/png").'
-    )
+    number_of_images: int | None = Field(default=None, description='Number of images to generate.')
+    aspect_ratio: str | None = Field(default=None, description='Desired aspect ratio (e.g. "1:1", "16:9").')
+    person_generation: str | None = Field(default=None, description='Person generation policy.')
+    output_mime_type: str | None = Field(default=None, description='Output MIME type (e.g. "image/png").')
 
 
 class ImagenModel:
