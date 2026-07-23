@@ -153,6 +153,7 @@ from google.auth.exceptions import DefaultCredentialsError
 from google.genai import types as genai_types
 from google.genai.errors import ClientError
 from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema
+from pydantic.alias_generators import to_camel
 
 from genkit import (
     Constrained,
@@ -262,8 +263,8 @@ class SafetySettingsSchema(BaseModel):
 class PrebuiltVoiceConfig(BaseModel):
     """Prebuilt voice config."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
-    voice_name: str | None = Field(default=None, alias='voiceName')
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    voice_name: str | None = None
 
 
 class FunctionCallingMode(StrEnum):
@@ -278,9 +279,9 @@ class FunctionCallingMode(StrEnum):
 class FunctionCallingConfig(BaseModel):
     """Function calling config."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
     mode: FunctionCallingMode | None = None
-    allowed_function_names: list[str] | None = Field(None, alias='allowedFunctionNames')
+    allowed_function_names: list[str] | None = None
 
 
 class ThinkingLevel(StrEnum):
@@ -295,19 +296,19 @@ class ThinkingLevel(StrEnum):
 class ThinkingConfigSchema(BaseModel):
     """Thinking config schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
-    include_thoughts: bool | None = Field(None, alias='includeThoughts')
-    thinking_budget: int | None = Field(None, alias='thinkingBudget')
-    thinking_level: ThinkingLevel | None = Field(None, alias='thinkingLevel')
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    include_thoughts: bool | None = None
+    thinking_budget: int | None = None
+    thinking_level: ThinkingLevel | None = None
 
 
 class FileSearchConfigSchema(BaseModel):
     """File search config schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
-    file_search_store_names: list[str] | None = Field(None, alias='fileSearchStoreNames')
-    metadata_filter: str | None = Field(None, alias='metadataFilter')
-    top_k: int | None = Field(None, alias='topK')
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    file_search_store_names: list[str] | None = None
+    metadata_filter: str | None = None
+    top_k: int | None = None
 
 
 class ImageAspectRatio(StrEnum):
@@ -336,31 +337,29 @@ class ImageSize(StrEnum):
 class ImageConfigSchema(BaseModel):
     """Image config schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
-    aspect_ratio: ImageAspectRatio | None = Field(None, alias='aspectRatio')
-    image_size: ImageSize | None = Field(None, alias='imageSize')
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    aspect_ratio: ImageAspectRatio | None = None
+    image_size: ImageSize | None = None
 
 
 class VoiceConfig(BaseModel):
     """Voice config schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
-    prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(default=None, alias='prebuiltVoiceConfig')
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(default=None)
 
 
 class GeminiConfig(ModelConfig):
     """Gemini Config Schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
 
     api_key: str | None = Field(  # pyright: ignore[reportGeneralTypeIssues]
-        None, description='Overrides the plugin-configured API key, if specified.', alias='apiKey', exclude=True
+        None, description='Overrides the plugin-configured API key, if specified.', exclude=True
     )
-    base_url: str | None = Field(
-        None, description='Overrides the plugin-configured or default baseUrl, if specified.', alias='baseUrl'
-    )
+    base_url: str | None = Field(None, description='Overrides the plugin-configured or default baseUrl, if specified.')
     api_version: str | None = Field(
-        None, description='Overrides the plugin-configured or default apiVersion, if specified.', alias='apiVersion'
+        None, description='Overrides the plugin-configured or default apiVersion, if specified.'
     )
     location: str | None = Field(
         None,
@@ -391,11 +390,10 @@ class GeminiConfig(ModelConfig):
         }),
     ] = Field(
         None,
-        alias='safetySettings',
     )
 
     code_execution: bool | dict[str, Any] | None = Field(
-        None, description='Enables the model to generate and run code.', alias='codeExecution'
+        None, description='Enables the model to generate and run code.'
     )
 
     context_cache: bool | None = Field(
@@ -403,7 +401,6 @@ class GeminiConfig(ModelConfig):
         description=(
             'Context caching allows you to save and reuse precomputed input tokens that you wish to use repeatedly.'
         ),
-        alias='contextCache',
     )
 
     function_calling_config: Annotated[
@@ -425,7 +422,6 @@ class GeminiConfig(ModelConfig):
         }),
     ] = Field(
         None,
-        alias='functionCallingConfig',
     )
 
     response_modalities: list[str] | None = Field(
@@ -433,7 +429,6 @@ class GeminiConfig(ModelConfig):
         description=(
             "The modalities to be used in response. Only supported for 'gemini-2.0-flash-exp' model at present."
         ),
-        alias='responseModalities',
     )
 
     google_search_retrieval: bool | dict[str, Any] | None = Field(
@@ -443,7 +438,6 @@ class GeminiConfig(ModelConfig):
             'Note: This feature is not supported on all models. '
             'If you get an error, use the google_search tool instead.'
         ),
-        alias='googleSearchRetrieval',
     )
 
     file_search: Annotated[
@@ -470,10 +464,10 @@ class GeminiConfig(ModelConfig):
             },
             'additionalProperties': True,
         }),
-    ] = Field(None, alias='fileSearch')
+    ] = Field(None)
 
     url_context: bool | dict[str, Any] | None = Field(
-        None, description='Return grounding metadata from links included in the query', alias='urlContext'
+        None, description='Return grounding metadata from links included in the query'
     )
 
     # inherited from ModelConfig:
@@ -508,13 +502,11 @@ class GeminiConfig(ModelConfig):
         }),
     ] = Field(
         default=None,
-        alias='topP',
         ge=0.0,
         le=1.0,
     )
     top_k: int | None = Field(  # pyrefly: ignore[bad-override]
         default=None,
-        alias='topK',
         description=('The maximum number of tokens to consider when sampling.'),
     )
 
@@ -551,19 +543,19 @@ class GeminiConfig(ModelConfig):
             },
             'additionalProperties': True,
         }),
-    ] = Field(None, alias='thinkingConfig')
+    ] = Field(None)
 
     max_output_tokens: int | None = Field(  # pyrefly: ignore[bad-override]
-        default=None, alias='maxOutputTokens', description='Maximum number of tokens to generate.'
+        default=None, description='Maximum number of tokens to generate.'
     )
-    stop_sequences: list[str] | None = Field(default=None, alias='stopSequences', description='Stop sequences.')
+    stop_sequences: list[str] | None = Field(default=None, description='Stop sequences.')
 
 
 class SpeechConfig(BaseModel):
     """Speech config schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
-    voice_config: VoiceConfig | None = Field(default=None, alias='voiceConfig')
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    voice_config: VoiceConfig | None = Field(default=None)
 
     http_options: Any | None = Field(None, exclude=True)
     tools: Any | None = Field(None, exclude=True)
@@ -575,8 +567,8 @@ class SpeechConfig(BaseModel):
 class GeminiTtsConfig(GeminiConfig):
     """Gemini TTS Config Schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
-    speech_config: SpeechConfig | None = Field(default=None, alias='speechConfig')
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    speech_config: SpeechConfig | None = Field(default=None)
 
 
 class GeminiImageConfig(GeminiConfig):
@@ -592,7 +584,7 @@ class GeminiImageConfig(GeminiConfig):
             },
             'additionalProperties': True,
         }),
-    ] = Field(None, alias='imageConfig')
+    ] = Field(None)
 
 
 class GemmaConfig(GeminiConfig):
