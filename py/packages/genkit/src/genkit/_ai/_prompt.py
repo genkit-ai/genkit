@@ -114,11 +114,7 @@ def _resolve_model_arg(
             if config is None:
                 config = model.config
             else:
-                default_dict = (
-                    model.config.model_dump(exclude_unset=True)
-                    if isinstance(model.config, BaseModel)
-                    else dict(model.config)  # type: ignore[arg-type]  # pyrefly: ignore
-                )
+                default_dict = model.config.model_dump(exclude_unset=True)
                 call_dict = config.model_dump(exclude_unset=True) if isinstance(config, BaseModel) else dict(config)  # type: ignore[arg-type]  # pyrefly: ignore
                 merged = {**default_dict, **call_dict}
                 if (
