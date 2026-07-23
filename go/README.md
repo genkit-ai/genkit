@@ -732,16 +732,21 @@ genkit.DefineFlow(g, "processDocument",
 Create reusable prompts with Handlebars templating:
 
 ```go
-greetingPrompt := genkit.DefinePrompt(g, "greeting",
+type GreetingRequest struct {
+    Name  string `json:"name"`
+    Style string `json:"style"`
+}
+
+greetingPrompt := genkit.DefinePrompt[GreetingRequest](g, "greeting",
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Write a {{style}} greeting for {{name}}."),
 )
 
-response, _ := greetingPrompt.Execute(ctx, ai.WithInput(map[string]any{
-    "name":  "Alice",
-    "style": "formal",
-}))
-fmt.Println(response.Text())
+text, _, _ := greetingPrompt.Execute(ctx, GreetingRequest{
+    Name:  "Alice",
+    Style: "formal",
+})
+fmt.Println(text)
 ```
 
 [See full example](samples/basic-prompts)
@@ -813,7 +818,7 @@ genkit.DefineSchemaFor[Recipe](g)
 
 // Look up and execute the prompt
 recipePrompt := genkit.LookupDataPrompt[RecipeRequest, *Recipe](g, "recipe")
-recipe, _ := recipePrompt.Execute(ctx, RecipeRequest{
+recipe, _, _ := recipePrompt.Execute(ctx, RecipeRequest{
     Dish:        "tacos",
     Cuisine:     "Mexican",
     ServingSize: 4,

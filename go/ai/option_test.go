@@ -330,15 +330,15 @@ func TestPromptGenerateOptions(t *testing.T) {
 		{
 			name: "valid options",
 			opts: []PromptExecuteOption{
-				WithInput(map[string]string{"key": "value"}),
+				WithConfig(&GenerationCommonConfig{Temperature: 0.7}),
 			},
 			wantErr: false,
 		},
 		{
-			name: "duplicate - input",
+			name: "duplicate - config",
 			opts: []PromptExecuteOption{
-				WithInput("input1"),
-				WithInput("input2"),
+				WithConfig(&GenerationCommonConfig{Temperature: 0.7}),
+				WithConfig(&GenerationCommonConfig{Temperature: 0.9}),
 			},
 			wantErr: true,
 		},
@@ -562,7 +562,6 @@ func TestPromptExecuteOptionsComplete(t *testing.T) {
 	model := &mockModel{name: "test/model"}
 	tool := &mockTool{name: "test/tool"}
 	streamFunc := func(context.Context, *ModelResponseChunk) error { return nil }
-	input := map[string]string{"key": "value"}
 	doc := DocumentFromText("doc", nil)
 
 	options := []PromptExecuteOption{
@@ -576,7 +575,6 @@ func TestPromptExecuteOptionsComplete(t *testing.T) {
 		WithUse(mw),
 		WithDocs(doc),
 		WithStreaming(streamFunc),
-		WithInput(input),
 	}
 
 	for _, opt := range options {
@@ -604,7 +602,6 @@ func TestPromptExecuteOptionsComplete(t *testing.T) {
 		documentOptions: documentOptions{
 			Documents: []*Document{doc},
 		},
-		Input: input,
 	}
 
 	if diff := cmp.Diff(expected, opts,

@@ -25,7 +25,7 @@ import (
 )
 
 // GetPrompt retrieves a prompt from the MCP server
-func (c *GenkitMCPClient) GetPrompt(ctx context.Context, g *genkit.Genkit, promptName string, args map[string]string) (ai.Prompt, error) {
+func (c *GenkitMCPClient) GetPrompt(ctx context.Context, g *genkit.Genkit, promptName string, args map[string]string) (*ai.TextPrompt[any], error) {
 	if !c.IsEnabled() || c.server == nil {
 		return nil, fmt.Errorf("MCP client is disabled or not connected")
 	}
@@ -67,7 +67,7 @@ func (c *GenkitMCPClient) fetchMCPPrompt(ctx context.Context, promptName string,
 }
 
 // createGenkitPrompt converts MCP prompt to Genkit prompt and registers it
-func (c *GenkitMCPClient) createGenkitPrompt(g *genkit.Genkit, promptName string, mcpPrompt *mcp.GetPromptResult) (ai.Prompt, error) {
+func (c *GenkitMCPClient) createGenkitPrompt(g *genkit.Genkit, promptName string, mcpPrompt *mcp.GetPromptResult) (*ai.TextPrompt[any], error) {
 	messages := c.convertMCPMessages(mcpPrompt.Messages)
 
 	promptOpts := []ai.PromptOption{
@@ -78,7 +78,7 @@ func (c *GenkitMCPClient) createGenkitPrompt(g *genkit.Genkit, promptName string
 		promptOpts = append(promptOpts, ai.WithMessages(messages...))
 	}
 
-	prompt := g.DefinePrompt(promptName, promptOpts...)
+	prompt := g.DefinePrompt[any](promptName, promptOpts...)
 
 	return prompt, nil
 }

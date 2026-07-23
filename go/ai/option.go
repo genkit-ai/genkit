@@ -923,14 +923,15 @@ func WithStrictSchema(strict bool) ToolOption {
 }
 
 // promptExecutionOptions are options for generating a model response by executing a prompt.
+// The prompt input is not an option; it is a typed parameter on
+// [Prompt.Execute] and [Prompt.ExecuteStream].
 type promptExecutionOptions struct {
 	commonGenOptions
 	executionOptions
 	documentOptions
-	Input any // Input fields for the prompt. If not nil this should be a struct that matches the prompt's input schema.
 }
 
-// PromptExecuteOption is an option for executing a prompt. It applies only to [prompt.Execute].
+// PromptExecuteOption is an option for executing a prompt. It applies only to [Prompt.Execute].
 type PromptExecuteOption interface {
 	applyPromptExecute(*promptExecutionOptions) error
 }
@@ -945,22 +946,5 @@ func (o *promptExecutionOptions) applyPromptExecute(pgOpts *promptExecutionOptio
 		return err
 	}
 
-	if err := o.documentOptions.applyPromptExecute(pgOpts); err != nil {
-		return err
-	}
-
-	if o.Input != nil {
-		if pgOpts.Input != nil {
-			return errors.New("cannot set input more than once (WithInput)")
-		}
-		pgOpts.Input = o.Input
-	}
-
-	return nil
-}
-
-// WithInput sets the input for the prompt request. Input must conform to the
-// prompt's input schema and can either be a map[string]any or a struct of the same api.
-func WithInput(input any) PromptExecuteOption {
-	return &promptExecutionOptions{Input: input}
+	return o.documentOptions.applyPromptExecute(pgOpts)
 }

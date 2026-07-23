@@ -52,12 +52,12 @@ func main() {
 			return "", errors.New("prompt not found")
 		}
 
-		resp, err := prompt.Execute(ctx)
+		text, _, err := prompt.Execute(ctx, nil)
 		if err != nil {
 			return "", err
 		}
 
-		return resp.Text(), nil
+		return text, nil
 	})
 
 	<-ctx.Done()

@@ -107,10 +107,9 @@ func main() {
 	}
 
 	m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
-	simpleGreetingPrompt := g.DefinePrompt("simpleGreeting2",
+	simpleGreetingPrompt := g.DefinePrompt[*simpleGreetingInput]("simpleGreeting2",
 		ai.WithPrompt(simpleGreetingPromptTemplate),
 		ai.WithModel(m),
-		ai.WithInputType(simpleGreetingInput{}),
 		ai.WithOutputFormat(ai.OutputFormatText),
 	)
 
@@ -121,37 +120,32 @@ func main() {
 				return cb(ctx, c.Text())
 			}
 		}
-		resp, err := simpleGreetingPrompt.Execute(ctx,
-			ai.WithInput(input),
+		text, _, err := simpleGreetingPrompt.Execute(ctx, input,
 			ai.WithStreaming(callback),
 		)
 		if err != nil {
 			return "", err
 		}
-		return resp.Text(), nil
+		return text, nil
 	})
 
-	greetingWithHistoryPrompt := g.DefinePrompt("greetingWithHistory",
+	greetingWithHistoryPrompt := g.DefinePrompt[*customerTimeAndHistoryInput]("greetingWithHistory",
 		ai.WithPrompt(greetingWithHistoryPromptTemplate),
 		ai.WithModel(m),
-		ai.WithInputType(customerTimeAndHistoryInput{}),
 		ai.WithOutputFormat(ai.OutputFormatText),
 	)
 
 	greetingWithHistoryFlow := g.DefineFlow("greetingWithHistory", func(ctx context.Context, input *customerTimeAndHistoryInput) (string, error) {
-		resp, err := greetingWithHistoryPrompt.Execute(ctx,
-			ai.WithInput(input),
-		)
+		text, _, err := greetingWithHistoryPrompt.Execute(ctx, input)
 		if err != nil {
 			return "", err
 		}
-		return resp.Text(), nil
+		return text, nil
 	})
 
-	simpleStructuredGreetingPrompt := g.DefinePrompt("simpleStructuredGreeting",
+	simpleStructuredGreetingPrompt := g.DefinePrompt[*simpleGreetingInput]("simpleStructuredGreeting",
 		ai.WithPrompt(simpleStructuredGreetingPromptTemplate),
 		ai.WithModel(m),
-		ai.WithInputType(simpleGreetingInput{}),
 		ai.WithOutputType(simpleGreetingOutput{}),
 	)
 
@@ -162,14 +156,13 @@ func main() {
 				return cb(ctx, c.Text())
 			}
 		}
-		resp, err := simpleStructuredGreetingPrompt.Execute(ctx,
-			ai.WithInput(input),
+		text, _, err := simpleStructuredGreetingPrompt.Execute(ctx, input,
 			ai.WithStreaming(callback),
 		)
 		if err != nil {
 			return "", err
 		}
-		return resp.Text(), nil
+		return text, nil
 	})
 
 	g.DefineFlow("testAllCoffeeFlows", func(ctx context.Context, _ struct{}) (*testAllCoffeeFlowsOutput, error) {

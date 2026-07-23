@@ -171,7 +171,7 @@ func ExampleGenkit_DefinePrompt() {
 	g := genkit.MustInit(ctx)
 
 	// Define a prompt with Handlebars template syntax
-	prompt := g.DefinePrompt("greeting",
+	prompt := g.DefinePrompt[map[string]any]("greeting",
 		ai.WithPrompt("Say hello to {{name}} in a {{style}} way."),
 	)
 
@@ -307,7 +307,7 @@ func ExampleGenkit_LookupPrompt() {
 	g := genkit.MustInit(ctx)
 
 	// Define a prompt programmatically (simulating a loaded prompt)
-	g.DefinePrompt("greeting",
+	g.DefinePrompt[map[string]any]("greeting",
 		ai.WithPrompt("Hello {{name}}!"),
 	)
 

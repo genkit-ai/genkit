@@ -119,23 +119,22 @@ They encapsulate model configuration, input schemas, and template logic for reus
 
 Define a prompt in code:
 
-	jokePrompt := g.DefinePrompt("joke",
-		ai.WithModelName("googleai/gemini-2.5-flash"),
-		ai.WithInputType(JokeRequest{Topic: "default topic"}),
+	type JokeRequest struct {
+		Topic string `json:"topic"`
+	}
+
+	jokePrompt := g.DefinePrompt[JokeRequest]("joke",
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithPrompt("Share a joke about {{topic}}."),
 	)
 
-	stream := jokePrompt.ExecuteStream(ctx, ai.WithInput(map[string]any{"topic": "cats"}))
-	for result, err := range stream {
-		if err != nil {
-			return err
-		}
-		if result.Done {
-			fmt.Println(result.Response.Text())
-		}
+	text, resp, err := jokePrompt.Execute(ctx, JokeRequest{Topic: "cats"})
+	if err != nil {
+		return err
 	}
+	fmt.Println(text)
 
-For type-safe prompts with structured input and output, use [DefineDataPrompt]:
+For prompts with structured output, use [Genkit.DefineDataPrompt]:
 
 	type RecipeRequest struct {
 		Cuisine     string `json:"cuisine"`

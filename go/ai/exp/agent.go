@@ -724,7 +724,7 @@ func DefineAgent[State any](
 	prompt InlinePrompt,
 	opts ...AgentOption[State],
 ) *Agent[State] {
-	p := ai.DefinePrompt(r, name, prompt...)
+	p := ai.DefinePrompt[any](r, name, prompt...)
 	return DefineCustomAgent(r, name, agentLoop[State](r, p, nil), opts...)
 }
 
@@ -2492,7 +2492,7 @@ func toolRefSuffix(ref string) string {
 // defaultInput is the prompt input passed to Render on every turn. It is
 // nil for inline-defined prompts ([InlinePrompt]), which take no per-turn
 // input.
-func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) AgentFunc[State] {
+func agentLoop[State any](r api.Registry, prompt *ai.TextPrompt[any], defaultInput any) AgentFunc[State] {
 	return func(ctx context.Context, resp Responder, sess *SessionRunner[State]) (*AgentResult, error) {
 		if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 			if !hasInputPayload(input) {

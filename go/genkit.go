@@ -236,7 +236,7 @@ func WithExperimental() GenkitOption {
 //			log.Fatalf("Prompt 'jokePrompt' not found.")
 //		}
 //
-//		resp, err := jokePrompt.Execute(ctx, nil) // Execute with default input (if any)
+//		text, resp, err := jokePrompt.Execute(ctx, nil) // Execute with default input (if any)
 //		if err != nil {
 //			log.Fatalf("jokePrompt.Execute failed: %v", err)
 //		}
@@ -814,8 +814,11 @@ func (g *Genkit) LookupMiddleware(name string) *ai.MiddlewareDesc {
 	return ai.LookupMiddleware(g.reg, name)
 }
 
-// DefinePrompt defines a prompt programmatically, registers it as a [core.Action]
-// of type Prompt, and returns an executable [ai.Prompt].
+// DefinePrompt defines a prompt with typed input and text output, registers
+// it as a [core.Action] of type Prompt, and returns an executable
+// [ai.TextPrompt]. The input schema is inferred from the In type parameter
+// unless an input schema option is provided; use In = any for dynamically
+// typed input. For structured output, use [Genkit.DefineDataPrompt] instead.
 //
 // This provides an alternative to defining prompts in `.prompt` files, offering
 // more flexibility through Go code. Prompts encapsulate configuration (model, parameters),
@@ -824,10 +827,7 @@ func (g *Genkit) LookupMiddleware(name string) *ai.MiddlewareDesc {
 // Prompts can be executed in two main ways:
 //  1. Render + Generate: Call [ai.Prompt.Render] to get [ai.GenerateActionOptions],
 //     modify them if needed, and pass them to [Genkit.GenerateWithRequest].
-//  2. Execute: Call [ai.Prompt.Execute] directly, passing input and execution options.
-//
-// For prompts that don't need to be registered (e.g., for single-use or testing),
-// use [ai.NewPrompt] instead.
+//  2. Execute: Call [ai.Prompt.Execute] directly, passing typed input and execution options.
 //
 // # Options
 //
@@ -844,8 +844,8 @@ func (g *Genkit) LookupMiddleware(name string) *ai.MiddlewareDesc {
 //   - [ai.WithMessages]: Provide static conversation history
 //   - [ai.WithMessagesFn]: Provide a function that generates conversation history
 //
-// Input Schema:
-//   - [ai.WithInputType]: Set input schema from a Go type (provides default values)
+// Input Schema (overrides inference from the In type parameter):
+//   - [ai.WithInputType]: Set input schema from a Go value (provides default values)
 //   - [ai.WithInputSchema]: Provide a custom JSON schema for input
 //   - [ai.WithInputSchemaName]: Reference a pre-registered schema by name
 //
@@ -871,55 +871,31 @@ func (g *Genkit) LookupMiddleware(name string) *ai.MiddlewareDesc {
 //		Country string `json:"country"`
 //	}
 //
-//	type GeoOutput struct {
-//		Capital string `json:"capital"`
-//	}
-//
 //	// Define the prompt
-//	capitalPrompt := g.DefinePrompt("findCapital",
+//	capitalPrompt := g.DefinePrompt[GeoInput]("findCapital",
 //		ai.WithDescription("Finds the capital of a country."),
-//		ai.WithModelName("googleai/gemini-3-flash-preview"),
+//		ai.WithModelName("googleai/gemini-flash-latest"),
 //		ai.WithSystem("You are a helpful geography assistant."),
 //		ai.WithPrompt("What is the capital of {{country}}?"),
-//		ai.WithInputType(GeoInput{Country: "USA"}),
-//		ai.WithOutputType(GeoOutput{}),
 //		// Config is provider-specific, e.g., genai.GenerateContentConfig for Google AI
 //	)
 //
-//	// Option 1: Render + Generate (using default input "USA")
-//	actionOpts, err := capitalPrompt.Render(ctx, nil) // nil input uses default
-//	if err != nil {
-//		log.Fatalf("Render failed: %v", err)
-//	}
-//	resp1, err := g.GenerateWithRequest(ctx, actionOpts, nil)
-//	if err != nil {
-//		log.Fatalf("GenerateWithRequest failed: %v", err)
-//	}
-//	var out1 GeoOutput
-//	if err = resp1.Output(&out1); err != nil {
-//		log.Fatalf("Output failed: %v", err)
-//	}
-//	fmt.Printf("Capital of USA: %s\n", out1.Capital) // Output: Capital of USA: Washington D.C.
-//
-//	// Option 2: Execute directly (with new input)
-//	resp2, err := capitalPrompt.Execute(ctx, ai.WithInput(GeoInput{Country: "France"}))
+//	text, resp, err := capitalPrompt.Execute(ctx, GeoInput{Country: "France"})
 //	if err != nil {
 //		log.Fatalf("Execute failed: %v", err)
 //	}
-//	var out2 GeoOutput
-//	if err = resp2.Output(&out2); err != nil {
-//		log.Fatalf("Output failed: %v", err)
-//	}
-//	fmt.Printf("Capital of France: %s\n", out2.Capital) // Output: Capital of France: Paris
-func (g *Genkit) DefinePrompt(name string, opts ...ai.PromptOption) ai.Prompt {
-	return ai.DefinePrompt(g.reg, name, opts...)
+//	fmt.Println(text) // e.g. "The capital of France is Paris."
+func (g *Genkit) DefinePrompt[In any](name string, opts ...ai.PromptOption) *ai.TextPrompt[In] {
+	return ai.DefinePrompt[In](g.reg, name, opts...)
 }
 
-// LookupPrompt retrieves a registered [ai.Prompt] by its name.
+// LookupPrompt retrieves a registered prompt by its name.
 // Prompts can be registered via [Genkit.DefinePrompt] or loaded automatically from
 // `.prompt` files in the directory specified by [WithPromptDir] or [Genkit.LoadPromptDir].
+// The returned prompt is dynamically typed; use [Genkit.LookupDataPrompt] to
+// attach static input and output types instead.
 // It returns the prompt instance if found, or `nil` otherwise.
-func (g *Genkit) LookupPrompt(name string) ai.Prompt {
+func (g *Genkit) LookupPrompt(name string) *ai.TextPrompt[any] {
 	return ai.LookupPrompt(g.reg, name)
 }
 
@@ -964,17 +940,13 @@ func (g *Genkit) DefineSchemaFor[T any]() {
 	core.DefineSchemaFor[T](g.reg)
 }
 
-// DefineDataPrompt creates a new [ai.DataPrompt] with strongly-typed input and output.
-// It automatically infers input schema from the In type parameter and configures
-// output schema and JSON format from the Out type parameter (unless Out is string).
+// DefineDataPrompt creates a new [ai.DataPrompt] with strongly-typed input and
+// structured output, and registers it. It automatically infers the input schema
+// from the In type parameter and the output schema and JSON format from the Out
+// type parameter, unless explicit schema options override them.
 //
-// This is a convenience wrapper around [Genkit.DefinePrompt] that provides compile-time
-// type safety for both input and output. For prompts that don't need to be registered,
-// use [ai.NewDataPrompt] instead.
-//
-// DefineDataPrompt accepts the same options as [Genkit.DefinePrompt]. See [Genkit.DefinePrompt] for
-// the full list of available options. Note that input and output schemas are automatically
-// inferred from the type parameters.
+// DefineDataPrompt accepts the same options as [Genkit.DefinePrompt]. See
+// [Genkit.DefinePrompt] for the full list of available options.
 //
 // Example:
 //
@@ -987,7 +959,7 @@ func (g *Genkit) DefineSchemaFor[T any]() {
 //	}
 //
 //	capitalPrompt := g.DefineDataPrompt[GeoInput, GeoOutput]("findCapital",
-//		ai.WithModelName("googleai/gemini-3-flash-preview"),
+//		ai.WithModelName("googleai/gemini-flash-latest"),
 //		ai.WithSystem("You are a helpful geography assistant."),
 //		ai.WithPrompt("What is the capital of {{country}}?"),
 //	)
@@ -1001,8 +973,10 @@ func (g *Genkit) DefineDataPrompt[In, Out any](name string, opts ...ai.PromptOpt
 	return ai.DefineDataPrompt[In, Out](g.reg, name, opts...)
 }
 
-// LookupDataPrompt looks up a prompt by name and wraps it with type information.
-// This is useful for wrapping prompts loaded from .prompt files with strong types.
+// LookupDataPrompt looks up a prompt by name and attaches static input and
+// output types to it. This is useful for accessing prompts loaded from
+// .prompt files with strong types. The types are not verified against the
+// prompt's declared schemas; input is validated at execution time.
 // It returns nil if the prompt was not found.
 func (g *Genkit) LookupDataPrompt[In, Out any](name string) *ai.DataPrompt[In, Out] {
 	return ai.LookupDataPrompt[In, Out](g.reg, name)
@@ -1496,9 +1470,9 @@ func (g *Genkit) LoadPromptDirFromFS(fsys fs.FS, dir, namespace string) error {
 //	}
 //
 //	// Execute the loaded prompt
-//	resp, err := customPrompt.Execute(ctx, ai.WithInput(map[string]any{"text": "some data"}))
+//	text, resp, err := customPrompt.Execute(ctx, map[string]any{"text": "some data"})
 //	// ... handle response and error ...
-func (g *Genkit) LoadPrompt(path, namespace string) (ai.Prompt, error) {
+func (g *Genkit) LoadPrompt(path, namespace string) (*ai.TextPrompt[any], error) {
 	dir, filename := filepath.Split(path)
 	if dir == "" {
 		dir = "."
@@ -1510,7 +1484,7 @@ func (g *Genkit) LoadPrompt(path, namespace string) (ai.Prompt, error) {
 }
 
 // LoadPromptFromSource loads a prompt from raw `.prompt` file content (frontmatter + template)
-// into the registry and returns the resulting [ai.Prompt].
+// into the registry and returns the resulting [ai.TextPrompt].
 //
 // The `source` parameter should contain the complete `.prompt` file text, including
 // the YAML frontmatter (delimited by `---`) and the template body.
@@ -1537,9 +1511,9 @@ func (g *Genkit) LoadPrompt(path, namespace string) (ai.Prompt, error) {
 //		log.Fatalf("Failed to load prompt: %v", err)
 //	}
 //
-//	resp, err := prompt.Execute(ctx, ai.WithInput(map[string]any{"name": "World"}))
+//	text, resp, err := prompt.Execute(ctx, map[string]any{"name": "World"})
 //	// ...
-func (g *Genkit) LoadPromptFromSource(source, name, namespace string) (ai.Prompt, error) {
+func (g *Genkit) LoadPromptFromSource(source, name, namespace string) (*ai.TextPrompt[any], error) {
 	return ai.LoadPromptFromSource(g.reg, source, name, namespace)
 }
 

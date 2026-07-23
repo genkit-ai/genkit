@@ -56,14 +56,14 @@ func main() {
 		},
 	)
 
-	defaultPrompt := g.DefinePrompt("defaultInstructions",
+	defaultPrompt := g.DefinePrompt[StoryCharacter]("defaultInstructions",
 		ai.WithPrompt("Generate a children's book story character about someone named {{name}} and generate the gablorken of 2 over 3."),
 		ai.WithTools(gablorkenTool),
 		ai.WithOutputType([]StoryCharacter{}),
 		ai.WithOutputFormat(ai.OutputFormatJSONL),
 	)
 
-	customPrompt := g.DefinePrompt("customInstructions",
+	customPrompt := g.DefinePrompt[StoryCharacter]("customInstructions",
 		ai.WithPrompt("Generate a children's book story character about someone named {{name}}."),
 		ai.WithOutputInstructions("The output should be JSON and match the schema of the following object: "+
 			"{name: string, age: number, homeTown: string, profession: string}"),
@@ -75,8 +75,7 @@ func main() {
 				return cb(ctx, c.Text())
 			}
 		}
-		resp, err := defaultPrompt.Execute(ctx,
-			ai.WithInput(StoryCharacter{Name: "Willy the Pig"}),
+		_, resp, err := defaultPrompt.Execute(ctx, StoryCharacter{Name: "Willy the Pig"},
 			ai.WithStreaming(callback),
 		)
 		if err != nil {
@@ -88,7 +87,7 @@ func main() {
 			return nil, err
 		}
 
-		resp, err = customPrompt.Execute(ctx, ai.WithInput(StoryCharacter{Name: "Markie the Doberman"}))
+		_, resp, err = customPrompt.Execute(ctx, StoryCharacter{Name: "Markie the Doberman"})
 		if err != nil {
 			return nil, err
 		}

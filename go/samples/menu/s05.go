@@ -34,17 +34,16 @@ func setup05(g *genkit.Genkit, model ai.Model) error {
 	text := `Extract _all_ of the text, in order, from the following image of a restaurant menu.
 
 {{media url=imageUrl}}`
-	readMenuPrompt := g.DefinePrompt("s05_readMenu",
+	readMenuPrompt := g.DefinePrompt[*imageURLInput]("s05_readMenu",
 		ai.WithPrompt(text),
 		ai.WithModel(model),
-		ai.WithInputType(imageURLInput{}),
 		ai.WithOutputFormat(ai.OutputFormatText),
 		ai.WithConfig(&genai.GenerateContentConfig{
 			Temperature: genai.Ptr[float32](0.1),
 		}),
 	)
 
-	textMenuPrompt := g.DefinePrompt("s05_textMenu",
+	textMenuPrompt := g.DefinePrompt[*textMenuQuestionInput]("s05_textMenu",
 		ai.WithPrompt(`
 You are acting as Walt, a helpful AI assistant here at the restaurant.
 You can answer questions about the food on the menu or any other questions
@@ -57,7 +56,6 @@ Answer this customer's question:
 {{question}}?
 `),
 		ai.WithModel(model),
-		ai.WithInputType(textMenuQuestionInput{}),
 		ai.WithOutputFormat(ai.OutputFormatText),
 		ai.WithConfig(&genai.GenerateContentConfig{
 			Temperature: genai.Ptr[float32](0.3),
@@ -78,10 +76,9 @@ Answer this customer's question:
 			base64.StdEncoding.Encode(data, image)
 			imageDataURL := "data:image/jpeg;base64," + string(data)
 
-			presp, err := readMenuPrompt.Execute(ctx,
-				ai.WithInput(&imageURLInput{
-					ImageURL: imageDataURL,
-				}))
+			_, presp, err := readMenuPrompt.Execute(ctx, &imageURLInput{
+				ImageURL: imageDataURL,
+			})
 			if err != nil {
 				return "", err
 			}
@@ -95,7 +92,7 @@ Answer this customer's question:
 	// Just returns the LLM's text response to the question.
 	textMenuQuestionFlow := g.DefineFlow("s05_textMenuQuestion",
 		func(ctx context.Context, input *textMenuQuestionInput) (*answerOutput, error) {
-			presp, err := textMenuPrompt.Execute(ctx, ai.WithInput(input))
+			_, presp, err := textMenuPrompt.Execute(ctx, input)
 			if err != nil {
 				return nil, err
 			}

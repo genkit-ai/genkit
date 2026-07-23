@@ -47,13 +47,12 @@ func main() {
 		return strings.ToUpper(s)
 	})
 
-	p := g.DefinePrompt("test", ai.WithPrompt(`{{> header}} {{uppercase @greeting}}`))
+	p := g.DefinePrompt[any]("test", ai.WithPrompt(`{{> header}} {{uppercase @greeting}}`))
 
-	result, err := p.Execute(ctx)
+	text, _, err := p.Execute(ctx, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-	text := result.Text()
 	log.Printf("Response: %s", text)
 
 }

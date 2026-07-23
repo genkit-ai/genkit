@@ -172,7 +172,7 @@ func (h *MCPHost) GetActiveResources(ctx context.Context) ([]ai.Resource, error)
 }
 
 // GetPrompt retrieves a specific prompt from a specific server
-func (h *MCPHost) GetPrompt(ctx context.Context, gk *genkit.Genkit, serverName, promptName string, args map[string]string) (ai.Prompt, error) {
+func (h *MCPHost) GetPrompt(ctx context.Context, gk *genkit.Genkit, serverName, promptName string, args map[string]string) (*ai.TextPrompt[any], error) {
 	client, exists := h.clients[serverName]
 	if !exists {
 		return nil, fmt.Errorf("no client found with name '%s'", serverName)

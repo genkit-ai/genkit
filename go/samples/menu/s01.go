@@ -22,7 +22,7 @@ import (
 )
 
 func setup01(g *genkit.Genkit, m ai.Model) error {
-	g.DefinePrompt("s01_vanillaPrompt",
+	g.DefinePrompt[menuQuestionInput]("s01_vanillaPrompt",
 		ai.WithPrompt(`
 You are acting as a helpful AI assistant named "Walt" that can answer
 questions about the food available on the menu at Walt's Burgers.
@@ -31,7 +31,7 @@ Customer says: {{question}}`),
 		ai.WithInputType(menuQuestionInput{Question: "What's on the menu?"}),
 	)
 
-	g.DefinePrompt("s01_staticMenuDotPrompt",
+	g.DefinePrompt[menuQuestionInput]("s01_staticMenuDotPrompt",
 		ai.WithPrompt(`
 You are acting as a helpful AI assistant named "Walt" that can answer
 questions about the food available on the menu at Walt's Burgers.

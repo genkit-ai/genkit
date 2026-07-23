@@ -143,7 +143,7 @@ func main() {
 // The prompt has no output schema defined so it will always return a string.
 // When executing the prompt, we pass in a map[string]any with the input fields.
 func DefineSimpleJokeWithInlinePrompt(g *genkit.Genkit) {
-	jokePrompt := g.DefinePrompt("joke.code",
+	jokePrompt := g.DefinePrompt[any]("joke.code",
 		ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
 			ThinkingConfig: &genai.ThinkingConfig{
 				ThinkingBudget: genai.Ptr[int32](0),
@@ -157,7 +157,7 @@ func DefineSimpleJokeWithInlinePrompt(g *genkit.Genkit) {
 	g.DefineStreamingFlow("simpleJokePromptFlow",
 		func(ctx context.Context, topic string, sendChunk core.StreamCallback[string]) (string, error) {
 			// One way to pass input is using a map[string]any. This is useful when there is no structured input type.
-			stream := jokePrompt.ExecuteStream(ctx, ai.WithInput(map[string]any{"topic": topic}))
+			stream := jokePrompt.ExecuteStream(ctx, map[string]any{"topic": topic})
 			for result, err := range stream {
 				if err != nil {
 					return "", fmt.Errorf("could not generate joke: %w", err)
@@ -181,7 +181,7 @@ func DefineSimpleJokeWithDotprompt(g *genkit.Genkit) {
 		func(ctx context.Context, topic string, sendChunk core.StreamCallback[string]) (string, error) {
 			jokePrompt := g.LookupPrompt("joke")
 			// One way to pass input is using a map[string]any. This is useful when there is no structured input type.
-			stream := jokePrompt.ExecuteStream(ctx, ai.WithInput(map[string]any{"topic": topic}))
+			stream := jokePrompt.ExecuteStream(ctx, map[string]any{"topic": topic})
 			for result, err := range stream {
 				if err != nil {
 					return "", fmt.Errorf("could not generate joke: %w", err)
@@ -330,10 +330,9 @@ func newIngredientFilter() func([]*Ingredient) []*Ingredient {
 // This creates a highly capable and resilient prompt that is also fully
 // transparent in the Dev UI metadata.
 func DefineAssistantWithInlinePrompt(g *genkit.Genkit) {
-	assistantPrompt := g.DefinePrompt("assistant.code",
+	assistantPrompt := g.DefinePrompt[AssistantRequest]("assistant.code",
 		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithPrompt("{{query}}"),
-		ai.WithInputType(AssistantRequest{}),
 		ai.WithUse(
 			&middleware.Retry{MaxRetries: 2},
 			&middleware.Fallback{
@@ -351,7 +350,7 @@ func DefineAssistantWithInlinePrompt(g *genkit.Genkit) {
 
 	g.DefineStreamingFlow("assistantPromptFlow",
 		func(ctx context.Context, query string, sendChunk core.StreamCallback[string]) (string, error) {
-			stream := assistantPrompt.ExecuteStream(ctx, ai.WithInput(&AssistantRequest{Query: query}))
+			stream := assistantPrompt.ExecuteStream(ctx, AssistantRequest{Query: query})
 			for result, err := range stream {
 				if err != nil {
 					return "", fmt.Errorf("assistant error: %w", err)
@@ -373,7 +372,7 @@ func DefineAssistantWithDotprompt(g *genkit.Genkit) {
 		func(ctx context.Context, query string, sendChunk core.StreamCallback[string]) (string, error) {
 			// The "assistant" prompt file includes all middleware in its frontmatter.
 			assistantPrompt := g.LookupPrompt("assistant")
-			stream := assistantPrompt.ExecuteStream(ctx, ai.WithInput(&AssistantRequest{Query: query}))
+			stream := assistantPrompt.ExecuteStream(ctx, &AssistantRequest{Query: query})
 			for result, err := range stream {
 				if err != nil {
 					return "", fmt.Errorf("agent error: %w", err)

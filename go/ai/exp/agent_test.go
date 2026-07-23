@@ -1717,7 +1717,7 @@ func TestPromptAgent_NamedPromptSharedAcrossAgents(t *testing.T) {
 
 	// One shared prompt with a personality variable, registered under a name
 	// that matches no agent.
-	ai.DefinePrompt(reg, "sharedChat",
+	ai.DefinePrompt[any](reg, "sharedChat",
 		ai.WithModelName("test/capture"),
 		ai.WithInputType(personaInput{}),
 		ai.WithSystem("You are {{personality}}."),
@@ -1781,11 +1781,11 @@ func TestDefinePromptAgent_DefaultAndNamed(t *testing.T) {
 
 	// A same-named prompt for the default lookup, and a shared parameterized
 	// prompt for the WithNamedPrompt override.
-	ai.DefinePrompt(reg, "chef",
+	ai.DefinePrompt[any](reg, "chef",
 		ai.WithModelName("test/capture"),
 		ai.WithSystem("You are a chef."),
 	)
-	ai.DefinePrompt(reg, "sharedChat",
+	ai.DefinePrompt[any](reg, "sharedChat",
 		ai.WithModelName("test/capture"),
 		ai.WithInputType(personaInput{}),
 		ai.WithSystem("You are {{personality}}."),
@@ -1826,7 +1826,7 @@ func TestDefinePromptAgent_DefaultAndNamed(t *testing.T) {
 // that is not registered, and setting the prompt source more than once.
 func TestDefinePromptAgent_Panics(t *testing.T) {
 	reg := setupPromptTestRegistry(t)
-	ai.DefinePrompt(reg, "present", ai.WithModelName("test/echo"))
+	ai.DefinePrompt[any](reg, "present", ai.WithModelName("test/echo"))
 
 	t.Run("missing prompt", func(t *testing.T) {
 		defer func() {
@@ -1853,7 +1853,7 @@ func TestPromptAgent_Basic(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
 
-	ai.DefinePrompt(reg, "testPrompt",
+	ai.DefinePrompt[any](reg, "testPrompt",
 		ai.WithModelName("test/echo"),
 		ai.WithSystem("You are a test assistant."),
 	)
@@ -1928,7 +1928,7 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 		},
 	)
 
-	ai.DefinePrompt(reg, "historyPrompt",
+	ai.DefinePrompt[any](reg, "historyPrompt",
 		ai.WithModelName("test/history"),
 		ai.WithSystem("system prompt"),
 	)
@@ -2002,7 +2002,7 @@ func TestPromptAgent_SnapshotResumePreservesHistory(t *testing.T) {
 	reg := setupPromptTestRegistry(t)
 	store := newTestInMemStore[testState]()
 
-	ai.DefinePrompt(reg, "snapPrompt",
+	ai.DefinePrompt[any](reg, "snapPrompt",
 		ai.WithModelName("test/echo"),
 		ai.WithSystem("You are a test assistant."),
 	)
@@ -2126,7 +2126,7 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 	)
 	ai.DefineGenerateAction(ctx, reg)
 
-	ai.DefinePrompt(reg, "toolPrompt",
+	ai.DefinePrompt[any](reg, "toolPrompt",
 		ai.WithModelName("test/toolmodel"),
 		ai.WithSystem("You are a test assistant."),
 		ai.WithTools(ai.ToolName("greet"), ai.ToolName("farewell")),
@@ -2332,7 +2332,7 @@ func TestPromptAgent_RunText(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
 
-	ai.DefinePrompt(reg, "runTextPrompt",
+	ai.DefinePrompt[any](reg, "runTextPrompt",
 		ai.WithModelName("test/echo"),
 		ai.WithSystem("You are a test assistant."),
 	)
@@ -2368,7 +2368,7 @@ func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 			return &ai.ModelResponse{Message: ai.NewModelTextMessage("unexpected")}, nil
 		},
 	)
-	ai.DefinePrompt(reg, "rejectPrompt", ai.WithModelName("test/reject"))
+	ai.DefinePrompt[any](reg, "rejectPrompt", ai.WithModelName("test/reject"))
 	af := DefinePromptAgent[testState](reg, "rejectPrompt")
 
 	tests := []struct {
@@ -2545,7 +2545,7 @@ func TestPromptAgent_RejectsResumeForUnrequestedTool(t *testing.T) {
 			return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("hello")}, nil
 		})
 	ai.DefineGenerateAction(ctx, reg)
-	ai.DefinePrompt(reg, "plainPrompt", ai.WithModelName("test/plain"))
+	ai.DefinePrompt[any](reg, "plainPrompt", ai.WithModelName("test/plain"))
 
 	af := DefinePromptAgent[testState](reg, "plainPrompt")
 
@@ -5498,7 +5498,7 @@ func TestPromptAgent_ForwardsFinishReason(t *testing.T) {
 		},
 	)
 	ai.DefineGenerateAction(ctx, reg)
-	ai.DefinePrompt(reg, "lengthPrompt", ai.WithModelName("test/length"))
+	ai.DefinePrompt[any](reg, "lengthPrompt", ai.WithModelName("test/length"))
 
 	af := DefinePromptAgent[testState](reg, "lengthPrompt")
 
@@ -5896,7 +5896,7 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 			}, nil
 		})
 	ai.DefineGenerateAction(ctx, reg)
-	ai.DefinePrompt(reg, "interruptPrompt",
+	ai.DefinePrompt[any](reg, "interruptPrompt",
 		ai.WithModelName("test/interrupt"),
 		ai.WithTools(interruptTool),
 	)

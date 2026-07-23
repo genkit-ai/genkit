@@ -77,13 +77,13 @@ func TestOutputFormat(t *testing.T) {
 			reg := registry.New()
 
 			if test.output == nil {
-				DefinePrompt(
+				DefinePrompt[any](
 					reg, "aModel",
 					WithInputType(InputOutput{Text: "test"}),
 					WithOutputFormat(test.format),
 				)
 			} else {
-				DefinePrompt(
+				DefinePrompt[any](
 					reg, "bModel",
 					WithInputType(InputOutput{Text: "test"}),
 					WithOutputType(test.output),
@@ -126,12 +126,12 @@ func TestInputFormat(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var err error
-			var p Prompt
+			var p *TextPrompt[any]
 
 			if test.inputType != nil {
-				p = DefinePrompt(reg, test.name, WithPrompt(test.templateText), WithInputType(test.inputType))
+				p = DefinePrompt[any](reg, test.name, WithPrompt(test.templateText), WithInputType(test.inputType))
 			} else {
-				p = DefinePrompt(reg, test.name, WithPrompt(test.templateText))
+				p = DefinePrompt[any](reg, test.name, WithPrompt(test.templateText))
 			}
 
 			req, err := p.Render(context.Background(), test.input)
@@ -254,9 +254,7 @@ func TestValidPrompt(t *testing.T) {
 			systemText: "say hello",
 			promptText: "my name is foo",
 			input:      HelloPromptInput{Name: "foo"},
-			executeOptions: []PromptExecuteOption{
-				WithInput(HelloPromptInput{Name: "foo"}),
-			},
+
 			wantTextOutput: "Echo: system: say hello; my name is foo; config: {\n  \"temperature\": 11\n}; context: null",
 			wantGenerated: &ModelRequest{
 				Config: &GenerationCommonConfig{
@@ -290,9 +288,7 @@ func TestValidPrompt(t *testing.T) {
 				return "my name is {{Name}}", nil
 			},
 			input: HelloPromptInput{Name: "foo"},
-			executeOptions: []PromptExecuteOption{
-				WithInput(HelloPromptInput{Name: "foo"}),
-			},
+
 			wantTextOutput: "Echo: system: say hello to foo; my name is foo; config: {\n  \"temperature\": 11\n}; context: null",
 			wantGenerated: &ModelRequest{
 				Config: &GenerationCommonConfig{
@@ -328,9 +324,7 @@ func TestValidPrompt(t *testing.T) {
 				},
 			},
 			input: HelloPromptInput{Name: "foo"},
-			executeOptions: []PromptExecuteOption{
-				WithInput(HelloPromptInput{Name: "foo"}),
-			},
+
 			wantTextOutput: "Echo: system: say hello; you're history; my name is foo; config: {\n  \"temperature\": 11\n}; context: null",
 			wantGenerated: &ModelRequest{
 				Config: &GenerationCommonConfig{
@@ -372,9 +366,7 @@ func TestValidPrompt(t *testing.T) {
 				}, nil
 			},
 			input: HelloPromptInput{Name: "foo"},
-			executeOptions: []PromptExecuteOption{
-				WithInput(HelloPromptInput{Name: "foo"}),
-			},
+
 			wantTextOutput: "Echo: system: say hello; your name is foo; my name is foo; config: {\n  \"temperature\": 11\n}; context: null",
 			wantGenerated: &ModelRequest{
 				Config: &GenerationCommonConfig{
@@ -421,9 +413,7 @@ func TestValidPrompt(t *testing.T) {
 				}, nil
 			},
 			input: HelloPromptInput{Name: "foo"},
-			executeOptions: []PromptExecuteOption{
-				WithInput(HelloPromptInput{Name: "foo"}),
-			},
+
 			wantTextOutput: "Echo: system: say hello; your name is foo; my name is foo; config: {\n  \"temperature\": 11\n}; context: null",
 			wantGenerated: &ModelRequest{
 				Config: &GenerationCommonConfig{
@@ -458,9 +448,7 @@ func TestValidPrompt(t *testing.T) {
 			promptText: "my name is foo",
 			tools:      []ToolArg{testTool(reg, "testTool")},
 			input:      HelloPromptInput{Name: "foo"},
-			executeOptions: []PromptExecuteOption{
-				WithInput(HelloPromptInput{Name: "foo"}),
-			},
+
 			wantTextOutput: "Echo: system: tool: say hello; my name is foo; ; Bar; ; config: {\n  \"temperature\": 11\n}; context: null",
 			wantGenerated: &ModelRequest{
 				Config: &GenerationCommonConfig{
@@ -515,7 +503,6 @@ func TestValidPrompt(t *testing.T) {
 			promptText: "my name is {{Name}}",
 			input:      HelloPromptInput{Name: "foo"},
 			executeOptions: []PromptExecuteOption{
-				WithInput(HelloPromptInput{Name: "foo"}),
 				WithMessages(NewModelTextMessage("I remember you said your name is {{Name}}")),
 			},
 			wantTextOutput: "Echo: system: say hello; I remember you said your name is foo; my name is foo; config: {\n  \"temperature\": 11\n}; context: null",
@@ -553,7 +540,6 @@ func TestValidPrompt(t *testing.T) {
 			tools:      []ToolArg{testTool(reg, "promptTool")},
 			input:      HelloPromptInput{Name: "foo"},
 			executeOptions: []PromptExecuteOption{
-				WithInput(HelloPromptInput{Name: "foo"}),
 				WithTools(testTool(reg, "executeOverrideTool")),
 			},
 			wantTextOutput: "Echo: system: tool: say hello; my name is foo; ; Bar; ; config: {\n  \"temperature\": 11\n}; context: null",
@@ -645,9 +631,9 @@ func TestValidPrompt(t *testing.T) {
 				opts = append(opts, WithPromptFn(test.promptFn))
 			}
 
-			p := DefinePrompt(reg, test.name, opts...)
+			p := DefinePrompt[any](reg, test.name, opts...)
 
-			output, err := p.Execute(context.Background(), test.executeOptions...)
+			_, output, err := p.Execute(context.Background(), test.input, test.executeOptions...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -696,14 +682,14 @@ func TestOptionsPatternExecute(t *testing.T) {
 	testModel := DefineModel(reg, "options/test", nil, testGenerate)
 
 	t.Run("Streaming", func(t *testing.T) {
-		p := DefinePrompt(reg, "TestExecute", WithInputType(InputOutput{}), WithPrompt("TestExecute"))
+		p := DefinePrompt[any](reg, "TestExecute", WithInputType(InputOutput{}), WithPrompt("TestExecute"))
 
 		streamText := ""
-		resp, err := p.Execute(
+		_, resp, err := p.Execute(
 			context.Background(),
-			WithInput(InputOutput{
+			InputOutput{
 				Text: "TestExecute",
-			}),
+			},
 			WithStreaming(func(ctx context.Context, grc *ModelResponseChunk) error {
 				streamText += grc.Text()
 				return nil
@@ -722,13 +708,13 @@ func TestOptionsPatternExecute(t *testing.T) {
 	})
 
 	t.Run("WithModelName", func(t *testing.T) {
-		p := DefinePrompt(reg, "TestModelname", WithInputType(InputOutput{}), WithPrompt("TestModelname"))
+		p := DefinePrompt[any](reg, "TestModelname", WithInputType(InputOutput{}), WithPrompt("TestModelname"))
 
-		resp, err := p.Execute(
+		_, resp, err := p.Execute(
 			context.Background(),
-			WithInput(InputOutput{
+			InputOutput{
 				Text: "testing",
-			}),
+			},
 			WithModelName("options/test"),
 		)
 		if err != nil {
@@ -850,10 +836,11 @@ func TestDefaultsOverride(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			p := DefinePrompt(reg, test.name, test.define...)
+			p := DefinePrompt[any](reg, test.name, test.define...)
 
-			output, err := p.Execute(
+			_, output, err := p.Execute(
 				context.Background(),
+				nil,
 				test.execute...,
 			)
 			if err != nil {
@@ -1029,7 +1016,7 @@ Hello, {{name}}!
 	}
 
 	// Verify that the metadata name does NOT include the variant
-	promptMetadata, ok := prompt.(api.Action).Desc().Metadata["prompt"].(map[string]any)
+	promptMetadata, ok := prompt.Desc().Metadata["prompt"].(map[string]any)
 	if !ok {
 		t.Fatalf("Expected Metadata['prompt'] to be a map")
 	}
@@ -1044,14 +1031,14 @@ Hello, {{name}}!
 func TestDefinePrompt_WithVariant(t *testing.T) {
 	reg := registry.New()
 
-	DefinePrompt(reg, "example.code", WithPrompt("Hello, {{name}}!"))
+	DefinePrompt[any](reg, "example.code", WithPrompt("Hello, {{name}}!"))
 
 	prompt := LookupPrompt(reg, "example.code")
 	if prompt == nil {
 		t.Fatalf("Prompt was not registered")
 	}
 
-	promptMetadata, ok := prompt.(api.Action).Desc().Metadata["prompt"].(map[string]any)
+	promptMetadata, ok := prompt.Desc().Metadata["prompt"].(map[string]any)
 	if !ok {
 		t.Fatalf("Expected Metadata['prompt'] to be a map")
 	}
@@ -1066,14 +1053,14 @@ func TestDefinePrompt_WithVariant(t *testing.T) {
 func TestDefinePrompt_WithoutVariant(t *testing.T) {
 	reg := registry.New()
 
-	DefinePrompt(reg, "simple", WithPrompt("Hello, world!"))
+	DefinePrompt[any](reg, "simple", WithPrompt("Hello, world!"))
 
 	prompt := LookupPrompt(reg, "simple")
 	if prompt == nil {
 		t.Fatalf("Prompt was not registered")
 	}
 
-	promptMetadata, ok := prompt.(api.Action).Desc().Metadata["prompt"].(map[string]any)
+	promptMetadata, ok := prompt.Desc().Metadata["prompt"].(map[string]any)
 	if !ok {
 		t.Fatalf("Expected Metadata['prompt'] to be a map")
 	}
@@ -1089,14 +1076,14 @@ func TestDefinePrompt_WithMiddlewareMetadata(t *testing.T) {
 	reg := registry.New()
 
 	mw := middlewareRefArg{name: "test/mw", config: map[string]any{"foo": "bar"}}
-	DefinePrompt(reg, "test-mw", WithUse(mw))
+	DefinePrompt[any](reg, "test-mw", WithUse(mw))
 
 	prompt := LookupPrompt(reg, "test-mw")
 	if prompt == nil {
 		t.Fatalf("Prompt was not registered")
 	}
 
-	promptMetadata, ok := prompt.(api.Action).Desc().Metadata["prompt"].(map[string]any)
+	promptMetadata, ok := prompt.Desc().Metadata["prompt"].(map[string]any)
 	if !ok {
 		t.Fatalf("Expected Metadata['prompt'] to be a map")
 	}
@@ -1367,7 +1354,7 @@ Formal greeting
 			t.Fatal("Prompt 'greeting.formal' was not registered")
 		}
 
-		promptMetadata, ok := lookedUp.(api.Action).Desc().Metadata["prompt"].(map[string]any)
+		promptMetadata, ok := lookedUp.Desc().Metadata["prompt"].(map[string]any)
 		if !ok {
 			t.Fatal("Expected Metadata['prompt'] to be a map")
 		}
@@ -1478,16 +1465,16 @@ func TestDefinePartialAndHelper(t *testing.T) {
 		return strings.ToUpper(s)
 	})
 
-	p := DefinePrompt(
+	p := DefinePrompt[any](
 		reg,
 		"test",
 		WithPrompt(`{{> header}} {{uppercase greeting}}`),
 		WithModel(model))
 
-	result, err := p.Execute(context.Background(), WithInput(map[string]any{
+	_, result, err := p.Execute(context.Background(), map[string]any{
 		"name":     "User",
 		"greeting": "hello",
-	}))
+	})
 	if err != nil {
 		t.Fatalf("Failed to execute prompt: %v", err)
 	}
@@ -1529,7 +1516,7 @@ Hello!
 		t.Fatalf("LoadPromptFromFS failed to load prompt: %v", err)
 	}
 
-	result, err := prompt.Execute(context.Background())
+	_, result, err := prompt.Execute(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("Failed to execute prompt: %v", err)
 	}
@@ -1595,7 +1582,7 @@ Generate a recipe for {{food}}.
 
 	// verify the prompt is loaded with a schema reference
 	// the internal representation stores the schema with $ref for lazy resolution
-	actionDef := prompt.(api.Action).Desc()
+	actionDef := prompt.Desc()
 	outputSchema := actionDef.Metadata["prompt"].(map[string]any)["output"].(map[string]any)["schema"]
 	if outputSchema == nil {
 		t.Fatal("Output schema should not be nil")
@@ -1633,7 +1620,7 @@ Generate a recipe for {{food}}.
 	})
 
 	// we should now resolve "Recipe" correctly
-	resp, err := prompt.Execute(context.Background(), WithInput(map[string]any{"food": "tacos"}))
+	_, resp, err := prompt.Execute(context.Background(), map[string]any{"food": "tacos"})
 	if err != nil {
 		t.Fatalf("Failed to execute prompt with deferred schema: %v", err)
 	}
@@ -1701,7 +1688,7 @@ Generate a recipe.
 		t.Fatalf("Failed to load prompt: %v", err)
 	}
 
-	_, err = prompt.Execute(context.Background())
+	_, _, err = prompt.Execute(context.Background(), nil)
 	if err == nil {
 		t.Fatal("Expected error when executing prompt with missing schema")
 	}
@@ -1733,13 +1720,13 @@ func TestWithOutputSchemaName_DefinePrompt(t *testing.T) {
 	})
 
 	// Define prompt using WithOutputSchemaName
-	prompt := DefinePrompt(reg, "testPrompt",
+	prompt := DefinePrompt[any](reg, "testPrompt",
 		WithModelName("test-model"),
 		WithPrompt("test"),
 		WithOutputSchemaName("FooSchema"),
 	)
 
-	resp, err := prompt.Execute(context.Background())
+	_, resp, err := prompt.Execute(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -1763,13 +1750,13 @@ func TestWithOutputSchemaName_DefinePrompt_Missing(t *testing.T) {
 	})
 
 	// Define prompt using WithOutputSchemaName, but Schema is missing
-	prompt := DefinePrompt(reg, "testPromptMissing",
+	prompt := DefinePrompt[any](reg, "testPromptMissing",
 		WithModelName("test-model"),
 		WithPrompt("test"),
 		WithOutputSchemaName("MissingSchema"),
 	)
 
-	_, err := prompt.Execute(context.Background())
+	_, _, err := prompt.Execute(context.Background(), nil)
 	if err == nil {
 		t.Fatal("Expected error when executing prompt with missing schema")
 	}
@@ -2209,20 +2196,22 @@ func TestPromptExecuteStream(t *testing.T) {
 			}, nil
 		})
 
-		p := DefinePrompt(r, "streamTestPrompt",
+		p := DefinePrompt[any](r, "streamTestPrompt",
 			WithModel(testModel),
 			WithPrompt("Test"),
 		)
 
 		var chunks []*ModelResponseChunk
 		var finalResponse *ModelResponse
+		var finalText string
 
-		for val, err := range p.ExecuteStream(context.Background()) {
+		for val, err := range p.ExecuteStream(context.Background(), nil) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if val.Done {
 				finalResponse = val.Response
+				finalText = val.Output
 			} else {
 				chunks = append(chunks, val.Chunk)
 			}
@@ -2243,13 +2232,16 @@ func TestPromptExecuteStream(t *testing.T) {
 		if finalResponse.Text() != "ABC" {
 			t.Errorf("expected final text %q, got %q", "ABC", finalResponse.Text())
 		}
+		if finalText != "ABC" {
+			t.Errorf("expected final output %q, got %q", "ABC", finalText)
+		}
 	})
 
 	t.Run("nil prompt returns error", func(t *testing.T) {
-		var p *prompt
+		var p *TextPrompt[any]
 
 		var receivedErr error
-		for _, err := range p.ExecuteStream(context.Background()) {
+		for _, err := range p.ExecuteStream(context.Background(), nil) {
 			if err != nil {
 				receivedErr = err
 				break
@@ -2279,12 +2271,13 @@ func TestPromptExecuteStream(t *testing.T) {
 			}, nil
 		})
 
-		p := DefinePrompt(r, "execOptionsTestPrompt",
+		p := DefinePrompt[any](r, "execOptionsTestPrompt",
 			WithModel(testModel),
 			WithPrompt("Test"),
 		)
 
 		for range p.ExecuteStream(context.Background(),
+			nil,
 			WithConfig(&GenerationCommonConfig{Temperature: 0.9}),
 		) {
 		}
@@ -2315,12 +2308,12 @@ func TestPromptExecuteStream(t *testing.T) {
 			}, nil
 		})
 
-		p := DefinePrompt(r, "breakStreamTestPrompt",
+		p := DefinePrompt[any](r, "breakStreamTestPrompt",
 			WithModel(testModel),
 			WithPrompt("Test"),
 		)
 
-		for _, err := range p.ExecuteStream(t.Context()) {
+		for _, err := range p.ExecuteStream(t.Context(), nil) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -2352,7 +2345,7 @@ func TestSessionStateInjection(t *testing.T) {
 		})
 
 		// Create a prompt that uses {{@state.name}} syntax
-		p := DefinePrompt(r, "sessionStatePrompt",
+		p := DefinePrompt[any](r, "sessionStatePrompt",
 			WithModel(testModel),
 			WithPrompt("Hello {{@state.name}}, your theme is {{@state.preferences.theme}}"),
 		)
@@ -2366,7 +2359,7 @@ func TestSessionStateInjection(t *testing.T) {
 		})
 
 		// Execute prompt with state in context
-		if _, err := p.Execute(ctx); err != nil {
+		if _, _, err := p.Execute(ctx, nil); err != nil {
 			t.Fatalf("Execute failed: %v", err)
 		}
 
@@ -2391,7 +2384,7 @@ func TestSessionStateInjection(t *testing.T) {
 		})
 
 		// Create a prompt that uses regular input variables (not session state)
-		p := DefinePrompt(r, "noSessionPrompt",
+		p := DefinePrompt[any](r, "noSessionPrompt",
 			WithModel(testModel),
 			WithPrompt("Hello {{name}}"),
 			WithInputType(struct {
@@ -2401,7 +2394,7 @@ func TestSessionStateInjection(t *testing.T) {
 
 		// Execute without session in context
 		ctx := context.Background()
-		_, err := p.Execute(ctx, WithInput(map[string]any{"name": "Bob"}))
+		_, _, err := p.Execute(ctx, map[string]any{"name": "Bob"})
 		if err != nil {
 			t.Fatalf("Execute failed: %v", err)
 		}
@@ -2426,7 +2419,7 @@ func TestSessionStateInjection(t *testing.T) {
 		})
 
 		// Create a prompt that uses both input and session state
-		p := DefinePrompt(r, "mixedPrompt",
+		p := DefinePrompt[any](r, "mixedPrompt",
 			WithModel(testModel),
 			WithPrompt("User {{@state.name}} asks: {{question}}"),
 			WithInputType(struct {
@@ -2440,7 +2433,7 @@ func TestSessionStateInjection(t *testing.T) {
 		})
 
 		// Execute with both state and input
-		_, err := p.Execute(ctx, WithInput(map[string]any{"question": "What is the weather?"}))
+		_, _, err := p.Execute(ctx, map[string]any{"question": "What is the weather?"})
 		if err != nil {
 			t.Fatalf("Execute failed: %v", err)
 		}
@@ -2467,7 +2460,7 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		tool := defineFakeTool(t, r, "testTool", "a test tool")
 
 		// Define with ToolChoiceAuto
-		p := DefinePrompt(r, "toolChoicePrompt",
+		p := DefinePrompt[any](r, "toolChoicePrompt",
 			WithModel(model),
 			WithPrompt("test"),
 			WithTools(tool),
@@ -2476,7 +2469,8 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		)
 
 		// Execute with ToolChoiceRequired - should override
-		_, err := p.Execute(context.Background(),
+		_, _, err := p.Execute(context.Background(),
+			nil,
 			WithToolChoice(ToolChoiceRequired),
 		)
 		assertNoError(t, err)
@@ -2498,7 +2492,7 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		tool := defineFakeTool(t, r, "testTool2", "a test tool")
 
 		// Define with ToolChoiceRequired
-		p := DefinePrompt(r, "toolChoiceNoOverridePrompt",
+		p := DefinePrompt[any](r, "toolChoiceNoOverridePrompt",
 			WithModel(model),
 			WithPrompt("test"),
 			WithTools(tool),
@@ -2507,7 +2501,7 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		)
 
 		// Execute without specifying ToolChoice - should use define-time value
-		_, err := p.Execute(context.Background())
+		_, _, err := p.Execute(context.Background(), nil)
 		assertNoError(t, err)
 
 		if captured.ToolChoice != ToolChoiceRequired {
@@ -2546,7 +2540,7 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		tool := defineFakeTool(t, r, "maxTurnsTool", "a tool for max turns test")
 
 		// Define with MaxTurns 5
-		p := DefinePrompt(r, "maxTurnsPrompt",
+		p := DefinePrompt[any](r, "maxTurnsPrompt",
 			WithModel(model),
 			WithPrompt("test"),
 			WithTools(tool),
@@ -2554,7 +2548,8 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		)
 
 		// Execute with MaxTurns 2 - should override and stop after 2 turns
-		_, err := p.Execute(context.Background(),
+		_, _, err := p.Execute(context.Background(),
+			nil,
 			WithMaxTurns(2),
 		)
 
@@ -2590,7 +2585,7 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		tool := defineFakeTool(t, r, "returnToolReqsTool", "tool for return requests test")
 
 		// Define with ReturnToolRequests false (default)
-		p := DefinePrompt(r, "returnToolReqsPrompt",
+		p := DefinePrompt[any](r, "returnToolReqsPrompt",
 			WithModel(model),
 			WithPrompt("test"),
 			WithTools(tool),
@@ -2599,7 +2594,8 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		)
 
 		// Execute with ReturnToolRequests true - should override and return tool requests
-		resp, err := p.Execute(context.Background(),
+		_, resp, err := p.Execute(context.Background(),
+			nil,
 			WithReturnToolRequests(true),
 		)
 		assertNoError(t, err)
@@ -2631,7 +2627,7 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		toolC := defineFakeTool(t, r, "toolC", "tool C")
 
 		// Define with tools A and B
-		p := DefinePrompt(r, "toolsReplacePrompt",
+		p := DefinePrompt[any](r, "toolsReplacePrompt",
 			WithModel(model),
 			WithPrompt("test"),
 			WithTools(toolA, toolB),
@@ -2639,7 +2635,8 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		)
 
 		// Execute with tool C - should REPLACE (not merge) define-time tools
-		_, err := p.Execute(context.Background(),
+		_, _, err := p.Execute(context.Background(),
+			nil,
 			WithTools(toolC),
 		)
 		assertNoError(t, err)
@@ -2666,7 +2663,7 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		toolB := defineFakeTool(t, r, "toolInheritB", "tool B")
 
 		// Define with tools A and B
-		p := DefinePrompt(r, "toolsInheritPrompt",
+		p := DefinePrompt[any](r, "toolsInheritPrompt",
 			WithModel(model),
 			WithPrompt("test"),
 			WithTools(toolA, toolB),
@@ -2674,7 +2671,7 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		)
 
 		// Execute without specifying tools - should inherit define-time tools
-		_, err := p.Execute(context.Background())
+		_, _, err := p.Execute(context.Background(), nil)
 		assertNoError(t, err)
 
 		if len(captured.Tools) != 2 {
@@ -2692,14 +2689,15 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		})
 
 		// Define without docs
-		p := DefinePrompt(r, "docsPrompt",
+		p := DefinePrompt[any](r, "docsPrompt",
 			WithModel(model),
 			WithPrompt("test"),
 		)
 
 		// Execute with docs
 		doc := DocumentFromText("context document", nil)
-		_, err := p.Execute(context.Background(),
+		_, _, err := p.Execute(context.Background(),
+			nil,
 			WithDocs(doc),
 		)
 		assertNoError(t, err)
@@ -2719,14 +2717,15 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		})
 
 		// Define with Temperature and TopK
-		p := DefinePrompt(r, "configReplacePrompt",
+		p := DefinePrompt[any](r, "configReplacePrompt",
 			WithModel(model),
 			WithPrompt("test"),
 			WithConfig(&GenerationCommonConfig{Temperature: 0.5, TopK: 10}),
 		)
 
 		// Execute with only Temperature - config is REPLACED, not merged
-		_, err := p.Execute(context.Background(),
+		_, _, err := p.Execute(context.Background(),
+			nil,
 			WithConfig(&GenerationCommonConfig{Temperature: 0.9}),
 		)
 		assertNoError(t, err)
@@ -2768,13 +2767,14 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		})
 
 		// Define with defineModel
-		p := DefinePrompt(r, "modelOverridePrompt",
+		p := DefinePrompt[any](r, "modelOverridePrompt",
 			WithModel(defineModel),
 			WithPrompt("test"),
 		)
 
 		// Execute with executeModel - should use execute model
-		resp, err := p.Execute(context.Background(),
+		_, resp, err := p.Execute(context.Background(),
+			nil,
 			WithModel(executeModel),
 		)
 		assertNoError(t, err)
@@ -2794,14 +2794,15 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		})
 
 		// Define with system and user prompt
-		p := DefinePrompt(r, "messagesFnPrompt",
+		p := DefinePrompt[any](r, "messagesFnPrompt",
 			WithModel(model),
 			WithSystem("system instruction"),
 			WithPrompt("user question"),
 		)
 
 		// Execute with MessagesFn - messages should be inserted between system and user
-		_, err := p.Execute(context.Background(),
+		_, _, err := p.Execute(context.Background(),
+			nil,
 			WithMessages(NewModelTextMessage("conversation history")),
 		)
 		assertNoError(t, err)
@@ -2834,13 +2835,13 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		// Create ModelRef with embedded config
 		modelRef := NewModelRef("test/modelRefConfigModel", &GenerationCommonConfig{Temperature: 0.7})
 
-		p := DefinePrompt(r, "modelRefConfigPrompt",
+		p := DefinePrompt[any](r, "modelRefConfigPrompt",
 			WithModel(modelRef),
 			WithPrompt("test"),
 		)
 
 		// Execute without config - should use ModelRef's config
-		_, err := p.Execute(context.Background())
+		_, _, err := p.Execute(context.Background(), nil)
 		assertNoError(t, err)
 
 		config, ok := captured.Config.(*GenerationCommonConfig)
@@ -2863,13 +2864,14 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 
 		modelRef := NewModelRef("test/modelRefOverrideModel", &GenerationCommonConfig{Temperature: 0.7})
 
-		p := DefinePrompt(r, "modelRefOverridePrompt",
+		p := DefinePrompt[any](r, "modelRefOverridePrompt",
 			WithModel(modelRef),
 			WithPrompt("test"),
 		)
 
 		// Execute with explicit config - should override ModelRef's config
-		_, err := p.Execute(context.Background(),
+		_, _, err := p.Execute(context.Background(),
+			nil,
 			WithConfig(&GenerationCommonConfig{Temperature: 0.3}),
 		)
 		assertNoError(t, err)
@@ -2889,26 +2891,26 @@ func TestPromptErrorPaths(t *testing.T) {
 	t.Run("DefinePrompt with empty name panics", func(t *testing.T) {
 		r := newTestRegistry(t)
 		assertPanic(t, func() {
-			DefinePrompt(r, "")
+			DefinePrompt[any](r, "")
 		}, "name is required")
 	})
 
 	t.Run("Execute on nil prompt returns error", func(t *testing.T) {
-		var p *prompt
-		_, err := p.Execute(context.Background())
+		var p *TextPrompt[any]
+		_, _, err := p.Execute(context.Background(), nil)
 		assertError(t, err, "prompt is nil")
 	})
 
 	t.Run("Render on nil prompt returns error", func(t *testing.T) {
-		var p *prompt
+		var p *TextPrompt[any]
 		_, err := p.Render(context.Background(), nil)
 		assertError(t, err, "prompt is nil")
 	})
 
 	t.Run("ExecuteStream on nil prompt yields error", func(t *testing.T) {
-		var p *prompt
+		var p *TextPrompt[any]
 		var gotErr error
-		for _, err := range p.ExecuteStream(context.Background()) {
+		for _, err := range p.ExecuteStream(context.Background(), nil) {
 			if err != nil {
 				gotErr = err
 				break
@@ -2938,7 +2940,7 @@ func TestLookupPromptCoverage(t *testing.T) {
 
 	t.Run("returns prompt for existing prompt", func(t *testing.T) {
 		r := newTestRegistry(t)
-		DefinePrompt(r, "existingPrompt", WithPrompt("hello"))
+		DefinePrompt[any](r, "existingPrompt", WithPrompt("hello"))
 		p := LookupPrompt(r, "existingPrompt")
 		if p == nil {
 			t.Error("expected prompt, got nil")
@@ -2999,7 +3001,7 @@ func TestLookupDataPrompt(t *testing.T) {
 		name: "test/lookupDataModel",
 	})
 
-	DefinePrompt(r, "lookupDataPrompt",
+	DefinePrompt[any](r, "lookupDataPrompt",
 		WithModel(model),
 		WithPrompt("test"),
 	)
@@ -3015,34 +3017,6 @@ func TestLookupDataPrompt(t *testing.T) {
 		dp := LookupDataPrompt[map[string]any, string](r, "nonexistent")
 		if dp != nil {
 			t.Error("expected nil for non-existent prompt")
-		}
-	})
-}
-
-// TestAsDataPrompt tests AsDataPrompt function.
-func TestAsDataPrompt(t *testing.T) {
-	r := newTestRegistry(t)
-
-	model := defineFakeModel(t, r, fakeModelConfig{
-		name: "test/asDataModel",
-	})
-
-	p := DefinePrompt(r, "asDataPrompt",
-		WithModel(model),
-		WithPrompt("test"),
-	)
-
-	t.Run("wraps existing prompt", func(t *testing.T) {
-		dp := AsDataPrompt[map[string]any, string](p)
-		if dp == nil {
-			t.Error("expected DataPrompt, got nil")
-		}
-	})
-
-	t.Run("returns nil for nil prompt", func(t *testing.T) {
-		dp := AsDataPrompt[map[string]any, string](nil)
-		if dp != nil {
-			t.Error("expected nil for nil prompt")
 		}
 	})
 }
@@ -3459,7 +3433,7 @@ hello
 		t.Fatalf("LoadPromptFromSource: %v", err)
 	}
 
-	if _, err := p.Execute(context.Background()); err != nil {
+	if _, _, err := p.Execute(context.Background(), nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 
@@ -3485,7 +3459,7 @@ hi
 		t.Fatalf("LoadPromptFromSource: %v", err)
 	}
 
-	if _, err := p.Execute(context.Background()); err == nil {
+	if _, _, err := p.Execute(context.Background(), nil); err == nil {
 		t.Fatal("expected NOT_FOUND error for unregistered middleware referenced from `use:`")
 	}
 }
@@ -3522,7 +3496,7 @@ hello
 		t.Fatalf("LoadPromptFromSource: %v", err)
 	}
 
-	promptMetadata, ok := p.(api.Action).Desc().Metadata["prompt"].(map[string]any)
+	promptMetadata, ok := p.Desc().Metadata["prompt"].(map[string]any)
 	if !ok {
 		t.Fatalf("Expected Metadata['prompt'] to be a map")
 	}
