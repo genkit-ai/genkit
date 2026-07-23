@@ -44,20 +44,15 @@ import type {
   Part,
   TextPart,
 } from 'genkit/model';
-import { randomUUID } from 'node:crypto';
 import {
   DEFAULT_CATALOG_ID,
   renderCatalogInstructions,
   type A2uiCatalog,
 } from './catalog.js';
 import { resolveCatalog } from './loader.js';
-import { A2uiStreamParser } from './parser.js';
+import { A2uiStreamParser, type ParseResult } from './parser.js';
 import { a2uiPart, isA2uiPart } from './part.js';
-import {
-  A2UI_VERSION,
-  type A2uiClientAction,
-  type A2uiEnvelope,
-} from './types.js';
+import { A2UI_VERSION, type A2uiClientAction } from './types.js';
 
 /** Zod schema for the {@link a2ui} middleware configuration. */
 export const A2uiOptionsSchema = z.object({
@@ -76,10 +71,10 @@ export const A2uiOptionsSchema = z.object({
   instructions: z.enum(['system', 'none']).optional(),
 
   /**
-   * Validate emitted envelopes against the catalog. `'strict'` (default) throws
-   * on malformed JSON or unknown components; `'warn'` logs a warning and drops
-   * the offending block/envelope (keeping the turn alive); `'off'` passes them
-   * through unchecked.
+   * Validate emitted envelopes against the catalog. `'warn'` (default) logs a
+   * warning and drops the offending block/envelope, keeping the rest of the
+   * turn alive; `'strict'` throws on malformed JSON or unknown components (best
+   * for development); `'off'` passes them through unchecked.
    */
   validate: z.enum(['strict', 'warn', 'off']).optional(),
 
@@ -104,7 +99,10 @@ function isTextPart(part: Part): part is TextPart {
 /** Resolves the configured surface-id policy into a factory. */
 function surfaceIdFactory(policy: A2uiOptions['surfaceId']): () => string {
   if (typeof policy === 'string') return () => policy;
-  return randomUUID;
+  // Use the Web Crypto API (available on Node >=16 and all supported "exotic"
+  // runtimes, e.g. Cloudflare Workers) rather than a hard `node:crypto` import,
+  // keeping the middleware portable.
+  return () => globalThis.crypto.randomUUID();
 }
 
 /**
@@ -141,15 +139,18 @@ function replayableSurfaceIds(base: () => string): {
 }
 
 /**
- * Turns a text run into prose + a2ui parts using a parser, preserving order.
- * Returns the new parts to substitute for the original text part.
+ * Turns a parse result into ordered prose + a2ui parts, preserving the exact
+ * source order (so prose after a block stays after it). Returns the new parts
+ * to substitute for the original text part.
  */
-
-function partsFromParse(prose: string, batches: A2uiEnvelope[][]): Part[] {
+function partsFromParse(result: ParseResult): Part[] {
   const out: Part[] = [];
-  if (prose) out.push({ text: prose });
-  for (const batch of batches) {
-    out.push(a2uiPart(batch));
+  for (const seg of result.segments) {
+    if ('prose' in seg) {
+      if (seg.prose) out.push({ text: seg.prose });
+    } else {
+      out.push(a2uiPart(seg.envelopes));
+    }
   }
   return out;
 }
@@ -184,7 +185,7 @@ export const a2ui: GenerateMiddleware<typeof A2uiOptionsSchema> =
       const {
         catalog: catalogId = DEFAULT_CATALOG_ID,
         instructions = 'system',
-        validate = 'strict',
+        validate = 'warn',
         version = A2UI_VERSION,
       } = config ?? {};
       const nextSurfaceId = surfaceIdFactory(config?.surfaceId);
@@ -276,8 +277,7 @@ function transformChunk(
   const newContent: Part[] = [];
   for (const part of chunk.content) {
     if (isTextPart(part) && part.text !== '') {
-      const { prose, envelopeBatches } = parser.push(part.text);
-      newContent.push(...partsFromParse(prose, envelopeBatches));
+      newContent.push(...partsFromParse(parser.push(part.text)));
     } else {
       newContent.push(part);
     }
@@ -303,14 +303,12 @@ function transformResponse(
   const newContent: Part[] = [];
   for (const part of message.content) {
     if (isTextPart(part)) {
+      // Combine the streamed-push and final-flush segments so ordering (prose
+      // before/after a block) is preserved in the aggregated message too.
       const pushed = parser.push(part.text);
       const flushed = parser.flush();
-      newContent.push(
-        ...partsFromParse(pushed.prose + flushed.prose, [
-          ...pushed.envelopeBatches,
-          ...flushed.envelopeBatches,
-        ])
-      );
+      const segments = [...pushed.segments, ...flushed.segments];
+      newContent.push(...partsFromParse({ segments } as ParseResult));
     } else {
       newContent.push(part);
     }

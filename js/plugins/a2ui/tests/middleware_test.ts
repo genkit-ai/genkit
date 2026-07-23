@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { genkit } from 'genkit';
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
 import {
@@ -290,5 +291,76 @@ describe('a2ui() middleware', () => {
       .join('');
     assert.match(prose, /Here is the weather/);
     assert.doesNotMatch(prose, /createSurface/);
+  });
+
+  it('defaults to validate:warn — drops a bad block, keeps the turn alive', async () => {
+    // A hallucinated component would throw under strict, killing the turn.
+    // With the warn default the block is dropped and prose survives.
+    const bad = `oops:
+\`\`\`a2ui
+[{ "updateComponents": { "surfaceId": "SURFACE_ID", "components": [
+  { "id": "root", "component": "NotAThing" }
+] } }]
+\`\`\`
+`;
+    const mw = modelHook({});
+    const original = console.warn;
+    console.warn = () => {};
+    let res: any;
+    try {
+      res = await mw(req('sys'), undefined, async () => ({
+        message: { role: 'model', content: [{ text: bad }] },
+      }));
+    } finally {
+      console.warn = original;
+    }
+    const content = res.message.content;
+    // No a2ui parts (the bad block was dropped), but prose is preserved.
+    assert.ok(!content.some((p: any) => isA2uiPart(p)));
+    const text = content
+      .filter((p: any) => typeof p.text === 'string')
+      .map((p: any) => p.text)
+      .join('');
+    assert.match(text, /oops/);
+  });
+
+  it('preserves prose ordering around a block in the final message', async () => {
+    const mw = modelHook({ surfaceId: 'sfc' });
+    const mixed =
+      'intro\n' + SAMPLE_TEXT.replace('Here is the weather:\n', '') + 'outro';
+    const res = await mw(req('sys'), undefined, async () => ({
+      message: { role: 'model', content: [{ text: mixed }] },
+    }));
+    const content = (res as any).message.content;
+    // Expect three ordered parts: prose("intro"), a2ui, prose("outro").
+    assert.strictEqual(content.length, 3);
+    assert.match(content[0].text, /intro/);
+    assert.ok(isA2uiPart(content[1]));
+    assert.match(content[2].text, /outro/);
+  });
+});
+
+describe('a2ui() end-to-end via ai.generate', () => {
+  it('rewrites an echo model’s a2ui block into an a2ui part', async () => {
+    const ai = genkit({});
+    const model = ai.defineModel({ name: 'echo' }, async (request) => {
+      // Echo back a fixed mixed prose + a2ui block, ignoring the request.
+      return {
+        message: { role: 'model', content: [{ text: SAMPLE_TEXT }] },
+        finishReason: 'stop',
+      };
+    });
+
+    const res = await ai.generate({
+      model,
+      prompt: 'weather please',
+      use: [a2ui({ surfaceId: 'sfc' })],
+    });
+
+    // The catalog instructions were injected into the request the model saw.
+    assert.match(res.text, /Here is the weather/);
+    const envelopes = a2uiEnvelopes({ content: res.message!.content });
+    assert.strictEqual(envelopes.length, 2);
+    assert.strictEqual((envelopes[0] as any).createSurface.surfaceId, 'sfc');
   });
 });

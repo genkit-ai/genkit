@@ -51,13 +51,13 @@ const res = await ai.generate({
 
 ### Options
 
-| Option         | Default    | Description                                                                                                   |
-| -------------- | ---------- | ------------------------------------------------------------------------------------------------------------- |
-| `catalog`      | `'basic'`  | The id of the catalog describing what the agent may render.                                                   |
-| `instructions` | `'system'` | Where to inject catalog capabilities. `'none'` injects nothing.                                               |
-| `validate`     | `'strict'` | Validate emitted envelopes against the catalog. `'warn'` logs and drops bad blocks; `'off'` skips validation. |
-| `surfaceId`    | UUID       | Surface id policy: a fixed string reused for every surface.                                                   |
-| `version`      | `'v0.9'`   | Protocol version stamped on envelopes.                                                                        |
+| Option         | Default    | Description                                                                                                                     |
+| -------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `catalog`      | `'basic'`  | The id of the catalog describing what the agent may render.                                                                    |
+| `instructions` | `'system'` | Where to inject catalog capabilities. `'none'` injects nothing.                                                                |
+| `validate`     | `'warn'`   | Validate emitted envelopes against the catalog. `'warn'` logs and drops bad blocks; `'strict'` throws; `'off'` skips checking. |
+| `surfaceId`    | fresh UUID | Surface id policy. Defaults to a new UUID per surface; pass a fixed string to reuse one id for every surface.                  |
+| `version`      | `'v0.9'`   | Protocol version stamped on envelopes.                                                                                         |
 
 The middleware injects the catalog's capabilities into the system prompt, then
 intercepts model output (streamed chunks **and** the final message), extracts

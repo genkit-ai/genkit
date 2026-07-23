@@ -57,11 +57,28 @@ const MAX_PARTIAL_FENCE = '```a2ui\n'.length;
 /** Closing fence: ``` on its own (optionally indented) line, or end of text. */
 const CLOSE_FENCE_RE = /```/;
 
+/**
+ * A single ordered piece of parsed output: either a run of prose or one
+ * completed A2UI envelope batch. Segments preserve the exact source order, so
+ * prose that appears *after* a block is not reordered ahead of it.
+ */
+export type ParseSegment = { prose: string } | { envelopes: A2uiEnvelope[] };
+
 /** Result of feeding text to {@link A2uiStreamParser.push}. */
 export interface ParseResult {
-  /** Prose text ready to stream through (never contains A2UI blocks). */
+  /**
+   * Ordered prose/envelope segments exactly as they appear in the source text.
+   * Prefer this over {@link ParseResult.prose}/{@link ParseResult.envelopeBatches}
+   * when order between prose and blocks matters.
+   */
+  segments: ParseSegment[];
+  /**
+   * Convenience: all prose runs concatenated (never contains A2UI blocks). Loses
+   * the relative order of prose vs. blocks — use {@link ParseResult.segments}
+   * when that matters.
+   */
   prose: string;
-  /** Zero or more fully-parsed A2UI envelope batches (one per completed block). */
+  /** Convenience: the fully-parsed A2UI envelope batches, in order. */
   envelopeBatches: A2uiEnvelope[][];
 }
 
@@ -104,8 +121,16 @@ export class A2uiStreamParser {
   }
 
   private drain(final: boolean): ParseResult {
-    let prose = '';
-    const envelopeBatches: A2uiEnvelope[][] = [];
+    const segments: ParseSegment[] = [];
+    // Accumulates prose across loop iterations so consecutive prose runs (e.g.
+    // when a partial fence is held back) coalesce into a single segment.
+    let proseBuf = '';
+    const flushProse = () => {
+      if (proseBuf) {
+        segments.push({ prose: proseBuf });
+        proseBuf = '';
+      }
+    };
 
     // Loop because a single push may contain multiple prose/block transitions.
     // Each iteration makes progress or returns.
@@ -116,20 +141,20 @@ export class A2uiStreamParser {
           // No opening fence (yet). Emit prose, but hold back a tail that could
           // be the start of an incomplete opening fence, unless finalizing.
           if (final) {
-            prose += this.buffer;
+            proseBuf += this.buffer;
             this.buffer = '';
           } else {
             const keep = Math.min(MAX_PARTIAL_FENCE, this.buffer.length);
             const safeLen = this.buffer.length - keep;
             if (safeLen > 0) {
-              prose += this.buffer.slice(0, safeLen);
+              proseBuf += this.buffer.slice(0, safeLen);
               this.buffer = this.buffer.slice(safeLen);
             }
           }
           break;
         }
         // Emit prose before the fence, then enter the block.
-        prose += this.buffer.slice(0, open.index);
+        proseBuf += this.buffer.slice(0, open.index);
         this.buffer = this.buffer.slice(open.index! + open[0].length);
         this.inBlock = true;
         this.currentSurfaceId = this.options.surfaceId();
@@ -142,7 +167,10 @@ export class A2uiStreamParser {
         if (final) {
           // Unterminated block at end of stream — try to parse what we have.
           const batch = this.finalizeBlock(this.buffer);
-          if (batch) envelopeBatches.push(batch);
+          if (batch) {
+            flushProse();
+            segments.push({ envelopes: batch });
+          }
           this.buffer = '';
           this.inBlock = false;
         }
@@ -154,17 +182,29 @@ export class A2uiStreamParser {
       this.buffer = this.buffer.replace(/^[ \t]*\r?\n/, '');
       this.inBlock = false;
       const batch = this.finalizeBlock(blockText);
-      if (batch) envelopeBatches.push(batch);
+      if (batch) {
+        // Emit any prose seen before this block first, preserving source order.
+        flushProse();
+        segments.push({ envelopes: batch });
+      }
       continue;
     }
+    flushProse();
 
-    return { prose, envelopeBatches };
+    // Derive the convenience fields from the ordered segments.
+    let prose = '';
+    const envelopeBatches: A2uiEnvelope[][] = [];
+    for (const seg of segments) {
+      if ('prose' in seg) prose += seg.prose;
+      else envelopeBatches.push(seg.envelopes);
+    }
+    return { segments, prose, envelopeBatches };
   }
 
   /**
    * Handles a validation failure according to the configured `validate` mode:
-   * throws in `'strict'` (the default), logs a warning in `'warn'`, and is
-   * silent in `'off'`. Always returns `null` so callers can
+   * throws in `'strict'`, logs a warning in `'warn'` (the middleware default),
+   * and is silent in `'off'`. Always returns `null` so callers can
    * `return this.reject(...)`.
    */
   private reject(message: string): null {

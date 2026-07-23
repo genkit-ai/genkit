@@ -266,4 +266,20 @@ describe('A2uiStreamParser', () => {
     ]);
     assert.strictEqual(batches.length, 2);
   });
+
+  it('preserves prose/block order in segments (prose after a block)', () => {
+    const parser = new A2uiStreamParser({
+      catalog: basicCatalog,
+      surfaceId: fixedId,
+    });
+    // A single push containing: intro prose, a block, then trailing prose.
+    const r = parser.push('before\n' + SAMPLE_BLOCK + 'after');
+    const f = parser.flush();
+    const segments = [...r.segments, ...f.segments];
+    // Expect order: prose("before"), envelopes, prose("after").
+    assert.strictEqual(segments.length, 3);
+    assert.ok('prose' in segments[0] && /before/.test(segments[0].prose));
+    assert.ok('envelopes' in segments[1]);
+    assert.ok('prose' in segments[2] && /after/.test(segments[2].prose));
+  });
 });
