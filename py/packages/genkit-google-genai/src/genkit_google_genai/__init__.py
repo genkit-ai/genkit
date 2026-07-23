@@ -133,7 +133,7 @@ Supported Models:
     ┌─────────────────────────────────────────────────────────────────────────┐
     │ Plugin     │ Models                                                     │
     ├────────────┼─────────────────────────────────────────────────────────────┤
-    │ GoogleAI   │ gemini-2.5-flash, gemini-2.5-pro, etc.                      │
+    │ GoogleAI   │ gemini-flash-latest, gemini-pro-latest, etc.              │
     │ VertexAI   │ Same Gemini models + imagen-3.0-generate-002                │
     └────────────┴─────────────────────────────────────────────────────────────┘
 
@@ -159,7 +159,7 @@ Example:
     ai = Genkit(plugins=[GoogleAI()])
 
     response = await ai.generate(
-        model=gemini_model('gemini-2.5-flash'),
+        model=gemini_model('gemini-flash-latest'),
         config=GeminiConfig(temperature=0.7),
         prompt='Hello, world!',
     )
@@ -183,7 +183,7 @@ Example:
     )
 
     response = await ai.generate(
-        model=vertexai_gemini_model('gemini-2.5-flash'),
+        model=vertexai_gemini_model('gemini-pro-latest'),
         prompt='Hello, world!',
     )
     print(response.text)

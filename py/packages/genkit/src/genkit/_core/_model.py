@@ -94,7 +94,7 @@ class ModelRef(BaseModel, Generic[ConfigT]):
 
         from genkit_google_genai import GeminiConfig, gemini_model
 
-        ref = gemini_model('gemini-2.5-flash')
+        ref = gemini_model('gemini-flash-latest')
         await ai.generate(
             model=ref,
             config=GeminiConfig(temperature=0.7),
