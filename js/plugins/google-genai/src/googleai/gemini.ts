@@ -661,6 +661,7 @@ export function defineModel(
   const clientOptions: ClientOptions = {
     apiVersion: pluginOptions?.apiVersion,
     baseUrl: pluginOptions?.baseUrl,
+    allowCustomBaseUrl: pluginOptions?.allowCustomBaseUrl,
     customHeaders: pluginOptions?.customHeaders,
     experimental_debugTraces: pluginOptions?.experimental_debugTraces,
   };

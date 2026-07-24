@@ -43,6 +43,7 @@ import {
 } from './types.js';
 import {
   calculateApiKey,
+  resolveBaseUrlOverride,
   checkApiKey,
   checkModelName,
   extractVersion,
@@ -251,6 +252,7 @@ export function defineModel(
   const clientOptions: ClientOptions = {
     apiVersion: pluginOptions?.apiVersion,
     baseUrl: pluginOptions?.baseUrl,
+    allowCustomBaseUrl: pluginOptions?.allowCustomBaseUrl,
     customHeaders: pluginOptions?.customHeaders,
     experimental_debugTraces: pluginOptions?.experimental_debugTraces,
   };
@@ -281,7 +283,9 @@ export function defineModel(
       const newClientOptions: ClientOptions = {
         ...clientOptions,
         apiKey,
-        baseUrl: baseUrl || clientOptions.baseUrl,
+        baseUrl: baseUrl
+          ? resolveBaseUrlOverride(baseUrl, clientOptions)
+          : clientOptions.baseUrl,
         apiVersion: apiVersion || clientOptions.apiVersion,
       };
 

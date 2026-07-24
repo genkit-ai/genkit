@@ -21,6 +21,8 @@ import process from 'process';
 import {
   MISSING_API_KEY_ERROR,
   calculateApiKey,
+  calculateRequestOptions,
+  resolveBaseUrlOverride,
   checkApiKey,
   extractVeoImage,
   extractVeoVideo,
@@ -297,5 +299,87 @@ describe('API Key Utils', () => {
       process.env.GOOGLE_API_KEY = 'env_key';
       assert.strictEqual(calculateApiKey('', undefined), 'env_key');
     });
+  });
+});
+
+describe('calculateRequestOptions baseUrl override guard', () => {
+  const base = { apiKey: 'developer-key' };
+
+  it('allows an override to the default Google endpoint', () => {
+    const out = calculateRequestOptions(base, {
+      baseUrl: 'https://generativelanguage.googleapis.com',
+    });
+    assert.strictEqual(out.baseUrl, 'https://generativelanguage.googleapis.com');
+  });
+
+  it('allows an override to the plugin-configured baseUrl host', () => {
+    const out = calculateRequestOptions(
+      { ...base, baseUrl: 'https://proxy.internal.example.com' },
+      { baseUrl: 'https://proxy.internal.example.com/v2' }
+    );
+    assert.strictEqual(out.baseUrl, 'https://proxy.internal.example.com/v2');
+  });
+
+  it('rejects an override to an attacker-controlled host', () => {
+    assert.throws(
+      () => calculateRequestOptions(base, { baseUrl: 'http://attacker.example:8766' }),
+      /PERMISSION_DENIED|not the default Google/
+    );
+  });
+
+  it('rejects an invalid baseUrl override', () => {
+    assert.throws(
+      () => calculateRequestOptions(base, { baseUrl: 'not-a-url' }),
+      /INVALID_ARGUMENT|not a valid URL/
+    );
+  });
+
+  it('allows any host when allowCustomBaseUrl is set on the plugin', () => {
+    const out = calculateRequestOptions(
+      { ...base, allowCustomBaseUrl: true },
+      { baseUrl: 'http://attacker.example:8766' }
+    );
+    assert.strictEqual(out.baseUrl, 'http://attacker.example:8766');
+  });
+});
+
+describe('resolveBaseUrlOverride (shared guard used by deep-research and lyria)', () => {
+  it('allows the default Google endpoint', () => {
+    assert.strictEqual(
+      resolveBaseUrlOverride('https://generativelanguage.googleapis.com', {}),
+      'https://generativelanguage.googleapis.com'
+    );
+  });
+
+  it('allows the plugin-configured baseUrl host', () => {
+    assert.strictEqual(
+      resolveBaseUrlOverride('https://proxy.internal.example.com/v2', {
+        baseUrl: 'https://proxy.internal.example.com',
+      }),
+      'https://proxy.internal.example.com/v2'
+    );
+  });
+
+  it('rejects an attacker-controlled host', () => {
+    assert.throws(
+      () => resolveBaseUrlOverride('http://attacker.example:8766', {}),
+      /PERMISSION_DENIED|not the default Google/
+    );
+  });
+
+  it('rejects an invalid URL', () => {
+    assert.throws(
+      () => resolveBaseUrlOverride('not-a-url', {}),
+      /INVALID_ARGUMENT|not a valid URL/
+    );
+  });
+
+  it('allows any host when allowCustomBaseUrl is set', () => {
+    assert.strictEqual(
+      resolveBaseUrlOverride('http://attacker.example:8766', {
+        allowCustomBaseUrl: true,
+      }),
+      'http://attacker.example:8766'
+    );
   });
 });
