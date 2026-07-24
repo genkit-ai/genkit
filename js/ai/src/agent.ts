@@ -93,11 +93,13 @@ export {
   JsonPatchOperationSchema,
   JsonPatchSchema,
   TurnEndSchema,
+  TurnStartSchema,
   type AgentInit,
   type AgentInput,
   type AgentResult,
   type AgentStreamChunk,
   type TurnEnd,
+  type TurnStart,
 } from './agent-types.js';
 
 /**
@@ -281,6 +283,7 @@ export class SessionRunner<State = unknown> {
   readonly inputCh: AsyncIterable<AgentInput>;
 
   turnIndex: number = 0;
+  public onStartTurn?: (ctx: TurnContext) => void;
   public onEndTurn?: (
     snapshotId?: string,
     finishReason?: AgentFinishReason
@@ -334,6 +337,7 @@ export class SessionRunner<State = unknown> {
       lastSnapshot?: SessionSnapshot<State>;
       store?: SessionStore<State>;
       abortSignal?: AbortSignal;
+      onStartTurn?: (ctx: TurnContext) => void;
       onEndTurn?: (
         snapshotId?: string,
         finishReason?: AgentFinishReason
@@ -347,6 +351,7 @@ export class SessionRunner<State = unknown> {
     this.lastSnapshot = options?.lastSnapshot;
     this.store = options?.store;
     this.abortSignal = options?.abortSignal;
+    this.onStartTurn = options?.onStartTurn;
     this.onEndTurn = options?.onEndTurn;
     this.onDetach = options?.onDetach;
 
@@ -400,6 +405,15 @@ export class SessionRunner<State = unknown> {
   /** Adds artifacts to the session, deduplicating by name. */
   addArtifacts(artifacts: Artifact[]): void {
     this.session.addArtifacts(artifacts);
+  }
+
+  /** Invokes the start-of-turn callback, absorbing errors from a closed stream. */
+  private notifyStartTurn(ctx: TurnContext): void {
+    try {
+      this.onStartTurn?.(ctx);
+    } catch {
+      // Stream was closed, absorb exception.
+    }
   }
 
   /** Invokes the end-of-turn callback, absorbing errors from a closed stream. */
@@ -458,6 +472,11 @@ export class SessionRunner<State = unknown> {
         parentSnapshotId,
         turnIndex: this.turnIndex,
       };
+
+      // Signal the start of the turn before the handler runs, carrying the
+      // reserved snapshotId so a consumer can correlate the streaming turn with
+      // its (eventual) snapshot before any content is produced.
+      this.notifyStartTurn(turnContext);
 
       try {
         await run(`runTurn-${this.turnIndex + 1}`, input, async () => {
@@ -1168,6 +1187,21 @@ export function defineCustomAgent<State = unknown>(
               },
               { context: getContext() }
             );
+          }
+        },
+
+        onStartTurn: (ctx) => {
+          if (!runner.isDetached) {
+            emitChunk({
+              turnStart: {
+                // Only server-managed agents have a snapshotId to report.
+                ...(config.store && { snapshotId: ctx.snapshotId }),
+                ...(ctx.parentSnapshotId && {
+                  parentSnapshotId: ctx.parentSnapshotId,
+                }),
+                turnIndex: ctx.turnIndex,
+              },
+            });
           }
         },
 

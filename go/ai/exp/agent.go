@@ -95,6 +95,10 @@ type SessionRunner[State any] struct {
 	turnSnapshotID string
 
 	onStartTurn func()
+	// onTurnStart is invoked inside the turn span, after the turn's snapshot
+	// ID is reserved and before the per-turn fn runs, with the turn's
+	// [TurnContext]. The runtime uses it to emit the [TurnStart] chunk.
+	onTurnStart func(ctx context.Context, tc *TurnContext)
 	onEndTurn   func(ctx context.Context)
 
 	// snapMu serializes the turn-end snapshot write (snapshotTurnEnd)
@@ -268,6 +272,12 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 				// Carry the reserved turn context on the per-turn fn's context
 				// rather than threading it through Run's callback signature.
 				ctx = turnCtxKey.NewContext(ctx, turnCtx)
+				// Signal the start of the turn before the handler runs,
+				// carrying the reserved snapshot ID so a consumer can correlate
+				// the streaming turn with its (eventual) snapshot up front.
+				if s.onTurnStart != nil {
+					s.onTurnStart(ctx, turnCtx)
+				}
 				if input.Message != nil {
 					// The session owns its history: store a copy so fn's
 					// view of the input stays independent of session state.
@@ -1107,6 +1117,7 @@ func newAgentRuntime[State any](
 		rt.sess.lastSnapshotID = parent.SnapshotID
 	}
 	rt.sess.onEndTurn = rt.emitTurnEnd
+	rt.sess.onTurnStart = rt.emitTurnStart
 	// Stream custom-state mutations as customPatch chunks. beginTurn is armed
 	// per turn by the runner; the session's onCustomChange hook is wired in
 	// run, once the work context and responder exist.
@@ -1122,6 +1133,23 @@ func newAgentRuntime[State any](
 	rt.sess.captureLastGood()
 
 	return rt, nil
+}
+
+// emitTurnStart is called by the session at the start of each turn, before
+// the per-turn fn runs. It forwards a [TurnStart] chunk carrying the reserved
+// snapshot ID (server-managed only), the parent snapshot ID, and the turn
+// index, so a client can correlate the streaming turn with its (eventual)
+// snapshot before any content arrives. ctx is the turn span's context.
+func (rt *agentRuntime[State]) emitTurnStart(ctx context.Context, tc *TurnContext) {
+	start := &TurnStart{
+		ParentSnapshotID: tc.ParentSnapshotID,
+		TurnIndex:        float64(tc.TurnIndex),
+	}
+	// Only server-managed agents reserve a snapshot ID to report.
+	if rt.cfg.store != nil {
+		start.SnapshotID = tc.SnapshotID
+	}
+	rt.router.sendChunk(ctx, &AgentStreamChunk{TurnStart: start})
 }
 
 // emitTurnEnd is called by the session after each turn. It paces the

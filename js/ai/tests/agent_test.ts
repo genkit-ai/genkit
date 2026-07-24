@@ -346,6 +346,43 @@ describe('Agent', () => {
       // Without a store there is nothing to reserve, so snapshotId is undefined.
       assert.strictEqual(ctxSnapshotId, undefined);
     });
+
+    it('invokes onStartTurn before the handler with the reserved context', async () => {
+      const store = new InMemorySessionStore();
+      const session = new Session({});
+
+      async function* inputGen() {
+        yield {
+          message: { role: 'user' as const, content: [{ text: 'hi' }] },
+        };
+      }
+
+      const events: string[] = [];
+      let startCtxSnapshotId: string | undefined;
+      let handlerCtxSnapshotId: string | undefined;
+
+      const runner = new SessionRunner(session, inputGen(), {
+        store,
+        onStartTurn: (ctx) => {
+          events.push('start');
+          startCtxSnapshotId = ctx.snapshotId;
+        },
+        onEndTurn: () => {
+          events.push('end');
+        },
+      });
+
+      await runner.run(async (_input, ctx) => {
+        events.push('handler');
+        handlerCtxSnapshotId = ctx.snapshotId;
+      });
+
+      // onStartTurn fires before the handler runs, which fires before onEndTurn.
+      assert.deepStrictEqual(events, ['start', 'handler', 'end']);
+      // The start callback and the handler observe the same reserved snapshotId.
+      assert.ok(startCtxSnapshotId);
+      assert.strictEqual(startCtxSnapshotId, handlerCtxSnapshotId);
+    });
   });
 
   describe('reserveSnapshotId', () => {
@@ -3857,6 +3894,179 @@ Now respond to the latest message.`,
 
       const output = await session.output;
       assert.strictEqual(output.finishReason, 'stop');
+    });
+  });
+
+  describe('turnStart', () => {
+    it('emits turnStart once, before any content, carrying the reserved snapshotId (server-managed)', async () => {
+      const store = new InMemorySessionStore<{}>();
+
+      const flow = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'turnStartServer', store },
+        async (sess, { sendChunk }) => {
+          await sess.run(async () => {
+            sendChunk({
+              modelChunk: { role: 'model', content: [{ text: 'hello' }] },
+            });
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'hello' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+      });
+      session.close();
+
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+      const output = await session.output;
+
+      // Exactly one turnStart chunk.
+      const turnStartChunks = chunks.filter((c) => !!c.turnStart);
+      assert.strictEqual(turnStartChunks.length, 1);
+
+      // It precedes every content (modelChunk) and the turnEnd.
+      const firstContentIdx = chunks.findIndex((c) => !!c.modelChunk);
+      const turnStartIdx = chunks.findIndex((c) => !!c.turnStart);
+      const turnEndIdx = chunks.findIndex((c) => !!c.turnEnd);
+      assert.ok(turnStartIdx >= 0);
+      assert.ok(firstContentIdx > turnStartIdx, 'turnStart precedes content');
+      assert.ok(turnEndIdx > turnStartIdx, 'turnStart precedes turnEnd');
+
+      // The turnStart snapshotId matches the turn's persisted snapshotId - both
+      // the turnEnd chunk's and the final output's.
+      const startSnapshotId = turnStartChunks[0].turnStart?.snapshotId;
+      assert.ok(
+        startSnapshotId,
+        'server-managed turnStart carries a snapshotId'
+      );
+      assert.strictEqual(startSnapshotId, output.snapshotId);
+      const turnEndChunk = chunks.find((c) => !!c.turnEnd);
+      assert.strictEqual(startSnapshotId, turnEndChunk?.turnEnd?.snapshotId);
+      assert.strictEqual(turnStartChunks[0].turnStart?.turnIndex, 0);
+    });
+
+    it('omits the snapshotId on turnStart for a client-managed agent', async () => {
+      const flow = defineCustomAgent(
+        new Registry(),
+        { name: 'turnStartClient' },
+        async (sess) => {
+          await sess.run(async () => {
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'ok' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+      });
+      session.close();
+
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+
+      const turnStartChunks = chunks.filter((c) => !!c.turnStart);
+      assert.strictEqual(turnStartChunks.length, 1);
+      // No store, so no snapshotId is reserved/reported.
+      assert.strictEqual(turnStartChunks[0].turnStart?.snapshotId, undefined);
+    });
+
+    it('emits one turnStart per turn, threading parentSnapshotId (server-managed)', async () => {
+      const store = new InMemorySessionStore<{}>();
+
+      const flow = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'turnStartMultiTurn', store },
+        async (sess) => {
+          await sess.run(async () => {
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'ok' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'one' }] },
+      });
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'two' }] },
+      });
+      session.close();
+
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+
+      const turnStartChunks = chunks.filter((c) => !!c.turnStart);
+      assert.strictEqual(turnStartChunks.length, 2);
+      assert.strictEqual(turnStartChunks[0].turnStart?.turnIndex, 0);
+      assert.strictEqual(turnStartChunks[1].turnStart?.turnIndex, 1);
+      // First turn has no parent; the second turn's parent is the first turn's
+      // snapshot.
+      assert.strictEqual(
+        turnStartChunks[0].turnStart?.parentSnapshotId,
+        undefined
+      );
+      assert.strictEqual(
+        turnStartChunks[1].turnStart?.parentSnapshotId,
+        turnStartChunks[0].turnStart?.snapshotId
+      );
+    });
+
+    it('surfaces the reserved snapshotId on chunk.snapshotId via the chat API', async () => {
+      const store = new InMemorySessionStore<{}>();
+
+      const agent = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'turnStartChatApi', store },
+        async (sess, { sendChunk }) => {
+          await sess.run(async () => {
+            sendChunk({
+              modelChunk: { role: 'model', content: [{ text: 'hello' }] },
+            });
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'hello' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      const turn = chat.sendStream('hi');
+
+      let startSnapshotId: string | undefined;
+      for await (const chunk of turn.stream) {
+        if (chunk.snapshotId && !startSnapshotId) {
+          startSnapshotId = chunk.snapshotId;
+        }
+      }
+      const res = await turn.response;
+
+      assert.ok(startSnapshotId, 'chunk.snapshotId is surfaced on turnStart');
+      assert.strictEqual(startSnapshotId, res.snapshotId);
     });
   });
 

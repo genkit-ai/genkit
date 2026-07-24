@@ -254,6 +254,31 @@ export const AgentOutputSchema = z.object({
 export type AgentOutput = z.infer<typeof AgentOutputSchema>;
 
 /**
+ * Zod schema for the turn-start signal emitted by an agent.
+ *
+ * A TurnStart value is emitted exactly once per turn, before any of the turn's
+ * content chunks (`modelChunk` / `artifact` / `customPatch`). It carries the
+ * `snapshotId` the turn's snapshot will be persisted under - reserved up front
+ * - so a caller can correlate the streaming turn with its (eventual) snapshot
+ * before any output arrives.
+ */
+export const TurnStartSchema = z.object({
+  /**
+   * ID of the snapshot this turn will be persisted under, reserved before the
+   * turn runs. Empty when no snapshot will be written (no store configured).
+   */
+  snapshotId: z.string().optional(),
+  /**
+   * ID of the parent snapshot this turn continues from. Empty on the first
+   * turn of a fresh session.
+   */
+  parentSnapshotId: z.string().optional(),
+  /** Zero-based index of this turn within the current invocation. */
+  turnIndex: z.number().optional(),
+});
+export type TurnStart = z.infer<typeof TurnStartSchema>;
+
+/**
  * Zod schema for the turn-end signal emitted by an agent.
  *
  * A TurnEnd value is emitted exactly once per turn, regardless of whether a
@@ -334,6 +359,13 @@ export const AgentStreamChunkSchema = z.object({
   customPatch: JsonPatchSchema.optional(),
   /** A newly produced artifact. */
   artifact: ArtifactSchema.optional(),
+  /**
+   * Non-null before the agent starts processing the current input, ahead of
+   * any content chunks. Groups all turn-start signals; carries the snapshot
+   * ID the turn will be persisted under so a caller can correlate the turn
+   * with its (eventual) snapshot up front.
+   */
+  turnStart: TurnStartSchema.optional(),
   /**
    * Non-null when the agent has finished processing the current input.
    * Groups all turn-end signals; the client should stop iterating and may
