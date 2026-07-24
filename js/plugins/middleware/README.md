@@ -244,3 +244,66 @@ const response = await ai.generate({
   ]
 });
 ```
+
+### 8. Handoff Middleware (`handoff`)
+
+Enables the **agent transfer / handoff** pattern. A single host agent hosts several **personas** (specialized sub-agents); at any moment exactly one is _active_ and drives the model with its own system prompt and tools. The middleware injects a `transfer_to_<persona>` tool for each persona — when the model calls one, the active persona swaps (system prompt + visible tools) for all subsequent turns, so the user keeps talking directly to the specialist. Personas can transfer back to the default (e.g. triage) or to each other.
+
+How it differs from `agents`: the `agents` middleware **delegates** a one-shot subtask to a sub-agent and returns its result to the orchestrator (the orchestrator stays in control). `handoff` **transfers control** — the persona itself changes and stays changed across turns.
+
+The active persona is tracked statelessly from the conversation history (the most recent successful transfer wins), so it survives multi-turn conversations and works with or without a session.
+
+**Options:**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `personas` | `{ name, description?, system, tools? }[]` | — (required) | The specialized agents the conversation can be handed off between. `tools` are names of tools registered via `ai.defineTool`. |
+| `defaultPersona` | `string` | first persona | Persona that drives the conversation before any transfer. |
+| `toolPrefix` | `string` | `'transfer_to'` | Prefix for generated transfer tool names. Set to `''` for bare persona names. |
+| `maxTransfers` | `number` | unlimited | Maximum transfers per generate call. Prevents runaway transfer loops. |
+
+```typescript
+import { genkit } from 'genkit';
+import { handoff } from '@genkit-ai/middleware';
+
+const ai = genkit({ ... });
+
+ai.defineTool({ name: 'lookupOrder', /* ... */ }, async (i) => { /* ... */ });
+ai.defineTool({ name: 'issueRefund', /* ... */ }, async (i) => { /* ... */ });
+ai.defineTool({ name: 'getInvoice', /* ... */ }, async (i) => { /* ... */ });
+
+const customerService = ai.defineAgent({
+  name: 'customerService',
+  system: 'You are Acme support. Always be friendly and concise.',
+  use: [
+    handoff({
+      personas: [
+        {
+          name: 'triage',
+          description: 'Figures out the user’s issue and routes them.',
+          system: 'You triage support requests and transfer to a specialist.',
+        },
+        {
+          name: 'refund',
+          description: 'Handles refund requests.',
+          system: 'You handle refunds. Look up the order before refunding.',
+          tools: ['lookupOrder', 'issueRefund'],
+        },
+        {
+          name: 'billing',
+          description: 'Handles billing and invoice questions.',
+          system: 'You answer billing questions.',
+          tools: ['getInvoice'],
+        },
+      ],
+      defaultPersona: 'triage',
+      maxTransfers: 5,
+    }),
+  ],
+});
+```
+
+**Notes / limitations:**
+- Persona `tools` must be names of registered tools (`ai.defineTool`). Only the active persona's tools are exposed to the model each turn; the transfer tools are always available so any persona can hand off. Tools not owned by any persona (e.g. shared host-agent tools) are left untouched.
+- The middleware chain is fixed for the duration of a `generate()` call, so per-persona _middleware_ (e.g. a different `artifacts()` per persona) is not supported. Put shared middleware on the host agent. The system prompt and tools do swap per persona.
+
