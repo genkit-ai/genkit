@@ -232,12 +232,12 @@ def _mock_veo_client(start_done: bool = False) -> MagicMock:
 @patch('genkit_google_genai.google.genai.client.Client')
 @patch('genkit_google_genai.google._list_genai_models')
 @pytest.mark.asyncio
-async def test_veo_generate_returns_operation(mock_list_models: MagicMock, mock_client_ctor: MagicMock) -> None:
+async def test_veo_generate_returns_operation(mock_list_models: MagicMock, mock_client_class: MagicMock) -> None:
     """generate() on a Veo model returns an Operation to poll."""
     models = GenaiModels()
     models.veo = ['veo-2.0-generate-001']
     mock_list_models.return_value = models
-    mock_client_ctor.return_value = _mock_veo_client()
+    mock_client_class.return_value = _mock_veo_client()
 
     ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
     response = await ai.generate(
@@ -255,12 +255,12 @@ async def test_veo_generate_returns_operation(mock_list_models: MagicMock, mock_
 @patch('genkit_google_genai.google.genai.client.Client')
 @patch('genkit_google_genai.google._list_genai_models')
 @pytest.mark.asyncio
-async def test_veo_generate_operation_poll_loop(mock_list_models: MagicMock, mock_client_ctor: MagicMock) -> None:
+async def test_veo_generate_operation_poll_loop(mock_list_models: MagicMock, mock_client_class: MagicMock) -> None:
     """generate_operation + check_operation poll Veo to a ModelResponse output."""
     models = GenaiModels()
     models.veo = ['veo-2.0-generate-001']
     mock_list_models.return_value = models
-    mock_client_ctor.return_value = _mock_veo_client()
+    mock_client_class.return_value = _mock_veo_client()
 
     ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
     operation = await ai.generate_operation(

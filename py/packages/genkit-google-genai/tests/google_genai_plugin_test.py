@@ -107,7 +107,7 @@ def test_vertexai_initialization_from_env() -> None:
 
 @patch('genkit_google_genai.google.genai.client.Client')
 @pytest.mark.asyncio
-async def test_googleai_runtime_clients_are_loop_local(mock_client_ctor: MagicMock) -> None:
+async def test_googleai_runtime_clients_are_loop_local(mock_client_class: MagicMock) -> None:
     """GoogleAI runtime clients should be cached per event loop."""
     created: list[MagicMock] = []
 
@@ -116,7 +116,7 @@ async def test_googleai_runtime_clients_are_loop_local(mock_client_ctor: MagicMo
         created.append(client)
         return client
 
-    mock_client_ctor.side_effect = _new_client
+    mock_client_class.side_effect = _new_client
 
     plugin = GoogleAI(api_key='test-key')
     first = plugin._runtime_client()
