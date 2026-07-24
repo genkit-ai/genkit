@@ -17,7 +17,6 @@
 """Google GenAI media - one simple example each for speech, image, and video."""
 
 import asyncio
-from typing import Any
 
 from genkit_google_genai import GoogleAI, VeoConfigSchema
 from pydantic import BaseModel, Field
@@ -54,18 +53,6 @@ class VideoInput(BaseModel):
     )
 
 
-def _first_media_url(response: Any) -> str | None:
-    """Return the first media URL in a model response."""
-    message = getattr(response, 'message', None)
-    if not message:
-        return None
-    for part in message.content:
-        media = getattr(part.root, 'media', None)
-        if media and getattr(media, 'url', None):
-            return media.url
-    return None
-
-
 @ai.flow(name='generate_speech')
 async def tts_speech_generator(input: SpeechInput) -> dict[str, str | None]:
     """Turn text into speech with one TTS call."""
@@ -74,7 +61,8 @@ async def tts_speech_generator(input: SpeechInput) -> dict[str, str | None]:
         prompt=input.text,
         config={'speech_config': {'voice_config': {'prebuilt_voice_config': {'voice_name': input.voice}}}},
     )
-    return {'model': 'googleai/gemini-2.5-flash-preview-tts', 'audio_url': _first_media_url(response)}
+    audio_url = response.media[0].url if response.media else None
+    return {'model': 'googleai/gemini-2.5-flash-preview-tts', 'audio_url': audio_url}
 
 
 @ai.flow(name='generate_image')
@@ -85,7 +73,8 @@ async def imagen_image_generator(input: ImageInput) -> dict[str, str | None]:
         prompt=input.prompt,
         config={'number_of_images': 1},
     )
-    return {'model': 'googleai/imagen-3.0-generate-002', 'image_url': _first_media_url(response)}
+    image_url = response.media[0].url if response.media else None
+    return {'model': 'googleai/imagen-3.0-generate-002', 'image_url': image_url}
 
 
 @ai.flow(name='generate_video')
@@ -100,7 +89,7 @@ async def veo_video_generator(input: VideoInput) -> dict[str, str | int | None]:
         await asyncio.sleep(3)
         operation = await ai.check_operation(operation)
 
-    video_url = _first_media_url(operation.output) if operation.output else None
+    video_url = operation.output.media[0].url if operation.output and operation.output.media else None
     return {
         'model': input.model,
         'operation_id': operation.id,
