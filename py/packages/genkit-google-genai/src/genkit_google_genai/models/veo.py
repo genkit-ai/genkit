@@ -238,9 +238,7 @@ def _extract_video_uris(response: Any) -> list[str]:  # noqa: ANN401
 def _response_raw_payload(response: Any) -> dict[str, Any] | None:  # noqa: ANN401
     """Best-effort raw payload for completed Veo responses."""
     if isinstance(response, BaseModel):
-        dumped = response.model_dump(exclude_none=True)
-        if isinstance(dumped, dict):
-            return dumped
+        return response.model_dump(exclude_none=True)
     return None
 
 
