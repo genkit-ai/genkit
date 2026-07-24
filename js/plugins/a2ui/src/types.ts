@@ -44,6 +44,8 @@ export const A2UI_VERSION = 'v0.9';
 export const BASIC_CATALOG_ID =
   'https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json';
 
+export type SupportedVersion = 'v0.9' | `v0.9.1`;
+
 /**
  * A single component entry in an A2UI adjacency list. UI is expressed as a flat
  * list of components; the tree is reconstructed via `id` references. Exactly one
@@ -66,7 +68,7 @@ export interface A2uiComponent {
 
 /** Creates (or re-initializes) a UI surface. */
 export interface CreateSurfaceEnvelope {
-  version?: string;
+  version: SupportedVersion;
   createSurface: {
     surfaceId: string;
     catalogId: string;
@@ -77,7 +79,7 @@ export interface CreateSurfaceEnvelope {
 
 /** Adds or replaces components on an existing surface. */
 export interface UpdateComponentsEnvelope {
-  version?: string;
+  version: SupportedVersion;
   updateComponents: {
     surfaceId: string;
     components: A2uiComponent[];
@@ -86,7 +88,7 @@ export interface UpdateComponentsEnvelope {
 
 /** Mutates a value in a surface's per-surface data model. */
 export interface UpdateDataModelEnvelope {
-  version?: string;
+  version: SupportedVersion;
   updateDataModel: {
     surfaceId: string;
     /** JSON-Pointer path. When omitted, `value` replaces the whole model. */
@@ -97,7 +99,7 @@ export interface UpdateDataModelEnvelope {
 
 /** Removes a surface. */
 export interface DeleteSurfaceEnvelope {
-  version?: string;
+  version: SupportedVersion;
   deleteSurface: {
     surfaceId: string;
   };

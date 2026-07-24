@@ -22,7 +22,7 @@
  * `@a2ui/lit` renderer driven by `@a2ui/web_core`'s `MessageProcessor`.
  *
  * A2UI travels as `data` parts on the agent stream; we pull them off each chunk
- * with `a2uiEnvelopes` (from `@genkit-ai/a2ui/client`) and feed the whole
+ * with `a2uiEnvelopesFromParts` (from `@genkit-ai/a2ui/client`) and feed the whole
  * envelopes to the renderer. Surface actions (e.g. button presses) are sent back
  * to the agent as the next turn.
  */
@@ -34,7 +34,7 @@ import { renderMarkdown } from '@a2ui/markdown-it';
 import { MessageProcessor } from '@a2ui/web_core/v0_9';
 import { injectBasicCatalogStyles } from '@a2ui/web_core/v0_9/basic_catalog';
 import {
-  a2uiEnvelopes,
+  a2uiEnvelopesFromParts,
   actionToMessage,
   type A2uiClientAction,
 } from '@genkit-ai/a2ui/client';
@@ -156,9 +156,9 @@ async function runTurn(message: string | Record<string, unknown>) {
         scrollToBottom();
       }
       // A2UI rides as data parts on the raw chunk; extract whole envelopes.
-      const envelopes = a2uiEnvelopes(chunk.raw);
+      const envelopes = a2uiEnvelopesFromParts(chunk.raw.modelChunk?.content);
       if (envelopes.length > 0) {
-        processor.processMessages(envelopes as any);
+        processor.processMessages(envelopes);
       }
     }
     await turn.response;

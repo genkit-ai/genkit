@@ -16,11 +16,12 @@
 
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import { a2uiEnvelopes, a2uiPart, isA2uiPart } from '../src/part.js';
+import { a2uiEnvelopesFromParts, a2uiPart, isA2uiPart } from '../src/part.js';
 import { A2UI_MIME_TYPE, type A2uiEnvelope } from '../src/types.js';
 
 const sampleEnvelope: A2uiEnvelope = {
   createSurface: { surfaceId: 's1', catalogId: 'c1' },
+  version: 'v0.9',
 };
 
 describe('a2uiPart', () => {
@@ -74,34 +75,37 @@ describe('isA2uiPart', () => {
   });
 });
 
-describe('a2uiEnvelopes', () => {
+describe('a2uiEnvelopesFromParts', () => {
   it('extracts envelopes from a single a2ui part', () => {
-    const envelopes = a2uiEnvelopes(a2uiPart([sampleEnvelope]));
-    assert.deepStrictEqual(envelopes, [sampleEnvelope]);
+    assert.deepStrictEqual(
+      a2uiEnvelopesFromParts([a2uiPart([sampleEnvelope])]),
+      [sampleEnvelope]
+    );
   });
 
-  it('extracts envelopes from a message-shaped object (content array)', () => {
-    const message = {
-      content: [{ text: 'hi' }, a2uiPart([sampleEnvelope])],
-    };
-    assert.deepStrictEqual(a2uiEnvelopes(message), [sampleEnvelope]);
+  it("extracts envelopes from a message's content", () => {
+    const content = [{ text: 'hi' }, a2uiPart([sampleEnvelope])];
+    assert.deepStrictEqual(a2uiEnvelopesFromParts(content), [sampleEnvelope]);
   });
 
-  it('extracts envelopes from an AgentChunk-shaped object (modelChunk)', () => {
-    const chunk = {
-      modelChunk: { content: [a2uiPart([sampleEnvelope])] },
-    };
-    assert.deepStrictEqual(a2uiEnvelopes(chunk), [sampleEnvelope]);
+  it('collects across multiple parts', () => {
+    const content = [
+      { text: 'hi' },
+      a2uiPart([sampleEnvelope]),
+      a2uiPart([sampleEnvelope]),
+    ];
+    assert.deepStrictEqual(a2uiEnvelopesFromParts(content), [
+      sampleEnvelope,
+      sampleEnvelope,
+    ]);
   });
 
   it('returns [] for prose / non-a2ui content', () => {
-    assert.deepStrictEqual(a2uiEnvelopes({ content: [{ text: 'hi' }] }), []);
-    assert.deepStrictEqual(a2uiEnvelopes({ text: 'hi' }), []);
+    assert.deepStrictEqual(a2uiEnvelopesFromParts([{ text: 'hi' }]), []);
   });
 
-  it('returns [] for empty / non-object inputs', () => {
-    assert.deepStrictEqual(a2uiEnvelopes(null), []);
-    assert.deepStrictEqual(a2uiEnvelopes(undefined), []);
-    assert.deepStrictEqual(a2uiEnvelopes('nope'), []);
+  it('returns [] for a nullish parts list', () => {
+    assert.deepStrictEqual(a2uiEnvelopesFromParts(null), []);
+    assert.deepStrictEqual(a2uiEnvelopesFromParts(undefined), []);
   });
 });

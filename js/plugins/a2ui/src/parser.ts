@@ -37,6 +37,7 @@ import {
   type A2uiEnvelope,
   type CreateSurfaceEnvelope,
   type DeleteSurfaceEnvelope,
+  type SupportedVersion,
   type UpdateComponentsEnvelope,
   type UpdateDataModelEnvelope,
 } from './types.js';
@@ -253,7 +254,7 @@ export class A2uiStreamParser {
     );
     if (!hasCreate) {
       out.unshift({
-        version: this.options.version ?? A2UI_VERSION,
+        version: (this.options.version ?? A2UI_VERSION) as SupportedVersion,
         createSurface: {
           surfaceId,
           catalogId: this.options.catalog?.id ?? '',
@@ -290,7 +291,10 @@ export class A2uiStreamParser {
 
     if (e.createSurface) {
       swapSurfaceId(e.createSurface);
-      return { version, createSurface: e.createSurface };
+      return {
+        version: version as SupportedVersion,
+        createSurface: e.createSurface,
+      };
     }
     if (e.updateComponents) {
       swapSurfaceId(e.updateComponents);
@@ -298,15 +302,24 @@ export class A2uiStreamParser {
         const err = this.validateComponents(e.updateComponents.components);
         if (err) return this.reject(err);
       }
-      return { version, updateComponents: e.updateComponents };
+      return {
+        version: version as SupportedVersion,
+        updateComponents: e.updateComponents,
+      };
     }
     if (e.updateDataModel) {
       swapSurfaceId(e.updateDataModel);
-      return { version, updateDataModel: e.updateDataModel };
+      return {
+        version: version as SupportedVersion,
+        updateDataModel: e.updateDataModel,
+      };
     }
     if (e.deleteSurface) {
       swapSurfaceId(e.deleteSurface);
-      return { version, deleteSurface: e.deleteSurface };
+      return {
+        version: version as SupportedVersion,
+        deleteSurface: e.deleteSurface,
+      };
     }
     return this.reject(
       `unknown envelope type (keys: ${Object.keys(e).join(', ')}).`

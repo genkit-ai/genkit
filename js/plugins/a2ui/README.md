@@ -162,14 +162,14 @@ resolve them by id and, in the future, tooling can list them.
 
 `@genkit-ai/a2ui/client` is browser-safe (no Node deps). Consume the agent with
 `remoteAgent` from `genkit/beta/client` and pull A2UI envelopes off each chunk
-with `a2uiEnvelopes`, feeding them to a renderer such as
+with `a2uiEnvelopesFromParts`, feeding them to a renderer such as
 [`@a2ui/lit`](https://www.npmjs.com/package/@a2ui/lit):
 
 ```ts
 import { MessageProcessor } from '@a2ui/web_core/v0_9';
 import { basicCatalog } from '@a2ui/lit/v0_9';
 import '@a2ui/lit/v0_9'; // registers <a2ui-surface> + basic components
-import { a2uiEnvelopes } from '@genkit-ai/a2ui/client';
+import { a2uiEnvelopesFromParts } from '@genkit-ai/a2ui/client';
 import { remoteAgent } from 'genkit/beta/client';
 
 const processor = new MessageProcessor([basicCatalog]);
@@ -181,7 +181,7 @@ const chat = remoteAgent({ url: '/api/uiAgent' }).chat();
 const turn = chat.sendStream('weather in Tokyo');
 for await (const chunk of turn.stream) {
   if (chunk.text) appendProse(chunk.text);
-  const envelopes = a2uiEnvelopes(chunk.raw);
+  const envelopes = a2uiEnvelopesFromParts(chunk.raw.modelChunk?.content);
   if (envelopes.length) processor.processMessages(envelopes);
 }
 ```

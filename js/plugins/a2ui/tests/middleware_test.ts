@@ -23,7 +23,7 @@ import {
   type A2uiCatalog,
 } from '../src/catalog.js';
 import { a2ui, type A2uiOptions } from '../src/middleware.js';
-import { a2uiEnvelopes, isA2uiPart } from '../src/part.js';
+import { a2uiEnvelopesFromParts, isA2uiPart } from '../src/part.js';
 
 const SAMPLE_TEXT = `Here is the weather:
 \`\`\`a2ui
@@ -175,7 +175,7 @@ describe('a2ui() middleware', () => {
     assert.ok(textPart, 'expected a prose text part');
     assert.match(textPart.text, /Here is the weather/);
     assert.ok(uiPart, 'expected an a2ui part');
-    const envelopes = a2uiEnvelopes({ content });
+    const envelopes = a2uiEnvelopesFromParts(content);
     assert.strictEqual(envelopes.length, 2);
     assert.strictEqual((envelopes[0] as any).createSurface.surfaceId, 'sfc');
   });
@@ -187,7 +187,7 @@ describe('a2ui() middleware', () => {
     }));
     const content = (res as any).message.content;
     assert.ok(!content.some((p: any) => isA2uiPart(p)));
-    assert.strictEqual(a2uiEnvelopes({ content }).length, 0);
+    assert.strictEqual(a2uiEnvelopesFromParts(content).length, 0);
   });
 
   it('sanitizes inbound a2ui parts into text for the model', async () => {
@@ -241,7 +241,7 @@ describe('a2ui() middleware', () => {
     let streamedId: string | undefined;
     const ctx = {
       onChunk: (c: any) => {
-        const envs = a2uiEnvelopes(c);
+        const envs = a2uiEnvelopesFromParts(c.content);
         const create = envs.find((e: any) => e.createSurface);
         if (create) streamedId = (create as any).createSurface.surfaceId;
       },
@@ -255,9 +255,7 @@ describe('a2ui() middleware', () => {
         return { message: { role: 'model', content: [{ text: SAMPLE_TEXT }] } };
       }
     );
-    const finalEnvelopes = a2uiEnvelopes({
-      content: (res as any).message.content,
-    });
+    const finalEnvelopes = a2uiEnvelopesFromParts((res as any).message.content);
     const finalCreate = finalEnvelopes.find((e: any) => e.createSurface) as any;
     assert.ok(streamedId, 'expected a streamed surface id');
     assert.ok(finalCreate, 'expected a final createSurface');
@@ -281,7 +279,9 @@ describe('a2ui() middleware', () => {
       return { message: { role: 'model', content: [] } };
     });
     // Collect all envelopes emitted across chunks.
-    const allEnvelopes = emitted.flatMap((c) => a2uiEnvelopes(c));
+    const allEnvelopes = emitted.flatMap((c) =>
+      a2uiEnvelopesFromParts(c.content)
+    );
     assert.strictEqual(allEnvelopes.length, 2);
     // And prose was emitted too.
     const prose = emitted
@@ -359,7 +359,7 @@ describe('a2ui() end-to-end via ai.generate', () => {
 
     // The catalog instructions were injected into the request the model saw.
     assert.match(res.text, /Here is the weather/);
-    const envelopes = a2uiEnvelopes({ content: res.message!.content });
+    const envelopes = a2uiEnvelopesFromParts(res.message!.content);
     assert.strictEqual(envelopes.length, 2);
     assert.strictEqual((envelopes[0] as any).createSurface.surfaceId, 'sfc');
   });

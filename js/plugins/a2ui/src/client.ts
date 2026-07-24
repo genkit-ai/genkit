@@ -26,11 +26,11 @@
  */
 
 import { remoteAgent } from 'genkit/beta/client';
-import { a2uiEnvelopes } from './part.js';
+import { a2uiEnvelopesFromParts } from './part.js';
 import type { A2uiClientAction, A2uiEnvelope } from './types.js';
 import { A2UI_MIME_TYPE } from './types.js';
 
-export { a2uiEnvelopes, a2uiPart, isA2uiPart } from './part.js';
+export { a2uiEnvelopesFromParts, a2uiPart, isA2uiPart } from './part.js';
 export {
   A2UI_MIME_TYPE,
   A2UI_VERSION,
@@ -108,7 +108,7 @@ export async function* streamA2uiAgent(
       yield { type: 'text', text: chunk.text };
     }
     // A2UI rides as data parts on the raw chunk; extract whole envelopes.
-    const envelopes = a2uiEnvelopes(chunk.raw);
+    const envelopes = a2uiEnvelopesFromParts(chunk.raw.modelChunk?.content);
     if (envelopes.length > 0) {
       yield { type: 'envelopes', envelopes };
     }

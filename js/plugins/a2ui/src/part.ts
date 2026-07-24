@@ -20,11 +20,14 @@
  * tagged with {@link A2UI_MIME_TYPE}.
  *
  * These helpers operate on plain part-shaped objects (no Genkit runtime import),
- * so they are safe to use on both the server and the browser.
+ * so they are safe to use on both the server and the browser. To pull envelopes
+ * off an agent stream, pass the chunk's parts:
+ * `a2uiEnvelopesFromParts(chunk.raw.modelChunk?.content)`.
  *
  * @module
  */
 
+import { type Part } from 'genkit';
 import { A2UI_MIME_TYPE, type A2uiEnvelope, type A2uiPart } from './types.js';
 
 /** A minimal structural view of a Genkit part for these helpers. */
@@ -57,38 +60,26 @@ export function isA2uiPart(part: unknown): part is A2uiPart {
 }
 
 /**
- * Extracts all A2UI envelopes from a message-, chunk-, or part-shaped value.
- * Returns `[]` for anything that carries no a2ui parts (e.g. plain prose).
+ * Extracts all A2UI envelopes carried by the given `parts`.
  *
- * Accepts:
- * - a single part
- * - an object with a `content: Part[]` array (a message)
- * - an `AgentChunk`-shaped object with `modelChunk.content`
+ * This is the single entry point for reading envelopes off any part-carrying
+ * value: pass a message's, chunk's, or response's `content`. For example, to
+ * consume an agent stream:
+ *
+ * ```ts
+ * for await (const chunk of turn.stream) {
+ *   const envelopes = a2uiEnvelopesFromParts(chunk.raw.modelChunk?.content);
+ * }
+ * ```
+ *
+ * `parts` is nullable purely for call-site convenience (a chunk's content can
+ * be `undefined`); a nullish list is treated as empty.
+ *
+ * Returns `[]` for content that carries no a2ui parts (e.g. plain prose).
  */
-export function a2uiEnvelopes(value: unknown): A2uiEnvelope[] {
-  if (!value || typeof value !== 'object') return [];
-
-  const v = value as {
-    modelChunk?: { content?: unknown };
-    content?: unknown;
-  };
-
-  // AgentChunk: { modelChunk: { content: Part[] } }
-  if (v.modelChunk?.content) {
-    return collectFromParts(v.modelChunk.content);
-  }
-  // Message / GenerateResponseChunk: { content: Part[] }
-  if (Array.isArray(v.content)) {
-    return collectFromParts(v.content);
-  }
-  // A single part.
-  if (isA2uiPart(value)) {
-    return [...value.data.envelopes];
-  }
-  return [];
-}
-
-function collectFromParts(parts: unknown): A2uiEnvelope[] {
+export function a2uiEnvelopesFromParts(
+  parts: readonly Part[] | null | undefined
+): A2uiEnvelope[] {
   if (!Array.isArray(parts)) return [];
   const out: A2uiEnvelope[] = [];
   for (const part of parts) {
