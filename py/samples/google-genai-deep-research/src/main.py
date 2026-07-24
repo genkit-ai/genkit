@@ -40,7 +40,7 @@ class ResearchInput(BaseModel):
 
 
 @ai.flow(name='deep_research')
-async def deep_research_flow(input: ResearchInput) -> dict[str, str | None]:
+async def deep_research_flow(input: ResearchInput) -> str | None:
     """Run Deep Research with generate_operation() and poll until the report is ready."""
     operation = await ai.generate_operation(
         model=input.model,
@@ -50,12 +50,7 @@ async def deep_research_flow(input: ResearchInput) -> dict[str, str | None]:
         await asyncio.sleep(5)
         operation = await ai.check_operation(operation)
 
-    report = operation.output.text if operation.output else None
-    return {
-        'model': input.model,
-        'operation_id': operation.id,
-        'report': report,
-    }
+    return operation.output.text if operation.output else None
 
 
 async def main() -> None:

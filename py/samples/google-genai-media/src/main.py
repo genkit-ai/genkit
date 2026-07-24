@@ -54,31 +54,29 @@ class VideoInput(BaseModel):
 
 
 @ai.flow(name='generate_speech')
-async def tts_speech_generator(input: SpeechInput) -> dict[str, str | None]:
+async def tts_speech_generator(input: SpeechInput) -> str | None:
     """Turn text into speech with one TTS call."""
     response = await ai.generate(
         model='googleai/gemini-2.5-flash-preview-tts',
         prompt=input.text,
         config={'speech_config': {'voice_config': {'prebuilt_voice_config': {'voice_name': input.voice}}}},
     )
-    audio_url = response.media[0].url if response.media else None
-    return {'model': 'googleai/gemini-2.5-flash-preview-tts', 'audio_url': audio_url}
+    return response.media[0].url if response.media else None
 
 
 @ai.flow(name='generate_image')
-async def imagen_image_generator(input: ImageInput) -> dict[str, str | None]:
+async def imagen_image_generator(input: ImageInput) -> str | None:
     """Generate one image with Imagen."""
     response = await ai.generate(
         model='googleai/imagen-3.0-generate-002',
         prompt=input.prompt,
         config={'number_of_images': 1},
     )
-    image_url = response.media[0].url if response.media else None
-    return {'model': 'googleai/imagen-3.0-generate-002', 'image_url': image_url}
+    return response.media[0].url if response.media else None
 
 
 @ai.flow(name='generate_video')
-async def veo_video_generator(input: VideoInput) -> dict[str, str | int | None]:
+async def veo_video_generator(input: VideoInput) -> str | None:
     """Generate one Veo video with generate_operation() and poll to completion."""
     operation = await ai.generate_operation(
         model=input.model,
@@ -89,13 +87,7 @@ async def veo_video_generator(input: VideoInput) -> dict[str, str | int | None]:
         await asyncio.sleep(3)
         operation = await ai.check_operation(operation)
 
-    video_url = operation.output.media[0].url if operation.output and operation.output.media else None
-    return {
-        'model': input.model,
-        'operation_id': operation.id,
-        'video_url': video_url,
-        'duration_seconds': input.config.duration_seconds or 5,
-    }
+    return operation.output.media[0].url if operation.output and operation.output.media else None
 
 
 async def main() -> None:
