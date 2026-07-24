@@ -174,7 +174,8 @@ def list_known_deep_research_models() -> list[str]:
     return list(KNOWN_DEEP_RESEARCH_MODELS.keys())
 
 
-def _build_tools(request: ModelRequest, config: dict[str, Any]) -> list[dict[str, Any]]:
+def build_tools(request: ModelRequest, config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build Interactions API tool configurations for Deep Research."""
     tools: list[dict[str, Any]] = []
     if request.tools:
         for tool_def in request.tools:
@@ -225,7 +226,8 @@ def _build_tools(request: ModelRequest, config: dict[str, Any]) -> list[dict[str
     return tools
 
 
-def _build_create_request(request: ModelRequest, version: str, config: dict[str, Any]) -> dict[str, Any]:
+def build_create_request(request: ModelRequest, version: str, config: dict[str, Any]) -> dict[str, Any]:
+    """Build the dictionary payload for creating a Deep Research interaction."""
     thinking_summaries = config.get('thinking_summaries')
     visualization = config.get('visualization')
     collaborative_planning = config.get('collaborative_planning')
@@ -262,7 +264,7 @@ def _build_create_request(request: ModelRequest, version: str, config: dict[str,
         if request.output_schema:
             response_format['schema'] = clean_schema(request.output_schema)
 
-    tools = _build_tools(request, config)
+    tools = build_tools(request, config)
     messages = downgrade_system_messages(request.messages or [])
 
     req_dict: dict[str, Any] = {
@@ -337,7 +339,7 @@ class DeepResearchModel:
             try:
                 interaction = cast(
                     BaseModel,
-                    await client.aio.interactions.create(**_build_create_request(request, self._version, config)),
+                    await client.aio.interactions.create(**build_create_request(request, self._version, config)),
                 )
             except Exception as error:
                 raise map_genai_error(error) from error

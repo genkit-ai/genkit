@@ -113,8 +113,8 @@ class VeoVersion(StrEnum):
     VEO_3_1_FAST = 'veo-3.1-fast-generate-001'
 
 
-def is_veo_model(name: str) -> bool:
-    """Check if a model name is a Veo model.
+def is_veo_model(name: str | None) -> bool:
+    """Return True if the model name belongs to the Veo family.
 
     Args:
         name: The model name to check.
@@ -122,7 +122,7 @@ def is_veo_model(name: str) -> bool:
     Returns:
         True if this is a Veo model name.
     """
-    return name.lower().startswith('veo')
+    return bool(name and name.lower().startswith('veo'))
 
 
 class VeoConfigSchema(BaseModel):
@@ -173,7 +173,7 @@ def veo_model_info(version: str) -> ModelInfo:
     )
 
 
-def _extract_text(request: ModelRequest) -> str:
+def extract_text(request: ModelRequest) -> str:
     """Extract text prompt from a ModelRequest.
 
     Args:
@@ -191,7 +191,7 @@ def _extract_text(request: ModelRequest) -> str:
     return ' '.join(prompt_parts)
 
 
-def _to_veo_parameters(config: Any) -> dict[str, Any]:  # noqa: ANN401
+def to_veo_parameters(config: Any) -> dict[str, Any]:  # noqa: ANN401
     """Convert config to Veo API parameters.
 
     Args:
@@ -213,7 +213,7 @@ def _to_veo_parameters(config: Any) -> dict[str, Any]:  # noqa: ANN401
     return params
 
 
-def _video_parts_from_uris(uris: list[str]) -> list[Part]:
+def video_parts_from_uris(uris: list[str]) -> list[Part]:
     """Build model message parts for generated video URIs."""
     return [
         Part(
@@ -228,21 +228,21 @@ def _video_parts_from_uris(uris: list[str]) -> list[Part]:
     ]
 
 
-def _extract_video_uris(response: Any) -> list[str]:  # noqa: ANN401
+def extract_video_uris(response: Any) -> list[str]:  # noqa: ANN401
     """Extract video URIs from a Veo API response payload."""
     if not response or not hasattr(response, 'generated_videos'):
         return []
     return [gv.video.uri for gv in (getattr(response, 'generated_videos', None) or []) if gv.video and gv.video.uri]
 
 
-def _response_raw_payload(response: Any) -> dict[str, Any] | None:  # noqa: ANN401
+def response_raw_payload(response: Any) -> dict[str, Any] | None:  # noqa: ANN401
     """Best-effort raw payload for completed Veo responses."""
     if isinstance(response, BaseModel):
         return response.model_dump(exclude_none=True)
     return None
 
 
-def _from_veo_operation(api_op: dict[str, Any]) -> Operation:
+def from_veo_operation(api_op: dict[str, Any]) -> Operation:
     """Convert Veo API operation to Genkit Operation.
 
     Args:
@@ -268,15 +268,15 @@ def _from_veo_operation(api_op: dict[str, Any]) -> Operation:
     if response is None:
         return op
 
-    uris = _extract_video_uris(response)
+    uris = extract_video_uris(response)
     if uris:
         op.output = ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(
                 role=Role.MODEL,
-                content=_video_parts_from_uris(uris),
+                content=video_parts_from_uris(uris),
             ),
-            raw=_response_raw_payload(response),
+            raw=response_raw_payload(response),
         )
 
     return op
@@ -365,7 +365,7 @@ class VeoModel:
         if request.tools:
             raise ValueError('Tools are not supported for this model.')
 
-        prompt = _extract_text(request)
+        prompt = extract_text(request)
         if not prompt:
             raise ValueError('Veo requires a text prompt')
 
@@ -378,7 +378,7 @@ class VeoModel:
         )
 
         # Convert to Operation
-        return _from_veo_operation({
+        return from_veo_operation({
             'name': response.name if hasattr(response, 'name') else str(response),
             'done': getattr(response, 'done', False),
         })
@@ -410,7 +410,7 @@ class VeoModel:
         if hasattr(response, 'response') and response.response:
             op_dict['response'] = response.response
 
-        return _from_veo_operation(op_dict)
+        return from_veo_operation(op_dict)
 
     def _get_config(self, request: ModelRequest) -> genai_types.GenerateVideosConfigOrDict | None:
         if not request.config:

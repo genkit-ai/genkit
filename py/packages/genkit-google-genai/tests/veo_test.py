@@ -29,9 +29,9 @@ from genkit_google_genai.google import GenaiModels
 from genkit_google_genai.models.veo import (
     VeoConfigSchema,
     VeoVersion,
-    _from_veo_operation,
-    _to_veo_parameters,
+    from_veo_operation,
     is_veo_model,
+    to_veo_parameters,
 )
 from google.genai import types as genai_types
 
@@ -49,9 +49,11 @@ class TestIsVeoModel:
         """Case-insensitive matching works."""
         assert is_veo_model('VEO-2.0-generate-001') is True
 
-    def test_non_veo_model(self) -> None:
-        """Non-Veo model names are rejected."""
+    def test_non_veo_model_name(self) -> None:
+        """Non-Veo models return False."""
         assert is_veo_model('gemini-2.0-flash') is False
+        assert is_veo_model('imagen-3.0-generate-001') is False
+        assert is_veo_model(None) is False
 
 
 class TestVeoVersion:
@@ -72,35 +74,35 @@ class TestVeoVersion:
 
 
 class TestToVeoParameters:
-    """Tests for _to_veo_parameters."""
+    """Tests for to_veo_parameters."""
 
     def test_none_config(self) -> None:
         """None config returns empty dict."""
-        assert _to_veo_parameters(None) == {}
+        assert to_veo_parameters(None) == {}
 
     def test_dict_config(self) -> None:
         """Dict config filters out None values."""
         config = {'aspect_ratio': '16:9', 'duration_seconds': 5, 'empty': None}
-        result = _to_veo_parameters(config)
+        result = to_veo_parameters(config)
         assert result == {'aspect_ratio': '16:9', 'duration_seconds': 5}
 
     def test_schema_config(self) -> None:
         """VeoConfigSchema is converted with camelCase keys."""
         config = VeoConfigSchema(aspect_ratio='16:9', duration_seconds=5)
-        result = _to_veo_parameters(config)
+        result = to_veo_parameters(config)
         assert result['aspectRatio'] == '16:9'
         assert result['durationSeconds'] == 5
 
     def test_schema_config_includes_new_fields(self) -> None:
         """VeoConfigSchema includes newer Veo parameters."""
         config = VeoConfigSchema(resolution='1080p', seed=7)
-        result = _to_veo_parameters(config)
+        result = to_veo_parameters(config)
         assert result['resolution'] == '1080p'
         assert result['seed'] == 7
 
 
 class TestFromVeoOperation:
-    """Tests for _from_veo_operation.
+    """Tests for from_veo_operation.
 
     This function must handle two shapes for the 'response' value:
 
@@ -115,7 +117,7 @@ class TestFromVeoOperation:
 
     def test_pending_operation(self) -> None:
         """An in-progress operation has no response — output stays None."""
-        op = _from_veo_operation({
+        op = from_veo_operation({
             'name': 'operations/123',
             'done': False,
         })
@@ -130,13 +132,13 @@ class TestFromVeoOperation:
             {'name': 'operations/null-done', 'done': None},
             {'name': 'operations/omitted-done'},
         ):
-            op = _from_veo_operation(api_op)
+            op = from_veo_operation(api_op)
             assert op.done is False
             assert op.output is None
 
     def test_error_operation(self) -> None:
         """An operation with an error populates op.error."""
-        op = _from_veo_operation({
+        op = from_veo_operation({
             'name': 'operations/456',
             'done': True,
             'error': {'message': 'Quota exceeded'},
@@ -166,7 +168,7 @@ class TestFromVeoOperation:
                 ),
             ],
         )
-        op = _from_veo_operation({
+        op = from_veo_operation({
             'name': 'models/veo-2.0-generate-001/operations/abc',
             'done': True,
             'response': pydantic_response,
@@ -186,7 +188,7 @@ class TestFromVeoOperation:
         pydantic_response = genai_types.GenerateVideosResponse(
             generated_videos=[],
         )
-        op = _from_veo_operation({
+        op = from_veo_operation({
             'name': 'operations/empty',
             'done': True,
             'response': pydantic_response,
@@ -196,7 +198,7 @@ class TestFromVeoOperation:
 
     def test_response_none_explicit(self) -> None:
         """Explicit None response is handled (no crash)."""
-        op = _from_veo_operation({
+        op = from_veo_operation({
             'name': 'operations/null',
             'done': False,
             'response': None,
