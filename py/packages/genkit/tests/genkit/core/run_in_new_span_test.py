@@ -110,43 +110,37 @@ def test_realtime_on_start_export_carries_identity_attrs(
                 self.snapshots.append(dict(span.attributes or {}))
             return super().export(spans)
 
-    provider = trace_api.get_tracer_provider()
-    if not isinstance(provider, TracerProvider):
-        provider = TracerProvider()
-        trace_api.set_tracer_provider(provider)
-
+    provider = TracerProvider()
     snap_exporter = SnapshotExporter()
     processor = RealtimeSpanProcessor(snap_exporter)
     provider.add_span_processor(processor)
+
+    tracer = provider.get_tracer('test_tracer')
+    meta = SpanMetadata(
+        name='liveAction',
+        type='action',
+        subtype='flow',
+        input={'prompt': 'hi'},
+        metadata={'flow:name': 'liveAction'},
+    )
+    start_attrs = start_attributes(meta, qualified_path='/{liveAction,t:action,s:flow}')
+
     try:
-        with run_in_new_span(
-            SpanMetadata(
-                name='liveAction',
-                type='action',
-                subtype='flow',
-                input={'prompt': 'hi'},
-                metadata={'flow:name': 'liveAction'},
-            )
-        ):
+        with tracer.start_as_current_span('liveAction', attributes=start_attrs):
             # on_start already fired; first snapshot is the live export.
             assert snap_exporter.snapshots, 'expected RealtimeSpanProcessor on_start export'
-            start_attrs = snap_exporter.snapshots[0]
-            assert start_attrs['genkit:name'] == 'liveAction'
-            assert start_attrs['genkit:type'] == 'action'
-            assert start_attrs['genkit:metadata:subtype'] == 'flow'
-            assert start_attrs['genkit:path'] == '/{liveAction,t:action,s:flow}'
-            assert start_attrs['genkit:metadata:flow:name'] == 'liveAction'
-            assert start_attrs['genkit:input'] == '{"prompt": "hi"}'
+            start_attrs_snapshot = snap_exporter.snapshots[0]
+            assert start_attrs_snapshot['genkit:name'] == 'liveAction'
+            assert start_attrs_snapshot['genkit:type'] == 'action'
+            assert start_attrs_snapshot['genkit:metadata:subtype'] == 'flow'
+            assert start_attrs_snapshot['genkit:path'] == '/{liveAction,t:action,s:flow}'
+            assert start_attrs_snapshot['genkit:metadata:flow:name'] == 'liveAction'
+            assert start_attrs_snapshot['genkit:input'] == '{"prompt": "hi"}'
             # Run-determined attrs must not leak into the start write.
-            assert 'genkit:state' not in start_attrs
-            assert 'genkit:output' not in start_attrs
+            assert 'genkit:state' not in start_attrs_snapshot
+            assert 'genkit:output' not in start_attrs_snapshot
     finally:
-        snap_exporter.clear()
-        if hasattr(provider, '_active_span_processor'):
-            try:
-                provider._active_span_processor._span_processors.remove(processor)
-            except ValueError:
-                pass
+        provider.shutdown()
 
 
 def test_writes_name_path_and_state_success(exporter: InMemorySpanExporter) -> None:
