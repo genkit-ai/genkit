@@ -55,8 +55,8 @@ class TestEnsureToolIds:
             Message(
                 role='model',
                 content=[
-                    Part(root=ToolRequestPart(tool_request=ToolRequest(name='tool1', input={}))),
-                    Part(root=ToolRequestPart(tool_request=ToolRequest(name='tool2', input={}))),
+                    Part(ToolRequestPart(tool_request=ToolRequest(name='tool1', input={}))),
+                    Part(ToolRequestPart(tool_request=ToolRequest(name='tool2', input={}))),
                 ],
             )
         ]
@@ -72,15 +72,15 @@ class TestEnsureToolIds:
             Message(
                 role='model',
                 content=[
-                    Part(root=ToolRequestPart(tool_request=ToolRequest(name='tool1', input={}))),
-                    Part(root=ToolRequestPart(tool_request=ToolRequest(name='tool2', input={}))),
+                    Part(ToolRequestPart(tool_request=ToolRequest(name='tool1', input={}))),
+                    Part(ToolRequestPart(tool_request=ToolRequest(name='tool2', input={}))),
                 ],
             ),
             Message(
                 role='tool',
                 content=[
-                    Part(root=ToolResponsePart(tool_response=ToolResponse(name='tool1', output={}))),
-                    Part(root=ToolResponsePart(tool_response=ToolResponse(name='tool2', output={}))),
+                    Part(ToolResponsePart(tool_response=ToolResponse(name='tool1', output={}))),
+                    Part(ToolResponsePart(tool_response=ToolResponse(name='tool2', output={}))),
                 ],
             ),
         ]
@@ -96,7 +96,7 @@ class TestEnsureToolIds:
         messages = [
             Message(
                 role='tool',
-                content=[Part(root=ToolResponsePart(tool_response=ToolResponse(name='tool1', output={})))],
+                content=[Part(ToolResponsePart(tool_response=ToolResponse(name='tool1', output={})))],
             )
         ]
         result = ensure_tool_ids(messages)
@@ -107,9 +107,7 @@ class TestEnsureToolIds:
         messages = [
             Message(
                 role='model',
-                content=[
-                    Part(root=ToolRequestPart(tool_request=ToolRequest(name='tool1', input={}, ref='existing-id')))
-                ],
+                content=[Part(ToolRequestPart(tool_request=ToolRequest(name='tool1', input={}, ref='existing-id')))],
             )
         ]
         result = ensure_tool_ids(messages)
@@ -150,38 +148,36 @@ class TestToInteractionTool:
 
 class TestToInteractionContent:
     def test_text(self) -> None:
-        result = to_interaction_content(Part(root=TextPart(text='Hello')))
+        result = to_interaction_content(Part(TextPart(text='Hello')))
         assert result == {'type': 'text', 'text': 'Hello'}
 
     def test_image_data(self) -> None:
         result = to_interaction_content(
-            Part(root=MediaPart(media=Media(url='data:image/png;base64,DATA', content_type='image/png')))
+            Part(MediaPart(media=Media(url='data:image/png;base64,DATA', content_type='image/png')))
         )
         assert result == {'type': 'image', 'data': 'DATA', 'mime_type': 'image/png'}
 
     def test_image_uri(self) -> None:
         result = to_interaction_content(
-            Part(root=MediaPart(media=Media(url='gs://bucket/image.png', content_type='image/png')))
+            Part(MediaPart(media=Media(url='gs://bucket/image.png', content_type='image/png')))
         )
         assert result == {'type': 'image', 'uri': 'gs://bucket/image.png', 'mime_type': 'image/png'}
 
     def test_audio(self) -> None:
         result = to_interaction_content(
-            Part(root=MediaPart(media=Media(url='data:audio/mp3;base64,DATA', content_type='audio/mp3')))
+            Part(MediaPart(media=Media(url='data:audio/mp3;base64,DATA', content_type='audio/mp3')))
         )
         assert result == {'type': 'audio', 'data': 'DATA', 'mime_type': 'audio/mp3'}
 
     def test_document(self) -> None:
         result = to_interaction_content(
-            Part(root=MediaPart(media=Media(url='gs://bucket/doc.pdf', content_type='application/pdf')))
+            Part(MediaPart(media=Media(url='gs://bucket/doc.pdf', content_type='application/pdf')))
         )
         assert result == {'type': 'document', 'uri': 'gs://bucket/doc.pdf', 'mime_type': 'application/pdf'}
 
     def test_unsupported_media_raises(self) -> None:
         with pytest.raises(ValueError, match='Unsupported media type'):
-            to_interaction_content(
-                Part(root=MediaPart(media=Media(url='https://example.com/x', content_type='text/plain')))
-            )
+            to_interaction_content(Part(MediaPart(media=Media(url='https://example.com/x', content_type='text/plain'))))
 
 
 class TestToInteractionSteps:
@@ -189,7 +185,7 @@ class TestToInteractionSteps:
         messages = [
             Message(
                 role='model',
-                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='func', input={'a': 1}, ref='ref1')))],
+                content=[Part(ToolRequestPart(tool_request=ToolRequest(name='func', input={'a': 1}, ref='ref1')))],
             )
         ]
         assert to_interaction_steps(messages) == [
@@ -217,7 +213,7 @@ class TestToInteractionSteps:
         messages = [
             Message(
                 role='model',
-                content=[Part(root=TextPart(text='Thinking')), Part(root=TextPart(text='Done'))],
+                content=[Part(TextPart(text='Thinking')), Part(TextPart(text='Done'))],
             )
         ]
         assert to_interaction_steps(messages) == [

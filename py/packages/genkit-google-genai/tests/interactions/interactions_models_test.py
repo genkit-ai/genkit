@@ -39,8 +39,8 @@ from genkit.model import Operation
 
 def test_downgrade_system_messages_maps_system_to_user() -> None:
     messages = [
-        Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='Be helpful'))]),
-        Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))]),
+        Message(role=Role.SYSTEM, content=[Part(TextPart(text='Be helpful'))]),
+        Message(role=Role.USER, content=[Part(TextPart(text='Hi'))]),
     ]
     downgraded = downgrade_system_messages(messages)
     assert downgraded[0].role == Role.USER
@@ -116,8 +116,8 @@ async def test_deep_research_start_sends_background_request() -> None:
     )
     request = ModelRequest(
         messages=[
-            Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='sys'))]),
-            Message(role=Role.USER, content=[Part(root=TextPart(text='research this'))]),
+            Message(role=Role.SYSTEM, content=[Part(TextPart(text='sys'))]),
+            Message(role=Role.USER, content=[Part(TextPart(text='research this'))]),
         ],
         config={'thinking_summaries': 'auto', 'google_search': True},
     )
@@ -201,8 +201,8 @@ async def test_antigravity_generate_downgrades_system_and_uses_agent() -> None:
     model = AntigravityModel('antigravity-preview-05-2026', plugin_api_key='key', client_options={})
     request = ModelRequest(
         messages=[
-            Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='sys'))]),
-            Message(role=Role.USER, content=[Part(root=TextPart(text='build'))]),
+            Message(role=Role.SYSTEM, content=[Part(TextPart(text='sys'))]),
+            Message(role=Role.USER, content=[Part(TextPart(text='build'))]),
         ],
         config={'response_modalities': ['text', 'image']},
     )
@@ -234,7 +234,7 @@ async def test_googleai_lyria_defaults_audio_and_text_modalities() -> None:
     )
     model = GoogleAILyriaModel('lyria-3-clip-preview', plugin_api_key='key', client_options={})
     request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='jazz riff'))])],
+        messages=[Message(role=Role.USER, content=[Part(TextPart(text='jazz riff'))])],
     )
     with patcher:
         response = await model.generate(request, MagicMock())
@@ -266,7 +266,7 @@ async def test_deep_research_define_background_model_sets_action() -> None:
     )
     with patcher:
         operation = await bg.start(
-            ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='q'))])]),
+            ModelRequest(messages=[Message(role=Role.USER, content=[Part(TextPart(text='q'))])]),
         )
 
     assert isinstance(operation, Operation)
