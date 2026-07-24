@@ -147,30 +147,6 @@ class TestFromVeoOperation:
         assert op.error.message == 'Quota exceeded'
         assert op.output is None
 
-    def test_dict_response_with_videos(self) -> None:
-        """Dict-shaped response extracts video URIs (start path)."""
-        op = _from_veo_operation({
-            'name': 'operations/789',
-            'done': True,
-            'response': {
-                'generateVideoResponse': {
-                    'generatedSamples': [
-                        {'video': {'uri': 'https://example.com/v1.mp4'}},
-                        {'video': {'uri': 'https://example.com/v2.mp4'}},
-                    ]
-                }
-            },
-        })
-        assert op.done is True
-        assert isinstance(op.output, ModelResponse)
-        assert op.output.finish_reason == FinishReason.STOP
-        content = op.output.message.content if op.output.message else []
-        assert len(content) == 2
-        media0 = content[0].root.media
-        media1 = content[1].root.media
-        assert media0 is not None and media0.url == 'https://example.com/v1.mp4'
-        assert media1 is not None and media1.url == 'https://example.com/v2.mp4'
-
     def test_pydantic_response_with_videos(self) -> None:
         """Pydantic GenerateVideosResponse extracts video URIs (check path).
 
@@ -225,16 +201,6 @@ class TestFromVeoOperation:
             'done': False,
             'response': None,
         })
-        assert op.output is None
-
-    def test_dict_response_no_videos(self) -> None:
-        """Dict response with empty generatedSamples produces no output."""
-        op = _from_veo_operation({
-            'name': 'operations/empty-dict',
-            'done': True,
-            'response': {'generateVideoResponse': {'generatedSamples': []}},
-        })
-        assert op.done is True
         assert op.output is None
 
 

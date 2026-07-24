@@ -230,25 +230,13 @@ def _video_parts_from_uris(uris: list[str]) -> list[Part]:
 
 def _extract_video_uris(response: Any) -> list[str]:  # noqa: ANN401
     """Extract video URIs from a Veo API response payload."""
-    uris: list[str] = []
-    if hasattr(response, 'generated_videos'):
-        for gv in response.generated_videos or []:
-            if gv.video and gv.video.uri:
-                uris.append(gv.video.uri)
-    elif isinstance(response, dict):
-        video_response = response.get('generateVideoResponse', {})
-        for sample in video_response.get('generatedSamples', []):
-            video = sample.get('video', {})
-            uri = video.get('uri')
-            if uri:
-                uris.append(uri)
-    return uris
+    if not response or not hasattr(response, 'generated_videos'):
+        return []
+    return [gv.video.uri for gv in (getattr(response, 'generated_videos', None) or []) if gv.video and gv.video.uri]
 
 
 def _response_raw_payload(response: Any) -> dict[str, Any] | None:  # noqa: ANN401
     """Best-effort raw payload for completed Veo responses."""
-    if isinstance(response, dict):
-        return response
     if isinstance(response, BaseModel):
         dumped = response.model_dump(exclude_none=True)
         if isinstance(dumped, dict):
@@ -258,14 +246,6 @@ def _response_raw_payload(response: Any) -> dict[str, Any] | None:  # noqa: ANN4
 
 def _from_veo_operation(api_op: dict[str, Any]) -> Operation:
     """Convert Veo API operation to Genkit Operation.
-
-    The ``response`` value in ``api_op`` may be either:
-
-    * A plain dict (from the ``start`` method, or legacy REST responses).
-    * A ``GenerateVideosResponse`` Pydantic model (from the ``check`` method,
-      which stores the SDK object directly).
-
-    This function handles both cases when extracting video URIs.
 
     Args:
         api_op: The raw API operation response dict.
