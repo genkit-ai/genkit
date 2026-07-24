@@ -44,7 +44,7 @@ from genkit_google_genai.models.interactions_utils import (
     response_modalities_from_config,
 )
 
-GENERIC_LYRIA_INFO = ModelInfo(
+LYRIA_INFO = ModelInfo(
     label='Google AI - lyria-3',
     supports=Supports(
         multiturn=False,
@@ -57,8 +57,8 @@ GENERIC_LYRIA_INFO = ModelInfo(
 )
 
 KNOWN_LYRIA_MODELS: dict[str, ModelInfo] = {
-    'lyria-3-clip-preview': GENERIC_LYRIA_INFO,
-    'lyria-3-pro-preview': GENERIC_LYRIA_INFO,
+    'lyria-3-clip-preview': LYRIA_INFO,
+    'lyria-3-pro-preview': LYRIA_INFO,
 }
 
 
@@ -70,10 +70,6 @@ class LyriaConfigSchema(BaseModel):
     base_url: str | None = None
     api_version: str | None = None
     response_modalities: list[Literal['text', 'image', 'audio']] | None = None
-
-
-# Aliases for backward compatibility
-LyriaConfig = LyriaConfigSchema
 
 
 class LyriaVersion:
@@ -97,7 +93,7 @@ def lyria_model_info(version: str) -> ModelInfo:
     known = KNOWN_LYRIA_MODELS.get(version)
     if known is not None:
         return ModelInfo(label=f'Google AI - {version}', supports=known.supports)
-    return ModelInfo(label=f'Google AI - {version}', supports=GENERIC_LYRIA_INFO.supports)
+    return ModelInfo(label=f'Google AI - {version}', supports=LYRIA_INFO.supports)
 
 
 def list_known_lyria_models() -> list[str]:
