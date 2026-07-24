@@ -23,11 +23,11 @@ import json
 import logging
 from typing import Any
 
+from genkit_google_genai._interactions.options import ClientOptions
 from pydantic import BaseModel
 
 from genkit import CustomPart, Media, MediaPart, Part, ReasoningPart, TextPart, ToolRequestPart, ToolResponsePart
 from genkit.model import Error, FinishReason, Message, ModelResponse, ModelUsage, Operation, ToolDefinition
-from genkit_google_genai._interactions.options import ClientOptions
 
 logger = logging.getLogger(__name__)
 
