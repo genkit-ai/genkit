@@ -4168,5 +4168,303 @@ Now respond to the latest message.`,
       const snap = await task.wait({ intervalMs: 1 });
       assert.ok(snap.status);
     });
+
+    it('assembles intermediate messages from the stream (server-managed tool loop)', async () => {
+      // Server-managed agents (with a store) return only the final response
+      // message on the wire; the intermediate messages a turn produces (the
+      // assistant message issuing tool requests, the `tool` response, and the
+      // final text) exist only as streamed `modelChunk` frames, each carrying
+      // an `index` marking the message it belongs to. The client must rebuild
+      // the full per-turn message list from those chunks.
+      const store = new InMemorySessionStore<{}>();
+      const agent = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'apiToolLoop', store },
+        async (sess, { sendChunk }) => {
+          await sess.run(async () => {
+            // Message 0: assistant issues a tool request.
+            sendChunk({
+              modelChunk: {
+                role: 'model',
+                index: 0,
+                content: [
+                  {
+                    toolRequest: { name: 'getWeather', input: { city: 'SF' } },
+                  },
+                ],
+              },
+            });
+            // Message 1: the tool response (streamed as a whole message).
+            sendChunk({
+              modelChunk: {
+                role: 'tool',
+                index: 1,
+                content: [
+                  {
+                    toolResponse: { name: 'getWeather', output: 'sunny' },
+                  },
+                ],
+              },
+            });
+            // Message 2: the final assistant text, in two incremental deltas.
+            sendChunk({
+              modelChunk: {
+                role: 'model',
+                index: 2,
+                content: [{ text: "It's " }],
+              },
+            });
+            sendChunk({
+              modelChunk: {
+                role: 'model',
+                index: 2,
+                content: [{ text: 'sunny' }],
+              },
+            });
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: "It's sunny" }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      const turn = chat.sendStream('weather?');
+      for await (const _ of turn.stream) {
+      }
+      const res = await turn.response;
+
+      const expected = [
+        { role: 'user', content: [{ text: 'weather?' }] },
+        {
+          role: 'model',
+          content: [
+            { toolRequest: { name: 'getWeather', input: { city: 'SF' } } },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [{ toolResponse: { name: 'getWeather', output: 'sunny' } }],
+        },
+        { role: 'model', content: [{ text: "It's sunny" }] },
+      ];
+      assert.deepEqual(chat.messages, expected);
+      // res.messages reads through a live getter and mirrors chat.messages.
+      assert.deepEqual(res.messages, expected);
+    });
+
+    it('assembles messages up to an interrupt (server-managed)', async () => {
+      const store = new InMemorySessionStore<{}>();
+      const agent = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'apiToolLoopInterrupt', store },
+        async (sess, { sendChunk }) => {
+          await sess.run(async () => {
+            sendChunk({
+              modelChunk: {
+                role: 'model',
+                index: 0,
+                content: [
+                  {
+                    toolRequest: {
+                      name: 'userApproval',
+                      ref: 'r1',
+                      input: { action: 'transfer' },
+                    },
+                    metadata: { interrupt: true },
+                  },
+                ],
+              },
+            });
+            return { finishReason: 'interrupted' as const };
+          });
+          return {
+            message: {
+              role: 'model',
+              content: [
+                {
+                  toolRequest: {
+                    name: 'userApproval',
+                    ref: 'r1',
+                    input: { action: 'transfer' },
+                  },
+                  metadata: { interrupt: true },
+                },
+              ],
+            },
+            finishReason: 'interrupted' as const,
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      const turn = chat.sendStream('Transfer $500');
+      for await (const _ of turn.stream) {
+      }
+      const res = await turn.response;
+
+      assert.strictEqual(res.finishReason, 'interrupted');
+      assert.deepEqual(chat.messages, [
+        { role: 'user', content: [{ text: 'Transfer $500' }] },
+        {
+          role: 'model',
+          content: [
+            {
+              toolRequest: {
+                name: 'userApproval',
+                ref: 'r1',
+                input: { action: 'transfer' },
+              },
+              metadata: { interrupt: true },
+            },
+          ],
+        },
+      ]);
+    });
+
+    it('does not corrupt the final message when a trailing index-less interrupt frame streams (server-managed)', async () => {
+      // On interrupt, `agentFromPrompt` streams the model message
+      // (with an `index`) and then emits an extra `role: 'tool'` frame with no
+      // `index` carrying the same tool requests. A naive assembler folds that
+      // index-less frame into the model message's bucket, flipping its role to
+      // `tool` and duplicating the tool request. The final message must stay the
+      // authoritative `role: 'model'` message (with interrupt metadata), with no
+      // duplicated tool request.
+      const store = new InMemorySessionStore<{}>();
+      const agent = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'apiTrailingInterruptFrame', store },
+        async (sess, { sendChunk }) => {
+          await sess.run(async () => {
+            // The model message that issued the interrupt tool request.
+            sendChunk({
+              modelChunk: {
+                role: 'model',
+                index: 0,
+                content: [
+                  {
+                    toolRequest: {
+                      name: 'userApproval',
+                      ref: 'r1',
+                      input: { action: 'transfer' },
+                    },
+                    metadata: { interrupt: true },
+                  },
+                ],
+              },
+            });
+            // The trailing, index-less `tool` frame emitted on interrupt.
+            sendChunk({
+              modelChunk: {
+                role: 'tool',
+                content: [
+                  {
+                    toolRequest: {
+                      name: 'userApproval',
+                      ref: 'r1',
+                      input: { action: 'transfer' },
+                    },
+                    metadata: { interrupt: true },
+                  },
+                ],
+              },
+            });
+            return { finishReason: 'interrupted' as const };
+          });
+          return {
+            message: {
+              role: 'model',
+              content: [
+                {
+                  toolRequest: {
+                    name: 'userApproval',
+                    ref: 'r1',
+                    input: { action: 'transfer' },
+                  },
+                  metadata: { interrupt: true },
+                },
+              ],
+            },
+            finishReason: 'interrupted' as const,
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      const turn = chat.sendStream('Transfer $500');
+      for await (const _ of turn.stream) {
+      }
+      const res = await turn.response;
+
+      assert.strictEqual(res.finishReason, 'interrupted');
+      const expected = [
+        { role: 'user', content: [{ text: 'Transfer $500' }] },
+        {
+          role: 'model',
+          content: [
+            {
+              toolRequest: {
+                name: 'userApproval',
+                ref: 'r1',
+                input: { action: 'transfer' },
+              },
+              metadata: { interrupt: true },
+            },
+          ],
+        },
+      ];
+      // The trailing index-less frame must not flip the role to `tool` nor
+      // duplicate the tool request.
+      assert.deepEqual(chat.messages, expected);
+      assert.deepEqual(res.messages, expected);
+    });
+
+    it('replaces messages wholesale with authoritative history (client-managed)', async () => {
+      // Client-managed agents round-trip the full authoritative history on the
+      // wire, so `applyOutput` replaces `chat.messages` wholesale - any
+      // provisional messages assembled from the stream are overwritten. Here the
+      // stream carries a "provisional" model message, but the agent stores a
+      // different authoritative message; `chat.messages` must reflect the
+      // authoritative one, not the streamed provisional.
+      const agent = defineCustomAgent(
+        new Registry(),
+        { name: 'apiClientMessages' },
+        async (sess, { sendChunk }) => {
+          await sess.run(async () => {
+            sendChunk({
+              modelChunk: {
+                role: 'model',
+                index: 0,
+                content: [{ text: 'provisional' }],
+              },
+            });
+            // Store an authoritative model reply that differs from the stream.
+            sess.session.addMessages([
+              { role: 'model', content: [{ text: 'authoritative' }] },
+            ]);
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'authoritative' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      const turn = chat.sendStream('hello');
+      for await (const _ of turn.stream) {
+      }
+      await turn.response;
+
+      // The authoritative client-managed history wins over the streamed
+      // provisional model message.
+      assert.deepEqual(chat.messages, [
+        { role: 'user', content: [{ text: 'hello' }] },
+        { role: 'model', content: [{ text: 'authoritative' }] },
+      ]);
+    });
   });
 });
