@@ -17,14 +17,12 @@
 """Google GenAI media - one simple example each for speech, image, and video."""
 
 import asyncio
-import time
 from typing import Any, Literal
 
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
 from genkit import Genkit
-from genkit.model import Operation
 
 ai = Genkit(plugins=[GoogleAI()])
 
@@ -68,7 +66,6 @@ class VideoInput(BaseModel):
 
 def _first_media_url(response: Any) -> str | None:
     """Return the first media URL in a model response."""
-
     message = getattr(response, 'message', None)
     if not message:
         return None
@@ -79,22 +76,9 @@ def _first_media_url(response: Any) -> str | None:
     return None
 
 
-async def _poll_operation(operation: Operation, *, timeout_seconds: float = 180) -> Operation:
-    """Poll a background operation until it completes or times out."""
-
-    started_at = time.monotonic()
-    while not operation.done:
-        if time.monotonic() - started_at > timeout_seconds:
-            raise TimeoutError('Timed out waiting for background model output')
-        await asyncio.sleep(3)
-        operation = await ai.check_operation(operation)
-    return operation
-
-
 @ai.flow(name='generate_speech')
 async def tts_speech_generator(input: SpeechInput) -> dict[str, str | None]:
     """Turn text into speech with one TTS call."""
-
     response = await ai.generate(
         model='googleai/gemini-2.5-flash-preview-tts',
         prompt=input.text,
@@ -106,7 +90,6 @@ async def tts_speech_generator(input: SpeechInput) -> dict[str, str | None]:
 @ai.flow(name='generate_image')
 async def imagen_image_generator(input: ImageInput) -> dict[str, str | None]:
     """Generate one image with Imagen."""
-
     response = await ai.generate(
         model='googleai/imagen-3.0-generate-002',
         prompt=input.prompt,
@@ -118,17 +101,17 @@ async def imagen_image_generator(input: ImageInput) -> dict[str, str | None]:
 @ai.flow(name='generate_video')
 async def veo_video_generator(input: VideoInput) -> dict[str, str | int | None]:
     """Generate one Veo video with generate_operation() and poll to completion."""
-
     config = input.model_dump(exclude_none=True, exclude={'prompt', 'model'})
     operation = await ai.generate_operation(
         model=input.model,
         prompt=input.prompt,
         config=config,
     )
-    operation = await _poll_operation(operation)
+    while not operation.done:
+        await asyncio.sleep(3)
+        operation = await ai.check_operation(operation)
 
     video_url = _first_media_url(operation.output) if operation.output else None
-
     return {
         'model': input.model,
         'operation_id': operation.id,
