@@ -330,15 +330,14 @@ func TestWithStrictSchema(t *testing.T) {
 		check(false)(t, found)
 	})
 
-	t.Run("setting strict twice panics", func(t *testing.T) {
-		assertPanic(t, func() {
-			r := newTestRegistry(t)
-			DefineTool(r, "strict/double-set", "double set",
-				func(ctx context.Context, input struct{}) (string, error) { return "", nil },
-				WithStrictSchema(true),
-				WithStrictSchema(false),
-			)
-		}, "strict schema")
+	t.Run("setting strict twice takes the last value", func(t *testing.T) {
+		r := newTestRegistry(t)
+		tl := DefineTool(r, "strict/double-set", "double set",
+			func(ctx context.Context, input struct{}) (string, error) { return "", nil },
+			WithStrictSchema(true),
+			WithStrictSchema(false),
+		)
+		check(false)(t, tl)
 	})
 }
 

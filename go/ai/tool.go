@@ -120,64 +120,6 @@ func validateInterruptedPart(p *Part, toolName string) error {
 	return nil
 }
 
-// restartOptions holds configuration for restarting an interrupted tool.
-type restartOptions struct {
-	resume      any
-	resumeSet   bool
-	newInput    any
-	newInputSet bool
-}
-
-// RestartOption is an option for restarting an interrupted tool via
-// [Part.ToRestart] or [InterruptibleTool.Restart]. Create one with [WithResume]
-// or [WithNewInput], or with the compile-time checked equivalents
-// [InterruptibleTool.WithResume] and [InterruptibleTool.WithNewInput].
-type RestartOption interface {
-	applyRestart(*restartOptions) error
-}
-
-type restartOptionFunc func(*restartOptions) error
-
-func (f restartOptionFunc) applyRestart(cfg *restartOptions) error { return f(cfg) }
-
-// WithResume carries data to the tool function's resume parameter when it
-// re-executes, e.g. the user's answer to the question the tool interrupted
-// with; middleware reads it via [tool.ResumeData]. data must serialize to a
-// JSON object (a struct or a map); see [tool.Interrupt] for the rationale.
-// [InterruptibleTool.WithResume] is the compile-time checked equivalent.
-//
-// Omitting it makes a bare restart. The call still counts as a resumption, so
-// the tool's resume parameter is non-nil, but it holds the zero value of the
-// tool's resume type. Tools that treat a non-nil resume as the approval need
-// nothing more; tools that read fields off that type see zero values, so pass
-// the data explicitly rather than relying on a bare restart.
-func WithResume(resume any) RestartOption {
-	return restartOptionFunc(func(cfg *restartOptions) error {
-		if cfg.resumeSet {
-			return errors.New("cannot set resume data more than once (WithResume)")
-		}
-		cfg.resume = resume
-		cfg.resumeSet = true
-		return nil
-	})
-}
-
-// WithNewInput provides a new input for the tool when it is re-executed on
-// restart, for example when the user revised an action before confirming. The
-// tool can read the original input via [tool.OriginalInput]. The input is
-// validated against the tool's input schema when the tool re-executes.
-// [InterruptibleTool.WithNewInput] is the compile-time checked equivalent.
-func WithNewInput(input any) RestartOption {
-	return restartOptionFunc(func(cfg *restartOptions) error {
-		if cfg.newInputSet {
-			return errors.New("cannot set a new input more than once (WithNewInput)")
-		}
-		cfg.newInput = input
-		cfg.newInputSet = true
-		return nil
-	})
-}
-
 // toolStrictKey is the metadata key under metadata["tool"] used to carry the
 // per-tool strict-schema flag through the action metadata and onto
 // [ToolDefinition.Metadata]. Plugins consume this key directly.
@@ -293,9 +235,7 @@ func NewInterruptibleTool[In, Out, Res any](
 func newTool[In, Out any](fnName, name, description string, fn ToolFunc[In, Out], dynamic bool, opts []ToolOption) *Tool[In, Out] {
 	toolOpts := &toolOptions{}
 	for _, opt := range opts {
-		if err := opt.applyTool(toolOpts); err != nil {
-			panic(fmt.Errorf("%s %q: %w", fnName, name, err))
-		}
+		opt.applyTool(toolOpts)
 	}
 
 	// If the user provided a custom input schema, enforce that In is 'any'.
@@ -489,9 +429,7 @@ func (t *InterruptibleTool[In, Out, Res]) WithNewInput(input In) RestartOption {
 func newRestartPart(fnName string, interruptPart *Part, opts []RestartOption) (*Part, error) {
 	resOpts := &restartOptions{}
 	for _, opt := range opts {
-		if err := opt.applyRestart(resOpts); err != nil {
-			return nil, status.Errorf(status.ErrInvalidArgument, "%s: %w", fnName, err)
-		}
+		opt.applyRestart(resOpts)
 	}
 	if resOpts.resume != nil {
 		if err := validateInterruptPayload(resOpts.resume, "resume data"); err != nil {

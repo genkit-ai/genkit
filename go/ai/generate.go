@@ -624,9 +624,7 @@ func recordToolShortCircuit(ctx context.Context, name string, input any, resp *M
 func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*ModelResponse, error) {
 	genOpts := &generateOptions{}
 	for _, opt := range opts {
-		if err := opt.applyGenerate(genOpts); err != nil {
-			return nil, status.Errorf(status.ErrInvalidArgument, "ai.Generate: %w", err)
-		}
+		opt.applyGenerate(genOpts)
 	}
 
 	if genOpts.OutputSchema != nil {
@@ -759,7 +757,11 @@ func GenerateText(ctx context.Context, r api.Registry, opts ...GenerateOption) (
 // resp.ToolRequests() to handle those cases.
 func GenerateData[Out any](ctx context.Context, r api.Registry, opts ...GenerateOption) (Out, *ModelResponse, error) {
 	var zero Out
-	opts = append(opts, WithOutputType(zero))
+	// Prepend the inferred output type so an explicit WithOutputSchema or
+	// WithOutputSchemaName passed by the caller wins the schema slot (last set
+	// wins). The typed Out still drives value extraction below, so structured
+	// output keeps working whether or not the caller overrode the schema.
+	opts = append([]GenerateOption{WithOutputType(zero)}, opts...)
 
 	resp, err := Generate(ctx, r, opts...)
 	if err != nil {

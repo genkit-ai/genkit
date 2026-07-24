@@ -114,11 +114,15 @@ func TestToRestart_Bare(t *testing.T) {
 	}
 }
 
-func TestToRestart_RejectsDuplicateNewInput(t *testing.T) {
-	_, err := interruptPart().ToRestart(WithResume(resumeData{Approved: true}),
-		WithNewInput(map[string]any{"a": 1}), WithNewInput(map[string]any{"a": 2}))
-	if err == nil {
-		t.Error("ToRestart with WithNewInput twice must error")
+func TestToRestart_DuplicateNewInputTakesLast(t *testing.T) {
+	got, err := interruptPart().ToRestart(WithResume(resumeData{Approved: true}),
+		WithNewInput(map[string]any{"a": float64(1)}), WithNewInput(map[string]any{"a": float64(2)}))
+	if err != nil {
+		t.Fatalf("ToRestart: %v", err)
+	}
+	gotInput, ok := got.ToolRequest.Input.(map[string]any)
+	if !ok || gotInput["a"] != float64(2) {
+		t.Errorf("restart input = %v, want the last new input {a:2}", got.ToolRequest.Input)
 	}
 }
 

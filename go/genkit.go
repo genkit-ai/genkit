@@ -736,7 +736,8 @@ func (g *Genkit) DefineTool[In, Out any](name, description string, fn ai.ToolFun
 //	if resp.FinishReason == ai.FinishReasonInterrupted {
 //		for _, interrupt := range resp.Interrupts() {
 //			// Ask the user for confirmation, then resume.
-//			restart, _ := transfer.Restart(interrupt, &Confirmation{Approved: true})
+//			restart, _ := transferTool.Restart(interrupt,
+//				transferTool.WithResume(Confirmation{Approved: true}))
 //			resp, _ = g.Generate(ctx,
 //				ai.WithMessages(resp.History()...),
 //				ai.WithTools(transferTool),

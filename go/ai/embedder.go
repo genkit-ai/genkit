@@ -171,9 +171,7 @@ func (e *Embedder) Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse
 func Embed(ctx context.Context, r api.Registry, opts ...EmbedderOption) (*EmbedResponse, error) {
 	embedOpts := &embedderOptions{}
 	for _, opt := range opts {
-		if err := opt.applyEmbedder(embedOpts); err != nil {
-			return nil, fmt.Errorf("ai.Embed: error applying options: %w", err)
-		}
+		opt.applyEmbedder(embedOpts)
 	}
 
 	if embedOpts.Embedder == nil {

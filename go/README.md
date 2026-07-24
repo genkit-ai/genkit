@@ -395,6 +395,12 @@ text, _ := g.GenerateText(ctx,
 fmt.Println(text)
 ```
 
+Options compose, so you can build a request up from several helpers. Options
+carrying multiple items (`ai.WithMessages`, `ai.WithTools`, `ai.WithDocs`,
+`ai.WithUse`) accumulate across repeats, while single-value options
+(`ai.WithConfig`, `ai.WithModelName`, `ai.WithSystem`) take the last one set.
+Repeating an option is never an error.
+
 ### Generate Structured Data
 
 Get type-safe JSON output that maps directly to your Go structs:
