@@ -77,14 +77,26 @@ class Middleware(MiddlewarePlugin):
     constructing an instance, for example
     ``Filesystem(root_dir='./workspace')``.
 
-    Usage:
-        from genkit_middleware import Middleware, Retry, Skills
+    Example:
+        ```python
+        from genkit import Genkit
+        from genkit_google_genai import GoogleAI
+        from genkit_middleware import Middleware, Retry
 
+        # 1. Register middleware plugin
         ai = Genkit(plugins=[GoogleAI(), Middleware()])
-        await ai.generate(
-            prompt='Hello',
-            use=[Retry(max_retries=5), Skills(skill_paths=['skills'])],
+
+        # 2. Generate with automatic retry resilience
+        res = await ai.generate(
+            model='googleai/gemini-flash-latest',
+            prompt='Summarize quantum computing.',
+            use=[Retry(max_retries=3)],
         )
+
+        # 3. Inspect output
+        print(res.text)
+        # => Quantum computing uses quantum mechanics for complex calculations...
+        ```
     """
 
     name = 'genkit-middleware'

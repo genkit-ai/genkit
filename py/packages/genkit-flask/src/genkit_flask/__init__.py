@@ -20,118 +20,37 @@
 This plugin provides Flask integration for Genkit, enabling you to expose
 Genkit flows as HTTP endpoints in a Flask application.
 
-Key Concepts (ELI5)::
-
-    ┌─────────────────────┬────────────────────────────────────────────────────┐
-    │ Concept             │ ELI5 Explanation                                   │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Flask               │ A simple Python web framework. Like a waiter      │
-    │                     │ that takes HTTP requests and serves responses.    │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ HTTP Endpoint       │ A URL that accepts requests. Like a phone number  │
-    │                     │ your app answers when called.                     │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Flow                │ A Genkit function that does AI work. This plugin  │
-    │                     │ lets you call flows via HTTP requests.            │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Route               │ Maps a URL to a function. /api/chat → chat_flow   │
-    │                     │                                                    │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Request Handler     │ Code that processes incoming requests.            │
-    │                     │ genkit_flask_handler does this for you.           │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ POST                │ HTTP method for sending data. Like mailing a      │
-    │                     │ letter with your prompt inside.                   │
-    └─────────────────────┴────────────────────────────────────────────────────┘
-
-Data Flow::
-
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                HOW FLASK SERVES YOUR GENKIT FLOWS                       │
-    │                                                                         │
-    │    Client (Browser, curl, etc.)                                         │
-    │    POST /api/chat {"prompt": "Hello!"}                                  │
-    │         │                                                               │
-    │         │  (1) HTTP request arrives                                     │
-    │         ▼                                                               │
-    │    ┌─────────────────┐                                                  │
-    │    │  Flask App      │   Routes request to the right handler            │
-    │    │  @app.route()   │                                                  │
-    │    └────────┬────────┘                                                  │
-    │             │                                                           │
-    │             │  (2) Handler invoked                                      │
-    │             ▼                                                           │
-    │    ┌─────────────────┐                                                  │
-    │    │ genkit_flask_   │   Parses JSON body, validates input              │
-    │    │ handler()       │                                                  │
-    │    └────────┬────────┘                                                  │
-    │             │                                                           │
-    │             │  (3) Calls your Genkit flow                               │
-    │             ▼                                                           │
-    │    ┌─────────────────┐                                                  │
-    │    │  Your Flow      │   Does AI magic (generate, tools, etc.)          │
-    │    │  async def ...  │                                                  │
-    │    └────────┬────────┘                                                  │
-    │             │                                                           │
-    │             │  (4) Response serialized to JSON                          │
-    │             ▼                                                           │
-    │    ┌─────────────────┐                                                  │
-    │    │  Client         │   {"result": "Hello! How can I help?"}           │
-    │    └─────────────────┘                                                  │
-    └─────────────────────────────────────────────────────────────────────────┘
-
-Architecture Overview::
-
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                         Flask Plugin                                    │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  Plugin Entry Point (__init__.py)                                       │
-    │  └── genkit_flask_handler() - Create Flask route handler                │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  handler.py - Request Handler                                           │
-    │  ├── genkit_flask_handler() - Factory for Flask handlers                │
-    │  ├── Request parsing and validation                                     │
-    │  └── Response serialization                                             │
-    └─────────────────────────────────────────────────────────────────────────┘
-
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                        Request Flow                                     │
-    │                                                                         │
-    │  HTTP Request ──► Flask Route ──► genkit_flask_handler ──► Genkit Flow  │
-    │                                                                         │
-    │  HTTP Response ◄── Flask Route ◄── Handler ◄── Flow Result              │
-    └─────────────────────────────────────────────────────────────────────────┘
-
 Example:
     ```python
     from flask import Flask
     from genkit import Genkit
     from genkit_flask import genkit_flask_handler
+    from genkit_google_genai import GoogleAI
 
+    # 1. Initialize Flask app and Genkit with GoogleAI
     app = Flask(__name__)
-    ai = Genkit(...)
+    ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
 
 
+    # 2. Stack Flask route + Genkit handler + flow on one function
+    @app.post('/api/greet')
+    @genkit_flask_handler(ai)
     @ai.flow()
-    async def my_flow(prompt: str) -> str:
-        response = await ai.generate(prompt=prompt)
-        return response.text
+    async def greet_user(name: str) -> str:
+        res = await ai.generate(prompt=f'Say hello to {name} in one sentence.')
+        return res.text
 
 
-    # Expose flow as HTTP endpoint
-    @app.route('/api/flow', methods=['POST'])
-    def handle_flow():
-        return genkit_flask_handler(ai, my_flow)
+    # POST /api/greet {"data": "Alice"}
+    # => {"result": "Hello Alice! Welcome to our AI community."}
     ```
 
-Caveats:
-    - Requires Flask to be installed
-    - Async flows are run synchronously in Flask (use async frameworks for better performance)
-    - For production, consider using the async-native Genkit server
+Requirements:
+    - Requires Flask 3.0+.
+    - Async flows are run via an asyncio event loop within the Flask request handler.
 
 See Also:
     - Flask documentation: https://flask.palletsprojects.com/
-    - Genkit documentation: https://genkit.dev/
 """
 
 from .handler import genkit_flask_handler
