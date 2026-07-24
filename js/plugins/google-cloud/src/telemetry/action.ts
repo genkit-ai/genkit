@@ -95,7 +95,7 @@ class ActionTelemetry implements Telemetry {
       sessionId,
       threadName,
     };
-    logger.logStructured(`${tag}[${path}, ${featureName}]`, {
+    logger.info(`${tag}[${path}, ${featureName}]`, {
       ...sharedMetadata,
       content,
     });
