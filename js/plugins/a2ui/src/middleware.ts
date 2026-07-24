@@ -93,7 +93,11 @@ export type A2uiOptions = z.infer<typeof A2uiOptionsSchema>;
 
 /** Type guard: is this part a text part? */
 function isTextPart(part: Part): part is TextPart {
-  return typeof (part as { text?: unknown }).text === 'string';
+  return (
+    !!part &&
+    typeof part === 'object' &&
+    typeof (part as { text?: unknown }).text === 'string'
+  );
 }
 
 /** Resolves the configured surface-id policy into a factory. */

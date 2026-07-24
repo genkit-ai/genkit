@@ -124,6 +124,9 @@ export async function* streamA2uiAgent(
  * part for richer handling.
  */
 export function actionToMessage(action: A2uiClientAction) {
+  if (!action) {
+    throw new Error('actionToMessage: action is required');
+  }
   const summary =
     `User interacted with the UI (surface "${action.surfaceId}"): ` +
     `action "${action.name}"` +
