@@ -79,13 +79,13 @@ class LyriaVersion:
     LYRIA_3_PRO = 'lyria-3-pro-preview'
 
 
-def is_lyria_model_name(name: str | None) -> bool:
+def is_lyria_model_name(name: str) -> bool:
     """Return True for Google AI Interactions Lyria model name prefixes.
 
     Known product models are lyria-3-*; the broader lyria-* prefix keeps legacy
     names like lyria-002 from falling through to the Gemini catch-all.
     """
-    return bool(name and name.startswith('lyria-'))
+    return name.startswith('lyria-')
 
 
 def lyria_model_info(version: str) -> ModelInfo:
