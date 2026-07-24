@@ -142,6 +142,11 @@ def test_realtime_on_start_export_carries_identity_attrs(
             assert 'genkit:output' not in start_attrs
     finally:
         snap_exporter.clear()
+        if hasattr(provider, '_active_span_processor'):
+            try:
+                provider._active_span_processor._span_processors.remove(processor)
+            except ValueError:
+                pass
 
 
 def test_writes_name_path_and_state_success(exporter: InMemorySpanExporter) -> None:
