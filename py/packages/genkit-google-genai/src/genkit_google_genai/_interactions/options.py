@@ -14,4 +14,24 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Internal Interactions converters and options (transport comes from google-genai)."""
+"""Small option types for Interactions-backed Google AI models."""
+
+from __future__ import annotations
+
+from typing import Literal, TypedDict
+
+ResponseModality = Literal['text', 'image', 'audio']
+
+
+class ClientOptions(TypedDict, total=False):
+    """HTTP settings reconstructed across background poll calls.
+
+    Includes api_key so check/cancel can reuse a per-request override from start,
+    matching the JS Operation.metadata.clientOptions shape.
+    """
+
+    api_key: str
+    api_version: str
+    base_url: str
+    custom_headers: dict[str, str]
+    timeout: float

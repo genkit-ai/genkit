@@ -249,7 +249,7 @@ def _response_raw_payload(response: Any) -> dict[str, Any] | None:  # noqa: ANN4
     """Best-effort raw payload for completed Veo responses."""
     if isinstance(response, dict):
         return response
-    if hasattr(response, 'model_dump'):
+    if isinstance(response, BaseModel):
         dumped = response.model_dump(exclude_none=True)
         if isinstance(dumped, dict):
             return dumped

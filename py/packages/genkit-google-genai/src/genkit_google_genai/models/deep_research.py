@@ -18,16 +18,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from google import genai
+from pydantic import BaseModel, ConfigDict
 
 from genkit import ModelInfo, ModelRequest, Supports
 from genkit._core._background import define_background_model
 from genkit._core._registry import Registry
 from genkit.model import BackgroundAction, ModelRef, Operation, model_ref
 from genkit.plugin_api import ActionRunContext
-from genkit_google_genai._interactions.client import InteractionsClient
 from genkit_google_genai._interactions.converters import (
     clean_schema,
     ensure_tool_ids,
@@ -35,20 +37,17 @@ from genkit_google_genai._interactions.converters import (
     to_interaction_steps,
     to_interaction_tool,
 )
-from genkit_google_genai._interactions.types import (
-    ClientOptions,
-    CreateInteractionRequest,
-    DeepResearchAgentConfig,
-    InteractionTool,
-)
 from genkit_google_genai.models.interactions_utils import (
+    ClientOptions,
     calculate_api_key,
     client_options_for_operation,
     config_as_dict,
     downgrade_system_messages,
     extract_version,
+    map_genai_error,
     merge_client_options,
     remove_client_option_overrides,
+    resolve_interactions_client,
     response_modalities_from_config,
 )
 
@@ -81,41 +80,38 @@ ADVANCED_DEEP_RESEARCH_INFO = ModelInfo(
 class McpServerConfig(BaseModel):
     """MCP server configuration for Deep Research."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(extra='allow')
     name: str | None = None
     url: str | None = None
     headers: dict[str, str] | None = None
-    allowed_tools: list[str] | None = Field(default=None, alias='allowedTools')
+    allowed_tools: list[str] | None = None
 
 
 class FileSearchConfig(BaseModel):
     """File search store configuration for Deep Research."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
-    file_search_store_names: list[str] = Field(alias='fileSearchStoreNames')
+    model_config = ConfigDict(extra='allow')
+    file_search_store_names: list[str]
 
 
 class DeepResearchConfigSchema(BaseModel):
     """Deep Research model configuration."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
-    api_key: str | None = Field(default=None, alias='apiKey')
-    base_url: str | None = Field(default=None, alias='baseUrl')
-    api_version: str | None = Field(default=None, alias='apiVersion')
-    thinking_summaries: Literal['AUTO', 'NONE'] | None = Field(default=None, alias='thinkingSummaries')
-    previous_interaction_id: str | None = Field(default=None, alias='previousInteractionId')
+    model_config = ConfigDict(extra='allow')
+    api_key: str | None = None
+    base_url: str | None = None
+    api_version: str | None = None
+    thinking_summaries: Literal['auto', 'none'] | None = None
+    previous_interaction_id: str | None = None
     store: bool | None = None
-    response_modalities: list[Literal['TEXT', 'IMAGE', 'AUDIO']] | None = Field(
-        default=None,
-        alias='responseModalities',
-    )
-    visualization: Literal['AUTO', 'OFF'] | None = None
-    collaborative_planning: bool | None = Field(default=None, alias='collaborativePlanning')
-    google_search: bool | dict[str, Any] | None = Field(default=None, alias='googleSearch')
-    url_context: bool | dict[str, Any] | None = Field(default=None, alias='urlContext')
-    code_execution: bool | dict[str, Any] | None = Field(default=None, alias='codeExecution')
-    file_search: FileSearchConfig | dict[str, Any] | None = Field(default=None, alias='fileSearch')
-    mcp_servers: list[McpServerConfig | dict[str, Any]] | None = Field(default=None, alias='mcpServers')
+    response_modalities: list[Literal['text', 'image', 'audio']] | None = None
+    visualization: Literal['auto', 'off'] | None = None
+    collaborative_planning: bool | None = None
+    google_search: bool | dict[str, Any] | None = None
+    url_context: bool | dict[str, Any] | None = None
+    code_execution: bool | dict[str, Any] | None = None
+    file_search: FileSearchConfig | dict[str, Any] | None = None
+    mcp_servers: list[McpServerConfig | dict[str, Any]] | None = None
 
 
 def _common_ref(name: str, info: ModelInfo | None = None) -> ModelRef:
@@ -177,109 +173,85 @@ def list_known_deep_research_models() -> list[ModelRef]:
     return list(KNOWN_DEEP_RESEARCH_MODELS.values())
 
 
-def _build_tools(request: ModelRequest, config: dict[str, Any]) -> list[InteractionTool]:
-    tools: list[InteractionTool] = []
+def _build_tools(request: ModelRequest, config: dict[str, Any]) -> list[dict[str, Any]]:
+    tools: list[dict[str, Any]] = []
     if request.tools:
         for tool_def in request.tools:
             tools.append(to_interaction_tool(tool_def))
 
-    google_search = config.get('googleSearch') or config.get('google_search')
+    google_search = config.get('google_search')
     if google_search:
-        builtin: InteractionTool = {'type': 'google_search'}
+        builtin: dict[str, Any] = {'type': 'google_search'}
         if isinstance(google_search, dict):
-            builtin = cast(InteractionTool, {'type': 'google_search', **google_search})
+            builtin = {'type': 'google_search', **google_search}
         tools.append(builtin)
 
-    url_context = config.get('urlContext') or config.get('url_context')
+    url_context = config.get('url_context')
     if url_context:
         builtin = {'type': 'url_context'}
         if isinstance(url_context, dict):
-            builtin = cast(InteractionTool, {'type': 'url_context', **url_context})
+            builtin = {'type': 'url_context', **url_context}
         tools.append(builtin)
 
-    code_execution = config.get('codeExecution') or config.get('code_execution')
+    code_execution = config.get('code_execution')
     if code_execution:
         builtin = {'type': 'code_execution'}
         if isinstance(code_execution, dict):
-            builtin = cast(InteractionTool, {'type': 'code_execution', **code_execution})
+            builtin = {'type': 'code_execution', **code_execution}
         tools.append(builtin)
 
-    file_search = config.get('fileSearch') or config.get('file_search')
+    file_search = config.get('file_search')
     if isinstance(file_search, dict):
-        store_names = file_search.get('fileSearchStoreNames') or file_search.get('file_search_store_names')
-        rest = {
-            key: value
-            for key, value in file_search.items()
-            if key not in {'fileSearchStoreNames', 'file_search_store_names'}
-        }
-        tools.append(
-            cast(
-                InteractionTool,
-                {
-                    'type': 'file_search',
-                    'file_search_store_names': store_names,
-                    **rest,
-                },
-            )
-        )
+        store_names = file_search.get('file_search_store_names')
+        rest = {key: value for key, value in file_search.items() if key != 'file_search_store_names'}
+        tools.append({
+            'type': 'file_search',
+            'file_search_store_names': store_names,
+            **rest,
+        })
 
-    mcp_servers = config.get('mcpServers') or config.get('mcp_servers') or []
-    for mcp_server in mcp_servers:
+    for mcp_server in config.get('mcp_servers') or []:
         if not isinstance(mcp_server, dict):
             continue
-        allowed_tools = mcp_server.get('allowedTools') or mcp_server.get('allowed_tools')
-        rest_mcp = {key: value for key, value in mcp_server.items() if key not in {'allowedTools', 'allowed_tools'}}
-        tools.append(
-            cast(
-                InteractionTool,
-                {
-                    'type': 'mcp_server',
-                    **rest_mcp,
-                    **({'allowed_tools': allowed_tools} if allowed_tools else {}),
-                },
-            )
-        )
+        allowed_tools = mcp_server.get('allowed_tools')
+        rest_mcp = {key: value for key, value in mcp_server.items() if key != 'allowed_tools'}
+        tools.append({
+            'type': 'mcp_server',
+            **rest_mcp,
+            **({'allowed_tools': allowed_tools} if allowed_tools else {}),
+        })
 
     return tools
 
 
-def _build_create_request(request: ModelRequest, version: str, config: dict[str, Any]) -> CreateInteractionRequest:
-    thinking_summaries = config.get('thinkingSummaries') or config.get('thinking_summaries')
+def _build_create_request(request: ModelRequest, version: str, config: dict[str, Any]) -> dict[str, Any]:
+    thinking_summaries = config.get('thinking_summaries')
     visualization = config.get('visualization')
-    collaborative_planning = config.get('collaborativePlanning') or config.get('collaborative_planning')
-    previous_interaction_id = config.get('previousInteractionId') or config.get('previous_interaction_id')
+    collaborative_planning = config.get('collaborative_planning')
+    previous_interaction_id = config.get('previous_interaction_id')
     store = config.get('store')
 
     passthrough = remove_client_option_overrides(config)
     for key in (
-        'thinkingSummaries',
         'thinking_summaries',
         'visualization',
-        'collaborativePlanning',
         'collaborative_planning',
-        'previousInteractionId',
         'previous_interaction_id',
         'store',
-        'responseModalities',
         'response_modalities',
-        'googleSearch',
         'google_search',
-        'urlContext',
         'url_context',
-        'codeExecution',
         'code_execution',
-        'fileSearch',
         'file_search',
-        'mcpServers',
         'mcp_servers',
     ):
         passthrough.pop(key, None)
 
-    agent_config: DeepResearchAgentConfig = {'type': 'deep-research'}
+    agent_config: dict[str, Any] = {'type': 'deep-research'}
     if isinstance(thinking_summaries, str):
-        agent_config['thinking_summaries'] = thinking_summaries.lower()  # type: ignore[typeddict-item]
+        agent_config['thinking_summaries'] = thinking_summaries
     if isinstance(visualization, str):
-        agent_config['visualization'] = visualization.lower()  # type: ignore[typeddict-item]
+        agent_config['visualization'] = visualization
     if collaborative_planning is not None:
         agent_config['collaborative_planning'] = bool(collaborative_planning)
 
@@ -312,7 +284,7 @@ def _build_create_request(request: ModelRequest, version: str, config: dict[str,
     if response_modalities is not None:
         req_dict['response_modalities'] = response_modalities
 
-    return cast(CreateInteractionRequest, req_dict)
+    return req_dict
 
 
 class DeepResearchModel:
@@ -324,52 +296,106 @@ class DeepResearchModel:
         *,
         plugin_api_key: str | None,
         client_options: ClientOptions,
+        client_getter: Callable[[], genai.Client] | None = None,
     ) -> None:
         """Initialize Deep Research model."""
         self._version = version
         self._plugin_api_key = plugin_api_key
         self._client_options = client_options
+        self._client_getter = client_getter
+
+    def _client_scope(
+        self,
+        *,
+        api_key: str,
+        request_api_key: str | None,
+        client_options: ClientOptions,
+    ) -> AbstractAsyncContextManager[genai.Client]:
+        return resolve_interactions_client(
+            client_getter=self._client_getter,
+            plugin_api_key=self._plugin_api_key,
+            api_key=api_key,
+            request_api_key=request_api_key,
+            plugin_client_options=self._client_options,
+            client_options=client_options,
+        )
 
     async def start(self, request: ModelRequest, _ctx: ActionRunContext) -> Operation:
         """Start a background Deep Research interaction."""
         config = config_as_dict(request.config)
-        api_key = calculate_api_key(
-            self._plugin_api_key,
-            config.get('apiKey') or config.get('api_key'),
-        )
+        request_api_key = config.get('api_key')
+        if request_api_key is not None:
+            request_api_key = str(request_api_key)
+        api_key = calculate_api_key(self._plugin_api_key, request_api_key)
         client_options = merge_client_options(self._client_options, config)
-        client = InteractionsClient(api_key=api_key, client_options=client_options)
-        try:
-            interaction = await client.create_interaction(_build_create_request(request, self._version, config))
-        finally:
-            await client.aclose()
-        return from_interaction(interaction, client_options_for_operation(client_options))
+        async with self._client_scope(
+            api_key=api_key,
+            request_api_key=request_api_key,
+            client_options=client_options,
+        ) as client:
+            try:
+                interaction = cast(
+                    BaseModel,
+                    await client.aio.interactions.create(**_build_create_request(request, self._version, config)),
+                )
+            except Exception as error:
+                raise map_genai_error(error) from error
+        return from_interaction(
+            interaction,
+            client_options_for_operation(client_options, api_key=api_key),
+        )
+
+    def _api_key_from_operation(self, stored: dict[str, Any]) -> tuple[str, str | None]:
+        """Resolve api key for check/cancel, preferring the key stored at start."""
+        stored_api_key = stored.get('api_key')
+        if isinstance(stored_api_key, str) and stored_api_key:
+            # Treat a stored override as request_api_key so we don't reuse the
+            # plugin client when the start call used a different key.
+            request_api_key = (
+                stored_api_key if self._plugin_api_key is not None and stored_api_key != self._plugin_api_key else None
+            )
+            return stored_api_key, request_api_key
+        return calculate_api_key(self._plugin_api_key, None), None
 
     async def check(self, operation: Operation) -> Operation:
         """Poll a Deep Research interaction for completion."""
         stored_raw = (operation.metadata or {}).get('clientOptions')
         stored_dict: dict[str, Any] = cast(dict[str, Any], stored_raw) if isinstance(stored_raw, dict) else {}
         check_options = merge_client_options(self._client_options, stored_dict)
-        api_key = calculate_api_key(self._plugin_api_key, None)
-        client = InteractionsClient(api_key=api_key, client_options=check_options)
-        try:
-            interaction = await client.get_interaction(operation.id)
-        finally:
-            await client.aclose()
-        return from_interaction(interaction, client_options_for_operation(check_options))
+        api_key, request_api_key = self._api_key_from_operation(stored_dict)
+        async with self._client_scope(
+            api_key=api_key,
+            request_api_key=request_api_key,
+            client_options=check_options,
+        ) as client:
+            try:
+                interaction = await client.aio.interactions.get(operation.id)
+            except Exception as error:
+                raise map_genai_error(error) from error
+        return from_interaction(
+            interaction,
+            client_options_for_operation(check_options, api_key=api_key),
+        )
 
     async def cancel(self, operation: Operation) -> Operation:
         """Cancel an in-progress Deep Research interaction."""
         stored_raw = (operation.metadata or {}).get('clientOptions')
         stored_dict: dict[str, Any] = cast(dict[str, Any], stored_raw) if isinstance(stored_raw, dict) else {}
         cancel_options = merge_client_options(self._client_options, stored_dict)
-        api_key = calculate_api_key(self._plugin_api_key, None)
-        client = InteractionsClient(api_key=api_key, client_options=cancel_options)
-        try:
-            interaction = await client.cancel_interaction(operation.id)
-        finally:
-            await client.aclose()
-        return from_interaction(interaction, client_options_for_operation(cancel_options))
+        api_key, request_api_key = self._api_key_from_operation(stored_dict)
+        async with self._client_scope(
+            api_key=api_key,
+            request_api_key=request_api_key,
+            client_options=cancel_options,
+        ) as client:
+            try:
+                interaction = await client.aio.interactions.cancel(operation.id)
+            except Exception as error:
+                raise map_genai_error(error) from error
+        return from_interaction(
+            interaction,
+            client_options_for_operation(cancel_options, api_key=api_key),
+        )
 
 
 def create_deep_research_background_action(
@@ -377,10 +403,16 @@ def create_deep_research_background_action(
     *,
     plugin_api_key: str | None,
     client_options: ClientOptions,
+    client_getter: Callable[[], genai.Client] | None = None,
 ) -> BackgroundAction:
     """Wire Deep Research Interactions start/check/cancel through define_background_model."""
     version = extract_version(ref.name)
-    model = DeepResearchModel(version, plugin_api_key=plugin_api_key, client_options=client_options)
+    model = DeepResearchModel(
+        version,
+        plugin_api_key=plugin_api_key,
+        client_options=client_options,
+        client_getter=client_getter,
+    )
     info = deep_research_model_info(version)
     label = info.label or ref.name
 

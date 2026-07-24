@@ -18,10 +18,10 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, patch
+from contextlib import asynccontextmanager
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 from genkit_google_genai.google import GoogleAI, googleai_name
 from genkit_google_genai.models.antigravity import AntigravityModel
@@ -47,38 +47,84 @@ def test_downgrade_system_messages_maps_system_to_user() -> None:
     assert downgraded[1].role == Role.USER
 
 
+def _patch_interactions(
+    module: str,
+    *,
+    create_result: dict[str, Any] | None = None,
+    get_result: dict[str, Any] | None = None,
+    cancel_result: dict[str, Any] | None = None,
+    captured: dict[str, Any] | None = None,
+):
+    """Patch interactions_client on a model module with fake create/get/cancel."""
+    create_calls: list[dict[str, Any]] = []
+    get_calls: list[str] = []
+    cancel_calls: list[str] = []
+
+    async def create(**kwargs: Any) -> dict[str, Any]:
+        create_calls.append(kwargs)
+        if captured is not None:
+            captured['create'] = kwargs
+            captured['api_key'] = captured.get('_api_key')
+        return create_result or {'id': 'ix-1', 'status': 'in_progress'}
+
+    async def get(interaction_id: str, **_kwargs: Any) -> dict[str, Any]:
+        get_calls.append(interaction_id)
+        if captured is not None:
+            captured['get'] = interaction_id
+            captured['api_key'] = captured.get('_api_key')
+        return get_result or {'id': interaction_id, 'status': 'completed', 'steps': []}
+
+    async def cancel(interaction_id: str, **_kwargs: Any) -> dict[str, Any]:
+        cancel_calls.append(interaction_id)
+        if captured is not None:
+            captured['cancel'] = interaction_id
+        return cancel_result or {'id': interaction_id, 'status': 'cancelled'}
+
+    mock_client = MagicMock()
+    mock_client.aio.interactions.create = AsyncMock(side_effect=create)
+    mock_client.aio.interactions.get = AsyncMock(side_effect=get)
+    mock_client.aio.interactions.cancel = AsyncMock(side_effect=cancel)
+    mock_client.aio.aclose = AsyncMock()
+
+    @asynccontextmanager
+    async def fake_interactions_client(**kwargs: Any):
+        if captured is not None:
+            captured['_api_key'] = kwargs.get('api_key')
+            captured['client_options'] = kwargs.get('client_options')
+        yield mock_client
+
+    return (
+        patch(f'{module}.resolve_interactions_client', fake_interactions_client),
+        create_calls,
+        get_calls,
+        cancel_calls,
+    )
+
+
 @pytest.mark.asyncio
 async def test_deep_research_start_sends_background_request() -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
+    patcher, create_calls, _, _ = _patch_interactions(
+        'genkit_google_genai.models.deep_research',
+        create_result={'id': 'dr-1', 'status': 'in_progress'},
+        captured=captured,
+    )
+    model = DeepResearchModel(
+        'deep-research-preview-04-2026',
+        plugin_api_key='plugin-key',
+        client_options={},
+    )
+    request = ModelRequest(
+        messages=[
+            Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='sys'))]),
+            Message(role=Role.USER, content=[Part(root=TextPart(text='research this'))]),
+        ],
+        config={'thinking_summaries': 'auto', 'google_search': True},
+    )
+    with patcher:
+        operation = await model.start(request, MagicMock())
 
-    async def handler(request: httpx.Request) -> httpx.Response:
-        captured['body'] = json.loads(request.content.decode())
-        return httpx.Response(200, json={'id': 'dr-1', 'status': 'in_progress'})
-
-    transport = httpx.MockTransport(handler)
-    async with httpx.AsyncClient(transport=transport) as http_client:
-        model = DeepResearchModel(
-            'deep-research-preview-04-2026',
-            plugin_api_key='plugin-key',
-            client_options={},
-        )
-        request = ModelRequest(
-            messages=[
-                Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='sys'))]),
-                Message(role=Role.USER, content=[Part(root=TextPart(text='research this'))]),
-            ],
-            config={'thinkingSummaries': 'AUTO', 'googleSearch': True},
-        )
-        with patch(
-            'genkit_google_genai.models.deep_research.InteractionsClient',
-            wraps=lambda **kwargs: __import__(
-                'genkit_google_genai._interactions.client', fromlist=['InteractionsClient']
-            ).InteractionsClient(http_client=http_client, **kwargs),
-        ):
-            operation = await model.start(request, MagicMock())
-
-    body = captured['body']
-    assert isinstance(body, dict)
+    body = create_calls[0]
     assert body['background'] is True
     assert body['agent'] == 'deep-research-preview-04-2026'
     assert body['agent_config'] == {
@@ -92,43 +138,31 @@ async def test_deep_research_start_sends_background_request() -> None:
     assert input_steps[0]['type'] == 'user_input'
     assert operation.id == 'dr-1'
     assert operation.done is False
-    assert 'apiKey' not in (operation.metadata or {}).get('clientOptions', {})
-    assert 'api_key' not in (operation.metadata or {}).get('clientOptions', {})
+    assert (operation.metadata or {}).get('clientOptions', {}).get('api_key') == 'plugin-key'
 
 
 @pytest.mark.asyncio
-async def test_deep_research_check_rederives_api_key() -> None:
-    captured: dict[str, str] = {}
+async def test_deep_research_check_uses_stored_api_key() -> None:
+    captured: dict[str, Any] = {}
+    patcher, _, get_calls, _ = _patch_interactions(
+        'genkit_google_genai.models.deep_research',
+        get_result={
+            'id': 'dr-1',
+            'status': 'completed',
+            'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'done'}]}],
+        },
+        captured=captured,
+    )
+    model = DeepResearchModel('deep-research-preview-04-2026', plugin_api_key='plugin-key', client_options={})
+    operation = Operation.model_construct(
+        id='dr-1',
+        metadata={'clientOptions': {'base_url': 'https://example.test', 'api_key': 'override-key'}},
+    )
+    with patcher:
+        updated = await model.check(operation)
 
-    async def handler(request: httpx.Request) -> httpx.Response:
-        captured['api_key'] = request.headers.get('x-goog-api-key', '')
-        return httpx.Response(
-            200,
-            json={
-                'id': 'dr-1',
-                'status': 'completed',
-                'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'done'}]}],
-            },
-        )
-
-    transport = httpx.MockTransport(handler)
-    async with httpx.AsyncClient(transport=transport) as http_client:
-        model = DeepResearchModel('deep-research-preview-04-2026', plugin_api_key='plugin-key', client_options={})
-        from genkit.model import Operation
-
-        operation = Operation.model_construct(
-            id='dr-1',
-            metadata={'clientOptions': {'base_url': 'https://example.test'}},
-        )
-        with patch(
-            'genkit_google_genai.models.deep_research.InteractionsClient',
-            wraps=lambda **kwargs: __import__(
-                'genkit_google_genai._interactions.client', fromlist=['InteractionsClient']
-            ).InteractionsClient(http_client=http_client, **kwargs),
-        ):
-            updated = await model.check(operation)
-
-    assert captured['api_key'] == 'plugin-key'
+    assert captured['api_key'] == 'override-key'
+    assert get_calls == ['dr-1']
     assert updated.done is True
     assert updated.output is not None
     assert updated.output.message is not None
@@ -136,40 +170,46 @@ async def test_deep_research_check_rederives_api_key() -> None:
 
 
 @pytest.mark.asyncio
+async def test_deep_research_check_falls_back_to_plugin_api_key() -> None:
+    captured: dict[str, Any] = {}
+    patcher, _, _, _ = _patch_interactions(
+        'genkit_google_genai.models.deep_research',
+        get_result={'id': 'dr-1', 'status': 'in_progress'},
+        captured=captured,
+    )
+    model = DeepResearchModel('deep-research-preview-04-2026', plugin_api_key='plugin-key', client_options={})
+    operation = Operation.model_construct(
+        id='dr-1',
+        metadata={'clientOptions': {'base_url': 'https://example.test'}},
+    )
+    with patcher:
+        await model.check(operation)
+
+    assert captured['api_key'] == 'plugin-key'
+
+
+@pytest.mark.asyncio
 async def test_antigravity_generate_downgrades_system_and_uses_agent() -> None:
-    captured: dict[str, object] = {}
+    patcher, create_calls, _, _ = _patch_interactions(
+        'genkit_google_genai.models.antigravity',
+        create_result={
+            'id': 'ag-1',
+            'status': 'completed',
+            'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'hello'}]}],
+        },
+    )
+    model = AntigravityModel('antigravity-preview-05-2026', plugin_api_key='key', client_options={})
+    request = ModelRequest(
+        messages=[
+            Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='sys'))]),
+            Message(role=Role.USER, content=[Part(root=TextPart(text='build'))]),
+        ],
+        config={'response_modalities': ['text', 'image']},
+    )
+    with patcher:
+        response = await model.generate(request, MagicMock())
 
-    async def handler(request: httpx.Request) -> httpx.Response:
-        captured['body'] = json.loads(request.content.decode())
-        return httpx.Response(
-            200,
-            json={
-                'id': 'ag-1',
-                'status': 'completed',
-                'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'hello'}]}],
-            },
-        )
-
-    transport = httpx.MockTransport(handler)
-    async with httpx.AsyncClient(transport=transport) as http_client:
-        model = AntigravityModel('antigravity-preview-05-2026', plugin_api_key='key', client_options={})
-        request = ModelRequest(
-            messages=[
-                Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='sys'))]),
-                Message(role=Role.USER, content=[Part(root=TextPart(text='build'))]),
-            ],
-            config={'responseModalities': ['TEXT', 'IMAGE']},
-        )
-        with patch(
-            'genkit_google_genai.models.antigravity.InteractionsClient',
-            wraps=lambda **kwargs: __import__(
-                'genkit_google_genai._interactions.client', fromlist=['InteractionsClient']
-            ).InteractionsClient(http_client=http_client, **kwargs),
-        ):
-            response = await model.generate(request, MagicMock())
-
-    body = captured['body']
-    assert isinstance(body, dict)
+    body = create_calls[0]
     assert body['agent'] == 'antigravity-preview-05-2026'
     assert body['response_modalities'] == ['text', 'image']
     assert 'background' not in body
@@ -179,40 +219,27 @@ async def test_antigravity_generate_downgrades_system_and_uses_agent() -> None:
 
 @pytest.mark.asyncio
 async def test_googleai_lyria_defaults_audio_and_text_modalities() -> None:
-    captured: dict[str, object] = {}
+    patcher, create_calls, _, _ = _patch_interactions(
+        'genkit_google_genai.models.googleai_lyria',
+        create_result={
+            'id': 'ly-1',
+            'status': 'completed',
+            'steps': [
+                {
+                    'type': 'model_output',
+                    'content': [{'type': 'audio', 'data': 'abc', 'mime_type': 'audio/wav'}],
+                }
+            ],
+        },
+    )
+    model = GoogleAILyriaModel('lyria-3-clip-preview', plugin_api_key='key', client_options={})
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='jazz riff'))])],
+    )
+    with patcher:
+        response = await model.generate(request, MagicMock())
 
-    async def handler(request: httpx.Request) -> httpx.Response:
-        captured['body'] = json.loads(request.content.decode())
-        return httpx.Response(
-            200,
-            json={
-                'id': 'ly-1',
-                'status': 'completed',
-                'steps': [
-                    {
-                        'type': 'model_output',
-                        'content': [{'type': 'audio', 'data': 'abc', 'mime_type': 'audio/wav'}],
-                    }
-                ],
-            },
-        )
-
-    transport = httpx.MockTransport(handler)
-    async with httpx.AsyncClient(transport=transport) as http_client:
-        model = GoogleAILyriaModel('lyria-3-clip-preview', plugin_api_key='key', client_options={})
-        request = ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='jazz riff'))])],
-        )
-        with patch(
-            'genkit_google_genai.models.googleai_lyria.InteractionsClient',
-            wraps=lambda **kwargs: __import__(
-                'genkit_google_genai._interactions.client', fromlist=['InteractionsClient']
-            ).InteractionsClient(http_client=http_client, **kwargs),
-        ):
-            response = await model.generate(request, MagicMock())
-
-    body = captured['body']
-    assert isinstance(body, dict)
+    body = create_calls[0]
     assert body['model'] == 'lyria-3-clip-preview'
     assert body['response_modalities'] == ['audio', 'text']
     assert response.message is not None
@@ -227,27 +254,20 @@ def test_deep_research_model_ref_is_namespaced() -> None:
 @pytest.mark.asyncio
 async def test_deep_research_define_background_model_sets_action() -> None:
     """define_background_model must stamp Operation.action for check/cancel."""
-
-    async def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={'id': 'dr-action-1', 'status': 'in_progress'})
-
-    transport = httpx.MockTransport(handler)
+    patcher, _, _, _ = _patch_interactions(
+        'genkit_google_genai.models.deep_research',
+        create_result={'id': 'dr-action-1', 'status': 'in_progress'},
+    )
     ref = deep_research_model('deep-research-preview-04-2026')
-    async with httpx.AsyncClient(transport=transport) as http_client:
-        bg = create_deep_research_background_action(
-            ref,
-            plugin_api_key='plugin-key',
-            client_options={},
+    bg = create_deep_research_background_action(
+        ref,
+        plugin_api_key='plugin-key',
+        client_options={},
+    )
+    with patcher:
+        operation = await bg.start(
+            ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='q'))])]),
         )
-        with patch(
-            'genkit_google_genai.models.deep_research.InteractionsClient',
-            wraps=lambda **kwargs: __import__(
-                'genkit_google_genai._interactions.client', fromlist=['InteractionsClient']
-            ).InteractionsClient(http_client=http_client, **kwargs),
-        ):
-            operation = await bg.start(
-                ModelRequest(messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='q'))])]),
-            )
 
     assert isinstance(operation, Operation)
     assert operation.action == f'/background-model/{ref.name}'

@@ -121,7 +121,6 @@ from genkit.plugin_api import (
     loop_local_client,
     to_json_schema,
 )
-from genkit_google_genai._interactions.types import ClientOptions
 from genkit_google_genai.evaluators import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
@@ -167,6 +166,7 @@ from genkit_google_genai.models.imagen import (
     ImagenModel,
     vertexai_image_model_info,
 )
+from genkit_google_genai.models.interactions_utils import ClientOptions
 from genkit_google_genai.models.veo import (
     VeoConfigSchema,
     VeoModel,
@@ -534,6 +534,7 @@ class GoogleAI(Plugin):
                     googleai_name(name),
                     plugin_api_key=plugin_api_key,
                     client_options=client_options,
+                    client_getter=self._runtime_client,
                 )
             )
         for name in list_known_googleai_lyria_models():
@@ -542,6 +543,7 @@ class GoogleAI(Plugin):
                     googleai_name(name),
                     plugin_api_key=plugin_api_key,
                     client_options=client_options,
+                    client_getter=self._runtime_client,
                 )
             )
 
@@ -687,6 +689,7 @@ class GoogleAI(Plugin):
             ref,
             plugin_api_key=plugin_api_key,
             client_options=client_options,
+            client_getter=self._runtime_client,
         )
 
     def _resolve_model(self, name: str) -> Action:
@@ -706,12 +709,14 @@ class GoogleAI(Plugin):
                 name,
                 plugin_api_key=self._plugin_api_key(),
                 client_options=self._interactions_client_options(),
+                client_getter=self._runtime_client,
             )
         if is_googleai_lyria_model_name(clean_name):
             return create_googleai_lyria_action(
                 name,
                 plugin_api_key=self._plugin_api_key(),
                 client_options=self._interactions_client_options(),
+                client_getter=self._runtime_client,
             )
 
         # Determine model type and create model metadata/config schema

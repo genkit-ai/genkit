@@ -18,8 +18,6 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 import pytest
 from genkit_google_genai._interactions.converters import (
     ensure_tool_ids,
@@ -32,7 +30,6 @@ from genkit_google_genai._interactions.converters import (
     to_interaction_steps,
     to_interaction_tool,
 )
-from genkit_google_genai._interactions.types import Content, GeminiInteraction
 
 from genkit import (
     CustomPart,
@@ -284,7 +281,7 @@ class TestFromInteractionContent:
 
     def test_thought(self) -> None:
         content = {'type': 'thought', 'signature': 'SIG', 'summary': [{'type': 'text', 'text': 'Thinking...'}]}
-        result = from_interaction_content(cast(Content, content))
+        result = from_interaction_content(content)
         assert _part_dict(result) == {
             'reasoning': 'Thinking...',
             'metadata': {'thoughtSignature': 'SIG'},
@@ -322,7 +319,7 @@ class TestFromInteractionStatusMapping:
         assert result.error.message == 'boom'
 
     def test_requires_action_leaves_done_unset(self) -> None:
-        interaction: GeminiInteraction = {
+        interaction = {
             'id': '123',
             'status': 'requires_action',
             'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'approve plan'}]}],
@@ -336,6 +333,55 @@ class TestFromInteractionStatusMapping:
     def test_in_progress(self) -> None:
         result = from_interaction({'id': '123', 'status': 'in_progress'})
         assert result.done is False
+
+    def test_queued_keeps_polling(self) -> None:
+        result = from_interaction({'id': '123', 'status': 'queued'})
+        assert result.done is False
+
+    def test_incomplete_surfaces_partial_steps(self) -> None:
+        result = from_interaction({
+            'id': '123',
+            'status': 'incomplete',
+            'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'partial'}]}],
+        })
+        assert result.done is True
+        assert result.error is None
+        assert result.output is not None
+        assert result.output.finish_reason == 'length'
+        assert result.output.finish_message == 'Interaction incomplete (truncated output)'
+        assert result.output.message is not None
+        assert result.output.message.content[0].root.text == 'partial'
+        assert result.output.message.metadata is not None
+        assert result.output.message.metadata.get('interactionStatus') == 'incomplete'
+
+    def test_incomplete_without_steps_errors(self) -> None:
+        result = from_interaction({'id': '123', 'status': 'incomplete'})
+        assert result.done is True
+        assert result.output is None
+        assert result.error is not None
+
+    def test_budget_exceeded_surfaces_partial_steps(self) -> None:
+        result = from_interaction({
+            'id': '123',
+            'status': 'budget_exceeded',
+            'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'draft'}]}],
+        })
+        assert result.done is True
+        assert result.error is None
+        assert result.output is not None
+        assert result.output.finish_reason == 'aborted'
+        assert result.output.finish_message == 'Interaction exceeded its budget'
+        assert result.output.message is not None
+        assert result.output.message.content[0].root.text == 'draft'
+        assert result.output.message.metadata is not None
+        assert result.output.message.metadata.get('interactionStatus') == 'budget_exceeded'
+
+    def test_budget_exceeded_without_steps_errors(self) -> None:
+        result = from_interaction({'id': '123', 'status': 'budget_exceeded'})
+        assert result.done is True
+        assert result.output is None
+        assert result.error is not None
+        assert 'budget' in (result.error.message or '').lower()
 
 
 class TestFromInteractionSync:

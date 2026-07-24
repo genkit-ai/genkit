@@ -18,25 +18,29 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from google import genai
+from pydantic import BaseModel, ConfigDict
 
 from genkit import ModelInfo, ModelRequest, ModelResponse, Supports
 from genkit.plugin_api import Action, ActionKind, ActionRunContext, model_action_metadata
-from genkit_google_genai._interactions.client import InteractionsClient
 from genkit_google_genai._interactions.converters import (
     ensure_tool_ids,
     from_interaction_sync,
     to_interaction_steps,
 )
-from genkit_google_genai._interactions.types import ClientOptions, CreateInteractionRequest, ResponseModality
 from genkit_google_genai.models.interactions_utils import (
+    ClientOptions,
+    ResponseModality,
     calculate_api_key,
     config_as_dict,
     extract_version,
+    map_genai_error,
     merge_client_options,
     remove_client_option_overrides,
+    resolve_interactions_client,
     response_modalities_from_config,
 )
 
@@ -61,14 +65,11 @@ KNOWN_GOOGLEAI_LYRIA_MODELS: dict[str, ModelInfo] = {
 class GoogleAILyriaConfigSchema(BaseModel):
     """Google AI Interactions Lyria model configuration."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
-    api_key: str | None = Field(default=None, alias='apiKey')
-    base_url: str | None = Field(default=None, alias='baseUrl')
-    api_version: str | None = Field(default=None, alias='apiVersion')
-    response_modalities: list[Literal['TEXT', 'IMAGE', 'AUDIO']] | None = Field(
-        default=None,
-        alias='responseModalities',
-    )
+    model_config = ConfigDict(extra='allow')
+    api_key: str | None = None
+    base_url: str | None = None
+    api_version: str | None = None
+    response_modalities: list[Literal['text', 'image', 'audio']] | None = None
 
 
 def is_googleai_lyria_model_name(name: str | None) -> bool:
@@ -102,22 +103,23 @@ class GoogleAILyriaModel:
         *,
         plugin_api_key: str | None,
         client_options: ClientOptions,
+        client_getter: Callable[[], genai.Client] | None = None,
     ) -> None:
         """Initialize Interactions Lyria model."""
         self._version = version
         self._plugin_api_key = plugin_api_key
         self._client_options = client_options
+        self._client_getter = client_getter
 
     async def generate(self, request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
         """Run a synchronous Interactions Lyria generation."""
         config = config_as_dict(request.config)
-        api_key = calculate_api_key(
-            self._plugin_api_key,
-            config.get('apiKey') or config.get('api_key'),
-        )
+        request_api_key = config.get('api_key')
+        if request_api_key is not None:
+            request_api_key = str(request_api_key)
+        api_key = calculate_api_key(self._plugin_api_key, request_api_key)
         client_options = merge_client_options(self._client_options, config)
         passthrough = remove_client_option_overrides(config)
-        passthrough.pop('responseModalities', None)
         passthrough.pop('response_modalities', None)
 
         messages = request.messages or []
@@ -129,13 +131,19 @@ class GoogleAILyriaModel:
             or default_modalities,
         }
         req_dict.update(passthrough)
-        req = cast(CreateInteractionRequest, req_dict)
 
-        client = InteractionsClient(api_key=api_key, client_options=client_options)
-        try:
-            interaction = await client.create_interaction(req)
-        finally:
-            await client.aclose()
+        async with resolve_interactions_client(
+            client_getter=self._client_getter,
+            plugin_api_key=self._plugin_api_key,
+            api_key=api_key,
+            request_api_key=request_api_key,
+            plugin_client_options=self._client_options,
+            client_options=client_options,
+        ) as client:
+            try:
+                interaction = cast(BaseModel, await client.aio.interactions.create(**req_dict))
+            except Exception as error:
+                raise map_genai_error(error) from error
         return from_interaction_sync(interaction)
 
 
@@ -144,10 +152,16 @@ def create_googleai_lyria_action(
     *,
     plugin_api_key: str | None,
     client_options: ClientOptions,
+    client_getter: Callable[[], genai.Client] | None = None,
 ) -> Action:
     """Build a foreground model action for Interactions Lyria."""
     clean_name = extract_version(name)
-    model = GoogleAILyriaModel(clean_name, plugin_api_key=plugin_api_key, client_options=client_options)
+    model = GoogleAILyriaModel(
+        clean_name,
+        plugin_api_key=plugin_api_key,
+        client_options=client_options,
+        client_getter=client_getter,
+    )
     info = googleai_lyria_model_info(clean_name)
 
     async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
