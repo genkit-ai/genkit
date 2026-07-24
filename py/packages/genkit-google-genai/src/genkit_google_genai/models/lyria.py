@@ -72,6 +72,10 @@ class LyriaConfigSchema(BaseModel):
     response_modalities: list[Literal['text', 'image', 'audio']] | None = None
 
 
+# Alias for backwards compatibility with __init__.py exports
+LyriaConfig = LyriaConfigSchema
+
+
 class LyriaVersion:
     """Lyria model version identifiers."""
 

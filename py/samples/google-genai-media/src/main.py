@@ -18,7 +18,7 @@
 
 import asyncio
 
-from genkit_google_genai import GoogleAI, VeoConfigSchema
+from genkit_google_genai import GoogleAI, VeoConfig
 from pydantic import BaseModel, Field
 
 from genkit import Genkit
@@ -47,8 +47,8 @@ class VideoInput(BaseModel):
         default='A paper airplane gliding through a bright classroom, cinematic slow motion',
         description='Video prompt',
     )
-    config: VeoConfigSchema = Field(
-        default_factory=lambda: VeoConfigSchema(aspect_ratio='16:9', duration_seconds=5),
+    config: VeoConfig = Field(
+        default_factory=lambda: VeoConfig(aspect_ratio='16:9', duration_seconds=5),
         description='Veo model configuration',
     )
 
