@@ -522,8 +522,8 @@ class GoogleAI(Plugin):
         # Interactions-backed models (known catalog)
         client_options = self._interactions_client_options()
         plugin_api_key = self._plugin_api_key()
-        for ref in list_known_deep_research_models():
-            bg_action = self._resolve_deep_research_model(ref, client_options, plugin_api_key)
+        for name in list_known_deep_research_models():
+            bg_action = self._resolve_deep_research_model(googleai_name(name), client_options, plugin_api_key)
             actions.append(bg_action.start_action)
             actions.append(bg_action.check_action)
             if bg_action.cancel_action is not None:
@@ -680,13 +680,13 @@ class GoogleAI(Plugin):
 
     def _resolve_deep_research_model(
         self,
-        ref: ModelRef,
+        target: str | ModelRef,
         client_options: ClientOptions,
         plugin_api_key: str | None,
     ) -> BackgroundAction:
         """Create a BackgroundAction for a Deep Research ModelRef (Interactions)."""
         return create_deep_research_background_action(
-            ref,
+            target,
             plugin_api_key=plugin_api_key,
             client_options=client_options,
             client_getter=self._runtime_client,
@@ -805,11 +805,11 @@ class GoogleAI(Plugin):
                 )
             )
 
-        for ref in list_known_deep_research_models():
+        for name in list_known_deep_research_models():
             actions_list.append(
                 model_action_metadata(
-                    name=ref.name,
-                    info=deep_research_model_info(ref.name).model_dump(by_alias=True),
+                    name=googleai_name(name),
+                    info=deep_research_model_info(name).model_dump(by_alias=True),
                     config_schema=DeepResearchConfigSchema,
                 )
             )

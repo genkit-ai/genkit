@@ -168,9 +168,9 @@ def deep_research_model_info(version: str) -> ModelInfo:
     )
 
 
-def list_known_deep_research_models() -> list[ModelRef]:
-    """Return statically known Deep Research ModelRefs."""
-    return list(KNOWN_DEEP_RESEARCH_MODELS.values())
+def list_known_deep_research_models() -> list[str]:
+    """Return statically known Deep Research model names."""
+    return list(KNOWN_DEEP_RESEARCH_MODELS.keys())
 
 
 def _build_tools(request: ModelRequest, config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -399,14 +399,15 @@ class DeepResearchModel:
 
 
 def create_deep_research_background_action(
-    ref: ModelRef,
+    target: str | ModelRef,
     *,
     plugin_api_key: str | None,
     client_options: ClientOptions,
     client_getter: Callable[[], genai.Client] | None = None,
 ) -> BackgroundAction:
     """Wire Deep Research Interactions start/check/cancel through define_background_model."""
-    version = extract_version(ref.name)
+    name = target.name if isinstance(target, ModelRef) else target
+    version = extract_version(name)
     model = DeepResearchModel(
         version,
         plugin_api_key=plugin_api_key,
@@ -414,13 +415,13 @@ def create_deep_research_background_action(
         client_getter=client_getter,
     )
     info = deep_research_model_info(version)
-    label = info.label or ref.name
+    label = info.label or name
 
     # Throwaway registry: plugin init re-registers the returned actions on the app registry.
     # define_background_model stamps Operation.action so check_operation/cancel_operation work.
     return define_background_model(
         registry=Registry(),
-        name=ref.name,
+        name=name,
         start=model.start,
         check=model.check,
         cancel=model.cancel,
