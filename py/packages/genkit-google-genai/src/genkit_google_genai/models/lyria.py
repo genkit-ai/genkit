@@ -14,229 +14,193 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lyria audio generation model for Google Vertex AI plugin.
+"""Google AI Interactions Lyria audio model."""
 
-Lyria is Google's music and audio generation model that creates audio from
-text prompts. It's available through Vertex AI only (not Google AI).
+from __future__ import annotations
 
-Architecture:
-    ```
-    ┌──────────────────────────────────────────────────────────────────────┐
-    │                      Lyria Audio Generation Flow                      │
-    ├──────────────────────────────────────────────────────────────────────┤
-    │                                                                       │
-    │   Input                    Model                     Output           │
-    │   ┌─────────┐             ┌─────────┐             ┌─────────┐        │
-    │   │ Text    │ ─predict──► │ Lyria   │ ──────────► │  Audio  │        │
-    │   │ Prompt  │             │ Model   │             │  (WAV)  │        │
-    │   └─────────┘             └─────────┘             └─────────┘        │
-    │                                                                       │
-    └──────────────────────────────────────────────────────────────────────┘
-    ```
+from collections.abc import Callable
+from typing import Any, Literal, cast
 
-Supported Models:
-    +----------------------+--------------------------------------------------+
-    | Model                | Description                                      |
-    +----------------------+--------------------------------------------------+
-    | lyria-002            | Lyria 002 - Audio generation from text           |
-    +----------------------+--------------------------------------------------+
+from google import genai
+from pydantic import BaseModel, ConfigDict
 
-Example:
-    >>> from genkit import Genkit
-    >>> from genkit_google_genai import VertexAI
-    >>>
-    >>> ai = Genkit(plugins=[VertexAI(project='my-project')])
-    >>>
-    >>> # Generate audio
-    >>> response = await ai.generate(
-    ...     model='vertexai/lyria-002',
-    ...     prompt='A peaceful piano melody with gentle rain sounds',
-    ... )
-    >>>
-    >>> # Response contains audio as base64-encoded WAV
-    >>> audio_content = response.message.content[0]
-    >>> print(audio_content.media.content_type)  # 'audio/wav'
+from genkit import ModelInfo, ModelRequest, ModelResponse, Supports
+from genkit.plugin_api import Action, ActionKind, ActionRunContext, model_action_metadata
+from genkit_google_genai._interactions.converters import (
+    ensure_tool_ids,
+    from_interaction_sync,
+    to_interaction_steps,
+)
+from genkit_google_genai.models.interactions_utils import (
+    ClientOptions,
+    ResponseModality,
+    calculate_api_key,
+    config_as_dict,
+    extract_version,
+    map_genai_error,
+    merge_client_options,
+    remove_client_option_overrides,
+    resolve_interactions_client,
+    response_modalities_from_config,
+)
 
-See Also:
-    - Vertex AI Audio: https://cloud.google.com/vertex-ai/docs/generative-ai/audio
-    - JS implementation: js/plugins/google-genai/src/vertexai/lyria.ts
-"""
-
-import sys
-
-if sys.version_info < (3, 11):
-    from strenum import StrEnum
-else:
-    from enum import StrEnum
-
-from typing import Any
-
-from pydantic import BaseModel, Field
-
-from genkit import ModelInfo, Supports
-
-
-class LyriaVersion(StrEnum):
-    """Supported Lyria audio generation models."""
-
-    LYRIA_002 = 'lyria-002'
-
-
-# Known Lyria models
-KNOWN_LYRIA_MODELS = {
-    LyriaVersion.LYRIA_002,
-}
-
-
-def is_lyria_model(name: str) -> bool:
-    """Check if a model name is a Lyria model.
-
-    Args:
-        name: The model name to check.
-
-    Returns:
-        True if this is a Lyria model name.
-    """
-    return name.startswith('lyria-')
-
-
-class LyriaConfig(BaseModel):
-    """Configuration options for Lyria audio generation.
-
-    Attributes:
-        negative_prompt: Text describing what to avoid in the audio.
-        seed: Random seed for reproducible generation.
-        sample_count: Number of audio samples to generate (default: 1).
-        location: Must be 'global' for Lyria. Override if plugin uses different region.
-    """
-
-    negative_prompt: str | None = Field(default=None, alias='negativePrompt')
-    seed: int | None = Field(default=None)
-    sample_count: int | None = Field(default=None, ge=1, alias='sampleCount')
-    location: str | None = Field(default=None)
-
-    model_config = {'populate_by_name': True}
-
-
-LYRIA_MODEL_INFO = ModelInfo(
-    label='Vertex AI - Lyria',
+GENERIC_LYRIA_INFO = ModelInfo(
+    label='Google AI - lyria-3',
     supports=Supports(
-        media=True,
         multiturn=False,
+        media=True,
         tools=False,
+        tool_choice=False,
         system_role=False,
-        output=['media'],
+        output=['media', 'text'],
     ),
 )
 
+KNOWN_LYRIA_MODELS: dict[str, ModelInfo] = {
+    'lyria-3-clip-preview': GENERIC_LYRIA_INFO,
+    'lyria-3-pro-preview': GENERIC_LYRIA_INFO,
+}
+
+
+class LyriaConfigSchema(BaseModel):
+    """Google AI Interactions Lyria model configuration."""
+
+    model_config = ConfigDict(extra='allow')
+    api_key: str | None = None
+    base_url: str | None = None
+    api_version: str | None = None
+    response_modalities: list[Literal['text', 'image', 'audio']] | None = None
+
+
+# Aliases for backward compatibility
+LyriaConfig = LyriaConfigSchema
+GoogleAILyriaConfigSchema = LyriaConfigSchema
+
+
+class LyriaVersion:
+    """Lyria model version identifiers."""
+
+    LYRIA_3_CLIP = 'lyria-3-clip-preview'
+    LYRIA_3_PRO = 'lyria-3-pro-preview'
+
+
+def is_lyria_model_name(name: str | None) -> bool:
+    """Return True for Google AI Interactions Lyria model name prefixes.
+
+    Known product models are lyria-3-*; the broader lyria-* prefix keeps legacy
+    names like lyria-002 from falling through to the Gemini catch-all.
+    """
+    return bool(name and name.startswith('lyria-'))
+
+
+is_googleai_lyria_model_name = is_lyria_model_name
+
 
 def lyria_model_info(version: str) -> ModelInfo:
-    """Get model info for a Lyria model.
+    """Return capability metadata for an Interactions Lyria model."""
+    known = KNOWN_LYRIA_MODELS.get(version)
+    if known is not None:
+        return ModelInfo(label=f'Google AI - {version}', supports=known.supports)
+    return ModelInfo(label=f'Google AI - {version}', supports=GENERIC_LYRIA_INFO.supports)
 
-    Args:
-        version: The Lyria model version.
 
-    Returns:
-        ModelInfo describing the model's capabilities.
-    """
-    return ModelInfo(
-        label=f'Vertex AI - {version}',
-        supports=LYRIA_MODEL_INFO.supports,
+googleai_lyria_model_info = lyria_model_info
+
+
+def list_known_lyria_models() -> list[str]:
+    """Return statically known Interactions Lyria model names."""
+    return list(KNOWN_LYRIA_MODELS.keys())
+
+
+list_known_googleai_lyria_models = list_known_lyria_models
+
+
+class LyriaModel:
+    """Interactions Lyria model for Google AI."""
+
+    def __init__(
+        self,
+        version: str,
+        *,
+        plugin_api_key: str | None,
+        client_options: ClientOptions,
+        client_getter: Callable[[], genai.Client] | None = None,
+    ) -> None:
+        """Initialize Interactions Lyria model."""
+        self._version = version
+        self._plugin_api_key = plugin_api_key
+        self._client_options = client_options
+        self._client_getter = client_getter
+
+    async def generate(self, request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        """Run a synchronous Interactions Lyria generation."""
+        config = config_as_dict(request.config)
+        request_api_key = config.get('api_key')
+        if request_api_key is not None:
+            request_api_key = str(request_api_key)
+        api_key = calculate_api_key(self._plugin_api_key, request_api_key)
+        client_options = merge_client_options(self._client_options, config)
+        passthrough = remove_client_option_overrides(config)
+        passthrough.pop('response_modalities', None)
+
+        messages = request.messages or []
+        default_modalities: list[ResponseModality] = ['audio', 'text']
+        req_dict: dict[str, Any] = {
+            'model': extract_version(self._version),
+            'input': to_interaction_steps(ensure_tool_ids(messages)),
+            'response_modalities': response_modalities_from_config(config, default=default_modalities)
+            or default_modalities,
+        }
+        req_dict.update(passthrough)
+
+        async with resolve_interactions_client(
+            client_getter=self._client_getter,
+            plugin_api_key=self._plugin_api_key,
+            api_key=api_key,
+            request_api_key=request_api_key,
+            plugin_client_options=self._client_options,
+            client_options=client_options,
+        ) as client:
+            try:
+                interaction = cast(BaseModel, await client.aio.interactions.create(**req_dict))
+            except Exception as error:
+                raise map_genai_error(error) from error
+        return from_interaction_sync(interaction)
+
+
+GoogleAILyriaModel = LyriaModel
+
+
+def create_lyria_action(
+    name: str,
+    *,
+    plugin_api_key: str | None,
+    client_options: ClientOptions,
+    client_getter: Callable[[], genai.Client] | None = None,
+) -> Action:
+    """Build a foreground model action for Interactions Lyria."""
+    clean_name = extract_version(name)
+    model = LyriaModel(
+        clean_name,
+        plugin_api_key=plugin_api_key,
+        client_options=client_options,
+        client_getter=client_getter,
+    )
+    info = lyria_model_info(clean_name)
+
+    async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        return await model.generate(request, ctx)
+
+    return Action(
+        kind=ActionKind.MODEL,
+        name=name,
+        fn=_run,
+        metadata=model_action_metadata(
+            name=name,
+            info=info.model_dump(by_alias=True),
+            config_schema=LyriaConfigSchema,
+        ).metadata,
     )
 
 
-def _extract_text(messages: list[Any]) -> str:
-    """Extract text prompt from messages.
-
-    Args:
-        messages: The message list from a ModelRequest.
-
-    Returns:
-        The text prompt string.
-    """
-    if not messages:
-        return ''
-    for message in messages:
-        for part in message.content:
-            if hasattr(part.root, 'text') and part.root.text:
-                return str(part.root.text)
-    return ''
-
-
-def _to_lyria_instances(prompt: str, config: Any) -> list[dict[str, Any]]:  # noqa: ANN401
-    """Convert config to Lyria API instances.
-
-    Args:
-        prompt: The text prompt.
-        config: The model configuration (LyriaConfig or dict).
-
-    Returns:
-        List of Lyria instance dictionaries.
-    """
-    instance: dict[str, Any] = {'prompt': prompt}
-
-    if config is None:
-        return [instance]
-
-    if isinstance(config, LyriaConfig):
-        if config.negative_prompt:
-            instance['negativePrompt'] = config.negative_prompt
-        if config.seed is not None:
-            instance['seed'] = config.seed
-    elif isinstance(config, dict):
-        if 'negativePrompt' in config or 'negative_prompt' in config:
-            instance['negativePrompt'] = config.get('negativePrompt') or config.get('negative_prompt')
-        if 'seed' in config:
-            instance['seed'] = config['seed']
-
-    return [instance]
-
-
-def _to_lyria_parameters(config: Any) -> dict[str, Any]:  # noqa: ANN401
-    """Convert config to Lyria API parameters.
-
-    Args:
-        config: The model configuration (LyriaConfig or dict).
-
-    Returns:
-        Dictionary of Lyria API parameters.
-    """
-    if config is None:
-        return {'sampleCount': 1}
-
-    if isinstance(config, LyriaConfig):
-        return {'sampleCount': config.sample_count or 1}
-    elif isinstance(config, dict):
-        return {'sampleCount': config.get('sampleCount') or config.get('sample_count') or 1}
-
-    return {'sampleCount': 1}
-
-
-def _from_lyria_prediction(prediction: dict[str, Any], index: int) -> dict[str, Any]:
-    """Convert a Lyria prediction to a candidate.
-
-    Args:
-        prediction: The raw prediction from Lyria API.
-        index: The candidate index.
-
-    Returns:
-        A candidate data dictionary.
-    """
-    b64data = prediction.get('bytesBase64Encoded', '')
-    mime_type = prediction.get('mimeType', 'audio/wav')
-
-    return {
-        'index': index,
-        'finishReason': 'stop',
-        'message': {
-            'role': 'model',
-            'content': [
-                {
-                    'media': {
-                        'url': f'data:{mime_type};base64,{b64data}',
-                        'contentType': mime_type,
-                    },
-                },
-            ],
-        },
-    }
+create_googleai_lyria_action = create_lyria_action

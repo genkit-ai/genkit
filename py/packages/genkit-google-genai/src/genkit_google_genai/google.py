@@ -153,13 +153,6 @@ from genkit_google_genai.models.gemini import (
     google_model_info,
     is_tuned_gemini_name,
 )
-from genkit_google_genai.models.googleai_lyria import (
-    GoogleAILyriaConfigSchema,
-    create_googleai_lyria_action,
-    googleai_lyria_model_info,
-    is_googleai_lyria_model_name,
-    list_known_googleai_lyria_models,
-)
 from genkit_google_genai.models.imagen import (
     SUPPORTED_MODELS as IMAGE_SUPPORTED_MODELS,
     ImagenConfigSchema,
@@ -167,6 +160,13 @@ from genkit_google_genai.models.imagen import (
     vertexai_image_model_info,
 )
 from genkit_google_genai.models.interactions_utils import ClientOptions
+from genkit_google_genai.models.lyria import (
+    LyriaConfigSchema,
+    create_lyria_action,
+    is_lyria_model_name,
+    list_known_lyria_models,
+    lyria_model_info,
+)
 from genkit_google_genai.models.veo import (
     VeoConfigSchema,
     VeoModel,
@@ -537,9 +537,9 @@ class GoogleAI(Plugin):
                     client_getter=self._runtime_client,
                 )
             )
-        for name in list_known_googleai_lyria_models():
+        for name in list_known_lyria_models():
             actions.append(
-                create_googleai_lyria_action(
+                create_lyria_action(
                     googleai_name(name),
                     plugin_api_key=plugin_api_key,
                     client_options=client_options,
@@ -711,8 +711,8 @@ class GoogleAI(Plugin):
                 client_options=self._interactions_client_options(),
                 client_getter=self._runtime_client,
             )
-        if is_googleai_lyria_model_name(clean_name):
-            return create_googleai_lyria_action(
+        if is_lyria_model_name(clean_name):
+            return create_lyria_action(
                 name,
                 plugin_api_key=self._plugin_api_key(),
                 client_options=self._interactions_client_options(),
@@ -823,12 +823,12 @@ class GoogleAI(Plugin):
                 )
             )
 
-        for name in list_known_googleai_lyria_models():
+        for name in list_known_lyria_models():
             actions_list.append(
                 model_action_metadata(
                     name=googleai_name(name),
-                    info=googleai_lyria_model_info(name).model_dump(by_alias=True),
-                    config_schema=GoogleAILyriaConfigSchema,
+                    info=lyria_model_info(name).model_dump(by_alias=True),
+                    config_schema=LyriaConfigSchema,
                 )
             )
 

@@ -30,8 +30,8 @@ from genkit_google_genai.models.deep_research import (
     create_deep_research_background_action,
     deep_research_model,
 )
-from genkit_google_genai.models.googleai_lyria import GoogleAILyriaModel
 from genkit_google_genai.models.interactions_utils import downgrade_system_messages
+from genkit_google_genai.models.lyria import LyriaModel
 
 from genkit import ActionKind, Message, ModelRequest, Part, Role, TextPart
 from genkit.model import Operation
@@ -220,7 +220,7 @@ async def test_antigravity_generate_downgrades_system_and_uses_agent() -> None:
 @pytest.mark.asyncio
 async def test_googleai_lyria_defaults_audio_and_text_modalities() -> None:
     patcher, create_calls, _, _ = _patch_interactions(
-        'genkit_google_genai.models.googleai_lyria',
+        'genkit_google_genai.models.lyria',
         create_result={
             'id': 'ly-1',
             'status': 'completed',
@@ -232,7 +232,7 @@ async def test_googleai_lyria_defaults_audio_and_text_modalities() -> None:
             ],
         },
     )
-    model = GoogleAILyriaModel('lyria-3-clip-preview', plugin_api_key='key', client_options={})
+    model = LyriaModel('lyria-3-clip-preview', plugin_api_key='key', client_options={})
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(TextPart(text='jazz riff'))])],
     )
