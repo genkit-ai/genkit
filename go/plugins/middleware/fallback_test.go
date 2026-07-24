@@ -53,7 +53,7 @@ func TestFallbackNotTriggeredOnSuccess(t *testing.T) {
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary")}, nil
 	})
 
-	fb := &Fallback{Models: []ai.ActionRef{ai.NewActionRef(secondary.Name(), nil)}}
+	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
 
 	resp, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err != nil {
@@ -80,7 +80,7 @@ func TestFallbackTriggeredOnRetryableError(t *testing.T) {
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary ok")}, nil
 	})
 
-	fb := &Fallback{Models: []ai.ActionRef{ai.NewActionRef(secondary.Name(), nil)}}
+	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
 
 	resp, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err != nil {
@@ -108,7 +108,7 @@ func TestFallbackTriesMultipleModels(t *testing.T) {
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("tertiary ok")}, nil
 	})
 
-	fb := &Fallback{Models: []ai.ActionRef{ai.NewActionRef(secondary.Name(), nil), ai.NewActionRef(tertiary.Name(), nil)}}
+	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil), ai.NewModelRef(tertiary.Name(), nil)}}
 
 	resp, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err != nil {
@@ -138,7 +138,7 @@ func TestFallbackAllModelsFail(t *testing.T) {
 		return nil, status.Errorf(status.ErrUnavailable, "secondary down")
 	})
 
-	fb := &Fallback{Models: []ai.ActionRef{ai.NewActionRef(secondary.Name(), nil)}}
+	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
 
 	_, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err == nil {
@@ -161,7 +161,7 @@ func TestFallbackDoesNotTriggerOnNonRetryableError(t *testing.T) {
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary")}, nil
 	})
 
-	fb := &Fallback{Models: []ai.ActionRef{ai.NewActionRef(secondary.Name(), nil)}}
+	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
 
 	_, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err == nil {
@@ -189,7 +189,7 @@ func TestFallbackTriggersOnUnclassifiedError(t *testing.T) {
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary")}, nil
 	})
 
-	fb := &Fallback{Models: []ai.ActionRef{ai.NewActionRef(secondary.Name(), nil)}}
+	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
 
 	resp, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err != nil {
@@ -217,7 +217,7 @@ func TestFallbackDoesNotTriggerOnUnlistedStatus(t *testing.T) {
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary")}, nil
 	})
 
-	fb := &Fallback{Models: []ai.ActionRef{ai.NewActionRef(secondary.Name(), nil)}}
+	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
 
 	_, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err == nil {
@@ -243,7 +243,7 @@ func TestFallbackStopsOnNonRetryableFallbackError(t *testing.T) {
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("tertiary")}, nil
 	})
 
-	fb := &Fallback{Models: []ai.ActionRef{ai.NewActionRef(secondary.Name(), nil), ai.NewActionRef(tertiary.Name(), nil)}}
+	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil), ai.NewModelRef(tertiary.Name(), nil)}}
 
 	_, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err == nil {
@@ -268,7 +268,7 @@ func TestFallbackCustomStatuses(t *testing.T) {
 	})
 
 	fb := &Fallback{
-		Models:   []ai.ActionRef{ai.NewActionRef(secondary.Name(), nil)},
+		Models:   []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)},
 		Statuses: []status.Name{status.PermissionDenied},
 	}
 
@@ -294,7 +294,7 @@ func TestFallbackUsesRefConfig(t *testing.T) {
 	})
 
 	refConfig := map[string]any{"temperature": 0.5, "source": "ref"}
-	fb := &Fallback{Models: []ai.ActionRef{ai.NewActionRef(secondary.Name(), refConfig)}}
+	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), refConfig)}}
 
 	_, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithConfig(map[string]any{"temperature": 0.9, "source": "req"}), ai.WithUse(fb))
 	if err != nil {
@@ -321,7 +321,7 @@ func TestFallbackPassesNilConfigWhenRefHasNone(t *testing.T) {
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary ok")}, nil
 	})
 
-	fb := &Fallback{Models: []ai.ActionRef{ai.NewActionRef(secondary.Name(), nil)}}
+	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
 
 	_, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithConfig(map[string]any{"source": "req"}), ai.WithUse(fb))
 	if err != nil {
@@ -345,7 +345,7 @@ func TestFallbackDoesNotMutateOriginalRequest(t *testing.T) {
 	})
 
 	refConfig := map[string]any{"source": "ref"}
-	fb := &Fallback{Models: []ai.ActionRef{ai.NewActionRef(secondary.Name(), refConfig)}}
+	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), refConfig)}}
 
 	_, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithConfig(map[string]any{"source": "req"}), ai.WithUse(fb))
 	if err != nil {
@@ -367,7 +367,7 @@ func TestFallbackModelNotFound(t *testing.T) {
 		return nil, status.Errorf(status.ErrUnavailable, "primary down")
 	})
 
-	fb := &Fallback{Models: []ai.ActionRef{ai.NewActionRef("test/nonexistent", nil)}}
+	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef("test/nonexistent", nil)}}
 
 	_, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err == nil {

@@ -611,7 +611,7 @@ response, _ := g.Generate(ctx,
     ai.WithPrompt("Explain quantum computing."),
     ai.WithUse(
         &middleware.Retry{MaxRetries: 3},
-        &middleware.Fallback{Models: []ai.ActionRef{
+        &middleware.Fallback{Models: []ai.ModelRef{
             googlegenai.ModelRef("googleai/gemini-2.5-flash", nil),
         }},
     ),

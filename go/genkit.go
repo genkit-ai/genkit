@@ -836,7 +836,7 @@ func (g *Genkit) LookupMiddleware(name string) *ai.MiddlewareDesc {
 // # Options
 //
 // Model and Configuration:
-//   - [ai.WithModel]: Specify the model (accepts [*ai.Model] or [ai.ActionRef])
+//   - [ai.WithModel]: Specify the model (accepts [*ai.Model] or [ai.ModelRef])
 //   - [ai.WithModelName]: Specify model by name string
 //   - [ai.WithConfig]: Set generation parameters (temperature, max tokens, etc.)
 //
@@ -1024,7 +1024,7 @@ func (g *Genkit) GenerateWithRequest(ctx context.Context, actionOpts *ai.Generat
 // # Options
 //
 // Model and Configuration:
-//   - [ai.WithModel]: Specify the model (accepts [*ai.Model] or [ai.ActionRef])
+//   - [ai.WithModel]: Specify the model (accepts [*ai.Model] or [ai.ModelRef])
 //   - [ai.WithModelName]: Specify model by name string (e.g., "googleai/gemini-3-flash-preview")
 //   - [ai.WithConfig]: Set generation parameters (temperature, max tokens, etc.)
 //
@@ -1247,7 +1247,7 @@ func (g *Genkit) GenerateDataStream[Out any](ctx context.Context, opts ...ai.Gen
 //
 // # Options
 //
-//   - [ai.WithEmbedder]: Specify the embedder (accepts [*ai.Embedder] or [ai.ActionRef])
+//   - [ai.WithEmbedder]: Specify the embedder (accepts [*ai.Embedder] or [ai.EmbedderRef])
 //   - [ai.WithEmbedderName]: Specify embedder by name string
 //   - [ai.WithConfig]: Set embedder-specific configuration
 //   - [ai.WithTextDocs]: Provide text to embed
@@ -1359,7 +1359,7 @@ func (g *Genkit) LookupEvaluator(name string) *ai.Evaluator {
 //
 // # Options
 //
-//   - [ai.WithEvaluator]: Specify the evaluator (accepts [*ai.Evaluator] or [ai.ActionRef])
+//   - [ai.WithEvaluator]: Specify the evaluator (accepts [*ai.Evaluator] or [ai.EvaluatorRef])
 //   - [ai.WithEvaluatorName]: Specify evaluator by name string
 //   - [ai.WithDataset]: Provide the dataset of examples to evaluate
 //   - [ai.WithID]: Set a unique identifier for this evaluation run

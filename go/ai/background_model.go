@@ -41,7 +41,7 @@ type BackgroundModel struct {
 
 var (
 	_ api.Action = (*BackgroundModel)(nil)
-	_ Named      = (*BackgroundModel)(nil)
+	_ ModelArg   = (*BackgroundModel)(nil)
 )
 
 // ModelOperation is a background operation for a model.
@@ -184,6 +184,8 @@ func (m *BackgroundModel) Name() string {
 	}
 	return m.backgroundAction.Name()
 }
+
+func (m *BackgroundModel) modelArg() {}
 
 // GenerateOperation generates a model response as a long-running operation based on the provided options.
 func GenerateOperation(ctx context.Context, r *registry.Registry, opts ...GenerateOption) (*ModelOperation, error) {

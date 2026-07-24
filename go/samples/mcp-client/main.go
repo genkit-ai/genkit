@@ -55,7 +55,7 @@ func clientExample() {
 	tools, _ := client.GetActiveTools(ctx, g)
 	logger.FromContext(ctx).Info("Found MCP time tools", "count", len(tools), "client", "mcp-time")
 
-	var toolArgs []ai.Named
+	var toolArgs []ai.ToolArg
 	for _, tool := range tools {
 		toolArgs = append(toolArgs, tool)
 	}
@@ -110,7 +110,7 @@ func managerExample() {
 	tools, _ := host.GetActiveTools(ctx, g)
 	logger.FromContext(ctx).Info("Found MCP tools", "count", len(tools))
 
-	var toolArgs []ai.Named
+	var toolArgs []ai.ToolArg
 	for _, tool := range tools {
 		toolArgs = append(toolArgs, tool)
 	}

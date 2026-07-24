@@ -42,7 +42,7 @@ var defaultFallbackStatuses = []status.Name{
 // It only hooks the Model stage -- when a model API call fails with a matching
 // status, the request is forwarded to the next model in the list.
 //
-// Models are specified as [ai.ActionRef] values (created via [ai.NewActionRef])
+// Models are specified as [ai.ModelRef] values (created via [ai.NewModelRef])
 // and resolved via the [genkit.Genkit] instance at call time.
 //
 // Usage:
@@ -50,7 +50,7 @@ var defaultFallbackStatuses = []status.Name{
 //	resp, err := g.Generate(ctx,
 //	    ai.WithModel(primary),
 //	    ai.WithPrompt("hello"),
-//	    ai.WithUse(&middleware.Fallback{Models: []ai.ActionRef{
+//	    ai.WithUse(&middleware.Fallback{Models: []ai.ModelRef{
 //	        googlegenai.ModelRef("googleai/gemini-2.5-flash", ...),
 //	        googlegenai.ModelRef("vertexai/gemini-2.5-flash", ...),
 //	    }}),
@@ -59,8 +59,8 @@ type Fallback struct {
 	// Models is the ordered list of fallback models to try.
 	// These are tried in order after the primary model fails. Each ref's
 	// Config is used verbatim for that model -- the original request's
-	// Config is not inherited. Use [ai.NewActionRef] to attach config.
-	Models []ai.ActionRef `json:"models,omitempty"`
+	// Config is not inherited. Use [ai.NewModelRef] to attach config.
+	Models []ai.ModelRef `json:"models,omitempty"`
 	// Statuses is the set of status codes that trigger a fallback. An error
 	// carrying no status counts as INTERNAL for this check.
 	// Defaults to [defaultFallbackStatuses].

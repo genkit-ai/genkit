@@ -428,7 +428,7 @@ func TestResolveUniqueTools(t *testing.T) {
 			return true, nil
 		})
 
-		names, newTools, err := resolveUniqueTools(r, []Named{
+		names, newTools, err := resolveUniqueTools(r, []ToolArg{
 			ToolName("provider/tool1"),
 			ToolName("provider/tool2"),
 		})
@@ -445,7 +445,7 @@ func TestResolveUniqueTools(t *testing.T) {
 
 	t.Run("returns error for duplicate tools", func(t *testing.T) {
 		r := newTestRegistry(t)
-		_, _, err := resolveUniqueTools(r, []Named{
+		_, _, err := resolveUniqueTools(r, []ToolArg{
 			ToolName("provider/dup"),
 			ToolName("provider/dup"),
 		})
@@ -460,7 +460,7 @@ func TestResolveUniqueTools(t *testing.T) {
 			return "new", nil
 		})
 
-		names, newTools, err := resolveUniqueTools(r, []Named{newTl})
+		names, newTools, err := resolveUniqueTools(r, []ToolArg{newTl})
 		if err != nil {
 			t.Fatalf("resolveUniqueTools error: %v", err)
 		}

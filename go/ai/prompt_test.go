@@ -236,7 +236,7 @@ func TestValidPrompt(t *testing.T) {
 		promptFn       PromptFn
 		messages       []*Message
 		messagesFn     MessagesFn
-		tools          []Named
+		tools          []ToolArg
 		config         *GenerationCommonConfig
 		inputType      any
 		input          any
@@ -446,7 +446,7 @@ func TestValidPrompt(t *testing.T) {
 			inputType:  HelloPromptInput{},
 			systemText: "say hello",
 			promptText: "my name is foo",
-			tools:      []Named{testTool(reg, "testTool")},
+			tools:      []ToolArg{testTool(reg, "testTool")},
 			input:      HelloPromptInput{Name: "foo"},
 
 			wantTextOutput: "Echo: system: tool: say hello; my name is foo; ; Bar; ; config: {\n  \"temperature\": 11\n}; context: null",
@@ -537,7 +537,7 @@ func TestValidPrompt(t *testing.T) {
 			inputType:  HelloPromptInput{},
 			systemText: "say hello",
 			promptText: "my name is foo",
-			tools:      []Named{testTool(reg, "promptTool")},
+			tools:      []ToolArg{testTool(reg, "promptTool")},
 			input:      HelloPromptInput{Name: "foo"},
 			executeOptions: []PromptExecuteOption{
 				WithTools(testTool(reg, "executeOverrideTool")),
@@ -2822,7 +2822,7 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		}
 	})
 
-	t.Run("ActionRef config used when no explicit config", func(t *testing.T) {
+	t.Run("ModelRef config used when no explicit config", func(t *testing.T) {
 		r := newTestRegistry(t)
 		var captured *ModelRequest
 
@@ -2832,15 +2832,15 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 			handler: capturingModelHandler(&captured),
 		})
 
-		// Create ActionRef with embedded config
-		modelRef := NewActionRef("test/modelRefConfigModel", &GenerationCommonConfig{Temperature: 0.7})
+		// Create ModelRef with embedded config
+		modelRef := NewModelRef("test/modelRefConfigModel", &GenerationCommonConfig{Temperature: 0.7})
 
 		p := DefinePrompt[any](r, "modelRefConfigPrompt",
 			WithModel(modelRef),
 			WithPrompt("test"),
 		)
 
-		// Execute without config - should use ActionRef's config
+		// Execute without config - should use ModelRef's config
 		_, _, err := p.Execute(context.Background(), nil)
 		assertNoError(t, err)
 
@@ -2853,7 +2853,7 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 		}
 	})
 
-	t.Run("Explicit config overrides ActionRef config", func(t *testing.T) {
+	t.Run("Explicit config overrides ModelRef config", func(t *testing.T) {
 		r := newTestRegistry(t)
 		var captured *ModelRequest
 
@@ -2862,14 +2862,14 @@ func TestDefineExecuteOptionInteractions(t *testing.T) {
 			handler: capturingModelHandler(&captured),
 		})
 
-		modelRef := NewActionRef("test/modelRefOverrideModel", &GenerationCommonConfig{Temperature: 0.7})
+		modelRef := NewModelRef("test/modelRefOverrideModel", &GenerationCommonConfig{Temperature: 0.7})
 
 		p := DefinePrompt[any](r, "modelRefOverridePrompt",
 			WithModel(modelRef),
 			WithPrompt("test"),
 		)
 
-		// Execute with explicit config - should override ActionRef's config
+		// Execute with explicit config - should override ModelRef's config
 		_, _, err := p.Execute(context.Background(),
 			nil,
 			WithConfig(&GenerationCommonConfig{Temperature: 0.3}),

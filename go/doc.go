@@ -364,7 +364,7 @@ accept options from the [ai] package to control behavior. The most common option
 
 Model and Configuration:
 
-  - [ai.WithModel]: Specify the model (accepts [ai.ActionRef] or plugin model refs)
+  - [ai.WithModel]: Specify the model (accepts [ai.ModelRef] or plugin model refs)
   - [ai.WithModelName]: Specify model by name string (e.g., "googleai/gemini-2.5-flash")
   - [ai.WithConfig]: Set generation parameters (temperature, max tokens, etc.)
 

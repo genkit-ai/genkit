@@ -48,8 +48,8 @@ type Evaluator struct {
 }
 
 var (
-	_ api.Action = (*Evaluator)(nil)
-	_ Named      = (*Evaluator)(nil)
+	_ api.Action   = (*Evaluator)(nil)
+	_ EvaluatorArg = (*Evaluator)(nil)
 )
 
 // Example is a single example that requires evaluation
@@ -324,6 +324,8 @@ func (e *Evaluator) Name() string {
 	return e.action.Name()
 }
 
+func (e *Evaluator) evaluatorArg() {}
+
 // Evaluate runs the given [Evaluator].
 func (e *Evaluator) Evaluate(ctx context.Context, req *EvaluatorRequest) (*EvaluatorResponse, error) {
 	if e == nil {
@@ -353,7 +355,7 @@ func Evaluate(ctx context.Context, r api.Registry, opts ...EvaluatorOption) (*Ev
 		return nil, fmt.Errorf("ai.Evaluate: evaluator not found: %s", evalOpts.Evaluator.Name())
 	}
 
-	if ref, ok := evalOpts.Evaluator.(ActionRef); ok && evalOpts.Config == nil {
+	if ref, ok := evalOpts.Evaluator.(EvaluatorRef); ok && evalOpts.Config == nil {
 		evalOpts.Config = ref.Config()
 	}
 

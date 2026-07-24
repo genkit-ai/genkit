@@ -61,7 +61,7 @@ func client() {
 	logger.FromContext(ctx).Info("Connected to MCP server", "tools", getToolNames(tools))
 
 	// Convert to ToolArg values
-	var toolArgs []ai.Named
+	var toolArgs []ai.ToolArg
 	for _, tool := range tools {
 		toolArgs = append(toolArgs, tool)
 	}

@@ -38,8 +38,8 @@ type Embedder struct {
 }
 
 var (
-	_ api.Action = (*Embedder)(nil)
-	_ Named      = (*Embedder)(nil)
+	_ api.Action  = (*Embedder)(nil)
+	_ EmbedderArg = (*Embedder)(nil)
 )
 
 // EmbedderSupports represents the supported capabilities of the embedder model.
@@ -156,6 +156,8 @@ func (e *Embedder) Name() string {
 	return e.action.Name()
 }
 
+func (e *Embedder) embedderArg() {}
+
 // Embed runs the given [Embedder].
 func (e *Embedder) Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
 	if e == nil {
@@ -185,7 +187,7 @@ func Embed(ctx context.Context, r api.Registry, opts ...EmbedderOption) (*EmbedR
 		return nil, fmt.Errorf("ai.Embed: embedder not found: %s", embedOpts.Embedder.Name())
 	}
 
-	if ref, ok := embedOpts.Embedder.(ActionRef); ok && embedOpts.Config == nil {
+	if ref, ok := embedOpts.Embedder.(EmbedderRef); ok && embedOpts.Config == nil {
 		embedOpts.Config = ref.Config()
 	}
 

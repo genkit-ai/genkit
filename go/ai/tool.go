@@ -44,8 +44,8 @@ type ToolFunc[In, Out any] = func(ctx context.Context, input In) (Out, error)
 type InterruptibleToolFunc[In, Out, Res any] = func(ctx context.Context, input In, resume *Res) (Out, error)
 
 // ToolName is a distinct type for a tool name.
-// It is meant to be passed where a [Named] is expected (e.g. [WithTools]) but
-// no tool value is had.
+// It is meant to be passed where a [ToolArg] is expected (e.g. [WithTools])
+// but no tool value is had.
 type ToolName string
 
 // Name returns the name of the tool.
@@ -53,12 +53,19 @@ func (t ToolName) Name() string {
 	return (string)(t)
 }
 
+func (ToolName) toolArg() {}
+
 // AnyTool is the type-erased handle for a tool, used where the concrete
 // input/output types are not known: registry lookups, the generate loop, and
 // middleware. Typed tools ([*Tool], [*InterruptibleTool]) implement it.
+//
+// Embedding [ToolArg] seals AnyTool to this package: tools are built with
+// [NewTool], [DefineTool], and their interruptible counterparts, which is the
+// only supported way to supply one. Behavior around a tool call is customized
+// with a [Hooks.WrapTool] middleware hook rather than by reimplementing this
+// interface.
 type AnyTool interface {
-	// Name returns the name of the tool.
-	Name() string
+	ToolArg
 	// Definition returns the definition for this tool to be passed to models.
 	Definition() *ToolDefinition
 	// RunRaw runs this tool using the provided raw input and returns the full
@@ -200,7 +207,7 @@ type InterruptibleTool[In, Out, Res any] struct {
 	tool[In, Out]
 }
 
-// Tools are registerable and can be passed as [Named] (e.g. to [WithTools]),
+// Tools are registerable and can be passed as [ToolArg] (e.g. to [WithTools]),
 // but are intentionally not [api.Action]: the raw action surface (RunJSON,
 // Desc) speaks the internal multipart envelope, which [Tool.RunRaw] and
 // [Tool.Definition] translate out of.
@@ -208,8 +215,8 @@ var (
 	_ AnyTool          = (*Tool[any, any])(nil)
 	_ AnyTool          = (*InterruptibleTool[any, any, any])(nil)
 	_ api.Registerable = (*Tool[any, any])(nil)
-	_ Named            = (*Tool[any, any])(nil)
-	_ Named            = ToolName("")
+	_ ToolArg          = (*Tool[any, any])(nil)
+	_ ToolArg          = ToolName("")
 )
 
 // DefineTool creates a new [Tool] and registers it.
@@ -368,6 +375,8 @@ func newTool[In, Out any](fnName, name, description string, fn ToolFunc[In, Out]
 func (t *Tool[In, Out]) Name() string {
 	return t.action.Name()
 }
+
+func (t *Tool[In, Out]) toolArg() {}
 
 // Definition returns the [ToolDefinition] for this tool to be passed to models.
 func (t *Tool[In, Out]) Definition() *ToolDefinition {
@@ -603,7 +612,7 @@ func LookupTool(r api.Registry, name string) AnyTool {
 
 // resolveUniqueTools resolves the list of tool refs to a list of all tool names and new tools that must be registered.
 // Returns an error if there are tool refs with duplicate names.
-func resolveUniqueTools(r api.Registry, toolArgs []Named) (toolNames []string, newTools []AnyTool, err error) {
+func resolveUniqueTools(r api.Registry, toolArgs []ToolArg) (toolNames []string, newTools []AnyTool, err error) {
 	toolMap := make(map[string]bool)
 
 	for _, toolRef := range toolArgs {

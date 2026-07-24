@@ -69,11 +69,11 @@ type Model struct {
 }
 
 // Model is a full registry action and can be passed anywhere an [api.Action]
-// is accepted (e.g. [genkit.Handler]) as well as anywhere a [Named] is
+// is accepted (e.g. [genkit.Handler]) as well as anywhere a [ModelArg] is
 // accepted (e.g. [WithModel]).
 var (
 	_ api.Action = (*Model)(nil)
-	_ Named      = (*Model)(nil)
+	_ ModelArg   = (*Model)(nil)
 )
 
 // generateAction is the type for a utility model generation action that takes in a GenerateActionOptions instead of a ModelRequest.
@@ -694,7 +694,7 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 		messages = append(messages, NewUserTextMessage(prompt))
 	}
 
-	if ref, ok := genOpts.Model.(ActionRef); ok && genOpts.Config == nil {
+	if ref, ok := genOpts.Model.(ModelRef); ok && genOpts.Config == nil {
 		if cfg := ref.Config(); !base.IsNil(cfg) {
 			genOpts.Config = cfg
 		}
@@ -916,6 +916,8 @@ func (m *Model) Name() string {
 	}
 	return m.action.Name()
 }
+
+func (m *Model) modelArg() {}
 
 // Generate applies the [Model] to the provided request, optionally streaming
 // chunks through cb.

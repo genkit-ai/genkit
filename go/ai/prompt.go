@@ -125,7 +125,7 @@ func definePrompt[In, Out, Stream any](r api.Registry, name string, opts []Promp
 		modelName = pOpts.Model.Name()
 	}
 
-	if ref, ok := pOpts.Model.(ActionRef); ok && pOpts.Config == nil {
+	if ref, ok := pOpts.Model.(ModelRef); ok && pOpts.Config == nil {
 		pOpts.Config = ref.Config()
 	}
 
@@ -265,7 +265,7 @@ func (p *Prompt[In, Out, Stream]) execute(ctx context.Context, input In, opts []
 		return nil, err
 	}
 
-	if ref, ok := execOpts.Model.(ActionRef); ok && execOpts.Config == nil {
+	if ref, ok := execOpts.Model.(ModelRef); ok && execOpts.Config == nil {
 		execOpts.Config = ref.Config()
 	}
 
@@ -329,7 +329,7 @@ func (p *Prompt[In, Out, Stream]) execute(ctx context.Context, input In, opts []
 
 	toolArgs := execOpts.Tools
 	if len(toolArgs) == 0 {
-		toolArgs = make([]Named, 0, len(actionOpts.Tools))
+		toolArgs = make([]ToolArg, 0, len(actionOpts.Tools))
 		for _, toolName := range actionOpts.Tools {
 			toolArgs = append(toolArgs, ToolName(toolName))
 		}
@@ -575,7 +575,7 @@ func (p *Prompt[In, Out, Stream]) buildRequest(ctx context.Context, input any) (
 	}
 
 	config := p.Config
-	if ref, ok := p.Model.(ActionRef); ok && config == nil {
+	if ref, ok := p.Model.(ModelRef); ok && config == nil {
 		config = ref.Config()
 	}
 
@@ -881,7 +881,7 @@ func LoadPromptFromSource(r api.Registry, source, name, namespace string) (*Text
 		return nil, fmt.Errorf("failed to render dotprompt metadata: %w", err)
 	}
 
-	toolArgs := make([]Named, len(metadata.Tools))
+	toolArgs := make([]ToolArg, len(metadata.Tools))
 	for i, tool := range metadata.Tools {
 		toolArgs[i] = ToolName(tool)
 	}
@@ -909,7 +909,7 @@ func LoadPromptFromSource(r api.Registry, source, name, namespace string) (*Text
 			configOptions: configOptions{
 				Config: (map[string]any)(metadata.Config),
 			},
-			Model: NewActionRef(metadata.Model, nil),
+			Model: NewModelRef(metadata.Model, nil),
 			Tools: toolArgs,
 		},
 		inputOptions: inputOptions{

@@ -332,7 +332,7 @@ func DefineAssistantWithInlinePrompt(g *genkit.Genkit) {
 		ai.WithUse(
 			&middleware.Retry{MaxRetries: 2},
 			&middleware.Fallback{
-				Models: []ai.ActionRef{
+				Models: []ai.ModelRef{
 					googlegenai.ModelRef("googleai/gemini-3.1-flash-preview", nil),
 					googlegenai.ModelRef("googleai/gemini-3.1-pro-preview", &genai.GenerateContentConfig{
 						Temperature: genai.Ptr[float32](2.0),
