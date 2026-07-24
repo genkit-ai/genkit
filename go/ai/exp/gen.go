@@ -20,7 +20,7 @@ package exp
 
 import (
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"time"
 )
 
@@ -171,7 +171,7 @@ type AgentOutput[State any] struct {
 	// failure (FinishReason is [AgentFinishReasonFailed]). Its Status preserves
 	// the original error category (e.g. INVALID_ARGUMENT, FAILED_PRECONDITION,
 	// INTERNAL) so callers can still branch on it. Nil otherwise.
-	Error *core.GenkitError `json:"error,omitempty"`
+	Error *status.Error `json:"error,omitempty"`
 	// FinishReason is why the invocation finished. It is
 	// [AgentFinishReasonDetached] when the client detached and the work continues
 	// in the background, or [AgentFinishReasonFailed] when the invocation ended
@@ -324,7 +324,7 @@ type SessionSnapshot[State any] struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// Error is the structured failure information for a snapshot in
 	// [SnapshotStatusFailed]. Nil otherwise.
-	Error *core.GenkitError `json:"error,omitempty"`
+	Error *status.Error `json:"error,omitempty"`
 	// FinishReason is the semantic reason the turn or invocation captured here
 	// ended (e.g. [AgentFinishReasonStop], [AgentFinishReasonInterrupted],
 	// [AgentFinishReasonFailed], [AgentFinishReasonAborted]). It complements
@@ -435,7 +435,7 @@ type TurnEnd struct {
 	// [AgentFinishReasonFailed] reports a failed turn; unless the agent
 	// recovers and keeps processing, the invocation then resolves with a failed
 	// [AgentOutput] carrying the error and the last-good state, and further
-	// sends fail with [core.ErrActionCompleted].
+	// sends fail with [github.com/firebase/genkit/go/core.ErrActionCompleted].
 	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
 	// SnapshotID is the ID of the snapshot persisted at the end of this turn.
 	// Empty if no snapshot was written (no store configured, the turn failed, or

@@ -36,6 +36,7 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal"
 	"github.com/firebase/genkit/go/internal/base"
@@ -335,7 +336,7 @@ func wrapReflectionHandler(h func(w http.ResponseWriter, r *http.Request) error)
 		w.Header().Set("x-genkit-version", "go/"+internal.Version)
 
 		if err = h(w, r); err != nil {
-			errorResponse := core.ToReflectionError(err)
+			errorResponse := toReflectionError(err)
 			w.WriteHeader(errorResponse.Code)
 			writeJSON(ctx, w, errorResponse)
 		}
@@ -357,7 +358,7 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 		}
 		defer r.Body.Close()
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			return core.NewError(core.INVALID_ARGUMENT, err.Error())
+			return status.Errorf(status.ErrInvalidArgument, "invalid request body: %w", err)
 		}
 
 		stream, err := parseBoolQueryParam(r, "stream")
@@ -450,10 +451,10 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 					traceIDPtr = &resp.Telemetry.TraceID
 				}
 				errResp := errorResponse{
-					Error: core.ReflectionError{
-						Code:    core.CodeCancelled, // gRPC CANCELLED = 1
+					Error: reflectionError{
+						Code:    status.Cancelled.Code(),
 						Message: "Action was cancelled",
-						Details: &core.ReflectionErrorDetails{
+						Details: &reflectionErrorDetails{
 							TraceID: traceIDPtr,
 						},
 					},
@@ -474,7 +475,7 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 
 			// Handle other errors
 			if stream {
-				refErr := core.ToReflectionError(err)
+				refErr := toReflectionError(err)
 				if resp != nil && resp.Telemetry.TraceID != "" {
 					refErr.Details.TraceID = &resp.Telemetry.TraceID
 				}
@@ -492,7 +493,7 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 			}
 
 			// Non-streaming error
-			errorResponse := core.ToReflectionError(err)
+			errorResponse := toReflectionError(err)
 			if resp != nil && resp.Telemetry.TraceID != "" {
 				errorResponse.Details.TraceID = &resp.Telemetry.TraceID
 			}
@@ -544,11 +545,11 @@ func handleCancelAction(activeActions *activeActionsMap) func(w http.ResponseWri
 
 		defer r.Body.Close()
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			return core.NewError(core.INVALID_ARGUMENT, err.Error())
+			return status.Errorf(status.ErrInvalidArgument, "invalid request body: %w", err)
 		}
 
 		if body.TraceID == "" {
-			return core.NewError(core.INVALID_ARGUMENT, "traceId is required")
+			return status.Errorf(status.ErrInvalidArgument, "traceId is required")
 		}
 
 		action, exists := activeActions.Get(body.TraceID)
@@ -597,7 +598,7 @@ func handleNotify() func(w http.ResponseWriter, r *http.Request) error {
 
 		defer r.Body.Close()
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			return core.NewError(core.INVALID_ARGUMENT, err.Error())
+			return status.Errorf(status.ErrInvalidArgument, "invalid request body: %w", err)
 		}
 
 		configureTelemetry(body.TelemetryServerURL)
@@ -631,7 +632,7 @@ func handleListValues(g *Genkit) func(w http.ResponseWriter, r *http.Request) er
 	return func(w http.ResponseWriter, r *http.Request) error {
 		valueType := r.URL.Query().Get("type")
 		if valueType == "" {
-			return core.NewError(core.INVALID_ARGUMENT, `query parameter "type" is required`)
+			return status.Errorf(status.ErrInvalidArgument, `query parameter "type" is required`)
 		}
 		prefix := "/" + valueType + "/"
 		result := map[string]any{}
@@ -744,13 +745,49 @@ type telemetry struct {
 }
 
 type errorResponse struct {
-	Error core.ReflectionError `json:"error"`
+	Error reflectionError `json:"error"`
+}
+
+// reflectionError is the wire format for errors in Reflection API responses.
+// It is the dev-time envelope around a [status.Error]: unlike the canonical
+// error wire shape it reports an integer code and carries the stack trace and
+// trace ID the Dev UI uses to link a failure to its span.
+type reflectionError struct {
+	Details *reflectionErrorDetails `json:"details,omitempty"`
+	Message string                  `json:"message"`
+	Code    int                     `json:"code"`
+}
+
+type reflectionErrorDetails struct {
+	Stack   *string `json:"stack,omitempty"`
+	TraceID *string `json:"traceId,omitempty"`
+}
+
+// toReflectionError renders err for a Reflection API response. Details is
+// always non-nil so callers can attach a trace ID to it.
+//
+// This is the one place that deliberately exposes internal error text: the
+// reflection server only ever serves the local Dev UI.
+func toReflectionError(err error) reflectionError {
+	e := status.Convert(err)
+	details := &reflectionErrorDetails{}
+	if stack := e.Stack(); stack != "" {
+		details.Stack = &stack
+	}
+	if traceID, ok := e.Details["traceId"].(string); ok {
+		details.TraceID = &traceID
+	}
+	return reflectionError{
+		Details: details,
+		Code:    e.HTTPCode(),
+		Message: e.Message,
+	}
 }
 
 func runAction(ctx context.Context, g *Genkit, key string, input, init json.RawMessage, telemetryLabels json.RawMessage, cb streamingCallback[json.RawMessage], runtimeContext map[string]any) (*runActionResponse, error) {
 	action := g.reg.ResolveAction(key)
 	if action == nil {
-		return nil, core.NewError(core.NOT_FOUND, "action %q not found", key)
+		return nil, status.Errorf(status.ErrActionNotFound, "action %q not found", key)
 	}
 	ctx = core.WithActionContext(ctx, runtimeContext)
 
@@ -759,7 +796,7 @@ func runAction(ctx context.Context, g *Genkit, key string, input, init json.RawM
 		var telemetryAttributes map[string]string
 		err := json.Unmarshal(telemetryLabels, &telemetryAttributes)
 		if err != nil {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "Error unmarshalling telemetryLabels: %v", err)
+			return nil, status.Errorf(status.ErrInvalidArgument, "invalid telemetryLabels: %w", err)
 		}
 		ctx = tracing.WithTelemetryLabels(ctx, telemetryAttributes)
 	}
@@ -796,7 +833,7 @@ func runAction(ctx context.Context, g *Genkit, key string, input, init json.RawM
 func checkInitSupported(a api.Action, init json.RawMessage) error {
 	if base.HasJSONValue(init) {
 		if _, ok := a.(api.BidiAction); !ok {
-			return core.NewError(core.INVALID_ARGUMENT, "action %q does not accept init", a.Name())
+			return status.PublicErrorf(status.ErrInvalidArgument, "action %q does not accept init", a.Name())
 		}
 	}
 	return nil

@@ -18,23 +18,22 @@ package middleware
 
 import (
 	"context"
-	"errors"
 	"slices"
 
 	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // defaultFallbackStatuses are the status codes that trigger a fallback by default.
-var defaultFallbackStatuses = []core.StatusName{
-	core.UNAVAILABLE,
-	core.DEADLINE_EXCEEDED,
-	core.RESOURCE_EXHAUSTED,
-	core.ABORTED,
-	core.INTERNAL,
-	core.NOT_FOUND,
-	core.UNIMPLEMENTED,
+var defaultFallbackStatuses = []status.Name{
+	status.Unavailable,
+	status.DeadlineExceeded,
+	status.ResourceExhausted,
+	status.Aborted,
+	status.Internal,
+	status.NotFound,
+	status.Unimplemented,
 }
 
 // Fallback is a middleware that tries alternative models when the primary model
@@ -62,11 +61,10 @@ type Fallback struct {
 	// Config is used verbatim for that model -- the original request's
 	// Config is not inherited. Use [ai.NewActionRef] to attach config.
 	Models []ai.ActionRef `json:"models,omitempty"`
-	// Statuses is the set of status codes that trigger a fallback.
-	// Only [core.GenkitError] errors with a matching status will trigger fallback;
-	// non-GenkitError errors propagate immediately.
+	// Statuses is the set of status codes that trigger a fallback. An error
+	// carrying no status counts as INTERNAL for this check.
 	// Defaults to [defaultFallbackStatuses].
-	Statuses []core.StatusName `json:"statuses,omitempty"`
+	Statuses []status.Name `json:"statuses,omitempty"`
 }
 
 func (f *Fallback) Name() string { return provider + "/fallback" }
@@ -77,7 +75,7 @@ func (f *Fallback) New(ctx context.Context) (*ai.Hooks, error) {
 	}, nil
 }
 
-func (f *Fallback) statuses() []core.StatusName {
+func (f *Fallback) statuses() []status.Name {
 	if len(f.Statuses) > 0 {
 		return f.Statuses
 	}
@@ -99,7 +97,7 @@ func (f *Fallback) wrapModel(ctx context.Context, params *ai.ModelParams, next a
 		name := ref.Name()
 		m := genkit.FromContext(ctx).LookupModel(name)
 		if m == nil {
-			return nil, core.NewError(core.NOT_FOUND, "fallback: model %q not found", name)
+			return nil, status.Errorf(ai.ErrModelNotFound, "fallback: model %q not found", name)
 		}
 		req := *params.Request
 		req.Config = ref.Config()
@@ -115,12 +113,10 @@ func (f *Fallback) wrapModel(ctx context.Context, params *ai.ModelParams, next a
 	return nil, lastErr
 }
 
-// isFallbackRetryable reports whether err should trigger trying the next model.
-// Only GenkitErrors with a matching status trigger fallback.
-func isFallbackRetryable(err error, statuses []core.StatusName) bool {
-	var ge *core.GenkitError
-	if !errors.As(err, &ge) {
-		return false
-	}
-	return slices.Contains(statuses, ge.Status)
+// isFallbackRetryable reports whether err should trigger trying the next model:
+// its status must be in the provided list. An error carrying no status counts
+// as INTERNAL, which the default list includes, so an unclassified provider
+// failure still falls through to the next model.
+func isFallbackRetryable(err error, statuses []status.Name) bool {
+	return slices.Contains(statuses, status.Of(err))
 }

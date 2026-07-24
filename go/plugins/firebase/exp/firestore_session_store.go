@@ -44,7 +44,7 @@ import (
 	"cloud.google.com/go/firestore"
 	genkit "github.com/firebase/genkit/go"
 	aix "github.com/firebase/genkit/go/ai/exp"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/plugins/firebase"
 	"github.com/google/uuid"
 )
@@ -192,7 +192,7 @@ type snapshotDoc struct {
 	Status       string     `firestore:"status,omitempty"`
 	HeartbeatAt  *time.Time `firestore:"heartbeatAt,omitempty"`
 	FinishReason string     `firestore:"finishReason,omitempty"`
-	// Error is a JSON-encoded *core.GenkitError, or nil.
+	// Error is a JSON-encoded *status.Error, or nil.
 	Error []byte `firestore:"error,omitempty"`
 	// Kind is "diff" or "checkpoint".
 	Kind string `firestore:"kind"`
@@ -575,7 +575,7 @@ func (s *FirestoreSessionStore[State]) SaveSnapshot(
 			// per-session pointer by session ID and cannot persist a session-less
 			// row. The runtime stamps a session ID on every row it writes, so an
 			// empty one indicates misuse. Matches the other session stores.
-			return core.NewError(core.INVALID_ARGUMENT, "FirestoreSessionStore requires sessionId to be set on the snapshot")
+			return status.Errorf(aix.ErrSessionIDRequired, "FirestoreSessionStore: snapshot %q has no session ID", next.SnapshotID)
 		}
 		next.SessionID = sessionID
 		if next.Status == "" {
@@ -913,7 +913,7 @@ func (s *FirestoreSessionStore[State]) toSnapshot(doc snapshotDoc, stateAny any)
 		State:        state,
 	}
 	if len(doc.Error) > 0 {
-		var ge core.GenkitError
+		var ge status.Error
 		if err := json.Unmarshal(doc.Error, &ge); err != nil {
 			return nil, fmt.Errorf("unmarshal error: %w", err)
 		}

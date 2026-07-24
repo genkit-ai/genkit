@@ -25,7 +25,7 @@ import (
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // DownloadRequestMedia is a middleware that downloads media referenced by an
@@ -97,13 +97,13 @@ func (d *DownloadRequestMedia) download(req *ai.ModelRequest) error {
 
 			resp, err := client.Get(mediaURL)
 			if err != nil {
-				return core.NewError(core.INVALID_ARGUMENT, "HTTP error downloading media %q: %v", mediaURL, err)
+				return status.Errorf(status.ErrInvalidArgument, "downloading media %q: %w", mediaURL, err)
 			}
 			defer resp.Body.Close()
 
 			if resp.StatusCode != http.StatusOK {
 				body, _ := io.ReadAll(resp.Body)
-				return core.NewError(core.UNKNOWN, "HTTP error downloading media %q: %s", mediaURL, string(body))
+				return status.Errorf(status.ErrUnknown, "HTTP error downloading media %q: %s", mediaURL, string(body))
 			}
 
 			contentType := part.ContentType
@@ -118,7 +118,7 @@ func (d *DownloadRequestMedia) download(req *ai.ModelRequest) error {
 				data, err = io.ReadAll(resp.Body)
 			}
 			if err != nil {
-				return core.NewError(core.UNKNOWN, "error reading media %q: %v", mediaURL, err)
+				return status.Errorf(status.ErrUnknown, "reading media %q: %w", mediaURL, err)
 			}
 
 			message.Content[j] = ai.NewMediaPart(contentType, fmt.Sprintf("data:%s;base64,%s", contentType, base64.StdEncoding.EncodeToString(data)))

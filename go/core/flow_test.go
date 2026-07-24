@@ -21,6 +21,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -146,7 +147,7 @@ func TestFlowStream(t *testing.T) {
 	t.Run("yields error on flow failure", func(t *testing.T) {
 		r := registry.New()
 		f := DefineStreamingFlow(r, "failing", func(ctx context.Context, input int, cb StreamCallback[int]) (int, error) {
-			return 0, NewError(INTERNAL, "flow failed")
+			return 0, status.Errorf(status.ErrInternal, "flow failed")
 		})
 
 		var gotErr error

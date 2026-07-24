@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai/exp"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/google/uuid"
 )
 
@@ -217,7 +217,7 @@ func (s *FileSessionStore[State]) SaveSnapshot(
 		// A snapshot must belong to a session; stores never mint or infer one. The
 		// runtime stamps a session ID on every row it writes, so an empty one
 		// indicates misuse.
-		return nil, core.NewError(core.INVALID_ARGUMENT, "FileSessionStore requires sessionId to be set on the snapshot")
+		return nil, status.Errorf(exp.ErrSessionIDRequired, "FileSessionStore: snapshot %q has no session ID", next.SnapshotID)
 	}
 	// The session ID names the per-session pointer file, so it must be a safe
 	// path segment - the same rule snapshot IDs and prefixes obey. Reject up

@@ -18,10 +18,12 @@ package core_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -181,17 +183,20 @@ func ExampleChainMiddleware() {
 	// Final: HELLO
 }
 
-// This example demonstrates creating user-facing errors.
-func ExampleNewPublicError() {
-	// Create a user-facing error with details
-	err := core.NewPublicError(core.INVALID_ARGUMENT, "Invalid email format", map[string]any{
-		"field": "email",
-		"value": "not-an-email",
-	})
+// This example demonstrates creating errors whose message is safe to return
+// to a client.
+func ExamplePublicErrorf() {
+	err := status.PublicErrorf(status.ErrInvalidArgument, "invalid email format").
+		WithDetails(map[string]any{
+			"field": "email",
+			"value": "not-an-email",
+		})
 
 	fmt.Println("Status:", err.Status)
 	fmt.Println("Message:", err.Message)
+	fmt.Println("Is invalid argument:", errors.Is(err, status.ErrInvalidArgument))
 	// Output:
 	// Status: INVALID_ARGUMENT
-	// Message: Invalid email format
+	// Message: invalid email format
+	// Is invalid argument: true
 }

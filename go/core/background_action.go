@@ -20,6 +20,7 @@ import (
 	"context"
 
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // StartOpFunc starts a background operation.
@@ -64,7 +65,7 @@ func (b *BackgroundAction[In, Out]) Check(ctx context.Context, op *Operation[Out
 // Cancel attempts to cancel a background operation. It returns an error if the background action does not support cancellation.
 func (b *BackgroundAction[In, Out]) Cancel(ctx context.Context, op *Operation[Out]) (*Operation[Out], error) {
 	if !b.SupportsCancel() {
-		return nil, NewError(UNAVAILABLE, "model %q does not support canceling operations", b.Name())
+		return nil, status.Errorf(status.ErrUnavailable, "model %q does not support canceling operations", b.Name())
 	}
 
 	return b.cancel.Run(ctx, op, nil)
@@ -197,16 +198,16 @@ func LookupBackgroundAction[In, Out any](r api.Registry, key string) *Background
 // CheckOperation checks the status of a background operation by looking up the action and calling its Check method.
 func CheckOperation[In, Out any](ctx context.Context, r api.Registry, op *Operation[Out]) (*Operation[Out], error) {
 	if op == nil {
-		return nil, NewError(INVALID_ARGUMENT, "core.CheckOperation: operation is nil")
+		return nil, status.Errorf(status.ErrInvalidArgument, "core.CheckOperation: operation is nil")
 	}
 
 	if op.Action == "" {
-		return nil, NewError(INVALID_ARGUMENT, "core.CheckOperation: operation is missing original request information")
+		return nil, status.Errorf(status.ErrInvalidArgument, "core.CheckOperation: operation is missing original request information")
 	}
 
 	m := LookupBackgroundAction[In, Out](r, op.Action)
 	if m == nil {
-		return nil, NewError(INVALID_ARGUMENT, "core.CheckOperation: failed to resolve background model %q from original request", op.Action)
+		return nil, status.Errorf(status.ErrInvalidArgument, "core.CheckOperation: failed to resolve background model %q from original request", op.Action)
 	}
 
 	return m.Check(ctx, op)

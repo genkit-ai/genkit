@@ -47,7 +47,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -613,14 +613,10 @@ func assertOutput(t *testing.T, label string, output *exp.AgentOutput[customStat
 		// graceful AgentOutput. Surface this explicitly: a spec that expects a
 		// graceful failure (finishReason=failed) is not satisfied by a thrown
 		// error, so this fails — and the message makes the mismatch obvious.
-		status := "<none>"
-		var ge *core.GenkitError
-		if errors.As(invocationErr, &ge) {
-			status = string(ge.Status)
-		}
+		gotStatus := string(status.Of(invocationErr))
 		if wantsFailure {
 			t.Errorf("%s: expected a graceful failed AgentOutput, but the invocation returned a transport-level error "+
-				"(status=%s): %v", label, status, invocationErr)
+				"(status=%s): %v", label, gotStatus, invocationErr)
 		} else {
 			t.Fatalf("%s: invocation failed: %v", label, invocationErr)
 		}
@@ -725,7 +721,7 @@ func assertThrownError(t *testing.T, label string, err error, expect map[string]
 	}
 	if st, ok := expect["status"].(string); ok {
 		got := ""
-		var ge *core.GenkitError
+		var ge *status.Error
 		if errors.As(err, &ge) {
 			got = string(ge.Status)
 		}

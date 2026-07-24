@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // TestStreamTransform_RedactsModelChunksOnWire verifies a stream transform that
@@ -277,11 +277,11 @@ func TestStreamTransform_ReshapesTurnEnd(t *testing.T) {
 func TestStreamTransform_ErrorFailsInvocationClosed(t *testing.T) {
 	transform := func(_ context.Context, c *AgentStreamChunk) (*AgentStreamChunk, error) {
 		if c.ModelChunk != nil {
-			return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape chunk")
+			return nil, status.Errorf(status.ErrPermissionDenied, "cannot shape chunk")
 		}
 		return c, nil
 	}
-	assertStreamTransformFailsClosed(t, transform, core.PERMISSION_DENIED, "cannot shape chunk")
+	assertStreamTransformFailsClosed(t, transform, status.PermissionDenied, "cannot shape chunk")
 }
 
 // TestStreamTransform_PanicFailsInvocationClosed verifies a panicking transform
@@ -295,14 +295,14 @@ func TestStreamTransform_PanicFailsInvocationClosed(t *testing.T) {
 		}
 		return c, nil
 	}
-	assertStreamTransformFailsClosed(t, transform, core.INTERNAL, "panicked")
+	assertStreamTransformFailsClosed(t, transform, status.Internal, "panicked")
 }
 
 // assertStreamTransformFailsClosed runs an agent that streams one model chunk
 // through transform and asserts the invocation fails closed: the chunk never
 // reaches the wire and the output is a failure carrying wantStatus and a message
 // containing wantMsg.
-func assertStreamTransformFailsClosed(t *testing.T, transform StreamTransform, wantStatus core.StatusName, wantMsg string) {
+func assertStreamTransformFailsClosed(t *testing.T, transform StreamTransform, wantStatus status.Name, wantMsg string) {
 	t.Helper()
 	ctx := context.Background()
 	reg := newTestRegistry(t)

@@ -35,7 +35,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/exp"
 )
 
@@ -72,11 +72,11 @@ func TestHandlerAgent(t *testing.T) {
 		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			modelCalls.Add(1)
 			if len(req.Messages) == 0 {
-				return nil, core.NewError(core.INTERNAL, "model saw empty messages")
+				return nil, status.Errorf(status.ErrInternal, "model saw empty messages")
 			}
 			last := req.Messages[len(req.Messages)-1]
 			if last.Role == ai.RoleUser && strings.Contains(last.Text(), "fail") {
-				return nil, core.NewError(core.RESOURCE_EXHAUSTED, "model on fire")
+				return nil, status.Errorf(status.ErrResourceExhausted, "model on fire")
 			}
 			if cb != nil {
 				cb(ctx, &ai.ModelResponseChunk{Content: []*ai.Part{ai.NewTextPart("chunk")}})

@@ -27,6 +27,7 @@ import (
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 )
 
@@ -104,10 +105,10 @@ func validateInterruptPayload(data any, what string) error {
 // belonging to the named tool. fn is woven into error messages.
 func validateInterruptedPart(p *Part, toolName string) error {
 	if !p.IsInterrupt() {
-		return core.NewError(core.INVALID_ARGUMENT, "part (kind %s) is not an interrupted tool request", p.Kind)
+		return status.Errorf(ErrInvalidPart, "part (kind %s) is not an interrupted tool request", p.Kind)
 	}
 	if p.ToolRequest.Name != toolName {
-		return core.NewError(core.INVALID_ARGUMENT, "tool request is for %q, expected %q", p.ToolRequest.Name, toolName)
+		return status.Errorf(ErrInvalidPart, "tool request is for %q, want %q", p.ToolRequest.Name, toolName)
 	}
 	return nil
 }
@@ -416,7 +417,7 @@ func (t *Tool[In, Out]) Register(r api.Registry) {
 // [tool.AttachParts].
 func (t *Tool[In, Out]) RunRaw(ctx context.Context, input any) (*MultipartToolResponse, error) {
 	if t == nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "ai.Tool.RunRaw: tool called on a nil tool; check that all tools are defined")
+		return nil, status.Errorf(status.ErrInvalidArgument, "ai.Tool.RunRaw: tool called on a nil tool; check that all tools are defined")
 	}
 
 	mi, err := json.Marshal(input)
@@ -447,7 +448,7 @@ func (t *Tool[In, Out]) RunRaw(ctx context.Context, input any) (*MultipartToolRe
 // interrupted part belongs to this tool.
 func (t *InterruptibleTool[In, Out, Res]) Restart(interruptPart *Part, opts ...RestartOption) (*Part, error) {
 	if err := validateInterruptedPart(interruptPart, t.Name()); err != nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "InterruptibleTool.Restart: %v", err)
+		return nil, status.Errorf(status.ErrInvalidArgument, "InterruptibleTool.Restart: %w", err)
 	}
 	return newRestartPart("InterruptibleTool.Restart", interruptPart, opts)
 }
@@ -475,7 +476,7 @@ func (t *InterruptibleTool[In, Out, Res]) WithNewInput(input In) RestartOption {
 // this is the underlying constructor.
 func NewRestartPart(interruptPart *Part, opts ...RestartOption) (*Part, error) {
 	if !interruptPart.IsInterrupt() {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "ai.NewRestartPart: part is not an interrupted tool request")
+		return nil, status.Errorf(ErrInvalidPart, "ai.NewRestartPart: part is not an interrupted tool request")
 	}
 	return newRestartPart("ai.NewRestartPart", interruptPart, opts)
 }
@@ -489,12 +490,12 @@ func newRestartPart(fnName string, interruptPart *Part, opts []RestartOption) (*
 	resOpts := &restartOptions{}
 	for _, opt := range opts {
 		if err := opt.applyRestart(resOpts); err != nil {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "%s: %v", fnName, err)
+			return nil, status.Errorf(status.ErrInvalidArgument, "%s: %w", fnName, err)
 		}
 	}
 	if resOpts.resume != nil {
 		if err := validateInterruptPayload(resOpts.resume, "resume data"); err != nil {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "%s: %v", fnName, err)
+			return nil, status.Errorf(status.ErrInvalidArgument, "%s: %w", fnName, err)
 		}
 	}
 	toolReq := interruptPart.ToolRequest
@@ -519,7 +520,7 @@ func newRestartPart(fnName string, interruptPart *Part, opts []RestartOption) (*
 // interrupted part belongs to this tool and accepts a strongly-typed output.
 func (t *InterruptibleTool[In, Out, Res]) Respond(interruptPart *Part, output Out) (*Part, error) {
 	if err := validateInterruptedPart(interruptPart, t.Name()); err != nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "InterruptibleTool.Respond: %v", err)
+		return nil, status.Errorf(status.ErrInvalidArgument, "InterruptibleTool.Respond: %w", err)
 	}
 	toolResp, err := NewResponseForToolRequest(interruptPart, output)
 	if err != nil {
@@ -554,7 +555,7 @@ func resolveUniqueTools(r api.Registry, toolArgs []Named) (toolNames []string, n
 		name := toolRef.Name()
 
 		if toolMap[name] {
-			return nil, nil, core.NewError(core.INVALID_ARGUMENT, "duplicate tool %q", name)
+			return nil, nil, status.Errorf(status.ErrInvalidArgument, "duplicate tool %q", name)
 		}
 		toolMap[name] = true
 		toolNames = append(toolNames, name)

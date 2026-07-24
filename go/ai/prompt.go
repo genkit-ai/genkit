@@ -31,6 +31,7 @@ import (
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/dotprompt/go/dotprompt"
 	"github.com/invopop/jsonschema"
@@ -240,14 +241,14 @@ func outputFromResponse[Out any](resp *ModelResponse) (Out, error) {
 // model response.
 func (p *Prompt[In, Out, Stream]) execute(ctx context.Context, input In, opts []PromptExecuteOption) (*ModelResponse, error) {
 	if p == nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "Prompt.Execute: prompt is nil")
+		return nil, status.Errorf(status.ErrInvalidArgument, "Prompt.Execute: prompt is nil")
 	}
 
 	// With a dynamically typed input (In = any), an option mistakenly passed
 	// in the input position would compile; catch it here instead of rendering
 	// garbage.
 	if _, ok := any(input).(PromptExecuteOption); ok {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "Prompt.Execute: an option (%T) was passed as the prompt input; input is the argument before any options (pass nil if the prompt takes no input)", input)
+		return nil, status.Errorf(status.ErrInvalidArgument, "Prompt.Execute: an option (%T) was passed as the prompt input; input is the argument before any options (pass nil if the prompt takes no input)", input)
 	}
 
 	execOpts := &promptExecutionOptions{}
@@ -377,7 +378,7 @@ func (p *Prompt[In, Out, Stream]) execute(ctx context.Context, input In, opts []
 func (p *Prompt[In, Out, Stream]) ExecuteStream(ctx context.Context, input In, opts ...PromptExecuteOption) iter.Seq2[*StreamValue[Out, Stream], error] {
 	return func(yield func(*StreamValue[Out, Stream], error) bool) {
 		if p == nil {
-			yield(nil, core.NewError(core.INVALID_ARGUMENT, "Prompt.ExecuteStream: prompt is nil"))
+			yield(nil, status.Errorf(status.ErrInvalidArgument, "Prompt.ExecuteStream: prompt is nil"))
 			return
 		}
 
@@ -438,7 +439,7 @@ func (p *Prompt[In, Out, Stream]) ExecuteStream(ctx context.Context, input In, o
 // [GenerateActionOptions] to be used with [GenerateWithRequest].
 func (p *Prompt[In, Out, Stream]) Render(ctx context.Context, input In) (*GenerateActionOptions, error) {
 	if p == nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "Prompt.Render: prompt is nil")
+		return nil, status.Errorf(status.ErrInvalidArgument, "Prompt.Render: prompt is nil")
 	}
 
 	in := any(input)
@@ -585,7 +586,7 @@ func (p *Prompt[In, Out, Stream]) buildRequest(ctx context.Context, input any) (
 
 	outputSchema, err := core.ResolveSchema(p.registry, p.OutputSchema)
 	if err != nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "invalid output schema for prompt %q: %v", p.Name(), err)
+		return nil, status.Errorf(status.ErrInvalidSchema, "prompt %q: output schema: %w", p.Name(), err)
 	}
 
 	useRefs, err := configsToRefs(p.Use)

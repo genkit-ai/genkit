@@ -22,6 +22,7 @@ import (
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // EmbedderFunc is the function type for embedding documents.
@@ -158,7 +159,7 @@ func (e *Embedder) Name() string {
 // Embed runs the given [Embedder].
 func (e *Embedder) Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
 	if e == nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "Embedder.Embed: embedder called on a nil embedder; check that all embedders are defined")
+		return nil, status.Errorf(status.ErrInvalidArgument, "Embedder.Embed: embedder called on a nil embedder; check that all embedders are defined")
 	}
 
 	return e.Run(ctx, req, nil)

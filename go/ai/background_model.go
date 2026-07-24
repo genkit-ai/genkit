@@ -22,6 +22,7 @@ import (
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -234,7 +235,7 @@ func backgroundModelToModelFn(startFn rawStartModelOpFunc) rawModelFunc {
 // modelOpFromResponse extracts a [ModelOperation] from a [ModelResponse].
 func modelOpFromResponse(resp *ModelResponse) (*ModelOperation, error) {
 	if resp.Operation == nil {
-		return nil, core.NewError(core.FAILED_PRECONDITION, "background model did not return an operation")
+		return nil, status.Errorf(status.ErrFailedPrecondition, "background model did not return an operation")
 	}
 
 	op := &ModelOperation{
@@ -252,7 +253,7 @@ func modelOpFromResponse(resp *ModelResponse) (*ModelOperation, error) {
 		if modelResp, ok := resp.Operation.Output.(*ModelResponse); ok {
 			op.Output = modelResp
 		} else {
-			return nil, core.NewError(core.INTERNAL, "operation output is not a model response")
+			return nil, status.Errorf(status.ErrInternal, "operation output is not a model response")
 		}
 	}
 

@@ -32,7 +32,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // readMaxBytes caps a single full read or returned slice. Models can step
@@ -169,15 +169,15 @@ func (f *Filesystem) Name() string { return provider + "/filesystem" }
 // model on the next turn.
 func (f *Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 	if strings.TrimSpace(f.RootDir) == "" {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "filesystem middleware: RootDir is required")
+		return nil, status.Errorf(status.ErrInvalidArgument, "filesystem middleware: RootDir is required")
 	}
 	abs, err := filepath.Abs(f.RootDir)
 	if err != nil {
-		return nil, core.NewError(core.INTERNAL, "filesystem middleware: resolve %q: %v", f.RootDir, err)
+		return nil, status.Errorf(status.ErrInvalidArgument, "filesystem middleware: resolving RootDir %q: %w", f.RootDir, err)
 	}
 	root, err := os.OpenRoot(abs)
 	if err != nil {
-		return nil, core.NewError(core.FAILED_PRECONDITION, "filesystem middleware: open root %q: %v", abs, err)
+		return nil, status.Errorf(status.ErrFailedPrecondition, "filesystem middleware: opening root %q: %w", abs, err)
 	}
 
 	var (

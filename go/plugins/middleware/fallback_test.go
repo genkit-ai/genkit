@@ -24,7 +24,7 @@ import (
 
 	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 func newTestGenkit(t *testing.T) *genkit.Genkit {
@@ -74,7 +74,7 @@ func TestFallbackTriggeredOnRetryableError(t *testing.T) {
 	g := newTestGenkit(t)
 
 	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		return nil, core.NewError(core.UNAVAILABLE, "primary down")
+		return nil, status.Errorf(status.ErrUnavailable, "primary down")
 	})
 	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary ok")}, nil
@@ -97,11 +97,11 @@ func TestFallbackTriesMultipleModels(t *testing.T) {
 
 	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		callOrder = append(callOrder, "primary")
-		return nil, core.NewError(core.UNAVAILABLE, "primary down")
+		return nil, status.Errorf(status.ErrUnavailable, "primary down")
 	})
 	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		callOrder = append(callOrder, "secondary")
-		return nil, core.NewError(core.RESOURCE_EXHAUSTED, "secondary exhausted")
+		return nil, status.Errorf(status.ErrResourceExhausted, "secondary exhausted")
 	})
 	tertiary := defineTestModel(t, g, "test/tertiary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		callOrder = append(callOrder, "tertiary")
@@ -132,10 +132,10 @@ func TestFallbackAllModelsFail(t *testing.T) {
 	g := newTestGenkit(t)
 
 	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		return nil, core.NewError(core.UNAVAILABLE, "primary down")
+		return nil, status.Errorf(status.ErrUnavailable, "primary down")
 	})
 	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		return nil, core.NewError(core.UNAVAILABLE, "secondary down")
+		return nil, status.Errorf(status.ErrUnavailable, "secondary down")
 	})
 
 	fb := &Fallback{Models: []ai.ActionRef{ai.NewActionRef(secondary.Name(), nil)}}
@@ -154,7 +154,7 @@ func TestFallbackDoesNotTriggerOnNonRetryableError(t *testing.T) {
 	secondaryCalls := 0
 
 	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "bad input")
+		return nil, status.Errorf(status.ErrInvalidArgument, "bad input")
 	})
 	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		secondaryCalls++
@@ -175,7 +175,9 @@ func TestFallbackDoesNotTriggerOnNonRetryableError(t *testing.T) {
 	}
 }
 
-func TestFallbackDoesNotTriggerOnNonGenkitError(t *testing.T) {
+// An error carrying no status counts as INTERNAL, which the default list
+// includes, so an unclassified provider failure still falls through.
+func TestFallbackTriggersOnUnclassifiedError(t *testing.T) {
 	g := newTestGenkit(t)
 	secondaryCalls := 0
 
@@ -189,12 +191,40 @@ func TestFallbackDoesNotTriggerOnNonGenkitError(t *testing.T) {
 
 	fb := &Fallback{Models: []ai.ActionRef{ai.NewActionRef(secondary.Name(), nil)}}
 
+	resp, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if got := resp.Text(); got != "secondary" {
+		t.Errorf("text = %q, want %q", got, "secondary")
+	}
+	if secondaryCalls != 1 {
+		t.Errorf("secondary called %d times, want 1", secondaryCalls)
+	}
+}
+
+// A status outside the configured list does not fall through, even though the
+// error carries no *status.Error at the top of its chain.
+func TestFallbackDoesNotTriggerOnUnlistedStatus(t *testing.T) {
+	g := newTestGenkit(t)
+	secondaryCalls := 0
+
+	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return nil, fmt.Errorf("wrapped: %w", status.Errorf(status.ErrPermissionDenied, "no access"))
+	})
+	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		secondaryCalls++
+		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary")}, nil
+	})
+
+	fb := &Fallback{Models: []ai.ActionRef{ai.NewActionRef(secondary.Name(), nil)}}
+
 	_, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
 	if secondaryCalls != 0 {
-		t.Errorf("secondary called %d times, want 0 (non-GenkitError)", secondaryCalls)
+		t.Errorf("secondary called %d times, want 0 (PERMISSION_DENIED is not a fallback status)", secondaryCalls)
 	}
 }
 
@@ -203,10 +233,10 @@ func TestFallbackStopsOnNonRetryableFallbackError(t *testing.T) {
 	tertiaryCalls := 0
 
 	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		return nil, core.NewError(core.UNAVAILABLE, "primary down")
+		return nil, status.Errorf(status.ErrUnavailable, "primary down")
 	})
 	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "bad request from secondary")
+		return nil, status.Errorf(status.ErrInvalidArgument, "bad request from secondary")
 	})
 	tertiary := defineTestModel(t, g, "test/tertiary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		tertiaryCalls++
@@ -231,7 +261,7 @@ func TestFallbackCustomStatuses(t *testing.T) {
 	g := newTestGenkit(t)
 
 	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		return nil, core.NewError(core.PERMISSION_DENIED, "forbidden")
+		return nil, status.Errorf(status.ErrPermissionDenied, "forbidden")
 	})
 	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary ok")}, nil
@@ -239,7 +269,7 @@ func TestFallbackCustomStatuses(t *testing.T) {
 
 	fb := &Fallback{
 		Models:   []ai.ActionRef{ai.NewActionRef(secondary.Name(), nil)},
-		Statuses: []core.StatusName{core.PERMISSION_DENIED},
+		Statuses: []status.Name{status.PermissionDenied},
 	}
 
 	resp, err := g.Generate(ctx, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
@@ -256,7 +286,7 @@ func TestFallbackUsesRefConfig(t *testing.T) {
 	var secondaryConfig any
 
 	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		return nil, core.NewError(core.UNAVAILABLE, "primary down")
+		return nil, status.Errorf(status.ErrUnavailable, "primary down")
 	})
 	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		secondaryConfig = req.Config
@@ -284,7 +314,7 @@ func TestFallbackPassesNilConfigWhenRefHasNone(t *testing.T) {
 	var secondaryConfig any
 
 	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		return nil, core.NewError(core.UNAVAILABLE, "primary down")
+		return nil, status.Errorf(status.ErrUnavailable, "primary down")
 	})
 	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		secondaryConfig = req.Config
@@ -308,7 +338,7 @@ func TestFallbackDoesNotMutateOriginalRequest(t *testing.T) {
 
 	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		primaryConfig = req.Config
-		return nil, core.NewError(core.UNAVAILABLE, "primary down")
+		return nil, status.Errorf(status.ErrUnavailable, "primary down")
 	})
 	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary ok")}, nil
@@ -334,7 +364,7 @@ func TestFallbackModelNotFound(t *testing.T) {
 	g := newTestGenkit(t)
 
 	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		return nil, core.NewError(core.UNAVAILABLE, "primary down")
+		return nil, status.Errorf(status.ErrUnavailable, "primary down")
 	})
 
 	fb := &Fallback{Models: []ai.ActionRef{ai.NewActionRef("test/nonexistent", nil)}}

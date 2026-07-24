@@ -25,8 +25,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // This file holds the built-in request/response processing that every model
@@ -232,28 +232,28 @@ func validateSupport(model string, opts *ModelOptions) func(next rawModelFunc) r
 				for _, msg := range input.Messages {
 					for _, part := range msg.Content {
 						if part.IsMedia() {
-							return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support media, but media was provided. Request: %+v", model, input)
+							return nil, status.Errorf(ErrUnsupportedByModel, "model %q does not support media", model)
 						}
 					}
 				}
 			}
 
 			if !opts.Supports.Tools && len(input.Tools) > 0 {
-				return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support tool use, but tools were provided. Request: %+v", model, input)
+				return nil, status.Errorf(ErrUnsupportedByModel, "model %q does not support tools", model)
 			}
 
 			if !opts.Supports.Multiturn && len(input.Messages) > 1 {
-				return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support multiple messages, but %d were provided. Request: %+v", model, len(input.Messages), input)
+				return nil, status.Errorf(ErrUnsupportedByModel, "model %q does not support multiple messages, got %d", model, len(input.Messages))
 			}
 
 			if !opts.Supports.ToolChoice && input.ToolChoice != "" && input.ToolChoice != ToolChoiceAuto {
-				return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support tool choice, but tool choice was provided. Request: %+v", model, input)
+				return nil, status.Errorf(ErrUnsupportedByModel, "model %q does not support tool choice", model)
 			}
 
 			if !opts.Supports.SystemRole {
 				for _, msg := range input.Messages {
 					if msg.Role == RoleSystem {
-						return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support system role, but system role was provided. Request: %+v", model, input)
+						return nil, status.Errorf(ErrUnsupportedByModel, "model %q does not support the system role", model)
 					}
 				}
 			}
@@ -266,7 +266,7 @@ func validateSupport(model string, opts *ModelOptions) func(next rawModelFunc) r
 				opts.Supports.Constrained == ConstrainedSupportNone ||
 				(opts.Supports.Constrained == ConstrainedSupportNoTools && len(input.Tools) > 0)) &&
 				input.Output != nil && input.Output.Constrained {
-				return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support native constrained output, but constrained output was requested. Request: %+v", model, input)
+				return nil, status.Errorf(ErrUnsupportedByModel, "model %q does not support native constrained output", model)
 			}
 
 			return next(ctx, input, cb)
@@ -305,14 +305,14 @@ func validateVersion(model string, versions []string, config any) error {
 
 	version, ok := versionVal.(string)
 	if !ok {
-		return core.NewError(core.INVALID_ARGUMENT, "version must be a string, got %T", versionVal)
+		return status.Errorf(status.ErrInvalidArgument, "version must be a string, got %T", versionVal)
 	}
 
 	if slices.Contains(versions, version) {
 		return nil
 	}
 
-	return core.NewError(core.INVALID_ARGUMENT, "model %q does not support version %q, supported versions: %v", model, version, versions)
+	return status.Errorf(ErrUnsupportedByModel, "model %q does not support version %q; supported: %v", model, version, versions)
 }
 
 // contextItemTemplate is the default item template for context augmentation.

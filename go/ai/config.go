@@ -19,9 +19,9 @@ package ai
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 )
 
@@ -101,9 +101,9 @@ func resolveConfig[Config any](raw any) (Config, error) {
 	cfg, err := base.ConvertToExact[Config](raw)
 	if err != nil {
 		if errors.Is(err, base.ErrTypeMismatch) {
-			return cfg, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("Invalid configuration type %T, expected %T or map[string]any.", raw, cfg), nil)
+			return cfg, status.PublicErrorf(status.ErrInvalidArgument, "invalid config type %T, want %T or map[string]any", raw, cfg)
 		}
-		return cfg, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("The configuration settings are not in the correct format. Check that the names and values match what the action expects: %v", err), nil)
+		return cfg, status.PublicErrorf(status.ErrInvalidArgument, "invalid config for %T; check that field names and value types match: %v", cfg, err)
 	}
 	return cfg, nil
 }

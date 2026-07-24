@@ -34,6 +34,7 @@ import (
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 )
 
@@ -779,8 +780,8 @@ func TestReflectionServerV2_PromptAgentRejectsEmptyStreamInput(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected agent output error, got %v", output["error"])
 		}
-		if errObj["status"] != string(core.INVALID_ARGUMENT) {
-			t.Errorf("error status = %v, want %s", errObj["status"], core.INVALID_ARGUMENT)
+		if errObj["status"] != string(status.InvalidArgument) {
+			t.Errorf("error status = %v, want %s", errObj["status"], status.InvalidArgument)
 		}
 		if !strings.Contains(errObj["message"].(string), "message") {
 			t.Errorf("error message = %q, want substring %q", errObj["message"], "message")
@@ -903,7 +904,7 @@ func TestReflectionServerV2_BidiRunActionErrors(t *testing.T) {
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			for range inCh {
 			}
-			return "", core.NewError(core.INVALID_ARGUMENT, "boom")
+			return "", status.Errorf(status.ErrInvalidArgument, "boom")
 		})
 
 	ctx, cancel := startRuntime(t, g, m)
@@ -1010,8 +1011,8 @@ func TestReflectionServerV2_BidiInvalidChunkFailsRun(t *testing.T) {
 		if !ok {
 			continue // ignore notifications (e.g., runActionState)
 		}
-		if !strings.Contains(errObj["message"].(string), "invalid stream chunk") {
-			t.Errorf("error message = %q, want substring %q", errObj["message"], "invalid stream chunk")
+		if !strings.Contains(errObj["message"].(string), "stream chunk") {
+			t.Errorf("error message = %q, want substring %q", errObj["message"], "stream chunk")
 		}
 		return
 	}

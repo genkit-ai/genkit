@@ -60,8 +60,8 @@ func TestModelTypedConfig(t *testing.T) {
 		{name: "exact type", config: testTypedConfig{Temperature: 0.5, MaxTokens: 10}, want: testTypedConfig{Temperature: 0.5, MaxTokens: 10}},
 		{name: "pointer to exact type", config: &testTypedConfig{Temperature: 0.7}, want: testTypedConfig{Temperature: 0.7}},
 		{name: "map is deserialized", config: map[string]any{"temperature": 0.9, "maxTokens": 5}, want: testTypedConfig{Temperature: 0.9, MaxTokens: 5}},
-		{name: "mismatched struct type is rejected", config: otherProviderConfig{Temperature: 0.2}, wantErr: "Invalid configuration type"},
-		{name: "mismatched pointer type is rejected", config: &otherProviderConfig{Temperature: 0.2}, wantErr: "Invalid configuration type"},
+		{name: "mismatched struct type is rejected", config: otherProviderConfig{Temperature: 0.2}, wantErr: "invalid config type"},
+		{name: "mismatched pointer type is rejected", config: &otherProviderConfig{Temperature: 0.2}, wantErr: "invalid config type"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -108,7 +108,7 @@ func TestModelConfigNormalizedBeforeBuiltins(t *testing.T) {
 		Config:   otherProviderConfig{Temperature: 0.2},
 	}
 	_, err := m.Generate(context.Background(), req, nil)
-	if err == nil || !strings.Contains(err.Error(), "Invalid configuration type") {
+	if err == nil || !strings.Contains(err.Error(), "invalid config type") {
 		t.Fatalf("Generate() error = %v, want config type error before media support error", err)
 	}
 }
@@ -222,8 +222,8 @@ func TestEmbedderTypedConfig(t *testing.T) {
 	}
 
 	req = &EmbedRequest{Config: otherProviderConfig{Temperature: 0.1}}
-	if _, err := e.Embed(context.Background(), req); err == nil || !strings.Contains(err.Error(), "Invalid configuration type") {
-		t.Fatalf("Embed() error = %v, want invalid configuration type error", err)
+	if _, err := e.Embed(context.Background(), req); err == nil || !strings.Contains(err.Error(), "invalid config type") {
+		t.Fatalf("Embed() error = %v, want invalid config type error", err)
 	}
 }
 

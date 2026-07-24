@@ -21,8 +21,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 )
 
@@ -105,7 +105,7 @@ func resolveFormat(reg api.Registry, schema map[string]any, format string) (Form
 	if f, ok := formatter.(Formatter); ok {
 		return f, nil
 	}
-	return nil, core.NewError(core.INVALID_ARGUMENT, "output format %q is invalid", format)
+	return nil, status.Errorf(status.ErrInvalidArgument, "output format %q is invalid", format)
 }
 
 // injectInstructions returns the messages with formatting instructions added.
@@ -332,7 +332,7 @@ func (j jsonlFormatter) Name() string {
 // Handler returns a new formatter handler for the given schema.
 func (j jsonlFormatter) Handler(schema map[string]any) (FormatHandler, error) {
 	if schema == nil || !base.ValidateIsJSONArray(schema) {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "schema must be an array of objects for JSONL format")
+		return nil, status.Errorf(status.ErrInvalidArgument, "schema must be an array of objects for JSONL format")
 	}
 
 	jsonBytes, err := json.Marshal(schema["items"])
@@ -549,7 +549,7 @@ func (e enumFormatter) Name() string {
 func (e enumFormatter) Handler(schema map[string]any) (FormatHandler, error) {
 	enums := objectEnums(schema)
 	if schema == nil || len(enums) == 0 {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "schema must be an object with an 'enum' property for enum format")
+		return nil, status.Errorf(status.ErrInvalidArgument, "schema must be an object with an 'enum' property for enum format")
 	}
 
 	instructions := fmt.Sprintf("Output should be ONLY one of the following enum values. Do not output any additional information or add quotes.\n\n```%s```", strings.Join(enums, "\n"))

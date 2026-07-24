@@ -25,6 +25,7 @@ import (
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/metrics"
@@ -268,7 +269,7 @@ func (a *Action[In, Out, Stream]) runWithTelemetry(ctx context.Context, input In
 			}
 
 			if err = base.ValidateValue(input, inputSchema); err != nil {
-				return base.Zero[Out](), NewSchemaValidationError(a.desc.Key, err)
+				return base.Zero[Out](), status.PublicErrorf(status.ErrInvalidInput, "action %q: %w", a.desc.Key, err)
 			}
 
 			output, err = fn(ctx, input, cb)
@@ -337,7 +338,7 @@ func (a *Action[In, Out, Stream]) resolveSchema(role string, schema map[string]a
 
 	resolved, err := ResolveSchema(r, schema)
 	if err != nil {
-		return nil, NewError(INVALID_ARGUMENT, "invalid %s schema for action %q: %v", role, a.desc.Key, err)
+		return nil, status.Errorf(status.ErrInvalidSchema, "action %q: %s schema: %w", a.desc.Key, role, err)
 	}
 
 	s.mu.Lock()
@@ -353,7 +354,7 @@ func (a *Action[In, Out, Stream]) resolveSchema(role string, schema map[string]a
 // schema.
 func (a *Action[In, Out, Stream]) validateOutput(out Out, schema map[string]any) error {
 	if err := base.ValidateValue(out, schema); err != nil {
-		return NewError(INTERNAL, "invalid output from action %q: %v", a.desc.Key, err)
+		return status.Errorf(status.ErrInvalidOutput, "action %q: %w", a.desc.Key, err)
 	}
 	return nil
 }
@@ -376,7 +377,7 @@ func (a *Action[In, Out, Stream]) runJSON(ctx context.Context, input json.RawMes
 	}
 	i, err := base.UnmarshalAndNormalize[In](input, inputSchema)
 	if err != nil {
-		return nil, NewSchemaValidationError(a.desc.Key, err)
+		return nil, status.PublicErrorf(status.ErrInvalidInput, "action %q: %w", a.desc.Key, err)
 	}
 
 	var scb StreamCallback[Stream]

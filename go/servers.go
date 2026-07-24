@@ -31,6 +31,7 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/x/streaming"
 	"github.com/google/uuid"
 )
@@ -145,13 +146,13 @@ func wrapHandler(h func(http.ResponseWriter, *http.Request) error) http.HandlerF
 			}
 		}()
 
+		// The full error is logged above; the response carries the status code
+		// and, when the error was built with status.PublicErrorf, its message.
+		// Everything else gets a generic message so internal detail (schema
+		// dumps, upstream provider text, stack context) does not reach clients.
 		if err = h(w, r); err != nil {
-			var herr *core.GenkitError
-			if errors.As(err, &herr) {
-				http.Error(w, herr.Error(), core.HTTPStatusCode(herr.Status))
-			} else {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-			}
+			msg, _ := status.PublicMessage(err)
+			http.Error(w, msg, status.Of(err).HTTPCode())
 		}
 	}
 }
@@ -171,7 +172,7 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 		if r.Body != nil && r.ContentLength > 0 {
 			defer r.Body.Close()
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				return core.NewPublicError(core.INVALID_ARGUMENT, err.Error(), nil)
+				return status.PublicErrorf(status.ErrInvalidArgument, "invalid request body: %v", err)
 			}
 		}
 
@@ -357,8 +358,7 @@ func runWithDurableStreaming(ctx context.Context, w http.ResponseWriter, run run
 func subscribeToStream(ctx context.Context, w http.ResponseWriter, sm streaming.StreamManager, streamID string) error {
 	events, unsubscribe, err := sm.Subscribe(ctx, streamID)
 	if err != nil {
-		var ufErr *core.UserFacingError
-		if errors.As(err, &ufErr) && ufErr.Status == core.NOT_FOUND {
+		if errors.Is(err, streaming.ErrStreamNotFound) {
 			w.WriteHeader(http.StatusNoContent)
 			return nil
 		}
@@ -417,9 +417,8 @@ type flowErrorResponse struct {
 
 // flowError represents the error payload in a streaming error response.
 type flowError struct {
-	Status  core.StatusName `json:"status"`
-	Message string          `json:"message"`
-	Details string          `json:"details,omitempty"`
+	Status  status.Name `json:"status"`
+	Message string      `json:"message"`
 }
 
 // writeResultResponse writes a JSON result response for non-streaming requests.
@@ -460,21 +459,14 @@ func writeSSEMessage(w http.ResponseWriter, msg json.RawMessage) error {
 }
 
 // writeSSEError writes an error as a server-sent event for streaming requests.
+// Like [wrapHandler], it reports the message only when the error was marked
+// public; the rest of the chain stays server-side.
 func writeSSEError(w http.ResponseWriter, flowErr error) error {
-	status := core.INTERNAL
-	var ufErr *core.UserFacingError
-	var gErr *core.GenkitError
-	if errors.As(flowErr, &ufErr) {
-		status = ufErr.Status
-	} else if errors.As(flowErr, &gErr) {
-		status = gErr.Status
-	}
-
+	msg, _ := status.PublicMessage(flowErr)
 	resp := flowErrorResponse{
 		Error: &flowError{
-			Status:  status,
-			Message: "stream flow error",
-			Details: flowErr.Error(),
+			Status:  status.Of(flowErr),
+			Message: msg,
 		},
 	}
 	data, err := json.Marshal(resp)
@@ -491,7 +483,7 @@ func parseBoolQueryParam(r *http.Request, name string) (bool, error) {
 		var err error
 		b, err = strconv.ParseBool(s)
 		if err != nil {
-			return false, core.NewPublicError(core.INVALID_ARGUMENT, err.Error(), nil)
+			return false, status.PublicErrorf(status.ErrInvalidArgument, "invalid %q query parameter: %v", name, err)
 		}
 	}
 	return b, nil

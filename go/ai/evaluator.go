@@ -23,6 +23,7 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
@@ -326,7 +327,7 @@ func (e *Evaluator) Name() string {
 // Evaluate runs the given [Evaluator].
 func (e *Evaluator) Evaluate(ctx context.Context, req *EvaluatorRequest) (*EvaluatorResponse, error) {
 	if e == nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "Evaluator.Evaluate: evaluator called on a nil evaluator; check that all evaluators are defined")
+		return nil, status.Errorf(status.ErrInvalidArgument, "Evaluator.Evaluate: evaluator called on a nil evaluator; check that all evaluators are defined")
 	}
 
 	return e.Run(ctx, req, nil)

@@ -24,7 +24,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 )
 
@@ -222,7 +222,7 @@ func NewToolResponsePart(r *ToolResponse) *Part {
 // tool request part.
 func NewResponseForToolRequest(p *Part, output any) (*Part, error) {
 	if !p.IsToolRequest() {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "ai.NewResponseForToolRequest: part is not a tool request")
+		return nil, status.Errorf(status.ErrInvalidArgument, "ai.NewResponseForToolRequest: part is not a tool request")
 	}
 	return &Part{Kind: PartToolResponse, ToolResponse: &ToolResponse{
 		Name:   p.ToolRequest.Name,
@@ -518,10 +518,10 @@ func (p *Part) liftWireMetadata() {
 // text part). It reports the first inconsistency found.
 func (p *Part) Validate() error {
 	if p == nil {
-		return core.NewError(core.INVALID_ARGUMENT, "part is nil")
+		return status.Errorf(status.ErrInvalidArgument, "part is nil")
 	}
 	if _, ok := partKindNames[p.Kind]; !ok {
-		return core.NewError(core.INVALID_ARGUMENT, "invalid part kind %d", int8(p.Kind))
+		return status.Errorf(status.ErrInvalidArgument, "invalid part kind %d", int8(p.Kind))
 	}
 	fields := []struct {
 		name    string
@@ -539,7 +539,7 @@ func (p *Part) Validate() error {
 	}
 	for _, f := range fields {
 		if f.set && !f.validOn {
-			return core.NewError(core.INVALID_ARGUMENT, "field %s is not valid on a %s part", f.name, p.Kind)
+			return status.Errorf(status.ErrInvalidArgument, "field %s is not valid on a %s part", f.name, p.Kind)
 		}
 	}
 	required := map[PartKind]struct {
@@ -552,10 +552,10 @@ func (p *Part) Validate() error {
 		PartCustom:       {"Custom", p.Custom != nil},
 	}
 	if r, ok := required[p.Kind]; ok && !r.set {
-		return core.NewError(core.INVALID_ARGUMENT, "field %s is required on a %s part", r.name, p.Kind)
+		return status.Errorf(status.ErrInvalidArgument, "field %s is required on a %s part", r.name, p.Kind)
 	}
 	if p.Interrupt != nil && !p.Interrupt.Resolved && p.Restart != nil {
-		return core.NewError(core.INVALID_ARGUMENT, "part cannot both await an interrupt and be a restart; resolve the interrupt first")
+		return status.Errorf(status.ErrInvalidArgument, "part cannot both await an interrupt and be a restart; resolve the interrupt first")
 	}
 	return nil
 }

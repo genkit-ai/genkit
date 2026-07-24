@@ -773,7 +773,7 @@ func TestRunActionWithInit(t *testing.T) {
 		// The v1 handler reports action errors as an error JSON body
 		// (matching the TS runtime), not via the HTTP status.
 		var resp struct {
-			Error *core.ReflectionError `json:"error"`
+			Error *reflectionError `json:"error"`
 		}
 		if err := json.NewDecoder(res.Body).Decode(&resp); err != nil {
 			t.Fatal(err)

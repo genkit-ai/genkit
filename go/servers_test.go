@@ -28,6 +28,7 @@ import (
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/x/streaming"
 )
 
@@ -48,20 +49,20 @@ func TestHandler(t *testing.T) {
 		return "", errors.New("generic error message")
 	})
 
-	genkitErrorInvalidArgFlow := g.DefineFlow("handlerGenkitErrorInvalidArg", func(ctx context.Context, input string) (string, error) {
-		return "", core.NewError(core.INVALID_ARGUMENT, "invalid argument")
+	statusErrorInvalidArgFlow := g.DefineFlow("handlerStatusErrorInvalidArg", func(ctx context.Context, input string) (string, error) {
+		return "", status.Errorf(status.ErrInvalidArgument, "invalid argument message")
 	})
 
-	genkitErrorNotFoundFlow := g.DefineFlow("handlerGenkitErrorNotFound", func(ctx context.Context, input string) (string, error) {
-		return "", core.NewError(core.NOT_FOUND, "resource not found")
+	statusErrorNotFoundFlow := g.DefineFlow("handlerStatusErrorNotFound", func(ctx context.Context, input string) (string, error) {
+		return "", status.Errorf(status.ErrNotFound, "resource not found")
 	})
 
-	genkitErrorPermissionDeniedFlow := g.DefineFlow("handlerGenkitErrorPermissionDenied", func(ctx context.Context, input string) (string, error) {
-		return "", core.NewError(core.PERMISSION_DENIED, "permission denied")
+	statusErrorPermissionDeniedFlow := g.DefineFlow("handlerStatusErrorPermissionDenied", func(ctx context.Context, input string) (string, error) {
+		return "", status.Errorf(status.ErrPermissionDenied, "denied for user alice")
 	})
 
-	userFacingErrorFlow := g.DefineFlow("handlerUserFacingError", func(ctx context.Context, input string) (string, error) {
-		return "", core.NewPublicError(core.INVALID_ARGUMENT, "public error message", nil)
+	publicErrorFlow := g.DefineFlow("handlerPublicError", func(ctx context.Context, input string) (string, error) {
+		return "", status.PublicErrorf(status.ErrInvalidArgument, "public error message")
 	})
 
 	t.Run("successful request returns 200 with response", func(t *testing.T) {
@@ -85,7 +86,7 @@ func TestHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("generic error returns 500 with error in response body", func(t *testing.T) {
+	t.Run("generic error returns 500 without leaking its message", func(t *testing.T) {
 		handler := Handler(genericErrorFlow)
 
 		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"data":"test"}`))
@@ -101,13 +102,13 @@ func TestHandler(t *testing.T) {
 			t.Errorf("want status code %d, got %d", http.StatusInternalServerError, resp.StatusCode)
 		}
 
-		if !strings.Contains(string(body), "generic error message") {
-			t.Errorf("want error message in response body, got %q", string(body))
+		if strings.Contains(string(body), "generic error message") {
+			t.Errorf("non-public error message leaked into response body: %q", string(body))
 		}
 	})
 
-	t.Run("GenkitError INVALID_ARGUMENT maps to 400", func(t *testing.T) {
-		handler := Handler(genkitErrorInvalidArgFlow)
+	t.Run("status error INVALID_ARGUMENT maps to 400", func(t *testing.T) {
+		handler := Handler(statusErrorInvalidArgFlow)
 
 		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"data":"test"}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -122,13 +123,13 @@ func TestHandler(t *testing.T) {
 			t.Errorf("want status code %d for INVALID_ARGUMENT, got %d", http.StatusBadRequest, resp.StatusCode)
 		}
 
-		if !strings.Contains(string(body), "invalid argument") {
-			t.Errorf("want error message in response body, got %q", string(body))
+		if strings.Contains(string(body), "invalid argument message") {
+			t.Errorf("non-public error message leaked into response body: %q", string(body))
 		}
 	})
 
-	t.Run("GenkitError NOT_FOUND maps to 404", func(t *testing.T) {
-		handler := Handler(genkitErrorNotFoundFlow)
+	t.Run("status error NOT_FOUND maps to 404", func(t *testing.T) {
+		handler := Handler(statusErrorNotFoundFlow)
 
 		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"data":"test"}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -143,13 +144,13 @@ func TestHandler(t *testing.T) {
 			t.Errorf("want status code %d for NOT_FOUND, got %d", http.StatusNotFound, resp.StatusCode)
 		}
 
-		if !strings.Contains(string(body), "resource not found") {
-			t.Errorf("want error message in response body, got %q", string(body))
+		if strings.Contains(string(body), "resource not found") {
+			t.Errorf("non-public error message leaked into response body: %q", string(body))
 		}
 	})
 
-	t.Run("GenkitError PERMISSION_DENIED maps to 403", func(t *testing.T) {
-		handler := Handler(genkitErrorPermissionDeniedFlow)
+	t.Run("status error PERMISSION_DENIED maps to 403", func(t *testing.T) {
+		handler := Handler(statusErrorPermissionDeniedFlow)
 
 		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"data":"test"}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -164,13 +165,13 @@ func TestHandler(t *testing.T) {
 			t.Errorf("want status code %d for PERMISSION_DENIED, got %d", http.StatusForbidden, resp.StatusCode)
 		}
 
-		if !strings.Contains(string(body), "permission denied") {
-			t.Errorf("want error message in response body, got %q", string(body))
+		if strings.Contains(string(body), "denied for user alice") {
+			t.Errorf("non-public error message leaked into response body: %q", string(body))
 		}
 	})
 
-	t.Run("UserFacingError returns internal server error", func(t *testing.T) {
-		handler := Handler(userFacingErrorFlow)
+	t.Run("public error maps to its status and keeps its message", func(t *testing.T) {
+		handler := Handler(publicErrorFlow)
 
 		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"data":"test"}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -181,12 +182,12 @@ func TestHandler(t *testing.T) {
 		resp := w.Result()
 		body, _ := io.ReadAll(resp.Body)
 
-		if resp.StatusCode != http.StatusInternalServerError {
-			t.Errorf("want status code %d, got %d", http.StatusInternalServerError, resp.StatusCode)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("want status code %d, got %d", http.StatusBadRequest, resp.StatusCode)
 		}
 
 		if !strings.Contains(string(body), "public error message") {
-			t.Errorf("want error message in response body, got %q", string(body))
+			t.Errorf("want public error message in response body, got %q", string(body))
 		}
 	})
 
@@ -423,7 +424,9 @@ data: {"result":"hello-end"}
 		resp := w.Result()
 		body, _ := io.ReadAll(resp.Body)
 
-		expected := `data: {"error":{"status":"INTERNAL","message":"stream flow error","details":"streaming error"}}
+		// The flow's error is not public, so the client gets the status and a
+		// generic message; the full text is logged server-side.
+		expected := `data: {"error":{"status":"INTERNAL","message":"internal"}}
 
 `
 		if string(body) != expected {

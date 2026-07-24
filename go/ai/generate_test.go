@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/registry"
 	test_utils "github.com/firebase/genkit/go/tests/utils"
@@ -558,8 +559,16 @@ func TestGenerate(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for exceeding maximum turns")
 		}
-		if !strings.Contains(err.Error(), "exceeded maximum tool call iterations (2)") {
-			t.Errorf("unexpected error message: %v", err)
+		if !errors.Is(err, ErrMaxTurnsExceeded) {
+			t.Errorf("error = %v, want ErrMaxTurnsExceeded", err)
+		}
+		// The domain sentinel also matches its base, so callers that only care
+		// about the category do not have to enumerate every specific failure.
+		if !errors.Is(err, status.ErrAborted) {
+			t.Errorf("error = %v, want it to match status.ErrAborted too", err)
+		}
+		if got := status.Of(err); got != status.Aborted {
+			t.Errorf("status.Of(err) = %q, want ABORTED", got)
 		}
 	})
 

@@ -25,6 +25,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 )
 
@@ -222,22 +223,22 @@ func readSnapshot[State any](
 	if snapshotID != "" {
 		snap, err = store.GetSnapshot(ctx, snapshotID)
 		if err != nil {
-			return nil, core.NewError(core.INTERNAL, "getSnapshot: %v", err)
+			return nil, fmt.Errorf("get snapshot: %w", err)
 		}
 		if snap == nil {
-			return nil, core.NewError(core.NOT_FOUND, "getSnapshot: snapshot %q not found", snapshotID)
+			return nil, status.Errorf(ErrSnapshotNotFound, "snapshot %q not found", snapshotID)
 		}
 		if sessionID != "" && snap.SessionID != sessionID {
-			return nil, core.NewError(core.INVALID_ARGUMENT,
+			return nil, status.Errorf(status.ErrInvalidArgument,
 				"getSnapshot: snapshot %q does not belong to session %q (snapshot's session: %q)", snapshotID, sessionID, snap.SessionID)
 		}
 	} else {
 		snap, err = store.GetLatestSnapshot(ctx, sessionID)
 		if err != nil {
-			return nil, core.NewError(core.INTERNAL, "getSnapshot: %v", err)
+			return nil, fmt.Errorf("get snapshot: %w", err)
 		}
 		if snap == nil {
-			return nil, core.NewError(core.NOT_FOUND, "getSnapshot: no snapshot found for session %q", sessionID)
+			return nil, status.Errorf(ErrSnapshotNotFound, "session %q has no snapshots", sessionID)
 		}
 	}
 
@@ -291,7 +292,7 @@ func newSnapshotActions[State any](
 	getSnapshotAction := core.NewAction(api.ActionTypeAgentSnapshot, agentName, nil,
 		func(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[State], error) {
 			if req == nil || (req.SnapshotID == "" && req.SessionID == "") {
-				return nil, core.NewError(core.INVALID_ARGUMENT, "getSnapshot: snapshotId or sessionId is required")
+				return nil, status.Errorf(status.ErrInvalidArgument, "snapshotId or sessionId is required")
 			}
 
 			return readSnapshot(ctx, store, transform, req.SnapshotID, req.SessionID)
@@ -305,17 +306,17 @@ func newSnapshotActions[State any](
 	abortAction := core.NewAction(api.ActionTypeAgentAbort, agentName, nil,
 		func(ctx context.Context, req *AgentAbortRequest) (*AgentAbortResponse, error) {
 			if req == nil || req.SnapshotID == "" {
-				return nil, core.NewError(core.INVALID_ARGUMENT, "abort: snapshotId is required")
+				return nil, status.Errorf(status.ErrInvalidArgument, "snapshotId is required")
 			}
 
-			status, err := abortPendingSnapshot(ctx, store, req.SnapshotID)
+			snapStatus, err := abortPendingSnapshot(ctx, store, req.SnapshotID)
 			if err != nil {
-				return nil, core.NewError(core.INTERNAL, "abort: %v", err)
+				return nil, fmt.Errorf("abort snapshot %q: %w", req.SnapshotID, err)
 			}
-			if status == "" {
-				return nil, core.NewError(core.NOT_FOUND, "abort: snapshot %q not found", req.SnapshotID)
+			if snapStatus == "" {
+				return nil, status.Errorf(ErrSnapshotNotFound, "snapshot %q not found", req.SnapshotID)
 			}
-			return &AgentAbortResponse{SnapshotID: req.SnapshotID, Status: status}, nil
+			return &AgentAbortResponse{SnapshotID: req.SnapshotID, Status: snapStatus}, nil
 		})
 
 	return getSnapshotAction, abortAction

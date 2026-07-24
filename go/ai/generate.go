@@ -29,6 +29,7 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/uuid"
@@ -240,14 +241,14 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			opts.Model = defaultModel
 		}
 		if opts.Model == "" {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "ai.GenerateWithRequest: model is required")
+			return nil, status.Errorf(status.ErrInvalidArgument, "model is required (WithModel or WithModelName, or a default model)")
 		}
 	}
 
 	m := LookupModel(r, opts.Model)
 	bm := LookupBackgroundModel(r, opts.Model)
 	if m == nil && bm == nil {
-		return nil, core.NewError(core.NOT_FOUND, "ai.GenerateWithRequest: model %q not found", opts.Model)
+		return nil, status.Errorf(ErrModelNotFound, "model %q not found; is its plugin registered with genkit.Init?", opts.Model)
 	}
 
 	mws, err := resolveRefs(ctx, r, opts.Use)
@@ -261,12 +262,12 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	toolDefMap := make(map[string]*ToolDefinition)
 	for _, t := range opts.Tools {
 		if _, ok := toolDefMap[t]; ok {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "ai.GenerateWithRequest: duplicate tool %q", t)
+			return nil, status.Errorf(status.ErrInvalidArgument, "duplicate tool %q", t)
 		}
 
 		tool := LookupTool(r, t)
 		if tool == nil {
-			return nil, core.NewError(core.NOT_FOUND, "ai.GenerateWithRequest: tool %q not found", t)
+			return nil, status.Errorf(ErrToolNotFound, "tool %q not found", t)
 		}
 
 		toolDefMap[t] = tool.Definition()
@@ -278,7 +279,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		}
 		for _, t := range mw.Tools {
 			if _, ok := toolDefMap[t.Name()]; ok {
-				return nil, core.NewError(core.INVALID_ARGUMENT, "ai.GenerateWithRequest: tool %q is contributed by middleware but already declared elsewhere", t.Name())
+				return nil, status.Errorf(status.ErrInvalidArgument, "tool %q is contributed by middleware but already declared on the request", t.Name())
 			}
 			toolDefMap[t.Name()] = t.Definition()
 			middlewareTools = append(middlewareTools, t)
@@ -299,7 +300,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 
 	maxTurns := opts.MaxTurns
 	if maxTurns < 0 {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "ai.GenerateWithRequest: max turns must be greater than 0, got %d", maxTurns)
+		return nil, status.Errorf(status.ErrInvalidArgument, "max turns must be greater than 0, got %d", maxTurns)
 	}
 	if maxTurns == 0 {
 		maxTurns = 5 // Default max turns.
@@ -435,7 +436,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 				}
 
 				if resumeOutput.interruptedResponse != nil {
-					return nil, core.NewError(core.FAILED_PRECONDITION,
+					return nil, status.Errorf(status.ErrFailedPrecondition,
 						"One or more tools triggered an interrupt during a restarted execution.")
 				}
 
@@ -481,7 +482,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			}
 
 			if currentTurn+1 > maxTurns {
-				return nil, core.NewError(core.ABORTED, "exceeded maximum tool call iterations (%d)", maxTurns)
+				return nil, status.Errorf(ErrMaxTurnsExceeded, "stopped after %d turns; raise the limit with WithMaxTurns", maxTurns)
 			}
 
 			newReq, interruptMsg, err := handleToolRequests(ctx, r, req, resp, wrappedCb, currentIndex, runTool)
@@ -624,14 +625,14 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 	genOpts := &generateOptions{}
 	for _, opt := range opts {
 		if err := opt.applyGenerate(genOpts); err != nil {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "ai.Generate: error applying options: %v", err)
+			return nil, status.Errorf(status.ErrInvalidArgument, "ai.Generate: %w", err)
 		}
 	}
 
 	if genOpts.OutputSchema != nil {
 		resolved, err := core.ResolveSchema(r, genOpts.OutputSchema)
 		if err != nil {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "ai.Generate: invalid output schema: %v", err)
+			return nil, status.Errorf(status.ErrInvalidSchema, "ai.Generate: output schema: %w", err)
 		}
 		genOpts.OutputSchema = resolved
 		if genOpts.OutputFormat == "" {
@@ -734,7 +735,7 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 
 	processedMessages, err := processResources(ctx, r, messages)
 	if err != nil {
-		return nil, core.NewError(core.INTERNAL, "ai.Generate: error processing resources: %v", err)
+		return nil, fmt.Errorf("ai.Generate: resolving resources: %w", err)
 	}
 	actionOpts.Messages = processedMessages
 
@@ -920,7 +921,7 @@ func (m *Model) Name() string {
 // chunks through cb.
 func (m *Model) Generate(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 	if m == nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "Model.Generate: generate called on a nil model; check that all models are defined")
+		return nil, status.Errorf(status.ErrInvalidArgument, "Model.Generate: generate called on a nil model; check that all models are defined")
 	}
 
 	return m.action.Run(ctx, req, cb)
@@ -1039,7 +1040,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 			toolReq := p.ToolRequest
 			tool := LookupTool(r, p.ToolRequest.Name)
 			if tool == nil {
-				resultChan <- result[*MultipartToolResponse]{index: idx, err: core.NewError(core.NOT_FOUND, "tool %q not found", toolReq.Name)}
+				resultChan <- result[*MultipartToolResponse]{index: idx, err: status.Errorf(ErrToolNotFound, "tool %q not found", toolReq.Name)}
 				return
 			}
 
@@ -1071,7 +1072,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 				var tie *InterruptError
 				if errors.As(err, &tie) {
 					if vErr := validateInterruptPayload(tie.Data, "interrupt data"); vErr != nil {
-						resultChan <- result[*MultipartToolResponse]{index: idx, err: core.NewError(core.INTERNAL, "tool %q failed: %v", toolReq.Name, vErr)}
+						resultChan <- result[*MultipartToolResponse]{index: idx, err: status.Errorf(ErrToolFailed, "tool %q: %w", toolReq.Name, vErr)}
 						return
 					}
 					logger.FromContext(ctx).Debug("tool %q triggered an interrupt: %v", toolReq.Name, tie.Data)
@@ -1085,7 +1086,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 					return
 				}
 
-				resultChan <- result[*MultipartToolResponse]{index: idx, err: core.NewError(core.INTERNAL, "tool %q failed: %v", toolReq.Name, err)}
+				resultChan <- result[*MultipartToolResponse]{index: idx, err: status.Errorf(ErrToolFailed, "tool %q: %w", toolReq.Name, err)}
 				return
 			}
 
@@ -1434,7 +1435,7 @@ const (
 // pending output, or explicit 'respond' or 'restart' directives in the resume options.
 func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *GenerateActionOptions, p *Part, runTool toolRunnerFunc) (*resumedToolRequestOutput, error) {
 	if p == nil || !p.IsToolRequest() {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "handleResumedToolRequest: part is not a tool request")
+		return nil, status.Errorf(ErrInvalidPart, "resume: part is not a tool request")
 	}
 
 	if pendingOutputVal, ok := p.Metadata[base.ToolMetaPendingOutput]; ok {
@@ -1467,23 +1468,23 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 
 				tool := LookupTool(r, toolReq.Name)
 				if tool == nil {
-					return nil, core.NewError(core.NOT_FOUND, "handleResumedToolRequest: tool %q not found", toolReq.Name)
+					return nil, status.Errorf(ErrToolNotFound, "resume: tool %q not found", toolReq.Name)
 				}
 
 				toolDef := tool.Definition()
 				if len(toolDef.OutputSchema) > 0 {
 					outputBytes, err := json.Marshal(respondPart.ToolResponse.Output)
 					if err != nil {
-						return nil, core.NewError(core.INVALID_ARGUMENT, "handleResumedToolRequest: failed to marshal tool output for validation: %v", err)
+						return nil, status.Errorf(status.ErrInvalidArgument, "resume: marshaling output of tool %q: %w", toolReq.Name, err)
 					}
 
 					schemaBytes, err := json.Marshal(toolDef.OutputSchema)
 					if err != nil {
-						return nil, core.NewError(core.INTERNAL, "handleResumedToolRequest: tool %q has invalid output schema: %v", toolReq.Name, err)
+						return nil, status.Errorf(status.ErrInvalidSchema, "resume: tool %q output schema: %w", toolReq.Name, err)
 					}
 
 					if err := base.ValidateRaw(outputBytes, schemaBytes); err != nil {
-						return nil, core.NewError(core.INVALID_ARGUMENT, "handleResumedToolRequest: tool %q output validation failed: %v", toolReq.Name, err)
+						return nil, status.Errorf(ErrToolFailed, "resume: tool %q output: %w", toolReq.Name, err)
 					}
 				}
 
@@ -1503,7 +1504,7 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 				restartPart.ToolRequest.Ref == toolReq.Ref {
 				tool := LookupTool(r, restartPart.ToolRequest.Name)
 				if tool == nil {
-					return nil, core.NewError(core.NOT_FOUND, "handleResumedToolRequest: tool %q not found", restartPart.ToolRequest.Name)
+					return nil, status.Errorf(ErrToolNotFound, "resume: tool %q not found", restartPart.ToolRequest.Name)
 				}
 
 				resumedCtx := ctx
@@ -1529,7 +1530,7 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 					var tie *InterruptError
 					if errors.As(err, &tie) {
 						if vErr := validateInterruptPayload(tie.Data, "interrupt data"); vErr != nil {
-							return nil, core.NewError(core.INTERNAL, "tool %q failed: %v", restartPart.ToolRequest.Name, vErr)
+							return nil, status.Errorf(ErrToolFailed, "tool %q: %w", restartPart.ToolRequest.Name, vErr)
 						}
 						logger.FromContext(ctx).Debug("tool %q triggered an interrupt: %v", restartPart.ToolRequest.Name, tie.Data)
 
@@ -1541,7 +1542,7 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 						}, nil
 					}
 
-					return nil, core.NewError(core.INTERNAL, "tool %q failed: %v", restartPart.ToolRequest.Name, err)
+					return nil, status.Errorf(ErrToolFailed, "tool %q: %w", restartPart.ToolRequest.Name, err)
 				}
 
 				newToolReq := clone(p)
@@ -1569,7 +1570,7 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 	if p.ToolRequest.Ref != "" {
 		refStr = "#" + p.ToolRequest.Ref
 	}
-	return nil, core.NewError(core.INVALID_ARGUMENT, fmt.Sprintf("unresolved tool request %q was not handled by the Resume argument; you must supply Respond or Restart directives, or ensure there is pending output from a previous tool call", refStr))
+	return nil, status.Errorf(ErrUnresolvedToolRequest, "tool request %q was not resolved by Resume; supply a Respond or Restart directive, or pending output from a previous call", refStr)
 }
 
 // handleResumeOption amends message history to handle `resume` arguments.
@@ -1581,12 +1582,12 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 
 	for _, part := range genOpts.Resume.Respond {
 		if !part.IsToolResponse() {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "handleResumeOption: respond part is not a tool response")
+			return nil, status.Errorf(ErrInvalidPart, "resume: respond part is not a tool response")
 		}
 	}
 	for _, part := range genOpts.Resume.Restart {
 		if !part.IsToolRequest() {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "handleResumeOption: restart part is not a tool request")
+			return nil, status.Errorf(ErrInvalidPart, "resume: restart part is not a tool request")
 		}
 	}
 
@@ -1594,19 +1595,19 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 	for _, t := range genOpts.Tools {
 		tool := LookupTool(r, t)
 		if tool == nil {
-			return nil, core.NewError(core.NOT_FOUND, "handleResumeOption: tool %q not found", t)
+			return nil, status.Errorf(ErrToolNotFound, "resume: tool %q not found", t)
 		}
 		toolDefMap[t] = tool.Definition()
 	}
 
 	messages := genOpts.Messages
 	if len(messages) == 0 {
-		return nil, core.NewError(core.FAILED_PRECONDITION, "handleResumeOption: cannot resume generation with no messages")
+		return nil, status.Errorf(status.ErrFailedPrecondition, "cannot resume: no messages")
 	}
 	lastMessage := messages[len(messages)-1]
 
 	if lastMessage.Role != RoleModel || !slices.ContainsFunc(lastMessage.Content, func(p *Part) bool { return p.IsToolRequest() }) {
-		return nil, core.NewError(core.FAILED_PRECONDITION, "handleResumeOption: cannot resume generation unless the last message is by a model with at least one tool request")
+		return nil, status.Errorf(status.ErrFailedPrecondition, "cannot resume: the last message must be a model message with at least one tool request")
 	}
 
 	toolReqCount := 0
@@ -1666,7 +1667,7 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 	}
 
 	if len(toolResps) != toolReqCount {
-		return nil, core.NewError(core.FAILED_PRECONDITION, fmt.Sprintf("handleResumeOption: Expected %d tool responses but resolved to %d.", toolReqCount, len(toolResps)))
+		return nil, status.Errorf(status.ErrFailedPrecondition, "resume resolved %d tool responses, want %d", len(toolResps), toolReqCount)
 	}
 
 	toolMessage := &Message{

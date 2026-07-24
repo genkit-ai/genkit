@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"google.golang.org/genai"
 )
 
@@ -34,9 +34,9 @@ func TestWrapAPIError_NilPassthrough(t *testing.T) {
 func TestWrapAPIError_NonAPIErrorPassthrough(t *testing.T) {
 	plain := errors.New("some non-SDK error")
 	got := wrapAPIError(plain)
-	var ge *core.GenkitError
+	var ge *status.Error
 	if errors.As(got, &ge) {
-		t.Fatalf("wrapAPIError wrapped a non-APIError into a GenkitError; got %#v", ge)
+		t.Fatalf("wrapAPIError wrapped a non-APIError into a *status.Error; got %#v", ge)
 	}
 	if got != plain {
 		t.Fatalf("wrapAPIError mutated a non-APIError; got %v, want %v", got, plain)
@@ -46,25 +46,25 @@ func TestWrapAPIError_NonAPIErrorPassthrough(t *testing.T) {
 func TestWrapAPIError_MapsCanonicalStatus(t *testing.T) {
 	cases := []struct {
 		status string
-		want   core.StatusName
+		want   status.Name
 	}{
-		{"NOT_FOUND", core.NOT_FOUND},
-		{"UNAVAILABLE", core.UNAVAILABLE},
-		{"DEADLINE_EXCEEDED", core.DEADLINE_EXCEEDED},
-		{"RESOURCE_EXHAUSTED", core.RESOURCE_EXHAUSTED},
-		{"INTERNAL", core.INTERNAL},
-		{"INVALID_ARGUMENT", core.INVALID_ARGUMENT},
-		{"PERMISSION_DENIED", core.PERMISSION_DENIED},
-		{"UNAUTHENTICATED", core.UNAUTHENTICATED},
-		{"UNIMPLEMENTED", core.UNIMPLEMENTED},
+		{"NOT_FOUND", status.NotFound},
+		{"UNAVAILABLE", status.Unavailable},
+		{"DEADLINE_EXCEEDED", status.DeadlineExceeded},
+		{"RESOURCE_EXHAUSTED", status.ResourceExhausted},
+		{"INTERNAL", status.Internal},
+		{"INVALID_ARGUMENT", status.InvalidArgument},
+		{"PERMISSION_DENIED", status.PermissionDenied},
+		{"UNAUTHENTICATED", status.Unauthenticated},
+		{"UNIMPLEMENTED", status.Unimplemented},
 	}
 	for _, tc := range cases {
 		t.Run(tc.status, func(t *testing.T) {
 			api := genai.APIError{Code: 500, Status: tc.status, Message: "boom"}
 			wrapped := wrapAPIError(api)
-			var ge *core.GenkitError
+			var ge *status.Error
 			if !errors.As(wrapped, &ge) {
-				t.Fatalf("wrapAPIError did not produce a GenkitError; got %T: %v", wrapped, wrapped)
+				t.Fatalf("wrapAPIError did not produce a *status.Error; got %T: %v", wrapped, wrapped)
 			}
 			if ge.Status != tc.want {
 				t.Fatalf("status = %q, want %q", ge.Status, tc.want)
@@ -84,27 +84,27 @@ func TestWrapAPIError_FallsBackToHTTPCode(t *testing.T) {
 	// than a canonical gRPC name.
 	cases := []struct {
 		code int
-		want core.StatusName
+		want status.Name
 	}{
-		{400, core.INVALID_ARGUMENT},
-		{401, core.UNAUTHENTICATED},
-		{403, core.PERMISSION_DENIED},
-		{404, core.NOT_FOUND},
-		{409, core.ABORTED},
-		{429, core.RESOURCE_EXHAUSTED},
-		{500, core.INTERNAL},
-		{501, core.UNIMPLEMENTED},
-		{502, core.INTERNAL},
-		{503, core.UNAVAILABLE},
-		{504, core.DEADLINE_EXCEEDED},
+		{400, status.InvalidArgument},
+		{401, status.Unauthenticated},
+		{403, status.PermissionDenied},
+		{404, status.NotFound},
+		{409, status.Aborted},
+		{429, status.ResourceExhausted},
+		{500, status.Internal},
+		{501, status.Unimplemented},
+		{502, status.Internal},
+		{503, status.Unavailable},
+		{504, status.DeadlineExceeded},
 	}
 	for _, tc := range cases {
 		t.Run(fmt.Sprintf("%d", tc.code), func(t *testing.T) {
 			api := genai.APIError{Code: tc.code, Status: fmt.Sprintf("%d plain text", tc.code)}
 			wrapped := wrapAPIError(api)
-			var ge *core.GenkitError
+			var ge *status.Error
 			if !errors.As(wrapped, &ge) {
-				t.Fatalf("wrapAPIError did not produce a GenkitError; got %T", wrapped)
+				t.Fatalf("wrapAPIError did not produce a *status.Error; got %T", wrapped)
 			}
 			if ge.Status != tc.want {
 				t.Fatalf("status = %q, want %q", ge.Status, tc.want)
@@ -127,11 +127,11 @@ func TestWrapAPIError_HandlesWrappedAPIError(t *testing.T) {
 	api := genai.APIError{Code: 503, Status: "UNAVAILABLE", Message: "temporary outage"}
 	outer := fmt.Errorf("while calling model: %w", api)
 	wrapped := wrapAPIError(outer)
-	var ge *core.GenkitError
+	var ge *status.Error
 	if !errors.As(wrapped, &ge) {
-		t.Fatalf("wrapAPIError did not produce a GenkitError; got %T", wrapped)
+		t.Fatalf("wrapAPIError did not produce a *status.Error; got %T", wrapped)
 	}
-	if ge.Status != core.UNAVAILABLE {
+	if ge.Status != status.Unavailable {
 		t.Fatalf("status = %q, want UNAVAILABLE", ge.Status)
 	}
 }

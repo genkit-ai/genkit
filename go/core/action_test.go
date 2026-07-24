@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
 )
@@ -489,9 +490,9 @@ func TestResolveSchemaUnregisteredAction(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error running unregistered action with a schema ref, got nil")
 	}
-	var gerr *GenkitError
-	if !errors.As(err, &gerr) || gerr.Status != INVALID_ARGUMENT {
-		t.Errorf("err = %v, want INVALID_ARGUMENT GenkitError", err)
+	var gerr *status.Error
+	if !errors.As(err, &gerr) || gerr.Status != status.InvalidArgument {
+		t.Errorf("err = %v, want status.InvalidArgument status.Error", err)
 	}
 }
 

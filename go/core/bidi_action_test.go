@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -256,12 +257,12 @@ func TestRunBidiJSONInvalidInit(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid JSON, got nil")
 	}
-	gerr, ok := err.(*GenkitError)
+	gerr, ok := err.(*status.Error)
 	if !ok {
-		t.Fatalf("expected *GenkitError, got %T: %v", err, err)
+		t.Fatalf("expected *status.Error, got %T: %v", err, err)
 	}
-	if gerr.Status != INVALID_ARGUMENT {
-		t.Errorf("status = %v, want %v", gerr.Status, INVALID_ARGUMENT)
+	if gerr.Status != status.InvalidArgument {
+		t.Errorf("status = %v, want %v", gerr.Status, status.InvalidArgument)
 	}
 }
 
@@ -292,12 +293,12 @@ func TestRunBidiJSONRequiresInput(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error for absent input, got nil")
 			}
-			gerr, ok := err.(*GenkitError)
+			gerr, ok := err.(*status.Error)
 			if !ok {
-				t.Fatalf("expected *GenkitError, got %T: %v", err, err)
+				t.Fatalf("expected *status.Error, got %T: %v", err, err)
 			}
-			if gerr.Status != INVALID_ARGUMENT {
-				t.Errorf("status = %v, want %v", gerr.Status, INVALID_ARGUMENT)
+			if gerr.Status != status.InvalidArgument {
+				t.Errorf("status = %v, want %v", gerr.Status, status.InvalidArgument)
 			}
 			if !strings.Contains(gerr.Message, "streaming session") {
 				t.Errorf("message %q should point the caller at streaming sessions", gerr.Message)
@@ -366,12 +367,12 @@ func TestInitSchemaValidationRejectsBadInit(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
-	gerr, ok := err.(*GenkitError)
+	gerr, ok := err.(*status.Error)
 	if !ok {
-		t.Fatalf("expected *GenkitError, got %T: %v", err, err)
+		t.Fatalf("expected *status.Error, got %T: %v", err, err)
 	}
-	if gerr.Status != INVALID_ARGUMENT {
-		t.Errorf("status = %v, want %v", gerr.Status, INVALID_ARGUMENT)
+	if gerr.Status != status.InvalidArgument {
+		t.Errorf("status = %v, want %v", gerr.Status, status.InvalidArgument)
 	}
 }
 
@@ -446,11 +447,11 @@ func TestBidiJSONInitRejectsUnknownFields(t *testing.T) {
 	assertRejected := func(t *testing.T, err error) {
 		t.Helper()
 		if err == nil {
-			t.Fatal("expected INVALID_ARGUMENT for unknown init field, got nil")
+			t.Fatal("expected status.InvalidArgument for unknown init field, got nil")
 		}
-		var gerr *GenkitError
-		if !errors.As(err, &gerr) || gerr.Status != INVALID_ARGUMENT {
-			t.Fatalf("err = %v, want INVALID_ARGUMENT GenkitError", err)
+		var gerr *status.Error
+		if !errors.As(err, &gerr) || gerr.Status != status.InvalidArgument {
+			t.Fatalf("err = %v, want status.InvalidArgument status.Error", err)
 		}
 	}
 
@@ -647,9 +648,9 @@ func TestBidiZeroStructInitValidatedWithoutInit(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error for zero init, got nil")
 	}
-	var gerr *GenkitError
-	if !errors.As(err, &gerr) || gerr.Status != INVALID_ARGUMENT {
-		t.Errorf("err = %v, want INVALID_ARGUMENT GenkitError", err)
+	var gerr *status.Error
+	if !errors.As(err, &gerr) || gerr.Status != status.InvalidArgument {
+		t.Errorf("err = %v, want status.InvalidArgument status.Error", err)
 	}
 
 	got, err := action.RunBidi(ctx, Config{Prefix: ">> "}, "ignored", nil)
@@ -822,11 +823,11 @@ func TestBidiActionPanicRecovered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.Output(); err == nil || !strings.Contains(err.Error(), "panic in bidi action") {
+	if _, err := conn.Output(); !errors.Is(err, status.ErrPanic) {
 		t.Errorf("Output err = %v, want panic error", err)
 	}
 
-	if _, err := action.Run(ctx, "in", nil); err == nil || !strings.Contains(err.Error(), "panic in bidi action") {
+	if _, err := action.Run(ctx, "in", nil); !errors.Is(err, status.ErrPanic) {
 		t.Errorf("Run err = %v, want panic error", err)
 	}
 }
@@ -1143,12 +1144,12 @@ func TestBidiJSONConnSendValidatesChunks(t *testing.T) {
 		if serr == nil {
 			t.Fatal("expected validation error for non-string chunk")
 		}
-		if gerr, ok := serr.(*GenkitError); !ok || gerr.Status != INVALID_ARGUMENT {
-			t.Errorf("Send err = %v, want INVALID_ARGUMENT GenkitError", serr)
+		if gerr, ok := serr.(*status.Error); !ok || gerr.Status != status.InvalidArgument {
+			t.Errorf("Send err = %v, want status.InvalidArgument status.Error", serr)
 		}
 		// The validation error is the session's terminal error.
-		if _, oerr := conn.Output(); oerr == nil || !strings.Contains(oerr.Error(), "invalid stream chunk") {
-			t.Errorf("Output err = %v, want invalid-chunk error", oerr)
+		if _, oerr := conn.Output(); !errors.Is(oerr, status.ErrInvalidInput) {
+			t.Errorf("Output err = %v, want status.ErrInvalidInput", oerr)
 		}
 	})
 
@@ -1183,8 +1184,8 @@ func TestBidiOutputSchemaValidatedOnConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn.Close()
-	if _, err := conn.Output(); err == nil || !strings.Contains(err.Error(), "invalid output") {
-		t.Errorf("Output err = %v, want invalid-output error", err)
+	if _, err := conn.Output(); !errors.Is(err, status.ErrInvalidOutput) {
+		t.Errorf("Output err = %v, want status.ErrInvalidOutput", err)
 	}
 }
 
@@ -1258,8 +1259,8 @@ func TestBidiInvalidChunkFailsCtxObliviousSession(t *testing.T) {
 	if err := conn.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, oerr := conn.Output(); oerr == nil || !strings.Contains(oerr.Error(), "invalid stream chunk") {
-		t.Errorf("Output err = %v, want invalid-chunk error overriding the nil result", oerr)
+	if _, oerr := conn.Output(); !errors.Is(oerr, status.ErrInvalidInput) {
+		t.Errorf("Output err = %v, want status.ErrInvalidInput overriding the nil result", oerr)
 	}
 }
 

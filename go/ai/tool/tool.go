@@ -29,7 +29,7 @@ import (
 	"context"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 )
 
@@ -79,7 +79,7 @@ func Restart(interruptedPart *ai.Part, opts ...ai.RestartOption) (*ai.Part, erro
 // callers that don't have the tool value in scope.
 func Respond(interruptedPart *ai.Part, output any) (*ai.Part, error) {
 	if !interruptedPart.IsInterrupt() {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "tool.Respond: part is not an interrupted tool request")
+		return nil, status.Errorf(status.ErrInvalidArgument, "tool.Respond: part is not an interrupted tool request")
 	}
 	resp, err := ai.NewResponseForToolRequest(interruptedPart, output)
 	if err != nil {

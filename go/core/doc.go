@@ -208,18 +208,34 @@ with an operation ID that can be polled for completion:
 
 # Error Handling
 
-Return user-facing errors with appropriate status codes:
+Errors carry a canonical status from the status package. Classify with a
+sentinel, which callers match using errors.Is:
+
+	return nil, status.Errorf(status.ErrNotFound, "model %q not found", name)
+
+Declare domain failure modes from a base sentinel so callers can match at
+either granularity:
+
+	var ErrQuotaExceeded = status.ErrResourceExhausted.Subtype("quota exceeded")
+
+Add context as an error travels up without reclassifying it. Use fmt.Errorf
+with %w; the sentinel and status survive:
+
+	return fmt.Errorf("model %q: %w", name, err)
+
+Reclassify only where the meaning genuinely changes, and do it deliberately:
+
+	return status.Errorf(status.ErrInternal, "tool %q: %w", name, err)
+
+Messages stay server-side by default. Mark the ones that are safe to return
+to a client, and transports will surface them verbatim:
 
 	if err := validate(input); err != nil {
-		return nil, core.NewPublicError(core.INVALID_ARGUMENT, "Invalid input", map[string]any{
-			"field": "email",
-			"error": err.Error(),
-		})
+		return nil, status.PublicErrorf(status.ErrInvalidArgument, "invalid email").
+			WithDetails(map[string]any{"field": "email"})
 	}
 
-For internal errors that should be logged but not exposed to users:
-
-	return nil, core.NewError(core.INTERNAL, "database connection failed: %v", err)
+See [github.com/firebase/genkit/go/core/status] for the full guidance.
 
 # Context
 
