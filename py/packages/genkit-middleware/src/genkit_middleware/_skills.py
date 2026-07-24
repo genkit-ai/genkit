@@ -28,6 +28,7 @@ from pydantic import BaseModel as PydanticBaseModel, Field
 
 from genkit._ai._model import Message
 from genkit._ai._tools import define_tool
+from genkit._core._action import Action
 from genkit._core._model import GenerateActionOptions, ModelResponse
 from genkit._core._registry import Registry
 from genkit._core._typing import Part, Role, TextPart
@@ -148,7 +149,7 @@ class Skills(BaseMiddleware[SkillsConfig]):
         new_options.messages = messages
         return new_options
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Any]:
+    def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
         if not self._scan_skills():
             return []
 

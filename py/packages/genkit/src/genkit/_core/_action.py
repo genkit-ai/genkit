@@ -28,9 +28,9 @@ from typing import Any, ClassVar, Generic, NamedTuple, cast, get_type_hints
 from opentelemetry.util import types as otel_types
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
-from typing_extensions import Never, TypeVar
+from typing_extensions import TypeVar
 
-from genkit._core._channel import Channel
+from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError
 from genkit._core._schema import to_json_schema
@@ -111,6 +111,9 @@ class ActionKind(StrEnum):
     """Types of actions that can be registered."""
 
     BACKGROUND_MODEL = 'background-model'
+    AGENT = 'agent'
+    AGENT_ABORT = 'agent-abort'
+    AGENT_SNAPSHOT = 'agent-snapshot'
     CANCEL_OPERATION = 'cancel-operation'
     CHECK_OPERATION = 'check-operation'
     CUSTOM = 'custom'
@@ -173,6 +176,7 @@ class ActionMetadataKey(StrEnum):
 
     INPUT_KEY = 'inputSchema'
     OUTPUT_KEY = 'outputSchema'
+    INIT_KEY = 'initSchema'
     RETURN = 'return'
 
 
@@ -310,11 +314,23 @@ def create_action_key(kind: ActionKind | str, name: str) -> str:
 
 InputT = TypeVar('InputT', default=Any)
 OutputT = TypeVar('OutputT', default=Any)
-ChunkT = TypeVar('ChunkT', default=Never)
+ChunkT = TypeVar('ChunkT', default=Any)
+InitT = TypeVar('InitT', default=Any)
 
 # Generic streaming callback - use Callable[[ChunkT], None] for typed chunks
 # This untyped version is for internal use where chunk type is unknown
 StreamingCallback = Callable[[object], None]
+
+# A bidi fn is (init, incoming per-turn inputs, chunk sink) -> output. init is
+# the session identity for the whole connection; input_stream yields the per-turn
+# inputs (one item for a one-shot call, many for a live chat) and send_chunk emits
+# streamed chunks. Keeping init in its own slot is what lets one connection span
+# many typed message turns. This is the same shape a plain action fn sees on its
+# ctx (input stream + send_chunk), so bidi fns don't need any queue plumbing.
+BidiFn = Callable[
+    [InitT, AsyncIterator[InputT], Callable[[ChunkT], None]],
+    Awaitable[OutputT],
+]
 
 _action_context: ContextVar[dict[str, object] | None] = ContextVar('context')
 _ = _action_context.set(None)
@@ -323,20 +339,47 @@ _ = _action_context.set(None)
 class ActionRunContext:
     """Execution context for an action.
 
-    Provides read-only access to action context (auth, metadata) and streaming support.
+    Provides read-only access to action context (auth, metadata), streaming
+    support, and an abort signal for cooperative cancellation.
     """
 
     def __init__(
         self,
         context: dict[str, object] | None = None,
         streaming_callback: StreamingCallback | None = None,
+        abort_signal: asyncio.Event | None = None,
+        init: object | None = None,
+        input_stream: AsyncIterator[object] | None = None,
     ) -> None:
         self._context: dict[str, object] = context if context is not None else {}
         self._streaming_callback = streaming_callback
+        self.abort_signal: asyncio.Event = abort_signal if abort_signal is not None else asyncio.Event()
+        self._init = init
+        self._input_stream = input_stream
 
     @property
     def context(self) -> dict[str, object]:
         return self._context
+
+    @property
+    def init(self) -> object | None:
+        """Per-run initialization data (session identity for agents).
+
+        Separate from ``input``: ``input`` is the payload for one call, while
+        ``init`` says which longer-lived thing that call is part of. Plain
+        actions ignore it; bidi actions read it to pick up the right session.
+        """
+        return self._init
+
+    @property
+    def input_stream(self) -> AsyncIterator[object] | None:
+        """The live sequence of per-turn inputs for a bidi run, if any.
+
+        A one-shot call has a single ``input`` and no stream; a bidi call (an
+        agent chat) instead gets its turns over time here. Plain actions never
+        look at it — only bidi actions drain it turn by turn.
+        """
+        return self._input_stream
 
     @property
     def is_streaming(self) -> bool:
@@ -366,7 +409,7 @@ class ActionRunContext:
         return _action_context.get(None)
 
 
-class Action(Generic[InputT, OutputT, ChunkT]):
+class Action(Generic[InputT, OutputT, ChunkT, InitT]):
     """A named, traced, remotely callable function."""
 
     def __init__(
@@ -378,6 +421,7 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         description: str | None = None,
         metadata: dict[str, object] | None = None,
         span_metadata: dict[str, SpanAttributeValue] | None = None,
+        init_schema: type[BaseModel] | dict[str, object] | None = None,
     ) -> None:
         self._kind: ActionKind = kind
         self._name: str = name
@@ -405,6 +449,7 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         # wrapped function will fall back to its own Python-level default.
         self._first_arg_optional: bool = _first_action_arg_has_default(input_spec, len(action_args))
         self._initialize_io_schemas(action_args, arg_types, resolved_annotations, input_spec)
+        self._initialize_init_schema(init_schema)
 
     @property
     def kind(self) -> ActionKind:
@@ -467,6 +512,9 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         context: dict[str, object] | None = None,
         on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
         telemetry_labels: dict[str, object] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        init: InitT | None = None,
+        input_stream: AsyncIterator[InputT] | None = None,
     ) -> ActionResponse[OutputT]:
         """Execute the action with optional input validation.
 
@@ -476,6 +524,13 @@ class Action(Generic[InputT, OutputT, ChunkT]):
             context: Optional context dict for the action.
             on_trace_start: Optional callback invoked when trace starts.
             telemetry_labels: Custom labels to set as direct span attributes.
+            abort_signal: Optional shared abort event for cooperative cancellation.
+            init: Optional per-run initialization data (e.g. an agent's session
+                identity). Validated against the init schema and exposed to the
+                action fn via ``ActionRunContext.init``; plain actions ignore it.
+            input_stream: Optional live stream of per-turn inputs for a bidi
+                action. When omitted, a one-shot run is exactly the single ``input``;
+                only bidi actions read it. Exposed via ``ActionRunContext.input_stream``.
 
         Returns:
             ActionResponse containing the result and trace metadata.
@@ -483,44 +538,34 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         Raises:
             GenkitError: If input validation fails (INVALID_ARGUMENT status).
         """
-        # Skip validation when the caller passed nothing AND the wrapped
-        # function declares a Python default for its first arg — that's the
-        # signal that "no input" is a legitimate way to invoke this action.
-        skip_validation = input is None and self._first_arg_optional
+        # With a live input_stream, `input` isn't the payload — the stream
+        # carries the per-turn inputs — so there's nothing to validate up front.
+        if input_stream is None:
+            input = self._validate_input(input)
+        init = self._validate_init(init)
 
-        # Validate input if we have a schema
-        if self._input_type is not None and not skip_validation:
-            try:
-                input = self._input_type.validate_python(input)
-            except ValidationError as e:
-                if input is None:
-                    raise GenkitError(
-                        message=(
-                            f"Action '{self.name}' requires input but none was provided. "
-                            'Please supply a valid input payload.'
-                        ),
-                        status='INVALID_ARGUMENT',
-                    ) from e
-                raise GenkitError(
-                    message=f"Invalid input for action '{self.name}': {e}",
-                    status='INVALID_ARGUMENT',
-                    cause=e,
-                ) from e
-
+        token = None
         if context:
-            _ = _action_context.set(context)
+            token = _action_context.set(context)
 
         streaming_cb = cast(StreamingCallback, on_chunk) if on_chunk else None
 
-        return await self._run_with_telemetry(
-            input,
-            ActionRunContext(
-                context=_action_context.get(None),
-                streaming_callback=streaming_cb,
-            ),
-            on_trace_start,
-            telemetry_labels,
-        )
+        try:
+            return await self._run_with_telemetry(
+                input,
+                ActionRunContext(
+                    context=_action_context.get(None),
+                    streaming_callback=streaming_cb,
+                    abort_signal=abort_signal,
+                    init=init,
+                    input_stream=input_stream,
+                ),
+                on_trace_start,
+                telemetry_labels,
+            )
+        finally:
+            if token is not None:
+                _action_context.reset(token)
 
     def stream(
         self,
@@ -528,6 +573,8 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         context: dict[str, object] | None = None,
         telemetry_labels: dict[str, object] | None = None,
         timeout: float | None = None,
+        init: InitT | None = None,
+        input_stream: AsyncIterator[InputT] | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
         """Execute and return a StreamResponse with .stream and .response properties."""
         channel: Channel[ChunkT, ActionResponse[OutputT]] = Channel(timeout=timeout)
@@ -540,11 +587,27 @@ class Action(Generic[InputT, OutputT, ChunkT]):
             context=context,
             telemetry_labels=telemetry_labels,
             on_chunk=send_chunk,
+            init=init,
+            input_stream=input_stream,
         )
         channel.set_close_future(asyncio.create_task(resp))
 
+        # Mirror the run's terminal state onto .response so a caller awaiting it
+        # sees the same success/error/cancel the run ended with, instead of
+        # hanging (or dropping the error on the floor) when the run raises.
         result_future: asyncio.Future[OutputT] = asyncio.Future()
-        channel.closed.add_done_callback(lambda _: result_future.set_result(channel.closed.result().response))
+
+        def _resolve_response(closed: asyncio.Future[ActionResponse[OutputT]]) -> None:
+            if result_future.done():
+                return
+            if closed.cancelled():
+                result_future.cancel()
+            elif (exc := closed.exception()) is not None:
+                result_future.set_exception(exc)
+            else:
+                result_future.set_result(closed.result().response)
+
+        channel.closed.add_done_callback(_resolve_response)
 
         return StreamResponse(stream=channel, response=result_future)
 
@@ -577,12 +640,86 @@ class Action(Generic[InputT, OutputT, ChunkT]):
             self._output_schema = TypeAdapter(object).json_schema()
             self._metadata[ActionMetadataKey.OUTPUT_KEY] = self._output_schema
 
+    def _initialize_init_schema(
+        self,
+        init_schema: type[BaseModel] | dict[str, object] | None,
+    ) -> None:
+        """Register the schema for per-run ``init`` data, if the action declares one.
+
+        Mirrors the input/output schema setup: a Pydantic model gives us a
+        validator plus a published JSON schema; a raw dict is published as-is
+        but can't be validated.
+        """
+        if init_schema is None:
+            self._init_type: TypeAdapter[InitT] | None = None
+            return
+        self._init_schema: dict[str, object] = to_json_schema(init_schema)
+        self._metadata[ActionMetadataKey.INIT_KEY] = self._init_schema
+        if isinstance(init_schema, dict):
+            self._init_type = None
+        else:
+            self._init_type = cast(TypeAdapter[InitT], TypeAdapter(init_schema))
+
+    def _validate_init(self, init: InitT | None) -> InitT | None:
+        """Validate per-run ``init`` against the init schema when one is registered.
+
+        A missing ``init`` is validated as an empty object so a schema whose
+        fields are all optional (like an agent's session identity) still produces
+        a sensible default. A schema with required fields instead surfaces a clear
+        "init required" error rather than a raw validation dump about ``{}``.
+        """
+        if self._init_type is None:
+            return init
+        try:
+            return self._init_type.validate_python(init if init is not None else {})
+        except ValidationError as e:
+            if init is None:
+                raise GenkitError(
+                    message=(
+                        f"Action '{self.name}' requires init but none was provided. Please supply a valid init payload."
+                    ),
+                    status='INVALID_ARGUMENT',
+                ) from e
+            raise GenkitError(
+                message=f"Invalid init for action '{self.name}': {e}",
+                status='INVALID_ARGUMENT',
+                cause=e,
+            ) from e
+
+    def _validate_input(self, input: InputT | None) -> InputT | None:
+        """Validate caller input against the action schema when one is registered."""
+        if self._input_type is None:
+            return input
+        # Skip validation when the caller passed nothing AND the wrapped
+        # function declares a Python default for its first arg — that's the
+        # signal that "no input" is a legitimate way to invoke this action.
+        if input is None and self._first_arg_optional:
+            return input
+        try:
+            return self._input_type.validate_python(input)
+        except ValidationError as e:
+            if input is None:
+                raise GenkitError(
+                    message=(
+                        f"Action '{self.name}' requires input but none was provided. "
+                        'Please supply a valid input payload.'
+                    ),
+                    status='INVALID_ARGUMENT',
+                ) from e
+            raise GenkitError(
+                message=f"Invalid input for action '{self.name}': {e}",
+                status='INVALID_ARGUMENT',
+                cause=e,
+            ) from e
+
     async def _run_with_telemetry(
         self,
         input: object | None,
         ctx: ActionRunContext,
         on_trace_start: Callable[[str, str], Awaitable[None]] | None,
         telemetry_labels: dict[str, object] | None,
+        *,
+        execute: Callable[[], Awaitable[OutputT]] | None = None,
     ) -> ActionResponse[OutputT]:
         """Open the action span via ``run_in_new_span``, dispatch ``self._fn``, wrap errors in ``GenkitError``."""
         start_time = time.perf_counter()
@@ -622,7 +759,10 @@ class Action(Generic[InputT, OutputT, ChunkT]):
                 if on_trace_start:
                     await on_trace_start(trace_id, span_id)
 
-                output = await self._invoke(input, ctx)
+                if execute is not None:
+                    output = await execute()
+                else:
+                    output = await self._invoke(input, ctx)
                 output = cast(OutputT, _record_latency(output, start_time))
                 # Picked up by run_in_new_span's success branch and written as ``genkit:output``.
                 span_meta.output = output
@@ -663,6 +803,163 @@ class Action(Generic[InputT, OutputT, ChunkT]):
                 return await self._fn(input, ctx)
             case _:
                 raise ValueError('action fn must have 0-2 args')
+
+
+async def single_item_stream(item: InputT) -> AsyncIterator[InputT]:
+    """Present a one-shot input as a one-item stream (no item ⇒ no turns).
+
+    Lets a multi-turn fn be driven by a plain ``run(input)``: the fn just sees a
+    stream with exactly one turn (or zero when there's no input to send).
+    """
+    if item is not None:
+        yield item
+
+
+# =============================================================================
+# BidiConnection
+# =============================================================================
+
+StreamInT = TypeVar('StreamInT')
+StreamOutT_co = TypeVar('StreamOutT_co', covariant=True)
+BidiOutT_co = TypeVar('BidiOutT_co', covariant=True)
+
+
+class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
+    """Client-side handle for an active bidirectional streaming session.
+
+    Returned by BidiAction.stream_bidi(). It's a thin ergonomic wrapper: send/
+    close push per-turn inputs into the run's input stream, while receive/output
+    read the run's chunk stream and final result. The run itself goes through the
+    same stream()/run() path as any other action.
+    """
+
+    def __init__(
+        self,
+        in_queue: CloseableQueue[StreamInT],
+        stream_response: StreamResponse[StreamOutT_co, BidiOutT_co],
+    ) -> None:
+        self._in_queue = in_queue
+        self._stream_response = stream_response
+        self.closed = False
+
+    async def send(self, item: StreamInT) -> None:
+        """Send a per-turn input to the server."""
+        if self.closed:
+            raise GenkitError(
+                message=(
+                    'Cannot send input on BidiConnection because the connection has '
+                    'already been closed. No further inputs can be sent after close() '
+                    'is called.'
+                ),
+                status='FAILED_PRECONDITION',
+            )
+        await self._in_queue.put(item)
+
+    async def close(self) -> None:
+        """Signal no more inputs will be sent."""
+        if not self.closed:
+            self.closed = True
+            self._in_queue.close()
+
+    async def receive(self) -> AsyncIterator[StreamOutT_co]:
+        """Async iterator yielding server-side stream chunks."""
+        async for chunk in self._stream_response.stream:
+            yield chunk
+
+    async def output(self) -> BidiOutT_co:
+        """Await the final output from the server fn."""
+        return await self._stream_response.response
+
+
+# =============================================================================
+# BidiAction
+# =============================================================================
+
+
+class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
+    """An Action extended with bidirectional streaming via stream_bidi().
+
+    Both one-shot calls and live sessions run through the same Action.run() /
+    stream() path: run() drives the fn with a single input, while stream_bidi()
+    is sugar that hands run() a live input stream and returns a connection
+    handle for sending per-turn inputs and receiving chunks.
+    """
+
+    def __init__(
+        self,
+        kind: ActionKind,
+        name: str,
+        bidi_fn: BidiFn[InitT, InputT, ChunkT, OutputT],
+        metadata_fn: Callable[..., object] | None = None,
+        description: str | None = None,
+        metadata: dict[str, object] | None = None,
+        span_metadata: dict[str, SpanAttributeValue] | None = None,
+        init_schema: type[BaseModel] | dict[str, object] | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> None:
+        self.bidi_fn = bidi_fn
+        super().__init__(
+            kind=kind,
+            name=name,
+            fn=self.action_fn,
+            metadata_fn=metadata_fn,
+            description=description,
+            # The 'bidi': True metadata flag is used by the Genkit Dev UI and Reflection API
+            # to identify this as a bidirectional action and render the interactive chat interface.
+            metadata={**(metadata or {}), 'bidi': True},
+            span_metadata=span_metadata,
+            init_schema=init_schema,
+        )
+        # The wrapper's input arg is a generic TypeVar, so the derived input
+        # schema is untyped. Declaring the per-turn input schema explicitly lets
+        # run() coerce a raw payload (e.g. a JSON body) into the real input type
+        # before it reaches the fn — the same way the input arrives typed over a
+        # live connection.
+        if input_schema is not None:
+            self._override_input_schema(input_schema)
+
+    async def action_fn(self, input: InputT, ctx: ActionRunContext) -> OutputT:  # noqa: A002
+        """Adapt the bidi fn to the plain Action fn shape.
+
+        The bidi fn reads its per-turn inputs from an async stream and emits
+        chunks through a callback — the same pair a plain action fn gets on its
+        ctx. A live chat supplies ``ctx.input_stream``; a one-shot run has just
+        the single ``input``, which we hand over as a one-item stream. init
+        (session identity) rides the run's init channel, separate from inputs.
+        """
+        if ctx.input_stream is not None:
+            # ctx carries the stream as AsyncIterator[object]; here we know it's
+            # this action's InputT. (ty collapses InputT to object and sees this
+            # as redundant; pyright needs it.)
+            input_stream = cast('AsyncIterator[InputT]', ctx.input_stream)  # ty: ignore[redundant-cast]
+        else:
+            input_stream = single_item_stream(input)
+        return await self.bidi_fn(cast(InitT, ctx.init), input_stream, ctx.send_chunk)
+
+    async def stream_bidi(
+        self,
+        init: InitT | None = None,
+        context: dict[str, object] | None = None,
+        telemetry_labels: dict[str, object] | None = None,
+    ) -> BidiConnection[InputT, ChunkT, OutputT]:
+        """Start a bidirectional streaming session over the single stream() primitive.
+
+        Opens an input channel, kicks off ``stream(input_stream=channel)``, and
+        returns a BidiConnection whose send/close push per-turn inputs into that
+        channel while receive/output read the run's chunks and final result.
+        ``init`` is the session identity for the whole connection; per-turn
+        inputs arrive later via ``BidiConnection.send``. It's sugar — all
+        execution goes through the same run()/stream() path as any other action.
+        """
+        # Unbounded: turn-level backpressure is managed at the agent runtime intake.
+        in_queue: CloseableQueue[InputT] = CloseableQueue()
+        stream_response = self.stream(
+            init=init,
+            context=context,
+            telemetry_labels=telemetry_labels,
+            input_stream=in_queue,
+        )
+        return BidiConnection(in_queue, stream_response)
 
 
 def get_current_context() -> dict[str, object] | None:

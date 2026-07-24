@@ -16,6 +16,7 @@ from genkit._core._action import (
     ActionRunContext,
     DapQualifiedName,
     create_action_key,
+    get_current_context,
     parse_action_key,
     parse_dap_qualified_name,
     parse_plugin_name_from_action_name,
@@ -33,6 +34,7 @@ def test_action_enum_behaves_like_str() -> None:
     assert ActionKind.EMBEDDER == 'embedder'
     assert ActionKind.EVALUATOR == 'evaluator'
     assert ActionKind.EXECUTABLE_PROMPT == 'executable-prompt'
+    assert ActionKind.AGENT == 'agent'
     assert ActionKind.FLOW == 'flow'
     assert ActionKind.MODEL == 'model'
     assert ActionKind.PROMPT == 'prompt'
@@ -51,6 +53,7 @@ def test_parse_action_key_valid() -> None:
         ),
         ('/custom/test-action', (ActionKind.CUSTOM, 'test-action')),
         ('/flow/my-flow', (ActionKind.FLOW, 'my-flow')),
+        ('/agent/my-agent', (ActionKind.AGENT, 'my-agent')),
     ]
 
     for key, expected in test_cases:
@@ -90,6 +93,7 @@ def test_create_action_key() -> None:
     assert create_action_key(ActionKind.PROMPT, 'foo') == '/prompt/foo'
     assert create_action_key(ActionKind.TOOL, 'foo') == '/tool/foo'
     assert create_action_key(ActionKind.UTIL, 'foo') == '/util/foo'
+    assert create_action_key(ActionKind.AGENT, 'foo') == '/agent/foo'
 
 
 def test_sync_action_rejected() -> None:
@@ -275,6 +279,48 @@ async def test_run_no_input_type_allows_none() -> None:
 
     result = await action.run(input=None)
     assert result.response == 'no input needed'
+
+
+@pytest.mark.asyncio
+async def test_action_context_isolation_sequential_and_nested() -> None:
+    """Action context is isolated and does not bleed sequentially or permanently override in nested runs."""
+
+    # 1. Sequential isolation test
+    async def get_context(_: None, ctx: ActionRunContext) -> dict[str, object] | None:
+        return ctx.context
+
+    tool_action = Action(name='getContext', kind=ActionKind.TOOL, fn=get_context)
+
+    # First run sets context
+    res1 = await tool_action.run(context={'auth': 'user1'})
+    assert res1.response == {'auth': 'user1'}
+
+    # Second run does NOT set context (should be empty/None)
+    res2 = await tool_action.run()
+    assert res2.response == {}  # Bleeding check
+
+    # 2. Nested isolation test (parent calls child with overrides)
+    async def child_fn(_: None, ctx: ActionRunContext) -> dict[str, object] | None:
+        return ctx.context
+
+    child_action = Action(name='childAction', kind=ActionKind.CUSTOM, fn=child_fn)
+
+    async def parent_fn(_: None, ctx: ActionRunContext) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+        # Run child action with different context
+        child_res = await child_action.run(context={'auth': 'child_secret'})
+        # Return parent context (which should still be parent's original context!)
+        return ctx.context, child_res.response
+
+    parent_action = Action(name='parentAction', kind=ActionKind.CUSTOM, fn=parent_fn)
+
+    # Run parent action with its own context
+    res = await parent_action.run(context={'auth': 'parent_secret'})
+    parent_ctx, child_ctx = res.response
+
+    assert child_ctx == {'auth': 'child_secret'}
+    assert parent_ctx == {'auth': 'parent_secret'}  # Permanent override check
+
+    assert get_current_context() is None
 
 
 @pytest.mark.asyncio

@@ -23,7 +23,7 @@ from typing import Any, TypeVar
 
 import pytest
 
-from genkit._core._channel import Channel
+from genkit._core._channel import Channel, CloseableQueue, QueueShutDown
 
 T = TypeVar('T')
 
@@ -213,3 +213,85 @@ async def test_channel_close_future_success_propagates_result() -> None:
     result = await channel.closed
 
     assert result == 'success_result'
+
+
+@pytest.mark.asyncio
+async def test_closeable_queue_close_wakes_blocked_getter() -> None:
+    """Tests that close() wakes a coroutine already blocked in get()."""
+    queue: CloseableQueue[int] = CloseableQueue()
+
+    get_task = asyncio.create_task(queue.get())
+    await asyncio.sleep(0)
+    assert not get_task.done()
+
+    queue.close()
+
+    with pytest.raises(QueueShutDown):
+        await get_task
+
+
+@pytest.mark.asyncio
+async def test_closeable_queue_drain_then_stop() -> None:
+    """Tests that buffered items drain in order before get() raises."""
+    queue: CloseableQueue[int] = CloseableQueue()
+    for value in (1, 2, 3):
+        queue.put_nowait(value)
+
+    queue.close()
+
+    assert await queue.get() == 1
+    assert await queue.get() == 2
+    assert await queue.get() == 3
+    with pytest.raises(QueueShutDown):
+        await queue.get()
+
+
+@pytest.mark.asyncio
+async def test_closeable_queue_put_after_close_raises() -> None:
+    """Tests that put()/put_nowait() after close() raise QueueShutDown."""
+    queue: CloseableQueue[int] = CloseableQueue()
+    queue.close()
+
+    with pytest.raises(QueueShutDown):
+        await queue.put(1)
+    with pytest.raises(QueueShutDown):
+        queue.put_nowait(1)
+
+
+@pytest.mark.asyncio
+async def test_closeable_queue_get_nowait_after_close() -> None:
+    """Tests get_nowait() on a closed queue: drains buffered items, then raises."""
+    queue: CloseableQueue[int] = CloseableQueue()
+    queue.put_nowait(42)
+    queue.close()
+
+    assert queue.get_nowait() == 42
+    with pytest.raises(QueueShutDown):
+        queue.get_nowait()
+
+
+@pytest.mark.asyncio
+async def test_closeable_queue_async_iteration() -> None:
+    """Tests that async for yields buffered items then terminates cleanly."""
+    queue: CloseableQueue[int] = CloseableQueue()
+    for value in (10, 20, 30):
+        queue.put_nowait(value)
+    queue.close()
+
+    received = [item async for item in queue]
+
+    assert received == [10, 20, 30]
+
+
+@pytest.mark.asyncio
+async def test_closeable_queue_close_is_idempotent() -> None:
+    """Tests that close() is idempotent and is_closed() reflects state."""
+    queue: CloseableQueue[int] = CloseableQueue()
+    assert not queue.is_closed()
+
+    queue.close()
+    assert queue.is_closed()
+
+    # a second close() is a no-op and must not raise.
+    queue.close()
+    assert queue.is_closed()

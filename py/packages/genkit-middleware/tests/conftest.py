@@ -5,10 +5,10 @@
 
 import pytest
 
-from genkit._core._registry import Registry
+from genkit import Genkit
 from genkit.middleware import GenerateMiddlewareContext
 
 
 @pytest.fixture
 def ctx() -> GenerateMiddlewareContext:
-    return GenerateMiddlewareContext(registry=Registry())
+    return GenerateMiddlewareContext(ai=Genkit())

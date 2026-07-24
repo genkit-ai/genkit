@@ -32,9 +32,11 @@ circular-import cycles.  A realistic example in Genkit is the Registry/Plugin/Mi
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 from genkit._core._action import Action, ActionKind
+from genkit._core._typing import Artifact, MessageData
 
 
 @runtime_checkable
@@ -66,4 +68,50 @@ class RegistryLike(Protocol):
 
     async def resolve_action(self, kind: ActionKind, name: str) -> Action | None:
         """Resolve an action by kind and name, initialising plugins as needed."""
+        ...
+
+
+class SessionLike(Protocol):
+    """Structural interface for agent session state peekable from generate middleware.
+
+    The concrete ``Session`` in ``_ai._agents._session`` satisfies this protocol.
+    Middleware should treat ``GenerateMiddlewareContext.session`` as optional and only
+    call methods when a bind is present.
+    """
+
+    async def get_artifacts(self) -> list[Artifact]:
+        """Return a copy of artifacts currently stored on the session."""
+        ...
+
+    async def add_artifacts(self, *artifacts: Artifact) -> None:
+        """Append artifacts, replacing any existing entry with the same name."""
+        ...
+
+    async def get_messages(self) -> list[MessageData]:
+        """Return a copy of messages currently stored on the session."""
+        ...
+
+    async def add_messages(self, *messages: MessageData) -> None:
+        """Append messages to the session history."""
+        ...
+
+    async def get_custom(self) -> Any:  # noqa: ANN401
+        """Return the session's custom state blob, if any."""
+        ...
+
+    async def update_custom(self, fn: Callable[[Any], Any]) -> None:  # noqa: ANN401
+        """Replace custom state via ``fn(old) -> new``."""
+        ...
+
+
+class GenkitLike(Protocol):
+    """Structural interface for the Genkit instance exposed on middleware context."""
+
+    @property
+    def registry(self) -> RegistryLike:
+        """The call-scoped registry for this generate invocation."""
+        ...
+
+    def current_session(self) -> SessionLike | None:
+        """Return the bound agent session, if running inside one."""
         ...

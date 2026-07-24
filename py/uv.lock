@@ -11,6 +11,7 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "agents",
     "anthropic-sample",
     "basic-flows",
     "context",
@@ -44,6 +45,33 @@ members = [
     "vertexai-imagen",
 ]
 overrides = [{ name = "werkzeug", specifier = ">=3.1.6" }]
+
+[[package]]
+name = "agents"
+version = "0.1.0"
+source = { virtual = "samples/agents" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "genkit" },
+    { name = "genkit-plugin-fastapi" },
+    { name = "genkit-plugin-google-genai" },
+    { name = "genkit-plugin-middleware" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.100.0" },
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "genkit-plugin-fastapi" },
+    { name = "genkit-plugin-google-genai" },
+    { name = "genkit-plugin-middleware" },
+    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
+]
 
 [[package]]
 name = "aiofiles"
@@ -1793,6 +1821,49 @@ requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "openai" },
     { name = "strenum", marker = "python_full_version < '3.11'", specifier = ">=0.4.15" },
+]
+
+[[package]]
+name = "genkit-plugin-fastapi"
+version = "0.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "genkit" },
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/06/6e/50277d9baf6ae376178d2f5ea643d25fe79f931476161adda14bc601294c/genkit_plugin_fastapi-0.7.0.tar.gz", hash = "sha256:fa17606cd6c725ad1a8458f525d74a5727bc2988ffeeeaed942c0abeb31eb534", size = 8443, upload-time = "2026-06-09T22:47:00.421Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9e/1e/8ed7316853d7181389bc855615c5f7f32045ee7cb9ae04898fab66859a3d/genkit_plugin_fastapi-0.7.0-py3-none-any.whl", hash = "sha256:b31f186b8c4ef1a37336202cf25bb3691c9536a4b2f1011028bf5be1f230ab9d", size = 9587, upload-time = "2026-06-09T22:46:49.316Z" },
+]
+
+[[package]]
+name = "genkit-plugin-google-genai"
+version = "0.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "genkit" },
+    { name = "google-cloud-aiplatform" },
+    { name = "google-genai" },
+    { name = "strenum", marker = "python_full_version < '3.11'" },
+    { name = "structlog" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/41/f0/15f74a7e84435bd70a6c8e3afbe750d5fa271bd6ac42f4a14beacc2edd4a/genkit_plugin_google_genai-0.7.0.tar.gz", hash = "sha256:2f743901f58443f5ef8701107719be5ceec2d0b4ccadec1f308c3ff79a7b0212", size = 67618, upload-time = "2026-06-09T22:47:02.891Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f2/09/6b52ba321e67b9e0814ab302667612a24962bb39d5c43adca03b8206f396/genkit_plugin_google_genai-0.7.0-py3-none-any.whl", hash = "sha256:7c6e553ae9ce0e25c65ab8d35d1053a1d06b403eaf4b1782f9ad48e520c8a8c5", size = 65711, upload-time = "2026-06-09T22:46:52.785Z" },
+]
+
+[[package]]
+name = "genkit-plugin-middleware"
+version = "0.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "genkit" },
+    { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fd/d5/de3cf7d9290c26c63a119fdc517c9ff87ca8a8d562a7f3141ecfe7a11628/genkit_plugin_middleware-0.7.0.tar.gz", hash = "sha256:821482927ca96b9c736ab0d1dc1989da29def3a4a13ea186a90f7156f073a962", size = 17860, upload-time = "2026-06-10T15:53:05.982Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c8/b1/aacd0e43db84d9f75c8ac8a1abd42606aa990bfd70e859dac18fb0f2be56/genkit_plugin_middleware-0.7.0-py3-none-any.whl", hash = "sha256:fee53c68869bf8931258692c3ba4b178ca5209fedaf163883384c7f5535660d4", size = 20066, upload-time = "2026-06-10T15:53:03.748Z" },
 ]
 
 [[package]]

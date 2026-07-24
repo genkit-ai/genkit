@@ -45,15 +45,15 @@ from pydantic import BaseModel, Field
 from websockets.asyncio.server import serve
 
 from genkit import Genkit
-from genkit._core._action import Action, ActionKind, ActionRunContext
+from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._reflection_v2 import (
     JSON_RPC_INVALID_PARAMS,
     JSON_RPC_METHOD_NOT_FOUND,
-    JSON_RPC_SERVER_ERROR,
     ReflectionServerV2,
 )
 from genkit._core._registry import Registry
+from genkit._core._typing import AgentInit, AgentInput
 
 
 class FakeReflectionManager:
@@ -480,6 +480,167 @@ async def test_reflection_server_v2_streaming_run_action(fake_manager: FakeRefle
         await _stop_client(client, task)
 
 
+def _register_echo_agent(registry: Registry, name: str = 'test/echo') -> str:
+    """Register a minimal bidi (agent) action that emits one chunk per input turn.
+
+    Returns the action key. The fn stays agnostic of session state — it just
+    counts turns — so the test exercises the reflection→bidi seam (init/input
+    resolution, chunk forwarding, final output) without the full agent runtime.
+    """
+
+    async def echo_agent(_init: Any, input_stream: Any, send_chunk: Any) -> dict[str, Any]:
+        turns = 0
+        async for _inp in input_stream:
+            turns += 1
+            send_chunk({'turn': turns})
+        return {'turns': turns}
+
+    registry.register_action_from_instance(
+        BidiAction(
+            ActionKind.AGENT,
+            name,
+            echo_agent,
+            metadata={'agent': {'stateManagement': 'client'}},
+            init_schema=AgentInit,
+            input_schema=AgentInput,
+        )
+    )
+    return f'/agent/{name}'
+
+
+@pytest.mark.asyncio
+async def test_reflection_server_v2_run_bidi_action(fake_manager: FakeReflectionManager) -> None:
+    """A bidi (agent) runAction sends one input turn, streams its chunk, then the final output."""
+    registry = Registry()
+    key = _register_echo_agent(registry)
+
+    client, task = await _run_client_lifecycle(registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'runAction',
+            'params': {'key': key, 'input': {}},
+            'id': 'bidi-1',
+        })
+        chunks: list[Any] = []
+        final: dict[str, Any] | None = None
+        while final is None:
+            msg = await fake_manager.read_rpc()
+            if msg.get('method') == 'streamChunk':
+                params = msg.get('params')
+                assert isinstance(params, dict)
+                assert params.get('requestId') == 'bidi-1'
+                chunks.append(params.get('chunk'))
+                continue
+            if msg.get('method') == 'runActionState':
+                continue
+            final = msg
+        assert chunks == [{'turn': 1}]
+        assert final.get('id') == 'bidi-1'
+        assert final.get('error') is None
+        result = final.get('result')
+        assert isinstance(result, dict)
+        assert result.get('result') == {'turns': 1}
+    finally:
+        await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
+async def test_reflection_server_v2_bidi_input_stream(fake_manager: FakeReflectionManager) -> None:
+    """With streamInput, turns are fed via sendInputStreamChunk and closed with endInputStream."""
+    registry = Registry()
+    key = _register_echo_agent(registry, 'test/echo_stream')
+
+    client, task = await _run_client_lifecycle(registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'runAction',
+            'params': {'key': key, 'streamInput': True},
+            'id': 'bidi-2',
+        })
+        # runActionState fires after the bidi connection is registered, so waiting
+        # for it means sendInputStreamChunk won't race ahead of registration.
+        seen_state = False
+        while not seen_state:
+            msg = await fake_manager.read_rpc()
+            if msg.get('method') == 'runActionState':
+                seen_state = True
+
+        for _ in range(2):
+            await fake_manager.write_rpc({
+                'jsonrpc': '2.0',
+                'method': 'sendInputStreamChunk',
+                'params': {'requestId': 'bidi-2', 'chunk': {}},
+            })
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'endInputStream',
+            'params': {'requestId': 'bidi-2'},
+        })
+
+        chunks: list[Any] = []
+        final: dict[str, Any] | None = None
+        while final is None:
+            msg = await fake_manager.read_rpc()
+            if msg.get('method') == 'streamChunk':
+                params = msg.get('params')
+                assert isinstance(params, dict)
+                chunks.append(params.get('chunk'))
+                continue
+            if msg.get('method') == 'runActionState':
+                continue
+            final = msg
+        assert chunks == [{'turn': 1}, {'turn': 2}]
+        assert final.get('id') == 'bidi-2'
+        assert final.get('error') is None
+        result = final.get('result')
+        assert isinstance(result, dict)
+        assert result.get('result') == {'turns': 2}
+    finally:
+        await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
+async def test_reflection_server_v2_bidi_action_cleans_up_active_actions(
+    fake_manager: FakeReflectionManager,
+) -> None:
+    """A finished agent turn leaves nothing behind in the cancel/connection registries.
+
+    Regression: `_run_bidi_action` used to drop only the bidi stream registry, so
+    each turn's trace id lingered in `_active_actions` (a late cancelAction would
+    then falsely succeed against a completed turn).
+    """
+    registry = Registry()
+    key = _register_echo_agent(registry, 'test/echo_cleanup')
+
+    client, task = await _run_client_lifecycle(registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'runAction',
+            'params': {'key': key, 'input': {}},
+            'id': 'bidi-cleanup',
+        })
+        final: dict[str, Any] | None = None
+        while final is None:
+            msg = await fake_manager.read_rpc()
+            if msg.get('method') in ('streamChunk', 'runActionState'):
+                continue
+            final = msg
+        assert final.get('id') == 'bidi-cleanup'
+        assert final.get('error') is None
+        # Let the run's `finally` run before inspecting the registries.
+        await asyncio.sleep(0)
+        assert client._active_actions == {}
+        assert client._bidi_input_streams == {}
+    finally:
+        await _stop_client(client, task)
+
+
 @pytest.mark.asyncio
 async def test_reflection_server_v2_run_action_not_found(fake_manager: FakeReflectionManager) -> None:
     registry = Registry()
@@ -562,11 +723,11 @@ async def test_reflection_server_v2_cancel_action(fake_manager: FakeReflectionMa
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('stream_method', ('sendInputStreamChunk', 'endInputStream'))
-async def test_reflection_server_v2_input_stream_not_implemented_js_style(
+async def test_reflection_server_v2_input_stream_rejects_invalid_params(
     fake_manager: FakeReflectionManager,
     stream_method: str,
 ) -> None:
-    """Unimplemented input-stream methods return -32000 + data.stack when id is set."""
+    """Input-stream methods validate params and return -32602 when required fields are missing."""
     registry = Registry()
     client, task = await _run_client_lifecycle(registry, fake_manager)
     try:
@@ -580,11 +741,8 @@ async def test_reflection_server_v2_input_stream_not_implemented_js_style(
         resp = await fake_manager.read_rpc()
         err = resp.get('error')
         assert isinstance(err, dict)
-        assert err.get('code') == JSON_RPC_SERVER_ERROR
-        assert 'not implemented' in str(err.get('message', '')).lower()
-        data = err.get('data')
-        assert isinstance(data, dict)
-        assert 'stack' in data and str(data.get('stack', '')).strip()
+        assert err.get('code') == JSON_RPC_INVALID_PARAMS
+        assert 'invalid params' in str(err.get('message', '')).lower()
     finally:
         await _stop_client(client, task)
 

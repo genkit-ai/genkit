@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import AsyncIterator, Coroutine
 from typing import Any, Generic, TypeVar
 
@@ -27,6 +28,17 @@ from typing_extensions import TypeVar as TypeVarExt
 from genkit._core._logger import get_logger
 
 from ._compat import wait_for
+
+if sys.version_info >= (3, 13):
+    # Reuse the stdlib exception so a queue closed via native shutdown() and one
+    # closed via the emulated path raise the exact same type, and so callers
+    # can catch either interchangeably.
+    from asyncio import QueueShutDown
+else:
+
+    class QueueShutDown(Exception):  # noqa: N818
+        """Raised when interacting with a closed CloseableQueue."""
+
 
 logger = get_logger(__name__)
 
@@ -115,3 +127,86 @@ def run_loop(coro: Coroutine[object, object, T], *, debug: bool | None = None) -
     except ImportError as e:
         logger.debug('Using asyncio (install uvloop for better performance)', error=e)
         return asyncio.run(coro, debug=debug)
+
+
+class CloseableQueue(asyncio.Queue[T]):
+    """An asyncio.Queue subclass with a synchronous, idempotent close().
+
+    Once closed, put()/put_nowait() raise QueueShutDown immediately, while
+    get()/get_nowait() drain any buffered items first and then raise
+    QueueShutDown once the queue is empty. close() also wakes coroutines that
+    are already blocked in get() (and put() on a bounded queue). Supports async
+    iteration via ``async for``.
+
+    Python 3.13+ ships this as Queue.shutdown(), so we delegate to it there. On
+    3.10-3.12 the same behavior is emulated by hand.
+    """
+
+    def __init__(self, maxsize: int = 0) -> None:
+        super().__init__(maxsize=maxsize)
+        self._closed = False
+
+    def close(self) -> None:
+        """Close the queue synchronously and idempotently.
+
+        Stops accepting new items, lets buffered items drain, then makes blocked
+        and future getters raise QueueShutDown. Must be called on the event loop
+        thread: asyncio.Queue is loop-affine and not thread-safe.
+        """
+        if self._closed:
+            return
+        self._closed = True
+
+        if sys.version_info >= (3, 13):
+            # native shutdown rejects new puts, leaves buffered items to drain,
+            # and wakes blocked getters so they raise once the queue is empty.
+            super().shutdown(immediate=False)
+            return
+
+        # wake anyone blocked in get() so they observe the closed-and-empty
+        # state; the base queue tracks its waiters as plain deques.
+        getters = getattr(self, '_getters', None)
+        while getters:
+            getter = getters.popleft()
+            if not getter.done():
+                getter.set_exception(QueueShutDown())
+
+        # wake anyone blocked in put() on a bounded queue.
+        putters = getattr(self, '_putters', None)
+        while putters:
+            putter = putters.popleft()
+            if not putter.done():
+                putter.set_exception(QueueShutDown())
+
+    def is_closed(self) -> bool:
+        return self._closed
+
+    async def put(self, item: T) -> None:
+        if self._closed:
+            raise QueueShutDown('Queue is closed')
+        await super().put(item)
+
+    def put_nowait(self, item: T) -> None:
+        if self._closed:
+            raise QueueShutDown('Queue is closed')
+        super().put_nowait(item)
+
+    async def get(self) -> T:
+        # If the queue is closed and empty, raise QueueShutDown to signal end of stream
+        if self._closed and self.empty():
+            raise QueueShutDown('Queue is closed and empty')
+        return await super().get()
+
+    def get_nowait(self) -> T:
+        if self._closed and self.empty():
+            raise QueueShutDown('Queue is closed and empty')
+        return super().get_nowait()
+
+    def __aiter__(self) -> AsyncIterator[T]:
+        return self
+
+    async def __anext__(self) -> T:
+        try:
+            return await self.get()
+        except QueueShutDown:
+            raise StopAsyncIteration from None

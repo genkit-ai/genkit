@@ -141,9 +141,7 @@ async def test_simulates_doc_grounding(
         ),
     )
 
-    assert response.request is not None
-    assert response.request.messages is not None
-    assert response.request.messages[0] == Message(
+    grounded_msg = Message(
         role=Role.USER,
         content=[
             Part(TextPart(text='hi')),
@@ -155,6 +153,17 @@ async def test_simulates_doc_grounding(
             ),
         ],
     )
+
+    # the model receives the grounded prompt with docs injected as a context part.
+    assert pm.last_request is not None
+    assert pm.last_request.messages[0] == grounded_msg
+
+    # the returned request is the conversation we persist: the clean turn. The
+    # docs ride along as structured data, not inlined into the message.
+    assert response.request is not None
+    assert response.request.messages is not None
+    assert response.request.messages[0] == Message(role=Role.USER, content=[Part(TextPart(text='hi'))])
+    assert response.request.docs is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -1551,11 +1560,11 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
         ) -> ModelResponse:
             # Resolve the tool ProviderMW just contributed — only works if
             # both middleware share the same per-call registry scope.
-            tool = await ctx.registry.resolve_action(ActionKind.TOOL, 'shared_tool')
+            tool = await ctx.ai.registry.resolve_action(ActionKind.TOOL, 'shared_tool')
             if tool is not None:
                 seen_by_b.append(tool.name)
             # Also exercise the write path: anything we register through
-            # ctx.registry must not survive the call.
+            # ctx.ai.registry must not survive the call.
             scratch = Registry()
 
             async def leaky_tool() -> str:
@@ -1563,7 +1572,7 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
                 return 'nope'
 
             leak = define_tool(scratch, leaky_tool, name='leaky_tool').action()
-            ctx.registry.register_action_from_instance(leak)
+            ctx.ai.registry.register_action_from_instance(leak)
             return await next_fn(params, ctx)
 
     pm, _ = define_programmable_model(ai)
@@ -1743,7 +1752,7 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
                 restart=[
                     ToolRequestPart(
                         tool_request=ToolRequest(name='approveMe', input={}, ref='r1'),
-                        metadata={'resumed': {'toolApproved': True}},
+                        metadata={'resumed': {'tool_approved': True}},
                     )
                 ],
             ),
@@ -2232,7 +2241,6 @@ async def test_generate_action_spec(spec: dict[str, Any]) -> None:
             captured_chunks.append(chunk)
 
         action_response = await action.run(
-            ai.registry,
             TypeAdapter(GenerateActionOptions).validate_python(spec['input']),  # type: ignore[arg-type]
             on_chunk=on_chunk,  # type: ignore[misc]
         )
