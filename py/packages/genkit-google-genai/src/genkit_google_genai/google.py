@@ -481,7 +481,19 @@ class GoogleAI(Plugin):
         self._list_actions_cache: list[ActionMetadata] | None = None
 
     def _interactions_client_options(self) -> ClientOptions:
-        """Build non-secret Interactions client options from plugin init settings."""
+        """Extract baseline non-secret HTTP options from plugin init settings.
+
+        These settings (base_url, api_version, custom_headers) serve as the
+        plugin-level fallback defaults for Google AI Interactions-backed models
+        (Deep Research, Lyria, Veo).
+
+        Resolution Hierarchy for Client Settings:
+            1. Per-request override: Options passed in request config (highest priority).
+            2. Operation metadata: Stored options on Operation.metadata['clientOptions']
+               (for background check/cancel calls across processes).
+            3. Plugin-level init: Baseline settings from self._client_kwargs.
+            4. Environment variables: E.g., GEMINI_API_KEY / GOOGLE_API_KEY (lowest fallback).
+        """
         http_options: HttpOptions | None = self._client_kwargs.get('http_options')
         options: ClientOptions = {}
         if http_options is not None:

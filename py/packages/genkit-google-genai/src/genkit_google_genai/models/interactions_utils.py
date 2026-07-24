@@ -54,7 +54,13 @@ def calculate_api_key(
     plugin_api_key: str | None,
     request_api_key: str | None,
 ) -> str:
-    """Resolve the effective API key for an Interactions call."""
+    """Resolve the effective API key for an Interactions call.
+
+    Fallback Hierarchy:
+        1. request_api_key: Override passed in request config.
+        2. plugin_api_key: Plugin initialization key (from self._client_kwargs).
+        3. Environment variables: GEMINI_API_KEY, GOOGLE_API_KEY, or GOOGLE_GENAI_API_KEY.
+    """
     api_key = request_api_key or plugin_api_key or get_api_key_from_env()
     if not api_key:
         raise GenkitError(
@@ -98,7 +104,7 @@ def merge_client_options(
     base: ClientOptions,
     config: dict[str, Any],
 ) -> ClientOptions:
-    """Apply per-request client overrides from model config."""
+    """Apply per-request client overrides from model config onto base plugin options."""
     merged = cast(ClientOptions, dict(base))
     if base_url := config.get('base_url'):
         merged['base_url'] = str(base_url)
@@ -121,7 +127,7 @@ def client_options_for_operation(
     *,
     api_key: str | None = None,
 ) -> ClientOptions:
-    """Persist client settings on an Operation for later check/cancel calls."""
+    """Persist client settings on Operation.metadata['clientOptions'] for check/cancel calls."""
     persisted = cast(ClientOptions, dict(client_options))
     if api_key:
         persisted['api_key'] = api_key
