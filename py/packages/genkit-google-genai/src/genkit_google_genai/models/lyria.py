@@ -74,7 +74,6 @@ class LyriaConfigSchema(BaseModel):
 
 # Aliases for backward compatibility
 LyriaConfig = LyriaConfigSchema
-GoogleAILyriaConfigSchema = LyriaConfigSchema
 
 
 class LyriaVersion:
@@ -93,9 +92,6 @@ def is_lyria_model_name(name: str | None) -> bool:
     return bool(name and name.startswith('lyria-'))
 
 
-is_googleai_lyria_model_name = is_lyria_model_name
-
-
 def lyria_model_info(version: str) -> ModelInfo:
     """Return capability metadata for an Interactions Lyria model."""
     known = KNOWN_LYRIA_MODELS.get(version)
@@ -104,15 +100,9 @@ def lyria_model_info(version: str) -> ModelInfo:
     return ModelInfo(label=f'Google AI - {version}', supports=GENERIC_LYRIA_INFO.supports)
 
 
-googleai_lyria_model_info = lyria_model_info
-
-
 def list_known_lyria_models() -> list[str]:
     """Return statically known Interactions Lyria model names."""
     return list(KNOWN_LYRIA_MODELS.keys())
-
-
-list_known_googleai_lyria_models = list_known_lyria_models
 
 
 class LyriaModel:
@@ -168,9 +158,6 @@ class LyriaModel:
         return from_interaction_sync(interaction)
 
 
-GoogleAILyriaModel = LyriaModel
-
-
 def create_lyria_action(
     name: str,
     *,
@@ -201,6 +188,3 @@ def create_lyria_action(
             config_schema=LyriaConfigSchema,
         ).metadata,
     )
-
-
-create_googleai_lyria_action = create_lyria_action

@@ -218,7 +218,7 @@ async def test_antigravity_generate_downgrades_system_and_uses_agent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_googleai_lyria_defaults_audio_and_text_modalities() -> None:
+async def test_lyria_defaults_audio_and_text_modalities() -> None:
     patcher, create_calls, _, _ = _patch_interactions(
         'genkit_google_genai.models.lyria',
         create_result={
