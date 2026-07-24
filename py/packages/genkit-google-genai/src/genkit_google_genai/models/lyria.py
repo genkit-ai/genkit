@@ -45,7 +45,7 @@ from genkit_google_genai.models.interactions_utils import (
 )
 
 LYRIA_INFO = ModelInfo(
-    label='Google AI - lyria-3',
+    label='Google AI - Lyria',
     supports=Supports(
         multiturn=False,
         media=True,
