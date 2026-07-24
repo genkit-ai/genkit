@@ -219,7 +219,7 @@ from genkit_google_genai.models.gemini import (
     VertexAIGeminiVersion,
 )
 from genkit_google_genai.models.imagen import ImagenVersion
-from genkit_google_genai.models.lyria import LyriaConfig, LyriaVersion
+from genkit_google_genai.models.lyria import LyriaConfigSchema, LyriaVersion
 from genkit_google_genai.models.veo import VeoConfig, VeoVersion
 
 
@@ -241,7 +241,7 @@ __all__ = [
     'GoogleAI',
     'GoogleAIGeminiVersion',
     'ImagenVersion',
-    'LyriaConfig',
+    'LyriaConfigSchema',
     'LyriaVersion',
     'VeoConfig',
     'VeoVersion',
