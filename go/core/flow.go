@@ -48,6 +48,7 @@ type flowContext struct {
 }
 
 // NewFlow creates a Flow that runs fn without registering it. fn takes an input of type In and returns an output of type Out.
+// Register it later via the Register method.
 func NewFlow[In, Out any](name string, fn Func[In, Out]) *Flow[In, Out, struct{}] {
 	return &Flow[In, Out, struct{}]{NewAction(api.ActionTypeFlow, name, nil, func(ctx context.Context, input In) (Out, error) {
 		fc := &flowContext{
@@ -59,6 +60,7 @@ func NewFlow[In, Out any](name string, fn Func[In, Out]) *Flow[In, Out, struct{}
 }
 
 // NewStreamingFlow creates a streaming Flow that runs fn without registering it.
+// Register it later via the Register method.
 func NewStreamingFlow[In, Out, Stream any](name string, fn StreamingFunc[In, Out, Stream]) *Flow[In, Out, Stream] {
 	return &Flow[In, Out, Stream]{NewStreamingAction(api.ActionTypeFlow, name, nil, func(ctx context.Context, input In, cb func(context.Context, Stream) error) (Out, error) {
 		fc := &flowContext{

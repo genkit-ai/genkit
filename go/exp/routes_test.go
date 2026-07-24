@@ -31,6 +31,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
+	"github.com/firebase/genkit/go/core"
 )
 
 // routeKey is a compact "METHOD path" identity for asserting on a route set
@@ -137,7 +138,7 @@ func TestAllFlowRoutes(t *testing.T) {
 		t.Errorf("AllFlowRoutes = %v, want %v", got, want)
 	}
 
-	greet := genkit.NewFlow("standalone", func(ctx context.Context, s string) (string, error) { return s, nil })
+	greet := core.NewFlow("standalone", func(ctx context.Context, s string) (string, error) { return s, nil })
 	single := FlowRoutes(greet)
 	if len(single) != 1 || routeKey(single[0]) != "POST /flows/standalone" {
 		t.Errorf("FlowRoutes = %v, want one POST /flows/standalone", routeKeys(single))

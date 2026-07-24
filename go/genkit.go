@@ -457,18 +457,6 @@ func (g *Genkit) DefineStreamingFlow[In, Out, Stream any](name string, fn core.S
 	return core.DefineStreamingFlow(g.reg, name, fn)
 }
 
-// NewFlow creates a [core.Flow] without registering it as an action.
-// To register the flow later, call [Genkit.RegisterAction].
-func NewFlow[In, Out any](name string, fn core.Func[In, Out]) *core.Flow[In, Out, struct{}] {
-	return core.NewFlow(name, fn)
-}
-
-// NewStreamingFlow creates a streaming [core.Flow] without registering it as an action.
-// To register the flow later, call [Genkit.RegisterAction].
-func NewStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In, Out, Stream]) *core.Flow[In, Out, Stream] {
-	return core.NewStreamingFlow(name, fn)
-}
-
 // Run executes the given function `fn` within the context of the current flow run,
 // creating a distinct trace span for this step. It's used to add observability
 // to specific sub-operations within a flow defined by [Genkit.DefineFlow] or [Genkit.DefineStreamingFlow].
@@ -1637,31 +1625,6 @@ func (g *Genkit) DefineResource(name string, opts *ai.ResourceOptions, fn ai.Res
 // FindMatchingResource finds a resource that matches the given URI.
 func (g *Genkit) FindMatchingResource(uri string) (*ai.Resource, *ai.ResourceInput, error) {
 	return ai.FindMatchingResource(g.reg, uri)
-}
-
-// NewResource creates an unregistered resource action that can be temporarily
-// attached during generation via WithResources option.
-//
-// Example:
-//
-//	resource := NewResource("user-data", &ai.ResourceOptions{
-//	  Template: "user://profile/{id}",
-//	}, func(ctx context.Context, input *ai.ResourceInput) (*ai.ResourceOutput, error) {
-//	  userID := input.Variables["id"]
-//	  // Load user data dynamically...
-//	  return &ai.ResourceOutput{Content: []*ai.Part{ai.NewTextPart(userData)}}, nil
-//	})
-//
-//	// Use in generation:
-//	ai.Generate(ctx, g,
-//	  ai.WithPrompt([]*ai.Part{
-//	    ai.NewTextPart("Analyze this user:"),
-//	    ai.NewResourcePart("user://profile/123"),
-//	  }),
-//	  ai.WithResources(resource),
-//	)
-func NewResource(name string, opts *ai.ResourceOptions, fn ai.ResourceFunc) *ai.Resource {
-	return ai.NewResource(name, opts, fn)
 }
 
 // ListResources returns a slice of all resource actions

@@ -122,7 +122,25 @@ func DefineResource(r api.Registry, name string, opts *ResourceOptions, fn Resou
 }
 
 // NewResource creates a resource but does not register it in the registry.
-// It can be registered later via the Register method.
+// Pass it to [WithResources] to attach it to a single generation, or register
+// it later via the Register method.
+//
+// Example:
+//
+//	resource := ai.NewResource("user-data", &ai.ResourceOptions{
+//	  Template: "user://profile/{id}",
+//	}, func(ctx context.Context, input *ai.ResourceInput) (*ai.ResourceOutput, error) {
+//	  userData := loadUser(input.Variables["id"])
+//	  return &ai.ResourceOutput{Content: []*ai.Part{ai.NewTextPart(userData)}}, nil
+//	})
+//
+//	resp, err := g.Generate(ctx,
+//	  ai.WithMessages(ai.NewUserMessage(
+//	    ai.NewTextPart("Analyze this user:"),
+//	    ai.NewResourcePart("user://profile/123"),
+//	  )),
+//	  ai.WithResources(resource),
+//	)
 func NewResource(name string, opts *ResourceOptions, fn ResourceFunc) *Resource {
 	metadata := resourceMetadata(name, opts)
 	metadata["dynamic"] = true
