@@ -482,14 +482,14 @@ class GoogleAI(Plugin):
 
     def _interactions_client_options(self) -> ClientOptions:
         """Build non-secret Interactions client options from plugin init settings."""
-        http_options = self._client_kwargs.get('http_options')
+        http_options: HttpOptions | None = self._client_kwargs.get('http_options')
         options: ClientOptions = {}
         if http_options is not None:
-            if getattr(http_options, 'api_version', None):
+            if http_options.api_version:
                 options['api_version'] = http_options.api_version
-            if getattr(http_options, 'base_url', None):
+            if http_options.base_url:
                 options['base_url'] = http_options.base_url
-            if getattr(http_options, 'headers', None):
+            if http_options.headers:
                 options['custom_headers'] = dict(http_options.headers)
         return options
 
