@@ -17,9 +17,9 @@
 """Google GenAI media - one simple example each for speech, image, and video."""
 
 import asyncio
-from typing import Any, Literal
+from typing import Any
 
-from genkit_google_genai import GoogleAI
+from genkit_google_genai import GoogleAI, VeoConfigSchema
 from pydantic import BaseModel, Field
 
 from genkit import Genkit
@@ -43,25 +43,15 @@ class ImageInput(BaseModel):
 class VideoInput(BaseModel):
     """Input for Veo."""
 
-    model: Literal[
-        'googleai/veo-3.1-generate-preview',
-        'googleai/veo-3.1-fast-generate-preview',
-        'googleai/veo-3.1-generate-001',
-        'googleai/veo-3.1-fast-generate-001',
-        'googleai/veo-3.0-generate-001',
-        'googleai/veo-3.0-fast-generate-001',
-        'googleai/veo-2.0-generate-001',
-    ] = Field(default='googleai/veo-3.1-generate-preview', description='Veo model for generation')
+    model: str = Field(default='googleai/veo-3.1-generate-preview', description='Veo model for generation')
     prompt: str = Field(
         default='A paper airplane gliding through a bright classroom, cinematic slow motion',
         description='Video prompt',
     )
-    aspect_ratio: str = Field(default='16:9', description='Video aspect ratio')
-    duration_seconds: int = Field(default=5, description='Video duration in seconds')
-    resolution: str | None = Field(
-        default=None, description='Output resolution (for supported models, e.g. "720p", "1080p")'
+    config: VeoConfigSchema = Field(
+        default_factory=lambda: VeoConfigSchema(aspect_ratio='16:9', duration_seconds=5),
+        description='Veo model configuration',
     )
-    seed: int | None = Field(default=None, description='Optional RNG seed')
 
 
 def _first_media_url(response: Any) -> str | None:
@@ -101,11 +91,10 @@ async def imagen_image_generator(input: ImageInput) -> dict[str, str | None]:
 @ai.flow(name='generate_video')
 async def veo_video_generator(input: VideoInput) -> dict[str, str | int | None]:
     """Generate one Veo video with generate_operation() and poll to completion."""
-    config = input.model_dump(exclude_none=True, exclude={'prompt', 'model'})
     operation = await ai.generate_operation(
         model=input.model,
         prompt=input.prompt,
-        config=config,
+        config=input.config,
     )
     while not operation.done:
         await asyncio.sleep(3)
@@ -116,7 +105,7 @@ async def veo_video_generator(input: VideoInput) -> dict[str, str | int | None]:
         'model': input.model,
         'operation_id': operation.id,
         'video_url': video_url,
-        'duration_seconds': input.duration_seconds,
+        'duration_seconds': input.config.duration_seconds or 5,
     }
 
 

@@ -220,7 +220,7 @@ from genkit_google_genai.models.gemini import (
 )
 from genkit_google_genai.models.imagen import ImagenVersion
 from genkit_google_genai.models.lyria import LyriaConfig, LyriaVersion
-from genkit_google_genai.models.veo import VeoConfig, VeoVersion
+from genkit_google_genai.models.veo import VeoConfig, VeoConfigSchema, VeoVersion
 
 
 def package_name() -> str:
@@ -244,6 +244,7 @@ __all__ = [
     'LyriaConfig',
     'LyriaVersion',
     'VeoConfig',
+    'VeoConfigSchema',
     'VeoVersion',
     'VertexAI',
     'VertexAIGeminiVersion',
