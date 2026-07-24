@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -73,13 +73,13 @@ def calculate_api_key(
     return api_key
 
 
-def config_as_dict(config: Any) -> dict[str, Any]:  # noqa: ANN401
+def config_as_dict(config: BaseModel | Mapping[str, Any] | None) -> dict[str, Any]:
     """Normalize model config to a plain snake_case dict."""
     if config is None:
         return {}
     if isinstance(config, BaseModel):
         return config.model_dump(exclude_none=True)
-    if isinstance(config, dict):
+    if isinstance(config, Mapping):
         return dict(config)
     return {}
 
@@ -102,7 +102,7 @@ def downgrade_system_messages(messages: list[Message]) -> list[Message]:
 
 def merge_client_options(
     base: ClientOptions,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
 ) -> ClientOptions:
     """Apply per-request client overrides from model config onto base plugin options."""
     merged = cast(ClientOptions, dict(base))
