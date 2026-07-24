@@ -27,3 +27,5 @@ Flows: `generate_speech`, `generate_image`, `generate_video`.
 - `googleai/veo-2.0-generate-001`
 
 The flow input includes Veo config fields such as `aspect_ratio`, `duration_seconds`, `resolution`, and `seed`.
+
+`generate_video` uses `generate_operation()` to start Veo and `check_operation()` to poll until the video URL is ready in `operation.output`.

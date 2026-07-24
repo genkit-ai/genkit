@@ -438,5 +438,5 @@ async def test_multimodal_embedding_guards_missing_private_transport(mocker: Moc
     client_mock = mocker.Mock(spec=[])  # no _api_client attribute at all
 
     embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
-    with pytest.raises(RuntimeError, match='google-genai>=1.63.0'):
+    with pytest.raises(RuntimeError, match='google-genai>=2.3.0'):
         await embedder.generate(request)

@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Google AI Interactions Lyria audio model."""
+"""Antigravity foreground model via the Google AI Interactions API."""
 
 from __future__ import annotations
 
@@ -33,9 +33,9 @@ from genkit_google_genai._interactions.converters import (
 )
 from genkit_google_genai.models.interactions_utils import (
     ClientOptions,
-    ResponseModality,
     calculate_api_key,
     config_as_dict,
+    downgrade_system_messages,
     extract_version,
     map_genai_error,
     merge_client_options,
@@ -44,69 +44,56 @@ from genkit_google_genai.models.interactions_utils import (
     response_modalities_from_config,
 )
 
-GENERIC_LYRIA_INFO = ModelInfo(
-    label='Google AI - lyria-3',
+GENERIC_ANTIGRAVITY_INFO = ModelInfo(
+    label='Google AI - antigravity',
     supports=Supports(
-        multiturn=False,
+        multiturn=True,
         media=True,
         tools=False,
         tool_choice=False,
         system_role=False,
-        output=['media', 'text'],
+        output=['text'],
     ),
 )
 
-KNOWN_LYRIA_MODELS: dict[str, ModelInfo] = {
-    'lyria-3-clip-preview': GENERIC_LYRIA_INFO,
-    'lyria-3-pro-preview': GENERIC_LYRIA_INFO,
+KNOWN_ANTIGRAVITY_MODELS: dict[str, ModelInfo] = {
+    'antigravity-preview-05-2026': GENERIC_ANTIGRAVITY_INFO,
 }
 
 
-class LyriaConfigSchema(BaseModel):
-    """Google AI Interactions Lyria model configuration."""
+class AntigravityConfigSchema(BaseModel):
+    """Antigravity model configuration."""
 
     model_config = ConfigDict(extra='allow')
     api_key: str | None = None
     base_url: str | None = None
     api_version: str | None = None
-    response_modalities: list[Literal['text', 'image', 'audio']] | None = None
+    previous_interaction_id: str | None = None
+    store: bool | None = None
+    environment: str | dict[str, Any] | None = None
+    response_modalities: list[Literal['text', 'image']] | None = None
 
 
-# Aliases for backward compatibility
-LyriaConfig = LyriaConfigSchema
+def is_antigravity_model_name(name: str | None) -> bool:
+    """Return True when the model name belongs to the Antigravity family."""
+    return bool(name and name.startswith('antigravity-'))
 
 
-class LyriaVersion:
-    """Lyria model version identifiers."""
-
-    LYRIA_3_CLIP = 'lyria-3-clip-preview'
-    LYRIA_3_PRO = 'lyria-3-pro-preview'
-
-
-def is_lyria_model_name(name: str | None) -> bool:
-    """Return True for Google AI Interactions Lyria model name prefixes.
-
-    Known product models are lyria-3-*; the broader lyria-* prefix keeps legacy
-    names like lyria-002 from falling through to the Gemini catch-all.
-    """
-    return bool(name and name.startswith('lyria-'))
-
-
-def lyria_model_info(version: str) -> ModelInfo:
-    """Return capability metadata for an Interactions Lyria model."""
-    known = KNOWN_LYRIA_MODELS.get(version)
+def antigravity_model_info(version: str) -> ModelInfo:
+    """Return capability metadata for an Antigravity model."""
+    known = KNOWN_ANTIGRAVITY_MODELS.get(version)
     if known is not None:
         return ModelInfo(label=f'Google AI - {version}', supports=known.supports)
-    return ModelInfo(label=f'Google AI - {version}', supports=GENERIC_LYRIA_INFO.supports)
+    return ModelInfo(label=f'Google AI - {version}', supports=GENERIC_ANTIGRAVITY_INFO.supports)
 
 
-def list_known_lyria_models() -> list[str]:
-    """Return statically known Interactions Lyria model names."""
-    return list(KNOWN_LYRIA_MODELS.keys())
+def list_known_antigravity_models() -> list[str]:
+    """Return statically known Antigravity model names."""
+    return list(KNOWN_ANTIGRAVITY_MODELS.keys())
 
 
-class LyriaModel:
-    """Interactions Lyria model for Google AI."""
+class AntigravityModel:
+    """Antigravity model backed by the Interactions API."""
 
     def __init__(
         self,
@@ -116,32 +103,43 @@ class LyriaModel:
         client_options: ClientOptions,
         client_getter: Callable[[], genai.Client] | None = None,
     ) -> None:
-        """Initialize Interactions Lyria model."""
+        """Initialize Antigravity model."""
         self._version = version
         self._plugin_api_key = plugin_api_key
         self._client_options = client_options
         self._client_getter = client_getter
 
     async def generate(self, request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
-        """Run a synchronous Interactions Lyria generation."""
+        """Run a synchronous Antigravity interaction."""
         config = config_as_dict(request.config)
         request_api_key = config.get('api_key')
         if request_api_key is not None:
             request_api_key = str(request_api_key)
         api_key = calculate_api_key(self._plugin_api_key, request_api_key)
         client_options = merge_client_options(self._client_options, config)
-        passthrough = remove_client_option_overrides(config)
-        passthrough.pop('response_modalities', None)
+        request_options = remove_client_option_overrides(config)
 
-        messages = request.messages or []
-        default_modalities: list[ResponseModality] = ['audio', 'text']
+        previous_interaction_id = request_options.pop('previous_interaction_id', None)
+        store = request_options.pop('store', None)
+        environment = request_options.pop('environment', None)
+        request_options.pop('response_modalities', None)
+
+        messages = downgrade_system_messages(request.messages or [])
         req_dict: dict[str, Any] = {
-            'model': extract_version(self._version),
+            'agent': extract_version(self._version),
             'input': to_interaction_steps(ensure_tool_ids(messages)),
-            'response_modalities': response_modalities_from_config(config, default=default_modalities)
-            or default_modalities,
         }
-        req_dict.update(passthrough)
+        if previous_interaction_id:
+            req_dict['previous_interaction_id'] = previous_interaction_id
+        if store is not None:
+            req_dict['store'] = store
+        if environment is not None:
+            req_dict['environment'] = environment
+        req_dict.update(request_options)
+
+        response_modalities = response_modalities_from_config(config)
+        if response_modalities is not None:
+            req_dict['response_modalities'] = response_modalities
 
         async with resolve_interactions_client(
             client_getter=self._client_getter,
@@ -158,22 +156,22 @@ class LyriaModel:
         return from_interaction_sync(interaction)
 
 
-def create_lyria_action(
+def create_antigravity_action(
     name: str,
     *,
     plugin_api_key: str | None,
     client_options: ClientOptions,
     client_getter: Callable[[], genai.Client] | None = None,
 ) -> Action:
-    """Build a foreground model action for Interactions Lyria."""
+    """Build a foreground model action for Antigravity."""
     clean_name = extract_version(name)
-    model = LyriaModel(
+    model = AntigravityModel(
         clean_name,
         plugin_api_key=plugin_api_key,
         client_options=client_options,
         client_getter=client_getter,
     )
-    info = lyria_model_info(clean_name)
+    info = antigravity_model_info(clean_name)
 
     async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
         return await model.generate(request, ctx)
@@ -185,6 +183,6 @@ def create_lyria_action(
         metadata=model_action_metadata(
             name=name,
             info=info.model_dump(by_alias=True),
-            config_schema=LyriaConfigSchema,
+            config_schema=AntigravityConfigSchema,
         ).metadata,
     )

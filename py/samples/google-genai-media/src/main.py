@@ -17,16 +17,12 @@
 """Google GenAI media - one simple example each for speech, image, and video."""
 
 import asyncio
-import time
 from typing import Any, Literal
 
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
 from genkit import Genkit
-from genkit._core._background import lookup_background_action
-from genkit._core._typing import Operation, Part, Role, TextPart
-from genkit.model import Message, ModelRequest
 
 ai = Genkit(plugins=[GoogleAI()])
 
@@ -70,7 +66,6 @@ class VideoInput(BaseModel):
 
 def _first_media_url(response: Any) -> str | None:
     """Return the first media URL in a model response."""
-
     message = getattr(response, 'message', None)
     if not message:
         return None
@@ -84,7 +79,6 @@ def _first_media_url(response: Any) -> str | None:
 @ai.flow(name='generate_speech')
 async def tts_speech_generator(input: SpeechInput) -> dict[str, str | None]:
     """Turn text into speech with one TTS call."""
-
     response = await ai.generate(
         model='googleai/gemini-2.5-flash-preview-tts',
         prompt=input.text,
@@ -96,7 +90,6 @@ async def tts_speech_generator(input: SpeechInput) -> dict[str, str | None]:
 @ai.flow(name='generate_image')
 async def imagen_image_generator(input: ImageInput) -> dict[str, str | None]:
     """Generate one image with Imagen."""
-
     response = await ai.generate(
         model='googleai/imagen-3.0-generate-002',
         prompt=input.prompt,
@@ -105,46 +98,20 @@ async def imagen_image_generator(input: ImageInput) -> dict[str, str | None]:
     return {'model': 'googleai/imagen-3.0-generate-002', 'image_url': _first_media_url(response)}
 
 
-async def _poll_video(operation: Operation, model_name: str) -> Operation:
-    """Wait for a background video operation to finish."""
-
-    action = await lookup_background_action(ai.registry, f'/background-model/{model_name}')
-    if action is None:
-        raise ValueError(f'Veo background model not found: {model_name}')
-
-    started_at = time.monotonic()
-    while not operation.done:
-        if time.monotonic() - started_at > 180:
-            raise TimeoutError('Timed out waiting for Veo output')
-        await asyncio.sleep(3)
-        operation = await action.check(operation)
-    return operation
-
-
 @ai.flow(name='generate_video')
 async def veo_video_generator(input: VideoInput) -> dict[str, str | int | None]:
-    """Generate one video by starting and polling a background model."""
-
-    action = await lookup_background_action(ai.registry, f'/background-model/{input.model}')
-    if action is None:
-        raise ValueError(f'Veo background model not found: {input.model}')
-
-    operation = await action.start(
-        ModelRequest(
-            messages=[Message(role=Role.USER, content=[Part(root=TextPart(text=input.prompt))])],
-            config=input.model_dump(exclude_none=True, exclude={'prompt', 'model'}),
-        )
+    """Generate one Veo video with generate_operation() and poll to completion."""
+    config = input.model_dump(exclude_none=True, exclude={'prompt', 'model'})
+    operation = await ai.generate_operation(
+        model=input.model,
+        prompt=input.prompt,
+        config=config,
     )
-    operation = await _poll_video(operation, input.model)
+    while not operation.done:
+        await asyncio.sleep(3)
+        operation = await ai.check_operation(operation)
 
-    video_url = None
-    if isinstance(operation.output, dict):
-        message = operation.output.get('message', {})
-        content = message.get('content', [])
-        if content:
-            media = content[0].get('media', {})
-            video_url = media.get('url')
-
+    video_url = _first_media_url(operation.output) if operation.output else None
     return {
         'model': input.model,
         'operation_id': operation.id,

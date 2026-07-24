@@ -59,7 +59,7 @@ Example:
     ...     operation = await ai.check_operation(operation)
     >>>
     >>> # Get the video URL
-    >>> print(operation.output)
+    >>> print(operation.output.message.content[0].root.media.url)
 
 See Also:
     - https://ai.google.dev/gemini-api/docs/video
@@ -80,6 +80,7 @@ from google.genai import types as genai_types
 from pydantic import BaseModel, ConfigDict, Field
 
 from genkit import (
+    FinishReason,
     Media,
     MediaPart,
     Message,
@@ -153,6 +154,7 @@ DEFAULT_VEO_SUPPORT = Supports(
     tools=False,
     system_role=True,
     output=['media'],
+    long_running=True,
 )
 
 
@@ -211,16 +213,39 @@ def _to_veo_parameters(config: Any) -> dict[str, Any]:  # noqa: ANN401
     return params
 
 
+def _video_parts_from_uris(uris: list[str]) -> list[Part]:
+    """Build model message parts for generated video URIs."""
+    return [
+        Part(
+            root=MediaPart(
+                media=Media(
+                    url=uri,
+                    content_type='video/mp4',
+                )
+            )
+        )
+        for uri in uris
+    ]
+
+
+def _extract_video_uris(response: Any) -> list[str]:  # noqa: ANN401
+    """Extract video URIs from a Veo API response payload."""
+    if not response or not hasattr(response, 'generated_videos'):
+        return []
+    return [gv.video.uri for gv in (getattr(response, 'generated_videos', None) or []) if gv.video and gv.video.uri]
+
+
+def _response_raw_payload(response: Any) -> dict[str, Any] | None:  # noqa: ANN401
+    """Best-effort raw payload for completed Veo responses."""
+    if isinstance(response, BaseModel):
+        dumped = response.model_dump(exclude_none=True)
+        if isinstance(dumped, dict):
+            return dumped
+    return None
+
+
 def _from_veo_operation(api_op: dict[str, Any]) -> Operation:
     """Convert Veo API operation to Genkit Operation.
-
-    The ``response`` value in ``api_op`` may be either:
-
-    * A plain dict (from the ``start`` method, or legacy REST responses).
-    * A ``GenerateVideosResponse`` Pydantic model (from the ``check`` method,
-      which stores the SDK object directly).
-
-    This function handles both cases when extracting video URIs.
 
     Args:
         api_op: The raw API operation response dict.
@@ -228,9 +253,11 @@ def _from_veo_operation(api_op: dict[str, Any]) -> Operation:
     Returns:
         A Genkit Operation object.
     """
+    # LRO can omit or null `done` while the job is still running. Treat that as
+    # pending so typed clients don't see a missing/null flag mid-poll.
     op = Operation(
         id=api_op.get('name', ''),
-        done=api_op.get('done', False),
+        done=bool(api_op.get('done')),
     )
 
     # Handle error
@@ -243,31 +270,16 @@ def _from_veo_operation(api_op: dict[str, Any]) -> Operation:
     if response is None:
         return op
 
-    # Extract video URIs — response may be a Pydantic model or a dict.
-    uris: list[str] = []
-    if hasattr(response, 'generated_videos'):
-        # Pydantic GenerateVideosResponse from the SDK (check path).
-        for gv in response.generated_videos or []:
-            if gv.video and gv.video.uri:
-                uris.append(gv.video.uri)
-    elif isinstance(response, dict):
-        # Plain dict (start path or legacy REST).
-        video_response = response.get('generateVideoResponse', {})
-        for sample in video_response.get('generatedSamples', []):
-            video = sample.get('video', {})
-            uri = video.get('uri')
-            if uri:
-                uris.append(uri)
-
+    uris = _extract_video_uris(response)
     if uris:
-        content = [{'media': {'url': uri}} for uri in uris]
-        op.output = {
-            'finishReason': 'stop',
-            'message': {
-                'role': 'model',
-                'content': content,
-            },
-        }
+        op.output = ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(
+                role=Role.MODEL,
+                content=_video_parts_from_uris(uris),
+            ),
+            raw=_response_raw_payload(response),
+        )
 
     return op
 
