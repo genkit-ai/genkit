@@ -20,10 +20,10 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropic, AsyncAnthropicVertex
 from genkit_anthropic import models as anthropic_models
 from genkit_anthropic.config import AnthropicConfig
-from genkit_anthropic.models import AnthropicModel, _to_anthropic_thinking_config
+from genkit_anthropic.models import BETA_APIS, AnthropicModel, _to_anthropic_thinking_config
 from genkit_anthropic.utils import maybe_strip_fences, strip_markdown_fences
 from pydantic import ValidationError
 
@@ -845,12 +845,31 @@ def test_structured_output_with_no_tools_capability() -> None:
 
 
 def _mock_client_for_generate() -> MagicMock:
-    """A client whose messages.create returns a minimal text response."""
-    mock_client = MagicMock()
+    """A direct API client whose messages.create returns a minimal text response."""
+    mock_client = MagicMock(spec=AsyncAnthropic)
     mock_response = MagicMock()
     mock_response.content = [MagicMock(type='text', text='ok')]
     mock_response.usage = MagicMock(input_tokens=1, output_tokens=1)
     mock_response.stop_reason = 'end_turn'
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+    mock_client.beta.messages.create = AsyncMock(return_value=mock_response)
+    # The real client only gains these on instantiation; _client_for_config reads them.
+    mock_client.auth_token = None
+    mock_client._custom_headers = {}
+    mock_client.copy = MagicMock(return_value=mock_client)
+    return mock_client
+
+
+def _mock_vertex_client_for_generate() -> MagicMock:
+    """A resold-surface client, which is not an ``AsyncAnthropic`` instance."""
+    mock_client = MagicMock(spec=AsyncAnthropicVertex)
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(type='text', text='ok')]
+    mock_response.usage = MagicMock(input_tokens=1, output_tokens=1)
+    mock_response.stop_reason = 'end_turn'
+    # The Vertex client only gains these attributes on instantiation, so the spec omits them.
+    mock_client.messages = MagicMock()
+    mock_client.beta = MagicMock()
     mock_client.messages.create = AsyncMock(return_value=mock_response)
     mock_client.beta.messages.create = AsyncMock(return_value=mock_response)
     return mock_client
@@ -861,6 +880,170 @@ def _text_request(config: Any) -> ModelRequest:
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
         config=config,
     )
+
+
+@pytest.mark.parametrize(
+    ('config', 'default_api_version', 'expected'),
+    [
+        ({'apiVersion': 'beta'}, 'stable', True),
+        ({'apiVersion': 'stable'}, 'beta', False),
+        ({}, 'beta', True),
+        ({}, 'stable', False),
+        ({}, None, False),
+        ({'metadata': {'user_id': 'test-user'}}, 'beta', True),
+        ({'metadata': {'user_id': 'test-user'}}, 'stable', False),
+        ({'betas': ['custom-beta']}, None, True),
+        ({'betas': ['custom-beta']}, 'stable', True),
+        ({'output_config': {'task_budget': {'total': 20000}}}, None, True),
+        ({'betas': []}, None, False),
+    ],
+)
+def test_api_surface_resolution(config: dict[str, Any], default_api_version: Any, expected: bool) -> None:
+    """Resolve request override, feature signals, plugin default, then stable."""
+    model = AnthropicModel(
+        model_name='claude-sonnet-4',
+        client=MagicMock(),
+        default_api_version=default_api_version,
+    )
+
+    assert model._uses_beta_api(AnthropicConfig.model_validate(config)) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('default_api_version', 'config', 'use_beta'),
+    [
+        ('beta', {}, True),
+        ('beta', {'apiVersion': 'stable'}, False),
+        ('stable', {'apiVersion': 'beta'}, True),
+    ],
+)
+async def test_api_surface_resolution_routes_create(
+    default_api_version: Any,
+    config: dict[str, Any],
+    use_beta: bool,
+) -> None:
+    """The resolved API surface selects the matching SDK create method."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(
+        model_name='claude-sonnet-4',
+        client=mock_client,
+        default_api_version=default_api_version,
+    )
+
+    await model.generate(_text_request(config))
+
+    if use_beta:
+        mock_client.beta.messages.create.assert_awaited_once()
+        mock_client.messages.create.assert_not_called()
+    else:
+        mock_client.messages.create.assert_awaited_once()
+        mock_client.beta.messages.create.assert_not_called()
+        assert 'betas' not in mock_client.messages.create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_default_api_version_beta_routes_streaming() -> None:
+    """The configured beta default applies to streaming as well as create."""
+    mock_client = MagicMock(spec=AsyncAnthropic)
+    final_content = [MagicMock(type='text', text='ok')]
+    mock_client.beta.messages.stream.return_value = MockStreamManager([], final_content=final_content)
+    model = AnthropicModel(
+        model_name='claude-sonnet-4',
+        client=mock_client,
+        default_api_version='beta',
+    )
+    ctx = MagicMock()
+    ctx.is_streaming = True
+
+    await model.generate(_text_request({}), ctx)
+
+    mock_client.beta.messages.stream.assert_called_once()
+    mock_client.messages.stream.assert_not_called()
+    assert mock_client.beta.messages.stream.call_args.kwargs['betas'] == list(BETA_APIS)
+
+
+@pytest.mark.asyncio
+async def test_beta_surface_sends_default_betas() -> None:
+    """Beta calls send the same default beta headers as the JS plugin."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'apiVersion': 'beta'}))
+
+    assert mock_client.beta.messages.create.call_args.kwargs['betas'] == list(BETA_APIS)
+    assert list(BETA_APIS) == [
+        'files-api-2025-04-14',
+        'effort-2025-11-24',
+        'structured-outputs-2025-11-13',
+        'task-budgets-2026-03-13',
+    ]
+
+
+@pytest.mark.asyncio
+async def test_beta_surface_preserves_empty_betas_opt_out() -> None:
+    """An explicit empty list opts out of the default beta headers."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'apiVersion': 'beta', 'betas': []}))
+
+    mock_client.beta.messages.create.assert_awaited_once()
+    mock_client.messages.create.assert_not_called()
+    assert 'betas' not in mock_client.beta.messages.create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_resold_surface_omits_default_betas() -> None:
+    """Resold surfaces do not offer every default beta, so none are assumed."""
+    mock_client = _mock_vertex_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'apiVersion': 'beta'}))
+
+    mock_client.beta.messages.create.assert_awaited_once()
+    assert 'betas' not in mock_client.beta.messages.create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_resold_surface_beta_only_field_routes_beta_without_defaults() -> None:
+    """A beta-only field still selects the beta surface without assuming default headers."""
+    mock_client = _mock_vertex_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'output_config': {'task_budget': {'total': 20000}}}))
+
+    mock_client.beta.messages.create.assert_awaited_once()
+    mock_client.messages.create.assert_not_called()
+    assert 'betas' not in mock_client.beta.messages.create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_resold_surface_forwards_explicit_betas() -> None:
+    """An explicit betas list is still forwarded on resold surfaces."""
+    mock_client = _mock_vertex_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'apiVersion': 'beta', 'betas': ['context-1m-2025-08-07']}))
+
+    assert mock_client.beta.messages.create.call_args.kwargs['betas'] == ['context-1m-2025-08-07']
+
+
+@pytest.mark.asyncio
+async def test_beta_streaming_omits_empty_betas_opt_out() -> None:
+    """Streaming also omits the SDK kwarg rather than sending an empty header."""
+    mock_client = MagicMock()
+    final_content = [MagicMock(type='text', text='ok')]
+    mock_client.beta.messages.stream.return_value = MockStreamManager([], final_content=final_content)
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+    ctx = MagicMock()
+    ctx.is_streaming = True
+
+    await model.generate(_text_request({'apiVersion': 'beta', 'betas': []}), ctx)
+
+    mock_client.beta.messages.stream.assert_called_once()
+    mock_client.messages.stream.assert_not_called()
+    assert 'betas' not in mock_client.beta.messages.stream.call_args.kwargs
 
 
 @pytest.mark.asyncio

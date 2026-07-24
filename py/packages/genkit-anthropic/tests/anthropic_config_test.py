@@ -178,7 +178,10 @@ def test_json_schema_advertises_js_shaped_keys() -> None:
     assert props['maxOutputTokens']['title'] == 'Max output tokens'
     assert props['apiKey']['description'] == 'Overrides the plugin-configured Anthropic API key for this request.'
     assert props['apiVersion']['description'] == 'Selects the Anthropic API surface for this request.'
-    assert props['betas']['description'] == 'Anthropic beta feature headers to enable for this request.'
+    assert (
+        props['betas']['description']
+        == 'Anthropic beta feature headers to enable for this request. An empty list suppresses the defaults.'
+    )
     assert props['tool_choice']['type'] == 'object'
     assert props['tool_choice']['properties']['type']['enum'] == ['auto', 'any', 'tool', 'none']
     assert 'oneOf' not in props['tool_choice']
