@@ -107,6 +107,13 @@ export class GenerateResponse<O = unknown> implements ModelResponseData {
       );
     }
 
+    if (this.finishReason === 'length') {
+      throw new GenerationResponseError(
+        this,
+        `Model generated a message that is too long. Finish reason: '${this.finishReason}': ${this.finishMessage}`
+      );
+    }
+
     if (!this.message && !this.operation) {
       throw new GenerationResponseError(
         this,
