@@ -26,9 +26,9 @@ import (
 
 // ApprovalRequest is the interrupt payload [ToolApproval] emits when a tool
 // call requires approval. Read it from the interrupted part with
-// [tool.InterruptData], then resume with [Approval]:
+// [ai.Part.InterruptAs], then resume with [Approval]:
 //
-//	req, ok := tool.InterruptData[middleware.ApprovalRequest](interruptPart)
+//	req, ok := interruptPart.InterruptAs[middleware.ApprovalRequest]()
 type ApprovalRequest struct {
 	// Tool is the name of the tool awaiting approval.
 	Tool string `json:"tool"`
@@ -56,7 +56,7 @@ type Approval struct {
 //
 // To approve on resume, pass [Approval] as the resume data:
 //
-//	restart, err := tool.Restart(interruptPart, ai.WithResume(middleware.Approval{ToolApproved: true}))
+//	restart, err := interruptPart.ToRestart(ai.WithResume(middleware.Approval{ToolApproved: true}))
 //
 // A bare resumption alone is NOT treated as approval; callers must opt in so
 // that unrelated resume flows (e.g. respond-only turns) cannot bypass

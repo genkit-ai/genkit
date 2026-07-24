@@ -17,7 +17,7 @@
 // Interrupt/resume flow tests. These drive the generate loop with restart and
 // respond parts built by the real constructors (the typed
 // [ai.InterruptibleTool.Restart]/[ai.InterruptibleTool.Respond] methods and
-// the type-erased [tool.Restart]/[tool.Respond]), covering
+// the type-erased [Part.ToRestart]/[Part.ToResponse]), covering
 // the loop's consumption of the interrupt/resume wire format end to end. They
 // live in an external test package because ai/tool imports ai, so in-package
 // ai tests cannot use it.
@@ -78,7 +78,7 @@ type confirmation struct {
 
 // TestInterruptResume_TypedRoundTrip pins the core interrupt/resume contract:
 // the tool interrupts with typed data on the first pass, the caller reads it
-// with tool.InterruptData and restarts with typed data via the Restart method,
+// with Part.InterruptAs and restarts with typed data via the Restart method,
 // and the
 // resumed value reaches the function's *Res parameter on re-execution.
 func TestInterruptResume_TypedRoundTrip(t *testing.T) {
@@ -112,7 +112,7 @@ func TestInterruptResume_TypedRoundTrip(t *testing.T) {
 		t.Fatalf("expected 1 interrupt, got %d (finish=%s)", len(interrupts), resp.FinishReason)
 	}
 
-	meta, ok := tool.InterruptData[transferInterrupt](interrupts[0])
+	meta, ok := interrupts[0].InterruptAs[transferInterrupt]()
 	if !ok {
 		t.Fatal("failed to decode the typed interrupt data")
 	}
@@ -344,7 +344,7 @@ func TestInterruptResume_MixedToolRequests(t *testing.T) {
 		if !interrupted.IsInterrupt() {
 			t.Fatal("expected second part to be an interrupted tool request")
 		}
-		meta, ok := tool.InterruptData[interruptMeta](interrupted)
+		meta, ok := interrupted.InterruptAs[interruptMeta]()
 		if !ok {
 			t.Fatal("failed to decode interrupt metadata")
 		}
@@ -355,7 +355,7 @@ func TestInterruptResume_MixedToolRequests(t *testing.T) {
 
 	t.Run("respond directive resolves the interrupted request", func(t *testing.T) {
 		res := interruptedTurn(t)
-		respond, err := tool.Respond(res.Message.Content[1], "user_provided_response")
+		respond, err := res.Message.Content[1].ToResponse("user_provided_response")
 		if err != nil {
 			t.Fatalf("Respond: %v", err)
 		}
@@ -375,8 +375,7 @@ func TestInterruptResume_MixedToolRequests(t *testing.T) {
 
 	t.Run("restart directive re-executes the interrupted request", func(t *testing.T) {
 		res := interruptedTurn(t)
-		restart, err := tool.Restart(res.Message.Content[1],
-			ai.WithResume(restartMeta{Data: "restart_context"}),
+		restart, err := res.Message.Content[1].ToRestart(ai.WithResume(restartMeta{Data: "restart_context"}),
 			ai.WithNewInput(conditionalIn{Value: "restarted_data", Interrupt: false}))
 		if err != nil {
 			t.Fatalf("Restart: %v", err)
@@ -455,8 +454,7 @@ func TestMiddlewareHookOrderOnToolRestart(t *testing.T) {
 		}, nil
 	})
 
-	restart, err := tool.Restart(interruptedPart,
-		ai.WithNewInput(restartInput{Interrupt: false}))
+	restart, err := interruptedPart.ToRestart(ai.WithNewInput(restartInput{Interrupt: false}))
 	if err != nil {
 		t.Fatalf("Restart: %v", err)
 	}

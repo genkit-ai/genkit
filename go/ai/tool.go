@@ -122,7 +122,7 @@ type restartOptions struct {
 }
 
 // RestartOption is an option for restarting an interrupted tool via
-// [tool.Restart] or [InterruptibleTool.Restart]. Create one with [WithResume]
+// [Part.ToRestart] or [InterruptibleTool.Restart]. Create one with [WithResume]
 // or [WithNewInput], or with the compile-time checked equivalents
 // [InterruptibleTool.WithResume] and [InterruptibleTool.WithNewInput].
 type RestartOption interface {
@@ -137,8 +137,13 @@ func (f restartOptionFunc) applyRestart(cfg *restartOptions) error { return f(cf
 // re-executes, e.g. the user's answer to the question the tool interrupted
 // with; middleware reads it via [tool.ResumeData]. data must serialize to a
 // JSON object (a struct or a map); see [tool.Interrupt] for the rationale.
-// Omit it to restart the tool without data, as an implicit approval.
 // [InterruptibleTool.WithResume] is the compile-time checked equivalent.
+//
+// Omitting it makes a bare restart. The call still counts as a resumption, so
+// the tool's resume parameter is non-nil, but it holds the zero value of the
+// tool's resume type. Tools that treat a non-nil resume as the approval need
+// nothing more; tools that read fields off that type see zero values, so pass
+// the data explicitly rather than relying on a bare restart.
 func WithResume(resume any) RestartOption {
 	return restartOptionFunc(func(cfg *restartOptions) error {
 		if cfg.resumeSet {
@@ -234,7 +239,7 @@ func NewTool[In, Out any](name, description string, fn ToolFunc[In, Out], opts .
 // DefineInterruptibleTool creates a new [InterruptibleTool] and registers it.
 // The resumed parameter is non-nil when the tool is being re-executed after an
 // interrupt. Use [tool.Interrupt] inside the function to pause execution and
-// send data to the caller; the caller inspects it with [tool.InterruptData] and
+// send data to the caller; the caller inspects it with [Part.InterruptAs] and
 // restarts it with [InterruptibleTool.Restart] or resolves it directly with
 // [InterruptibleTool.Respond].
 func DefineInterruptibleTool[In, Out, Res any](
@@ -443,7 +448,7 @@ func (t *Tool[In, Out]) RunRaw(ctx context.Context, input any) (*MultipartToolRe
 // resume parameter, and [InterruptibleTool.WithNewInput] to provide a new
 // input.
 //
-// [tool.Restart] is the type-erased equivalent for callers that don't have
+// [Part.ToRestart] is the type-erased equivalent for callers that don't have
 // the tool value in scope; this method additionally validates that the
 // interrupted part belongs to this tool.
 func (t *InterruptibleTool[In, Out, Res]) Restart(interruptPart *Part, opts ...RestartOption) (*Part, error) {
@@ -465,20 +470,6 @@ func (t *InterruptibleTool[In, Out, Res]) WithResume(resume Res) RestartOption {
 // [WithNewInput] for the semantics.
 func (t *InterruptibleTool[In, Out, Res]) WithNewInput(input In) RestartOption {
 	return WithNewInput(input)
-}
-
-// NewRestartPart creates a restart [Part] for re-executing an interrupted
-// tool call, for use with [WithToolRestarts]. The interruptedPart must be an
-// interrupted tool request (as received via [ModelResponse.Interrupts]).
-// Configure it with [WithResume] and [WithNewInput].
-//
-// Most callers use [tool.Restart] or [InterruptibleTool.Restart] instead;
-// this is the underlying constructor.
-func NewRestartPart(interruptPart *Part, opts ...RestartOption) (*Part, error) {
-	if !interruptPart.IsInterrupt() {
-		return nil, status.Errorf(ErrInvalidPart, "ai.NewRestartPart: part is not an interrupted tool request")
-	}
-	return newRestartPart("ai.NewRestartPart", interruptPart, opts)
 }
 
 // newRestartPart builds the tool request [Part] that re-executes an
@@ -515,7 +506,7 @@ func newRestartPart(fnName string, interruptPart *Part, opts []RestartOption) (*
 // with [WithToolResponses]. Instead of re-executing the tool (as [InterruptibleTool.Restart]
 // does), this provides a pre-computed result directly.
 //
-// [tool.Respond] is the type-erased equivalent for callers that don't have
+// [Part.ToResponse] is the type-erased equivalent for callers that don't have
 // the tool value in scope; this method additionally validates that the
 // interrupted part belongs to this tool and accepts a strongly-typed output.
 func (t *InterruptibleTool[In, Out, Res]) Respond(interruptPart *Part, output Out) (*Part, error) {
@@ -523,6 +514,70 @@ func (t *InterruptibleTool[In, Out, Res]) Respond(interruptPart *Part, output Ou
 		return nil, status.Errorf(status.ErrInvalidArgument, "InterruptibleTool.Respond: %w", err)
 	}
 	toolResp, err := NewResponseForToolRequest(interruptPart, output)
+	if err != nil {
+		return nil, err
+	}
+	// interruptResponse marks the part so the generate loop resolves the
+	// interrupt instead of re-executing the tool.
+	toolResp.Metadata = map[string]any{base.ToolMetaInterruptResponse: true}
+	return toolResp, nil
+}
+
+// InterruptAs returns this interrupted tool request's interrupt data as a
+// typed value, typically to decide between [Part.ToRestart] and
+// [Part.ToResponse]. Returns the zero value and false if the part is not an
+// interrupt, the interrupt carries no data, or the type doesn't match.
+//
+// This reads the Data field of the [Part.Interrupt] state.
+//
+//	for _, part := range resp.Interrupts() {
+//		req, ok := part.InterruptAs[TransferInterrupt]()
+//	}
+func (p *Part) InterruptAs[T any]() (T, bool) {
+	var zero T
+	if p == nil || !p.IsInterrupt() || p.Interrupt.Data == nil {
+		return zero, false
+	}
+	return base.ConvertTo[T](p.Interrupt.Data)
+}
+
+// ToRestart converts this interrupted tool request into a restart [Part] that
+// re-executes the tool, for use with [WithToolRestarts]. The receiver must be
+// an interrupted tool request, as received via [ModelResponse.Interrupts].
+// Use [WithResume] to deliver data to the tool function's resume parameter,
+// and [WithNewInput] to provide a new input.
+//
+// With no options the tool re-executes with a non-nil, zero-valued resume
+// parameter, so restarting is itself the approval for tools that key on the
+// presence of a resume. See [WithResume] for what a bare restart delivers.
+// [ModelResponse.InterruptRestarts] does this for every interrupt at once.
+//
+// [InterruptibleTool.Restart] is the typed equivalent for callers that have
+// the tool value in scope; it additionally validates that the interrupted
+// part belongs to that tool.
+//
+//	for _, part := range resp.Interrupts() {
+//		restart, err := part.ToRestart(ai.WithResume(Confirmation{Approved: true}))
+//	}
+func (p *Part) ToRestart(opts ...RestartOption) (*Part, error) {
+	if !p.IsInterrupt() {
+		return nil, status.Errorf(ErrInvalidPart, "ai.Part.ToRestart: part is not an interrupted tool request")
+	}
+	return newRestartPart("ai.Part.ToRestart", p, opts)
+}
+
+// ToResponse converts this interrupted tool request into a tool response
+// [Part], for use with [WithToolResponses]. Instead of re-executing the tool
+// (as [Part.ToRestart] does), this provides a pre-computed result directly.
+//
+// [InterruptibleTool.Respond] is the typed equivalent for callers that have
+// the tool value in scope; it additionally validates that the interrupted
+// part belongs to that tool and accepts a strongly-typed output.
+func (p *Part) ToResponse(output any) (*Part, error) {
+	if !p.IsInterrupt() {
+		return nil, status.Errorf(status.ErrInvalidArgument, "ai.Part.ToResponse: part is not an interrupted tool request")
+	}
+	toolResp, err := NewResponseForToolRequest(p, output)
 	if err != nil {
 		return nil, err
 	}

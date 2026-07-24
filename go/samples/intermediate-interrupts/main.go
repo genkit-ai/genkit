@@ -117,7 +117,7 @@ func main() {
 			var restarts, responses []*ai.Part
 
 			for _, interrupt := range resp.Interrupts() {
-				meta, ok := tool.InterruptData[TransferInterrupt](interrupt)
+				meta, ok := interrupt.InterruptAs[TransferInterrupt]()
 				if !ok {
 					continue
 				}

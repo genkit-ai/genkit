@@ -1224,6 +1224,22 @@ func (mr *ModelResponse) Output(v any) error {
 	return nil
 }
 
+// OutputAs parses the structured output from the response and returns it as a
+// typed value. It is the typed form of [ModelResponse.Output], which takes a
+// pointer and an untyped value.
+//
+// Use this when you called [Genkit.Generate] and want the result as a Go
+// value. When Out is string, it returns the response text. If you know the
+// output type up front, prefer [Genkit.GenerateData], which additionally
+// derives the output schema from Out and sends it with the request; OutputAs
+// only parses what came back.
+//
+//	resp, err := g.Generate(ctx, ai.WithPrompt("..."), ai.WithOutputType(BookInfo{}))
+//	book, err := resp.OutputAs[BookInfo]()
+func (mr *ModelResponse) OutputAs[Out any]() (Out, error) {
+	return extractTypedOutput[Out](mr)
+}
+
 // ToolRequests returns the tool requests from the response.
 func (mr *ModelResponse) ToolRequests() []*Part {
 	var parts []*Part
@@ -1248,6 +1264,35 @@ func (mr *ModelResponse) Interrupts() []*Part {
 		if p.IsInterrupt() {
 			parts = append(parts, p)
 		}
+	}
+	return parts
+}
+
+// InterruptRestarts returns a bare restart [Part] for every unresolved interrupt in
+// the response, ready to hand to [WithToolRestarts]. It is the blanket form of
+// [Part.ToRestart]: each interrupted tool re-executes with a non-nil,
+// zero-valued resume parameter, so for tools that treat the presence of a
+// resume as the approval this approves everything pending.
+//
+// Tools that read fields off their resume type get zero values here. Restart
+// those individually with [Part.ToRestart] and [WithResume] so the payload is
+// explicit.
+//
+//	resp, err = g.Generate(ctx,
+//		ai.WithMessages(resp.History()...),
+//		ai.WithTools(myTool),
+//		ai.WithToolRestarts(resp.InterruptRestarts()...),
+//	)
+func (mr *ModelResponse) InterruptRestarts() []*Part {
+	var parts []*Part
+	for _, p := range mr.Interrupts() {
+		// A bare restart of a part that IsInterrupt cannot fail: there are no
+		// options to validate.
+		restart, err := p.ToRestart()
+		if err != nil {
+			continue
+		}
+		parts = append(parts, restart)
 	}
 	return parts
 }
@@ -1351,24 +1396,27 @@ func (c *ModelResponseChunk) Output(v any) error {
 	return nil
 }
 
+// OutputAs parses the chunk using the format handler and returns the result as
+// a typed value. It is the typed form of [ModelResponseChunk.Output], which
+// takes a pointer and an untyped value.
+//
+// This is for the raw streaming path ([Genkit.GenerateStream]). Chunks arrive
+// as partial JSON, so a chunk that isn't yet parseable yields the zero value.
+// [Genkit.GenerateDataStream] parses each chunk into StreamValue.Chunk for you
+// and is the better choice when the output type is known up front.
+func (c *ModelResponseChunk) OutputAs[Out any]() (Out, error) {
+	return extractTypedOutput[Out](c)
+}
+
 // outputer is an interface for types that can unmarshal structured output.
+// It exists so [extractTypedOutput] can serve both [ModelResponse] and
+// [ModelResponseChunk]; it cannot itself declare the generic OutputAs method,
+// since interface methods may not have type parameters.
 type outputer interface {
 	// Text returns the contents of the output as a string.
 	Text() string
 	// Output parses the structured output from the response and unmarshals it into value.
 	Output(value any) error
-}
-
-// OutputFrom is a convenience function that parses structured output from a
-// [ModelResponse] or [ModelResponseChunk] and returns it as a typed value.
-// This is equivalent to calling Output() but returns the value directly instead
-// of requiring a pointer argument. If you need to handle the error, use Output() instead.
-func OutputFrom[Out any](src outputer) Out {
-	output, err := extractTypedOutput[Out](src)
-	if err != nil {
-		return base.Zero[Out]()
-	}
-	return output
 }
 
 // extractTypedOutput extracts the typed output from a model response.
@@ -1415,7 +1463,7 @@ func (m *Message) Text() string {
 // NewResume constructs a [GenerateActionResume] from Part slices.
 // This is useful when building [GenerateActionOptions] directly (e.g., from a
 // rendered prompt) and need to set the Resume field from [*Part] values
-// produced by [tool.Restart] or [tool.Respond].
+// produced by [Part.ToRestart] or [Part.ToResponse].
 func NewResume(restarts, responds []*Part) *GenerateActionResume {
 	return &GenerateActionResume{
 		Restart: restarts,

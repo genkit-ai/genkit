@@ -132,11 +132,11 @@ func defineBankerAgent(g *genkit.Genkit) *aix.Agent[any] {
 
 // handleTransferInterrupt is the banker's InterruptHandler. It reads the
 // typed interrupt payload, asks the user through the Prompter, and returns
-// a restart part (tool.Restart) carrying their decision. Returning a resume
+// a restart part (ai.Part.ToRestart) carrying their decision. Returning a resume
 // part — instead of touching the connection — is what keeps the handler
 // decoupled from the CLI's streaming loop.
 func handleTransferInterrupt(p *Prompter, part *ai.Part) (*ai.Part, error) {
-	meta, ok := tool.InterruptData[TransferInterrupt](part)
+	meta, ok := part.InterruptAs[TransferInterrupt]()
 	if !ok {
 		// Not our interrupt type; let the CLI report it as unresolved.
 		return nil, nil
@@ -150,17 +150,17 @@ func handleTransferInterrupt(p *Prompter, part *ai.Part) (*ai.Part, error) {
 			fmt.Sprintf("Transfer $%.2f instead", meta.Balance),
 			"Cancel the transfer") {
 		case 0:
-			return tool.Restart(part, ai.WithResume(Confirmation{Approved: true, AdjustedAmount: &meta.Balance}))
+			return part.ToRestart(ai.WithResume(Confirmation{Approved: true, AdjustedAmount: &meta.Balance}))
 		default:
-			return tool.Restart(part, ai.WithResume(Confirmation{Approved: false}))
+			return part.ToRestart(ai.WithResume(Confirmation{Approved: false}))
 		}
 
 	case "confirm_large":
 		approved := p.Confirm(fmt.Sprintf("Confirm large transfer of $%.2f to %s?", meta.Amount, meta.ToAccount))
-		return tool.Restart(part, ai.WithResume(Confirmation{Approved: approved}))
+		return part.ToRestart(ai.WithResume(Confirmation{Approved: approved}))
 
 	default:
 		p.Printf("Unrecognized approval request (%q); cancelling the transfer.\n", meta.Reason)
-		return tool.Restart(part, ai.WithResume(Confirmation{Approved: false}))
+		return part.ToRestart(ai.WithResume(Confirmation{Approved: false}))
 	}
 }

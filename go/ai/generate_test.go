@@ -2030,7 +2030,7 @@ func TestModelResponseMedia(t *testing.T) {
 	})
 }
 
-func TestOutputFrom(t *testing.T) {
+func TestOutputAs(t *testing.T) {
 	type TestData struct {
 		Name  string `json:"name"`
 		Count int    `json:"count"`
@@ -2041,13 +2041,44 @@ func TestOutputFrom(t *testing.T) {
 			Message: NewModelTextMessage(`{"name": "test", "count": 5}`),
 		}
 
-		output := OutputFrom[TestData](resp)
+		output, err := resp.OutputAs[TestData]()
+		if err != nil {
+			t.Fatalf("OutputAs() error = %v, want nil", err)
+		}
 
 		if output.Name != "test" {
 			t.Errorf("output.Name = %q, want %q", output.Name, "test")
 		}
 		if output.Count != 5 {
 			t.Errorf("output.Count = %d, want 5", output.Count)
+		}
+	})
+
+	t.Run("returns response text when Out is string", func(t *testing.T) {
+		resp := &ModelResponse{Message: NewModelTextMessage("plain text")}
+
+		output, err := resp.OutputAs[string]()
+		if err != nil {
+			t.Fatalf("OutputAs() error = %v, want nil", err)
+		}
+		if output != "plain text" {
+			t.Errorf("OutputAs() = %q, want %q", output, "plain text")
+		}
+	})
+
+	t.Run("returns an error on unparseable output", func(t *testing.T) {
+		resp := &ModelResponse{Message: NewModelTextMessage("not json")}
+
+		if _, err := resp.OutputAs[TestData](); err == nil {
+			t.Error("OutputAs() error = nil, want an error")
+		}
+	})
+
+	t.Run("returns an error when the chunk has no format handler", func(t *testing.T) {
+		chunk := &ModelResponseChunk{Content: []*Part{NewTextPart(`{"name":"x"}`)}}
+
+		if _, err := chunk.OutputAs[TestData](); err == nil {
+			t.Error("OutputAs() error = nil, want an error")
 		}
 	})
 }

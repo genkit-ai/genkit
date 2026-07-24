@@ -15,21 +15,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package tool provides the runtime verbs for tools created with
-// [ai.DefineTool] and friends. The split with package ai is by moment of use:
-// everything for building and wiring a tool (constructors, types, options)
-// lives in ai, while this package holds only functions, used at two moments:
+// [ai.DefineTool] and friends, called from inside a running tool function:
+// [Interrupt], [AttachParts], [SendPartial], [SendChunk], [ResumeData], and
+// [OriginalInput].
 //
-//   - Inside the tool function, with its context: [Interrupt], [AttachParts],
-//     [SendPartial], [SendChunk], [ResumeData], [OriginalInput].
-//   - After a turn, acting on what it produced: [InterruptData], [Restart],
-//     [Respond].
+// Everything for building and wiring a tool (constructors, types, options)
+// lives in package ai, as does everything that acts on a value you already
+// hold: to inspect or resolve an interrupted tool request, use the [ai.Part]
+// methods [ai.Part.InterruptAs], [ai.Part.ToRestart], and [ai.Part.ToResponse],
+// or their typed equivalents on [ai.InterruptibleTool].
 package tool
 
 import (
 	"context"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 )
 
@@ -44,51 +44,6 @@ import (
 // when it returns; wrap such values in a struct or map field instead.
 func Interrupt(data any) error {
 	return &ai.InterruptError{Data: data}
-}
-
-// InterruptData extracts typed interrupt data from an interrupted tool request
-// [ai.Part], typically to decide between [Restart] and [Respond]. Returns the
-// zero value and false if the part is not an interrupt, the interrupt carries
-// no data, or the type doesn't match.
-func InterruptData[T any](p *ai.Part) (T, bool) {
-	var zero T
-	if p == nil || !p.IsInterrupt() || p.Interrupt.Data == nil {
-		return zero, false
-	}
-	return base.ConvertTo[T](p.Interrupt.Data)
-}
-
-// Restart creates a restart [ai.Part] for re-executing an interrupted tool
-// call, for use with [ai.WithToolRestarts]. The interruptedPart must be an
-// interrupted tool request (as received via [ai.ModelResponse.Interrupts]).
-// With no options, the tool simply re-executes; restarting is itself the
-// approval. Use [ai.WithResume] to deliver data to the tool function's resume
-// parameter, and [ai.WithNewInput] to provide a new input.
-//
-// This is the type-erased equivalent of [ai.InterruptibleTool.Restart], for
-// callers that don't have the tool value in scope.
-func Restart(interruptedPart *ai.Part, opts ...ai.RestartOption) (*ai.Part, error) {
-	return ai.NewRestartPart(interruptedPart, opts...)
-}
-
-// Respond creates a tool response [ai.Part] for an interrupted tool request,
-// for use with [ai.WithToolResponses]. Instead of re-executing the tool (as
-// [Restart] does), this provides a pre-computed result directly.
-//
-// This is the type-erased equivalent of [ai.InterruptibleTool.Respond], for
-// callers that don't have the tool value in scope.
-func Respond(interruptedPart *ai.Part, output any) (*ai.Part, error) {
-	if !interruptedPart.IsInterrupt() {
-		return nil, status.Errorf(status.ErrInvalidArgument, "tool.Respond: part is not an interrupted tool request")
-	}
-	resp, err := ai.NewResponseForToolRequest(interruptedPart, output)
-	if err != nil {
-		return nil, err
-	}
-	// interruptResponse marks the part so the generate loop resolves the
-	// interrupt instead of re-executing the tool.
-	resp.Metadata = map[string]any{base.ToolMetaInterruptResponse: true}
-	return resp, nil
 }
 
 // SendPartial streams a partial tool response during tool execution.

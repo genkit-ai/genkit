@@ -128,7 +128,7 @@ type AgentInput struct {
 	// Message is the user's input for this turn.
 	Message *ai.Message `json:"message,omitempty"`
 	// Resume provides options for resuming an interrupted generation.
-	// Construct using [tool.Restart] / [tool.Respond] parts. When set, the
+	// Construct using [ai.Part.ToRestart] / [ai.Part.ToResponse] parts. When set, the
 	// generate call resumes with these parts instead of treating Message
 	// as a tool response.
 	Resume *ToolResume `json:"resume,omitempty"`

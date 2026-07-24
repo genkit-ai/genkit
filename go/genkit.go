@@ -696,7 +696,7 @@ func (g *Genkit) DefineTool[In, Out any](name, description string, fn ai.ToolFun
 // parameter that is non-nil when the tool is being re-executed after an
 // interrupt. Inside the function, call [tool.Interrupt] to pause execution
 // and send data to the caller. The caller can inspect the interrupt with
-// [tool.InterruptData] and restart the tool with [ai.InterruptibleTool.Restart],
+// [ai.Part.InterruptAs] and restart the tool with [ai.InterruptibleTool.Restart],
 // or resolve it with a pre-computed output via [ai.InterruptibleTool.Respond].
 //
 // The interrupt and resume payloads (the Res type parameter and the value
