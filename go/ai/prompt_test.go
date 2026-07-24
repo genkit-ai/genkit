@@ -1231,6 +1231,29 @@ Hello, {{name}}!
 	}
 }
 
+func TestLoadPromptDirFromFS_NamespacedPartials(t *testing.T) {
+	fsys := fstest.MapFS{
+		"prompts/flowA/_system.prompt": &fstest.MapFile{Data: []byte("system A")},
+		"prompts/flowB/_system.prompt": &fstest.MapFile{Data: []byte("system B")},
+		"prompts/_greeting.prompt":     &fstest.MapFile{Data: []byte("hello")},
+	}
+
+	reg := registry.New()
+
+	LoadPromptDirFromFS(reg, fsys, "prompts", "")
+
+	partials := reg.Dotprompt().Partials
+	if partials["flowA/system"] != "system A" {
+		t.Errorf("flowA/system partial = %q, want %q", partials["flowA/system"], "system A")
+	}
+	if partials["flowB/system"] != "system B" {
+		t.Errorf("flowB/system partial = %q, want %q", partials["flowB/system"], "system B")
+	}
+	if partials["greeting"] != "hello" {
+		t.Errorf("greeting partial = %q, want %q", partials["greeting"], "hello")
+	}
+}
+
 func TestLoadPromptFS_WithVariant(t *testing.T) {
 	mockPromptContent := `---
 model: test/chat
