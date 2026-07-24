@@ -544,7 +544,19 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         channel.set_close_future(asyncio.create_task(resp))
 
         result_future: asyncio.Future[OutputT] = asyncio.Future()
-        channel.closed.add_done_callback(lambda _: result_future.set_result(channel.closed.result().response))
+
+        def _propagate_closed_to_result(_: asyncio.Future[ActionResponse[OutputT]]) -> None:
+            if result_future.done():
+                return
+            closed = channel.closed
+            if closed.cancelled():
+                result_future.cancel()
+            elif (exc := closed.exception()) is not None:
+                result_future.set_exception(exc)
+            else:
+                result_future.set_result(closed.result().response)
+
+        channel.closed.add_done_callback(_propagate_closed_to_result)
 
         return StreamResponse(stream=channel, response=result_future)
 
