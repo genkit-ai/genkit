@@ -114,7 +114,7 @@ class DeepResearchConfigSchema(BaseModel):
     mcp_servers: list[McpServerConfig | dict[str, Any]] | None = None
 
 
-def _common_ref(name: str, info: ModelInfo | None = None) -> ModelRef:
+def common_ref(name: str, info: ModelInfo | None = None) -> ModelRef:
     """Build a googleai/ ModelRef for a Deep Research version."""
     resolved = info or GENERIC_DEEP_RESEARCH_INFO
     # Prefer a version-specific label when callers pass ADVANCED/GENERIC without one.
@@ -124,16 +124,17 @@ def _common_ref(name: str, info: ModelInfo | None = None) -> ModelRef:
         name=name,
         namespace='googleai',
         info=resolved,
-    ).model_copy(update={'config_schema': DeepResearchConfigSchema})
+        config_schema=DeepResearchConfigSchema,
+    )
 
 
 KNOWN_DEEP_RESEARCH_MODELS: dict[str, ModelRef] = {
-    'deep-research-pro-preview-12-2025': _common_ref('deep-research-pro-preview-12-2025'),
-    'deep-research-preview-04-2026': _common_ref(
+    'deep-research-pro-preview-12-2025': common_ref('deep-research-pro-preview-12-2025'),
+    'deep-research-preview-04-2026': common_ref(
         'deep-research-preview-04-2026',
         ADVANCED_DEEP_RESEARCH_INFO,
     ),
-    'deep-research-max-preview-04-2026': _common_ref(
+    'deep-research-max-preview-04-2026': common_ref(
         'deep-research-max-preview-04-2026',
         ADVANCED_DEEP_RESEARCH_INFO,
     ),
@@ -151,7 +152,7 @@ def deep_research_model(version: str) -> ModelRef:
     known = KNOWN_DEEP_RESEARCH_MODELS.get(clean)
     if known is not None:
         return known
-    return _common_ref(clean)
+    return common_ref(clean)
 
 
 def deep_research_model_info(version: str) -> ModelInfo:
