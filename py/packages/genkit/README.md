@@ -12,14 +12,14 @@ you can use Genkit independently of any Google services.
 
 ```bash
 pip install genkit
-pip install genkit-plugin-google-genai
+pip install genkit-google-genai
 ```
 
 
 ```python
 from pydantic import BaseModel, Field
 from genkit import Genkit
-from genkit.plugins.google_genai import GoogleAI
+from genkit_google_genai import GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],

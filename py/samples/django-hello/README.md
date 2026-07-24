@@ -1,6 +1,6 @@
 # Django Hello
 
-Serve a Genkit flow through Django and stream the model response back to the client. Mirrors `flask-hello` and `fastapi-bugbot` but uses Django's ASGI server and the `genkit-plugin-django` adaptor.
+Serve a Genkit flow through Django and stream the model response back to the client. Mirrors `flask-hello` and `fastapi-bugbot` but uses Django's ASGI server and the `genkit-django` adaptor.
 
 ```bash
 export GEMINI_API_KEY=your-api-key

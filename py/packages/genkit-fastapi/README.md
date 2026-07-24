@@ -5,7 +5,7 @@ Serve Genkit flows as FastAPI endpoints.
 ## Installation
 
 ```bash
-pip install genkit-plugin-fastapi
+pip install genkit-fastapi
 ```
 
 ## Usage
