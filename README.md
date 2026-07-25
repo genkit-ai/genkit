@@ -1,3 +1,5 @@
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Ffirebase%2Fgenkit.svg)](https://mcptoplist.com/server/glama%2Ffirebase%2Fgenkit)
+
 ![Genkit logo](docs/resources/genkit-logo-dark.png#gh-dark-mode-only 'Genkit')
 ![Genkit logo](docs/resources/genkit-logo.png#gh-light-mode-only 'Genkit')
 
