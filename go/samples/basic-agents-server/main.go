@@ -102,11 +102,11 @@ import (
 	"log"
 	"net/http"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
-	"github.com/firebase/genkit/go/genkit"
-	genkitx "github.com/firebase/genkit/go/genkit/exp"
+	genkitx "github.com/firebase/genkit/go/exp"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/server"
 	"google.golang.org/genai"
@@ -119,7 +119,10 @@ func main() {
 	// Config parameter, the Google AI plugin will get the API key from the
 	// GEMINI_API_KEY or GOOGLE_API_KEY environment variable, which is the
 	// recommended practice.
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}), genkit.WithExperimental())
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}), genkit.WithExperimental())
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	model := googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 		ThinkingConfig: &genai.ThinkingConfig{

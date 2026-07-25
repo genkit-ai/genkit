@@ -23,10 +23,10 @@ import (
 	"strings"
 	"sync"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/genkit"
 )
 
 // agentsMarker tags the system prompt part injected by this middleware. The
@@ -58,9 +58,9 @@ const (
 // than the registry directly.
 func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (api.BidiAction, error) {
 	if g == nil {
-		return nil, fmt.Errorf("no Genkit instance on the context (the agents middleware must run within genkit.Generate or a genkit-defined agent)")
+		return nil, fmt.Errorf("no Genkit instance on the context (the agents middleware must run within a Genkit Generate call or a genkit-defined agent)")
 	}
-	action := genkit.LookupAction(g, "/agent/"+ref.Name)
+	action := g.LookupAction("/agent/" + ref.Name)
 	if action == nil {
 		return nil, fmt.Errorf("agent %q not found in registry", ref.Name)
 	}
@@ -80,7 +80,7 @@ func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (api.BidiAction, error) {
 // system prompt.
 //
 // When the model calls a delegation tool the middleware resolves the target
-// agent from the registry (via the [github.com/firebase/genkit/go/genkit.Genkit]
+// agent from the registry (via the [github.com/firebase/genkit/go.Genkit]
 // instance carried on the context), optionally forwards recent conversation
 // history, runs the sub-agent with the task, and returns its response as the
 // tool result.
@@ -97,9 +97,9 @@ func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (api.BidiAction, error) {
 // interaction is a future feature.
 //
 // The middleware resolves agents through genkit.FromContext, which is seeded by
-// genkit.Generate and by agents defined via the genkit/exp constructors
+// [genkit.Genkit.Generate] and by agents defined via the genkit/exp constructors
 // (genkitx.DefineAgent and friends). It is therefore typically attached to an
-// orchestrator agent (or a genkit.Generate call).
+// orchestrator agent (or a [genkit.Genkit.Generate] call).
 //
 // Usage:
 //
@@ -174,13 +174,13 @@ func (a *Agents) New(ctx context.Context) (*ai.Hooks, error) {
 	prefix := a.prefix()
 	st := &agentsState{}
 
-	tools := make([]ai.Tool, 0, len(a.Agents))
+	tools := make([]ai.AnyTool, 0, len(a.Agents))
 	for _, ref := range a.Agents {
 		desc := ref.Description
 		if desc == "" {
 			desc = fmt.Sprintf("Delegates a task to the %q sub-agent.", ref.Name)
 		}
-		tools = append(tools, aix.NewTool(makeToolName(prefix, ref.Name), desc, a.delegate(ref, st)))
+		tools = append(tools, ai.NewTool(makeToolName(prefix, ref.Name), desc, a.delegate(ref, st)))
 	}
 
 	wrapGenerate := func(ctx context.Context, params *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
@@ -223,9 +223,8 @@ type delegatedArtifact struct {
 }
 
 // delegate builds the delegation tool function for one sub-agent. The function
-// uses the experimental [aix.NewTool] signature: a plain [context.Context]
-// rather than an [ai.ToolContext], since delegation needs only the context for
-// agent resolution, sub-agent execution, and artifact merging.
+// needs only the context for agent resolution, sub-agent execution, and
+// artifact merging.
 func (a *Agents) delegate(ref aix.AgentRef, st *agentsState) func(context.Context, delegateInput) (delegationResult, error) {
 	return func(ctx context.Context, in delegateInput) (delegationResult, error) {
 		// Guard rail: enforce the delegation cap and reserve this delegation's
@@ -286,7 +285,7 @@ func (a *Agents) delegate(ref aix.AgentRef, st *agentsState) func(context.Contex
 		if len(subArtifacts) > 0 {
 			invocationID := fmt.Sprintf("%s_%d", ref.Name, invocationNum)
 			// Merge into the parent session under both strategies (no-op if there
-			// is no active session, e.g. a plain genkit.Generate call).
+			// is no active session, e.g. a plain genkit.Genkit.Generate call).
 			mergeArtifacts(ctx, ref.Name, invocationID, subArtifacts)
 			result.Artifacts = delegatedArtifacts(invocationID, subArtifacts, a.strategy())
 		}
@@ -447,7 +446,7 @@ func buildAgentsInstructions(g *genkit.Genkit, refs []aix.AgentRef, prefix strin
 // descriptor, falling back to the backing prompt's description, or "" if none.
 func discoverDescription(g *genkit.Genkit, name string) string {
 	for _, key := range []string{"/agent/" + name, "/prompt/" + name} {
-		if action := genkit.LookupAction(g, key); action != nil {
+		if action := g.LookupAction(key); action != nil {
 			if d := action.Desc().Description; d != "" {
 				return d
 			}

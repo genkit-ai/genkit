@@ -17,9 +17,10 @@ package main
 import (
 	"context"
 	"errors"
+	"log"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/vertexai/modelgarden"
 )
 
@@ -28,18 +29,21 @@ func main() {
 
 	// Llama MaaS is served from us-central1. Override Location if your project
 	// has Llama enabled in a different region.
-	g := genkit.Init(ctx, genkit.WithPlugins(
+	g, err := genkit.Init(ctx, genkit.WithPlugins(
 		&modelgarden.Llama{Location: "us-central1"},
 	))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Define a flow that uses Llama 3.3 70B to describe a topic.
-	genkit.DefineFlow(g, "llamaFlow", func(ctx context.Context, input string) (string, error) {
+	g.DefineFlow("llamaFlow", func(ctx context.Context, input string) (string, error) {
 		m := modelgarden.LlamaModel(g, "meta/llama-3.3-70b-instruct-maas")
 		if m == nil {
 			return "", errors.New("llamaFlow: failed to find model")
 		}
 
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModel(m),
 			ai.WithPrompt("In one short sentence, describe %s", input))
 		if err != nil {

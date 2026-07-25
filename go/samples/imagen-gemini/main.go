@@ -18,12 +18,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"google.golang.org/genai"
 )
@@ -41,7 +42,7 @@ func generateGemini31Lite(ctx context.Context, g *genkit.Genkit, modelName, inpu
 		prompt = "bananas"
 	}
 
-	return genkit.GenerateText(ctx, g,
+	return g.GenerateText(ctx,
 		ai.WithModel(googlegenai.ModelRef(modelName, &genai.GenerateContentConfig{
 			ThinkingConfig: &genai.ThinkingConfig{
 				ThinkingLevel: genai.ThinkingLevelMinimal,
@@ -57,7 +58,7 @@ func generateGemini31Image(ctx context.Context, g *genkit.Genkit, modelName, inp
 		prompt = "a robot cat wearing sunglasses"
 	}
 
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithModel(googlegenai.ModelRef(modelName, &genai.GenerateContentConfig{
 			ResponseModalities: []string{"IMAGE", "TEXT"},
 			ThinkingConfig: &genai.ThinkingConfig{
@@ -108,10 +109,13 @@ func main() {
 	if hasVertex {
 		plugins = append(plugins, &googlegenai.VertexAI{})
 	}
-	g := genkit.Init(ctx, genkit.WithPlugins(plugins...))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(plugins...))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Define a simple flow that generates an image of a given topic
-	genkit.DefineFlow(g, "imageFlow", func(ctx context.Context, input string) ([]string, error) {
+	g.DefineFlow("imageFlow", func(ctx context.Context, input string) ([]string, error) {
 		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash-image")
 		if m == nil {
 			return nil, errors.New("imageFlow: failed to find model")
@@ -123,7 +127,7 @@ func main() {
 				chose the wrong programming language, the proper programing
 				language for a gopher should be Go`
 		}
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModel(m),
 			ai.WithConfig(&genai.GenerateContentConfig{
 				Temperature:        genai.Ptr[float32](0.5),
@@ -144,20 +148,20 @@ func main() {
 		return story, nil
 	})
 
-	genkit.DefineFlow(g, "gemini31LiteGoogleAIFlow", func(ctx context.Context, input string) (string, error) {
+	g.DefineFlow("gemini31LiteGoogleAIFlow", func(ctx context.Context, input string) (string, error) {
 		return generateGemini31Lite(ctx, g, "googleai/gemini-3.1-flash-lite-preview", input)
 	})
 
-	genkit.DefineFlow(g, "gemini31ImageGoogleAIFlow", func(ctx context.Context, input string) (*imageFlowResult, error) {
+	g.DefineFlow("gemini31ImageGoogleAIFlow", func(ctx context.Context, input string) (*imageFlowResult, error) {
 		return generateGemini31Image(ctx, g, "googleai/gemini-3.1-flash-image-preview", input)
 	})
 
 	if hasVertex {
-		genkit.DefineFlow(g, "gemini31LiteVertexAIFlow", func(ctx context.Context, input string) (string, error) {
+		g.DefineFlow("gemini31LiteVertexAIFlow", func(ctx context.Context, input string) (string, error) {
 			return generateGemini31Lite(ctx, g, "vertexai/gemini-3.1-flash-lite-preview", input)
 		})
 
-		genkit.DefineFlow(g, "gemini31ImageVertexAIFlow", func(ctx context.Context, input string) (*imageFlowResult, error) {
+		g.DefineFlow("gemini31ImageVertexAIFlow", func(ctx context.Context, input string) (*imageFlowResult, error) {
 			return generateGemini31Image(ctx, g, "vertexai/gemini-3.1-flash-image-preview", input)
 		})
 	}

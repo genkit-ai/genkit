@@ -1,14 +1,12 @@
 module kitchen-sink-telemetry
 
-go 1.24.1
-
-toolchain go1.24.6
+go 1.27rc2
 
 replace github.com/firebase/genkit/go => ../../../
 
 require (
 	github.com/firebase/genkit/go v0.0.0-00010101000000-000000000000
-	google.golang.org/genai v1.41.0
+	google.golang.org/genai v1.57.0
 )
 
 require (
@@ -34,6 +32,7 @@ require (
 	github.com/buger/jsonparser v1.1.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cncf/xds/go v0.0.0-20250326154945-ae57f3c0d45f // indirect
+	github.com/coder/websocket v1.8.14 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.32.4 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.2.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect

@@ -21,8 +21,8 @@ import (
 	"flag"
 	"testing"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	ollamaPlugin "github.com/firebase/genkit/go/plugins/ollama"
 )
 
@@ -45,7 +45,7 @@ func TestLive(t *testing.T) {
 	ctx := context.Background()
 
 	o := &ollamaPlugin.Ollama{ServerAddress: *serverAddress, Timeout: 60}
-	g := genkit.Init(ctx, genkit.WithPlugins(o))
+	g := genkit.MustInit(ctx, genkit.WithPlugins(o))
 
 	// Define the model
 	o.DefineModel(g, ollamaPlugin.ModelDefinition{Name: *modelName, Type: "chat"}, nil)
@@ -57,7 +57,7 @@ func TestLive(t *testing.T) {
 	}
 
 	// Generate a response from the model
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithModel(m),
 		ai.WithConfig(&ollamaPlugin.GenerateContentConfig{Temperature: ollamaPlugin.Ptr(1.0), Think: ollamaPlugin.ThinkEnabled(true)}),
 		ai.WithPrompt("I'm hungry what should I eat?"),
@@ -89,7 +89,7 @@ func TestLiveDynamicDiscovery(t *testing.T) {
 
 	ctx := context.Background()
 	o := &ollamaPlugin.Ollama{ServerAddress: *serverAddress}
-	g := genkit.Init(ctx, genkit.WithPlugins(o))
+	g := genkit.MustInit(ctx, genkit.WithPlugins(o))
 
 	// Verify ListActions discovers local models
 	actions := o.ListActions(ctx)
@@ -109,7 +109,7 @@ func TestLiveDynamicDiscovery(t *testing.T) {
 	}
 
 	// Generate a response from the dynamically resolved model
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithModel(m),
 		ai.WithConfig(&ai.GenerationCommonConfig{Temperature: 1}),
 		ai.WithPrompt("Say hello in one sentence."),

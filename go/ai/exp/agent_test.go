@@ -31,6 +31,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -1009,7 +1010,7 @@ func defineLastGoodTestAgent(reg api.Registry, name string, opts ...AgentOption[
 						s.Counter = 999
 						return s
 					})
-					return nil, core.NewError(core.UNAVAILABLE, "model timeout")
+					return nil, status.Errorf(status.ErrUnavailable, "model timeout")
 				}
 				sess.AddMessages(ai.NewModelTextMessage("echo: " + text))
 				sess.UpdateCustom(func(s testState) testState {
@@ -1050,8 +1051,8 @@ func TestAgent_FailedTurn_ClientManagedReturnsLastGoodState(t *testing.T) {
 	if out.Error == nil {
 		t.Fatal("expected error on failed output")
 	}
-	if out.Error.Status != core.UNAVAILABLE {
-		t.Errorf("expected original status %q preserved, got %q", core.UNAVAILABLE, out.Error.Status)
+	if out.Error.Status != status.Unavailable {
+		t.Errorf("expected original status %q preserved, got %q", status.Unavailable, out.Error.Status)
 	}
 	if !strings.Contains(out.Error.Message, "model timeout") {
 		t.Errorf("expected error message to contain %q, got %q", "model timeout", out.Error.Message)
@@ -1318,7 +1319,7 @@ func TestAgent_InitFailure_FailsActionWithStatus(t *testing.T) {
 	tests := []struct {
 		name       string
 		run        func() (*AgentOutput[testState], error)
-		wantStatus core.StatusName
+		wantStatus status.Name
 		wantMsg    string
 	}{
 		{
@@ -1326,7 +1327,7 @@ func TestAgent_InitFailure_FailsActionWithStatus(t *testing.T) {
 			run: func() (*AgentOutput[testState], error) {
 				return serverManaged.RunText(ctx, "hi", WithState(&SessionState[testState]{}))
 			},
-			wantStatus: core.FAILED_PRECONDITION,
+			wantStatus: status.FailedPrecondition,
 			wantMsg:    "session store",
 		},
 		{
@@ -1334,7 +1335,7 @@ func TestAgent_InitFailure_FailsActionWithStatus(t *testing.T) {
 			run: func() (*AgentOutput[testState], error) {
 				return clientManaged.RunText(ctx, "hi", WithSnapshotID[testState]("some-id"))
 			},
-			wantStatus: core.FAILED_PRECONDITION,
+			wantStatus: status.FailedPrecondition,
 			wantMsg:    "no session store",
 		},
 		{
@@ -1342,7 +1343,7 @@ func TestAgent_InitFailure_FailsActionWithStatus(t *testing.T) {
 			run: func() (*AgentOutput[testState], error) {
 				return serverManaged.RunText(ctx, "hi", WithSnapshotID[testState]("nope"))
 			},
-			wantStatus: core.NOT_FOUND,
+			wantStatus: status.NotFound,
 			wantMsg:    "not found",
 		},
 	}
@@ -1355,7 +1356,7 @@ func TestAgent_InitFailure_FailsActionWithStatus(t *testing.T) {
 			if out != nil {
 				t.Errorf("expected nil output on init failure, got %+v", out)
 			}
-			ge := core.AsGenkitError(err)
+			ge := status.Convert(err)
 			if ge.Status != tc.wantStatus {
 				t.Errorf("expected status %q, got %q (err: %v)", tc.wantStatus, ge.Status, err)
 			}
@@ -1388,8 +1389,8 @@ func TestAgent_JSONInitRejectsUnknownFields(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected INVALID_ARGUMENT for unknown init field, got nil")
 		}
-		if ge := core.AsGenkitError(err); ge.Status != core.INVALID_ARGUMENT {
-			t.Errorf("status = %q, want %q (err: %v)", ge.Status, core.INVALID_ARGUMENT, err)
+		if ge := status.Convert(err); ge.Status != status.InvalidArgument {
+			t.Errorf("status = %q, want %q (err: %v)", ge.Status, status.InvalidArgument, err)
 		}
 	}
 
@@ -1652,7 +1653,7 @@ func setupPromptTestRegistry(t *testing.T) *registry.Registry {
 
 	ai.ConfigureFormats(reg)
 	ai.DefineModel(reg, "test/echo", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			// Echo back the last user message text.
 			var text string
 			for i := len(req.Messages) - 1; i >= 0; i-- {
@@ -1702,7 +1703,7 @@ func TestPromptAgent_NamedPromptSharedAcrossAgents(t *testing.T) {
 	var mu sync.Mutex
 	var renderedSystems []string
 	ai.DefineModel(reg, "test/capture", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			mu.Lock()
 			for _, m := range req.Messages {
 				if m.Role == ai.RoleSystem {
@@ -1717,7 +1718,7 @@ func TestPromptAgent_NamedPromptSharedAcrossAgents(t *testing.T) {
 
 	// One shared prompt with a personality variable, registered under a name
 	// that matches no agent.
-	ai.DefinePrompt(reg, "sharedChat",
+	ai.DefinePrompt[any](reg, "sharedChat",
 		ai.WithModelName("test/capture"),
 		ai.WithInputType(personaInput{}),
 		ai.WithSystem("You are {{personality}}."),
@@ -1766,7 +1767,7 @@ func TestDefinePromptAgent_DefaultAndNamed(t *testing.T) {
 	var mu sync.Mutex
 	var renderedSystems []string
 	ai.DefineModel(reg, "test/capture", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			mu.Lock()
 			for _, m := range req.Messages {
 				if m.Role == ai.RoleSystem {
@@ -1781,11 +1782,11 @@ func TestDefinePromptAgent_DefaultAndNamed(t *testing.T) {
 
 	// A same-named prompt for the default lookup, and a shared parameterized
 	// prompt for the WithNamedPrompt override.
-	ai.DefinePrompt(reg, "chef",
+	ai.DefinePrompt[any](reg, "chef",
 		ai.WithModelName("test/capture"),
 		ai.WithSystem("You are a chef."),
 	)
-	ai.DefinePrompt(reg, "sharedChat",
+	ai.DefinePrompt[any](reg, "sharedChat",
 		ai.WithModelName("test/capture"),
 		ai.WithInputType(personaInput{}),
 		ai.WithSystem("You are {{personality}}."),
@@ -1826,7 +1827,7 @@ func TestDefinePromptAgent_DefaultAndNamed(t *testing.T) {
 // that is not registered, and setting the prompt source more than once.
 func TestDefinePromptAgent_Panics(t *testing.T) {
 	reg := setupPromptTestRegistry(t)
-	ai.DefinePrompt(reg, "present", ai.WithModelName("test/echo"))
+	ai.DefinePrompt[any](reg, "present", ai.WithModelName("test/echo"))
 
 	t.Run("missing prompt", func(t *testing.T) {
 		defer func() {
@@ -1853,7 +1854,7 @@ func TestPromptAgent_Basic(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
 
-	ai.DefinePrompt(reg, "testPrompt",
+	ai.DefinePrompt[any](reg, "testPrompt",
 		ai.WithModelName("test/echo"),
 		ai.WithSystem("You are a test assistant."),
 	)
@@ -1909,7 +1910,7 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 
 	// Use a model that echoes all message count so we can verify history grows.
 	ai.DefineModel(reg, "test/history", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			// Count total messages received (includes prompt-rendered + history).
 			var parts []string
 			for _, m := range req.Messages {
@@ -1928,7 +1929,7 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 		},
 	)
 
-	ai.DefinePrompt(reg, "historyPrompt",
+	ai.DefinePrompt[any](reg, "historyPrompt",
 		ai.WithModelName("test/history"),
 		ai.WithSystem("system prompt"),
 	)
@@ -2002,7 +2003,7 @@ func TestPromptAgent_SnapshotResumePreservesHistory(t *testing.T) {
 	reg := setupPromptTestRegistry(t)
 	store := newTestInMemStore[testState]()
 
-	ai.DefinePrompt(reg, "snapPrompt",
+	ai.DefinePrompt[any](reg, "snapPrompt",
 		ai.WithModelName("test/echo"),
 		ai.WithSystem("You are a test assistant."),
 	)
@@ -2056,14 +2057,14 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 
 	// Define two tools so the model can call them across multiple rounds.
 	ai.DefineTool(reg, "greet", "returns a greeting",
-		func(ctx *ai.ToolContext, input struct {
+		func(ctx context.Context, input struct {
 			Name string `json:"name"`
 		}) (string, error) {
 			return "hello " + input.Name, nil
 		},
 	)
 	ai.DefineTool(reg, "farewell", "returns a farewell",
-		func(ctx *ai.ToolContext, input struct {
+		func(ctx context.Context, input struct {
 			Name string `json:"name"`
 		}) (string, error) {
 			return "goodbye " + input.Name, nil
@@ -2075,7 +2076,7 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 	//   Round 2: after seeing greet response, request "farewell" tool
 	//   Round 3: after seeing farewell response, return final text
 	ai.DefineModel(reg, "test/toolmodel", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			// Count tool responses to determine which round we're in.
 			toolResps := 0
 			for _, msg := range req.Messages {
@@ -2126,7 +2127,7 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 	)
 	ai.DefineGenerateAction(ctx, reg)
 
-	ai.DefinePrompt(reg, "toolPrompt",
+	ai.DefinePrompt[any](reg, "toolPrompt",
 		ai.WithModelName("test/toolmodel"),
 		ai.WithSystem("You are a test assistant."),
 		ai.WithTools(ai.ToolName("greet"), ai.ToolName("farewell")),
@@ -2332,7 +2333,7 @@ func TestPromptAgent_RunText(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
 
-	ai.DefinePrompt(reg, "runTextPrompt",
+	ai.DefinePrompt[any](reg, "runTextPrompt",
 		ai.WithModelName("test/echo"),
 		ai.WithSystem("You are a test assistant."),
 	)
@@ -2363,12 +2364,12 @@ func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 	reg := setupPromptTestRegistry(t)
 	var modelCalls atomic.Int64
 	ai.DefineModel(reg, "test/reject", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			modelCalls.Add(1)
 			return &ai.ModelResponse{Message: ai.NewModelTextMessage("unexpected")}, nil
 		},
 	)
-	ai.DefinePrompt(reg, "rejectPrompt", ai.WithModelName("test/reject"))
+	ai.DefinePrompt[any](reg, "rejectPrompt", ai.WithModelName("test/reject"))
 	af := DefinePromptAgent[testState](reg, "rejectPrompt")
 
 	tests := []struct {
@@ -2425,8 +2426,8 @@ func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 			if out.Error == nil {
 				t.Fatal("expected output error, got nil")
 			}
-			if out.Error.Status != core.INVALID_ARGUMENT {
-				t.Errorf("Error.Status = %q, want %q", out.Error.Status, core.INVALID_ARGUMENT)
+			if out.Error.Status != status.InvalidArgument {
+				t.Errorf("Error.Status = %q, want %q", out.Error.Status, status.InvalidArgument)
 			}
 			if !strings.Contains(out.Error.Message, tc.wantMsg) {
 				t.Errorf("Error.Message = %q, want substring %q", out.Error.Message, tc.wantMsg)
@@ -2523,8 +2524,8 @@ func TestValidateResumeAgainstHistory(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("error %q does not contain %q", err.Error(), tc.wantErr)
 			}
-			if ge := core.AsGenkitError(err); ge.Status != core.INVALID_ARGUMENT {
-				t.Fatalf("expected status %q, got %q", core.INVALID_ARGUMENT, ge.Status)
+			if ge := status.Convert(err); ge.Status != status.InvalidArgument {
+				t.Fatalf("expected status %q, got %q", status.InvalidArgument, ge.Status)
 			}
 		})
 	}
@@ -2540,12 +2541,12 @@ func TestPromptAgent_RejectsResumeForUnrequestedTool(t *testing.T) {
 
 	var modelCalls atomic.Int32
 	ai.DefineModel(reg, "test/plain", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			modelCalls.Add(1)
 			return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("hello")}, nil
 		})
 	ai.DefineGenerateAction(ctx, reg)
-	ai.DefinePrompt(reg, "plainPrompt", ai.WithModelName("test/plain"))
+	ai.DefinePrompt[any](reg, "plainPrompt", ai.WithModelName("test/plain"))
 
 	af := DefinePromptAgent[testState](reg, "plainPrompt")
 
@@ -2575,7 +2576,7 @@ func TestPromptAgent_RejectsResumeForUnrequestedTool(t *testing.T) {
 	if out.FinishReason != AgentFinishReasonFailed {
 		t.Fatalf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
 	}
-	if out.Error == nil || out.Error.Status != core.INVALID_ARGUMENT {
+	if out.Error == nil || out.Error.Status != status.InvalidArgument {
 		t.Fatalf("expected INVALID_ARGUMENT error, got %+v", out.Error)
 	}
 	if !strings.Contains(out.Error.Message, "not found in session history") {
@@ -2751,8 +2752,8 @@ func TestAgent_FnPanicResolvesAsFailedOutput(t *testing.T) {
 	if out.Error == nil || !strings.Contains(out.Error.Message, "panicked") {
 		t.Errorf("expected panic error on output, got: %+v", out.Error)
 	}
-	if out.Error != nil && out.Error.Status != core.INTERNAL {
-		t.Errorf("expected status %q, got %q", core.INTERNAL, out.Error.Status)
+	if out.Error != nil && out.Error.Status != status.Internal {
+		t.Errorf("expected status %q, got %q", status.Internal, out.Error.Status)
 	}
 }
 
@@ -3114,11 +3115,11 @@ func TestAgent_Detach_RequiresStore(t *testing.T) {
 	if out.FinishReason != AgentFinishReasonFailed {
 		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
 	}
-	if out.Error == nil || !strings.Contains(out.Error.Message, "detach requires a session store") {
+	if !errors.Is(out.Error, ErrNoSessionStore) {
 		t.Errorf("unexpected output error: %+v", out.Error)
 	}
-	if out.Error != nil && out.Error.Status != core.FAILED_PRECONDITION {
-		t.Errorf("expected status %q, got %q", core.FAILED_PRECONDITION, out.Error.Status)
+	if out.Error != nil && out.Error.Status != status.FailedPrecondition {
+		t.Errorf("expected status %q, got %q", status.FailedPrecondition, out.Error.Status)
 	}
 }
 
@@ -3755,8 +3756,8 @@ func TestAgent_ResumeFromErrorSnapshot_Rejected(t *testing.T) {
 		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 			return &SessionSnapshot[testState]{
 				Status: SnapshotStatusFailed,
-				Error: &core.GenkitError{
-					Status:  core.INTERNAL,
+				Error: &status.Error{
+					Status:  status.Internal,
 					Message: "underlying failure",
 				},
 				State: &SessionState[testState]{},
@@ -3776,9 +3777,9 @@ func TestAgent_ResumeFromErrorSnapshot_Rejected(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error when resuming from errored snapshot, got output: %+v", out)
 	}
-	ge := core.AsGenkitError(err)
-	if ge.Status != core.FAILED_PRECONDITION {
-		t.Errorf("expected status %q, got %q", core.FAILED_PRECONDITION, ge.Status)
+	ge := status.Convert(err)
+	if ge.Status != status.FailedPrecondition {
+		t.Errorf("expected status %q, got %q", status.FailedPrecondition, ge.Status)
 	}
 	if !strings.Contains(ge.Message, "underlying failure") {
 		t.Errorf("expected error to surface underlying failure, got: %v", err)
@@ -3874,17 +3875,11 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 	}
 }
 
-// assertGenkitStatus fails the test unless err is a *core.GenkitError with the
-// given status.
-func assertGenkitStatus(t *testing.T, err error, want core.StatusName, label string) {
+// assertStatus fails the test unless err carries the given status.
+func assertStatus(t *testing.T, err error, want status.Name, label string) {
 	t.Helper()
-	var ge *core.GenkitError
-	if !errors.As(err, &ge) {
-		t.Errorf("%s: expected *core.GenkitError, got %v", label, err)
-		return
-	}
-	if ge.Status != want {
-		t.Errorf("%s: status = %q, want %q", label, ge.Status, want)
+	if got := status.Of(err); got != want {
+		t.Errorf("%s: status = %q, want %q (err = %v)", label, got, want, err)
 	}
 }
 
@@ -3977,23 +3972,23 @@ func TestAgent_SnapshotFacade_Errors(t *testing.T) {
 	// Client-managed agent (no store): every facade method is FAILED_PRECONDITION.
 	client := defineCounterAgent(reg, "facadeClient")
 	_, e1 := client.GetSnapshot(ctx, "x")
-	assertGenkitStatus(t, e1, core.FAILED_PRECONDITION, "client GetSnapshot")
+	assertStatus(t, e1, status.FailedPrecondition, "client GetSnapshot")
 	_, e2 := client.GetLatestSnapshot(ctx, "x")
-	assertGenkitStatus(t, e2, core.FAILED_PRECONDITION, "client GetLatestSnapshot")
+	assertStatus(t, e2, status.FailedPrecondition, "client GetLatestSnapshot")
 	_, e3 := client.Abort(ctx, "x")
-	assertGenkitStatus(t, e3, core.FAILED_PRECONDITION, "client abortPendingSnapshot")
+	assertStatus(t, e3, status.FailedPrecondition, "client abortPendingSnapshot")
 
 	// Server-managed agent: empty IDs are INVALID_ARGUMENT, missing rows NOT_FOUND.
 	store := newTestInMemStore[testState]()
 	server := defineCounterAgent(reg, "facadeServer", WithSessionStore(store))
 	_, e4 := server.GetSnapshot(ctx, "")
-	assertGenkitStatus(t, e4, core.INVALID_ARGUMENT, "empty GetSnapshot")
+	assertStatus(t, e4, status.InvalidArgument, "empty GetSnapshot")
 	_, e5 := server.GetLatestSnapshot(ctx, "")
-	assertGenkitStatus(t, e5, core.INVALID_ARGUMENT, "empty GetLatestSnapshot")
+	assertStatus(t, e5, status.InvalidArgument, "empty GetLatestSnapshot")
 	_, e6 := server.Abort(ctx, "")
-	assertGenkitStatus(t, e6, core.INVALID_ARGUMENT, "empty abortPendingSnapshot")
+	assertStatus(t, e6, status.InvalidArgument, "empty abortPendingSnapshot")
 	_, e7 := server.GetSnapshot(ctx, "missing")
-	assertGenkitStatus(t, e7, core.NOT_FOUND, "missing GetSnapshot")
+	assertStatus(t, e7, status.NotFound, "missing GetSnapshot")
 }
 
 // TestAgent_Abort_Method verifies the in-process convenience flips a
@@ -4114,21 +4109,21 @@ func TestAgent_GetSnapshotAction_BySessionID(t *testing.T) {
 	// A snapshotId whose session does not match the asserted sessionId is rejected.
 	if _, err := action.Run(ctx, &GetSnapshotRequest{SessionID: "other-session", SnapshotID: out1.SnapshotID}, nil); err == nil {
 		t.Fatal("expected snapshot/session mismatch to be rejected")
-	} else if ge := core.AsGenkitError(err); ge.Status != core.INVALID_ARGUMENT {
+	} else if ge := status.Convert(err); ge.Status != status.InvalidArgument {
 		t.Errorf("mismatch status = %q, want INVALID_ARGUMENT (err: %v)", ge.Status, err)
 	}
 
 	// Neither field set is rejected.
 	if _, err := action.Run(ctx, &GetSnapshotRequest{}, nil); err == nil {
 		t.Fatal("expected empty request to be rejected")
-	} else if ge := core.AsGenkitError(err); ge.Status != core.INVALID_ARGUMENT {
+	} else if ge := status.Convert(err); ge.Status != status.InvalidArgument {
 		t.Errorf("empty-request status = %q, want INVALID_ARGUMENT (err: %v)", ge.Status, err)
 	}
 
 	// An unknown session resolves to no snapshot (NOT_FOUND).
 	if _, err := action.Run(ctx, &GetSnapshotRequest{SessionID: "no-such-session"}, nil); err == nil {
 		t.Fatal("expected NOT_FOUND for unknown session")
-	} else if ge := core.AsGenkitError(err); ge.Status != core.NOT_FOUND {
+	} else if ge := status.Convert(err); ge.Status != status.NotFound {
 		t.Errorf("unknown-session status = %q, want NOT_FOUND (err: %v)", ge.Status, err)
 	}
 
@@ -4716,7 +4711,7 @@ func TestAgent_RegisterCarriesCompanions(t *testing.T) {
 
 // TestNewCustomAgent_UnregisteredUntilRegister verifies the non-registering
 // constructor: the agent is fully usable before it touches a registry, and
-// registering it later (the genkit.RegisterAction path) surfaces the run
+// registering it later (the genkit.Genkit.RegisterAction path) surfaces the run
 // action and its companions together.
 func TestNewCustomAgent_UnregisteredUntilRegister(t *testing.T) {
 	ctx := context.Background()
@@ -4759,7 +4754,7 @@ func TestNewCustomAgent_UnregisteredUntilRegister(t *testing.T) {
 
 func TestAgent_AbortAction_NotFound(t *testing.T) {
 	// The store's "not found" sentinel (empty status, nil error) must
-	// surface as a core.NOT_FOUND GenkitError on the abort companion
+	// surface as a NOT_FOUND status error on the abort companion
 	// action so callers (Dev UI, remote clients) see a proper status.
 	reg := newTestRegistry(t)
 	DefineCustomAgent(reg, "missingFlow",
@@ -4779,12 +4774,12 @@ func TestAgent_AbortAction_NotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing snapshot, got nil")
 	}
-	var ge *core.GenkitError
+	var ge *status.Error
 	if !errors.As(err, &ge) {
-		t.Fatalf("expected *core.GenkitError, got %T: %v", err, err)
+		t.Fatalf("expected *status.Error, got %T: %v", err, err)
 	}
-	if ge.Status != core.NOT_FOUND {
-		t.Errorf("status = %q, want %q", ge.Status, core.NOT_FOUND)
+	if ge.Status != status.NotFound {
+		t.Errorf("status = %q, want %q", ge.Status, status.NotFound)
 	}
 }
 
@@ -4832,7 +4827,7 @@ func TestAgent_StateTransform_ErrorFailsClientManagedOutputClosed(t *testing.T) 
 	reg := newTestRegistry(t)
 
 	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
-		return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape state")
+		return nil, status.Errorf(status.ErrPermissionDenied, "cannot shape state")
 	}
 
 	af := DefineCustomAgent(reg, "clientXformErr",
@@ -4852,8 +4847,8 @@ func TestAgent_StateTransform_ErrorFailsClientManagedOutputClosed(t *testing.T) 
 	if out.FinishReason != AgentFinishReasonFailed {
 		t.Errorf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
 	}
-	if out.Error == nil || out.Error.Status != core.PERMISSION_DENIED {
-		t.Errorf("Error = %+v, want status %q from the transform", out.Error, core.PERMISSION_DENIED)
+	if out.Error == nil || out.Error.Status != status.PermissionDenied {
+		t.Errorf("Error = %+v, want status %q from the transform", out.Error, status.PermissionDenied)
 	}
 	// failedOutput shapes the last-good state through the same transform, which
 	// errors again here; the runtime omits state rather than leaking it.
@@ -4872,7 +4867,7 @@ func TestAgent_StateTransform_ErrorFailsSnapshotReadClosed(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
-		return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape state")
+		return nil, status.Errorf(status.ErrPermissionDenied, "cannot shape state")
 	}
 
 	af := DefineCustomAgent(reg, "snapXformErr",
@@ -4899,8 +4894,8 @@ func TestAgent_StateTransform_ErrorFailsSnapshotReadClosed(t *testing.T) {
 	// The typed facade fails closed with the transform's status.
 	if _, err := af.GetSnapshot(ctx, out.SnapshotID); err == nil {
 		t.Error("Agent.GetSnapshot: expected the transform error, got nil")
-	} else if core.AsGenkitError(err).Status != core.PERMISSION_DENIED {
-		t.Errorf("Agent.GetSnapshot error status = %q, want %q", core.AsGenkitError(err).Status, core.PERMISSION_DENIED)
+	} else if status.Convert(err).Status != status.PermissionDenied {
+		t.Errorf("Agent.GetSnapshot error status = %q, want %q", status.Convert(err).Status, status.PermissionDenied)
 	}
 
 	// The getSnapshot companion action fails the same way for non-Go clients.
@@ -4911,8 +4906,8 @@ func TestAgent_StateTransform_ErrorFailsSnapshotReadClosed(t *testing.T) {
 	}
 	if _, err := action.Run(ctx, &GetSnapshotRequest{SnapshotID: out.SnapshotID}, nil); err == nil {
 		t.Error("getSnapshot action: expected the transform error, got nil")
-	} else if core.AsGenkitError(err).Status != core.PERMISSION_DENIED {
-		t.Errorf("getSnapshot action error status = %q, want %q", core.AsGenkitError(err).Status, core.PERMISSION_DENIED)
+	} else if status.Convert(err).Status != status.PermissionDenied {
+		t.Errorf("getSnapshot action error status = %q, want %q", status.Convert(err).Status, status.PermissionDenied)
 	}
 
 	// The stored snapshot itself is untouched: the failure is read-time shaping,
@@ -5489,7 +5484,7 @@ func TestPromptAgent_ForwardsFinishReason(t *testing.T) {
 	reg := registry.New()
 	ai.ConfigureFormats(reg)
 	ai.DefineModel(reg, "test/length", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return &ai.ModelResponse{
 				Request:      req,
 				Message:      ai.NewModelTextMessage("partial"),
@@ -5498,7 +5493,7 @@ func TestPromptAgent_ForwardsFinishReason(t *testing.T) {
 		},
 	)
 	ai.DefineGenerateAction(ctx, reg)
-	ai.DefinePrompt(reg, "lengthPrompt", ai.WithModelName("test/length"))
+	ai.DefinePrompt[any](reg, "lengthPrompt", ai.WithModelName("test/length"))
 
 	af := DefinePromptAgent[testState](reg, "lengthPrompt")
 
@@ -5881,14 +5876,12 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 	ai.ConfigureFormats(reg)
 
 	interruptTool := ai.DefineTool(reg, "interruptor", "always interrupts",
-		func(tc *ai.ToolContext, input any) (any, error) {
-			return nil, tc.Interrupt(&ai.InterruptOptions{
-				Metadata: map[string]any{"reason": "needs approval"},
-			})
+		func(tc context.Context, input any) (any, error) {
+			return nil, &ai.InterruptError{Data: map[string]any{"reason": "needs approval"}}
 		},
 	)
 	ai.DefineModel(reg, "test/interrupt", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return &ai.ModelResponse{
 				Request: req,
 				Message: &ai.Message{
@@ -5898,7 +5891,7 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 			}, nil
 		})
 	ai.DefineGenerateAction(ctx, reg)
-	ai.DefinePrompt(reg, "interruptPrompt",
+	ai.DefinePrompt[any](reg, "interruptPrompt",
 		ai.WithModelName("test/interrupt"),
 		ai.WithTools(interruptTool),
 	)
@@ -6262,7 +6255,7 @@ func TestAgent_ResumeFromSessionID_FailedTipRejected(t *testing.T) {
 	// Resuming by session ID hits the failed tip and is rejected.
 	if _, err := af.RunText(ctx, "second", WithSessionID[testState](out1.SessionID)); err == nil {
 		t.Fatal("expected resume to be rejected for a failed tip, got nil")
-	} else if ge := core.AsGenkitError(err); ge.Status != core.FAILED_PRECONDITION {
+	} else if ge := status.Convert(err); ge.Status != status.FailedPrecondition {
 		t.Fatalf("expected FAILED_PRECONDITION, got %q (err: %v)", ge.Status, err)
 	}
 
@@ -6423,8 +6416,8 @@ func TestAgent_ResumeFromSessionID_PendingTipRejected(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for pending tip, got output: %+v", out)
 	}
-	ge := core.AsGenkitError(err)
-	if ge.Status != core.FAILED_PRECONDITION {
+	ge := status.Convert(err)
+	if ge.Status != status.FailedPrecondition {
 		t.Fatalf("expected FAILED_PRECONDITION, got %q (err: %v)", ge.Status, err)
 	}
 	if !strings.Contains(ge.Message, "still pending") {
@@ -6556,9 +6549,9 @@ func TestAgent_ResumeFromSnapshotID_WithSessionID(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected mismatch error, got output: %+v", out3)
 	}
-	ge := core.AsGenkitError(err)
-	if ge.Status != core.INVALID_ARGUMENT {
-		t.Errorf("expected status %q, got %q (err: %v)", core.INVALID_ARGUMENT, ge.Status, err)
+	ge := status.Convert(err)
+	if ge.Status != status.InvalidArgument {
+		t.Errorf("expected status %q, got %q (err: %v)", status.InvalidArgument, ge.Status, err)
 	}
 	if !strings.Contains(ge.Message, "does not belong to session") {
 		t.Errorf("expected mismatch message, got %q", ge.Message)

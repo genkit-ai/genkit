@@ -20,8 +20,8 @@ import (
 	"strings"
 	"testing"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai/anthropic"
 	"github.com/openai/openai-go/option"
 )
@@ -35,7 +35,7 @@ func TestPlugin(t *testing.T) {
 	ctx := context.Background()
 
 	// Initialize genkit with claude-4-5-sonnet as default model
-	g := genkit.Init(
+	g := genkit.MustInit(
 		ctx,
 		genkit.WithDefaultModel("anthropic/claude-sonnet-4-5-20250929"),
 		genkit.WithPlugins(&anthropic.Anthropic{
@@ -48,7 +48,7 @@ func TestPlugin(t *testing.T) {
 
 	t.Run("basic completion", func(t *testing.T) {
 		t.Log("generating basic completion response")
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithPrompt("What is the capital of France?"),
 		)
 		if err != nil {
@@ -71,7 +71,7 @@ func TestPlugin(t *testing.T) {
 		var streamedOutput string
 		chunks := 0
 
-		final, err := genkit.Generate(ctx, g,
+		final, err := g.Generate(ctx,
 			ai.WithPrompt("Write a short paragraph about artificial intelligence."),
 			ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
 				chunks++
@@ -103,7 +103,7 @@ func TestPlugin(t *testing.T) {
 	})
 
 	t.Run("system message", func(t *testing.T) {
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithPrompt("What are you?"),
 			ai.WithSystem("You are a helpful math tutor who loves numbers."),
 		)

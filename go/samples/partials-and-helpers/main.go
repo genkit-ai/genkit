@@ -21,9 +21,9 @@ import (
 
 	// Import Genkit and the Google AI plugin
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 )
 
@@ -34,23 +34,25 @@ func main() {
 		"name":     "John Doe",
 	})
 
-	g := genkit.Init(ctx,
+	g, err := genkit.Init(ctx,
 		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 	)
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
-	genkit.DefinePartial(g, "header", "Welcome {{@name}}!")
-	genkit.DefineHelper(g, "uppercase", func(s string) string {
+	g.DefinePartial("header", "Welcome {{@name}}!")
+	g.DefineHelper("uppercase", func(s string) string {
 		return strings.ToUpper(s)
 	})
 
-	p := genkit.DefinePrompt(g, "test", ai.WithPrompt(`{{> header}} {{uppercase @greeting}}`))
+	p := g.DefinePrompt[any]("test", ai.WithPrompt(`{{> header}} {{uppercase @greeting}}`))
 
-	result, err := p.Execute(ctx)
+	text, _, err := p.Execute(ctx, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-	text := result.Text()
 	log.Printf("Response: %s", text)
 
 }

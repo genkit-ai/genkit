@@ -28,8 +28,9 @@ import (
 	"strings"
 	"testing"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
+	gtool "github.com/firebase/genkit/go/ai/tool"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"google.golang.org/genai"
 )
@@ -65,13 +66,13 @@ func TestGoogleAILive(t *testing.T) {
 
 	ctx := context.Background()
 
-	g := genkit.Init(ctx,
-		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+	g := genkit.MustInit(ctx,
+		genkit.WithDefaultModel("googleai/gemini-flash-latest"),
 		genkit.WithPlugins(&googlegenai.GoogleAI{APIKey: apiKey}),
 	)
 
-	gablorkenTool := genkit.DefineTool(g, "gablorken", "use this tool when the user asks to calculate a gablorken, carefuly inspect the user input to determine which value from the prompt corresponds to the input structure",
-		func(ctx *ai.ToolContext, input struct {
+	gablorkenTool := g.DefineTool("gablorken", "use this tool when the user asks to calculate a gablorken, carefuly inspect the user input to determine which value from the prompt corresponds to the input structure",
+		func(ctx context.Context, input struct {
 			Value int
 			Over  float64
 		},
@@ -80,14 +81,14 @@ func TestGoogleAILive(t *testing.T) {
 		},
 	)
 
-	answerOfEverythingTool := genkit.DefineTool(g, "answerOfEverything", "use this tool when the user asks for the answer of life, the universe and everything",
-		func(ctx *ai.ToolContext, input any) (int, error) {
+	answerOfEverythingTool := g.DefineTool("answerOfEverything", "use this tool when the user asks for the answer of life, the universe and everything",
+		func(ctx context.Context, input any) (int, error) {
 			return 42, nil
 		},
 	)
 
 	t.Run("embedder", func(t *testing.T) {
-		res, err := genkit.Embed(ctx, g, ai.WithEmbedderName("googleai/gemini-embedding-001"), ai.WithTextDocs("yellow banana"))
+		res, err := g.Embed(ctx, ai.WithEmbedderName("googleai/gemini-embedding-001"), ai.WithTextDocs("yellow banana"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -107,7 +108,7 @@ func TestGoogleAILive(t *testing.T) {
 	})
 
 	t.Run("generate", func(t *testing.T) {
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithPrompt("Which country was Napoleon the emperor of? Name the country, nothing else"),
 		)
 		if err != nil {
@@ -130,11 +131,11 @@ func TestGoogleAILive(t *testing.T) {
 	t.Run("streaming", func(t *testing.T) {
 		out := ""
 		parts := 0
-		final, err := genkit.Generate(ctx, g,
+		final, err := g.Generate(ctx,
 			ai.WithPrompt("Write one paragraph about the North Pole."),
 			ai.WithStreaming(func(ctx context.Context, c *ai.ModelResponseChunk) error {
 				parts++
-				out += c.Content[0].Text
+				out += c.Text()
 				return nil
 			}))
 		if err != nil {
@@ -161,7 +162,7 @@ func TestGoogleAILive(t *testing.T) {
 	})
 
 	t.Run("tool", func(t *testing.T) {
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithPrompt("what is a gablorken of 2 over 3.5?"),
 			ai.WithTools(gablorkenTool))
 		if err != nil {
@@ -177,12 +178,12 @@ func TestGoogleAILive(t *testing.T) {
 	t.Run("tool stream", func(t *testing.T) {
 		parts := 0
 		out := ""
-		final, err := genkit.Generate(ctx, g,
+		final, err := g.Generate(ctx,
 			ai.WithPrompt("what is a gablorken of 2 over 3.5?"),
 			ai.WithTools(gablorkenTool),
 			ai.WithStreaming(func(ctx context.Context, c *ai.ModelResponseChunk) error {
 				parts++
-				out += c.Content[0].Text
+				out += c.Text()
 				return nil
 			}))
 		if err != nil {
@@ -203,8 +204,8 @@ func TestGoogleAILive(t *testing.T) {
 	})
 
 	t.Run("tool with thinking", func(t *testing.T) {
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
-		resp, err := genkit.Generate(ctx, g,
+		m := googlegenai.GoogleAIModel(g, "gemini-flash-latest")
+		resp, err := g.Generate(ctx,
 			ai.WithConfig(&genai.GenerateContentConfig{
 				ThinkingConfig: &genai.ThinkingConfig{
 					ThinkingBudget: genai.Ptr[int32](1024),
@@ -224,8 +225,8 @@ func TestGoogleAILive(t *testing.T) {
 		}
 	})
 	t.Run("api side tools", func(t *testing.T) {
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
-		_, err := genkit.Generate(ctx, g,
+		m := googlegenai.GoogleAIModel(g, "gemini-flash-latest")
+		_, err := g.Generate(ctx,
 			ai.WithConfig(&genai.GenerateContentConfig{
 				Tools: []*genai.Tool{
 					{GoogleSearch: &genai.GoogleSearch{}},
@@ -243,8 +244,8 @@ func TestGoogleAILive(t *testing.T) {
 		// This test verifies that tools are properly merged (not silently dropped),
 		// even though the API will reject this specific combination.
 		// See: https://github.com/google/adk-python/issues/53
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
-		_, err := genkit.Generate(ctx, g,
+		m := googlegenai.GoogleAIModel(g, "gemini-flash-latest")
+		_, err := g.Generate(ctx,
 			ai.WithConfig(&genai.GenerateContentConfig{
 				Tools: []*genai.Tool{
 					{GoogleSearch: &genai.GoogleSearch{}},
@@ -271,15 +272,15 @@ func TestGoogleAILive(t *testing.T) {
 			Report string `json:"report"`
 		}
 
-		weatherTool := genkit.DefineTool(g, "weatherTool",
+		weatherTool := g.DefineTool("weatherTool",
 			"Use this tool to get the weather report for a specific location",
-			func(ctx *ai.ToolContext, input weatherQuery) (string, error) {
+			func(ctx context.Context, input weatherQuery) (string, error) {
 				report := fmt.Sprintf("The weather in %s is sunny and 70 degrees today.", input.Location)
 				return report, nil
 			},
 		)
 
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithTools(weatherTool),
 			ai.WithPrompt("what's the weather in San Francisco?"),
 			ai.WithOutputType(weather{}),
@@ -296,7 +297,7 @@ func TestGoogleAILive(t *testing.T) {
 		}
 	})
 	t.Run("avoid tool", func(t *testing.T) {
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithPrompt("what is a gablorken of value 2 over 3.5?"),
 			ai.WithTools(gablorkenTool),
 			ai.WithToolChoice(ai.ToolChoiceNone),
@@ -321,7 +322,7 @@ func TestGoogleAILive(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithMessages(
 				ai.NewUserTextMessage(string(textContent)).WithCacheTTL(360),
 			),
@@ -346,7 +347,7 @@ func TestGoogleAILive(t *testing.T) {
 			t.Fatalf("cache name should be a map but got %T", cache)
 		}
 
-		resp, err = genkit.Generate(ctx, g,
+		resp, err = g.Generate(ctx,
 			ai.WithMessages(resp.History()...),
 			ai.WithPrompt("rewrite the previous summary but now talking like a pirate, say Ahoy a lot of times"),
 		)
@@ -382,7 +383,7 @@ func TestGoogleAILive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithSystem("You are a pirate expert in animals, your response should include the name of the animal in the provided image"),
 			ai.WithMessages(
 				ai.NewUserMessage(
@@ -399,7 +400,7 @@ func TestGoogleAILive(t *testing.T) {
 		}
 	})
 	t.Run("media content", func(t *testing.T) {
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithMessages(
 				ai.NewUserMessage(
 					ai.NewTextPart("do you know what's the video about?"),
@@ -419,7 +420,7 @@ func TestGoogleAILive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithSystem("You are an excellent animal detector, the user will provide you a request with an image, identify which animal is in there"),
 			ai.WithMessages(
 				ai.NewUserMessage(
@@ -437,7 +438,7 @@ func TestGoogleAILive(t *testing.T) {
 	})
 	t.Run("image generation", func(t *testing.T) {
 		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash-image")
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithConfig(genai.GenerateContentConfig{
 				ResponseModalities: []string{"IMAGE", "TEXT"},
 			}),
@@ -457,7 +458,7 @@ func TestGoogleAILive(t *testing.T) {
 			if part.ContentType == "image/png" {
 				foundMediaPart = true
 				if part.Kind != ai.PartMedia {
-					t.Errorf("expecting part to be Media type but got: %q", part.Kind)
+					t.Errorf("expecting part to be Media type but got: %v", part.Kind)
 				}
 				if part.Text == "" {
 					t.Error("empty response")
@@ -473,7 +474,7 @@ func TestGoogleAILive(t *testing.T) {
 		type outFormat struct {
 			Country string
 		}
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithPrompt("Which country was Napoleon the emperor of?"),
 			ai.WithOutputType(outFormat{}),
 		)
@@ -498,8 +499,8 @@ func TestGoogleAILive(t *testing.T) {
 		}
 	})
 	t.Run("thinking", func(t *testing.T) {
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
-		resp, err := genkit.Generate(ctx, g,
+		m := googlegenai.GoogleAIModel(g, "gemini-flash-latest")
+		resp, err := g.Generate(ctx,
 			ai.WithConfig(genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](0.4),
 				ThinkingConfig: &genai.ThinkingConfig{
@@ -524,8 +525,8 @@ func TestGoogleAILive(t *testing.T) {
 			Text string `json:"text"`
 		}
 
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
-		resp, err := genkit.Generate(ctx, g,
+		m := googlegenai.GoogleAIModel(g, "gemini-flash-latest")
+		resp, err := g.Generate(ctx,
 			ai.WithConfig(genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](0.4),
 				ThinkingConfig: &genai.ThinkingConfig{
@@ -559,8 +560,10 @@ func TestGoogleAILive(t *testing.T) {
 		}
 	})
 	t.Run("thinking disabled", func(t *testing.T) {
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
-		resp, err := genkit.Generate(ctx, g,
+		// Use a model that supports fully disabling thinking; the latest
+		// flash models reject a zero thinking budget.
+		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash-lite")
+		resp, err := g.Generate(ctx,
 			ai.WithConfig(genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](0.4),
 				ThinkingConfig: &genai.ThinkingConfig{
@@ -581,24 +584,20 @@ func TestGoogleAILive(t *testing.T) {
 		}
 	})
 	t.Run("multipart tool", func(t *testing.T) {
-		m := googlegenai.GoogleAIModel(g, "gemini-3-pro-preview")
+		m := googlegenai.GoogleAIModel(g, "gemini-pro-latest")
 		img64, err := fetchImgAsBase64()
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		tool := genkit.DefineMultipartTool(g, "getImage", "returns a misterious image",
-			func(ctx *ai.ToolContext, input any) (*ai.MultipartToolResponse, error) {
-				return &ai.MultipartToolResponse{
-					Output: map[string]any{"status": "success"},
-					Content: []*ai.Part{
-						ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,"+img64),
-					},
-				}, nil
+		tool := g.DefineTool("getImage", "returns a misterious image",
+			func(ctx context.Context, input any) (map[string]any, error) {
+				gtool.AttachParts(ctx, ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,"+img64))
+				return map[string]any{"status": "success"}, nil
 			},
 		)
 
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModel(m),
 			ai.WithTools(tool),
 			ai.WithPrompt("get an image and tell me what is in it"),

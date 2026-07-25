@@ -21,6 +21,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -146,7 +147,7 @@ func TestFlowStream(t *testing.T) {
 	t.Run("yields error on flow failure", func(t *testing.T) {
 		r := registry.New()
 		f := DefineStreamingFlow(r, "failing", func(ctx context.Context, input int, cb StreamCallback[int]) (int, error) {
-			return 0, NewError(INTERNAL, "flow failed")
+			return 0, status.Errorf(status.ErrInternal, "flow failed")
 		})
 
 		var gotErr error
@@ -215,22 +216,22 @@ func TestFlowRunJSON(t *testing.T) {
 			t.Fatalf("RunJSON error: %v", err)
 		}
 
-		if string(got) != "10" {
-			t.Errorf("RunJSON result = %s, want %q", got, "10")
+		if string(got.Result) != "10" {
+			t.Errorf("RunJSON result = %s, want %q", got.Result, "10")
 		}
 	})
 }
 
-func TestFlowRunJSONWithTelemetry(t *testing.T) {
+func TestFlowRunJSONTelemetry(t *testing.T) {
 	t.Run("returns telemetry info with result", func(t *testing.T) {
 		r := registry.New()
 		f := DefineFlow(r, "test/telemetryFlow", func(ctx context.Context, input int) (int, error) {
 			return input + 1, nil
 		})
 
-		result, err := f.RunJSONWithTelemetry(context.Background(), []byte("5"), nil)
+		result, err := f.RunJSON(context.Background(), []byte("5"), nil)
 		if err != nil {
-			t.Fatalf("RunJSONWithTelemetry error: %v", err)
+			t.Fatalf("RunJSON error: %v", err)
 		}
 
 		if result == nil {

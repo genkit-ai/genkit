@@ -20,11 +20,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 func TestInMemoryStreamManager_OpenAndSubscribe(t *testing.T) {
@@ -74,11 +75,11 @@ func TestInMemoryStreamManager_OpenDuplicateFails(t *testing.T) {
 		t.Fatal("Expected error when opening duplicate stream")
 	}
 
-	var ufErr *core.UserFacingError
+	var ufErr *status.Error
 	if !errors.As(err, &ufErr) {
-		t.Fatalf("Expected UserFacingError, got %T", err)
+		t.Fatalf("Expected *status.Error, got %T", err)
 	}
-	if ufErr.Status != core.ALREADY_EXISTS {
+	if ufErr.Status != status.AlreadyExists {
 		t.Errorf("Expected ALREADY_EXISTS status, got %v", ufErr.Status)
 	}
 }
@@ -94,11 +95,11 @@ func TestInMemoryStreamManager_SubscribeNonExistent(t *testing.T) {
 		t.Fatal("Expected error when subscribing to non-existent stream")
 	}
 
-	var ufErr *core.UserFacingError
+	var ufErr *status.Error
 	if !errors.As(err, &ufErr) {
-		t.Fatalf("Expected UserFacingError, got %T", err)
+		t.Fatalf("Expected *status.Error, got %T", err)
 	}
-	if ufErr.Status != core.NOT_FOUND {
+	if ufErr.Status != status.NotFound {
 		t.Errorf("Expected NOT_FOUND status, got %v", ufErr.Status)
 	}
 }
@@ -220,7 +221,7 @@ func TestInMemoryStreamManager_Error(t *testing.T) {
 	defer unsubscribe()
 
 	// Mark as error
-	streamErr := core.NewPublicError(core.INTERNAL, "test error", nil)
+	streamErr := status.PublicErrorf(status.ErrInternal, "test error")
 	if err := writer.Error(ctx, streamErr); err != nil {
 		t.Fatalf("Error failed: %v", err)
 	}
@@ -260,11 +261,11 @@ func TestInMemoryStreamManager_WriteAfterDone(t *testing.T) {
 		t.Fatal("Expected error when writing after done")
 	}
 
-	var ufErr *core.UserFacingError
+	var ufErr *status.Error
 	if !errors.As(err, &ufErr) {
-		t.Fatalf("Expected UserFacingError, got %T", err)
+		t.Fatalf("Expected *status.Error, got %T", err)
 	}
-	if ufErr.Status != core.FAILED_PRECONDITION {
+	if ufErr.Status != status.FailedPrecondition {
 		t.Errorf("Expected FAILED_PRECONDITION status, got %v", ufErr.Status)
 	}
 }
@@ -291,11 +292,11 @@ func TestInMemoryStreamManager_WriteAfterClose(t *testing.T) {
 		t.Fatal("Expected error when writing after close")
 	}
 
-	var ufErr *core.UserFacingError
+	var ufErr *status.Error
 	if !errors.As(err, &ufErr) {
-		t.Fatalf("Expected UserFacingError, got %T", err)
+		t.Fatalf("Expected *status.Error, got %T", err)
 	}
-	if ufErr.Status != core.FAILED_PRECONDITION {
+	if ufErr.Status != status.FailedPrecondition {
 		t.Errorf("Expected FAILED_PRECONDITION status, got %v", ufErr.Status)
 	}
 }
@@ -312,7 +313,7 @@ func TestInMemoryStreamManager_DoneAfterError(t *testing.T) {
 		t.Fatalf("Open failed: %v", err)
 	}
 
-	if err := writer.Error(ctx, core.NewPublicError(core.INTERNAL, "test", nil)); err != nil {
+	if err := writer.Error(ctx, status.PublicErrorf(status.ErrInternal, "test")); err != nil {
 		t.Fatalf("Error failed: %v", err)
 	}
 
@@ -500,7 +501,7 @@ func TestInMemoryStreamManager_SubscribeToErroredStream(t *testing.T) {
 	if err := writer.Write(ctx, json.RawMessage(`"chunk1"`)); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
-	streamErr := core.NewPublicError(core.INTERNAL, "test error", nil)
+	streamErr := status.PublicErrorf(status.ErrInternal, "test error")
 	if err := writer.Error(ctx, streamErr); err != nil {
 		t.Fatalf("Error failed: %v", err)
 	}
@@ -619,7 +620,7 @@ func TestInMemoryStreamManager_ConcurrentOperations(t *testing.T) {
 			}
 
 			if received != numChunks {
-				errors <- core.NewPublicError(core.INTERNAL, "subscriber %d received %d chunks, expected %d", nil)
+				errors <- fmt.Errorf("subscriber %d received %d chunks, expected %d", i, received, numChunks)
 			}
 		}(i)
 	}
@@ -692,11 +693,11 @@ func TestInMemoryStreamManager_CleanupExpiredStreams(t *testing.T) {
 		t.Fatal("Expected error subscribing to expired stream")
 	}
 
-	var ufErr *core.UserFacingError
+	var ufErr *status.Error
 	if !errors.As(err, &ufErr) {
-		t.Fatalf("Expected UserFacingError, got %T", err)
+		t.Fatalf("Expected *status.Error, got %T", err)
 	}
-	if ufErr.Status != core.NOT_FOUND {
+	if ufErr.Status != status.NotFound {
 		t.Errorf("Expected NOT_FOUND status, got %v", ufErr.Status)
 	}
 }
@@ -743,16 +744,16 @@ func TestInMemoryStreamManager_ErrorAfterClose(t *testing.T) {
 	}
 
 	// Try to error after close
-	err = writer.Error(ctx, core.NewPublicError(core.INTERNAL, "test", nil))
+	err = writer.Error(ctx, status.PublicErrorf(status.ErrInternal, "test"))
 	if err == nil {
 		t.Fatal("Expected error when calling Error after Close")
 	}
 
-	var ufErr *core.UserFacingError
+	var ufErr *status.Error
 	if !errors.As(err, &ufErr) {
-		t.Fatalf("Expected UserFacingError, got %T", err)
+		t.Fatalf("Expected *status.Error, got %T", err)
 	}
-	if ufErr.Status != core.FAILED_PRECONDITION {
+	if ufErr.Status != status.FailedPrecondition {
 		t.Errorf("Expected FAILED_PRECONDITION status, got %v", ufErr.Status)
 	}
 }
@@ -779,11 +780,11 @@ func TestInMemoryStreamManager_DoneAfterClose(t *testing.T) {
 		t.Fatal("Expected error when calling Done after Close")
 	}
 
-	var ufErr *core.UserFacingError
+	var ufErr *status.Error
 	if !errors.As(err, &ufErr) {
-		t.Fatalf("Expected UserFacingError, got %T", err)
+		t.Fatalf("Expected *status.Error, got %T", err)
 	}
-	if ufErr.Status != core.FAILED_PRECONDITION {
+	if ufErr.Status != status.FailedPrecondition {
 		t.Errorf("Expected FAILED_PRECONDITION status, got %v", ufErr.Status)
 	}
 }

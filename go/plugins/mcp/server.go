@@ -20,9 +20,9 @@ import (
 	"log/slog"
 	"strings"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -42,7 +42,7 @@ type GenkitMCPServer struct {
 	mcpServer *server.MCPServer
 
 	// Discovered actions from Genkit registry
-	toolActions     []ai.Tool
+	toolActions     []ai.AnyTool
 	resourceActions []api.Action
 	actionsResolved bool
 }
@@ -108,26 +108,22 @@ func (s *GenkitMCPServer) setup() error {
 }
 
 // discoverAndCategorizeActions discovers all actions from Genkit registry and categorizes them
-func (s *GenkitMCPServer) discoverAndCategorizeActions() ([]ai.Tool, []api.Action, error) {
+func (s *GenkitMCPServer) discoverAndCategorizeActions() ([]ai.AnyTool, []api.Action, error) {
 	// Use the existing List functions which properly handle the registry access
-	toolActions := genkit.ListTools(s.genkit)
-	resources := genkit.ListResources(s.genkit)
+	toolActions := s.genkit.ListTools()
+	resources := s.genkit.ListResources()
 
-	// Convert ai.Resource to api.Action
+	// Convert *ai.Resource to api.Action
 	resourceActions := make([]api.Action, len(resources))
 	for i, resource := range resources {
-		if resourceAction, ok := resource.(api.Action); ok {
-			resourceActions[i] = resourceAction
-		} else {
-			return nil, nil, fmt.Errorf("resource %s does not implement api.Action", resource.Name())
-		}
+		resourceActions[i] = resource
 	}
 
 	return toolActions, resourceActions, nil
 }
 
 // convertGenkitToolToMCP converts a Genkit tool to MCP format
-func (s *GenkitMCPServer) convertGenkitToolToMCP(tool ai.Tool) mcp.Tool {
+func (s *GenkitMCPServer) convertGenkitToolToMCP(tool ai.AnyTool) mcp.Tool {
 	def := tool.Definition()
 
 	// Start with basic options
@@ -159,16 +155,16 @@ func (s *GenkitMCPServer) convertGenkitToolToMCP(tool ai.Tool) mcp.Tool {
 }
 
 // createToolHandler creates an MCP tool handler for a Genkit tool
-func (s *GenkitMCPServer) createToolHandler(tool ai.Tool) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *GenkitMCPServer) createToolHandler(tool ai.AnyTool) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Execute the Genkit tool
-		result, err := tool.RunRaw(ctx, request.Params.Arguments)
+		resp, err := tool.RunRaw(ctx, request.Params.Arguments)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		// Convert result to MCP format
-		switch v := result.(type) {
+		switch v := resp.Output.(type) {
 		case string:
 			return mcp.NewToolResultText(v), nil
 		case nil:
@@ -209,7 +205,7 @@ func (s *GenkitMCPServer) registerResourceWithMCP(resourceAction api.Action) err
 	handler := func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
 
 		// Find matching resource for the URI and execute it
-		resourceAction, input, err := genkit.FindMatchingResource(s.genkit, request.Params.URI)
+		resourceAction, input, err := s.genkit.FindMatchingResource(request.Params.URI)
 		if err != nil {
 			return nil, fmt.Errorf("no resource found for URI %s: %w", request.Params.URI, err)
 		}

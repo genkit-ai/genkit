@@ -22,6 +22,7 @@ import (
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // Hooks is the per-call bundle of hook functions produced by a [Middleware]'s
@@ -30,7 +31,7 @@ type Hooks struct {
 	// Tools are additional tools to register during the generation this
 	// middleware is attached to. They are available to the model alongside
 	// any user-supplied tools.
-	Tools []Tool
+	Tools []AnyTool
 	// WrapGenerate wraps each iteration of the tool loop. It sees the
 	// accumulated request, the iteration index, and the streaming callback.
 	// A single Generate() with N tool-call turns invokes this hook N+1 times.
@@ -41,7 +42,10 @@ type Hooks struct {
 	// WrapTool wraps each tool execution. It may be called concurrently when
 	// multiple tools execute in parallel for the same Generate() call; any
 	// state closed over from the enclosing scope that this hook mutates must
-	// be guarded with sync primitives.
+	// be guarded with sync primitives. Pass the received params through to
+	// next (mutate its fields rather than replacing the struct): the engine
+	// carries per-call state on it, e.g. to attribute short-circuits in
+	// traces.
 	WrapTool func(ctx context.Context, params *ToolParams, next ToolNext) (*MultipartToolResponse, error)
 }
 
@@ -77,7 +81,12 @@ type ToolParams struct {
 	// Request is the tool request about to be executed.
 	Request *ToolRequest
 	// Tool is the resolved tool being called.
-	Tool Tool
+	Tool AnyTool
+
+	// ran records whether the innermost runner actually executed the tool,
+	// letting the engine attribute hook short-circuits (interrupts, cached
+	// responses) to the tool in traces.
+	ran bool
 }
 
 // GenerateNext is the next function in the WrapGenerate hook chain.
@@ -144,7 +153,7 @@ func NewMiddleware[M Middleware](description string, prototype M) *MiddlewareDes
 			cfg := prototype // value copy preserves unexported fields, shares pointers
 			if len(configJSON) > 0 {
 				if err := json.Unmarshal(configJSON, &cfg); err != nil {
-					return nil, core.NewError(core.INVALID_ARGUMENT, "middleware %q: %w", name, err)
+					return nil, status.Errorf(status.ErrInvalidArgument, "middleware %q: %w", name, err)
 				}
 			}
 			return cfg.New(ctx)
@@ -195,7 +204,7 @@ func (r middlewareRefArg) Name() string { return r.name }
 // for a name-only [MiddlewareRef] before [resolveRefs] sees it; the error
 // here surfaces a routing bug instead of returning nil hooks.
 func (middlewareRefArg) New(context.Context) (*Hooks, error) {
-	return nil, core.NewError(core.INTERNAL, "ai: middlewareRefArg must be resolved via the registry")
+	return nil, status.Errorf(status.ErrInternal, "middlewareRefArg must be resolved via the registry")
 }
 
 // LookupMiddleware returns the registered middleware descriptor with the
@@ -233,7 +242,7 @@ func configsToRefs(configs []Middleware) ([]*MiddlewareRef, error) {
 	refs := make([]*MiddlewareRef, 0, len(configs))
 	for _, c := range configs {
 		if c == nil {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "ai: nil middleware")
+			return nil, status.Errorf(status.ErrInvalidArgument, "nil middleware")
 		}
 		if lazy, ok := c.(middlewareRefArg); ok {
 			refs = append(refs, &MiddlewareRef{Name: lazy.name, Config: lazy.config})
@@ -258,32 +267,32 @@ func resolveRefs(ctx context.Context, r api.Registry, refs []*MiddlewareRef) ([]
 		if mw, ok := ref.Config.(Middleware); ok {
 			h, err := mw.New(ctx)
 			if err != nil {
-				return nil, core.NewError(core.INVALID_ARGUMENT, "ai: failed to build middleware %q: %v", ref.Name, err)
+				return nil, status.Errorf(status.ErrInvalidArgument, "middleware %q: %w", ref.Name, err)
 			}
 			if h == nil {
-				return nil, core.NewError(core.INTERNAL, "ai: middleware %q returned nil hooks", ref.Name)
+				return nil, status.Errorf(status.ErrInternal, "middleware %q returned nil hooks", ref.Name)
 			}
 			bundles = append(bundles, h)
 			continue
 		}
 		d := LookupMiddleware(r, ref.Name)
 		if d == nil {
-			return nil, core.NewError(core.NOT_FOUND, "ai: middleware %q not registered (is the providing plugin installed?)", ref.Name)
+			return nil, status.Errorf(status.ErrNotFound, "middleware %q not registered; is its plugin registered with genkit.Init?", ref.Name)
 		}
 		var configJSON []byte
 		if ref.Config != nil {
 			b, err := json.Marshal(ref.Config)
 			if err != nil {
-				return nil, core.NewError(core.INTERNAL, "ai: failed to marshal config for middleware %q: %v", ref.Name, err)
+				return nil, status.Errorf(status.ErrInternal, "middleware %q: marshaling config: %w", ref.Name, err)
 			}
 			configJSON = b
 		}
 		h, err := d.buildFromJSON(ctx, configJSON)
 		if err != nil {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "ai: failed to build middleware %q: %v", ref.Name, err)
+			return nil, status.Errorf(status.ErrInvalidArgument, "middleware %q: %w", ref.Name, err)
 		}
 		if h == nil {
-			return nil, core.NewError(core.INTERNAL, "ai: middleware %q factory returned nil", ref.Name)
+			return nil, status.Errorf(status.ErrInternal, "middleware %q factory returned nil", ref.Name)
 		}
 		bundles = append(bundles, h)
 	}

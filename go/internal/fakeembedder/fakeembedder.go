@@ -45,7 +45,7 @@ func (e *Embedder) Register(d *ai.Document, vals []float32) {
 	e.registry[d] = vals
 }
 
-func (e *Embedder) Embed(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
+func (e *Embedder) Embed(ctx context.Context, req *ai.EmbedRequest, _ any) (*ai.EmbedResponse, error) {
 	res := &ai.EmbedResponse{}
 	for _, doc := range req.Input {
 		vals, ok := e.registry[doc]

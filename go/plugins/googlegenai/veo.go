@@ -26,7 +26,6 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
 	"google.golang.org/genai"
 )
@@ -37,13 +36,13 @@ func newVeoModel(
 	client *genai.Client,
 	name string,
 	info ai.ModelOptions,
-) ai.BackgroundModel {
+) *ai.BackgroundModel {
 	provider := googleAIProvider
 	if client.ClientConfig().Backend == genai.BackendVertexAI {
 		provider = vertexAIProvider
 	}
 
-	startFunc := func(ctx context.Context, req *ai.ModelRequest) (*ai.ModelOperation, error) {
+	startFunc := func(ctx context.Context, req *ai.ModelRequest, config genai.GenerateVideosConfig) (*ai.ModelOperation, error) {
 		// Extract text prompt from the request
 		prompt := extractTextFromRequest(req)
 		if prompt == "" {
@@ -52,10 +51,7 @@ func newVeoModel(
 
 		video := extractVeoVideoFromRequest(req)
 		image := extractVeoImageFromRequest(req)
-		videoConfig, err := toVeoParameters(req)
-		if err != nil {
-			return nil, err
-		}
+		videoConfig := &config
 
 		// prevent SDK to pick a default number of video generation (usually 2)
 		// if users do not provide this setting
@@ -198,30 +194,6 @@ func extractVeoVideoFromRequest(request *ai.ModelRequest) *genai.Video {
 	}
 
 	return nil
-}
-
-// toVeoParameters converts model request configuration to Veo video generation parameters.
-func toVeoParameters(request *ai.ModelRequest) (*genai.GenerateVideosConfig, error) {
-	if request.Config == nil {
-		return &genai.GenerateVideosConfig{}, nil
-	}
-
-	switch config := request.Config.(type) {
-	case *genai.GenerateVideosConfig:
-		return config, nil
-	case genai.GenerateVideosConfig:
-		return &config, nil
-	case map[string]any:
-		var result genai.GenerateVideosConfig
-		var err error
-		result, err = base.MapToStruct[genai.GenerateVideosConfig](config)
-		if err != nil {
-			return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("The video configuration settings are not in the correct format. Check that the names and values match what the model expects: %v", err), nil)
-		}
-		return &result, nil
-	default:
-		return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("The configuration type %T is not supported. Use the correct configuration for this model (like VideoModelRef) or a configuration struct.", request.Config), nil)
-	}
 }
 
 // fromVeoOperation converts a Veo API operation to a Genkit core operation.

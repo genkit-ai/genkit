@@ -41,8 +41,8 @@ import (
 	"log"
 	"net/http"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/server"
 )
@@ -98,78 +98,74 @@ type testAllCoffeeFlowsOutput struct {
 
 func main() {
 	ctx := context.Background()
-	g := genkit.Init(ctx,
+	g, err := genkit.Init(ctx,
 		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 	)
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
-	simpleGreetingPrompt := genkit.DefinePrompt(g, "simpleGreeting2",
+	simpleGreetingPrompt := g.DefinePrompt[*simpleGreetingInput]("simpleGreeting2",
 		ai.WithPrompt(simpleGreetingPromptTemplate),
 		ai.WithModel(m),
-		ai.WithInputType(simpleGreetingInput{}),
 		ai.WithOutputFormat(ai.OutputFormatText),
 	)
 
-	simpleGreetingFlow := genkit.DefineStreamingFlow(g, "simpleGreeting", func(ctx context.Context, input *simpleGreetingInput, cb func(context.Context, string) error) (string, error) {
+	simpleGreetingFlow := g.DefineStreamingFlow("simpleGreeting", func(ctx context.Context, input *simpleGreetingInput, cb func(context.Context, string) error) (string, error) {
 		var callback func(context.Context, *ai.ModelResponseChunk) error
 		if cb != nil {
 			callback = func(ctx context.Context, c *ai.ModelResponseChunk) error {
 				return cb(ctx, c.Text())
 			}
 		}
-		resp, err := simpleGreetingPrompt.Execute(ctx,
-			ai.WithInput(input),
+		text, _, err := simpleGreetingPrompt.Execute(ctx, input,
 			ai.WithStreaming(callback),
 		)
 		if err != nil {
 			return "", err
 		}
-		return resp.Text(), nil
+		return text, nil
 	})
 
-	greetingWithHistoryPrompt := genkit.DefinePrompt(g, "greetingWithHistory",
+	greetingWithHistoryPrompt := g.DefinePrompt[*customerTimeAndHistoryInput]("greetingWithHistory",
 		ai.WithPrompt(greetingWithHistoryPromptTemplate),
 		ai.WithModel(m),
-		ai.WithInputType(customerTimeAndHistoryInput{}),
 		ai.WithOutputFormat(ai.OutputFormatText),
 	)
 
-	greetingWithHistoryFlow := genkit.DefineFlow(g, "greetingWithHistory", func(ctx context.Context, input *customerTimeAndHistoryInput) (string, error) {
-		resp, err := greetingWithHistoryPrompt.Execute(ctx,
-			ai.WithInput(input),
-		)
+	greetingWithHistoryFlow := g.DefineFlow("greetingWithHistory", func(ctx context.Context, input *customerTimeAndHistoryInput) (string, error) {
+		text, _, err := greetingWithHistoryPrompt.Execute(ctx, input)
 		if err != nil {
 			return "", err
 		}
-		return resp.Text(), nil
+		return text, nil
 	})
 
-	simpleStructuredGreetingPrompt := genkit.DefinePrompt(g, "simpleStructuredGreeting",
+	simpleStructuredGreetingPrompt := g.DefinePrompt[*simpleGreetingInput]("simpleStructuredGreeting",
 		ai.WithPrompt(simpleStructuredGreetingPromptTemplate),
 		ai.WithModel(m),
-		ai.WithInputType(simpleGreetingInput{}),
 		ai.WithOutputType(simpleGreetingOutput{}),
 	)
 
-	genkit.DefineStreamingFlow(g, "simpleStructuredGreeting", func(ctx context.Context, input *simpleGreetingInput, cb func(context.Context, string) error) (string, error) {
+	g.DefineStreamingFlow("simpleStructuredGreeting", func(ctx context.Context, input *simpleGreetingInput, cb func(context.Context, string) error) (string, error) {
 		var callback func(context.Context, *ai.ModelResponseChunk) error
 		if cb != nil {
 			callback = func(ctx context.Context, c *ai.ModelResponseChunk) error {
 				return cb(ctx, c.Text())
 			}
 		}
-		resp, err := simpleStructuredGreetingPrompt.Execute(ctx,
-			ai.WithInput(input),
+		text, _, err := simpleStructuredGreetingPrompt.Execute(ctx, input,
 			ai.WithStreaming(callback),
 		)
 		if err != nil {
 			return "", err
 		}
-		return resp.Text(), nil
+		return text, nil
 	})
 
-	genkit.DefineFlow(g, "testAllCoffeeFlows", func(ctx context.Context, _ struct{}) (*testAllCoffeeFlowsOutput, error) {
+	g.DefineFlow("testAllCoffeeFlows", func(ctx context.Context, _ struct{}) (*testAllCoffeeFlowsOutput, error) {
 		test1, err := simpleGreetingFlow.Run(ctx, &simpleGreetingInput{
 			CustomerName: "Sam",
 		})
@@ -203,7 +199,7 @@ func main() {
 	})
 
 	mux := http.NewServeMux()
-	for _, a := range genkit.ListFlows(g) {
+	for _, a := range g.ListFlows() {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
 	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))

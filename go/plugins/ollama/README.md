@@ -23,7 +23,7 @@ You can configure the Ollama plugin with your server address. By default, Ollama
 import (
  "context"
 
- "github.com/firebase/genkit/go/genkit"
+ genkit "github.com/firebase/genkit/go"
  "github.com/firebase/genkit/go/plugins/ollama"
 )
 
@@ -36,7 +36,10 @@ func main() {
   Timeout:       60,                       // Optional: Response timeout in seconds (default: 30)
  }
 
- g := genkit.Init(ctx, genkit.WithPlugins(o))
+ g, err := genkit.Init(ctx, genkit.WithPlugins(o))
+ if err != nil {
+  log.Fatal(err)
+ }
 }
 ```
 
@@ -68,7 +71,7 @@ import (
  "log"
 
  "github.com/firebase/genkit/go/ai"
- "github.com/firebase/genkit/go/genkit"
+ genkit "github.com/firebase/genkit/go"
  "github.com/firebase/genkit/go/plugins/ollama"
 )
 

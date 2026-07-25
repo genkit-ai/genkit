@@ -42,22 +42,26 @@ package main
 import (
     "context"
     "fmt"
+    "log"
 
+    genkit "github.com/firebase/genkit/go"
     "github.com/firebase/genkit/go/ai"
-    "github.com/firebase/genkit/go/genkit"
     "github.com/firebase/genkit/go/plugins/googlegenai"
 )
 
 func main() {
     ctx := context.Background()
-    g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+    g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+    if err != nil {
+        log.Fatal(err)
+    }
 
-    answer, err := genkit.GenerateText(ctx, g,
+    answer, err := g.GenerateText(ctx,
         ai.WithModelName("googleai/gemini-flash-latest"),
         ai.WithPrompt("Why is Go a great language for AI applications?"),
     )
     if err != nil {
-        fmt.Println("could not generate: %s", err)
+        log.Fatalf("could not generate: %v", err)
     }
     fmt.Println(answer)
 }
@@ -84,7 +88,7 @@ Beyond a plain chat loop, agents give you:
 > [!WARNING]
 > This API is in preview and may experience breaking changes in minor releases.
 
-The constructors (`DefineAgent`, `DefinePromptAgent`, `DefineCustomAgent`) live in `github.com/firebase/genkit/go/genkit/exp` (aliased `genkitx` below); the agent types and options live in `github.com/firebase/genkit/go/ai/exp` (aliased `aix`). Initialize Genkit with `genkit.WithExperimental()` to enable the `genkit/exp` surface.
+The constructors (`DefineAgent`, `DefinePromptAgent`, `DefineCustomAgent`) live in `github.com/firebase/genkit/go/exp` (aliased `genkitx` below); the agent types and options live in `github.com/firebase/genkit/go/ai/exp` (aliased `aix`). Initialize Genkit with `genkit.WithExperimental()` to enable the `exp` surface.
 
 ### Define an Agent
 
@@ -95,8 +99,8 @@ import (
     "github.com/firebase/genkit/go/ai"
     aix "github.com/firebase/genkit/go/ai/exp"
     "github.com/firebase/genkit/go/ai/exp/localstore"
-    "github.com/firebase/genkit/go/genkit"
-    genkitx "github.com/firebase/genkit/go/genkit/exp"
+    genkit "github.com/firebase/genkit/go"
+    genkitx "github.com/firebase/genkit/go/exp"
 )
 
 chatAgent := genkitx.DefineAgent(g, "chat",
@@ -168,7 +172,7 @@ type ChatInput struct {
 }
 
 // Register the schema so the .prompt file can reference it by name.
-genkit.DefineSchemaFor[ChatInput](g)
+g.DefineSchemasFor(ChatInput{})
 
 // Agent "chat" renders ./prompts/chat.prompt every turn (no source option needed).
 chatAgent := genkitx.DefinePromptAgent(g, "chat",
@@ -204,7 +208,7 @@ type ChatState struct {
 chatAgent := genkitx.DefineCustomAgent(g, "chat",
     func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[ChatState]) (*aix.AgentResult, error) {
         err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
-            for chunk, err := range genkit.GenerateStream(ctx, g,
+            for chunk, err := range g.GenerateStream(ctx,
                 ai.WithModelName("googleai/gemini-flash-latest"),
                 ai.WithMessages(sess.Messages()...), // the history is yours to manage
             ) {
@@ -313,7 +317,7 @@ import (
     "github.com/firebase/genkit/go/ai"
     aix "github.com/firebase/genkit/go/ai/exp"
     "github.com/firebase/genkit/go/ai/exp/localstore"
-    genkitx "github.com/firebase/genkit/go/genkit/exp"
+    genkitx "github.com/firebase/genkit/go/exp"
     middlewarex "github.com/firebase/genkit/go/plugins/middleware/exp"
 )
 
@@ -355,7 +359,7 @@ An `Agent` is an `api.BidiAction`, so it serves over HTTP one turn per request. 
 
 ```go
 import (
-    genkitx "github.com/firebase/genkit/go/genkit/exp"
+    genkitx "github.com/firebase/genkit/go/exp"
     "github.com/firebase/genkit/go/plugins/server"
 )
 
@@ -384,12 +388,18 @@ Genkit Go gives you everything you need to build AI applications with confidence
 Call any model with a simple, unified API:
 
 ```go
-text, _ := genkit.GenerateText(ctx, g,
+text, _ := g.GenerateText(ctx,
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Explain quantum computing in simple terms."),
 )
 fmt.Println(text)
 ```
+
+Options compose, so you can build a request up from several helpers. Options
+carrying multiple items (`ai.WithMessages`, `ai.WithTools`, `ai.WithDocs`,
+`ai.WithUse`) accumulate across repeats, while single-value options
+(`ai.WithConfig`, `ai.WithModelName`, `ai.WithSystem`) take the last one set.
+Repeating an option is never an error.
 
 ### Generate Structured Data
 
@@ -402,7 +412,7 @@ type Recipe struct {
     Steps       []string `json:"steps"`
 }
 
-recipe, _ := genkit.GenerateData[Recipe](ctx, g,
+recipe, _, _ := g.GenerateData[Recipe](ctx,
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Create a recipe for chocolate chip cookies."),
 )
@@ -416,7 +426,7 @@ fmt.Printf("Recipe: %s\n", recipe.Title)
 Stream text as it's generated for responsive user experiences:
 
 ```go
-stream := genkit.GenerateStream(ctx, g,
+stream := g.GenerateStream(ctx,
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Write a short story about a robot learning to paint."),
 )
@@ -449,7 +459,7 @@ type Recipe struct {
     Ingredients []*Ingredient `json:"ingredients"`
 }
 
-stream := genkit.GenerateDataStream[*Recipe](ctx, g,
+stream := g.GenerateDataStream[*Recipe](ctx,
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Create a recipe for spaghetti carbonara."),
 )
@@ -480,20 +490,40 @@ type WeatherInput struct {
     Location string `json:"location"`
 }
 
-weatherTool := genkit.DefineTool(g, "getWeather",
+weatherTool := g.DefineTool("getWeather",
     "Gets the current weather for a location",
-    func(ctx *ai.ToolContext, input WeatherInput) (string, error) {
+    func(ctx context.Context, input WeatherInput) (string, error) {
         // Call your weather API here
         return fmt.Sprintf("Weather in %s: 72°F and sunny", input.Location), nil
     },
 )
 
-response, _ := genkit.Generate(ctx, g,
+response, _ := g.Generate(ctx,
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("What's the weather like in San Francisco?"),
     ai.WithTools(weatherTool),
 )
 fmt.Println(response.Text())
+```
+
+Inside the tool, helpers from the `ai/tool` package add capabilities without changing the function signature: `tool.SendPartial` streams partial results to the client mid-execution and `tool.AttachParts` adds extra content parts (like media) to the response:
+
+```go
+import "github.com/firebase/genkit/go/ai/tool"
+
+analyzeTool := g.DefineTool("analyzeStock",
+    "Analyzes a stock and returns a summary with a chart.",
+    func(ctx context.Context, input AnalyzeInput) (string, error) {
+        // Stream progress to the client while the tool runs. It is a no-op when
+        // the caller isn't streaming; the return value is always authoritative.
+        tool.SendPartial(ctx, map[string]any{"status": "fetching prices", "progress": 50})
+
+        // Attach media to the tool's response.
+        tool.AttachParts(ctx, ai.NewMediaPart("image/png", chartDataURI))
+
+        return fmt.Sprintf("%s closed up 4%% this week.", input.Symbol), nil
+    },
+)
 ```
 
 [See full example](samples/basic)
@@ -503,101 +533,25 @@ fmt.Println(response.Text())
 Pause execution for human approval, then resume with modified inputs or direct responses:
 
 ```go
+import "github.com/firebase/genkit/go/ai/tool"
+
 type TransferInput struct {
     ToAccount string  `json:"toAccount"`
     Amount    float64 `json:"amount"`
 }
 
 type TransferInterrupt struct {
-    Reason  string  `json:"reason"`
-    Amount  float64 `json:"amount"`
-    Balance float64 `json:"balance"`
+    Reason string  `json:"reason"`
+    Amount float64 `json:"amount"`
 }
 
-transferTool := genkit.DefineTool(g, "transfer",
-    "Transfer money to an account",
-    func(ctx *ai.ToolContext, input TransferInput) (string, error) {
-        // Confirm large transfers
-        if !ctx.IsResumed() && input.Amount > 1000 {
-            return "", ai.InterruptWith(ctx, TransferInterrupt{
-                Reason:  "confirm_large",
-                Amount:  input.Amount,
-                Balance: currentBalance,
-            })
-        }
-        return "Transfer completed", nil
-    },
-)
-
-// Handle interrupts in your flow
-resp, _ := genkit.Generate(ctx, g,
-    ai.WithModelName("googleai/gemini-flash-latest"),
-    ai.WithPrompt("Transfer $5000 to account ABC123"),
-    ai.WithTools(transferTool),
-)
-
-if resp.FinishReason == ai.FinishReasonInterrupted {
-    for _, interrupt := range resp.Interrupts() {
-        meta, _ := ai.InterruptAs[TransferInterrupt](interrupt)
-
-        // Get user confirmation, then resume
-        part, _ := transferTool.RestartWith(interrupt)
-        resp, _ = genkit.Generate(ctx, g,
-            ai.WithMessages(resp.History()...),
-            ai.WithTools(transferTool),
-            ai.WithToolRestarts(part),
-        )
-    }
-}
-```
-
-[See full example](samples/intermediate-interrupts)
-
-### Streaming, Multipart, and Interruptible Tools
-
-> [!WARNING]
-> This API is in preview and may experience breaking changes in minor releases.
-
-The experimental tool constructors in `genkit/exp` (aliased `genkitx`) hand your function a plain `context.Context` instead of `ai.ToolContext`, with helpers in `ai/exp/tool` for streaming progress, attaching media, and typed interrupts. This is a preview of Genkit Go's next-generation tools API: it is slated to replace the current `genkit.DefineTool` (shown above) as the default in the next major version. Initialize Genkit with `genkit.WithExperimental()` to enable them.
-
-`genkitx.DefineTool` infers its input and output types from the function. Inside the tool, `tool.SendPartial` streams partial results mid-execution and `tool.AttachParts` adds extra content parts to the response, neither of which changes the function signature:
-
-```go
-import (
-    "github.com/firebase/genkit/go/ai"
-    "github.com/firebase/genkit/go/ai/exp/tool"
-    genkitx "github.com/firebase/genkit/go/genkit/exp"
-)
-
-type AnalyzeInput struct {
-    Symbol string `json:"symbol"`
-}
-
-analyzeTool := genkitx.DefineTool(g, "analyzeStock",
-    "Analyzes a stock and returns a summary with a chart.",
-    func(ctx context.Context, input AnalyzeInput) (string, error) {
-        // Stream progress to the client while the tool runs. It is a no-op when
-        // the caller isn't streaming; the return value is always authoritative.
-        tool.SendPartial(ctx, map[string]any{"status": "fetching prices", "progress": 50})
-
-        // Attach media to the tool's response without a multipart signature.
-        tool.AttachParts(ctx, ai.NewMediaPart("image/png", chartDataURI))
-
-        return fmt.Sprintf("%s closed up 4%% this week.", input.Symbol), nil
-    },
-)
-```
-
-`genkitx.DefineInterruptibleTool` adds a typed resume parameter: it is `nil` on the first call and carries the caller's decision when the tool resumes. Reusing the `TransferInput`/`TransferInterrupt` types from above, the tool pauses with `tool.Interrupt` and the caller resumes it with typed data via the tool's `Resume`:
-
-```go
 type Confirmation struct {
     Approved bool `json:"approved"`
 }
 
 // The third parameter (*Confirmation) is the resume payload: nil on the first
 // call, populated when the caller resumes after an interrupt.
-transferTool := genkitx.DefineInterruptibleTool(g, "transfer",
+transferTool := g.DefineInterruptibleTool("transfer",
     "Transfers money to another account.",
     func(ctx context.Context, input TransferInput, confirm *Confirmation) (string, error) {
         if confirm == nil && input.Amount > 1000 {
@@ -611,7 +565,7 @@ transferTool := genkitx.DefineInterruptibleTool(g, "transfer",
     },
 )
 
-resp, _ := genkit.Generate(ctx, g,
+resp, _ := g.Generate(ctx,
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Transfer $5000 to account ABC123"),
     ai.WithTools(transferTool),
@@ -620,15 +574,16 @@ resp, _ := genkit.Generate(ctx, g,
 // Interrupts() yields nothing unless the tool paused for input.
 var restarts []*ai.Part
 for _, interrupt := range resp.Interrupts() {
-    meta, _ := tool.InterruptAs[TransferInterrupt](interrupt)
+    meta, _ := interrupt.InterruptAs[TransferInterrupt]()
 
     // Use meta to ask the user for a decision, then resume with their answer.
     // The typed data arrives as the tool's *Confirmation parameter.
-    restart, _ := transferTool.Resume(interrupt, Confirmation{Approved: true})
+    restart, _ := transferTool.Restart(interrupt,
+        transferTool.WithResume(Confirmation{Approved: true}))
     restarts = append(restarts, restart)
 }
 if len(restarts) > 0 {
-    resp, _ = genkit.Generate(ctx, g,
+    resp, _ = g.Generate(ctx,
         ai.WithMessages(resp.History()...),
         ai.WithTools(transferTool),
         ai.WithToolRestarts(restarts...),
@@ -636,7 +591,9 @@ if len(restarts) > 0 {
 }
 ```
 
-[See the banker example](samples/basic-agents) for an interruptible tool wired into an agent.
+To approve everything without inspecting each interrupt, `resp.InterruptRestarts()` returns a restart part for every pending interrupt in one call. To skip the tool entirely and supply its output yourself, use `transferTool.Respond(interrupt, "Transfer cancelled.")` and pass the parts to `ai.WithToolResponses`.
+
+[See full example](samples/intermediate-interrupts)
 
 ### Middleware
 
@@ -645,14 +602,17 @@ Middleware wraps generation, model calls, and tool execution to add cross-cuttin
 ```go
 import "github.com/firebase/genkit/go/plugins/middleware"
 
-g := genkit.Init(ctx, genkit.WithPlugins(
+g, err := genkit.Init(ctx, genkit.WithPlugins(
     &googlegenai.GoogleAI{},
     &middleware.Middleware{},
 ))
+if err != nil {
+    log.Fatal(err)
+}
 
 // Retry transient failures, then fall back to a secondary model if the primary
 // stays down. Middleware composes outer-to-inner: Retry { Fallback { model } }.
-response, _ := genkit.Generate(ctx, g,
+response, _ := g.Generate(ctx,
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Explain quantum computing."),
     ai.WithUse(
@@ -705,9 +665,9 @@ ai.WithUse(&Logger{Prefix: "[trace]"})
 Wrap your AI logic in flows for better observability, testing, and deployment:
 
 ```go
-jokeFlow := genkit.DefineFlow(g, "tellJoke",
+jokeFlow := g.DefineFlow("tellJoke",
     func(ctx context.Context, topic string) (string, error) {
-        return genkit.GenerateText(ctx, g,
+        return g.GenerateText(ctx,
             ai.WithModelName("googleai/gemini-flash-latest"),
             ai.WithPrompt("Tell me a joke about %s", topic),
         )
@@ -725,9 +685,9 @@ fmt.Println(joke)
 Stream data from your flows using Server-Sent Events (SSE):
 
 ```go
-genkit.DefineStreamingFlow(g, "streamStory",
+g.DefineStreamingFlow("streamStory",
     func(ctx context.Context, topic string, send core.StreamCallback[string]) (string, error) {
-        stream := genkit.GenerateStream(ctx, g,
+        stream := g.GenerateStream(ctx,
             ai.WithModelName("googleai/gemini-flash-latest"),
             ai.WithPrompt("Write a story about %s", topic),
         )
@@ -753,21 +713,22 @@ genkit.DefineStreamingFlow(g, "streamStory",
 Add observability to complex flows by breaking them into traced operations:
 
 ```go
-genkit.DefineFlow(g, "processDocument",
+g.DefineFlow("processDocument",
     func(ctx context.Context, doc string) (string, error) {
         // Each Run call creates a traced step visible in the Dev UI
         summary, _ := genkit.Run(ctx, "summarize", func() (string, error) {
-            return genkit.GenerateText(ctx, g,
+            return g.GenerateText(ctx,
                 ai.WithModelName("googleai/gemini-flash-latest"),
                 ai.WithPrompt("Summarize: %s", doc),
             )
         })
 
         keywords, _ := genkit.Run(ctx, "extractKeywords", func() ([]string, error) {
-            return genkit.GenerateData[[]string](ctx, g,
+            keywords, _, err := g.GenerateData[[]string](ctx,
                 ai.WithModelName("googleai/gemini-flash-latest"),
                 ai.WithPrompt("Extract keywords from: %s", summary),
             )
+            return keywords, err
         })
 
         return fmt.Sprintf("Summary: %s\nKeywords: %v", summary, keywords), nil
@@ -782,16 +743,21 @@ genkit.DefineFlow(g, "processDocument",
 Create reusable prompts with Handlebars templating:
 
 ```go
-greetingPrompt := genkit.DefinePrompt(g, "greeting",
+type GreetingRequest struct {
+    Name  string `json:"name"`
+    Style string `json:"style"`
+}
+
+greetingPrompt := g.DefinePrompt[GreetingRequest]("greeting",
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Write a {{style}} greeting for {{name}}."),
 )
 
-response, _ := greetingPrompt.Execute(ctx, ai.WithInput(map[string]any{
-    "name":  "Alice",
-    "style": "formal",
-}))
-fmt.Println(response.Text())
+text, _, _ := greetingPrompt.Execute(ctx, GreetingRequest{
+    Name:  "Alice",
+    Style: "formal",
+})
+fmt.Println(text)
 ```
 
 [See full example](samples/basic-prompts)
@@ -810,7 +776,7 @@ type Joke struct {
     Punchline string `json:"punchline"`
 }
 
-jokePrompt := genkit.DefineDataPrompt[JokeRequest, *Joke](g, "joke",
+jokePrompt := g.DefineDataPrompt[JokeRequest, *Joke]("joke",
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Tell a joke about {{topic}}."),
 )
@@ -858,12 +824,11 @@ Dietary restrictions: {{#each dietaryRestrictions}}{{this}}{{#unless @last}}, {{
 
 ```go
 // Register schemas so .prompt files can reference them by name
-genkit.DefineSchemaFor[RecipeRequest](g)
-genkit.DefineSchemaFor[Recipe](g)
+g.DefineSchemasFor(RecipeRequest{}, Recipe{})
 
 // Look up and execute the prompt
-recipePrompt := genkit.LookupDataPrompt[RecipeRequest, *Recipe](g, "recipe")
-recipe, _ := recipePrompt.Execute(ctx, RecipeRequest{
+recipePrompt := g.LookupDataPrompt[RecipeRequest, *Recipe]("recipe")
+recipe, _, _ := recipePrompt.Execute(ctx, RecipeRequest{
     Dish:        "tacos",
     Cuisine:     "Mexican",
     ServingSize: 4,
@@ -883,14 +848,17 @@ var promptsFS embed.FS
 
 func main() {
     ctx := context.Background()
-    g := genkit.Init(ctx,
+    g, err := genkit.Init(ctx,
         genkit.WithPlugins(&googlegenai.GoogleAI{}),
         genkit.WithPromptFS(promptsFS),
     )
+    if err != nil {
+        log.Fatal(err)
+    }
 
-    prompt := genkit.LookupPrompt(g, "greeting")
-    response, _ := prompt.Execute(ctx)
-    fmt.Println(response.Text())
+    prompt := g.LookupPrompt("greeting")
+    text, _, _ := prompt.Execute(ctx, nil)
+    fmt.Println(text)
 }
 ```
 
@@ -902,7 +870,7 @@ Serve your flows over HTTP with automatic JSON serialization:
 
 ```go
 mux := http.NewServeMux()
-for _, flow := range genkit.ListFlows(g) {
+for _, flow := range g.ListFlows() {
     mux.HandleFunc("POST /"+flow.Name(), genkit.Handler(flow))
 }
 log.Fatal(http.ListenAndServe(":8080", mux))
@@ -965,6 +933,39 @@ e.Start(":8080")
 
 Any error returned by `genkit.HandlerFunc` will be handled by Echo's middleware stack.
 
+### Errors
+
+Every error Genkit returns carries a status, and failure modes are classified with sentinels you match using `errors.Is` instead of matching on message text. A base sentinel exists per status (`status.ErrNotFound`, `status.ErrAborted`, ...) and packages derive domain sentinels from them, so you can branch at either granularity:
+
+```go
+import (
+    "errors"
+
+    "github.com/firebase/genkit/go/core/status"
+)
+
+_, err := g.Generate(ctx, ai.WithModelName("googleai/gemini-flash-latest"), ai.WithPrompt("Hi!"))
+
+switch {
+case errors.Is(err, ai.ErrMaxTurnsExceeded): // specific failure mode
+    log.Print("the tool loop ran too long")
+case errors.Is(err, status.ErrAborted):      // the whole class it belongs to
+    log.Print("aborted for some other reason")
+}
+
+if status.Of(err) == status.ResourceExhausted {
+    log.Print("back off and retry")
+}
+```
+
+Add context as an error travels up with plain `fmt.Errorf("...: %w", err)`, which preserves the sentinel and the status. Declare your own failure modes with `Subtype`, and use `PublicErrorf` when the message is safe to return to clients (everything else surfaces only the status code over HTTP, so internal detail does not leak):
+
+```go
+var ErrQuotaExceeded = status.ErrResourceExhausted.Subtype("quota exceeded")
+
+return status.PublicErrorf(ErrQuotaExceeded, "daily quota of %d requests reached", limit)
+```
+
 ### Durable Streaming
 
 > [!WARNING]
@@ -1002,18 +1003,18 @@ Genkit provides a unified interface across all major AI providers. Use whichever
 
 ```go
 // Google AI
-g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
 // Anthropic
-g := genkit.Init(ctx, genkit.WithPlugins(&anthropic.Anthropic{}))
+g, err := genkit.Init(ctx, genkit.WithPlugins(&anthropic.Anthropic{}))
 
 // Ollama (local models)
-g := genkit.Init(ctx, genkit.WithPlugins(&ollama.Ollama{
+g, err := genkit.Init(ctx, genkit.WithPlugins(&ollama.Ollama{
     ServerAddress: "http://localhost:11434",
 }))
 
 // Multiple providers at once
-g := genkit.Init(ctx, genkit.WithPlugins(
+g, err := genkit.Init(ctx, genkit.WithPlugins(
     &googlegenai.GoogleAI{},
     &anthropic.Anthropic{},
 ))
@@ -1025,16 +1026,16 @@ Use `ai.WithModelName` for simple cases, or pair a model with provider-specific 
 import "google.golang.org/genai"
 
 // Simple: just the model name
-response, _ := genkit.Generate(ctx, g,
+response, _ := g.Generate(ctx,
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Hello!"),
 )
 
 // Advanced: model name + provider-specific configuration
-response, _ := genkit.Generate(ctx, g,
+response, _ := g.Generate(ctx,
     ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
         Temperature:     genai.Ptr(float32(0.7)),
-        MaxOutputTokens: genai.Ptr(int32(1000)),
+        MaxOutputTokens: 1000,
         TopP:            genai.Ptr(float32(0.9)),
     })),
     ai.WithPrompt("Hello!"),

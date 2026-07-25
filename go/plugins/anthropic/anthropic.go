@@ -28,9 +28,9 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/genkit"
 	ant "github.com/firebase/genkit/go/plugins/internal/anthropic"
 )
 
@@ -99,7 +99,7 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 // The second argument describes the capability of the model.
 // Use [IsDefinedModel] to determine if a model is already defined.
 // After [Init] is called, only the known models are defined.
-func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
+func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (*ai.Model, error) {
 	return ant.DefineModel(a.aclient, provider, name, *opts), nil
 }
 
@@ -133,22 +133,20 @@ func (a *Anthropic) ListActions(ctx context.Context) []api.ActionDesc {
 		// When listing discovered models, the Genkit action name and the
 		// Anthropic API model ID are identical.
 		model := newModel(a.aclient, name, name, modelOptions(name))
-		if actionDef, ok := model.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
+		actions = append(actions, model.Desc())
 	}
 
 	return actions
 }
 
 // Model returns a previously registered model
-func Model(g *genkit.Genkit, name string) ai.Model {
-	return genkit.LookupModel(g, api.NewName(provider, name))
+func Model(g *genkit.Genkit, name string) *ai.Model {
+	return g.LookupModel(api.NewName(provider, name))
 }
 
 // IsDefinedModel returns whether a model is already defined
 func IsDefinedModel(g *genkit.Genkit, name string) bool {
-	return genkit.LookupModel(g, api.NewName(provider, name)) != nil
+	return g.LookupModel(api.NewName(provider, name)) != nil
 }
 
 // ResolveAction resolves an action with the given name
@@ -169,7 +167,7 @@ func (a *Anthropic) ResolveAction(atype api.ActionType, id string) api.Action {
 
 		// We register the model using the ID requested by the user, but
 		// use the resolved 'realID' (e.g. versioned) for actual API calls.
-		return newModel(a.aclient, id, realID, modelOptions(id)).(api.Action)
+		return newModel(a.aclient, id, realID, modelOptions(id))
 	}
 	return nil
 }
@@ -194,7 +192,7 @@ func (a *Anthropic) getModels(ctx context.Context) ([]string, error) {
 }
 
 // newModel creates a model wihout registering it
-func newModel(client anthropic.Client, name, apiModelName string, opts ai.ModelOptions) ai.Model {
+func newModel(client anthropic.Client, name, apiModelName string, opts ai.ModelOptions) *ai.Model {
 	config := &anthropic.MessageNewParams{}
 
 	meta := &ai.ModelOptions{
@@ -213,9 +211,10 @@ func newModel(client anthropic.Client, name, apiModelName string, opts ai.ModelO
 	fn := func(
 		ctx context.Context,
 		input *ai.ModelRequest,
+		config anthropic.MessageNewParams,
 		cb func(context.Context, *ai.ModelResponseChunk) error,
 	) (*ai.ModelResponse, error) {
-		return ant.Generate(ctx, client, provider, targetModel, input, cb)
+		return ant.Generate(ctx, client, provider, targetModel, input, config, cb)
 	}
 
 	return ai.NewModel(api.NewName(provider, name), meta, fn)

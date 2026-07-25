@@ -22,9 +22,10 @@ import (
 )
 
 /*
-  - Pre-requisites to run this test:
-
-Same as that in retriever_test.go
+- Pre-requisites to run this test:
+- 1. Create a Firebase project and enable Firestore (https://console.firebase.google.com/).
+- 2. Authenticate locally: `gcloud auth application-default login`.
+- 3. Set the FIREBASE_PROJECT_ID environment variable to your project ID.
 */
 func TestInit(t *testing.T) {
 	t.Parallel()

@@ -20,7 +20,6 @@ import (
 	"fmt"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/internal/base"
 	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/packages/param"
@@ -139,37 +138,15 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 // WithConfig adds configuration parameters from the model request
 // see https://platform.openai.com/docs/api-reference/responses/create
 // for more details on openai's request fields
-func (g *ModelGenerator) WithConfig(config any) *ModelGenerator {
+func (g *ModelGenerator) WithConfig(config openai.ChatCompletionNewParams) *ModelGenerator {
 	// Return early if we already have an error
 	if g.err != nil {
 		return g
 	}
 
-	if config == nil {
-		return g
-	}
-
-	var openaiConfig openai.ChatCompletionNewParams
-	switch cfg := config.(type) {
-	case openai.ChatCompletionNewParams:
-		openaiConfig = cfg
-	case *openai.ChatCompletionNewParams:
-		openaiConfig = *cfg
-	case map[string]any:
-		var err error
-		openaiConfig, err = base.MapToStruct[openai.ChatCompletionNewParams](cfg)
-		if err != nil {
-			g.err = fmt.Errorf("failed to convert config to openai.ChatCompletionNewParams: %w", err)
-			return g
-		}
-	default:
-		g.err = fmt.Errorf("unexpected config type: %T", config)
-		return g
-	}
-
 	// keep the original model in the updated config structure
-	openaiConfig.Model = g.request.Model
-	g.request = &openaiConfig
+	config.Model = g.request.Model
+	g.request = &config
 	return g
 }
 

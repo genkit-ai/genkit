@@ -26,8 +26,8 @@ import (
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/vertexai/modelgarden"
 )
 
@@ -40,7 +40,7 @@ func TestAnthropicLive(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	g := genkit.Init(ctx, genkit.WithPlugins(&modelgarden.Anthropic{}))
+	g := genkit.MustInit(ctx, genkit.WithPlugins(&modelgarden.Anthropic{}))
 
 	t.Run("invalid model", func(t *testing.T) {
 		m := modelgarden.AnthropicModel(g, "claude-not-valid-v2")
@@ -51,7 +51,7 @@ func TestAnthropicLive(t *testing.T) {
 
 	t.Run("model ok", func(t *testing.T) {
 		m := modelgarden.AnthropicModel(g, "claude-opus-4")
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
 				MaxTokens:   1024,
@@ -71,7 +71,7 @@ func TestAnthropicLive(t *testing.T) {
 
 	t.Run("model without messages fails", func(t *testing.T) {
 		m := modelgarden.AnthropicModel(g, "claude-opus-4")
-		_, err := genkit.Generate(ctx, g,
+		_, err := g.Generate(ctx,
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
 				MaxTokens:   1024,
@@ -88,7 +88,7 @@ func TestAnthropicLive(t *testing.T) {
 		if m == nil {
 			t.Fatal("claude-opus-4-5 model was not registered")
 		}
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
 				MaxTokens:   1024,
@@ -112,7 +112,7 @@ func TestAnthropicLive(t *testing.T) {
 			t.Fatal(err)
 		}
 		m := modelgarden.AnthropicModel(g, "claude-opus-4")
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithSystem("You are a professional image detective that talks like an evil pirate that loves animals, your task is to tell the name of the animal in the image but be very short"),
 			ai.WithModel(m),
 			ai.WithConfig(&anthropic.MessageNewParams{
@@ -133,15 +133,14 @@ func TestAnthropicLive(t *testing.T) {
 
 	t.Run("tools", func(t *testing.T) {
 		m := modelgarden.AnthropicModel(g, "claude-opus-4")
-		myJokeTool := genkit.DefineTool(
-			g,
+		myJokeTool := g.DefineTool(
 			"myJoke",
 			"When the user asks for a joke, this tool must be used to generate a joke, try to come up with a joke that uses the output of the tool",
-			func(ctx *ai.ToolContext, input *any) (string, error) {
+			func(ctx context.Context, input *any) (string, error) {
 				return "why did the chicken cross the road?", nil
 			},
 		)
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModel(m),
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
@@ -162,7 +161,7 @@ func TestAnthropicLive(t *testing.T) {
 		m := modelgarden.AnthropicModel(g, "claude-opus-4")
 		out := ""
 
-		final, err := genkit.Generate(ctx, g,
+		final, err := g.Generate(ctx,
 			ai.WithPrompt("Tell me a short story about a frog and a princess"),
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
@@ -194,7 +193,7 @@ func TestAnthropicLive(t *testing.T) {
 		m := modelgarden.AnthropicModel(g, "claude-opus-4")
 		out := ""
 
-		final, err := genkit.Generate(ctx, g,
+		final, err := g.Generate(ctx,
 			ai.WithPrompt("Tell me a short story about a frog and a princess"),
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
@@ -240,16 +239,15 @@ func TestAnthropicLive(t *testing.T) {
 		m := modelgarden.AnthropicModel(g, "claude-opus-4")
 		out := ""
 
-		myStoryTool := genkit.DefineTool(
-			g,
+		myStoryTool := g.DefineTool(
 			"myStory",
 			"When the user asks for a story, create a story about a frog and a fox that are good friends",
-			func(ctx *ai.ToolContext, input *any) (string, error) {
+			func(ctx context.Context, input *any) (string, error) {
 				return "the fox is named Goph and the frog is called Fred", nil
 			},
 		)
 
-		final, err := genkit.Generate(ctx, g,
+		final, err := g.Generate(ctx,
 			ai.WithPrompt("Tell me a short story about a frog and a fox, do no mention anything else, only the short story"),
 			ai.WithModel(m),
 			ai.WithConfig(&anthropic.MessageNewParams{

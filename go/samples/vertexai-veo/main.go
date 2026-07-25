@@ -23,9 +23,9 @@ import (
 	"strings"
 	"time"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"google.golang.org/genai"
 )
@@ -34,13 +34,16 @@ func main() {
 	ctx := context.Background()
 
 	// Initialize with Vertex AI plugin. Ensure GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION are set.
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
-	genkit.DefineFlow(g, "text-to-video", func(ctx context.Context, input string) (string, error) {
+	g.DefineFlow("text-to-video", func(ctx context.Context, input string) (string, error) {
 		if input == "" {
 			input = "A futuristic city at sunset, flying cars, cyberpunk style"
 		}
-		operation, err := genkit.GenerateOperation(ctx, g,
+		operation, err := g.GenerateOperation(ctx,
 			ai.WithMessages(ai.NewUserTextMessage(input)),
 			ai.WithModelName("vertexai/veo-3.1-generate-preview"),
 			ai.WithConfig(&genai.GenerateVideosConfig{
@@ -80,7 +83,7 @@ func waitForCompletion(ctx context.Context, g *genkit.Genkit, op *core.Operation
 		case <-ctx.Done():
 			return nil, fmt.Errorf("context cancelled: %w", ctx.Err())
 		case <-ticker.C:
-			updatedOp, err := genkit.CheckModelOperation(ctx, g, op)
+			updatedOp, err := g.CheckModelOperation(ctx, op)
 			if err != nil {
 				return nil, fmt.Errorf("failed to check status: %w", err)
 			}

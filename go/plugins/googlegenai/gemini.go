@@ -27,11 +27,11 @@ import (
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
+	"github.com/firebase/genkit/go/plugins/middleware"
 	"github.com/invopop/jsonschema"
 	"google.golang.org/genai"
 )
@@ -62,33 +62,8 @@ func configToMap(config any) map[string]any {
 	return result
 }
 
-// configFromRequest converts any supported config type to [genai.GenerateContentConfig].
-func configFromRequest(input *ai.ModelRequest) (*genai.GenerateContentConfig, error) {
-	var result genai.GenerateContentConfig
-
-	switch config := input.Config.(type) {
-	case genai.GenerateContentConfig:
-		result = config
-	case *genai.GenerateContentConfig:
-		result = *config
-	case map[string]any:
-		// TODO: Log warnings if unknown parameters are found.
-		var err error
-		result, err = base.MapToStruct[genai.GenerateContentConfig](config)
-		if err != nil {
-			return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("The configuration settings are not in the correct format. Check that the names and values match what the model expects: %v", err), nil)
-		}
-	case nil:
-		// Empty but valid config
-	default:
-		return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("Invalid configuration type: %T. Expected *genai.GenerateContentConfig. Ensure you are using the correct ModelRef helper (e.g., ModelRef) or passing the correct configuration struct.", input.Config), nil)
-	}
-
-	return &result, nil
-}
-
 // newModel creates a model without registering it.
-func newModel(client *genai.Client, name string, opts ai.ModelOptions) ai.Model {
+func newModel(client *genai.Client, name string, opts ai.ModelOptions) *ai.Model {
 	provider := googleAIProvider
 	if client.ClientConfig().Backend == genai.BackendVertexAI {
 		provider = vertexAIProvider
@@ -110,40 +85,53 @@ func newModel(client *genai.Client, name string, opts ai.ModelOptions) ai.Model 
 		Stage:        opts.Stage,
 	}
 
-	fn := func(
-		ctx context.Context,
-		input *ai.ModelRequest,
-		cb func(context.Context, *ai.ModelResponseChunk) error,
-	) (*ai.ModelResponse, error) {
-		switch mt {
-		case ModelTypeImagen:
-			return generateImage(ctx, client, name, input, cb)
-		default:
-			return generate(ctx, client, name, input, cb)
-		}
+	// the gemini api doesn't support downloading media from http(s)
+	downloadMedia := &middleware.DownloadRequestMedia{
+		MaxBytes: 1024 * 1024 * 20, // 20MB
+		Filter: func(part *ai.Part) bool {
+			u, err := url.Parse(part.Text)
+			if err != nil {
+				return true
+			}
+			// Gemini can handle these URLs
+			return !slices.Contains(
+				[]string{
+					"generativelanguage.googleapis.com",
+					"www.youtube.com", "youtube.com", "youtu.be",
+				},
+				u.Hostname(),
+			)
+		},
 	}
 
-	// the gemini api doesn't support downloading media from http(s)
-	if opts.Supports.Media {
-		fn = core.ChainMiddleware(ai.DownloadRequestMedia(&ai.DownloadMediaOptions{
-			MaxBytes: 1024 * 1024 * 20, // 20MB
-			Filter: func(part *ai.Part) bool {
-				u, err := url.Parse(part.Text)
-				if err != nil {
-					return true
-				}
-				// Gemini can handle these URLs
-				return !slices.Contains(
-					[]string{
-						"generativelanguage.googleapis.com",
-						"www.youtube.com", "youtube.com", "youtu.be",
-					},
-					u.Hostname(),
-				)
-			},
-		}))(fn)
+	switch mt {
+	case ModelTypeImagen:
+		fn := func(
+			ctx context.Context,
+			input *ai.ModelRequest,
+			config genai.GenerateImagesConfig,
+			cb func(context.Context, *ai.ModelResponseChunk) error,
+		) (*ai.ModelResponse, error) {
+			return generateImage(ctx, client, name, input, config, cb)
+		}
+		if opts.Supports.Media {
+			fn = downloadMedia.WrapModelFunc(fn)
+		}
+		return ai.NewModel(api.NewName(provider, name), meta, fn)
+	default:
+		fn := func(
+			ctx context.Context,
+			input *ai.ModelRequest,
+			config genai.GenerateContentConfig,
+			cb func(context.Context, *ai.ModelResponseChunk) error,
+		) (*ai.ModelResponse, error) {
+			return generate(ctx, client, name, input, config, cb)
+		}
+		if opts.Supports.Media {
+			fn = downloadMedia.WrapModelFunc(fn)
+		}
+		return ai.NewModel(api.NewName(provider, name), meta, fn)
 	}
-	return ai.NewModel(api.NewName(provider, name), meta, fn)
 }
 
 // resolveVertexModelName prepares a model name for the google.golang.org/genai
@@ -173,6 +161,7 @@ func generate(
 	client *genai.Client,
 	model string,
 	input *ai.ModelRequest,
+	config genai.GenerateContentConfig,
 	cb func(context.Context, *ai.ModelResponseChunk) error,
 ) (*ai.ModelResponse, error) {
 	if model == "" {
@@ -185,7 +174,7 @@ func generate(
 		return nil, err
 	}
 
-	gcc, err := toGeminiRequest(input, cache, model)
+	gcc, err := toGeminiRequest(input, config, cache, model)
 	if err != nil {
 		return nil, err
 	}
@@ -318,12 +307,10 @@ func toGeminiRole(role ai.Role) string {
 }
 
 // toGeminiRequest translates an [*ai.ModelRequest] to
-// *genai.GenerateContentConfig
-func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent, modelName ...string) (*genai.GenerateContentConfig, error) {
-	gcc, err := configFromRequest(input)
-	if err != nil {
-		return nil, err
-	}
+// *genai.GenerateContentConfig. The request's typed config is the base
+// configuration that the Genkit primitive fields are merged into.
+func toGeminiRequest(input *ai.ModelRequest, config genai.GenerateContentConfig, cache *genai.CachedContent, modelName ...string) (*genai.GenerateContentConfig, error) {
+	gcc := &config
 
 	isTTS := len(modelName) > 0 && isTTSModelName(modelName[0])
 
@@ -544,11 +531,7 @@ func translateCandidate(cand *genai.Candidate) (*ai.ModelResponse, error) {
 		// Attach the thought signature to the first emitted part so that a
 		// subsequent request round-trips a single signature per genai.Part.
 		if len(part.ThoughtSignature) > 0 {
-			first := emitted[0]
-			if first.Metadata == nil {
-				first.Metadata = make(map[string]any)
-			}
-			first.Metadata["signature"] = part.ThoughtSignature
+			emitted[0].SetThoughtSignature(part.ThoughtSignature)
 		}
 
 		msg.Content = append(msg.Content, emitted...)
@@ -668,36 +651,13 @@ func toGeminiPart(p *ai.Part) (*genai.Part, error) {
 			}
 		}
 		fc := genai.NewPartFromFunctionCall(toolReq.Name, input)
-		// Restore ThoughtSignature if present in metadata.
-		if p.Metadata != nil {
-			fc.ThoughtSignature = metadataSignature(p.Metadata)
-		}
+		fc.ThoughtSignature = p.ThoughtSignature()
 		return fc, nil
 	default:
-		return nil, fmt.Errorf("unknown part in the request: %q", p.Kind)
+		return nil, fmt.Errorf("unknown part in the request: %v", p.Kind)
 	}
 
-	// Restore ThoughtSignature if present in metadata.
-	if p.Metadata != nil {
-		gp.ThoughtSignature = metadataSignature(p.Metadata)
-	}
+	gp.ThoughtSignature = p.ThoughtSignature()
 
 	return gp, nil
-}
-
-// metadataSignature extracts the thought signature from part metadata.
-// It handles both []byte (original value) and string (base64-encoded
-// after a JSON clone roundtrip).
-func metadataSignature(metadata map[string]any) []byte {
-	switch sig := metadata["signature"].(type) {
-	case []byte:
-		return sig
-	case string:
-		decoded, err := base64.StdEncoding.DecodeString(sig)
-		if err != nil {
-			return nil
-		}
-		return decoded
-	}
-	return nil
 }

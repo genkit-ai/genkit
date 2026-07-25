@@ -20,8 +20,8 @@ import (
 	"log"
 	"net/http"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/firebase"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/server"
@@ -37,14 +37,17 @@ func main() {
 	})
 
 	// Initialize Genkit with plugins
-	g := genkit.Init(ctx, genkit.WithPlugins(
+	g, err := genkit.Init(ctx, genkit.WithPlugins(
 		&googlegenai.GoogleAI{},
 	))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Define a simple joke flow
-	genkit.DefineFlow(g, "jokeFlow", func(ctx context.Context, topic string) (string, error) {
+	g.DefineFlow("jokeFlow", func(ctx context.Context, topic string) (string, error) {
 		// Generate a joke using Gemini
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModelName("googleai/gemini-2.5-flash"),
 			ai.WithConfig(&genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](1.0),
@@ -65,7 +68,7 @@ func main() {
 	fmt.Println(`curl -X POST http://localhost:3400/jokeFlow -H 'Content-Type: application/json' -d '{"data": "cats"}'`)
 
 	mux := http.NewServeMux()
-	for _, flow := range genkit.ListFlows(g) {
+	for _, flow := range g.ListFlows() {
 		fmt.Printf("Registered flow: %s\n", flow.Name())
 		mux.HandleFunc("POST /"+flow.Name(), genkit.Handler(flow))
 	}

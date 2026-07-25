@@ -23,38 +23,38 @@ import (
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
-var testEvalFunc = func(ctx context.Context, req *EvaluatorCallbackRequest) (*EvaluatorCallbackResponse, error) {
+var testEvalFunc = func(ctx context.Context, req *EvaluatorCallbackRequest, _ any) (*EvaluatorCallbackResponse, error) {
 	m := make(map[string]any)
 	m["reasoning"] = "No good reason"
-	m["options"] = req.Options
+	m["options"] = req.Config
 	score := Score{
-		Id:      "testScore",
+		ID:      "testScore",
 		Score:   1,
 		Status:  ScoreStatusPass.String(),
 		Details: m,
 	}
 	callbackResponse := EvaluatorCallbackResponse{
-		TestCaseId: req.Input.TestCaseId,
+		TestCaseID: req.Input.TestCaseID,
 		Evaluation: []Score{score},
 	}
 	return &callbackResponse, nil
 }
 
-var testBatchEvalFunc = func(ctx context.Context, req *EvaluatorRequest) (*EvaluatorResponse, error) {
+var testBatchEvalFunc = func(ctx context.Context, req *EvaluatorRequest, _ any) (*EvaluatorResponse, error) {
 	var evalResponses []EvaluationResult
 	for _, datapoint := range req.Dataset {
 		fmt.Printf("%+v\n", datapoint)
 		m := make(map[string]any)
 		m["reasoning"] = fmt.Sprintf("batch of cookies, %s", datapoint.Input)
-		m["options"] = req.Options
+		m["options"] = req.Config
 		score := Score{
-			Id:      "testScore",
+			ID:      "testScore",
 			Score:   true,
 			Status:  ScoreStatusPass.String(),
 			Details: m,
 		}
 		callbackResponse := EvaluationResult{
-			TestCaseId: datapoint.TestCaseId,
+			TestCaseID: datapoint.TestCaseID,
 			Evaluation: []Score{score},
 		}
 		evalResponses = append(evalResponses, callbackResponse)
@@ -62,7 +62,7 @@ var testBatchEvalFunc = func(ctx context.Context, req *EvaluatorRequest) (*Evalu
 	return &evalResponses, nil
 }
 
-var testFailingEvalFunc = func(ctx context.Context, req *EvaluatorCallbackRequest) (*EvaluatorCallbackResponse, error) {
+var testFailingEvalFunc = func(ctx context.Context, req *EvaluatorCallbackRequest, _ any) (*EvaluatorCallbackResponse, error) {
 	return nil, errors.New("i give up")
 }
 
@@ -83,8 +83,8 @@ var dataset = []*Example{
 
 var testRequest = EvaluatorRequest{
 	Dataset:      dataset,
-	EvaluationId: "testrun",
-	Options:      "test-options",
+	EvaluationID: "testrun",
+	Config:       "test-options",
 }
 
 func TestSimpleEvaluator(t *testing.T) {
@@ -100,7 +100,7 @@ func TestSimpleEvaluator(t *testing.T) {
 	if got, want := len(*resp), 2; got != want {
 		t.Errorf("got %v, want %v", got, want)
 	}
-	if got, want := (*resp)[0].Evaluation[0].Id, "testScore"; got != want {
+	if got, want := (*resp)[0].Evaluation[0].ID, "testScore"; got != want {
 		t.Errorf("got %v, want %v", got, want)
 	}
 	if got, want := (*resp)[0].Evaluation[0].Score, 1; got != want {
@@ -167,7 +167,7 @@ func TestEvaluate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got, want := (*resp)[0].Evaluation[0].Id, "testScore"; got != want {
+	if got, want := (*resp)[0].Evaluation[0].ID, "testScore"; got != want {
 		t.Errorf("got %v, want %v", got, want)
 	}
 	if got, want := (*resp)[0].Evaluation[0].Score, 1; got != want {
@@ -194,7 +194,7 @@ func TestBatchEvaluator(t *testing.T) {
 	if got, want := len(*resp), 2; got != want {
 		t.Errorf("got %v, want %v", got, want)
 	}
-	if got, want := (*resp)[0].Evaluation[0].Id, "testScore"; got != want {
+	if got, want := (*resp)[0].Evaluation[0].ID, "testScore"; got != want {
 		t.Errorf("got %v, want %v", got, want)
 	}
 	if got, want := (*resp)[0].Evaluation[0].Score, true; got != want {
@@ -235,9 +235,9 @@ func TestNewEvaluatorRef(t *testing.T) {
 		}
 	})
 
-	t.Run("implements EvaluatorArg interface", func(t *testing.T) {
+	t.Run("implements Named interface", func(t *testing.T) {
 		ref := NewEvaluatorRef("test/interface", nil)
-		var _ EvaluatorArg = ref // compile-time check
+		var _ Named = ref // compile-time check
 
 		if ref.Name() != "test/interface" {
 			t.Errorf("Name() = %q, want %q", ref.Name(), "test/interface")
@@ -249,15 +249,15 @@ func TestEvaluatorRefUsedWithEvaluate(t *testing.T) {
 	r := registry.New()
 
 	// Define evaluator that uses config
-	DefineEvaluator(r, "test/configEvaluator", &evalOpts, func(ctx context.Context, req *EvaluatorCallbackRequest) (*EvaluatorCallbackResponse, error) {
+	DefineEvaluator(r, "test/configEvaluator", &evalOpts, func(ctx context.Context, req *EvaluatorCallbackRequest, _ any) (*EvaluatorCallbackResponse, error) {
 		score := Score{
-			Id:      "configScore",
+			ID:      "configScore",
 			Score:   1,
 			Status:  ScoreStatusPass.String(),
-			Details: map[string]any{"options": req.Options},
+			Details: map[string]any{"options": req.Config},
 		}
 		return &EvaluatorCallbackResponse{
-			TestCaseId: req.Input.TestCaseId,
+			TestCaseID: req.Input.TestCaseID,
 			Evaluation: []Score{score},
 		}, nil
 	})

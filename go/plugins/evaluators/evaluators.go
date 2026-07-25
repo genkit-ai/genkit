@@ -74,12 +74,12 @@ func (ge *GenkitEval) Init(ctx context.Context) []api.Action {
 
 	var actions []api.Action
 	for _, metric := range ge.Metrics {
-		actions = append(actions, ConfigureMetric(metric).(api.Action))
+		actions = append(actions, ConfigureMetric(metric))
 	}
 	return actions
 }
 
-func ConfigureMetric(metric MetricConfig) ai.Evaluator {
+func ConfigureMetric(metric MetricConfig) *ai.Evaluator {
 	switch metric.MetricType {
 	case EvaluatorDeepEqual:
 		return configureDeepEqualEvaluator()
@@ -92,13 +92,13 @@ func ConfigureMetric(metric MetricConfig) ai.Evaluator {
 	}
 }
 
-func configureRegexEvaluator() ai.Evaluator {
+func configureRegexEvaluator() *ai.Evaluator {
 	evalOptions := ai.EvaluatorOptions{
 		DisplayName: "RegExp",
 		Definition:  "Tests output against the regexp provided as reference",
 		IsBilled:    false,
 	}
-	return ai.NewEvaluator(api.NewName(provider, "regex"), &evalOptions, func(ctx context.Context, req *ai.EvaluatorCallbackRequest) (*ai.EvaluatorCallbackResponse, error) {
+	return ai.NewEvaluator(api.NewName(provider, "regex"), &evalOptions, func(ctx context.Context, req *ai.EvaluatorCallbackRequest, _ any) (*ai.EvaluatorCallbackResponse, error) {
 		dataPoint := req.Input
 		var score ai.Score
 		if dataPoint.Output == nil {
@@ -126,27 +126,27 @@ func configureRegexEvaluator() ai.Evaluator {
 		} else {
 			// Mark as failed if output is not string type
 			logger.FromContext(ctx).Debug("genkitEval",
-				"regex", fmt.Sprintf("Failed regex evaluation, as output is not string api. TestCaseId: %s", dataPoint.TestCaseId))
+				"regex", fmt.Sprintf("Failed regex evaluation, as output is not string api. TestCaseID: %s", dataPoint.TestCaseID))
 			score = ai.Score{
 				Score:  false,
 				Status: ai.ScoreStatusFail.String(),
 			}
 		}
 		callbackResponse := ai.EvaluatorCallbackResponse{
-			TestCaseId: req.Input.TestCaseId,
+			TestCaseID: req.Input.TestCaseID,
 			Evaluation: []ai.Score{score},
 		}
 		return &callbackResponse, nil
 	})
 }
 
-func configureDeepEqualEvaluator() ai.Evaluator {
+func configureDeepEqualEvaluator() *ai.Evaluator {
 	evalOptions := ai.EvaluatorOptions{
 		DisplayName: "Deep Equal",
 		Definition:  "Tests equality of output against the provided reference",
 		IsBilled:    false,
 	}
-	return ai.NewEvaluator(api.NewName(provider, "deep_equal"), &evalOptions, func(ctx context.Context, req *ai.EvaluatorCallbackRequest) (*ai.EvaluatorCallbackResponse, error) {
+	return ai.NewEvaluator(api.NewName(provider, "deep_equal"), &evalOptions, func(ctx context.Context, req *ai.EvaluatorCallbackRequest, _ any) (*ai.EvaluatorCallbackResponse, error) {
 		dataPoint := req.Input
 		var score ai.Score
 		if dataPoint.Output == nil {
@@ -168,20 +168,20 @@ func configureDeepEqualEvaluator() ai.Evaluator {
 		}
 
 		callbackResponse := ai.EvaluatorCallbackResponse{
-			TestCaseId: req.Input.TestCaseId,
+			TestCaseID: req.Input.TestCaseID,
 			Evaluation: []ai.Score{score},
 		}
 		return &callbackResponse, nil
 	})
 }
 
-func configureJsonataEvaluator() ai.Evaluator {
+func configureJsonataEvaluator() *ai.Evaluator {
 	evalOptions := ai.EvaluatorOptions{
 		DisplayName: "JSONata",
 		Definition:  "Tests JSONata expression (provided in reference) against output",
 		IsBilled:    false,
 	}
-	return ai.NewEvaluator(api.NewName(provider, "jsonata"), &evalOptions, func(ctx context.Context, req *ai.EvaluatorCallbackRequest) (*ai.EvaluatorCallbackResponse, error) {
+	return ai.NewEvaluator(api.NewName(provider, "jsonata"), &evalOptions, func(ctx context.Context, req *ai.EvaluatorCallbackRequest, _ any) (*ai.EvaluatorCallbackResponse, error) {
 		dataPoint := req.Input
 		var score ai.Score
 		if dataPoint.Output == nil {
@@ -211,7 +211,7 @@ func configureJsonataEvaluator() ai.Evaluator {
 		}
 
 		callbackResponse := ai.EvaluatorCallbackResponse{
-			TestCaseId: req.Input.TestCaseId,
+			TestCaseID: req.Input.TestCaseID,
 			Evaluation: []ai.Score{score},
 		}
 		return &callbackResponse, nil

@@ -18,8 +18,8 @@ import (
 	"context"
 	"testing"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/evaluators"
 )
 
@@ -36,7 +36,7 @@ func TestEvaluators(t *testing.T) {
 			MetricType: evaluators.EvaluatorJsonata,
 		},
 	}
-	g := genkit.Init(ctx,
+	g := genkit.MustInit(ctx,
 		genkit.WithPlugins(&evaluators.GenkitEval{Metrics: metrics}))
 
 	t.Run("deep equal", func(t *testing.T) {
@@ -58,10 +58,10 @@ func TestEvaluators(t *testing.T) {
 		}
 		var testRequest = ai.EvaluatorRequest{
 			Dataset:      dataset,
-			EvaluationId: "testrun",
+			EvaluationID: "testrun",
 		}
 
-		evalAction := genkit.LookupEvaluator(g, "genkitEval/deep_equal")
+		evalAction := g.LookupEvaluator("genkitEval/deep_equal")
 		if evalAction == nil {
 			t.Fatal("evalAction is nil")
 		}
@@ -100,10 +100,10 @@ func TestEvaluators(t *testing.T) {
 		}
 		var testRequest = ai.EvaluatorRequest{
 			Dataset:      dataset,
-			EvaluationId: "testrun",
+			EvaluationID: "testrun",
 		}
 
-		evalAction := genkit.LookupEvaluator(g, "genkitEval/regex")
+		evalAction := g.LookupEvaluator("genkitEval/regex")
 		resp, err := evalAction.Evaluate(ctx, &testRequest)
 		if err != nil {
 			t.Fatal(err)
@@ -148,10 +148,10 @@ func TestEvaluators(t *testing.T) {
 		}
 		var testRequest = ai.EvaluatorRequest{
 			Dataset:      dataset,
-			EvaluationId: "testrun",
+			EvaluationID: "testrun",
 		}
 
-		evalAction := genkit.LookupEvaluator(g, "genkitEval/jsonata")
+		evalAction := g.LookupEvaluator("genkitEval/jsonata")
 		resp, err := evalAction.Evaluate(ctx, &testRequest)
 		if err != nil {
 			t.Fatal(err)

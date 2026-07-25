@@ -269,7 +269,7 @@ func TestMCPTemplateEdgeCases(t *testing.T) {
 			}
 
 			// Test the MCP → Genkit translation step
-			var resource ai.Resource
+			var resource *ai.Resource
 			var err error
 
 			if templateErr != nil {

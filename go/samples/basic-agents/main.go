@@ -74,12 +74,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"google.golang.org/genai"
 )
@@ -96,7 +97,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}), genkit.WithExperimental())
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}), genkit.WithExperimental())
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Each define function registers an agent and returns it, paired with
 	// the optional hooks the CLI needs to drive it (see agentEntry). The

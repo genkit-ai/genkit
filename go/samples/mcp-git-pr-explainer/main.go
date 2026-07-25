@@ -22,12 +22,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/logger"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/mcp"
 )
@@ -40,7 +41,10 @@ func main() {
 	flag.Parse()
 
 	ctx := context.Background()
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	ghToken := os.Getenv("GITHUB_PERSONAL_ACCESS_TOKEN")
 	if ghToken == "" {
@@ -85,9 +89,9 @@ func main() {
 		logger.FromContext(ctx).Error("failed to list GitHub tools", "error", err)
 		os.Exit(1)
 	}
-	var toolRefs []ai.ToolRef
+	var toolArgs []ai.ToolArg
 	for _, t := range tools {
-		toolRefs = append(toolRefs, t)
+		toolArgs = append(toolArgs, t)
 	}
 
 	owner, name := splitRepo(repo)
@@ -107,10 +111,10 @@ Always pass owner='%s' repo='%s' pull_number='%d'.`,
 	)
 
 	m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithModel(m),
 		ai.WithPrompt(prompt),
-		ai.WithTools(toolRefs...),
+		ai.WithTools(toolArgs...),
 		ai.WithToolChoice(ai.ToolChoiceAuto),
 	)
 	if err != nil {

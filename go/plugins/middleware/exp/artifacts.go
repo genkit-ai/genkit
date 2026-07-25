@@ -53,7 +53,7 @@ const artifactsMarker = "artifacts-listing"
 //
 // Artifacts live on the active agent session, so this middleware only has an
 // effect when generation runs inside an agent invocation (see
-// [github.com/firebase/genkit/go/genkit/exp.DefineAgent]). With no active
+// [github.com/firebase/genkit/go/exp.DefineAgent]). With no active
 // session the tools report that gracefully and the listing is empty.
 //
 // Usage:
@@ -76,7 +76,7 @@ func (a *Artifacts) Name() string { return provider + "/artifacts" }
 // New returns the hooks that register the artifact tools and inject the
 // artifact listing into the system prompt on each turn.
 func (a *Artifacts) New(ctx context.Context) (*ai.Hooks, error) {
-	tools := []ai.Tool{newReadArtifactTool()}
+	tools := []ai.AnyTool{newReadArtifactTool()}
 	if !a.Readonly {
 		tools = append(tools, newWriteArtifactTool())
 	}
@@ -106,8 +106,8 @@ type readArtifactOutput struct {
 	Found   bool   `json:"found"`
 }
 
-func newReadArtifactTool() ai.Tool {
-	return aix.NewTool("read_artifact",
+func newReadArtifactTool() ai.AnyTool {
+	return ai.NewTool("read_artifact",
 		"Reads the content of a named artifact from the session. Use this to "+
 			"inspect artifacts produced by sub-agents or previously created artifacts.",
 		func(ctx context.Context, in readArtifactInput) (readArtifactOutput, error) {
@@ -133,8 +133,8 @@ type writeArtifactOutput struct {
 	Status string `json:"status"`
 }
 
-func newWriteArtifactTool() ai.Tool {
-	return aix.NewTool("write_artifact",
+func newWriteArtifactTool() ai.AnyTool {
+	return ai.NewTool("write_artifact",
 		"Creates or updates a named artifact in the session. If an artifact with "+
 			"the same name already exists, it is replaced. Use this to produce "+
 			"files, reports, code, or other deliverables.",

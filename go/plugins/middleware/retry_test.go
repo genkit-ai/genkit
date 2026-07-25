@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -34,7 +34,7 @@ func newTestRegistry(t *testing.T) *registry.Registry {
 	return r
 }
 
-func defineModel(t *testing.T, r *registry.Registry, name string, fn ai.ModelFunc) ai.Model {
+func defineModel(t *testing.T, r *registry.Registry, name string, fn ai.ModelFunc[any]) *ai.Model {
 	t.Helper()
 	return ai.DefineModel(r, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true},
@@ -49,7 +49,7 @@ func init() {
 func TestRetrySucceedsOnFirstAttempt(t *testing.T) {
 	r := newTestRegistry(t)
 	calls := 0
-	m := defineModel(t, r, "test/ok", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	m := defineModel(t, r, "test/ok", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		calls++
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("ok")}, nil
 	})
@@ -72,10 +72,10 @@ func TestRetrySucceedsOnFirstAttempt(t *testing.T) {
 func TestRetryRecoversAfterTransientError(t *testing.T) {
 	r := newTestRegistry(t)
 	calls := 0
-	m := defineModel(t, r, "test/transient", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	m := defineModel(t, r, "test/transient", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		calls++
 		if calls <= 2 {
-			return nil, core.NewError(core.UNAVAILABLE, "service down")
+			return nil, status.Errorf(status.ErrUnavailable, "service down")
 		}
 		return &ai.ModelResponse{Message: ai.NewModelTextMessage("recovered")}, nil
 	})
@@ -98,9 +98,9 @@ func TestRetryRecoversAfterTransientError(t *testing.T) {
 func TestRetryExhaustsMaxRetries(t *testing.T) {
 	r := newTestRegistry(t)
 	calls := 0
-	m := defineModel(t, r, "test/alwaysfail", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	m := defineModel(t, r, "test/alwaysfail", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		calls++
-		return nil, core.NewError(core.UNAVAILABLE, "always failing")
+		return nil, status.Errorf(status.ErrUnavailable, "always failing")
 	})
 
 	retry := &Retry{MaxRetries: 2}
@@ -116,12 +116,12 @@ func TestRetryExhaustsMaxRetries(t *testing.T) {
 	}
 }
 
-func TestRetryDoesNotRetryNonMatchingGenkitError(t *testing.T) {
+func TestRetryDoesNotRetryNonMatchingStatus(t *testing.T) {
 	r := newTestRegistry(t)
 	calls := 0
-	m := defineModel(t, r, "test/badarg", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	m := defineModel(t, r, "test/badarg", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		calls++
-		return nil, core.NewError(core.INVALID_ARGUMENT, "bad input")
+		return nil, status.Errorf(status.ErrInvalidArgument, "bad input")
 	})
 
 	retry := &Retry{}
@@ -136,10 +136,10 @@ func TestRetryDoesNotRetryNonMatchingGenkitError(t *testing.T) {
 	}
 }
 
-func TestRetryRetriesNonGenkitErrors(t *testing.T) {
+func TestRetryRetriesUnclassifiedErrors(t *testing.T) {
 	r := newTestRegistry(t)
 	calls := 0
-	m := defineModel(t, r, "test/plainerr", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	m := defineModel(t, r, "test/plainerr", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		calls++
 		if calls == 1 {
 			return nil, fmt.Errorf("network timeout")
@@ -165,13 +165,13 @@ func TestRetryRetriesNonGenkitErrors(t *testing.T) {
 func TestRetryCustomStatuses(t *testing.T) {
 	r := newTestRegistry(t)
 	calls := 0
-	m := defineModel(t, r, "test/forbidden", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	m := defineModel(t, r, "test/forbidden", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		calls++
-		return nil, core.NewError(core.PERMISSION_DENIED, "forbidden")
+		return nil, status.Errorf(status.ErrPermissionDenied, "forbidden")
 	})
 
 	retry := &Retry{
-		Statuses:   []core.StatusName{core.PERMISSION_DENIED},
+		Statuses:   []status.Name{status.PermissionDenied},
 		MaxRetries: 1,
 	}
 	ai.DefineMiddleware(r, "retry", retry)
@@ -188,8 +188,8 @@ func TestRetryCustomStatuses(t *testing.T) {
 
 func TestRetryBackoffDelays(t *testing.T) {
 	r := newTestRegistry(t)
-	m := defineModel(t, r, "test/delays", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		return nil, core.NewError(core.UNAVAILABLE, "down")
+	m := defineModel(t, r, "test/delays", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return nil, status.Errorf(status.ErrUnavailable, "down")
 	})
 
 	var delays []time.Duration
@@ -221,8 +221,8 @@ func TestRetryBackoffDelays(t *testing.T) {
 
 func TestRetryMaxDelayClamp(t *testing.T) {
 	r := newTestRegistry(t)
-	m := defineModel(t, r, "test/clamp", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		return nil, core.NewError(core.UNAVAILABLE, "down")
+	m := defineModel(t, r, "test/clamp", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return nil, status.Errorf(status.ErrUnavailable, "down")
 	})
 
 	var delays []time.Duration
@@ -258,9 +258,9 @@ func TestRetryMaxDelayClamp(t *testing.T) {
 func TestRetryStopsWhenContextCanceledDuringBackoff(t *testing.T) {
 	r := newTestRegistry(t)
 	calls := 0
-	m := defineModel(t, r, "test/ctxcancel", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	m := defineModel(t, r, "test/ctxcancel", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		calls++
-		return nil, core.NewError(core.UNAVAILABLE, "down")
+		return nil, status.Errorf(status.ErrUnavailable, "down")
 	})
 
 	reqCtx, cancel := context.WithCancel(context.Background())

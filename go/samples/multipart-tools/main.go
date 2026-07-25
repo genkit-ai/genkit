@@ -16,9 +16,11 @@ package main
 
 import (
 	"context"
+	"log"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/ai/tool"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"google.golang.org/genai"
 )
@@ -26,26 +28,27 @@ import (
 func main() {
 	ctx := context.Background()
 
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
-	// Define a multipart tool.
-	// This simulates a tool that takes a screenshot
-	screenshot := genkit.DefineMultipartTool(g, "screenshot", "Takes a screenshot",
-		func(ctx *ai.ToolContext, input any) (*ai.MultipartToolResponse, error) {
+	// Define a tool that returns media alongside its output.
+	// This simulates a tool that takes a screenshot: the structured output
+	// reports success, and tool.AttachParts adds the image itself to the
+	// tool's multipart response.
+	screenshot := g.DefineTool("screenshot", "Takes a screenshot",
+		func(ctx context.Context, input any) (map[string]any, error) {
 			rectangle := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHIAAABUAQMAAABk5vEVAAAABlBMVEX///8AAABVwtN+" +
 				"AAAAI0lEQVR4nGNgGHaA/z8UHIDwOWASDqP8Uf7w56On/1FAQwAAVM0exw1hqwkAAAAASUVORK5CYII="
-			return &ai.MultipartToolResponse{
-				Output: map[string]any{"success": true},
-				Content: []*ai.Part{
-					ai.NewMediaPart("image/png", rectangle),
-				},
-			}, nil
+			tool.AttachParts(ctx, ai.NewMediaPart("image/png", rectangle))
+			return map[string]any{"success": true}, nil
 		},
 	)
 
 	// Define a simple flow that uses the multipart tool
-	genkit.DefineStreamingFlow(g, "cardFlow", func(ctx context.Context, input any, cb ai.ModelStreamCallback) (string, error) {
-		resp, err := genkit.Generate(ctx, g,
+	g.DefineStreamingFlow("cardFlow", func(ctx context.Context, input any, cb ai.ModelStreamCallback) (string, error) {
+		resp, err := g.Generate(ctx,
 			ai.WithModelName("googleai/gemini-3-pro-preview"),
 			ai.WithConfig(&genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](1.0),

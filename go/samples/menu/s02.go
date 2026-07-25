@@ -21,11 +21,11 @@ import (
 	"encoding/json"
 	"os"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 )
 
-func menu(ctx *ai.ToolContext, _ any) ([]*menuItem, error) {
+func menu(ctx context.Context, _ any) ([]*menuItem, error) {
 	f, err := os.Open("testdata/menu.json")
 	if err != nil {
 		return nil, err
@@ -38,10 +38,10 @@ func menu(ctx *ai.ToolContext, _ any) ([]*menuItem, error) {
 	return s, nil
 }
 
-func setup02(g *genkit.Genkit, m ai.Model) error {
-	menuTool := genkit.DefineTool(g, "todaysMenu", "Use this tool to retrieve all the items on today's menu", menu)
+func setup02(g *genkit.Genkit, m *ai.Model) error {
+	menuTool := g.DefineTool("todaysMenu", "Use this tool to retrieve all the items on today's menu", menu)
 
-	dataMenuPrompt := genkit.DefinePrompt(g, "s02_dataMenu",
+	dataMenuPrompt := g.DefinePrompt[*menuQuestionInput]("s02_dataMenu",
 		ai.WithPrompt(`
 You are acting as a helpful AI assistant named Walt that can answer
 questions about the food available on the menu at Walt's Burgers.
@@ -54,18 +54,17 @@ DO NOT INVENT ITEMS NOT ON THE MENU.
 Question:
 {{question}} ?`),
 		ai.WithModel(m),
-		ai.WithInputType(menuQuestionInput{}),
 		ai.WithTools(menuTool),
 	)
 
-	genkit.DefineFlow(g, "s02_menuQuestion",
+	g.DefineFlow("s02_menuQuestion",
 		func(ctx context.Context, input *menuQuestionInput) (*answerOutput, error) {
-			resp, err := dataMenuPrompt.Execute(ctx, ai.WithInput(input))
+			text, _, err := dataMenuPrompt.Execute(ctx, input)
 			if err != nil {
 				return nil, err
 			}
 
-			return &answerOutput{Answer: resp.Text()}, nil
+			return &answerOutput{Answer: text}, nil
 		},
 	)
 

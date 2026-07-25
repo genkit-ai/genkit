@@ -32,7 +32,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // readMaxBytes caps a single full read or returned slice. Models can step
@@ -143,7 +143,7 @@ func (p *pathLocks) lock(path string) func() {
 //
 // Usage:
 //
-//	resp, err := genkit.Generate(ctx, g,
+//	resp, err := g.Generate(ctx,
 //	    ai.WithModel(m),
 //	    ai.WithPrompt("summarise docs/ and save the summary to out.md"),
 //	    ai.WithUse(&middleware.Filesystem{
@@ -169,15 +169,15 @@ func (f *Filesystem) Name() string { return provider + "/filesystem" }
 // model on the next turn.
 func (f *Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 	if strings.TrimSpace(f.RootDir) == "" {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "filesystem middleware: RootDir is required")
+		return nil, status.Errorf(status.ErrInvalidArgument, "filesystem middleware: RootDir is required")
 	}
 	abs, err := filepath.Abs(f.RootDir)
 	if err != nil {
-		return nil, core.NewError(core.INTERNAL, "filesystem middleware: resolve %q: %v", f.RootDir, err)
+		return nil, status.Errorf(status.ErrInvalidArgument, "filesystem middleware: resolving RootDir %q: %w", f.RootDir, err)
 	}
 	root, err := os.OpenRoot(abs)
 	if err != nil {
-		return nil, core.NewError(core.FAILED_PRECONDITION, "filesystem middleware: open root %q: %v", abs, err)
+		return nil, status.Errorf(status.ErrFailedPrecondition, "filesystem middleware: opening root %q: %w", abs, err)
 	}
 
 	var (
@@ -236,7 +236,8 @@ func (f *Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 		if err == nil {
 			return resp, nil
 		}
-		if isInterrupt, _ := ai.IsToolInterruptError(err); isInterrupt {
+		var ie *ai.InterruptError
+		if errors.As(err, &ie) {
 			return nil, err
 		}
 
@@ -262,8 +263,8 @@ func (f *Filesystem) buildTools(
 	cache *fileStateCache,
 	locks *pathLocks,
 	enqueueParts func(parts ...*ai.Part),
-) []ai.Tool {
-	tools := []ai.Tool{
+) []ai.AnyTool {
+	tools := []ai.AnyTool{
 		f.newListFilesTool(root),
 		f.newReadFileTool(root, rootAbs, cache, locks, enqueueParts),
 	}
@@ -314,11 +315,11 @@ type fileEntry struct {
 	SizeBytes   int64  `json:"sizeBytes,omitempty"`
 }
 
-func (f *Filesystem) newListFilesTool(root *os.Root) ai.Tool {
+func (f *Filesystem) newListFilesTool(root *os.Root) ai.AnyTool {
 	return ai.NewTool(
 		f.toolName("list_files"),
 		"Lists files and directories in a given path. Returns a list of entries with path and type.",
-		func(_ *ai.ToolContext, in listFilesInput) ([]fileEntry, error) {
+		func(_ context.Context, in listFilesInput) ([]fileEntry, error) {
 			dir := normalizeRel(in.DirPath)
 			fsys := root.FS()
 
@@ -384,11 +385,11 @@ func (f *Filesystem) newReadFileTool(
 	cache *fileStateCache,
 	locks *pathLocks,
 	enqueueParts func(parts ...*ai.Part),
-) ai.Tool {
+) ai.AnyTool {
 	return ai.NewTool(
 		f.toolName("read_file"),
 		"Reads the contents of a file. The actual contents are delivered as a user message on the next turn. Use offset and limit (1-indexed lines) for large files.",
-		func(_ *ai.ToolContext, in readFileInput) (string, error) {
+		func(_ context.Context, in readFileInput) (string, error) {
 			if err := requireFilePath(in.FilePath); err != nil {
 				return "", err
 			}
@@ -556,11 +557,11 @@ func (f *Filesystem) newWriteFileTool(
 	rootAbs string,
 	cache *fileStateCache,
 	locks *pathLocks,
-) ai.Tool {
+) ai.AnyTool {
 	return ai.NewTool(
 		f.toolName("write_file"),
 		"Writes content to a file, creating it (and any missing parent directories) or overwriting it if it exists. Overwriting an existing file requires a prior read_file in this session.",
-		func(_ *ai.ToolContext, in writeFileInput) (string, error) {
+		func(_ context.Context, in writeFileInput) (string, error) {
 			if err := requireFilePath(in.FilePath); err != nil {
 				return "", err
 			}
@@ -618,11 +619,11 @@ func (f *Filesystem) newEditFileTool(
 	rootAbs string,
 	cache *fileStateCache,
 	locks *pathLocks,
-) ai.Tool {
+) ai.AnyTool {
 	return ai.NewTool(
 		f.toolName("edit_file"),
 		"Applies one or more structured edits to a file. Requires a prior read_file in this session. Edits are applied sequentially; later edits see the changes from earlier ones. Each edit's oldString must match the file byte-for-byte (including whitespace), and by default must be unique — set replaceAll on the edit to rename across all occurrences.",
-		func(_ *ai.ToolContext, in editFileInput) (string, error) {
+		func(_ context.Context, in editFileInput) (string, error) {
 			if err := requireFilePath(in.FilePath); err != nil {
 				return "", err
 			}

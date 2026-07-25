@@ -18,9 +18,9 @@ import (
 	"context"
 	"fmt"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/logger"
-	"github.com/firebase/genkit/go/genkit"
 )
 
 // MCPServerConfig holds configuration for a single MCP server
@@ -131,8 +131,8 @@ func (h *MCPHost) Reconnect(ctx context.Context, serverName string) error {
 }
 
 // GetActiveTools retrieves all tools from all connected and enabled MCP clients
-func (h *MCPHost) GetActiveTools(ctx context.Context, gk *genkit.Genkit) ([]ai.Tool, error) {
-	var allTools []ai.Tool
+func (h *MCPHost) GetActiveTools(ctx context.Context, gk *genkit.Genkit) ([]ai.AnyTool, error) {
+	var allTools []ai.AnyTool
 
 	for name, client := range h.clients {
 		if !client.IsEnabled() {
@@ -152,8 +152,8 @@ func (h *MCPHost) GetActiveTools(ctx context.Context, gk *genkit.Genkit) ([]ai.T
 }
 
 // GetActiveResources retrieves detached resources from all connected and enabled MCP clients
-func (h *MCPHost) GetActiveResources(ctx context.Context) ([]ai.Resource, error) {
-	var allResources []ai.Resource
+func (h *MCPHost) GetActiveResources(ctx context.Context) ([]*ai.Resource, error) {
+	var allResources []*ai.Resource
 
 	for name, client := range h.clients {
 		if !client.IsEnabled() {
@@ -172,7 +172,7 @@ func (h *MCPHost) GetActiveResources(ctx context.Context) ([]ai.Resource, error)
 }
 
 // GetPrompt retrieves a specific prompt from a specific server
-func (h *MCPHost) GetPrompt(ctx context.Context, gk *genkit.Genkit, serverName, promptName string, args map[string]string) (ai.Prompt, error) {
+func (h *MCPHost) GetPrompt(ctx context.Context, gk *genkit.Genkit, serverName, promptName string, args map[string]string) (*ai.TextPrompt[any], error) {
 	client, exists := h.clients[serverName]
 	if !exists {
 		return nil, fmt.Errorf("no client found with name '%s'", serverName)

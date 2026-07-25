@@ -29,7 +29,7 @@ import (
 // A Flow is a user-defined Action. A Flow[In, Out, Stream] represents a function from In to Out.
 // The Stream parameter is for flows that support streaming: providing their results incrementally.
 type Flow[In, Out, Stream any] struct {
-	*Action[In, Out, Stream]
+	*action[In, Out, Stream]
 }
 
 // StreamingFlowValue is either a streamed value or a final output of a flow.
@@ -48,8 +48,9 @@ type flowContext struct {
 }
 
 // NewFlow creates a Flow that runs fn without registering it. fn takes an input of type In and returns an output of type Out.
+// Register it later via the Register method.
 func NewFlow[In, Out any](name string, fn Func[In, Out]) *Flow[In, Out, struct{}] {
-	return &Flow[In, Out, struct{}]{NewAction(name, api.ActionTypeFlow, nil, nil, func(ctx context.Context, input In) (Out, error) {
+	return &Flow[In, Out, struct{}]{NewAction(api.ActionTypeFlow, name, nil, func(ctx context.Context, input In) (Out, error) {
 		fc := &flowContext{
 			flowName: name,
 		}
@@ -59,8 +60,9 @@ func NewFlow[In, Out any](name string, fn Func[In, Out]) *Flow[In, Out, struct{}
 }
 
 // NewStreamingFlow creates a streaming Flow that runs fn without registering it.
+// Register it later via the Register method.
 func NewStreamingFlow[In, Out, Stream any](name string, fn StreamingFunc[In, Out, Stream]) *Flow[In, Out, Stream] {
-	return &Flow[In, Out, Stream]{NewStreamingAction(name, api.ActionTypeFlow, nil, nil, func(ctx context.Context, input In, cb func(context.Context, Stream) error) (Out, error) {
+	return &Flow[In, Out, Stream]{NewStreamingAction(api.ActionTypeFlow, name, nil, func(ctx context.Context, input In, cb func(context.Context, Stream) error) (Out, error) {
 		fc := &flowContext{
 			flowName: name,
 		}
@@ -123,7 +125,7 @@ func Run[Out any](ctx context.Context, name string, fn func() (Out, error)) (Out
 
 // Run runs the flow in the context of another flow.
 func (f *Flow[In, Out, Stream]) Run(ctx context.Context, input In) (Out, error) {
-	return f.Action.Run(ctx, input, nil)
+	return f.action.Run(ctx, input, nil)
 }
 
 // Stream runs the flow in the context of another flow and streams the output.
@@ -154,7 +156,7 @@ func (f *Flow[In, Out, Stream]) Stream(ctx context.Context, input In) func(func(
 			}
 			return nil
 		}
-		output, err := f.Action.Run(ctx, input, cb)
+		output, err := f.action.Run(ctx, input, cb)
 		if done || errors.Is(err, errStop) {
 			// Consumer broke out of the loop; don't yield again.
 			return

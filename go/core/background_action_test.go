@@ -36,7 +36,7 @@ func TestNewBackgroundAction(t *testing.T) {
 			return &Operation[string]{ID: op.ID, Done: true}, nil
 		}
 
-		ba := NewBackgroundAction("test/background", api.ActionTypeCustom, nil, startFn, checkFn, cancelFn)
+		ba := NewBackgroundAction(api.ActionTypeCustom, "test/background", nil, startFn, checkFn, cancelFn)
 
 		if ba == nil {
 			t.Fatal("NewBackgroundAction returned nil")
@@ -57,7 +57,7 @@ func TestNewBackgroundAction(t *testing.T) {
 			return &Operation[int]{ID: op.ID, Done: true, Output: 42}, nil
 		}
 
-		ba := NewBackgroundAction("test/nocancel", api.ActionTypeCustom, nil, startFn, checkFn, nil)
+		ba := NewBackgroundAction(api.ActionTypeCustom, "test/nocancel", nil, startFn, checkFn, nil)
 
 		if ba == nil {
 			t.Fatal("NewBackgroundAction returned nil")
@@ -74,15 +74,15 @@ func TestNewBackgroundAction(t *testing.T) {
 			}
 		}()
 
-		NewBackgroundAction("", api.ActionTypeCustom, nil,
+		NewBackgroundAction(api.ActionTypeCustom, "", nil,
 			func(ctx context.Context, input string) (*Operation[string], error) {
 				return nil, nil
 			},
 			func(ctx context.Context, op *Operation[string]) (*Operation[string], error) {
 				return nil, nil
 			},
-			nil,
-		)
+			nil)
+
 	})
 
 	t.Run("panics with nil startFn", func(t *testing.T) {
@@ -92,7 +92,7 @@ func TestNewBackgroundAction(t *testing.T) {
 			}
 		}()
 
-		NewBackgroundAction[string, string]("test/nilstart", api.ActionTypeCustom, nil,
+		NewBackgroundAction[string, string](api.ActionTypeCustom, "test/nilstart", nil,
 			nil,
 			func(ctx context.Context, op *Operation[string]) (*Operation[string], error) {
 				return nil, nil
@@ -108,13 +108,13 @@ func TestNewBackgroundAction(t *testing.T) {
 			}
 		}()
 
-		NewBackgroundAction("test/nilcheck", api.ActionTypeCustom, nil,
+		NewBackgroundAction(api.ActionTypeCustom, "test/nilcheck", nil,
 			func(ctx context.Context, input string) (*Operation[string], error) {
 				return nil, nil
 			},
 			nil,
-			nil,
-		)
+			nil)
+
 	})
 }
 
@@ -128,7 +128,7 @@ func TestDefineBackgroundAction(t *testing.T) {
 			return &Operation[string]{ID: op.ID, Done: true, Output: "done"}, nil
 		}
 
-		ba := DefineBackgroundAction(r, "test/registered", api.ActionTypeCustom, nil, startFn, checkFn, nil)
+		ba := DefineBackgroundAction(r, api.ActionTypeCustom, "test/registered", nil, startFn, checkFn, nil)
 
 		if ba == nil {
 			t.Fatal("DefineBackgroundAction returned nil")
@@ -153,7 +153,7 @@ func TestBackgroundActionStart(t *testing.T) {
 			return &Operation[string]{ID: op.ID, Done: op.Done, Metadata: map[string]any{}}, nil
 		}
 
-		ba := DefineBackgroundAction(r, "test/start", api.ActionTypeCustom, nil, startFn, checkFn, nil)
+		ba := DefineBackgroundAction(r, api.ActionTypeCustom, "test/start", nil, startFn, checkFn, nil)
 
 		op, err := ba.Start(context.Background(), "hello")
 		if err != nil {
@@ -182,7 +182,7 @@ func TestBackgroundActionCheck(t *testing.T) {
 			return &Operation[string]{ID: op.ID, Done: true, Output: "completed", Metadata: map[string]any{}}, nil
 		}
 
-		ba := DefineBackgroundAction(r, "test/check", api.ActionTypeCustom, nil, startFn, checkFn, nil)
+		ba := DefineBackgroundAction(r, api.ActionTypeCustom, "test/check", nil, startFn, checkFn, nil)
 
 		op, err := ba.Start(context.Background(), "input")
 		if err != nil {
@@ -215,7 +215,7 @@ func TestBackgroundActionCancel(t *testing.T) {
 			return &Operation[string]{ID: op.ID, Done: true, Metadata: map[string]any{"cancelled": true}}, nil
 		}
 
-		ba := DefineBackgroundAction(r, "test/cancel", api.ActionTypeCustom, nil, startFn, checkFn, cancelFn)
+		ba := DefineBackgroundAction(r, api.ActionTypeCustom, "test/cancel", nil, startFn, checkFn, cancelFn)
 
 		op, err := ba.Start(context.Background(), "input")
 		if err != nil {
@@ -240,7 +240,7 @@ func TestBackgroundActionCancel(t *testing.T) {
 			return &Operation[string]{ID: op.ID, Done: op.Done, Metadata: map[string]any{}}, nil
 		}
 
-		ba := DefineBackgroundAction(r, "test/nocancel", api.ActionTypeCustom, nil, startFn, checkFn, nil)
+		ba := DefineBackgroundAction(r, api.ActionTypeCustom, "test/nocancel", nil, startFn, checkFn, nil)
 
 		op, err := ba.Start(context.Background(), "input")
 		if err != nil {
@@ -267,7 +267,7 @@ func TestBackgroundActionRegister(t *testing.T) {
 			return &Operation[string]{ID: op.ID, Metadata: map[string]any{}}, nil
 		}
 
-		ba := NewBackgroundAction("test/register", api.ActionTypeCustom, nil, startFn, checkFn, cancelFn)
+		ba := NewBackgroundAction(api.ActionTypeCustom, "test/register", nil, startFn, checkFn, cancelFn)
 		ba.Register(r)
 
 		// Check main action
@@ -298,7 +298,7 @@ func TestBackgroundActionRegister(t *testing.T) {
 			return &Operation[string]{ID: op.ID, Metadata: map[string]any{}}, nil
 		}
 
-		ba := NewBackgroundAction("test/register-nocancel", api.ActionTypeCustom, nil, startFn, checkFn, nil)
+		ba := NewBackgroundAction(api.ActionTypeCustom, "test/register-nocancel", nil, startFn, checkFn, nil)
 		ba.Register(r)
 
 		// Cancel action should not be registered
@@ -319,7 +319,7 @@ func TestLookupBackgroundAction(t *testing.T) {
 			return &Operation[string]{ID: op.ID, Metadata: map[string]any{}}, nil
 		}
 
-		DefineBackgroundAction(r, "test/lookup", api.ActionTypeCustom, nil, startFn, checkFn, nil)
+		DefineBackgroundAction(r, api.ActionTypeCustom, "test/lookup", nil, startFn, checkFn, nil)
 
 		key := api.KeyFromName(api.ActionTypeCustom, "test/lookup")
 		found := LookupBackgroundAction[string, string](r, key)
@@ -354,7 +354,7 @@ func TestCheckOperation(t *testing.T) {
 			return &Operation[string]{ID: op.ID, Done: true, Output: "checked", Metadata: map[string]any{}}, nil
 		}
 
-		ba := DefineBackgroundAction(r, "test/checkop", api.ActionTypeCustom, nil, startFn, checkFn, nil)
+		ba := DefineBackgroundAction(r, api.ActionTypeCustom, "test/checkop", nil, startFn, checkFn, nil)
 
 		op, err := ba.Start(context.Background(), "input")
 		if err != nil {
@@ -421,7 +421,7 @@ func TestBackgroundActionWithMetadata(t *testing.T) {
 			return &Operation[string]{ID: op.ID, Metadata: map[string]any{}}, nil
 		}
 
-		ba := DefineBackgroundAction(r, "test/meta", api.ActionTypeCustom, meta, startFn, checkFn, nil)
+		ba := DefineBackgroundAction(r, api.ActionTypeCustom, "test/meta", &ActionOptions{Metadata: meta}, startFn, checkFn, nil)
 
 		desc := ba.Desc()
 		if desc.Description != "A test background action" {

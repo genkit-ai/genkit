@@ -25,8 +25,8 @@ import (
 	"log"
 	"net/http"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/server"
 )
 
@@ -37,10 +37,13 @@ func main() {
 	}
 
 	ctx := context.Background()
-	g := genkit.Init(ctx)
-	model := genkit.DefineModel(g, "customReflector", nil, echo)
-	genkit.DefineFlow(g, "testFlow", func(ctx context.Context, in string) (string, error) {
-		res, err := genkit.Generate(ctx, g, ai.WithModel(model), ai.WithPrompt(in))
+	g, err := genkit.Init(ctx)
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
+	model := g.DefineModel("customReflector", nil, echo)
+	g.DefineFlow("testFlow", func(ctx context.Context, in string) (string, error) {
+		res, err := g.Generate(ctx, ai.WithModel(model), ai.WithPrompt(in))
 		if err != nil {
 			return "", err
 		}
@@ -48,7 +51,7 @@ func main() {
 		return "TBD", nil
 	})
 
-	genkit.DefineStreamingFlow(g, "streamy", func(ctx context.Context, count int, cb func(context.Context, chunk) error) (string, error) {
+	g.DefineStreamingFlow("streamy", func(ctx context.Context, count int, cb func(context.Context, chunk) error) (string, error) {
 		i := 0
 		if cb != nil {
 			for ; i < count; i++ {
@@ -61,13 +64,13 @@ func main() {
 	})
 
 	mux := http.NewServeMux()
-	for _, a := range genkit.ListFlows(g) {
+	for _, a := range g.ListFlows() {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
 	log.Fatal(server.Start(ctx, "127.0.0.1:3400", mux))
 }
 
-func echo(ctx context.Context, req *ai.ModelRequest, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
+func echo(ctx context.Context, req *ai.ModelRequest, _ any, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
 	jsonBytes, err := json.Marshal(req)
 	if err != nil {
 		return nil, err

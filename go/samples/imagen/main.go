@@ -18,18 +18,21 @@ import (
 	"context"
 	"log"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"google.golang.org/genai"
 )
 
 func main() {
 	ctx := context.Background()
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
-	genkit.DefineFlow(g, "image-generation", func(ctx context.Context, input string) ([]string, error) {
-		r, err := genkit.Generate(ctx, g,
+	g.DefineFlow("image-generation", func(ctx context.Context, input string) ([]string, error) {
+		r, err := g.Generate(ctx,
 			ai.WithModelName("vertexai/imagen-3.0-generate-001"),
 			ai.WithPrompt("Generate an image of %s", input),
 			ai.WithConfig(&genai.GenerateImagesConfig{

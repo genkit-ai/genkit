@@ -28,8 +28,8 @@ import (
 	"log"
 	"os"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"google.golang.org/genai"
 )
@@ -38,7 +38,10 @@ func main() {
 	ctx := context.Background()
 
 	// Initialize Genkit
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Create Files API client
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
@@ -62,7 +65,7 @@ func main() {
 
 	// Use Files API URI directly with Genkit (now supported!)
 	fmt.Println("Analyzing image with Genkit using Files API URI...")
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithModelName("googleai/gemini-2.5-flash"),
 		ai.WithMessages(
 			ai.NewUserMessage(

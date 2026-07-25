@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 )
 
 // TestMCPConnectionAndTranslation tests the full integration between
@@ -49,7 +49,7 @@ func TestMCPConnectionAndTranslation(t *testing.T) {
 	}
 
 	// SETUP: Genkit client
-	g := genkit.Init(ctx)
+	g := genkit.MustInit(ctx)
 
 	host, err := NewMCPHost(g, MCPHostOptions{
 		Name: "test-host",
@@ -117,13 +117,13 @@ func TestMCPAIIntegration(t *testing.T) {
 	}
 
 	// SETUP: Genkit with MCP and mock model
-	g := genkit.Init(ctx)
+	g := genkit.MustInit(ctx)
 
 	// Define a mock model that echoes the input (like in resource_test.go)
-	genkit.DefineModel(g, "echo-model", &ai.ModelOptions{
+	g.DefineModel("echo-model", &ai.ModelOptions{
 		Label:    "Mock Echo Model for Testing",
 		Supports: &ai.ModelSupports{},
-	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	}, func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		// Echo back all the content to verify resources were included
 		var parts []*ai.Part
 		for _, msg := range req.Messages {
@@ -160,7 +160,7 @@ func TestMCPAIIntegration(t *testing.T) {
 	}
 
 	// TEST: AI generation with MCP resources (like resource_test.go)
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithModelName("echo-model"),
 		ai.WithMessages(ai.NewUserMessage(
 			ai.NewTextPart("Policy summary:"),
@@ -212,7 +212,7 @@ func TestMCPURIMatching(t *testing.T) {
 	}
 
 	// SETUP: Genkit with MCP
-	g := genkit.Init(ctx)
+	g := genkit.MustInit(ctx)
 
 	host, err := NewMCPHost(g, MCPHostOptions{Name: "test-host"})
 	if err != nil {
@@ -287,7 +287,7 @@ func TestMCPContentFetch(t *testing.T) {
 	}
 
 	// SETUP: Genkit with MCP
-	g := genkit.Init(ctx)
+	g := genkit.MustInit(ctx)
 
 	host, err := NewMCPHost(g, MCPHostOptions{Name: "test-host"})
 	if err != nil {
@@ -313,7 +313,7 @@ func TestMCPContentFetch(t *testing.T) {
 
 	// Find resource that matches our test URI
 	testURI := "file://data/example.txt"
-	var matchingResource ai.Resource
+	var matchingResource *ai.Resource
 	for _, res := range resources {
 		if res.Matches(testURI) {
 			matchingResource = res
@@ -327,9 +327,9 @@ func TestMCPContentFetch(t *testing.T) {
 	}
 
 	// ASSERT 2: Content can be fetched via AI integration (end-to-end test)
-	genkit.DefineModel(g, "echo-model", &ai.ModelOptions{
+	g.DefineModel("echo-model", &ai.ModelOptions{
 		Supports: &ai.ModelSupports{},
-	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	}, func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		// Echo back all content to verify resources were included
 		var parts []*ai.Part
 		for _, msg := range req.Messages {
@@ -344,7 +344,7 @@ func TestMCPContentFetch(t *testing.T) {
 	})
 
 	// TEST: AI generation with MCP resource to verify content fetch
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithModelName("echo-model"),
 		ai.WithMessages(ai.NewUserMessage(
 			ai.NewTextPart("Content:"),
@@ -406,7 +406,7 @@ func TestMCPMultipleServers(t *testing.T) {
 	}
 
 	// SETUP: Genkit with MCP host
-	g := genkit.Init(ctx)
+	g := genkit.MustInit(ctx)
 
 	host, err := NewMCPHost(g, MCPHostOptions{Name: "multi-host"})
 	if err != nil {
@@ -483,7 +483,7 @@ func TestMCPMultipleServers(t *testing.T) {
 // This covers the most common real-world failure scenarios.
 func TestMCPErrorResilience(t *testing.T) {
 	ctx := context.Background()
-	g := genkit.Init(ctx)
+	g := genkit.MustInit(ctx)
 
 	// TEST 1: Server connection failure (fast!)
 	t.Run("connection_failure", func(t *testing.T) {

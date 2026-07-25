@@ -25,346 +25,228 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
-func TestCommonOptions(t *testing.T) {
-	tests := []struct {
-		name    string
-		opts    []CommonGenOption
-		wantErr bool
-	}{
-		{
-			name: "valid options",
-			opts: []CommonGenOption{
-				WithMessages(NewUserTextMessage("test")),
-				WithConfig(&GenerationCommonConfig{Temperature: 0.7}),
-				WithModel(&mockModel{name: "test/model"}),
-				WithTools(&mockTool{name: "test/tool"}),
-				WithToolChoice(ToolChoiceAuto),
-				WithMaxTurns(3),
-				WithReturnToolRequests(true),
-				WithMiddleware(func(next ModelFunc) ModelFunc { return next }),
-			},
-			wantErr: false,
-		},
-		{
-			name: "mutually exclusive - messages",
-			opts: []CommonGenOption{
-				WithMessages(NewUserTextMessage("test")),
-				WithMessagesFn(func(context.Context, any) ([]*Message, error) { return nil, nil }),
-			},
-			wantErr: true,
-		},
-		{
-			name: "mutually exclusive - model",
-			opts: []CommonGenOption{
-				WithModel(&mockModel{name: "test/model"}),
-				WithModelName("test/model"),
-			},
-			wantErr: true,
-		},
+// applyGen builds a generateOptions from the given options, mirroring what
+// Generate does internally.
+func applyGen(opts ...GenerateOption) *generateOptions {
+	g := &generateOptions{}
+	for _, o := range opts {
+		o.applyGenerate(g)
 	}
+	return g
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			genOpts := &generateOptions{}
-			promptOpts := &promptOptions{}
-			pgOpts := &promptExecutionOptions{}
+// messageText renders the concatenated text of a MessagesFn's output, for
+// asserting on accumulation order.
+func messageText(t *testing.T, fn MessagesFn) []string {
+	t.Helper()
+	if fn == nil {
+		return nil
+	}
+	msgs, err := fn(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("MessagesFn error: %v", err)
+	}
+	out := make([]string, len(msgs))
+	for i, m := range msgs {
+		out[i] = m.Text()
+	}
+	return out
+}
 
-			var err error
-			for _, opt := range tt.opts {
-				err = opt.applyGenerate(genOpts)
-				if err != nil {
-					break
-				}
-			}
+// TestCollectionOptionsAccumulate verifies that options carrying multiple items
+// append across repeated calls (and across their variants) rather than
+// erroring or overwriting.
+func TestCollectionOptionsAccumulate(t *testing.T) {
+	t.Run("messages append across WithMessages and WithMessagesFn", func(t *testing.T) {
+		g := applyGen(
+			WithMessages(NewUserTextMessage("a")),
+			WithMessages(NewUserTextMessage("b"), NewUserTextMessage("c")),
+			WithMessagesFn(func(context.Context, any) ([]*Message, error) {
+				return []*Message{NewUserTextMessage("d")}, nil
+			}),
+		)
+		got := messageText(t, g.MessagesFn)
+		want := []string{"a", "b", "c", "d"}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("messages diff (-want +got):\n%s", diff)
+		}
+	})
 
-			if (err != nil) != tt.wantErr {
-				t.Errorf("applyGenerate() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
+	t.Run("tools append", func(t *testing.T) {
+		t1 := &mockTool{name: "t/1"}
+		t2 := &mockTool{name: "t/2"}
+		t3 := &mockTool{name: "t/3"}
+		g := applyGen(WithTools(t1, t2), WithTools(t3))
+		if diff := cmp.Diff([]ToolArg{t1, t2, t3}, g.Tools,
+			cmpopts.IgnoreUnexported(mockTool{})); diff != "" {
+			t.Errorf("tools diff (-want +got):\n%s", diff)
+		}
+	})
 
-			if tt.wantErr {
-				return
-			}
+	t.Run("docs append across WithDocs and WithTextDocs", func(t *testing.T) {
+		d := DocumentFromText("doc", nil)
+		g := applyGen(WithDocs(d), WithTextDocs("text"))
+		if len(g.Documents) != 2 {
+			t.Fatalf("len(Documents) = %d, want 2", len(g.Documents))
+		}
+	})
 
-			for _, opt := range tt.opts {
-				if err = opt.applyPrompt(promptOpts); err != nil {
-					t.Errorf("applyPrompt() unexpected error = %v", err)
-					return
-				}
-			}
+	t.Run("resources append", func(t *testing.T) {
+		g := applyGen(
+			WithResources(&Resource{}),
+			WithResources(&Resource{}, &Resource{}),
+		)
+		if len(g.Resources) != 3 {
+			t.Errorf("len(Resources) = %d, want 3", len(g.Resources))
+		}
+	})
 
-			for _, opt := range tt.opts {
-				if err = opt.applyPromptExecute(pgOpts); err != nil {
-					t.Errorf("applyPromptExecute() unexpected error = %v", err)
-					return
-				}
-			}
-		})
+	t.Run("middleware append in order", func(t *testing.T) {
+		a := MiddlewareFunc(func(context.Context) (*Hooks, error) { return &Hooks{}, nil })
+		b := MiddlewareFunc(func(context.Context) (*Hooks, error) { return &Hooks{}, nil })
+		g := applyGen(WithUse(a), WithUse(b))
+		if len(g.Use) != 2 {
+			t.Errorf("len(Use) = %d, want 2", len(g.Use))
+		}
+	})
+
+	t.Run("tool responses and restarts append", func(t *testing.T) {
+		g := applyGen(
+			WithToolResponses(NewTextPart("r1")),
+			WithToolResponses(NewTextPart("r2")),
+			WithToolRestarts(NewTextPart("s1")),
+			WithToolRestarts(NewTextPart("s2")),
+		)
+		if len(g.RespondParts) != 2 {
+			t.Errorf("len(RespondParts) = %d, want 2", len(g.RespondParts))
+		}
+		if len(g.RestartParts) != 2 {
+			t.Errorf("len(RestartParts) = %d, want 2", len(g.RestartParts))
+		}
+	})
+
+	t.Run("dataset appends", func(t *testing.T) {
+		e := &evaluatorOptions{}
+		for _, o := range []EvaluatorOption{
+			WithDataset(&Example{}),
+			WithDataset(&Example{}, &Example{}),
+		} {
+			o.applyEvaluator(e)
+		}
+		if len(e.Dataset) != 3 {
+			t.Errorf("len(Dataset) = %d, want 3", len(e.Dataset))
+		}
+	})
+}
+
+// TestSingleValueOptionsLastWins verifies that options filling a single slot
+// take the last value set instead of erroring on repeats.
+func TestSingleValueOptionsLastWins(t *testing.T) {
+	t.Run("model: WithModel then WithModelName", func(t *testing.T) {
+		g := applyGen(WithModel(&mockModel{name: "first/model"}), WithModelName("second/model"))
+		if g.Model == nil || g.Model.Name() != "second/model" {
+			t.Errorf("Model = %v, want name second/model", g.Model)
+		}
+	})
+
+	t.Run("config: last wins", func(t *testing.T) {
+		last := &GenerationCommonConfig{Temperature: 0.9}
+		g := applyGen(
+			WithConfig(&GenerationCommonConfig{Temperature: 0.1}),
+			WithConfig(last),
+		)
+		if g.Config != last {
+			t.Errorf("Config = %v, want %v", g.Config, last)
+		}
+	})
+
+	t.Run("tool choice, max turns, return tool requests: last wins", func(t *testing.T) {
+		g := applyGen(
+			WithToolChoice(ToolChoiceAuto), WithToolChoice(ToolChoiceRequired),
+			WithMaxTurns(2), WithMaxTurns(7),
+			WithReturnToolRequests(true), WithReturnToolRequests(false),
+		)
+		if g.ToolChoice != ToolChoiceRequired {
+			t.Errorf("ToolChoice = %q, want %q", g.ToolChoice, ToolChoiceRequired)
+		}
+		if g.MaxTurns != 7 {
+			t.Errorf("MaxTurns = %d, want 7", g.MaxTurns)
+		}
+		if g.ReturnToolRequests == nil || *g.ReturnToolRequests {
+			t.Errorf("ReturnToolRequests = %v, want false", g.ReturnToolRequests)
+		}
+	})
+
+	t.Run("system and prompt: last wins across text and fn", func(t *testing.T) {
+		g := applyGen(
+			WithSystem("sys one"),
+			WithSystemFn(func(context.Context, any) (string, error) { return "sys two", nil }),
+			WithPrompt("usr one"),
+			WithPrompt("usr two"),
+		)
+		if sys, _ := g.SystemFn(context.Background(), nil); sys != "sys two" {
+			t.Errorf("system = %q, want %q", sys, "sys two")
+		}
+		if usr, _ := g.PromptFn(context.Background(), nil); usr != "usr two" {
+			t.Errorf("prompt = %q, want %q", usr, "usr two")
+		}
+	})
+
+	t.Run("streaming: last wins, no error on repeat", func(t *testing.T) {
+		g := applyGen(
+			WithStreaming(func(context.Context, *ModelResponseChunk) error { return nil }),
+			WithStreaming(func(context.Context, *ModelResponseChunk) error { return nil }),
+		)
+		if g.Stream == nil {
+			t.Error("Stream is nil, want non-nil")
+		}
+	})
+}
+
+// TestOutputSchemaLastWins verifies the output-schema slot behaves as last-wins,
+// which is what lets GenerateData inject a schema that a caller can override.
+func TestOutputSchemaLastWins(t *testing.T) {
+	custom := map[string]any{"type": "object", "properties": map[string]any{"n": map[string]any{"type": "string"}}}
+
+	// Simulate GenerateData's prepend: the inferred type is applied first, the
+	// caller's explicit schema second.
+	g := applyGen(
+		WithOutputType(struct {
+			Value int `json:"value"`
+		}{}),
+		WithOutputSchema(custom),
+	)
+	if diff := cmp.Diff(custom, g.OutputSchema); diff != "" {
+		t.Errorf("OutputSchema not overridden by caller (-want +got):\n%s", diff)
+	}
+	if g.OutputFormat != OutputFormatJSON {
+		t.Errorf("OutputFormat = %q, want %q", g.OutputFormat, OutputFormatJSON)
 	}
 }
 
 func TestPromptOptions(t *testing.T) {
-	tests := []struct {
-		name    string
-		opts    []PromptOption
-		wantErr bool
-	}{
-		{
-			name: "valid options",
-			opts: []PromptOption{
-				WithDescription("test description"),
-				WithMetadata(map[string]any{"key": "value"}),
-				WithInputType(struct {
-					Test string `json:"test"`
-				}{}),
-			},
-			wantErr: false,
-		},
+	opts := &promptOptions{}
+	for _, o := range []PromptOption{
+		WithDescription("test description"),
+		WithMetadata(map[string]any{"key": "value"}),
+		WithInputType(struct {
+			Test string `json:"test"`
+		}{}),
+	} {
+		o.applyPrompt(opts)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			opts := &promptOptions{}
-			var err error
-			for _, opt := range tt.opts {
-				err = opt.applyPrompt(opts)
-				if err != nil {
-					break
-				}
-			}
-			if (err != nil) != tt.wantErr {
-				t.Errorf("applyPrompt() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
+	if opts.Description != "test description" {
+		t.Errorf("Description = %q, want %q", opts.Description, "test description")
 	}
-}
-
-func TestPromptingOptions(t *testing.T) {
-	tests := []struct {
-		name    string
-		opts    []PromptingOption
-		wantErr bool
-	}{
-		{
-			name: "valid options",
-			opts: []PromptingOption{
-				WithSystem("system instruction"),
-				WithPrompt("user prompt"),
-			},
-			wantErr: false,
-		},
-		{
-			name: "mutually exclusive - system",
-			opts: []PromptingOption{
-				WithSystem("system instruction"),
-				WithSystemFn(func(context.Context, any) (string, error) { return "system", nil }),
-			},
-			wantErr: true,
-		},
-		{
-			name: "mutually exclusive - prompt",
-			opts: []PromptingOption{
-				WithPrompt("user prompt"),
-				WithPromptFn(func(context.Context, any) (string, error) { return "prompt", nil }),
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			genOpts := &generateOptions{}
-			promptOpts := &promptOptions{}
-
-			var err error
-			for _, opt := range tt.opts {
-				err = opt.applyGenerate(genOpts)
-				if err != nil {
-					break
-				}
-			}
-
-			if (err != nil) != tt.wantErr {
-				t.Errorf("applyGenerate() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-
-			if tt.wantErr {
-				return
-			}
-
-			for _, opt := range tt.opts {
-				if err = opt.applyPrompt(promptOpts); err != nil {
-					t.Errorf("applyPrompt() unexpected error = %v", err)
-					return
-				}
-			}
-		})
-	}
-}
-
-func TestOutputOptions(t *testing.T) {
-	tests := []struct {
-		name    string
-		opts    []OutputOption
-		wantErr bool
-	}{
-		{
-			name: "valid - output type",
-			opts: []OutputOption{
-				WithOutputType(struct {
-					Test string `json:"test"`
-				}{}),
-			},
-			wantErr: false,
-		},
-		{
-			name: "valid - output format",
-			opts: []OutputOption{
-				WithOutputFormat(OutputFormatText),
-			},
-			wantErr: false,
-		},
-		{
-			name: "valid - output instruction",
-			opts: []OutputOption{
-				WithOutputInstructions(""),
-			},
-			wantErr: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			genOpts := &generateOptions{}
-			promptOpts := &promptOptions{}
-
-			var err error
-			for _, opt := range tt.opts {
-				err = opt.applyGenerate(genOpts)
-				if err != nil {
-					break
-				}
-			}
-
-			if (err != nil) != tt.wantErr {
-				t.Errorf("applyGenerate() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-
-			if tt.wantErr {
-				return
-			}
-
-			for _, opt := range tt.opts {
-				if err = opt.applyPrompt(promptOpts); err != nil {
-					t.Errorf("applyPrompt() unexpected error = %v", err)
-					return
-				}
-			}
-		})
-	}
-}
-
-func TestExecutionOptions(t *testing.T) {
-	tests := []struct {
-		name    string
-		opts    []ExecutionOption
-		wantErr bool
-	}{
-		{
-			name: "valid options",
-			opts: []ExecutionOption{
-				WithStreaming(func(context.Context, *ModelResponseChunk) error { return nil }),
-			},
-			wantErr: false,
-		},
-		{
-			name: "duplicate - streaming",
-			opts: []ExecutionOption{
-				WithStreaming(func(context.Context, *ModelResponseChunk) error { return nil }),
-				WithStreaming(func(context.Context, *ModelResponseChunk) error { return nil }),
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			genOpts := &generateOptions{}
-			pgOpts := &promptExecutionOptions{}
-
-			var err error
-			for _, opt := range tt.opts {
-				err = opt.applyGenerate(genOpts)
-				if err != nil {
-					break
-				}
-			}
-
-			if (err != nil) != tt.wantErr {
-				t.Errorf("applyGenerate() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-
-			if tt.wantErr {
-				return
-			}
-
-			for _, opt := range tt.opts {
-				if err = opt.applyPromptExecute(pgOpts); err != nil {
-					t.Errorf("applyPromptExecute() unexpected error = %v", err)
-					return
-				}
-			}
-		})
-	}
-}
-
-func TestPromptGenerateOptions(t *testing.T) {
-	tests := []struct {
-		name    string
-		opts    []PromptExecuteOption
-		wantErr bool
-	}{
-		{
-			name: "valid options",
-			opts: []PromptExecuteOption{
-				WithInput(map[string]string{"key": "value"}),
-			},
-			wantErr: false,
-		},
-		{
-			name: "duplicate - input",
-			opts: []PromptExecuteOption{
-				WithInput("input1"),
-				WithInput("input2"),
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			opts := &promptExecutionOptions{}
-			var err error
-			for _, opt := range tt.opts {
-				err = opt.applyPromptExecute(opts)
-				if err != nil {
-					break
-				}
-			}
-			if (err != nil) != tt.wantErr {
-				t.Errorf("applyPromptExecute() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
+	if opts.InputSchema == nil {
+		t.Error("InputSchema is nil")
 	}
 }
 
 func TestGenerateOptionsComplete(t *testing.T) {
 	opts := &generateOptions{}
 
-	mw := func(next ModelFunc) ModelFunc { return next }
+	mw := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) { return &Hooks{}, nil })
 	model := &mockModel{name: "test/model"}
 	tool := &mockTool{name: "test/tool"}
 	streamFunc := func(context.Context, *ModelResponseChunk) error { return nil }
@@ -377,7 +259,7 @@ func TestGenerateOptionsComplete(t *testing.T) {
 		WithToolChoice(ToolChoiceAuto),
 		WithMaxTurns(3),
 		WithReturnToolRequests(true),
-		WithMiddleware(mw),
+		WithUse(mw),
 		WithSystem("system prompt"),
 		WithPrompt("user prompt"),
 		WithDocs(doc),
@@ -388,9 +270,7 @@ func TestGenerateOptionsComplete(t *testing.T) {
 	}
 
 	for _, opt := range options {
-		if err := opt.applyGenerate(opts); err != nil {
-			t.Fatalf("Failed to apply option: %v", err)
-		}
+		opt.applyGenerate(opts)
 	}
 
 	returnToolRequests := true
@@ -400,11 +280,11 @@ func TestGenerateOptionsComplete(t *testing.T) {
 				Config: &GenerationCommonConfig{Temperature: 0.7},
 			},
 			Model:              model,
-			Tools:              []ToolRef{tool},
+			Tools:              []ToolArg{tool},
 			ToolChoice:         ToolChoiceAuto,
 			MaxTurns:           3,
 			ReturnToolRequests: &returnToolRequests,
-			Middleware:         []ModelMiddleware{mw},
+			Use:                []Middleware{mw},
 		},
 		promptingOptions: promptingOptions{
 			SystemFn: opts.SystemFn,
@@ -428,7 +308,7 @@ func TestGenerateOptionsComplete(t *testing.T) {
 	}
 
 	if diff := cmp.Diff(expected, opts,
-		cmpopts.IgnoreFields(commonGenOptions{}, "MessagesFn", "Middleware"),
+		cmpopts.IgnoreFields(commonGenOptions{}, "MessagesFn", "Use"),
 		cmpopts.IgnoreFields(promptingOptions{}, "SystemFn", "PromptFn"),
 		cmpopts.IgnoreFields(executionOptions{}, "Stream"),
 		cmpopts.IgnoreUnexported(mockModel{}, mockTool{}),
@@ -440,8 +320,8 @@ func TestGenerateOptionsComplete(t *testing.T) {
 	if opts.MessagesFn == nil {
 		t.Errorf("MessagesFn should not be nil")
 	}
-	if len(opts.Middleware) == 0 {
-		t.Errorf("Middleware should not be empty")
+	if len(opts.Use) == 0 {
+		t.Errorf("Use should not be empty")
 	}
 	if opts.SystemFn == nil {
 		t.Errorf("SystemFn should not be nil")
@@ -453,10 +333,11 @@ func TestGenerateOptionsComplete(t *testing.T) {
 		t.Errorf("Stream should not be nil")
 	}
 }
+
 func TestPromptOptionsComplete(t *testing.T) {
 	opts := &promptOptions{}
 
-	mw := func(next ModelFunc) ModelFunc { return next }
+	mw := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) { return &Hooks{}, nil })
 	model := &mockModel{name: "test/model"}
 	tool := &mockTool{name: "test/tool"}
 	input := struct {
@@ -473,7 +354,7 @@ func TestPromptOptionsComplete(t *testing.T) {
 		WithToolChoice(ToolChoiceAuto),
 		WithMaxTurns(3),
 		WithReturnToolRequests(true),
-		WithMiddleware(mw),
+		WithUse(mw),
 		WithSystem("system prompt"),
 		WithPrompt("user prompt"),
 		WithDescription("test description"),
@@ -485,9 +366,7 @@ func TestPromptOptionsComplete(t *testing.T) {
 	}
 
 	for _, opt := range options {
-		if err := opt.applyPrompt(opts); err != nil {
-			t.Fatalf("Failed to apply option: %v", err)
-		}
+		opt.applyPrompt(opts)
 	}
 
 	returnToolRequests := true
@@ -497,11 +376,11 @@ func TestPromptOptionsComplete(t *testing.T) {
 				Config: &GenerationCommonConfig{Temperature: 0.7},
 			},
 			Model:              model,
-			Tools:              []ToolRef{tool},
+			Tools:              []ToolArg{tool},
 			ToolChoice:         ToolChoiceAuto,
 			MaxTurns:           3,
 			ReturnToolRequests: &returnToolRequests,
-			Middleware:         []ModelMiddleware{mw},
+			Use:                []Middleware{mw},
 		},
 		promptingOptions: promptingOptions{
 			SystemFn: opts.SystemFn,
@@ -525,7 +404,7 @@ func TestPromptOptionsComplete(t *testing.T) {
 	}
 
 	if diff := cmp.Diff(expected, opts,
-		cmpopts.IgnoreFields(commonGenOptions{}, "MessagesFn", "Middleware"),
+		cmpopts.IgnoreFields(commonGenOptions{}, "MessagesFn", "Use"),
 		cmpopts.IgnoreFields(promptingOptions{}, "SystemFn", "PromptFn"),
 		cmpopts.IgnoreFields(outputOptions{}, "OutputSchema"),
 		cmpopts.IgnoreFields(inputOptions{}, "InputSchema"),
@@ -538,8 +417,8 @@ func TestPromptOptionsComplete(t *testing.T) {
 	if opts.MessagesFn == nil {
 		t.Errorf("MessagesFn should not be nil")
 	}
-	if len(opts.Middleware) == 0 {
-		t.Errorf("Middleware should not be empty")
+	if len(opts.Use) == 0 {
+		t.Errorf("Use should not be empty")
 	}
 	if opts.SystemFn == nil {
 		t.Errorf("SystemFn should not be nil")
@@ -558,11 +437,10 @@ func TestPromptOptionsComplete(t *testing.T) {
 func TestPromptExecuteOptionsComplete(t *testing.T) {
 	opts := &promptExecutionOptions{}
 
-	mw := func(next ModelFunc) ModelFunc { return next }
+	mw := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) { return &Hooks{}, nil })
 	model := &mockModel{name: "test/model"}
 	tool := &mockTool{name: "test/tool"}
 	streamFunc := func(context.Context, *ModelResponseChunk) error { return nil }
-	input := map[string]string{"key": "value"}
 	doc := DocumentFromText("doc", nil)
 
 	options := []PromptExecuteOption{
@@ -573,16 +451,13 @@ func TestPromptExecuteOptionsComplete(t *testing.T) {
 		WithToolChoice(ToolChoiceAuto),
 		WithMaxTurns(3),
 		WithReturnToolRequests(true),
-		WithMiddleware(mw),
+		WithUse(mw),
 		WithDocs(doc),
 		WithStreaming(streamFunc),
-		WithInput(input),
 	}
 
 	for _, opt := range options {
-		if err := opt.applyPromptExecute(opts); err != nil {
-			t.Fatalf("Failed to apply option: %v", err)
-		}
+		opt.applyPromptExecute(opts)
 	}
 
 	returnToolRequests := true
@@ -592,11 +467,11 @@ func TestPromptExecuteOptionsComplete(t *testing.T) {
 				Config: &GenerationCommonConfig{Temperature: 0.7},
 			},
 			Model:              model,
-			Tools:              []ToolRef{tool},
+			Tools:              []ToolArg{tool},
 			ToolChoice:         ToolChoiceAuto,
 			MaxTurns:           3,
 			ReturnToolRequests: &returnToolRequests,
-			Middleware:         []ModelMiddleware{mw},
+			Use:                []Middleware{mw},
 		},
 		executionOptions: executionOptions{
 			Stream: streamFunc,
@@ -604,11 +479,10 @@ func TestPromptExecuteOptionsComplete(t *testing.T) {
 		documentOptions: documentOptions{
 			Documents: []*Document{doc},
 		},
-		Input: input,
 	}
 
 	if diff := cmp.Diff(expected, opts,
-		cmpopts.IgnoreFields(commonGenOptions{}, "MessagesFn", "Middleware"),
+		cmpopts.IgnoreFields(commonGenOptions{}, "MessagesFn", "Use"),
 		cmpopts.IgnoreFields(executionOptions{}, "Stream"),
 		cmpopts.IgnoreUnexported(mockModel{}, mockTool{}),
 		cmp.AllowUnexported(promptExecutionOptions{}, commonGenOptions{},
@@ -619,8 +493,8 @@ func TestPromptExecuteOptionsComplete(t *testing.T) {
 	if opts.MessagesFn == nil {
 		t.Errorf("MessagesFn should not be nil")
 	}
-	if opts.Middleware == nil {
-		t.Errorf("Middleware should not be nil")
+	if opts.Use == nil {
+		t.Errorf("Use should not be nil")
 	}
 	if opts.Stream == nil {
 		t.Errorf("Stream should not be nil")
@@ -635,6 +509,8 @@ func (m *mockModel) Name() string {
 	return m.name
 }
 
+func (m *mockModel) modelArg() {}
+
 func (m *mockModel) Generate(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 	return nil, nil
 }
@@ -647,15 +523,13 @@ func (t *mockTool) Name() string {
 	return t.name
 }
 
+func (t *mockTool) toolArg() {}
+
 func (t *mockTool) Definition() *ToolDefinition {
 	return &ToolDefinition{Name: t.name}
 }
 
-func (t *mockTool) RunRaw(ctx context.Context, input any) (any, error) {
-	return nil, nil
-}
-
-func (t *mockTool) RunRawMultipart(ctx context.Context, input any) (*MultipartToolResponse, error) {
+func (t *mockTool) RunRaw(ctx context.Context, input any) (*MultipartToolResponse, error) {
 	return nil, nil
 }
 
@@ -667,9 +541,7 @@ func TestWithInputSchemaName(t *testing.T) {
 		opt := WithInputSchemaName("MyInputType")
 		opts := &promptOptions{}
 
-		if err := opt.applyPrompt(opts); err != nil {
-			t.Fatalf("applyPrompt() error: %v", err)
-		}
+		opt.applyPrompt(opts)
 
 		if opts.InputSchema == nil {
 			t.Fatal("InputSchema is nil")
@@ -696,9 +568,7 @@ func TestWithOutputSchema(t *testing.T) {
 		opt := WithOutputSchema(schema)
 		opts := &generateOptions{}
 
-		if err := opt.applyGenerate(opts); err != nil {
-			t.Fatalf("applyGenerate() error: %v", err)
-		}
+		opt.applyGenerate(opts)
 
 		if opts.OutputSchema == nil {
 			t.Fatal("OutputSchema is nil")
@@ -714,9 +584,7 @@ func TestWithOutputEnums(t *testing.T) {
 		opt := WithOutputEnums("red", "green", "blue")
 		opts := &generateOptions{}
 
-		if err := opt.applyGenerate(opts); err != nil {
-			t.Fatalf("applyGenerate() error: %v", err)
-		}
+		opt.applyGenerate(opts)
 
 		if opts.OutputSchema == nil {
 			t.Fatal("OutputSchema is nil")
@@ -744,9 +612,7 @@ func TestWithOutputEnums(t *testing.T) {
 		opt := WithOutputEnums(Color("red"), Color("green"))
 		opts := &generateOptions{}
 
-		if err := opt.applyGenerate(opts); err != nil {
-			t.Fatalf("applyGenerate() error: %v", err)
-		}
+		opt.applyGenerate(opts)
 
 		enumVals := opts.OutputSchema["enum"].([]string)
 		if enumVals[0] != "red" || enumVals[1] != "green" {
@@ -760,9 +626,7 @@ func TestWithEvaluatorName(t *testing.T) {
 		opt := WithEvaluatorName("test/myEvaluator")
 		opts := &evaluatorOptions{}
 
-		if err := opt.applyEvaluator(opts); err != nil {
-			t.Fatalf("applyEvaluator() error: %v", err)
-		}
+		opt.applyEvaluator(opts)
 
 		if opts.Evaluator == nil {
 			t.Fatal("Evaluator is nil")

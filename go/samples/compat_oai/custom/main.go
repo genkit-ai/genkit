@@ -19,8 +19,8 @@ import (
 	"log"
 	"os"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 
 	oai "github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/openai/openai-go"
@@ -33,12 +33,15 @@ func main() {
 		log.Fatalf("OPENROUTER_API_KEY environment variable not set")
 	}
 
-	g := genkit.Init(ctx, genkit.WithPlugins(&oai.OpenAICompatible{
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&oai.OpenAICompatible{
 		Provider: "openrouter",
 		APIKey:   apiKey,
 		BaseURL:  "https://openrouter.ai/api/v1",
 	}),
 		genkit.WithDefaultModel("openrouter/tngtech/deepseek-r1t2-chimera:free"))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	prompt := "tell me a joke"
 	config := &openai.ChatCompletionNewParams{
@@ -47,7 +50,7 @@ func main() {
 		TopP:        openai.Float(0.9),
 	}
 
-	resp, err := genkit.Generate(context.Background(), g,
+	resp, err := g.Generate(context.Background(),
 		ai.WithConfig(config),
 		ai.WithPrompt(prompt))
 	if err != nil {

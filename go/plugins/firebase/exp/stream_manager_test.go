@@ -23,9 +23,9 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
-	"github.com/firebase/genkit/go/core"
+	genkit "github.com/firebase/genkit/go"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/x/streaming"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/firebase"
 	"google.golang.org/api/iterator"
 )
@@ -68,9 +68,9 @@ func setupTestStreamManager(t *testing.T) (*FirestoreStreamManager, *firestore.C
 	skipIfNoFirestore(t)
 
 	ctx := context.Background()
-	g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: *testStreamProjectID}))
+	g := genkit.MustInit(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: *testStreamProjectID}))
 
-	f := genkit.LookupPlugin(g, "firebase").(*firebase.Firebase)
+	f := g.LookupPlugin("firebase").(*firebase.Firebase)
 	client, err := f.Firestore(ctx)
 	if err != nil {
 		t.Fatalf("Failed to get Firestore client: %v", err)
@@ -125,11 +125,11 @@ func TestFirestoreStreamManager_OpenDuplicateFails(t *testing.T) {
 		t.Fatal("Expected error when opening duplicate stream")
 	}
 
-	publicErr, ok := err.(*core.UserFacingError)
+	publicErr, ok := err.(*status.Error)
 	if !ok {
-		t.Fatalf("Expected UserFacingError, got %T", err)
+		t.Fatalf("Expected *status.Error, got %T", err)
 	}
-	if publicErr.Status != core.ALREADY_EXISTS {
+	if publicErr.Status != status.AlreadyExists {
 		t.Errorf("Expected ALREADY_EXISTS error, got %v", publicErr.Status)
 	}
 }
@@ -301,7 +301,7 @@ func TestFirestoreStreamManager_Error(t *testing.T) {
 	if errData["message"] != "test error message" {
 		t.Errorf("Expected error message 'test error message', got %v", errData["message"])
 	}
-	if errData["status"] != string(core.UNKNOWN) {
+	if errData["status"] != string(status.Unknown) {
 		t.Errorf("Expected status UNKNOWN for plain error, got %v", errData["status"])
 	}
 
@@ -322,7 +322,7 @@ func TestFirestoreStreamManager_ErrorStatusPreserved(t *testing.T) {
 		t.Fatalf("Failed to open stream: %v", err)
 	}
 
-	testError := core.NewPublicError(core.INVALID_ARGUMENT, "invalid input", nil)
+	testError := status.PublicErrorf(status.ErrInvalidArgument, "invalid input")
 	if err := stream.Error(ctx, testError); err != nil {
 		t.Fatalf("Failed to mark stream error: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestFirestoreStreamManager_ErrorStatusPreserved(t *testing.T) {
 	entry, _ := streamArr[0].(map[string]interface{})
 	errData, _ := entry["err"].(map[string]interface{})
 
-	if errData["status"] != string(core.INVALID_ARGUMENT) {
+	if errData["status"] != string(status.InvalidArgument) {
 		t.Errorf("Expected status INVALID_ARGUMENT, got %v", errData["status"])
 	}
 	if errData["message"] != "invalid input" {
@@ -418,7 +418,7 @@ func TestFirestoreStreamManager_SubscribeErrorStatusPreserved(t *testing.T) {
 	_, err := client.Collection(*testStreamCollection).Doc(streamID).Set(ctx, map[string]interface{}{
 		"stream": []map[string]interface{}{
 			{"type": "error", "err": map[string]interface{}{
-				"status":  string(core.INVALID_ARGUMENT),
+				"status":  string(status.InvalidArgument),
 				"message": "bad input",
 			}},
 		},
@@ -444,11 +444,11 @@ func TestFirestoreStreamManager_SubscribeErrorStatusPreserved(t *testing.T) {
 		if event.Type != streaming.StreamEventError {
 			t.Fatalf("Expected error event, got %v", event.Type)
 		}
-		publicErr, ok := event.Err.(*core.UserFacingError)
+		publicErr, ok := event.Err.(*status.Error)
 		if !ok {
-			t.Fatalf("Expected UserFacingError, got %T", event.Err)
+			t.Fatalf("Expected *status.Error, got %T", event.Err)
 		}
-		if publicErr.Status != core.INVALID_ARGUMENT {
+		if publicErr.Status != status.InvalidArgument {
 			t.Errorf("Expected INVALID_ARGUMENT status, got %v", publicErr.Status)
 		}
 	case <-timeout:
@@ -466,11 +466,11 @@ func TestFirestoreStreamManager_SubscribeNotFound(t *testing.T) {
 		t.Fatal("Expected error for non-existent stream")
 	}
 
-	publicErr, ok := err.(*core.UserFacingError)
+	publicErr, ok := err.(*status.Error)
 	if !ok {
-		t.Fatalf("Expected UserFacingError, got %T", err)
+		t.Fatalf("Expected *status.Error, got %T", err)
 	}
-	if publicErr.Status != core.NOT_FOUND {
+	if publicErr.Status != status.NotFound {
 		t.Errorf("Expected NOT_FOUND error, got %v", publicErr.Status)
 	}
 }
@@ -479,9 +479,9 @@ func TestFirestoreStreamManager_Timeout(t *testing.T) {
 	skipIfNoFirestore(t)
 
 	ctx := context.Background()
-	g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: *testStreamProjectID}))
+	g := genkit.MustInit(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: *testStreamProjectID}))
 
-	f := genkit.LookupPlugin(g, "firebase").(*firebase.Firebase)
+	f := g.LookupPlugin("firebase").(*firebase.Firebase)
 	client, err := f.Firestore(ctx)
 	if err != nil {
 		t.Fatalf("Failed to get Firestore client: %v", err)
@@ -517,11 +517,11 @@ func TestFirestoreStreamManager_Timeout(t *testing.T) {
 				return
 			}
 			if event.Type == streaming.StreamEventError {
-				publicErr, ok := event.Err.(*core.UserFacingError)
+				publicErr, ok := event.Err.(*status.Error)
 				if !ok {
-					t.Fatalf("Expected UserFacingError, got %T", event.Err)
+					t.Fatalf("Expected *status.Error, got %T", event.Err)
 				}
-				if publicErr.Status != core.DEADLINE_EXCEEDED {
+				if publicErr.Status != status.DeadlineExceeded {
 					t.Errorf("Expected DEADLINE_EXCEEDED, got %v", publicErr.Status)
 				}
 				return
@@ -554,11 +554,11 @@ func TestFirestoreStreamManager_WriteAfterClose(t *testing.T) {
 		t.Fatal("Expected error when writing after close")
 	}
 
-	publicErr, ok := err.(*core.UserFacingError)
+	publicErr, ok := err.(*status.Error)
 	if !ok {
-		t.Fatalf("Expected UserFacingError, got %T", err)
+		t.Fatalf("Expected *status.Error, got %T", err)
 	}
-	if publicErr.Status != core.FAILED_PRECONDITION {
+	if publicErr.Status != status.FailedPrecondition {
 		t.Errorf("Expected FAILED_PRECONDITION, got %v", publicErr.Status)
 	}
 }

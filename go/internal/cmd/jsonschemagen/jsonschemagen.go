@@ -659,13 +659,25 @@ func adjustIdentifier(name string) string {
 		name = strings.Join(parts, "")
 	}
 
-	// "Id" is common; change to "ID".
-	if pre, ok := strings.CutSuffix(name, "Id"); ok {
-		name = pre + "ID"
-	} else if pre, ok := strings.CutSuffix(name, "Ids"); ok {
-		name = pre + "IDs"
+	name = fmt.Sprintf("%c%s", unicode.ToUpper(rune(name[0])), name[1:])
+
+	// Uppercase trailing initialisms ("id" -> "ID", "traceId" -> "TraceID",
+	// "url" -> "URL") per Go naming conventions. The suffixes start with an
+	// uppercase letter so they only match at camel-case word boundaries
+	// (e.g. "Valid" is untouched).
+	for _, in := range []struct{ suffix, repl string }{
+		{"Id", "ID"},
+		{"Ids", "IDs"},
+		{"Url", "URL"},
+		{"Uri", "URI"},
+		{"Api", "API"},
+	} {
+		if pre, ok := strings.CutSuffix(name, in.suffix); ok {
+			name = pre + in.repl
+			break
+		}
 	}
-	return fmt.Sprintf("%c%s", unicode.ToUpper(rune(name[0])), name[1:])
+	return name
 }
 
 func sortedKeys[K cmp.Ordered, V any](m map[K]V) []K {

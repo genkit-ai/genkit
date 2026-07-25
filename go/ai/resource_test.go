@@ -63,7 +63,7 @@ func TestDynamicResourceWithTemplate(t *testing.T) {
 	})
 
 	// Register the resource to set up tracing state properly
-	dynResource.(*resource).Register(r)
+	dynResource.Register(r)
 
 	// Test URI matching
 	if !dynResource.Matches("user://profile/123") {
@@ -107,7 +107,7 @@ func TestResourceInGeneration(t *testing.T) {
 	ConfigureFormats(r)
 
 	// Define mock model
-	DefineModel(r, "test", nil, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	DefineModel(r, "test", nil, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		// Extract resource parts from the prompt
 		var responseText strings.Builder
 		for _, msg := range req.Messages {
@@ -163,7 +163,7 @@ func TestDynamicResourceInGeneration(t *testing.T) {
 	ConfigureFormats(r)
 
 	// Define mock model
-	DefineModel(r, "test", nil, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	DefineModel(r, "test", nil, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		var responseText strings.Builder
 		for _, msg := range req.Messages {
 			for _, part := range msg.Content {
@@ -219,7 +219,7 @@ func TestMultipleDynamicResourcesInGeneration(t *testing.T) {
 	ConfigureFormats(r)
 
 	// Define mock model
-	DefineModel(r, "test", nil, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	DefineModel(r, "test", nil, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{
 			Request: req,
 			Message: &Message{

@@ -65,8 +65,11 @@ func (s *Schema) UnmarshalJSON(data []byte) error {
 		s.Not = &Schema{}
 		return nil
 	}
-	type nomethod *Schema
-	return json.Unmarshal(data, nomethod(s))
+	// A defined struct type has no methods, so this avoids infinite recursion.
+	// A named pointer type (`type nomethod *Schema`) is not enough: json/v2
+	// still finds UnmarshalJSON through the pointed-to type.
+	type schemaNoMethod Schema
+	return json.Unmarshal(data, (*schemaNoMethod)(s))
 }
 
 var fields = reflect.VisibleFields(reflect.TypeOf(Schema{}))
