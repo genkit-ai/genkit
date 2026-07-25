@@ -21,6 +21,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/internal/base"
+	plugininternal "github.com/firebase/genkit/go/plugins/internal"
 	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/packages/param"
@@ -184,7 +185,7 @@ func (g *ModelGenerator) WithTools(tools []*ai.ToolDefinition) *ModelGenerator {
 	}
 
 	toolParams := make([]openai.ChatCompletionToolParam, 0, len(tools))
-	for _, tool := range tools {
+	for _, tool := range plugininternal.SortToolDefinitions(tools) {
 		if tool == nil || tool.Name == "" {
 			continue
 		}

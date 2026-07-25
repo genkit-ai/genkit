@@ -28,6 +28,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/base"
+	plugininternal "github.com/firebase/genkit/go/plugins/internal"
 	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
 	"github.com/invopop/jsonschema"
@@ -302,7 +303,7 @@ func toAnthropicTools(provider string, tools []*ai.ToolDefinition) ([]anthropic.
 	resp := make([]anthropic.ToolUnionParam, 0)
 	regex := regexp.MustCompile(ToolNameRegex)
 
-	for _, t := range tools {
+	for _, t := range plugininternal.SortToolDefinitions(tools) {
 		if t.Name == "" {
 			return nil, fmt.Errorf("tool name is required")
 		}
