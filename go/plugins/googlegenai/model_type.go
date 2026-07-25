@@ -15,11 +15,12 @@ import (
 type ModelType int
 
 const (
-	ModelTypeUnknown  ModelType = iota
-	ModelTypeGemini             // Text/multimodal generation (gemini-*, gemma-*)
-	ModelTypeImagen             // Image generation (imagen-*)
-	ModelTypeVeo                // Video generation (veo-*), long-running
-	ModelTypeEmbedder           // Embedding models (*embedding*)
+	ModelTypeUnknown     ModelType = iota
+	ModelTypeGemini                // Text/multimodal generation (gemini-*, gemma-*)
+	ModelTypeImagen                // Image generation (imagen-*)
+	ModelTypeVeo                   // Video generation (veo-*), long-running
+	ModelTypeEmbedder              // Embedding models (*embedding*)
+	ModelTypeAntigravity           // Antigravity preview generation (antigravity-*)
 )
 
 // ClassifyModel determines the model type from its name.
@@ -30,6 +31,8 @@ func ClassifyModel(name string) ModelType {
 		return ModelTypeVeo
 	case strings.HasPrefix(name, "imagen"), strings.HasPrefix(name, "image"):
 		return ModelTypeImagen
+	case strings.HasPrefix(name, "antigravity"):
+		return ModelTypeAntigravity
 	case strings.Contains(name, "embedding"):
 		// Covers: text-embedding-*, embedding-*, textembedding-*,
 		// multimodalembedding, gemini-embedding-*. Checked before the gemini
@@ -83,6 +86,8 @@ func (mt ModelType) DefaultSupports() *ai.ModelSupports {
 		return &Media
 	case ModelTypeVeo:
 		return &VeoSupports
+	case ModelTypeAntigravity:
+		return &AntigravitySupports
 	default:
 		return nil
 	}
@@ -99,6 +104,8 @@ func (mt ModelType) DefaultConfig() any {
 		return &genai.GenerateVideosConfig{}
 	case ModelTypeEmbedder:
 		return &genai.EmbedContentConfig{}
+	case ModelTypeAntigravity:
+		return &AntigravityConfig{}
 	default:
 		return nil
 	}
