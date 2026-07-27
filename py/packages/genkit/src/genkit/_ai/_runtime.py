@@ -37,6 +37,8 @@ logger = get_logger(__name__)
 
 DEFAULT_RUNTIME_DIR_NAME = '.genkit/runtimes'
 ACTIVE_CLEANUPS: list[Callable[[], None]] = []
+# RLock so a SIGINT/SIGTERM mid-update can re-enter: signal handlers run on the
+# main thread, and a plain Lock would deadlock if that thread already holds it.
 ACTIVE_CLEANUPS_LOCK = threading.RLock()
 SIGNALS_REGISTERED = False
 

@@ -173,6 +173,10 @@ class Genkit:
         # daemon thread so it's available regardless of which web framework (or
         # none) the user chooses.
         if is_dev_environment():
+            # SIGINT (Ctrl+C) always hits handle_signal. SIGTERM inside the
+            # run_main wait loop is stolen by anyio (clean exit → atexit);
+            # elsewhere SIGTERM also goes through handle_signal. Both paths
+            # remove the runtime discovery files.
             setup_signal_handlers()
             self._start_reflection_background()
 
