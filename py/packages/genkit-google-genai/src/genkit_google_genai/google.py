@@ -355,7 +355,7 @@ def _create_embedder_action(
         ),
     )
 
-    async def _run(request: Any) -> Any:  # noqa: ANN401
+    async def run(request: Any) -> Any:  # noqa: ANN401
         embedder = Embedder(
             version=clean_name,
             client=client_getter(),
@@ -366,7 +366,7 @@ def _create_embedder_action(
     action = Action(
         kind=ActionKind.EMBEDDER,
         name=full_name,
-        fn=_run,
+        fn=run,
         metadata=action_metadata.metadata,
     )
 
@@ -501,6 +501,8 @@ class GoogleAI(Plugin):
             api_version=http_options.api_version,
             base_url=http_options.base_url,
             custom_headers=dict(http_options.headers) if http_options.headers else None,
+            # HttpOptions.timeout is milliseconds; ClientOptions uses the same unit.
+            timeout=float(http_options.timeout) if http_options.timeout is not None else None,
         )
 
     def _plugin_api_key(self) -> str | None:
@@ -544,7 +546,6 @@ class GoogleAI(Plugin):
                     googleai_name(name),
                     plugin_api_key=plugin_api_key,
                     client_options=client_options,
-                    client_getter=self._runtime_client,
                 )
             )
         for name in list_known_lyria_models():
@@ -553,7 +554,6 @@ class GoogleAI(Plugin):
                     googleai_name(name),
                     plugin_api_key=plugin_api_key,
                     client_options=client_options,
-                    client_getter=self._runtime_client,
                 )
             )
 
@@ -681,7 +681,6 @@ class GoogleAI(Plugin):
             target,
             plugin_api_key=plugin_api_key,
             client_options=client_options,
-            client_getter=self._runtime_client,
         )
 
     def _resolve_model(self, name: str) -> Action:
@@ -701,14 +700,12 @@ class GoogleAI(Plugin):
                 name,
                 plugin_api_key=self._plugin_api_key(),
                 client_options=self._interactions_client_options(),
-                client_getter=self._runtime_client,
             )
         if is_lyria_model_name(clean_name):
             return create_lyria_action(
                 name,
                 plugin_api_key=self._plugin_api_key(),
                 client_options=self._interactions_client_options(),
-                client_getter=self._runtime_client,
             )
 
         # Determine model type and create model metadata/config schema
@@ -721,7 +718,7 @@ class GoogleAI(Plugin):
             SUPPORTED_MODELS[clean_name] = model_ref
             config_schema = get_model_config_schema(clean_name)
 
-        async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
             if clean_name.lower().startswith('image'):
                 model = ImagenModel(clean_name, self._runtime_client())
             else:
@@ -736,7 +733,7 @@ class GoogleAI(Plugin):
         return Action(
             kind=ActionKind.MODEL,
             name=name,
-            fn=_run,
+            fn=run,
             metadata=model_action_metadata(
                 name=name,
                 info=model_ref.model_dump(by_alias=True),
@@ -1146,7 +1143,7 @@ class VertexAI(Plugin):
             SUPPORTED_MODELS[clean_name] = model_ref
             config_schema = get_model_config_schema(clean_name)
 
-        async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
             if is_tuned_gemini_name(clean_name):
                 model = GeminiModel(
                     clean_name,
@@ -1168,7 +1165,7 @@ class VertexAI(Plugin):
         return Action(
             kind=ActionKind.MODEL,
             name=name,
-            fn=_run,
+            fn=run,
             metadata=model_action_metadata(
                 name=name,
                 info=model_ref.model_dump(by_alias=True),

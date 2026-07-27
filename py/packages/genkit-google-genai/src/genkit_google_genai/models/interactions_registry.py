@@ -30,7 +30,7 @@ from genkit._core._compat import StrEnum
 from genkit_google_genai.models.interactions_utils import extract_version
 
 
-def _model_info(
+def model_info(
     version: str,
     *,
     fallback: ModelInfo,
@@ -79,7 +79,7 @@ def is_lyria_model_name(name: str | None) -> bool:
 
 def lyria_model_info(version: str) -> ModelInfo:
     """Return capability metadata for an Interactions Lyria model."""
-    return _model_info(version, fallback=LYRIA_INFO)
+    return model_info(version, fallback=LYRIA_INFO)
 
 
 def list_known_lyria_models() -> list[str]:
@@ -115,7 +115,7 @@ def is_antigravity_model_name(name: str | None) -> bool:
 
 def antigravity_model_info(version: str) -> ModelInfo:
     """Return capability metadata for an Antigravity model."""
-    return _model_info(version, known=KNOWN_ANTIGRAVITY_MODELS, fallback=ANTIGRAVITY_INFO)
+    return model_info(version, known=KNOWN_ANTIGRAVITY_MODELS, fallback=ANTIGRAVITY_INFO)
 
 
 def list_known_antigravity_models() -> list[str]:
@@ -166,7 +166,7 @@ def is_deep_research_model_name(name: str | None) -> bool:
 
 def deep_research_model_info(version: str) -> ModelInfo:
     """Return capability metadata for a Deep Research model."""
-    return _model_info(version, known=KNOWN_DEEP_RESEARCH_MODELS, fallback=DEEP_RESEARCH_INFO)
+    return model_info(version, known=KNOWN_DEEP_RESEARCH_MODELS, fallback=DEEP_RESEARCH_INFO)
 
 
 def list_known_deep_research_models() -> list[str]:

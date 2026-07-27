@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from genkit import Genkit, Message, Part, Role, TextPart
+from genkit import Genkit, Message, ModelResponse, Part, Role, TextPart
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._model import ModelRequest
@@ -34,8 +34,8 @@ def ai() -> Genkit:
     return Genkit()
 
 
-async def _register_bg_model(ai: Genkit, *, op_id: str = 'bg-op-123') -> None:
-    async def start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+async def register_bg_model(ai: Genkit, *, op_id: str = 'bg-op-123') -> None:
+    async def start(request: ModelRequest, _: ActionRunContext) -> Operation:
         return Operation(id=op_id, done=False)
 
     async def check(op: Operation) -> Operation:
@@ -49,7 +49,7 @@ async def _register_bg_model(ai: Genkit, *, op_id: str = 'bg-op-123') -> None:
     )
 
 
-class _PluginConfig(BaseModel):
+class PluginConfig(BaseModel):
     thinking_summaries: str | None = None
     google_search: bool | None = None
 
@@ -59,7 +59,7 @@ async def test_background_start_receives_plugin_config_schema(ai: Genkit) -> Non
     """Bare ModelRequest configs are re-validated as the plugin config schema."""
     seen: dict[str, Any] = {}
 
-    async def start(request: ModelRequest[_PluginConfig], ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest[PluginConfig], _: ActionRunContext) -> Operation:
         seen['config'] = request.config
         return Operation(id='cfg-op', done=False)
 
@@ -70,7 +70,7 @@ async def test_background_start_receives_plugin_config_schema(ai: Genkit) -> Non
         name='cfg-model',
         start=start,
         check=check,
-        config_schema=_PluginConfig,
+        config_schema=PluginConfig,
         info=ModelInfo(supports=Supports(long_running=True)),
     )
 
@@ -84,7 +84,7 @@ async def test_background_start_receives_plugin_config_schema(ai: Genkit) -> Non
     await action.start(request)
 
     config = seen['config']
-    assert isinstance(config, _PluginConfig)
+    assert isinstance(config, PluginConfig)
     assert config.thinking_summaries == 'auto'
     assert config.google_search is True
 
@@ -92,7 +92,7 @@ async def test_background_start_receives_plugin_config_schema(ai: Genkit) -> Non
 @pytest.mark.asyncio
 async def test_generate_returns_operation_for_background_model(ai: Genkit) -> None:
     """generate() wraps a background model Operation in ModelResponse."""
-    await _register_bg_model(ai)
+    await register_bg_model(ai)
 
     response = await ai.generate(model='bg-model', prompt='a cat surfing')
 
@@ -106,7 +106,7 @@ async def test_generate_returns_operation_for_background_model(ai: Genkit) -> No
 @pytest.mark.asyncio
 async def test_generate_operation_with_background_model(ai: Genkit) -> None:
     """generate_operation resolves background models via resolve_model()."""
-    await _register_bg_model(ai, op_id='bg-op-456')
+    await register_bg_model(ai, op_id='bg-op-456')
 
     operation = await ai.generate_operation(model='bg-model', prompt='a cat surfing')
 
@@ -118,10 +118,8 @@ async def test_generate_operation_with_background_model(ai: Genkit) -> None:
 @pytest.mark.asyncio
 async def test_generate_operation_rejects_foreground_model_without_lro(ai: Genkit) -> None:
     """generate_operation rejects standard foreground models."""
-    from genkit import Message, ModelResponse
-    from genkit._core._typing import Part, Role, TextPart
 
-    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def model_fn(request: ModelRequest, _: ActionRunContext) -> ModelResponse:
         return ModelResponse(
             message=Message(
                 role=Role.MODEL,

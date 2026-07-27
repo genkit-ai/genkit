@@ -23,7 +23,7 @@ from genkit._core._typing import (
 from genkit.model import get_basic_usage_stats, model_action_metadata
 
 
-class _PluginConfig(BaseModel):
+class PluginConfig(BaseModel):
     """Stand-in for a plugin-specific config schema (e.g. LyriaConfig)."""
 
     model_config = ConfigDict(extra='allow')
@@ -389,13 +389,13 @@ def test_text_from_content_with_none_text() -> None:
 
 def test_bare_model_request_accepts_plugin_config_instance() -> None:
     """Bare ModelRequest(config=PluginConfig) keeps the plugin schema instance."""
-    plugin_config = _PluginConfig(api_key='k', response_modalities=['audio'])
+    plugin_config = PluginConfig(api_key='k', response_modalities=['audio'])
     request = ModelRequest(
         messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
         config=plugin_config,
     )
     assert request.config is plugin_config
-    assert isinstance(request.config, _PluginConfig)
+    assert isinstance(request.config, PluginConfig)
 
 
 def test_bare_model_request_keeps_dict_config() -> None:
@@ -408,9 +408,9 @@ def test_bare_model_request_keeps_dict_config() -> None:
 
 
 def test_parameterized_model_request_coerces_dict_to_plugin_config() -> None:
-    request = ModelRequest[_PluginConfig](
+    request = ModelRequest[PluginConfig](
         messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
         config={'api_key': 'k'},
     )
-    assert isinstance(request.config, _PluginConfig)
+    assert isinstance(request.config, PluginConfig)
     assert request.config.api_key == 'k'

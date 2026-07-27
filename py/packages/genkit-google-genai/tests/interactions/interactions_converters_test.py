@@ -32,6 +32,7 @@ from genkit_google_genai._interactions.converters import (
     to_interaction_steps,
     to_interaction_tool,
 )
+from genkit_google_genai._interactions.options import ClientOptions
 from google.genai.interactions import Content, Interaction, Step, ThoughtStep
 from pydantic import TypeAdapter
 
@@ -53,7 +54,7 @@ ContentAdapter: TypeAdapter[Content] = TypeAdapter(Content)
 StepAdapter: TypeAdapter[Step] = TypeAdapter(Step)
 
 
-def _part_dict(part: Part) -> dict:
+def part_dict(part: Part) -> dict:
     return part.root.model_dump(by_alias=True, exclude_none=True)
 
 
@@ -342,7 +343,7 @@ class TestFromInteractionContent:
                 'annotations': [{'start_index': 0, 'end_index': 5, 'source': 'source'}],
             })
         )
-        assert _part_dict(result) == {
+        assert part_dict(result) == {
             'text': 'Hello world',
             'metadata': {
                 'annotations': [{'start_index': 0, 'end_index': 5, 'source': 'source', 'type': 'file_citation'}]
@@ -353,7 +354,7 @@ class TestFromInteractionContent:
         result = from_interaction_content(
             ContentAdapter.validate_python({'type': 'image', 'data': 'BASE64DATA', 'mime_type': 'image/png'})
         )
-        assert _part_dict(result) == {'media': {'url': 'data:image/png;base64,BASE64DATA', 'contentType': 'image/png'}}
+        assert part_dict(result) == {'media': {'url': 'data:image/png;base64,BASE64DATA', 'contentType': 'image/png'}}
 
     def test_image_resolution(self) -> None:
         result = from_interaction_content(
@@ -364,7 +365,7 @@ class TestFromInteractionContent:
                 'resolution': 'high',
             })
         )
-        assert _part_dict(result) == {
+        assert part_dict(result) == {
             'media': {'url': 'gs://bucket/image.png', 'contentType': 'image/png'},
             'metadata': {'resolution': 'high'},
         }
@@ -376,7 +377,7 @@ class TestFromInteractionContent:
             'summary': [{'type': 'text', 'text': 'Thinking...'}],
         })
         result = from_thought_step(step)
-        assert _part_dict(result) == {
+        assert part_dict(result) == {
             'reasoning': 'Thinking...',
             'metadata': {'thoughtSignature': 'SIG'},
             'custom': {'thought': step.model_dump(mode='python')},
@@ -596,8 +597,6 @@ class TestFunctionCallRoundTrip:
 
 class TestClientOptionsWireFormat:
     def test_operation_metadata_uses_camel_case_keys(self) -> None:
-        from genkit_google_genai._interactions.options import ClientOptions
-
         op = from_interaction(
             Interaction.model_validate({'id': '123', 'status': 'in_progress'}),
             ClientOptions(api_key='k', base_url='https://example.test', api_version='v1beta'),
@@ -618,7 +617,7 @@ class TestFromInteractionStatusMapping:
         assert result.output is not None
         assert result.output.finish_reason == 'aborted'
         assert result.output.finish_message == 'Operation cancelled'
-        assert _part_dict(result.output.message.content[0]) == {'text': 'Operation cancelled.'}
+        assert part_dict(result.output.message.content[0]) == {'text': 'Operation cancelled.'}
 
     def test_failed_exits_poll_loop(self) -> None:
         result = from_interaction(

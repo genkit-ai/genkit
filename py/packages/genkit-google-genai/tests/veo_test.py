@@ -190,7 +190,7 @@ class TestFromVeoOperation:
         assert op.output is None
 
 
-def _mock_veo_client(start_done: bool = False) -> MagicMock:
+def mock_veo_client(start_done: bool = False) -> MagicMock:
     """Build a mocked GenAI client for Veo background-model tests."""
     client = MagicMock()
     start_op = veo_operation(
@@ -223,7 +223,7 @@ async def test_veo_generate_returns_operation(mock_list_models: MagicMock, mock_
     models = GenaiModels()
     models.veo = ['veo-2.0-generate-001']
     mock_list_models.return_value = models
-    mock_client_ctor.return_value = _mock_veo_client()
+    mock_client_ctor.return_value = mock_veo_client()
 
     ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
     response = await ai.generate(
@@ -246,7 +246,7 @@ async def test_veo_generate_operation_poll_loop(mock_list_models: MagicMock, moc
     models = GenaiModels()
     models.veo = ['veo-2.0-generate-001']
     mock_list_models.return_value = models
-    mock_client_ctor.return_value = _mock_veo_client()
+    mock_client_ctor.return_value = mock_veo_client()
 
     ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
     operation = await ai.generate_operation(

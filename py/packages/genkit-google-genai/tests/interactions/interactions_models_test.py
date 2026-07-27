@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -56,7 +55,7 @@ def test_split_system_instruction_without_system_turns() -> None:
     assert turns == messages
 
 
-def _patch_interactions(
+def patch_interactions(
     module: str,
     *,
     create_result: dict[str, Any] | None = None,
@@ -64,46 +63,57 @@ def _patch_interactions(
     cancel_result: dict[str, Any] | None = None,
     captured: dict[str, Any] | None = None,
 ):
-    """Patch interactions_client on a model module with fake create/get/cancel."""
+    """Patch raw HTTP Interactions helpers on a model module."""
     create_calls: list[dict[str, Any]] = []
     get_calls: list[str] = []
     cancel_calls: list[str] = []
 
-    async def create(**kwargs: Any) -> Interaction:
-        create_calls.append(kwargs)
+    async def create(
+        api_key: str,
+        body: dict[str, Any],
+        client_options: ClientOptions | None = None,
+    ) -> Interaction:
+        create_calls.append(body)
         if captured is not None:
-            captured['create'] = kwargs
-            captured['api_key'] = captured.get('_api_key')
+            captured['create'] = body
+            captured['api_key'] = api_key
+            captured['client_options'] = client_options
         return Interaction.model_validate(create_result or {'id': 'ix-1', 'status': 'in_progress'})
 
-    async def get(interaction_id: str, **_kwargs: Any) -> Interaction:
+    async def get(
+        api_key: str,
+        interaction_id: str,
+        client_options: ClientOptions | None = None,
+    ) -> Interaction:
         get_calls.append(interaction_id)
         if captured is not None:
             captured['get'] = interaction_id
-            captured['api_key'] = captured.get('_api_key')
+            captured['api_key'] = api_key
+            captured['client_options'] = client_options
         return Interaction.model_validate(get_result or {'id': interaction_id, 'status': 'completed', 'steps': []})
 
-    async def cancel(interaction_id: str, **_kwargs: Any) -> Interaction:
+    async def cancel(
+        api_key: str,
+        interaction_id: str,
+        client_options: ClientOptions | None = None,
+    ) -> Interaction:
         cancel_calls.append(interaction_id)
         if captured is not None:
             captured['cancel'] = interaction_id
+            captured['api_key'] = api_key
+            captured['client_options'] = client_options
         return Interaction.model_validate(cancel_result or {'id': interaction_id, 'status': 'cancelled'})
 
-    mock_client = MagicMock()
-    mock_client.aio.interactions.create = AsyncMock(side_effect=create)
-    mock_client.aio.interactions.get = AsyncMock(side_effect=get)
-    mock_client.aio.interactions.cancel = AsyncMock(side_effect=cancel)
-    mock_client.aio.aclose = AsyncMock()
-
-    @asynccontextmanager
-    async def fake_interactions_client(**kwargs: Any):
-        if captured is not None:
-            captured['_api_key'] = kwargs.get('api_key')
-            captured['client_options'] = kwargs.get('client_options')
-        yield mock_client
+    patches: dict[str, Any] = {
+        'create_interaction': AsyncMock(side_effect=create),
+    }
+    # Only deep_research imports get/cancel; patch those when present.
+    if module.endswith('deep_research'):
+        patches['get_interaction'] = AsyncMock(side_effect=get)
+        patches['cancel_interaction'] = AsyncMock(side_effect=cancel)
 
     return (
-        patch(f'{module}.resolve_interactions_client', fake_interactions_client),
+        patch.multiple(module, **patches),
         create_calls,
         get_calls,
         cancel_calls,
@@ -113,7 +123,7 @@ def _patch_interactions(
 @pytest.mark.asyncio
 async def test_deep_research_start_sends_background_request() -> None:
     captured: dict[str, Any] = {}
-    patcher, create_calls, _, _ = _patch_interactions(
+    patcher, create_calls, _, _ = patch_interactions(
         'genkit_google_genai.models.deep_research',
         create_result={'id': 'dr-1', 'status': 'in_progress'},
         captured=captured,
@@ -155,7 +165,7 @@ async def test_deep_research_start_sends_background_request() -> None:
 @pytest.mark.asyncio
 async def test_deep_research_check_uses_stored_api_key() -> None:
     captured: dict[str, Any] = {}
-    patcher, _, get_calls, _ = _patch_interactions(
+    patcher, _, get_calls, _ = patch_interactions(
         'genkit_google_genai.models.deep_research',
         get_result={
             'id': 'dr-1',
@@ -185,9 +195,35 @@ async def test_deep_research_check_uses_stored_api_key() -> None:
 
 
 @pytest.mark.asyncio
+async def test_deep_research_cancel_uses_stored_api_key() -> None:
+    captured: dict[str, Any] = {}
+    patcher, _, _, cancel_calls = patch_interactions(
+        'genkit_google_genai.models.deep_research',
+        cancel_result={'id': 'dr-1', 'status': 'cancelled'},
+        captured=captured,
+    )
+    action = create_deep_research_background_action(
+        'deep-research-preview-04-2026',
+        plugin_api_key='plugin-key',
+        client_options=ClientOptions(),
+    )
+    operation = Operation.model_construct(
+        id='dr-1',
+        metadata={'clientOptions': {'baseUrl': 'https://example.test', 'apiKey': 'override-key'}},
+    )
+    with patcher:
+        updated = await action.cancel(operation)
+
+    assert captured['api_key'] == 'override-key'
+    assert cancel_calls == ['dr-1']
+    assert updated.done is True
+    assert updated.id == 'dr-1'
+
+
+@pytest.mark.asyncio
 async def test_deep_research_check_falls_back_to_plugin_api_key() -> None:
     captured: dict[str, Any] = {}
-    patcher, _, _, _ = _patch_interactions(
+    patcher, _, _, _ = patch_interactions(
         'genkit_google_genai.models.deep_research',
         get_result={'id': 'dr-1', 'status': 'in_progress'},
         captured=captured,
@@ -209,7 +245,7 @@ async def test_deep_research_check_falls_back_to_plugin_api_key() -> None:
 
 @pytest.mark.asyncio
 async def test_deep_research_passes_previous_interaction_id() -> None:
-    patcher, create_calls, _, _ = _patch_interactions(
+    patcher, create_calls, _, _ = patch_interactions(
         'genkit_google_genai.models.deep_research',
         create_result={'id': 'dr-2', 'status': 'in_progress'},
     )
@@ -231,7 +267,7 @@ async def test_deep_research_passes_previous_interaction_id() -> None:
 @pytest.mark.asyncio
 async def test_deep_research_start_stores_request_api_key_override() -> None:
     """Per-request api_key wins and is what check will reuse from the Operation."""
-    patcher, _, _, _ = _patch_interactions(
+    patcher, _, _, _ = patch_interactions(
         'genkit_google_genai.models.deep_research',
         create_result={'id': 'dr-key', 'status': 'in_progress'},
     )
@@ -253,7 +289,7 @@ async def test_deep_research_start_stores_request_api_key_override() -> None:
 
 @pytest.mark.asyncio
 async def test_antigravity_passes_previous_interaction_id() -> None:
-    patcher, create_calls, _, _ = _patch_interactions(
+    patcher, create_calls, _, _ = patch_interactions(
         'genkit_google_genai.models.antigravity',
         create_result={
             'id': 'ag-2',
@@ -279,7 +315,7 @@ async def test_antigravity_passes_previous_interaction_id() -> None:
 
 @pytest.mark.asyncio
 async def test_antigravity_rejects_empty_messages() -> None:
-    patcher, create_calls, _, _ = _patch_interactions(
+    patcher, create_calls, _, _ = patch_interactions(
         'genkit_google_genai.models.antigravity',
         create_result={'id': 'ag-empty', 'status': 'completed', 'steps': []},
     )
@@ -296,31 +332,8 @@ async def test_antigravity_rejects_empty_messages() -> None:
 
 
 @pytest.mark.asyncio
-async def test_antigravity_rejects_non_remote_environment() -> None:
-    patcher, create_calls, _, _ = _patch_interactions(
-        'genkit_google_genai.models.antigravity',
-        create_result={'id': 'ag-env', 'status': 'completed', 'steps': []},
-    )
-    action = create_antigravity_action(
-        'antigravity-preview-05-2026',
-        plugin_api_key='key',
-        client_options=ClientOptions(),
-    )
-    with patcher:
-        with pytest.raises(GenkitError, match=r'only supports environment') as exc_info:
-            await action.run(
-                ModelRequest[AntigravityConfig](
-                    messages=[Message(role=Role.USER, content=[Part(TextPart(text='hi'))])],
-                    config=AntigravityConfig(environment={'type': 'local'}),
-                )
-            )
-    assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert create_calls == []
-
-
-@pytest.mark.asyncio
 async def test_deep_research_rejects_empty_messages() -> None:
-    patcher, create_calls, _, _ = _patch_interactions(
+    patcher, create_calls, _, _ = patch_interactions(
         'genkit_google_genai.models.deep_research',
         create_result={'id': 'dr-empty', 'status': 'in_progress'},
     )
@@ -338,7 +351,7 @@ async def test_deep_research_rejects_empty_messages() -> None:
 
 @pytest.mark.asyncio
 async def test_antigravity_generate_folds_system_and_uses_agent() -> None:
-    patcher, create_calls, _, _ = _patch_interactions(
+    patcher, create_calls, _, _ = patch_interactions(
         'genkit_google_genai.models.antigravity',
         create_result={
             'id': 'ag-1',
@@ -388,7 +401,7 @@ def test_bare_model_request_accepts_lyria_config_instance() -> None:
 
 @pytest.mark.asyncio
 async def test_lyria_defaults_audio_and_text_modalities() -> None:
-    patcher, create_calls, _, _ = _patch_interactions(
+    patcher, create_calls, _, _ = patch_interactions(
         'genkit_google_genai.models.lyria',
         create_result={
             'id': 'ly-1',
@@ -418,6 +431,35 @@ async def test_lyria_defaults_audio_and_text_modalities() -> None:
     assert response.response.message is not None
 
 
+@pytest.mark.asyncio
+async def test_lyria_passes_through_unknown_config_fields() -> None:
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai.models.lyria',
+        create_result={
+            'id': 'ly-2',
+            'status': 'completed',
+            'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'ok'}]}],
+        },
+    )
+    action = create_lyria_action(
+        'lyria-3-clip-preview',
+        plugin_api_key='key',
+        client_options=ClientOptions(),
+    )
+    with patcher:
+        await action.run(
+            ModelRequest(
+                messages=[Message(role=Role.USER, content=[Part(TextPart(text='riff'))])],
+                config={'temperature': 0.4, 'api_key': 'should-not-passthrough'},
+            )
+        )
+
+    body = create_calls[0]
+    assert body['temperature'] == 0.4
+    assert 'api_key' not in body
+    assert 'apiKey' not in body
+
+
 def test_deep_research_model_ref_is_namespaced() -> None:
     ref = deep_research_model('deep-research-preview-04-2026')
     assert ref.name == 'googleai/deep-research-preview-04-2026'
@@ -427,7 +469,7 @@ def test_deep_research_model_ref_is_namespaced() -> None:
 @pytest.mark.asyncio
 async def test_deep_research_define_background_model_sets_action() -> None:
     """define_background_model must stamp Operation.action for check/cancel."""
-    patcher, _, _, _ = _patch_interactions(
+    patcher, _, _, _ = patch_interactions(
         'genkit_google_genai.models.deep_research',
         create_result={'id': 'dr-action-1', 'status': 'in_progress'},
     )

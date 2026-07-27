@@ -41,6 +41,7 @@ class ClientOptions(BaseModel):
     api_version: str | None = None
     base_url: str | None = None
     custom_headers: dict[str, str] | None = None
+    # Milliseconds — same unit as the JS Google AI client option / HttpOptions.
     timeout: float | None = None
 
     def merge(self, overrides: ClientOptions | dict[str, Any] | None) -> Self:

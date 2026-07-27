@@ -20,6 +20,7 @@ from types import SimpleNamespace
 
 import pytest
 from genkit_google_genai.models.gemini import (
+    SUPPORTED_MODELS,
     _finish_message_for_image_response,
     _to_finish_reason,
     is_image_model,
@@ -60,7 +61,5 @@ def test_finish_message_for_missing_image() -> None:
 
 
 def test_stale_flash_image_preview_not_in_supported_models() -> None:
-    from genkit_google_genai.models.gemini import SUPPORTED_MODELS
-
     assert 'gemini-2.5-flash-image-preview' not in SUPPORTED_MODELS
     assert is_image_model('gemini-2.5-flash-image-preview')

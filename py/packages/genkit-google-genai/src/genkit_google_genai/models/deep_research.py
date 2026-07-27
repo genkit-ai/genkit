@@ -18,19 +18,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
-from google import genai
-from google.genai.interactions import Interaction
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
-from genkit import GenkitError, ModelInfo, ModelRequest
+from genkit import ModelInfo, ModelRequest
 from genkit._core._background import define_background_model
 from genkit._core._registry import Registry
 from genkit.model import BackgroundAction, ModelRef, Operation, model_ref
 from genkit.plugin_api import ActionRunContext
+from genkit_google_genai._interactions.client import (
+    cancel_interaction,
+    create_interaction,
+    get_interaction,
+)
 from genkit_google_genai._interactions.converters import (
     clean_schema,
     ensure_tool_ids,
@@ -48,12 +50,11 @@ from genkit_google_genai.models.interactions_registry import (
 from genkit_google_genai.models.interactions_utils import (
     calculate_api_key,
     client_options_for_operation,
+    client_overrides_from_config,
     extract_version,
-    map_genai_error,
+    partition_keys,
     remove_client_option_overrides,
     require_interaction_steps,
-    resolve_interactions_client,
-    take_keys,
 )
 
 AGENT_CONFIG_KEYS = (
@@ -102,6 +103,9 @@ class DeepResearchConfig(BaseModel):
     api_key: str | None = None
     base_url: str | None = None
     api_version: str | None = None
+    # Milliseconds — applied to the HTTP call, not the create body.
+    timeout: float | None = None
+    custom_headers: dict[str, str] | None = None
     thinking_summaries: Literal['auto', 'none'] | None = None
     previous_interaction_id: str | None = None
     store: bool | None = None
@@ -166,15 +170,13 @@ def api_key_from_operation(
     stored: ClientOptions,
     *,
     plugin_api_key: str | None,
-) -> tuple[str, str | None]:
-    """Resolve api key for check/cancel, preferring the key stored at start."""
-    stored_api_key = stored.api_key
-    if not stored_api_key:
-        return calculate_api_key(plugin_api_key, None), None
-    # Treat a stored override as request_api_key so we don't reuse the
-    # plugin client when the start call used a different key.
-    request_api_key = stored_api_key if plugin_api_key is not None and stored_api_key != plugin_api_key else None
-    return stored_api_key, request_api_key
+) -> str:
+    """Resolve the api key for check/cancel.
+
+    Prefer the key persisted on the operation at start. If metadata omitted it,
+    calculate_api_key falls through plugin → env (and errors if nothing is set).
+    """
+    return stored.api_key or calculate_api_key(plugin_api_key, None)
 
 
 def create_deep_research_background_action(
@@ -182,54 +184,35 @@ def create_deep_research_background_action(
     *,
     plugin_api_key: str | None,
     client_options: ClientOptions,
-    client_getter: Callable[[], genai.Client] | None = None,
 ) -> BackgroundAction:
     """Wire Deep Research Interactions start/check/cancel through define_background_model."""
     name = target.name if isinstance(target, ModelRef) else target
     version = extract_version(name)
     info = deep_research_model_info(version)
 
-    async def run_with_client(
-        *,
-        api_key: str,
-        request_api_key: str | None,
-        options: ClientOptions,
-        call: Callable[[genai.Client], Awaitable[object]],
-    ) -> Operation:
-        async with resolve_interactions_client(
-            client_getter=client_getter,
-            plugin_api_key=plugin_api_key,
-            api_key=api_key,
-            request_api_key=request_api_key,
-            plugin_client_options=client_options,
-            client_options=options,
-        ) as client:
-            try:
-                interaction = await call(client)
-            except Exception as error:
-                raise map_genai_error(error) from error
-        if not isinstance(interaction, Interaction):
-            raise GenkitError(
-                status='INTERNAL',
-                message='Expected a non-streaming Interaction response from Deep Research',
-            )
-        return from_interaction(
-            interaction,
-            client_options_for_operation(options, api_key=api_key),
-        )
-
     async def start(request: ModelRequest[DeepResearchConfig], _: ActionRunContext) -> Operation:
         config = request.config or DeepResearchConfig()
-        request_api_key = config.api_key
-        api_key = calculate_api_key(plugin_api_key, request_api_key)
-        options = client_options.merge(ClientOptions(base_url=config.base_url, api_version=config.api_version))
+        api_key = calculate_api_key(plugin_api_key, config.api_key)
+        options = client_options.merge(
+            client_overrides_from_config(
+                base_url=config.base_url,
+                api_version=config.api_version,
+                timeout=config.timeout,
+                custom_headers=config.custom_headers,
+            )
+        )
 
-        # Partition the dumped config: agent fields → agent_config, tools handled
-        # by build_tools, known create kwargs lifted out, leftovers pass through.
-        wire = remove_client_option_overrides(config.model_dump(exclude_none=True))
-        agent_config: dict[str, Any] = {'type': 'deep-research', **take_keys(wire, AGENT_CONFIG_KEYS)}
-        take_keys(wire, TOOL_CONFIG_KEYS)  # consumed by build_tools, not the create body
-        create_options = take_keys(wire, CREATE_OPTION_KEYS)
+        # Map dumped config into the buckets interactions.create expects without
+        # mutating the dump: agent fields, tool flags (via build_tools), create
+        # options, then undocumented passthrough leftovers.
+        dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
+        agent_fields, _tool_fields, create_options, passthrough = partition_keys(
+            dumped,
+            AGENT_CONFIG_KEYS,
+            TOOL_CONFIG_KEYS,
+            CREATE_OPTION_KEYS,
+        )
+        agent_config: dict[str, Any] = {'type': 'deep-research', **agent_fields}
 
         tools = build_tools(request, config)
         response_format = response_format_from_request(request)
@@ -252,35 +235,30 @@ def create_deep_research_background_action(
             'background': True,
             'agent_config': agent_config,
             **create_options,
-            **wire,
+            **passthrough,
         }
         if tools:
             create_kwargs['tools'] = tools
         if response_format is not None:
             create_kwargs['response_format'] = response_format
 
-        return await run_with_client(
-            api_key=api_key,
-            request_api_key=request_api_key,
-            options=options,
-            call=lambda client: client.aio.interactions.create(**create_kwargs),
+        interaction = await create_interaction(api_key, create_kwargs, options)
+        return from_interaction(
+            interaction,
+            client_options_for_operation(options, api_key=api_key),
         )
 
     async def follow_up(operation: Operation, *, cancel: bool = False) -> Operation:
         stored = ClientOptions.from_metadata(operation.metadata)
         options = client_options.merge(stored)
-        api_key, request_api_key = api_key_from_operation(stored, plugin_api_key=plugin_api_key)
-
-        async def call(client: genai.Client) -> object:
-            if cancel:
-                return await client.aio.interactions.cancel(operation.id)
-            return await client.aio.interactions.get(operation.id)
-
-        return await run_with_client(
-            api_key=api_key,
-            request_api_key=request_api_key,
-            options=options,
-            call=call,
+        api_key = api_key_from_operation(stored, plugin_api_key=plugin_api_key)
+        if cancel:
+            interaction = await cancel_interaction(api_key, operation.id, options)
+        else:
+            interaction = await get_interaction(api_key, operation.id, options)
+        return from_interaction(
+            interaction,
+            client_options_for_operation(options, api_key=api_key),
         )
 
     async def check(operation: Operation) -> Operation:

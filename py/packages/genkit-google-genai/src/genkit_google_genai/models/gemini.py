@@ -1663,24 +1663,25 @@ class GeminiModel:
             )
 
         response.usage = self._create_usage_stats(request=request, response=response)
-        # Framework attaches this request onto response.request — rewrite config
-        # to the normalized effective values (snake_case + injected modalities)
-        # so callers debugging the response see what actually drove the call.
-        self._echo_effective_config(request, model_name=model_name, request_cfg=request_cfg)
+        # Put normalized config on a request copy so callers debugging
+        # response.request see what drove the call, without mutating the
+        # original ModelRequest.
+        effective = self.effective_config(request, model_name=model_name, request_cfg=request_cfg)
+        response.request = request.model_copy(update={'config': effective})
 
         return response
 
-    def _echo_effective_config(
+    def effective_config(
         self,
         request: ModelRequest,
         *,
         model_name: str,
         request_cfg: genai_types.GenerateContentConfig | None,
-    ) -> None:
-        """Replace ``request.config`` with the coerced config used for this call.
+    ) -> dict[str, Any] | None:
+        """Return the coerced config used for this call (snake_case + injections).
 
-        Accepts camelCase or snake_case on the way in; echoes a snake_case dict
-        that includes plugin-injected fields (e.g. image/TTS ``response_modalities``).
+        Accepts camelCase or snake_case on the way in; includes plugin-injected
+        fields (e.g. image/TTS ``response_modalities``). Does not mutate request.
         """
         effective: dict[str, Any] = {}
         if request.config is not None:
@@ -1700,7 +1701,7 @@ class GeminiModel:
         effective.pop('api_key', None)
         effective.pop('apiKey', None)
 
-        request.config = effective or None
+        return effective or None
 
     async def _resolve_request_client(self, request: ModelRequest) -> genai.Client:
         """Resolve the client to use for a request.

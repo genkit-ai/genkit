@@ -303,7 +303,7 @@ async def test_generate_media_response(mocker: MockerFixture, version: str) -> N
 
 @pytest.mark.asyncio
 async def test_generate_echoes_normalized_effective_config(mocker: MockerFixture) -> None:
-    """request.config is rewritten to snake_case + injected image modalities."""
+    """response.request.config is snake_case + injected modalities; caller request untouched."""
     candidate = genai.types.Candidate(
         content=genai.types.Content(parts=[genai.types.Part(text='ok')]),
         finish_reason='STOP',
@@ -312,24 +312,29 @@ async def test_generate_echoes_normalized_effective_config(mocker: MockerFixture
     client = mocker.AsyncMock()
     client.aio.models.generate_content.return_value = resp
 
+    original_config = {
+        'imageConfig': {'aspectRatio': '16:9'},
+        'apiKey': 'should-not-echo',
+        'temperature': 0.2,
+    }
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='draw a red circle'))])],
-        config={
-            'imageConfig': {'aspectRatio': '16:9'},
-            'apiKey': 'should-not-echo',
-            'temperature': 0.2,
-        },
+        config=dict(original_config),
     )
     gemini = GeminiModel('gemini-2.5-flash-image', client)
-    await gemini.generate(request, ActionRunContext())
+    response = await gemini.generate(request, ActionRunContext())
 
-    assert isinstance(request.config, dict)
-    assert request.config['image_config']['aspect_ratio'] == '16:9'
-    assert request.config['temperature'] == 0.2
-    assert request.config['response_modalities'] == ['TEXT', 'IMAGE']
-    assert 'api_key' not in request.config
-    assert 'apiKey' not in request.config
-    assert 'imageConfig' not in request.config
+    assert request.config == original_config
+    assert response.request is not None
+    assert response.request is not request
+    echoed = response.request.config
+    assert isinstance(echoed, dict)
+    assert echoed['image_config']['aspect_ratio'] == '16:9'
+    assert echoed['temperature'] == 0.2
+    assert echoed['response_modalities'] == ['TEXT', 'IMAGE']
+    assert 'api_key' not in echoed
+    assert 'apiKey' not in echoed
+    assert 'imageConfig' not in echoed
 
 
 @pytest.mark.asyncio
@@ -349,9 +354,11 @@ async def test_generate_echoes_injected_modalities_when_config_omitted(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='draw a blue square'))])],
     )
     gemini = GeminiModel('gemini-2.5-flash-image', client)
-    await gemini.generate(request, ActionRunContext())
+    response = await gemini.generate(request, ActionRunContext())
 
-    assert request.config == {'response_modalities': ['TEXT', 'IMAGE']}
+    assert request.config is None
+    assert response.request is not None
+    assert response.request.config == {'response_modalities': ['TEXT', 'IMAGE']}
 
 
 def test_convert_schema_property(mocker: MockerFixture) -> None:

@@ -25,7 +25,7 @@ from typing import Any, Generic, TypeVar, cast
 from pydantic import BaseModel
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
-from genkit._core._model import ModelRequest, ModelResponse
+from genkit._core._model import ConfigT, ModelRequest, ModelResponse
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
@@ -35,9 +35,6 @@ from genkit._core._typing import (
 
 # Type variable for operation output
 OutputT = TypeVar('OutputT')
-# Bound to BaseModel so background models can use their own config schemas
-# (e.g. DeepResearchConfig) instead of only GenerationCommonConfig.
-ConfigT = TypeVar('ConfigT', bound=BaseModel)
 
 
 def make_action_key(action_type: ActionKind | str, name: str) -> str:
@@ -279,7 +276,7 @@ def define_background_model(
         return op
 
     # Wrap the check function (matching JS - no ctx parameter)
-    async def wrapped_check(op: Operation, ctx: ActionRunContext) -> Operation:
+    async def wrapped_check(op: Operation, _: ActionRunContext) -> Operation:
         updated = await check(op)
         # Preserve action key
         updated.action = action_key
@@ -321,7 +318,7 @@ def define_background_model(
         # Capture cancel in local scope for the nested function
         cancel_fn = cancel
 
-        async def wrapped_cancel(op: Operation, ctx: ActionRunContext) -> Operation:
+        async def wrapped_cancel(op: Operation, _: ActionRunContext) -> Operation:
             cancelled = await cancel_fn(op)
             cancelled.action = action_key
             return cancelled

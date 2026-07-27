@@ -18,17 +18,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
-from google import genai
-from google.genai.interactions import Interaction
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 from typing_extensions import Never
 
-from genkit import GenkitError, ModelRequest, ModelResponse
+from genkit import ModelRequest, ModelResponse
 from genkit.plugin_api import Action, ActionKind, ActionRunContext, model_action_metadata
+from genkit_google_genai._interactions.client import create_interaction
 from genkit_google_genai._interactions.converters import (
     ensure_tool_ids,
     from_interaction_sync,
@@ -39,11 +37,14 @@ from genkit_google_genai._interactions.options import ClientOptions, ResponseMod
 from genkit_google_genai.models.interactions_registry import lyria_model_info
 from genkit_google_genai.models.interactions_utils import (
     calculate_api_key,
+    client_overrides_from_config,
     extract_version,
-    map_genai_error,
+    partition_keys,
+    remove_client_option_overrides,
     require_interaction_steps,
-    resolve_interactions_client,
 )
+
+CREATE_OPTION_KEYS = ('response_modalities',)
 
 
 class LyriaConfig(BaseModel):
@@ -54,6 +55,9 @@ class LyriaConfig(BaseModel):
     api_key: str | None = None
     base_url: str | None = None
     api_version: str | None = None
+    # Milliseconds — applied to the HTTP call, not the create body.
+    timeout: float | None = None
+    custom_headers: dict[str, str] | None = None
     response_modalities: list[ResponseModality] | None = None
 
 
@@ -62,56 +66,48 @@ def create_lyria_action(
     *,
     plugin_api_key: str | None,
     client_options: ClientOptions,
-    client_getter: Callable[[], genai.Client] | None = None,
 ) -> Action[ModelRequest[LyriaConfig], ModelResponse, Never]:
     """Build a foreground model action for Interactions Lyria."""
     version = extract_version(name)
     info = lyria_model_info(version)
 
-    async def _run(request: ModelRequest[LyriaConfig], _: ActionRunContext) -> ModelResponse:
+    async def run(request: ModelRequest[LyriaConfig], _: ActionRunContext) -> ModelResponse:
         config = request.config or LyriaConfig()
-        request_api_key = config.api_key
-        api_key = calculate_api_key(plugin_api_key, request_api_key)
+        api_key = calculate_api_key(plugin_api_key, config.api_key)
         merged_options = client_options.merge(
-            ClientOptions(
+            client_overrides_from_config(
                 base_url=config.base_url,
                 api_version=config.api_version,
+                timeout=config.timeout,
+                custom_headers=config.custom_headers,
             )
         )
-        modalities = config.response_modalities or ['audio', 'text']
+        # Known create fields vs undocumented passthrough (same as JS ...rest).
+        dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
+        create_options, passthrough = partition_keys(dumped, CREATE_OPTION_KEYS)
+        modalities = create_options.get('response_modalities') or ['audio', 'text']
         system_instruction, turns = split_system_instruction(request.messages or [])
-        steps = require_interaction_steps(to_interaction_steps(ensure_tool_ids(turns)))
+        steps = to_interaction_steps(ensure_tool_ids(turns))
         create_kwargs: dict[str, Any] = {
             'model': version,
             'input': steps,
             'response_modalities': modalities,
+            **passthrough,
         }
         if system_instruction:
             create_kwargs['system_instruction'] = system_instruction
+        # Reject empty prompts before the round trip; system_instruction alone
+        # is enough for Lyria, so only require steps when there is no system text.
+        if not system_instruction:
+            require_interaction_steps(steps)
 
-        async with resolve_interactions_client(
-            client_getter=client_getter,
-            plugin_api_key=plugin_api_key,
-            api_key=api_key,
-            request_api_key=request_api_key,
-            plugin_client_options=client_options,
-            client_options=merged_options,
-        ) as client:
-            try:
-                created = await client.aio.interactions.create(**create_kwargs)
-            except Exception as error:
-                raise map_genai_error(error) from error
-        if not isinstance(created, Interaction):
-            raise GenkitError(
-                status='INTERNAL',
-                message='Expected a non-streaming Interaction response from Lyria',
-            )
+        created = await create_interaction(api_key, create_kwargs, merged_options)
         return from_interaction_sync(created)
 
     return Action(
         kind=ActionKind.MODEL,
         name=name,
-        fn=_run,
+        fn=run,
         metadata=model_action_metadata(
             name=name,
             info=info.model_dump(by_alias=True),

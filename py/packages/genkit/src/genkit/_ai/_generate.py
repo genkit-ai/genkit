@@ -718,10 +718,11 @@ async def _generate_action_turn(
         # Extract schema_type for runtime Pydantic validation
         schema_type = turn_options.output.schema_type if turn_options.output else None
 
-        # Plugin returns ModelResponse directly. Framework sets request and
-        # any output format context (message_parser, schema_type) as private attrs.
+        # Plugin returns ModelResponse directly. Framework fills request when the
+        # plugin didn't already attach one (e.g. with a normalized config echo).
         response = model_response
-        response.request = request
+        if response.request is None:
+            response.request = request
         if formatter:
             response._message_parser = message_parser
         if schema_type:
