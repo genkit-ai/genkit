@@ -22,12 +22,6 @@ import (
 	"github.com/openai/openai-go"
 )
 
-// newGen returns a ModelGenerator with a nil client; only local tool-shaping
-// logic is exercised, so no network call is made.
-func newGen() *ModelGenerator {
-	return NewModelGenerator((*openai.Client)(nil), "test-model")
-}
-
 func TestConvertChatCompletionToModelResponseReasoningContent(t *testing.T) {
 	var completion openai.ChatCompletion
 	if err := json.Unmarshal([]byte(`{
@@ -58,6 +52,17 @@ func TestConvertChatCompletionToModelResponseReasoningContent(t *testing.T) {
 	if got := resp.Text(); got != "Final answer" {
 		t.Errorf("Text() = %q, want %q", got, "Final answer")
 	}
+	if len(resp.Message.Content) != 2 ||
+		!resp.Message.Content[0].IsReasoning() ||
+		!resp.Message.Content[1].IsText() {
+		t.Fatalf("content = %#v, want reasoning followed by text", resp.Message.Content)
+	}
+}
+
+// newGen returns a ModelGenerator with a nil client; only local tool-shaping
+// logic is exercised, so no network call is made.
+func newGen() *ModelGenerator {
+	return NewModelGenerator((*openai.Client)(nil), "test-model")
 }
 
 func TestConvertChatCompletionToModelResponseProviderFinishReasons(t *testing.T) {
@@ -114,6 +119,38 @@ func TestWithMessagesPreservesReasoningContent(t *testing.T) {
 	}
 }
 
+func TestWithMessagesSkipsNilMessagesAndParts(t *testing.T) {
+	g := newGen().WithMessages([]*ai.Message{
+		nil,
+		{
+			Role:    ai.RoleSystem,
+			Content: []*ai.Part{nil, ai.NewTextPart("System prompt")},
+		},
+		{
+			Role: ai.RoleModel,
+			Content: []*ai.Part{
+				nil,
+				ai.NewReasoningPart("Reasoning", nil),
+				ai.NewTextPart("Answer"),
+			},
+		},
+		{
+			Role:    ai.RoleTool,
+			Content: []*ai.Part{nil},
+		},
+		{
+			Role:    ai.RoleUser,
+			Content: []*ai.Part{nil, ai.NewTextPart("Question")},
+		},
+	})
+	if g.err != nil {
+		t.Fatalf("WithMessages() error = %v", g.err)
+	}
+	if got := len(g.messages); got != 3 {
+		t.Fatalf("messages = %d, want 3 non-empty messages", got)
+	}
+}
+
 func TestWithConfigPreservesProviderSpecificFields(t *testing.T) {
 	g := newGen().WithConfig(map[string]any{
 		"maxOutputTokens": 123,
@@ -146,6 +183,19 @@ func TestWithConfigPreservesProviderSpecificFields(t *testing.T) {
 	if got := request["top_p"]; got != 0.8 {
 		t.Errorf("top_p = %v, want 0.8", got)
 	}
+	extraFields := g.GetRequest().ExtraFields()
+	if _, ok := extraFields["temperature"]; ok {
+		t.Error("temperature was added as an extra field")
+	}
+	if _, ok := extraFields["top_p"]; ok {
+		t.Error("top_p was added as an extra field")
+	}
+	if _, ok := extraFields["model"]; ok {
+		t.Error("model was added as an extra field")
+	}
+	if _, ok := request["topP"]; ok {
+		t.Error("request contains unconverted topP field")
+	}
 	if _, ok := request["maxOutputTokens"]; ok {
 		t.Error("request contains unsupported maxOutputTokens field")
 	}
@@ -158,6 +208,9 @@ func TestWithConfigPreservesProviderSpecificFields(t *testing.T) {
 	}
 	if got := thinking["clear_thinking"]; got != false {
 		t.Errorf("thinking.clear_thinking = %v, want false", got)
+	}
+	if _, ok := extraFields["thinking"]; !ok {
+		t.Error("thinking was not preserved as a provider-specific extra field")
 	}
 }
 
@@ -185,6 +238,34 @@ func TestConcatenateContentSkipsNilParts(t *testing.T) {
 	}
 	if got := concatenateReasoningContent(parts); got != "thought" {
 		t.Errorf("concatenateReasoningContent() = %q, want %q", got, "thought")
+	}
+}
+
+func TestWithToolChoice(t *testing.T) {
+	for _, toolChoice := range []ai.ToolChoice{
+		ai.ToolChoiceAuto,
+		ai.ToolChoiceNone,
+		ai.ToolChoiceRequired,
+	} {
+		t.Run(string(toolChoice), func(t *testing.T) {
+			g := newGen().WithToolChoice(toolChoice)
+			if g.err != nil {
+				t.Fatalf("WithToolChoice() error = %v", g.err)
+			}
+			if !g.request.ToolChoice.OfAuto.Valid() {
+				t.Fatal("tool choice was not set")
+			}
+			if got := g.request.ToolChoice.OfAuto.Value; got != string(toolChoice) {
+				t.Errorf("tool choice = %q, want %q", got, toolChoice)
+			}
+		})
+	}
+}
+
+func TestWithToolChoiceRejectsUnsupportedValue(t *testing.T) {
+	g := newGen().WithToolChoice(ai.ToolChoice("sometimes"))
+	if g.err == nil {
+		t.Fatal("WithToolChoice() error = nil, want unsupported tool choice error")
 	}
 }
 
