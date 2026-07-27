@@ -1943,11 +1943,8 @@ class GeminiModel:
                     content_parts.extend(converted)
                 else:
                     content_parts.append(converted)
-            if msg.role == Role.MODEL or msg.role == 'model':
-                gemini_role = 'model'
-            else:
-                gemini_role = 'user'
-            request_contents.append(genai_types.Content(parts=content_parts, role=gemini_role))
+            role = 'model' if msg.role in (Role.MODEL, 'model') else 'user'
+            request_contents.append(genai_types.Content(parts=content_parts, role=role))
 
             if msg.metadata and msg.metadata.get('cache'):
                 cache = await self._retrieve_cached_content(
