@@ -75,7 +75,16 @@ def resolve_agent_init(action: BidiAction[Any, Any, Any], init_val: object) -> A
 
 def resolve_agent_input(input_val: object) -> AgentInput:
     """Validate a raw per-turn input payload into an ``AgentInput`` (empty when absent)."""
-    return AgentInput.model_validate(input_val) if input_val is not None else AgentInput()
+    if input_val is None:
+        return AgentInput()
+    if isinstance(input_val, dict):
+        d = dict(input_val)
+        if 'messages' in d and 'message' not in d:
+            msgs = d.pop('messages', [])
+            if msgs and isinstance(msgs, list):
+                d['message'] = msgs[-1]
+        return AgentInput.model_validate(d)
+    return AgentInput.model_validate(input_val)
 
 
 @dataclass
