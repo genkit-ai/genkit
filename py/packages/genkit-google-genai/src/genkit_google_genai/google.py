@@ -18,78 +18,32 @@
 """Google AI and Vertex AI plugin implementations for Genkit.
 
 This module provides the GoogleAI and VertexAI plugins that enable Genkit to use
-Google's generative AI models. Both plugins use **dynamic model discovery** to
-automatically detect and register available models from the Google GenAI SDK.
+Google's generative AI models. Both plugins use dynamic model discovery via the
+Google GenAI SDK to detect and register available models at runtime.
 
-Architecture:
-    ```
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                        Dynamic Model Discovery                          │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │                                                                         │
-    │   Plugin Init                                                           │
-    │   ┌─────────┐     ┌──────────────┐     ┌─────────────────────────────┐ │
-    │   │ GoogleAI│────►│client.models │────►│ Filter & Categorize         │ │
-    │   │ VertexAI│     │   .list()    │     │ ┌─────────┬───────────────┐ │ │
-    │   └─────────┘     └──────────────┘     │ │ Action  │ Model Type    │ │ │
-    │                                        │ ├─────────┼───────────────┤ │ │
-    │                                        │ │generate │ gemini, gemma │ │ │
-    │                                        │ │Content  │               │ │ │
-    │                                        │ ├─────────┼───────────────┤ │ │
-    │                                        │ │embed    │ text-embedding│ │ │
-    │                                        │ │Content  │               │ │ │
-    │                                        │ ├─────────┼───────────────┤ │ │
-    │                                        │ │predict  │ imagen        │ │ │
-    │                                        │ ├─────────┼───────────────┤ │ │
-    │                                        │ │generate │ veo           │ │ │
-    │                                        │ │Videos   │               │ │ │
-    │                                        │ └─────────┴───────────────┘ │ │
-    │                                        └─────────────────────────────┘ │
-    │                                                                         │
-    └─────────────────────────────────────────────────────────────────────────┘
-    ```
-
-Key Concepts:
-    +--------------------+-------------------------------------------------------+
-    | Concept            | Description                                           |
-    +--------------------+-------------------------------------------------------+
-    | Dynamic Discovery  | Models are discovered at runtime via the API, not     |
-    |                    | hardcoded. This ensures new models are automatically  |
-    |                    | available without SDK updates.                        |
-    +--------------------+-------------------------------------------------------+
-    | Background Models  | Long-running operations (e.g., Veo video generation)  |
-    |                    | use start/check pattern instead of blocking generate. |
-    +--------------------+-------------------------------------------------------+
-    | Action Resolution  | On-demand model instantiation when a model is first   |
-    |                    | used, avoiding upfront initialization overhead.       |
-    +--------------------+-------------------------------------------------------+
-    | Namespacing        | Models are prefixed with plugin name (e.g.,           |
-    |                    | 'googleai/gemini-flash-latest').                      |
-    +--------------------+-------------------------------------------------------+
-
-Supported Model Types:
-    - **Gemini/Gemma**: Text generation with generateContent action
-    - **Embedders**: Text embeddings with embedContent action
-    - **Imagen**: Image generation with predict action
-    - **Veo**: Video generation with generateVideos action
+Supported capabilities include text generation (Gemini/Gemma), text embeddings,
+image generation (Imagen), and video generation (Veo).
 
 Example:
-    >>> from genkit import Genkit
-    >>> from genkit_google_genai import GoogleAI
-    >>>
-    >>> # Models are discovered automatically
-    >>> ai = Genkit(plugins=[GoogleAI()])
-    >>>
-    >>> # Use any available model - no pre-registration needed
-    >>> response = await ai.generate(
-    ...     model='googleai/gemini-flash-latest',
-    ...     prompt='Hello, world!',
-    ... )
+    ```python
+    from genkit import Genkit
+    from genkit_google_genai import GoogleAI
 
-See Also:
-    - https://ai.google.dev/gemini-api/docs
-    - https://cloud.google.com/vertex-ai/generative-ai/docs
-    - JS implementation: js/plugins/google-genai/src/
+    # 1. Initialize Genkit with dynamic model discovery
+    ai = Genkit(plugins=[GoogleAI()])
+
+    # 2. Generate content using any discovered Gemini model
+    response = await ai.generate(
+        model='googleai/gemini-flash-latest',
+        prompt='Suggest 3 names for a space-themed coffee shop.',
+    )
+
+    # 3. Inspect output shapes directly
+    print(response.text)
+    # => 1. AstroBrew
+    #    2. Nebula Nectar
+    #    3. Cosmic Cup
+    ```
 """
 
 import os
@@ -97,7 +51,9 @@ from collections.abc import Callable
 from typing import Any
 
 from google import genai
+from google.auth import default as google_auth_default
 from google.auth.credentials import Credentials
+from google.auth.exceptions import DefaultCredentialsError
 from google.genai.client import DebugConfig
 from google.genai.types import HttpOptions, HttpOptionsDict
 
@@ -358,35 +314,31 @@ class GoogleAI(Plugin):
     initialization time, ensuring new models are available without SDK updates.
 
     Model Types:
-        +------------------+-------------------+--------------------------------+
-        | Type             | Action Kind       | Example                        |
-        +------------------+-------------------+--------------------------------+
-        | Gemini/Gemma     | MODEL             | googleai/gemini-flash-latest   |
-        | Imagen           | MODEL             | googleai/imagen-3.0-generate   |
-        | Embedders        | EMBEDDER          | googleai/gemini-embedding-001  |
-        | Veo (video)      | BACKGROUND_MODEL  | googleai/veo-2.0-generate-001  |
-        +------------------+-------------------+--------------------------------+
+        | Type | Action Kind | Example |
+        |---|---|---|
+        | Gemini / Gemma | MODEL | ``googleai/gemini-flash-latest`` |
+        | Imagen | MODEL | ``googleai/imagen-3.0-generate-002`` |
+        | Embedders | EMBEDDER | ``googleai/text-embedding-004`` |
+        | Veo (Video) | BACKGROUND_MODEL | ``googleai/veo-2.0-generate-001`` |
 
     Example:
-        >>> from genkit import Genkit
-        >>> from genkit_google_genai import GoogleAI
-        >>>
-        >>> ai = Genkit(plugins=[GoogleAI()])
-        >>>
-        >>> # Text generation
-        >>> response = await ai.generate(
-        ...     model='googleai/gemini-flash-latest',
-        ...     prompt='Explain quantum computing',
-        ... )
-        >>>
-        >>> # Video generation (background model)
-        >>> op = await ai.generate(
-        ...     model='googleai/veo-2.0-generate-001',
-        ...     prompt='A sunset over mountains',
-        ... )
-        >>> while not op.done:
-        ...     await asyncio.sleep(5)
-        ...     op = await ai.check_operation(op)
+        ```python
+        from genkit import Genkit
+        from genkit_google_genai import GoogleAI
+
+        # 1. Initialize Genkit with dynamic model discovery
+        ai = Genkit(plugins=[GoogleAI()])
+
+        # 2. Generate text using Gemini Flash
+        res = await ai.generate(
+            model='googleai/gemini-flash-latest',
+            prompt='Explain quantum computing in one sentence.',
+        )
+
+        # 3. Inspect output text directly
+        print(res.text)
+        # => Quantum computing utilizes quantum bits to solve complex problems faster...
+        ```
 
     Attributes:
         name: The plugin name ('googleai').
@@ -447,6 +399,7 @@ class GoogleAI(Plugin):
             'debug_config': debug_config,
             'http_options': _inject_attribution_headers(http_options, base_url, api_version),
         }
+        self._base_url_pinned = bool(self._client_kwargs['http_options'].base_url)
         # Single loop-local client accessor used everywhere in plugin runtime paths.
         self._runtime_client = loop_local_client(lambda: genai.client.Client(**self._client_kwargs))
         self._list_actions_cache: list[ActionMetadata] | None = None
@@ -628,7 +581,12 @@ class GoogleAI(Plugin):
             if clean_name.lower().startswith('image'):
                 model = ImagenModel(clean_name, self._runtime_client())
             else:
-                model = GeminiModel(clean_name, self._runtime_client())
+                model = GeminiModel(
+                    clean_name,
+                    self._runtime_client(),
+                    client_kwargs=self._client_kwargs,
+                    base_url_pinned=self._base_url_pinned,
+                )
             return await model.generate(request, ctx)
 
         return Action(
@@ -726,32 +684,31 @@ class VertexAI(Plugin):
         - Imagen image generation models
 
     Model Types:
-        +------------------+-------------------+--------------------------------+
-        | Type             | Action Kind       | Example                        |
-        +------------------+-------------------+--------------------------------+
-        | Gemini/Gemma     | MODEL             | vertexai/gemini-flash-latest   |
-        | Imagen           | MODEL             | vertexai/imagen-3.0-generate   |
-        | Veo (video)      | MODEL             | vertexai/veo-2.0-generate-001  |
-        | Embedders        | EMBEDDER          | vertexai/text-embedding-005    |
-        +------------------+-------------------+--------------------------------+
+        | Type | Action Kind | Example |
+        |---|---|---|
+        | Gemini / Gemma | MODEL | ``vertexai/gemini-flash-latest`` |
+        | Imagen | MODEL | ``vertexai/imagen-3.0-generate-002`` |
+        | Veo (Video) | MODEL | ``vertexai/veo-2.0-generate-001`` |
+        | Embedders | EMBEDDER | ``vertexai/text-embedding-005`` |
 
     Example:
-        >>> from genkit import Genkit
-        >>> from genkit_google_genai import VertexAI
-        >>>
-        >>> ai = Genkit(plugins=[VertexAI(project='my-project')])
-        >>>
-        >>> # Text generation
-        >>> response = await ai.generate(
-        ...     model='vertexai/gemini-flash-latest',
-        ...     prompt='Explain quantum computing',
-        ... )
-        >>>
-        >>> # Image generation (Vertex AI only)
-        >>> response = await ai.generate(
-        ...     model='vertexai/imagen-3.0-generate-002',
-        ...     prompt='A serene mountain landscape',
-        ... )
+        ```python
+        from genkit import Genkit
+        from genkit_google_genai import VertexAI
+
+        # 1. Initialize Genkit with VertexAI plugin
+        ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
+
+        # 2. Generate text using Gemini on Vertex AI
+        res = await ai.generate(
+            model='vertexai/gemini-flash-latest',
+            prompt='Explain quantum computing in one sentence.',
+        )
+
+        # 3. Inspect output text directly
+        print(res.text)
+        # => Quantum computing utilizes quantum bits to solve complex problems faster...
+        ```
 
     Attributes:
         name: The plugin name ('vertexai').
@@ -769,7 +726,7 @@ class VertexAI(Plugin):
         self,
         credentials: Credentials | None = None,
         project: str | None = None,
-        location: str | None = 'us-central1',
+        location: str | None = None,
         debug_config: DebugConfig | None = None,
         http_options: HttpOptions | HttpOptionsDict | None = None,
         api_key: str | None = None,
@@ -783,7 +740,10 @@ class VertexAI(Plugin):
                 Defaults to None, in which case the client uses default authentication
                 mechanisms (e.g., application default credentials or API key).
             project: Name of the Google Cloud project.
-            location: Location of the Google Cloud project.
+            location: Location of the Google Cloud project. Accepts regions
+                (e.g. 'us-central1'), multi-regions ('us', 'eu'), or 'global'.
+                Falls back to the GOOGLE_CLOUD_LOCATION or GCLOUD_LOCATION
+                environment variable, then 'us-central1'.
             debug_config: Configuration for debugging the client. Defaults to None.
             http_options: HTTP options for configuring the client's network requests.
                 Can be an instance of HttpOptions or a dictionary. Defaults to None.
@@ -793,10 +753,43 @@ class VertexAI(Plugin):
             api_version: The API version to use. Defaults to None.
             base_url: The base URL for the API. Defaults to None.
         """
-        # Store project and location on the plugin for reranker resolution.
-        # This avoids reaching into client internals.
-        self._project = project if project else os.getenv(const.GCLOUD_PROJECT)
-        self._location = location if location else const.DEFAULT_REGION
+        # Store project and location on the plugin for evaluator registration
+        # and multi-region routing. This avoids reaching into client internals.
+        self._project = project or os.getenv(const.GCLOUD_PROJECT) or os.getenv(const.GOOGLE_CLOUD_PROJECT)
+        self._location = (
+            location
+            or os.getenv(const.GOOGLE_CLOUD_LOCATION)
+            or os.getenv(const.GCLOUD_LOCATION)
+            or const.DEFAULT_REGION
+        )
+
+        opts = _inject_attribution_headers(http_options, base_url, api_version)
+        self._base_url_pinned = bool(opts.base_url)
+        multi_region = const.is_multi_regional_location(self._location)
+        if multi_region and not self._base_url_pinned:
+            # Multi-regions ('us', 'eu') are served from dedicated endpoints
+            # that the google-genai SDK does not derive itself.
+            opts.base_url = const.multi_regional_base_url(self._location)
+
+        # Resolve the project here rather than leaving it to the SDK: with any
+        # base_url set the SDK skips its own ADC lookup, evaluator registration
+        # needs a concrete project, and doing it now keeps the blocking ADC IO
+        # off the event loop. Express mode (api_key) needs no project, so it
+        # only pays for the probe where a multi-region demands one.
+        if not self._project and (api_key is None or multi_region):
+            if credentials is not None:
+                self._project = getattr(credentials, 'project_id', None)
+            if not self._project:
+                try:
+                    _, self._project = google_auth_default()
+                except DefaultCredentialsError:
+                    self._project = None
+
+        if multi_region and not self._project:
+            raise ValueError(
+                'VertexAI plugin requires a project when using a multi-region location. '
+                'Set the project parameter or GOOGLE_CLOUD_PROJECT environment variable.'
+            )
 
         self._client_kwargs: dict[str, Any] = {
             'vertexai': self._vertexai,
@@ -805,7 +798,7 @@ class VertexAI(Plugin):
             'project': self._project,
             'location': self._location,
             'debug_config': debug_config,
-            'http_options': _inject_attribution_headers(http_options, base_url, api_version),
+            'http_options': opts,
         }
         # Single loop-local client accessor used everywhere in plugin runtime paths.
         self._runtime_client = loop_local_client(lambda: genai.client.Client(**self._client_kwargs))
@@ -964,13 +957,23 @@ class VertexAI(Plugin):
 
         async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
             if is_tuned_gemini_name(clean_name):
-                model = GeminiModel(clean_name, self._runtime_client())
+                model = GeminiModel(
+                    clean_name,
+                    self._runtime_client(),
+                    client_kwargs=self._client_kwargs,
+                    base_url_pinned=self._base_url_pinned,
+                )
             elif clean_name.lower().startswith('image'):
                 model = ImagenModel(clean_name, self._runtime_client())
             elif is_veo_model(clean_name):
                 model = VeoModel(clean_name, self._runtime_client())
             else:
-                model = GeminiModel(clean_name, self._runtime_client())
+                model = GeminiModel(
+                    clean_name,
+                    self._runtime_client(),
+                    client_kwargs=self._client_kwargs,
+                    base_url_pinned=self._base_url_pinned,
+                )
             return await model.generate(request, ctx)
 
         return Action(
@@ -1075,7 +1078,9 @@ def _inject_attribution_headers(
     if not http_options:
         opts = HttpOptions()
     elif isinstance(http_options, HttpOptions):
-        opts = http_options
+        # Copy so plugin-derived settings never mutate the caller's object
+        # (which may be shared across plugin instances).
+        opts = http_options.model_copy(deep=True)
     else:
         opts = HttpOptions.model_validate(http_options)
 

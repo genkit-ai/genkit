@@ -40,8 +40,9 @@ type GoogleAI struct {
 
 // VertexAI is a Genkit plugin for interacting with the Google Vertex AI service.
 type VertexAI struct {
-	ProjectID string // Google Cloud project to use for Vertex AI. If empty, the value of the environment variable GOOGLE_CLOUD_PROJECT will be consulted.
-	Location  string // Location of the Vertex AI service. If empty, GOOGLE_CLOUD_LOCATION and GOOGLE_CLOUD_REGION environment variables will be consulted, in that order.
+	ProjectID  string // Google Cloud project to use for Vertex AI. If empty, the value of the environment variable GOOGLE_CLOUD_PROJECT will be consulted.
+	Location   string // Location of the Vertex AI service. If empty, GOOGLE_CLOUD_LOCATION and GOOGLE_CLOUD_REGION environment variables will be consulted, in that order. Accepts a regional location (e.g. "us-central1"), a multi-region location ("us" or "eu"), or "global".
+	APIVersion string // API version to use ("v1" or "v1beta1"). If empty, the genai SDK default (v1beta1) is used. Can be overridden per-request via config.HTTPOptions.APIVersion.
 
 	gclient *genai.Client // Client for the Vertex AI service.
 	mu      sync.Mutex    // Mutex to control access.
@@ -134,6 +135,13 @@ func (v *VertexAI) Init(ctx context.Context) []api.Action {
 			panic("Vertex AI requires setting GOOGLE_CLOUD_LOCATION or GOOGLE_CLOUD_REGION in the environment. You can get a location at https://cloud.google.com/vertex-ai/docs/general/locations")
 		}
 	}
+
+	switch v.APIVersion {
+	case "", "v1", "v1beta1":
+	default:
+		panic(fmt.Sprintf("Vertex AI APIVersion must be %q or %q, got %q", "v1", "v1beta1", v.APIVersion))
+	}
+
 	cred, err := credentials.DetectDefault(&credentials.DetectOptions{
 		Scopes: []string{"https://www.googleapis.com/auth/cloud-platform"},
 	})
@@ -162,7 +170,8 @@ func (v *VertexAI) Init(ctx context.Context) []api.Action {
 		Location:   location,
 		HTTPClient: httpClient,
 		HTTPOptions: genai.HTTPOptions{
-			Headers: genkitClientHeader,
+			Headers:    genkitClientHeader,
+			APIVersion: v.APIVersion,
 		},
 	}
 

@@ -48,6 +48,8 @@ __all__ = [
     'TEXT_MIME_TYPE',
     'build_cache_usage',
     'get_cache_control',
+    'get_redacted_thinking_data',
+    'get_thinking_signature',
     'maybe_strip_fences',
     'strip_markdown_fences',
     'to_anthropic_document',
@@ -130,6 +132,36 @@ def get_cache_control(part: Any) -> dict[str, str] | None:  # noqa: ANN401
     if cache_ctrl and isinstance(cache_ctrl, dict):
         return cache_ctrl
     return None
+
+
+def get_redacted_thinking_data(part: Any) -> str | None:  # noqa: ANN401
+    """Extract redacted thinking data from a part's custom field."""
+    custom = getattr(part, 'custom', None)
+    if not isinstance(custom, dict):
+        return None
+    redacted = custom.get('redactedThinking')
+    return redacted if isinstance(redacted, str) else None
+
+
+def get_thinking_signature(part: Any) -> str | None:  # noqa: ANN401
+    """Extract the Anthropic thinking signature from a part's metadata.
+
+    Reads ``metadata.thoughtSignature`` (JS naming), falling back to
+    ``metadata.signature`` (Go naming) as an input alias.
+    """
+    metadata = getattr(part, 'metadata', None)
+    if not isinstance(metadata, dict):
+        return None
+
+    signature = metadata.get('thoughtSignature')
+    if signature is None:
+        signature = metadata.get('signature')
+    if isinstance(signature, bytes):
+        try:
+            signature = signature.decode('utf-8')
+        except UnicodeDecodeError:
+            return None
+    return signature if isinstance(signature, str) else None
 
 
 def to_anthropic_document(url: str, content_type: str) -> dict[str, Any]:

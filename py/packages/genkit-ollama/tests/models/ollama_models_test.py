@@ -217,7 +217,10 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
             ctx=streaming_ctx,
         )
         self.assertIsNotNone(response.message)
-        self.assertEqual(cast(Message, response.message).content, [])
+        self.assertEqual(
+            cast(Message, response.message).content,
+            [Part(root=TextPart(text='Parsed chat content'))],
+        )
 
     @patch(
         'genkit.model.get_basic_usage_stats',
@@ -260,7 +263,10 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
             ctx=streaming_ctx,
         )
         self.assertIsNotNone(response.message)
-        self.assertEqual(cast(Message, response.message).content, [])
+        self.assertEqual(
+            cast(Message, response.message).content,
+            [Part(root=TextPart(text='Generated text'))],
+        )
 
     @patch(
         'genkit.model.get_basic_usage_stats',
@@ -307,6 +313,44 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(response.usage)
         self.assertEqual(cast(ModelUsage, response.usage).input_tokens, None)
         self.assertEqual(cast(ModelUsage, response.usage).output_tokens, None)
+
+    @patch(
+        'genkit.model.get_basic_usage_stats',
+        return_value=ModelUsage(),
+    )
+    async def test_generate_chat_streaming_zero_chunks(self, mock_get_basic_usage_stats: MagicMock) -> None:
+        """Streaming with zero chunks returns empty content, not the error default."""
+        model_def = ModelDefinition(name='chat-model', api_type=OllamaAPITypes.CHAT)
+        ollama_model = OllamaModel(client=self.mock_client, model_definition=model_def)
+        streaming_ctx = ActionRunContext(streaming_callback=MagicMock())
+
+        cast(Any, ollama_model)._chat_with_ollama = AsyncMock(return_value=None)
+        cast(Any, ollama_model).is_streaming_request = MagicMock(return_value=True)
+        cast(Any, ollama_model).get_usage_info = MagicMock(return_value=ModelUsage())
+
+        response = await ollama_model.generate(self.request, streaming_ctx)
+
+        self.assertIsNotNone(response.message)
+        self.assertEqual(cast(Message, response.message).content, [])
+
+    @patch(
+        'genkit.model.get_basic_usage_stats',
+        return_value=ModelUsage(),
+    )
+    async def test_generate_generate_streaming_zero_chunks(self, mock_get_basic_usage_stats: MagicMock) -> None:
+        """Streaming with zero chunks returns empty content, not the error default."""
+        model_def = ModelDefinition(name='generate-model', api_type=OllamaAPITypes.GENERATE)
+        ollama_model = OllamaModel(client=self.mock_client, model_definition=model_def)
+        streaming_ctx = ActionRunContext(streaming_callback=MagicMock())
+
+        cast(Any, ollama_model)._generate_ollama_response = AsyncMock(return_value=None)
+        cast(Any, ollama_model).is_streaming_request = MagicMock(return_value=True)
+        cast(Any, ollama_model).get_usage_info = MagicMock(return_value=ModelUsage())
+
+        response = await ollama_model.generate(self.request, streaming_ctx)
+
+        self.assertIsNotNone(response.message)
+        self.assertEqual(cast(Message, response.message).content, [])
 
 
 class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
@@ -427,10 +471,8 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
 
         response = await self.ollama_model._chat_with_ollama(self.request, self.ctx)
 
-        # For streaming requests, the method returns None because response chunks
-        # are sent incrementally via ctx.send_chunk() rather than returned at the end.
-        # This is the expected behavior for streaming APIs.
-        self.assertIsNone(response)
+        assert response is not None
+        self.assertEqual(response.message.content, 'chunk1chunk2')
         self.mock_build_chat_messages.assert_called_once_with(self.request)
         self.mock_is_streaming_request.assert_called_once_with(ctx=self.ctx)
         self.mock_ollama_client_instance.chat.assert_awaited_once_with(
@@ -445,6 +487,81 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.mock_build_multimodal_response.call_count, 2)
         cast(MagicMock, self.ctx.send_chunk).assert_any_call(chunk=ANY)
         self.mock_build_multimodal_response.assert_any_call(chat_response=ANY)
+
+    async def test_streaming_chat_accumulates_thinking(self) -> None:
+        """Thinking from non-final chunks is concatenated into the returned response."""
+        self.mock_is_streaming_request.return_value = True
+        self.ctx = ActionRunContext(streaming_callback=MagicMock())
+        cast(Any, self.ctx).send_chunk = MagicMock()
+
+        async def mock_streaming_chunks() -> AsyncIterator[ollama_api.ChatResponse]:
+            yield ollama_api.ChatResponse(
+                message=ollama_api.Message(role='assistant', content='Hello ', thinking='step1 '),
+            )
+            yield ollama_api.ChatResponse(
+                message=ollama_api.Message(role='assistant', content='world', thinking='step2'),
+            )
+            yield ollama_api.ChatResponse(
+                message=ollama_api.Message(role='assistant', content='', thinking=''),
+            )
+
+        self.mock_ollama_client_instance.chat.return_value = mock_streaming_chunks()
+
+        response = await self.ollama_model._chat_with_ollama(self.request, self.ctx)
+
+        assert response is not None
+        self.assertEqual(response.message.content, 'Hello world')
+        self.assertEqual(response.message.thinking, 'step1 step2')
+
+        parts = OllamaModel._build_multimodal_chat_response(chat_response=response)
+        reasoning_parts = [p for p in parts if isinstance(p.root, ReasoningPart)]
+        self.assertEqual(len(reasoning_parts), 1)
+        self.assertEqual(reasoning_parts[0].root.reasoning, 'step1 step2')
+
+    async def test_streaming_chat_accumulates_tool_calls(self) -> None:
+        """Tool calls from a mid-stream chunk survive into the returned response."""
+        self.mock_is_streaming_request.return_value = True
+        self.ctx = ActionRunContext(streaming_callback=MagicMock())
+        cast(Any, self.ctx).send_chunk = MagicMock()
+
+        tool_call = ollama_api.Message.ToolCall(
+            function=ollama_api.Message.ToolCall.Function(name='search', arguments={'q': 'test'})
+        )
+
+        async def mock_streaming_chunks() -> AsyncIterator[ollama_api.ChatResponse]:
+            yield ollama_api.ChatResponse(
+                message=ollama_api.Message(role='assistant', content='', tool_calls=[tool_call]),
+            )
+            yield ollama_api.ChatResponse(
+                message=ollama_api.Message(role='assistant', content=''),
+            )
+
+        self.mock_ollama_client_instance.chat.return_value = mock_streaming_chunks()
+
+        response = await self.ollama_model._chat_with_ollama(self.request, self.ctx)
+
+        assert response is not None
+        assert response.message.tool_calls is not None
+        self.assertEqual(len(response.message.tool_calls), 1)
+        self.assertEqual(response.message.tool_calls[0].function.name, 'search')
+        self.assertEqual(response.message.tool_calls[0].function.arguments, {'q': 'test'})
+
+    async def test_streaming_chat_empty_stream_returns_none(self) -> None:
+        """An empty stream (zero chunks) returns None from the real helper."""
+        self.mock_is_streaming_request.return_value = True
+        self.ctx = ActionRunContext(streaming_callback=MagicMock())
+        cast(Any, self.ctx).send_chunk = MagicMock()
+
+        async def mock_empty_stream() -> AsyncIterator[ollama_api.ChatResponse]:
+            return
+            yield
+
+        self.mock_ollama_client_instance.chat.return_value = mock_empty_stream()
+
+        response = await self.ollama_model._chat_with_ollama(self.request, self.ctx)
+
+        self.assertIsNone(response)
+        cast(MagicMock, self.ctx.send_chunk).assert_not_called()
 
     async def test_streaming_chat_empty_role_maps_to_model(self) -> None:
         """Streamed chunks with an empty role should be labeled MODEL, not TOOL."""
@@ -640,11 +757,8 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
 
         response = await self.ollama_model._generate_ollama_response(self.request, self.ctx)
 
-        # For streaming requests, the method returns None because response chunks
-        # are sent incrementally via ctx.send_chunk() rather than returned at the end.
-        # This is the expected behavior for streaming APIs.
-        self.assertIsNone(response)
-
+        assert response is not None
+        self.assertEqual(response.response, 'chunk1 chunk2')
         self.mock_build_prompt.assert_called_once_with(self.request)
         self.mock_is_streaming_request.assert_called_once_with(ctx=self.ctx)
         self.mock_ollama_client_instance.generate.assert_awaited_once_with(

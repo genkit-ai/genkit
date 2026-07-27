@@ -1137,3 +1137,30 @@ def test_gemini_model__pick_plugin_schema_routes_by_model_family(
     picked = model._pick_plugin_schema({})
 
     assert type(picked) is expected_schema
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__build_messages_maps_tool_role_to_user(
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """Messages with Role.TOOL are mapped to 'user' in Gemini request Content."""
+    request = ModelRequest(
+        messages=[
+            Message(role=Role.USER, content=[Part(root=TextPart(text='What is the weather in Seattle?'))]),
+            Message(
+                role=Role.MODEL,
+                content=[Part(root=TextPart(text='I will check.'))],
+            ),
+            Message(
+                role=Role.TOOL,
+                content=[Part(root=TextPart(text='Sunny, 72°F in Seattle'))],
+            ),
+        ],
+    )
+
+    contents, cache = await gemini_model_instance._build_messages(request, model_name='gemini-2.5-flash')
+    assert cache is None
+    assert len(contents) == 3
+    assert contents[0].role == 'user'
+    assert contents[1].role == 'model'
+    assert contents[2].role == 'user'

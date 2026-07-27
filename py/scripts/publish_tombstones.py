@@ -31,73 +31,77 @@ def get_version() -> str:
     )
 
 
+# Scoped 0.8.0 release: only google-genai is being published, so only its tombstone is
+# built. Publishing the other tombstones now would pin them to genkit-<name>==0.8.0
+# distributions that don't exist yet, breaking installs. Restore the full list for the
+# next full release.
 PLUGINS = [
-    {
-        'old_dist': 'genkit-plugin-anthropic',
-        'new_dist': 'genkit-anthropic',
-        'old_import': 'anthropic',
-        'new_import': 'genkit_anthropic',
-    },
-    {
-        'old_dist': 'genkit-plugin-compat-oai',
-        'new_dist': 'genkit-openai',
-        'old_import': 'compat_oai',
-        'new_import': 'genkit_openai',
-    },
-    {
-        'old_dist': 'genkit-plugin-django',
-        'new_dist': 'genkit-django',
-        'old_import': 'django',
-        'new_import': 'genkit_django',
-    },
-    {
-        'old_dist': 'genkit-plugin-evaluators',
-        'new_dist': 'genkit-evaluators',
-        'old_import': 'evaluators',
-        'new_import': 'genkit_evaluators',
-    },
-    {
-        'old_dist': 'genkit-plugin-fastapi',
-        'new_dist': 'genkit-fastapi',
-        'old_import': 'fastapi',
-        'new_import': 'genkit_fastapi',
-    },
-    {
-        'old_dist': 'genkit-plugin-flask',
-        'new_dist': 'genkit-flask',
-        'old_import': 'flask',
-        'new_import': 'genkit_flask',
-    },
-    {
-        'old_dist': 'genkit-plugin-google-cloud',
-        'new_dist': 'genkit-google-cloud',
-        'old_import': 'google_cloud',
-        'new_import': 'genkit_google_cloud',
-    },
+    # {
+    #     'old_dist': 'genkit-plugin-anthropic',
+    #     'new_dist': 'genkit-anthropic',
+    #     'old_import': 'anthropic',
+    #     'new_import': 'genkit_anthropic',
+    # },
+    # {
+    #     'old_dist': 'genkit-plugin-compat-oai',
+    #     'new_dist': 'genkit-openai',
+    #     'old_import': 'compat_oai',
+    #     'new_import': 'genkit_openai',
+    # },
+    # {
+    #     'old_dist': 'genkit-plugin-django',
+    #     'new_dist': 'genkit-django',
+    #     'old_import': 'django',
+    #     'new_import': 'genkit_django',
+    # },
+    # {
+    #     'old_dist': 'genkit-plugin-evaluators',
+    #     'new_dist': 'genkit-evaluators',
+    #     'old_import': 'evaluators',
+    #     'new_import': 'genkit_evaluators',
+    # },
+    # {
+    #     'old_dist': 'genkit-plugin-fastapi',
+    #     'new_dist': 'genkit-fastapi',
+    #     'old_import': 'fastapi',
+    #     'new_import': 'genkit_fastapi',
+    # },
+    # {
+    #     'old_dist': 'genkit-plugin-flask',
+    #     'new_dist': 'genkit-flask',
+    #     'old_import': 'flask',
+    #     'new_import': 'genkit_flask',
+    # },
+    # {
+    #     'old_dist': 'genkit-plugin-google-cloud',
+    #     'new_dist': 'genkit-google-cloud',
+    #     'old_import': 'google_cloud',
+    #     'new_import': 'genkit_google_cloud',
+    # },
     {
         'old_dist': 'genkit-plugin-google-genai',
         'new_dist': 'genkit-google-genai',
         'old_import': 'google_genai',
         'new_import': 'genkit_google_genai',
     },
-    {
-        'old_dist': 'genkit-plugin-middleware',
-        'new_dist': 'genkit-middleware',
-        'old_import': 'middleware',
-        'new_import': 'genkit_middleware',
-    },
-    {
-        'old_dist': 'genkit-plugin-ollama',
-        'new_dist': 'genkit-ollama',
-        'old_import': 'ollama',
-        'new_import': 'genkit_ollama',
-    },
-    {
-        'old_dist': 'genkit-plugin-vertex-ai',
-        'new_dist': 'genkit-vertexai',
-        'old_import': 'vertex_ai',
-        'new_import': 'genkit_vertexai',
-    },
+    # {
+    #     'old_dist': 'genkit-plugin-middleware',
+    #     'new_dist': 'genkit-middleware',
+    #     'old_import': 'middleware',
+    #     'new_import': 'genkit_middleware',
+    # },
+    # {
+    #     'old_dist': 'genkit-plugin-ollama',
+    #     'new_dist': 'genkit-ollama',
+    #     'old_import': 'ollama',
+    #     'new_import': 'genkit_ollama',
+    # },
+    # {
+    #     'old_dist': 'genkit-plugin-vertex-ai',
+    #     'new_dist': 'genkit-vertexai',
+    #     'old_import': 'vertex_ai',
+    #     'new_import': 'genkit_vertexai',
+    # },
 ]
 
 PYPROJECT = """[build-system]

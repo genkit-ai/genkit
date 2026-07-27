@@ -2361,14 +2361,37 @@ func TestPromptAgent_RunText(t *testing.T) {
 func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
-	ai.DefinePrompt(reg, "rejectPrompt", ai.WithModelName("test/echo"))
+	var modelCalls atomic.Int64
+	ai.DefineModel(reg, "test/reject", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			modelCalls.Add(1)
+			return &ai.ModelResponse{Message: ai.NewModelTextMessage("unexpected")}, nil
+		},
+	)
+	ai.DefinePrompt(reg, "rejectPrompt", ai.WithModelName("test/reject"))
 	af := DefinePromptAgent[testState](reg, "rejectPrompt")
 
 	tests := []struct {
 		name    string
 		message *ai.Message
+		resume  *ToolResume
 		wantMsg string
 	}{
+		{
+			name:    "missing message",
+			message: nil,
+			wantMsg: "message",
+		},
+		{
+			// A Resume struct that is non-nil but carries no Respond/Restart
+			// entries must be treated the same as no Resume at all; only
+			// checking for a nil Resume would let this slip through to the
+			// model with an effectively empty turn.
+			name:    "empty resume payload",
+			message: nil,
+			resume:  &ToolResume{},
+			wantMsg: "message",
+		},
 		{
 			name:    "non-user role",
 			message: &ai.Message{Role: ai.RoleModel, Content: []*ai.Part{ai.NewTextPart("hi")}},
@@ -2392,7 +2415,7 @@ func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			out, err := af.Run(ctx, &AgentInput{Message: tc.message})
+			out, err := af.Run(ctx, &AgentInput{Message: tc.message, Resume: tc.resume})
 			if err != nil {
 				t.Fatalf("Run: %v", err)
 			}
@@ -2409,6 +2432,9 @@ func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 				t.Errorf("Error.Message = %q, want substring %q", out.Error.Message, tc.wantMsg)
 			}
 		})
+	}
+	if got := modelCalls.Load(); got != 0 {
+		t.Fatalf("model calls = %d, want 0", got)
 	}
 }
 

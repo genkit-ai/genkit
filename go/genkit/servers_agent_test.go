@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -63,11 +64,16 @@ type agentHTTPResult struct {
 // session source) are hard HTTP errors.
 func TestHandlerAgent(t *testing.T) {
 	g := genkit.Init(context.Background(), genkit.WithExperimental())
+	var modelCalls atomic.Int64
 
 	// Replies "echo <n>" where n is the number of messages the model saw,
 	// so resumed history is observable; fails when asked to.
 	genkit.DefineModel(g, "test/echo", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			modelCalls.Add(1)
+			if len(req.Messages) == 0 {
+				return nil, core.NewError(core.INTERNAL, "model saw empty messages")
+			}
 			last := req.Messages[len(req.Messages)-1]
 			if last.Role == ai.RoleUser && strings.Contains(last.Text(), "fail") {
 				return nil, core.NewError(core.RESOURCE_EXHAUSTED, "model on fire")
@@ -223,6 +229,30 @@ func TestHandlerAgent(t *testing.T) {
 		// The failed output still hands back the last-good state.
 		if len(res.State) == 0 {
 			t.Error("failed output must carry the last-good state")
+		}
+	})
+
+	t.Run("missing turn message fails before model invocation", func(t *testing.T) {
+		before := modelCalls.Load()
+		code, body := post(t, "agentClient", `{"data":{}}`, false)
+		if code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (failure rides the output); body = %s", code, body)
+		}
+		res := parseResult(t, body)
+		if res.FinishReason != "failed" {
+			t.Errorf("finishReason = %q, want %q", res.FinishReason, "failed")
+		}
+		if res.Error == nil {
+			t.Fatalf("missing error in failed output: %s", body)
+		}
+		if res.Error.Status != "INVALID_ARGUMENT" {
+			t.Errorf("error.status = %q, want INVALID_ARGUMENT", res.Error.Status)
+		}
+		if !strings.Contains(res.Error.Message, "message") {
+			t.Errorf("error.message = %q, want substring %q", res.Error.Message, "message")
+		}
+		if got := modelCalls.Load(); got != before {
+			t.Fatalf("model calls = %d, want %d", got, before)
 		}
 	})
 

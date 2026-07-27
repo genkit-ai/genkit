@@ -572,7 +572,7 @@ class TestVertexAIInit(unittest.TestCase):
     """Test cases for VertexAI.__init__ plugin."""
 
     @patch('google.genai.client.Client')
-    @patch.dict(os.environ, {'GCLOUD_PROJECT': 'project'})
+    @patch.dict(os.environ, {'GCLOUD_PROJECT': 'project'}, clear=True)
     def test_init_with_api_key(self, mock_genai_client: MagicMock) -> None:
         """Test using api_key parameter."""
         api_key = 'test_api_key'
@@ -592,7 +592,7 @@ class TestVertexAIInit(unittest.TestCase):
         self.assertIsInstance(runtime_client, MagicMock)
 
     @patch('google.genai.client.Client')
-    @patch.dict(os.environ, {'GCLOUD_PROJECT': 'project'})
+    @patch.dict(os.environ, {'GCLOUD_PROJECT': 'project'}, clear=True)
     def test_init_with_credentials(self, mock_genai_client: MagicMock) -> None:
         """Test using credentials parameter."""
         mock_credentials = MagicMock(spec=Credentials)

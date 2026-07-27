@@ -421,4 +421,42 @@ func TestVertexAILive(t *testing.T) {
 			t.Fatal("expected a non-empty response from the tuned endpoint")
 		}
 	})
+	t.Run("multi-region location", func(t *testing.T) {
+		// Multi-region ("us"/"eu") endpoints aren't necessarily enabled on
+		// every Vertex AI project, so this is opt-in like the tuned endpoint
+		// test above rather than assumed to work whenever GOOGLE_CLOUD_PROJECT
+		// is set.
+		multiRegion, ok := requireEnv("GENKIT_VERTEX_MULTIREGION_LOCATION")
+		if !ok {
+			t.Skip("GENKIT_VERTEX_MULTIREGION_LOCATION not set; skipping multi-region live test")
+		}
+		// "us" and "eu" are multi-region locations routed to
+		// aiplatform.{location}.rep.googleapis.com by the genai SDK.
+		plugin := &googlegenai.VertexAI{ProjectID: projectID, Location: multiRegion}
+		gMultiRegion := genkit.Init(ctx, genkit.WithPlugins(plugin))
+		resp, err := genkit.Generate(ctx, gMultiRegion,
+			ai.WithModelName("vertexai/gemini-2.5-flash"),
+			ai.WithPrompt("Say hello in one short sentence."),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimSpace(resp.Text()) == "" {
+			t.Fatal("expected a non-empty response from the multi-region endpoint")
+		}
+	})
+	t.Run("plugin-level apiVersion override", func(t *testing.T) {
+		plugin := &googlegenai.VertexAI{ProjectID: projectID, Location: location, APIVersion: "v1"}
+		gAPIVersion := genkit.Init(ctx, genkit.WithPlugins(plugin))
+		resp, err := genkit.Generate(ctx, gAPIVersion,
+			ai.WithModelName("vertexai/gemini-2.5-flash"),
+			ai.WithPrompt("Say hello in one short sentence."),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimSpace(resp.Text()) == "" {
+			t.Fatal("expected a non-empty response with apiVersion override")
+		}
+	})
 }

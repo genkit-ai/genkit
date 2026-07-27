@@ -16,12 +16,12 @@
 
 """Anthropic plugin for Genkit."""
 
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import structlog
 from anthropic import AsyncAnthropic
 
-from genkit import ModelConfig, ModelRequest, ModelResponse
+from genkit import ModelRequest, ModelResponse
 from genkit.model import model_action_metadata
 from genkit.plugin_api import (
     Action,
@@ -32,6 +32,7 @@ from genkit.plugin_api import (
     loop_local_client,
     to_json_schema,
 )
+from genkit_anthropic.config import AnthropicConfig
 from genkit_anthropic.model_info import SUPPORTED_ANTHROPIC_MODELS, get_model_info
 from genkit_anthropic.models import AnthropicModel
 
@@ -63,17 +64,30 @@ class Anthropic(Plugin):
     def __init__(
         self,
         models: list[str] | None = None,
+        *,
+        api_version: Literal['stable', 'beta'] | None = None,
         **anthropic_params: object,
     ) -> None:
         """Initializes Anthropic plugin with given configuration.
 
         Args:
             models: List of model names to register. Defaults to all supported models.
+            api_version: Default API surface unless overridden by per-request
+                config. An explicit config ``apiVersion`` always takes
+                precedence. Defaults to stable.
             **anthropic_params: Additional parameters passed to the AsyncAnthropic client.
                 This may include api_key, base_url, timeout, and other configuration
                 settings required by Anthropic's API.
+
+        Raises:
+            ValueError: If ``api_version`` is not ``'stable'``, ``'beta'``, or
+                ``None``.
         """
+        if api_version not in (None, 'stable', 'beta'):
+            raise ValueError("api_version must be 'stable', 'beta', or None")
+
         self.models = models or list(SUPPORTED_ANTHROPIC_MODELS.keys())
+        self._default_api_version: Literal['stable', 'beta'] | None = api_version
         self._anthropic_params = anthropic_params
         self._runtime_client = loop_local_client(lambda: AsyncAnthropic(**cast(dict[str, Any], self._anthropic_params)))
         self._list_actions_cache: list[ActionMetadata] | None = None
@@ -116,7 +130,11 @@ class Anthropic(Plugin):
         model_info = get_model_info(clean_name)
 
         async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-            model = AnthropicModel(model_name=clean_name, client=self._runtime_client())
+            model = AnthropicModel(
+                model_name=clean_name,
+                client=self._runtime_client(),
+                default_api_version=self._default_api_version,
+            )
             return await model.generate(request, ctx)
 
         return Action(
@@ -128,7 +146,7 @@ class Anthropic(Plugin):
                     'supports': (
                         model_info.supports.model_dump(by_alias=True, exclude_none=True) if model_info.supports else {}
                     ),
-                    'customOptions': to_json_schema(ModelConfig),
+                    'customOptions': to_json_schema(AnthropicConfig),
                 },
             },
         )
@@ -146,7 +164,7 @@ class Anthropic(Plugin):
         return model_action_metadata(
             name=anthropic_name(model_id),
             info=get_model_info(model_id).model_dump(by_alias=True, exclude_none=True),
-            config_schema=ModelConfig,
+            config_schema=AnthropicConfig,
         )
 
     async def _fetch_dynamic_model_ids(self) -> list[str]:

@@ -18,21 +18,6 @@
 
 Provides image generation capabilities via the OpenAI Images API,
 supporting models like DALL-E 3 and GPT-Image-1.
-
-Data Flow::
-
-    ┌─────────────────────────────────────────────────────────────────────┐
-    │  ModelRequest (text prompt)                                      │
-    │         │                                                           │
-    │         ▼                                                           │
-    │  to_image_generate_params()  ──►  ImageGenerateParams               │
-    │         │                                                           │
-    │         ▼                                                           │
-    │  client.images.generate()                                           │
-    │         │                                                           │
-    │         ▼                                                           │
-    │  to_generate_response()  ──►  ModelResponse (media parts)        │
-    └─────────────────────────────────────────────────────────────────────┘
 """
 
 from __future__ import annotations

@@ -21,7 +21,9 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from genkit_anthropic.config import AnthropicConfig
 from genkit_vertexai.model_garden import ModelGarden, ModelGardenPlugin
+from genkit_vertexai.model_garden.anthropic import AnthropicModelGarden
 from genkit_vertexai.model_garden.model_garden import ModelGardenModel
 
 
@@ -97,3 +99,16 @@ def test_model_garden_plugin_deprecated_alias() -> None:
     assert len(caught) == 1
     assert 'ModelGardenPlugin is deprecated' in str(caught[0].message)
     assert isinstance(plugin, ModelGarden)
+
+
+def test_anthropic_model_garden_uses_anthropic_config_schema() -> None:
+    """Anthropic Model Garden advertises the schema enforced by its handler."""
+    schema = AnthropicModelGarden.get_config_schema()
+    assert issubclass(schema, AnthropicConfig)
+
+
+def test_anthropic_model_garden_does_not_advertise_api_key() -> None:
+    """Vertex authenticates with Google credentials, so apiKey is not offered."""
+    properties = AnthropicModelGarden.get_config_schema().model_json_schema()['properties']
+    assert 'apiKey' not in properties
+    assert 'apiVersion' in properties

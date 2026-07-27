@@ -21,17 +21,36 @@ from collections.abc import Awaitable, Callable
 from typing import cast
 
 from anthropic import AsyncAnthropic, AsyncAnthropicVertex
+from genkit_anthropic.config import AnthropicConfig
 from genkit_anthropic.models import AnthropicModel
 from pydantic import ConfigDict
+from pydantic.config import JsonDict
 
 from genkit import ModelConfig, ModelInfo, ModelRequest, ModelResponse, Supports
 from genkit.plugin_api import ActionRunContext, loop_local_client
 
 
-class AnthropicConfigSchema(ModelConfig):
-    """Configuration for Anthropic models."""
+def _vertex_anthropic_config_schema_extra(schema: JsonDict) -> None:
+    """Drop options Vertex Model Garden cannot honor from the advertised schema."""
+    base_extra = AnthropicConfig.model_config.get('json_schema_extra')
+    if callable(base_extra):
+        cast(Callable[[JsonDict], None], base_extra)(schema)
+    properties = schema.get('properties')
+    if isinstance(properties, dict):
+        properties.pop('apiKey', None)
 
-    model_config = ConfigDict(extra='allow')
+
+class VertexAnthropicConfig(AnthropicConfig):
+    """Anthropic config for Vertex Model Garden.
+
+    ``apiKey`` is omitted because :class:`AsyncAnthropicVertex` authenticates
+    with ambient Google credentials and ignores a per-request Anthropic key.
+    """
+
+    model_config = ConfigDict(**{
+        **AnthropicConfig.model_config,
+        'json_schema_extra': _vertex_anthropic_config_schema_extra,
+    })
 
 
 class AnthropicModelGarden:
@@ -95,4 +114,4 @@ class AnthropicModelGarden:
     @staticmethod
     def get_config_schema() -> type[ModelConfig]:
         """Returns the config schema for this model type."""
-        return AnthropicConfigSchema
+        return VertexAnthropicConfig

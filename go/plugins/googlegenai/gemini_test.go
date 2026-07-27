@@ -1383,3 +1383,57 @@ func TestFinishReasonMapping(t *testing.T) {
 		})
 	}
 }
+
+// TestToGeminiRole verifies that Genkit roles map to Gemini content roles.
+// The Gemini Content API only accepts "user" or "model"; tool responses must
+// be sent under the "user" role.
+func TestToGeminiRole(t *testing.T) {
+	testCases := []struct {
+		name string
+		role ai.Role
+		want string
+	}{
+		{"user", ai.RoleUser, "user"},
+		{"model", ai.RoleModel, "model"},
+		{"tool maps to user", ai.RoleTool, "user"},
+		{"unknown defaults to user", ai.Role("something"), "user"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := toGeminiRole(tc.role); got != tc.want {
+				t.Errorf("toGeminiRole(%q) = %q, want %q", tc.role, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestToGeminiContents verifies that messages are converted to Gemini contents,
+// that system messages are dropped, and that tool messages are sent as "user".
+func TestToGeminiContents(t *testing.T) {
+	input := &ai.ModelRequest{
+		Messages: []*ai.Message{
+			{Role: ai.RoleSystem, Content: []*ai.Part{ai.NewTextPart("you are helpful")}},
+			{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("hello")}},
+			{Role: ai.RoleModel, Content: []*ai.Part{ai.NewToolRequestPart(&ai.ToolRequest{Name: "myTool", Input: map[string]any{"Test": "x"}})}},
+			{Role: ai.RoleTool, Content: []*ai.Part{ai.NewToolResponsePart(&ai.ToolResponse{Name: "myTool", Output: "result"})}},
+		},
+	}
+
+	contents, err := toGeminiContents(input)
+	if err != nil {
+		t.Fatalf("toGeminiContents failed: %v", err)
+	}
+
+	// System message should be dropped.
+	if len(contents) != 3 {
+		t.Fatalf("len(contents) = %d, want 3", len(contents))
+	}
+
+	wantRoles := []string{"user", "model", "user"}
+	for i, want := range wantRoles {
+		if contents[i].Role != want {
+			t.Errorf("contents[%d].Role = %q, want %q", i, contents[i].Role, want)
+		}
+	}
+}

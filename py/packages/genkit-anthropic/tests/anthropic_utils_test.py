@@ -29,6 +29,8 @@ from genkit_anthropic.utils import (
     TEXT_MIME_TYPE,
     build_cache_usage,
     get_cache_control,
+    get_redacted_thinking_data,
+    get_thinking_signature,
     to_anthropic_document,
     to_anthropic_image,
     to_anthropic_media,
@@ -93,6 +95,80 @@ class TestGetCacheControl:
 
         result = get_cache_control(FakePart())
         assert result == {'type': 'ephemeral'}
+
+
+# ---------------------------------------------------------------------------
+# get_thinking_signature tests
+# ---------------------------------------------------------------------------
+
+
+class TestGetThinkingSignature:
+    """Tests for get_thinking_signature utility."""
+
+    def test_returns_none_for_no_metadata(self) -> None:
+        """Returns None when part has no metadata."""
+        part = TextPart(text='hello')
+        assert get_thinking_signature(part) is None
+
+    def test_returns_none_when_metadata_key_absent(self) -> None:
+        """Returns None when metadata has no signature keys."""
+        part = TextPart(text='hello', metadata=Metadata({'other_key': 'value'}))
+        assert get_thinking_signature(part) is None
+
+    def test_reads_thought_signature(self) -> None:
+        """Reads JS-style thoughtSignature metadata."""
+        part = TextPart(text='hello', metadata=Metadata({'thoughtSignature': 'sig-js'}))
+        assert get_thinking_signature(part) == 'sig-js'
+
+    def test_falls_back_to_signature(self) -> None:
+        """Reads Go-style signature metadata when thoughtSignature is absent."""
+        part = TextPart(text='hello', metadata=Metadata({'signature': 'sig-go'}))
+        assert get_thinking_signature(part) == 'sig-go'
+
+    def test_prefers_thought_signature(self) -> None:
+        """Prefers JS-style metadata when both aliases are present."""
+        part = TextPart(text='hello', metadata=Metadata({'thoughtSignature': 'sig-js', 'signature': 'sig-go'}))
+        assert get_thinking_signature(part) == 'sig-js'
+
+    def test_decodes_bytes_signature(self) -> None:
+        """Decodes Go-style raw byte signatures."""
+        part = TextPart(text='hello', metadata=Metadata({'signature': b'sig-go'}))
+        assert get_thinking_signature(part) == 'sig-go'
+
+    def test_returns_none_for_non_string_signature(self) -> None:
+        """Returns None when signature metadata is not string-like."""
+        part = TextPart(text='hello', metadata=Metadata({'signature': 123}))
+        assert get_thinking_signature(part) is None
+
+
+# ---------------------------------------------------------------------------
+# get_redacted_thinking_data tests
+# ---------------------------------------------------------------------------
+
+
+class TestGetRedactedThinkingData:
+    """Tests for get_redacted_thinking_data utility."""
+
+    def test_returns_none_for_no_custom(self) -> None:
+        """Returns None when part has no custom field."""
+        part = TextPart(text='hello')
+        assert get_redacted_thinking_data(part) is None
+
+    def test_extracts_redacted_thinking(self) -> None:
+        """Extracts redacted thinking custom data."""
+
+        class FakePart:
+            custom = {'redactedThinking': 'opaque-blob'}
+
+        assert get_redacted_thinking_data(FakePart()) == 'opaque-blob'
+
+    def test_returns_none_for_non_string_redacted_thinking(self) -> None:
+        """Returns None when redacted thinking data is not a string."""
+
+        class FakePart:
+            custom = {'redactedThinking': 123}
+
+        assert get_redacted_thinking_data(FakePart()) is None
 
 
 # ---------------------------------------------------------------------------

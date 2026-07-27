@@ -277,7 +277,7 @@ class OllamaModel:
         else:
             raise ValueError(f'Unresolved API type: {self.model_definition.api_type}')
 
-        if self.is_streaming_request(ctx=ctx):
+        if not api_response and self.is_streaming_request(ctx=ctx):
             content = []
 
         response_message = Message(
@@ -316,7 +316,11 @@ class OllamaModel:
                 stored client factory when omitted.
 
         Returns:
-            The chat response from Ollama.
+            The chat response from Ollama. For streaming requests, returns the
+            last streamed chunk with ``message.content``, ``message.thinking``,
+            and ``message.tool_calls`` replaced by the values accumulated across
+            all chunks; other fields reflect the final chunk. Returns ``None``
+            if the stream yielded no chunks.
         """
         # Resolve media URLs first. build_chat_messages may perform HTTP fetches
         # for image parts, and those must stay *outside* wrap_connection_errors so
@@ -367,9 +371,18 @@ class OllamaModel:
                     **extra_kwargs,
                 )
                 idx = 0
+                accumulated_text = ''
+                accumulated_thinking = ''
+                accumulated_tool_calls: list[ollama_api.Message.ToolCall] = []
+                last_chunk: ollama_api.ChatResponse | None = None
                 async for chunk in chat_response:
                     idx += 1
+                    last_chunk = chunk
                     role = self._from_ollama_role(chunk.message.role)
+                    accumulated_text += chunk.message.content or ''
+                    accumulated_thinking += chunk.message.thinking or ''
+                    if chunk.message.tool_calls:
+                        accumulated_tool_calls.extend(chunk.message.tool_calls)
                     if ctx:
                         ctx.send_chunk(
                             chunk=ModelResponseChunk(
@@ -378,9 +391,11 @@ class OllamaModel:
                                 content=self._build_multimodal_chat_response(chat_response=chunk),
                             )
                         )
-            # For streaming requests, we return None because the response chunks
-            # have already been sent via ctx.send_chunk() above. The async generator
-            # is now exhausted, and the caller should not expect a return value.
+            if last_chunk is not None:
+                last_chunk.message.content = accumulated_text
+                last_chunk.message.thinking = accumulated_thinking or None
+                last_chunk.message.tool_calls = accumulated_tool_calls or None
+                return last_chunk
             return None
         else:
             async with wrap_connection_errors(self._server_address):
@@ -411,7 +426,11 @@ class OllamaModel:
                 stored client factory when omitted.
 
         Returns:
-            The generated response.
+            The generated response from Ollama. For streaming requests,
+            returns the last streamed chunk with ``response`` and ``thinking``
+            replaced by the values accumulated across all chunks; other fields
+            reflect the final chunk. Returns ``None`` if the stream yielded
+            no chunks.
         """
         prompt = self.build_prompt(request)
         if client is None:
@@ -433,8 +452,14 @@ class OllamaModel:
                     **extra_kwargs,
                 )
                 idx = 0
+                accumulated_text = ''
+                accumulated_thinking = ''
+                last_chunk: ollama_api.GenerateResponse | None = None
                 async for chunk in generate_response:
                     idx += 1
+                    last_chunk = chunk
+                    accumulated_text += chunk.response or ''
+                    accumulated_thinking += chunk.thinking or ''
                     if ctx:
                         ctx.send_chunk(
                             chunk=ModelResponseChunk(
@@ -443,9 +468,10 @@ class OllamaModel:
                                 content=self._build_generate_response(generate_response=chunk),
                             )
                         )
-            # For streaming requests, we return None because the response chunks
-            # have already been sent via ctx.send_chunk() above. The async generator
-            # is now exhausted, and the caller should not expect a return value.
+            if last_chunk is not None:
+                last_chunk.response = accumulated_text
+                last_chunk.thinking = accumulated_thinking or None
+                return last_chunk
             return None
         else:
             async with wrap_connection_errors(self._server_address):

@@ -16,15 +16,21 @@
 
 """Tests for Anthropic models."""
 
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from genkit_anthropic.models import AnthropicModel
+from anthropic import AsyncAnthropic, AsyncAnthropicVertex
+from genkit_anthropic import models as anthropic_models
+from genkit_anthropic.config import AnthropicConfig
+from genkit_anthropic.models import BETA_APIS, AnthropicModel, _to_anthropic_thinking_config
 from genkit_anthropic.utils import maybe_strip_fences, strip_markdown_fences
+from pydantic import ValidationError
 
 from genkit import (
     Constrained,
+    CustomPart,
+    FinishReason,
     Media,
     MediaPart,
     Message,
@@ -34,6 +40,7 @@ from genkit import (
     ModelRequest,
     ModelResponseChunk,
     Part,
+    ReasoningPart,
     Role,
     Supports,
     TextPart,
@@ -190,18 +197,22 @@ async def test_generate_with_config() -> None:
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Test'))])],
         config=ModelConfig(
-            temperature=0.7,
+            temperature=0.0,
             max_output_tokens=100,
             top_p=0.9,
+            top_k=40,
+            stop_sequences=['STOP'],
         ),
     )
 
     await model.generate(request)
 
     call_args = mock_client.messages.create.call_args
-    assert call_args.kwargs['temperature'] == 0.7
+    assert call_args.kwargs['temperature'] == 0.0
     assert call_args.kwargs['max_tokens'] == 100
     assert call_args.kwargs['top_p'] == 0.9
+    assert call_args.kwargs['top_k'] == 40
+    assert call_args.kwargs['stop_sequences'] == ['STOP']
 
 
 def test_extract_system() -> None:
@@ -828,3 +839,1063 @@ def test_structured_output_with_no_tools_capability() -> None:
     assert 'output_config' in params_without_tools
     assert 'output_config' not in params_with_tools
     assert 'Output valid JSON' in params_with_tools['system']
+
+
+# --- typed config (AnthropicConfig) ----------------------------------------
+
+
+def _mock_client_for_generate() -> MagicMock:
+    """A direct API client whose messages.create returns a minimal text response."""
+    mock_client = MagicMock(spec=AsyncAnthropic)
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(type='text', text='ok')]
+    mock_response.usage = MagicMock(input_tokens=1, output_tokens=1)
+    mock_response.stop_reason = 'end_turn'
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+    mock_client.beta.messages.create = AsyncMock(return_value=mock_response)
+    # The real client only gains these on instantiation; _client_for_config reads them.
+    mock_client.auth_token = None
+    mock_client._custom_headers = {}
+    mock_client.copy = MagicMock(return_value=mock_client)
+    return mock_client
+
+
+def _mock_vertex_client_for_generate() -> MagicMock:
+    """A resold-surface client, which is not an ``AsyncAnthropic`` instance."""
+    mock_client = MagicMock(spec=AsyncAnthropicVertex)
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(type='text', text='ok')]
+    mock_response.usage = MagicMock(input_tokens=1, output_tokens=1)
+    mock_response.stop_reason = 'end_turn'
+    # The Vertex client only gains these attributes on instantiation, so the spec omits them.
+    mock_client.messages = MagicMock()
+    mock_client.beta = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+    mock_client.beta.messages.create = AsyncMock(return_value=mock_response)
+    return mock_client
+
+
+def _text_request(config: Any) -> ModelRequest:
+    return ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Hi'))])],
+        config=config,
+    )
+
+
+@pytest.mark.parametrize(
+    ('config', 'default_api_version', 'expected'),
+    [
+        ({'apiVersion': 'beta'}, 'stable', True),
+        ({'apiVersion': 'stable'}, 'beta', False),
+        ({}, 'beta', True),
+        ({}, 'stable', False),
+        ({}, None, False),
+        ({'metadata': {'user_id': 'test-user'}}, 'beta', True),
+        ({'metadata': {'user_id': 'test-user'}}, 'stable', False),
+        ({'betas': ['custom-beta']}, None, True),
+        ({'betas': ['custom-beta']}, 'stable', True),
+        ({'output_config': {'task_budget': {'total': 20000}}}, None, True),
+        ({'betas': []}, None, False),
+    ],
+)
+def test_api_surface_resolution(config: dict[str, Any], default_api_version: Any, expected: bool) -> None:
+    """Resolve request override, feature signals, plugin default, then stable."""
+    model = AnthropicModel(
+        model_name='claude-sonnet-4',
+        client=MagicMock(),
+        default_api_version=default_api_version,
+    )
+
+    assert model._uses_beta_api(AnthropicConfig.model_validate(config)) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('default_api_version', 'config', 'use_beta'),
+    [
+        ('beta', {}, True),
+        ('beta', {'apiVersion': 'stable'}, False),
+        ('stable', {'apiVersion': 'beta'}, True),
+    ],
+)
+async def test_api_surface_resolution_routes_create(
+    default_api_version: Any,
+    config: dict[str, Any],
+    use_beta: bool,
+) -> None:
+    """The resolved API surface selects the matching SDK create method."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(
+        model_name='claude-sonnet-4',
+        client=mock_client,
+        default_api_version=default_api_version,
+    )
+
+    await model.generate(_text_request(config))
+
+    if use_beta:
+        mock_client.beta.messages.create.assert_awaited_once()
+        mock_client.messages.create.assert_not_called()
+    else:
+        mock_client.messages.create.assert_awaited_once()
+        mock_client.beta.messages.create.assert_not_called()
+        assert 'betas' not in mock_client.messages.create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_default_api_version_beta_routes_streaming() -> None:
+    """The configured beta default applies to streaming as well as create."""
+    mock_client = MagicMock(spec=AsyncAnthropic)
+    final_content = [MagicMock(type='text', text='ok')]
+    mock_client.beta.messages.stream.return_value = MockStreamManager([], final_content=final_content)
+    model = AnthropicModel(
+        model_name='claude-sonnet-4',
+        client=mock_client,
+        default_api_version='beta',
+    )
+    ctx = MagicMock()
+    ctx.is_streaming = True
+
+    await model.generate(_text_request({}), ctx)
+
+    mock_client.beta.messages.stream.assert_called_once()
+    mock_client.messages.stream.assert_not_called()
+    assert mock_client.beta.messages.stream.call_args.kwargs['betas'] == list(BETA_APIS)
+
+
+@pytest.mark.asyncio
+async def test_beta_surface_sends_default_betas() -> None:
+    """Beta calls send the same default beta headers as the JS plugin."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'apiVersion': 'beta'}))
+
+    assert mock_client.beta.messages.create.call_args.kwargs['betas'] == list(BETA_APIS)
+    assert list(BETA_APIS) == [
+        'files-api-2025-04-14',
+        'effort-2025-11-24',
+        'structured-outputs-2025-11-13',
+        'task-budgets-2026-03-13',
+    ]
+
+
+@pytest.mark.asyncio
+async def test_beta_surface_preserves_empty_betas_opt_out() -> None:
+    """An explicit empty list opts out of the default beta headers."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'apiVersion': 'beta', 'betas': []}))
+
+    mock_client.beta.messages.create.assert_awaited_once()
+    mock_client.messages.create.assert_not_called()
+    assert 'betas' not in mock_client.beta.messages.create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_resold_surface_omits_default_betas() -> None:
+    """Resold surfaces do not offer every default beta, so none are assumed."""
+    mock_client = _mock_vertex_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'apiVersion': 'beta'}))
+
+    mock_client.beta.messages.create.assert_awaited_once()
+    assert 'betas' not in mock_client.beta.messages.create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_resold_surface_beta_only_field_routes_beta_without_defaults() -> None:
+    """A beta-only field still selects the beta surface without assuming default headers."""
+    mock_client = _mock_vertex_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'output_config': {'task_budget': {'total': 20000}}}))
+
+    mock_client.beta.messages.create.assert_awaited_once()
+    mock_client.messages.create.assert_not_called()
+    assert 'betas' not in mock_client.beta.messages.create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_resold_surface_forwards_explicit_betas() -> None:
+    """An explicit betas list is still forwarded on resold surfaces."""
+    mock_client = _mock_vertex_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'apiVersion': 'beta', 'betas': ['context-1m-2025-08-07']}))
+
+    assert mock_client.beta.messages.create.call_args.kwargs['betas'] == ['context-1m-2025-08-07']
+
+
+@pytest.mark.asyncio
+async def test_beta_streaming_omits_empty_betas_opt_out() -> None:
+    """Streaming also omits the SDK kwarg rather than sending an empty header."""
+    mock_client = MagicMock()
+    final_content = [MagicMock(type='text', text='ok')]
+    mock_client.beta.messages.stream.return_value = MockStreamManager([], final_content=final_content)
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+    ctx = MagicMock()
+    ctx.is_streaming = True
+
+    await model.generate(_text_request({'apiVersion': 'beta', 'betas': []}), ctx)
+
+    mock_client.beta.messages.stream.assert_called_once()
+    mock_client.messages.stream.assert_not_called()
+    assert 'betas' not in mock_client.beta.messages.stream.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_camelcase_sampling_aliases_normalized() -> None:
+    """CamelCase sampling aliases become SDK kwargs without leaking."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(
+        _text_request({
+            'topP': 0.9,
+            'topK': 20,
+            'stopSequences': ['x'],
+            'maxOutputTokens': 64,
+        })
+    )
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert kwargs['top_p'] == 0.9
+    assert kwargs['top_k'] == 20
+    assert kwargs['stop_sequences'] == ['x']
+    assert kwargs['max_tokens'] == 64
+
+    camelcase_keys = {'topP', 'topK', 'stopSequences', 'maxOutputTokens'}
+    assert camelcase_keys.isdisjoint(kwargs)
+    assert camelcase_keys.isdisjoint(kwargs.get('extra_body', {}))
+
+
+@pytest.mark.asyncio
+async def test_sampling_params_reach_streaming_request() -> None:
+    """Sampling parameters reach the SDK's streaming request unchanged."""
+    mock_client = _mock_client_for_generate()
+    mock_client.messages.stream.return_value = MockStreamManager(
+        [],
+        final_content=[MagicMock(type='text', text='ok')],
+    )
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+    ctx = MagicMock()
+    ctx.is_streaming = True
+
+    await model.generate(
+        _text_request(
+            ModelConfig(
+                temperature=0.2,
+                top_p=0.8,
+                top_k=30,
+                stop_sequences=['END'],
+                max_output_tokens=256,
+            )
+        ),
+        ctx,
+    )
+
+    kwargs = mock_client.messages.stream.call_args.kwargs
+    assert kwargs['temperature'] == 0.2
+    assert kwargs['top_p'] == 0.8
+    assert kwargs['top_k'] == 30
+    assert kwargs['stop_sequences'] == ['END']
+    assert kwargs['max_tokens'] == 256
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('model_name', ['claude-opus-4-8', 'claude-fable-5'])
+async def test_sampling_params_pass_through_for_newest_models(model_name: str) -> None:
+    """Newest models keep local pass-through for API-enforced sampling rules."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name=model_name, client=mock_client)
+
+    # These models enforce sampling restrictions server-side; match JS and Go by forwarding unchanged.
+    await model.generate(_text_request({'temperature': 0.7, 'top_p': 0.9, 'top_k': 40}))
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert kwargs['temperature'] == 0.7
+    assert kwargs['top_p'] == 0.9
+    assert kwargs['top_k'] == 40
+
+
+def test_build_params_default_max_tokens() -> None:
+    """An empty config uses the plugin's default output-token limit."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    params = model._build_params(_text_request({}))
+
+    assert params['max_tokens'] == anthropic_models.DEFAULT_MAX_OUTPUT_TOKENS
+    assert {'temperature', 'top_p', 'top_k', 'stop_sequences'}.isdisjoint(params)
+
+
+@pytest.mark.asyncio
+async def test_dict_config_unknown_key_reaches_sdk() -> None:
+    """Unknown extra keys in a dict config pass through the SDK body escape hatch."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'temperature': 0.3, 'future_option': 'x'}))
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert kwargs['temperature'] == 0.3
+    assert kwargs['extra_body'] == {'future_option': 'x'}
+
+
+@pytest.mark.asyncio
+async def test_typed_config_thinking_translated_for_sdk() -> None:
+    """A typed thinking config is translated to the SDK's snake_case shape."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    config = AnthropicConfig.model_validate({'thinking': {'enabled': True, 'budgetTokens': 2048}})
+    await model.generate(_text_request(config))
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert kwargs['thinking'] == {'type': 'enabled', 'budget_tokens': 2048}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'thinking, expected',
+    [
+        ({'adaptive': True, 'display': 'summarized'}, {'type': 'adaptive', 'display': 'summarized'}),
+        ({'adaptive': True}, {'type': 'adaptive'}),
+        ({'enabled': False}, {'type': 'disabled'}),
+        ({'budgetTokens': 2048}, {'type': 'enabled', 'budget_tokens': 2048}),
+        # Non-mode keys (display, forward-compatible fields) pass through in every mode.
+        (
+            {'enabled': True, 'budgetTokens': 2048, 'display': 'summarized'},
+            {'type': 'enabled', 'budget_tokens': 2048, 'display': 'summarized'},
+        ),
+        # SDK-native type spellings are accepted alongside the boolean flags.
+        ({'type': 'adaptive'}, {'type': 'adaptive'}),
+        ({'type': 'disabled'}, {'type': 'disabled'}),
+    ],
+)
+async def test_typed_config_thinking_variants_translated_for_sdk(
+    thinking: dict[str, Any], expected: dict[str, Any]
+) -> None:
+    """Advertised thinking variants are translated to the SDK shape."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    config = AnthropicConfig.model_validate({'thinking': thinking})
+    await model.generate(_text_request(config))
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert kwargs['thinking'] == expected
+
+
+@pytest.mark.asyncio
+async def test_beta_config_uses_beta_sdk_and_sends_betas() -> None:
+    """apiVersion / betas route through the beta SDK surface."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    config = AnthropicConfig.model_validate({
+        'apiVersion': 'beta',
+        'betas': ['token-efficient-tools-2025'],
+    })
+    await model.generate(_text_request(config))
+
+    mock_client.messages.create.assert_not_called()
+    kwargs = mock_client.beta.messages.create.call_args.kwargs
+    assert 'api_version' not in kwargs
+    assert 'apiVersion' not in kwargs
+    assert kwargs['betas'] == ['token-efficient-tools-2025']
+
+
+@pytest.mark.asyncio
+async def test_api_key_does_not_reach_sdk_params() -> None:
+    """apiKey is a client override and is never passed as a messages kwarg."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    config = AnthropicConfig.model_validate({'apiKey': 'secret'})
+    await model.generate(_text_request(config))
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert 'api_key' not in kwargs
+    assert 'apiKey' not in kwargs
+
+
+def test_api_key_config_overrides_real_sdk_client() -> None:
+    """apiKey yields a request-scoped copy that keeps client settings and transport."""
+    base_client = AsyncAnthropic(api_key='base-key', default_headers={'X-Custom': 'yes'})
+    model = AnthropicModel(model_name='claude-sonnet-4', client=base_client)
+
+    client = model._client_for_config(AnthropicConfig.model_validate({'apiKey': 'request-key'}))
+
+    assert client is not base_client
+    assert isinstance(client, AsyncAnthropic)
+    assert client.api_key == 'request-key'
+    assert client.default_headers.get('X-Custom') == 'yes'
+    assert client._client is base_client._client
+
+
+def test_build_params_consumes_client_level_keys_silently() -> None:
+    """apiVersion/apiKey are honored elsewhere and must not be logged as ignored."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    with patch.object(anthropic_models, 'logger') as mock_logger:
+        params = model._build_params(_text_request({'apiVersion': 'beta', 'apiKey': 'request-key'}))
+
+    mock_logger.warning.assert_not_called()
+    assert 'api_version' not in params
+    assert 'api_key' not in params
+
+
+@pytest.mark.asyncio
+async def test_invalid_config_raises_from_generate() -> None:
+    """An invalid dict config surfaces a validation error from generate()."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    with pytest.raises(ValidationError):
+        await model.generate(_text_request({'thinking': {'enabled': True}}))
+
+    mock_client.messages.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_config_tool_choice_and_metadata_reach_sdk() -> None:
+    """Config-level tool_choice and metadata reach the SDK kwargs."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    config = AnthropicConfig.model_validate({
+        'tool_choice': {'type': 'tool', 'name': 'get_weather'},
+        'metadata': {'user_id': 'user-123'},
+        'tools': [{'name': 'get_weather', 'description': 'Weather', 'input_schema': {'type': 'object'}}],
+    })
+    await model.generate(_text_request(config))
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert kwargs['tool_choice'] == {'type': 'tool', 'name': 'get_weather'}
+    assert kwargs['metadata'] == {'user_id': 'user-123'}
+
+
+@pytest.mark.asyncio
+async def test_config_tool_choice_none_reaches_sdk() -> None:
+    """Config-level tool_choice none remains valid for dict compatibility."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(
+        _text_request({
+            'tool_choice': {'type': 'none'},
+            'tools': [{'name': 'get_weather', 'description': 'Weather', 'input_schema': {'type': 'object'}}],
+        })
+    )
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert kwargs['tool_choice'] == {'type': 'none'}
+
+
+@pytest.mark.asyncio
+async def test_config_tool_choice_dropped_without_tools() -> None:
+    """Config-level tool_choice is dropped when the request carries no tools."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'tool_choice': {'type': 'auto'}}))
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert 'tool_choice' not in kwargs
+
+
+def test_structured_output_merges_existing_output_config() -> None:
+    """Native structured output keeps user-supplied output_config options."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-opus-4-6', client=mock_client)
+    config: Any = AnthropicConfig.model_validate({'output_config': {'effort': 'high', 'task_budget': {'total': 20000}}})
+
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Generate a cat'))])],
+        output_format='json',
+        output_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
+        config=config,
+        output_constrained=True,
+    )
+
+    params = model._build_params(request)
+
+    assert params['output_config']['effort'] == 'high'
+    assert params['output_config']['task_budget'] == {'type': 'tokens', 'total': 20000}
+    assert params['output_config']['format']['type'] == 'json_schema'
+
+
+def test_config_version_overrides_model_name() -> None:
+    """Per-request version maps to the Anthropic model parameter."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    params = model._build_params(_text_request({'version': 'claude-sonnet-4-20260101'}))
+
+    assert params['model'] == 'claude-sonnet-4-20260101'
+
+
+def test_backward_compat_plain_model_config() -> None:
+    """A plain ModelConfig still maps to the same SDK params (no behavior change)."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    params = model._build_params(_text_request(ModelConfig(temperature=0.7, max_output_tokens=100, top_p=0.9)))
+
+    assert params['temperature'] == 0.7
+    assert params['max_tokens'] == 100
+    assert params['top_p'] == 0.9
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('config', 'kwarg'),
+    [
+        ({'speed': 'fast'}, 'speed'),
+        ({'mcp_servers': [{'type': 'url', 'name': 'x', 'url': 'https://example.com'}]}, 'mcp_servers'),
+        ({'context_management': {'edits': []}}, 'context_management'),
+    ],
+)
+async def test_beta_only_params_select_beta_surface(config: dict, kwarg: str) -> None:
+    """Beta-only params route to the beta surface instead of crashing the stable one."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request(config))
+
+    mock_client.messages.create.assert_not_called()
+    kwargs = mock_client.beta.messages.create.call_args.kwargs
+    assert kwargs[kwarg] == config[kwarg]
+    assert 'extra_body' not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_task_budget_selects_beta_surface() -> None:
+    """output_config.task_budget is beta-only and must not ship on the stable surface."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'output_config': {'task_budget': {'total': 20000}}}))
+
+    mock_client.messages.create.assert_not_called()
+    kwargs = mock_client.beta.messages.create.call_args.kwargs
+    assert kwargs['output_config']['task_budget'] == {'type': 'tokens', 'total': 20000}
+
+
+@pytest.mark.asyncio
+async def test_unknown_params_still_route_to_extra_body_on_beta() -> None:
+    """The escape hatch keeps working once the beta surface is selected."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'speed': 'fast', 'future_option': 'x'}))
+
+    kwargs = mock_client.beta.messages.create.call_args.kwargs
+    assert kwargs['speed'] == 'fast'
+    assert kwargs['extra_body'] == {'future_option': 'x'}
+
+
+@pytest.mark.asyncio
+async def test_config_stream_does_not_reach_sdk() -> None:
+    """Genkit owns streaming, so a config-level stream flag is dropped."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    await model.generate(_text_request({'stream': True}))
+
+    kwargs = mock_client.messages.create.call_args.kwargs
+    assert 'stream' not in kwargs
+    assert 'stream' not in (kwargs.get('extra_body') or {})
+
+
+@pytest.mark.parametrize(
+    ('stop_reason', 'expected'),
+    [
+        ('end_turn', FinishReason.STOP),
+        ('max_tokens', FinishReason.LENGTH),
+        ('model_context_window_exceeded', FinishReason.LENGTH),
+        ('refusal', FinishReason.BLOCKED),
+        ('pause_turn', FinishReason.OTHER),
+        ('compaction', FinishReason.OTHER),
+        ('something_new', FinishReason.UNKNOWN),
+    ],
+)
+@pytest.mark.asyncio
+async def test_finish_reason_mapping(stop_reason: str, expected: FinishReason) -> None:
+    """Anthropic stop reasons map onto Genkit finish reasons."""
+    mock_client = _mock_client_for_generate()
+    mock_client.messages.create.return_value.stop_reason = stop_reason
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    response = await model.generate(_text_request({}))
+
+    assert response.finish_reason == expected
+
+
+def test_per_request_api_key_ignored_when_client_uses_auth_token() -> None:
+    """An auth-token client cannot be re-credentialed by copy(), so the key is ignored."""
+    client = AsyncAnthropic(auth_token='corp-bearer')
+    model = AnthropicModel(model_name='claude-sonnet-4', client=client)
+
+    assert model._client_for_config(AnthropicConfig.model_validate({'apiKey': 'user-key'})) is client
+
+
+def test_per_request_api_key_ignored_when_client_pins_api_key_header() -> None:
+    """A pinned x-api-key header outranks copy(api_key=...), so the key is ignored."""
+    client = AsyncAnthropic(api_key='plugin-key', default_headers={'X-Api-Key': 'pinned'})
+    model = AnthropicModel(model_name='claude-sonnet-4', client=client)
+
+    assert model._client_for_config(AnthropicConfig.model_validate({'apiKey': 'user-key'})) is client
+
+
+def test_per_request_api_key_applied_on_plain_client() -> None:
+    """A plain api-key client is re-credentialed for the request."""
+    client = AsyncAnthropic(api_key='plugin-key')
+    model = AnthropicModel(model_name='claude-sonnet-4', client=client)
+
+    applied = model._client_for_config(AnthropicConfig.model_validate({'apiKey': 'user-key'}))
+
+    assert applied is not client
+    assert cast(AsyncAnthropic, applied).api_key == 'user-key'
+
+
+@pytest.mark.parametrize(
+    ('raw', 'expected'),
+    [
+        (
+            {'enabled': True, 'budgetTokens': 2048, 'display': 'omitted'},
+            {'display': 'omitted', 'type': 'enabled', 'budget_tokens': 2048},
+        ),
+        ({'adaptive': True, 'display': 'summarized'}, {'display': 'summarized', 'type': 'adaptive'}),
+        ({'type': 'interleaved'}, {'type': 'interleaved'}),
+    ],
+)
+def test_thinking_preserves_display_and_forward_compatible_keys(raw: dict, expected: dict) -> None:
+    """display and unknown thinking keys survive translation to the SDK shape."""
+    thinking = AnthropicConfig.model_validate({'thinking': raw}).model_dump(exclude_none=True, by_alias=False)[
+        'thinking'
+    ]
+
+    assert _to_anthropic_thinking_config(thinking) == expected
+
+
+@pytest.mark.parametrize('raw', [{'display': 'summarized'}, {}])
+def test_thinking_dropped_when_no_mode_is_set(raw: dict) -> None:
+    """A thinking config with no mode has no SDK type, so it is dropped rather than sent."""
+    thinking = AnthropicConfig.model_validate({'thinking': raw}).model_dump(exclude_none=True, by_alias=False)[
+        'thinking'
+    ]
+
+    assert _to_anthropic_thinking_config(thinking) is None
+
+
+@pytest.mark.asyncio
+async def test_generate_with_thinking_block() -> None:
+    """Test that thinking blocks become ReasoningPart values with signatures."""
+    sample_request = _create_sample_request()
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.content = [
+        MagicMock(type='thinking', thinking='Let me reason.', signature='sig-abc'),
+        MagicMock(type='text', text='Answer'),
+    ]
+    mock_response.usage = MagicMock(input_tokens=10, output_tokens=15)
+    mock_response.stop_reason = 'end_turn'
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+    response = await model.generate(sample_request)
+
+    assert response.message is not None
+    assert len(response.message.content) == 2
+    reasoning_part = response.message.content[0].root
+    assert isinstance(reasoning_part, ReasoningPart)
+    assert reasoning_part.reasoning == 'Let me reason.'
+    assert reasoning_part.metadata == {'thoughtSignature': 'sig-abc'}
+
+    text_part = response.message.content[1].root
+    assert isinstance(text_part, TextPart)
+    assert text_part.text == 'Answer'
+
+
+@pytest.mark.asyncio
+async def test_generate_thinking_block_without_signature_omits_metadata() -> None:
+    """Test that thinking blocks without signatures omit metadata."""
+    sample_request = _create_sample_request()
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(type='thinking', thinking='No signature.', signature=None)]
+    mock_response.usage = MagicMock(input_tokens=10, output_tokens=15)
+    mock_response.stop_reason = 'end_turn'
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+    response = await model.generate(sample_request)
+
+    assert response.message is not None
+    reasoning_part = response.message.content[0].root
+    assert isinstance(reasoning_part, ReasoningPart)
+    assert reasoning_part.reasoning == 'No signature.'
+    assert reasoning_part.metadata is None
+
+
+@pytest.mark.asyncio
+async def test_generate_with_redacted_thinking_block() -> None:
+    """Test that redacted thinking blocks become CustomPart values."""
+    sample_request = _create_sample_request()
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(type='redacted_thinking', data='opaque-blob')]
+    mock_response.usage = MagicMock(input_tokens=10, output_tokens=15)
+    mock_response.stop_reason = 'end_turn'
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+    response = await model.generate(sample_request)
+
+    assert response.message is not None
+    custom_part = response.message.content[0].root
+    assert isinstance(custom_part, CustomPart)
+    assert custom_part.custom == {'redactedThinking': 'opaque-blob'}
+
+
+@pytest.mark.asyncio
+async def test_streaming_thinking_deltas() -> None:
+    """Test that thinking deltas stream as reasoning chunks."""
+    sample_request = _create_sample_request()
+    mock_client = MagicMock()
+
+    chunks = [
+        MagicMock(type='content_block_start', index=0, content_block=MagicMock(type='thinking')),
+        MagicMock(type='content_block_delta', index=0, delta=MagicMock(type='thinking_delta', thinking='Think')),
+        MagicMock(type='content_block_delta', index=0, delta=MagicMock(type='thinking_delta', thinking='ing')),
+        MagicMock(type='content_block_delta', index=0, delta=MagicMock(type='signature_delta', signature='sig-abc')),
+        MagicMock(type='content_block_stop', index=0),
+        MagicMock(type='content_block_delta', delta=MagicMock(type='text_delta', text='Answer')),
+    ]
+    final_content = [
+        MagicMock(type='thinking', thinking='Thinking', signature='sig-abc'),
+        MagicMock(type='text', text='Answer'),
+    ]
+    mock_client.messages.stream.return_value = MockStreamManager(chunks, final_content=final_content)
+
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    ctx = MagicMock()
+    ctx.is_streaming = True
+    collected_chunks: list[ModelResponseChunk] = []
+    ctx.send_chunk = lambda chunk: collected_chunks.append(chunk)
+
+    response = await model.generate(sample_request, ctx)
+
+    assert len(collected_chunks) == 3
+
+    first_part = collected_chunks[0].content[0].root
+    assert isinstance(first_part, ReasoningPart)
+    assert first_part.reasoning == 'Think'
+
+    second_part = collected_chunks[1].content[0].root
+    assert isinstance(second_part, ReasoningPart)
+    assert second_part.reasoning == 'ing'
+
+    third_part = collected_chunks[2].content[0].root
+    assert isinstance(third_part, TextPart)
+    assert third_part.text == 'Answer'
+
+    assert response.message is not None
+    final_reasoning_part = response.message.content[0].root
+    assert isinstance(final_reasoning_part, ReasoningPart)
+    assert final_reasoning_part.reasoning == 'Thinking'
+    assert final_reasoning_part.metadata == {'thoughtSignature': 'sig-abc'}
+
+
+@pytest.mark.asyncio
+async def test_streaming_redacted_thinking_block() -> None:
+    """Test that redacted thinking blocks stream as custom chunks and reach the final response."""
+    sample_request = _create_sample_request()
+    mock_client = MagicMock()
+
+    chunks = [
+        MagicMock(
+            type='content_block_start',
+            index=0,
+            content_block=MagicMock(type='redacted_thinking', data='opaque-blob'),
+        ),
+        MagicMock(type='content_block_stop', index=0),
+        MagicMock(type='content_block_delta', delta=MagicMock(type='text_delta', text='Answer')),
+    ]
+    final_content = [
+        MagicMock(type='redacted_thinking', data='opaque-blob'),
+        MagicMock(type='text', text='Answer'),
+    ]
+    mock_client.messages.stream.return_value = MockStreamManager(chunks, final_content=final_content)
+
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    ctx = MagicMock()
+    ctx.is_streaming = True
+    collected_chunks: list[ModelResponseChunk] = []
+    ctx.send_chunk = lambda chunk: collected_chunks.append(chunk)
+
+    response = await model.generate(sample_request, ctx)
+
+    assert len(collected_chunks) == 2
+
+    first_part = collected_chunks[0].content[0].root
+    assert isinstance(first_part, CustomPart)
+    assert first_part.custom == {'redactedThinking': 'opaque-blob'}
+
+    second_part = collected_chunks[1].content[0].root
+    assert isinstance(second_part, TextPart)
+    assert second_part.text == 'Answer'
+
+    assert response.message is not None
+    final_first_part = response.message.content[0].root
+    assert isinstance(final_first_part, CustomPart)
+    assert final_first_part.custom == {'redactedThinking': 'opaque-blob'}
+
+
+@pytest.mark.asyncio
+async def test_streaming_thinking_then_tool_use_interleave() -> None:
+    """Test a turn that streams a thinking block followed by a tool_use block."""
+    sample_request = _create_sample_request()
+    mock_client = MagicMock()
+
+    tool_block = MagicMock(type='tool_use', id='tool_abc')
+    tool_block.name = 'get_weather'
+    chunks = [
+        MagicMock(type='content_block_start', index=0, content_block=MagicMock(type='thinking')),
+        MagicMock(type='content_block_delta', index=0, delta=MagicMock(type='thinking_delta', thinking='Need')),
+        MagicMock(type='content_block_delta', index=0, delta=MagicMock(type='thinking_delta', thinking=' a tool')),
+        MagicMock(type='content_block_delta', index=0, delta=MagicMock(type='signature_delta', signature='sig-abc')),
+        MagicMock(type='content_block_stop', index=0),
+        MagicMock(type='content_block_start', index=1, content_block=tool_block),
+        MagicMock(
+            type='content_block_delta',
+            index=1,
+            delta=MagicMock(type='input_json_delta', partial_json='{"location"'),
+        ),
+        MagicMock(
+            type='content_block_delta',
+            index=1,
+            delta=MagicMock(type='input_json_delta', partial_json=': "Paris"}'),
+        ),
+        MagicMock(type='content_block_stop', index=1),
+    ]
+
+    final_tool = MagicMock(type='tool_use', id='tool_abc', input={'location': 'Paris'})
+    final_tool.name = 'get_weather'
+    final_content = [
+        MagicMock(type='thinking', thinking='Need a tool', signature='sig-abc'),
+        final_tool,
+    ]
+    mock_client.messages.stream.return_value = MockStreamManager(chunks, final_content=final_content)
+
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    ctx = MagicMock()
+    ctx.is_streaming = True
+    collected_chunks: list[ModelResponseChunk] = []
+    ctx.send_chunk = lambda chunk: collected_chunks.append(chunk)
+
+    response = await model.generate(sample_request, ctx)
+
+    # Two reasoning chunks, then one tool request chunk.
+    assert len(collected_chunks) == 3
+
+    first_part = collected_chunks[0].content[0].root
+    assert isinstance(first_part, ReasoningPart)
+    assert first_part.reasoning == 'Need'
+
+    second_part = collected_chunks[1].content[0].root
+    assert isinstance(second_part, ReasoningPart)
+    assert second_part.reasoning == ' a tool'
+
+    tool_part = collected_chunks[2].content[0].root
+    assert isinstance(tool_part, ToolRequestPart)
+    assert tool_part.tool_request.name == 'get_weather'
+    assert tool_part.tool_request.ref == 'tool_abc'
+    assert tool_part.tool_request.input == {'location': 'Paris'}
+
+    # The final message keeps both blocks, with the signature on the reasoning part.
+    assert response.message is not None
+    assert len(response.message.content) == 2
+    final_reasoning_part = response.message.content[0].root
+    assert isinstance(final_reasoning_part, ReasoningPart)
+    assert final_reasoning_part.reasoning == 'Need a tool'
+    assert final_reasoning_part.metadata == {'thoughtSignature': 'sig-abc'}
+    final_tool_part = response.message.content[1].root
+    assert isinstance(final_tool_part, ToolRequestPart)
+    assert final_tool_part.tool_request.name == 'get_weather'
+
+
+def test_reasoning_part_encodes_as_thinking_block() -> None:
+    """Test that signed ReasoningPart values encode as Anthropic thinking blocks."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    messages = [
+        Message(
+            role=Role.MODEL,
+            content=[Part(root=ReasoningPart(reasoning='step', metadata={'thoughtSignature': 'sig-abc'}))],
+        ),
+    ]
+
+    anthropic_messages = model._to_anthropic_messages(messages)
+
+    assert anthropic_messages[0]['content'][0] == {
+        'type': 'thinking',
+        'thinking': 'step',
+        'signature': 'sig-abc',
+    }
+
+
+@pytest.mark.parametrize('signature', ['sig-go', b'sig-go'])
+def test_reasoning_part_accepts_go_style_signature_alias(signature: str | bytes) -> None:
+    """Test that metadata.signature is accepted as an outbound alias."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    messages = [
+        Message(
+            role=Role.MODEL,
+            content=[Part(root=ReasoningPart(reasoning='step', metadata={'signature': signature}))],
+        ),
+    ]
+
+    anthropic_messages = model._to_anthropic_messages(messages)
+    block = anthropic_messages[0]['content'][0]
+    assert block['type'] == 'thinking'
+    assert block['signature'] == 'sig-go'
+
+
+def test_reasoning_part_without_signature_raises() -> None:
+    """Test that non-empty reasoning cannot be sent back without a signature."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    messages = [
+        Message(
+            role=Role.MODEL,
+            content=[Part(root=ReasoningPart(reasoning='step'))],
+        ),
+    ]
+
+    with pytest.raises(ValueError, match='require a signature'):
+        model._to_anthropic_messages(messages)
+
+
+def test_empty_reasoning_part_is_skipped() -> None:
+    """Test that empty reasoning parts produce no Anthropic block."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    messages = [
+        Message(
+            role=Role.MODEL,
+            content=[Part(root=ReasoningPart(reasoning='', metadata={'thoughtSignature': 'sig-abc'}))],
+        ),
+    ]
+
+    anthropic_messages = model._to_anthropic_messages(messages)
+    assert anthropic_messages[0]['content'] == []
+
+
+def test_redacted_thinking_part_round_trips() -> None:
+    """Test that redacted thinking custom data encodes as a redacted block."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    messages = [
+        Message(
+            role=Role.MODEL,
+            content=[Part(root=CustomPart(custom={'redactedThinking': 'opaque-blob'}))],
+        ),
+    ]
+
+    anthropic_messages = model._to_anthropic_messages(messages)
+    assert anthropic_messages[0]['content'][0] == {
+        'type': 'redacted_thinking',
+        'data': 'opaque-blob',
+    }
+
+
+def test_thinking_blocks_do_not_get_cache_control() -> None:
+    """Test that cache_control metadata is not applied to thinking blocks."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    cache_meta = {'cache_control': {'type': 'ephemeral'}}
+    messages = [
+        Message(
+            role=Role.MODEL,
+            content=[
+                Part(
+                    root=ReasoningPart(
+                        reasoning='step',
+                        metadata={'thoughtSignature': 'sig-abc', **cache_meta},
+                    )
+                ),
+                Part(root=CustomPart(custom={'redactedThinking': 'opaque-blob'}, metadata=cache_meta)),
+                Part(root=TextPart(text='Answer', metadata=cache_meta)),
+            ],
+        ),
+    ]
+
+    anthropic_messages = model._to_anthropic_messages(messages)
+    thinking_block, redacted_block, text_block = anthropic_messages[0]['content']
+
+    assert thinking_block['type'] == 'thinking'
+    assert 'cache_control' not in thinking_block
+    assert redacted_block['type'] == 'redacted_thinking'
+    assert 'cache_control' not in redacted_block
+    assert text_block['cache_control'] == {'type': 'ephemeral'}
+
+
+def test_deserialized_reasoning_part_round_trips() -> None:
+    """Test that reasoning history parsed from JSON encodes as a thinking block."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    messages = [
+        Message.model_validate({
+            'role': 'model',
+            'content': [{'reasoning': 'step', 'metadata': {'thoughtSignature': 'sig-abc'}}],
+        }),
+    ]
+
+    anthropic_messages = model._to_anthropic_messages(messages)
+
+    assert anthropic_messages[0]['content'][0] == {
+        'type': 'thinking',
+        'thinking': 'step',
+        'signature': 'sig-abc',
+    }
+
+
+def test_deserialized_redacted_thinking_part_round_trips() -> None:
+    """Test that redacted thinking history parsed from JSON encodes as a redacted block."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    messages = [
+        Message.model_validate({
+            'role': 'model',
+            'content': [{'custom': {'redactedThinking': 'opaque-blob'}}],
+        }),
+    ]
+
+    anthropic_messages = model._to_anthropic_messages(messages)
+
+    assert anthropic_messages[0]['content'][0] == {
+        'type': 'redacted_thinking',
+        'data': 'opaque-blob',
+    }

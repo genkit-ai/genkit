@@ -20,7 +20,8 @@ import asyncio
 import queue
 import threading
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from genkit_anthropic import Anthropic, anthropic_name
@@ -86,6 +87,51 @@ def test_custom_models() -> None:
     """Test plugin initialization with custom models."""
     plugin = Anthropic(api_key='test-key', models=['claude-sonnet-4'])
     assert plugin.models == ['claude-sonnet-4']
+
+
+@patch('genkit_anthropic.plugin.AsyncAnthropic')
+def test_api_version_is_stored_without_leaking_to_sdk(mock_client_ctor: MagicMock) -> None:
+    """Plugin API version is a model default, not an AsyncAnthropic kwarg."""
+    mock_client = MagicMock()
+    mock_client_ctor.return_value = mock_client
+    plugin = Anthropic(api_key='test-key', api_version='beta')
+
+    async def _get_client() -> object:
+        return plugin._runtime_client()
+
+    assert asyncio.run(_get_client()) is mock_client
+    assert plugin._default_api_version == 'beta'
+    assert 'api_version' not in plugin._anthropic_params
+    mock_client_ctor.assert_called_once_with(api_key='test-key')
+
+
+def test_invalid_api_version_fails_fast() -> None:
+    """Invalid plugin API versions fail before an SDK client can be created."""
+    with pytest.raises(ValueError, match='api_version'):
+        Anthropic(api_version=cast(Any, 'Beta'))
+
+
+@patch('genkit_anthropic.plugin.AsyncAnthropic')
+@pytest.mark.asyncio
+async def test_plugin_beta_default_routes_action_run_to_beta_surface(mock_client_ctor: MagicMock) -> None:
+    """The plugin-wide beta default reaches models resolved as public actions."""
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(type='text', text='ok')]
+    mock_response.usage = MagicMock(input_tokens=1, output_tokens=1)
+    mock_response.stop_reason = 'end_turn'
+
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+    mock_client.beta.messages.create = AsyncMock(return_value=mock_response)
+    mock_client_ctor.return_value = mock_client
+
+    plugin = Anthropic(api_key='test-key', api_version='beta')
+    action = plugin._create_model_action('anthropic/claude-sonnet-4')
+
+    await action.run(_create_sample_request())
+
+    mock_client.beta.messages.create.assert_awaited_once()
+    mock_client.messages.create.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -343,6 +389,54 @@ async def test_list_actions_empty_api_response_returns_and_caches_statics() -> N
     # Unlike the error path, an empty-but-successful response is cached.
     _ = await plugin.list_actions()
     assert mock_client.beta.models.list.call_count == 1
+
+
+_ANTHROPIC_CONFIG_KEYS = {
+    'apiKey',
+    'apiVersion',
+    'betas',
+    'maxOutputTokens',
+    'tool_choice',
+    'metadata',
+    'thinking',
+    'output_config',
+}
+
+
+def _custom_options(action_metadata: object) -> dict[str, Any]:
+    metadata = cast(dict[str, Any], action_metadata)
+    model_metadata = cast(dict[str, Any], metadata['model'])
+    return cast(dict[str, Any], model_metadata['customOptions'])
+
+
+@pytest.mark.asyncio
+async def test_resolve_advertises_anthropic_config() -> None:
+    """resolve() metadata customOptions reflects the typed AnthropicConfig."""
+    plugin = Anthropic(api_key='test-key')
+
+    action = await plugin.resolve(ActionKind.MODEL, 'anthropic/claude-sonnet-4')
+
+    assert action is not None
+    custom_options = _custom_options(action.metadata)
+    properties = set(custom_options['properties'].keys())
+    assert _ANTHROPIC_CONFIG_KEYS <= properties
+
+
+@pytest.mark.asyncio
+async def test_list_actions_advertises_anthropic_config() -> None:
+    """list_actions() customOptions reflects the typed AnthropicConfig."""
+    plugin = Anthropic(api_key='test-key')
+    mock_client = MagicMock()
+    mock_client.beta.models.list = MagicMock(side_effect=RuntimeError('offline'))
+    plugin._runtime_client = lambda: mock_client
+
+    actions = await plugin.list_actions()
+
+    assert actions
+    for action in actions:
+        custom_options = _custom_options(action.metadata)
+        properties = set(custom_options['properties'].keys())
+        assert _ANTHROPIC_CONFIG_KEYS <= properties
 
 
 def _create_sample_request() -> ModelRequest:

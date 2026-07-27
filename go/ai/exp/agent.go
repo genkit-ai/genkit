@@ -2495,6 +2495,9 @@ func toolRefSuffix(ref string) string {
 func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) AgentFunc[State] {
 	return func(ctx context.Context, resp Responder, sess *SessionRunner[State]) (*AgentResult, error) {
 		if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+			if !hasInputPayload(input) {
+				return nil, core.NewError(core.INVALID_ARGUMENT, "agent input message or resume is required")
+			}
 			if err := validateUserMessage(input.Message); err != nil {
 				return nil, err
 			}

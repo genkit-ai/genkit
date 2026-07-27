@@ -24,7 +24,7 @@ import os from 'os';
 import path from 'path';
 import type { GenkitToolsError } from '../manager';
 import type { BaseRuntimeManager } from '../manager/manager';
-import { logger, writeToolsInfoFile } from '../utils';
+import { detectRuntimeSync, logger, writeToolsInfoFile } from '../utils';
 import {
   createToolsRequestEvent,
   extractActionType,
@@ -94,7 +94,7 @@ class PushableAsyncIterable<T> implements AsyncIterable<T> {
 
 const activeInputStreams = new Map<string, PushableAsyncIterable<any>>();
 
-const loggedExpressRoute = (routeName: string) => {
+const loggedExpressRoute = (routeName: string, projectRuntime?: string) => {
   return (
     req: express.Request,
     res: express.Response,
@@ -121,7 +121,10 @@ const loggedExpressRoute = (routeName: string) => {
           : undefined;
 
       recordRequestEvent(
-        createToolsRequestEvent(routeName, durationMs, status, { action })
+        createToolsRequestEvent(routeName, durationMs, status, {
+          action,
+          project_runtime: projectRuntime,
+        })
       );
     };
 
@@ -140,6 +143,7 @@ export function startServer(
   port: number,
   host: string = DEFAULT_HOST
 ) {
+  const projectRuntime = detectRuntimeSync(manager.projectRoot);
   let server: Server;
   const app = express();
 
@@ -165,7 +169,7 @@ export function startServer(
   app.post(
     '/api/runAction',
     bodyParser.json({ limit: MAX_PAYLOAD_SIZE }),
-    loggedExpressRoute('runAction'),
+    loggedExpressRoute('runAction', projectRuntime),
     async (req, res) => {
       // Set headers but don't flush yet - wait for trace ID (if realtime telemetry enabled)
       res.setHeader('Content-Type', 'application/json');
@@ -213,7 +217,7 @@ export function startServer(
   app.post(
     '/api/streamAction',
     bodyParser.json({ limit: MAX_PAYLOAD_SIZE }),
-    loggedExpressRoute('streamAction'),
+    loggedExpressRoute('streamAction', projectRuntime),
     async (req, res) => {
       // Set streaming headers but don't flush yet - wait for trace ID (if realtime telemetry enabled)
       res.setHeader('Content-Type', 'text/plain');
@@ -271,7 +275,7 @@ export function startServer(
   app.post(
     '/api/sendBidiInput',
     bodyParser.json({ limit: MAX_PAYLOAD_SIZE }),
-    loggedExpressRoute('sendBidiInput'),
+    loggedExpressRoute('sendBidiInput', projectRuntime),
     (req, res) => {
       const { traceId, chunk } = req.body;
       const stream = activeInputStreams.get(traceId);
@@ -287,7 +291,7 @@ export function startServer(
   app.post(
     '/api/endBidiInput',
     bodyParser.json(),
-    loggedExpressRoute('endBidiInput'),
+    loggedExpressRoute('endBidiInput', projectRuntime),
     (req, res) => {
       const { traceId } = req.body;
       const stream = activeInputStreams.get(traceId);
@@ -307,7 +311,7 @@ export function startServer(
   app.post(
     '/api/streamTrace',
     bodyParser.json({ limit: MAX_PAYLOAD_SIZE }),
-    loggedExpressRoute('streamTrace'),
+    loggedExpressRoute('streamTrace', projectRuntime),
     async (req, res) => {
       const { traceId } = req.body;
 
