@@ -95,8 +95,8 @@ class HttpAgentTransport(AgentTransport[StateT]):
 
         Args:
             url: Agent turn endpoint (e.g. ``/api/myAgent``).
-            agent_name: Registry action key when calling reflection ``/api/runAction``
-                (e.g. ``/agent/myAgent``). Unused for dedicated agent HTTP routes.
+            agent_name: Unused. Kept for call-site compatibility; the flow
+                envelope addresses a dedicated agent URL, not a reflection key.
             get_snapshot_url: ``getSnapshot`` route. Defaults to ``{url}/getSnapshot``.
             abort_url: ``abort`` route. Defaults to ``{url}/abort``.
             state_management: Declares server- vs client-managed state.
@@ -111,7 +111,8 @@ class HttpAgentTransport(AgentTransport[StateT]):
     async def _post_json(self, *, url: str, input_val: dict[str, Any]) -> Any:  # noqa: ANN401
         """POST JSON to a one-shot action endpoint and return the parsed body."""
         client = get_cached_client('agent_transport')
-        response = await client.post(url, json=input_val)
+        # Same callable/flow envelope as run_turn: handlers expect {"data": ...}.
+        response = await client.post(url, json={'data': input_val})
         if response.status_code == 404:
             return None
         if response.status_code != 200:
@@ -147,25 +148,24 @@ class HttpAgentTransport(AgentTransport[StateT]):
         """Runs a single turn over HTTP using a streaming POST request."""
         client = get_cached_client('agent_transport')
 
+        # Callable/flow envelope used by expressHandler and FastAPI/Flask/Django
+        # handlers: {"data": <AgentInput>, "init": <AgentInit>}. Streaming is
+        # negotiated with Accept only (not ?stream=true).
         payload: dict[str, Any] = {
-            'input': agent_input.model_dump(by_alias=True, exclude_none=True),
+            'data': agent_input.model_dump(by_alias=True, exclude_none=True),
             'init': init.model_dump(by_alias=True, exclude_none=True),
         }
-        if self.agent_name:
-            payload['key'] = self.agent_name
 
         output_future: asyncio.Future[AgentOutput] = asyncio.Future()
         stream_queue = CloseableQueue[AgentStreamChunk | Exception]()
 
         async def fetch_stream() -> None:
             try:
-                request_url = f'{self.url}?stream=true' if 'stream=true' not in self.url else self.url
-
                 async with client.stream(
                     'POST',
-                    request_url,
+                    self.url,
                     json=payload,
-                    headers={'accept': 'text/event-stream'},
+                    headers={'Accept': 'text/event-stream', 'Content-Type': 'application/json'},
                 ) as response:
                     if response.status_code != 200:
                         body = (await response.aread()).decode(errors='ignore')

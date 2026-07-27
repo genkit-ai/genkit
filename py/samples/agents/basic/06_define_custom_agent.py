@@ -35,6 +35,7 @@ from genkit.agent import (
     AgentStreamChunk,
     InMemorySessionStore,
     SessionRunner,
+    TurnContext,
     TurnResult,
 )
 
@@ -43,7 +44,7 @@ store = InMemorySessionStore()
 
 
 async def custom_coder_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-    async def handle_turn(inp: AgentInput) -> TurnResult | None:
+    async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         history = await sess.get_messages()
         messages = [Message(m) for m in history] if history else None
 

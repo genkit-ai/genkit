@@ -44,6 +44,7 @@ from genkit.agent import (
     Artifact,
     SessionRunner,
     SessionState,
+    TurnContext,
     TurnResult,
 )
 
@@ -51,7 +52,7 @@ ai = Genkit(plugins=[GoogleAI()])
 
 
 async def guarded_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-    async def handle_turn(inp: AgentInput) -> TurnResult | None:
+    async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         # Server-side state carries a secret the client should never see.
         await sess.update_custom(lambda c: {'answers': (c or {}).get('answers', 0) + 1, 'api_key': 'sk-super-secret'})
         # An internal artifact the client shouldn't receive either.

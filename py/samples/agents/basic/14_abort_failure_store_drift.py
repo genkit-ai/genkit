@@ -57,6 +57,7 @@ from genkit.agent import (
     InMemorySessionStore,
     SessionRunner,
     SnapshotStatus,
+    TurnContext,
     TurnResult,
 )
 
@@ -70,8 +71,8 @@ def _text(content: list[Part] | None) -> str:
     )
 
 
-async def flaky_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-    async def handle_turn(inp: AgentInput) -> TurnResult | None:
+async def flaky_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         text = _text(inp.message.content if inp.message else None).lower()
         if 'fail' in text:
             raise GenkitError(status='INTERNAL', message='model exhausted')

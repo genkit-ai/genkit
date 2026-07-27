@@ -32,10 +32,12 @@ from genkit._ai._agents._preamble import (
 )
 from genkit._ai._agents._runtime import (
     AgentFn,
+    AgentInitError,
     AgentRuntime,
     SessionRunner,
     generate_prompt_agent_turn,
     load_session,
+    to_error_details,
 )
 from genkit._ai._agents._session import (
     SessionStore,
@@ -51,6 +53,7 @@ from genkit._ai._agents._types import (
     ChunkTransform,
     StateManagement,
     StateTransform,
+    TurnContext,
     TurnResult,
 )
 
@@ -71,6 +74,7 @@ from genkit._core._registry import Registry
 from genkit._core._typing import (
     AgentAbortRequest,
     AgentAbortResponse,
+    AgentFinishReason,
     AgentInit,
     AgentInput,
     AgentOutput,
@@ -221,7 +225,21 @@ def define_custom_agent(
         input_stream: AsyncIterator[AgentInput],
         send_chunk: Callable[[AgentStreamChunk], None],
     ) -> AgentOutput:
-        session, parent = await load_session(init=init, store=store, agent_name=name, state_schema=state_schema)
+        # API misuse (wrong state-management init) must propagate as a thrown
+        # error so HTTP handlers map it to a status. Recoverable pre-turn
+        # failures (missing/non-resumable snapshot, invalid custom state) resolve
+        # as finish_reason='failed' so the caller gets a structured result.
+        try:
+            session, parent = await load_session(init=init, store=store, agent_name=name, state_schema=state_schema)
+        except AgentInitError:
+            raise
+        except GenkitError as e:
+            return AgentOutput(
+                finish_reason=AgentFinishReason.FAILED,
+                error=to_error_details(e),
+                state=(init.state if store is None and init.state is not None else None),
+            )
+
         state = await session.state()
         if state.session_id:
             span = trace_api.get_current_span()
@@ -367,7 +385,7 @@ def define_prompt_agent(
     """
 
     async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-        async def handle_turn(inp: AgentInput) -> TurnResult | None:
+        async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
             history = await session_runner.get_messages()
             resume_respond = None
             resume_restart = None

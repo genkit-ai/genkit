@@ -40,6 +40,7 @@ from genkit._ai._agents._transports._http import HttpAgentTransport, remote_agen
 from genkit._ai._agents._types import (
     ChunkTransform,
     StateTransform,
+    TurnContext,
     TurnResult,
 )
 from genkit._core._typing import (
@@ -74,6 +75,7 @@ __all__ = [
     # Agent function protocol
     'AgentFn',
     'SessionRunner',
+    'TurnContext',
     'TurnResult',
     # Session persistence
     'Session',

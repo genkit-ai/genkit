@@ -23,6 +23,7 @@ from genkit._ai._agents._runtime import AgentRuntime, SessionRunner, agent_input
 from genkit._ai._agents._session import Session
 from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
 from genkit._ai._agents._snapshot import abort_snapshot_in_store
+from genkit._ai._agents._types import TurnContext
 from genkit._ai._aio import Genkit
 from genkit._ai._generate import generate_action
 from genkit._ai._testing import define_programmable_model
@@ -98,8 +99,8 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
 
     seen_inputs: list[AgentInput] = []
 
-    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-        async def handle_turn(inp: AgentInput) -> None:
+    async def agent_fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+        async def handle_turn(inp: AgentInput, _: TurnContext) -> None:
             seen_inputs.append(inp)
             return None
 
@@ -150,7 +151,7 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
     chunks: list[AgentStreamChunk] = []
 
     async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-        async def handle_turn(_inp: AgentInput) -> None:
+        async def handle_turn(inp: AgentInput, _: TurnContext) -> None:
             ctx.send_chunk(
                 AgentStreamChunk(
                     model_chunk=ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='working'))])
@@ -213,7 +214,7 @@ async def test_detach_stamps_and_refreshes_pending_heartbeat(monkeypatch: pytest
     release = asyncio.Event()
 
     async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-        async def handle_turn(_inp: AgentInput) -> None:
+        async def handle_turn(inp: AgentInput, _: TurnContext) -> None:
             await release.wait()
 
         await session_runner.run(handle_turn)
@@ -262,7 +263,7 @@ async def test_detach_without_store_raises() -> None:
     await rt.session_runner.seed_last_good_state()
 
     async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-        async def handle_turn(_inp: AgentInput) -> None:
+        async def handle_turn(inp: AgentInput, _: TurnContext) -> None:
             await ctx.abort_signal.wait()
 
         await session_runner.run(handle_turn)
@@ -287,8 +288,8 @@ async def test_abort_snapshot_stops_detached_work() -> None:
     aborted = asyncio.Event()
 
     async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-        async def handle_turn(_inp: AgentInput) -> None:
-            for _ in range(100):
+        async def handle_turn(inp: AgentInput, _: TurnContext) -> None:
+            for _i in range(100):
                 if ctx.abort_signal.is_set():
                     aborted.set()
                     return

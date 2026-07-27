@@ -34,10 +34,11 @@ from genkit._ai._agents._session import (
     SessionStore,
     SnapshotSubscriber,
     StateT,
+    reserve_snapshot_id,
     run_with_session,
 )
 from genkit._ai._agents._snapshot import walk_back_to_resumable
-from genkit._ai._agents._types import ChunkTransform, StateTransform, TurnResult
+from genkit._ai._agents._types import ChunkTransform, StateTransform, TurnContext, TurnResult
 from genkit._ai._generate import generate_action
 from genkit._ai._json_patch import diff_json
 from genkit._core._action import ActionRunContext, StreamingCallback, get_current_context
@@ -87,11 +88,15 @@ class SessionRunner(Generic[StateT]):
         *,
         session: Session[StateT],
         turn_inputs: CloseableQueue[AgentInput],
+        store: SessionStore | None = None,
+        get_parent_snapshot_id: Callable[[], str | None] | None = None,
         on_begin_turn: Callable[[], Awaitable[None]] | None = None,
         on_end_turn: Callable[[AgentFinishReason | None], Awaitable[None]] | None = None,
     ) -> None:
         self.session = session
         self.turn_inputs = turn_inputs
+        self.store = store
+        self.get_parent_snapshot_id = get_parent_snapshot_id
         self.on_begin_turn = on_begin_turn
         self.on_end_turn = on_end_turn
         self.turn_index: int = 0
@@ -100,6 +105,10 @@ class SessionRunner(Generic[StateT]):
         self.last_good_state: SessionState | None = None
         self.last_good_state_version: int | None = None
         self.last_good_finish_reason: AgentFinishReason | None = None
+        # Detach may pre-reserve the in-flight id; the next turn consumes it.
+        self.new_snapshot_id: str | None = None
+        # Id reserved for the turn currently running (None without a store).
+        self.current_turn_snapshot_id: str | None = None
 
     async def seed_last_good_state(self) -> None:
         """Capture initial session state as the fallback for first-turn failures."""
@@ -108,12 +117,15 @@ class SessionRunner(Generic[StateT]):
 
     async def run(
         self,
-        fn: Callable[[AgentInput], Awaitable[TurnResult | None]],
+        fn: Callable[[AgentInput, TurnContext], Awaitable[TurnResult | None]],
     ) -> None:
         """Consume inputs from the intake queue, calling fn for each turn.
 
         Each turn is wrapped in a trace span ``runTurn-N`` (1-based). Inbound
         messages are automatically added to the session before fn is called.
+        When a store is configured the turn's snapshot id is reserved up front
+        and handed to ``fn`` via ``TurnContext`` so handlers can name external
+        resources before the turn runs; the snapshot at turn end reuses that id.
         After fn returns, on_end_turn is called (snapshot + chunk emission)
         and turn_index is incremented.
 
@@ -126,6 +138,22 @@ class SessionRunner(Generic[StateT]):
             if inp.message:
                 await self.session.add_messages(inp.message)
 
+            parent_snapshot_id = self.get_parent_snapshot_id() if self.get_parent_snapshot_id else None
+            # Reserve the turn's snapshot id up front (when a store is configured)
+            # so the handler can name snapshot-correlated external resources
+            # before the turn runs. Detach may have already reserved one; reuse it.
+            if self.store is not None and self.new_snapshot_id is None:
+                self.new_snapshot_id = reserve_snapshot_id()
+            turn_snapshot_id = self.new_snapshot_id
+            self.new_snapshot_id = None
+            self.current_turn_snapshot_id = turn_snapshot_id
+
+            turn_ctx = TurnContext(
+                snapshot_id=turn_snapshot_id,
+                parent_snapshot_id=parent_snapshot_id,
+                turn_index=self.turn_index,
+            )
+
             if self.on_begin_turn is not None:
                 await self.on_begin_turn()
 
@@ -136,7 +164,7 @@ class SessionRunner(Generic[StateT]):
             )
             try:
                 with run_in_new_span(span_meta):
-                    turn_result = await fn(inp)
+                    turn_result = await fn(inp, turn_ctx)
                     finish_reason = turn_result.finish_reason if turn_result else None
                     self.last_turn_finish_reason = finish_reason
                     self.last_turn_error = None
@@ -145,6 +173,8 @@ class SessionRunner(Generic[StateT]):
                         await self.on_end_turn(finish_reason)
 
                     span_meta.output = {'finishReason': finish_reason}
+                    if turn_snapshot_id:
+                        span_meta.metadata = {'agent:snapshotId': turn_snapshot_id}
 
                 self.last_good_state = await self.session.state()
                 self.last_good_state_version = self.session.version
@@ -158,6 +188,8 @@ class SessionRunner(Generic[StateT]):
                     await self.on_end_turn(AgentFinishReason.FAILED)
 
                 break
+            finally:
+                self.current_turn_snapshot_id = None
 
     async def result(self) -> AgentResult:
         """Last message, artifacts, and finish reason from the current session."""
@@ -234,6 +266,43 @@ def validate_custom_state(*, custom: Any, state_schema: type[BaseModel] | None, 
         ) from e
 
 
+class AgentInitError(GenkitError):
+    """API misuse on agent init that must surface as a thrown/HTTP error.
+
+    Covers calling an agent with an init that does not match its state-management
+    mode (e.g. sending ``state`` to a server-managed agent). Recoverable pre-turn
+    problems (missing snapshot, non-resumable snapshot, invalid custom state)
+    stay as plain ``GenkitError`` so the caller can absorb them into
+    ``finish_reason='failed'``.
+    """
+
+
+def assert_init_matches_state_management(
+    *,
+    init: AgentInit,
+    store: SessionStore | None,
+    agent_name: str,
+) -> None:
+    """Raise ``AgentInitError`` when init does not match the agent's store mode."""
+    if (init.snapshot_id or init.session_id) and store is None:
+        field = 'snapshot_id' if init.snapshot_id else 'session_id'
+        raise AgentInitError(
+            status='FAILED_PRECONDITION',
+            message=(
+                f"Cannot use '{field}' with agent '{agent_name}': this agent has no "
+                "store configured (client-managed state). Send 'state' instead."
+            ),
+        )
+    if init.state is not None and store is not None:
+        raise AgentInitError(
+            status='FAILED_PRECONDITION',
+            message=(
+                f"Cannot send 'state' to agent '{agent_name}': this agent uses a "
+                "server-managed store. Send 'snapshot_id' or 'session_id' instead."
+            ),
+        )
+
+
 async def load_session(
     *,
     init: AgentInit,
@@ -248,31 +317,19 @@ async def load_session(
 
     When ``state_schema`` is set the custom state loaded from a snapshot or the
     client is validated against it before the session is built.
+
+    State-management mismatches raise ``AgentInitError`` (must propagate).
+    Missing/non-resumable snapshots and invalid custom state raise plain
+    ``GenkitError`` for the caller to turn into ``finish_reason='failed'``.
     """
     name = agent_name or 'agent'
 
     if init.snapshot_id and init.session_id:
-        raise GenkitError(
+        raise AgentInitError(
             status='INVALID_ARGUMENT',
             message=(f"Cannot send both 'snapshot_id' and 'session_id' to agent '{name}'. Provide exactly one."),
         )
-    if (init.snapshot_id or init.session_id) and store is None:
-        field = 'snapshot_id' if init.snapshot_id else 'session_id'
-        raise GenkitError(
-            status='FAILED_PRECONDITION',
-            message=(
-                f"Cannot use '{field}' with agent '{name}': this agent has no "
-                "store configured (client-managed state). Send 'state' instead."
-            ),
-        )
-    if init.state is not None and store is not None:
-        raise GenkitError(
-            status='FAILED_PRECONDITION',
-            message=(
-                f"Cannot send 'state' to agent '{name}': this agent uses a "
-                "server-managed store. Send 'snapshot_id' or 'session_id' instead."
-            ),
-        )
+    assert_init_matches_state_management(init=init, store=store, agent_name=name)
 
     if store is not None and init.snapshot_id:
         snap = await store.get_snapshot(snapshot_id=init.snapshot_id)
@@ -363,6 +420,8 @@ class AgentRuntime:
         self.session_runner = SessionRunner(
             session=session,
             turn_inputs=self.turn_inputs,
+            store=store,
+            get_parent_snapshot_id=lambda: self.last_snapshot.snapshot_id if self.last_snapshot else None,
             on_begin_turn=self.reset_custom_patch_turn,
             on_end_turn=self.emit_turn_end,
         )
@@ -424,11 +483,15 @@ class AgentRuntime:
         status: SnapshotStatus | None = None,
         error: GenkitRuntimeError | None = None,
         force: bool = False,
+        snapshot_id: str | None = None,
     ) -> str | None:
         """Persist a snapshot whenever a store is configured and state changed.
 
         With a store, every turn is persisted (no opt-out): the durable head
         always advances so a stateless resume never regresses to an older turn.
+        Prefers an explicit ``snapshot_id``, then the turn's reserved id, so a
+        handler that named external resources after ``TurnContext.snapshot_id``
+        gets the same id back on the persisted snapshot.
         """
         if self.store is None:
             return None
@@ -440,6 +503,7 @@ class AgentRuntime:
         parent_id = self.last_snapshot.snapshot_id if self.last_snapshot else None
         now = datetime.now(timezone.utc).isoformat()
         snap_status = status or SnapshotStatus.COMPLETED
+        effective_id = snapshot_id or self.session_runner.current_turn_snapshot_id or reserve_snapshot_id()
 
         def make_snap(
             existing: SessionSnapshot | None,
@@ -447,7 +511,7 @@ class AgentRuntime:
             if existing is not None and existing.status == SnapshotStatus.ABORTED:
                 return None
             return SessionSnapshot(
-                snapshot_id=existing.snapshot_id if existing else '',
+                snapshot_id=existing.snapshot_id if existing else effective_id,
                 parent_id=parent_id or '',
                 status=snap_status,
                 state=state,
@@ -456,7 +520,7 @@ class AgentRuntime:
                 error=error,
             )
 
-        snap = await self.store.save_snapshot(None, make_snap)
+        snap = await self.store.save_snapshot(effective_id, make_snap)
         if snap is not None:
             self.last_snapshot = snap
             self.last_snapshot_version = self.session.version
@@ -481,11 +545,13 @@ class AgentRuntime:
         now = datetime.now(timezone.utc).isoformat()
         last_good = self.session_runner.last_good_state
 
+        recovery_id = reserve_snapshot_id()
+
         def recovery(existing: SessionSnapshot | None) -> SessionSnapshot | None:
             if existing is not None and existing.status == SnapshotStatus.ABORTED:
                 return None
             return SessionSnapshot(
-                snapshot_id='',
+                snapshot_id=recovery_id,
                 parent_id=parent_id or '',
                 status=SnapshotStatus.COMPLETED,
                 state=last_good,
@@ -493,7 +559,7 @@ class AgentRuntime:
                 finish_reason=self.session_runner.last_good_finish_reason,
             )
 
-        snap = await self.store.save_snapshot(None, recovery)
+        snap = await self.store.save_snapshot(recovery_id, recovery)
         if snap is not None:
             self.last_snapshot = snap
             if self.session_runner.last_good_state_version is not None:
@@ -724,10 +790,20 @@ class AgentRuntime:
             parent_id = self.last_snapshot.snapshot_id if self.last_snapshot else None
             now = datetime.now(timezone.utc).isoformat()
             state = await self.session.state()
+            # Reserve the in-flight snapshot's id up front so the pending
+            # snapshot and any handler-named external resources share one id.
+            turn_snapshot_id = (
+                self.session_runner.current_turn_snapshot_id
+                or self.session_runner.new_snapshot_id
+                or reserve_snapshot_id()
+            )
+            self.session_runner.new_snapshot_id = turn_snapshot_id
+            if self.session_runner.current_turn_snapshot_id is None:
+                self.session_runner.current_turn_snapshot_id = turn_snapshot_id
 
             def pending(_: SessionSnapshot | None) -> SessionSnapshot | None:
                 return SessionSnapshot(
-                    snapshot_id='',
+                    snapshot_id=turn_snapshot_id,
                     parent_id=parent_id or '',
                     status=SnapshotStatus.PENDING,
                     state=state,
@@ -737,7 +813,7 @@ class AgentRuntime:
                     heartbeat_at=now,
                 )
 
-            pending_snap = await self.store.save_snapshot(None, pending)
+            pending_snap = await self.store.save_snapshot(turn_snapshot_id, pending)
             if pending_snap is None:
                 raise ValueError(
                     f"Agent '{self.name}' failed to persist the initial 'PENDING' recovery snapshot "

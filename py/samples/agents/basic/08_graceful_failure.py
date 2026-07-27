@@ -36,6 +36,7 @@ from genkit.agent import (
     AgentResult,
     InMemorySessionStore,
     SessionRunner,
+    TurnContext,
     TurnResult,
 )
 
@@ -43,8 +44,8 @@ ai = Genkit(plugins=[GoogleAI()])
 store = InMemorySessionStore()
 
 
-async def flaky_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-    async def handle_turn(inp: AgentInput) -> TurnResult | None:
+async def flaky_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         text = ''
         if inp.message:
             for part in inp.message.content or []:

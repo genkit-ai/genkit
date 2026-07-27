@@ -39,6 +39,7 @@ from genkit.agent import (
     SessionRunner,
     SessionSnapshot,
     SnapshotStatus,
+    TurnContext,
     TurnResult,
 )
 
@@ -61,7 +62,7 @@ async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
     return {'done': True}
 
 
-async def long_task_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+async def long_task_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
     # Define tool inside turn handler closure so it can mutate custom session state on each step:
     @ai.tool(name='slowWork', description='Simulate long background work.')
     async def slow_work_closure(_: dict, tool_ctx: ToolRunContext) -> dict:
@@ -72,7 +73,7 @@ async def long_task_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResul
             await sess.update_custom(lambda _, step=i: JobState(step=step, completed=(step == 10)))
         return {'done': True}
 
-    async def handle_turn(inp: AgentInput) -> TurnResult | None:
+    async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         history = await sess.get_messages()
         messages = [Message(m) for m in history] if history else None
         res = await ai.generate(

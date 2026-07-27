@@ -48,6 +48,23 @@ StateTransform = Callable[[SessionState], SessionState]
 ChunkTransform = Callable[[AgentStreamChunk], AgentStreamChunk | None]
 
 
+@dataclass(frozen=True)
+class TurnContext:
+    """Per-turn context handed to a custom-agent handler before the turn runs.
+
+    ``snapshot_id`` is reserved at turn start (when a store is configured) and is
+    the id the snapshot persisted at turn end will reuse. That lets a handler
+    name external, snapshot-correlated resources — e.g. a worktree or scratch
+    directory — up front, then commit them under that id, so a later rollback to
+    the snapshot can restore the external state too. ``None`` when the agent has
+    no store (client-managed).
+    """
+
+    snapshot_id: str | None
+    parent_snapshot_id: str | None
+    turn_index: int
+
+
 @dataclass
 class TurnResult:
     """What an agent turn function returns to tell the loop how the turn ended."""

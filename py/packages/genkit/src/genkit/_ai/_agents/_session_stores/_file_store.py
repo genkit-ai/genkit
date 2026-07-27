@@ -31,6 +31,7 @@ from genkit._ai._agents._session_stores._util import (
     SaveFn,
     Subs,
     apply_save,
+    assert_safe_snapshot_id,
     notify,
     require_one_selector,
     select_leaf,
@@ -69,6 +70,7 @@ class FileSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[StateT]
 
     def path(self, snapshot_id: str) -> str:
         """Return the file path for a snapshot ID."""
+        assert_safe_snapshot_id(snapshot_id=snapshot_id)
         return os.path.join(self.directory, f'{snapshot_id}.json')
 
     def read_sync(self, snapshot_id: str) -> SessionSnapshot | None:
@@ -150,10 +152,10 @@ class FileSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[StateT]
             owned = await asyncio.to_thread(self.read_session_sync, session_id)
             return select_leaf(snapshots=owned, session_id=session_id, reject_ambiguous=self.reject_ambiguous)
 
-    async def save_snapshot(self, snapshot_id: str | None, fn: SaveFn) -> SessionSnapshot | None:
+    async def save_snapshot(self, snapshot_id: str, fn: SaveFn) -> SessionSnapshot | None:
         """Read-modify-write a snapshot on disk, prune the chain, and notify subscribers."""
         async with self.lock:
-            existing = await asyncio.to_thread(self.read_sync, snapshot_id) if snapshot_id is not None else None
+            existing = await asyncio.to_thread(self.read_sync, snapshot_id)
             next_snapshot = apply_save(existing=existing, snapshot_id=snapshot_id, fn=fn)
             if next_snapshot is None:
                 return None

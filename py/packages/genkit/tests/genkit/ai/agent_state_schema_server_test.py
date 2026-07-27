@@ -94,7 +94,7 @@ async def test_load_session_validates_snapshot_custom() -> None:
         status=SnapshotStatus.COMPLETED,
         state=SessionState(session_id=session_id, messages=[], artifacts=[], custom={'done': True}),
     )
-    await store.save_snapshot(None, lambda _existing: snap)
+    await store.save_snapshot(snap.snapshot_id, lambda _existing: snap)
 
     with pytest.raises(GenkitError) as exc:
         await load_session(init=AgentInit(session_id=session_id), store=store, agent_name='a', state_schema=TaskState)

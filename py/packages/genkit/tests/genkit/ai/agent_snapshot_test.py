@@ -24,7 +24,7 @@ from genkit._ai._agents._client import AgentError
 from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
 from genkit._ai._agents._snapshot import is_heartbeat_expired, resolve_snapshot
-from genkit._ai._agents._types import TurnResult
+from genkit._ai._agents._types import TurnContext, TurnResult
 from genkit._core._action import ActionKind, ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._registry import Registry
@@ -67,7 +67,7 @@ async def test_resolve_snapshot_applies_client_transform() -> None:
             custom={'public': 'ok', 'secret': 'hidden'},
         ),
     )
-    saved = await store.save_snapshot(None, lambda _: snap)
+    saved = await store.save_snapshot(snap.snapshot_id, lambda _: snap)
     assert saved is not None
 
     def redact(state: SessionState) -> SessionState:
@@ -98,8 +98,8 @@ async def test_define_custom_agent_registers_snapshot_and_abort_actions() -> Non
     registry = Registry()
     store = InMemorySessionStore()
 
-    async def fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-        async def handle_turn(inp: AgentInput) -> TurnResult | None:
+    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+        async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
             await session_runner.add_messages(MessageData(role='model', content=[Part(root=TextPart(text='hi'))]))
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
@@ -135,7 +135,7 @@ async def test_snapshot_action_raises_not_found_for_missing_snapshot() -> None:
     registry = Registry()
     store = InMemorySessionStore()
 
-    async def fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
         return await session_runner.result()
 
     define_custom_agent(registry, 'missingSnapTest', fn, store=store)
@@ -154,8 +154,8 @@ async def test_custom_agent_turn_that_raises_resolves_as_failed() -> None:
     registry = Registry()
     store = InMemorySessionStore()
 
-    async def fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-        async def handle_turn(inp: AgentInput) -> TurnResult | None:
+    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+        async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
             text = input_text(inp)
             if 'fail' in text.lower():
                 raise GenkitError(status='INTERNAL', message='boom')
@@ -191,8 +191,8 @@ async def test_chat_resumes_from_last_good_after_detached_turn_is_aborted() -> N
     registry = Registry()
     store = InMemorySessionStore()
 
-    async def fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-        async def handle_turn(inp: AgentInput) -> TurnResult | None:
+    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+        async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
             text = input_text(inp)
             if 'slow' in text.lower():
                 await asyncio.sleep(1.0)  # keep the turn pending long enough to abort it
@@ -237,8 +237,8 @@ async def test_load_chat_by_session_skips_aborted_leaf_to_last_resumable() -> No
     registry = Registry()
     store = InMemorySessionStore()
 
-    async def fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-        async def handle_turn(inp: AgentInput) -> TurnResult | None:
+    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+        async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
             text = input_text(inp)
             if 'slow' in text.lower():
                 await asyncio.sleep(1.0)

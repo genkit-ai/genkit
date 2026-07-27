@@ -38,6 +38,7 @@ from genkit.agent import (
     Artifact,
     InMemorySessionStore,
     SessionRunner,
+    TurnContext,
     TurnResult,
 )
 
@@ -50,7 +51,7 @@ class Progress(BaseModel):
 
 
 async def stateful_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-    async def handle_turn(inp: AgentInput) -> TurnResult | None:
+    async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         await sess.update_custom(lambda c: {'turns': (c or {}).get('turns', 0) + 1})
         await sess.add_artifacts(Artifact(name='status', parts=[Part(TextPart(text=f'turn {sess.turn_index + 1}'))]))
         history = await sess.get_messages()

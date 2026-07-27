@@ -19,6 +19,7 @@ import pytest
 from genkit import Genkit
 from genkit._ai._agents._runtime import AgentRuntime, SessionRunner
 from genkit._ai._agents._session import Session, get_current_session, run_with_session
+from genkit._ai._agents._types import TurnContext
 from genkit._core._action import ActionRunContext
 from genkit._core._channel import CloseableQueue
 from genkit._core._typing import AgentInput, AgentResult, SessionState
@@ -100,10 +101,10 @@ async def test_agent_runtime_binds_session_during_handler() -> None:
     )
     seen: list[Session | None] = []
 
-    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
         seen.append(get_current_session())
 
-        async def handle_turn(_inp: AgentInput) -> None:
+        async def handle_turn(inp: AgentInput, _: TurnContext) -> None:
             seen.append(get_current_session())
             cur = get_current_session()
             assert cur is not None

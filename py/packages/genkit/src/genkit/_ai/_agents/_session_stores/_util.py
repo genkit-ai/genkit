@@ -32,9 +32,9 @@ is a self-contained read of how its backend works.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Callable
 from datetime import datetime, timezone
-from uuid import uuid4
 
 from genkit._ai._agents._session import select_leaf_snapshot
 from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
@@ -43,6 +43,30 @@ from genkit._core._typing import SessionSnapshot, SnapshotStatus
 
 SaveFn = Callable[[SessionSnapshot | None], SessionSnapshot | None]
 Subs = dict[str, list['asyncio.Queue[SnapshotStatus | None]']]
+
+
+def assert_safe_snapshot_id(*, snapshot_id: str) -> None:
+    """Reject snapshot ids that could escape a store directory when used as a filename.
+
+    Snapshot ids can arrive straight off the wire (abort/getSnapshot take a bare
+    string), so without this an id like ``../../foo`` would let a caller read or
+    write outside the store directory.
+    """
+    if (
+        not snapshot_id
+        or '/' in snapshot_id
+        or '\\' in snapshot_id
+        or '\0' in snapshot_id
+        or snapshot_id in ('.', '..')
+        or os.path.basename(snapshot_id) != snapshot_id
+    ):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=(
+                f'Invalid snapshotId: "{snapshot_id}". '
+                'A snapshotId must be a plain file name (no path separators or "..").'
+            ),
+        )
 
 
 def session_id_of(snapshot: SessionSnapshot) -> str | None:
@@ -91,9 +115,9 @@ def select_leaf(
     return max(leaves, key=lambda snap: (snap.created_at, snap.snapshot_id))
 
 
-def stamp_store_fields(*, snapshot: SessionSnapshot, snapshot_id: str | None) -> None:
+def stamp_store_fields(*, snapshot: SessionSnapshot, snapshot_id: str) -> None:
     """Fill in the fields the store owns on a snapshot about to be written."""
-    snapshot.snapshot_id = snapshot_id or str(uuid4())
+    snapshot.snapshot_id = snapshot_id
     if not snapshot.created_at:
         snapshot.created_at = datetime.now(timezone.utc).isoformat()
     if not snapshot.status:
@@ -104,10 +128,12 @@ def stamp_store_fields(*, snapshot: SessionSnapshot, snapshot_id: str | None) ->
         snapshot.session_id = snapshot.state.session_id
 
 
-def apply_save(*, existing: SessionSnapshot | None, snapshot_id: str | None, fn: SaveFn) -> SessionSnapshot | None:
-    """Run a save mutator and stamp the result, or None to skip the write."""
-    if snapshot_id is not None and existing is None:
-        return None
+def apply_save(*, existing: SessionSnapshot | None, snapshot_id: str, fn: SaveFn) -> SessionSnapshot | None:
+    """Run a save mutator and stamp the result under ``snapshot_id``, or None to skip.
+
+    When ``existing`` is None this creates under the reserved id. Mutators that
+    only update (abort, heartbeat) return None when ``existing`` is missing.
+    """
     next_snapshot = fn(existing.model_copy(deep=True) if existing is not None else None)
     if next_snapshot is None:
         return None

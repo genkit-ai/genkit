@@ -21,6 +21,7 @@ import weakref
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from typing import Any, Generic, Protocol, cast, runtime_checkable
+from uuid import uuid4
 
 from pydantic import BaseModel
 from typing_extensions import TypeVar as TypeVarExt
@@ -34,6 +35,18 @@ from genkit._core._typing import (
     SessionState,
     SnapshotStatus,
 )
+
+
+def reserve_snapshot_id() -> str:
+    """Mint a snapshot id that can be known before the snapshot is persisted.
+
+    The runtime normally supplies this to the store at save time, but some flows
+    need the id ahead of time — e.g. a turn that wants to name a worktree after
+    the snapshot at turn start and have the snapshot at turn end reuse that id,
+    or the detach path which pre-reserves the in-flight snapshot's id.
+    """
+    return str(uuid4())
+
 
 # Custom state is a Pydantic model, so StateT is bound to BaseModel; the Any
 # default covers schemaless (client-managed) sessions where custom is plain JSON.
@@ -70,20 +83,22 @@ class SessionStore(Protocol, Generic[StateT_co]):
 
     async def save_snapshot(
         self,
-        snapshot_id: str | None,
+        snapshot_id: str,
         fn: Callable[
             [SessionSnapshot | None],
             SessionSnapshot | None,
         ],
     ) -> SessionSnapshot | None:
-        """Atomically read-modify-write a snapshot.
+        """Atomically read-modify-write a snapshot under ``snapshot_id``.
 
         fn receives the existing snapshot (or None for new) and returns the
         snapshot to persist, or None to skip. fn must be side-effect free —
         stores may call it more than once under contention.
 
-        The store populates snapshot_id and created_at, and defaults status to
-        done when fn leaves it empty.
+        Callers reserve the id up front (``reserve_snapshot_id``) so it can be
+        known before the write — e.g. handed to a turn handler via
+        ``TurnContext``. When no row exists yet, this creates under that id.
+        The store also fills ``created_at`` and defaults status when left empty.
         """
         ...
 

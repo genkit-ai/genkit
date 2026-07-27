@@ -72,10 +72,10 @@ class InMemorySessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[Sta
             leaf = select_leaf(snapshots=owned, session_id=session_id, reject_ambiguous=self.reject_ambiguous)
             return leaf.model_copy(deep=True) if leaf is not None else None
 
-    async def save_snapshot(self, snapshot_id: str | None, fn: SaveFn) -> SessionSnapshot | None:
+    async def save_snapshot(self, snapshot_id: str, fn: SaveFn) -> SessionSnapshot | None:
         """Read-modify-write a snapshot in memory and notify status subscribers."""
         async with self.lock:
-            existing = self.snapshots.get(snapshot_id) if snapshot_id is not None else None
+            existing = self.snapshots.get(snapshot_id)
             next_snapshot = apply_save(existing=existing, snapshot_id=snapshot_id, fn=fn)
             if next_snapshot is None:
                 return None

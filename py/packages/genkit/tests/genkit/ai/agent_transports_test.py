@@ -14,89 +14,87 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Integration tests for the HTTP Agent Transport."""
+"""Integration tests for HttpAgentTransport against a flow-shaped HTTP server."""
 
-import os
+from __future__ import annotations
+
+import asyncio
+import json
 import socket
-from unittest import mock
+from collections.abc import AsyncIterator
 
 import pytest
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import StreamingResponse
+from starlette.routing import Route
+from uvicorn import Config, Server
 
-from genkit import ActionRunContext, Genkit
-from genkit._core._environment import GENKIT_ENV, GenkitEnvironment
-from genkit._core._reflection import ServerSpec
-from genkit._core._typing import MessageData, Part, TextPart
 from genkit.agent import (
     AgentClient,
     AgentFinishReason,
-    AgentInput,
-    AgentResult,
     HttpAgentTransport,
-    InMemorySessionStore,
-    SessionRunner,
-    TurnResult,
 )
 
 
 def _find_free_port() -> int:
-    """Finds an unused port on the local system."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(('127.0.0.1', 0))
         return s.getsockname()[1]
 
 
+async def _agent_endpoint(request: Request) -> StreamingResponse:
+    """Minimal expressHandler-shaped agent endpoint: {data, init} + SSE."""
+    body = await request.json()
+    assert 'data' in body, 'request must use the flow {"data": ...} envelope'
+    assert 'input' not in body
+    assert 'key' not in body
+    assert 'text/event-stream' in request.headers.get('accept', '')
+
+    text = ''
+    data = body.get('data') or {}
+    message = data.get('message') or {}
+    content = message.get('content') or []
+    if content:
+        text = content[0].get('text', '')
+
+    async def event_stream() -> AsyncIterator[str]:
+        result = {
+            'finishReason': 'stop',
+            'message': {
+                'role': 'model',
+                'content': [{'text': f'Echo: {text}'}],
+            },
+        }
+        yield f'data: {json.dumps({"result": result})}\n\n'
+
+    return StreamingResponse(event_stream(), media_type='text/event-stream')
+
+
 @pytest.mark.asyncio
-async def test_http_transport_integration() -> None:
-    """Tests HttpAgentTransport end-to-end against a local Starlette reflection server."""
+async def test_http_transport_flow_envelope_integration() -> None:
     port = _find_free_port()
+    app = Starlette(routes=[Route('/weatherAgent', _agent_endpoint, methods=['POST'])])
+    config = Config(app=app, host='127.0.0.1', port=port, log_level='error')
+    server = Server(config)
+    task = asyncio.create_task(server.serve())
 
-    # Configure Dev environment so Genkit starts the reflection server
-    with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}):
-        ai = Genkit(
-            reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port),
-            plugins=[],
+    try:
+        for _ in range(50):
+            if server.started:
+                break
+            await asyncio.sleep(0.05)
+        assert server.started
+
+        transport = HttpAgentTransport(
+            url=f'http://127.0.0.1:{port}/weatherAgent',
+            state_management='server',
         )
-
-        # Register a simple custom agent
-        async def echo_agent(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-            async def handle_turn(inp: AgentInput) -> TurnResult | None:
-                text = inp.message.content[0].root.text if inp.message else ''
-                await session_runner.add_messages(
-                    MessageData(role='model', content=[Part(root=TextPart(text=f'Echo: {text}'))])
-                )
-                return TurnResult(finish_reason=AgentFinishReason.STOP)
-
-            await session_runner.run(handle_turn)
-            return await session_runner.result()
-
-        ai.define_custom_agent(name='echoAgent', fn=echo_agent, store=InMemorySessionStore())
-
-        # Wait for the Starlette reflection server to become active in the background
-        # (Using private attr for test synchronization, as in reflection_server_test.py)
-        assert ai._reflection_ready.wait(timeout=5), 'Reflection server never became ready'  # type: ignore[reportPrivateUsage]
-
-        try:
-            # 1. Instantiate the HTTP transport talking to the reflection endpoint
-            url = f'http://127.0.0.1:{port}/api/runAction'
-            transport = HttpAgentTransport(
-                url=url,
-                agent_name='/agent/echoAgent',
-                state_management='server',
-            )
-            client = AgentClient(transport)
-
-            # 2. Run a turn and check the stream and output!
-            chat = client.chat()
-            turn = chat.send('Hello Genkit!')
-
-            chunks = []
-            async for chunk in turn.stream:
-                if chunk.text:
-                    chunks.append(chunk.text)
-
-            res = await turn.response
-            assert res.text == 'Echo: Hello Genkit!'
-            assert res.finish_reason == AgentFinishReason.STOP
-        finally:
-            # Shutdown Genkit and reflection server
-            pass
+        client = AgentClient(transport)
+        chat = client.chat()
+        res = await chat.send('Hello Genkit!').response
+        assert res.text == 'Echo: Hello Genkit!'
+        assert res.finish_reason == AgentFinishReason.STOP
+    finally:
+        server.should_exit = True
+        await task

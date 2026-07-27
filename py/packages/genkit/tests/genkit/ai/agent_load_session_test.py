@@ -75,7 +75,7 @@ class _ScriptedStore(SessionStore[Any]):
 
     async def save_snapshot(
         self,
-        snapshot_id: str | None,
+        snapshot_id: str,
         fn: Callable[[SessionSnapshot | None], SessionSnapshot | None],
     ) -> SessionSnapshot | None:
         return None
