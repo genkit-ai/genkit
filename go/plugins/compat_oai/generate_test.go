@@ -757,6 +757,7 @@ func TestWithParams(t *testing.T) {
 		TopP:        openai.Float(0.8),
 	}
 	params.SetExtraFields(map[string]any{
+		"prompt_cache_retention": "24h",
 		"thinking": map[string]any{
 			"type":           "enabled",
 			"clear_thinking": false,
@@ -771,6 +772,9 @@ func TestWithParams(t *testing.T) {
 	request := marshalParams(t, *g.GetRequest())
 	if got := request["model"]; got != "test-model-2026-01-01" {
 		t.Errorf("model = %v, want the pinned %q", got, "test-model-2026-01-01")
+	}
+	if got := request["prompt_cache_retention"]; got != "24h" {
+		t.Errorf("prompt_cache_retention = %v, want %q", got, "24h")
 	}
 	if got := request["temperature"]; got != 0.3 {
 		t.Errorf("temperature = %v, want 0.3", got)
