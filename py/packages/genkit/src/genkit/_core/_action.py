@@ -746,6 +746,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             type='action',
             subtype=str(self._kind),
             input=input,
+            init=ctx.init,
             metadata=extra_metadata or None,
             telemetry_labels={k: str(v) for k, v in (telemetry_labels or {}).items()} or None,
         )

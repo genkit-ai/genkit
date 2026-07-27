@@ -63,6 +63,7 @@ class SpanMetadata(GenkitModel):
     state: Literal['success', 'error'] | None = None
     input: Any | None = Field(default=None)
     output: Any | None = Field(default=None)
+    init: Any | None = Field(default=None)
     is_root: bool | None = None
     metadata: dict[str, Any] | None = None
     path: str | None = None
@@ -175,6 +176,8 @@ def start_attributes(
             attrs[metadata_key(meta_key)] = str(meta_value)
     if metadata.input is not None:
         attrs[Attr.INPUT] = _to_json_attr(metadata.input)
+    if metadata.init is not None:
+        attrs[Attr.INIT] = _to_json_attr(metadata.init)
     return attrs
 
 

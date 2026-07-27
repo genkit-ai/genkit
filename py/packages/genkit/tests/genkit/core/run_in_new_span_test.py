@@ -94,6 +94,14 @@ def test_start_attributes_json_input() -> None:
     assert attrs['genkit:input'] == '{"msg": "hi"}'
 
 
+def test_start_attributes_json_init() -> None:
+    attrs = start_attributes(
+        SpanMetadata(name='agentRun', type='action', init={'sessionId': 'session-123'}),
+        qualified_path='/{agentRun,t:action}',
+    )
+    assert attrs['genkit:init'] == '{"sessionId": "session-123"}'
+
+
 def test_realtime_on_start_export_carries_identity_attrs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -168,6 +176,15 @@ def test_writes_input_from_metadata(exporter: InMemorySpanExporter) -> None:
     assert attrs['genkit:input'] == '{"msg":"hi"}'
     assert attrs['genkit:path'] == '/{echo,t:action,s:tool}'
     assert attrs['genkit:metadata:subtype'] == 'tool'
+
+
+def test_writes_init_from_metadata(exporter: InMemorySpanExporter) -> None:
+    with run_in_new_span(SpanMetadata(name='agentRun', type='action', init={'sessionId': 'session-123'})):
+        pass
+
+    span = _by_name(exporter.get_finished_spans(), 'agentRun')
+    attrs = dict(span.attributes or {})
+    assert attrs['genkit:init'] == '{"sessionId": "session-123"}'
 
 
 def test_writes_output_from_metadata_on_success(exporter: InMemorySpanExporter) -> None:
