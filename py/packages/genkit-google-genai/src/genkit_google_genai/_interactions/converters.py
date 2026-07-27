@@ -134,8 +134,11 @@ def clean_schema(schema: dict[str, Any]) -> dict[str, Any]:
         value = out[key]
         if isinstance(value, dict):
             out[key] = clean_schema(value)
-        elif key == 'type' and isinstance(value, list):
-            out[key] = next((item for item in value if item != 'null'), value[0] if value else value)
+        elif isinstance(value, list):
+            if key == 'type':
+                out[key] = next((item for item in value if item != 'null'), value[0] if value else value)
+            else:
+                out[key] = [clean_schema(item) if isinstance(item, dict) else item for item in value]
     return out
 
 
