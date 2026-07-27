@@ -134,11 +134,12 @@ def genkit_flask_handler(
                     action_context = context
 
             stream = request_data.headers.get('accept') == 'text/event-stream' or request.args.get('stream') == 'true'
+            init = input_data.get('init')
             if stream:
 
                 async def async_gen() -> AsyncIterator[str]:
                     try:
-                        stream_response = flow.stream(input_data.get('data'), context=action_context)
+                        stream_response = flow.stream(input_data.get('data'), context=action_context, init=init)
                         async for chunk in stream_response.stream:
                             yield f'data: {json.dumps({"message": _to_dict(chunk)}, separators=_JSON_SEPARATORS)}\n\n'
 
@@ -154,7 +155,7 @@ def genkit_flask_handler(
                 return iter
             else:
                 try:
-                    response = await flow.run(input_data.get('data'), context=action_context)
+                    response = await flow.run(input_data.get('data'), context=action_context, init=init)
                     return {'result': _to_dict(response.response)}
                 except Exception as e:
                     ex = e
