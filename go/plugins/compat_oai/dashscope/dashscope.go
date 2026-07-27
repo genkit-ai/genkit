@@ -154,7 +154,7 @@ var supportedModels = map[string]ai.ModelOptions{
 
 type DashScope struct {
 	Opts             []option.RequestOption
-	openAICompatible compat_oai.OpenAICompatible
+	openAICompatible *compat_oai.OpenAICompatible
 }
 
 // Name implements genkit.Plugin.
@@ -172,6 +172,10 @@ func (d *DashScope) Init(ctx context.Context) []api.Action {
 	apiKey := os.Getenv("DASHSCOPE_API_KEY")
 	if apiKey != "" {
 		d.Opts = append([]option.RequestOption{option.WithAPIKey(apiKey)}, d.Opts...)
+	}
+
+	if d.openAICompatible == nil {
+		d.openAICompatible = &compat_oai.OpenAICompatible{}
 	}
 
 	// initialize OpenAICompatible
