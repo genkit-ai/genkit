@@ -17,7 +17,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
-	oai "github.com/firebase/genkit/go/plugins/compat_oai/dashscope"
+	"github.com/firebase/genkit/go/plugins/compat_oai/dashscope"
 	"github.com/firebase/genkit/go/plugins/server"
 	"github.com/openai/openai-go/option"
 )
@@ -25,15 +25,15 @@ import (
 func main() {
 	ctx := context.Background()
 
-	oai := oai.DashScope{
+	ds := &dashscope.DashScope{
 		Opts: []option.RequestOption{
 			option.WithAPIKey(os.Getenv("DASHSCOPE_API_KEY")),
 		},
 	}
-	g := genkit.Init(ctx, genkit.WithPlugins(&oai))
+	g := genkit.Init(ctx, genkit.WithPlugins(ds))
 
 	genkit.DefineFlow(g, "dashscope", func(ctx context.Context, subject string) (string, error) {
-		model := oai.Model(g, "qwen-plus")
+		model := ds.Model(g, "qwen-plus")
 
 		prompt := fmt.Sprintf("tell me a joke about %s", subject)
 		foo, err := genkit.Generate(ctx, g, ai.WithModel(model), ai.WithPrompt(prompt))
@@ -71,7 +71,7 @@ func main() {
 		if modelID == "" {
 			modelID = "qwen-plus"
 		}
-		model := oai.Model(g, modelID)
+		model := ds.Model(g, modelID)
 
 		prompt := fmt.Sprintf("What's the current temperature in %s? Use the tool to check, don't guess.", input.City)
 		resp, err := genkit.Generate(ctx, g,
@@ -98,7 +98,7 @@ func main() {
 		if modelID == "" {
 			modelID = "qwen3-vl-plus"
 		}
-		model := oai.Model(g, modelID)
+		model := ds.Model(g, modelID)
 
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithModel(model),
