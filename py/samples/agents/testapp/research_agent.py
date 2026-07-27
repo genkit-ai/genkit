@@ -39,6 +39,7 @@ from genkit.agent import (
     AgentResult,
     AgentStreamChunk,
     SessionRunner,
+    TurnContext,
     TurnResult,
 )
 
@@ -59,7 +60,7 @@ def _text(parts: list[Any] | None) -> str:
 
 
 async def research_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-    async def handle_turn(inp: AgentInput) -> TurnResult | None:
+    async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         question = _text(inp.message.content) if inp.message else ''
 
         # Step 1 — decompose (cheap model, structured output).
