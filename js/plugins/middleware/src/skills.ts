@@ -99,7 +99,7 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
                         description,
                       });
                     } catch (e: any) {
-                      if (e.code !== 'ENOENT') {
+                      if (e?.code !== 'ENOENT') {
                         logger.warn(
                           `Failed to read skill file "${skillMdPath}": ${e.message || String(e)}`,
                           {
@@ -113,7 +113,16 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
                   }
                 }
               } catch (e: any) {
-                // ignore directory read errors
+                if (e?.code !== 'ENOENT') {
+                  logger.warn(
+                    `Failed to scan skill directory "${dirPath}": ${e.message || String(e)}`,
+                    {
+                      'genkit.middleware.name': 'skills',
+                      'genkit.middleware.skills.path': dirPath,
+                    },
+                    e
+                  );
+                }
               }
             }
             if (skillCache.size > 0) {

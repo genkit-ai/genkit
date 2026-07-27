@@ -61,8 +61,11 @@ class Logger {
     }
 
     try {
-      const currentLevel = getLogger().level || 'info';
-      if (LOG_LEVELS.indexOf(currentLevel) > LOG_LEVELS.indexOf(level)) {
+      const currentLevel = getLogger().level;
+      if (
+        currentLevel &&
+        LOG_LEVELS.indexOf(currentLevel) > LOG_LEVELS.indexOf(level)
+      ) {
         return;
       }
 
@@ -117,8 +120,11 @@ class Logger {
   }
 
   private _log(level: string, ...args: any[]) {
-    const currentLevel = getLogger().level || 'info';
-    if (LOG_LEVELS.indexOf(currentLevel) > LOG_LEVELS.indexOf(level)) {
+    const currentLevel = getLogger().level;
+    if (
+      currentLevel &&
+      LOG_LEVELS.indexOf(currentLevel) > LOG_LEVELS.indexOf(level)
+    ) {
       return;
     }
 
