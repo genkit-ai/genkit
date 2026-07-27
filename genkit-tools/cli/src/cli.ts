@@ -91,7 +91,7 @@ export async function startCLI(): Promise<void> {
       // For now only record known command names, to avoid tools plugins causing
       // arbitrary text to get recorded. Once we launch tools plugins, we'll have
       // to give this more thought
-      const commandNames = commands.map((c) => c.name());
+      const commandNames = [...commands.map((c) => c.name()), 'help'];
       let commandName: string;
       if (commandNames.includes(actionCommand.name())) {
         commandName = actionCommand.name();
