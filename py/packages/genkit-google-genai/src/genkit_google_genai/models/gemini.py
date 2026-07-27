@@ -157,6 +157,7 @@ from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema
 from genkit import (
     Constrained,
     GenkitError,
+    MediaPart,
     Message,
     ModelConfig,
     ModelInfo,
@@ -183,9 +184,19 @@ def _to_dict(obj: JsonAny) -> JsonAny:  # noqa: ANN401
     return obj.model_dump() if isinstance(obj, BaseModel) else obj
 
 
+def _finish_reason_name(fr: Any) -> str | None:  # noqa: ANN401
+    """Normalize a google-genai finish reason to an uppercase name string."""
+    if fr is None:
+        return None
+    name = getattr(fr, 'name', fr)
+    if isinstance(name, str):
+        return name.upper()
+    return str(name).upper() if name is not None else None
+
+
 def _to_finish_reason(fr: Any) -> FinishReason:  # noqa: ANN401
     """Map a google-genai finish reason onto Genkit's FinishReason."""
-    fr_name = getattr(fr, 'name', fr) if fr is not None else None
+    fr_name = _finish_reason_name(fr)
     if fr_name == 'STOP':
         return FinishReason.STOP
     if fr_name == 'MAX_TOKENS':
@@ -201,9 +212,40 @@ def _to_finish_reason(fr: Any) -> FinishReason:  # noqa: ANN401
         'IMAGE_SAFETY',
     ):
         return FinishReason.BLOCKED
-    if fr_name in ('OTHER', 'MALFORMED_FUNCTION_CALL', 'MISSING_THOUGHT_SIGNATURE'):
+    # NO_IMAGE: request accepted but no image bytes. IMAGE_OTHER: generation
+    # stopped for a non-safety reason (often prompt/content policy adjacent).
+    if fr_name in (
+        'OTHER',
+        'MALFORMED_FUNCTION_CALL',
+        'MISSING_THOUGHT_SIGNATURE',
+        'NO_IMAGE',
+        'IMAGE_OTHER',
+    ):
         return FinishReason.OTHER
     return FinishReason.UNKNOWN
+
+
+def _content_has_media(content: list[Part]) -> bool:
+    """Return True when any part carries media (image/audio/video bytes or URL)."""
+    return any(isinstance(part.root, MediaPart) for part in content)
+
+
+def _finish_message_for_image_response(
+    *,
+    fr_name: str | None,
+    content: list[Part],
+) -> str | None:
+    """Explain empty/no-image outcomes so callers don't treat them as silent success."""
+    if _content_has_media(content):
+        return None
+    if fr_name == 'IMAGE_SAFETY':
+        return 'Image blocked by safety filters.'
+    if fr_name == 'IMAGE_OTHER':
+        return 'Image generation stopped (IMAGE_OTHER). Try revising the prompt.'
+    if fr_name == 'NO_IMAGE':
+        return 'No image was returned. Try a clearer image prompt (for example, "draw a red circle on white").'
+    # Ambiguous prompts sometimes come back as STOP/OTHER/UNKNOWN with empty parts.
+    return 'No image was returned. Try a clearer image prompt (for example, "draw a red circle on white").'
 
 
 def _to_float(obj: Any, attr: str) -> float | None:  # noqa: ANN401
@@ -998,7 +1040,6 @@ class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     | `gemini-3-pro-image`                 | Gemini 3 Pro Image                   | Supported    |
     | `gemini-3.1-flash-image`             | Gemini 3.1 Flash Image               | Supported    |
     | `gemini-3-pro-image-preview`         | Gemini 3 Pro Image Preview           | Supported    |
-    | `gemini-2.5-flash-image-preview`     | Gemini 2.5 Flash Image Preview       | Supported    |
     | `gemini-2.5-flash-image`             | Gemini 2.5 Flash Image               | Supported    |
     | `gemma-3-12b-it`                     | Gemma 3 12B IT                       | Supported    |
     | `gemma-3-1b-it`                      | Gemma 3 1B IT                        | Supported    |
@@ -1064,7 +1105,6 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     | `gemini-3.1-flash-image`             | Gemini 3.1 Flash Image               | Supported  |
     | `gemini-3.1-flash-image-preview`     | Gemini 3.1 Flash Image Preview       | Supported  |
     | `gemini-3-pro-image-preview`         | Gemini 3 Pro Image Preview           | Supported  |
-    | `gemini-2.5-flash-image-preview`     | Gemini 2.5 Flash Image Preview       | Supported  |
     | `gemini-2.5-flash-image`             | Gemini 2.5 Flash Image               | Supported  |
     | `gemini-3.1-pro-preview`             | Gemini 3.1 Pro Preview               | Supported  |
     | `gemini-3.1-pro-preview-customtools` | Gemini 3.1 Pro Preview Custom Tools  | Supported  |
@@ -1141,7 +1181,6 @@ _add_model(GEMINI_3_PRO_IMAGE, ['gemini-3-pro-image'])
 _add_model(GEMINI_3_1_FLASH_IMAGE, ['gemini-3.1-flash-image'])
 _add_model(GEMINI_3_1_FLASH_IMAGE_PREVIEW, ['gemini-3.1-flash-image-preview'])
 _add_model(GEMINI_3_PRO_IMAGE_PREVIEW, ['gemini-3-pro-image-preview'])
-_add_model(GEMINI_2_5_FLASH_IMAGE_PREVIEW, ['gemini-2.5-flash-image-preview'])
 _add_model(GEMINI_2_5_FLASH_IMAGE, ['gemini-2.5-flash-image'])
 
 
@@ -1624,8 +1663,44 @@ class GeminiModel:
             )
 
         response.usage = self._create_usage_stats(request=request, response=response)
+        # Framework attaches this request onto response.request — rewrite config
+        # to the normalized effective values (snake_case + injected modalities)
+        # so callers debugging the response see what actually drove the call.
+        self._echo_effective_config(request, model_name=model_name, request_cfg=request_cfg)
 
         return response
+
+    def _echo_effective_config(
+        self,
+        request: ModelRequest,
+        *,
+        model_name: str,
+        request_cfg: genai_types.GenerateContentConfig | None,
+    ) -> None:
+        """Replace ``request.config`` with the coerced config used for this call.
+
+        Accepts camelCase or snake_case on the way in; echoes a snake_case dict
+        that includes plugin-injected fields (e.g. image/TTS ``response_modalities``).
+        """
+        effective: dict[str, Any] = {}
+        if request.config is not None:
+            normalized = self._normalize_config_to_dict(request.config)
+            if normalized:
+                effective.update(normalized)
+
+        if request_cfg is not None and request_cfg.response_modalities:
+            effective['response_modalities'] = list(request_cfg.response_modalities)
+        elif is_tts_model(model_name):
+            effective['response_modalities'] = ['AUDIO']
+        elif is_image_model(model_name):
+            effective['response_modalities'] = ['TEXT', 'IMAGE']
+
+        # api_key is Field(exclude=True) on the schema dump, but strip anyway
+        # in case the caller handed us a raw dict.
+        effective.pop('api_key', None)
+        effective.pop('apiKey', None)
+
+        request.config = effective or None
 
     async def _resolve_request_client(self, request: ModelRequest) -> genai.Client:
         """Resolve the client to use for a request.
@@ -1783,6 +1858,8 @@ class GeminiModel:
             content = [Part(root=TextPart(text=''))]
 
         finish_reason = FinishReason.OTHER
+        finish_message: str | None = None
+        primary_fr_name: str | None = None
         candidates = []
         if response.candidates:
             for i, c in enumerate(response.candidates):
@@ -1796,18 +1873,34 @@ class GeminiModel:
                 if not c_content:
                     c_content = [Part(root=TextPart(text=''))]
 
+                c_fr_name = _finish_reason_name(c.finish_reason)
                 c_finish_reason = _to_finish_reason(c.finish_reason)
+                c_finish_message = getattr(c, 'finish_message', None) or None
+                if is_image_model(model_name) and not c_finish_message:
+                    c_finish_message = _finish_message_for_image_response(
+                        fr_name=c_fr_name,
+                        content=c_content,
+                    )
 
                 if i == 0:
                     finish_reason = c_finish_reason
+                    finish_message = c_finish_message
+                    primary_fr_name = c_fr_name
 
                 candidates.append(
                     Candidate(
                         index=float(i),
                         message=Message(role=Role.MODEL, content=c_content),
                         finish_reason=c_finish_reason,
+                        finish_message=c_finish_message,
                     )
                 )
+
+        if is_image_model(model_name) and finish_message is None:
+            finish_message = _finish_message_for_image_response(
+                fr_name=primary_fr_name,
+                content=content,
+            )
 
         return ModelResponse(
             message=Message(
@@ -1815,6 +1908,7 @@ class GeminiModel:
                 role=Role.MODEL,
             ),
             finish_reason=finish_reason,
+            finish_message=finish_message,
             candidates=candidates,
             usage=_usage_from_metadata(response.usage_metadata),
         )
@@ -1867,6 +1961,8 @@ class GeminiModel:
 
         accumulated_content: list[Part] = []
         finish_reason = FinishReason.UNKNOWN
+        finish_message: str | None = None
+        primary_fr_name: str | None = None
         usage_metadata: Any = None
         async for response_chunk in generator:
             content = await self._contents_from_response(response_chunk)
@@ -1882,11 +1978,22 @@ class GeminiModel:
             # chunks, so hold onto the latest values we see as the stream drains —
             # otherwise a streamed turn reports no finish reason and no usage at all.
             if response_chunk.candidates and response_chunk.candidates[0] is not None:
-                fr = response_chunk.candidates[0].finish_reason
+                candidate = response_chunk.candidates[0]
+                fr = candidate.finish_reason
                 if fr:
+                    primary_fr_name = _finish_reason_name(fr)
                     finish_reason = _to_finish_reason(fr)
+                candidate_finish_message = getattr(candidate, 'finish_message', None)
+                if candidate_finish_message:
+                    finish_message = candidate_finish_message
             if response_chunk.usage_metadata is not None:
                 usage_metadata = response_chunk.usage_metadata
+
+        if is_image_model(model_name) and finish_message is None:
+            finish_message = _finish_message_for_image_response(
+                fr_name=primary_fr_name,
+                content=accumulated_content,
+            )
 
         return ModelResponse(
             message=Message(
@@ -1894,6 +2001,7 @@ class GeminiModel:
                 content=accumulated_content,
             ),
             finish_reason=finish_reason,
+            finish_message=finish_message,
             usage=_usage_from_metadata(usage_metadata),
         )
 

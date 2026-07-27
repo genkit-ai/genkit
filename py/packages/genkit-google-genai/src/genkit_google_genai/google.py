@@ -106,9 +106,7 @@ from google.genai.types import HttpOptions, HttpOptionsDict
 import genkit_google_genai.constants as const
 from genkit import ModelInfo
 from genkit._core._action import ActionRunContext
-from genkit._core._background import define_background_model
 from genkit._core._model import ModelRequest, ModelResponse
-from genkit._core._registry import Registry
 from genkit.embedder import embedder_action_metadata
 from genkit.evaluator import EvalFnResponse, EvalRequest
 from genkit.model import BackgroundAction, ModelRef, model_action_metadata
@@ -121,24 +119,19 @@ from genkit.plugin_api import (
     loop_local_client,
     to_json_schema,
 )
+from genkit_google_genai._interactions.options import ClientOptions
 from genkit_google_genai.evaluators import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
 )
 from genkit_google_genai.models.antigravity import (
-    AntigravityConfigSchema,
-    antigravity_model_info,
+    AntigravityConfig,
     create_antigravity_action,
-    is_antigravity_model_name,
-    list_known_antigravity_models,
 )
 from genkit_google_genai.models.deep_research import (
-    DeepResearchConfigSchema,
+    DeepResearchConfig,
     create_deep_research_background_action,
     deep_research_model,
-    deep_research_model_info,
-    is_deep_research_model_name,
-    list_known_deep_research_models,
 )
 from genkit_google_genai.models.embedder import (
     VERTEX_KNOWN_EMBEDDERS,
@@ -159,17 +152,24 @@ from genkit_google_genai.models.imagen import (
     ImagenModel,
     vertexai_image_model_info,
 )
-from genkit_google_genai.models.interactions_utils import ClientOptions
-from genkit_google_genai.models.lyria import (
-    LyriaConfigSchema,
-    create_lyria_action,
+from genkit_google_genai.models.interactions_registry import (
+    antigravity_model_info,
+    deep_research_model_info,
+    is_antigravity_model_name,
+    is_deep_research_model_name,
     is_lyria_model_name,
+    list_known_antigravity_models,
+    list_known_deep_research_models,
     list_known_lyria_models,
     lyria_model_info,
 )
+from genkit_google_genai.models.lyria import (
+    LyriaConfig,
+    create_lyria_action,
+)
 from genkit_google_genai.models.veo import (
-    VeoConfigSchema,
-    VeoModel,
+    VeoConfig,
+    create_veo_background_action,
     is_veo_model,
     veo_model_info,
 )
@@ -485,7 +485,7 @@ class GoogleAI(Plugin):
 
         These settings (base_url, api_version, custom_headers) serve as the
         plugin-level fallback defaults for Google AI Interactions-backed models
-        (Deep Research, Lyria, Veo).
+        (Deep Research, Antigravity, Lyria).
 
         Resolution Hierarchy for Client Settings:
             1. Per-request override: Options passed in request config (highest priority).
@@ -495,15 +495,13 @@ class GoogleAI(Plugin):
             4. Environment variables: E.g., GEMINI_API_KEY / GOOGLE_API_KEY (lowest fallback).
         """
         http_options: HttpOptions | None = self._client_kwargs.get('http_options')
-        options: ClientOptions = {}
-        if http_options is not None:
-            if http_options.api_version:
-                options['api_version'] = http_options.api_version
-            if http_options.base_url:
-                options['base_url'] = http_options.base_url
-            if http_options.headers:
-                options['custom_headers'] = dict(http_options.headers)
-        return options
+        if http_options is None:
+            return ClientOptions()
+        return ClientOptions(
+            api_version=http_options.api_version,
+            base_url=http_options.base_url,
+            custom_headers=dict(http_options.headers) if http_options.headers else None,
+        )
 
     def _plugin_api_key(self) -> str | None:
         return self._client_kwargs.get('api_key')
@@ -669,26 +667,8 @@ class GoogleAI(Plugin):
         return None
 
     def _resolve_veo_model(self, name: str) -> BackgroundAction:
-        """Create a BackgroundAction for a Veo video generation model.
-
-        Args:
-            name: The namespaced name of the model.
-
-        Returns:
-            BackgroundAction for the Veo model.
-        """
-        clean_name = name.replace(GOOGLEAI_PLUGIN_NAME + '/', '') if name.startswith(GOOGLEAI_PLUGIN_NAME) else name
-        veo = VeoModel(clean_name, self._runtime_client())
-        # Build actions via define_background_model; plugin init registers them on the app registry.
-        return define_background_model(
-            registry=Registry(),
-            name=name,
-            start=veo.start,
-            check=veo.check,
-            cancel=None,
-            info=veo_model_info(clean_name),
-            config_schema=VeoConfigSchema,
-        )
+        """Create a BackgroundAction for a Veo video generation model."""
+        return create_veo_background_action(name, self._runtime_client())
 
     def _resolve_deep_research_model(
         self,
@@ -813,7 +793,7 @@ class GoogleAI(Plugin):
                 model_action_metadata(
                     name=googleai_name(name),
                     info=veo_model_info(name).model_dump(by_alias=True),
-                    config_schema=VeoConfigSchema,
+                    config_schema=VeoConfig,
                 )
             )
 
@@ -822,7 +802,7 @@ class GoogleAI(Plugin):
                 model_action_metadata(
                     name=googleai_name(name),
                     info=deep_research_model_info(name).model_dump(by_alias=True),
-                    config_schema=DeepResearchConfigSchema,
+                    config_schema=DeepResearchConfig,
                 )
             )
 
@@ -831,7 +811,7 @@ class GoogleAI(Plugin):
                 model_action_metadata(
                     name=googleai_name(name),
                     info=antigravity_model_info(name).model_dump(by_alias=True),
-                    config_schema=AntigravityConfigSchema,
+                    config_schema=AntigravityConfig,
                 )
             )
 
@@ -840,7 +820,7 @@ class GoogleAI(Plugin):
                 model_action_metadata(
                     name=googleai_name(name),
                     info=lyria_model_info(name).model_dump(by_alias=True),
-                    config_schema=LyriaConfigSchema,
+                    config_schema=LyriaConfig,
                 )
             )
 
@@ -880,7 +860,7 @@ class VertexAI(Plugin):
         +------------------+-------------------+--------------------------------+
         | Gemini/Gemma     | MODEL             | vertexai/gemini-flash-latest   |
         | Imagen           | MODEL             | vertexai/imagen-3.0-generate   |
-        | Veo (video)      | MODEL             | vertexai/veo-2.0-generate-001  |
+        | Veo (video)      | BACKGROUND_MODEL  | vertexai/veo-2.0-generate-001  |
         | Embedders        | EMBEDDER          | vertexai/text-embedding-005    |
         +------------------+-------------------+--------------------------------+
 
@@ -1012,7 +992,9 @@ class VertexAI(Plugin):
             actions.append(self._resolve_model(vertexai_name(name)))
 
         for name in genai_models.veo:
-            actions.append(self._resolve_model(vertexai_name(name)))
+            bg_action = self._resolve_veo_model(vertexai_name(name))
+            actions.append(bg_action.start_action)
+            actions.append(bg_action.check_action)
 
         for name in VERTEX_KNOWN_EMBEDDERS:
             actions.append(self._resolve_embedder(vertexai_name(name)))
@@ -1046,9 +1028,11 @@ class VertexAI(Plugin):
             actions.append(self._resolve_model(vertexai_name(name)))
         for name in genai_models.imagen:
             actions.append(self._resolve_model(vertexai_name(name)))
-        for name in genai_models.veo:
-            actions.append(self._resolve_model(vertexai_name(name)))
         return actions
+
+    def _resolve_veo_model(self, name: str) -> BackgroundAction:
+        """Create a BackgroundAction for a Veo video generation model."""
+        return create_veo_background_action(name, self._runtime_client())
 
     def _list_known_embedders(self) -> list[Action]:
         """List known embedders as Action objects.
@@ -1073,7 +1057,25 @@ class VertexAI(Plugin):
             Action object if found, None otherwise.
         """
         if action_type == ActionKind.MODEL:
+            prefix = VERTEXAI_PLUGIN_NAME + '/'
+            clean_name = name.replace(prefix, '') if name.startswith(prefix) else name
+            if is_veo_model(clean_name):
+                return None
             return self._resolve_model(name)
+        elif action_type == ActionKind.BACKGROUND_MODEL:
+            prefix = VERTEXAI_PLUGIN_NAME + '/'
+            clean_name = name.replace(prefix, '') if name.startswith(prefix) else name
+            if is_veo_model(clean_name):
+                return self._resolve_veo_model(name).start_action
+            return None
+        elif action_type == ActionKind.CHECK_OPERATION:
+            if name.endswith('/check'):
+                model_name = name[:-6]
+                prefix = VERTEXAI_PLUGIN_NAME + '/'
+                clean_name = model_name.replace(prefix, '') if model_name.startswith(prefix) else model_name
+                if is_veo_model(clean_name):
+                    return self._resolve_veo_model(model_name).check_action
+            return None
         elif action_type == ActionKind.EMBEDDER:
             return self._resolve_embedder(name)
         elif action_type == ActionKind.EVALUATOR:
@@ -1139,9 +1141,6 @@ class VertexAI(Plugin):
             model_ref = vertexai_image_model_info(clean_name)
             IMAGE_SUPPORTED_MODELS[clean_name] = model_ref  # pyright: ignore[reportArgumentType]
             config_schema = ImagenConfigSchema
-        elif is_veo_model(clean_name):
-            model_ref = veo_model_info(clean_name)
-            config_schema = VeoConfigSchema
         else:
             model_ref = google_model_info(clean_name)
             SUPPORTED_MODELS[clean_name] = model_ref
@@ -1157,8 +1156,6 @@ class VertexAI(Plugin):
                 )
             elif clean_name.lower().startswith('image'):
                 model = ImagenModel(clean_name, self._runtime_client())
-            elif is_veo_model(clean_name):
-                model = VeoModel(clean_name, self._runtime_client())
             else:
                 model = GeminiModel(
                     clean_name,
@@ -1228,7 +1225,7 @@ class VertexAI(Plugin):
                 model_action_metadata(
                     name=vertexai_name(name),
                     info=veo_model_info(name).model_dump(by_alias=True),
-                    config_schema=VeoConfigSchema,
+                    config_schema=VeoConfig,
                 )
             )
 

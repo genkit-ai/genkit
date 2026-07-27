@@ -18,20 +18,51 @@
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
+from typing_extensions import Self
 
 ResponseModality = Literal['text', 'image', 'audio']
 
 
-class ClientOptions(TypedDict, total=False):
+class ClientOptions(BaseModel):
     """HTTP settings reconstructed across background poll calls.
 
-    Includes api_key so check/cancel can reuse a per-request override from start,
-    matching the JS Operation.metadata.clientOptions shape.
+    Stored on Operation.metadata['clientOptions'] so check/cancel can reuse
+    per-request overrides (including apiKey) from start. Wire keys are
+    camelCase like the rest of operation metadata.
     """
 
-    api_key: str
-    api_version: str
-    base_url: str
-    custom_headers: dict[str, str]
-    timeout: float
+    model_config = ConfigDict(alias_generator=to_camel, extra='ignore', populate_by_name=True)
+
+    api_key: str | None = None
+    api_version: str | None = None
+    base_url: str | None = None
+    custom_headers: dict[str, str] | None = None
+    timeout: float | None = None
+
+    def merge(self, overrides: ClientOptions | dict[str, Any] | None) -> Self:
+        """Return a copy with non-null override fields applied."""
+        if not overrides:
+            return self
+        if isinstance(overrides, dict):
+            overrides = ClientOptions.model_validate(overrides)
+        # Field names (not aliases) — model_copy(update=...) keys off Python attrs.
+        update = overrides.model_dump(exclude_none=True)
+        return self.model_copy(update=update) if update else self
+
+    @classmethod
+    def from_metadata(cls, metadata: dict[str, Any] | None) -> Self:
+        """Load options previously persisted on an Operation."""
+        raw = (metadata or {}).get('clientOptions')
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, dict):
+            return cls.model_validate(raw)
+        return cls()
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        """Serialize for Operation.metadata (omit unset fields)."""
+        return self.model_dump(by_alias=True, exclude_none=True)

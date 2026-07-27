@@ -64,7 +64,9 @@ ModelUsage = GenerationUsage  # public name for GenerationUsage
 
 # TypeVars for generic types
 OutputT = TypeVar('OutputT', default=object)
-ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
+# No default — callers/actions bind ModelRequest[TheirConfig]. A ModelConfig
+# default would reject plugin config instances on bare ModelRequest.
+ConfigT = TypeVar('ConfigT', bound=BaseModel)
 
 
 class ModelRef(BaseModel):
@@ -254,6 +256,27 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
     output_schema: dict[str, Any] | None = None
     output_constrained: bool | None = None
     output_content_type: str | None = None
+
+    @field_validator('config', mode='plain')
+    @classmethod
+    def _validate_config(cls, v: object) -> object:
+        """Accept plugin config models and dicts without forcing ModelConfig.
+
+        Bare ModelRequest(config={...}) keeps the dict; ModelRequest[PluginConfig]
+        coerces that dict into the plugin schema. Plugin config instances pass through.
+        """
+        if v is None:
+            return None
+        if isinstance(v, BaseModel):
+            return v
+        if isinstance(v, dict):
+            args = cls.__pydantic_generic_metadata__['args']
+            if args:
+                schema = args[0]
+                if isinstance(schema, type) and issubclass(schema, BaseModel):
+                    return schema.model_validate(v)
+            return v
+        raise TypeError(f'config must be a BaseModel or dict, got {type(v).__name__}')
 
     @field_validator('messages', mode='before')
     @classmethod

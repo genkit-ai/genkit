@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Antigravity foreground model via the Google AI Interactions API."""
+"""Google AI Interactions Antigravity model action."""
 
 from __future__ import annotations
 
@@ -22,49 +22,46 @@ from collections.abc import Callable
 from typing import Any, Literal, cast
 
 from google import genai
+from google.genai.interactions import Interaction
 from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
+from typing_extensions import Never
 
-from genkit import ModelInfo, ModelRequest, ModelResponse, Supports
+from genkit import GenkitError, ModelRequest, ModelResponse
 from genkit.plugin_api import Action, ActionKind, ActionRunContext, model_action_metadata
 from genkit_google_genai._interactions.converters import (
     ensure_tool_ids,
     from_interaction_sync,
+    split_system_instruction,
     to_interaction_steps,
 )
+from genkit_google_genai._interactions.options import ClientOptions
+from genkit_google_genai.models.interactions_registry import antigravity_model_info
 from genkit_google_genai.models.interactions_utils import (
-    ClientOptions,
     calculate_api_key,
-    config_as_dict,
-    downgrade_system_messages,
     extract_version,
     map_genai_error,
-    merge_client_options,
     remove_client_option_overrides,
+    require_interaction_steps,
     resolve_interactions_client,
-    response_modalities_from_config,
+    take_keys,
 )
 
-GENERIC_ANTIGRAVITY_INFO = ModelInfo(
-    label='Google AI - antigravity',
-    supports=Supports(
-        multiturn=True,
-        media=True,
-        tools=False,
-        tool_choice=False,
-        system_role=False,
-        output=['text'],
-    ),
+DEFAULT_ENVIRONMENT: dict[str, str] = {'type': 'remote'}
+
+CREATE_OPTION_KEYS = (
+    'previous_interaction_id',
+    'store',
+    'environment',
+    'response_modalities',
 )
 
-KNOWN_ANTIGRAVITY_MODELS: dict[str, ModelInfo] = {
-    'antigravity-preview-05-2026': GENERIC_ANTIGRAVITY_INFO,
-}
 
-
-class AntigravityConfigSchema(BaseModel):
+class AntigravityConfig(BaseModel):
     """Antigravity model configuration."""
 
-    model_config = ConfigDict(extra='allow')
+    # Per-request options arrive camelCased (apiKey).
+    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
     api_key: str | None = None
     base_url: str | None = None
     api_version: str | None = None
@@ -74,86 +71,14 @@ class AntigravityConfigSchema(BaseModel):
     response_modalities: list[Literal['text', 'image']] | None = None
 
 
-def is_antigravity_model_name(name: str | None) -> bool:
-    """Return True when the model name belongs to the Antigravity family."""
-    return bool(name and name.startswith('antigravity-'))
-
-
-def antigravity_model_info(version: str) -> ModelInfo:
-    """Return capability metadata for an Antigravity model."""
-    known = KNOWN_ANTIGRAVITY_MODELS.get(version)
-    if known is not None:
-        return ModelInfo(label=f'Google AI - {version}', supports=known.supports)
-    return ModelInfo(label=f'Google AI - {version}', supports=GENERIC_ANTIGRAVITY_INFO.supports)
-
-
-def list_known_antigravity_models() -> list[str]:
-    """Return statically known Antigravity model names."""
-    return list(KNOWN_ANTIGRAVITY_MODELS.keys())
-
-
-class AntigravityModel:
-    """Antigravity model backed by the Interactions API."""
-
-    def __init__(
-        self,
-        version: str,
-        *,
-        plugin_api_key: str | None,
-        client_options: ClientOptions,
-        client_getter: Callable[[], genai.Client] | None = None,
-    ) -> None:
-        """Initialize Antigravity model."""
-        self._version = version
-        self._plugin_api_key = plugin_api_key
-        self._client_options = client_options
-        self._client_getter = client_getter
-
-    async def generate(self, request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
-        """Run a synchronous Antigravity interaction."""
-        config = config_as_dict(request.config)
-        request_api_key = config.get('api_key')
-        if request_api_key is not None:
-            request_api_key = str(request_api_key)
-        api_key = calculate_api_key(self._plugin_api_key, request_api_key)
-        client_options = merge_client_options(self._client_options, config)
-        request_options = remove_client_option_overrides(config)
-
-        previous_interaction_id = request_options.pop('previous_interaction_id', None)
-        store = request_options.pop('store', None)
-        environment = request_options.pop('environment', None)
-        request_options.pop('response_modalities', None)
-
-        messages = downgrade_system_messages(request.messages or [])
-        req_dict: dict[str, Any] = {
-            'agent': extract_version(self._version),
-            'input': to_interaction_steps(ensure_tool_ids(messages)),
-        }
-        if previous_interaction_id:
-            req_dict['previous_interaction_id'] = previous_interaction_id
-        if store is not None:
-            req_dict['store'] = store
-        if environment is not None:
-            req_dict['environment'] = environment
-        req_dict.update(request_options)
-
-        response_modalities = response_modalities_from_config(config)
-        if response_modalities is not None:
-            req_dict['response_modalities'] = response_modalities
-
-        async with resolve_interactions_client(
-            client_getter=self._client_getter,
-            plugin_api_key=self._plugin_api_key,
-            api_key=api_key,
-            request_api_key=request_api_key,
-            plugin_client_options=self._client_options,
-            client_options=client_options,
-        ) as client:
-            try:
-                interaction = cast(BaseModel, await client.aio.interactions.create(**req_dict))
-            except Exception as error:
-                raise map_genai_error(error) from error
-        return from_interaction_sync(interaction)
+def _is_remote_environment(environment: object) -> bool:
+    """Return True when environment is the remote sandbox Antigravity accepts."""
+    if environment == 'remote':
+        return True
+    if not isinstance(environment, dict):
+        return False
+    env = cast(dict[str, Any], environment)
+    return env.get('type') == 'remote'
 
 
 def create_antigravity_action(
@@ -162,19 +87,72 @@ def create_antigravity_action(
     plugin_api_key: str | None,
     client_options: ClientOptions,
     client_getter: Callable[[], genai.Client] | None = None,
-) -> Action:
+) -> Action[ModelRequest[AntigravityConfig], ModelResponse, Never]:
     """Build a foreground model action for Antigravity."""
-    clean_name = extract_version(name)
-    model = AntigravityModel(
-        clean_name,
-        plugin_api_key=plugin_api_key,
-        client_options=client_options,
-        client_getter=client_getter,
-    )
-    info = antigravity_model_info(clean_name)
+    version = extract_version(name)
+    info = antigravity_model_info(version)
 
-    async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        return await model.generate(request, ctx)
+    async def _run(request: ModelRequest[AntigravityConfig], _: ActionRunContext) -> ModelResponse:
+        config = request.config or AntigravityConfig()
+        request_api_key = config.api_key
+        api_key = calculate_api_key(plugin_api_key, request_api_key)
+        merged_options = client_options.merge(
+            ClientOptions(
+                base_url=config.base_url,
+                api_version=config.api_version,
+            )
+        )
+
+        # Peel known create kwargs (previous_interaction_id, store, …) out of the
+        # dumped config; anything left in wire is an undocumented passthrough.
+        wire = remove_client_option_overrides(config.model_dump(exclude_none=True))
+        create_options = take_keys(wire, CREATE_OPTION_KEYS)
+        # Antigravity doesn't take system_instruction; fold system text into the
+        # leading user turn so guidance still reaches the model.
+        system_instruction, turns = split_system_instruction(request.messages or [])
+        steps = to_interaction_steps(ensure_tool_ids(turns))
+        if system_instruction:
+            steps.insert(
+                0,
+                {
+                    'type': 'user_input',
+                    'content': [{'type': 'text', 'text': system_instruction}],
+                },
+            )
+        require_interaction_steps(steps)
+        create_kwargs: dict[str, Any] = {
+            'agent': version,
+            'input': steps,
+            **create_options,
+            **wire,
+        }
+        # Default after merge so a missing environment still becomes remote, and
+        # a caller override can't silently clobber it into something the API rejects.
+        create_kwargs.setdefault('environment', DEFAULT_ENVIRONMENT)
+        if not _is_remote_environment(create_kwargs.get('environment')):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message="Antigravity only supports environment {'type': 'remote'}.",
+            )
+
+        async with resolve_interactions_client(
+            client_getter=client_getter,
+            plugin_api_key=plugin_api_key,
+            api_key=api_key,
+            request_api_key=request_api_key,
+            plugin_client_options=client_options,
+            client_options=merged_options,
+        ) as client:
+            try:
+                created = await client.aio.interactions.create(**create_kwargs)
+            except Exception as error:
+                raise map_genai_error(error) from error
+        if not isinstance(created, Interaction):
+            raise GenkitError(
+                status='INTERNAL',
+                message='Expected a non-streaming Interaction response from Antigravity',
+            )
+        return from_interaction_sync(created)
 
     return Action(
         kind=ActionKind.MODEL,
@@ -183,6 +161,6 @@ def create_antigravity_action(
         metadata=model_action_metadata(
             name=name,
             info=info.model_dump(by_alias=True),
-            config_schema=AntigravityConfigSchema,
+            config_schema=AntigravityConfig,
         ).metadata,
     )

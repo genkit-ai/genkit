@@ -16,9 +16,12 @@
 
 """Tests for background model generate() and generate_operation() plumbing."""
 
-import pytest
+from typing import Any
 
-from genkit import Genkit
+import pytest
+from pydantic import BaseModel
+
+from genkit import Genkit, Message, Part, Role, TextPart
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._model import ModelRequest
@@ -44,6 +47,46 @@ async def _register_bg_model(ai: Genkit, *, op_id: str = 'bg-op-123') -> None:
         check=check,
         info=ModelInfo(supports=Supports(long_running=True)),
     )
+
+
+class _PluginConfig(BaseModel):
+    thinking_summaries: str | None = None
+    google_search: bool | None = None
+
+
+@pytest.mark.asyncio
+async def test_background_start_receives_plugin_config_schema(ai: Genkit) -> None:
+    """Bare ModelRequest configs are re-validated as the plugin config schema."""
+    seen: dict[str, Any] = {}
+
+    async def start(request: ModelRequest[_PluginConfig], ctx: ActionRunContext) -> Operation:
+        seen['config'] = request.config
+        return Operation(id='cfg-op', done=False)
+
+    async def check(op: Operation) -> Operation:
+        return op
+
+    action = ai.define_background_model(
+        name='cfg-model',
+        start=start,
+        check=check,
+        config_schema=_PluginConfig,
+        info=ModelInfo(supports=Supports(long_running=True)),
+    )
+
+    # Mimic generate: bare ModelRequest keeps a dict; Action coerces to the plugin schema.
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(TextPart(text='go'))])],
+        config={'thinking_summaries': 'auto', 'google_search': True},
+    )
+    assert request.config == {'thinking_summaries': 'auto', 'google_search': True}
+
+    await action.start(request)
+
+    config = seen['config']
+    assert isinstance(config, _PluginConfig)
+    assert config.thinking_summaries == 'auto'
+    assert config.google_search is True
 
 
 @pytest.mark.asyncio

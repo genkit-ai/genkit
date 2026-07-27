@@ -22,6 +22,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from genkit_google_genai._interactions.options import ClientOptions
 from genkit_google_genai.models.interactions_utils import map_genai_error, resolve_interactions_client
 from google.genai.errors import APIError
 
@@ -47,6 +48,35 @@ def test_map_genai_error_maps_unauthenticated() -> None:
     assert mapped.status == 'UNAUTHENTICATED'
 
 
+def test_map_genai_error_maps_gaos_status_code() -> None:
+    """Interactions gaos errors aren't google.genai.errors.APIError but carry status_code."""
+    error = SimpleNamespace(status_code=400, message='Missing input.')
+    mapped = map_genai_error(error)
+    assert mapped.status == 'INVALID_ARGUMENT'
+    assert mapped.original_message == 'Missing input.'
+
+
+def test_map_genai_error_maps_gaos_not_found() -> None:
+    error = SimpleNamespace(status_code=404, message="Did you mean 'lyria-3-pro-preview'?")
+    mapped = map_genai_error(error)
+    assert mapped.status == 'NOT_FOUND'
+
+
+def test_require_interaction_steps_rejects_empty() -> None:
+    from genkit_google_genai.models.interactions_utils import require_interaction_steps
+
+    with pytest.raises(GenkitError, match='Missing input') as exc_info:
+        require_interaction_steps([])
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+def test_require_interaction_steps_passes_through() -> None:
+    from genkit_google_genai.models.interactions_utils import require_interaction_steps
+
+    steps = [{'type': 'user_input', 'content': [{'type': 'text', 'text': 'hi'}]}]
+    assert require_interaction_steps(steps) is steps
+
+
 @pytest.mark.asyncio
 async def test_resolve_interactions_client_reuses_shared_client() -> None:
     shared = MagicMock(name='shared-client')
@@ -61,8 +91,8 @@ async def test_resolve_interactions_client_reuses_shared_client() -> None:
         plugin_api_key='plugin-key',
         api_key='plugin-key',
         request_api_key=None,
-        plugin_client_options={},
-        client_options={},
+        plugin_client_options=ClientOptions(),
+        client_options=ClientOptions(),
     ) as client:
         assert client is shared
     assert calls['count'] == 1
@@ -87,8 +117,8 @@ async def test_resolve_interactions_client_ephemeral_on_api_key_override() -> No
             plugin_api_key='plugin-key',
             api_key='override-key',
             request_api_key='override-key',
-            plugin_client_options={},
-            client_options={},
+            plugin_client_options=ClientOptions(),
+            client_options=ClientOptions(),
         ) as client:
             assert client is ephemeral
     ephemeral.aio.aclose.assert_awaited_once()

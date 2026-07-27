@@ -114,11 +114,11 @@ Architecture Overview::
     │  models/imagen.py - Image Generation                                    │
     │  └── ImagenModel (Vertex AI only)                                       │
     ├─────────────────────────────────────────────────────────────────────────┤
-    │  models/veo.py - Video Generation                                       │
-    │  └── VeoModel (Vertex AI only)                                          │
+    │  models/veo.py - Video Generation (generate_videos LRO)                 │
+    │  └── create_veo_background_action (Google AI + Vertex AI)               │
     ├─────────────────────────────────────────────────────────────────────────┤
     │  models/lyria.py - Audio Generation                                     │
-    │  └── LyriaModel (Vertex AI only)                                        │
+    │  └── Lyria (Interactions audio)                                         │
     └─────────────────────────────────────────────────────────────────────────┘
 
 Overview:
@@ -219,7 +219,8 @@ from genkit_google_genai.models.gemini import (
     VertexAIGeminiVersion,
 )
 from genkit_google_genai.models.imagen import ImagenVersion
-from genkit_google_genai.models.lyria import LyriaConfigSchema, LyriaVersion
+from genkit_google_genai.models.interactions_registry import LyriaVersion
+from genkit_google_genai.models.lyria import LyriaConfig
 from genkit_google_genai.models.veo import VeoConfig, VeoVersion
 
 
@@ -241,7 +242,7 @@ __all__ = [
     'GoogleAI',
     'GoogleAIGeminiVersion',
     'ImagenVersion',
-    'LyriaConfigSchema',
+    'LyriaConfig',
     'LyriaVersion',
     'VeoConfig',
     'VeoVersion',

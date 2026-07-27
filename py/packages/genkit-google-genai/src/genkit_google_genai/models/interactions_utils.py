@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -28,14 +28,14 @@ from typing import Any, cast
 from google import genai
 from google.genai.errors import APIError
 from google.genai.types import HttpOptions
-from pydantic import BaseModel
 
-from genkit import GenkitError, Message
+from genkit import GenkitError
 from genkit._core._error import ErrorResponseMetadata, StatusName
 from genkit.plugin_api import GENKIT_CLIENT_HEADER
-from genkit_google_genai._interactions.options import ClientOptions, ResponseModality
+from genkit_google_genai._interactions.options import ClientOptions
 
-_CLIENT_OPTION_KEYS = frozenset({
+# Snake_case: callers dump config with by_alias=False before we strip these.
+CLIENT_OPTION_KEYS = frozenset({
     'api_key',
     'base_url',
     'api_version',
@@ -54,13 +54,7 @@ def calculate_api_key(
     plugin_api_key: str | None,
     request_api_key: str | None,
 ) -> str:
-    """Resolve the effective API key for an Interactions call.
-
-    Fallback Hierarchy:
-        1. request_api_key: Override passed in request config.
-        2. plugin_api_key: Plugin initialization key (from self._client_kwargs).
-        3. Environment variables: GEMINI_API_KEY, GOOGLE_API_KEY, or GOOGLE_GENAI_API_KEY.
-    """
+    """Resolve the effective API key for an Interactions call."""
     api_key = request_api_key or plugin_api_key or get_api_key_from_env()
     if not api_key:
         raise GenkitError(
@@ -73,17 +67,6 @@ def calculate_api_key(
     return api_key
 
 
-def config_as_dict(config: BaseModel | Mapping[str, Any] | None) -> dict[str, Any]:
-    """Normalize model config to a plain snake_case dict."""
-    if config is None:
-        return {}
-    if isinstance(config, BaseModel):
-        return config.model_dump(exclude_none=True)
-    if isinstance(config, Mapping):
-        return dict(config)
-    return {}
-
-
 def extract_version(model_name: str) -> str:
     """Return the bare model version from a namespaced model name."""
     if '/' in model_name:
@@ -91,35 +74,48 @@ def extract_version(model_name: str) -> str:
     return model_name
 
 
-def downgrade_system_messages(messages: list[Message]) -> list[Message]:
-    """Map system turns to user turns for agents that reject system instructions."""
-    downgraded = [message.model_copy(deep=True) for message in messages]
-    for message in downgraded:
-        if message.role == 'system':
-            message.role = 'user'
-    return downgraded
-
-
-def merge_client_options(
-    base: ClientOptions,
-    config: Mapping[str, Any],
-) -> ClientOptions:
-    """Apply per-request client overrides from model config onto base plugin options."""
-    merged = cast(ClientOptions, dict(base))
-    if base_url := config.get('base_url'):
-        merged['base_url'] = str(base_url)
-    if api_version := config.get('api_version'):
-        merged['api_version'] = str(api_version)
-    if custom_headers := config.get('custom_headers'):
-        merged['custom_headers'] = dict(custom_headers)
-    if isinstance(config.get('timeout'), (int, float)):
-        merged['timeout'] = float(config['timeout'])
-    return merged
-
-
 def remove_client_option_overrides(config: dict[str, Any]) -> dict[str, Any]:
     """Drop client-only config keys before passthrough to the wire payload."""
-    return {key: value for key, value in config.items() if key not in _CLIENT_OPTION_KEYS}
+    return {key: value for key, value in config.items() if key not in CLIENT_OPTION_KEYS}
+
+
+def take_keys(payload: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    """Pull the given keys out of payload (mutating) and return them as a new dict.
+
+    Used to peel a dumped model config into the buckets interactions.create
+    expects — top-level create fields, agent_config, tools — so the leftovers
+    can be passed through as extras without colliding.
+    """
+    return {key: payload.pop(key) for key in keys if key in payload}
+
+
+def require_interaction_steps(steps: list[Any]) -> list[Any]:
+    """Reject an empty Interactions input before we pay for a round trip."""
+    if not steps:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message='Missing input.',
+        )
+    return steps
+
+
+def http_status_code_from_exception(exc: BaseException) -> int | None:
+    """Read an HTTP status from SDK errors that aren't google.genai.errors.APIError.
+
+    Interactions (gaos) raises its own BadRequestError hierarchy with
+    status_code, which doesn't subclass google.genai.errors.APIError.
+    """
+    for attr in ('status_code', 'code'):
+        raw = getattr(exc, attr, None)
+        if raw is None:
+            continue
+        try:
+            code = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if code > 0:
+            return code
+    return None
 
 
 def client_options_for_operation(
@@ -127,40 +123,27 @@ def client_options_for_operation(
     *,
     api_key: str | None = None,
 ) -> ClientOptions:
-    """Persist client settings on Operation.metadata['clientOptions'] for check/cancel calls."""
-    persisted = cast(ClientOptions, dict(client_options))
+    """Persist client settings on an Operation for later check/cancel calls."""
     if api_key:
-        persisted['api_key'] = api_key
-    return persisted
+        return client_options.model_copy(update={'api_key': api_key})
+    return client_options
 
 
-def response_modalities_from_config(
-    config: dict[str, Any],
-    *,
-    default: list[ResponseModality] | None = None,
-) -> list[ResponseModality] | None:
-    """Read response_modalities from config (already lowercase at the Python surface)."""
-    raw = config.get('response_modalities')
-    if raw is None:
-        return default
-    return [str(item).lower() for item in raw]  # type: ignore[misc]
-
-
-def _http_options_from_client_options(client_options: ClientOptions | None) -> HttpOptions | None:
-    options = client_options or {}
-    headers = dict(options.get('custom_headers') or {})
+def http_options_from_client_options(client_options: ClientOptions) -> HttpOptions:
+    """Translate plugin client options into google-genai transport options."""
+    headers = dict(client_options.custom_headers or {})
     # Keep Genkit visible in traces even when callers override other headers.
     headers.setdefault('x-goog-api-client', GENKIT_CLIENT_HEADER)
     headers.setdefault('user-agent', GENKIT_CLIENT_HEADER)
 
     http_kwargs: dict[str, Any] = {'headers': headers}
-    if api_version := options.get('api_version'):
-        http_kwargs['api_version'] = api_version
-    if base_url := options.get('base_url'):
-        http_kwargs['base_url'] = base_url
-    if (timeout := options.get('timeout')) is not None and timeout >= 0:
+    if client_options.api_version:
+        http_kwargs['api_version'] = client_options.api_version
+    if client_options.base_url:
+        http_kwargs['base_url'] = client_options.base_url
+    if client_options.timeout is not None and client_options.timeout >= 0:
         # google-genai HttpOptions.timeout is milliseconds.
-        http_kwargs['timeout'] = int(timeout * 1000)
+        http_kwargs['timeout'] = int(client_options.timeout * 1000)
 
     return HttpOptions(**http_kwargs)
 
@@ -173,18 +156,21 @@ def make_genai_client(
     """Build a google-genai Client for Interactions calls."""
     return genai.Client(
         api_key=api_key,
-        http_options=_http_options_from_client_options(client_options),
+        http_options=http_options_from_client_options(client_options or ClientOptions()),
     )
 
 
-def _options_need_ephemeral_client(
+def options_need_ephemeral_client(
     plugin_client_options: ClientOptions,
     client_options: ClientOptions,
 ) -> bool:
-    for key in ('base_url', 'api_version', 'timeout'):
-        if client_options.get(key) != plugin_client_options.get(key):
-            return True
-    return (client_options.get('custom_headers') or {}) != (plugin_client_options.get('custom_headers') or {})
+    """Report whether a request overrides transport settings the shared client pinned."""
+    return (
+        client_options.base_url != plugin_client_options.base_url
+        or client_options.api_version != plugin_client_options.api_version
+        or client_options.timeout != plugin_client_options.timeout
+        or (client_options.custom_headers or {}) != (plugin_client_options.custom_headers or {})
+    )
 
 
 @asynccontextmanager
@@ -196,13 +182,13 @@ async def resolve_interactions_client(
     request_api_key: str | None,
     plugin_client_options: ClientOptions,
     client_options: ClientOptions,
-) -> AsyncIterator[genai.Client]:
+) -> AsyncGenerator[genai.Client]:
     """Yield a shared plugin client when safe, otherwise an ephemeral one."""
     reuse_shared = (
         client_getter is not None
         and request_api_key is None
         and (plugin_api_key is None or api_key == plugin_api_key)
-        and not _options_need_ephemeral_client(plugin_client_options, client_options)
+        and not options_need_ephemeral_client(plugin_client_options, client_options)
     )
     if reuse_shared:
         assert client_getter is not None
@@ -216,7 +202,8 @@ async def resolve_interactions_client(
         await client.aio.aclose()
 
 
-def _parse_retry_after_ms(value: str | None) -> float | None:
+def parse_retry_after_ms(value: str | None) -> float | None:
+    """Read a Retry-After header, which may be a delay in seconds or an HTTP date."""
     if not value or not value.strip():
         return None
     try:
@@ -234,7 +221,8 @@ def _parse_retry_after_ms(value: str | None) -> float | None:
     return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds() * 1000)
 
 
-def _status_for_http_code(status_code: int) -> StatusName:
+def status_for_http_code(status_code: int) -> StatusName:
+    """Map an HTTP status onto the Genkit error status callers switch on."""
     match status_code:
         case 429:
             return 'RESOURCE_EXHAUSTED'
@@ -256,7 +244,8 @@ def _status_for_http_code(status_code: int) -> StatusName:
             return 'UNKNOWN'
 
 
-def _status_from_api_error(error: APIError) -> StatusName:
+def status_from_api_error(error: APIError) -> StatusName:
+    """Pick the Genkit error status for an SDK error, preferring the status it names."""
     raw_status = error.status
     if isinstance(raw_status, str):
         candidate = raw_status.upper()
@@ -282,7 +271,7 @@ def _status_from_api_error(error: APIError) -> StatusName:
         }
         if candidate in valid:
             return cast(StatusName, candidate)
-    return _status_for_http_code(int(error.code or 0))
+    return status_for_http_code(int(error.code or 0))
 
 
 def map_genai_error(exc: BaseException) -> GenkitError:
@@ -299,7 +288,7 @@ def map_genai_error(exc: BaseException) -> GenkitError:
                 headers = {str(key).lower(): str(value) for key, value in raw_headers.items()}
             except Exception:  # noqa: BLE001 - headers shape varies by transport
                 headers = {}
-            retry_after_ms = _parse_retry_after_ms(headers.get('retry-after'))
+            retry_after_ms = parse_retry_after_ms(headers.get('retry-after'))
         response_metadata: ErrorResponseMetadata | None = None
         if retry_after_ms is not None or headers:
             meta: ErrorResponseMetadata = {}
@@ -309,9 +298,14 @@ def map_genai_error(exc: BaseException) -> GenkitError:
                 meta['headers'] = headers
             response_metadata = meta
         return GenkitError(
-            status=_status_from_api_error(exc),
+            status=status_from_api_error(exc),
             message=exc.message or str(exc),
             details=getattr(exc, 'details', None),
             response_metadata=response_metadata,
         )
+    # Interactions path: gaos BadRequestError etc. carry status_code but aren't APIError.
+    status_code = http_status_code_from_exception(exc)
+    if status_code is not None:
+        message = getattr(exc, 'message', None) or str(exc)
+        return GenkitError(status=status_for_http_code(status_code), message=message)
     return GenkitError(status='UNKNOWN', message=str(exc))

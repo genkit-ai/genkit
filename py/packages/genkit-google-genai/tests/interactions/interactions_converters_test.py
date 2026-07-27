@@ -25,17 +25,22 @@ from genkit_google_genai._interactions.converters import (
     from_interaction_content,
     from_interaction_step,
     from_interaction_sync,
+    from_thought_step,
+    parts_from_steps,
     to_interaction_content,
     to_interaction_role,
     to_interaction_steps,
     to_interaction_tool,
 )
+from google.genai.interactions import Content, Interaction, Step, ThoughtStep
+from pydantic import TypeAdapter
 
 from genkit import (
     CustomPart,
     Media,
     MediaPart,
     Part,
+    ReasoningPart,
     TextPart,
     ToolRequest,
     ToolRequestPart,
@@ -43,6 +48,9 @@ from genkit import (
     ToolResponsePart,
 )
 from genkit.model import Message, ToolDefinition
+
+ContentAdapter: TypeAdapter[Content] = TypeAdapter(Content)
+StepAdapter: TypeAdapter[Step] = TypeAdapter(Step)
 
 
 def _part_dict(part: Part) -> dict:
@@ -223,6 +231,33 @@ class TestToInteractionSteps:
             }
         ]
 
+    def test_system_role_rejected(self) -> None:
+        messages = [Message(role='system', content=[Part(TextPart(text='be terse'))])]
+        with pytest.raises(ValueError, match='system_instruction'):
+            to_interaction_steps(messages)
+
+    def test_code_execution_call_always_sends_python(self) -> None:
+        messages = [
+            Message(
+                role='model',
+                content=[
+                    Part(
+                        root=CustomPart(
+                            custom={'executableCode': {'code': 'print(1)', 'language': 'PYTHON'}},
+                            metadata={'callId': 'c1'},
+                        )
+                    )
+                ],
+            )
+        ]
+        assert to_interaction_steps(messages) == [
+            {
+                'type': 'code_execution_call',
+                'id': 'c1',
+                'arguments': {'code': 'print(1)', 'language': 'python'},
+            }
+        ]
+
     def test_google_search_call(self) -> None:
         messages = [
             Message(
@@ -246,48 +281,113 @@ class TestToInteractionSteps:
             }
         ]
 
+    def test_thought_becomes_its_own_step(self) -> None:
+        messages = [
+            Message(
+                role='model',
+                content=[
+                    Part(
+                        root=ReasoningPart(
+                            reasoning='plan the answer',
+                            metadata={'thoughtSignature': 'sig-t'},
+                        )
+                    )
+                ],
+            )
+        ]
+        assert to_interaction_steps(messages) == [
+            {
+                'type': 'thought',
+                'summary': [{'type': 'text', 'text': 'plan the answer'}],
+                'signature': 'sig-t',
+            }
+        ]
+
+    def test_mixed_model_turn_flushes_standalone_steps_before_inline_text(self) -> None:
+        """Standalone steps (thought/tool) emit immediately; text waits until end of turn.
+
+        That means [thought, text, tool_request] becomes thought, function_call,
+        then model_output(text) — not thought, model_output, function_call.
+        """
+        messages = [
+            Message(
+                role='model',
+                content=[
+                    Part(root=ReasoningPart(reasoning='think', metadata={'thoughtSignature': 's'})),
+                    Part(TextPart(text='calling tool')),
+                    Part(ToolRequestPart(tool_request=ToolRequest(name='lookup', input={'q': 1}, ref='c1'))),
+                ],
+            )
+        ]
+        assert to_interaction_steps(messages) == [
+            {
+                'type': 'thought',
+                'summary': [{'type': 'text', 'text': 'think'}],
+                'signature': 's',
+            },
+            {'type': 'function_call', 'name': 'lookup', 'arguments': {'q': 1}, 'id': 'c1'},
+            {
+                'type': 'model_output',
+                'content': [{'type': 'text', 'text': 'calling tool'}],
+            },
+        ]
+
 
 class TestFromInteractionContent:
     def test_text(self) -> None:
-        result = from_interaction_content({
-            'type': 'text',
-            'text': 'Hello world',
-            'annotations': [{'start_index': 0, 'end_index': 5, 'source': 'source'}],
-        })
+        result = from_interaction_content(
+            ContentAdapter.validate_python({
+                'type': 'text',
+                'text': 'Hello world',
+                'annotations': [{'start_index': 0, 'end_index': 5, 'source': 'source'}],
+            })
+        )
         assert _part_dict(result) == {
             'text': 'Hello world',
-            'metadata': {'annotations': [{'start_index': 0, 'end_index': 5, 'source': 'source'}]},
+            'metadata': {
+                'annotations': [{'start_index': 0, 'end_index': 5, 'source': 'source', 'type': 'file_citation'}]
+            },
         }
 
     def test_image_data(self) -> None:
-        result = from_interaction_content({'type': 'image', 'data': 'BASE64DATA', 'mime_type': 'image/png'})
+        result = from_interaction_content(
+            ContentAdapter.validate_python({'type': 'image', 'data': 'BASE64DATA', 'mime_type': 'image/png'})
+        )
         assert _part_dict(result) == {'media': {'url': 'data:image/png;base64,BASE64DATA', 'contentType': 'image/png'}}
 
     def test_image_resolution(self) -> None:
-        result = from_interaction_content({
-            'type': 'image',
-            'uri': 'gs://bucket/image.png',
-            'mime_type': 'image/png',
-            'resolution': 'high',
-        })
+        result = from_interaction_content(
+            ContentAdapter.validate_python({
+                'type': 'image',
+                'uri': 'gs://bucket/image.png',
+                'mime_type': 'image/png',
+                'resolution': 'high',
+            })
+        )
         assert _part_dict(result) == {
             'media': {'url': 'gs://bucket/image.png', 'contentType': 'image/png'},
             'metadata': {'resolution': 'high'},
         }
 
     def test_thought(self) -> None:
-        content = {'type': 'thought', 'signature': 'SIG', 'summary': [{'type': 'text', 'text': 'Thinking...'}]}
-        result = from_interaction_content(content)
+        step = ThoughtStep.model_validate({
+            'type': 'thought',
+            'signature': 'SIG',
+            'summary': [{'type': 'text', 'text': 'Thinking...'}],
+        })
+        result = from_thought_step(step)
         assert _part_dict(result) == {
             'reasoning': 'Thinking...',
             'metadata': {'thoughtSignature': 'SIG'},
-            'custom': {'thought': content},
+            'custom': {'thought': step.model_dump(mode='python')},
         }
 
 
 class TestFromInteractionStep:
     def test_model_output_includes_empty_annotations(self) -> None:
-        result = from_interaction_step({'type': 'model_output', 'content': [{'type': 'text', 'text': 'Hello'}]})
+        result = from_interaction_step(
+            StepAdapter.validate_python({'type': 'model_output', 'content': [{'type': 'text', 'text': 'Hello'}]})
+        )
         root = result[0].root
         assert isinstance(root, TextPart)
         assert root.text == 'Hello'
@@ -295,13 +395,225 @@ class TestFromInteractionStep:
         assert 'annotations' in root.metadata
 
     def test_user_input_dropped(self) -> None:
-        result = from_interaction_step({'type': 'user_input', 'content': [{'type': 'text', 'text': 'Hello'}]})
+        result = from_interaction_step(
+            StepAdapter.validate_python({'type': 'user_input', 'content': [{'type': 'text', 'text': 'Hello'}]})
+        )
         assert result == []
+
+    def test_function_call_is_tool_request(self) -> None:
+        result = from_interaction_step(
+            StepAdapter.validate_python({
+                'type': 'function_call',
+                'id': 'c1',
+                'name': 'get_weather',
+                'arguments': {'city': 'Austin'},
+            })
+        )
+        root = result[0].root
+        assert isinstance(root, ToolRequestPart)
+        assert root.tool_request is not None
+        assert root.tool_request.name == 'get_weather'
+        assert root.tool_request.input == {'city': 'Austin'}
+        assert root.tool_request.ref == 'c1'
+
+    def test_function_result_is_tool_response(self) -> None:
+        result = from_interaction_step(
+            StepAdapter.validate_python({
+                'type': 'function_result',
+                'call_id': 'c1',
+                'name': 'get_weather',
+                'result': {'temp': 92},
+                'is_error': False,
+            })
+        )
+        root = result[0].root
+        assert isinstance(root, ToolResponsePart)
+        assert root.tool_response is not None
+        assert root.tool_response.name == 'get_weather'
+        assert root.tool_response.output == {'temp': 92}
+        assert root.tool_response.ref == 'c1'
+        assert root.metadata == {'isError': False}
+
+    def test_google_search_call_is_custom_part(self) -> None:
+        result = from_interaction_step(
+            StepAdapter.validate_python({
+                'type': 'google_search_call',
+                'id': 'gs1',
+                'arguments': {'queries': ['genkit']},
+                'signature': 'sig',
+            })
+        )
+        root = result[0].root
+        assert isinstance(root, CustomPart)
+        assert root.custom == {'googleSearchCall': {'id': 'gs1', 'arguments': {'queries': ['genkit']}}}
+        assert root.metadata == {'thoughtSignature': 'sig'}
+
+    def test_code_execution_call_is_custom_part(self) -> None:
+        result = from_interaction_step(
+            StepAdapter.validate_python({
+                'type': 'code_execution_call',
+                'id': 'ce1',
+                'arguments': {'code': 'print(1)', 'language': 'python'},
+            })
+        )
+        root = result[0].root
+        assert isinstance(root, CustomPart)
+        assert root.custom == {'executableCode': {'code': 'print(1)', 'language': 'python'}}
+        assert root.metadata == {'callId': 'ce1'}
+
+
+class TestInboundFlattensToSingleModelMessage:
+    """Every Interaction response becomes one role=model Message of flattened parts."""
+
+    def test_mixed_tape_drops_user_input_and_keeps_order(self) -> None:
+        interaction = Interaction.model_validate({
+            'id': 'ix-1',
+            'status': 'completed',
+            'environment_id': 'env-1',
+            'steps': [
+                {'type': 'user_input', 'content': [{'type': 'text', 'text': 'weather?'}]},
+                {
+                    'type': 'thought',
+                    'signature': 'sig',
+                    'summary': [{'type': 'text', 'text': 'need a tool'}],
+                },
+                {'type': 'model_output', 'content': [{'type': 'text', 'text': 'checking'}]},
+                {
+                    'type': 'function_call',
+                    'id': 'c1',
+                    'name': 'get_weather',
+                    'arguments': {'city': 'Austin'},
+                },
+            ],
+        })
+        op = from_interaction(interaction)
+        assert op.done is True
+        assert op.output is not None
+        message = op.output.message
+        assert message is not None
+        assert message.role == 'model'
+        assert message.metadata == {
+            'interactionId': 'ix-1',
+            'environmentId': 'env-1',
+            'interactionStatus': 'completed',
+        }
+        assert [type(part.root).__name__ for part in message.content] == [
+            'ReasoningPart',
+            'TextPart',
+            'ToolRequestPart',
+        ]
+        assert message.content[0].root.reasoning == 'need a tool'
+        assert message.content[1].root.text == 'checking'
+        assert message.content[2].root.tool_request.ref == 'c1'
+
+    def test_already_resolved_tool_pair_stays_inside_model_message(self) -> None:
+        """A tape that already has function_result still flattens into one model turn."""
+        steps = [
+            StepAdapter.validate_python({
+                'type': 'function_call',
+                'id': 'c1',
+                'name': 'get_weather',
+                'arguments': {'city': 'Austin'},
+            }),
+            StepAdapter.validate_python({
+                'type': 'function_result',
+                'call_id': 'c1',
+                'name': 'get_weather',
+                'result': {'temp': 92},
+            }),
+            StepAdapter.validate_python({
+                'type': 'model_output',
+                'content': [{'type': 'text', 'text': '92F'}],
+            }),
+        ]
+        parts = parts_from_steps(steps)
+        assert [type(part.root).__name__ for part in parts] == [
+            'ToolRequestPart',
+            'ToolResponsePart',
+            'TextPart',
+        ]
+
+
+class TestFunctionCallRoundTrip:
+    """The bug we hit: function_call must be ToolRequestPart, not CustomPart."""
+
+    def test_outbound_then_inbound_preserves_tool_request(self) -> None:
+        messages = [
+            Message(
+                role='model',
+                content=[
+                    Part(
+                        ToolRequestPart(
+                            tool_request=ToolRequest(name='get_weather', input={'city': 'Austin'}, ref='c1')
+                        )
+                    )
+                ],
+            )
+        ]
+        steps = to_interaction_steps(messages)
+        assert steps == [{'type': 'function_call', 'name': 'get_weather', 'arguments': {'city': 'Austin'}, 'id': 'c1'}]
+        inbound = from_interaction_step(StepAdapter.validate_python(steps[0]))
+        root = inbound[0].root
+        assert isinstance(root, ToolRequestPart)
+        assert root.tool_request is not None
+        assert root.tool_request.name == 'get_weather'
+        assert root.tool_request.input == {'city': 'Austin'}
+        assert root.tool_request.ref == 'c1'
+
+    def test_inbound_then_outbound_preserves_function_call(self) -> None:
+        step = StepAdapter.validate_python({
+            'type': 'function_call',
+            'id': 'c1',
+            'name': 'get_weather',
+            'arguments': {'city': 'Austin'},
+        })
+        part = from_interaction_step(step)[0]
+        assert isinstance(part.root, ToolRequestPart)
+        again = to_interaction_steps([Message(role='model', content=[part])])
+        assert again == [{'type': 'function_call', 'name': 'get_weather', 'arguments': {'city': 'Austin'}, 'id': 'c1'}]
+
+    def test_thought_round_trip_keeps_signature(self) -> None:
+        messages = [
+            Message(
+                role='model',
+                content=[
+                    Part(
+                        root=ReasoningPart(
+                            reasoning='plan',
+                            metadata={'thoughtSignature': 'sig'},
+                        )
+                    )
+                ],
+            )
+        ]
+        steps = to_interaction_steps(messages)
+        inbound = from_interaction_step(StepAdapter.validate_python(steps[0]))
+        root = inbound[0].root
+        assert isinstance(root, ReasoningPart)
+        assert root.reasoning == 'plan'
+        assert root.metadata == {'thoughtSignature': 'sig'}
+
+
+class TestClientOptionsWireFormat:
+    def test_operation_metadata_uses_camel_case_keys(self) -> None:
+        from genkit_google_genai._interactions.options import ClientOptions
+
+        op = from_interaction(
+            Interaction.model_validate({'id': '123', 'status': 'in_progress'}),
+            ClientOptions(api_key='k', base_url='https://example.test', api_version='v1beta'),
+        )
+        assert op.metadata == {
+            'clientOptions': {
+                'apiKey': 'k',
+                'baseUrl': 'https://example.test',
+                'apiVersion': 'v1beta',
+            }
+        }
 
 
 class TestFromInteractionStatusMapping:
     def test_cancelled(self) -> None:
-        result = from_interaction({'id': '123', 'status': 'cancelled'})
+        result = from_interaction(Interaction.model_validate({'id': '123', 'status': 'cancelled'}))
         assert result.done is True
         assert result.output is not None
         assert result.output.finish_reason == 'aborted'
@@ -309,17 +621,29 @@ class TestFromInteractionStatusMapping:
         assert _part_dict(result.output.message.content[0]) == {'text': 'Operation cancelled.'}
 
     def test_failed_exits_poll_loop(self) -> None:
-        result = from_interaction({'id': '123', 'status': 'failed', 'error': {'message': 'boom'}})
+        result = from_interaction(
+            Interaction.model_validate({
+                'id': '123',
+                'status': 'failed',
+                'steps': [{'type': 'model_output', 'error': {'code': 3, 'message': 'boom'}}],
+            })
+        )
         assert result.done is True
         assert result.error is not None
         assert result.error.message == 'boom'
 
+    def test_failed_without_step_error_falls_back(self) -> None:
+        result = from_interaction(Interaction.model_validate({'id': '123', 'status': 'failed'}))
+        assert result.done is True
+        assert result.error is not None
+        assert result.error.message == 'Interaction failed'
+
     def test_requires_action_leaves_done_unset(self) -> None:
-        interaction = {
+        interaction = Interaction.model_validate({
             'id': '123',
             'status': 'requires_action',
             'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'approve plan'}]}],
-        }
+        })
         result = from_interaction(interaction)
         assert result.id == '123'
         assert result.done is None
@@ -327,19 +651,21 @@ class TestFromInteractionStatusMapping:
         assert not (result.metadata or {}).get('interaction_status')
 
     def test_in_progress(self) -> None:
-        result = from_interaction({'id': '123', 'status': 'in_progress'})
+        result = from_interaction(Interaction.model_validate({'id': '123', 'status': 'in_progress'}))
         assert result.done is False
 
     def test_queued_keeps_polling(self) -> None:
-        result = from_interaction({'id': '123', 'status': 'queued'})
+        result = from_interaction(Interaction.model_validate({'id': '123', 'status': 'queued'}))
         assert result.done is False
 
     def test_incomplete_surfaces_partial_steps(self) -> None:
-        result = from_interaction({
-            'id': '123',
-            'status': 'incomplete',
-            'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'partial'}]}],
-        })
+        result = from_interaction(
+            Interaction.model_validate({
+                'id': '123',
+                'status': 'incomplete',
+                'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'partial'}]}],
+            })
+        )
         assert result.done is True
         assert result.error is None
         assert result.output is not None
@@ -351,17 +677,19 @@ class TestFromInteractionStatusMapping:
         assert result.output.message.metadata.get('interactionStatus') == 'incomplete'
 
     def test_incomplete_without_steps_errors(self) -> None:
-        result = from_interaction({'id': '123', 'status': 'incomplete'})
+        result = from_interaction(Interaction.model_validate({'id': '123', 'status': 'incomplete'}))
         assert result.done is True
         assert result.output is None
         assert result.error is not None
 
     def test_budget_exceeded_surfaces_partial_steps(self) -> None:
-        result = from_interaction({
-            'id': '123',
-            'status': 'budget_exceeded',
-            'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'draft'}]}],
-        })
+        result = from_interaction(
+            Interaction.model_validate({
+                'id': '123',
+                'status': 'budget_exceeded',
+                'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'draft'}]}],
+            })
+        )
         assert result.done is True
         assert result.error is None
         assert result.output is not None
@@ -373,7 +701,7 @@ class TestFromInteractionStatusMapping:
         assert result.output.message.metadata.get('interactionStatus') == 'budget_exceeded'
 
     def test_budget_exceeded_without_steps_errors(self) -> None:
-        result = from_interaction({'id': '123', 'status': 'budget_exceeded'})
+        result = from_interaction(Interaction.model_validate({'id': '123', 'status': 'budget_exceeded'}))
         assert result.done is True
         assert result.output is None
         assert result.error is not None
@@ -383,4 +711,4 @@ class TestFromInteractionStatusMapping:
 class TestFromInteractionSync:
     def test_failed_raises(self) -> None:
         with pytest.raises(ValueError, match='Interaction failed'):
-            from_interaction_sync({'status': 'failed'})
+            from_interaction_sync(Interaction.model_validate({'status': 'failed'}))

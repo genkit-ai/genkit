@@ -446,7 +446,7 @@ class Action(Generic[InputT, OutputT, ChunkT]):
 
     def _override_input_schema(
         self,
-        input_schema: type[BaseModel] | dict[str, object],
+        input_schema: type | dict[str, object],
     ) -> None:
         """Replace inferred input JSON Schema and validation type (e.g. tool schema overrides)."""
         in_js = to_json_schema(input_schema)
@@ -488,10 +488,18 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         # signal that "no input" is a legitimate way to invoke this action.
         skip_validation = input is None and self._first_arg_optional
 
-        # Validate input if we have a schema
+        # Validate input if we have a schema. When a BaseModel instance fails
+        # (e.g. generate hands ModelRequest with GenerationCommonConfig into an
+        # action typed as ModelRequest[PluginConfig]), dump to plain data and
+        # retry so the action's schema wins.
         if self._input_type is not None and not skip_validation:
             try:
-                input = self._input_type.validate_python(input)
+                try:
+                    input = self._input_type.validate_python(input)
+                except ValidationError:
+                    if not isinstance(input, BaseModel):
+                        raise
+                    input = self._input_type.validate_python(input.model_dump(mode='python'))
             except ValidationError as e:
                 if input is None:
                     raise GenkitError(

@@ -21,29 +21,107 @@ from __future__ import annotations
 import copy
 import json
 import logging
-from typing import Any
+from typing import Any, Literal, cast
 
 from genkit_google_genai._interactions.options import ClientOptions
+from google.genai.interactions import (
+    AudioContent,
+    CodeExecutionCallStep,
+    CodeExecutionCallStepParam,
+    CodeExecutionResultStep,
+    CodeExecutionResultStepParam,
+    Content,
+    ContentParam,
+    DocumentContent,
+    FunctionCallStep,
+    FunctionCallStepParam,
+    FunctionParam,
+    FunctionResultStep,
+    FunctionResultStepParam,
+    FunctionResultStepResultUnionParam,
+    GoogleSearchCallStep,
+    GoogleSearchCallStepParam,
+    GoogleSearchResultStep,
+    GoogleSearchResultStepParam,
+    ImageContent,
+    Interaction,
+    ModelOutputStep,
+    ModelOutputStepParam,
+    Step,
+    StepParam,
+    TextContent,
+    TextContentParam,
+    ThoughtStep,
+    ThoughtStepParam,
+    UnknownContent,
+    Usage,
+    UserInputStep,
+    UserInputStepParam,
+    VideoContent,
+)
 from pydantic import BaseModel
 
-from genkit import CustomPart, Media, MediaPart, Part, ReasoningPart, TextPart, ToolRequestPart, ToolResponsePart
+from genkit import (
+    CustomPart,
+    Media,
+    MediaPart,
+    Part,
+    ReasoningPart,
+    TextPart,
+    ToolRequest,
+    ToolRequestPart,
+    ToolResponse,
+    ToolResponsePart,
+)
 from genkit.model import Error, FinishReason, Message, ModelResponse, ModelUsage, Operation, ToolDefinition
 
 logger = logging.getLogger(__name__)
 
-# Wire payloads are plain dicts (SDK accepts them on create; responses are normalized
-# to dicts so converter tests can stay fixture-driven).
-Content = dict[str, Any]
-Step = dict[str, Any]
-InteractionTool = dict[str, Any]
-InteractionDict = dict[str, Any]
+InteractionRole = Literal['user', 'model']
+
+# Keys we round-trip through Genkit custom parts and metadata for wire concepts
+# Genkit has no first-class part for. Both directions read them, so a typo in
+# one place would silently break pairing — keep them defined once.
+THOUGHT_SIGNATURE = 'thoughtSignature'
+CALL_ID = 'callId'
+GOOGLE_SEARCH_CALL = 'googleSearchCall'
+GOOGLE_SEARCH_RESULT = 'googleSearchResult'
+EXECUTABLE_CODE = 'executableCode'
+CODE_EXECUTION_RESULT = 'codeExecutionResult'
+# Code execution only ever runs Python, and the wire rejects any other value.
+CODE_LANGUAGE: Literal['python'] = 'python'
+
+FAILED_MESSAGE = 'Interaction failed'
+
+# Interactions splits media into typed content blocks, chosen by mime prefix.
+MEDIA_CONTENT_TYPES: tuple[tuple[str, str], ...] = (
+    ('image/', 'image'),
+    ('audio/', 'audio'),
+    ('video/', 'video'),
+    ('application/pdf', 'document'),
+)
+
+# Turns a Genkit role into the side of the transcript it belongs on. Tool
+# results are part of the user's side; system prompts aren't turns at all.
+INTERACTION_ROLES: dict[str, InteractionRole] = {
+    'user': 'user',
+    'model': 'model',
+    'tool': 'user',
+}
+
+# Terminal statuses that can still carry partial output worth surfacing.
+PARTIAL_TERMINAL_STATUSES: dict[str, tuple[FinishReason, str]] = {
+    'incomplete': (FinishReason.LENGTH, 'Interaction incomplete (truncated output)'),
+    'budget_exceeded': (FinishReason.ABORTED, 'Interaction exceeded its budget'),
+}
 
 
-def as_interaction_dict(interaction: BaseModel | InteractionDict) -> InteractionDict:
-    """Normalize an SDK Interaction or dict to a plain interaction dict."""
-    if isinstance(interaction, BaseModel):
-        return interaction.model_dump(mode='python')
-    return dict(interaction)
+def interaction_error_message(interaction: Interaction) -> str | None:
+    """Read the failure message a failed Interaction reports on its output step."""
+    for step in interaction.steps or []:
+        if isinstance(step, ModelOutputStep) and step.error is not None and step.error.message:
+            return step.error.message
+    return None
 
 
 def clean_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -92,13 +170,14 @@ def ensure_tool_ids(messages: list[Message]) -> list[Message]:
     return new_messages
 
 
-def to_interaction_tool(tool: ToolDefinition) -> InteractionTool:
+def to_interaction_tool(tool: ToolDefinition) -> FunctionParam:
     """Convert a Genkit tool definition to an Interactions function tool."""
-    func: InteractionTool = {
+    func: FunctionParam = {
         'type': 'function',
         'name': tool.name,
-        'description': tool.description,
     }
+    if tool.description is not None:
+        func['description'] = tool.description
     if tool.input_schema is not None:
         if isinstance(tool.input_schema, dict):
             func['parameters'] = clean_schema(tool.input_schema)
@@ -107,445 +186,424 @@ def to_interaction_tool(tool: ToolDefinition) -> InteractionTool:
     return func
 
 
-def to_interaction_content(part: Part) -> Content | None:
+def to_interaction_content(part: Part) -> ContentParam | None:
     """Convert a Genkit part to an Interactions content block."""
     root = part.root
     if isinstance(root, TextPart):
-        return {'type': 'text', 'text': root.text}
+        text: TextContentParam = {'type': 'text', 'text': root.text}
+        return text
     if isinstance(root, MediaPart) and root.media is not None:
         return to_interaction_media(root)
     logger.warning('Unsupported part type for Interaction input: %s', part.model_dump(by_alias=True))
     return None
 
 
-def to_interaction_media(part: MediaPart) -> Content:
+def to_interaction_media(part: MediaPart) -> ContentParam:
     """Convert a media part to an Interactions image/audio/video/document block."""
     if part.media is None:
         raise ValueError('Media part missing media')
-    url = part.media.url
     content_type = part.media.content_type
     if not content_type:
         raise ValueError('Media part missing contentType')
+    block_type = next((name for prefix, name in MEDIA_CONTENT_TYPES if content_type.startswith(prefix)), None)
+    if block_type is None:
+        raise ValueError(f'Unsupported media type: {content_type}')
 
-    data: str | None = None
-    uri: str | None = None
+    block: dict[str, Any] = {'type': block_type, 'mime_type': content_type}
+    # Inline data URLs travel as base64; anything else is a reference the API fetches.
+    url = part.media.url
     if url.startswith('data:'):
-        data = url[url.index(',') + 1 :]
+        block['data'] = url[url.index(',') + 1 :]
     else:
-        uri = url
-
-    out: dict[str, Any] = {'mime_type': content_type}
-    if data is not None:
-        out['data'] = data
-    if uri is not None:
-        out['uri'] = uri
-
-    if content_type.startswith('image/'):
-        out['type'] = 'image'
-        return out
-    if content_type.startswith('audio/'):
-        out['type'] = 'audio'
-        return out
-    if content_type.startswith('video/'):
-        out['type'] = 'video'
-        return out
-    if content_type == 'application/pdf':
-        out['type'] = 'document'
-        return out
-
-    raise ValueError(f'Unsupported media type: {content_type}')
+        block['uri'] = url
+    return cast(ContentParam, block)
 
 
-def to_interaction_role(role: str) -> str:
+def to_interaction_role(role: str) -> InteractionRole:
     """Map a Genkit message role to the Interactions API role."""
-    if role == 'user':
-        return 'user'
-    if role == 'model':
-        return 'model'
-    if role == 'tool':
-        return 'user'
     if role == 'system':
         raise ValueError('System role should be handled as system_instruction, not part of turns.')
-    return 'user'
+    return INTERACTION_ROLES.get(role, 'user')
 
 
-def to_interaction_steps(messages: list[Message]) -> list[Step]:
-    """Convert Genkit messages to Interactions API steps."""
-    steps: list[Step] = []
+def split_system_instruction(messages: list[Message]) -> tuple[str | None, list[Message]]:
+    """Lift system turns out of the transcript into the interaction's instruction.
 
+    An interaction carries one system instruction that governs the whole thing
+    rather than a turn in the tape, so however many system messages a prompt
+    has, they fold into a single block of text ahead of the conversation.
+    """
+    instructions: list[str] = []
+    turns: list[Message] = []
     for message in messages:
-        normal_content: list[Content] = []
+        if message.role != 'system':
+            turns.append(message)
+            continue
+        if any(not isinstance(part.root, TextPart) for part in message.content):
+            logger.warning('Dropping non-text content from a system message; system instructions are text only.')
+        if message.text:
+            instructions.append(message.text)
+    return '\n\n'.join(instructions) or None, turns
+
+
+def with_signature(step: StepParam, metadata: dict[str, Any]) -> StepParam:
+    """Carry a thought signature from part metadata back onto its step."""
+    signature = metadata.get(THOUGHT_SIGNATURE)
+    if signature is not None:
+        cast(dict[str, Any], step)['signature'] = signature
+    return step
+
+
+def to_function_call_step(request: ToolRequest) -> FunctionCallStepParam:
+    """Compile a Genkit tool request into a function_call step."""
+    return {
+        'type': 'function_call',
+        'name': request.name,
+        'arguments': request.input if isinstance(request.input, dict) else {},
+        'id': request.ref or '',
+    }
+
+
+def to_function_result_step(response: ToolResponse) -> FunctionResultStepParam:
+    """Compile a Genkit tool response into a function_result step."""
+    output = response.output
+    if isinstance(output, (str, dict, list)):
+        result = cast(FunctionResultStepResultUnionParam, output)
+    elif output is None:
+        result = cast(FunctionResultStepResultUnionParam, {})
+    else:
+        # Bare scalars aren't a result shape the API accepts, so box them.
+        result = cast(FunctionResultStepResultUnionParam, {'result': output})
+    return {
+        'type': 'function_result',
+        'name': response.name,
+        'result': result,
+        'call_id': response.ref or '',
+    }
+
+
+def to_thought_step(part: ReasoningPart) -> StepParam:
+    """Compile a Genkit reasoning part into a thought step."""
+    thought: ThoughtStepParam = {
+        'type': 'thought',
+        'summary': [{'type': 'text', 'text': part.reasoning}],
+    }
+    return with_signature(thought, part.metadata or {})
+
+
+def to_server_tool_step(custom: dict[str, Any], metadata: dict[str, Any]) -> StepParam | None:
+    """Compile the custom parts that stand in for Google-side tool activity.
+
+    Search and code execution run on Google's side, so Genkit has no first-class
+    part for them and we round-trip them through custom parts instead.
+    """
+    if GOOGLE_SEARCH_CALL in custom:
+        call = custom[GOOGLE_SEARCH_CALL]
+        search_call: GoogleSearchCallStepParam = {
+            'type': 'google_search_call',
+            'id': call.get('id', ''),
+            'arguments': call.get('arguments'),
+        }
+        return search_call
+    if GOOGLE_SEARCH_RESULT in custom:
+        result = custom[GOOGLE_SEARCH_RESULT]
+        search_result: GoogleSearchResultStepParam = {
+            'type': 'google_search_result',
+            'call_id': result.get(CALL_ID, ''),
+            'result': result.get('result'),
+        }
+        return search_result
+    if EXECUTABLE_CODE in custom:
+        code = custom[EXECUTABLE_CODE]
+        code_call: CodeExecutionCallStepParam = {
+            'type': 'code_execution_call',
+            'id': metadata.get(CALL_ID, ''),
+            'arguments': {'code': code.get('code'), 'language': CODE_LANGUAGE},
+        }
+        return code_call
+    if CODE_EXECUTION_RESULT in custom:
+        code_result: CodeExecutionResultStepParam = {
+            'type': 'code_execution_result',
+            'call_id': metadata.get(CALL_ID, ''),
+            'result': custom[CODE_EXECUTION_RESULT].get('output'),
+        }
+        return code_result
+    return None
+
+
+def to_standalone_step(part: Part) -> StepParam | None:
+    """Return the step a part compiles to on its own, or None if it is inline content."""
+    root = part.root
+    if isinstance(root, ToolRequestPart) and root.tool_request:
+        return to_function_call_step(root.tool_request)
+    if isinstance(root, ToolResponsePart) and root.tool_response:
+        return to_function_result_step(root.tool_response)
+    if isinstance(root, ReasoningPart):
+        return to_thought_step(root)
+    if isinstance(root, CustomPart):
+        metadata = root.metadata or {}
+        step = to_server_tool_step(root.custom or {}, metadata)
+        return with_signature(step, metadata) if step is not None else None
+    return None
+
+
+def to_content_step(role: InteractionRole, content: list[ContentParam]) -> StepParam:
+    """Wrap a turn's inline content in the step for whoever produced it."""
+    if role == 'model':
+        model_step: ModelOutputStepParam = {'type': 'model_output', 'content': content}
+        return model_step
+    user_step: UserInputStepParam = {'type': 'user_input', 'content': content}
+    return user_step
+
+
+def to_interaction_steps(messages: list[Message]) -> list[StepParam]:
+    """Convert Genkit messages to Interactions API steps.
+
+    A message's plain text and media collapse into one content step for the
+    turn, but tool calls, thoughts, and Google-side tool activity are steps in
+    their own right on the wire, so they get spliced in where they occurred.
+    """
+    steps: list[StepParam] = []
+    for message in messages:
+        role = to_interaction_role(message.role)
+        inline: list[ContentParam] = []
         for part in message.content:
-            root = part.root
-            if isinstance(root, ToolRequestPart) and root.tool_request:
-                tool_request = root.tool_request
-                steps.append({
-                    'type': 'function_call',
-                    'name': tool_request.name,
-                    'arguments': tool_request.input if isinstance(tool_request.input, dict) else {},
-                    'id': tool_request.ref or '',
-                })
-            elif isinstance(root, ToolResponsePart) and root.tool_response:
-                tool_response = root.tool_response
-                output = tool_response.output
-                if not isinstance(output, (dict, str)) and output is not None:
-                    output = {'result': output}
-                steps.append({
-                    'type': 'function_result',
-                    'name': tool_response.name,
-                    'result': output,
-                    'call_id': tool_response.ref or '',
-                })
-            elif isinstance(root, CustomPart):
-                custom = root.custom or {}
-                metadata = root.metadata or {}
-                if 'googleSearchCall' in custom:
-                    gs_call = custom['googleSearchCall']
-                    steps.append({
-                        'type': 'google_search_call',
-                        'id': gs_call['id'],
-                        'arguments': gs_call['arguments'],
-                        'signature': metadata.get('thoughtSignature'),
-                    })
-                elif 'googleSearchResult' in custom:
-                    gs_result = custom['googleSearchResult']
-                    steps.append({
-                        'type': 'google_search_result',
-                        'call_id': gs_result['callId'],
-                        'result': gs_result['result'],
-                        'signature': metadata.get('thoughtSignature'),
-                    })
-                elif 'executableCode' in custom:
-                    exec_code = custom['executableCode']
-                    steps.append({
-                        'type': 'code_execution_call',
-                        'id': metadata['callId'],
-                        'arguments': {
-                            'code': exec_code['code'],
-                            'language': exec_code.get('language', 'PYTHON'),
-                        },
-                        'signature': metadata.get('thoughtSignature'),
-                    })
-                elif 'codeExecutionResult' in custom:
-                    exec_result = custom['codeExecutionResult']
-                    steps.append({
-                        'type': 'code_execution_result',
-                        'call_id': metadata['callId'],
-                        'result': exec_result['output'],
-                        'signature': metadata.get('thoughtSignature'),
-                    })
-                else:
-                    content = to_interaction_content(part)
-                    if content is not None:
-                        normal_content.append(content)
-            elif isinstance(root, ReasoningPart):
-                metadata = root.metadata or {}
-                steps.append({
-                    'type': 'thought',
-                    'summary': [{'type': 'text', 'text': root.reasoning}],
-                    'signature': metadata.get('thoughtSignature'),
-                })
-            else:
-                content = to_interaction_content(part)
-                if content is not None:
-                    normal_content.append(content)
-
-        if normal_content:
-            if message.role == 'model':
-                steps.append({'type': 'model_output', 'content': normal_content})
-            else:
-                steps.append({'type': 'user_input', 'content': normal_content})
-
+            step = to_standalone_step(part)
+            if step is not None:
+                steps.append(step)
+                continue
+            content = to_interaction_content(part)
+            if content is not None:
+                inline.append(content)
+        if inline:
+            steps.append(to_content_step(role, inline))
     return steps
 
 
-def from_interaction_content(content: Content) -> Part:
-    """Convert an Interactions content block back to a Genkit part."""
-    content_type = content.get('type')
-    if content_type == 'text':
-        return from_text_content(content)
-    if content_type == 'image':
-        return from_image_content(content)
-    if content_type in ('audio', 'document'):
-        return Part(root=from_media_content(content))
-    if content_type == 'video':
-        return from_video_content(content)
-    if content_type == 'thought':
-        return from_thought_content(content)
-    if content_type == 'function_call':
-        return from_function_call_content(content)
-    if content_type == 'function_result':
-        return from_function_result_content(content)
-    return Part(root=CustomPart(custom={'unknownContent': content}))
+def with_metadata(part: Part, key: str, value: object) -> Part:
+    """Return a copy of the part carrying one more metadata entry."""
+    if not value:
+        return part
+    root = part.root
+    updated = root.model_copy(update={'metadata': {**(root.metadata or {}), key: value}})
+    return Part(root=updated)
 
 
-def _maybe_add_gemini_thought_signature(step: Step, part: Part) -> Part:
-    signature = step.get('signature') if isinstance(step, dict) else None
-    if signature:
-        root = part.root
-        metadata = dict(root.metadata or {})
-        metadata['thoughtSignature'] = signature
-        updated = root.model_copy(update={'metadata': metadata})
-        return Part(root=updated)
-    return part
+def plain(value: object) -> object:
+    """Unwrap SDK models into plain data so parts stay JSON-serializable."""
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode='python')
+    if isinstance(value, list):
+        return [plain(item) for item in value]
+    return value
 
 
-def from_google_search_call(step: Step) -> Part:
+def server_tool_part(key: str, payload: dict[str, Any], *, signature: str | None, call_id: str | None = None) -> Part:
+    """Wrap Google-side tool activity in the custom part Genkit round-trips."""
+    part = Part(root=CustomPart(custom={key: payload}, metadata={CALL_ID: call_id} if call_id else None))
+    return with_metadata(part, THOUGHT_SIGNATURE, signature)
+
+
+def from_google_search_call(step: GoogleSearchCallStep) -> Part:
     """Convert a google_search_call step to a Genkit custom part."""
-    part = Part(
-        root=CustomPart(
-            custom={
-                'googleSearchCall': {
-                    'id': step['id'],
-                    'arguments': step['arguments'],
-                }
-            }
-        )
+    return server_tool_part(
+        GOOGLE_SEARCH_CALL,
+        {'id': step.id, 'arguments': plain(step.arguments)},
+        signature=step.signature,
     )
-    return _maybe_add_gemini_thought_signature(step, part)
 
 
-def from_google_search_result(step: Step) -> Part:
+def from_google_search_result(step: GoogleSearchResultStep) -> Part:
     """Convert a google_search_result step to a Genkit custom part."""
-    part = Part(
-        root=CustomPart(
-            custom={
-                'googleSearchResult': {
-                    'callId': step['call_id'],
-                    'result': step['result'],
-                }
-            }
-        )
+    return server_tool_part(
+        GOOGLE_SEARCH_RESULT,
+        {CALL_ID: step.call_id, 'result': plain(step.result or [])},
+        signature=step.signature,
     )
-    return _maybe_add_gemini_thought_signature(step, part)
 
 
-def from_code_execution_call(step: Step) -> Part:
+def from_code_execution_call(step: CodeExecutionCallStep) -> Part:
     """Convert a code_execution_call step to a Genkit custom part."""
-    arguments = step['arguments']
-    part = Part(
-        root=CustomPart(
-            custom={
-                'executableCode': {
-                    'code': arguments['code'],
-                    'language': arguments.get('language', 'PYTHON'),
-                }
-            },
-            metadata={'callId': step['id']},
-        )
+    arguments = step.arguments
+    return server_tool_part(
+        EXECUTABLE_CODE,
+        {
+            'code': arguments.code if arguments else None,
+            'language': (arguments.language if arguments else None) or CODE_LANGUAGE,
+        },
+        signature=step.signature,
+        call_id=step.id,
     )
-    return _maybe_add_gemini_thought_signature(step, part)
 
 
-def from_code_execution_result(step: Step) -> Part:
+def from_code_execution_result(step: CodeExecutionResultStep) -> Part:
     """Convert a code_execution_result step to a Genkit custom part."""
-    result = step['result']
-    part = Part(
-        root=CustomPart(
-            custom={
-                'codeExecutionResult': {
-                    'output': result if isinstance(result, str) else json.dumps(result),
-                    'outcome': 'OUTCOME_OK',
-                }
-            },
-            metadata={'callId': step['call_id']},
-        )
+    result = step.result
+    return server_tool_part(
+        CODE_EXECUTION_RESULT,
+        {
+            'output': result if isinstance(result, str) else json.dumps(result),
+            'outcome': 'OUTCOME_OK',
+        },
+        signature=step.signature,
+        call_id=step.call_id,
     )
-    return _maybe_add_gemini_thought_signature(step, part)
 
 
-def from_server_function_call(step: Step) -> Part:
-    """Convert a standalone function_call step to a Genkit custom part."""
+def from_function_call_step(step: FunctionCallStep) -> Part:
+    """Convert a function_call step to a Genkit tool request part.
+
+    Fresh create/get steps with client tool calls are pending work for Genkit's
+    tool loop, so they use ToolRequestPart — not an opaque custom blob.
+    """
     return Part(
-        root=CustomPart(
-            custom={
-                'serverFunctionCall': {
-                    'id': step['id'],
-                    'name': step['name'],
-                    'arguments': step.get('arguments'),
-                }
-            }
+        root=ToolRequestPart(
+            tool_request=ToolRequest(
+                name=step.name or '',
+                input=plain(step.arguments) if step.arguments is not None else {},
+                ref=step.id,
+            )
         )
     )
 
 
-def from_server_function_result(step: Step) -> Part:
-    """Convert a standalone function_result step to a Genkit custom part."""
+def from_function_result_step(step: FunctionResultStep) -> Part:
+    """Convert a function_result step to a Genkit tool response part."""
     return Part(
-        root=CustomPart(
-            custom={
-                'serverFunctionResult': {
-                    'callId': step['call_id'],
-                    'name': step['name'],
-                    'result': step.get('result'),
-                    'isError': step.get('is_error'),
-                }
-            }
+        root=ToolResponsePart(
+            tool_response=ToolResponse(
+                name=step.name or '',
+                output=plain(step.result),
+                ref=step.call_id,
+            ),
+            metadata={'isError': step.is_error} if step.is_error is not None else None,
         )
     )
 
 
-def from_interaction_step(step: Step) -> list[Part]:
-    """Convert an Interactions step to Genkit parts."""
-    step_type = step.get('type')
-    if step_type == 'model_output':
-        return [from_interaction_content(content) for content in step['content']]
-    if step_type == 'user_input':
-        # The API echoes our prompt back; including it would duplicate the input.
-        return []
-    if step_type == 'google_search_call':
-        return [from_google_search_call(step)]
-    if step_type == 'google_search_result':
-        return [from_google_search_result(step)]
-    if step_type == 'code_execution_call':
-        return [from_code_execution_call(step)]
-    if step_type == 'code_execution_result':
-        return [from_code_execution_result(step)]
-    if step_type == 'thought':
-        return [from_thought_content(step)]
-    if step_type == 'function_call':
-        return [from_server_function_call(step)]
-    if step_type == 'function_result':
-        return [from_server_function_result(step)]
-    return [Part(root=CustomPart(custom={'unknownStep': step}))]
-
-
-def from_media_content(content: Content) -> MediaPart:
+def from_media_content(content: ImageContent | AudioContent | DocumentContent | VideoContent) -> MediaPart:
     """Convert wire media content to a Genkit media part."""
-    url = content.get('uri')
-    if content.get('data') and content.get('mime_type'):
-        url = f'data:{content["mime_type"]};base64,{content["data"]}'
-    return MediaPart(media=Media(url=url or '', content_type=content.get('mime_type')))
+    url = content.uri
+    if content.data and content.mime_type:
+        url = f'data:{content.mime_type};base64,{content.data}'
+    return MediaPart(media=Media(url=url or '', content_type=content.mime_type))
 
 
-def from_text_content(content: Content) -> Part:
+def from_text_content(content: TextContent) -> Part:
     """Convert wire text content to a Genkit text part."""
     # Empty annotations still show up in metadata so round-trips stay stable.
     return Part(
         root=TextPart(
-            text=content.get('text') or '',
-            metadata={'annotations': content.get('annotations')},
+            text=content.text or '',
+            metadata={'annotations': content.annotations},
         )
     )
 
 
-def from_image_content(content: Content) -> Part:
-    """Convert wire image content to a Genkit media part."""
-    part = Part(root=from_media_content(content))
-    if content.get('resolution') is not None:
-        root = part.root
-        metadata = dict(root.metadata or {})
-        metadata['resolution'] = content['resolution']
-        part = Part(root=root.model_copy(update={'metadata': metadata}))
-    return part
+def from_visual_content(content: ImageContent | VideoContent) -> Part:
+    """Convert wire image or video content, keeping the resolution it came back at."""
+    return with_metadata(Part(root=from_media_content(content)), 'resolution', content.resolution)
 
 
-def from_video_content(content: Content) -> Part:
-    """Convert wire video content to a Genkit media part."""
-    part = Part(root=from_media_content(content))
-    if content.get('resolution') is not None:
-        root = part.root
-        metadata = dict(root.metadata or {})
-        metadata['resolution'] = content['resolution']
-        part = Part(root=root.model_copy(update={'metadata': metadata}))
-    return part
-
-
-def from_thought_content(content: Content) -> Part:
-    """Convert wire thought content to a Genkit reasoning part."""
-    reasoning = ''
-    summary = content.get('summary')
-    if summary:
-        chunks: list[str] = []
-        for item in summary:
-            if item.get('type') == 'text':
-                chunks.append(str(item.get('text') or ''))
-            else:
-                chunks.append('[Image]')
-        reasoning = '\n'.join(chunks)
+def from_thought_step(step: ThoughtStep) -> Part:
+    """Convert a thought step to a Genkit reasoning part."""
+    summary = step.summary or []
+    reasoning = '\n'.join(item.text or '' if isinstance(item, TextContent) else '[Image]' for item in summary)
     return Part(
         root=ReasoningPart(
             reasoning=reasoning,
-            metadata={'thoughtSignature': content.get('signature')},
-            custom={'thought': content},
+            metadata={THOUGHT_SIGNATURE: step.signature},
+            custom={'thought': step.model_dump(mode='python')},
         )
     )
 
 
-def from_function_call_content(content: Content) -> Part:
-    """Convert wire function_call content to a Genkit tool request part."""
-    from genkit import ToolRequest
-
-    return Part(
-        root=ToolRequestPart(
-            tool_request=ToolRequest(
-                name=content['name'],
-                input=content.get('arguments'),
-                ref=content['id'],
-            )
-        )
-    )
+def from_interaction_content(content: Content) -> Part:
+    """Convert an Interactions content block back to a Genkit part."""
+    if isinstance(content, TextContent):
+        return from_text_content(content)
+    if isinstance(content, (ImageContent, VideoContent)):
+        return from_visual_content(content)
+    if isinstance(content, (AudioContent, DocumentContent)):
+        return Part(root=from_media_content(content))
+    if isinstance(content, UnknownContent):
+        return Part(root=CustomPart(custom={'unknownContent': content.model_dump(mode='python')}))
+    return Part(root=CustomPart(custom={'unknownContent': content}))
 
 
-def from_function_result_content(content: Content) -> Part:
-    """Convert wire function_result content to a Genkit tool response part."""
-    from genkit import ToolResponse
+def from_interaction_step(step: Step) -> list[Part]:
+    """Convert an Interactions step to Genkit parts."""
+    if isinstance(step, ModelOutputStep):
+        return [from_interaction_content(content) for content in (step.content or [])]
+    if isinstance(step, UserInputStep):
+        # The API echoes our prompt back; including it would duplicate the input.
+        return []
+    if isinstance(step, GoogleSearchCallStep):
+        return [from_google_search_call(step)]
+    if isinstance(step, GoogleSearchResultStep):
+        return [from_google_search_result(step)]
+    if isinstance(step, CodeExecutionCallStep):
+        return [from_code_execution_call(step)]
+    if isinstance(step, CodeExecutionResultStep):
+        return [from_code_execution_result(step)]
+    if isinstance(step, ThoughtStep):
+        return [from_thought_step(step)]
+    if isinstance(step, FunctionCallStep):
+        return [from_function_call_step(step)]
+    if isinstance(step, FunctionResultStep):
+        return [from_function_result_step(step)]
+    if isinstance(step, BaseModel):
+        return [Part(root=CustomPart(custom={'unknownStep': step.model_dump(mode='python')}))]
+    return [Part(root=CustomPart(custom={'unknownStep': step}))]
 
-    return Part(
-        root=ToolResponsePart(
-            tool_response=ToolResponse(
-                name=content['name'],
-                output=content.get('result'),
-                ref=content['call_id'],
-            )
-        )
-    )
 
-
-def _interaction_message_metadata(interaction: InteractionDict) -> dict[str, Any] | None:
+def interaction_message_metadata(interaction: Interaction) -> dict[str, Any] | None:
+    """Build message.metadata fields that identify the source Interaction."""
     metadata: dict[str, Any] = {}
-    if interaction.get('id'):
-        metadata['interactionId'] = interaction['id']
-    if interaction.get('environment_id'):
-        metadata['environmentId'] = interaction['environment_id']
-    if interaction.get('status'):
+    if interaction.id:
+        metadata['interactionId'] = interaction.id
+    if interaction.environment_id:
+        metadata['environmentId'] = interaction.environment_id
+    if interaction.status:
         # Preserve the wire status when finish_reason is a coarser Genkit enum.
-        metadata['interactionStatus'] = interaction['status']
+        metadata['interactionStatus'] = interaction.status
     return metadata or None
 
 
-def _usage_from_interaction(usage: dict[str, Any]) -> ModelUsage:
+def usage_from_interaction(usage: Usage) -> ModelUsage:
+    """Map Interactions Usage onto Genkit ModelUsage."""
     response_usage = ModelUsage(
-        input_tokens=usage.get('total_input_tokens'),
-        output_tokens=usage.get('total_output_tokens'),
-        total_tokens=usage.get('total_tokens'),
-        cached_content_tokens=usage.get('total_cached_tokens'),
-        thoughts_tokens=usage.get('total_thought_tokens'),
+        input_tokens=usage.total_input_tokens,
+        output_tokens=usage.total_output_tokens,
+        total_tokens=usage.total_tokens,
+        cached_content_tokens=usage.total_cached_tokens,
+        thoughts_tokens=usage.total_thought_tokens,
     )
-    for modality_token in usage.get('input_tokens_by_modality') or []:
-        match modality_token.get('modality'):
+    for modality_token in usage.input_tokens_by_modality or []:
+        match modality_token.modality:
             case 'text':
-                response_usage.input_characters = modality_token.get('tokens')
+                response_usage.input_characters = modality_token.tokens
             case 'image':
-                response_usage.input_images = modality_token.get('tokens')
+                response_usage.input_images = modality_token.tokens
             case 'audio':
-                response_usage.input_audio_files = modality_token.get('tokens')
+                response_usage.input_audio_files = modality_token.tokens
             case _:
                 pass
-    for modality_token in usage.get('output_tokens_by_modality') or []:
-        match modality_token.get('modality'):
+    for modality_token in usage.output_tokens_by_modality or []:
+        match modality_token.modality:
             case 'text':
-                response_usage.output_characters = modality_token.get('tokens')
+                response_usage.output_characters = modality_token.tokens
             case 'image':
-                response_usage.output_images = modality_token.get('tokens')
+                response_usage.output_images = modality_token.tokens
             case 'audio':
-                response_usage.output_audio_files = modality_token.get('tokens')
+                response_usage.output_audio_files = modality_token.tokens
             case _:
                 pass
     return response_usage
 
 
-def _parts_from_steps(steps: list[Step]) -> list[Part]:
+def parts_from_steps(steps: list[Step]) -> list[Part]:
+    """Flatten interaction steps into Genkit parts, dropping empty ones."""
     return [
         part
         for part in (item for step in steps for item in from_interaction_step(step))
@@ -553,130 +611,101 @@ def _parts_from_steps(steps: list[Step]) -> list[Part]:
     ]
 
 
-def _cancelled_response(interaction: InteractionDict) -> ModelResponse:
-    message_metadata = _interaction_message_metadata(interaction)
-    message = Message(
-        role='model',
-        content=[Part(root=TextPart(text='Operation cancelled.'))],
-        metadata=message_metadata,
+def model_response(
+    interaction: Interaction,
+    *,
+    content: list[Part],
+    finish_reason: FinishReason,
+    finish_message: str | None = None,
+) -> ModelResponse:
+    """Build a ModelResponse that carries the raw interaction alongside its parts."""
+    dumped = interaction.model_dump(mode='python')
+    response = ModelResponse.model_construct(
+        finish_reason=finish_reason,
+        finish_message=finish_message,
+        message=Message(role='model', content=content, metadata=interaction_message_metadata(interaction)),
+        custom=dumped,
+        raw=dumped,
     )
-    return ModelResponse.model_construct(
+    if interaction.usage is not None:
+        response.usage = usage_from_interaction(interaction.usage)
+    return response
+
+
+def cancelled_response(interaction: Interaction) -> ModelResponse:
+    """Build the ModelResponse for a cancelled Interaction."""
+    return model_response(
+        interaction,
+        content=[Part(root=TextPart(text='Operation cancelled.'))],
         finish_reason=FinishReason.ABORTED,
         finish_message='Operation cancelled',
-        message=message,
     )
 
 
-def _steps_response(
-    interaction: InteractionDict,
+def steps_response(
+    interaction: Interaction,
     *,
     finish_reason: FinishReason,
     finish_message: str | None = None,
 ) -> ModelResponse | None:
     """Build a ModelResponse from interaction steps, or None when there are none."""
-    steps = interaction.get('steps') or []
+    steps = list(interaction.steps or [])
     if not steps:
         return None
-    content = _parts_from_steps(steps)
-    message_metadata = _interaction_message_metadata(interaction)
-    response = ModelResponse.model_construct(
+    return model_response(
+        interaction,
+        content=parts_from_steps(steps),
         finish_reason=finish_reason,
         finish_message=finish_message,
-        message=Message(role='model', content=content, metadata=message_metadata),
-        custom=dict(interaction),
-        raw=dict(interaction),
     )
-    if interaction.get('usage'):
-        response.usage = _usage_from_interaction(interaction['usage'])
-    return response
 
 
-def _completed_response(interaction: InteractionDict) -> ModelResponse | None:
-    return _steps_response(interaction, finish_reason=FinishReason.STOP)
+def completed_response(interaction: Interaction) -> ModelResponse | None:
+    """Build the ModelResponse for a completed Interaction, if it has steps."""
+    return steps_response(interaction, finish_reason=FinishReason.STOP)
 
 
-def from_interaction_sync(interaction: BaseModel | InteractionDict) -> ModelResponse:
+def from_interaction_sync(interaction: Interaction) -> ModelResponse:
     """Convert a completed interaction to a synchronous model response."""
-    payload = as_interaction_dict(interaction)
-    if payload.get('status') == 'failed':
-        raise ValueError('Interaction failed')
-
-    message_metadata = _interaction_message_metadata(payload)
-    response = ModelResponse.model_construct(
-        finish_reason=FinishReason.STOP,
-        message=Message(role='model', content=[], metadata=message_metadata),
-        custom=dict(payload),
-        raw=dict(payload),
-    )
-
-    if payload.get('status') == 'cancelled':
-        response.finish_reason = FinishReason.ABORTED
-        response.finish_message = 'Operation cancelled'
-        response.message = Message(
-            role='model',
-            content=[Part(root=TextPart(text='Operation cancelled.'))],
-            metadata=message_metadata,
-        )
-        return response
-
-    steps = payload.get('steps')
-    if steps:
-        response.message = Message(
-            role='model',
-            content=_parts_from_steps(steps),
-            metadata=message_metadata,
-        )
-        if payload.get('usage'):
-            response.usage = _usage_from_interaction(payload['usage'])
-    return response
+    if interaction.status == 'failed':
+        raise ValueError(interaction_error_message(interaction) or FAILED_MESSAGE)
+    if interaction.status == 'cancelled':
+        return cancelled_response(interaction)
+    return completed_response(interaction) or model_response(interaction, content=[], finish_reason=FinishReason.STOP)
 
 
 def from_interaction(
-    interaction: BaseModel | InteractionDict,
+    interaction: Interaction,
     client_options: ClientOptions | None = None,
 ) -> Operation:
     """Convert an interaction poll result to a Genkit operation."""
-    payload = as_interaction_dict(interaction)
-    op = Operation.model_construct(id=payload.get('id') or '')
-    if client_options:
-        op.metadata = {'clientOptions': client_options}
+    op = Operation.model_construct(id=interaction.id or '')
+    if client_options is not None:
+        dumped = client_options.to_metadata_dict()
+        if dumped:
+            op.metadata = {'clientOptions': dumped}
 
-    status = payload.get('status')
+    status = interaction.status
     if status in ('in_progress', 'queued'):
         # Keep polling — still running or waiting on the server.
         op.done = False
     elif status == 'cancelled':
         op.done = True
-        op.output = _cancelled_response(payload)
+        op.output = cancelled_response(interaction)
     elif status == 'completed':
         op.done = True
-        op.output = _completed_response(payload)
-    elif status == 'incomplete':
-        # Terminal truncated result (e.g. max_tokens). Surface steps when present.
+        op.output = completed_response(interaction)
+    elif partial := PARTIAL_TERMINAL_STATUSES.get(cast(str, status)):
+        # Halted for length or budget. Prefer whatever landed over a bare error.
+        finish_reason, message = partial
         op.done = True
-        op.output = _steps_response(
-            payload,
-            finish_reason=FinishReason.LENGTH,
-            finish_message='Interaction incomplete (truncated output)',
-        )
+        op.output = steps_response(interaction, finish_reason=finish_reason, finish_message=message)
         if op.output is None:
-            op.error = Error(message='Interaction incomplete (truncated output)')
-    elif status == 'budget_exceeded':
-        # Terminal halt on budget. Prefer partial steps over a bare error.
-        op.done = True
-        op.output = _steps_response(
-            payload,
-            finish_reason=FinishReason.ABORTED,
-            finish_message='Interaction exceeded its budget',
-        )
-        if op.output is None:
-            op.error = Error(message='Interaction exceeded its budget')
+            op.error = Error(message=message)
     elif status == 'failed':
         # Always exit the poll loop on failure; leaving done unset hangs forever.
         op.done = True
-        error_payload = payload.get('error') or {}
-        message = error_payload.get('message') if isinstance(error_payload, dict) else None
-        op.error = Error(message=message or 'Interaction failed')
+        op.error = Error(message=interaction_error_message(interaction) or FAILED_MESSAGE)
     # requires_action: leave done unset. Resuming that turn is a separate product
     # decision; we don't invent interrupt/resume here.
     return op
