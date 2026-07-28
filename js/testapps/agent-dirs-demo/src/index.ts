@@ -17,45 +17,21 @@
 /**
  * Serves every directory agent under `agents/` for interactive chat.
  *
- * - Dev UI: `GCLOUD_PROJECT=<project> pnpm genkit:dev` - agents appear as
- *   actions and can be chatted with directly.
- * - HTTP: `GCLOUD_PROJECT=<project> pnpm server` - each agent is exposed at
- *   `/api/<name>` (plus `/getSnapshot` and `/abort`), consumable with
+ * - Dev UI: `GCLOUD_PROJECT=<project> pnpm genkit:dev` - chat with agents
+ *   directly.
+ * - HTTP: `GCLOUD_PROJECT=<project> pnpm server` - each agent at
+ *   `/api/<name>` (plus `/getSnapshot`, `/abort`), consumable with
  *   `remoteAgent` from `genkit/beta/client`.
  *
- * Uses Vertex AI via Application Default Credentials (`gcloud auth
- * application-default login`).
+ * Uses Vertex AI via Application Default Credentials.
  */
 
-import { agentDirs, listAgents } from '@genkit-ai/agent-dirs';
-import { expressHandler } from '@genkit-ai/express';
+import { agentDirs, serveAgents } from '@genkit-ai/agent-dirs';
 import { vertexAI } from '@genkit-ai/google-genai';
-import express from 'express';
 import { genkit } from 'genkit/beta';
 
 const ai = genkit({
   plugins: [vertexAI(), agentDirs({ dir: './agents' })],
 });
 
-const app = express();
-app.use(express.json());
-
-const agents = await listAgents(ai);
-for (const [name, agent] of Object.entries(agents)) {
-  app.post(`/api/${name}`, expressHandler(agent));
-  app.post(
-    `/api/${name}/getSnapshot`,
-    expressHandler(agent.getSnapshotDataAction)
-  );
-  app.post(`/api/${name}/abort`, expressHandler(agent.abortAgentAction));
-}
-
-const port = Number(process.env.PORT ?? 8080);
-app.listen(port, () => {
-  console.log(
-    `agent-dirs demo server on :${port} - agents: ` +
-      Object.keys(agents)
-        .map((n) => `/api/${n}`)
-        .join(', ')
-  );
-});
+await serveAgents(ai);

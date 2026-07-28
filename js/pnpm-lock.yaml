@@ -274,13 +274,28 @@ importers:
 
   plugins/agent-dirs:
     dependencies:
+      '@genkit-ai/express':
+        specifier: workspace:*
+        version: link:../express
       '@genkit-ai/middleware':
         specifier: workspace:*
         version: link:../middleware
+      cors:
+        specifier: ^2.8.5
+        version: 2.8.6
+      express:
+        specifier: ^4.21.1
+        version: 4.22.1
       genkit:
         specifier: workspace:^
         version: link:../../genkit
     devDependencies:
+      '@types/cors':
+        specifier: ^2.8.17
+        version: 2.8.19
+      '@types/express':
+        specifier: ^4.17.21
+        version: 4.17.25
       '@types/node':
         specifier: ^20.11.16
         version: 20.19.37
@@ -1179,22 +1194,13 @@ importers:
       '@genkit-ai/agent-dirs':
         specifier: workspace:*
         version: link:../../plugins/agent-dirs
-      '@genkit-ai/express':
-        specifier: workspace:*
-        version: link:../../plugins/express
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
-      express:
-        specifier: ^4.21.1
-        version: 4.22.1
       genkit:
         specifier: workspace:*
         version: link:../../genkit
     devDependencies:
-      '@types/express':
-        specifier: ^4.17.21
-        version: 4.17.25
       tsx:
         specifier: ^4.19.2
         version: 4.21.0

@@ -28,7 +28,10 @@
   "author": "genkit",
   "license": "Apache-2.0",
   "dependencies": {
-    "@genkit-ai/middleware": "workspace:*"
+    "@genkit-ai/middleware": "workspace:*",
+    "@genkit-ai/express": "workspace:*",
+    "cors": "^2.8.5",
+    "express": "^4.21.1"
   },
   "peerDependencies": {
     "genkit": "workspace:^"
@@ -39,7 +42,9 @@
     "rimraf": "^6.0.1",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21"
   },
   "types": "./lib/index.d.ts",
   "exports": {

@@ -60,20 +60,21 @@ an Agent handle you didn't `defineAgent` yourself, named for where the agent
 lives. A first-party version would more naturally be `ai.agent(name)`,
 mirroring `ai.prompt(name)`.)
 
-Serving over HTTP is one loop with `listAgents`:
+Serving over HTTP is one call:
 
 ```ts
-import { listAgents } from '@genkit-ai/agent-dirs';
-import { expressHandler } from '@genkit-ai/express';
+import { serveAgents } from '@genkit-ai/agent-dirs';
 
-for (const [name, agent] of Object.entries(await listAgents(ai))) {
-  app.post(`/api/${name}`, expressHandler(agent));
-}
+await serveAgents(ai); // POST /api/<name> (+ /getSnapshot, /abort) per agent
 ```
 
 Clients then chat with `remoteAgent({ url })` from `genkit/beta/client`; the
-demo testapp serves every directory agent this way and works with the Dev UI
-(`pnpm genkit:dev`).
+demo testapp is exactly this plus the Dev UI (`pnpm genkit:dev`). Nothing in
+`serveAgents` is directory-specific - it wires the three routes any
+`defineAgent` user needs (both in-tree agent testapps previously hand-rolled
+them), so its natural upstream home is `@genkit-ai/express` as a sibling of
+the flows-only `startFlowServer`. `listAgents(ai)` / `directoryAgent(ai,
+name)` remain available for custom wiring.
 
 Each agent gets a per-agent `FileSessionStore` under
 `./.genkit/agent-snapshots/<name>` by default; pass `store: (name) => ...` for
