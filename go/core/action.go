@@ -237,6 +237,10 @@ func (a *Action[In, Out, Stream]) Run(ctx context.Context, input In, cb StreamCa
 // inject a per-call one-shot adapter; spanInit, when non-nil, is recorded as
 // the span's genkit:init attribute.
 func (a *Action[In, Out, Stream]) runWithTelemetry(ctx context.Context, input In, cb StreamCallback[Stream], fn StreamingFunc[In, Out, Stream], spanInit any) (output api.ActionRunResult[Out], err error) {
+	return a.runWithTelemetryInternal(ctx, input, cb, fn, spanInit, nil, nil)
+}
+
+func (a *Action[In, Out, Stream]) runWithTelemetryInternal(ctx context.Context, input In, cb StreamCallback[Stream], fn StreamingFunc[In, Out, Stream], spanInit any, inputSchema, outputSchema map[string]any) (output api.ActionRunResult[Out], err error) {
 	logger.FromContext(ctx).Debug("Action.Run", "name", a.Name())
 	defer func() {
 		logger.FromContext(ctx).Debug("Action.Run",
@@ -255,16 +259,18 @@ func (a *Action[In, Out, Stream]) runWithTelemetry(ctx context.Context, input In
 			start := time.Now()
 			defer func() { recordActionMetrics(ctx, a.desc.Name, start, err) }()
 
-			var inputSchema map[string]any
-			inputSchema, err = ResolveSchema(a.registry, a.desc.InputSchema)
-			if err != nil {
-				return base.Zero[Out](), NewError(INVALID_ARGUMENT, "invalid input schema for action %q: %v", a.desc.Key, err)
+			if inputSchema == nil {
+				inputSchema, err = ResolveSchema(a.registry, a.desc.InputSchema)
+				if err != nil {
+					return base.Zero[Out](), NewError(INVALID_ARGUMENT, "invalid input schema for action %q: %v", a.desc.Key, err)
+				}
 			}
 
-			var outputSchema map[string]any
-			outputSchema, err = a.resolveOutputSchema()
-			if err != nil {
-				return base.Zero[Out](), err
+			if outputSchema == nil {
+				outputSchema, err = a.resolveOutputSchema()
+				if err != nil {
+					return base.Zero[Out](), err
+				}
 			}
 
 			if err = base.ValidateValue(input, inputSchema); err != nil {
@@ -351,7 +357,17 @@ func (a *Action[In, Out, Stream]) RunJSONWithTelemetry(ctx context.Context, inpu
 // runJSONWithTelemetry is the shared JSON execution path. fn and spanInit
 // follow the same contract as runWithTelemetry.
 func (a *Action[In, Out, Stream]) runJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb StreamCallback[json.RawMessage], fn StreamingFunc[In, Out, Stream], spanInit any) (*api.ActionRunResult[json.RawMessage], error) {
-	i, err := base.UnmarshalAndNormalize[In](input, a.desc.InputSchema)
+	inputSchema, err := ResolveSchema(a.registry, a.desc.InputSchema)
+	if err != nil {
+		return nil, NewError(INVALID_ARGUMENT, "invalid input schema for action %q: %v", a.desc.Key, err)
+	}
+
+	outputSchema, err := a.resolveOutputSchema()
+	if err != nil {
+		return nil, err
+	}
+
+	i, err := base.UnmarshalAndNormalize[In](input, inputSchema)
 	if err != nil {
 		return nil, NewSchemaValidationError(a.desc.Key, err)
 	}
@@ -367,7 +383,7 @@ func (a *Action[In, Out, Stream]) runJSONWithTelemetry(ctx context.Context, inpu
 		}
 	}
 
-	r, err := a.runWithTelemetry(ctx, i, scb, fn, spanInit)
+	r, err := a.runWithTelemetryInternal(ctx, i, scb, fn, spanInit, inputSchema, outputSchema)
 	if err != nil {
 		return &api.ActionRunResult[json.RawMessage]{
 			TraceId: r.TraceId,

@@ -66,22 +66,130 @@ func SchemaRef(name string) map[string]any {
 // Returns the original schema if no $ref is present, or the resolved schema if found.
 // Returns an error if the schema reference cannot be resolved.
 func ResolveSchema(r api.Registry, schema map[string]any) (map[string]any, error) {
+	return resolveSchema(r, schema, nil, 0)
+}
+
+const maxSchemaDepth = 50
+
+func resolveSchema(r api.Registry, schema map[string]any, seen map[uintptr]bool, depth int) (map[string]any, error) {
 	if schema == nil {
 		return nil, nil
 	}
-	ref, ok := schema["$ref"].(string)
-	if !ok {
+	if depth > maxSchemaDepth {
+		return nil, fmt.Errorf("schema reference too deep (possible cycle)")
+	}
+
+	if ref, ok := schema["$ref"].(string); ok {
+		if schemaName, found := strings.CutPrefix(ref, "genkit:"); found {
+			resolved := r.LookupSchema(schemaName)
+			if resolved == nil {
+				return nil, fmt.Errorf("schema %q not found", schemaName)
+			}
+
+			if seen[reflect.ValueOf(resolved).Pointer()] {
+				return schema, nil
+			}
+
+			newSeen := make(map[uintptr]bool, len(seen)+1)
+			for k, v := range seen {
+				newSeen[k] = v
+			}
+			newSeen[reflect.ValueOf(schema).Pointer()] = true
+
+			// Recursive call to resolve any refs within the looked-up schema.
+			return resolveSchema(r, resolved, newSeen, depth+1)
+		}
+		// If it's a non-genkit $ref, we return the schema as-is to allow
+		// the underlying validator to handle it.
 		return schema, nil
 	}
-	schemaName, found := strings.CutPrefix(ref, "genkit:")
-	if !found {
+
+	ptr := reflect.ValueOf(schema).Pointer()
+	if seen[ptr] {
 		return schema, nil
 	}
-	resolved := r.LookupSchema(schemaName)
-	if resolved == nil {
-		return nil, fmt.Errorf("schema %q not found", schemaName)
+
+	newSeen := make(map[uintptr]bool, len(seen)+1)
+	for k, v := range seen {
+		newSeen[k] = v
 	}
-	return resolved, nil
+	newSeen[ptr] = true
+	seen = newSeen
+
+	// Iterate and recursively resolve any nested maps or arrays.
+	// We only clone the schema if a change is actually made.
+	var newSchema map[string]any
+	for k, v := range schema {
+		resolved, err := resolveValue(r, v, seen, depth+1)
+		if err != nil {
+			return nil, err
+		}
+
+		if newSchema == nil && !isSame(v, resolved) {
+			newSchema = make(map[string]any, len(schema))
+			for k2, v2 := range schema {
+				newSchema[k2] = v2
+			}
+		}
+		if newSchema != nil {
+			newSchema[k] = resolved
+		}
+	}
+
+	if newSchema == nil {
+		return schema, nil
+	}
+	return newSchema, nil
+}
+
+func resolveValue(r api.Registry, v any, seen map[uintptr]bool, depth int) (any, error) {
+	switch val := v.(type) {
+	case map[string]any:
+		return resolveSchema(r, val, seen, depth)
+	case []any:
+		return resolveArray(r, val, seen, depth)
+	default:
+		return v, nil
+	}
+}
+
+func resolveArray(r api.Registry, arr []any, seen map[uintptr]bool, depth int) ([]any, error) {
+	if depth > maxSchemaDepth {
+		return nil, fmt.Errorf("schema reference too deep (possible cycle)")
+	}
+	var newArray []any
+	for i, v := range arr {
+		resolved, err := resolveValue(r, v, seen, depth+1)
+		if err != nil {
+			return nil, err
+		}
+
+		if newArray == nil && !isSame(v, resolved) {
+			newArray = make([]any, len(arr))
+			copy(newArray, arr[:i])
+		}
+		if newArray != nil {
+			newArray[i] = resolved
+		}
+	}
+	if newArray == nil {
+		return arr, nil
+	}
+	return newArray, nil
+}
+
+func isSame(a, b any) bool {
+	if reflect.TypeOf(a) != reflect.TypeOf(b) {
+		return false
+	}
+	va := reflect.ValueOf(a)
+	vb := reflect.ValueOf(b)
+	switch va.Kind() {
+	case reflect.Map, reflect.Slice:
+		return va.Pointer() == vb.Pointer()
+	default:
+		return a == b
+	}
 }
 
 // InferSchemaMap infers a JSON schema from a Go value and converts it to a map.

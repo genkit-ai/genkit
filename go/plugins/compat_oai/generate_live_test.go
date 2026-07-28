@@ -69,7 +69,7 @@ func TestGenerator_Complete(t *testing.T) {
 
 	resp, err := g.WithMessages(messages).Generate(context.Background(), req, nil)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	if len(resp.Message.Content) == 0 {
 		t.Error("empty messages content, got 0")
@@ -103,7 +103,7 @@ func TestGenerator_Stream(t *testing.T) {
 
 	_, err := g.WithMessages(messages).Generate(context.Background(), req, handleChunk)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	if len(chunks) == 0 {
 		t.Error("expecting stream chunks, got: 0")
