@@ -2,107 +2,170 @@
 
 Everything non-obvious we hit while building this plugin and its demo, as
 input for API/docs work. Ordered by impact. "Fix" lines are suggestions, not
-demands; several have candidate implementations in this PR.
+demands; several have candidate implementations in this PR. Claims were
+adversarially fact-checked against source; evidence refs are to this repo.
 
-## 1. No way to serve agents over HTTP without hand-rolling routes
+## 1. No first-party way to serve agents over HTTP
 
-`startFlowServer` (`@genkit-ai/express`) serves flows only: explicit list, no
-registry discovery, and none of an agent's companion actions
-(`getSnapshotDataAction`, `abortAgentAction`) - so resume inspection and
-abort don't work over HTTP. Result: `testapps/agents/src/index.ts` hand-rolls
-an `exposeAgent()` helper, and this package's demo independently reinvented
-the same ~15 lines before we extracted `serveAgents()` (`src/server.ts`).
+The transport layer is fine - `expressHandler` fully supports agent actions,
+including `init` forwarding (`js/plugins/express/src/index.ts:82,149-153`).
+What's missing is the aggregation: `startFlowServer` is flows-only (explicit
+list, no registry discovery, `express/src/index.ts:379-403`), fastify/next
+are per-action handlers, and nothing wires an agent's companion actions
+(`getSnapshotDataAction`, `abortAgentAction`).
+
+That this is a gap rather than a design choice is visible in the client: the
+first-party `remoteAgent` hard-codes a server URL contract - `${url}`,
+`${url}/getSnapshot`, `${url}/abort` (`js/genkit/src/client/agent.ts:53-91`)
+- that no first-party server implements. Both the upstream agents testapp
+(`testapps/agents/src/index.ts:126-141`, `exposeAgent()`) and this package's
+demo independently hand-rolled the same routes before we extracted
+`serveAgents()` (`src/server.ts`). Likely rationale is release staging
+(agents are beta, `@genkit-ai/express` is stable), not opinionation.
+
+Related trap: durable stream reconnects need `X-Genkit-Stream-Id` in
+`Access-Control-Expose-Headers`; the testapp hand-rolls this
+(`testapps/agents/src/index.ts:108-122`) and `startFlowServer`'s default
+`cors()` doesn't set it.
 
 **Fix:** first-party `startAgentServer()` / `agents:` option in
-`@genkit-ai/express`. `serveAgents()` here is a candidate implementation.
+`@genkit-ai/express`, with the stream-id CORS default. `serveAgents()` here
+is a candidate implementation.
 
-## 2. Agents registered by plugins are hard to reach
+## 2. Agents registered by plugins are awkward to reach
 
 A plugin that calls `defineAgent` has no way to hand the `Agent` object to
-user code. The only route back is `registry.lookupAction('/agent/<name>')` -
-an undocumented key convention plus an unchecked cast (`Agent` has no runtime
-brand; we duck-type on `.chat`). Same for enumeration (`listAgents` filters
-`listActions()` keys by prefix).
+user code. The route back is `registry.lookupAction('/agent/<name>')` - an
+undocumented key convention - plus a cast. A runtime brand does exist
+(`__action.actionType === 'agent'`, set at `js/ai/src/agent.ts:1003`; the
+registered action IS the full Agent composite via `Object.assign`,
+`agent.ts:1390-1447`), but nothing documents that this is the supported way
+to recover an `Agent`, and enumeration means filtering `listActions()` keys
+by prefix.
 
-**Fix:** `ai.agent(name)` instance method mirroring `ai.prompt(name)`, plus a
-typed way to enumerate registered agents.
+**Fix:** `ai.agent(name)` instance method mirroring `ai.prompt(name)`
+(`js/genkit/src/genkit.ts:348`), plus typed enumeration.
 
 ## 3. Slash-namespaced tool names are silently rewritten for the model
 
 Tools named `<ns>/<name>` (the MCP convention, used here for per-agent
-namespacing) are exposed to the model by short name only -
-`toMap`/`resolveToolRequest` key on the segment after the last `/`
-(`ai/src/generate/resolve-tool-requests.ts`). Undocumented; cost us a live
-NOT_FOUND loop when a scripted model called the full name, and any prompt
-text that mentions a tool by full name is silently wrong.
+namespacing) are exposed to the model by short name only: `toToolDefinition`
+strips the namespace (`js/ai/src/tool.ts:263-288`) and the tool loop keys on
+the segment after the last `/`
+(`js/ai/src/generate/resolve-tool-requests.ts:44-69`); calling the full name
+hits `NOT_FOUND` (`:100-107`). Cost us a live NOT_FOUND loop, and any prompt
+text naming a tool by full name is silently wrong. Not documented anywhere
+in-repo; the MCP README shows namespaced names without saying the model sees
+short ones.
 
-**Fix:** document the short-name contract where `defineTool` is documented.
+Sharper edge: the namespace does not prevent collisions - two tools
+`agentA/search` and `agentB/search` in one generate call throw
+`Cannot provide two tools with the same name`
+(`resolve-tool-requests.ts:56-69`). Per-agent namespacing (this plugin's
+scheme) only helps while agents' toolsets stay disjoint per call; the
+`agents` delegation middleware can put both in play.
 
-## 4. `@genkit-ai/middleware` is invisible
+**Fix:** document the short-name contract with `defineTool`; consider
+collision-aware aliasing in the tool map.
 
-We fully reimplemented progressive-disclosure skills (index + load tool)
-before discovering `skills` middleware already ships first-party - along
-with `agents` (delegation), `toolApproval` (interrupt-gated tools),
-`artifacts`, `filesystem`, `retry`, `fallback`. None are referenced from the
-docs surfaces a plugin author reads first. The package is arguably the most
-Eve-shaped capability layer genkit has, and it's undiscoverable.
+## 4. `@genkit-ai/middleware` is easy to miss
 
-**Fix:** document the middleware catalog prominently; reference it from the
-agents API docs.
+We fully reimplemented progressive-disclosure skills before discovering the
+first-party `skills` middleware - alongside `agents` (delegation),
+`toolApproval`, `artifacts`, `filesystem`, `retry`, `fallback`. To be fair:
+the genkit README does list the catalog (`js/genkit/README.md:187-199`) and
+shows `toolApproval` in its agents section - we missed it. The residual
+point: the middleware package is the most capability-shaped layer genkit has
+(each entry maps to a folder-per-capability convention like this plugin's),
+and neither the agents docs nor the plugin-authoring docs lead you to it.
 
-## 5. `vertexAI()` cannot infer a project from gcloud ADC alone
+**Fix:** cross-reference the middleware catalog from the agents docs.
 
-With valid ADC and `gcloud config set project`, plugin init still fails:
-"Unable to determine client options. Please set either apiKey or projectId
-and location". Works only with `GCLOUD_PROJECT` env or explicit `projectId`.
-The error suggests an API key first, which is the wrong path for the GCP-
-native audience, and doesn't mention the env var it actually reads.
+## 5. Vertex plugin init failures are undiagnosable by design
 
-**Fix:** fall back to the gcloud config project like the CLI does, and name
-`GCLOUD_PROJECT` in the error.
+Original claim was "vertexAI() can't infer the project from gcloud ADC" -
+that's wrong at the code level: `getProjectId` falls back through
+`GCLOUD_PROJECT`, `FIREBASE_CONFIG`, and `authClient.getProjectId()`
+(`js/plugins/google-genai/src/vertexai/utils.ts:209-241`), and
+google-auth-library does shell out to `gcloud config config-helper`. Our
+failure was environmental.
+
+The real defect our experience points at: `getDerivedOptions` swallows the
+errors of all four fallback attempts and replaces them with one generic
+message (`utils.ts:119-163`) - "Unable to determine client options. Please
+set either apiKey or projectId and location" - which suggests an API key
+first (wrong path for the GCP-native audience), names no env var, and
+shadows the inner error at `utils.ts:244` that actually says
+`GCLOUD_PROJECT`. Whatever actually failed (PATH, expired login, IAM) is
+undiscoverable from the message.
+
+**Fix:** surface the per-attempt errors (or the last one) and name the env
+vars in the message.
 
 ## 6. Deploy story: no environment-aware session store default
 
-`FileSessionStore` defaults break on Cloud Run (ephemeral disk,
-multi-instance); `FirestoreSessionStore` exists in the firebase plugin but
-must be discovered and wired manually. One env-aware default (local disk in
-dev, Firestore when `K_SERVICE` is set) plus `serveAgents()` would make
-agent deployment literally `gcloud run deploy --source .` with zero keys
-(ADC covers Vertex).
+A store-less agent defaults to client-managed state (throwaway per-invocation
+`InMemorySessionStore`, `js/ai/src/agent.ts:1020`); `FileSessionStore` (the
+jsdoc example) breaks on Cloud Run (ephemeral disk, multi-instance);
+`FirestoreSessionStore` exists but only via `@genkit-ai/firebase/beta`
+(`plugins/firebase/src/beta.ts:17-22`) and must be discovered and wired
+manually. No environment detection anywhere (zero `K_SERVICE` hits in js/).
+More building blocks exist than are discoverable - the firebase plugin also
+ships `FirestoreStreamManager`/`RtdbStreamManager` for durable stream
+reconnect on serverless - but nothing composes them into a default. One
+env-aware store default plus an agent server helper would make deployment
+literally `gcloud run deploy --source .` with zero keys (ADC covers Vertex).
 
 **Fix:** environment-aware store default, or at minimum a deploy guide for
 the agents API.
 
 ## 7. Durability is turn-granular; the gaps compound on serverless
 
-Snapshots persist per turn. A crash mid-turn (long tool chains) loses the
-whole turn and re-executes side effects on retry - the
-`TurnContext.snapshotId` idempotency hook exists but is convention only.
-No intra-turn step journal means long turns can't span serverless request
-timeouts; detached turns die with the instance (heartbeat -> `expired`).
-Snapshots also carry no code version, so resuming after a deploy replays
+Snapshots persist only at turn boundaries (`maybeSnapshot` calls,
+`js/ai/src/agent.ts:469-474,511-516`). A crash mid-turn loses the whole turn
+and re-executes side effects on retry - the `TurnContext.snapshotId`
+idempotency hook (`agent.ts:151-170,444-460`) is convention only. No
+intra-turn journal means long turns can't span serverless request timeouts.
+Detached turns die with the instance: the heartbeat is an in-process
+`setInterval` (`agent.ts:1143-1157`) and `expired` is computed on read, never
+written back (`agent.ts:1334-1341`) - no durable resume trigger exists.
+Snapshots carry no code-version field (`SessionSnapshotSchema`,
+`js/ai/src/agent-types.ts:342-353`), so resume after a deploy replays
 against changed agent code unguarded.
 
-**Fix (long-term):** opt-in intra-turn step journaling (middleware `tool`/
-`model` hooks are the natural seam), durable resume triggers, version stamp
-on snapshots.
+**Fix (long-term):** opt-in intra-turn step journaling (middleware
+`tool`/`model` hooks are the natural seam), durable resume triggers, version
+stamp on snapshots.
 
-## 8. `.prompt` parsing has no public API
+## 8. `.prompt` parsing: three routes, none blessed
 
-Reading an `agent.prompt` file requires `ai.registry.dotprompt.parse()` -
-reaching into the registry's internal Dotprompt instance. Fine in-tree,
-awkward for external plugins wanting dotprompt-compatible files. Related:
-unknown frontmatter keys surface only via the undocumented `parsed.raw`,
-which this plugin relies on for `delegates`/`requireApproval`.
+An external plugin wanting dotprompt-compatible files can (a) use
+`registry.dotprompt.parse()` - a public readonly field
+(`js/core/src/registry.ts:164`) whose value over a fresh instance is the
+registry-wired schema resolver; (b) use `loadPromptFolder`, publicly exported
+from `@genkit-ai/ai` (`js/ai/src/index.ts:106`) but register-only - it
+doesn't return parsed frontmatter; or (c) depend on the standalone
+`dotprompt` npm package directly (where `ParsedPrompt.raw` is documented).
+Nothing says which is the supported path, and the `genkit` package itself
+re-exports none of it. This plugin uses (a) and reads custom frontmatter
+keys (`delegates`, `requireApproval`) from `parsed.raw`.
 
-**Fix:** export a parse/loadPromptFolder-style helper; document `raw` (or a
-blessed extension-keys mechanism).
+**Fix:** document the blessed path (and an extension-keys convention for
+frontmatter).
 
-## 9. Minor
+## 9. Smaller items
 
-- `mockModel` defaults to "does not support tools" warnings in agent tests;
-  needs `info: { supports: { tools: true } }` boilerplate every time.
-- Beta agents API (snapshot statuses, `use` on prompts/agents, detach,
-  branching) is currently learnable only by reading source; this plugin was
-  built entirely from `ai/src/agent.ts` comments - which are good, but
-  they're the only docs.
+- `mockModel` needs `info: { supports: { tools: true } }` boilerplate to
+  avoid "does not support tools" warnings in every agent test
+  (`js/ai/src/testing/mock-model.ts:382` vs
+  `js/ai/src/generate/action.ts:580-588`).
+- `FileSessionStore` can serve a stale `sessionId` lookup after a crash
+  between snapshot write and pointer write - acknowledged only in a private
+  comment (`js/ai/src/session-stores.ts:541-551`).
+- `resume.restart` validates by deep-equal input match against history
+  (`js/ai/src/agent.ts:1672-1682`) - sharp for clients that re-serialize
+  (dropped `undefined` fields, number formatting).
+- Published agents docs exist (genkit.dev/docs/js/agents) but the beta
+  surface (snapshot statuses, `use` on prompts/agents, detach, branching) is
+  substantially deeper than them; `ai/src/agent.ts` source comments are the
+  real reference today.

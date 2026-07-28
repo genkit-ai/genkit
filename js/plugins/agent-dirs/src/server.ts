@@ -86,7 +86,16 @@ export async function serveAgents(
   const app = options.app ?? express();
   if (!options.app) {
     app.use(express.json());
-    app.use(cors(options.cors ?? {}));
+    // Durable stream reconnects require the client to read the
+    // X-Genkit-Stream-Id response header, so it must be CORS-exposed.
+    app.use(
+      cors(
+        options.cors ?? {
+          allowedHeaders: ['Content-Type', 'Accept', 'X-Genkit-Stream-Id'],
+          exposedHeaders: ['X-Genkit-Stream-Id'],
+        }
+      )
+    );
   }
 
   const prefix = (options.pathPrefix ?? '/api').replace(/\/+$/, '');
