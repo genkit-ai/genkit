@@ -36,36 +36,28 @@ func listActions(ctx context.Context, client *genai.Client, provider string) []a
 	for _, name := range models.gemini {
 		opts := GetModelOptions(name, provider)
 		model := newModel(client, name, opts)
-		if actionDef, ok := model.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
+		actions = append(actions, model.Desc())
 	}
 
 	// Imagen models
 	for _, name := range models.imagen {
 		opts := GetModelOptions(name, provider)
 		model := newModel(client, name, opts)
-		if actionDef, ok := model.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
+		actions = append(actions, model.Desc())
 	}
 
 	// Veo models (background models)
 	for _, name := range models.veo {
 		opts := GetModelOptions(name, provider)
 		veoModel := newVeoModel(client, name, opts)
-		if actionDef, ok := veoModel.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
+		actions = append(actions, veoModel.Desc())
 	}
 
 	// Embedders
 	for _, name := range models.embedders {
 		opts := GetEmbedderOptions(name, provider)
 		embedder := newEmbedder(client, name, &opts)
-		if actionDef, ok := embedder.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
+		actions = append(actions, embedder.Desc())
 	}
 
 	return actions
@@ -88,7 +80,7 @@ func resolveAction(client *genai.Client, provider string, atype api.ActionType, 
 	switch atype {
 	case api.ActionTypeEmbedder:
 		opts := GetEmbedderOptions(name, provider)
-		return newEmbedder(client, name, &opts).(api.Action)
+		return newEmbedder(client, name, &opts)
 
 	case api.ActionTypeModel:
 		// Veo models should not be resolved as regular models
@@ -96,7 +88,7 @@ func resolveAction(client *genai.Client, provider string, atype api.ActionType, 
 			return nil
 		}
 		opts := GetModelOptions(name, provider)
-		return newModel(client, name, opts).(api.Action)
+		return newModel(client, name, opts)
 
 	case api.ActionTypeBackgroundModel:
 		if mt != ModelTypeVeo {
@@ -120,7 +112,7 @@ func createVeoBackgroundAction(client *genai.Client, name, provider string) api.
 	veoModel := newVeoModel(client, name, opts)
 	actionName := api.NewName(provider, name)
 
-	return core.NewAction(actionName, api.ActionTypeBackgroundModel, nil, nil,
+	return core.NewAction(api.ActionTypeBackgroundModel, actionName, nil,
 		func(ctx context.Context, input *ai.ModelRequest) (*core.Operation[*ai.ModelResponse], error) {
 			op, err := veoModel.Start(ctx, input)
 			if err != nil {
@@ -129,6 +121,7 @@ func createVeoBackgroundAction(client *genai.Client, name, provider string) api.
 			op.Action = api.KeyFromName(api.ActionTypeBackgroundModel, actionName)
 			return op, nil
 		})
+
 }
 
 // createVeoCheckAction creates a check operation action for Veo.
@@ -137,8 +130,8 @@ func createVeoCheckAction(client *genai.Client, name, provider string) api.Actio
 	veoModel := newVeoModel(client, name, opts)
 	actionName := api.NewName(provider, name)
 
-	return core.NewAction(actionName, api.ActionTypeCheckOperation,
-		map[string]any{"description": fmt.Sprintf("Check status of %s operation", name)}, nil,
+	return core.NewAction(api.ActionTypeCheckOperation, actionName,
+		&core.ActionOptions{Description: fmt.Sprintf("Check status of %s operation", name)},
 		func(ctx context.Context, op *core.Operation[*ai.ModelResponse]) (*core.Operation[*ai.ModelResponse], error) {
 			updatedOp, err := veoModel.Check(ctx, op)
 			if err != nil {
@@ -147,4 +140,5 @@ func createVeoCheckAction(client *genai.Client, name, provider string) api.Actio
 			updatedOp.Action = api.KeyFromName(api.ActionTypeBackgroundModel, actionName)
 			return updatedOp, nil
 		})
+
 }

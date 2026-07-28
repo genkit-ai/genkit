@@ -39,7 +39,7 @@ const (
 	ToolNameRegex = `^[a-zA-Z0-9_-]{1,64}$`
 )
 
-func DefineModel(client anthropic.Client, provider, name string, info ai.ModelOptions) ai.Model {
+func DefineModel(client anthropic.Client, provider, name string, info ai.ModelOptions) *ai.Model {
 	label := "Anthropic"
 
 	if provider == "vertexai" {
@@ -61,9 +61,10 @@ func DefineModel(client anthropic.Client, provider, name string, info ai.ModelOp
 	return ai.NewModel(api.NewName(provider, name), meta, func(
 		ctx context.Context,
 		input *ai.ModelRequest,
+		config anthropic.MessageNewParams,
 		cb func(context.Context, *ai.ModelResponseChunk) error,
 	) (*ai.ModelResponse, error) {
-		return Generate(ctx, client, provider, name, input, cb)
+		return Generate(ctx, client, provider, name, input, config, cb)
 	})
 }
 
@@ -114,9 +115,10 @@ func Generate(
 	provider string,
 	model string,
 	input *ai.ModelRequest,
+	config anthropic.MessageNewParams,
 	cb func(context.Context, *ai.ModelResponseChunk) error,
 ) (*ai.ModelResponse, error) {
-	req, err := toAnthropicRequest(provider, input)
+	req, err := toAnthropicRequest(provider, input, config)
 	if err != nil {
 		return nil, fmt.Errorf("unable to generate anthropic request: %w", err)
 	}
@@ -208,14 +210,12 @@ func toAnthropicRole(role ai.Role) (anthropic.MessageParamRole, error) {
 	}
 }
 
-// toAnthropicRequest translates [ai.ModelRequest] to an Anthropic request
-func toAnthropicRequest(provider string, i *ai.ModelRequest) (*anthropic.MessageNewParams, error) {
+// toAnthropicRequest translates [ai.ModelRequest] to an Anthropic request.
+// The request's typed config doubles as the base request params.
+func toAnthropicRequest(provider string, i *ai.ModelRequest, config anthropic.MessageNewParams) (*anthropic.MessageNewParams, error) {
 	messages := make([]anthropic.MessageParam, 0)
 
-	req, err := configFromRequest(i)
-	if err != nil {
-		return nil, err
-	}
+	req := &config
 
 	if req.MaxTokens == 0 {
 		return nil, errors.New("maxTokens not set")
@@ -272,29 +272,6 @@ func toAnthropicRequest(provider string, i *ai.ModelRequest) (*anthropic.Message
 	}
 
 	return req, nil
-}
-
-// configFromRequest converts any supported config type to [anthropic.MessageNewParams]
-func configFromRequest(input *ai.ModelRequest) (*anthropic.MessageNewParams, error) {
-	var result anthropic.MessageNewParams
-
-	switch config := input.Config.(type) {
-	case anthropic.MessageNewParams:
-		result = config
-	case *anthropic.MessageNewParams:
-		result = *config
-	case map[string]any:
-		var err error
-		result, err = base.MapToStruct[anthropic.MessageNewParams](config)
-		if err != nil {
-			return nil, err
-		}
-	case nil:
-		// Empty configuration is considered valid
-	default:
-		return nil, fmt.Errorf("unexpected config type: %T", input.Config)
-	}
-	return &result, nil
 }
 
 // toAnthropicTools translates [ai.ToolDefinition] to an anthropic.ToolParam type
@@ -392,13 +369,7 @@ func toAnthropicParts(parts []*ai.Part) ([]anthropic.ContentBlockParamUnion, err
 			}
 			blocks = append(blocks, anthropic.NewToolResultBlock(toolResp.Ref, string(output), false))
 		case p.IsReasoning():
-			signature := []byte{}
-			if p.Metadata != nil {
-				if sig, ok := p.Metadata["signature"].([]byte); ok {
-					signature = sig
-				}
-			}
-			blocks = append(blocks, anthropic.NewThinkingBlock(string(signature), p.Text))
+			blocks = append(blocks, anthropic.NewThinkingBlock(string(p.ThoughtSignature()), p.Text))
 		default:
 			return nil, errors.New("unknown part type in the request")
 		}

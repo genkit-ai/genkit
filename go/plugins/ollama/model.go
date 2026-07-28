@@ -17,17 +17,8 @@
 package ollama
 
 import (
-	"errors"
-	"fmt"
 	"maps"
-
-	"github.com/firebase/genkit/go/ai"
 )
-
-var topLevelOpts = map[string]struct{}{
-	"think":      {},
-	"keep_alive": {},
-}
 
 // Ollama has two API endpoints, one with a chat interface and another with a generate response interface.
 // That's why have multiple request interfaces for the Ollama API below.
@@ -54,30 +45,9 @@ type ollamaChatRequest struct {
 	KeepAlive string           `json:"keep_alive,omitempty"`
 }
 
-func (o *ollamaChatRequest) ApplyOptions(cfg any) error {
+func (o *ollamaChatRequest) applyGenerateContentConfig(cfg *GenerateContentConfig) {
 	if cfg == nil {
-		return nil
-	}
-
-	switch config := cfg.(type) {
-	case GenerateContentConfig:
-		return o.applyGenerateContentConfig(&config)
-	case *GenerateContentConfig:
-		return o.applyGenerateContentConfig(config)
-	case map[string]any:
-		return o.applyMapAny(config)
-	case *ai.GenerationCommonConfig:
-		return o.applyGenerationCommonConfig(config)
-	case ai.GenerationCommonConfig:
-		return o.applyGenerationCommonConfig(&config)
-	default:
-		return fmt.Errorf("unexpected config type: %T", cfg)
-	}
-}
-
-func (o *ollamaChatRequest) applyGenerateContentConfig(cfg *GenerateContentConfig) error {
-	if cfg == nil {
-		return nil
+		return
 	}
 
 	if cfg.Think != nil {
@@ -120,73 +90,4 @@ func (o *ollamaChatRequest) applyGenerateContentConfig(cfg *GenerateContentConfi
 		}
 		maps.Copy(o.Options, opts)
 	}
-
-	return nil
-}
-
-func (o *ollamaChatRequest) applyGenerationCommonConfig(cfg *ai.GenerationCommonConfig) error {
-	if cfg == nil {
-		return nil
-	}
-
-	m := make(map[string]any)
-
-	if cfg.MaxOutputTokens > 0 {
-		m["num_predict"] = cfg.MaxOutputTokens
-	}
-	if len(cfg.StopSequences) > 0 {
-		m["stop"] = cfg.StopSequences
-	}
-	if cfg.Temperature != 0 {
-		m["temperature"] = cfg.Temperature
-	}
-	if cfg.TopK > 0 {
-		m["top_k"] = cfg.TopK
-	}
-	if cfg.TopP > 0 {
-		m["top_p"] = cfg.TopP
-	}
-
-	return o.applyMapAny(m)
-}
-
-func (o *ollamaChatRequest) applyMapAny(m map[string]any) error {
-	if len(m) == 0 {
-		return nil
-	}
-	opts := o.Options
-	if opts == nil {
-		opts = make(map[string]any)
-	}
-	for k, v := range m {
-		if _, isTopLevel := topLevelOpts[k]; isTopLevel {
-			switch k {
-			case "think":
-				switch tv := v.(type) {
-				case bool:
-					o.Think = ThinkEnabled(tv)
-				case string:
-					o.Think = ThinkEffort(tv)
-				case *ThinkOption:
-					o.Think = tv
-				default:
-					return fmt.Errorf("think must be a boolean or string, got: %T", v)
-				}
-			case "keep_alive":
-				if s, ok := v.(string); ok {
-					o.KeepAlive = s
-				} else {
-					return errors.New("keep_alive must be string")
-				}
-			}
-			continue
-		}
-		opts[k] = v
-	}
-
-	if len(opts) > 0 {
-		o.Options = opts
-	}
-
-	return nil
 }

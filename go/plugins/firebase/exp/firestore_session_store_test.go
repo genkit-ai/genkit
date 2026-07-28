@@ -25,8 +25,8 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	genkit "github.com/firebase/genkit/go"
 	aix "github.com/firebase/genkit/go/ai/exp"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/firebase"
 	"github.com/google/uuid"
 )
@@ -105,7 +105,7 @@ func TestNewFirestoreSessionStoreNilClient(t *testing.T) {
 func TestNewFirestoreSessionStorePluginNotFound(t *testing.T) {
 	// Without the Firebase plugin registered, the public constructor surfaces a
 	// clear error instead of resolving a client.
-	g := genkit.Init(context.Background())
+	g := genkit.MustInit(context.Background())
 	if _, err := NewFirestoreSessionStore[testState](context.Background(), g); err == nil {
 		t.Error("expected error when the Firebase plugin is not registered")
 	}
@@ -118,7 +118,7 @@ func TestNewFirestoreSessionStorePublic(t *testing.T) {
 		t.Skip("Skipping: FIRESTORE_EMULATOR_HOST not set")
 	}
 	ctx := context.Background()
-	g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: testProjectID}))
+	g := genkit.MustInit(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: testProjectID}))
 	store, err := NewFirestoreSessionStore[testState](ctx, g, WithCollection("sessions-"+uuid.NewString()))
 	if err != nil {
 		t.Fatalf("NewFirestoreSessionStore: %v", err)

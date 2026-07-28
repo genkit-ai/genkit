@@ -20,8 +20,8 @@ import (
 	"math"
 	"net/http"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/server"
 )
@@ -36,15 +36,18 @@ type StoryCharacter struct {
 
 func main() {
 	ctx := context.Background()
-	g := genkit.Init(ctx,
+	g, err := genkit.Init(ctx,
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
 	)
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	var callback func(context.Context, *ai.ModelResponseChunk) error
 
-	gablorkenTool := genkit.DefineTool(g, "gablorken", "use when need to calculate a gablorken",
-		func(ctx *ai.ToolContext, input struct {
+	gablorkenTool := g.DefineTool("gablorken", "use when need to calculate a gablorken",
+		func(ctx context.Context, input struct {
 			Value float64
 			Over  float64
 		},
@@ -53,27 +56,26 @@ func main() {
 		},
 	)
 
-	defaultPrompt := genkit.DefinePrompt(g, "defaultInstructions",
+	defaultPrompt := g.DefinePrompt[StoryCharacter]("defaultInstructions",
 		ai.WithPrompt("Generate a children's book story character about someone named {{name}} and generate the gablorken of 2 over 3."),
 		ai.WithTools(gablorkenTool),
 		ai.WithOutputType([]StoryCharacter{}),
 		ai.WithOutputFormat(ai.OutputFormatJSONL),
 	)
 
-	customPrompt := genkit.DefinePrompt(g, "customInstructions",
+	customPrompt := g.DefinePrompt[StoryCharacter]("customInstructions",
 		ai.WithPrompt("Generate a children's book story character about someone named {{name}}."),
 		ai.WithOutputInstructions("The output should be JSON and match the schema of the following object: "+
 			"{name: string, age: number, homeTown: string, profession: string}"),
 	)
 
-	genkit.DefineStreamingFlow(g, "defaultInstructionsFlow", func(ctx context.Context, _ any, cb func(context.Context, string) error) ([]*StoryCharacter, error) {
+	g.DefineStreamingFlow("defaultInstructionsFlow", func(ctx context.Context, _ any, cb func(context.Context, string) error) ([]*StoryCharacter, error) {
 		if cb != nil {
 			callback = func(ctx context.Context, c *ai.ModelResponseChunk) error {
 				return cb(ctx, c.Text())
 			}
 		}
-		resp, err := defaultPrompt.Execute(ctx,
-			ai.WithInput(StoryCharacter{Name: "Willy the Pig"}),
+		_, resp, err := defaultPrompt.Execute(ctx, StoryCharacter{Name: "Willy the Pig"},
 			ai.WithStreaming(callback),
 		)
 		if err != nil {
@@ -85,7 +87,7 @@ func main() {
 			return nil, err
 		}
 
-		resp, err = customPrompt.Execute(ctx, ai.WithInput(StoryCharacter{Name: "Markie the Doberman"}))
+		_, resp, err = customPrompt.Execute(ctx, StoryCharacter{Name: "Markie the Doberman"})
 		if err != nil {
 			return nil, err
 		}
@@ -99,7 +101,7 @@ func main() {
 	})
 
 	mux := http.NewServeMux()
-	for _, a := range genkit.ListFlows(g) {
+	for _, a := range g.ListFlows() {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
 	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))

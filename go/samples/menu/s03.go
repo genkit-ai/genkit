@@ -20,8 +20,8 @@ import (
 	"context"
 	"slices"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"google.golang.org/genai"
 )
 
@@ -57,8 +57,8 @@ func (ch *chatHistoryStore) Retrieve(sessionID string) chatHistory {
 	return ch.preamble
 }
 
-func setup03(g *genkit.Genkit, m ai.Model) error {
-	chatPreamblePrompt := genkit.DefinePrompt(g, "s03_chatPreamble",
+func setup03(g *genkit.Genkit, m *ai.Model) error {
+	chatPreamblePrompt := g.DefinePrompt[dataMenuQuestionInput]("s03_chatPreamble",
 		ai.WithMessages(
 			ai.NewUserTextMessage("Hi. What's on the menu today?"),
 			ai.NewModelTextMessage(`
@@ -73,21 +73,20 @@ Here is today's menu:
 Do you have any questions about the menu?`),
 		),
 		ai.WithModel(m),
-		ai.WithInputType(dataMenuQuestionInput{}),
 		ai.WithOutputFormat(ai.OutputFormatText),
 		ai.WithConfig(&genai.GenerateContentConfig{
 			Temperature: genai.Ptr[float32](0.3),
 		}),
 	)
 
-	menuData, err := menu(&ai.ToolContext{Context: context.Background()}, nil)
+	menuData, err := menu(context.Background(), nil)
 	if err != nil {
 		return err
 	}
 
-	preamble, err := chatPreamblePrompt.Render(context.Background(), map[string]any{
-		"menuData": menuData,
-		"question": "",
+	preamble, err := chatPreamblePrompt.Render(context.Background(), dataMenuQuestionInput{
+		MenuData: menuData,
+		Question: "",
 	})
 	if err != nil {
 		return err
@@ -98,7 +97,7 @@ Do you have any questions about the menu?`),
 		sessions: make(map[string]chatHistory),
 	}
 
-	genkit.DefineFlow(g, "s03_multiTurnChat",
+	g.DefineFlow("s03_multiTurnChat",
 		func(ctx context.Context, input *chatSessionInput) (*chatSessionOutput, error) {
 			history := storedHistory.Retrieve(input.SessionID)
 			msg := &ai.Message{
@@ -108,7 +107,7 @@ Do you have any questions about the menu?`),
 				Role: ai.RoleUser,
 			}
 			messages := append(slices.Clip(history), msg)
-			resp, err := genkit.Generate(ctx, g, ai.WithModel(m), ai.WithMessages(messages...))
+			resp, err := g.Generate(ctx, ai.WithModel(m), ai.WithMessages(messages...))
 			if err != nil {
 				return nil, err
 			}

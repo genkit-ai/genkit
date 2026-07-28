@@ -24,7 +24,7 @@ a higher-level, more convenient API.
 # Actions
 
 Actions are the fundamental building blocks of Genkit. Every operation - flows,
-model calls, tool invocations, retrieval - is implemented as an action. Actions
+model calls, tool invocations, embeddings - is implemented as an action. Actions
 provide:
 
   - Type-safe input/output with JSON schema validation
@@ -34,17 +34,27 @@ provide:
 
 Define a non-streaming action:
 
-	action := core.DefineAction(registry, "myAction",
+	action := core.DefineAction(registry, api.ActionTypeCustom, "myAction", nil,
 		func(ctx context.Context, input string) (string, error) {
 			return "processed: " + input, nil
 		},
 	)
 
-	result, err := action.Run(context.Background(), "hello")
+	result, err := action.Run(context.Background(), "hello", nil)
+
+Optional attributes (description, metadata, schema overrides) are passed via
+[ActionOptions]:
+
+	action := core.DefineAction(registry, api.ActionTypeCustom, "myAction",
+		&core.ActionOptions{Description: "processes strings"},
+		func(ctx context.Context, input string) (string, error) {
+			return "processed: " + input, nil
+		},
+	)
 
 Define a streaming action that sends chunks during execution:
 
-	streamingAction := core.DefineStreamingAction(registry, "countdown",
+	streamingAction := core.DefineStreamingAction(registry, api.ActionTypeCustom, "countdown", nil,
 		func(ctx context.Context, start int, cb core.StreamCallback[string]) (string, error) {
 			for i := start; i > 0; i-- {
 				if cb != nil {
@@ -136,14 +146,14 @@ Register JSON schemas for use in prompts and validation:
 		"required": []any{"name"},
 	})
 
-	// Define a schema from a Go type (recommended)
-	core.DefineSchemaFor[Person](registry)
+	// Define schemas from Go types (recommended)
+	core.DefineSchemasFor(registry, Person{})
 
 Schemas can be referenced in .prompt files by name.
 
 # Plugin Development
 
-Plugins extend Genkit's functionality by providing models, tools, retrievers,
+Plugins extend Genkit's functionality by providing models, tools,
 and other capabilities. Implement the [api.Plugin] interface:
 
 	type MyPlugin struct {
@@ -184,8 +194,8 @@ from an API), implement [api.DynamicPlugin]:
 For long-running operations, use background actions that return immediately
 with an operation ID that can be polled for completion:
 
-	bgAction := core.DefineBackgroundAction(registry, "longTask",
-		func(ctx context.Context, input Input) (Output, error) {
+	bgAction := core.DefineBackgroundAction(registry, api.ActionTypeCustom, "longTask", nil,
+		func(ctx context.Context, input Input) (*core.Operation[Output], error) {
 			// Start the operation
 			return startLongOperation(input)
 		},
@@ -193,22 +203,39 @@ with an operation ID that can be polled for completion:
 			// Check operation status
 			return checkOperationStatus(op)
 		},
+		nil, // cancelFn; nil means cancellation is unsupported
 	)
 
 # Error Handling
 
-Return user-facing errors with appropriate status codes:
+Errors carry a canonical status from the status package. Classify with a
+sentinel, which callers match using errors.Is:
+
+	return nil, status.Errorf(status.ErrNotFound, "model %q not found", name)
+
+Declare domain failure modes from a base sentinel so callers can match at
+either granularity:
+
+	var ErrQuotaExceeded = status.ErrResourceExhausted.Subtype("quota exceeded")
+
+Add context as an error travels up without reclassifying it. Use fmt.Errorf
+with %w; the sentinel and status survive:
+
+	return fmt.Errorf("model %q: %w", name, err)
+
+Reclassify only where the meaning genuinely changes, and do it deliberately:
+
+	return status.Errorf(status.ErrInternal, "tool %q: %w", name, err)
+
+Messages stay server-side by default. Mark the ones that are safe to return
+to a client, and transports will surface them verbatim:
 
 	if err := validate(input); err != nil {
-		return nil, core.NewPublicError(core.INVALID_ARGUMENT, "Invalid input", map[string]any{
-			"field": "email",
-			"error": err.Error(),
-		})
+		return nil, status.PublicErrorf(status.ErrInvalidArgument, "invalid email").
+			WithDetails(map[string]any{"field": "email"})
 	}
 
-For internal errors that should be logged but not exposed to users:
-
-	return nil, core.NewError(core.INTERNAL, "database connection failed: %v", err)
+See [github.com/firebase/genkit/go/core/status] for the full guidance.
 
 # Context
 

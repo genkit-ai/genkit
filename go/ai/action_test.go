@@ -71,7 +71,7 @@ func defineProgrammableModel(r api.Registry) *programmableModel {
 		Tools:     true,
 		Multiturn: true,
 	}
-	DefineModel(r, "programmableModel", &ModelOptions{Supports: supports}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	DefineModel(r, "programmableModel", &ModelOptions{Supports: supports}, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		return pm.Generate(ctx, r, req, &ToolConfig{MaxTurns: 5}, cb)
 	})
 	return pm
@@ -98,7 +98,7 @@ func TestGenerateAction(t *testing.T) {
 			pm := defineProgrammableModel(r)
 
 			DefineTool(r, "testTool", "description",
-				func(ctx *ToolContext, input any) (any, error) {
+				func(ctx context.Context, input any) (any, error) {
 					return "tool called", nil
 				})
 

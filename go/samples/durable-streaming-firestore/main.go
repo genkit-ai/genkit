@@ -48,7 +48,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/firebase/genkit/go/genkit"
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/plugins/firebase"
 	firebasex "github.com/firebase/genkit/go/plugins/firebase/exp"
 	"github.com/firebase/genkit/go/plugins/server"
@@ -57,7 +57,10 @@ import (
 func main() {
 	ctx := context.Background()
 
-	g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	type CountdownChunk struct {
 		Count     int    `json:"count"`
@@ -65,7 +68,7 @@ func main() {
 		Timestamp string `json:"timestamp"`
 	}
 
-	countdown := genkit.DefineStreamingFlow(g, "countdown",
+	countdown := g.DefineStreamingFlow("countdown",
 		func(ctx context.Context, count int, sendChunk func(context.Context, CountdownChunk) error) (string, error) {
 			if count <= 0 {
 				count = 5

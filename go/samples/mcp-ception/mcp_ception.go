@@ -17,13 +17,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/logger"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/mcp"
 )
@@ -41,14 +42,17 @@ func createMCPServer() {
 	logger.FromContext(ctx).Info("Starting Genkit MCP Server")
 
 	// Initialize Genkit for the server
-	g := genkit.Init(ctx)
+	g, err := genkit.Init(ctx)
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Define a tool that generates creative content (this will be auto-exposed via MCP)
-	genkit.DefineTool(g, "genkit-brainstorm", "Generate creative ideas about a topic",
-		func(ctx *ai.ToolContext, input struct {
+	g.DefineTool("genkit-brainstorm", "Generate creative ideas about a topic",
+		func(ctx context.Context, input struct {
 			Topic string `json:"topic" description:"The topic to brainstorm about"`
 		}) (map[string]interface{}, error) {
-			logger.FromContext(ctx.Context).Debug("Executing genkit-brainstorm tool", "topic", input.Topic)
+			logger.FromContext(ctx).Debug("Executing genkit-brainstorm tool", "topic", input.Topic)
 
 			ideas := fmt.Sprintf(`Creative Ideas for "%s":
 
@@ -72,7 +76,7 @@ These ideas can be mixed, matched, and customized for "%s".`, input.Topic, input
 		})
 
 	// Define a resource that contains Genkit knowledge (this will be auto-exposed via MCP)
-	genkit.DefineResource(g, "genkit-knowledge", &ai.ResourceOptions{
+	g.DefineResource("genkit-knowledge", &ai.ResourceOptions{
 		URI: "knowledge://genkit-docs",
 	}, func(ctx context.Context, input *ai.ResourceInput) (*ai.ResourceOutput, error) {
 		knowledge := `# Genkit Knowledge Base
@@ -135,10 +139,13 @@ func mcpSelfConnection() {
 	logger.FromContext(ctx).Info("Connecting to local MCP server (the sample will spawn it for you)")
 
 	// Initialize Genkit with Google AI for the client
-	g := genkit.Init(ctx,
+	g, err := genkit.Init(ctx,
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
 	)
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Server process is spawned automatically via stdio
 
@@ -199,15 +206,15 @@ func mcpSelfConnection() {
 	logger.FromContext(ctx).Info("")
 
 	// Convert tools to refs
-	var toolRefs []ai.ToolRef
+	var toolArgs []ai.ToolArg
 	for _, tool := range tools {
-		toolRefs = append(toolRefs, tool)
+		toolArgs = append(toolArgs, tool)
 	}
 
 	// Guided demos
 	runResourceDemo(ctx, g, resources)
 	logger.FromContext(ctx).Info("")
-	runToolDemo(ctx, g, toolRefs)
+	runToolDemo(ctx, g, toolArgs)
 	logger.FromContext(ctx).Info("")
 
 	logger.FromContext(ctx).Info("MCP demos finished")
@@ -217,7 +224,7 @@ func mcpSelfConnection() {
 }
 
 // runResourceDemo demonstrates referencing a resource from the MCP server in a model request.
-func runResourceDemo(ctx context.Context, g *genkit.Genkit, resources []ai.Resource) {
+func runResourceDemo(ctx context.Context, g *genkit.Genkit, resources []*ai.Resource) {
 	// Explain
 	logger.FromContext(ctx).Info("")
 	logger.FromContext(ctx).Info("Resource demo: Use a resource from our own MCP server")
@@ -237,7 +244,7 @@ func runResourceDemo(ctx context.Context, g *genkit.Genkit, resources []ai.Resou
 	logger.FromContext(ctx).Info("resource_demo: selected_resource", "uri", selectedURI, "matched", matched, "resource", matchedName)
 
 	// Call generate using resource
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithMessages(ai.NewUserMessage(
 			ai.NewTextPart("Based on this Genkit knowledge:"),
 			ai.NewResourcePart(selectedURI),
@@ -262,7 +269,7 @@ func runResourceDemo(ctx context.Context, g *genkit.Genkit, resources []ai.Resou
 }
 
 // runToolDemo demonstrates enabling and calling a tool from the MCP server.
-func runToolDemo(ctx context.Context, g *genkit.Genkit, toolRefs []ai.ToolRef) {
+func runToolDemo(ctx context.Context, g *genkit.Genkit, toolArgs []ai.ToolArg) {
 	// Explain
 	logger.FromContext(ctx).Info("")
 	logger.FromContext(ctx).Info("Tool demo: Use a tool from our own MCP server")
@@ -270,20 +277,20 @@ func runToolDemo(ctx context.Context, g *genkit.Genkit, toolRefs []ai.ToolRef) {
 
 	// List tools we are enabling
 	toolNames := []string{}
-	for _, t := range toolRefs {
+	for _, t := range toolArgs {
 		toolNames = append(toolNames, t.Name())
 	}
-	logger.FromContext(ctx).Info("tool_demo: starting", "tool_choice", string(ai.ToolChoiceAuto), "tool_count", len(toolRefs), "tools", toolNames)
+	logger.FromContext(ctx).Info("tool_demo: starting", "tool_choice", string(ai.ToolChoiceAuto), "tool_count", len(toolArgs), "tools", toolNames)
 	for _, n := range toolNames {
 		logger.FromContext(ctx).Info("tool_demo: tool_enabled", "name", n)
 	}
 
 	// Call generate with tools enabled
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithMessages(ai.NewUserMessage(
 			ai.NewTextPart("Use the brainstorm tool to generate creative ideas for \"AI-powered cooking assistant\""),
 		)),
-		ai.WithTools(toolRefs...),
+		ai.WithTools(toolArgs...),
 		ai.WithToolChoice(ai.ToolChoiceAuto),
 	)
 	if err != nil {

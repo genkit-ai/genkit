@@ -81,7 +81,7 @@ Create spans with rich metadata for better observability:
 	metadata := &tracing.SpanMetadata{
 		Name:    "processDocument",
 		Type:    "action",
-		Subtype: "retriever",
+		Subtype: "embedder",
 	}
 
 	output, err := tracing.RunInNewSpan(ctx, metadata, input,

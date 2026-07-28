@@ -23,12 +23,12 @@ import (
 )
 
 // GetActiveResources fetches resources from the MCP server
-func (c *GenkitMCPClient) GetActiveResources(ctx context.Context) ([]ai.Resource, error) {
+func (c *GenkitMCPClient) GetActiveResources(ctx context.Context) ([]*ai.Resource, error) {
 	if !c.IsEnabled() || c.server == nil {
 		return nil, fmt.Errorf("MCP client is disabled or not connected")
 	}
 
-	var resources []ai.Resource
+	var resources []*ai.Resource
 
 	// Fetch static resources
 	staticResources, err := c.getStaticResources(ctx)
@@ -49,13 +49,13 @@ func (c *GenkitMCPClient) GetActiveResources(ctx context.Context) ([]ai.Resource
 }
 
 // getStaticResources retrieves and converts static MCP resources to Genkit resources
-func (c *GenkitMCPClient) getStaticResources(ctx context.Context) ([]ai.Resource, error) {
+func (c *GenkitMCPClient) getStaticResources(ctx context.Context) ([]*ai.Resource, error) {
 	mcpResources, err := c.getResources(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	var resources []ai.Resource
+	var resources []*ai.Resource
 	for _, mcpResource := range mcpResources {
 		resource, err := c.toGenkitResource(mcpResource)
 		if err != nil {
@@ -67,13 +67,13 @@ func (c *GenkitMCPClient) getStaticResources(ctx context.Context) ([]ai.Resource
 }
 
 // getTemplateResources retrieves and converts MCP resource templates to Genkit resources
-func (c *GenkitMCPClient) getTemplateResources(ctx context.Context) ([]ai.Resource, error) {
+func (c *GenkitMCPClient) getTemplateResources(ctx context.Context) ([]*ai.Resource, error) {
 	mcpTemplates, err := c.getResourceTemplates(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	var resources []ai.Resource
+	var resources []*ai.Resource
 	for _, mcpTemplate := range mcpTemplates {
 		resource, err := c.toGenkitResourceTemplate(mcpTemplate)
 		if err != nil {
@@ -85,7 +85,7 @@ func (c *GenkitMCPClient) getTemplateResources(ctx context.Context) ([]ai.Resour
 }
 
 // toGenkitResource creates a Genkit resource from an MCP static resource
-func (c *GenkitMCPClient) toGenkitResource(mcpResource mcp.Resource) (ai.Resource, error) {
+func (c *GenkitMCPClient) toGenkitResource(mcpResource mcp.Resource) (*ai.Resource, error) {
 	// Create namespaced resource name
 	resourceName := c.GetResourceNameWithNamespace(mcpResource.Name)
 
@@ -109,7 +109,7 @@ func (c *GenkitMCPClient) toGenkitResource(mcpResource mcp.Resource) (ai.Resourc
 }
 
 // toGenkitResourceTemplate creates a Genkit template resource from MCP template
-func (c *GenkitMCPClient) toGenkitResourceTemplate(mcpTemplate mcp.ResourceTemplate) (ai.Resource, error) {
+func (c *GenkitMCPClient) toGenkitResourceTemplate(mcpTemplate mcp.ResourceTemplate) (*ai.Resource, error) {
 	resourceName := c.GetResourceNameWithNamespace(mcpTemplate.Name)
 
 	// Convert URITemplate to string - extract the raw template string

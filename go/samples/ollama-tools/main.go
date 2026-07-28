@@ -17,10 +17,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/ollama"
 )
 
@@ -46,7 +47,10 @@ func main() {
 		Timeout:       60,                       // Response timeout in seconds
 	}
 
-	g := genkit.Init(ctx, genkit.WithPlugins(ollamaPlugin))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(ollamaPlugin))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Define the Ollama model
 	model := ollamaPlugin.DefineModel(g,
@@ -57,8 +61,8 @@ func main() {
 		nil)
 
 	// Define tools
-	weatherTool := genkit.DefineTool(g, "weather", "Get current weather for a location",
-		func(ctx *ai.ToolContext, input WeatherInput) (WeatherData, error) {
+	weatherTool := g.DefineTool("weather", "Get current weather for a location",
+		func(ctx context.Context, input WeatherInput) (WeatherData, error) {
 			// Get weather data (simulated)
 			return simulateWeather(input.Location), nil
 		},
@@ -75,7 +79,7 @@ func main() {
 	// Generate response with tools
 	fmt.Println("Generating response with weather tool...")
 
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := g.Generate(ctx,
 		ai.WithModel(model),
 		ai.WithMessages(systemMsg, userMsg),
 		ai.WithTools(weatherTool),

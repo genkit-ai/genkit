@@ -22,46 +22,25 @@ import (
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // EmbedderFunc is the function type for embedding documents.
-type EmbedderFunc = func(context.Context, *EmbedRequest) (*EmbedResponse, error)
+// Config is the embedder's typed configuration: the framework deserializes the
+// request's raw config into it before calling the function (see [DefineEmbedder]).
+type EmbedderFunc[Config any] = func(context.Context, *EmbedRequest, Config) (*EmbedResponse, error)
 
-// Embedder represents an embedder that can perform content embedding.
-type Embedder interface {
-	// Name returns the registry name of the embedder.
-	Name() string
-	// Embed embeds to content as part of the [EmbedRequest].
-	Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error)
-	// Register registers the embedder with the given registry.
-	Register(r api.Registry)
+// Embedder is a content embedder backed by a registry action. Create one
+// with [DefineEmbedder] or [NewEmbedder], or fetch a registered one with
+// [LookupEmbedder]. Pass it to [WithEmbedder] to use it with [Embed].
+type Embedder struct {
+	action[*EmbedRequest, *EmbedResponse, struct{}]
 }
 
-// EmbedderArg is the interface for embedder arguments. It can either be the embedder action itself or a reference to be looked up.
-type EmbedderArg interface {
-	Name() string
-}
-
-// EmbedderRef is a struct to hold embedder name and configuration.
-type EmbedderRef struct {
-	name   string
-	config any
-}
-
-// NewEmbedderRef creates a new EmbedderRef with the given name and configuration.
-func NewEmbedderRef(name string, config any) EmbedderRef {
-	return EmbedderRef{name: name, config: config}
-}
-
-// Name returns the name of the embedder.
-func (e EmbedderRef) Name() string {
-	return e.name
-}
-
-// Config returns the configuration to use by default for this embedder.
-func (e EmbedderRef) Config() any {
-	return e.config
-}
+var (
+	_ api.Action  = (*Embedder)(nil)
+	_ EmbedderArg = (*Embedder)(nil)
+)
 
 // EmbedderSupports represents the supported capabilities of the embedder model.
 type EmbedderSupports struct {
@@ -83,13 +62,17 @@ type EmbedderOptions struct {
 	Dimensions int `json:"dimensions,omitempty"`
 }
 
-// embedder is an action with functions specific to converting documents to multidimensional vectors such as Embed().
-type embedder struct {
-	core.Action[*EmbedRequest, *EmbedResponse, struct{}]
-}
-
-// NewEmbedder creates a new [Embedder].
-func NewEmbedder(name string, opts *EmbedderOptions, fn EmbedderFunc) Embedder {
+// NewEmbedder creates a new unregistered [Embedder]. Register it with
+// [Embedder.Register] or use [DefineEmbedder] to define and register in one
+// step.
+//
+// Config is the embedder's typed configuration; it is usually inferred from
+// fn's signature. The framework deserializes the request's raw config into
+// Config before calling fn: the exact Config type (or a pointer to it) and
+// map[string]any (from the Dev UI and other JSON callers) are accepted, and
+// mismatched types are rejected. The config's JSON schema is inferred from
+// Config unless [EmbedderOptions.ConfigSchema] overrides it.
+func NewEmbedder[Config any](name string, opts *EmbedderOptions, fn EmbedderFunc[Config]) *Embedder {
 	if name == "" {
 		panic("ai.NewEmbedder: name is required")
 	}
@@ -103,6 +86,8 @@ func NewEmbedder(name string, opts *EmbedderOptions, fn EmbedderFunc) Embedder {
 		opts.Supports = &EmbedderSupports{}
 	}
 
+	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, EmbedRequest{}, "options")
+
 	metadata := map[string]any{
 		"type": api.ActionTypeEmbedder,
 		// TODO: This should be under "embedder" but JS has it as "info".
@@ -115,25 +100,35 @@ func NewEmbedder(name string, opts *EmbedderOptions, fn EmbedderFunc) Embedder {
 			},
 		},
 		"embedder": map[string]any{
-			"customOptions": opts.ConfigSchema,
+			"customOptions": configSchema,
 		},
 	}
 
-	inputSchema := core.InferSchemaMap(EmbedRequest{})
-	if inputSchema != nil && opts.ConfigSchema != nil {
-		if props, ok := inputSchema["properties"].(map[string]any); ok {
-			props["options"] = opts.ConfigSchema
+	rawFn := func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+		cfg, err := resolveConfig[Config](req.Config)
+		if err != nil {
+			return nil, err
 		}
+		// Normalize the request so its type-erased Config always carries the
+		// same converted value the typed parameter does.
+		req.Config = cfg
+		return fn(ctx, req, cfg)
 	}
 
-	return &embedder{
-		Action: *core.NewAction(name, api.ActionTypeEmbedder, metadata, inputSchema, fn),
+	return &Embedder{
+		action: *core.NewAction(api.ActionTypeEmbedder, name, &core.ActionOptions{
+			Metadata:    metadata,
+			InputSchema: inputSchema,
+		}, rawFn),
 	}
 }
 
 // DefineEmbedder registers the given embed function as an action, and returns an
 // [Embedder] that runs it.
-func DefineEmbedder(r api.Registry, name string, opts *EmbedderOptions, fn EmbedderFunc) Embedder {
+//
+// Config is the embedder's typed configuration; it is usually inferred from
+// fn's signature. See [NewEmbedder] for how the request's config is deserialized.
+func DefineEmbedder[Config any](r api.Registry, name string, opts *EmbedderOptions, fn EmbedderFunc[Config]) *Embedder {
 	e := NewEmbedder(name, opts, fn)
 	e.Register(r)
 	return e
@@ -142,20 +137,31 @@ func DefineEmbedder(r api.Registry, name string, opts *EmbedderOptions, fn Embed
 // LookupEmbedder looks up an [Embedder] registered by [DefineEmbedder].
 // It will try to resolve the embedder dynamically if the embedder is not found.
 // It returns nil if the embedder was not resolved.
-func LookupEmbedder(r api.Registry, name string) Embedder {
+func LookupEmbedder(r api.Registry, name string) *Embedder {
 	action := core.ResolveActionFor[*EmbedRequest, *EmbedResponse, struct{}](r, api.ActionTypeEmbedder, name)
 	if action == nil {
 		return nil
 	}
-	return &embedder{
-		Action: *action,
+	return &Embedder{
+		action: *action,
 	}
 }
 
-// Embed runs the given [Embedder].
-func (e *embedder) Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+// Name returns the registry name of the embedder, or the empty string if the
+// embedder is nil (e.g. from a failed lookup).
+func (e *Embedder) Name() string {
 	if e == nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "Embedder.Embed: embedder called on a nil embedder; check that all embedders are defined")
+		return ""
+	}
+	return e.action.Name()
+}
+
+func (e *Embedder) embedderArg() {}
+
+// Embed runs the given [Embedder].
+func (e *Embedder) Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+	if e == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "Embedder.Embed: embedder called on a nil embedder; check that all embedders are defined")
 	}
 
 	return e.Run(ctx, req, nil)
@@ -165,15 +171,13 @@ func (e *embedder) Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse
 func Embed(ctx context.Context, r api.Registry, opts ...EmbedderOption) (*EmbedResponse, error) {
 	embedOpts := &embedderOptions{}
 	for _, opt := range opts {
-		if err := opt.applyEmbedder(embedOpts); err != nil {
-			return nil, fmt.Errorf("ai.Embed: error applying options: %w", err)
-		}
+		opt.applyEmbedder(embedOpts)
 	}
 
 	if embedOpts.Embedder == nil {
 		return nil, fmt.Errorf("ai.Embed: embedder must be set")
 	}
-	e, ok := embedOpts.Embedder.(Embedder)
+	e, ok := embedOpts.Embedder.(*Embedder)
 	if !ok {
 		e = LookupEmbedder(r, embedOpts.Embedder.Name())
 	}
@@ -181,13 +185,13 @@ func Embed(ctx context.Context, r api.Registry, opts ...EmbedderOption) (*EmbedR
 		return nil, fmt.Errorf("ai.Embed: embedder not found: %s", embedOpts.Embedder.Name())
 	}
 
-	if embedRef, ok := embedOpts.Embedder.(EmbedderRef); ok && embedOpts.Config == nil {
-		embedOpts.Config = embedRef.Config()
+	if ref, ok := embedOpts.Embedder.(EmbedderRef); ok && embedOpts.Config == nil {
+		embedOpts.Config = ref.Config()
 	}
 
 	req := &EmbedRequest{
-		Input:   embedOpts.Documents,
-		Options: embedOpts.Config,
+		Input:  embedOpts.Documents,
+		Config: embedOpts.Config,
 	}
 
 	return e.Embed(ctx, req)

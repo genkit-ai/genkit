@@ -19,20 +19,20 @@ import (
 	"context"
 	"fmt"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // GetPrompt retrieves a prompt from the MCP server
-func (c *GenkitMCPClient) GetPrompt(ctx context.Context, g *genkit.Genkit, promptName string, args map[string]string) (ai.Prompt, error) {
+func (c *GenkitMCPClient) GetPrompt(ctx context.Context, g *genkit.Genkit, promptName string, args map[string]string) (*ai.TextPrompt[any], error) {
 	if !c.IsEnabled() || c.server == nil {
 		return nil, fmt.Errorf("MCP client is disabled or not connected")
 	}
 
 	// Check if prompt already exists
 	namespacedPromptName := c.GetPromptNameWithNamespace(promptName)
-	if existingPrompt := genkit.LookupPrompt(g, namespacedPromptName); existingPrompt != nil {
+	if existingPrompt := g.LookupPrompt(namespacedPromptName); existingPrompt != nil {
 		return existingPrompt, nil
 	}
 
@@ -67,7 +67,7 @@ func (c *GenkitMCPClient) fetchMCPPrompt(ctx context.Context, promptName string,
 }
 
 // createGenkitPrompt converts MCP prompt to Genkit prompt and registers it
-func (c *GenkitMCPClient) createGenkitPrompt(g *genkit.Genkit, promptName string, mcpPrompt *mcp.GetPromptResult) (ai.Prompt, error) {
+func (c *GenkitMCPClient) createGenkitPrompt(g *genkit.Genkit, promptName string, mcpPrompt *mcp.GetPromptResult) (*ai.TextPrompt[any], error) {
 	messages := c.convertMCPMessages(mcpPrompt.Messages)
 
 	promptOpts := []ai.PromptOption{
@@ -78,7 +78,7 @@ func (c *GenkitMCPClient) createGenkitPrompt(g *genkit.Genkit, promptName string
 		promptOpts = append(promptOpts, ai.WithMessages(messages...))
 	}
 
-	prompt := genkit.DefinePrompt(g, promptName, promptOpts...)
+	prompt := g.DefinePrompt[any](promptName, promptOpts...)
 
 	return prompt, nil
 }

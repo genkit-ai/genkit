@@ -29,7 +29,7 @@ import (
 	"sync"
 
 	"github.com/firebase/genkit/go/ai/exp"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/google/uuid"
 )
 
@@ -134,7 +134,7 @@ func (s *InMemorySessionStore[State]) SaveSnapshot(
 		// A snapshot must belong to a session; stores never mint or infer one. The
 		// runtime stamps a session ID on every row it writes, so an empty one
 		// indicates misuse.
-		return nil, core.NewError(core.INVALID_ARGUMENT, "InMemorySessionStore requires sessionId to be set on the snapshot")
+		return nil, status.Errorf(exp.ErrSessionIDRequired, "InMemorySessionStore: snapshot %q has no session ID", next.SnapshotID)
 	}
 	if next.Status == "" {
 		next.Status = exp.SnapshotStatusCompleted

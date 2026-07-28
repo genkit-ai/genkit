@@ -24,8 +24,8 @@ import (
 	"strings"
 	"testing"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 
 	compat_oai "github.com/firebase/genkit/go/plugins/compat_oai/openai"
 	"github.com/openai/openai-go"
@@ -43,15 +43,15 @@ func TestPlugin(t *testing.T) {
 	oai := &compat_oai.OpenAI{
 		APIKey: apiKey,
 	}
-	g := genkit.Init(context.Background(),
+	g := genkit.MustInit(context.Background(),
 		genkit.WithDefaultModel("openai/gpt-4o-mini"),
 		genkit.WithPlugins(oai),
 	)
 	t.Log("genkit initialized")
 
 	// Define a tool for calculating gablorkens
-	gablorkenTool := genkit.DefineTool(g, "gablorken", "use when need to calculate a gablorken",
-		func(ctx *ai.ToolContext, input struct {
+	gablorkenTool := g.DefineTool("gablorken", "use when need to calculate a gablorken",
+		func(ctx context.Context, input struct {
 			Value float64
 			Over  float64
 		},
@@ -65,7 +65,7 @@ func TestPlugin(t *testing.T) {
 	t.Run("embedder", func(t *testing.T) {
 		// define embedder
 		embedder := oai.Embedder(g, "text-embedding-3-small")
-		res, err := genkit.Embed(ctx, g, ai.WithEmbedder(embedder), ai.WithTextDocs("yellow banana"))
+		res, err := g.Embed(ctx, ai.WithEmbedder(embedder), ai.WithTextDocs("yellow banana"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -86,7 +86,7 @@ func TestPlugin(t *testing.T) {
 
 	t.Run("basic completion", func(t *testing.T) {
 		t.Log("generating basic completion response")
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithPrompt("What is the capital of France?"),
 		)
 		if err != nil {
@@ -109,7 +109,7 @@ func TestPlugin(t *testing.T) {
 		var streamedOutput string
 		chunks := 0
 
-		final, err := genkit.Generate(ctx, g,
+		final, err := g.Generate(ctx,
 			ai.WithPrompt("Write a short paragraph about artificial intelligence."),
 			ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
 				chunks++
@@ -141,7 +141,7 @@ func TestPlugin(t *testing.T) {
 	})
 
 	t.Run("tool usage with basic completion", func(t *testing.T) {
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithPrompt("what is a gablorken of 2 over 3.5?"),
 			ai.WithTools(gablorkenTool))
 		if err != nil {
@@ -161,7 +161,7 @@ func TestPlugin(t *testing.T) {
 		var streamedOutput string
 		chunks := 0
 
-		final, err := genkit.Generate(ctx, g,
+		final, err := g.Generate(ctx,
 			ai.WithPrompt("what is a gablorken of 2 over 3.5?"),
 			ai.WithTools(gablorkenTool),
 			ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
@@ -199,7 +199,7 @@ func TestPlugin(t *testing.T) {
 	})
 
 	t.Run("system message", func(t *testing.T) {
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithPrompt("What are you?"),
 			ai.WithSystem("You are a helpful math tutor who loves numbers."),
 		)
@@ -226,7 +226,7 @@ func TestPlugin(t *testing.T) {
 			},
 		}
 
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithPrompt("Write a short sentence about artificial intelligence."),
 			ai.WithConfig(config),
 		)
@@ -241,7 +241,7 @@ func TestPlugin(t *testing.T) {
 		// Try to use a string as config instead of *ai.GenerationCommonConfig
 		config := "not a config"
 
-		_, err := genkit.Generate(ctx, g,
+		_, err := g.Generate(ctx,
 			ai.WithPrompt("Write a short sentence about artificial intelligence."),
 			ai.WithConfig(config),
 		)
@@ -255,7 +255,7 @@ func TestPlugin(t *testing.T) {
 	})
 
 	t.Run("check history", func(t *testing.T) {
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithPrompt("Tell me a joke"))
 		if err != nil {
 			t.Fatal("got error: %w", err)
@@ -266,7 +266,7 @@ func TestPlugin(t *testing.T) {
 		if len(resp.Request.Messages) == 0 {
 			t.Fatal("expecting user messages in request")
 		}
-		resp, err = genkit.Generate(ctx, g,
+		resp, err = g.Generate(ctx,
 			ai.WithMessages(resp.History()...),
 			ai.WithPrompt("explain the joke that you just provided me"))
 		if err != nil {
@@ -287,7 +287,7 @@ func TestPlugin(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to fetch image: %v", err)
 		}
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModelName("openai/gpt-4.1-nano"),
 			ai.WithMessages(
 				ai.NewUserMessage(

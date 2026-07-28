@@ -17,10 +17,10 @@ package main
 import (
 	"context"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
-	"github.com/firebase/genkit/go/genkit"
-	genkitx "github.com/firebase/genkit/go/genkit/exp"
+	genkitx "github.com/firebase/genkit/go/exp"
 )
 
 // defineCustomAgent demonstrates DefineCustomAgent. The per-turn function
@@ -37,7 +37,7 @@ func defineCustomAgent(g *genkit.Genkit) *aix.Agent[any] {
 	return genkitx.DefineCustomAgent(g, name,
 		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 			if err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
-				for chunk, err := range genkit.GenerateStream(ctx, g,
+				for chunk, err := range g.GenerateStream(ctx,
 					ai.WithModel(flashModel),
 					ai.WithSystem("You are a senior software engineer. Answer in as few words as possible. Use fenced code blocks for any code."),
 					ai.WithMessages(sess.Messages()...),

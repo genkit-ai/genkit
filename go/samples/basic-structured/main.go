@@ -45,9 +45,9 @@ import (
 	"log"
 	"net/http"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/server"
 	"google.golang.org/genai"
@@ -94,7 +94,10 @@ func main() {
 	// Config parameter, the Google AI plugin will get the API key from the
 	// GEMINI_API_KEY or GOOGLE_API_KEY environment variable, which is the recommended
 	// practice.
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Define the flows.
 	DefineSimpleJoke(g)
@@ -103,7 +106,7 @@ func main() {
 
 	// Optionally, start a web server to make the flows callable via HTTP.
 	mux := http.NewServeMux()
-	for _, a := range genkit.ListFlows(g) {
+	for _, a := range g.ListFlows() {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
 	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
@@ -111,9 +114,9 @@ func main() {
 
 // DefineSimpleJoke demonstrates defining a streaming flow that generates a joke about a given topic.
 func DefineSimpleJoke(g *genkit.Genkit) {
-	genkit.DefineStreamingFlow(g, "simpleJokesFlow",
+	g.DefineStreamingFlow("simpleJokesFlow",
 		func(ctx context.Context, input string, sendChunk core.StreamCallback[string]) (string, error) {
-			stream := genkit.GenerateStream(ctx, g,
+			stream := g.GenerateStream(ctx,
 				ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
 					ThinkingConfig: &genai.ThinkingConfig{
 						ThinkingBudget: genai.Ptr[int32](0),
@@ -140,9 +143,9 @@ func DefineSimpleJoke(g *genkit.Genkit) {
 // DefineStructuredJoke demonstrates defining a streaming flow that generates a joke about a given topic.
 // The input is a strongly-typed JokeRequest struct and the output is a strongly-typed Joke struct.
 func DefineStructuredJoke(g *genkit.Genkit) {
-	genkit.DefineStreamingFlow(g, "structuredJokesFlow",
+	g.DefineStreamingFlow("structuredJokesFlow",
 		func(ctx context.Context, input JokeRequest, sendChunk core.StreamCallback[*Joke]) (*Joke, error) {
-			stream := genkit.GenerateDataStream[*Joke](ctx, g,
+			stream := g.GenerateDataStream[*Joke](ctx,
 				ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
 					ThinkingConfig: &genai.ThinkingConfig{
 						ThinkingBudget: genai.Ptr[int32](0),
@@ -168,9 +171,9 @@ func DefineStructuredJoke(g *genkit.Genkit) {
 // DefineRecipe demonstrates defining a streaming flow that generates a recipe based on a given RecipeRequest struct.
 // The input is a strongly-typed RecipeRequest struct and the output is a strongly-typed Recipe struct.
 func DefineRecipe(g *genkit.Genkit) {
-	genkit.DefineStreamingFlow(g, "recipeFlow",
+	g.DefineStreamingFlow("recipeFlow",
 		func(ctx context.Context, input RecipeRequest, sendChunk core.StreamCallback[[]*Ingredient]) (*Recipe, error) {
-			stream := genkit.GenerateDataStream[*Recipe](ctx, g,
+			stream := g.GenerateDataStream[*Recipe](ctx,
 				ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
 					ThinkingConfig: &genai.ThinkingConfig{
 						ThinkingBudget: genai.Ptr[int32](0),

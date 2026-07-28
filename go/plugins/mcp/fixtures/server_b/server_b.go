@@ -17,14 +17,14 @@ package main
 import (
 	"context"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/mcp"
 )
 
 func main() {
-	g := genkit.Init(context.Background())
-	genkit.DefineResource(g, "server-b-files", &ai.ResourceOptions{
+	g := genkit.MustInit(context.Background())
+	g.DefineResource("server-b-files", &ai.ResourceOptions{
 		Template: "b://files/{path}",
 	}, func(ctx context.Context, input *ai.ResourceInput) (*ai.ResourceOutput, error) {
 		return &ai.ResourceOutput{

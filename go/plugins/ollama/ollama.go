@@ -32,10 +32,10 @@ import (
 	"sync"
 	"time"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
 	"github.com/invopop/jsonschema"
 )
@@ -109,7 +109,7 @@ func (o *Ollama) listLocalModels(ctx context.Context) ([]ollamaLocalModel, error
 	return tagsResp.Models, nil
 }
 
-func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.ModelOptions) ai.Model {
+func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.ModelOptions) *ai.Model {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if !o.initted {
@@ -137,21 +137,21 @@ func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.M
 		Label:        "Ollama - " + model.Name,
 		Supports:     modelOpts.Supports,
 		Versions:     []string{},
-		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
+		ConfigSchema: generateContentConfigSchema(),
 	}
 	gen := &generator{model: model, serverAddress: o.ServerAddress, timeout: o.Timeout}
-	return genkit.DefineModel(g, api.NewName(provider, model.Name), meta, gen.generate)
+	return g.DefineModel(api.NewName(provider, model.Name), meta, gen.generate)
 }
 
 // IsDefinedModel reports whether a model is defined.
 func IsDefinedModel(g *genkit.Genkit, name string) bool {
-	return genkit.LookupModel(g, api.NewName(provider, name)) != nil
+	return g.LookupModel(api.NewName(provider, name)) != nil
 }
 
 // Model returns the [ai.Model] with the given name.
 // It returns nil if the model was not configured.
-func Model(g *genkit.Genkit, name string) ai.Model {
-	return genkit.LookupModel(g, api.NewName(provider, name))
+func Model(g *genkit.Genkit, name string) *ai.Model {
+	return g.LookupModel(api.NewName(provider, name))
 }
 
 // ModelDefinition represents a model with its name and api.
@@ -341,14 +341,21 @@ func (o *Ollama) Init(ctx context.Context) []api.Action {
 	return []api.Action{}
 }
 
+// generateContentConfigSchema caches the config schema shared by every
+// Ollama model so that ListActions/ResolveAction, which construct a model
+// per discovered name on every call, don't re-run schema reflection.
+var generateContentConfigSchema = sync.OnceValue(func() map[string]any {
+	return core.InferSchemaMap(GenerateContentConfig{})
+})
+
 // newModel creates an Ollama model without registering it in the Genkit registry.
 // It is used by ListActions (to generate ActionDesc) and ResolveAction (to return an Action).
-func (o *Ollama) newModel(name string, opts ai.ModelOptions) ai.Model {
+func (o *Ollama) newModel(name string, opts ai.ModelOptions) *ai.Model {
 	meta := &ai.ModelOptions{
 		Label:        "Ollama - " + name,
 		Supports:     opts.Supports,
 		Versions:     []string{},
-		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
+		ConfigSchema: generateContentConfigSchema(),
 	}
 	gen := &generator{
 		model:         ModelDefinition{Name: name, Type: "chat"},
@@ -374,9 +381,7 @@ func (o *Ollama) ListActions(ctx context.Context) []api.ActionDesc {
 			continue
 		}
 		model := o.newModel(name, ai.ModelOptions{Supports: &defaultOllamaSupports})
-		if action, ok := model.(api.Action); ok {
-			actions = append(actions, action.Desc())
-		}
+		actions = append(actions, model.Desc())
 	}
 	return actions
 }
@@ -386,11 +391,7 @@ func (o *Ollama) ResolveAction(atype api.ActionType, name string) api.Action {
 	if atype != api.ActionTypeModel {
 		return nil
 	}
-	model := o.newModel(name, ai.ModelOptions{Supports: &defaultOllamaSupports})
-	if action, ok := model.(api.Action); ok {
-		return action
-	}
-	return nil
+	return o.newModel(name, ai.ModelOptions{Supports: &defaultOllamaSupports})
 }
 
 // Ptr returns a pointer to the given value.
@@ -399,7 +400,7 @@ func Ptr[T any](v T) *T {
 }
 
 // Generate makes a request to the Ollama API and processes the response.
-func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
+func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, config GenerateContentConfig, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
 	stream := cb != nil
 	var payload any
 	var thinkingEnabled bool
@@ -437,9 +438,7 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			Stream:   stream,
 			Images:   images,
 		}
-		if err := chatReq.ApplyOptions(input.Config); err != nil {
-			return nil, fmt.Errorf("failed to apply options: %v", err)
-		}
+		chatReq.applyGenerateContentConfig(&config)
 		thinkingEnabled = chatReq.Think.IsEnabled()
 
 		if len(input.Tools) > 0 {

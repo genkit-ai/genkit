@@ -24,7 +24,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // --- counter: a config whose BuildMiddleware tracks hook invocations ---
@@ -115,7 +115,7 @@ func TestPluginStateCarriedThroughPrototype(t *testing.T) {
 			Model:    m.Name(),
 			Messages: []*Message{NewUserTextMessage("go")},
 			Use:      refs,
-		}, nil, nil)
+		}, nil)
 		assertNoError(t, err)
 	}
 	if got := atomic.LoadInt32(&shared); got != 3 {
@@ -438,8 +438,8 @@ func TestMiddlewareContributesTool(t *testing.T) {
 
 	injectTool := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
 		return &Hooks{
-			Tools: []Tool{NewTool("mw/tool", "injected",
-				func(tc *ToolContext, in struct {
+			Tools: []AnyTool{NewTool("mw/tool", "injected",
+				func(tc context.Context, in struct {
 					Value string `json:"value"`
 				}) (string, error) {
 					return "ok", nil
@@ -464,8 +464,8 @@ func TestDuplicateMiddlewareToolRejected(t *testing.T) {
 	makeInjector := func() Middleware {
 		return MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
 			return &Hooks{
-				Tools: []Tool{NewTool("dup/tool", "d",
-					func(tc *ToolContext, in struct{}) (string, error) { return "x", nil })},
+				Tools: []AnyTool{NewTool("dup/tool", "d",
+					func(tc context.Context, in struct{}) (string, error) { return "x", nil })},
 			}, nil
 		})
 	}
@@ -506,7 +506,7 @@ func TestWrapToolInterrupts(t *testing.T) {
 	interrupter := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
 		return &Hooks{
 			WrapTool: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
-				return nil, NewToolInterruptError(map[string]any{"reason": "blocked"})
+				return nil, &InterruptError{Data: map[string]any{"reason": "blocked"}}
 			},
 		}, nil
 	})
@@ -533,7 +533,7 @@ func TestWrapToolValidationErrorReturnedToModel(t *testing.T) {
 
 	var callCount int32
 
-	modelHandler := func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	modelHandler := func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		c := atomic.AddInt32(&callCount, 1)
 
 		if c <= 2 {
@@ -568,7 +568,7 @@ func TestWrapToolValidationErrorReturnedToModel(t *testing.T) {
 	})
 
 	DefineTool(r, "validateMe", "A tool that requires a numeric value",
-		func(ctx *ToolContext, input any) (string, error) {
+		func(ctx context.Context, input any) (string, error) {
 			m := input.(map[string]any)
 			return fmt.Sprintf("success: %v", m["value"]), nil
 		},
@@ -587,10 +587,9 @@ func TestWrapToolValidationErrorReturnedToModel(t *testing.T) {
 		return &Hooks{
 			WrapTool: func(ctx context.Context, params *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
 				resp, err := next(ctx, params)
-				var sve *core.SchemaValidationError
-				if errors.As(err, &sve) {
+				if errors.Is(err, status.ErrInvalidInput) {
 					return &MultipartToolResponse{
-						Content: []*Part{NewTextPart(fmt.Sprintf("Validation error: %v", sve))},
+						Content: []*Part{NewTextPart(fmt.Sprintf("Validation error: %v", err))},
 						Output:  "tool call failed; see content for details",
 					}, nil
 				}
@@ -688,110 +687,6 @@ func TestWrapToolPreservesMetadata(t *testing.T) {
 
 // --- hook ordering on tool restart: outer generate > restarted tool > inner generate > model ---
 
-func TestMiddlewareHookOrderOnToolRestart(t *testing.T) {
-	r := newTestRegistry(t)
-
-	type restartInput struct {
-		Interrupt bool `json:"interrupt"`
-	}
-
-	tool := DefineTool(r, "restartable", "interrupts, then runs on resume",
-		func(ctx *ToolContext, in restartInput) (string, error) {
-			if in.Interrupt {
-				return "", ctx.Interrupt(&InterruptOptions{})
-			}
-			return "ok", nil
-		},
-	)
-
-	// Requests the tool on the first turn, returns a final text response once a
-	// tool response is present in history.
-	model := DefineModel(r, "test/restartModel", &ModelOptions{
-		Supports: &ModelSupports{Multiturn: true, Tools: true},
-	}, func(ctx context.Context, req *ModelRequest, _ ModelStreamCallback) (*ModelResponse, error) {
-		for _, msg := range req.Messages {
-			for _, p := range msg.Content {
-				if p.IsToolResponse() {
-					return &ModelResponse{
-						Request: req,
-						Message: NewModelTextMessage("done"),
-					}, nil
-				}
-			}
-		}
-		return &ModelResponse{
-			Request: req,
-			Message: &Message{
-				Role: RoleModel,
-				Content: []*Part{NewToolRequestPart(&ToolRequest{
-					Name:  "restartable",
-					Ref:   "t1",
-					Input: map[string]any{"interrupt": true},
-				})},
-			},
-		}, nil
-	})
-
-	first, err := Generate(testCtx, r, WithModel(model), WithPrompt("go"), WithTools(tool))
-	assertNoError(t, err)
-	if first.FinishReason != "interrupted" {
-		t.Fatalf("expected FinishReason=interrupted, got %q", first.FinishReason)
-	}
-	interruptedPart := first.Message.Content[0]
-
-	var mu sync.Mutex
-	var order []string
-	record := func(s string) {
-		mu.Lock()
-		defer mu.Unlock()
-		order = append(order, s)
-	}
-
-	tracker := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
-		return &Hooks{
-			WrapGenerate: func(ctx context.Context, p *GenerateParams, next GenerateNext) (*ModelResponse, error) {
-				record("generate")
-				return next(ctx, p)
-			},
-			WrapModel: func(ctx context.Context, p *ModelParams, next ModelNext) (*ModelResponse, error) {
-				record("model")
-				return next(ctx, p)
-			},
-			WrapTool: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
-				record("tool")
-				return next(ctx, p)
-			},
-		}, nil
-	})
-
-	restartPart, err := tool.RestartWith(interruptedPart, WithNewInput[restartInput](restartInput{Interrupt: false}))
-	assertNoError(t, err)
-
-	resumed, err := Generate(testCtx, r,
-		WithModel(model),
-		WithMessages(first.History()...),
-		WithTools(tool),
-		WithToolRestarts(restartPart),
-		WithUse(tracker),
-	)
-	assertNoError(t, err)
-	if resumed.FinishReason == "interrupted" {
-		t.Fatalf("expected completion after restart, got interrupted")
-	}
-
-	// Resume handling lives inside the outer generate span, so the restarted
-	// tool fires before the recursive follow-up iteration's generate+model.
-	want := []string{"generate", "tool", "generate", "model"}
-	if len(order) != len(want) {
-		t.Fatalf("hook order: got %v, want %v", order, want)
-	}
-	for i := range want {
-		if order[i] != want[i] {
-			t.Errorf("order[%d] = %q, want %q", i, order[i], want[i])
-		}
-	}
-}
-
 var testCtx = context.Background()
 
 // --- middlewareRefArg: lazy reference used by the dotprompt loader ---
@@ -821,7 +716,7 @@ func TestConfigsToRefs_StripsLazyAdapter(t *testing.T) {
 	}
 }
 
-func TestMiddlewareRefArg_NewErrors(t *testing.T) {
+func TestMiddlewareRefArg_Errors(t *testing.T) {
 	// Defensive: configsToRefs strips the adapter, so resolveRefs should
 	// never call New on it. If routing ever regresses, fail loudly instead
 	// of silently producing nil hooks.

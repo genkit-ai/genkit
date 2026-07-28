@@ -17,11 +17,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/logger"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/mcp"
 )
@@ -31,7 +32,10 @@ func clientExample() {
 	ctx := context.Background()
 
 	// Initialize Genkit with Google AI
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Create and connect to MCP time server
 	client, err := mcp.NewGenkitMCPClient(mcp.MCPClientOptions{
@@ -51,15 +55,15 @@ func clientExample() {
 	tools, _ := client.GetActiveTools(ctx, g)
 	logger.FromContext(ctx).Info("Found MCP time tools", "count", len(tools), "client", "mcp-time")
 
-	var toolRefs []ai.ToolRef
+	var toolArgs []ai.ToolArg
 	for _, tool := range tools {
-		toolRefs = append(toolRefs, tool)
+		toolArgs = append(toolArgs, tool)
 	}
 
-	response, err := genkit.Generate(ctx, g,
+	response, err := g.Generate(ctx,
 		ai.WithModelName("googleai/gemini-2.5-pro"),
 		ai.WithPrompt("Convert the current time from New York to London timezone."),
-		ai.WithTools(toolRefs...),
+		ai.WithTools(toolArgs...),
 		ai.WithToolChoice(ai.ToolChoiceAuto),
 	)
 	if err != nil {
@@ -79,7 +83,10 @@ func managerExample() {
 	ctx := context.Background()
 
 	// Initialize Genkit with Google AI
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Create and connect to MCP time server
 	host, _ := mcp.NewMCPHost(g, mcp.MCPHostOptions{
@@ -103,15 +110,15 @@ func managerExample() {
 	tools, _ := host.GetActiveTools(ctx, g)
 	logger.FromContext(ctx).Info("Found MCP tools", "count", len(tools))
 
-	var toolRefs []ai.ToolRef
+	var toolArgs []ai.ToolArg
 	for _, tool := range tools {
-		toolRefs = append(toolRefs, tool)
+		toolArgs = append(toolArgs, tool)
 	}
 
-	response, err := genkit.Generate(ctx, g,
+	response, err := g.Generate(ctx,
 		ai.WithModelName("googleai/gemini-2.5-pro"),
 		ai.WithPrompt("What time is it in New York and Tokyo?"),
-		ai.WithTools(toolRefs...),
+		ai.WithTools(toolArgs...),
 		ai.WithToolChoice(ai.ToolChoiceAuto),
 	)
 	if err != nil {

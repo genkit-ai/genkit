@@ -26,31 +26,30 @@ import (
 	"cloud.google.com/go/firestore"
 	firebasev4 "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/auth"
-	"github.com/firebase/genkit/go/ai"
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/genkit"
 )
 
 const provider = "firebase"
 const projectIdEnv = "FIREBASE_PROJECT_ID"
 
 const pluginInstruction = "Pass the Firebase plugin to genkit.Init():\n" +
-	"  g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: \"your-project\"}))"
+	"  g, err := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: \"your-project\"}))"
 
 var errPluginNotInitialized = errors.New("firebase: plugin not initialized. " + pluginInstruction)
 var errPluginNotFound = errors.New("firebase: plugin not found. " + pluginInstruction)
 var errCredentials = "Ensure you have proper credentials. For local development, run: gcloud auth application-default login"
 
 // Firebase is the Genkit plugin for Firebase services.
-// It provides integration with Firebase Firestore for retrievers, indexers, and durable streaming.
+// It provides integration with Firebase Firestore and Authentication, including durable streaming.
 //
 // Usage:
 //
-//	g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: "my-project"}))
+//	g, err := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: "my-project"}))
 //
 // Or with an existing Firebase app:
 //
-//	g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{App: myFirebaseApp}))
+//	g, err := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{App: myFirebaseApp}))
 type Firebase struct {
 	// ProjectId is the Firebase/GCP project ID. If set, a Firebase app is created automatically.
 	// Can also be set via the FIREBASE_PROJECT_ID environment variable.
@@ -105,7 +104,7 @@ func (f *Firebase) Init(ctx context.Context) []api.Action {
 
 // Firestore returns a cached Firestore client for the Firebase project.
 // The client is created lazily on first call and reused for subsequent calls.
-// This client is shared across all Firebase plugin features (retrievers, stream managers, etc.).
+// This client is shared across all Firebase plugin features (stream managers, etc.).
 func (f *Firebase) Firestore(ctx context.Context) (*firestore.Client, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -150,26 +149,6 @@ func (f *Firebase) Auth(ctx context.Context) (*auth.Client, error) {
 	return client, nil
 }
 
-// DefineRetriever defines a Firestore vector retriever with the given configuration.
-// The Firebase plugin must be registered with genkit.Init() before calling this function.
-func DefineRetriever(ctx context.Context, g *genkit.Genkit, opts RetrieverOptions) (ai.Retriever, error) {
-	f, err := resolvePlugin(g)
-	if err != nil {
-		return nil, err
-	}
-
-	firestoreClient, err := f.Firestore(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	retriever, err := defineFirestoreRetriever(g, opts, firestoreClient)
-	if err != nil {
-		return nil, fmt.Errorf("firebase.DefineRetriever: failed to initialize retriever %q: %w", opts.Name, err)
-	}
-	return retriever, nil
-}
-
 // resolveProjectId resolves the Firebase project ID from various sources.
 func resolveProjectId(projectId string) string {
 	if projectId != "" {
@@ -180,7 +159,7 @@ func resolveProjectId(projectId string) string {
 
 // resolvePlugin resolves the Firebase plugin from the Genkit registry.
 func resolvePlugin(g *genkit.Genkit) (*Firebase, error) {
-	plugin := genkit.LookupPlugin(g, provider)
+	plugin := g.LookupPlugin(provider)
 	if plugin == nil {
 		return nil, errPluginNotFound
 	}

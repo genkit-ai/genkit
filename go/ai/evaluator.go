@@ -23,74 +23,51 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
 )
 
 // EvaluatorFunc is the function type for evaluator implementations.
-type EvaluatorFunc = func(context.Context, *EvaluatorCallbackRequest) (*EvaluatorCallbackResponse, error)
+// Config is the evaluator's typed configuration: the framework deserializes
+// the request's raw config into it before calling the function (see [DefineEvaluator]).
+type EvaluatorFunc[Config any] = func(context.Context, *EvaluatorCallbackRequest, Config) (*EvaluatorCallbackResponse, error)
 
 // BatchEvaluatorFunc is the function type for batch evaluator implementations.
-type BatchEvaluatorFunc = func(context.Context, *EvaluatorRequest) (*EvaluatorResponse, error)
+// Config is the evaluator's typed configuration: the framework deserializes
+// the request's raw config into it before calling the function (see [DefineBatchEvaluator]).
+type BatchEvaluatorFunc[Config any] = func(context.Context, *EvaluatorRequest, Config) (*EvaluatorResponse, error)
 
-// Evaluator represents a evaluator action.
-type Evaluator interface {
-	// Name returns the name of the evaluator.
-	Name() string
-	// Evaluates a dataset.
-	Evaluate(ctx context.Context, req *EvaluatorRequest) (*EvaluatorResponse, error)
-	// Register registers the evaluator with the given registry.
-	Register(r api.Registry)
+// Evaluator is a dataset evaluator backed by a registry action. Create one
+// with [DefineEvaluator], [DefineBatchEvaluator], or their New* equivalents,
+// or fetch a registered one with [LookupEvaluator]. Pass it to
+// [WithEvaluator] to use it with [Evaluate].
+type Evaluator struct {
+	action[*EvaluatorRequest, *EvaluatorResponse, struct{}]
 }
 
-// EvaluatorArg is the interface for evaluator arguments. It can either be the evaluator action itself or a reference to be looked up.
-type EvaluatorArg interface {
-	Name() string
-}
-
-// EvaluatorRef is a struct to hold evaluator name and configuration.
-type EvaluatorRef struct {
-	name   string
-	config any
-}
-
-// NewEvaluatorRef creates a new EvaluatorRef with the given name and configuration.
-func NewEvaluatorRef(name string, config any) EvaluatorRef {
-	return EvaluatorRef{name: name, config: config}
-}
-
-// Name returns the name of the evaluator.
-func (e EvaluatorRef) Name() string {
-	return e.name
-}
-
-// Config returns the configuration to use by default for this evaluator.
-func (e EvaluatorRef) Config() any {
-	return e.config
-}
-
-// evaluator is an action with functions specific to evaluating a dataset.
-type evaluator struct {
-	core.Action[*EvaluatorRequest, *EvaluatorResponse, struct{}]
-}
+var (
+	_ api.Action   = (*Evaluator)(nil)
+	_ EvaluatorArg = (*Evaluator)(nil)
+)
 
 // Example is a single example that requires evaluation
 type Example struct {
-	TestCaseId string   `json:"testCaseId,omitempty"`
+	TestCaseID string   `json:"testCaseId,omitempty"`
 	Input      any      `json:"input"`
 	Output     any      `json:"output,omitempty"`
 	Context    []any    `json:"context,omitempty"`
 	Reference  any      `json:"reference,omitempty"`
-	TraceIds   []string `json:"traceIds,omitempty"`
+	TraceIDs   []string `json:"traceIds,omitempty"`
 }
 
 // EvaluatorRequest is the data we pass to evaluate a dataset.
-// The Options field is specific to the actual evaluator implementation.
+// The Config field is specific to the actual evaluator implementation.
 type EvaluatorRequest struct {
 	Dataset      []*Example `json:"dataset"`
-	EvaluationId string     `json:"evalRunId"`
-	Options      any        `json:"options,omitempty"`
+	EvaluationID string     `json:"evalRunId"`
+	Config       any        `json:"options,omitempty"`
 }
 
 // ScoreStatus is an enum used to indicate if a Score has passed or failed. This
@@ -118,7 +95,7 @@ func (ss ScoreStatus) String() string {
 // types), the reasoning provided for this score (if any), the score status (if
 // any) and other details.
 type Score struct {
-	Id      string         `json:"id,omitempty"`
+	ID      string         `json:"id,omitempty"`
 	Score   any            `json:"score,omitempty"`
 	Status  string         `json:"status,omitempty" jsonschema:"enum=UNKNOWN,enum=FAIL,enum=PASS"`
 	Error   string         `json:"error,omitempty"`
@@ -129,7 +106,7 @@ type Score struct {
 // An evaluator may provide multiple scores simultaneously (e.g. if they are using
 // an API to score on multiple criteria)
 type EvaluationResult struct {
-	TestCaseId string  `json:"testCaseId"`
+	TestCaseID string  `json:"testCaseId"`
 	TraceID    string  `json:"traceId,omitempty"`
 	SpanID     string  `json:"spanId,omitempty"`
 	Evaluation []Score `json:"evaluation"`
@@ -151,19 +128,26 @@ type EvaluatorOptions struct {
 }
 
 // EvaluatorCallbackRequest is the data we pass to the callback function
-// provided in defineEvaluator. The Options field is specific to the actual
+// provided in defineEvaluator. The Config field is specific to the actual
 // evaluator implementation.
 type EvaluatorCallbackRequest struct {
-	Input   Example `json:"input"`
-	Options any     `json:"options,omitempty"`
+	Input  Example `json:"input"`
+	Config any     `json:"options,omitempty"`
 }
 
 // EvaluatorCallbackResponse is the result on evaluating a single [Example]
 type EvaluatorCallbackResponse = EvaluationResult
 
-// NewEvaluator creates a new [Evaluator].
+// NewEvaluator creates a new unregistered [Evaluator].
 // This method processes the input dataset one-by-one.
-func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluator {
+//
+// Config is the evaluator's typed configuration; it is usually inferred from
+// fn's signature. The framework deserializes the request's raw config into
+// Config before calling fn: the exact Config type (or a pointer to it) and
+// map[string]any (from the Dev UI and other JSON callers) are accepted, and
+// mismatched types are rejected. The config's JSON schema is inferred from
+// Config unless [EvaluatorOptions.ConfigSchema] overrides it.
+func NewEvaluator[Config any](name string, opts *EvaluatorOptions, fn EvaluatorFunc[Config]) *Evaluator {
 	if name == "" {
 		panic("ai.NewEvaluator: evaluator name is required")
 	}
@@ -182,22 +166,28 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 		},
 	}
 
-	inputSchema := core.InferSchemaMap(EvaluatorRequest{})
-	if inputSchema != nil && opts.ConfigSchema != nil {
-		if props, ok := inputSchema["properties"].(map[string]any); ok {
-			props["options"] = opts.ConfigSchema
-		}
-	}
+	_, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, EvaluatorRequest{}, "options")
 
-	return &evaluator{
-		Action: *core.NewAction(name, api.ActionTypeEvaluator, metadata, inputSchema, func(ctx context.Context, req *EvaluatorRequest) (output *EvaluatorResponse, err error) {
+	return &Evaluator{
+		action: *core.NewAction(api.ActionTypeEvaluator, name, &core.ActionOptions{
+			Metadata:    metadata,
+			InputSchema: inputSchema,
+		}, func(ctx context.Context, req *EvaluatorRequest) (output *EvaluatorResponse, err error) {
+			cfg, err := resolveConfig[Config](req.Config)
+			if err != nil {
+				return nil, err
+			}
+			// Normalize the request so its type-erased Config always carries
+			// the same converted value the typed parameter does.
+			req.Config = cfg
+
 			var results []EvaluationResult
 			for _, datapoint := range req.Dataset {
-				if datapoint.TestCaseId == "" {
-					datapoint.TestCaseId = uuid.New().String()
+				if datapoint.TestCaseID == "" {
+					datapoint.TestCaseID = uuid.New().String()
 				}
 				spanMetadata := &tracing.SpanMetadata{
-					Name:    fmt.Sprintf("TestCase %s", datapoint.TestCaseId),
+					Name:    fmt.Sprintf("TestCase %s", datapoint.TestCaseID),
 					Type:    "evaluator",
 					Subtype: "evaluator",
 				}
@@ -207,24 +197,24 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 						spanId := trace.SpanContextFromContext(ctx).SpanID().String()
 
 						callbackRequest := EvaluatorCallbackRequest{
-							Input:   *input,
-							Options: req.Options,
+							Input:  *input,
+							Config: cfg,
 						}
 
-						result, err := fn(ctx, &callbackRequest)
+						result, err := fn(ctx, &callbackRequest, cfg)
 						if err != nil {
 							failedScore := Score{
 								Status: ScoreStatusFail.String(),
-								Error:  fmt.Sprintf("Evaluation of test case %s failed: \n %s", input.TestCaseId, err.Error()),
+								Error:  fmt.Sprintf("Evaluation of test case %s failed: \n %s", input.TestCaseID, err.Error()),
 							}
 							failedResult := EvaluationResult{
-								TestCaseId: input.TestCaseId,
+								TestCaseID: input.TestCaseID,
 								Evaluation: []Score{failedScore},
 								TraceID:    traceId,
 								SpanID:     spanId,
 							}
 							results = append(results, failedResult)
-							// return error to mark span as failed
+
 							return nil, err
 						}
 
@@ -247,16 +237,22 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 
 // DefineEvaluator creates a new [Evaluator] and registers it.
 // This method processes the input dataset one-by-one.
-func DefineEvaluator(r api.Registry, name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluator {
+//
+// Config is the evaluator's typed configuration; it is usually inferred from
+// fn's signature. See [NewEvaluator] for how the request's config is deserialized.
+func DefineEvaluator[Config any](r api.Registry, name string, opts *EvaluatorOptions, fn EvaluatorFunc[Config]) *Evaluator {
 	e := NewEvaluator(name, opts, fn)
 	e.Register(r)
 	return e
 }
 
-// NewBatchEvaluator creates a new [Evaluator].
+// NewBatchEvaluator creates a new unregistered [Evaluator].
 // This method provides the full [EvaluatorRequest] to the callback function,
 // giving more flexibility to the user for processing the data, such as batching or parallelization.
-func NewBatchEvaluator(name string, opts *EvaluatorOptions, fn BatchEvaluatorFunc) Evaluator {
+//
+// Config is the evaluator's typed configuration; it is usually inferred from
+// fn's signature. See [NewEvaluator] for how the request's config is deserialized.
+func NewBatchEvaluator[Config any](name string, opts *EvaluatorOptions, fn BatchEvaluatorFunc[Config]) *Evaluator {
 	if name == "" {
 		panic("ai.NewBatchEvaluator: batch evaluator name is required")
 	}
@@ -274,36 +270,66 @@ func NewBatchEvaluator(name string, opts *EvaluatorOptions, fn BatchEvaluatorFun
 		},
 	}
 
-	return &evaluator{
-		Action: *core.NewAction(name, api.ActionTypeEvaluator, metadata, nil, fn),
+	_, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, EvaluatorRequest{}, "options")
+
+	rawFn := func(ctx context.Context, req *EvaluatorRequest) (*EvaluatorResponse, error) {
+		cfg, err := resolveConfig[Config](req.Config)
+		if err != nil {
+			return nil, err
+		}
+		// Normalize the request so its type-erased Config always carries the
+		// same converted value the typed parameter does.
+		req.Config = cfg
+		return fn(ctx, req, cfg)
+	}
+
+	return &Evaluator{
+		action: *core.NewAction(api.ActionTypeEvaluator, name, &core.ActionOptions{
+			Metadata:    metadata,
+			InputSchema: inputSchema,
+		}, rawFn),
 	}
 }
 
 // DefineBatchEvaluator creates a new [Evaluator] and registers it.
 // This method provides the full [EvaluatorRequest] to the callback function,
 // giving more flexibility to the user for processing the data, such as batching or parallelization.
-func DefineBatchEvaluator(r api.Registry, name string, opts *EvaluatorOptions, fn BatchEvaluatorFunc) Evaluator {
+//
+// Config is the evaluator's typed configuration; it is usually inferred from
+// fn's signature. See [NewEvaluator] for how the request's config is deserialized.
+func DefineBatchEvaluator[Config any](r api.Registry, name string, opts *EvaluatorOptions, fn BatchEvaluatorFunc[Config]) *Evaluator {
 	e := NewBatchEvaluator(name, opts, fn)
-	e.(*evaluator).Register(r)
+	e.Register(r)
 	return e
 }
 
 // LookupEvaluator looks up an [Evaluator] registered by [DefineEvaluator].
 // It returns nil if the evaluator was not defined.
-func LookupEvaluator(r api.Registry, name string) Evaluator {
+func LookupEvaluator(r api.Registry, name string) *Evaluator {
 	action := core.ResolveActionFor[*EvaluatorRequest, *EvaluatorResponse, struct{}](r, api.ActionTypeEvaluator, name)
 	if action == nil {
 		return nil
 	}
-	return &evaluator{
-		Action: *action,
+	return &Evaluator{
+		action: *action,
 	}
 }
 
-// Evaluate runs the given [Evaluator].
-func (e *evaluator) Evaluate(ctx context.Context, req *EvaluatorRequest) (*EvaluatorResponse, error) {
+// Name returns the registry name of the evaluator, or the empty string if the
+// evaluator is nil (e.g. from a failed lookup).
+func (e *Evaluator) Name() string {
 	if e == nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "Evaluator.Evaluate: evaluator called on a nil evaluator; check that all evaluators are defined")
+		return ""
+	}
+	return e.action.Name()
+}
+
+func (e *Evaluator) evaluatorArg() {}
+
+// Evaluate runs the given [Evaluator].
+func (e *Evaluator) Evaluate(ctx context.Context, req *EvaluatorRequest) (*EvaluatorResponse, error) {
+	if e == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "Evaluator.Evaluate: evaluator called on a nil evaluator; check that all evaluators are defined")
 	}
 
 	return e.Run(ctx, req, nil)
@@ -313,15 +339,13 @@ func (e *evaluator) Evaluate(ctx context.Context, req *EvaluatorRequest) (*Evalu
 func Evaluate(ctx context.Context, r api.Registry, opts ...EvaluatorOption) (*EvaluatorResponse, error) {
 	evalOpts := &evaluatorOptions{}
 	for _, opt := range opts {
-		if err := opt.applyEvaluator(evalOpts); err != nil {
-			return nil, err
-		}
+		opt.applyEvaluator(evalOpts)
 	}
 
 	if evalOpts.Evaluator == nil {
 		return nil, fmt.Errorf("ai.Evaluate: evaluator must be set")
 	}
-	e, ok := evalOpts.Evaluator.(Evaluator)
+	e, ok := evalOpts.Evaluator.(*Evaluator)
 	if !ok {
 		e = LookupEvaluator(r, evalOpts.Evaluator.Name())
 	}
@@ -329,14 +353,14 @@ func Evaluate(ctx context.Context, r api.Registry, opts ...EvaluatorOption) (*Ev
 		return nil, fmt.Errorf("ai.Evaluate: evaluator not found: %s", evalOpts.Evaluator.Name())
 	}
 
-	if evalRef, ok := evalOpts.Evaluator.(EvaluatorRef); ok && evalOpts.Config == nil {
-		evalOpts.Config = evalRef.Config()
+	if ref, ok := evalOpts.Evaluator.(EvaluatorRef); ok && evalOpts.Config == nil {
+		evalOpts.Config = ref.Config()
 	}
 
 	req := &EvaluatorRequest{
 		Dataset:      evalOpts.Dataset,
-		EvaluationId: evalOpts.ID,
-		Options:      evalOpts.Config,
+		EvaluationID: evalOpts.ID,
+		Config:       evalOpts.Config,
 	}
 
 	return e.Evaluate(ctx, req)

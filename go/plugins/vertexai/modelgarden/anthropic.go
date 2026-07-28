@@ -23,9 +23,9 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/vertex"
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/genkit"
 
 	ant "github.com/firebase/genkit/go/plugins/internal/anthropic"
 )
@@ -73,7 +73,7 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 	var actions []api.Action
 	for name, opts := range AnthropicModels {
 		model := ant.DefineModel(a.client, provider, name, opts)
-		actions = append(actions, model.(api.Action))
+		actions = append(actions, model)
 	}
 
 	return actions
@@ -81,12 +81,12 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 
 // AnthropicModel returns the [ai.Model] with the given id.
 // It returns nil if the model was not defined
-func AnthropicModel(g *genkit.Genkit, id string) ai.Model {
-	return genkit.LookupModel(g, api.NewName(provider, id))
+func AnthropicModel(g *genkit.Genkit, id string) *ai.Model {
+	return g.LookupModel(api.NewName(provider, id))
 }
 
 // DefineModel adds the model to the registry
-func (a *Anthropic) DefineModel(name string, opts *ai.ModelOptions) (ai.Model, error) {
+func (a *Anthropic) DefineModel(name string, opts *ai.ModelOptions) (*ai.Model, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.initted {

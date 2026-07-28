@@ -15,13 +15,13 @@
 package main
 
 import (
+	genkit "github.com/firebase/genkit/go"
 	aix "github.com/firebase/genkit/go/ai/exp"
-	"github.com/firebase/genkit/go/genkit"
-	genkitx "github.com/firebase/genkit/go/genkit/exp"
+	genkitx "github.com/firebase/genkit/go/exp"
 )
 
 // ChatPromptInput is the input schema referenced by ./prompts/chef.prompt.
-// Registering it via DefineSchemaFor lets the .prompt file refer to it by
+// Registering it via DefineSchemasFor lets the .prompt file refer to it by
 // name in its YAML frontmatter.
 type ChatPromptInput struct {
 	Personality string `json:"personality"`
@@ -44,7 +44,7 @@ func definePromptAgent(g *genkit.Genkit) *aix.Agent[any] {
 	// chef.prompt's frontmatter references ChatPromptInput by name, so the
 	// schema must be registered before DefinePromptAgent renders the prompt
 	// at definition time.
-	genkit.DefineSchemaFor[ChatPromptInput](g)
+	g.DefineSchemasFor(ChatPromptInput{})
 	return genkitx.DefinePromptAgent(g, name,
 		aix.WithSessionStore(mustStore(name)),
 		aix.WithDescription[any]("Michelin-starred chef (prompt loaded from ./prompts/chef.prompt)"),

@@ -69,8 +69,8 @@ import (
 	"log"
 	"net/http"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/middleware"
 	"github.com/firebase/genkit/go/plugins/server"
@@ -88,12 +88,15 @@ func main() {
 	// Initialize Genkit with the Google AI plugin and the Middleware plugin.
 	// Registering the Middleware plugin exposes the built-in middleware
 	// (Skills, Filesystem, Retry, Fallback, ...) to the Dev UI.
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &middleware.Middleware{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &middleware.Middleware{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	DefineAskFlow(g)
 
 	mux := http.NewServeMux()
-	for _, a := range genkit.ListFlows(g) {
+	for _, a := range g.ListFlows() {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
 	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
@@ -104,12 +107,12 @@ func main() {
 // nudges the model toward the pirate skill so a fresh run produces obviously
 // skill-flavoured output ("Arr, matey!" rather than a plain paragraph).
 func DefineAskFlow(g *genkit.Genkit) {
-	genkit.DefineFlow(g, "askFlow", func(ctx context.Context, question string) (string, error) {
+	g.DefineFlow("askFlow", func(ctx context.Context, question string) (string, error) {
 		if question == "" {
 			question = "Explain how a rainbow forms, but in the voice of a pirate."
 		}
 
-		return genkit.GenerateText(ctx, g,
+		return g.GenerateText(ctx,
 			ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 				ThinkingConfig: &genai.ThinkingConfig{
 					ThinkingBudget: genai.Ptr[int32](0),

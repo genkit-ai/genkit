@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // collectTurnPatches consumes one turn's chunks, returning the customPatch from
@@ -221,7 +221,7 @@ func TestCustomPatch_StateTransformErrorFailsInvocationClosed(t *testing.T) {
 			})
 		},
 		WithStateTransform(func(_ context.Context, st *SessionState[testState]) (*SessionState[testState], error) {
-			return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape custom state")
+			return nil, status.Errorf(status.ErrPermissionDenied, "cannot shape custom state")
 		}),
 	)
 
@@ -244,8 +244,8 @@ func TestCustomPatch_StateTransformErrorFailsInvocationClosed(t *testing.T) {
 	if out.FinishReason != AgentFinishReasonFailed {
 		t.Errorf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
 	}
-	if out.Error == nil || out.Error.Status != core.PERMISSION_DENIED {
-		t.Errorf("Error = %+v, want status %q from the transform", out.Error, core.PERMISSION_DENIED)
+	if out.Error == nil || out.Error.Status != status.PermissionDenied {
+		t.Errorf("Error = %+v, want status %q from the transform", out.Error, status.PermissionDenied)
 	}
 }
 

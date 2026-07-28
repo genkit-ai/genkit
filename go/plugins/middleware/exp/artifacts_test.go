@@ -24,8 +24,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
-	"github.com/firebase/genkit/go/genkit"
-	genkitx "github.com/firebase/genkit/go/genkit/exp"
+	genkitx "github.com/firebase/genkit/go/exp"
 )
 
 func toolResponseByName(t *testing.T, msgs []*ai.Message, name string) (any, bool) {
@@ -76,7 +75,7 @@ func TestArtifactsWriteThenRead(t *testing.T) {
 	g := newTestGenkit(t)
 
 	// The model writes an artifact, reads it back, then finishes.
-	model := toolModel(t, g, "test/artifact-model", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	model := toolModel(t, g, "test/artifact-model", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		var wrote, read bool
 		for _, m := range req.Messages {
 			for _, p := range m.Content {
@@ -129,7 +128,7 @@ func TestArtifactsSystemPromptListing(t *testing.T) {
 	g := newTestGenkit(t)
 
 	var captured []*ai.Message
-	capture := toolModel(t, g, "test/capture", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	capture := toolModel(t, g, "test/capture", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		captured = req.Messages
 		return textResp(req, "ok"), nil
 	})
@@ -143,7 +142,7 @@ func TestArtifactsSystemPromptListing(t *testing.T) {
 					Name:  "notes.md",
 					Parts: []*ai.Part{ai.NewTextPart("some notes here")},
 				})
-				if _, err := genkit.Generate(ctx, g,
+				if _, err := g.Generate(ctx,
 					ai.WithModel(capture),
 					ai.WithMessages(input.Message),
 					ai.WithUse(&Artifacts{}),
@@ -177,7 +176,7 @@ func TestArtifactsNoSession(t *testing.T) {
 	g := newTestGenkit(t)
 
 	// With a plain Generate call there is no agent session.
-	model := toolModel(t, g, "test/no-session", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	model := toolModel(t, g, "test/no-session", func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		for _, m := range req.Messages {
 			for _, p := range m.Content {
 				if p.IsToolResponse() {
@@ -188,7 +187,7 @@ func TestArtifactsNoSession(t *testing.T) {
 		return toolReqResp(req, &ai.ToolRequest{Name: "read_artifact", Input: map[string]any{"name": "x"}}), nil
 	})
 
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(model), ai.WithPrompt("read x"), ai.WithUse(&Artifacts{}))
+	resp, err := g.Generate(ctx, ai.WithModel(model), ai.WithPrompt("read x"), ai.WithUse(&Artifacts{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +201,7 @@ func TestArtifactsNoSession(t *testing.T) {
 	}
 }
 
-func toolNames(tools []ai.Tool) []string {
+func toolNames(tools []ai.AnyTool) []string {
 	names := make([]string, 0, len(tools))
 	for _, tl := range tools {
 		names = append(names, tl.Name())

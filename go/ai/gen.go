@@ -53,8 +53,8 @@ type dataPart struct {
 type EmbedRequest struct {
 	// Input is the array of documents to generate embeddings for.
 	Input []*Document `json:"input,omitempty"`
-	// Options contains embedder-specific configuration parameters.
-	Options any `json:"options,omitempty"`
+	// Config contains embedder-specific configuration parameters.
+	Config any `json:"options,omitempty"`
 }
 
 // EmbedResponse contains the generated embeddings from an embed request.
@@ -205,8 +205,8 @@ type GenerationUsage struct {
 type Media struct {
 	// ContentType specifies the MIME type of the media. Inferred from the data URI if not provided.
 	ContentType string `json:"contentType,omitempty"`
-	// Url is a "data:" or "https:" URI containing the media content.
-	Url string `json:"url,omitempty"`
+	// URL is a "data:" or "https:" URI containing the media content.
+	URL string `json:"url,omitempty"`
 }
 
 type mediaPart struct {
@@ -349,7 +349,7 @@ type ModelResponse struct {
 	Request *ModelRequest `json:"request,omitempty"`
 	// Usage describes how many resources were used by this generation request.
 	Usage         *GenerationUsage `json:"usage,omitempty"`
-	formatHandler StreamingFormatHandler
+	formatHandler FormatHandler
 }
 
 // A ModelResponseChunk is the portion of the ModelResponse
@@ -366,7 +366,7 @@ type ModelResponseChunk struct {
 	Index int `json:"index"`
 	// Role indicates the entity that generated this chunk.
 	Role          Role `json:"role,omitempty"`
-	formatHandler StreamingFormatHandler
+	formatHandler FormatHandler
 }
 
 // MultipartToolResponse represents a tool response with both structured output and content parts.
@@ -386,8 +386,8 @@ type Operation struct {
 	Done bool `json:"done"`
 	// Error contains error information if the operation failed.
 	Error *OperationError `json:"error,omitempty"`
-	// Id is the unique identifier for this operation.
-	Id string `json:"id"`
+	// ID is the unique identifier for this operation.
+	ID string `json:"id"`
 	// Metadata contains additional information about the operation.
 	Metadata map[string]any `json:"metadata,omitempty"`
 	// Output contains the result of the operation if it has completed successfully.
@@ -426,41 +426,11 @@ type PathMetadata struct {
 	Status string `json:"status,omitempty"`
 }
 
-// RankedDocumentData represents a document with a relevance score from reranking.
-type RankedDocumentData struct {
-	// Content holds the document's parts (text and media).
-	Content []*Part `json:"content,omitempty"`
-	// Metadata contains the reranking score and other arbitrary key-value data.
-	Metadata *RankedDocumentMetadata `json:"metadata,omitempty"`
-}
-
-// RankedDocumentMetadata contains the relevance score and other metadata for a reranked document.
-type RankedDocumentMetadata struct {
-	// Score is the relevance score assigned by the reranker.
-	Score float64 `json:"score,omitempty"`
-}
-
 type reasoningPart struct {
 	// Metadata contains arbitrary key-value data for this part.
 	Metadata map[string]any `json:"metadata,omitempty"`
 	// Reasoning contains the reasoning text of the message.
 	Reasoning string `json:"reasoning,omitempty"`
-}
-
-// RerankerRequest represents a request to rerank documents based on relevance.
-type RerankerRequest struct {
-	// Documents is the array of documents to rerank.
-	Documents []*Document `json:"documents,omitempty"`
-	// Options contains reranker-specific configuration parameters.
-	Options any `json:"options,omitempty"`
-	// Query is the document to use for reranking.
-	Query *Document `json:"query,omitempty"`
-}
-
-// RerankerResponse contains the reranked documents with relevance scores.
-type RerankerResponse struct {
-	// Documents is the array of reranked documents with scores.
-	Documents []*RankedDocumentData `json:"documents,omitempty"`
 }
 
 type resourcePart struct {
@@ -471,22 +441,8 @@ type resourcePart struct {
 }
 
 type ResourcePart struct {
-	// Uri is the URI of the external resource.
-	Uri string `json:"uri,omitempty"`
-}
-
-// RetrieverRequest represents a request to retrieve relevant documents.
-type RetrieverRequest struct {
-	// Options contains retriever-specific configuration parameters.
-	Options any `json:"options,omitempty"`
-	// Query is the document to use for retrieval.
-	Query *Document `json:"query,omitempty"`
-}
-
-// RetrieverResponse contains the retrieved documents from a retriever request.
-type RetrieverResponse struct {
-	// Documents is the array of retrieved documents.
-	Documents []*Document `json:"documents,omitempty"`
+	// URI is the URI of the external resource.
+	URI string `json:"uri,omitempty"`
 }
 
 // Role indicates which entity is responsible for the content of a message.

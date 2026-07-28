@@ -18,10 +18,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"google.golang.org/genai"
 )
@@ -30,10 +31,13 @@ func main() {
 	ctx := context.Background()
 
 	// Initialize Genkit with Google AI plugin
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Define a flow to demonstrate code execution
-	genkit.DefineFlow(g, "codeExecutionFlow", func(ctx context.Context, _ any) (string, error) {
+	g.DefineFlow("codeExecutionFlow", func(ctx context.Context, _ any) (string, error) {
 		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
 		if m == nil {
 			return "", errors.New("failed to find model")
@@ -44,7 +48,7 @@ func main() {
 
 		// Generate response with code execution enabled
 		fmt.Println("Sending request to Gemini...")
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModel(m),
 			ai.WithConfig(&genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](0.2),

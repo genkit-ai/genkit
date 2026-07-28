@@ -17,26 +17,30 @@ package main
 import (
 	"context"
 	"errors"
+	"log"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/vertexai/modelgarden"
 )
 
 func main() {
 	ctx := context.Background()
 
-	g := genkit.Init(ctx, genkit.WithPlugins(&modelgarden.Anthropic{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&modelgarden.Anthropic{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	// Define a simple flow that generates jokes about a given topic
-	genkit.DefineFlow(g, "jokesFlow", func(ctx context.Context, input string) (string, error) {
+	g.DefineFlow("jokesFlow", func(ctx context.Context, input string) (string, error) {
 		m := modelgarden.AnthropicModel(g, "claude-3-5-sonnet-v2")
 		if m == nil {
 			return "", errors.New("jokesFlow: failed to find model")
 		}
 
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := g.Generate(ctx,
 			ai.WithModel(m),
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1.0),

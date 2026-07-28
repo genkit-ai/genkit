@@ -33,10 +33,11 @@ type Action interface {
 	Registerable
 	// Name returns the name of the action.
 	Name() string
-	// RunJSON runs the action with the given JSON input and streaming callback and returns the output as JSON.
-	RunJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (json.RawMessage, error)
-	// RunJSONWithTelemetry runs the action with the given JSON input and streaming callback and returns the output as JSON along with telemetry info.
-	RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (*ActionRunResult[json.RawMessage], error)
+	// RunJSON runs the action with the given JSON input and streaming callback
+	// and returns the output as JSON along with trace information. Trace
+	// information is populated even when the run fails, so transports can
+	// report the trace of a failed run.
+	RunJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (*ActionRunResult[json.RawMessage], error)
 	// Desc returns a descriptor of the action.
 	Desc() ActionDesc
 }
@@ -105,8 +106,6 @@ type Registerable interface {
 type ActionType string
 
 const (
-	ActionTypeRetriever        ActionType = "retriever"
-	ActionTypeIndexer          ActionType = "indexer"
 	ActionTypeEmbedder         ActionType = "embedder"
 	ActionTypeEvaluator        ActionType = "evaluator"
 	ActionTypeFlow             ActionType = "flow"
@@ -114,15 +113,18 @@ const (
 	ActionTypeBackgroundModel  ActionType = "background-model"
 	ActionTypeExecutablePrompt ActionType = "executable-prompt"
 	ActionTypeResource         ActionType = "resource"
-	ActionTypeTool             ActionType = "tool"
-	ActionTypeToolV2           ActionType = "tool.v2"
-	ActionTypeUtil             ActionType = "util"
-	ActionTypeCustom           ActionType = "custom"
-	ActionTypeAgentSnapshot    ActionType = "agent-snapshot"
-	ActionTypeAgentAbort       ActionType = "agent-abort"
-	ActionTypeCheckOperation   ActionType = "check-operation"
-	ActionTypeCancelOperation  ActionType = "cancel-operation"
-	ActionTypeAgent            ActionType = "agent"
+	// ActionTypeTool is the legacy tool action type. Go registers all tools
+	// under [ActionTypeToolV2]; this value remains in the cross-runtime
+	// taxonomy because other runtimes still register plain tools under it.
+	ActionTypeTool            ActionType = "tool"
+	ActionTypeToolV2          ActionType = "tool.v2"
+	ActionTypeUtil            ActionType = "util"
+	ActionTypeCustom          ActionType = "custom"
+	ActionTypeAgentSnapshot   ActionType = "agent-snapshot"
+	ActionTypeAgentAbort      ActionType = "agent-abort"
+	ActionTypeCheckOperation  ActionType = "check-operation"
+	ActionTypeCancelOperation ActionType = "cancel-operation"
+	ActionTypeAgent           ActionType = "agent"
 )
 
 // ActionDesc is a descriptor of an action.

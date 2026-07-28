@@ -25,12 +25,12 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
-	"github.com/firebase/genkit/go/core"
+	genkit "github.com/firebase/genkit/go"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/x/streaming"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 const (
@@ -126,8 +126,8 @@ func (m *FirestoreStreamManager) Open(ctx context.Context, streamID string) (str
 		ExpiresAt: &expiresAt,
 	})
 	if err != nil {
-		if status.Code(err) == codes.AlreadyExists {
-			return nil, core.NewPublicError(core.ALREADY_EXISTS, "stream already exists", nil)
+		if grpcstatus.Code(err) == codes.AlreadyExists {
+			return nil, status.PublicErrorf(streaming.ErrStreamExists, "stream %q already exists", streamID)
 		}
 		return nil, err
 	}
@@ -145,12 +145,12 @@ func (m *FirestoreStreamManager) Subscribe(ctx context.Context, streamID string)
 	snapshot, err := docRef.Get(ctx)
 	if err != nil {
 		if isNotFound(err) {
-			return nil, nil, core.NewPublicError(core.NOT_FOUND, "stream not found", nil)
+			return nil, nil, status.PublicErrorf(streaming.ErrStreamNotFound, "stream %q not found", streamID)
 		}
 		return nil, nil, err
 	}
 	if !snapshot.Exists() {
-		return nil, nil, core.NewPublicError(core.NOT_FOUND, "stream not found", nil)
+		return nil, nil, status.PublicErrorf(streaming.ErrStreamNotFound, "stream %q not found", streamID)
 	}
 
 	ch := make(chan streaming.StreamEvent, streamBufferSize)
@@ -175,7 +175,7 @@ func (m *FirestoreStreamManager) Subscribe(ctx context.Context, streamID string)
 				unsubscribed = true
 				ch <- streaming.StreamEvent{
 					Type: streaming.StreamEventError,
-					Err:  core.NewPublicError(core.DEADLINE_EXCEEDED, "stream timed out", nil),
+					Err:  status.PublicErrorf(streaming.ErrStreamTimeout, "stream %q timed out", streamID),
 				}
 				close(ch)
 				cancelSnapshot()
@@ -274,18 +274,18 @@ func (m *FirestoreStreamManager) Subscribe(ctx context.Context, streamID string)
 					return
 				case streamEventError:
 					if !unsubscribed {
-						var errStatus core.StatusName = core.UNKNOWN
+						var errStatus status.Name = status.Unknown
 						var errMsg string
 						if entry.Err != nil {
 							errMsg = entry.Err.Message
 							if entry.Err.Status != "" {
-								errStatus = core.StatusName(entry.Err.Status)
+								errStatus = status.Name(entry.Err.Status)
 							}
 						}
 						select {
 						case ch <- streaming.StreamEvent{
 							Type: streaming.StreamEventError,
-							Err:  core.NewPublicError(errStatus, errMsg, nil),
+							Err:  status.PublicErrorf(status.Base(errStatus), "%s", errMsg),
 						}:
 						default:
 						}
@@ -312,7 +312,7 @@ func isNotFound(err error) bool {
 	if err == nil {
 		return false
 	}
-	if grpcErr, ok := status.FromError(err); ok {
+	if grpcErr, ok := grpcstatus.FromError(err); ok {
 		return grpcErr.Code() == codes.NotFound
 	}
 	return false
@@ -332,7 +332,7 @@ func (s *firestoreStreamInput) Write(ctx context.Context, chunk json.RawMessage)
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return core.NewPublicError(core.FAILED_PRECONDITION, "stream writer is closed", nil)
+		return status.PublicErrorf(streaming.ErrStreamClosed, "stream %q: writer is closed", s.streamID)
 	}
 
 	_, err := s.docRef.Update(ctx, []firestore.Update{
@@ -357,7 +357,7 @@ func (s *firestoreStreamInput) Done(ctx context.Context, output json.RawMessage)
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return core.NewPublicError(core.FAILED_PRECONDITION, "stream writer is closed", nil)
+		return status.PublicErrorf(streaming.ErrStreamClosed, "stream %q: writer is closed", s.streamID)
 	}
 	s.closed = true
 
@@ -387,22 +387,13 @@ func (s *firestoreStreamInput) Error(ctx context.Context, err error) error {
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return core.NewPublicError(core.FAILED_PRECONDITION, "stream writer is closed", nil)
+		return status.PublicErrorf(streaming.ErrStreamClosed, "stream %q: writer is closed", s.streamID)
 	}
 	s.closed = true
 
 	streamErr := &streamError{
-		Status:  string(core.UNKNOWN),
+		Status:  string(status.Of(err)),
 		Message: err.Error(),
-	}
-	var ufErr *core.UserFacingError
-	if errors.As(err, &ufErr) {
-		streamErr.Status = string(ufErr.Status)
-		// Store the bare message, not err.Error(): a UserFacingError stringifies
-		// as "STATUS: message", and the status is already carried separately. This
-		// keeps the persisted message clean and prevents the Subscribe path (which
-		// rebuilds the error from status + message) from double-prefixing it.
-		streamErr.Message = ufErr.Message
 	}
 
 	expiresAt := time.Now().Add(s.manager.ttl)

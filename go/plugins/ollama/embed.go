@@ -24,13 +24,16 @@ import (
 	"net/http"
 	"strings"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/genkit"
 )
 
 type EmbedOptions struct {
-	Model string `json:"model"`
+	// Model is optional in requests; the embedder defaults it to the model
+	// it was defined with (omitempty also keeps the inferred config schema
+	// from marking it required).
+	Model string `json:"model,omitempty"`
 }
 
 type ollamaEmbedRequest struct {
@@ -43,11 +46,7 @@ type ollamaEmbedResponse struct {
 	Embeddings [][]float32 `json:"embeddings"`
 }
 
-func embed(ctx context.Context, serverAddress string, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
-	options, ok := req.Options.(*EmbedOptions)
-	if !ok && req.Options != nil {
-		return nil, fmt.Errorf("invalid options type: expected *EmbedOptions")
-	}
+func embed(ctx context.Context, serverAddress string, req *ai.EmbedRequest, options *EmbedOptions) (*ai.EmbedResponse, error) {
 	if options == nil || options.Model == "" {
 		return nil, fmt.Errorf("invalid embedding model: model must be specified")
 	}
@@ -129,7 +128,7 @@ func concatenateText(doc *ai.Document) string {
 }
 
 // DefineEmbedder defines an embedder with a given model.
-func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, embedOpts *ai.EmbedderOptions) ai.Embedder {
+func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, embedOpts *ai.EmbedderOptions) *ai.Embedder {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if !o.initted {
@@ -163,36 +162,24 @@ func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, 
 
 	meta.Dimensions = dimensions
 
-	return genkit.DefineEmbedder(g, api.NewName(provider, model), meta, func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
-		normalizedReq := *req
-
-		if req.Options == nil {
-			normalizedReq.Options = &EmbedOptions{Model: model}
-		} else if opts, ok := req.Options.(*EmbedOptions); ok {
-			if opts == nil {
-				normalizedReq.Options = &EmbedOptions{Model: model}
-			} else {
-				normalisedOpts := *opts
-				if normalisedOpts.Model == "" {
-					normalisedOpts.Model = model
-				} else if normalisedOpts.Model != model {
-					return nil, fmt.Errorf("invalid embedding model: embedder bound to model %q, got %q", model, opts.Model)
-				}
-				normalizedReq.Options = &normalisedOpts
-			}
+	return g.DefineEmbedder(api.NewName(provider, model), meta, func(ctx context.Context, req *ai.EmbedRequest, cfg EmbedOptions) (*ai.EmbedResponse, error) {
+		if cfg.Model == "" {
+			cfg.Model = model
+		} else if cfg.Model != model {
+			return nil, fmt.Errorf("invalid embedding model: embedder bound to model %q, got %q", model, cfg.Model)
 		}
 
-		return embed(ctx, o.ServerAddress, &normalizedReq)
+		return embed(ctx, o.ServerAddress, req, &cfg)
 	})
 }
 
 // IsDefinedEmbedder reports whether the embedder with the given model is defined by this plugin.
 func IsDefinedEmbedder(g *genkit.Genkit, model string) bool {
-	return genkit.LookupEmbedder(g, api.NewName(provider, model)) != nil
+	return g.LookupEmbedder(api.NewName(provider, model)) != nil
 }
 
 // Embedder returns the [ai.Embedder] with the given model.
 // It returns nil if the embedder was not defined.
-func Embedder(g *genkit.Genkit, model string) ai.Embedder {
-	return genkit.LookupEmbedder(g, api.NewName(provider, model))
+func Embedder(g *genkit.Genkit, model string) *ai.Embedder {
+	return g.LookupEmbedder(api.NewName(provider, model))
 }

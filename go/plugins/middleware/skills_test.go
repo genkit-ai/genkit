@@ -60,12 +60,12 @@ func setupSkillsDir(t *testing.T) string {
 // captureModel returns a model that records the messages it receives and
 // returns a fixed text response. The returned pointer lets the test inspect
 // what the middleware produced.
-func captureModel(t *testing.T, r *registry.Registry, name string) (ai.Model, *[]*ai.Message) {
+func captureModel(t *testing.T, r *registry.Registry, name string) (*ai.Model, *[]*ai.Message) {
 	t.Helper()
 	var captured []*ai.Message
 	m := ai.DefineModel(r, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
-	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	}, func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		captured = req.Messages
 		return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("mock response")}, nil
 	})
@@ -75,11 +75,11 @@ func captureModel(t *testing.T, r *registry.Registry, name string) (ai.Model, *[
 // toolCallingModel returns a model that issues a single tool request on its
 // first call, then returns "done" once the tool response is visible in the
 // messages.
-func toolCallingModel(t *testing.T, r *registry.Registry, name, toolName string, input map[string]any) ai.Model {
+func toolCallingModel(t *testing.T, r *registry.Registry, name, toolName string, input map[string]any) *ai.Model {
 	t.Helper()
 	return ai.DefineModel(r, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
-	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	}, func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		for _, msg := range req.Messages {
 			for _, part := range msg.Content {
 				if part.IsToolResponse() {

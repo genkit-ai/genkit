@@ -45,14 +45,17 @@ import (
 	"net/http"
 	"time"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/core/x/streaming"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/server"
 )
 
 func main() {
 	ctx := context.Background()
-	g := genkit.Init(ctx)
+	g, err := genkit.Init(ctx)
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	type CountdownChunk struct {
 		Count     int    `json:"count"`
@@ -61,7 +64,7 @@ func main() {
 	}
 
 	// Define a streaming flow that counts down with delays.
-	countdown := genkit.DefineStreamingFlow(g, "countdown",
+	countdown := g.DefineStreamingFlow("countdown",
 		func(ctx context.Context, count int, sendChunk func(context.Context, CountdownChunk) error) (string, error) {
 			if count <= 0 {
 				count = 5

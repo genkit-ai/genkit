@@ -51,8 +51,8 @@ import (
 	"log"
 	"net/http"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/middleware"
 	"github.com/firebase/genkit/go/plugins/server"
@@ -69,13 +69,16 @@ func main() {
 	// Initialize Genkit with the Google AI plugin and the Middleware plugin.
 	// Registering the Middleware plugin exposes the built-in middleware
 	// (Filesystem, Retry, Fallback, ...) to the Dev UI.
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &middleware.Middleware{}))
+	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &middleware.Middleware{}))
+	if err != nil {
+		log.Fatalf("failed to initialize Genkit: %v", err)
+	}
 
 	DefineExploreFlow(g)
 	DefineEditFlow(g)
 
 	mux := http.NewServeMux()
-	for _, a := range genkit.ListFlows(g) {
+	for _, a := range g.ListFlows() {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
 	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
@@ -86,12 +89,12 @@ func main() {
 // set, so write_file and search_and_replace are not registered — the model
 // literally cannot modify anything.
 func DefineExploreFlow(g *genkit.Genkit) {
-	genkit.DefineFlow(g, "exploreFlow", func(ctx context.Context, question string) (string, error) {
+	g.DefineFlow("exploreFlow", func(ctx context.Context, question string) (string, error) {
 		if question == "" {
 			question = "Summarise what this project does based on the files available."
 		}
 
-		return genkit.GenerateText(ctx, g,
+		return g.GenerateText(ctx,
 			ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 				ThinkingConfig: &genai.ThinkingConfig{
 					ThinkingBudget: genai.Ptr[int32](0),
@@ -114,12 +117,12 @@ func DefineExploreFlow(g *genkit.Genkit) {
 // edited workspace may report "search content not found" if the instruction
 // has already been satisfied.
 func DefineEditFlow(g *genkit.Genkit) {
-	genkit.DefineFlow(g, "editFlow", func(ctx context.Context, instruction string) (string, error) {
+	g.DefineFlow("editFlow", func(ctx context.Context, instruction string) (string, error) {
 		if instruction == "" {
 			instruction = "In todo.txt, mark the in-memory response cache item as done."
 		}
 
-		return genkit.GenerateText(ctx, g,
+		return g.GenerateText(ctx,
 			ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 				ThinkingConfig: &genai.ThinkingConfig{
 					ThinkingBudget: genai.Ptr[int32](0),

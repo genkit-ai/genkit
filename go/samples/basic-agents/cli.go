@@ -166,11 +166,11 @@ type agentEntry struct {
 
 // InterruptHandler resolves a single tool interrupt into a resume part. It
 // receives the interrupted tool-request part (read its typed payload with
-// tool.InterruptAs) and a Prompter for asking the user questions through
+// ai.Part.InterruptAs) and a Prompter for asking the user questions through
 // the CLI's input stream. It returns one of:
 //
-//   - a restart part (tool.Resume) to re-run the tool with resume data,
-//   - a response part (tool.Respond) to answer the tool directly, or
+//   - a restart part (ai.Part.ToRestart) to re-run the tool with resumed data,
+//   - a response part (ai.Part.ToResponse) to answer the tool directly, or
 //   - nil to leave this interrupt unresolved.
 //
 // The CLI sorts the returned part into the right half of aix.ToolResume,
@@ -717,7 +717,7 @@ func formatToolInput(input any) string {
 
 // resolveInterrupts turns a batch of tool interrupts into one resume
 // payload by asking the agent's handler about each. The handler builds the
-// resume part (tool.Resume or tool.Respond); this sorts each into the
+// resume part (ai.Part.ToRestart or ai.Part.ToResponse); this sorts each into the
 // matching half of aix.ToolResume by part kind — a restart is a tool
 // request, a direct response is a tool response — so handlers never deal
 // with the wire shape. Returns nil when nothing could be resolved.

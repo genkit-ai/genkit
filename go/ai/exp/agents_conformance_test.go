@@ -47,7 +47,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -112,7 +112,7 @@ func (pm *programmableModel) setHandler(h func(ctx context.Context, req *ai.Mode
 	pm.handler = h
 }
 
-func (pm *programmableModel) generate(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+func (pm *programmableModel) generate(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 	pm.mu.Lock()
 	h := pm.handler
 	pm.mu.Unlock()
@@ -149,25 +149,23 @@ func setupHarness(t *testing.T) *harness {
 	// --- Tools ---
 
 	testTool := ai.DefineTool(reg, "testTool", "A simple test tool",
-		func(tc *ai.ToolContext, _ struct{}) (string, error) {
+		func(tc context.Context, _ struct{}) (string, error) {
 			return "tool called", nil
 		})
 
 	// interruptTool always pauses the turn, returning the tool request to the
 	// client for external resolution (resume.respond).
 	interruptTool := ai.DefineTool(reg, "interruptTool", "An interrupt tool",
-		func(tc *ai.ToolContext, _ interruptIn) (interruptOut, error) {
-			return interruptOut{}, tc.Interrupt(&ai.InterruptOptions{})
+		func(tc context.Context, _ interruptIn) (interruptOut, error) {
+			return interruptOut{}, &ai.InterruptError{}
 		})
 
 	// restartTool interrupts on first call and succeeds when restarted with
 	// resumed metadata (resume.restart).
-	restartTool := ai.DefineTool(reg, "restartTool", "A tool that requires confirmation before executing",
-		func(tc *ai.ToolContext, in restartIn) (restartOut, error) {
-			if tc.Resumed == nil {
-				return restartOut{}, tc.Interrupt(&ai.InterruptOptions{
-					Metadata: map[string]any{"requiresConfirmation": true},
-				})
+	restartTool := ai.DefineInterruptibleTool(reg, "restartTool", "A tool that requires confirmation before executing",
+		func(tc context.Context, in restartIn, resumed *struct{}) (restartOut, error) {
+			if resumed == nil {
+				return restartOut{}, &ai.InterruptError{Data: map[string]any{"requiresConfirmation": true}}
 			}
 			return restartOut{Result: "confirmed: " + in.Action}, nil
 		})
@@ -615,14 +613,10 @@ func assertOutput(t *testing.T, label string, output *exp.AgentOutput[customStat
 		// graceful AgentOutput. Surface this explicitly: a spec that expects a
 		// graceful failure (finishReason=failed) is not satisfied by a thrown
 		// error, so this fails — and the message makes the mismatch obvious.
-		status := "<none>"
-		var ge *core.GenkitError
-		if errors.As(invocationErr, &ge) {
-			status = string(ge.Status)
-		}
+		gotStatus := string(status.Of(invocationErr))
 		if wantsFailure {
 			t.Errorf("%s: expected a graceful failed AgentOutput, but the invocation returned a transport-level error "+
-				"(status=%s): %v", label, status, invocationErr)
+				"(status=%s): %v", label, gotStatus, invocationErr)
 		} else {
 			t.Fatalf("%s: invocation failed: %v", label, invocationErr)
 		}
@@ -727,7 +721,7 @@ func assertThrownError(t *testing.T, label string, err error, expect map[string]
 	}
 	if st, ok := expect["status"].(string); ok {
 		got := ""
-		var ge *core.GenkitError
+		var ge *status.Error
 		if errors.As(err, &ge) {
 			got = string(ge.Status)
 		}

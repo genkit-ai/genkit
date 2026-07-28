@@ -17,14 +17,14 @@ package main
 import (
 	"context"
 
+	genkit "github.com/firebase/genkit/go"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/mcp"
 )
 
 func main() {
-	g := genkit.Init(context.Background())
-	genkit.DefineResource(g, "company-policy", &ai.ResourceOptions{
+	g := genkit.MustInit(context.Background())
+	g.DefineResource("company-policy", &ai.ResourceOptions{
 		Template: "docs://policy/{section}",
 	}, func(ctx context.Context, input *ai.ResourceInput) (*ai.ResourceOutput, error) {
 		return &ai.ResourceOutput{
