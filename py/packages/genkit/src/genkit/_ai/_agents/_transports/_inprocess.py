@@ -64,7 +64,7 @@ class InProcessTransport:
     ) -> None:
         self.action = action
         self.state_management: StateManagement = state_management
-        self._background_tasks: set[asyncio.Task[Any]] = set()
+        self.background_tasks: set[asyncio.Task[Any]] = set()
 
     async def run_turn(
         self,
@@ -108,8 +108,8 @@ class InProcessTransport:
                 stream_queue.close()
 
         task = asyncio.create_task(drain_connection())
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
+        self.background_tasks.add(task)
+        task.add_done_callback(self.background_tasks.discard)
 
         async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
             async for chunk in stream_queue:

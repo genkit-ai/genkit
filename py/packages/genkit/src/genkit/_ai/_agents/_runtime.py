@@ -410,7 +410,7 @@ class AgentRuntime:
         self.first_custom_patch_in_turn: bool = True
         self.last_sent_custom: object | None = None  # Cache of last streamed custom state to compute JSON Patch deltas
 
-        self._emit_chunk = emit_chunk
+        self.emit_chunk = emit_chunk
 
         # Separate turn inputs queue: runtime controls its lifecycle,
         # BidiAction's client_inputs is forwarded here by run().
@@ -903,7 +903,7 @@ class AgentRuntime:
             return
         transformed = self.transform_chunk(chunk)
         if transformed is not None:
-            self._emit_chunk(transformed)
+            self.emit_chunk(transformed)
 
 
 # ---------------------------------------------------------------------------

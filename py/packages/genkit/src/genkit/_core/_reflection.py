@@ -73,18 +73,21 @@ def resolve_agent_init(action: BidiAction[Any, Any, Any], init_val: object) -> A
     return init
 
 
-def resolve_agent_input(input_val: object) -> AgentInput:
-    """Validate a raw per-turn input payload into an ``AgentInput`` (empty when absent)."""
-    if input_val is None:
-        return AgentInput()
+def resolve_agent_input(input_val: dict[str, Any]) -> AgentInput:
+    """Validate a raw per-turn input payload into an ``AgentInput``."""
+    d = dict(input_val)
+    if 'messages' in d and 'message' not in d:
+        msgs = d.pop('messages', [])
+        if msgs and isinstance(msgs, list):
+            d['message'] = msgs[-1]
+    return AgentInput.model_validate(d)
+
+
+def as_agent_input_dict(input_val: object) -> dict[str, Any]:
+    """Narrow a wire JSON value to an agent-input object."""
     if isinstance(input_val, dict):
-        d = dict(input_val)
-        if 'messages' in d and 'message' not in d:
-            msgs = d.pop('messages', [])
-            if msgs and isinstance(msgs, list):
-                d['message'] = msgs[-1]
-        return AgentInput.model_validate(d)
-    return AgentInput.model_validate(input_val)
+        return cast(dict[str, Any], input_val)
+    raise TypeError(f'agent input must be a JSON object, got {type(input_val).__name__}')
 
 
 @dataclass
@@ -147,7 +150,10 @@ class ActionRunner:
                 # redundant (it already backfills Any) but ty needs it.
                 action = cast(BidiAction[Any, Any, Any], self.action)  # pyrefly: ignore[redundant-cast]
                 init = resolve_agent_init(action, self.payload.get('init'))
-                input_val = resolve_agent_input(input_val)
+                if input_val is None:
+                    input_val = AgentInput()
+                else:
+                    input_val = resolve_agent_input(as_agent_input_dict(input_val))
 
             output = await self.action.run(
                 input=input_val,

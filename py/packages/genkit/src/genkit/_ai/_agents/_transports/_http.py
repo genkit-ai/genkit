@@ -30,9 +30,9 @@ from typing_extensions import TypeVar as TypeVarExt
 from genkit._ai._agents._client import (
     AgentClient,
     AgentTransport,
-    _error_from_exception,
-    _error_from_http,
-    _error_from_wire,
+    error_from_exception,
+    error_from_http,
+    error_from_wire,
 )
 from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
 from genkit._ai._agents._types import StateManagement
@@ -81,7 +81,7 @@ def stream_error_from_payload(data: dict[str, Any]) -> GenkitError:
     # FastAPI wraps callable errors as {"error": {"error": {...}}}.
     if isinstance(error, dict) and 'error' in error:
         error = error['error']
-    return _error_from_wire(error)
+    return error_from_wire(error)
 
 
 class HttpAgentTransport(AgentTransport[StateT]):
@@ -136,12 +136,12 @@ class HttpAgentTransport(AgentTransport[StateT]):
             return None
         if response.status_code != 200:
             body = response.text
-            raise _error_from_http(status_code=response.status_code, body=body)
+            raise error_from_http(status_code=response.status_code, body=body)
         if not response.content:
             return None
         body = response.json()
         if isinstance(body, dict) and 'error' in body:
-            raise _error_from_wire(body['error'])
+            raise error_from_wire(body['error'])
         if isinstance(body, dict) and 'result' in body:
             return body['result']
         return body
@@ -194,7 +194,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
                 ) as response:
                     if response.status_code != 200:
                         body = (await response.aread()).decode(errors='ignore')
-                        raise _error_from_http(status_code=response.status_code, body=body)
+                        raise error_from_http(status_code=response.status_code, body=body)
 
                     async for line in response.aiter_lines():
                         data = parse_stream_line(line)
@@ -221,7 +221,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
                             output_future.set_exception(err)
                         stream_queue.put_nowait(err)
             except Exception as e:
-                err = e if isinstance(e, GenkitError) else _error_from_exception(e)
+                err = e if isinstance(e, GenkitError) else error_from_exception(e)
                 if not output_future.done():
                     output_future.set_exception(err)
                 stream_queue.put_nowait(err)

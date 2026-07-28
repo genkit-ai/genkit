@@ -303,16 +303,16 @@ class AgentError(Exception):
         self.response = response
 
 
-_HTTP_TO_STATUS: dict[int, StatusName] = {code: name for name, code in _STATUS_CODE_MAP.items()}
+HTTP_TO_STATUS: dict[int, StatusName] = {code: name for name, code in _STATUS_CODE_MAP.items()}
 
 
-def _coerce_status_name(raw: str | None) -> StatusName:
+def coerce_status_name(raw: str | None) -> StatusName:
     if raw and raw in _STATUS_CODE_MAP:
         return raw  # type: ignore[return-value]
     return 'INTERNAL'
 
 
-def _error_from_wire(error: dict[str, Any] | str | GenkitError) -> GenkitError:
+def error_from_wire(error: dict[str, Any] | str | GenkitError) -> GenkitError:
     """Parse a reflection or callable wire error payload into GenkitError."""
     if isinstance(error, GenkitError):
         return error
@@ -322,7 +322,7 @@ def _error_from_wire(error: dict[str, Any] | str | GenkitError) -> GenkitError:
     # Callable format: {message, status, details}
     if isinstance(error.get('status'), str):
         return GenkitError(
-            status=_coerce_status_name(error['status']),
+            status=coerce_status_name(error['status']),
             message=str(error.get('message', '')),
             details=error.get('details'),
         )
@@ -337,7 +337,7 @@ def _error_from_wire(error: dict[str, Any] | str | GenkitError) -> GenkitError:
         if details is not None and hasattr(details, 'model_dump'):
             details = details.model_dump(by_alias=True)
         return GenkitError(
-            status=_coerce_status_name(status_name),
+            status=coerce_status_name(status_name),
             message=str(error.get('message', '')),
             details=details,
         )
@@ -346,7 +346,7 @@ def _error_from_wire(error: dict[str, Any] | str | GenkitError) -> GenkitError:
     return GenkitError(status='INTERNAL', message=message)
 
 
-def _error_from_http(*, status_code: int, body: str) -> GenkitError:
+def error_from_http(*, status_code: int, body: str) -> GenkitError:
     """Build GenkitError from a non-2xx HTTP response body."""
     if body:
         try:
@@ -355,22 +355,22 @@ def _error_from_http(*, status_code: int, body: str) -> GenkitError:
             parsed = None
         if isinstance(parsed, dict):
             if 'error' in parsed:
-                return _error_from_wire(parsed['error'])
+                return error_from_wire(parsed['error'])
             if 'message' in parsed and ('status' in parsed or 'code' in parsed):
-                return _error_from_wire(parsed)
+                return error_from_wire(parsed)
 
-    status = _HTTP_TO_STATUS.get(status_code, 'INTERNAL')
+    status = HTTP_TO_STATUS.get(status_code, 'INTERNAL')
     message = body.strip() or f'HTTP {status_code}'
     return GenkitError(status=status, message=message)
 
 
-def _error_from_exception(e: Exception) -> GenkitError:
+def error_from_exception(e: Exception) -> GenkitError:
     """Normalize an arbitrary exception into GenkitError for transport boundaries."""
     if isinstance(e, GenkitError):
         return e
     message = str(e)
     match = re.match(r'^([A-Z_]+):', message)
-    status = _coerce_status_name(match.group(1) if match else None)
+    status = coerce_status_name(match.group(1) if match else None)
     return GenkitError(status=status, message=message, cause=e)
 
 
@@ -390,7 +390,7 @@ def to_agent_error(
         details = e.details
     else:
         message = str(e)
-        wrapped = _error_from_exception(e)
+        wrapped = error_from_exception(e)
         status = wrapped.status
         details = e
     raw = AgentOutput(
@@ -681,8 +681,8 @@ class StreamedMessageAccumulator:
     """
 
     def __init__(self) -> None:
-        # Underscored to avoid colliding with the messages() accessor below.
-        self._messages: list[MessageData] = []
+        # Named separately from messages() so the accessor can finalize then return.
+        self.built_messages: list[MessageData] = []
         self.role: Role | str | None = None
         self.index: float | None = None
         self.parts: list[Part] = []
@@ -718,7 +718,7 @@ class StreamedMessageAccumulator:
         if text_buf:
             merged.append(Part(root=TextPart(text=''.join(text_buf))))
         if merged:
-            self._messages.append(MessageData(role=self.role, content=merged))
+            self.built_messages.append(MessageData(role=self.role, content=merged))
         self.role = None
         self.index = None
         self.parts = []
@@ -726,7 +726,7 @@ class StreamedMessageAccumulator:
     def messages(self) -> list[MessageData]:
         """The reconstructed messages, finalizing any in-progress message first."""
         self.flush()
-        return self._messages
+        return self.built_messages
 
 
 class RunTurnFn(Protocol):

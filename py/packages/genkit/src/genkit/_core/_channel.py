@@ -144,7 +144,7 @@ class CloseableQueue(asyncio.Queue[T]):
 
     def __init__(self, maxsize: int = 0) -> None:
         super().__init__(maxsize=maxsize)
-        self._closed = False
+        self.closed = False
 
     def close(self) -> None:
         """Close the queue synchronously and idempotently.
@@ -153,9 +153,9 @@ class CloseableQueue(asyncio.Queue[T]):
         and future getters raise QueueShutDown. Must be called on the event loop
         thread: asyncio.Queue is loop-affine and not thread-safe.
         """
-        if self._closed:
+        if self.closed:
             return
-        self._closed = True
+        self.closed = True
 
         if sys.version_info >= (3, 13):
             # native shutdown rejects new puts, leaves buffered items to drain,
@@ -179,26 +179,26 @@ class CloseableQueue(asyncio.Queue[T]):
                 putter.set_exception(QueueShutDown())
 
     def is_closed(self) -> bool:
-        return self._closed
+        return self.closed
 
     async def put(self, item: T) -> None:
-        if self._closed:
+        if self.closed:
             raise QueueShutDown('Queue is closed')
         await super().put(item)
 
     def put_nowait(self, item: T) -> None:
-        if self._closed:
+        if self.closed:
             raise QueueShutDown('Queue is closed')
         super().put_nowait(item)
 
     async def get(self) -> T:
         # If the queue is closed and empty, raise QueueShutDown to signal end of stream
-        if self._closed and self.empty():
+        if self.closed and self.empty():
             raise QueueShutDown('Queue is closed and empty')
         return await super().get()
 
     def get_nowait(self) -> T:
-        if self._closed and self.empty():
+        if self.closed and self.empty():
             raise QueueShutDown('Queue is closed and empty')
         return super().get_nowait()
 

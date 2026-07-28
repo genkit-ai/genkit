@@ -50,11 +50,12 @@ from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
-from genkit._core._reflection import resolve_agent_init, resolve_agent_input
+from genkit._core._reflection import as_agent_input_dict, resolve_agent_init, resolve_agent_input
 from genkit._core._registry import Registry
 from genkit._core._trace._default_exporter import TraceServerExporter
 from genkit._core._tracing import add_custom_exporter
 from genkit._core._typing import (
+    AgentInput,
     ReflectionCancelActionParams,
     ReflectionCancelActionResponse,
     ReflectionConfigureParams,
@@ -82,7 +83,7 @@ RECONNECT_MAX_DELAY_S = 5.0
 WRITE_TIMEOUT_S = 5.0
 
 
-def _coerce_json_rpc_message(message: object) -> str:
+def coerce_json_rpc_message(message: object) -> str:
     """JSON-RPC and RuntimeManagerV2 require ``error.message`` to be a string."""
     if isinstance(message, str):
         return message
@@ -104,13 +105,13 @@ class JsonRpcCallError(Exception):
         super().__init__(f'JSON-RPC error {code}: {message}')
 
 
-def _chunk_for_json(chunk: object) -> object:
+def chunk_for_json(chunk: object) -> object:
     if isinstance(chunk, BaseModel):
         return json.loads(chunk.model_dump_json(by_alias=True, exclude_none=True))
     return chunk
 
 
-def _omit_none(payload: dict[str, Any]) -> dict[str, Any]:
+def omit_none(payload: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in payload.items() if v is not None}
 
 
@@ -127,25 +128,25 @@ class ReflectionServerV2:
         *,
         app_name: str | None = None,
     ) -> None:
-        self._registry = registry
-        self._ws_url = ws_url
-        self._app_name = app_name
-        self._ws: Any = None
-        self._write_lock = asyncio.Lock()
-        self._pending: dict[str, asyncio.Future[JsonValue]] = {}
-        self._request_seq = 0
-        self._active_actions: dict[str, asyncio.Task[Any]] = {}
+        self.registry = registry
+        self.ws_url = ws_url
+        self.app_name = app_name
+        self.ws: Any = None
+        self.write_lock = asyncio.Lock()
+        self.pending: dict[str, asyncio.Future[JsonValue]] = {}
+        self.request_seq = 0
+        self.active_actions: dict[str, asyncio.Task[Any]] = {}
         # Fire-and-forget register/dispatch tasks. Held so the event loop can't
         # GC them mid-flight (asyncio only weakly references tasks) and so they
         # can be cancelled when the connection drops.
-        self._background_tasks: set[asyncio.Task[Any]] = set()
+        self.background_tasks: set[asyncio.Task[Any]] = set()
         # request_id → live input stream feeding an active bidi (agent) run.
         # sendInputStreamChunk puts turns on it; endInputStream closes it.
-        self._bidi_input_streams: dict[str, CloseableQueue[Any]] = {}
-        self._stop = False
-        self._reflection_handshake_telemetry_applied = False
+        self.bidi_input_streams: dict[str, CloseableQueue[Any]] = {}
+        self.stopped = False
+        self.reflection_handshake_telemetry_applied = False
 
-    def _apply_handshake_telemetry(self, url: str | None) -> None:
+    def apply_handshake_telemetry(self, url: str | None) -> None:
         """Use the Dev UI trace server URL from the reflection handshake.
 
         The CLI manager returns ``telemetryServerUrl`` on ``register`` and may send it
@@ -154,9 +155,9 @@ class ReflectionServerV2:
         """
         if not url or os.environ.get('GENKIT_TELEMETRY_SERVER'):
             return
-        if self._reflection_handshake_telemetry_applied:
+        if self.reflection_handshake_telemetry_applied:
             return
-        self._reflection_handshake_telemetry_applied = True
+        self.reflection_handshake_telemetry_applied = True
         # Register HTTP export to this URL on the global OTel provider.
         add_custom_exporter(TraceServerExporter(telemetry_server_url=url), 'reflection_v2_telemetry')
         logger.debug('reflection V2: connected to telemetry server', url=url)
@@ -164,35 +165,35 @@ class ReflectionServerV2:
     async def run_forever(self) -> None:
         """Connect, handle requests, reconnect with backoff until stop() or process exit."""
         attempt = 0
-        while not self._stop:
+        while not self.stopped:
             try:
                 async with websockets.connect(
-                    self._ws_url,
+                    self.ws_url,
                     ping_interval=20,
                     ping_timeout=20,
                 ) as ws:
-                    self._ws = ws
+                    self.ws = ws
                     attempt = 0
-                    self._spawn(self._register())
-                    await self._read_loop()
+                    self.spawn(self.register())
+                    await self.read_loop()
             except ConnectionClosed as e:
                 logger.debug('reflection V2: connection closed', code=e.code, reason=e.reason)
             except OSError as e:
                 logger.debug('reflection V2: connection error', err=e)
             finally:
-                self._ws = None
-                self._drain_pending(ConnectionError('connection closed'))
+                self.ws = None
+                self.drain_pending(ConnectionError('connection closed'))
                 # Cancel in-flight register/dispatch handlers so they don't keep
                 # running against a dead socket after the connection drops.
-                for t in list(self._background_tasks):
+                for t in list(self.background_tasks):
                     t.cancel()
                 # Close each live input stream so its run's feeder ends the turn
                 # loop instead of hanging waiting for turns that can't arrive.
-                for _rid, stream in list(self._bidi_input_streams.items()):
+                for _rid, stream in list(self.bidi_input_streams.items()):
                     stream.close()
-                self._bidi_input_streams.clear()
+                self.bidi_input_streams.clear()
 
-            if self._stop:
+            if self.stopped:
                 return
 
             delay = min(RECONNECT_BASE_DELAY_S * (2**attempt), RECONNECT_MAX_DELAY_S)
@@ -201,37 +202,37 @@ class ReflectionServerV2:
             await asyncio.sleep(delay)
 
     def stop(self) -> None:
-        self._stop = True
+        self.stopped = True
 
-    def _spawn(self, coro: Coroutine[Any, Any, Any]) -> None:
+    def spawn(self, coro: Coroutine[Any, Any, Any]) -> None:
         """Run a fire-and-forget coroutine while keeping a reference to its task."""
         task = asyncio.create_task(coro)
-        self._background_tasks.add(task)
-        task.add_done_callback(self._on_background_task_done)
+        self.background_tasks.add(task)
+        task.add_done_callback(self.on_background_task_done)
 
-    def _on_background_task_done(self, task: asyncio.Task[Any]) -> None:
-        self._background_tasks.discard(task)
+    def on_background_task_done(self, task: asyncio.Task[Any]) -> None:
+        self.background_tasks.discard(task)
         # Retrieve any exception so it isn't reported as "never retrieved".
         if not task.cancelled() and (exc := task.exception()) is not None:
             logger.debug('reflection V2: background task error', err=exc)
 
-    def _drain_pending(self, exc: Exception) -> None:
-        for _rid, fut in list(self._pending.items()):
+    def drain_pending(self, exc: Exception) -> None:
+        for _rid, fut in list(self.pending.items()):
             if not fut.done():
                 fut.set_exception(exc)
-        self._pending.clear()
+        self.pending.clear()
 
-    async def _send_message(self, message: dict[str, Any]) -> None:
-        if self._ws is None:
+    async def send_message(self, message: dict[str, Any]) -> None:
+        if self.ws is None:
             raise ConnectionError('websocket not connected')
         raw = json.dumps(message, default=str)
-        async with self._write_lock:
-            await asyncio.wait_for(self._ws.send(raw), timeout=WRITE_TIMEOUT_S)
+        async with self.write_lock:
+            await asyncio.wait_for(self.ws.send(raw), timeout=WRITE_TIMEOUT_S)
 
-    async def _send_response(self, req_id: str, result: object) -> None:
-        await self._send_message({'jsonrpc': '2.0', 'result': result, 'id': req_id})
+    async def send_response(self, req_id: str, result: object) -> None:
+        await self.send_message({'jsonrpc': '2.0', 'result': result, 'id': req_id})
 
-    async def _send_error(
+    async def send_error(
         self,
         req_id: str,
         code: int,
@@ -239,29 +240,29 @@ class ReflectionServerV2:
         data: object | None = None,
     ) -> None:
         """Emit a JSON-RPC error."""
-        err: dict[str, Any] = {'code': code, 'message': _coerce_json_rpc_message(message)}
+        err: dict[str, Any] = {'code': code, 'message': coerce_json_rpc_message(message)}
         if data is not None:
             err['data'] = data
-        await self._send_message({'jsonrpc': '2.0', 'error': err, 'id': req_id})
+        await self.send_message({'jsonrpc': '2.0', 'error': err, 'id': req_id})
 
-    async def _send_notification(self, method: str, params: object) -> None:
-        await self._send_message({'jsonrpc': '2.0', 'method': method, 'params': params})
+    async def send_notification(self, method: str, params: object) -> None:
+        await self.send_message({'jsonrpc': '2.0', 'method': method, 'params': params})
 
-    async def _send_request(self, method: str, params: object) -> JsonValue:
-        self._request_seq += 1
-        req_id = str(self._request_seq)
+    async def send_request(self, method: str, params: object) -> JsonValue:
+        self.request_seq += 1
+        req_id = str(self.request_seq)
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[JsonValue] = loop.create_future()
-        self._pending[req_id] = fut
+        self.pending[req_id] = fut
         try:
-            await self._send_message({'jsonrpc': '2.0', 'id': req_id, 'method': method, 'params': params})
+            await self.send_message({'jsonrpc': '2.0', 'id': req_id, 'method': method, 'params': params})
             return await fut
         finally:
-            self._pending.pop(req_id, None)
+            self.pending.pop(req_id, None)
 
-    async def _register(self) -> None:
+    async def register(self) -> None:
         runtime_id = os.environ.get('GENKIT_RUNTIME_ID') or str(os.getpid())
-        name = self._app_name or runtime_id
+        name = self.app_name or runtime_id
         params = ReflectionRegisterParams(
             id=runtime_id,
             pid=float(os.getpid()),
@@ -271,17 +272,17 @@ class ReflectionServerV2:
             envs=['dev'],
         ).model_dump(by_alias=True, exclude_none=True)
         try:
-            result = await self._send_request('register', params)
+            result = await self.send_request('register', params)
             if isinstance(result, dict) and (telemetry_url := result.get('telemetryServerUrl')):
-                self._apply_handshake_telemetry(str(telemetry_url))
+                self.apply_handshake_telemetry(str(telemetry_url))
         except JsonRpcCallError as e:
             logger.error('reflection V2: register failed', code=e.code, message=e.message)
         except Exception as e:
             logger.error('reflection V2: register failed', err=e)
 
-    async def _read_loop(self) -> None:
-        assert self._ws is not None
-        async for raw in self._ws:
+    async def read_loop(self) -> None:
+        assert self.ws is not None
+        async for raw in self.ws:
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
@@ -297,21 +298,21 @@ class ReflectionServerV2:
                 )
                 continue
             if 'method' in msg:
-                self._spawn(self._dispatch_incoming(msg))
+                self.spawn(self.dispatch_incoming(msg))
             elif msg.get('id') is not None:
-                self._deliver_response(msg)
+                self.deliver_response(msg)
             else:
                 logger.debug(
                     'reflection V2: ignoring JSON-RPC 2.0 object without method or id',
                     keys=list(msg.keys()),
                 )
 
-    def _deliver_response(self, msg: dict[str, Any]) -> None:
+    def deliver_response(self, msg: dict[str, Any]) -> None:
         req_id = msg.get('id')
         if req_id is None:
             return
         sid = str(req_id)
-        fut = self._pending.pop(sid, None)
+        fut = self.pending.pop(sid, None)
         if fut is None:
             logger.debug('reflection V2: response for unknown id', id=sid)
             return
@@ -326,13 +327,13 @@ class ReflectionServerV2:
         else:
             fut.set_result(msg.get('result'))
 
-    async def _dispatch_incoming(self, msg: dict[str, Any]) -> None:
+    async def dispatch_incoming(self, msg: dict[str, Any]) -> None:
         method = msg.get('method')
         req_id = msg.get('id')
         params = msg.get('params') or {}
         if not isinstance(params, dict):
             if req_id is not None:
-                await self._send_error(
+                await self.send_error(
                     str(req_id),
                     JSON_RPC_INVALID_PARAMS,
                     'params must be a JSON object',
@@ -340,22 +341,22 @@ class ReflectionServerV2:
             return
         try:
             if method == 'listActions':
-                await self._handle_list_actions(req_id, params)
+                await self.handle_list_actions(req_id, params)
             elif method == 'listValues':
-                await self._handle_list_values(req_id, params)
+                await self.handle_list_values(req_id, params)
             elif method == 'runAction':
-                await self._handle_run_action(req_id, params)
+                await self.handle_run_action(req_id, params)
             elif method == 'cancelAction':
-                await self._handle_cancel_action(req_id, params)
+                await self.handle_cancel_action(req_id, params)
             elif method == 'configure':
-                self._handle_configure(params)
+                self.handle_configure(params)
             elif method == 'sendInputStreamChunk':
-                await self._handle_send_input_stream_chunk(req_id, params)
+                await self.handle_send_input_stream_chunk(req_id, params)
             elif method == 'endInputStream':
-                await self._handle_end_input_stream(req_id, params)
+                await self.handle_end_input_stream(req_id, params)
             else:
                 if req_id is not None:
-                    await self._send_error(
+                    await self.send_error(
                         str(req_id),
                         JSON_RPC_METHOD_NOT_FOUND,
                         f'method not found: {method}',
@@ -365,25 +366,25 @@ class ReflectionServerV2:
         except Exception:
             logger.exception('reflection V2: handler error', method=method)
             if req_id is not None:
-                await self._send_error(str(req_id), JSON_RPC_SERVER_ERROR, 'internal error')
+                await self.send_error(str(req_id), JSON_RPC_SERVER_ERROR, 'internal error')
 
-    async def _handle_send_input_stream_chunk(self, req_id: str | int | None, params: dict[str, Any]) -> None:
+    async def handle_send_input_stream_chunk(self, req_id: str | int | None, params: dict[str, Any]) -> None:
         """Feed a per-turn input chunk into an active bidi (agent) session."""
         try:
             p = ReflectionSendInputStreamChunkParams.model_validate(params)
         except Exception as e:  # noqa: BLE001
             if req_id is not None:
-                await self._send_error(str(req_id), JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
+                await self.send_error(str(req_id), JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
             return
 
-        stream = self._bidi_input_streams.get(p.request_id)
+        stream = self.bidi_input_streams.get(p.request_id)
         if stream is None:
             # A chunk for a requestId with no live turn means the client is writing
             # to a turn that already ended (or never started). Surface it as an
             # INVALID_PARAMS error so a mis-wired Dev UI notices, same as the
             # bad-params branch above.
             if req_id is not None:
-                await self._send_error(
+                await self.send_error(
                     str(req_id),
                     JSON_RPC_INVALID_PARAMS,
                     f'no active bidi session for requestId {p.request_id!r}',
@@ -391,32 +392,35 @@ class ReflectionServerV2:
             return
 
         try:
-            inp = resolve_agent_input(p.chunk)
+            if p.chunk is None:
+                inp = AgentInput()
+            else:
+                inp = resolve_agent_input(as_agent_input_dict(p.chunk))
             await stream.put(inp)
         except Exception as e:  # noqa: BLE001
             logger.warning('reflection V2: sendInputStreamChunk error', err=e)
 
-    async def _handle_end_input_stream(self, req_id: str | int | None, params: dict[str, Any]) -> None:
+    async def handle_end_input_stream(self, req_id: str | int | None, params: dict[str, Any]) -> None:
         """Close the input stream for an active bidi (agent) session."""
         try:
             p = ReflectionEndInputStreamParams.model_validate(params)
         except Exception as e:  # noqa: BLE001
             if req_id is not None:
-                await self._send_error(str(req_id), JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
+                await self.send_error(str(req_id), JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
             return
 
-        stream = self._bidi_input_streams.get(p.request_id)
+        stream = self.bidi_input_streams.get(p.request_id)
         if stream is None:
             return  # already gone or never existed — no-op
         stream.close()
 
-    async def _flush_tracing(self) -> None:
+    async def flush_tracing(self) -> None:
         provider = trace_api.get_tracer_provider()
         if isinstance(provider, TracerProvider):
             await asyncio.to_thread(provider.force_flush)
 
     @staticmethod
-    def _run_action_call_options(
+    def run_action_call_options(
         p: ReflectionRunActionParams,
     ) -> tuple[dict[str, object], dict[str, object] | None]:
         """Context and telemetry labels shared by one-shot and bidi runAction paths."""
@@ -426,14 +430,14 @@ class ReflectionServerV2:
             labels = {str(k): v for k, v in p.telemetry_labels.items()}
         return ctx, labels
 
-    async def _notify_run_action_state(self, sid: str, trace_id: str) -> None:
+    async def notify_run_action_state(self, sid: str, trace_id: str) -> None:
         st = ReflectionRunActionStateParams(
             request_id=sid,
             state=State(trace_id=trace_id),
         ).model_dump(by_alias=True, exclude_none=True)
-        await self._send_notification('runActionState', st)
+        await self.send_notification('runActionState', st)
 
-    def _trace_start_callback(
+    def trace_start_callback(
         self,
         sid: str,
         trace_holder: list[str | None],
@@ -443,20 +447,20 @@ class ReflectionServerV2:
         async def on_trace_start(tid: str, span_id: str) -> None:
             trace_holder[0] = tid
             if register_for_cancel and (t := asyncio.current_task()):
-                self._active_actions[tid] = t
-            await self._notify_run_action_state(sid, tid)
+                self.active_actions[tid] = t
+            await self.notify_run_action_state(sid, tid)
 
         return on_trace_start
 
-    async def _notify_stream_chunk(self, sid: str, chunk: object) -> None:
+    async def notify_stream_chunk(self, sid: str, chunk: object) -> None:
         payload = ReflectionStreamChunkParams(
             request_id=sid,
-            chunk=_chunk_for_json(chunk),
+            chunk=chunk_for_json(chunk),
         ).model_dump(by_alias=True, exclude_none=True)
-        await self._send_notification('streamChunk', payload)
+        await self.send_notification('streamChunk', payload)
 
     @staticmethod
-    def _run_action_success_body(result: object, trace_id: str | None) -> dict[str, Any]:
+    def run_action_success_body(result: object, trace_id: str | None) -> dict[str, Any]:
         if isinstance(result, BaseModel):
             result_body = result.model_dump(by_alias=True, exclude_none=True)
         else:
@@ -466,7 +470,7 @@ class ReflectionServerV2:
             body['telemetry'] = {'traceId': trace_id}
         return body
 
-    async def _send_run_action_error(
+    async def send_run_action_error(
         self,
         sid: str,
         exc: BaseException,
@@ -483,7 +487,7 @@ class ReflectionServerV2:
             }
             if err_details:
                 err_data['details'] = err_details
-            await self._send_error(sid, JSON_RPC_SERVER_ERROR, 'Action was cancelled', err_data)
+            await self.send_error(sid, JSON_RPC_SERVER_ERROR, 'Action was cancelled', err_data)
             return
 
         logger.exception('reflection V2: runAction error')
@@ -497,26 +501,26 @@ class ReflectionServerV2:
         tid = trace_holder[0] or (ref.details.trace_id if ref.details else None)
         status = ReflectionError(
             code=ref.code,
-            message=_coerce_json_rpc_message(ref.message),
+            message=coerce_json_rpc_message(ref.message),
             details=ReflectionErrorDetails(stack=stack, trace_id=tid) if (stack or tid) else None,
         )
-        await self._send_error(
+        await self.send_error(
             sid,
             JSON_RPC_SERVER_ERROR,
             status.message,
             status.model_dump(by_alias=True, exclude_none=True),
         )
 
-    async def _respond_run_action_success(
+    async def respond_run_action_success(
         self,
         sid: str,
         result: object,
         trace_id: str | None,
     ) -> None:
-        await self._flush_tracing()
-        await self._send_response(sid, self._run_action_success_body(result, trace_id))
+        await self.flush_tracing()
+        await self.send_response(sid, self.run_action_success_body(result, trace_id))
 
-    async def _run_action(
+    async def run_action(
         self,
         sid: str,
         p: ReflectionRunActionParams,
@@ -526,22 +530,22 @@ class ReflectionServerV2:
         stream = bool(p.stream)
         trace_holder: list[str | None] = [None]
         stream_chunk_tasks: list[asyncio.Task[Any]] = []
-        on_trace_start = self._trace_start_callback(sid, trace_holder, register_for_cancel=True)
+        on_trace_start = self.trace_start_callback(sid, trace_holder, register_for_cancel=True)
 
         on_chunk = None
         if stream:
 
             def on_chunk_fn(chunk: object) -> None:
                 # Chunks reach the client in order because tasks start in creation
-                # order and _send_message serializes on a FIFO lock with no await
+                # order and send_message serializes on a FIFO lock with no await
                 # before it — keep it that way, or streamed output can reorder.
-                stream_chunk_tasks.append(asyncio.create_task(self._notify_stream_chunk(sid, chunk)))
+                stream_chunk_tasks.append(asyncio.create_task(self.notify_stream_chunk(sid, chunk)))
 
             on_chunk = on_chunk_fn
 
-        ctx, labels = self._run_action_call_options(p)
+        ctx, labels = self.run_action_call_options(p)
 
-        async def _drain_chunks() -> None:
+        async def drain_chunks() -> None:
             if stream_chunk_tasks:
                 await asyncio.gather(*stream_chunk_tasks, return_exceptions=True)
 
@@ -553,15 +557,15 @@ class ReflectionServerV2:
                 on_trace_start=on_trace_start,
                 telemetry_labels=labels,
             )
-            await _drain_chunks()
-            await self._respond_run_action_success(
+            await drain_chunks()
+            await self.respond_run_action_success(
                 sid,
                 output.response,
                 output.trace_id or trace_holder[0],
             )
         except (asyncio.CancelledError, Exception) as e:
-            await _drain_chunks()
-            await self._send_run_action_error(sid, e, trace_holder)
+            await drain_chunks()
+            await self.send_run_action_error(sid, e, trace_holder)
             # Report the cancellation to the Dev UI, then let it propagate so the
             # task actually winds down (swallowing it fakes a clean completion and
             # breaks cooperative cancellation on shutdown).
@@ -570,9 +574,9 @@ class ReflectionServerV2:
         finally:
             tid = trace_holder[0]
             if tid:
-                self._active_actions.pop(tid, None)
+                self.active_actions.pop(tid, None)
 
-    async def _run_bidi_action(
+    async def run_bidi_action(
         self,
         sid: str,
         p: ReflectionRunActionParams,
@@ -589,35 +593,42 @@ class ReflectionServerV2:
         try:
             init = resolve_agent_init(action, p.init)
         except Exception as e:  # noqa: BLE001
-            await self._send_error(sid, JSON_RPC_INVALID_PARAMS, f'invalid AgentInit input: {e}')
+            await self.send_error(sid, JSON_RPC_INVALID_PARAMS, f'invalid AgentInit input: {e}')
             return
 
-        ctx, labels = self._run_action_call_options(p)
+        ctx, labels = self.run_action_call_options(p)
         trace_holder: list[str | None] = [None]
-        on_trace_start = self._trace_start_callback(sid, trace_holder, register_for_cancel=True)
+        on_trace_start = self.trace_start_callback(sid, trace_holder, register_for_cancel=True)
 
         stream_chunk_tasks: list[asyncio.Task[Any]] = []
 
         def on_chunk(chunk: object) -> None:
             # Ordering matches the one-shot path: tasks start in FIFO order and
-            # _send_message serializes with no await before it, so chunks reach
+            # send_message serializes with no await before it, so chunks reach
             # the client in emission order.
-            stream_chunk_tasks.append(asyncio.create_task(self._notify_stream_chunk(sid, chunk)))
+            stream_chunk_tasks.append(asyncio.create_task(self.notify_stream_chunk(sid, chunk)))
 
-        async def _drain_chunks() -> None:
+        async def drain_chunks() -> None:
             if stream_chunk_tasks:
                 await asyncio.gather(*stream_chunk_tasks, return_exceptions=True)
 
-        input_val: object | None = None
+        input_val: AgentInput | None = None
         input_stream: CloseableQueue[Any] | None = None
         if p.stream_input:
             # Register before the run starts so sendInputStreamChunk can find the
             # stream while run() is in flight (the client waits for runActionState
             # before sending turns, and that fires from on_trace_start inside run).
             input_stream = CloseableQueue()
-            self._bidi_input_streams[sid] = input_stream
+            self.bidi_input_streams[sid] = input_stream
         else:
-            input_val = resolve_agent_input(p.input)
+            try:
+                if p.input is None:
+                    input_val = AgentInput()
+                else:
+                    input_val = resolve_agent_input(as_agent_input_dict(p.input))
+            except (TypeError, ValidationError) as e:
+                await self.send_error(sid, JSON_RPC_INVALID_PARAMS, f'invalid AgentInput: {e}')
+                return
 
         try:
             output = await action.run(
@@ -629,36 +640,36 @@ class ReflectionServerV2:
                 on_trace_start=on_trace_start,
                 telemetry_labels=labels,
             )
-            await _drain_chunks()
-            await self._respond_run_action_success(
+            await drain_chunks()
+            await self.respond_run_action_success(
                 sid,
                 output.response,
                 output.trace_id or trace_holder[0],
             )
         except (asyncio.CancelledError, Exception) as e:
-            await _drain_chunks()
-            await self._send_run_action_error(sid, e, trace_holder)
+            await drain_chunks()
+            await self.send_run_action_error(sid, e, trace_holder)
             # Report the cancellation to the Dev UI, then let it propagate so the
             # task actually winds down (swallowing it fakes a clean completion and
             # breaks cooperative cancellation on shutdown).
             if isinstance(e, asyncio.CancelledError):
                 raise
         finally:
-            self._bidi_input_streams.pop(sid, None)
+            self.bidi_input_streams.pop(sid, None)
             # Drop the cancel registration too, or a finished turn's trace id
-            # lingers in _active_actions and a late cancelAction would falsely
+            # lingers in active_actions and a late cancelAction would falsely
             # report success against a task that already completed.
             tid = trace_holder[0]
             if tid:
-                self._active_actions.pop(tid, None)
+                self.active_actions.pop(tid, None)
 
-    async def _handle_list_actions(self, req_id: str | int | None, _: dict[str, Any]) -> None:
+    async def handle_list_actions(self, req_id: str | int | None, _: dict[str, Any]) -> None:
         if req_id is None:
             return
         sid = str(req_id)
-        catalog = await self._registry.list_actions()
+        catalog = await self.registry.list_actions()
         actions = {
-            key: _omit_none({
+            key: omit_none({
                 'key': key,
                 'name': meta.name,
                 'actionType': meta.action_type,
@@ -669,27 +680,27 @@ class ReflectionServerV2:
             })
             for key, meta in catalog.items()
         }
-        await self._send_response(sid, {'actions': actions})
+        await self.send_response(sid, {'actions': actions})
 
-    async def _handle_list_values(self, req_id: str | int | None, params: dict[str, Any]) -> None:
+    async def handle_list_values(self, req_id: str | int | None, params: dict[str, Any]) -> None:
         if req_id is None:
             return
         sid = str(req_id)
         try:
             p = ReflectionListValuesParams.model_validate(params)
         except ValidationError as e:
-            await self._send_error(sid, JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
+            await self.send_error(sid, JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
             return
         if p.type not in ('defaultModel', 'middleware'):
-            await self._send_error(
+            await self.send_error(
                 sid,
                 JSON_RPC_INVALID_PARAMS,
                 f"'type' {p.type} is not supported. Only 'defaultModel' and 'middleware' are supported",
             )
             return
         mapped: dict[str, Any] = {}
-        for name in self._registry.list_values(p.type):
-            value = self._registry.lookup_value(p.type, name)
+        for name in self.registry.list_values(p.type):
+            value = self.registry.lookup_value(p.type, name)
             if p.type == 'middleware':
                 assert isinstance(value, GenerateMiddleware), (
                     f'registry middleware/{name!r} must be GenerateMiddleware, got {type(value).__name__}'
@@ -697,59 +708,59 @@ class ReflectionServerV2:
                 mapped[name] = value.model_dump(by_alias=True, exclude_none=True, mode='json')
             else:
                 mapped[name] = value
-        await self._send_response(sid, {'values': mapped})
+        await self.send_response(sid, {'values': mapped})
 
-    def _handle_configure(self, params: dict[str, Any]) -> None:
+    def handle_configure(self, params: dict[str, Any]) -> None:
         try:
             p = ReflectionConfigureParams.model_validate(params)
         except ValidationError as e:
             logger.error('reflection V2: invalid configure params', err=e)
             return
         if p.telemetry_server_url:
-            self._apply_handshake_telemetry(p.telemetry_server_url)
+            self.apply_handshake_telemetry(p.telemetry_server_url)
 
-    async def _handle_cancel_action(self, req_id: str | int | None, params: dict[str, Any]) -> None:
+    async def handle_cancel_action(self, req_id: str | int | None, params: dict[str, Any]) -> None:
         if req_id is None:
             return
         sid = str(req_id)
         try:
             p = ReflectionCancelActionParams.model_validate(params)
         except ValidationError as e:
-            await self._send_error(sid, JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
+            await self.send_error(sid, JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
             return
         if not p.trace_id:
-            await self._send_error(sid, JSON_RPC_INVALID_PARAMS, 'traceId is required')
+            await self.send_error(sid, JSON_RPC_INVALID_PARAMS, 'traceId is required')
             return
-        task = self._active_actions.get(p.trace_id)
+        task = self.active_actions.get(p.trace_id)
         if task:
             task.cancel()
-            self._active_actions.pop(p.trace_id, None)
+            self.active_actions.pop(p.trace_id, None)
             body = ReflectionCancelActionResponse(message='Action cancelled').model_dump(by_alias=True)
-            await self._send_response(sid, body)
+            await self.send_response(sid, body)
         else:
-            await self._send_error(
+            await self.send_error(
                 sid,
                 JSON_RPC_INVALID_PARAMS,
                 'Action not found or already completed',
             )
 
-    async def _handle_run_action(self, req_id: str | int | None, params: dict[str, Any]) -> None:
+    async def handle_run_action(self, req_id: str | int | None, params: dict[str, Any]) -> None:
         if req_id is None:
             return
         sid = str(req_id)
         try:
             p = ReflectionRunActionParams.model_validate(params)
         except ValidationError as e:
-            await self._send_error(sid, JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
+            await self.send_error(sid, JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
             return
 
-        action = await self._registry.resolve_action_by_key(p.key)
+        action = await self.registry.resolve_action_by_key(p.key)
         if not action:
-            await self._send_error(sid, JSON_RPC_INVALID_PARAMS, f'action {p.key} not found')
+            await self.send_error(sid, JSON_RPC_INVALID_PARAMS, f'action {p.key} not found')
             return
 
         if p.context is not None and not isinstance(p.context, dict):
-            await self._send_error(
+            await self.send_error(
                 sid,
                 JSON_RPC_INVALID_PARAMS,
                 'context must be a JSON object when provided',
@@ -758,6 +769,6 @@ class ReflectionServerV2:
 
         # --- Bidi (agent) path ---
         if isinstance(action, BidiAction):
-            await self._run_bidi_action(sid, p, action)
+            await self.run_bidi_action(sid, p, action)
         else:
-            await self._run_action(sid, p, action)
+            await self.run_action(sid, p, action)

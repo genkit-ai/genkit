@@ -20,7 +20,7 @@ import json
 
 import pytest
 
-from genkit._ai._agents._client import _error_from_http, _error_from_wire
+from genkit._ai._agents._client import error_from_http, error_from_wire
 from genkit._ai._agents._transports._http import (
     parse_stream_line,
     stream_error_from_payload,
@@ -39,27 +39,27 @@ def test_parse_stream_line_sse_data_prefix() -> None:
 
 
 def test_error_from_wire_callable_format() -> None:
-    err = _error_from_wire({'status': 'UNAVAILABLE', 'message': 'down', 'details': {'x': 1}})
+    err = error_from_wire({'status': 'UNAVAILABLE', 'message': 'down', 'details': {'x': 1}})
     assert err.status == 'UNAVAILABLE'
     assert err.original_message == 'down'
     assert err.details['x'] == 1  # type: ignore[index]
 
 
 def test_error_from_wire_reflection_format() -> None:
-    err = _error_from_wire({'code': 13, 'message': 'boom', 'details': {'stack': ''}})
+    err = error_from_wire({'code': 13, 'message': 'boom', 'details': {'stack': ''}})
     assert err.status == 'INTERNAL'
     assert err.original_message == 'boom'
 
 
 def test_error_from_http_json_body() -> None:
     body = '{"error": {"status": "INVALID_ARGUMENT", "message": "bad input", "details": {}}}'
-    err = _error_from_http(status_code=400, body=body)
+    err = error_from_http(status_code=400, body=body)
     assert err.status == 'INVALID_ARGUMENT'
     assert err.original_message == 'bad input'
 
 
 def test_error_from_http_fallback() -> None:
-    err = _error_from_http(status_code=503, body='service unavailable')
+    err = error_from_http(status_code=503, body='service unavailable')
     assert err.status == 'UNAVAILABLE'
     assert 'service unavailable' in err.original_message
 

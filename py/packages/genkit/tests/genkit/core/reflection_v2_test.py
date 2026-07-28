@@ -609,8 +609,8 @@ async def test_reflection_server_v2_bidi_action_cleans_up_active_actions(
 ) -> None:
     """A finished agent turn leaves nothing behind in the cancel/connection registries.
 
-    Regression: `_run_bidi_action` used to drop only the bidi stream registry, so
-    each turn's trace id lingered in `_active_actions` (a late cancelAction would
+    Regression: `run_bidi_action` used to drop only the bidi stream registry, so
+    each turn's trace id lingered in `active_actions` (a late cancelAction would
     then falsely succeed against a completed turn).
     """
     registry = Registry()
@@ -635,8 +635,8 @@ async def test_reflection_server_v2_bidi_action_cleans_up_active_actions(
         assert final.get('error') is None
         # Let the run's `finally` run before inspecting the registries.
         await asyncio.sleep(0)
-        assert client._active_actions == {}
-        assert client._bidi_input_streams == {}
+        assert client.active_actions == {}
+        assert client.bidi_input_streams == {}
     finally:
         await _stop_client(client, task)
 
