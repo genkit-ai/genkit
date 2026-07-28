@@ -1,0 +1,24 @@
+{
+  "name": "agent-dirs-demo",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Demo of the experimental @genkit-ai/agent-dirs plugin: chat with directory agents via Dev UI or HTTP.",
+  "scripts": {
+    "server": "tsx src/index.ts",
+    "genkit:dev": "genkit start -- tsx --watch src/index.ts"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@genkit-ai/agent-dirs": "workspace:*",
+    "@genkit-ai/google-genai": "workspace:*",
+    "genkit": "workspace:*",
+    "@genkit-ai/express": "workspace:*",
+    "express": "^4.21.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3",
+    "@types/express": "^4.17.21"
+  }
+}
