@@ -78,12 +78,12 @@ func configFromRequest(input *ai.ModelRequest) (*genai.GenerateContentConfig, er
 		var err error
 		result, err = base.MapToStruct[genai.GenerateContentConfig](config)
 		if err != nil {
-			return nil, status.PublicErrorf(status.ErrInvalidArgument, "The configuration settings are not in the correct format. Check that the names and values match what the model expects: %w", err)
+			return nil, status.Errorf(status.ErrInvalidArgument, "The configuration settings are not in the correct format. Check that the names and values match what the model expects: %w", err)
 		}
 	case nil:
 		// Empty but valid config
 	default:
-		return nil, status.PublicErrorf(status.ErrInvalidArgument, "Invalid configuration type: %T. Expected *genai.GenerateContentConfig. Ensure you are using the correct ModelRef helper (e.g., ModelRef) or passing the correct configuration struct.", input.Config)
+		return nil, status.Errorf(status.ErrInvalidArgument, "Invalid configuration type: %T. Expected *genai.GenerateContentConfig. Ensure you are using the correct ModelRef helper (e.g., ModelRef) or passing the correct configuration struct.", input.Config)
 	}
 
 	return &result, nil

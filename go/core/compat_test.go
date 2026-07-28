@@ -112,6 +112,19 @@ func TestV1ConstructorsPreserveV1Behaviour(t *testing.T) {
 		}
 	})
 
+	t.Run("NewError keeps a non-canonical status name on the wire", func(t *testing.T) {
+		// v1 put whatever StatusName it was handed on the wire rather than
+		// coercing it, and the shim's contract is to behave the same.
+		weird := core.StatusName("NOT_A_REAL_STATUS")
+		err := core.NewError(weird, "boom")
+		if err.Status != weird {
+			t.Errorf("Status = %q, want %q", err.Status, weird)
+		}
+		if err.HTTPCode != http.StatusInternalServerError {
+			t.Errorf("HTTPCode = %d, want 500", err.HTTPCode)
+		}
+	})
+
 	t.Run("NewError records a stack in Details", func(t *testing.T) {
 		err := core.NewError(core.INTERNAL, "boom")
 		if _, ok := err.Details["stack"]; !ok {

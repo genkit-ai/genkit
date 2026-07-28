@@ -18,10 +18,11 @@ package ai
 
 import (
 	"encoding/json"
-	"fmt"
 	"maps"
 	"slices"
 	"strings"
+
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // A Document is a piece of data that can be embedded, indexed, or retrieved.
@@ -240,7 +241,7 @@ func (p *Part) IsResource() bool {
 // MarshalJSON is called by the JSON marshaler to write out a Part.
 func (p *Part) MarshalJSON() ([]byte, error) {
 	if p == nil {
-		return nil, fmt.Errorf("part is nil")
+		return nil, status.Errorf(ErrInvalidPart, "part is nil")
 	}
 
 	// This is not handled by the schema generator because
@@ -298,7 +299,7 @@ func (p *Part) MarshalJSON() ([]byte, error) {
 		}
 		return json.Marshal(v)
 	default:
-		return nil, fmt.Errorf("invalid part kind %v", p.Kind)
+		return nil, status.Errorf(ErrInvalidPart, "invalid part kind %v", p.Kind)
 	}
 }
 

@@ -79,6 +79,13 @@ type streamEntry struct {
 type streamError struct {
 	Status  string `firestore:"status"`
 	Message string `firestore:"message"`
+	// Public records whether Message was safe to return to a client. Without
+	// it, a subscriber resuming the stream would have to guess, and treating
+	// every persisted message as public would let an internal failure from the
+	// producing process reach a client by round-tripping through Firestore.
+	// Absent on documents written before this field existed, which decodes to
+	// false: the safe default.
+	Public bool `firestore:"public,omitempty"`
 }
 
 // NewFirestoreStreamManager creates a [FirestoreStreamManager] for durable streaming.
@@ -177,7 +184,7 @@ func (m *FirestoreStreamManager) Subscribe(ctx context.Context, streamID string)
 				unsubscribed = true
 				ch <- streaming.StreamEvent{
 					Type: streaming.StreamEventError,
-					Err:  status.PublicErrorf(status.ErrDeadlineExceeded, "stream timed out"),
+					Err:  status.PublicErrorf(streaming.ErrStreamTimeout, "stream %q timed out", streamID),
 				}
 				close(ch)
 				cancelSnapshot()
@@ -278,16 +285,25 @@ func (m *FirestoreStreamManager) Subscribe(ctx context.Context, streamID string)
 					if !unsubscribed {
 						errStatus := status.Unknown
 						var errMsg string
+						var errPublic bool
 						if entry.Err != nil {
 							errMsg = entry.Err.Message
+							errPublic = entry.Err.Public
 							if entry.Err.Status != "" {
 								errStatus = status.Name(entry.Err.Status)
 							}
 						}
+						// Rebuild with the publicness the producer recorded, so a
+						// message that was never safe to return does not become
+						// safe by having been persisted.
+						rebuild := status.Errorf
+						if errPublic {
+							rebuild = status.PublicErrorf
+						}
 						select {
 						case ch <- streaming.StreamEvent{
 							Type: streaming.StreamEventError,
-							Err:  status.PublicErrorf(status.Base(errStatus), "%s", errMsg),
+							Err:  rebuild(status.Base(errStatus), "%s", errMsg),
 						}:
 						default:
 						}
@@ -393,9 +409,14 @@ func (s *firestoreStreamInput) Error(ctx context.Context, err error) error {
 	}
 	s.closed = true
 
+	// Persist the full message either way: Firestore is the developer's own
+	// store and the text is worth having for diagnosis. Public is what governs
+	// whether a subscriber may pass it on.
+	_, public := status.PublicMessage(err)
 	streamErr := &streamError{
 		Status:  string(status.Of(err)),
 		Message: err.Error(),
+		Public:  public,
 	}
 	// A status.Error stringifies as its bare message, but the deprecated
 	// core.UserFacingError stringifies as "STATUS: message" while the status is

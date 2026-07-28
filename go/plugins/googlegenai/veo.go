@@ -218,11 +218,11 @@ func toVeoParameters(request *ai.ModelRequest) (*genai.GenerateVideosConfig, err
 		var err error
 		result, err = base.MapToStruct[genai.GenerateVideosConfig](config)
 		if err != nil {
-			return nil, status.PublicErrorf(status.ErrInvalidArgument, "The video configuration settings are not in the correct format. Check that the names and values match what the model expects: %w", err)
+			return nil, status.Errorf(status.ErrInvalidArgument, "The video configuration settings are not in the correct format. Check that the names and values match what the model expects: %w", err)
 		}
 		return &result, nil
 	default:
-		return nil, status.PublicErrorf(status.ErrInvalidArgument, "The configuration type %T is not supported. Use the correct configuration for this model (like VideoModelRef) or a configuration struct.", request.Config)
+		return nil, status.Errorf(status.ErrInvalidArgument, "The configuration type %T is not supported. Use the correct configuration for this model (like VideoModelRef) or a configuration struct.", request.Config)
 	}
 }
 

@@ -1767,10 +1767,15 @@ func loadSession[State any](
 			"state is mutually exclusive with session ID and snapshot ID; a client-managed conversation's identity rides inside the state (SessionState.SessionID)")
 	}
 
+	// The three store-mode mismatches below stay internal: they describe how the
+	// agent was wired, not what the caller sent, so an anonymous client should
+	// not learn from them whether state is server- or client-managed. A
+	// developer integrating against the agent sees the full text under
+	// GENKIT_ENV=dev and in the server log.
 	switch {
 	case init.State != nil:
 		if store != nil {
-			return nil, nil, status.PublicErrorf(status.ErrFailedPrecondition,
+			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 				"state provided but agent has a session store configured (server-managed state); use snapshot ID instead")
 		}
 		// Deep-copy at the entry boundary: an in-process caller retains
@@ -1783,7 +1788,7 @@ func loadSession[State any](
 
 	case init.SnapshotID != "":
 		if store == nil {
-			return nil, nil, status.PublicErrorf(status.ErrFailedPrecondition,
+			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 				"snapshot ID %q provided but agent has no session store configured (client-managed state); use state instead", init.SnapshotID)
 		}
 		snap, err := store.GetSnapshot(ctx, init.SnapshotID)
@@ -1804,7 +1809,7 @@ func loadSession[State any](
 
 	case init.SessionID != "":
 		if store == nil {
-			return nil, nil, status.PublicErrorf(status.ErrFailedPrecondition,
+			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 				"session ID %q provided but agent has no session store configured (client-managed state); the conversation's identity rides inside the state object (SessionState.SessionID)", init.SessionID)
 		}
 		snap, err := store.GetLatestSnapshot(ctx, init.SessionID)

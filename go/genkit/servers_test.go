@@ -49,7 +49,7 @@ func TestHandler(t *testing.T) {
 	})
 
 	genkitErrorInvalidArgFlow := DefineFlow(g, "handlerGenkitErrorInvalidArg", func(ctx context.Context, input string) (string, error) {
-		return "", core.NewError(core.INVALID_ARGUMENT, "invalid argument")
+		return "", core.NewError(core.INVALID_ARGUMENT, "field %q must be an RFC3339 timestamp", "startedAt")
 	})
 
 	genkitErrorNotFoundFlow := DefineFlow(g, "handlerGenkitErrorNotFound", func(ctx context.Context, input string) (string, error) {
@@ -57,7 +57,7 @@ func TestHandler(t *testing.T) {
 	})
 
 	genkitErrorPermissionDeniedFlow := DefineFlow(g, "handlerGenkitErrorPermissionDenied", func(ctx context.Context, input string) (string, error) {
-		return "", core.NewError(core.PERMISSION_DENIED, "permission denied")
+		return "", core.NewError(core.PERMISSION_DENIED, "caller lacks roles/aiplatform.user on project acme-prod")
 	})
 
 	userFacingErrorFlow := DefineFlow(g, "handlerUserFacingError", func(ctx context.Context, input string) (string, error) {
@@ -124,8 +124,9 @@ func TestHandler(t *testing.T) {
 			t.Errorf("want status code %d for INVALID_ARGUMENT, got %d", http.StatusBadRequest, resp.StatusCode)
 		}
 
-		if !strings.Contains(string(body), "invalid argument") {
-			t.Errorf("want error message in response body, got %q", string(body))
+		// The generic label for the status, not the flow's own text.
+		if got, want := strings.TrimSpace(string(body)), "invalid argument"; got != want {
+			t.Errorf("body = %q, want the generic %q", got, want)
 		}
 	})
 
@@ -166,8 +167,11 @@ func TestHandler(t *testing.T) {
 			t.Errorf("want status code %d for PERMISSION_DENIED, got %d", http.StatusForbidden, resp.StatusCode)
 		}
 
-		if !strings.Contains(string(body), "permission denied") {
-			t.Errorf("want the generic status message, got %q", string(body))
+		if got, want := strings.TrimSpace(string(body)), "permission denied"; got != want {
+			t.Errorf("body = %q, want the generic %q", got, want)
+		}
+		if strings.Contains(string(body), "acme-prod") {
+			t.Errorf("internal detail leaked to client: %q", string(body))
 		}
 	})
 

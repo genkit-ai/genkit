@@ -123,16 +123,16 @@ func (e *UserFacingError) PublicMessage() (string, bool) { return e.Message, tru
 //
 // Record a cause with %w rather than relying on the implicit wrapping of the
 // last error argument that this function performs.
-func NewError(status StatusName, message string, args ...any) *GenkitError {
-	ge := newErrorSkip(status, message, args...)
-	ge.Details = map[string]any{"stack": string(debug.Stack())}
-	return ge
-}
-
-// newErrorSkip builds the error NewError returns, minus the stack detail, so
-// the stack NewError records starts at its caller.
-func newErrorSkip(name StatusName, message string, args ...any) *GenkitError {
+func NewError(name StatusName, message string, args ...any) *GenkitError {
 	ge := status.Errorf(status.Base(name), message, args...)
+	// status.Base coerces a name outside the canonical set to UNKNOWN, but v1
+	// put whatever it was given on the wire. Restore it: this constructor's
+	// contract is to behave exactly as it did, and the sentinel it was
+	// classified with stays ErrUnknown, which is the honest classification.
+	if !name.IsValid() {
+		ge.Status = name
+		ge.HTTPCode = name.HTTPCode()
+	}
 	// v1 scanned args for the last error and wrapped it implicitly, with no %w
 	// in the format. Preserve that so errors.Is and errors.As still reach it.
 	for i := len(args) - 1; i >= 0; i-- {
@@ -141,6 +141,7 @@ func newErrorSkip(name StatusName, message string, args ...any) *GenkitError {
 			break
 		}
 	}
+	ge.Details = map[string]any{"stack": string(debug.Stack())}
 	return ge
 }
 

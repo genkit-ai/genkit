@@ -65,7 +65,10 @@ func ContextProvider(ctx context.Context, g *genkit.Genkit, policy AuthPolicy) (
 		token := authHeader[len(bearerPrefix):]
 		authCtx, err := client.VerifyIDToken(ctx, token)
 		if err != nil {
-			return nil, status.PublicErrorf(status.ErrUnauthenticated, "error verifying ID token: %w", err)
+			// Not public: the Admin SDK's text can name the project (an audience
+			// claim mismatch quotes the expected project ID). The caller gets
+			// UNAUTHENTICATED; the detail goes to the log and to GENKIT_ENV=dev.
+			return nil, status.Errorf(status.ErrUnauthenticated, "error verifying ID token: %w", err)
 		}
 
 		if policy != nil {

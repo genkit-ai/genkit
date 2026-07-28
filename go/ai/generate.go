@@ -1475,7 +1475,7 @@ func (ModelRef) JSONSchema() *jsonschema.Schema {
 // pending output, or explicit 'respond' or 'restart' directives in the resume options.
 func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *GenerateActionOptions, p *Part, runTool toolRunnerFunc) (*resumedToolRequestOutput, error) {
 	if p == nil || !p.IsToolRequest() {
-		return nil, status.Errorf(status.ErrInvalidArgument, "handleResumedToolRequest: part is not a tool request")
+		return nil, status.Errorf(ErrInvalidPart, "handleResumedToolRequest: part is not a tool request")
 	}
 
 	if pendingOutputVal, ok := p.Metadata["pendingOutput"]; ok {
@@ -1629,7 +1629,7 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 	}
 	for _, part := range genOpts.Resume.Restart {
 		if !part.IsToolRequest() {
-			return nil, status.Errorf(status.ErrInvalidArgument, "handleResumeOption: restart part is not a tool request")
+			return nil, status.Errorf(ErrInvalidPart, "handleResumeOption: restart part is not a tool request")
 		}
 	}
 

@@ -682,7 +682,7 @@ func (t *ToolDef[In, Out]) RespondWith(toolReq *Part, output Out, opts ...Respon
 		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RespondWith: toolReq is nil")
 	}
 	if !toolReq.IsToolRequest() {
-		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RespondWith: part is not a tool request")
+		return nil, status.Errorf(ErrInvalidPart, "ai.RespondWith: part is not a tool request")
 	}
 	if toolReq.ToolRequest.Name != t.Name() {
 		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RespondWith: tool request is for %q, not %q", toolReq.ToolRequest.Name, t.Name())
@@ -716,7 +716,7 @@ func (t *ToolDef[In, Out]) RestartWith(toolReq *Part, opts ...RestartWithOption[
 		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RestartWith: toolReq is nil")
 	}
 	if !toolReq.IsToolRequest() {
-		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RestartWith: part is not a tool request")
+		return nil, status.Errorf(ErrInvalidPart, "ai.RestartWith: part is not a tool request")
 	}
 	if toolReq.ToolRequest.Name != t.Name() {
 		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RestartWith: tool request is for %q, not %q", toolReq.ToolRequest.Name, t.Name())
