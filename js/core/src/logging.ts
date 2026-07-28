@@ -139,8 +139,12 @@ class Logger {
       !(msg instanceof Error) &&
       'message' in msg
     ) {
-      metadata = this._mergeErrorMetadata(msg.metadata, msg.error);
-      msg = msg.message;
+      const { message, metadata: msgMetadata, error: msgError, ...rest } = msg;
+      metadata = this._mergeErrorMetadata(
+        { ...rest, ...(msgMetadata || {}) },
+        msgError
+      );
+      msg = message;
     } else if (msg instanceof Error) {
       metadata = this._mergeErrorMetadata(undefined, msg);
       msg = msg.message || String(msg);
