@@ -16,9 +16,7 @@
 
 /**
  * Filesystem/import mechanics for agent directories: dynamically loading tool
- * modules and `agent.ts` overrides. A malformed or unloadable file is warned
- * about and skipped - authoring errors in one file never take down plugin
- * initialization.
+ * modules and `agent.ts` overrides.
  *
  * @module @genkit-ai/agent-dirs/loaders
  */
@@ -53,17 +51,34 @@ function isLoadableModule(file: string): boolean {
 }
 
 /**
- * Loads every tool module under `toolsDir` and registers it with the registry.
- * Tools default to an agent-prefixed registry name (`<agent>/<file>`) so
- * same-named tool files in different agent directories never collide; the
- * model still sees the short name (the segment after the last '/').
+ * Loads every tool module under `toolsDir` and registers it with the
+ * registry.
+ *
+ * Registry names default to `agent-dirs/<agent>/<file>`: prefixing with the
+ * plugin name keeps the registry's plugin-segment parsing pointing at a real
+ * plugin (a bare `<agent>/<file>` would make the registry treat the agent
+ * directory as a phantom plugin), and the per-agent segment keeps same-named
+ * tool files in different agent directories from colliding. The model always
+ * sees only the short name (the segment after the last '/'). Setting
+ * `config.name` opts out of namespacing entirely.
+ *
+ * Returns `undefined` when a tool failed and `strict` is false (the caller
+ * skips the agent); throws when `strict` is true.
  */
 export async function loadTools(
   ai: GenkitBeta,
   toolsDir: string,
-  agentName: string
-): Promise<RegisteredTool[]> {
+  agentName: string,
+  opts: { strict: boolean }
+): Promise<RegisteredTool[] | undefined> {
   if (!existsSync(toolsDir)) return [];
+  const fail = (message: string): undefined => {
+    const full = `[agent-dirs] agent '${agentName}': ${message}`;
+    if (opts.strict) throw new Error(full);
+    logger.warn(`${full} - skipping agent`);
+    return undefined;
+  };
+
   const actions: RegisteredTool[] = [];
   for (const file of readdirSync(toolsDir).sort()) {
     if (!isLoadableModule(file)) continue;
@@ -71,22 +86,18 @@ export async function loadTools(
     try {
       mod = await dynamicImport(pathToFileURL(path.join(toolsDir, file)).href);
     } catch (e) {
-      logger.warn(
-        `[agent-dirs] failed to load ${agentName}/tools/${file}: ${e}; skipping`
-      );
-      continue;
+      return fail(`failed to load tools/${file}: ${e}`);
     }
     const tool = mod.default as AgentDirTool | undefined;
     if (!tool?.config || typeof tool.fn !== 'function') {
-      logger.warn(
-        `[agent-dirs] ${agentName}/tools/${file} does not default-export ` +
-          `{ config, fn } (see defineDirTool); skipping`
+      return fail(
+        `tools/${file} must \`export default defineDirTool({ ... }, fn)\` ` +
+          `(a default export of { config, fn })`
       );
-      continue;
     }
     const name =
       tool.config.name ??
-      `${agentName}/${path.basename(file, path.extname(file))}`;
+      `agent-dirs/${agentName}/${path.basename(file, path.extname(file))}`;
     actions.push(
       ai.defineTool(
         {
@@ -104,30 +115,40 @@ export async function loadTools(
 
 /**
  * Loads the optional `agent.{ts,mts,js,mjs}` override module from an agent
- * directory, if present.
+ * directory, if present. When several `agent.*` candidates exist (e.g. a
+ * compiled `.js` beside its `.ts` source), the first extension in
+ * ts/mts/js/mjs order wins, with a warning.
  */
 export async function loadOverride(
   agentPath: string
 ): Promise<AgentDirOverride | undefined> {
-  for (const ext of TOOL_FILE_EXTENSIONS) {
-    const overrideFile = path.join(agentPath, `agent${ext}`);
-    if (!existsSync(overrideFile)) continue;
-    let mod: Record<string, unknown>;
-    try {
-      mod = await dynamicImport(pathToFileURL(overrideFile).href);
-    } catch (e) {
-      logger.warn(
-        `[agent-dirs] failed to load override ${overrideFile}: ${e}; ignoring`
-      );
-      return undefined;
-    }
-    if (typeof mod.default === 'function') {
-      return mod.default as AgentDirOverride;
-    }
+  const candidates = TOOL_FILE_EXTENSIONS.map((ext) =>
+    path.join(agentPath, `agent${ext}`)
+  ).filter(existsSync);
+  if (candidates.length === 0) return undefined;
+  if (candidates.length > 1) {
     logger.warn(
-      `[agent-dirs] ${overrideFile} exists but does not default-export a ` +
-        `function; ignoring`
+      `[agent-dirs] multiple override candidates in ${agentPath} ` +
+        `(${candidates.map((c) => path.basename(c)).join(', ')}) - using ` +
+        `${path.basename(candidates[0])}`
     );
   }
+  const overrideFile = candidates[0];
+  let mod: Record<string, unknown>;
+  try {
+    mod = await dynamicImport(pathToFileURL(overrideFile).href);
+  } catch (e) {
+    logger.warn(
+      `[agent-dirs] failed to load override ${overrideFile}: ${e}; ignoring`
+    );
+    return undefined;
+  }
+  if (typeof mod.default === 'function') {
+    return mod.default as AgentDirOverride;
+  }
+  logger.warn(
+    `[agent-dirs] ${overrideFile} exists but does not default-export a ` +
+      `function; ignoring`
+  );
   return undefined;
 }
