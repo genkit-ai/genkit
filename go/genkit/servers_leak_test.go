@@ -147,3 +147,17 @@ func TestPublicErrorKeepsItsStatusCode(t *testing.T) {
 		}
 	}
 }
+
+// A non-nil error interface holding a nil *status.Error classifies as OK. The
+// boundary is only reached on a failure path, so reporting 200 there would
+// claim success for a request whose result was never written.
+func TestTypedNilErrorDoesNotReportSuccess(t *testing.T) {
+	var typedNil *status.Error
+	msg, code := clientError(error(typedNil))
+	if code != http.StatusInternalServerError {
+		t.Errorf("code = %d, want %d", code, http.StatusInternalServerError)
+	}
+	if msg != "" {
+		t.Errorf("msg = %q, want empty", msg)
+	}
+}

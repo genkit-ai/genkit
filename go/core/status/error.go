@@ -39,6 +39,21 @@ import (
 //
 // Construct one with [Errorf] or [PublicErrorf]. To add context to an existing
 // error without reclassifying it, use fmt.Errorf with %w instead.
+//
+// # Nil receivers
+//
+// Error's methods, and the package functions that inspect an error, tolerate a
+// nil *Error. This matters because Genkit hands out *Error in places that are
+// nil in the ordinary case: [Convert] returns nil for a nil error, and the
+// generated AgentOutput.Error and SessionSnapshot.Error fields are nil whenever
+// nothing failed. Assigning one of those to an error variable produces an
+// interface that is non-nil but holds a nil pointer, and without these guards
+// the first errors.Is or transport call on it would panic, typically inside a
+// request handler.
+//
+// Field access cannot be guarded the same way: e.Status on a nil *Error panics
+// like any other nil dereference. Read fields only after checking for nil, or
+// go through [Of] and [PublicMessage], which handle it.
 type Error struct {
 	// Status is the canonical status name for this failure. Wire field "status".
 	Status Name
@@ -138,13 +153,25 @@ func (e *Error) WithCause(err error) *Error {
 
 // Error implements error. It returns Message alone: the sentinel is a
 // classification label, not a message prefix, so callers control the wording.
-func (e *Error) Error() string { return e.Message }
+// A nil *Error renders as "<nil>", matching how fmt prints a nil error, rather
+// than as "" which would be indistinguishable from an empty message.
+func (e *Error) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	return e.Message
+}
 
 // Unwrap returns the cause recorded via %w or [Error.WithCause], or nil. The
 // classifying sentinel is deliberately not part of the unwrap chain, so
 // errors.Unwrap and hand-rolled chain walks behave the way they do for any
 // fmt.Errorf result; [Error.Is] handles sentinel matching.
-func (e *Error) Unwrap() error { return e.cause }
+func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
 
 // Is reports whether e was classified by target or by a sentinel derived from
 // it. errors.Is consults this before walking [Error.Unwrap], so both
@@ -153,17 +180,33 @@ func (e *Error) Unwrap() error { return e.cause }
 //	errors.Is(err, ai.ErrMaxTurnsExceeded) // the specific sentinel
 //	errors.Is(err, status.ErrAborted)      // the base it derives from
 func (e *Error) Is(target error) bool {
-	return e.sentinel != nil && errors.Is(e.sentinel, target)
+	// errors.Is calls this whenever the interface is non-nil, including when it
+	// holds a nil *Error, so the nil check has to be here rather than at the
+	// call site.
+	if e == nil || e.sentinel == nil {
+		return false
+	}
+	return errors.Is(e.sentinel, target)
 }
 
 // Sentinel returns the sentinel that classified e, or nil if it was decoded
 // from the wire rather than constructed in this process.
-func (e *Error) Sentinel() *Sentinel { return e.sentinel }
+func (e *Error) Sentinel() *Sentinel {
+	if e == nil {
+		return nil
+	}
+	return e.sentinel
+}
 
 // Stack returns the call stack captured when e was constructed, formatted like
 // a panic trace, or "" for an error decoded from the wire. It is formatted on
 // demand: construction only records program counters.
-func (e *Error) Stack() string { return formatStack(e.stack) }
+func (e *Error) Stack() string {
+	if e == nil {
+		return ""
+	}
+	return formatStack(e.stack)
+}
 
 // Of returns the status of err.
 //
@@ -180,6 +223,9 @@ func Of(err error) Name {
 	}
 	var e *Error
 	if errors.As(err, &e) {
+		if e == nil {
+			return OK // a non-nil interface holding a nil *Error is not a failure
+		}
 		return e.Status
 	}
 	var s *Sentinel
@@ -197,7 +243,9 @@ func Of(err error) Name {
 
 // Convert returns err as an [Error], converting it if it is not one already.
 // The converted error takes its status from [Of] and is never public. Returns
-// nil for a nil err.
+// nil for a nil err, and also for an err that is a non-nil interface holding a
+// nil *Error, so callers must check the result rather than assume it is
+// non-nil.
 //
 // Prefer errors.As when you need to know whether err really is an [Error]; this
 // is for boundaries that must produce one either way.
@@ -226,6 +274,9 @@ func PublicMessage(err error) (msg string, public bool) {
 	}
 	var e *Error
 	if errors.As(err, &e) {
+		if e == nil {
+			return "", false
+		}
 		if e.Public {
 			return e.Message, true
 		}

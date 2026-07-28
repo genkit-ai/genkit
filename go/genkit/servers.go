@@ -166,11 +166,19 @@ func wrapHandler(h func(http.ResponseWriter, *http.Request) error) http.HandlerF
 // GENKIT_ENV=dev is exempt: suppressing the message during local development
 // only hides the failure from the developer causing it.
 func clientError(err error) (string, int) {
+	code := status.Of(err)
+	// Only reached on a failure path, so an error that classifies as OK is
+	// itself the bug: the usual cause is a non-nil interface holding a nil
+	// *status.Error, which would otherwise report success on a request whose
+	// result was never written.
+	if code == status.OK {
+		code = status.Internal
+	}
 	msg, public := status.PublicMessage(err)
 	if !public && api.CurrentEnvironment() == api.EnvironmentDev {
 		msg = err.Error()
 	}
-	return msg, status.Of(err).HTTPCode()
+	return msg, code.HTTPCode()
 }
 
 // handler returns an HTTP handler function that serves the action with the provided options.
