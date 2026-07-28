@@ -46,7 +46,7 @@ OpenClaw, and Codex. Three organizations converged independently on "the
 agent is what's on disk," each standardizing a different layer of it.
 
 The demand signal is measurable and attaches to the authoring model
-specifically. Eve reached 3.9k GitHub stars within six weeks of launch, and
+specifically. Eve reached 4.1k GitHub stars within six weeks of launch, and
 its reception has centred on the directory convention rather than the
 runtime, which Genkit's middleware catalog already covers almost one-to-one.
 Meanwhile the most common published criticism of eve is that production
