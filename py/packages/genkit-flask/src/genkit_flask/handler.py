@@ -133,7 +133,9 @@ def genkit_flask_handler(
                 if isinstance(context, dict):
                     action_context = context
 
-            stream = request_data.headers.get('accept') == 'text/event-stream' or request.args.get('stream') == 'true'
+            # Substring match so Accept: text/event-stream, */* (and similar) still streams.
+            accept = request_data.headers.get('accept', '')
+            stream = 'text/event-stream' in accept or request.args.get('stream') == 'true'
             init = input_data.get('init')
             if stream:
 
@@ -149,7 +151,7 @@ def genkit_flask_handler(
                         ex = e
                         if isinstance(ex, GenkitError):
                             ex = ex.cause
-                        yield f'error: {json.dumps({"error": get_callable_json(ex)}, separators=_JSON_SEPARATORS)}'
+                        yield f'data: {json.dumps({"error": get_callable_json(ex)}, separators=_JSON_SEPARATORS)}\n\n'
 
                 iter = _iter_over_async(async_gen(), loop)
                 return iter

@@ -156,9 +156,9 @@ def format_stream_result(result: object) -> str:
 
 
 def format_stream_error(error: Exception) -> str:
-    """Format a stream error for SSE."""
+    """Format a stream failure as a canonical SSE data event."""
     ex = error.cause if isinstance(error, GenkitError) else error
-    return f'error: {json.dumps({"error": get_callable_json(ex)}, separators=JSON_SEPARATORS)}\n\n'
+    return f'data: {json.dumps({"error": get_callable_json(ex)}, separators=JSON_SEPARATORS)}\n\n'
 
 
 async def handle_genkit_request(
