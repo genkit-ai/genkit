@@ -26,6 +26,7 @@ import (
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
 )
 
@@ -207,6 +208,12 @@ type ToolContext struct {
 func (tc *ToolContext) Interrupt(opts *InterruptOptions) error {
 	if opts == nil {
 		opts = &InterruptOptions{}
+	}
+	if opts.Metadata != nil {
+		data, err := json.Marshal(opts.Metadata)
+		if err == nil {
+			tracing.SetCustomMetadataAttribute(tc.Context, "interrupt", string(data))
+		}
 	}
 	return &toolInterruptError{
 		Metadata: opts.Metadata,

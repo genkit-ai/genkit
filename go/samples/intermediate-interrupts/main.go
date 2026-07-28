@@ -24,6 +24,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
@@ -59,6 +60,19 @@ func main() {
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 	reader := bufio.NewReader(os.Stdin)
 
+	// Define an askQuestion tool that always interrupts to ask for user input
+	type AskQuestionInput struct {
+		Question string   `json:"question"`
+		Choices  []string `json:"choices,omitempty"`
+	}
+
+	askQuestion := genkit.DefineTool(g, "askQuestion",
+		"Ask the user a clarifying question.",
+		func(ctx *ai.ToolContext, input AskQuestionInput) (string, error) {
+			// This tool will always interrupt to ask the question.
+			return "", ai.InterruptWith(ctx, input)
+		})
+
 	// Define the transfer tool with interrupt logic
 	transferMoney := genkit.DefineTool(g, "transferMoney",
 		"Transfers money to another account. Use this when the user wants to send money.",
@@ -90,7 +104,7 @@ func main() {
 	// Define the payment agent flow
 	paymentAgent := genkit.DefineFlow(g, "paymentAgent", func(ctx context.Context, request string) (string, error) {
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
+			ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 				ThinkingConfig: &genai.ThinkingConfig{ThinkingBudget: genai.Ptr[int32](0)},
 			})),
 			ai.WithSystem("You are a helpful payment assistant. When the user wants to transfer money, use the transferMoney tool. Always confirm the result with the user."),
@@ -135,34 +149,70 @@ func main() {
 					}
 
 				case "confirm_large":
-					fmt.Printf("\n[Confirm Large Transfer] Send $%.2f to %s? (yes/no): ", meta.Amount, meta.ToAccount)
+					fmt.Printf("\n[Confirm Large Transfer] Send $%.2f to %s? Auto-approving for testing in 5 seconds...\n", meta.Amount, meta.ToAccount)
 
-					if promptYesNo(reader) {
-						// RestartWith: Re-execute the tool with approval
-						part, err := transferMoney.RestartWith(interrupt)
-						if err != nil {
-							return "", fmt.Errorf("RestartWith: %w", err)
-						}
-						restarts = append(restarts, part)
-					} else {
-						// RespondWith: Provide cancelled output directly
-						part, err := transferMoney.RespondWith(interrupt,
-							TransferOutput{"cancelled", "Transfer cancelled by user.", accountBalance})
-						if err != nil {
-							return "", fmt.Errorf("RespondWith: %w", err)
-						}
-						responses = append(responses, part)
+					time.Sleep(5 * time.Second)
+
+					// RestartWith: Re-execute the tool with approval
+					part, err := transferMoney.RestartWith(interrupt)
+					if err != nil {
+						return "", fmt.Errorf("RestartWith: %w", err)
 					}
+					restarts = append(restarts, part)
 				}
 			}
 
 			resp, err = genkit.Generate(ctx, g,
-				ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
+				ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 					ThinkingConfig: &genai.ThinkingConfig{ThinkingBudget: genai.Ptr[int32](0)},
 				})),
 				ai.WithMessages(resp.History()...),
 				ai.WithTools(transferMoney),
 				ai.WithToolRestarts(restarts...),
+				ai.WithToolResponses(responses...),
+			)
+			if err != nil {
+				return "", err
+			}
+		}
+
+		return resp.Text(), nil
+	})
+
+	// Define a trivia agent flow to demonstrate RespondWith
+	triviaAgent := genkit.DefineFlow(g, "triviaAgent", func(ctx context.Context, request string) (string, error) {
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
+				ThinkingConfig: &genai.ThinkingConfig{ThinkingBudget: genai.Ptr[int32](0)},
+			})),
+			ai.WithSystem("You are a trivia master. When asked a trivia question, use the askQuestion tool to give the user multiple choice options before revealing the answer. Only do this once"),
+			ai.WithPrompt(request),
+			ai.WithTools(askQuestion),
+		)
+		if err != nil {
+			return "", err
+		}
+
+		var responses []*ai.Part
+		if resp.FinishReason == ai.FinishReasonInterrupted {
+			fmt.Println("\n[Trivia Agent] Interrupted to ask question. Auto-responding in 5 seconds...")
+			time.Sleep(5 * time.Second)
+
+			for _, interrupt := range resp.Interrupts() {
+				// Mock responding to the interrupt with a user-provided answer
+				part, err := askQuestion.RespondWith(interrupt, "The answer is C")
+				if err != nil {
+					return "", fmt.Errorf("RespondWith: %w", err)
+				}
+				responses = append(responses, part)
+			}
+
+			resp, err = genkit.Generate(ctx, g,
+				ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
+					ThinkingConfig: &genai.ThinkingConfig{ThinkingBudget: genai.Ptr[int32](0)},
+				})),
+				ai.WithMessages(resp.History()...),
+				ai.WithTools(askQuestion),
 				ai.WithToolResponses(responses...),
 			)
 			if err != nil {
@@ -190,12 +240,21 @@ func main() {
 			continue
 		}
 
-		result, err := paymentAgent.Run(ctx, input)
-		if err != nil {
-			fmt.Printf("Error: %v\n\n", err)
-			continue
+		if strings.HasPrefix(strings.ToLower(input), "trivia:") {
+			result, err := triviaAgent.Run(ctx, strings.TrimSpace(input[7:]))
+			if err != nil {
+				fmt.Printf("Error: %v\n\n", err)
+				continue
+			}
+			fmt.Printf("\n%s\n\n", result)
+		} else {
+			result, err := paymentAgent.Run(ctx, input)
+			if err != nil {
+				fmt.Printf("Error: %v\n\n", err)
+				continue
+			}
+			fmt.Printf("\n%s\n\n", result)
 		}
-		fmt.Printf("\n%s\n\n", result)
 	}
 }
 
