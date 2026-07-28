@@ -19,8 +19,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from pydantic import BaseModel
@@ -49,6 +50,10 @@ from genkit._core._typing import (
 )
 
 StateT = TypeVarExt('StateT', bound=BaseModel, default=Any)
+
+# Auth usually rides on HTTP headers, not the agent envelope. Static dict for a
+# fixed key; callable when a token needs refreshing between requests.
+HeadersProvider = dict[str, str] | Callable[[], dict[str, str] | Awaitable[dict[str, str]]]
 
 
 def parse_stream_line(line: str) -> dict[str, Any] | None:
@@ -86,33 +91,47 @@ class HttpAgentTransport(AgentTransport[StateT]):
         self,
         url: str,
         *,
-        agent_name: str | None = None,
         get_snapshot_url: str | None = None,
         abort_url: str | None = None,
+        headers: HeadersProvider | None = None,
         state_management: StateManagement,
     ) -> None:
         """Initializes the HTTP transport.
 
         Args:
             url: Agent turn endpoint (e.g. ``/api/myAgent``).
-            agent_name: Unused. Kept for call-site compatibility; the flow
-                envelope addresses a dedicated agent URL, not a reflection key.
             get_snapshot_url: ``getSnapshot`` route. Defaults to ``{url}/getSnapshot``.
             abort_url: ``abort`` route. Defaults to ``{url}/abort``.
+            headers: Static headers, or a function called per request (sync or async).
             state_management: Declares server- vs client-managed state.
         """
         self.url = url
-        self.agent_name = agent_name
         self.get_snapshot_url = get_snapshot_url or f'{url}/getSnapshot'
         self.abort_url = abort_url or f'{url}/abort'
+        self.headers = headers
         self.state_management: StateManagement = state_management
         self._background_tasks: set[asyncio.Task[Any]] = set()
+
+    async def _resolve_headers(self) -> dict[str, str]:
+        """Resolve caller headers for this request."""
+        if self.headers is None:
+            return {}
+        if callable(self.headers):
+            resolved = self.headers()
+            if inspect.isawaitable(resolved):
+                resolved = await resolved
+            return dict(resolved)
+        return dict(self.headers)
 
     async def _post_json(self, *, url: str, input_val: dict[str, Any]) -> Any:  # noqa: ANN401
         """POST JSON to a one-shot action endpoint and return the parsed body."""
         client = get_cached_client('agent_transport')
         # Same callable/flow envelope as run_turn: handlers expect {"data": ...}.
-        response = await client.post(url, json={'data': input_val})
+        response = await client.post(
+            url,
+            json={'data': input_val},
+            headers=await self._resolve_headers(),
+        )
         if response.status_code == 404:
             return None
         if response.status_code != 200:
@@ -161,11 +180,17 @@ class HttpAgentTransport(AgentTransport[StateT]):
 
         async def fetch_stream() -> None:
             try:
+                # Accept/Content-Type win so a caller header can't break streaming.
+                headers = {
+                    **(await self._resolve_headers()),
+                    'Accept': 'text/event-stream',
+                    'Content-Type': 'application/json',
+                }
                 async with client.stream(
                     'POST',
                     self.url,
                     json=payload,
-                    headers={'Accept': 'text/event-stream', 'Content-Type': 'application/json'},
+                    headers=headers,
                 ) as response:
                     if response.status_code != 200:
                         body = (await response.aread()).decode(errors='ignore')
@@ -247,18 +272,18 @@ class HttpAgentTransport(AgentTransport[StateT]):
 def remote_agent(
     url: str,
     *,
-    agent_name: str | None = None,
     get_snapshot_url: str | None = None,
     abort_url: str | None = None,
+    headers: HeadersProvider | None = None,
     state_management: StateManagement,
     state_schema: type[StateT] | None = None,
 ) -> AgentClient[StateT]:
     """Create a remote agent client over HTTP."""
     transport: HttpAgentTransport[StateT] = HttpAgentTransport(
         url=url,
-        agent_name=agent_name,
         get_snapshot_url=get_snapshot_url,
         abort_url=abort_url,
+        headers=headers,
         state_management=state_management,
     )
     return AgentClient(transport, state_schema=state_schema)

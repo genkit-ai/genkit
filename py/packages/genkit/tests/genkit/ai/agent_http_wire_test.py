@@ -54,8 +54,8 @@ class FakeClient:
 
         return Resp()
 
-    async def post(self, url: str, *, json: dict[str, Any]) -> Any:
-        self.calls.append({'url': url, 'json': json})
+    async def post(self, url: str, *, json: dict[str, Any], headers: dict[str, str] | None = None) -> Any:
+        self.calls.append({'url': url, 'json': json, 'headers': headers or {}})
 
         class Resp:
             status_code = 200
@@ -68,6 +68,16 @@ class FakeClient:
         return Resp()
 
 
+async def _run_turn(transport: HttpAgentTransport) -> None:
+    stream, output = await transport.run_turn(
+        agent_input=AgentInput(message=MessageData(role='user', content=[Part(root=TextPart(text='hi'))])),
+        init=AgentInit(snapshot_id='snap-1'),
+    )
+    async for _ in stream:
+        pass
+    await output
+
+
 @pytest.mark.asyncio
 async def test_run_turn_posts_data_init_envelope_with_accept_header() -> None:
     client = FakeClient()
@@ -76,13 +86,7 @@ async def test_run_turn_posts_data_init_envelope_with_accept_header() -> None:
         'genkit._ai._agents._transports._http.get_cached_client',
         return_value=client,
     ):
-        stream, output = await transport.run_turn(
-            agent_input=AgentInput(message=MessageData(role='user', content=[Part(root=TextPart(text='hi'))])),
-            init=AgentInit(snapshot_id='snap-1'),
-        )
-        async for _ in stream:
-            pass
-        await output
+        await _run_turn(transport)
 
     call = client.calls[0]
     assert call['url'] == URL
@@ -102,3 +106,71 @@ async def test_get_snapshot_posts_data_envelope() -> None:
         await transport.get_snapshot(snapshot_id='snap-1')
 
     assert client.calls[0]['json'] == {'data': {'snapshotId': 'snap-1'}}
+
+
+@pytest.mark.asyncio
+async def test_static_headers_on_turn_and_snapshot() -> None:
+    client = FakeClient()
+    transport = HttpAgentTransport(
+        url=URL,
+        state_management='server',
+        headers={'Authorization': 'Bearer static'},
+    )
+    with mock.patch(
+        'genkit._ai._agents._transports._http.get_cached_client',
+        return_value=client,
+    ):
+        await _run_turn(transport)
+        await transport.get_snapshot(snapshot_id='snap-1')
+
+    assert client.calls[0]['headers'] == {
+        'Authorization': 'Bearer static',
+        'Accept': 'text/event-stream',
+        'Content-Type': 'application/json',
+    }
+    assert client.calls[1]['headers'] == {'Authorization': 'Bearer static'}
+
+
+@pytest.mark.asyncio
+async def test_sync_callable_headers_resolved_per_request() -> None:
+    client = FakeClient()
+    tokens = iter(['tok-1', 'tok-2'])
+    transport = HttpAgentTransport(
+        url=URL,
+        state_management='server',
+        headers=lambda: {'Authorization': f'Bearer {next(tokens)}'},
+    )
+    with mock.patch(
+        'genkit._ai._agents._transports._http.get_cached_client',
+        return_value=client,
+    ):
+        await _run_turn(transport)
+        await transport.get_snapshot(snapshot_id='snap-1')
+
+    assert client.calls[0]['headers']['Authorization'] == 'Bearer tok-1'
+    assert client.calls[1]['headers']['Authorization'] == 'Bearer tok-2'
+
+
+@pytest.mark.asyncio
+async def test_async_callable_headers_resolved_per_request() -> None:
+    client = FakeClient()
+    n = {'i': 0}
+
+    async def refresh() -> dict[str, str]:
+        n['i'] += 1
+        return {'Authorization': f'Bearer async-{n["i"]}'}
+
+    transport = HttpAgentTransport(
+        url=URL,
+        state_management='server',
+        headers=refresh,
+    )
+    with mock.patch(
+        'genkit._ai._agents._transports._http.get_cached_client',
+        return_value=client,
+    ):
+        await _run_turn(transport)
+        await transport.abort_snapshot('snap-1')
+
+    assert client.calls[0]['headers']['Authorization'] == 'Bearer async-1'
+    assert client.calls[1]['headers']['Authorization'] == 'Bearer async-2'

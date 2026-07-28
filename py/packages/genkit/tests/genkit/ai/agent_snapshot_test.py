@@ -185,9 +185,12 @@ async def test_custom_agent_turn_that_raises_resolves_as_failed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_chat_resumes_from_last_good_after_detached_turn_is_aborted() -> None:
-    """Aborting a detached turn must not strand the chat: the next send() resumes
-    from the last completed turn instead of the dead, aborted snapshot."""
+async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reload() -> None:
+    """After detach the chat resumes the pending snapshot (JS applyOutput shape).
+
+    A send while it is still pending (or after abort) is rejected; reload by
+    session_id walks back to the last completed turn.
+    """
     registry = Registry()
     store = InMemorySessionStore()
 
@@ -206,28 +209,30 @@ async def test_chat_resumes_from_last_good_after_detached_turn_is_aborted() -> N
     chat = agent.chat()
 
     await chat.send('hello').response
-    last_good_parent = chat.snapshot_id
+    session_id = chat.session_id
     history_before_detach = list(chat.messages)
 
     task = await chat.detach('slow background work')
     assert chat.messages != history_before_detach  # optimistic prompt pushed
-    # The current snapshot is the in-flight detached one (so abort()/get_snapshot
-    # act on it), but the resume handle stays on the last completed turn.
+    # Resume handle tracks the pending detached snapshot — same as JS.
     assert chat.snapshot_id == task.snapshot_id
-    assert chat._snapshot_id != chat._resume_snapshot_id  # noqa: SLF001
+    assert chat._resume_snapshot_id == task.snapshot_id  # noqa: SLF001
+
+    with pytest.raises(AgentError, match='not resumable'):
+        await chat.send('too soon').response
 
     status = await task.abort()
     assert status == SnapshotStatus.ABORTED
-    # Aborting rolls back the optimistic prompt the chat was holding for the
-    # killed turn, so the running view returns to the last completed turn.
+    # Aborting drops the optimistic prompt; the resume id still names the aborted
+    # snapshot, so a bare send keeps failing until we reload.
     assert chat.messages == history_before_detach
+    with pytest.raises(AgentError, match='not resumable'):
+        await chat.send('still stranded').response
 
-    # The chat is still usable: the next turn branches off the last good parent
-    # rather than the aborted snapshot, which is not resumable.
+    chat = await agent.load_chat(session_id=session_id)
     out = await chat.send('are you there?').response
     assert out.finish_reason == AgentFinishReason.STOP
-    assert chat._resume_snapshot_id == chat.snapshot_id  # noqa: SLF001
-    assert chat.snapshot_id not in (None, last_good_parent, task.snapshot_id)
+    assert chat.snapshot_id not in (None, task.snapshot_id)
 
 
 @pytest.mark.asyncio

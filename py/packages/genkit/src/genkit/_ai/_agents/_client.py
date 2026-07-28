@@ -880,11 +880,10 @@ class AgentChat(Generic[StateT]):
         self._transport = transport
         self._state_schema = state_schema
         self._snapshot_id: str | None = None
-        # The snapshot the next turn branches from. Usually the same as
-        # _snapshot_id, but a detached turn parks its (speculative) snapshot in
-        # _snapshot_id for abort()/get_snapshot() while this stays on the last
-        # completed turn — so if that background turn is aborted or fails, the
-        # next send() still resumes from solid ground instead of a dead handle.
+        # Snapshot the next turn resumes from. Kept in lockstep with
+        # ``_snapshot_id`` whenever a turn output carries one (including a
+        # pending detached snapshot — a follow-up ``send`` then fails until that
+        # snapshot completes or the chat is reloaded onto a completed ancestor).
         self._resume_snapshot_id: str | None = None
         self._session_id: str | None = None
         self._messages: list[MessageData] = []
@@ -1042,21 +1041,14 @@ class AgentChat(Generic[StateT]):
         # reads the stream. For detach we only care about the resulting handle.
         _stream, output_awaitable = await self._transport.run_turn(agent_input=inp, init=init)
         raw_output = await output_awaitable
-
-        # The detached turn's snapshot is still in flight: it may complete, but it
-        # may also be aborted (task.abort()) or fail. Keep the resume handle on the
-        # last completed turn so a follow-up send() doesn't try to branch off a
-        # snapshot that never settled. _snapshot_id still tracks the detached turn
-        # so abort()/get_snapshot() act on it.
-        resume_before_detach = self._resume_snapshot_id
+        # Point the chat at the pending detached snapshot (same as JS applyOutput).
+        # A send() while it is still pending is rejected; after it completes, send
+        # continues from that snapshot. Abort rolls back the optimistic prompt —
+        # reload via load_chat(session_id=...) to resume from the last completed turn.
         self._update_from_output(raw=raw_output, message_count_before=message_count_before)
-        self._resume_snapshot_id = resume_before_detach
 
         if not raw_output.snapshot_id:
             raise ValueError('detach did not return a snapshot_id.')
-        # If the background turn is aborted, the prompt we optimistically pushed
-        # was never really answered, so drop it the same way a failed turn does —
-        # leaving the chat as if the detach never happened.
         return DetachedTask(
             snapshot_id=raw_output.snapshot_id,
             transport=self._transport,
@@ -1120,7 +1112,7 @@ class AgentChat(Generic[StateT]):
             return AgentInit(state=self._session_state())
 
         # Server store owns the state; point it at what to load. Prefer the
-        # last completed snapshot, fall back to the session id, else start fresh.
+        # current resume snapshot, fall back to the session id, else start fresh.
         if self._resume_snapshot_id:
             return AgentInit(snapshot_id=self._resume_snapshot_id)
         if self._session_id:
