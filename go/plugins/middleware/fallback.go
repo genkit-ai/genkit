@@ -63,7 +63,7 @@ type Fallback struct {
 	Models []ai.ModelRef `json:"models,omitempty"`
 	// Statuses is the set of status codes that trigger a fallback.
 	// An error's status comes from [status.Of], so unclassified errors count
-	// non-GenkitError errors propagate immediately.
+	// as INTERNAL and trigger a fallback under the defaults.
 	// Defaults to [defaultFallbackStatuses].
 	Statuses []status.Name `json:"statuses,omitempty"`
 }
@@ -98,7 +98,7 @@ func (f *Fallback) wrapModel(ctx context.Context, params *ai.ModelParams, next a
 		name := ref.Name()
 		m := genkit.LookupModel(genkit.FromContext(ctx), name)
 		if m == nil {
-			return nil, status.Errorf(status.ErrNotFound, "fallback: model %q not found", name)
+			return nil, status.Errorf(ai.ErrModelNotFound, "fallback: model %q not found", name)
 		}
 		req := *params.Request
 		req.Config = ref.Config()

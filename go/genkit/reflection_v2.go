@@ -798,9 +798,14 @@ func (s *reflectionServerV2) sendRunActionError(id string, err error, traceID st
 	// stack. Suppressing them here would only hide the failure from the
 	// developer causing it; the redaction that matters is at the flow HTTP
 	// boundary (see clientError in servers.go).
-	code := status.Of(err)
+	e := status.Convert(err)
+	code := e.Status
 	msg := err.Error()
 	if errors.Is(err, context.Canceled) {
+		// A cancellation anywhere in the chain wins, even when an intermediate
+		// frame reclassified the error; the Dev UI keys on CANCELLED to tell a
+		// user-initiated cancel from a failure.
+		code = status.Cancelled
 		msg = "Action was cancelled"
 	}
 
@@ -808,14 +813,12 @@ func (s *reflectionServerV2) sendRunActionError(id string, err error, traceID st
 	if traceID != "" {
 		details["traceId"] = traceID
 	}
-	if e := status.Convert(err); e != nil {
-		// status.Errorf records the stack out of band; core.NewError still puts
-		// one in Details for compatibility. Prefer whichever is present.
-		if stack, ok := e.Details["stack"].(string); ok {
-			details["stack"] = stack
-		} else if stack := e.Stack(); stack != "" {
-			details["stack"] = stack
-		}
+	// status.Errorf records the stack out of band; core.NewError still puts
+	// one in Details for compatibility. Prefer whichever is present.
+	if stack, ok := e.Details["stack"].(string); ok {
+		details["stack"] = stack
+	} else if stack := e.Stack(); stack != "" {
+		details["stack"] = stack
 	}
 
 	data := map[string]any{

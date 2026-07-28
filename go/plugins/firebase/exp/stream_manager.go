@@ -136,7 +136,7 @@ func (m *FirestoreStreamManager) Open(ctx context.Context, streamID string) (str
 	})
 	if err != nil {
 		if grpcstatus.Code(err) == codes.AlreadyExists {
-			return nil, status.PublicErrorf(status.ErrAlreadyExists, "stream already exists")
+			return nil, status.PublicErrorf(streaming.ErrStreamExists, "stream already exists")
 		}
 		return nil, err
 	}
@@ -154,12 +154,12 @@ func (m *FirestoreStreamManager) Subscribe(ctx context.Context, streamID string)
 	snapshot, err := docRef.Get(ctx)
 	if err != nil {
 		if isNotFound(err) {
-			return nil, nil, status.PublicErrorf(status.ErrNotFound, "stream not found")
+			return nil, nil, status.PublicErrorf(streaming.ErrStreamNotFound, "stream not found")
 		}
 		return nil, nil, err
 	}
 	if !snapshot.Exists() {
-		return nil, nil, status.PublicErrorf(status.ErrNotFound, "stream not found")
+		return nil, nil, status.PublicErrorf(streaming.ErrStreamNotFound, "stream not found")
 	}
 
 	ch := make(chan streaming.StreamEvent, streamBufferSize)
@@ -350,7 +350,7 @@ func (s *firestoreStreamInput) Write(ctx context.Context, chunk json.RawMessage)
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return status.PublicErrorf(status.ErrFailedPrecondition, "stream writer is closed")
+		return status.PublicErrorf(streaming.ErrStreamClosed, "stream writer is closed")
 	}
 
 	_, err := s.docRef.Update(ctx, []firestore.Update{
@@ -375,7 +375,7 @@ func (s *firestoreStreamInput) Done(ctx context.Context, output json.RawMessage)
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return status.PublicErrorf(status.ErrFailedPrecondition, "stream writer is closed")
+		return status.PublicErrorf(streaming.ErrStreamClosed, "stream writer is closed")
 	}
 	s.closed = true
 
@@ -405,7 +405,7 @@ func (s *firestoreStreamInput) Error(ctx context.Context, err error) error {
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return status.PublicErrorf(status.ErrFailedPrecondition, "stream writer is closed")
+		return status.PublicErrorf(streaming.ErrStreamClosed, "stream writer is closed")
 	}
 	s.closed = true
 

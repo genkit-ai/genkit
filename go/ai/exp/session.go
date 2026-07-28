@@ -223,7 +223,7 @@ func readSnapshot[State any](
 	if snapshotID != "" {
 		snap, err = store.GetSnapshot(ctx, snapshotID)
 		if err != nil {
-			return nil, status.Errorf(status.ErrInternal, "getSnapshot: %w", err)
+			return nil, fmt.Errorf("getSnapshot: %w", err)
 		}
 		if snap == nil {
 			return nil, status.PublicErrorf(ErrSnapshotNotFound, "getSnapshot: snapshot %q not found", snapshotID)
@@ -235,10 +235,10 @@ func readSnapshot[State any](
 	} else {
 		snap, err = store.GetLatestSnapshot(ctx, sessionID)
 		if err != nil {
-			return nil, status.Errorf(status.ErrInternal, "getSnapshot: %w", err)
+			return nil, fmt.Errorf("getSnapshot: %w", err)
 		}
 		if snap == nil {
-			return nil, status.Errorf(ErrSnapshotNotFound, "getSnapshot: no snapshot found for session %q", sessionID)
+			return nil, status.PublicErrorf(ErrSnapshotNotFound, "getSnapshot: no snapshot found for session %q", sessionID)
 		}
 	}
 
@@ -312,7 +312,7 @@ func newSnapshotActions[State any](
 			// aborted; the store has no dedicated abort method.
 			snapStatus, err := abortPendingSnapshot(ctx, store, req.SnapshotID)
 			if err != nil {
-				return nil, status.Errorf(status.ErrInternal, "abort: %w", err)
+				return nil, fmt.Errorf("abort: %w", err)
 			}
 			if snapStatus == "" {
 				return nil, status.PublicErrorf(ErrSnapshotNotFound, "abort: snapshot %q not found", req.SnapshotID)

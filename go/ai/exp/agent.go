@@ -1303,7 +1303,7 @@ func (rt *agentRuntime[State]) handleTransformFailure(
 // the abort flip and promptly cancel the background work without polling).
 func (rt *agentRuntime[State]) checkDetachCapabilities() error {
 	if rt.cfg.store == nil {
-		return status.Errorf(status.ErrFailedPrecondition,
+		return status.Errorf(ErrNoSessionStore,
 			"agent %q: detach requires a session store", rt.name)
 	}
 	if _, ok := rt.cfg.store.(SnapshotSubscriber); !ok {
@@ -1534,7 +1534,7 @@ func (rt *agentRuntime[State]) handleDetach(
 		})
 	if err != nil {
 		rt.drainAndWait(cancelWork)
-		return rt.failedOutput(clientCtx, status.Errorf(status.ErrInternal, "agent %q: detach: save pending snapshot: %w", rt.name, err)), nil
+		return rt.failedOutput(clientCtx, fmt.Errorf("agent %q: detach: save pending snapshot: %w", rt.name, err)), nil
 	}
 	// The router can no longer write to outCh once we return; the bidi
 	// framework closes it shortly after. Post-detach chunks never entered
@@ -1793,7 +1793,7 @@ func loadSession[State any](
 		}
 		snap, err := store.GetSnapshot(ctx, init.SnapshotID)
 		if err != nil {
-			return nil, nil, status.Errorf(status.ErrInternal, "failed to load snapshot %q: %w", init.SnapshotID, err)
+			return nil, nil, fmt.Errorf("failed to load snapshot %q: %w", init.SnapshotID, err)
 		}
 		if snap == nil {
 			return nil, nil, status.PublicErrorf(ErrSnapshotNotFound, "snapshot %q not found", init.SnapshotID)
@@ -1814,7 +1814,7 @@ func loadSession[State any](
 		}
 		snap, err := store.GetLatestSnapshot(ctx, init.SessionID)
 		if err != nil {
-			return nil, nil, status.Errorf(status.ErrInternal, "failed to resolve latest snapshot for session %q: %w", init.SessionID, err)
+			return nil, nil, fmt.Errorf("failed to resolve latest snapshot for session %q: %w", init.SessionID, err)
 		}
 		if snap == nil {
 			// No snapshot exists for this session ID yet: the caller is
