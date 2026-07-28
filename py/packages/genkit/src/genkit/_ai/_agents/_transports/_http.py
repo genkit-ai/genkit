@@ -57,13 +57,20 @@ HeadersProvider = dict[str, str] | Callable[[], dict[str, str] | Awaitable[dict[
 
 
 def parse_stream_line(line: str) -> dict[str, Any] | None:
-    """Parse one reflection JSON line or SSE ``data:`` / ``error:`` event."""
+    """Parse one SSE stream line into a JSON object.
+
+    The protocol uses ``data: {...}`` (including errors as
+    ``data: {"error": ...}``). The JS server currently emits failures with an
+    ``error:`` prefix instead, so we accept that here too — but ``data:`` is
+    what clients should expect.
+    """
     stripped = line.strip()
     if not stripped:
         return None
     if stripped.startswith('data:'):
         stripped = stripped[5:].strip()
     elif stripped.startswith('error:'):
+        # JS server emits this; protocol expects data: {"error": ...}.
         stripped = stripped[6:].strip()
     if not stripped:
         return None

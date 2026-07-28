@@ -64,7 +64,14 @@ def test_error_from_http_fallback() -> None:
     assert 'service unavailable' in err.original_message
 
 
-def test_parse_stream_line_sse_error_prefix() -> None:
+def test_parse_stream_line_sse_data_error() -> None:
+    """Canonical stream errors use data: {"error": ...} (same as Go)."""
+    data = parse_stream_line('data: {"error": {"status": "INTERNAL", "message": "boom"}}')
+    assert data == {'error': {'status': 'INTERNAL', 'message': 'boom'}}
+
+
+def test_parse_stream_line_legacy_error_prefix() -> None:
+    """Older JS/Py servers used an error: prefix; keep accepting it for now."""
     data = parse_stream_line('error: {"error": {"status": "INTERNAL", "message": "boom"}}')
     assert data == {'error': {'status': 'INTERNAL', 'message': 'boom'}}
 
