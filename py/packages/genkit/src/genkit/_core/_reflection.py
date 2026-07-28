@@ -51,14 +51,14 @@ logger = get_logger(__name__)
 LifecycleHook = Callable[[], Awaitable[None]]
 
 
-def agent_has_server_store(action: BidiAction[Any, Any, Any]) -> bool:
+def agent_has_server_store(action: Action) -> bool:
     """True when the agent keeps session state on the server rather than the client."""
     agent_meta = (action.metadata or {}).get('agent')
     agent_dict = cast(dict[str, Any], agent_meta) if isinstance(agent_meta, dict) else {}
     return agent_dict.get('stateManagement') == 'server'
 
 
-def resolve_agent_init(action: BidiAction[Any, Any, Any], init_val: object) -> AgentInit:
+def resolve_agent_init(action: Action, init_val: object) -> AgentInit:
     """Validate a raw init payload into an ``AgentInit``, normalized for the agent's store.
 
     For a server-store agent we mint a session id when the caller didn't supply
@@ -71,16 +71,6 @@ def resolve_agent_init(action: BidiAction[Any, Any, Any], init_val: object) -> A
             init.session_id = str(uuid4())
         init.state = None
     return init
-
-
-def resolve_agent_input(input_val: dict[str, Any]) -> AgentInput:
-    """Validate a raw per-turn input payload into an ``AgentInput``."""
-    d = dict(input_val)
-    if 'messages' in d and 'message' not in d:
-        msgs = d.pop('messages', [])
-        if msgs and isinstance(msgs, list):
-            d['message'] = msgs[-1]
-    return AgentInput.model_validate(d)
 
 
 def as_agent_input_dict(input_val: object) -> dict[str, Any]:
@@ -145,15 +135,11 @@ class ActionRunner:
             input_val = self.payload.get('input')
             init = None
             if isinstance(self.action, BidiAction):
-                # isinstance narrows BidiAction's generics to Never, so cast them to
-                # Any to keep resolve_agent_init typed. pyrefly reads the cast as
-                # redundant (it already backfills Any) but ty needs it.
-                action = cast(BidiAction[Any, Any, Any], self.action)  # pyrefly: ignore[redundant-cast]
-                init = resolve_agent_init(action, self.payload.get('init'))
+                init = resolve_agent_init(self.action, self.payload.get('init'))
                 if input_val is None:
                     input_val = AgentInput()
                 else:
-                    input_val = resolve_agent_input(as_agent_input_dict(input_val))
+                    input_val = AgentInput.model_validate(as_agent_input_dict(input_val))
 
             output = await self.action.run(
                 input=input_val,

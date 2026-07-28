@@ -50,7 +50,7 @@ from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
-from genkit._core._reflection import as_agent_input_dict, resolve_agent_init, resolve_agent_input
+from genkit._core._reflection import as_agent_input_dict, resolve_agent_init
 from genkit._core._registry import Registry
 from genkit._core._trace._default_exporter import TraceServerExporter
 from genkit._core._tracing import add_custom_exporter
@@ -395,7 +395,7 @@ class ReflectionServerV2:
             if p.chunk is None:
                 inp = AgentInput()
             else:
-                inp = resolve_agent_input(as_agent_input_dict(p.chunk))
+                inp = AgentInput.model_validate(as_agent_input_dict(p.chunk))
             await stream.put(inp)
         except Exception as e:  # noqa: BLE001
             logger.warning('reflection V2: sendInputStreamChunk error', err=e)
@@ -580,7 +580,7 @@ class ReflectionServerV2:
         self,
         sid: str,
         p: ReflectionRunActionParams,
-        action: BidiAction[Any, Any, Any],
+        action: BidiAction,
     ) -> None:
         """Drive a bidi (agent) runAction through action.run() with a per-turn input stream.
 
@@ -625,7 +625,7 @@ class ReflectionServerV2:
                 if p.input is None:
                     input_val = AgentInput()
                 else:
-                    input_val = resolve_agent_input(as_agent_input_dict(p.input))
+                    input_val = AgentInput.model_validate(as_agent_input_dict(p.input))
             except (TypeError, ValidationError) as e:
                 await self.send_error(sid, JSON_RPC_INVALID_PARAMS, f'invalid AgentInput: {e}')
                 return
