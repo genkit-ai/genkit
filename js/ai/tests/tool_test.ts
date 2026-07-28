@@ -53,6 +53,18 @@ describe('ToolInterruptError', () => {
     assert.ok(String(err).includes('tool execution interrupted'));
     assert.ok(String(err).includes('"key": "value"'));
   });
+
+  it('falls back when metadata cannot be serialized', () => {
+    const metadata: Record<string, any> = { key: 'value' };
+    metadata.self = metadata;
+    const err = new ToolInterruptError(metadata);
+    assert.strictEqual(err.name, 'ToolInterruptError');
+    assert.strictEqual(err.metadata, metadata);
+    assert.strictEqual(
+      err.message,
+      'tool execution interrupted: \n\n[unserializable metadata]'
+    );
+  });
 });
 
 describe('defineInterrupt', () => {

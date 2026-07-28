@@ -523,10 +523,15 @@ export function defineInterrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
  */
 export class ToolInterruptError extends Error {
   constructor(readonly metadata?: Record<string, any>) {
-    const message =
-      metadata !== undefined
-        ? `tool execution interrupted: \n\n${JSON.stringify(metadata, null, 2)}`
-        : 'tool execution interrupted';
+    let message = 'tool execution interrupted';
+    if (metadata !== undefined) {
+      try {
+        message += `: \n\n${JSON.stringify(metadata, null, 2)}`;
+      } catch {
+        // Keep construction safe if metadata has cycles / BigInt / etc.
+        message += ': \n\n[unserializable metadata]';
+      }
+    }
     super(message);
     this.name = 'ToolInterruptError';
   }
