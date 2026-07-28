@@ -1645,11 +1645,9 @@ export function validateResumeAgainstHistory(
       const msg = history[i];
       if (msg.role === 'model') {
         for (const part of msg.content) {
-          if (
-            part.toolRequest?.name === name &&
-            part.toolRequest?.ref === ref
-          ) {
-            return part.toolRequest;
+          const tr = part.toolRequest;
+          if (tr && tr.name === name && tr.ref === ref) {
+            return tr;
           }
         }
       }
