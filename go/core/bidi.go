@@ -228,7 +228,7 @@ func (b *BidiAction[In, Out, Stream, Init]) RunBidiJSON(ctx context.Context, inp
 	// schema). Deferring input past startup is a streaming session
 	// capability; see ConnectJSON.
 	if !base.HasJSONValue(input) {
-		return nil, status.Errorf(status.ErrInvalidArgument, "action %q requires input for a one-shot run; open a streaming session to defer input", b.desc.Key)
+		return nil, status.PublicErrorf(status.ErrInvalidArgument, "action %q requires input for a one-shot run; open a streaming session to defer input", b.desc.Key)
 	}
 	init, hasInit, err := b.decodeInit(opts)
 	if err != nil {

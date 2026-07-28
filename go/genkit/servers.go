@@ -148,14 +148,29 @@ func wrapHandler(h func(http.ResponseWriter, *http.Request) error) http.HandlerF
 		}()
 
 		if err = h(w, r); err != nil {
-			var herr *core.GenkitError
-			if errors.As(err, &herr) {
-				http.Error(w, herr.Error(), core.HTTPStatusCode(herr.Status))
-			} else {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-			}
+			msg, code := clientError(err)
+			http.Error(w, msg, code)
 		}
 	}
+}
+
+// clientError returns the message and HTTP status to send a client for err.
+//
+// The status always comes from the error, so an error deliberately marked
+// public reaches the client with its own code rather than falling through to
+// 500. The message only leaves the process when the error was built with
+// [status.PublicErrorf]; anything else becomes a generic string derived from
+// the status, so schema dumps, provider text, and internal identifiers stay
+// server-side. The full error is still logged by wrapHandler.
+//
+// GENKIT_ENV=dev is exempt: suppressing the message during local development
+// only hides the failure from the developer causing it.
+func clientError(err error) (string, int) {
+	msg, public := status.PublicMessage(err)
+	if !public && api.CurrentEnvironment() == api.EnvironmentDev {
+		msg = err.Error()
+	}
+	return msg, status.Of(err).HTTPCode()
 }
 
 // handler returns an HTTP handler function that serves the action with the provided options.
@@ -417,10 +432,12 @@ type flowErrorResponse struct {
 }
 
 // flowError represents the error payload in a streaming error response.
+//
+// It carries no details field: it used to hold the full err.Error() text, which
+// put internal failure detail on the wire on every streamed error.
 type flowError struct {
-	Status  core.StatusName `json:"status"`
-	Message string          `json:"message"`
-	Details string          `json:"details,omitempty"`
+	Status  status.Name `json:"status"`
+	Message string      `json:"message"`
 }
 
 // writeResultResponse writes a JSON result response for non-streaming requests.
@@ -462,20 +479,11 @@ func writeSSEMessage(w http.ResponseWriter, msg json.RawMessage) error {
 
 // writeSSEError writes an error as a server-sent event for streaming requests.
 func writeSSEError(w http.ResponseWriter, flowErr error) error {
-	status := core.INTERNAL
-	var ufErr *core.UserFacingError
-	var gErr *core.GenkitError
-	if errors.As(flowErr, &ufErr) {
-		status = ufErr.Status
-	} else if errors.As(flowErr, &gErr) {
-		status = gErr.Status
-	}
-
+	msg, _ := clientError(flowErr)
 	resp := flowErrorResponse{
 		Error: &flowError{
-			Status:  status,
-			Message: "stream flow error",
-			Details: flowErr.Error(),
+			Status:  status.Of(flowErr),
+			Message: msg,
 		},
 	}
 	data, err := json.Marshal(resp)

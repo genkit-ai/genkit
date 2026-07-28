@@ -101,8 +101,10 @@ func TestHandler(t *testing.T) {
 			t.Errorf("want status code %d, got %d", http.StatusInternalServerError, resp.StatusCode)
 		}
 
-		if !strings.Contains(string(body), "generic error message") {
-			t.Errorf("want error message in response body, got %q", string(body))
+		// The message is deliberately withheld: an unclassified error was never
+		// vetted as safe to return, so the client gets the status alone.
+		if strings.Contains(string(body), "generic error message") {
+			t.Errorf("internal message leaked to client: %q", string(body))
 		}
 	})
 
@@ -143,8 +145,8 @@ func TestHandler(t *testing.T) {
 			t.Errorf("want status code %d for NOT_FOUND, got %d", http.StatusNotFound, resp.StatusCode)
 		}
 
-		if !strings.Contains(string(body), "resource not found") {
-			t.Errorf("want error message in response body, got %q", string(body))
+		if strings.Contains(string(body), "resource not found") {
+			t.Errorf("internal message leaked to client: %q", string(body))
 		}
 	})
 
@@ -165,11 +167,14 @@ func TestHandler(t *testing.T) {
 		}
 
 		if !strings.Contains(string(body), "permission denied") {
-			t.Errorf("want error message in response body, got %q", string(body))
+			t.Errorf("want the generic status message, got %q", string(body))
 		}
 	})
 
-	t.Run("UserFacingError returns internal server error", func(t *testing.T) {
+	// A public error reaches the client with its own status. It used to fall
+	// through to 500 because *core.UserFacingError is unrelated to
+	// *core.GenkitError, so the handler's errors.As could never match it.
+	t.Run("UserFacingError keeps its status and message", func(t *testing.T) {
 		handler := Handler(userFacingErrorFlow)
 
 		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"data":"test"}`))
@@ -181,8 +186,8 @@ func TestHandler(t *testing.T) {
 		resp := w.Result()
 		body, _ := io.ReadAll(resp.Body)
 
-		if resp.StatusCode != http.StatusInternalServerError {
-			t.Errorf("want status code %d, got %d", http.StatusInternalServerError, resp.StatusCode)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("want status code %d, got %d", http.StatusBadRequest, resp.StatusCode)
 		}
 
 		if !strings.Contains(string(body), "public error message") {
@@ -423,7 +428,7 @@ data: {"result":"hello-end"}
 		resp := w.Result()
 		body, _ := io.ReadAll(resp.Body)
 
-		expected := `data: {"error":{"status":"INTERNAL","message":"stream flow error","details":"streaming error"}}
+		expected := `data: {"error":{"status":"INTERNAL","message":"internal"}}
 
 `
 		if string(body) != expected {

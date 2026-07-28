@@ -1770,7 +1770,7 @@ func loadSession[State any](
 	switch {
 	case init.State != nil:
 		if store != nil {
-			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
+			return nil, nil, status.PublicErrorf(status.ErrFailedPrecondition,
 				"state provided but agent has a session store configured (server-managed state); use snapshot ID instead")
 		}
 		// Deep-copy at the entry boundary: an in-process caller retains
@@ -1783,7 +1783,7 @@ func loadSession[State any](
 
 	case init.SnapshotID != "":
 		if store == nil {
-			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
+			return nil, nil, status.PublicErrorf(status.ErrFailedPrecondition,
 				"snapshot ID %q provided but agent has no session store configured (client-managed state); use state instead", init.SnapshotID)
 		}
 		snap, err := store.GetSnapshot(ctx, init.SnapshotID)
@@ -1791,7 +1791,7 @@ func loadSession[State any](
 			return nil, nil, status.Errorf(status.ErrInternal, "failed to load snapshot %q: %w", init.SnapshotID, err)
 		}
 		if snap == nil {
-			return nil, nil, status.Errorf(ErrSnapshotNotFound, "snapshot %q not found", init.SnapshotID)
+			return nil, nil, status.PublicErrorf(ErrSnapshotNotFound, "snapshot %q not found", init.SnapshotID)
 		}
 		// A session ID sent alongside the snapshot ID asserts which
 		// conversation the snapshot belongs to; a mismatch means the
@@ -1804,7 +1804,7 @@ func loadSession[State any](
 
 	case init.SessionID != "":
 		if store == nil {
-			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
+			return nil, nil, status.PublicErrorf(status.ErrFailedPrecondition,
 				"session ID %q provided but agent has no session store configured (client-managed state); the conversation's identity rides inside the state object (SessionState.SessionID)", init.SessionID)
 		}
 		snap, err := store.GetLatestSnapshot(ctx, init.SessionID)

@@ -225,10 +225,28 @@ func PublicMessage(err error) (msg string, public bool) {
 		return "", false
 	}
 	var e *Error
-	if errors.As(err, &e) && e.Public {
-		return e.Message, true
+	if errors.As(err, &e) {
+		if e.Public {
+			return e.Message, true
+		}
+		return genericMessage(e.Status), false
+	}
+	// No Error in the chain: fall back to the interface, which the deprecated
+	// core.UserFacingError implements so its message still reaches clients.
+	var pm publicMessager
+	if errors.As(err, &pm) {
+		if m, ok := pm.PublicMessage(); ok {
+			return m, true
+		}
 	}
 	return genericMessage(Of(err)), false
+}
+
+// publicMessager lets a type declared outside this package mark its message
+// safe to return to clients. It exists for the deprecated core.UserFacingError,
+// whose whole purpose was to be public but which predates [Error.Public].
+type publicMessager interface {
+	PublicMessage() (string, bool)
 }
 
 func genericMessage(n Name) string {

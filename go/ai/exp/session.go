@@ -226,7 +226,7 @@ func readSnapshot[State any](
 			return nil, status.Errorf(status.ErrInternal, "getSnapshot: %w", err)
 		}
 		if snap == nil {
-			return nil, status.Errorf(ErrSnapshotNotFound, "getSnapshot: snapshot %q not found", snapshotID)
+			return nil, status.PublicErrorf(ErrSnapshotNotFound, "getSnapshot: snapshot %q not found", snapshotID)
 		}
 		if sessionID != "" && snap.SessionID != sessionID {
 			return nil, status.Errorf(status.ErrInvalidArgument,
@@ -315,7 +315,7 @@ func newSnapshotActions[State any](
 				return nil, status.Errorf(status.ErrInternal, "abort: %w", err)
 			}
 			if snapStatus == "" {
-				return nil, status.Errorf(ErrSnapshotNotFound, "abort: snapshot %q not found", req.SnapshotID)
+				return nil, status.PublicErrorf(ErrSnapshotNotFound, "abort: snapshot %q not found", req.SnapshotID)
 			}
 			return &AgentAbortResponse{SnapshotID: req.SnapshotID, Status: snapStatus}, nil
 		})

@@ -31,8 +31,10 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal"
 )
@@ -792,10 +794,13 @@ func (s *bidiSession) stop() {
 // sendRunActionError maps a runAction error to a JSON-RPC error response
 // with a Status-shaped data field matching the JS implementation.
 func (s *reflectionServerV2) sendRunActionError(id string, err error, traceID string) {
-	code := core.INTERNAL
+	// The reflection API serves the Dev UI, so it reports the real message and
+	// stack. Suppressing them here would only hide the failure from the
+	// developer causing it; the redaction that matters is at the flow HTTP
+	// boundary (see clientError in servers.go).
+	code := status.Of(err)
 	msg := err.Error()
 	if errors.Is(err, context.Canceled) {
-		code = core.CANCELLED
 		msg = "Action was cancelled"
 	}
 
@@ -803,15 +808,18 @@ func (s *reflectionServerV2) sendRunActionError(id string, err error, traceID st
 	if traceID != "" {
 		details["traceId"] = traceID
 	}
-	var ge *core.GenkitError
-	if errors.As(err, &ge) && ge.Details != nil {
-		if stack, ok := ge.Details["stack"].(string); ok {
+	if e := status.Convert(err); e != nil {
+		// status.Errorf records the stack out of band; core.NewError still puts
+		// one in Details for compatibility. Prefer whichever is present.
+		if stack, ok := e.Details["stack"].(string); ok {
+			details["stack"] = stack
+		} else if stack := e.Stack(); stack != "" {
 			details["stack"] = stack
 		}
 	}
 
 	data := map[string]any{
-		"code":    core.StatusNameToCode[code],
+		"code":    code.Code(),
 		"message": msg,
 	}
 	if len(details) > 0 {

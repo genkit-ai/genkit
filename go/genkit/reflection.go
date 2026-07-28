@@ -771,7 +771,7 @@ func runAction(ctx context.Context, g *Genkit, key string, input, init json.RawM
 func checkInitSupported(a api.Action, init json.RawMessage) error {
 	if base.HasJSONValue(init) {
 		if _, ok := a.(api.BidiAction); !ok {
-			return status.Errorf(status.ErrInvalidArgument, "action %q does not accept init", a.Name())
+			return status.PublicErrorf(status.ErrInvalidArgument, "action %q does not accept init", a.Name())
 		}
 	}
 	return nil
