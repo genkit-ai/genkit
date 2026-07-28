@@ -28,11 +28,13 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/google/uuid"
+
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/x/streaming"
-	"github.com/google/uuid"
 )
 
 // HandlerOption configures a Handler.
@@ -171,7 +173,7 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 		if r.Body != nil && r.ContentLength > 0 {
 			defer r.Body.Close()
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				return core.NewPublicError(core.INVALID_ARGUMENT, err.Error(), nil)
+				return status.PublicErrorf(status.ErrInvalidArgument, "%w", err)
 			}
 		}
 
@@ -490,7 +492,7 @@ func parseBoolQueryParam(r *http.Request, name string) (bool, error) {
 		var err error
 		b, err = strconv.ParseBool(s)
 		if err != nil {
-			return false, core.NewPublicError(core.INVALID_ARGUMENT, err.Error(), nil)
+			return false, status.PublicErrorf(status.ErrInvalidArgument, "%w", err)
 		}
 	}
 	return b, nil

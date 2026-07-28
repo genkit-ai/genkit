@@ -26,6 +26,7 @@ import (
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 )
 
@@ -542,7 +543,7 @@ func (t *ToolDef[In, Out]) RunRaw(ctx context.Context, input any) (any, error) {
 // It returns the full multipart response.
 func (t *ToolDef[In, Out]) RunRawMultipart(ctx context.Context, input any) (*MultipartToolResponse, error) {
 	if t == nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "ai.Tool.RunRawMultipart: tool called on a nil tool; check that all tools are defined")
+		return nil, status.Errorf(status.ErrInvalidArgument, "ai.Tool.RunRawMultipart: tool called on a nil tool; check that all tools are defined")
 	}
 
 	mi, err := json.Marshal(input)
@@ -678,19 +679,19 @@ func (t *ToolDef[In, Out]) Restart(p *Part, opts *RestartOptions) *Part {
 //	part, err := myTool.RespondWith(toolReq, output, WithResponseMetadata[MyOutput](meta))
 func (t *ToolDef[In, Out]) RespondWith(toolReq *Part, output Out, opts ...RespondWithOption[Out]) (*Part, error) {
 	if toolReq == nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "ai.RespondWith: toolReq is nil")
+		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RespondWith: toolReq is nil")
 	}
 	if !toolReq.IsToolRequest() {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "ai.RespondWith: part is not a tool request")
+		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RespondWith: part is not a tool request")
 	}
 	if toolReq.ToolRequest.Name != t.Name() {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "ai.RespondWith: tool request is for %q, not %q", toolReq.ToolRequest.Name, t.Name())
+		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RespondWith: tool request is for %q, not %q", toolReq.ToolRequest.Name, t.Name())
 	}
 
 	cfg := &RespondOptions{}
 	for _, opt := range opts {
 		if err := opt.applyRespondWith(cfg); err != nil {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "ai.RespondWith: %v", err)
+			return nil, status.Errorf(status.ErrInvalidArgument, "ai.RespondWith: %w", err)
 		}
 	}
 
@@ -712,19 +713,19 @@ func (t *ToolDef[In, Out]) RespondWith(toolReq *Part, output Out, opts ...Respon
 //	part, err := myTool.RestartWith(toolReq, WithNewInput(newInput), WithResumedMetadata[MyInput](meta))
 func (t *ToolDef[In, Out]) RestartWith(toolReq *Part, opts ...RestartWithOption[In]) (*Part, error) {
 	if toolReq == nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "ai.RestartWith: toolReq is nil")
+		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RestartWith: toolReq is nil")
 	}
 	if !toolReq.IsToolRequest() {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "ai.RestartWith: part is not a tool request")
+		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RestartWith: part is not a tool request")
 	}
 	if toolReq.ToolRequest.Name != t.Name() {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "ai.RestartWith: tool request is for %q, not %q", toolReq.ToolRequest.Name, t.Name())
+		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RestartWith: tool request is for %q, not %q", toolReq.ToolRequest.Name, t.Name())
 	}
 
 	cfg := &RestartOptions{}
 	for _, opt := range opts {
 		if err := opt.applyRestartWith(cfg); err != nil {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "ai.RestartWith: %v", err)
+			return nil, status.Errorf(status.ErrInvalidArgument, "ai.RestartWith: %w", err)
 		}
 	}
 
@@ -771,7 +772,7 @@ func resolveUniqueTools(r api.Registry, toolRefs []ToolRef) (toolNames []string,
 		name := toolRef.Name()
 
 		if toolMap[name] {
-			return nil, nil, core.NewError(core.INVALID_ARGUMENT, "duplicate tool %q", name)
+			return nil, nil, status.Errorf(status.ErrInvalidArgument, "duplicate tool %q", name)
 		}
 		toolMap[name] = true
 		toolNames = append(toolNames, name)

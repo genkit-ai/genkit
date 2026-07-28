@@ -175,7 +175,11 @@ func TestFallbackDoesNotTriggerOnNonRetryableError(t *testing.T) {
 	}
 }
 
-func TestFallbackDoesNotTriggerOnNonGenkitError(t *testing.T) {
+// An unclassified error reports INTERNAL, which is in the default set, so it
+// triggers fallback. Retry has always treated such errors as retryable; before
+// status.Of, fallback ignored them, so the two middlewares disagreed about the
+// same failure.
+func TestFallbackTriggersOnUnclassifiedError(t *testing.T) {
 	g := newTestGenkit(t)
 	secondaryCalls := 0
 
@@ -189,12 +193,39 @@ func TestFallbackDoesNotTriggerOnNonGenkitError(t *testing.T) {
 
 	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
 
-	_, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
-	if err == nil {
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
+	if err != nil {
+		t.Fatalf("Generate() = %v, want fallback to succeed", err)
+	}
+	if got := resp.Text(); got != "secondary" {
+		t.Errorf("text = %q, want %q", got, "secondary")
+	}
+	if secondaryCalls != 1 {
+		t.Errorf("secondary called %d times, want 1", secondaryCalls)
+	}
+}
+
+// A cancelled context reports CANCELLED, which is not in the default set, so it
+// must not burn through the fallback chain.
+func TestFallbackDoesNotTriggerOnCancelledContext(t *testing.T) {
+	g := newTestGenkit(t)
+	secondaryCalls := 0
+
+	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return nil, context.Canceled
+	})
+	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		secondaryCalls++
+		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary")}, nil
+	})
+
+	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
+
+	if _, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb)); err == nil {
 		t.Fatal("expected error, got nil")
 	}
 	if secondaryCalls != 0 {
-		t.Errorf("secondary called %d times, want 0 (non-GenkitError)", secondaryCalls)
+		t.Errorf("secondary called %d times, want 0 (cancelled)", secondaryCalls)
 	}
 }
 

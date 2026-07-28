@@ -20,23 +20,22 @@ package middleware
 
 import (
 	"context"
-	"errors"
 	"math"
 	"math/rand"
 	"slices"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // defaultRetryStatuses are the status codes that trigger a retry by default.
-var defaultRetryStatuses = []core.StatusName{
-	core.UNAVAILABLE,
-	core.DEADLINE_EXCEEDED,
-	core.RESOURCE_EXHAUSTED,
-	core.ABORTED,
-	core.INTERNAL,
+var defaultRetryStatuses = []status.Name{
+	status.Unavailable,
+	status.DeadlineExceeded,
+	status.ResourceExhausted,
+	status.Aborted,
+	status.Internal,
 }
 
 // sleepFunc is the function used for delays. It blocks for d or until ctx is
@@ -57,9 +56,11 @@ var sleepFunc = func(ctx context.Context, d time.Duration) error {
 // It only hooks the Model stage — individual model API calls are retried,
 // not the entire generate loop.
 //
-// By default, retries occur for non-[core.GenkitError] errors (e.g. network failures)
-// and for [core.GenkitError] errors whose status is one of UNAVAILABLE, DEADLINE_EXCEEDED,
-// RESOURCE_EXHAUSTED, ABORTED, or INTERNAL.
+// An error is retried when its status is in Statuses, which defaults to
+// UNAVAILABLE, DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED, ABORTED, and INTERNAL.
+// An unclassified error reports INTERNAL (see [status.Of]), so network failures
+// and the like are retried by default; a cancelled context reports CANCELLED and
+// is not.
 //
 // Usage:
 //
@@ -71,10 +72,10 @@ var sleepFunc = func(ctx context.Context, d time.Duration) error {
 type Retry struct {
 	// MaxRetries is the maximum number of retry attempts. Defaults to 3.
 	MaxRetries int `json:"maxRetries,omitempty"`
-	// Statuses is the set of status codes that trigger a retry for [core.GenkitError] errors.
-	// Non-GenkitError errors are always retried regardless of this setting.
+	// Statuses is the set of status codes that trigger a retry. An error's
+	// status comes from [status.Of], so unclassified errors count as INTERNAL.
 	// Defaults to [defaultRetryStatuses].
-	Statuses []core.StatusName `json:"statuses,omitempty"`
+	Statuses []status.Name `json:"statuses,omitempty"`
 	// InitialDelayMs is the delay before the first retry, in milliseconds. Defaults to 1000.
 	InitialDelayMs int `json:"initialDelayMs,omitempty"`
 	// MaxDelayMs is the upper bound on retry delay, in milliseconds. Defaults to 60000.
@@ -101,7 +102,7 @@ func (r *Retry) maxRetries() int {
 	return 3
 }
 
-func (r *Retry) statuses() []core.StatusName {
+func (r *Retry) statuses() []status.Name {
 	if len(r.Statuses) > 0 {
 		return r.Statuses
 	}
@@ -167,13 +168,9 @@ func (r *Retry) wrapModel(ctx context.Context, params *ai.ModelParams, next ai.M
 	return nil, lastErr
 }
 
-// isRetryable reports whether err should trigger a retry.
-// Non-GenkitError errors are always retried. GenkitErrors are retried
-// only if their status is in the provided list.
-func isRetryable(err error, statuses []core.StatusName) bool {
-	var ge *core.GenkitError
-	if !errors.As(err, &ge) {
-		return true // unknown errors are retryable
-	}
-	return slices.Contains(statuses, ge.Status)
+// isRetryable reports whether err should trigger a retry: its status must be
+// in statuses. Unclassified errors report INTERNAL, which is in the default
+// set, so they stay retryable unless a caller narrows Statuses.
+func isRetryable(err error, statuses []status.Name) bool {
+	return slices.Contains(statuses, status.Of(err))
 }

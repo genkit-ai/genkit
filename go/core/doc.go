@@ -200,7 +200,7 @@ with an operation ID that can be polled for completion:
 Return user-facing errors with appropriate status codes:
 
 	if err := validate(input); err != nil {
-		return nil, core.NewPublicError(core.INVALID_ARGUMENT, "Invalid input", map[string]any{
+		return nil, status.PublicErrorf(status.ErrInvalidArgument, "Invalid input").WithDetails(map[string]any{
 			"field": "email",
 			"error": err.Error(),
 		})
@@ -208,7 +208,7 @@ Return user-facing errors with appropriate status codes:
 
 For internal errors that should be logged but not exposed to users:
 
-	return nil, core.NewError(core.INTERNAL, "database connection failed: %v", err)
+	return nil, status.Errorf(status.ErrInternal, "database connection failed: %w", err)
 
 # Context
 

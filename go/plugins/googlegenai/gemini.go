@@ -26,14 +26,16 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/invopop/jsonschema"
+	"google.golang.org/genai"
+
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
-	"github.com/invopop/jsonschema"
-	"google.golang.org/genai"
 )
 
 var (
@@ -76,12 +78,12 @@ func configFromRequest(input *ai.ModelRequest) (*genai.GenerateContentConfig, er
 		var err error
 		result, err = base.MapToStruct[genai.GenerateContentConfig](config)
 		if err != nil {
-			return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("The configuration settings are not in the correct format. Check that the names and values match what the model expects: %v", err), nil)
+			return nil, status.PublicErrorf(status.ErrInvalidArgument, "The configuration settings are not in the correct format. Check that the names and values match what the model expects: %w", err)
 		}
 	case nil:
 		// Empty but valid config
 	default:
-		return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("Invalid configuration type: %T. Expected *genai.GenerateContentConfig. Ensure you are using the correct ModelRef helper (e.g., ModelRef) or passing the correct configuration struct.", input.Config), nil)
+		return nil, status.PublicErrorf(status.ErrInvalidArgument, "Invalid configuration type: %T. Expected *genai.GenerateContentConfig. Ensure you are using the correct ModelRef helper (e.g., ModelRef) or passing the correct configuration struct.", input.Config)
 	}
 
 	return &result, nil

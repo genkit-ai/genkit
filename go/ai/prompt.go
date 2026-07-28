@@ -29,12 +29,14 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/dotprompt/go/dotprompt"
+	"github.com/invopop/jsonschema"
+
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
-	"github.com/google/dotprompt/go/dotprompt"
-	"github.com/invopop/jsonschema"
 )
 
 // Prompt is the interface for a prompt that can be executed and rendered.
@@ -154,7 +156,7 @@ func LookupPrompt(r api.Registry, name string) Prompt {
 // passes the rendered template to the AI model specified by the prompt.
 func (p *prompt) Execute(ctx context.Context, opts ...PromptExecuteOption) (*ModelResponse, error) {
 	if p == nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "Prompt.Execute: prompt is nil")
+		return nil, status.Errorf(status.ErrInvalidArgument, "Prompt.Execute: prompt is nil")
 	}
 
 	execOpts := &promptExecutionOptions{}
@@ -280,7 +282,7 @@ func (p *prompt) Execute(ctx context.Context, opts ...PromptExecuteOption) (*Mod
 func (p *prompt) ExecuteStream(ctx context.Context, opts ...PromptExecuteOption) iter.Seq2[*ModelStreamValue, error] {
 	return func(yield func(*ModelStreamValue, error) bool) {
 		if p == nil {
-			yield(nil, core.NewError(core.INVALID_ARGUMENT, "Prompt.ExecuteStream: prompt is nil"))
+			yield(nil, status.Errorf(status.ErrInvalidArgument, "Prompt.ExecuteStream: prompt is nil"))
 			return
 		}
 
@@ -316,7 +318,7 @@ func (p *prompt) ExecuteStream(ctx context.Context, opts ...PromptExecuteOption)
 // Render renders the prompt template based on user input.
 func (p *prompt) Render(ctx context.Context, input any) (*GenerateActionOptions, error) {
 	if p == nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "Prompt.Render: prompt is nil")
+		return nil, status.Errorf(status.ErrInvalidArgument, "Prompt.Render: prompt is nil")
 	}
 
 	if len(p.Middleware) > 0 {
@@ -466,7 +468,7 @@ func (p *prompt) buildRequest(ctx context.Context, input any) (*GenerateActionOp
 
 	outputSchema, err := core.ResolveSchema(p.registry, p.OutputSchema)
 	if err != nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "invalid output schema for prompt %q: %v", p.Name(), err)
+		return nil, status.Errorf(status.ErrInvalidArgument, "invalid output schema for prompt %q: %w", p.Name(), err)
 	}
 
 	useRefs, err := configsToRefs(p.Use)
@@ -1004,7 +1006,7 @@ func AsDataPrompt[In, Out any](p Prompt) *DataPrompt[In, Out] {
 // output schema, either through [DefineDataPrompt] or by using [WithOutputType] when defining the prompt.
 func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...PromptExecuteOption) (Out, *ModelResponse, error) {
 	if dp == nil {
-		return base.Zero[Out](), nil, core.NewError(core.INVALID_ARGUMENT, "DataPrompt.Execute: prompt is nil")
+		return base.Zero[Out](), nil, status.Errorf(status.ErrInvalidArgument, "DataPrompt.Execute: prompt is nil")
 	}
 
 	allOpts := append(slices.Clone(opts), WithInput(input))
@@ -1037,7 +1039,7 @@ func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...Pr
 func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts ...PromptExecuteOption) iter.Seq2[*StreamValue[Out, Out], error] {
 	return func(yield func(*StreamValue[Out, Out], error) bool) {
 		if dp == nil {
-			yield(nil, core.NewError(core.INVALID_ARGUMENT, "DataPrompt.ExecuteStream: prompt is nil"))
+			yield(nil, status.Errorf(status.ErrInvalidArgument, "DataPrompt.ExecuteStream: prompt is nil"))
 			return
 		}
 

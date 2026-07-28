@@ -33,16 +33,18 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/genkitbridge"
-	"github.com/google/uuid"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // --- Heartbeat ---
@@ -590,10 +592,10 @@ func (a *Agent[State]) Store() SessionStore[State] {
 // INVALID_ARGUMENT when snapshotID is empty; a missing snapshot is NOT_FOUND.
 func (a *Agent[State]) GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error) {
 	if a.store == nil {
-		return nil, core.NewError(core.FAILED_PRECONDITION, "agent %q: GetSnapshot requires a session store", a.Name())
+		return nil, status.Errorf(ErrNoSessionStore, "agent %q: GetSnapshot requires a session store", a.Name())
 	}
 	if snapshotID == "" {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "agent %q: GetSnapshot: snapshotID is required", a.Name())
+		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetSnapshot: snapshotID is required", a.Name())
 	}
 	return readSnapshot(ctx, a.store, a.transform, snapshotID, "")
 }
@@ -607,10 +609,10 @@ func (a *Agent[State]) GetSnapshot(ctx context.Context, snapshotID string) (*Ses
 // when sessionID is empty; an unknown session is NOT_FOUND.
 func (a *Agent[State]) GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[State], error) {
 	if a.store == nil {
-		return nil, core.NewError(core.FAILED_PRECONDITION, "agent %q: GetLatestSnapshot requires a session store", a.Name())
+		return nil, status.Errorf(ErrNoSessionStore, "agent %q: GetLatestSnapshot requires a session store", a.Name())
 	}
 	if sessionID == "" {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "agent %q: GetLatestSnapshot: sessionID is required", a.Name())
+		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetLatestSnapshot: sessionID is required", a.Name())
 	}
 	return readSnapshot(ctx, a.store, a.transform, "", sessionID)
 }
@@ -626,10 +628,10 @@ func (a *Agent[State]) GetLatestSnapshot(ctx context.Context, sessionID string) 
 // when snapshotID is empty.
 func (a *Agent[State]) Abort(ctx context.Context, snapshotID string) (SnapshotStatus, error) {
 	if a.store == nil {
-		return "", core.NewError(core.FAILED_PRECONDITION, "agent %q: Abort requires a session store", a.Name())
+		return "", status.Errorf(ErrNoSessionStore, "agent %q: Abort requires a session store", a.Name())
 	}
 	if snapshotID == "" {
-		return "", core.NewError(core.INVALID_ARGUMENT, "agent %q: Abort: snapshotID is required", a.Name())
+		return "", status.Errorf(status.ErrInvalidArgument, "agent %q: Abort: snapshotID is required", a.Name())
 	}
 	return abortPendingSnapshot(ctx, a.store, snapshotID)
 }
@@ -1014,7 +1016,7 @@ func (rt *agentRuntime[State]) takeFatal() error {
 // it crash the process.
 func panicError(ctx context.Context, what string, rec any) error {
 	logger.FromContext(ctx).Error(what+" panicked", "panic", rec, "stack", string(debug.Stack()))
-	return core.NewError(core.INTERNAL, "%s panicked: %v", what, rec)
+	return status.Errorf(status.ErrPanic, "%s panicked: %v", what, rec)
 }
 
 // fnDoneResult carries the user fn's return values across the goroutine
@@ -1301,11 +1303,11 @@ func (rt *agentRuntime[State]) handleTransformFailure(
 // the abort flip and promptly cancel the background work without polling).
 func (rt *agentRuntime[State]) checkDetachCapabilities() error {
 	if rt.cfg.store == nil {
-		return core.NewError(core.FAILED_PRECONDITION,
+		return status.Errorf(status.ErrFailedPrecondition,
 			"agent %q: detach requires a session store", rt.name)
 	}
 	if _, ok := rt.cfg.store.(SnapshotSubscriber); !ok {
-		return core.NewError(core.FAILED_PRECONDITION,
+		return status.Errorf(status.ErrFailedPrecondition,
 			"agent %q: detach requires a session store implementing SnapshotSubscriber", rt.name)
 	}
 	return nil
@@ -1453,7 +1455,7 @@ func (rt *agentRuntime[State]) failedOutput(ctx context.Context, cause error) *A
 	out := &AgentOutput[State]{
 		SessionID:    rt.session.SessionID(),
 		FinishReason: AgentFinishReasonFailed,
-		Error:        core.AsGenkitError(cause),
+		Error:        status.Convert(cause),
 	}
 	if rt.cfg.store == nil {
 		// This is already the failure path, so a transform that also fails
@@ -1532,8 +1534,7 @@ func (rt *agentRuntime[State]) handleDetach(
 		})
 	if err != nil {
 		rt.drainAndWait(cancelWork)
-		return rt.failedOutput(clientCtx, core.NewError(core.INTERNAL,
-			"agent %q: detach: save pending snapshot: %v", rt.name, err)), nil
+		return rt.failedOutput(clientCtx, status.Errorf(status.ErrInternal, "agent %q: detach: save pending snapshot: %w", rt.name, err)), nil
 	}
 	// The router can no longer write to outCh once we return; the bidi
 	// framework closes it shortly after. Post-detach chunks never entered
@@ -1702,23 +1703,23 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 				return &annotated, nil
 			}
 
-			status := SnapshotStatusCompleted
+			snapStatus := SnapshotStatusCompleted
 			// The persisted finish reason records how the background work
 			// actually ended, distinct from the detached reason the client
 			// already saw on AgentOutput.
 			finishReason := completedReason
-			var snapErr *core.GenkitError
+			var snapErr *status.Error
 			switch {
 			case abortedByUser:
-				status = SnapshotStatusAborted
+				snapStatus = SnapshotStatusAborted
 				finishReason = AgentFinishReasonAborted
 				if fnErr != nil {
-					snapErr = core.AsGenkitError(fnErr) // aborted wins, preserve text
+					snapErr = status.Convert(fnErr) // aborted wins, preserve text
 				}
 			case fnErr != nil:
-				status = SnapshotStatusFailed
+				snapStatus = SnapshotStatusFailed
 				finishReason = AgentFinishReasonFailed
-				snapErr = core.AsGenkitError(fnErr)
+				snapErr = status.Convert(fnErr)
 			}
 
 			// Preserve the pending row's CreatedAt (so the finalize does not
@@ -1727,7 +1728,7 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 			return &SessionSnapshot[State]{
 				SessionID:    pending.SessionID,
 				ParentID:     pending.ParentID,
-				Status:       status,
+				Status:       snapStatus,
 				FinishReason: finishReason,
 				Error:        snapErr,
 				State:        &finalState,
@@ -1762,14 +1763,14 @@ func loadSession[State any](
 	}
 
 	if init.State != nil && (init.SessionID != "" || init.SnapshotID != "") {
-		return nil, nil, core.NewError(core.INVALID_ARGUMENT,
+		return nil, nil, status.Errorf(status.ErrInvalidArgument,
 			"state is mutually exclusive with session ID and snapshot ID; a client-managed conversation's identity rides inside the state (SessionState.SessionID)")
 	}
 
 	switch {
 	case init.State != nil:
 		if store != nil {
-			return nil, nil, core.NewError(core.FAILED_PRECONDITION,
+			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 				"state provided but agent has a session store configured (server-managed state); use snapshot ID instead")
 		}
 		// Deep-copy at the entry boundary: an in-process caller retains
@@ -1782,33 +1783,33 @@ func loadSession[State any](
 
 	case init.SnapshotID != "":
 		if store == nil {
-			return nil, nil, core.NewError(core.FAILED_PRECONDITION,
+			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 				"snapshot ID %q provided but agent has no session store configured (client-managed state); use state instead", init.SnapshotID)
 		}
 		snap, err := store.GetSnapshot(ctx, init.SnapshotID)
 		if err != nil {
-			return nil, nil, core.NewError(core.INTERNAL, "failed to load snapshot %q: %v", init.SnapshotID, err)
+			return nil, nil, status.Errorf(status.ErrInternal, "failed to load snapshot %q: %w", init.SnapshotID, err)
 		}
 		if snap == nil {
-			return nil, nil, core.NewError(core.NOT_FOUND, "snapshot %q not found", init.SnapshotID)
+			return nil, nil, status.Errorf(ErrSnapshotNotFound, "snapshot %q not found", init.SnapshotID)
 		}
 		// A session ID sent alongside the snapshot ID asserts which
 		// conversation the snapshot belongs to; a mismatch means the
 		// caller would silently continue the wrong conversation.
 		if init.SessionID != "" && snap.SessionID != init.SessionID {
-			return nil, nil, core.NewError(core.INVALID_ARGUMENT,
+			return nil, nil, status.Errorf(status.ErrInvalidArgument,
 				"snapshot %q does not belong to session %q (snapshot's session: %q)", init.SnapshotID, init.SessionID, snap.SessionID)
 		}
 		return resumeSessionFrom(s, snap)
 
 	case init.SessionID != "":
 		if store == nil {
-			return nil, nil, core.NewError(core.FAILED_PRECONDITION,
+			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 				"session ID %q provided but agent has no session store configured (client-managed state); the conversation's identity rides inside the state object (SessionState.SessionID)", init.SessionID)
 		}
 		snap, err := store.GetLatestSnapshot(ctx, init.SessionID)
 		if err != nil {
-			return nil, nil, core.NewError(core.INTERNAL, "failed to resolve latest snapshot for session %q: %v", init.SessionID, err)
+			return nil, nil, status.Errorf(status.ErrInternal, "failed to resolve latest snapshot for session %q: %w", init.SessionID, err)
 		}
 		if snap == nil {
 			// No snapshot exists for this session ID yet: the caller is
@@ -1819,7 +1820,7 @@ func loadSession[State any](
 			return s, nil, nil
 		}
 		if snap.SessionID != init.SessionID {
-			return nil, nil, core.NewError(core.INTERNAL,
+			return nil, nil, status.Errorf(status.ErrInternal,
 				"store resolved session %q to snapshot %q, which belongs to session %q; the store violates the GetLatestSnapshot contract", init.SessionID, snap.SnapshotID, snap.SessionID)
 		}
 		return resumeSessionFrom(s, snap)
@@ -1841,13 +1842,13 @@ func resumeSessionFrom[State any](s *Session[State], snap *SessionSnapshot[State
 		if snap.Error != nil && snap.Error.Message != "" {
 			msg = snap.Error.Message
 		}
-		return nil, nil, core.NewError(core.FAILED_PRECONDITION,
+		return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 			"snapshot %q terminated with error: %s", snap.SnapshotID, msg)
 	case SnapshotStatusPending:
-		return nil, nil, core.NewError(core.FAILED_PRECONDITION,
+		return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 			"snapshot %q is still pending: its detached invocation is still running; wait for it to finalize or abort it before resuming", snap.SnapshotID)
 	case SnapshotStatusAborted:
-		return nil, nil, core.NewError(core.FAILED_PRECONDITION,
+		return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 			"snapshot %q was aborted", snap.SnapshotID)
 	}
 	if snap.State != nil {
@@ -2451,7 +2452,7 @@ func validateUserMessage(m *ai.Message) error {
 		return nil
 	}
 	if m.Role != "" && m.Role != ai.RoleUser {
-		return core.NewError(core.INVALID_ARGUMENT,
+		return status.Errorf(status.ErrInvalidArgument,
 			"agent input message must have role %q, got %q", ai.RoleUser, m.Role)
 	}
 	for _, p := range m.Content {
@@ -2459,7 +2460,7 @@ func validateUserMessage(m *ai.Message) error {
 			continue
 		}
 		if p.IsToolRequest() || p.IsToolResponse() {
-			return core.NewError(core.INVALID_ARGUMENT,
+			return status.Errorf(status.ErrInvalidArgument,
 				"agent input message must not contain tool request or response parts; use AgentInput.Resume instead")
 		}
 	}
@@ -2520,12 +2521,12 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 		req := p.ToolRequest
 		match := find(req.Name, req.Ref)
 		if match == nil {
-			return core.NewError(core.INVALID_ARGUMENT,
+			return status.Errorf(status.ErrInvalidArgument,
 				"resume.restart references tool %q%s which was not found in session history",
 				req.Name, toolRefSuffix(req.Ref))
 		}
 		if !jsonEqual(normalizeJSON(req.Input), normalizeJSON(match.Input)) {
-			return core.NewError(core.INVALID_ARGUMENT,
+			return status.Errorf(status.ErrInvalidArgument,
 				"resume.restart for tool %q%s has modified inputs that do not match the original tool request in session history; restart inputs must exactly match the interrupted tool request",
 				req.Name, toolRefSuffix(req.Ref))
 		}
@@ -2538,7 +2539,7 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 		}
 		resp := p.ToolResponse
 		if find(resp.Name, resp.Ref) == nil {
-			return core.NewError(core.INVALID_ARGUMENT,
+			return status.Errorf(status.ErrInvalidArgument,
 				"resume.respond references tool %q%s which was not found in session history",
 				resp.Name, toolRefSuffix(resp.Ref))
 		}
@@ -2567,7 +2568,7 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 	return func(ctx context.Context, resp Responder, sess *SessionRunner[State]) (*AgentResult, error) {
 		if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 			if !hasInputPayload(input) {
-				return nil, core.NewError(core.INVALID_ARGUMENT, "agent input message or resume is required")
+				return nil, status.Errorf(status.ErrInvalidArgument, "agent input message or resume is required")
 			}
 			if err := validateUserMessage(input.Message); err != nil {
 				return nil, err
@@ -2779,7 +2780,7 @@ type AgentConnection[State any] struct {
 // SendText, SendResume, and Detach helpers.
 func (c *AgentConnection[State]) Send(input *AgentInput) error {
 	if input == nil {
-		return core.NewError(core.INVALID_ARGUMENT, "agent input must not be nil")
+		return status.Errorf(status.ErrInvalidArgument, "agent input must not be nil")
 	}
 	return c.conn.Send(input)
 }

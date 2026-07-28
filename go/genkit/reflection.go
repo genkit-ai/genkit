@@ -35,6 +35,7 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal"
 	"github.com/firebase/genkit/go/internal/base"
@@ -356,7 +357,7 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 		}
 		defer r.Body.Close()
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			return core.NewError(core.INVALID_ARGUMENT, "%s", err)
+			return status.Errorf(status.ErrInvalidArgument, "%w", err)
 		}
 
 		stream, err := parseBoolQueryParam(r, "stream")
@@ -543,11 +544,11 @@ func handleCancelAction(activeActions *activeActionsMap) func(w http.ResponseWri
 
 		defer r.Body.Close()
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			return core.NewError(core.INVALID_ARGUMENT, "%s", err)
+			return status.Errorf(status.ErrInvalidArgument, "%w", err)
 		}
 
 		if body.TraceID == "" {
-			return core.NewError(core.INVALID_ARGUMENT, "traceId is required")
+			return status.Errorf(status.ErrInvalidArgument, "traceId is required")
 		}
 
 		action, exists := activeActions.Get(body.TraceID)
@@ -596,7 +597,7 @@ func handleNotify() func(w http.ResponseWriter, r *http.Request) error {
 
 		defer r.Body.Close()
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			return core.NewError(core.INVALID_ARGUMENT, "%s", err)
+			return status.Errorf(status.ErrInvalidArgument, "%w", err)
 		}
 
 		configureTelemetry(body.TelemetryServerURL)
@@ -630,7 +631,7 @@ func handleListValues(g *Genkit) func(w http.ResponseWriter, r *http.Request) er
 	return func(w http.ResponseWriter, r *http.Request) error {
 		valueType := r.URL.Query().Get("type")
 		if valueType == "" {
-			return core.NewError(core.INVALID_ARGUMENT, `query parameter "type" is required`)
+			return status.Errorf(status.ErrInvalidArgument, `query parameter "type" is required`)
 		}
 		prefix := "/" + valueType + "/"
 		result := map[string]any{}
@@ -724,7 +725,7 @@ type errorResponse struct {
 func runAction(ctx context.Context, g *Genkit, key string, input, init json.RawMessage, telemetryLabels json.RawMessage, cb streamingCallback[json.RawMessage], runtimeContext map[string]any) (*runActionResponse, error) {
 	action := g.reg.ResolveAction(key)
 	if action == nil {
-		return nil, core.NewError(core.NOT_FOUND, "action %q not found", key)
+		return nil, status.Errorf(status.ErrActionNotFound, "action %q not found", key)
 	}
 	ctx = core.WithActionContext(ctx, runtimeContext)
 
@@ -733,7 +734,7 @@ func runAction(ctx context.Context, g *Genkit, key string, input, init json.RawM
 		var telemetryAttributes map[string]string
 		err := json.Unmarshal(telemetryLabels, &telemetryAttributes)
 		if err != nil {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "Error unmarshalling telemetryLabels: %v", err)
+			return nil, status.Errorf(status.ErrInvalidArgument, "Error unmarshalling telemetryLabels: %w", err)
 		}
 		ctx = tracing.WithTelemetryLabels(ctx, telemetryAttributes)
 	}
@@ -770,7 +771,7 @@ func runAction(ctx context.Context, g *Genkit, key string, input, init json.RawM
 func checkInitSupported(a api.Action, init json.RawMessage) error {
 	if base.HasJSONValue(init) {
 		if _, ok := a.(api.BidiAction); !ok {
-			return core.NewError(core.INVALID_ARGUMENT, "action %q does not accept init", a.Name())
+			return status.Errorf(status.ErrInvalidArgument, "action %q does not accept init", a.Name())
 		}
 	}
 	return nil
