@@ -61,7 +61,10 @@ agents/
     agent.ts          # optional code override: (config) => config
 ```
 
-A tool file:
+A tool file - `defineDirTool` takes exactly `ai.defineTool`'s `(config, fn)`
+arguments, with `name` optional (defaults to the filename). The fn receives
+the standard second argument: `ctx.context` (ambient ActionContext, e.g.
+auth), `ctx.interrupt()` (human-in-the-loop pause), `ctx.resumed`:
 
 ```ts
 import { defineDirTool } from '@genkit-ai/agent-dirs';
@@ -73,8 +76,27 @@ export default defineDirTool(
     inputSchema: z.object({ orderId: z.string() }),
     outputSchema: z.object({ status: z.string() }),
   },
-  async ({ orderId }) => ({ status: `Order ${orderId} has shipped` })
+  async ({ orderId }, ctx) => {
+    if (!ctx.context.auth) ctx.interrupt({ reason: 'auth required' });
+    return { status: `Order ${orderId} has shipped` };
+  }
 );
+```
+
+Prefer the fully native API? A tool file may instead default-export a
+factory - the escape hatch for the full `defineTool` surface (multipart,
+custom metadata) or definition-time registry access. The factory owns the
+tool's name (no automatic `agent-dirs/<agent>/` namespacing):
+
+```ts
+import type { GenkitBeta } from 'genkit/beta';
+import { z } from 'genkit';
+
+export default (ai: GenkitBeta) =>
+  ai.defineTool(
+    { name: 'checkStock', description: '...', inputSchema: z.object({}) },
+    async () => 'in stock'
+  );
 ```
 
 ## How it compiles
