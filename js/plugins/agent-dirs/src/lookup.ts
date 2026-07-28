@@ -49,9 +49,10 @@ export async function directoryAgent<State = unknown>(
         `directory under the plugin's 'dir' and does it contain agent.prompt?`
     );
   }
-  if (typeof (action as unknown as Partial<Agent<State>>).chat !== 'function') {
+  if (action.__action.actionType !== 'agent') {
     throw new Error(
-      `[agent-dirs] action '/agent/${name}' is not an agent (no chat method).`
+      `[agent-dirs] action '/agent/${name}' is not an agent ` +
+        `(actionType: ${action.__action.actionType}).`
     );
   }
   return action as unknown as Agent<State>;
@@ -66,8 +67,7 @@ export async function listAgents(ai: Genkit): Promise<Record<string, Agent>> {
   const agents: Record<string, Agent> = {};
   for (const [key, action] of Object.entries(actions)) {
     if (!key.startsWith('/agent/')) continue;
-    if (typeof (action as unknown as Partial<Agent>).chat !== 'function')
-      continue;
+    if (action.__action.actionType !== 'agent') continue;
     agents[key.slice('/agent/'.length)] = action as unknown as Agent;
   }
   return agents;
