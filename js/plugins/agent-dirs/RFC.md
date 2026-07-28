@@ -1,44 +1,75 @@
-# RFC: agent-dirs - a directory convention for Genkit agents
+# [Draft] RFC: agent-dirs - a directory convention for Genkit agents
 
-- Status: retrospective RFC. Written after building the prototype in this
-  package, so the claims below describe what the code actually does, not a
-  proposal on paper.
+- Status: retrospective RFC. Written after building the prototype, so the
+  claims below describe what the code actually does, not a proposal on paper.
 - Artifacts: `@genkit-ai/agent-dirs` (this package), `testapps/agent-dirs-demo`,
   [FRICTION.md](./FRICTION.md) (API gaps hit along the way, with file:line
   evidence).
 
 ## Summary
 
-An agent is a directory. `agents/<name>/` compiles to one
-`ai.defineAgent(...)` call: `agent.prompt` supplies model, config and system
-prompt; `tools/*.ts` supply tools; `skills/` and `knowledge/` folders and the
-`delegates:` / `requireApproval:` frontmatter keys each compile to an entry
-on the standard `use: [...]` chain. `serveAgents(ai)` exposes every
-registered agent over HTTP in the contract `remoteAgent` already expects.
+An agent is a directory. To test how far Genkit already supports that model,
+we built a thin compiler from files to existing primitives - registry,
+dotprompt, the beta agents API, `@genkit-ai/middleware` - and ran it end to
+end on Vertex AI: tools, skills, knowledge, delegation, approval gating,
+snapshot resume over HTTP. It mostly just worked, which is the point: the
+middleware catalog maps almost one-to-one onto folder-per-capability, and
+every compiled agent can be written by hand in roughly ten lines, so the
+convention adds no runtime and locks nobody in.
 
-The convention adds no runtime. It is a compiler from files to existing
-primitives (registry, dotprompt, the beta agents API, `@genkit-ai/middleware`),
-and every compiled agent can be written by hand in roughly ten lines, so
-adopting the convention never locks anyone in.
+Where it didn't just work, the gaps were small and specific, and they're the
+substance of this RFC and the associated friction log: agent HTTP serving is
+hand-rolled per agent today, agents can't be looked up by name, `AgentConfig`
+isn't exported, and there's no session-store default that survives
+deployment.
+
+Concretely, `agents/<name>/` compiles to one `ai.defineAgent(...)` call:
+`agent.prompt` supplies model, config and system prompt; `tools/*.ts` supply
+tools; `skills/` and `knowledge/` folders and the `delegates:` /
+`requireApproval:` frontmatter keys each compile to an entry on the standard
+`use: [...]` chain; `serveAgents(ai)` exposes every registered agent over
+HTTP in the contract `remoteAgent` already expects.
 
 ## Motivation
 
-Frameworks like Vercel's eve have shown there is real demand for
-"agent = directory of files, one folder per capability": non-engineers edit
-prompts, skills and knowledge as markdown, engineers add tools as single
-files, deployment is one command. Genkit already has the underlying
-capability layer, and the middleware catalog maps almost one-to-one onto the
-folder-per-capability model. What's missing is the convention wiring files
-to it, plus a few last pieces: agent HTTP serving, agent lookup by name, a
-store default that survives deployment.
+The agent-as-directory model stopped being one vendor's idea in a single
+week of June 2026. On June 12, Google Cloud published the Open Knowledge
+Format, formalizing the LLM-wiki pattern: knowledge as a directory of
+markdown files with YAML frontmatter, no runtime, no SDK. It shipped inside
+Knowledge Catalog, with a second version following within six weeks. Five
+days later, Vercel launched eve on the thesis that the entire agent is a
+directory: one folder per capability, prompts and skills as markdown for
+non-engineers, tools as single TypeScript files, deployment as one command.
+Anthropic's SKILL.md had already become a de facto cross-agent standard by
+then, with the same skill folders working unchanged across Claude Code,
+OpenClaw, and Codex. Three organizations converged independently on "the
+agent is what's on disk," each standardizing a different layer of it.
 
-The serving gap is one of aggregation, not documentation: the documented
-path (genkit.dev/docs/js/agents/http) is hand-writing three `expressHandler`
-routes per agent (primary, `/getSnapshot`, `/abort`) to match the URL
-contract `remoteAgent` expects (`js/genkit/src/client/agent.ts:53-91`).
-`startFlowServer` is flows-only, so there is no helper for this;
-`testapps/agents/src/index.ts:126-141` and this package's demo each ended up
-hand-rolling the same wiring the docs show.
+The demand signal is measurable and attaches to the authoring model
+specifically. Eve reached 3.9k GitHub stars within six weeks of launch, and
+its reception has centred on the directory convention rather than the
+runtime, which Genkit's middleware catalog already covers almost one-to-one.
+Meanwhile the most common published criticism of eve is that production
+usage is tied to Vercel's platform. Genkit is positioned to be the open
+counterpart: the capability layer exists, Cloud Run deployment exists, and,
+via OKF, the knowledge layer of this convergence is already a Google
+standard looking for an agent framework that executes it. This convention
+deliberately adopts all three existing contracts (dotprompt, SKILL.md, OKF)
+rather than inventing a fourth. The distance from Genkit today to the full
+directory model turned out to be one thin compiler plus three or four small
+first-party pieces: agent HTTP serving, agent lookup by name, and a
+session-store default that survives deployment.
+
+The largest of those is serving, and the gap is one of aggregation, not
+documentation. The documented path (genkit.dev/docs/js/agents/http) is
+hand-writing three `expressHandler` routes per agent (primary,
+`/getSnapshot`, `/abort`) to match the URL contract `remoteAgent` expects
+(`js/genkit/src/client/agent.ts:53-91`). `startFlowServer` is flows-only, so
+no helper exists, and the cost shows inside the repo itself:
+`testapps/agents/src/index.ts:126-141` hand-rolls exactly the wiring the
+docs describe, and this package's demo had to do the same. The remaining
+gaps are itemised with file:line evidence in [FRICTION.md](./FRICTION.md)
+and addressed in priority order under "Possible upstreaming."
 
 ## Design decisions (and what the prototype showed)
 
@@ -77,7 +108,7 @@ agents/
   support/
     agent.prompt        # dotprompt; template = system prompt (single message)
     tools/*.ts          # defineDirTool({config}, fn) or (ai) => ai.defineTool(...)
-    skills/<n>/SKILL.md # -> skills middleware (use_skill, progressive disclosure)
+    skills/<name>/SKILL.md # -> skills middleware (use_skill, progressive disclosure)
     knowledge/*.md      # OKF bundle -> okfKnowledge middleware (lookup_knowledge)
     agent.ts            # optional override: (config) => config
 ```
@@ -176,11 +207,3 @@ what we think closes the biggest gaps:
   (currently warned and ignored).
 - Channel adapters (Slack, cron). Out of scope here; `serveAgents`' `app`
   option is the seam.
-
-## References
-
-- [FRICTION.md](./FRICTION.md), verified API gaps with file:line evidence.
-- [README.md](./README.md), the convention reference and hand-written
-  equivalent.
-- Vercel eve (agent-as-directory prior art); Google Cloud OKF spec;
-  `js/plugins/middleware`.
