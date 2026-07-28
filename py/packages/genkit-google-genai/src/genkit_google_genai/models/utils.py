@@ -127,13 +127,13 @@ class PartConverter:
         if isinstance(part.root, ToolRequestPart):
             # Round-trip the call id when we have one so the model can correlate
             # tool responses to the original request.
-            function_call = genai.types.FunctionCall(
-                # Gemini throws on '/' in tool name
-                name=part.root.tool_request.name.replace('/', '__'),
-                args=part.root.tool_request.input,
-            )
+            fc_args = {
+                'name': part.root.tool_request.name.replace('/', '__'),
+                'args': part.root.tool_request.input,
+            }
             if part.root.tool_request.ref:
-                function_call.id = part.root.tool_request.ref
+                fc_args['id'] = part.root.tool_request.ref
+            function_call = genai.types.FunctionCall(**fc_args)
             return genai.types.Part(
                 function_call=function_call,
                 thought_signature=cls._extract_thought_signature(part.root.metadata),
