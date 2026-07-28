@@ -74,12 +74,8 @@ func TestInMemoryStreamManager_OpenDuplicateFails(t *testing.T) {
 		t.Fatal("Expected error when opening duplicate stream")
 	}
 
-	var ufErr *core.UserFacingError
-	if !errors.As(err, &ufErr) {
-		t.Fatalf("Expected UserFacingError, got %T", err)
-	}
-	if ufErr.Status != core.ALREADY_EXISTS {
-		t.Errorf("Expected ALREADY_EXISTS status, got %v", ufErr.Status)
+	if !errors.Is(err, ErrStreamExists) {
+		t.Errorf("error = %v, want one matching ErrStreamExists", err)
 	}
 }
 
@@ -94,12 +90,8 @@ func TestInMemoryStreamManager_SubscribeNonExistent(t *testing.T) {
 		t.Fatal("Expected error when subscribing to non-existent stream")
 	}
 
-	var ufErr *core.UserFacingError
-	if !errors.As(err, &ufErr) {
-		t.Fatalf("Expected UserFacingError, got %T", err)
-	}
-	if ufErr.Status != core.NOT_FOUND {
-		t.Errorf("Expected NOT_FOUND status, got %v", ufErr.Status)
+	if !errors.Is(err, ErrStreamNotFound) {
+		t.Errorf("error = %v, want one matching ErrStreamNotFound", err)
 	}
 }
 
@@ -260,12 +252,10 @@ func TestInMemoryStreamManager_WriteAfterDone(t *testing.T) {
 		t.Fatal("Expected error when writing after done")
 	}
 
-	var ufErr *core.UserFacingError
-	if !errors.As(err, &ufErr) {
-		t.Fatalf("Expected UserFacingError, got %T", err)
-	}
-	if ufErr.Status != core.FAILED_PRECONDITION {
-		t.Errorf("Expected FAILED_PRECONDITION status, got %v", ufErr.Status)
+	// Done closes the writer, so a later write reports the closed writer rather
+	// than the completed stream. Both are FAILED_PRECONDITION.
+	if !errors.Is(err, ErrStreamClosed) {
+		t.Errorf("error = %v, want one matching ErrStreamClosed", err)
 	}
 }
 
@@ -291,12 +281,8 @@ func TestInMemoryStreamManager_WriteAfterClose(t *testing.T) {
 		t.Fatal("Expected error when writing after close")
 	}
 
-	var ufErr *core.UserFacingError
-	if !errors.As(err, &ufErr) {
-		t.Fatalf("Expected UserFacingError, got %T", err)
-	}
-	if ufErr.Status != core.FAILED_PRECONDITION {
-		t.Errorf("Expected FAILED_PRECONDITION status, got %v", ufErr.Status)
+	if !errors.Is(err, ErrStreamClosed) {
+		t.Errorf("error = %v, want one matching ErrStreamClosed", err)
 	}
 }
 
@@ -692,12 +678,8 @@ func TestInMemoryStreamManager_CleanupExpiredStreams(t *testing.T) {
 		t.Fatal("Expected error subscribing to expired stream")
 	}
 
-	var ufErr *core.UserFacingError
-	if !errors.As(err, &ufErr) {
-		t.Fatalf("Expected UserFacingError, got %T", err)
-	}
-	if ufErr.Status != core.NOT_FOUND {
-		t.Errorf("Expected NOT_FOUND status, got %v", ufErr.Status)
+	if !errors.Is(err, ErrStreamNotFound) {
+		t.Errorf("error = %v, want one matching ErrStreamNotFound", err)
 	}
 }
 
@@ -748,12 +730,8 @@ func TestInMemoryStreamManager_ErrorAfterClose(t *testing.T) {
 		t.Fatal("Expected error when calling Error after Close")
 	}
 
-	var ufErr *core.UserFacingError
-	if !errors.As(err, &ufErr) {
-		t.Fatalf("Expected UserFacingError, got %T", err)
-	}
-	if ufErr.Status != core.FAILED_PRECONDITION {
-		t.Errorf("Expected FAILED_PRECONDITION status, got %v", ufErr.Status)
+	if !errors.Is(err, ErrStreamClosed) {
+		t.Errorf("error = %v, want one matching ErrStreamClosed", err)
 	}
 }
 
@@ -779,11 +757,7 @@ func TestInMemoryStreamManager_DoneAfterClose(t *testing.T) {
 		t.Fatal("Expected error when calling Done after Close")
 	}
 
-	var ufErr *core.UserFacingError
-	if !errors.As(err, &ufErr) {
-		t.Fatalf("Expected UserFacingError, got %T", err)
-	}
-	if ufErr.Status != core.FAILED_PRECONDITION {
-		t.Errorf("Expected FAILED_PRECONDITION status, got %v", ufErr.Status)
+	if !errors.Is(err, ErrStreamClosed) {
+		t.Errorf("error = %v, want one matching ErrStreamClosed", err)
 	}
 }

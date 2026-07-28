@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
 )
@@ -522,12 +523,12 @@ func (c *BidiConnection[In, Out, Stream]) run(name string, fn func(context.Conte
 
 // ErrConnectionClosed indicates a Send on a connection whose input side
 // was closed with [BidiConnection.Close]. Test with [errors.Is].
-var ErrConnectionClosed = errors.New("connection is closed")
+var ErrConnectionClosed = status.ErrFailedPrecondition.Subtype("connection is closed")
 
 // ErrActionCompleted indicates a Send on a connection whose action has
 // already returned. Test with [errors.Is]; the action's result is
 // available via [BidiConnection.Output].
-var ErrActionCompleted = errors.New("action has completed")
+var ErrActionCompleted = status.ErrFailedPrecondition.Subtype("action has completed")
 
 // Send sends an input message to the bidi action. It blocks until the action
 // reads the message (backpressure), the connection is cancelled, or the

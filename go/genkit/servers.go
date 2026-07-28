@@ -357,8 +357,7 @@ func runWithDurableStreaming(ctx context.Context, w http.ResponseWriter, run run
 func subscribeToStream(ctx context.Context, w http.ResponseWriter, sm streaming.StreamManager, streamID string) error {
 	events, unsubscribe, err := sm.Subscribe(ctx, streamID)
 	if err != nil {
-		var ufErr *core.UserFacingError
-		if errors.As(err, &ufErr) && ufErr.Status == core.NOT_FOUND {
+		if errors.Is(err, streaming.ErrStreamNotFound) {
 			w.WriteHeader(http.StatusNoContent)
 			return nil
 		}
