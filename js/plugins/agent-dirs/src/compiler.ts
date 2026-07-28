@@ -346,13 +346,17 @@ function validateFrontmatter(
     }
   }
   const delegates = (frontmatter.delegates as string[] | undefined) ?? [];
+  // A delegate that isn't a sibling directory may still be a code-registered
+  // agent (registry contents aren't knowable at compile time), so this warns
+  // rather than fails; the delegation middleware resolves names at runtime.
   const unknownDelegates = delegates.filter((d) => !siblingAgents.includes(d));
   if (unknownDelegates.length > 0) {
-    fail(
-      `'delegates' names unknown agents [${unknownDelegates.join(', ')}] - ` +
-        `agent directories found: [${siblingAgents.join(', ')}]`
+    logger.warn(
+      `[agent-dirs] 'delegates' includes [${unknownDelegates.join(', ')}] ` +
+        `which are not agent directories (found: [${siblingAgents.join(', ')}]) - ` +
+        `assuming they are registered in code; a typo here will only fail ` +
+        `at delegation time`
     );
-    return undefined;
   }
   return frontmatter;
 }
