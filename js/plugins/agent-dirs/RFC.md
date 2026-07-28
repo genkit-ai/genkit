@@ -32,10 +32,13 @@ folder-per-capability model. What's missing is the convention wiring files
 to it, plus a few last pieces: agent HTTP serving, agent lookup by name, a
 store default that survives deployment.
 
-The serving gap is visible in-tree: `testapps/agents/src/index.ts:126-141`
-and this package's demo independently hand-rolled the same routes, and the
-`remoteAgent` client (`js/genkit/src/client/agent.ts:53-91`) hard-codes a
-server URL contract that no first-party server implements.
+The serving gap is one of aggregation, not documentation: the documented
+path (genkit.dev/docs/js/agents/http) is hand-writing three `expressHandler`
+routes per agent (primary, `/getSnapshot`, `/abort`) to match the URL
+contract `remoteAgent` expects (`js/genkit/src/client/agent.ts:53-91`).
+`startFlowServer` is flows-only, so there is no helper for this;
+`testapps/agents/src/index.ts:126-141` and this package's demo each ended up
+hand-rolling the same wiring the docs show.
 
 ## Design decisions (and what the prototype showed)
 
@@ -145,9 +148,12 @@ separable, and we're happy to pare back or drop any of them. Ordered by
 what we think closes the biggest gaps:
 
 1. An agent server in `@genkit-ai/express` (`startAgentServer()` or an
-   `agents:` option on `startFlowServer`). `serveAgents` here is a candidate
-   implementation. This closes the client/server contract gap for every
-   agents user, convention or not.
+   `agents:` option on `startFlowServer`). The documented path today
+   (genkit.dev/docs/js/agents/http) is three hand-written `expressHandler`
+   routes per agent; a helper collapses that to one call and adds what the
+   docs currently leave out (CORS with `X-Genkit-Stream-Id` exposed,
+   optional stream-manager wiring). `serveAgents` here is a candidate
+   implementation. Relevant to every agents user, convention or not.
 2. `ai.agent(name)` on `GenkitBeta`, mirroring `ai.prompt(name)`, plus typed
    agent enumeration, and exporting `AgentConfig` from `genkit/beta`.
 3. `okfKnowledge` into `@genkit-ai/middleware` next to `skills`.

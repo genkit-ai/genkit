@@ -14,13 +14,15 @@ list, no registry discovery, `express/src/index.ts:379-403`), fastify/next
 are per-action handlers, and nothing wires an agent's companion actions
 (`getSnapshotDataAction`, `abortAgentAction`).
 
-That this is a gap rather than a design choice is visible in the client: the
-first-party `remoteAgent` hard-codes a server URL contract - `${url}`,
-`${url}/getSnapshot`, `${url}/abort` (`js/genkit/src/client/agent.ts:53-91`)
-- that no first-party server implements. Both the upstream agents testapp
-(`testapps/agents/src/index.ts:126-141`, `exposeAgent()`) and this package's
-demo independently hand-rolled the same routes before we extracted
-`serveAgents()` (`src/server.ts`). Likely rationale is release staging
+The contract itself is documented: genkit.dev/docs/js/agents/http tells
+users to hand-write the three `expressHandler` routes per agent (primary,
+`/getSnapshot`, `/abort`) matching the URLs `remoteAgent` defaults to
+(`js/genkit/src/client/agent.ts:53-91`). The gap is that this per-agent
+boilerplate is the blessed path - no helper exists, and the docs don't
+cover CORS (including exposing `X-Genkit-Stream-Id` for durable streams).
+Both the upstream agents testapp (`testapps/agents/src/index.ts:126-141`,
+`exposeAgent()`) and this package's demo independently hand-rolled the same
+wiring before we extracted `serveAgents()` (`src/server.ts`). Likely rationale is release staging
 (agents are beta, `@genkit-ai/express` is stable), not opinionation.
 
 Related trap: durable stream reconnects need `X-Genkit-Stream-Id` in
