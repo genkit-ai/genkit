@@ -179,6 +179,7 @@ func (d *DashScope) Init(ctx context.Context) []api.Action {
 	}
 
 	// initialize OpenAICompatible
+	d.openAICompatible.Provider = provider
 	d.openAICompatible.Opts = d.Opts
 	compatActions := d.openAICompatible.Init(ctx)
 
