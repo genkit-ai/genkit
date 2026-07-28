@@ -2,8 +2,7 @@
 
 - Status: **retrospective RFC** - written after building the experimental
   prototype in this package, so every design claim below is backed by
-  working code, a live demo, and two adversarial reviews rather than
-  speculation.
+  working code and a live demo rather than speculation.
 - Artifacts: `@genkit-ai/agent-dirs` (this package), `testapps/agent-dirs-demo`,
   [FRICTION.md](./FRICTION.md) (API gaps hit along the way).
 
