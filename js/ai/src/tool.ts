@@ -516,11 +516,18 @@ export function defineInterrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
 }
 
 /**
- * Thrown when tools execution is interrupted. It's meant to be caugh by the framework, not public API.
+ * Thrown when tool execution is interrupted. Intended to be caught by the
+ * generate loop as a yield mechanism, but may also surface when tools are
+ * invoked outside of generate (e.g. manually or via the Dev UI), so the error
+ * includes a message for debugging and logging.
  */
 export class ToolInterruptError extends Error {
   constructor(readonly metadata?: Record<string, any>) {
-    super();
+    const message =
+      metadata !== undefined
+        ? `tool execution interrupted: \n\n${JSON.stringify(metadata, null, 2)}`
+        : 'tool execution interrupted';
+    super(message);
     this.name = 'ToolInterruptError';
   }
 }
