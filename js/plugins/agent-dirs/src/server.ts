@@ -31,6 +31,7 @@ import { expressHandler } from '@genkit-ai/express';
 import cors, { type CorsOptions } from 'cors';
 import express from 'express';
 import type { Genkit } from 'genkit';
+import type { StreamManager } from 'genkit/beta';
 import { logger } from 'genkit/logging';
 import type { Server } from 'node:http';
 import { listAgents } from './lookup.js';
@@ -49,6 +50,12 @@ export interface ServeAgentsOptions {
    * caller owns the app lifecycle.
    */
   app?: express.Express;
+  /**
+   * Stream manager enabling durable stream reconnects (the client re-attaches
+   * to an in-flight turn via the `X-Genkit-Stream-Id` header). Without one,
+   * streams are plain per-request SSE.
+   */
+  streamManager?: StreamManager;
 }
 
 /** The result of {@link serveAgents}. */
@@ -86,8 +93,9 @@ export async function serveAgents(
   const app = options.app ?? express();
   if (!options.app) {
     app.use(express.json());
-    // Durable stream reconnects require the client to read the
-    // X-Genkit-Stream-Id response header, so it must be CORS-exposed.
+    // Durable stream reconnects (streamManager option) require the client to
+    // read the X-Genkit-Stream-Id response header, so it is CORS-exposed by
+    // default.
     app.use(
       cors(
         options.cors ?? {
@@ -98,9 +106,12 @@ export async function serveAgents(
     );
   }
 
+  const handlerOpts = options.streamManager
+    ? { streamManager: options.streamManager }
+    : undefined;
   const prefix = (options.pathPrefix ?? '/api').replace(/\/+$/, '');
   for (const [name, agent] of Object.entries(agents)) {
-    app.post(`${prefix}/${name}`, expressHandler(agent));
+    app.post(`${prefix}/${name}`, expressHandler(agent, handlerOpts));
     app.post(
       `${prefix}/${name}/getSnapshot`,
       expressHandler(agent.getSnapshotDataAction)

@@ -22,6 +22,10 @@
  * names it injects. The compiled agent is then just prompt fields + directory
  * tools + the contributed middleware stack. See {@link CAPABILITIES}.
  *
+ * Authoring errors fail loudly by default (`strict: true`): a broken file
+ * aborts registration with a pointed error instead of silently degrading the
+ * agent. Set `strict: false` to warn-and-skip instead.
+ *
  * @module @genkit-ai/agent-dirs/compiler
  */
 
@@ -52,6 +56,13 @@ export interface AgentDirsOptions {
    * Default `./.genkit/agent-snapshots`.
    */
   snapshotDir?: string;
+  /**
+   * When `true` (the default), authoring errors - unparseable frontmatter,
+   * broken tool files, unknown `requireApproval`/`delegates` names - throw at
+   * plugin initialization. When `false`, they log a warning and the broken
+   * piece is skipped.
+   */
+  strict?: boolean;
 }
 
 /** A parsed `agent.prompt` file. */
@@ -61,6 +72,30 @@ type ParsedPrompt = ReturnType<GenkitBeta['registry']['dotprompt']['parse']>;
 type Frontmatter = Record<string, unknown>;
 
 type MiddlewareEntry = NonNullable<CompiledAgentConfig['use']>[number];
+
+/**
+ * Dotprompt's own reserved frontmatter keys plus this convention's. Bare keys
+ * outside this set are warned about (dotprompt gives them no diagnostics).
+ */
+const KNOWN_FRONTMATTER_KEYS = new Set([
+  // dotprompt reserved
+  'name',
+  'variant',
+  'version',
+  'description',
+  'model',
+  'tools',
+  'toolDefs',
+  'config',
+  'input',
+  'output',
+  'metadata',
+  'raw',
+  'ext',
+  // agent-dirs convention
+  'delegates',
+  'requireApproval',
+]);
 
 /**
  * What one capability adds to an agent: a middleware for the `use` chain, the
@@ -106,10 +141,10 @@ const knowledgeCapability: Capability = (agentPath) => {
 
 /** Frontmatter `delegates: [agent]` -> agents (delegation) middleware. */
 const delegatesCapability: Capability = (_agentPath, frontmatter) => {
-  const delegates = stringList(frontmatter.delegates);
-  if (delegates.length === 0) return undefined;
+  const delegates = frontmatter.delegates as string[] | undefined;
+  if (!delegates || delegates.length === 0) return undefined;
   return {
-    label: `${delegates.length} delegates`,
+    label: `delegates [${delegates.join(', ')}]`,
     middleware: delegateToAgents({ agents: delegates }),
     toolNames: delegates.map((d) => `delegate_to_${d}`),
   };
@@ -117,33 +152,14 @@ const delegatesCapability: Capability = (_agentPath, frontmatter) => {
 
 /**
  * Every capability the convention knows. Order matters only for middleware
- * execution order. Tool gating (`requireApproval`) is applied after these, in
- * {@link approvalContribution}, because it needs the union of all tool names.
+ * execution order. Tool gating (`requireApproval`) is applied after the
+ * `agent.ts` override, because it needs the final tool set.
  */
 const CAPABILITIES: Capability[] = [
   skillsCapability,
   knowledgeCapability,
   delegatesCapability,
 ];
-
-/**
- * Frontmatter `requireApproval: [toolName]` -> toolApproval middleware. The
- * middleware takes an allow-list, so the approved set is the complement:
- * every model-visible tool name the agent has that is not listed.
- */
-function approvalContribution(
-  frontmatter: Frontmatter,
-  allToolNames: string[]
-): Pick<CapabilityContribution, 'label' | 'middleware'> | undefined {
-  const gated = stringList(frontmatter.requireApproval);
-  if (gated.length === 0) return undefined;
-  return {
-    label: 'tool approval',
-    middleware: toolApproval({
-      approved: allToolNames.filter((n) => !gated.includes(n)),
-    }),
-  };
-}
 
 /**
  * Scans `options.dir` and registers one agent per sub-directory. See the
@@ -158,52 +174,68 @@ export async function compileAgentDirs(
     logger.warn(`[agent-dirs] agents directory not found: ${rootDir}`);
     return;
   }
-  for (const entry of readdirSync(rootDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    await compileAgentDir(
-      ai,
-      path.join(rootDir, entry.name),
-      entry.name,
-      options
-    );
+  const agentNames = readdirSync(rootDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name);
+  for (const name of agentNames) {
+    await compileAgentDir(ai, path.join(rootDir, name), name, {
+      options,
+      siblingAgents: agentNames,
+    });
   }
+}
+
+interface CompileContext {
+  options: AgentDirsOptions;
+  siblingAgents: string[];
 }
 
 async function compileAgentDir(
   ai: GenkitBeta,
   agentPath: string,
   agentName: string,
-  options: AgentDirsOptions
+  ctx: CompileContext
 ): Promise<void> {
-  const parsed = parseAgentPrompt(ai, agentPath, agentName);
-  if (!parsed) return;
-  const frontmatter: Frontmatter = (parsed.raw ?? {}) as Frontmatter;
+  const strict = ctx.options.strict ?? true;
+  const fail = (message: string): false => {
+    const full = `[agent-dirs] agent '${agentName}': ${message}`;
+    if (strict) throw new Error(full);
+    logger.warn(`${full} - skipping`);
+    return false;
+  };
 
-  const tools = await loadTools(ai, path.join(agentPath, 'tools'), agentName);
+  const parsed = parseAgentPrompt(ai, agentPath, agentName, fail);
+  if (!parsed) return;
+
+  const frontmatter = validateFrontmatter(
+    (parsed.raw ?? {}) as Frontmatter,
+    ctx.siblingAgents,
+    fail
+  );
+  if (!frontmatter) return;
+
+  if (/\{\{\s*(role|history)\b/.test(parsed.template)) {
+    fail(
+      `agent.prompt template is used as the agent's system prompt; ` +
+        `multi-message templates ({{role}}/{{history}}) are not supported here`
+    );
+    return;
+  }
+
+  const tools = await loadTools(ai, path.join(agentPath, 'tools'), agentName, {
+    strict,
+  });
+  if (tools === undefined) return; // strict=false tool failure already logged
 
   const contributed = CAPABILITIES.map((capability) =>
     capability(agentPath, frontmatter)
   ).filter((c): c is CapabilityContribution => c !== undefined);
 
-  const use = contributed.map((c) => c.middleware);
-  const labels = contributed.map((c) => c.label);
-
-  const modelVisibleTools = [
-    ...tools.map((t) => shortName(t.__action.name)),
-    ...(parsed.tools ?? []).map(shortName),
-    ...contributed.flatMap((c) => c.toolNames),
-  ];
-  const approval = approvalContribution(frontmatter, modelVisibleTools);
-  if (approval) {
-    use.push(approval.middleware);
-    labels.push(approval.label);
-  }
-
   let config = assembleConfig(parsed, {
     agentName,
     tools,
-    use,
-    store: resolveStore(agentName, options),
+    use: contributed.map((c) => c.middleware),
+    store: resolveStore(agentName, ctx.options),
   });
 
   const override = await loadOverride(agentPath);
@@ -211,34 +243,118 @@ async function compileAgentDir(
     config = await override(config);
   }
 
+  // Tool gating is applied to the FINAL config (post-override), so tools an
+  // override adds or removes are gated correctly.
+  const gated = (frontmatter.requireApproval as string[] | undefined) ?? [];
+  if (gated.length > 0) {
+    const known = finalToolNames(config, contributed);
+    const unknown = gated.filter((g) => !known.includes(g));
+    if (unknown.length > 0) {
+      fail(
+        `requireApproval names unknown tools [${unknown.join(', ')}] - ` +
+          `known model-visible tool names: [${known.join(', ')}]. ` +
+          `Approval gating is fail-closed, so this is an error.`
+      );
+      return;
+    }
+    config = {
+      ...config,
+      use: [
+        ...(config.use ?? []),
+        toolApproval({ approved: known.filter((n) => !gated.includes(n)) }),
+      ],
+    };
+  }
+
+  // A same-named agent (or prompt) registered by user code would be silently
+  // clobbered by the registry - detect and refuse instead.
+  if (await ai.registry.lookupAction(`/agent/${config.name}`)) {
+    fail(
+      `an action '/agent/${config.name}' is already registered - ` +
+        `rename the directory or the conflicting defineAgent call`
+    );
+    return;
+  }
+
   ai.defineAgent(config);
-  logger.info(
-    `[agent-dirs] registered agent '${config.name}' ` +
-      `(${[`${tools.length} tools`, ...labels].join(', ')})`
-  );
+  logSummary(agentPath, config.name, tools, contributed, gated);
 }
 
-/** Reads and parses `agent.prompt`; warns and skips the agent on failure. */
+/**
+ * Reads and parses `agent.prompt`. Detects dotprompt's silent YAML-error
+ * fallback (it logs to console and returns the whole file - fence included -
+ * as the template with empty metadata), which would otherwise become a
+ * garbage system prompt.
+ */
 function parseAgentPrompt(
   ai: GenkitBeta,
   agentPath: string,
-  agentName: string
+  agentName: string,
+  fail: (message: string) => false
 ): ParsedPrompt | undefined {
   const promptFile = path.join(agentPath, 'agent.prompt');
   if (!existsSync(promptFile)) {
-    logger.warn(
-      `[agent-dirs] skipping '${agentName}': no agent.prompt in ${agentPath}`
-    );
+    fail(`no agent.prompt in ${agentPath}`);
     return undefined;
   }
+  const source = readFileSync(promptFile, 'utf8');
+  let parsed: ParsedPrompt;
   try {
-    return ai.registry.dotprompt.parse(readFileSync(promptFile, 'utf8'));
+    parsed = ai.registry.dotprompt.parse(source);
   } catch (e) {
-    logger.warn(
-      `[agent-dirs] skipping '${agentName}': failed to parse ${promptFile}: ${e}`
+    fail(`failed to parse ${promptFile}: ${e}`);
+    return undefined;
+  }
+  if (parsed.template.trimStart().startsWith('---')) {
+    fail(
+      `frontmatter in ${promptFile} failed to parse (invalid YAML?) - ` +
+        `dotprompt fell back to treating the whole file as the template`
     );
     return undefined;
   }
+  return parsed;
+}
+
+/**
+ * Validates the convention's custom frontmatter keys (types and referenced
+ * names) and warns on unknown bare keys, which dotprompt never diagnoses.
+ * Returns the frontmatter with `delegates`/`requireApproval` normalized to
+ * string arrays, or undefined if validation failed.
+ */
+function validateFrontmatter(
+  frontmatter: Frontmatter,
+  siblingAgents: string[],
+  fail: (message: string) => false
+): Frontmatter | undefined {
+  for (const key of Object.keys(frontmatter)) {
+    if (!KNOWN_FRONTMATTER_KEYS.has(key)) {
+      logger.warn(
+        `[agent-dirs] unknown frontmatter key '${key}' in agent.prompt ` +
+          `(known custom keys: delegates, requireApproval) - ignoring`
+      );
+    }
+  }
+  for (const key of ['delegates', 'requireApproval'] as const) {
+    const value = frontmatter[key];
+    if (value === undefined) continue;
+    if (
+      !Array.isArray(value) ||
+      value.some((v) => typeof v !== 'string')
+    ) {
+      fail(`frontmatter '${key}' must be a list of strings`);
+      return undefined;
+    }
+  }
+  const delegates = (frontmatter.delegates as string[] | undefined) ?? [];
+  const unknownDelegates = delegates.filter((d) => !siblingAgents.includes(d));
+  if (unknownDelegates.length > 0) {
+    fail(
+      `'delegates' names unknown agents [${unknownDelegates.join(', ')}] - ` +
+        `agent directories found: [${siblingAgents.join(', ')}]`
+    );
+    return undefined;
+  }
+  return frontmatter;
 }
 
 function assembleConfig(
@@ -254,16 +370,50 @@ function assembleConfig(
     parsed.config && typeof parsed.config === 'object'
       ? (parsed.config as Record<string, unknown>)
       : undefined;
+  if (parsed.input || parsed.output) {
+    logger.warn(
+      `[agent-dirs] agent '${compiled.agentName}': 'input'/'output' ` +
+        `frontmatter is not yet supported by agent-dirs and is ignored`
+    );
+  }
+  const system = parsed.template.trim();
   return {
     name: compiled.agentName,
     ...(parsed.description && { description: parsed.description }),
     ...(parsed.model && { model: parsed.model }),
     ...(modelConfig && { config: modelConfig }),
-    system: parsed.template.trim(),
+    // An empty template (frontmatter-only file) means "no system prompt",
+    // typically because an agent.ts override supplies one.
+    ...(system && { system }),
     tools: [...compiled.tools, ...(parsed.tools ?? [])],
     ...(compiled.use.length > 0 ? { use: compiled.use } : {}),
     store: compiled.store,
   };
+}
+
+/**
+ * Model-visible tool names of the final (post-override) config: directory and
+ * frontmatter tools by short name, plus names injected by whichever
+ * capability middlewares survived the override.
+ */
+function finalToolNames(
+  config: CompiledAgentConfig,
+  contributed: CapabilityContribution[]
+): string[] {
+  const names = new Set<string>();
+  for (const tool of config.tools ?? []) {
+    if (typeof tool === 'string') {
+      names.add(shortName(tool));
+    } else if (typeof tool === 'object' && tool !== null && '__action' in tool) {
+      names.add(shortName((tool as RegisteredTool).__action.name));
+    }
+  }
+  for (const contribution of contributed) {
+    if (config.use?.includes(contribution.middleware)) {
+      contribution.toolNames.forEach((n) => names.add(n));
+    }
+  }
+  return [...names];
 }
 
 function resolveStore(
@@ -278,13 +428,90 @@ function resolveStore(
   );
 }
 
+/**
+ * One registration summary per agent, listing exactly what was compiled -
+ * the difference between a working agent and a quietly degraded one should
+ * be visible in the log.
+ */
+function logSummary(
+  agentPath: string,
+  agentName: string,
+  tools: RegisteredTool[],
+  contributed: CapabilityContribution[],
+  gated: string[]
+): void {
+  const parts = [
+    `tools [${tools.map((t) => shortName(t.__action.name)).join(', ')}]`,
+  ];
+  const skillNames = scanSkillNames(path.join(agentPath, 'skills'), agentName);
+  if (skillNames) parts.push(`skills [${skillNames.join(', ')}]`);
+  const knowledgeCount = countKnowledgeDocs(path.join(agentPath, 'knowledge'));
+  if (knowledgeCount !== undefined) {
+    parts.push(`knowledge ${knowledgeCount} docs`);
+  }
+  for (const c of contributed) {
+    if (c.label.startsWith('delegates')) parts.push(c.label);
+  }
+  if (gated.length > 0) parts.push(`approval-gated [${gated.join(', ')}]`);
+  logger.info(
+    `[agent-dirs] registered agent '${agentName}': ${parts.join(', ')}`
+  );
+}
+
+/** Skill directory names; also warns on layout mistakes the middleware ignores. */
+function scanSkillNames(
+  skillsDir: string,
+  agentName: string
+): string[] | undefined {
+  if (!existsSync(skillsDir)) return undefined;
+  const names: string[] = [];
+  for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      const skillFile = path.join(skillsDir, entry.name, 'SKILL.md');
+      if (!existsSync(skillFile)) continue;
+      names.push(entry.name);
+      const fmName = /^name:\s*(.+)$/m.exec(
+        readFileSync(skillFile, 'utf8')
+      )?.[1]?.trim();
+      if (fmName && fmName !== entry.name) {
+        logger.warn(
+          `[agent-dirs] agent '${agentName}': skill '${entry.name}' declares ` +
+            `frontmatter name '${fmName}', but the model-visible skill name ` +
+            `is the directory name ('${entry.name}')`
+        );
+      }
+    } else if (entry.name.endsWith('.md')) {
+      logger.warn(
+        `[agent-dirs] agent '${agentName}': skills/${entry.name} is ignored - ` +
+          `skills live in sub-directories: skills/<name>/SKILL.md`
+      );
+    }
+  }
+  return names;
+}
+
+function countKnowledgeDocs(knowledgeDir: string): number | undefined {
+  if (!existsSync(knowledgeDir)) return undefined;
+  let count = 0;
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory() && !entry.name.startsWith('.')) {
+        walk(path.join(dir, entry.name));
+      } else if (
+        entry.isFile() &&
+        entry.name.endsWith('.md') &&
+        entry.name !== 'log.md' &&
+        entry.name !== 'index.md'
+      ) {
+        count++;
+      }
+    }
+  };
+  walk(knowledgeDir);
+  return count;
+}
+
 /** The model-visible tool name: the segment after the last '/'. */
 function shortName(name: string): string {
   return name.substring(name.lastIndexOf('/') + 1);
-}
-
-function stringList(v: unknown): string[] {
-  return Array.isArray(v)
-    ? v.filter((x): x is string => typeof x === 'string')
-    : [];
 }

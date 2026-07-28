@@ -36,9 +36,10 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 export const OkfKnowledgeOptionsSchema = z.object({
-  /** Paths to directories containing OKF bundles. */
+  /** Paths to directories containing OKF bundles. Default `['knowledge']`. */
   knowledgePaths: z
     .array(z.string())
+    .optional()
     .describe('Paths to directories containing OKF markdown bundles.'),
 });
 
@@ -94,7 +95,6 @@ export const okfKnowledge: GenerateMiddleware<
     );
     const concepts = new Map<string, OkfConcept>();
     let rootIndexBody: string | undefined;
-    let scanPromise: Promise<void> | null = null;
 
     async function scanDir(root: string, dir: string): Promise<void> {
       let entries: fs.Dirent[];
@@ -138,15 +138,15 @@ export const okfKnowledge: GenerateMiddleware<
       }
     }
 
-    function ensureScanned(): Promise<void> {
-      if (!scanPromise) {
-        scanPromise = (async () => {
-          for (const root of roots) {
-            await scanDir(root, root);
-          }
-        })();
+    // Rescans on every call rather than memoizing, so file edits are live
+    // within a dev session. Bundles are small; the read cost is negligible
+    // next to a model call.
+    async function ensureScanned(): Promise<void> {
+      concepts.clear();
+      rootIndexBody = undefined;
+      for (const root of roots) {
+        await scanDir(root, root);
       }
-      return scanPromise;
     }
 
     function synthesizeIndex(): string {
@@ -185,9 +185,15 @@ export const okfKnowledge: GenerateMiddleware<
           : `/${input.path}`;
         const concept = concepts.get(normalized);
         if (!concept) {
+          // The recovery hint deliberately omits deprecated concepts - they
+          // stay loadable by exact path (OKF conformance) but must not be
+          // advertised to a model that fumbled a path.
+          const available = Array.from(concepts.values())
+            .filter((c) => c.status !== 'deprecated')
+            .map((c) => c.bundlePath);
           throw new Error(
             `Knowledge document '${input.path}' not found. Available: ` +
-              Array.from(concepts.keys()).join(', ')
+              available.join(', ')
           );
         }
         // Concepts are only served from the scanned map, so a crafted path
