@@ -153,7 +153,23 @@ keys (`delegates`, `requireApproval`) from `parsed.raw`.
 **Fix:** document the blessed path (and an extension-keys convention for
 frontmatter).
 
-## 9. Dev UI / CLI failure modes are cryptic
+## 9. Sub-agent delegation is one-shot; interrupted sub-agents can't resume
+
+The `agents` middleware (first-party) gives clean isolated delegation
+(`delegate_to_<name>` tools, historyLength-gated context, artifact merging,
+maxDelegations), but its own source states the limit: a sub-agent interrupt
+is flattened into a plain tool response because "there is no stateful
+sub-agent runtime to resume into" - so approvals inside a sub-agent can't
+round-trip, and multi-turn orchestrator/sub-agent interaction isn't
+possible. The building blocks already exist (sub-agents have stores,
+sessions and snapshot ids); delegation just doesn't persist the sub-agent's
+`sessionId` into parent state or offer a resume path.
+
+**Fix:** stateful delegation in `@genkit-ai/middleware` - record sub-agent
+sessionIds per invocation, propagate interrupts as interrupts, and let a
+later turn resume the sub-agent session.
+
+## 10. Dev UI / CLI failure modes are cryptic
 
 Hit while demoing the agents Dev UI flow:
 
@@ -175,7 +191,7 @@ Hit while demoing the agents Dev UI flow:
 stale-file cleanup on scan, and a version handshake between UI and runtime
 that names the mismatch.
 
-## 10. Smaller items
+## 11. Smaller items
 
 - `ToolFnOptions` / `ToolRunOptions` (the tool fn's second argument: ambient
   context, `interrupt()`, `resumed`) are not exported from the `genkit`
