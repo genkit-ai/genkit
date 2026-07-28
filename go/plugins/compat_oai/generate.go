@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/internal/base"
@@ -29,12 +30,11 @@ import (
 
 // ModelGenerator handles OpenAI generation requests
 type ModelGenerator struct {
-	client     *openai.Client
-	modelName  string
-	request    *openai.ChatCompletionNewParams
-	messages   []openai.ChatCompletionMessageParamUnion
-	tools      []openai.ChatCompletionToolParam
-	toolChoice openai.ChatCompletionToolChoiceOptionUnionParam
+	client    *openai.Client
+	modelName string
+	request   *openai.ChatCompletionNewParams
+	messages  []openai.ChatCompletionMessageParamUnion
+	tools     []openai.ChatCompletionToolParam
 	// Store any errors that occur during building
 	err error
 }
@@ -67,13 +67,18 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 
 	oaiMessages := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
 	for _, msg := range messages {
-		content := g.concatenateContent(msg.Content)
+		content := concatenateTextContent(msg.Content)
 		switch msg.Role {
 		case ai.RoleSystem:
 			oaiMessages = append(oaiMessages, openai.SystemMessage(content))
 		case ai.RoleModel:
 			am := openai.ChatCompletionAssistantMessageParam{}
 			am.Content.OfString = param.NewOpt(content)
+			if reasoning := concatenateReasoningContent(msg.Content); reasoning != "" {
+				am.SetExtraFields(map[string]any{
+					"reasoning_content": reasoning,
+				})
+			}
 			toolCalls, err := convertToolCalls(msg.Content)
 			if err != nil {
 				g.err = err
@@ -154,14 +159,52 @@ func (g *ModelGenerator) WithConfig(config any) *ModelGenerator {
 	case openai.ChatCompletionNewParams:
 		openaiConfig = cfg
 	case *openai.ChatCompletionNewParams:
+		if cfg == nil {
+			return g
+		}
 		openaiConfig = *cfg
 	case map[string]any:
+		normalizedConfig := make(map[string]any, len(cfg))
+		for key, value := range cfg {
+			normalizedConfig[key] = value
+		}
+		for source, target := range map[string]string{
+			"frequencyPenalty": "frequency_penalty",
+			"logProbs":         "logprobs",
+			"presencePenalty":  "presence_penalty",
+			"stopSequences":    "stop",
+			"topLogProbs":      "top_logprobs",
+			"topP":             "top_p",
+		} {
+			if value, ok := normalizedConfig[source]; ok {
+				normalizedConfig[target] = value
+				delete(normalizedConfig, source)
+			}
+		}
+		for _, key := range []string{
+			"apiKey", "maxOutputTokens", "topK", "version", "visualDetailLevel",
+		} {
+			delete(normalizedConfig, key)
+		}
+
 		var err error
-		openaiConfig, err = base.MapToStruct[openai.ChatCompletionNewParams](cfg)
+		openaiConfig, err = base.MapToStruct[openai.ChatCompletionNewParams](normalizedConfig)
 		if err != nil {
 			g.err = fmt.Errorf("failed to convert config to openai.ChatCompletionNewParams: %w", err)
 			return g
 		}
+		// Match the JS adapter's passthrough behavior for provider-specific
+		// fields that the OpenAI SDK does not know about.
+		extraFields := make(map[string]any, len(normalizedConfig))
+		for key, value := range normalizedConfig {
+			switch key {
+			case "messages", "model", "response_format", "stream", "stream_options", "tool_choice", "tools":
+				continue
+			default:
+				extraFields[key] = value
+			}
+		}
+		openaiConfig.SetExtraFields(extraFields)
 	default:
 		g.err = fmt.Errorf("unexpected config type: %T", config)
 		return g
@@ -282,22 +325,42 @@ func getResponseFormat(output *ai.ModelOutputConfig) openai.ChatCompletionNewPar
 	return format
 }
 
-// concatenateContent concatenates text content into a single string
-func (g *ModelGenerator) concatenateContent(parts []*ai.Part) string {
-	content := ""
+func concatenateTextContent(parts []*ai.Part) string {
+	var content strings.Builder
 	for _, part := range parts {
-		content += part.Text
+		if part == nil {
+			continue
+		}
+		if part.IsText() || part.IsData() {
+			content.WriteString(part.Text)
+		}
 	}
-	return content
+	return content.String()
+}
+
+func concatenateReasoningContent(parts []*ai.Part) string {
+	var reasoning strings.Builder
+	for _, part := range parts {
+		if part == nil {
+			continue
+		}
+		if part.IsReasoning() {
+			reasoning.WriteString(part.Text)
+		}
+	}
+	return reasoning.String()
 }
 
 // generateStream generates a streaming model response
 func (g *ModelGenerator) generateStream(ctx context.Context, handleChunk func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
 	stream := g.client.Chat.Completions.NewStreaming(ctx, *g.request)
-	defer stream.Close()
+	defer func() {
+		_ = stream.Close()
+	}()
 
 	// Use openai-go's accumulator to collect the complete response
 	acc := &openai.ChatCompletionAccumulator{}
+	var reasoning strings.Builder
 
 	for stream.Next() {
 		chunk := stream.Current()
@@ -309,6 +372,13 @@ func (g *ModelGenerator) generateStream(ctx context.Context, handleChunk func(co
 
 		// Create chunk for callback
 		modelChunk := &ai.ModelResponseChunk{}
+
+		if reasoningDelta := extractReasoningContent(
+			chunk.Choices[0].Delta.JSON.ExtraFields["reasoning_content"].Raw(),
+		); reasoningDelta != "" {
+			reasoning.WriteString(reasoningDelta)
+			modelChunk.Content = append(modelChunk.Content, ai.NewReasoningPart(reasoningDelta, nil))
+		}
 
 		// Handle content delta
 		if chunk.Choices[0].Delta.Content != "" {
@@ -339,8 +409,29 @@ func (g *ModelGenerator) generateStream(ctx context.Context, handleChunk func(co
 		return nil, fmt.Errorf("stream error: %w", err)
 	}
 
-	// Convert accumulated ChatCompletion to ai.ModelResponse
-	return convertChatCompletionToModelResponse(&acc.ChatCompletion)
+	// Convert accumulated ChatCompletion to ai.ModelResponse.
+	resp, err := convertChatCompletionToModelResponse(&acc.ChatCompletion)
+	if err != nil {
+		return nil, err
+	}
+	if reasoning.Len() > 0 && resp.Reasoning() == "" {
+		resp.Message.Content = append(
+			[]*ai.Part{ai.NewReasoningPart(reasoning.String(), nil)},
+			resp.Message.Content...,
+		)
+	}
+	return resp, nil
+}
+
+func extractReasoningContent(raw string) string {
+	if raw == "" || raw == "null" {
+		return ""
+	}
+	var reasoning string
+	if err := json.Unmarshal([]byte(raw), &reasoning); err != nil {
+		return ""
+	}
+	return reasoning
 }
 
 // convertChatCompletionToModelResponse converts openai.ChatCompletion to ai.ModelResponse
@@ -403,11 +494,11 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*a
 	switch choice.FinishReason {
 	case "stop", "tool_calls":
 		resp.FinishReason = ai.FinishReasonStop
-	case "length":
+	case "length", "model_context_window_exceeded":
 		resp.FinishReason = ai.FinishReasonLength
-	case "content_filter":
+	case "content_filter", "sensitive":
 		resp.FinishReason = ai.FinishReasonBlocked
-	case "function_call":
+	case "function_call", "network_error":
 		resp.FinishReason = ai.FinishReasonOther
 	default:
 		resp.FinishReason = ai.FinishReasonUnknown
@@ -417,6 +508,12 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*a
 	if choice.Message.Refusal != "" {
 		resp.FinishMessage = choice.Message.Refusal
 		resp.FinishReason = ai.FinishReasonBlocked
+	}
+
+	if reasoning := extractReasoningContent(
+		choice.Message.JSON.ExtraFields["reasoning_content"].Raw(),
+	); reasoning != "" {
+		resp.Message.Content = append(resp.Message.Content, ai.NewReasoningPart(reasoning, nil))
 	}
 
 	// Add text content

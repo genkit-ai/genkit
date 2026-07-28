@@ -58,6 +58,7 @@ Set your API keys:
 ```bash
 export OPENAI_API_KEY=<your-openai-key>
 export ANTHROPIC_API_KEY=<your-anthropic-key>
+export ZAI_API_KEY=<your-zai-key>
 ```
 
 Run all tests:
@@ -72,6 +73,9 @@ go test -v ./openai
 
 # Anthropic tests
 go test -v ./anthropic
+
+# Z.ai tests
+go test -v ./zai
 ```
 
 Note: Tests will be skipped if the required API keys are not set.

@@ -15,6 +15,7 @@
 package compat_oai
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
@@ -25,6 +26,166 @@ import (
 // logic is exercised, so no network call is made.
 func newGen() *ModelGenerator {
 	return NewModelGenerator((*openai.Client)(nil), "test-model")
+}
+
+func TestConvertChatCompletionToModelResponseReasoningContent(t *testing.T) {
+	var completion openai.ChatCompletion
+	if err := json.Unmarshal([]byte(`{
+		"id": "chatcmpl-1",
+		"object": "chat.completion",
+		"created": 1,
+		"model": "reasoning-model",
+		"choices": [{
+			"index": 0,
+			"message": {
+				"role": "assistant",
+				"reasoning_content": "Let me think...",
+				"content": "Final answer"
+			},
+			"finish_reason": "stop"
+		}]
+	}`), &completion); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	resp, err := convertChatCompletionToModelResponse(&completion)
+	if err != nil {
+		t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
+	}
+	if got := resp.Reasoning(); got != "Let me think..." {
+		t.Errorf("Reasoning() = %q, want %q", got, "Let me think...")
+	}
+	if got := resp.Text(); got != "Final answer" {
+		t.Errorf("Text() = %q, want %q", got, "Final answer")
+	}
+}
+
+func TestConvertChatCompletionToModelResponseProviderFinishReasons(t *testing.T) {
+	for finishReason, want := range map[string]ai.FinishReason{
+		"sensitive":                     ai.FinishReasonBlocked,
+		"model_context_window_exceeded": ai.FinishReasonLength,
+		"network_error":                 ai.FinishReasonOther,
+	} {
+		t.Run(finishReason, func(t *testing.T) {
+			completion := &openai.ChatCompletion{
+				Choices: []openai.ChatCompletionChoice{{
+					FinishReason: finishReason,
+					Message: openai.ChatCompletionMessage{
+						Role: "assistant",
+					},
+				}},
+			}
+			resp, err := convertChatCompletionToModelResponse(completion)
+			if err != nil {
+				t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
+			}
+			if resp.FinishReason != want {
+				t.Errorf("FinishReason = %q, want %q", resp.FinishReason, want)
+			}
+		})
+	}
+}
+
+func TestWithMessagesPreservesReasoningContent(t *testing.T) {
+	g := newGen().WithMessages([]*ai.Message{{
+		Role: ai.RoleModel,
+		Content: []*ai.Part{
+			ai.NewReasoningPart("Think carefully.", nil),
+			ai.NewTextPart("Final answer"),
+		},
+	}})
+	if g.err != nil {
+		t.Fatalf("WithMessages() error = %v", g.err)
+	}
+
+	data, err := json.Marshal(g.messages[0])
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(data, &message); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got := message["reasoning_content"]; got != "Think carefully." {
+		t.Errorf("reasoning_content = %v, want %q", got, "Think carefully.")
+	}
+	if got := message["content"]; got != "Final answer" {
+		t.Errorf("content = %v, want %q", got, "Final answer")
+	}
+}
+
+func TestWithConfigPreservesProviderSpecificFields(t *testing.T) {
+	g := newGen().WithConfig(map[string]any{
+		"maxOutputTokens": 123,
+		"model":           "must-not-override",
+		"temperature":     0.3,
+		"topP":            0.8,
+		"thinking": map[string]any{
+			"type":           "enabled",
+			"clear_thinking": false,
+		},
+	})
+	if g.err != nil {
+		t.Fatalf("WithConfig() error = %v", g.err)
+	}
+
+	data, err := json.Marshal(g.GetRequest())
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var request map[string]any
+	if err := json.Unmarshal(data, &request); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got := request["model"]; got != "test-model" {
+		t.Errorf("model = %v, want %q", got, "test-model")
+	}
+	if got := request["temperature"]; got != 0.3 {
+		t.Errorf("temperature = %v, want 0.3", got)
+	}
+	if got := request["top_p"]; got != 0.8 {
+		t.Errorf("top_p = %v, want 0.8", got)
+	}
+	if _, ok := request["maxOutputTokens"]; ok {
+		t.Error("request contains unsupported maxOutputTokens field")
+	}
+	thinking, ok := request["thinking"].(map[string]any)
+	if !ok {
+		t.Fatalf("thinking = %#v, want object", request["thinking"])
+	}
+	if got := thinking["type"]; got != "enabled" {
+		t.Errorf("thinking.type = %v, want %q", got, "enabled")
+	}
+	if got := thinking["clear_thinking"]; got != false {
+		t.Errorf("thinking.clear_thinking = %v, want false", got)
+	}
+}
+
+func TestWithConfigIgnoresNilPointer(t *testing.T) {
+	var config *openai.ChatCompletionNewParams
+	g := newGen().WithConfig(config)
+	if g.err != nil {
+		t.Fatalf("WithConfig() error = %v", g.err)
+	}
+	if got := g.GetRequest().Model; got != "test-model" {
+		t.Errorf("model = %q, want %q", got, "test-model")
+	}
+}
+
+func TestConcatenateContentSkipsNilParts(t *testing.T) {
+	parts := []*ai.Part{
+		nil,
+		ai.NewTextPart("visible"),
+		ai.NewReasoningPart("thought", nil),
+		nil,
+		ai.NewDataPart(" data"),
+	}
+	if got := concatenateTextContent(parts); got != "visible data" {
+		t.Errorf("concatenateTextContent() = %q, want %q", got, "visible data")
+	}
+	if got := concatenateReasoningContent(parts); got != "thought" {
+		t.Errorf("concatenateReasoningContent() = %q, want %q", got, "thought")
+	}
 }
 
 // TestWithTools_StrictDefaultsOff verifies the default behavior of sending
