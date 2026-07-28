@@ -3,7 +3,8 @@
 "Agent = directory" convention layer over Genkit's beta agents API. One
 sub-directory per agent compiles to a single `ai.defineAgent(...)` call, and
 each capability folder or frontmatter key compiles to the corresponding
-middleware - the convention is sugar, never a cage (see
+middleware. The convention is a thin compiler over existing primitives, and
+anything it produces can be written by hand (see
 [Ejecting to code](#ejecting-to-code)).
 
 ## Quickstart
