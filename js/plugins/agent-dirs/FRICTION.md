@@ -169,29 +169,7 @@ sessions and snapshot ids); delegation just doesn't persist the sub-agent's
 sessionIds per invocation, propagate interrupts as interrupts, and let a
 later turn resume the sub-agent session.
 
-## 10. Dev UI / CLI failure modes are cryptic
-
-Hit while demoing the agents Dev UI flow:
-
-- **Version skew renders silently.** A globally-installed `genkit-cli`
-  older than the runtime's agents API (`1.33.0-rc.1` UI against a `1.40.x`
-  runtime) shows no agents at all - no "unknown action type", no "your CLI
-  predates this runtime feature", just an empty UI. The update nudge the CLI
-  prints is generic and doesn't connect "old CLI" to "missing surface".
-- **Stale runtime files produce a raw TRPC error.** Runtimes register via
-  JSON files under `.genkit/runtimes`; a process killed without SIGINT
-  leaves its file behind, and the Dev UI then reports
-  `TRPCClientError: No runtime found with ID <pid>-<port>` / "No app
-  detected" instead of detecting the dead pid and cleaning up (or saying
-  "this runtime is gone - restart your app"). Several overlapping
-  `genkit start` invocations compound this: each takes the next UI port
-  (4000, 4002, ...) and the browser tab keeps talking to a dead one.
-
-**Fix:** UI-side runtime liveness check (pid probe) with a human message,
-stale-file cleanup on scan, and a version handshake between UI and runtime
-that names the mismatch.
-
-## 11. Smaller items
+## 10. Smaller items
 
 - `ToolFnOptions` / `ToolRunOptions` (the tool fn's second argument: ambient
   context, `interrupt()`, `resumed`) are not exported from the `genkit`
