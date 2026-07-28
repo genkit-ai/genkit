@@ -448,9 +448,16 @@ def validate_resume_against_history(resume: Resume, history: list[MessageData]) 
     restart additionally has to carry the *same* inputs as the interrupted
     request — otherwise a client could resume a tool with forged arguments.
     Raises ``INVALID_ARGUMENT`` on the first mismatch.
+
+    History is searched newest-first so a resume matches the *most recent* tool
+    request for a given ``name + ref``. A resume always answers the currently
+    paused turn (the latest interrupt), and ``ref`` is not guaranteed globally
+    unique — some providers reuse per-turn indices, so the same ``name + ref``
+    can appear in earlier, stale turns. Matching from the end lands on the live
+    request instead of a superseded one that shares the same handle.
     """
     tool_requests: list[ToolRequest] = []
-    for msg in history:
+    for msg in reversed(history):
         if msg.role != Role.MODEL:
             continue
         for root in part_roots(msg.content):
