@@ -125,12 +125,17 @@ class PartConverter:
         if isinstance(part.root, TextPart):
             return genai.types.Part(text=part.root.text or ' ')
         if isinstance(part.root, ToolRequestPart):
+            # Round-trip the call id when we have one so the model can correlate
+            # tool responses to the original request.
+            function_call = genai.types.FunctionCall(
+                # Gemini throws on '/' in tool name
+                name=part.root.tool_request.name.replace('/', '__'),
+                args=part.root.tool_request.input,
+            )
+            if part.root.tool_request.ref:
+                function_call.id = part.root.tool_request.ref
             return genai.types.Part(
-                function_call=genai.types.FunctionCall(
-                    # Gemini throws on '/' in tool name
-                    name=part.root.tool_request.name.replace('/', '__'),
-                    args=part.root.tool_request.input,
-                ),
+                function_call=function_call,
                 thought_signature=cls._extract_thought_signature(part.root.metadata),
             )
         if isinstance(part.root, ReasoningPart):
@@ -285,7 +290,7 @@ class PartConverter:
         return genai.types.Part()
 
     @classmethod
-    def from_gemini(cls, part: genai.types.Part, ref: str | None = None) -> Part:
+    def from_gemini(cls, part: genai.types.Part) -> Part:
         """Maps a Gemini Part back to a Genkit Part.
 
         This method inspects the type of the Gemini Part and converts it into
@@ -294,7 +299,6 @@ class PartConverter:
 
         Args:
             part: The `genai.types.Part` object to convert.
-            ref: The tool call reference ID.
 
         Returns:
             A Genkit `Part` object representing the converted content.
@@ -309,10 +313,13 @@ class PartConverter:
         if part.text is not None:
             return Part(root=TextPart(text=part.text))
         if part.function_call:
+            # Tool refs come only from the model's call id. A synthetic part
+            # index isn't unique across turns, so resume can't tell repeated
+            # calls to the same tool apart.
             return Part(
                 root=ToolRequestPart(
                     tool_request=ToolRequest(
-                        ref=ref or getattr(part.function_call, 'id', None),
+                        ref=getattr(part.function_call, 'id', None),
                         # restore slashes
                         name=(part.function_call.name or '').replace('__', '/'),
                         input=part.function_call.args if part.function_call.args is not None else {},

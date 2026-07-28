@@ -1788,8 +1788,8 @@ class GeminiModel:
             for i, c in enumerate(response.candidates):
                 c_content = []
                 if c.content and c.content.parts:
-                    for j, part in enumerate(c.content.parts):
-                        converted = PartConverter.from_gemini(part=part, ref=str(j))
+                    for part in c.content.parts:
+                        converted = PartConverter.from_gemini(part=part)
                         if converted:
                             c_content.append(converted)
 
@@ -1976,8 +1976,8 @@ class GeminiModel:
         if response.candidates:
             for candidate in response.candidates:
                 if candidate.content and candidate.content.parts:
-                    for i, part in enumerate(candidate.content.parts):
-                        converted = PartConverter.from_gemini(part=part, ref=str(i))
+                    for part in candidate.content.parts:
+                        converted = PartConverter.from_gemini(part=part)
                         if converted:  # Only append if conversion succeeded
                             content.append(converted)
 
