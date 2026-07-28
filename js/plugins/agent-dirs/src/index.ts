@@ -44,6 +44,8 @@ export {
   type AgentDirOverride,
   type AgentDirTool,
   type AgentDirToolConfig,
+  type AgentDirToolContext,
+  type AgentDirToolFactory,
   type CompiledAgentConfig,
 } from './authoring.js';
 export { type AgentDirsOptions } from './compiler.js';

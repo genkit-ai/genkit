@@ -26,7 +26,11 @@ import { logger } from 'genkit/logging';
 import { existsSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { AgentDirOverride, AgentDirTool } from './authoring.js';
+import type {
+  AgentDirOverride,
+  AgentDirTool,
+  AgentDirToolFactory,
+} from './authoring.js';
 
 /** A tool action registered via `ai.defineTool`. */
 export type RegisteredTool = ReturnType<GenkitBeta['defineTool']>;
@@ -88,11 +92,26 @@ export async function loadTools(
     } catch (e) {
       return fail(`failed to load tools/${file}: ${e}`);
     }
+    // Factory form: `export default (ai) => ai.defineTool({...}, fn)` -
+    // native API escape hatch; the factory owns naming.
+    if (typeof mod.default === 'function') {
+      const action = await (mod.default as AgentDirToolFactory)(ai);
+      if (!action?.__action?.name) {
+        return fail(
+          `tools/${file} default-exports a function, but it did not return ` +
+            `a tool (expected \`(ai) => ai.defineTool(...)\`)`
+        );
+      }
+      actions.push(action);
+      continue;
+    }
+
     const tool = mod.default as AgentDirTool | undefined;
     if (!tool?.config || typeof tool.fn !== 'function') {
       return fail(
         `tools/${file} must \`export default defineDirTool({ ... }, fn)\` ` +
-          `(a default export of { config, fn })`
+          `(a default export of { config, fn }) or a ` +
+          `\`(ai) => ai.defineTool(...)\` factory`
       );
     }
     const name =
@@ -106,7 +125,7 @@ export async function loadTools(
           inputSchema: tool.config.inputSchema,
           outputSchema: tool.config.outputSchema,
         },
-        async (input) => tool.fn(input)
+        async (input, ctx) => tool.fn(input, ctx)
       )
     );
   }

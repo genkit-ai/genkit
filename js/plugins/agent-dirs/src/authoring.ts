@@ -22,8 +22,21 @@
  * @module @genkit-ai/agent-dirs/authoring
  */
 
-import { z } from 'genkit';
+import { z, type ToolAction } from 'genkit';
 import type { GenkitBeta } from 'genkit/beta';
+
+/**
+ * The runtime context a directory tool receives as its second argument -
+ * structurally the framework's `ToolFnOptions & ToolRunOptions` (which genkit
+ * does not currently export): the ambient `ActionContext` (auth etc.), the
+ * `interrupt()` escape for human-in-the-loop pauses, and `resumed` metadata
+ * when re-running after an interrupt.
+ */
+export interface AgentDirToolContext {
+  context: Record<string, unknown>;
+  interrupt: (metadata?: Record<string, unknown>) => never;
+  resumed?: boolean | Record<string, unknown>;
+}
 
 /**
  * The config half of a directory tool module. Mirrors the first argument of
@@ -50,7 +63,10 @@ export interface AgentDirTool<
   O extends z.ZodTypeAny = z.ZodTypeAny,
 > {
   config: AgentDirToolConfig<I, O>;
-  fn: (input: z.infer<I>) => Promise<z.infer<O>> | z.infer<O>;
+  fn: (
+    input: z.infer<I>,
+    ctx: AgentDirToolContext
+  ) => Promise<z.infer<O>> | z.infer<O>;
 }
 
 /**
@@ -68,10 +84,27 @@ export function defineDirTool<
   O extends z.ZodTypeAny = z.ZodTypeAny,
 >(
   config: AgentDirToolConfig<I, O>,
-  fn: (input: z.infer<I>) => Promise<z.infer<O>> | z.infer<O>
+  fn: (
+    input: z.infer<I>,
+    ctx: AgentDirToolContext
+  ) => Promise<z.infer<O>> | z.infer<O>
 ): AgentDirTool<I, O> {
   return { config, fn };
 }
+
+/**
+ * The alternative shape a `tools/*.ts` file may default-export: a factory
+ * receiving the Genkit instance and returning a tool registered with the
+ * plain `ai.defineTool` API. Escape hatch for tools that need the full
+ * defineTool surface or definition-time registry access.
+ *
+ * The factory owns the tool's name - the compiler applies no
+ * `agent-dirs/<agent>/` namespacing, so cross-agent name collisions are the
+ * author's responsibility.
+ */
+export type AgentDirToolFactory = (
+  ai: GenkitBeta
+) => ToolAction | Promise<ToolAction>;
 
 /** The `ai.defineAgent` config type, without repeating its generics. */
 export type CompiledAgentConfig = Parameters<GenkitBeta['defineAgent']>[0];

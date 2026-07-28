@@ -155,6 +155,12 @@ frontmatter).
 
 ## 9. Smaller items
 
+- `ToolFnOptions` / `ToolRunOptions` (the tool fn's second argument: ambient
+  context, `interrupt()`, `resumed`) are not exported from the `genkit`
+  package, nor from `@genkit-ai/ai`'s root - only defined in
+  `ai/src/tool.ts`. Helper libraries wrapping `defineTool` must re-declare
+  the shape structurally (this plugin's `AgentDirToolContext`).
+
 - `mockModel` needs `info: { supports: { tools: true } }` boilerplate to
   avoid "does not support tools" warnings in every agent test
   (`js/ai/src/testing/mock-model.ts:382` vs
