@@ -15,25 +15,36 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package core provides base error types and utilities for Genkit.
+//
+// The error surface in this file is deprecated in favour of
+// [github.com/firebase/genkit/go/core/status], which unifies the two error
+// types below into one and adds sentinel classification so callers can branch
+// with errors.Is instead of matching on message text. Everything here is an
+// alias or a thin wrapper over that package: [GenkitError] and [status.Error]
+// are the same type, so an errors.As for either finds errors raised by any part
+// of Genkit, old or new.
 package core
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"maps"
 	"runtime/debug"
 
-	"github.com/firebase/genkit/go/internal/base"
-	"github.com/invopop/jsonschema"
+	"github.com/firebase/genkit/go/core/status"
 )
 
+// ReflectionErrorDetails is the details field of a [ReflectionError].
+//
+// Deprecated: the reflection API's error envelope is internal to that
+// boundary and will stop being part of this package's surface.
 type ReflectionErrorDetails struct {
 	Stack   *string `json:"stack,omitempty"` // Use pointer for optional
 	TraceID *string `json:"traceId,omitempty"`
 }
 
 // ReflectionError is the wire format for HTTP errors for Reflection API responses.
+//
+// Deprecated: the reflection API's error envelope is internal to that
+// boundary and will stop being part of this package's surface.
 type ReflectionError struct {
 	Details *ReflectionErrorDetails `json:"details,omitempty"`
 	Message string                  `json:"message"`
@@ -42,87 +53,30 @@ type ReflectionError struct {
 
 // GenkitError is the base error type for Genkit errors.
 //
-// On the wire, GenkitError marshals to and from the canonical Genkit
-// error shape {status, message, details}, which mirrors the
-// `RuntimeError` definition in the JSON schema. Fields that exist for
-// in-process use (HTTPCode, Source, the wrapped error) are not
-// serialized.
-type GenkitError struct {
-	Message       string         // Wire field "message".
-	Status        StatusName     // Wire field "status".
-	HTTPCode      int            // Derived from Status; not serialized.
-	Details       map[string]any // Wire field "details" (omitted when empty).
-	Source        *string        // In-process annotation; not serialized.
-	originalError error          // The wrapped error, if any.
-}
-
-// MarshalJSON encodes a GenkitError in the canonical Genkit error wire
-// format: {status, message, details}. The wire shape ([genkitErrorWire])
-// is generated from the shared JSON schema's RuntimeError definition.
-//
-// The stack trace [NewError] records under Details["stack"] is in-process
-// diagnostics like HTTPCode and Source, not wire data: marshaling omits it
-// so errors embedded in values (e.g. a failed agent invocation's output)
-// do not leak process internals to clients. Consumers that want the stack
-// (the reflection API's error envelope) read the error value directly.
-func (e *GenkitError) MarshalJSON() ([]byte, error) {
-	details := e.Details
-	if _, ok := details["stack"]; ok {
-		details = maps.Clone(details)
-		delete(details, "stack")
-		if len(details) == 0 {
-			details = nil
-		}
-	}
-	return json.Marshal(genkitErrorWire{
-		Status:  e.Status,
-		Message: e.Message,
-		Details: details,
-	})
-}
-
-// JSONSchema describes the error's wire format for schema inference.
-// Without it, inference would reflect over the struct fields, requiring
-// capitalized in-process fields (Message, HTTPCode, Source) that
-// MarshalJSON never emits, so values embedding a GenkitError would fail
-// validation against their own inferred schema.
-func (GenkitError) JSONSchema() *jsonschema.Schema {
-	return base.InferJSONSchema(genkitErrorWire{})
-}
-
-// UnmarshalJSON decodes a GenkitError from the canonical wire format
-// and re-derives HTTPCode from Status.
-func (e *GenkitError) UnmarshalJSON(data []byte) error {
-	var w genkitErrorWire
-	if err := json.Unmarshal(data, &w); err != nil {
-		return err
-	}
-	e.Status = w.Status
-	e.Message = w.Message
-	e.Details = w.Details
-	e.HTTPCode = HTTPStatusCode(w.Status)
-	return nil
-}
+// Deprecated: use [status.Error]. This is an alias for it, so the two are the
+// same type: an errors.As for a *GenkitError still matches every error Genkit
+// raises, and a *status.Error can be used anywhere a *GenkitError is expected.
+// Note that [status.Error] classifies failures with a sentinel, so prefer
+// errors.Is against the sentinels in core/status (and the domain sentinels in
+// ai, exp, and friends) over comparing the Status field.
+type GenkitError = status.Error
 
 // AsGenkitError returns err as a *GenkitError, wrapping it in a fresh
 // one with status INTERNAL if it isn't one already. Returns nil for a
 // nil input.
-func AsGenkitError(err error) *GenkitError {
-	if err == nil {
-		return nil
-	}
-	var ge *GenkitError
-	if errors.As(err, &ge) {
-		return ge
-	}
-	return &GenkitError{
-		Status:   INTERNAL,
-		Message:  err.Error(),
-		HTTPCode: HTTPStatusCode(INTERNAL),
-	}
-}
+//
+// Deprecated: use [status.Convert], or [status.Of] when you only need the
+// status. Note that Convert derives the status from the error (mapping a
+// cancelled context to CANCELLED, for instance) rather than always using
+// INTERNAL.
+func AsGenkitError(err error) *GenkitError { return status.Convert(err) }
 
 // UserFacingError is the base error type for user facing errors.
+//
+// Deprecated: use [status.PublicErrorf], which produces a [status.Error] with
+// Public set. Unlike this type, the result carries a sentinel and its status
+// reaches HTTP transports, so a public INVALID_ARGUMENT returns 400 rather than
+// falling through to 500.
 type UserFacingError struct {
 	Message string         `json:"message"` // Exclude from default JSON if embedded elsewhere
 	Status  StatusName     `json:"status"`
@@ -133,6 +87,8 @@ type UserFacingError struct {
 // is safe to return the message in a request. Other kinds of errors will
 // result in a generic 500 message to avoid the possibility of internal
 // exceptions being leaked to attackers.
+//
+// Deprecated: use [status.PublicErrorf].
 func NewPublicError(status StatusName, message string, details map[string]any) *UserFacingError {
 	return &UserFacingError{
 		Status:  status,
@@ -146,102 +102,100 @@ func (e *UserFacingError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Status, e.Message)
 }
 
+// Unwrap returns the base sentinel for the error's status, so a UserFacingError
+// classifies the same way a [status.Error] does: [status.Of] reports its Status
+// rather than defaulting to INTERNAL, and errors.Is matches the corresponding
+// base sentinel.
+func (e *UserFacingError) Unwrap() error { return status.Base(e.Status) }
+
+// PublicMessage reports the error's message as safe to return to clients.
+// Transports call this to decide what reaches a client; implementing it keeps
+// a UserFacingError public now that publicness is a property of the error
+// rather than of its type.
+func (e *UserFacingError) PublicMessage() (string, bool) { return e.Message, true }
+
 // NewError creates a new GenkitError with a stack trace.
+//
+// Deprecated: use [status.Errorf] with a sentinel, which classifies the failure
+// so callers can match it with errors.Is:
+//
+//	status.Errorf(status.ErrNotFound, "model %q not found", name)
+//
+// Record a cause with %w rather than relying on the implicit wrapping of the
+// last error argument that this function performs.
 func NewError(status StatusName, message string, args ...any) *GenkitError {
-	msg := message
+	ge := newErrorSkip(status, message, args...)
+	ge.Details = map[string]any{"stack": string(debug.Stack())}
+	return ge
+}
 
-	ge := &GenkitError{
-		Status:  status,
-		Message: fmt.Sprintf(msg, args...),
-	}
-
-	// scan args for the last error to wrap it (Iterate backwards)
+// newErrorSkip builds the error NewError returns, minus the stack detail, so
+// the stack NewError records starts at its caller.
+func newErrorSkip(name StatusName, message string, args ...any) *GenkitError {
+	ge := status.Errorf(status.Base(name), message, args...)
+	// v1 scanned args for the last error and wrapped it implicitly, with no %w
+	// in the format. Preserve that so errors.Is and errors.As still reach it.
 	for i := len(args) - 1; i >= 0; i-- {
 		if err, ok := args[i].(error); ok {
-			ge.originalError = err
+			ge.WithCause(err)
 			break
 		}
-	}
-
-	errStack := string(debug.Stack())
-	if errStack != "" {
-		ge.Details = make(map[string]any)
-		ge.Details["stack"] = errStack
 	}
 	return ge
 }
 
-// Error implements the standard error interface.
-func (e *GenkitError) Error() string {
-	return e.Message
-}
-
-// Unwrap implements the standard error unwrapping interface.
-// This allows errors.Is and errors.As to work with GenkitError.
-func (e *GenkitError) Unwrap() error {
-	return e.originalError
-}
-
 // SchemaValidationError is an error returned when action input fails parsing
 // or schema validation, e.g. when a model produces malformed tool arguments.
+//
+// Deprecated: match [status.ErrInvalidInput] with errors.Is instead.
 type SchemaValidationError struct {
 	*GenkitError
 }
 
 // Unwrap returns the underlying GenkitError so that errors.Is and errors.As
 // continue to match *GenkitError anywhere a SchemaValidationError is returned.
-func (e *SchemaValidationError) Unwrap() error {
-	return e.GenkitError
-}
+func (e *SchemaValidationError) Unwrap() error { return e.GenkitError }
 
 // NewSchemaValidationError creates a SchemaValidationError for the given action key and validation error.
+//
+// Deprecated: use status.Errorf with [status.ErrInvalidInput].
 func NewSchemaValidationError(actionKey string, err error) *SchemaValidationError {
 	return &SchemaValidationError{
-		GenkitError: NewError(INVALID_ARGUMENT, "invalid input to action %q: %v", actionKey, err),
+		GenkitError: status.Errorf(status.ErrInvalidInput, "invalid input to action %q: %w", actionKey, err),
 	}
 }
 
 // ToReflectionError returns a JSON-serializable representation for reflection API responses.
-func (e *GenkitError) ToReflectionError() ReflectionError {
-	var errDetails *ReflectionErrorDetails
-	if e.Details != nil {
-		stackVal, stackOk := e.Details["stack"].(string)
-		traceVal, traceOk := e.Details["traceId"].(string)
-
-		if stackOk || traceOk {
-			errDetails = &ReflectionErrorDetails{}
-			if stackOk {
-				errDetails.Stack = &stackVal
-			}
-			if traceOk {
-				errDetails.TraceID = &traceVal
-			}
+//
+// Deprecated: the reflection API's error envelope is internal to that boundary
+// and will stop being part of this package's surface.
+func ToReflectionError(err error) ReflectionError {
+	e := status.Convert(err)
+	if e == nil {
+		return ReflectionError{Code: status.Internal.HTTPCode(), Details: &ReflectionErrorDetails{}}
+	}
+	// v1 recorded the stack under Details["stack"]; status.Errorf keeps it off
+	// the details map and formats it on demand. Read both so errors from either
+	// constructor still carry a stack to the Dev UI.
+	stack, stackOK := e.Details["stack"].(string)
+	if !stackOK {
+		stack = e.Stack()
+		stackOK = stack != ""
+	}
+	traceID, traceOK := e.Details["traceId"].(string)
+	var details *ReflectionErrorDetails
+	if stackOK || traceOK {
+		details = &ReflectionErrorDetails{}
+		if stackOK {
+			details.Stack = &stack
+		}
+		if traceOK {
+			details.TraceID = &traceID
 		}
 	}
 	return ReflectionError{
-		Details: errDetails,
-		Code:    HTTPStatusCode(e.Status),
+		Details: details,
+		Code:    e.Status.HTTPCode(),
 		Message: e.Message,
-	}
-}
-
-// ToReflectionError gets the JSON representation for reflection API Error responses.
-func ToReflectionError(err error) ReflectionError {
-	if ge, ok := err.(*GenkitError); ok {
-		return ge.ToReflectionError()
-	}
-
-	// Error could be a markedError, which is a wrapper on GenkitError.
-	// Casting markedError directly fails because it is indeed a different type.
-	// errors.As() unwraps markedError and finds the GenkitError underneath.
-	var ge *GenkitError
-	if errors.As(err, &ge) {
-		return ge.ToReflectionError()
-	}
-
-	return ReflectionError{
-		Message: err.Error(),
-		Code:    HTTPStatusCode(INTERNAL),
-		Details: &ReflectionErrorDetails{},
 	}
 }

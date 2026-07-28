@@ -1610,7 +1610,7 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 	if p.ToolRequest.Ref != "" {
 		refStr = "#" + p.ToolRequest.Ref
 	}
-	return nil, core.NewError(core.INVALID_ARGUMENT, fmt.Sprintf("unresolved tool request %q was not handled by the Resume argument; you must supply Respond or Restart directives, or ensure there is pending output from a previous tool call", refStr))
+	return nil, core.NewError(core.INVALID_ARGUMENT, "unresolved tool request %q was not handled by the Resume argument; you must supply Respond or Restart directives, or ensure there is pending output from a previous tool call", refStr)
 }
 
 // handleResumeOption amends message history to handle `resume` arguments.
@@ -1707,7 +1707,7 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 	}
 
 	if len(toolResps) != toolReqCount {
-		return nil, core.NewError(core.FAILED_PRECONDITION, fmt.Sprintf("handleResumeOption: Expected %d tool responses but resolved to %d.", toolReqCount, len(toolResps)))
+		return nil, core.NewError(core.FAILED_PRECONDITION, "handleResumeOption: Expected %d tool responses but resolved to %d.", toolReqCount, len(toolResps))
 	}
 
 	toolMessage := &Message{

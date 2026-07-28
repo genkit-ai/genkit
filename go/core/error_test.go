@@ -116,7 +116,7 @@ func TestGenkitErrorError(t *testing.T) {
 func TestGenkitErrorToReflectionError(t *testing.T) {
 	t.Run("converts error with stack", func(t *testing.T) {
 		ge := NewError(NOT_FOUND, "resource not found")
-		re := ge.ToReflectionError()
+		re := ToReflectionError(ge)
 
 		if re.Message != "resource not found" {
 			t.Errorf("Message = %q, want %q", re.Message, "resource not found")
@@ -137,7 +137,7 @@ func TestGenkitErrorToReflectionError(t *testing.T) {
 				"traceId": "trace-123",
 			},
 		}
-		re := ge.ToReflectionError()
+		re := ToReflectionError(ge)
 
 		if re.Details == nil || re.Details.TraceID == nil {
 			t.Fatal("expected traceId in details")
@@ -153,7 +153,7 @@ func TestGenkitErrorToReflectionError(t *testing.T) {
 			Message: "success",
 			Details: nil,
 		}
-		re := ge.ToReflectionError()
+		re := ToReflectionError(ge)
 
 		if re.Message != "success" {
 			t.Errorf("Message = %q, want %q", re.Message, "success")

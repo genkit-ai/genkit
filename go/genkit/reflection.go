@@ -356,7 +356,7 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 		}
 		defer r.Body.Close()
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			return core.NewError(core.INVALID_ARGUMENT, err.Error())
+			return core.NewError(core.INVALID_ARGUMENT, "%s", err)
 		}
 
 		stream, err := parseBoolQueryParam(r, "stream")
@@ -543,7 +543,7 @@ func handleCancelAction(activeActions *activeActionsMap) func(w http.ResponseWri
 
 		defer r.Body.Close()
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			return core.NewError(core.INVALID_ARGUMENT, err.Error())
+			return core.NewError(core.INVALID_ARGUMENT, "%s", err)
 		}
 
 		if body.TraceID == "" {
@@ -596,7 +596,7 @@ func handleNotify() func(w http.ResponseWriter, r *http.Request) error {
 
 		defer r.Body.Close()
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			return core.NewError(core.INVALID_ARGUMENT, err.Error())
+			return core.NewError(core.INVALID_ARGUMENT, "%s", err)
 		}
 
 		configureTelemetry(body.TelemetryServerURL)
