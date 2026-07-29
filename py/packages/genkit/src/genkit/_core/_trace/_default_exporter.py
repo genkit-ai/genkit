@@ -37,6 +37,7 @@ from genkit._core._compat import override
 from genkit._core._environment import is_dev_environment
 from genkit._core._logger import get_logger
 
+from ._attrs import Attr, Subtype
 from ._realtime_processor import RealtimeSpanProcessor
 
 logger = get_logger(__name__)
@@ -77,13 +78,13 @@ def _ensure_exception_message_for_dev_ui(span_entry: dict[str, Any]) -> None:
     TraceData SpanStatusSchema uses `message` (not OTel's `description`). Dev UI and
     evaluate.ts read the first `exception` timeEvent's `exception.message` and fall
     back to the literal "Error" if missing. Synthesize from status.message or
-    genkit:error when events are empty or incomplete.
+    the error attr when events are empty or incomplete.
     """
     st = span_entry.get('status')
     if not st or st.get('code') != 2:
         return
     attrs = span_entry.get('attributes') or {}
-    msg = st.get('message') or attrs.get('genkit:error')
+    msg = st.get('message') or attrs.get(Attr.ERROR)
     if not msg:
         return
     if not st.get('message'):
@@ -181,7 +182,7 @@ def extract_span_data(span: ReadableSpan) -> dict[str, Any]:
 
 DEFAULT_SPAN_FILTERS: dict[str, str] = {
     # Suppress prompt runner preview traces (triggered on every keystroke in Dev UI)
-    'genkit:metadata:subtype': 'prompt',
+    Attr.SUBTYPE: Subtype.PROMPT,
 }
 
 
