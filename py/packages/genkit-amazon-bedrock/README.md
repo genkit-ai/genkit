@@ -4,7 +4,8 @@ Amazon Bedrock plugin for Genkit Python. Provides access to Bedrock-hosted
 models (Anthropic Claude, Amazon Nova, Meta Llama, Mistral, Cohere, and
 others), Titan/Cohere/Nova embedders, image generation, and Cohere reranking.
 
-> Status: scaffold. Feature slices are being ported from the mature Go plugin
+> Status: in progress. Non-streaming text generation (Converse) is available;
+> remaining feature slices are being ported from the mature Go plugin
 > ([genkit-ai/aws-bedrock-go-plugin](https://github.com/genkit-ai/aws-bedrock-go-plugin)).
 
 ## Installation
@@ -32,7 +33,9 @@ ai = Genkit(
 
 Credentials resolve through the standard AWS SDK chain (environment,
 `~/.aws/credentials`, instance metadata). Pass a pre-configured
-`boto3.session.Session` via `session=` for custom wiring.
+`boto3.session.Session` via `session=` for custom wiring. The region comes
+from `region=` or the SDK chain (`AWS_REGION`, `AWS_DEFAULT_REGION`,
+`~/.aws/config`); there is deliberately no default region.
 
 ## License
 
