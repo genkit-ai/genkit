@@ -72,7 +72,6 @@ describe('trace:get', () => {
 
     // Reset option values on the commander object
     traceGet.setOptionValue('format', undefined);
-    traceGet.setOptionValue('compact', undefined);
     traceGet.setOptionValue('keepMedia', undefined);
 
     // Mock console.log to avoid spamming test output

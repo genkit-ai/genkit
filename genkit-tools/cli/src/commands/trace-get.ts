@@ -27,7 +27,7 @@ import {
   stackTraceSpans,
 } from '@genkit-ai/tools-common/utils';
 import { yellow } from 'colorette';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { runWithManager } from '../utils/manager-utils';
@@ -89,17 +89,25 @@ function formatPart(part: Part): FormattedPart | null {
  * Formats an entire message's content array into an array of strings,
  * including its role (User, System, Tool, Model).
  */
-function formatMessageContent(msgData: unknown): string[] | null {
-  const parseRes = MessageSchema.safeParse(msgData);
-  if (!parseRes.success) return null;
-
-  const msg = parseRes.data;
+function formatMessageContent(msg: z.infer<typeof MessageSchema>): string[] | null {
   const role = msg.role;
 
   const formattedParts = msg.content
     .map(formatPart)
     .filter((p): p is FormattedPart => p !== null);
-  if (formattedParts.length === 0) return null;
+  
+  const rolePrefix =
+    role === 'user'
+      ? 'User: '
+      : role === 'system'
+        ? 'System: '
+        : role === 'tool'
+          ? 'Tool: '
+          : 'Model: ';
+
+  if (formattedParts.length === 0) {
+    return [`${rolePrefix}(empty)`];
+  }
 
   // Check for tool call first
   const toolCall = formattedParts.find((p) => p.type === 'toolCall');
@@ -116,14 +124,6 @@ function formatMessageContent(msgData: unknown): string[] | null {
   // Text / media content
   const texts = formattedParts.map((p) => p.text);
   const fullText = texts.join('\n');
-  const rolePrefix =
-    role === 'user'
-      ? 'User: '
-      : role === 'system'
-        ? 'System: '
-        : role === 'tool'
-          ? 'Tool: '
-          : 'Model: ';
 
   const lines = fullText.split(/\r?\n/);
   if (lines.length === 1) {
@@ -155,6 +155,17 @@ function formatPartsList(partsData: unknown): string[] | null {
     if (formatted) return [formatted.text];
   }
   return null;
+}
+
+function hasMessagesOrParts(val: unknown): boolean {
+  if (!val || typeof val !== 'object') return false;
+  if (
+    MessageSchema.safeParse(val).success ||
+    PartSchema.safeParse(val).success
+  ) {
+    return true;
+  }
+  return Object.values(val).some(hasMessagesOrParts);
 }
 
 /**
@@ -226,10 +237,7 @@ function formatCompactValue(
       return lines;
     }
 
-    const isAllPrimitives = val.every(
-      (item) => typeof item !== 'object' || item === null
-    );
-    if (isAllPrimitives) {
+    if (!hasMessagesOrParts(val)) {
       const yamlStr = YAML.stringify(val, {
         indent: 2,
         lineWidth: 0,
@@ -239,7 +247,11 @@ function formatCompactValue(
     }
 
     val.forEach((item) => {
-      lines.push(...formatCompactValue(item, itemPrefix));
+      const itemLines = formatCompactValue(item, itemPrefix + '  ');
+      if (itemLines.length > 0) {
+        itemLines[0] = itemPrefix + '- ' + itemLines[0].slice(itemPrefix.length + 2);
+        lines.push(...itemLines);
+      }
     });
     return lines;
   }
@@ -252,16 +264,7 @@ function formatCompactValue(
     return [];
   }
 
-  const hasMessagesOrParts = keys.some(
-    (k) =>
-      k === 'messages' ||
-      k === 'message' ||
-      k === 'content' ||
-      k === 'prompt' ||
-      k === 'history' ||
-      MessageSchema.safeParse(obj[k]).success ||
-      PartSchema.safeParse(obj[k]).success
-  );
+  const containsSpecial = hasMessagesOrParts(obj);
 
   const lines: string[] = [];
   if (keyName) {
@@ -269,7 +272,7 @@ function formatCompactValue(
   }
   const propPrefix = keyName ? `${childPrefix}  ` : childPrefix;
 
-  if (hasMessagesOrParts) {
+  if (containsSpecial) {
     for (const [k, v] of Object.entries(obj)) {
       if (v === undefined || v === null) continue;
       lines.push(...formatCompactValue(v, propPrefix, k));
@@ -390,7 +393,7 @@ function cleanTraceJson(trace: TraceData, keepMedia: boolean): any {
   if (result.spans) {
     for (const spanId of Object.keys(result.spans)) {
       const span = result.spans[spanId];
-      if (span.attributes) {
+      if (span && span.attributes) {
         for (const [key, value] of Object.entries(span.attributes)) {
           span.attributes[key] = parseAndSanitizeJson(value, keepMedia);
         }
@@ -404,7 +407,11 @@ function cleanTraceJson(trace: TraceData, keepMedia: boolean): any {
 export const traceGet = new Command('trace:get')
   .description('get a trace by id')
   .argument('<traceId>', 'id of the trace to get')
-  .option('-f, --format <format>', 'output format (tree, json)', 'tree')
+  .addOption(
+    new Option('-f, --format <format>', 'output format')
+      .choices(['tree', 'json'])
+      .default('tree')
+  )
   .option('--keep-media', 'do not strip base64 data URLs in output', false)
   .action(async (traceId: string, options: TraceGetOptions) => {
     const projectRoot = await findProjectRoot();

@@ -83,7 +83,7 @@ export function getSpanStatus(span: NestedSpanData): string {
     if (state.toLowerCase() === 'error' || state.toLowerCase() === 'failed')
       return '✖';
   }
-  if (span.status?.code === 0) return '✔';
+  if (span.status?.code === 1 || span.status?.code === 0) return '✔';
   if (span.status?.code === 2) return '✖';
   return '';
 }
