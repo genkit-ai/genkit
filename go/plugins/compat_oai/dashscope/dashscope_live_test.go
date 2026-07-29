@@ -23,7 +23,6 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai/dashscope"
-	"github.com/openai/openai-go/option"
 )
 
 func TestPlugin(t *testing.T) {
@@ -38,9 +37,7 @@ func TestPlugin(t *testing.T) {
 		ctx,
 		genkit.WithDefaultModel("dashscope/qwen-plus"),
 		genkit.WithPlugins(&dashscope.DashScope{
-			Opts: []option.RequestOption{
-				option.WithAPIKey(apiKey),
-			},
+			APIKey: apiKey,
 		}),
 	)
 	t.Log("genkit initialized")

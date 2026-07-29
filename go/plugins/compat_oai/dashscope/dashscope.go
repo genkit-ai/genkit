@@ -27,12 +27,13 @@ import (
 
 const (
 	provider = "dashscope"
-	// baseURL is the shared international endpoint, used as a fallback when
-	// DASHSCOPE_BASE_URL is unset. Works for standard API keys; mainland-China
-	// accounts or workspace-dedicated domains (Alibaba's recommended production
-	// setup) should override via DASHSCOPE_BASE_URL. See
-	// https://help.aliyun.com/en/model-studio/base-url and the package README.
-	baseURL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+	// defaultBaseURL is the shared international endpoint, used as a fallback
+	// when neither BaseURL nor DASHSCOPE_BASE_URL is set. Works for standard
+	// API keys; mainland-China accounts or workspace-dedicated domains
+	// (Alibaba's recommended production setup) should override via BaseURL or
+	// DASHSCOPE_BASE_URL. See https://help.aliyun.com/en/model-studio/base-url
+	// and the package README.
+	defaultBaseURL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 )
 
 // Supported models: https://www.alibabacloud.com/help/en/model-studio/models
@@ -152,8 +153,17 @@ var supportedModels = map[string]ai.ModelOptions{
 	},
 }
 
+// DashScope configures the Alibaba Cloud DashScope (Qwen) plugin.
 type DashScope struct {
-	Opts             []option.RequestOption
+	// APIKey is the DashScope API key. If empty, DASHSCOPE_API_KEY is consulted.
+	APIKey string
+	// BaseURL overrides the DashScope API endpoint. If empty, DASHSCOPE_BASE_URL,
+	// and then the default international endpoint are used.
+	BaseURL string
+	// Opts contains additional OpenAI client request options. Options supplied
+	// here are applied after the plugin defaults.
+	Opts []option.RequestOption
+
 	openAICompatible *compat_oai.OpenAICompatible
 }
 
@@ -162,33 +172,44 @@ func (d *DashScope) Name() string {
 	return provider
 }
 
+// Init implements genkit.Plugin.
 func (d *DashScope) Init(ctx context.Context) []api.Action {
-	url := os.Getenv("DASHSCOPE_BASE_URL")
-	if url == "" {
-		url = baseURL
+	baseURL := d.BaseURL
+	if baseURL == "" {
+		baseURL = os.Getenv("DASHSCOPE_BASE_URL")
 	}
-	d.Opts = append([]option.RequestOption{option.WithBaseURL(url)}, d.Opts...)
+	if baseURL == "" {
+		baseURL = defaultBaseURL
+	}
 
-	apiKey := os.Getenv("DASHSCOPE_API_KEY")
-	if apiKey != "" {
-		d.Opts = append([]option.RequestOption{option.WithAPIKey(apiKey)}, d.Opts...)
+	apiKey := d.APIKey
+	if apiKey == "" {
+		apiKey = os.Getenv("DASHSCOPE_API_KEY")
 	}
+	if apiKey == "" {
+		panic("dashscope plugin initialization failed: apiKey is required")
+	}
+
+	opts := []option.RequestOption{
+		option.WithAPIKey(apiKey),
+		option.WithBaseURL(baseURL),
+	}
+	opts = append(opts, d.Opts...)
 
 	if d.openAICompatible == nil {
 		d.openAICompatible = &compat_oai.OpenAICompatible{}
 	}
 
-	// initialize OpenAICompatible
 	d.openAICompatible.Provider = provider
-	d.openAICompatible.Opts = d.Opts
+	d.openAICompatible.Opts = opts
 	compatActions := d.openAICompatible.Init(ctx)
 
 	var actions []api.Action
 	actions = append(actions, compatActions...)
 
 	// define default models
-	for model, opts := range supportedModels {
-		actions = append(actions, d.DefineModel(model, opts).(api.Action))
+	for model, modelOpts := range supportedModels {
+		actions = append(actions, d.DefineModel(model, modelOpts).(api.Action))
 	}
 
 	return actions

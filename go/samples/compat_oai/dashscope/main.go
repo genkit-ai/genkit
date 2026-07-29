@@ -13,23 +13,17 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai/dashscope"
 	"github.com/firebase/genkit/go/plugins/server"
-	"github.com/openai/openai-go/option"
 )
 
 func main() {
 	ctx := context.Background()
 
-	ds := &dashscope.DashScope{
-		Opts: []option.RequestOption{
-			option.WithAPIKey(os.Getenv("DASHSCOPE_API_KEY")),
-		},
-	}
+	ds := &dashscope.DashScope{}
 	g := genkit.Init(ctx, genkit.WithPlugins(ds))
 
 	genkit.DefineFlow(g, "dashscope", func(ctx context.Context, subject string) (string, error) {
