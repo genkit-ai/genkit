@@ -73,12 +73,11 @@ func toAnthropicMediaBlock(p *ai.Part, kind string) (anthropic.ContentBlockParam
 		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("unable to parse %s part: %w", kind, err)
 	}
 
-	encoded := base64.StdEncoding.EncodeToString(data)
 	switch {
 	case strings.HasPrefix(contentType, "image/"):
-		return anthropic.NewImageBlockBase64(contentType, encoded), nil
+		return anthropic.NewImageBlockBase64(contentType, base64.StdEncoding.EncodeToString(data)), nil
 	case contentType == "application/pdf":
-		return anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{Data: encoded}), nil
+		return anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{Data: base64.StdEncoding.EncodeToString(data)}), nil
 	case contentType == "text/plain":
 		return anthropic.NewDocumentBlock(anthropic.PlainTextSourceParam{Data: string(data)}), nil
 	default:
