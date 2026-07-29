@@ -119,7 +119,7 @@ type ModelOptions struct {
 
 // DefineGenerateAction defines a utility generate action.
 func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
-	return (*generateAction)(core.DefineStreamingAction(r, "generate", api.ActionTypeUtil, nil, nil,
+	a := core.NewStreamingActionWithOptions(api.ActionTypeUtil, "generate", nil,
 		func(ctx context.Context, actionOpts *GenerateActionOptions, cb ModelStreamCallback) (resp *ModelResponse, err error) {
 			actionOptsBytes, _ := json.Marshal(actionOpts)
 			logger.FromContext(ctx).Debug("GenerateAction",
@@ -132,7 +132,9 @@ func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 			}()
 
 			return GenerateWithRequest(ctx, r, actionOpts, nil, cb)
-		}))
+		})
+	a.Register(r)
+	return (*generateAction)(a)
 }
 
 // NewModel creates a new [Model].
