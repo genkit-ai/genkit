@@ -34,7 +34,7 @@ provide:
 
 Define a non-streaming action:
 
-	action := core.NewActionWithOptions(api.ActionTypeCustom, "myAction", nil,
+	action := core.NewActionOf(api.ActionTypeCustom, "myAction", nil,
 		func(ctx context.Context, input string) (string, error) {
 			return "processed: " + input, nil
 		},
@@ -45,7 +45,7 @@ Define a non-streaming action:
 
 Define a streaming action that sends chunks during execution:
 
-	streamingAction := core.NewStreamingActionWithOptions(api.ActionTypeCustom, "countdown", nil,
+	streamingAction := core.NewStreamingActionOf(api.ActionTypeCustom, "countdown", nil,
 		func(ctx context.Context, start int, cb core.StreamCallback[string]) (string, error) {
 			for i := start; i > 0; i-- {
 				if cb != nil {
@@ -186,7 +186,7 @@ from an API), implement [api.DynamicPlugin]:
 For long-running operations, use background actions that return immediately
 with an operation ID that can be polled for completion:
 
-	bgAction := core.NewBackgroundActionWithOptions(api.ActionTypeCustom, "longTask", nil,
+	bgAction := core.NewBackgroundActionOf(api.ActionTypeCustom, "longTask", nil,
 		func(ctx context.Context, input Input) (Output, error) {
 			// Start the operation
 			return startLongOperation(input)

@@ -85,9 +85,9 @@ func (b *BackgroundActionDef[In, Out]) Register(r api.Registry) {
 	}
 }
 
-// NewBackgroundActionWithOptions creates a new background action without
+// NewBackgroundActionOf creates a new background action without
 // registering it. Register it with [BackgroundActionDef.Register].
-func NewBackgroundActionWithOptions[In, Out any](
+func NewBackgroundActionOf[In, Out any](
 	atype api.ActionType,
 	name string,
 	opts *ActionOptions,
@@ -96,18 +96,18 @@ func NewBackgroundActionWithOptions[In, Out any](
 	cancelFn CancelOpFunc[Out],
 ) *BackgroundActionDef[In, Out] {
 	if name == "" {
-		panic("core.NewBackgroundActionWithOptions: name is required")
+		panic("core.NewBackgroundActionOf: name is required")
 	}
 	if startFn == nil {
-		panic("core.NewBackgroundActionWithOptions: startFn is required")
+		panic("core.NewBackgroundActionOf: startFn is required")
 	}
 	if checkFn == nil {
-		panic("core.NewBackgroundActionWithOptions: checkFn is required")
+		panic("core.NewBackgroundActionOf: checkFn is required")
 	}
 
 	key := api.KeyFromName(atype, name)
 
-	startAction := NewActionWithOptions(atype, name, opts,
+	startAction := NewActionOf(atype, name, opts,
 		func(ctx context.Context, input In) (*Operation[Out], error) {
 			op, err := startFn(ctx, input)
 			if err != nil {
@@ -126,7 +126,7 @@ func NewBackgroundActionWithOptions[In, Out any](
 		opOpts.Metadata = opts.Metadata
 	}
 
-	checkAction := NewActionWithOptions(api.ActionTypeCheckOperation, name, opOpts,
+	checkAction := NewActionOf(api.ActionTypeCheckOperation, name, opOpts,
 		func(ctx context.Context, op *Operation[Out]) (*Operation[Out], error) {
 			updatedOp, err := checkFn(ctx, op)
 			if err != nil {
@@ -138,7 +138,7 @@ func NewBackgroundActionWithOptions[In, Out any](
 
 	var cancelAction *Action[*Operation[Out], *Operation[Out], struct{}]
 	if cancelFn != nil {
-		cancelAction = NewActionWithOptions(api.ActionTypeCancelOperation, name, opOpts,
+		cancelAction = NewActionOf(api.ActionTypeCancelOperation, name, opOpts,
 			func(ctx context.Context, op *Operation[Out]) (*Operation[Out], error) {
 				cancelledOp, err := cancelFn(ctx, op)
 				if err != nil {
@@ -158,7 +158,7 @@ func NewBackgroundActionWithOptions[In, Out any](
 
 // DefineBackgroundAction creates and registers a background action with three component actions
 //
-// Deprecated: Use [NewBackgroundActionWithOptions] and register the result
+// Deprecated: Use [NewBackgroundActionOf] and register the result
 // with [BackgroundActionDef.Register].
 func DefineBackgroundAction[In, Out any](
 	r api.Registry,
@@ -169,7 +169,7 @@ func DefineBackgroundAction[In, Out any](
 	checkFn CheckOpFunc[Out],
 	cancelFn CancelOpFunc[Out],
 ) *BackgroundActionDef[In, Out] {
-	a := NewBackgroundActionWithOptions(atype, name, &ActionOptions{
+	a := NewBackgroundActionOf(atype, name, &ActionOptions{
 		Metadata: metadata,
 	}, startFn, checkFn, cancelFn)
 	a.Register(r)
@@ -178,7 +178,7 @@ func DefineBackgroundAction[In, Out any](
 
 // NewBackgroundAction creates a new background action without registering it.
 //
-// Deprecated: Use [NewBackgroundActionWithOptions], which takes the action
+// Deprecated: Use [NewBackgroundActionOf], which takes the action
 // type first and an [ActionOptions] struct covering all schema slots.
 func NewBackgroundAction[In, Out any](
 	name string,
@@ -188,7 +188,7 @@ func NewBackgroundAction[In, Out any](
 	checkFn CheckOpFunc[Out],
 	cancelFn CancelOpFunc[Out],
 ) *BackgroundActionDef[In, Out] {
-	return NewBackgroundActionWithOptions(atype, name, &ActionOptions{
+	return NewBackgroundActionOf(atype, name, &ActionOptions{
 		Metadata: metadata,
 	}, startFn, checkFn, cancelFn)
 }
