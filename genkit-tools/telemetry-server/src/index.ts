@@ -346,7 +346,7 @@ export async function startTelemetryServer(params: {
 
   const host = params.host ?? '127.0.0.1';
   server = api.listen(params.port, host, () => {
-    logger.info(`Telemetry API running on http://${host}:${params.port}`);
+    logger.debug(`Telemetry API running on http://${host}:${params.port}`);
   });
 
   server.on('error', (error) => {
