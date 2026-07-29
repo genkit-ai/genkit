@@ -619,7 +619,7 @@ func TestReflectionServerV2_BidiRunAction(t *testing.T) {
 		Prefix string `json:"prefix"`
 	}
 
-	core.DefineBidiAction(g.reg, "test/bidi-echo", api.ActionTypeCustom, nil,
+	defineTestBidiAction(g.reg, api.ActionTypeCustom, "test/bidi-echo", nil,
 		func(ctx context.Context, cfg initConfig, inCh <-chan string, outCh chan<- string) (string, error) {
 			var n int
 			for chunk := range inCh {
@@ -815,7 +815,7 @@ func TestReflectionServerV2_BidiRunActionDropsAfterEnd(t *testing.T) {
 	var seenMu sync.Mutex
 	var seen []string
 
-	core.DefineBidiAction(g.reg, "test/bidi-record", api.ActionTypeCustom, nil,
+	defineTestBidiAction(g.reg, api.ActionTypeCustom, "test/bidi-record", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			for chunk := range inCh {
 				seenMu.Lock()
@@ -899,7 +899,7 @@ func TestReflectionServerV2_BidiRunActionErrors(t *testing.T) {
 
 	g := Init(context.Background())
 
-	core.DefineBidiAction(g.reg, "test/bidi-fail", api.ActionTypeCustom, nil,
+	defineTestBidiAction(g.reg, api.ActionTypeCustom, "test/bidi-fail", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			for range inCh {
 			}
@@ -958,7 +958,7 @@ func TestReflectionServerV2_BidiInvalidChunkFailsRun(t *testing.T) {
 
 	g := Init(context.Background())
 
-	core.DefineBidiAction(g.reg, "test/bidi-strict", api.ActionTypeCustom, nil,
+	defineTestBidiAction(g.reg, api.ActionTypeCustom, "test/bidi-strict", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			for {
 				select {
@@ -1091,7 +1091,7 @@ func TestReflectionServerV2_BidiRunActionNoStream(t *testing.T) {
 
 	g := Init(context.Background())
 
-	core.DefineBidiAction(g.reg, "test/bidi-quiet", api.ActionTypeCustom, nil,
+	defineTestBidiAction(g.reg, api.ActionTypeCustom, "test/bidi-quiet", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			var last string
 			for chunk := range inCh {
@@ -1171,7 +1171,7 @@ func TestReflectionServerV2_BidiInputClosedOnDisconnect(t *testing.T) {
 	g := Init(context.Background())
 
 	inputEnded := make(chan struct{})
-	core.DefineBidiAction(g.reg, "test/bidi-hang", api.ActionTypeCustom, nil,
+	defineTestBidiAction(g.reg, api.ActionTypeCustom, "test/bidi-hang", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			for range inCh {
 			}
