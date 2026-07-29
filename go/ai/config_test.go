@@ -26,7 +26,7 @@ import (
 )
 
 // testTypedConfig is a provider-style config struct used to exercise the
-// typed-config deserialization that New*WithConfig wraps around user
+// typed-config deserialization that NewTyped* constructors wrap around user
 // functions.
 type testTypedConfig struct {
 	Temperature float64 `json:"temperature,omitempty"`
@@ -46,7 +46,7 @@ func TestModelTypedConfig(t *testing.T) {
 
 	var got testTypedConfig
 	var gotReqConfig any
-	m := NewModelWithConfig("test/typed-config", nil, func(ctx context.Context, req *ModelRequest, cfg testTypedConfig, cb ModelStreamCallback) (*ModelResponse, error) {
+	m := NewTypedModel("test/typed-config", nil, func(ctx context.Context, req *ModelRequest, cfg testTypedConfig, cb ModelStreamCallback) (*ModelResponse, error) {
 		got = cfg
 		gotReqConfig = req.Config
 		return &ModelResponse{Message: NewModelTextMessage("ok"), Request: req}, nil
@@ -100,7 +100,7 @@ func TestModelTypedConfig(t *testing.T) {
 func TestModelConfigNormalizedBeforeBuiltins(t *testing.T) {
 	r := registry.New()
 
-	m := NewModelWithConfig("test/config-order", &ModelOptions{
+	m := NewTypedModel("test/config-order", &ModelOptions{
 		Supports: &ModelSupports{Multiturn: true}, // no media support
 	}, func(ctx context.Context, req *ModelRequest, cfg testTypedConfig, cb ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{Message: NewModelTextMessage("ok"), Request: req}, nil
@@ -120,7 +120,7 @@ func TestModelConfigNormalizedBeforeBuiltins(t *testing.T) {
 func TestBackgroundModelConfigValidation(t *testing.T) {
 	r := registry.New()
 
-	bm := NewBackgroundModelWithConfig("test/bg-typed-config", nil,
+	bm := NewTypedBackgroundModel("test/bg-typed-config", nil,
 		func(ctx context.Context, req *ModelRequest, cfg testTypedConfig) (*ModelOperation, error) {
 			return &ModelOperation{ID: "op1", Done: false}, nil
 		},
@@ -150,7 +150,7 @@ func TestBackgroundModelConfigValidation(t *testing.T) {
 }
 
 func TestModelConfigSchemaInference(t *testing.T) {
-	newFn := func() ModelFuncWithConfig[testTypedConfig] {
+	newFn := func() TypedModelFunc[testTypedConfig] {
 		return func(ctx context.Context, req *ModelRequest, cfg testTypedConfig, cb ModelStreamCallback) (*ModelResponse, error) {
 			return &ModelResponse{Message: NewModelTextMessage("ok"), Request: req}, nil
 		}
@@ -167,7 +167,7 @@ func TestModelConfigSchemaInference(t *testing.T) {
 	}
 
 	t.Run("inferred from Config type", func(t *testing.T) {
-		m := NewModelWithConfig("test/inferred-schema", nil, newFn())
+		m := NewTypedModel("test/inferred-schema", nil, newFn())
 		schema, ok := configSchemaOf(t, m).(map[string]any)
 		if !ok {
 			t.Fatalf("customOptions = %v, want inferred schema map", configSchemaOf(t, m))
@@ -183,7 +183,7 @@ func TestModelConfigSchemaInference(t *testing.T) {
 
 	t.Run("explicit ConfigSchema wins", func(t *testing.T) {
 		override := map[string]any{"type": "object", "properties": map[string]any{"custom": map[string]any{"type": "string"}}}
-		m := NewModelWithConfig("test/override-schema", &ModelOptions{ConfigSchema: override}, newFn())
+		m := NewTypedModel("test/override-schema", &ModelOptions{ConfigSchema: override}, newFn())
 		schema, ok := configSchemaOf(t, m).(map[string]any)
 		if !ok {
 			t.Fatalf("customOptions missing")
@@ -195,7 +195,7 @@ func TestModelConfigSchemaInference(t *testing.T) {
 	})
 
 	t.Run("any config infers no schema", func(t *testing.T) {
-		m := NewModelWithConfig("test/any-schema", nil, func(ctx context.Context, req *ModelRequest, cfg any, cb ModelStreamCallback) (*ModelResponse, error) {
+		m := NewTypedModel("test/any-schema", nil, func(ctx context.Context, req *ModelRequest, cfg any, cb ModelStreamCallback) (*ModelResponse, error) {
 			return &ModelResponse{Message: NewModelTextMessage("ok"), Request: req}, nil
 		})
 		if s, _ := configSchemaOf(t, m).(map[string]any); len(s) != 0 {
@@ -243,7 +243,7 @@ func TestEmbedderTypedConfig(t *testing.T) {
 
 	var got testTypedConfig
 	var gotReqOptions any
-	e := NewEmbedderWithConfig("test/typed-config-embedder", nil, func(ctx context.Context, req *EmbedRequest, cfg testTypedConfig) (*EmbedResponse, error) {
+	e := NewTypedEmbedder("test/typed-config-embedder", nil, func(ctx context.Context, req *EmbedRequest, cfg testTypedConfig) (*EmbedResponse, error) {
 		got = cfg
 		gotReqOptions = req.Options
 		return &EmbedResponse{}, nil
@@ -271,7 +271,7 @@ func TestEvaluatorTypedConfig(t *testing.T) {
 	r := registry.New()
 
 	var got testTypedConfig
-	e := NewEvaluatorWithConfig("test/typed-config-evaluator", nil, func(ctx context.Context, req *EvaluatorCallbackRequest, cfg testTypedConfig) (*EvaluatorCallbackResponse, error) {
+	e := NewTypedEvaluator("test/typed-config-evaluator", nil, func(ctx context.Context, req *EvaluatorCallbackRequest, cfg testTypedConfig) (*EvaluatorCallbackResponse, error) {
 		got = cfg
 		return &EvaluatorCallbackResponse{
 			TestCaseId: req.Input.TestCaseId,
@@ -293,7 +293,7 @@ func TestEvaluatorTypedConfig(t *testing.T) {
 	}
 
 	var gotBatch testTypedConfig
-	be := NewBatchEvaluatorWithConfig("test/typed-config-batch-evaluator", nil, func(ctx context.Context, req *EvaluatorRequest, cfg testTypedConfig) (*EvaluatorResponse, error) {
+	be := NewTypedBatchEvaluator("test/typed-config-batch-evaluator", nil, func(ctx context.Context, req *EvaluatorRequest, cfg testTypedConfig) (*EvaluatorResponse, error) {
 		gotBatch = cfg
 		return &EvaluatorResponse{}, nil
 	})

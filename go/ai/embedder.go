@@ -29,10 +29,10 @@ import (
 // EmbedderFunc is the function type for embedding documents.
 type EmbedderFunc = func(context.Context, *EmbedRequest) (*EmbedResponse, error)
 
-// EmbedderFuncWithConfig is an [EmbedderFunc] that additionally receives the
+// TypedEmbedderFunc is an [EmbedderFunc] that additionally receives the
 // request's typed Config: the framework deserializes the request's raw
-// options into it before calling the function (see [NewEmbedderWithConfig]).
-type EmbedderFuncWithConfig[Config any] = func(context.Context, *EmbedRequest, Config) (*EmbedResponse, error)
+// options into it before calling the function (see [NewTypedEmbedder]).
+type TypedEmbedderFunc[Config any] = func(context.Context, *EmbedRequest, Config) (*EmbedResponse, error)
 
 // Embedder represents an embedder that can perform content embedding.
 type Embedder interface {
@@ -95,7 +95,7 @@ type embedder struct {
 	core.Action[*EmbedRequest, *EmbedResponse, struct{}]
 }
 
-// NewEmbedderWithConfig creates a new [Embedder]. Register it with
+// NewTypedEmbedder creates a new [Embedder]. Register it with
 // [Embedder.Register] to make it resolvable by name.
 //
 // Config is the embedder's typed configuration; it is usually inferred from
@@ -106,9 +106,9 @@ type embedder struct {
 // normalized to the converted value, so it always matches the typed
 // parameter. The config's JSON schema is inferred from Config unless
 // [EmbedderOptions.ConfigSchema] overrides it.
-func NewEmbedderWithConfig[Config any](name string, opts *EmbedderOptions, fn EmbedderFuncWithConfig[Config]) Embedder {
+func NewTypedEmbedder[Config any](name string, opts *EmbedderOptions, fn TypedEmbedderFunc[Config]) Embedder {
 	if name == "" {
-		panic("ai.NewEmbedderWithConfig: name is required")
+		panic("ai.NewTypedEmbedder: name is required")
 	}
 
 	if opts == nil {
@@ -159,13 +159,13 @@ func NewEmbedderWithConfig[Config any](name string, opts *EmbedderOptions, fn Em
 
 // NewEmbedder creates a new [Embedder].
 //
-// Deprecated: Use [NewEmbedderWithConfig], which passes the request's options
+// Deprecated: Use [NewTypedEmbedder], which passes the request's options
 // to fn as a typed value instead of leaving them type-erased on the request.
 func NewEmbedder(name string, opts *EmbedderOptions, fn EmbedderFunc) Embedder {
 	if name == "" {
 		panic("ai.NewEmbedder: name is required")
 	}
-	return NewEmbedderWithConfig(name, opts, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
+	return NewTypedEmbedder(name, opts, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
 		return fn(ctx, req)
 	})
 }
@@ -173,7 +173,7 @@ func NewEmbedder(name string, opts *EmbedderOptions, fn EmbedderFunc) Embedder {
 // DefineEmbedder registers the given embed function as an action, and returns an
 // [Embedder] that runs it.
 //
-// Deprecated: Use [NewEmbedderWithConfig] and register the result with
+// Deprecated: Use [NewTypedEmbedder] and register the result with
 // [Embedder.Register].
 func DefineEmbedder(r api.Registry, name string, opts *EmbedderOptions, fn EmbedderFunc) Embedder {
 	e := NewEmbedder(name, opts, fn)
