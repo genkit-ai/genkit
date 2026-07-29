@@ -60,15 +60,15 @@ func ExampleNewSystemTextMessage() {
 	// Model role: model
 }
 
-// This example demonstrates creating a data part for raw string content.
+// This example demonstrates creating a data part for structured content.
 func ExampleNewDataPart() {
-	// Create a data part with raw string content
-	part := ai.NewDataPart(`{"name": "Alice", "age": 30}`)
+	// Create a data part with structured data
+	part := ai.NewDataPart(map[string]any{"name": "Alice", "age": 30})
 	fmt.Println("Is data part:", part.IsData())
-	fmt.Println("Content:", part.Text)
+	fmt.Println("Data:", part.Data)
 	// Output:
 	// Is data part: true
-	// Content: {"name": "Alice", "age": 30}
+	// Data: map[age:30 name:Alice]
 }
 
 // This example demonstrates accessing text from a Part.
@@ -136,12 +136,12 @@ func ExampleNewMediaPart() {
 func ExampleNewModelRef() {
 	// Create a reference to a model with custom configuration
 	// The config type depends on the model provider
-	modelRef := ai.NewModelRef("googleai/gemini-2.5-flash", map[string]any{
+	modelRef := ai.NewModelRef("googleai/gemini-flash-latest", map[string]any{
 		"temperature": 0.7,
 	})
 
 	fmt.Println("Model name:", modelRef.Name())
-	// Output: Model name: googleai/gemini-2.5-flash
+	// Output: Model name: googleai/gemini-flash-latest
 }
 
 // This example demonstrates building a multi-turn conversation.

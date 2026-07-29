@@ -55,7 +55,7 @@ func TestDocumentJSON(t *testing.T) {
 			},
 			&Part{
 				Kind: PartData,
-				Text: "somedata\x00string",
+				Data: map[string]any{"some": "data", "n": 3.3},
 			},
 			&Part{
 				Kind: PartToolRequest,
@@ -95,7 +95,7 @@ func TestDocumentJSON(t *testing.T) {
 		case PartMedia:
 			return a.ContentType == b.ContentType && a.Text == b.Text
 		case PartData:
-			return a.Text == b.Text
+			return reflect.DeepEqual(a.Data, b.Data)
 		case PartToolRequest:
 			return reflect.DeepEqual(a.ToolRequest, b.ToolRequest)
 		case PartToolResponse:
@@ -144,25 +144,51 @@ func TestReasoningPartJSON(t *testing.T) {
 }
 
 func TestNewDataPart(t *testing.T) {
-	t.Run("creates data part with content", func(t *testing.T) {
+	t.Run("creates data part with string content", func(t *testing.T) {
 		p := NewDataPart("some binary data")
 
 		if p.Kind != PartData {
 			t.Errorf("Kind = %v, want %v", p.Kind, PartData)
 		}
-		if p.Text != "some binary data" {
-			t.Errorf("Text = %q, want %q", p.Text, "some binary data")
+		if p.Data != "some binary data" {
+			t.Errorf("Data = %v, want %q", p.Data, "some binary data")
 		}
 	})
 
-	t.Run("creates data part with empty content", func(t *testing.T) {
-		p := NewDataPart("")
+	t.Run("creates data part with structured content", func(t *testing.T) {
+		data := map[string]any{"name": "Alice", "age": 30}
+		p := NewDataPart(data)
 
 		if p.Kind != PartData {
 			t.Errorf("Kind = %v, want %v", p.Kind, PartData)
 		}
-		if p.Text != "" {
-			t.Errorf("Text = %q, want empty string", p.Text)
+		if !reflect.DeepEqual(p.Data, data) {
+			t.Errorf("Data = %v, want %v", p.Data, data)
+		}
+	})
+
+	t.Run("round-trips structured data through JSON", func(t *testing.T) {
+		p := NewDataPart(map[string]any{"envelopes": []any{map[string]any{"x": 1.0}}})
+		p.Metadata = map[string]any{"mimeType": "application/a2ui+json"}
+
+		b, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"data":{"envelopes":[{"x":1}]},"metadata":{"mimeType":"application/a2ui+json"}}`
+		if string(b) != want {
+			t.Errorf("marshaled = %s, want %s", string(b), want)
+		}
+
+		var p2 Part
+		if err := json.Unmarshal(b, &p2); err != nil {
+			t.Fatal(err)
+		}
+		if p2.Kind != PartData {
+			t.Errorf("Kind = %v, want %v", p2.Kind, PartData)
+		}
+		if !reflect.DeepEqual(p2.Data, p.Data) {
+			t.Errorf("Data = %v, want %v", p2.Data, p.Data)
 		}
 	})
 }
@@ -421,6 +447,7 @@ func TestPartClone(t *testing.T) {
 		Kind:        PartToolRequest,
 		ContentType: "application/json",
 		Text:        "body",
+		Data:        map[string]any{"dk": "dv"},
 		ToolRequest: &ToolRequest{Name: "tool", Input: map[string]any{"a": 1}},
 		// Normally a Part wouldn't have both ToolRequest and ToolResponse,
 		// but we populate everything to catch missing fields.

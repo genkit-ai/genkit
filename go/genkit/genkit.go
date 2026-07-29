@@ -339,6 +339,31 @@ func LookupAction(g *Genkit, key string) api.Action {
 	return g.reg.LookupAction(key)
 }
 
+// RegisterValue records an arbitrary value in the registry under the given
+// name. Values are namespaced by convention using a "/type/name" key so
+// tooling can enumerate them by type (e.g. the Dev UI's GET /api/values?type=).
+// It panics if a value with the same name is already registered.
+//
+// This is the general-purpose counterpart of the typed Define* helpers, for
+// plugins that need to publish non-action resources (e.g. catalogs) that the
+// Dev UI or other components can discover via [ListValues].
+func RegisterValue(g *Genkit, name string, value any) {
+	g.reg.RegisterValue(name, value)
+}
+
+// LookupValue returns the value registered with g under name, or nil if none
+// is registered. It checks the current registry then falls back to the parent
+// hierarchy.
+func LookupValue(g *Genkit, name string) any {
+	return g.reg.LookupValue(name)
+}
+
+// ListValues returns all values registered with g, keyed by their registration
+// name. This includes values from the parent registry hierarchy.
+func ListValues(g *Genkit) map[string]any {
+	return g.reg.ListValues()
+}
+
 // DefineFlow defines a non-streaming flow, registers it as a [core.Action] of type Flow,
 // and returns a [core.Flow] runner.
 // The provided function `fn` takes an input of type `In` and returns an output of type `Out`.
