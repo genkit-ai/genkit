@@ -332,7 +332,7 @@ BidiFn = Callable[
     Awaitable[OutputT],
 ]
 
-_action_context: ContextVar[dict[str, object] | None] = ContextVar('context')
+_action_context: ContextVar[dict[str, Any] | None] = ContextVar('context')
 _ = _action_context.set(None)
 
 
@@ -345,20 +345,20 @@ class ActionRunContext:
 
     def __init__(
         self,
-        context: dict[str, object] | None = None,
+        context: dict[str, Any] | None = None,
         streaming_callback: StreamingCallback | None = None,
         abort_signal: asyncio.Event | None = None,
         init: object | None = None,
         input_stream: AsyncIterator[object] | None = None,
     ) -> None:
-        self._context: dict[str, object] = context if context is not None else {}
+        self._context: dict[str, Any] = context if context is not None else {}
         self._streaming_callback = streaming_callback
         self.abort_signal: asyncio.Event = abort_signal if abort_signal is not None else asyncio.Event()
         self._init = init
         self._input_stream = input_stream
 
     @property
-    def context(self) -> dict[str, object]:
+    def context(self) -> dict[str, Any]:
         return self._context
 
     @property
@@ -405,7 +405,7 @@ class ActionRunContext:
             self._streaming_callback(chunk)
 
     @staticmethod
-    def _current_context() -> dict[str, object] | None:
+    def _current_context() -> dict[str, Any] | None:
         return _action_context.get(None)
 
 
@@ -509,7 +509,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         self,
         input: InputT | None = None,
         on_chunk: Callable[[ChunkT], None] | None = None,
-        context: dict[str, object] | None = None,
+        context: dict[str, Any] | None = None,
         on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
         telemetry_labels: dict[str, object] | None = None,
         abort_signal: asyncio.Event | None = None,
@@ -570,7 +570,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
     def stream(
         self,
         input: InputT | None = None,
-        context: dict[str, object] | None = None,
+        context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
         timeout: float | None = None,
         init: InitT | None = None,
@@ -940,7 +940,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
     async def stream_bidi(
         self,
         init: InitT | None = None,
-        context: dict[str, object] | None = None,
+        context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
     ) -> BidiConnection[InputT, ChunkT, OutputT]:
         """Start a bidirectional streaming session over the single stream() primitive.
@@ -963,17 +963,11 @@ class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
         return BidiConnection(in_queue, stream_response)
 
 
-# Request side-channel data (auth, etc.). Open-ended so invokers/middleware
-# decide the keys (e.g. auth.uid for tenant paths).
-ActionContext = Mapping[str, object]
-
-
-def get_current_context() -> dict[str, object] | None:
+def get_current_context() -> dict[str, Any] | None:
     """Get the current action execution context, or None if not in an action.
 
     This module-level helper provides public cross-boundary access to
-    the private _action_context ContextVar. The returned dict is an
-    ``ActionContext`` bag (auth and other invoker side-channel data).
+    the private _action_context ContextVar.
     """
     return _action_context.get(None)
 

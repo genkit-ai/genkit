@@ -26,7 +26,6 @@ from uuid import uuid4
 from pydantic import BaseModel
 from typing_extensions import TypeVar as TypeVarExt
 
-from genkit._core._action import ActionContext
 from genkit._core._error import GenkitError
 from genkit._core._loop_cache import _loop_local_client
 from genkit._core._typing import (
@@ -78,7 +77,7 @@ class SessionStore(Protocol, Generic[StateT_co]):
         *,
         snapshot_id: str | None = None,
         session_id: str | None = None,
-        context: ActionContext | None = None,
+        context: dict[str, Any] | None = None,
     ) -> SessionSnapshot | None:
         """Retrieve a snapshot by id or the latest leaf for a session.
 
@@ -95,7 +94,7 @@ class SessionStore(Protocol, Generic[StateT_co]):
             SessionSnapshot | None,
         ],
         *,
-        context: ActionContext | None = None,
+        context: dict[str, Any] | None = None,
     ) -> SessionSnapshot | None:
         """Atomically read-modify-write a snapshot under ``snapshot_id``.
 

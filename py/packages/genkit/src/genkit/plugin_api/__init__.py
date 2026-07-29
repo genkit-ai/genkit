@@ -17,7 +17,7 @@
 """Framework primitives for plugin authors."""
 
 # Base class and framework primitives
-from genkit._core._action import Action, ActionContext, ActionKind, ActionRunContext
+from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._constants import GENKIT_CLIENT_HEADER, GENKIT_VERSION
 from genkit._core._context import ContextProvider, RequestData
 from genkit._core._environment import is_dev_environment
@@ -61,7 +61,6 @@ __all__ = [
     'Action',
     'ActionMetadata',
     'ActionKind',
-    'ActionContext',
     'ActionRunContext',
     'StatusCodes',
     'StatusName',

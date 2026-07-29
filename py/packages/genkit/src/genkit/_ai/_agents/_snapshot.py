@@ -19,10 +19,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from genkit._ai._agents._session import SessionStore
 from genkit._ai._agents._types import StateTransform
-from genkit._core._action import ActionContext, get_current_context
+from genkit._core._action import get_current_context
 from genkit._core._error import GenkitError
 from genkit._core._typing import SessionSnapshot, SnapshotStatus
 
@@ -134,7 +135,7 @@ async def resolve_snapshot(
     snapshot_id: str | None = None,
     session_id: str | None = None,
     state_transform: StateTransform | None = None,
-    context: ActionContext | None = None,
+    context: dict[str, Any] | None = None,
 ) -> SessionSnapshot | None:
     snapshot_id, session_id = parse_snapshot_lookup_kw(snapshot_id=snapshot_id, session_id=session_id)
     if snapshot_id is not None:
@@ -164,7 +165,7 @@ async def abort_snapshot_in_store(
     *,
     store: SessionStore,
     snapshot_id: str,
-    context: ActionContext | None = None,
+    context: dict[str, Any] | None = None,
 ) -> SnapshotStatus | None:
     """Abort a running snapshot by flipping it to aborted.
 
