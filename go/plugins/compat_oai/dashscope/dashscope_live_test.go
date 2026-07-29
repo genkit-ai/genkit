@@ -25,7 +25,7 @@ import (
 	"github.com/firebase/genkit/go/plugins/compat_oai/dashscope"
 )
 
-func TestPlugin(t *testing.T) {
+func TestPluginLive(t *testing.T) {
 	apiKey := os.Getenv("DASHSCOPE_API_KEY")
 	if apiKey == "" {
 		t.Skip("Skipping test: DASHSCOPE_API_KEY environment variable not set")
