@@ -16,7 +16,7 @@
 
 import { describe, expect, it } from '@jest/globals';
 import type { TraceData } from '../../src/types';
-import { stackTraceSpans, getSpanStatus } from '../../src/utils';
+import { getSpanStatus, stackTraceSpans } from '../../src/utils';
 import { BASE_FLOW_SPAN_ID, MockTrace } from './trace';
 
 const TEST_TRACE: TraceData = {

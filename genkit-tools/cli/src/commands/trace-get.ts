@@ -89,13 +89,15 @@ function formatPart(part: Part): FormattedPart | null {
  * Formats an entire message's content array into an array of strings,
  * including its role (User, System, Tool, Model).
  */
-function formatMessageContent(msg: z.infer<typeof MessageSchema>): string[] | null {
+function formatMessageContent(
+  msg: z.infer<typeof MessageSchema>
+): string[] | null {
   const role = msg.role;
 
   const formattedParts = msg.content
     .map(formatPart)
     .filter((p): p is FormattedPart => p !== null);
-  
+
   const rolePrefix =
     role === 'user'
       ? 'User: '
@@ -249,7 +251,8 @@ function formatCompactValue(
     val.forEach((item) => {
       const itemLines = formatCompactValue(item, itemPrefix + '  ');
       if (itemLines.length > 0) {
-        itemLines[0] = itemPrefix + '- ' + itemLines[0].slice(itemPrefix.length + 2);
+        itemLines[0] =
+          itemPrefix + '- ' + itemLines[0].slice(itemPrefix.length + 2);
         lines.push(...itemLines);
       }
     });
