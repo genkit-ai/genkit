@@ -233,6 +233,9 @@ Example (a minimal surface):
 // into the system prompt by the middleware when Instructions is
 // InstructionsSystem.
 func RenderCatalogInstructions(catalog *Catalog) string {
+	if catalog == nil {
+		return ""
+	}
 	var componentDocs strings.Builder
 	for i, c := range catalog.Components {
 		if i > 0 {

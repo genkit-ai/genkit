@@ -80,6 +80,10 @@ type streamParser struct {
 	// (placeholders map to this).
 	currentSurfaceID string
 	hasSurfaceID     bool
+	// knownComponents is the catalog's component-name set, computed once so
+	// validation doesn't rebuild it per updateComponents envelope. Nil when no
+	// catalog is configured.
+	knownComponents map[string]bool
 }
 
 func newStreamParser(opts parserOptions) *streamParser {
@@ -89,7 +93,11 @@ func newStreamParser(opts parserOptions) *streamParser {
 	if opts.version == "" {
 		opts.version = DefaultVersion
 	}
-	return &streamParser{opts: opts}
+	var known map[string]bool
+	if opts.catalog != nil {
+		known = opts.catalog.componentNames()
+	}
+	return &streamParser{opts: opts, knownComponents: known}
 }
 
 // push feeds a chunk of model text, returning prose + any completed blocks.
@@ -346,7 +354,7 @@ func (p *streamParser) validateComponents(components any) string {
 	if !ok {
 		return "updateComponents.components must be an array."
 	}
-	known := catalog.componentNames()
+	known := p.knownComponents
 	hasRoot := false
 	for _, c := range arr {
 		if cm, ok := c.(map[string]any); ok {

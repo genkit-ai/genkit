@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
@@ -211,6 +212,10 @@ func surfaceIDFactory(policy string) func() string {
 // replayNext hands back the recorded ids in the same order (only generating a
 // fresh id if the final parse yields more blocks than the stream did).
 type surfaceIDReplay struct {
+	// mu guards generated/cursor. In practice the streamed parse and the
+	// final-message parse of a turn never overlap, but the lock keeps this safe
+	// if a transport ever delivers chunks from multiple goroutines.
+	mu        sync.Mutex
 	base      func() string
 	generated []string
 	cursor    int
@@ -221,21 +226,34 @@ func replayableSurfaceIDs(base func() string) *surfaceIDReplay {
 }
 
 func (r *surfaceIDReplay) next() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.nextLocked()
+}
+
+// nextLocked mints and records a fresh id. The caller must hold r.mu.
+func (r *surfaceIDReplay) nextLocked() string {
 	id := r.base()
 	r.generated = append(r.generated, id)
 	return id
 }
 
 func (r *surfaceIDReplay) replayNext() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.cursor < len(r.generated) {
 		id := r.generated[r.cursor]
 		r.cursor++
 		return id
 	}
-	return r.next()
+	return r.nextLocked()
 }
 
-func (r *surfaceIDReplay) reset() { r.cursor = 0 }
+func (r *surfaceIDReplay) reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cursor = 0
+}
 
 // partsFromSegments turns parsed segments into ordered prose + a2ui parts,
 // preserving the exact source order.

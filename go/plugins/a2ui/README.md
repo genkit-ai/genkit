@@ -62,8 +62,8 @@ a2ui data parts.
 | -------------- | ------------------ | ------------------------------------------------------------------------------------------------- |
 | `Catalog`      | nil                | An inline catalog (code-defined use only; not serialized). Overrides `CatalogID` when set.        |
 | `CatalogID`    | `"basic"`          | Id of a catalog registered with `LoadCatalog`. Resolved from the registry at call time.           |
-| `Instructions` | `InstructionsSystem` | Where to inject catalog capabilities. `InstructionsNone` injects nothing.                        |
-| `Validate`     | `ValidateWarn`     | Validate emitted envelopes. `ValidateWarn` logs and drops bad blocks; `ValidateStrict` returns an error; `ValidateOff` skips checking. |
+| `Instructions` | `"system"`         | Where to inject catalog capabilities. `"none"` injects nothing.                                    |
+| `Validate`     | `"warn"`           | Validate emitted envelopes. `"warn"` logs and drops bad blocks; `"strict"` returns an error; `"off"` skips checking. |
 | `SurfaceID`    | fresh UUID         | Surface id policy. Provide a fixed string to reuse one id for every surface.                       |
 | `Version`      | `"v0.9"`           | Protocol version stamped on envelopes.                                                            |
 
