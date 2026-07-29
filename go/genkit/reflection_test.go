@@ -746,7 +746,7 @@ func TestRunActionWithInit(t *testing.T) {
 // defineTestBidiAction creates and registers a bidi action in one call for
 // the reflection and server tests in this package.
 func defineTestBidiAction[In, Out, Stream, Init any](r api.Registry, atype api.ActionType, name string, opts *core.BidiActionOptions, fn core.BidiFunc[In, Out, Stream, Init]) *core.BidiAction[In, Out, Stream, Init] {
-	b := core.NewBidiActionWithOptions(atype, name, opts, fn)
+	b := core.NewBidiActionOf(atype, name, opts, fn)
 	b.Register(r)
 	return b
 }

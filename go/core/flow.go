@@ -49,7 +49,7 @@ type flowContext struct {
 
 // NewFlow creates a Flow that runs fn without registering it. fn takes an input of type In and returns an output of type Out.
 func NewFlow[In, Out any](name string, fn Func[In, Out]) *Flow[In, Out, struct{}] {
-	return &Flow[In, Out, struct{}]{NewActionWithOptions(api.ActionTypeFlow, name, nil, func(ctx context.Context, input In) (Out, error) {
+	return &Flow[In, Out, struct{}]{NewActionOf(api.ActionTypeFlow, name, nil, func(ctx context.Context, input In) (Out, error) {
 		fc := &flowContext{
 			flowName: name,
 		}
@@ -60,7 +60,7 @@ func NewFlow[In, Out any](name string, fn Func[In, Out]) *Flow[In, Out, struct{}
 
 // NewStreamingFlow creates a streaming Flow that runs fn without registering it.
 func NewStreamingFlow[In, Out, Stream any](name string, fn StreamingFunc[In, Out, Stream]) *Flow[In, Out, Stream] {
-	return &Flow[In, Out, Stream]{NewStreamingActionWithOptions(api.ActionTypeFlow, name, nil, func(ctx context.Context, input In, cb func(context.Context, Stream) error) (Out, error) {
+	return &Flow[In, Out, Stream]{NewStreamingActionOf(api.ActionTypeFlow, name, nil, func(ctx context.Context, input In, cb func(context.Context, Stream) error) (Out, error) {
 		fc := &flowContext{
 			flowName: name,
 		}
@@ -179,7 +179,7 @@ func FlowNameFromContext(ctx context.Context) string {
 
 // WithFlowContext attaches flow-context metadata to ctx so that [Run] and
 // [FlowNameFromContext] work from within. Use it when wiring a custom
-// flow-like action (e.g. via [NewBidiActionWithOptions]) that
+// flow-like action (e.g. via [NewBidiActionOf]) that
 // should behave like a flow from the user's perspective — letting them
 // call [Run] for sub-step tracking and see the flow name in spans —
 // without going through the flow constructors.

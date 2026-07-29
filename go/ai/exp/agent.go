@@ -863,7 +863,7 @@ func newCustomAgent[State any](
 	if cfg.description != "" {
 		metadata["description"] = cfg.description
 	}
-	action := core.NewBidiActionWithOptions(api.ActionTypeAgent, name,
+	action := core.NewBidiActionOf(api.ActionTypeAgent, name,
 		&core.BidiActionOptions{Metadata: metadata},
 		func(
 			ctx context.Context,

@@ -325,7 +325,7 @@ func DefineTool[In, Out any](
 
 	metadata, wrappedFn := wrapToolFunc(name, description, fn)
 	applyStrictMetadata(metadata, toolOpts.StrictSchema)
-	action := core.NewActionWithOptions(api.ActionTypeToolV2, name, &core.ActionOptions{Metadata: metadata, InputSchema: toolOpts.InputSchema}, wrappedFn)
+	action := core.NewActionOf(api.ActionTypeToolV2, name, &core.ActionOptions{Metadata: metadata, InputSchema: toolOpts.InputSchema}, wrappedFn)
 	action.Register(r)
 
 	// Also register under the "tool" action type for backward compatibility.
@@ -369,7 +369,7 @@ func NewTool[In, Out any](name, description string, fn ToolFunc[In, Out], opts .
 	metadata, wrappedFn := wrapToolFunc(name, description, fn)
 	metadata["dynamic"] = true
 	applyStrictMetadata(metadata, toolOpts.StrictSchema)
-	action := core.NewActionWithOptions(api.ActionTypeToolV2, name, &core.ActionOptions{Metadata: metadata, InputSchema: toolOpts.InputSchema}, wrappedFn)
+	action := core.NewActionOf(api.ActionTypeToolV2, name, &core.ActionOptions{Metadata: metadata, InputSchema: toolOpts.InputSchema}, wrappedFn)
 	return &ToolDef[In, Out]{action: action, multipart: false}
 }
 
@@ -398,7 +398,7 @@ func DefineMultipartTool[In any](
 
 	metadata, wrappedFn := wrapMultipartToolFunc(name, description, fn)
 	applyStrictMetadata(metadata, toolOpts.StrictSchema)
-	action := core.NewActionWithOptions(api.ActionTypeToolV2, name, &core.ActionOptions{Metadata: metadata, InputSchema: toolOpts.InputSchema}, wrappedFn)
+	action := core.NewActionOf(api.ActionTypeToolV2, name, &core.ActionOptions{Metadata: metadata, InputSchema: toolOpts.InputSchema}, wrappedFn)
 	action.Register(r)
 	return &ToolDef[In, *MultipartToolResponse]{action: action, multipart: true, registry: r}
 }
@@ -417,7 +417,7 @@ func NewMultipartTool[In any](name, description string, fn MultipartToolFunc[In]
 	metadata, wrappedFn := wrapMultipartToolFunc(name, description, fn)
 	metadata["dynamic"] = true
 	applyStrictMetadata(metadata, toolOpts.StrictSchema)
-	action := core.NewActionWithOptions(api.ActionTypeToolV2, name, &core.ActionOptions{Metadata: metadata, InputSchema: toolOpts.InputSchema}, wrappedFn)
+	action := core.NewActionOf(api.ActionTypeToolV2, name, &core.ActionOptions{Metadata: metadata, InputSchema: toolOpts.InputSchema}, wrappedFn)
 	return &ToolDef[In, *MultipartToolResponse]{action: action, multipart: true}
 }
 
