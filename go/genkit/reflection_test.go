@@ -677,7 +677,7 @@ func TestRunActionWithInit(t *testing.T) {
 	type initConfig struct {
 		Prefix string `json:"prefix"`
 	}
-	core.DefineBidiAction(g.reg, "test/bidi-prefix", api.ActionTypeCustom, nil,
+	defineTestBidiAction(g.reg, api.ActionTypeCustom, "test/bidi-prefix", nil,
 		func(ctx context.Context, cfg initConfig, inCh <-chan string, outCh chan<- string) (string, error) {
 			var out string
 			for chunk := range inCh {
@@ -741,4 +741,12 @@ func TestRunActionWithInit(t *testing.T) {
 			t.Errorf("error message = %q, want mention of init rejection", resp.Error.Message)
 		}
 	})
+}
+
+// defineTestBidiAction creates and registers a bidi action in one call for
+// the reflection and server tests in this package.
+func defineTestBidiAction[In, Out, Stream, Init any](r api.Registry, atype api.ActionType, name string, opts *core.BidiActionOptions, fn core.BidiFunc[In, Out, Stream, Init]) *core.BidiAction[In, Out, Stream, Init] {
+	b := core.NewBidiActionWithOptions(atype, name, opts, fn)
+	b.Register(r)
+	return b
 }
