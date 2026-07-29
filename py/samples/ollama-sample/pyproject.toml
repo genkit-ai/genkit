@@ -5,7 +5,7 @@ requires-python = ">=3.10"
 dependencies = [
   "genkit",
   "genkit-ollama",
-  "pydantic>=2.0.0",
+  "pydantic>=2.13.4",
 ]
 
 [build-system]
