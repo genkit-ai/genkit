@@ -123,7 +123,7 @@ func NewRetriever(name string, opts *RetrieverOptions, fn RetrieverFunc) Retriev
 	}
 
 	return &retriever{
-		Action: *core.NewActionWithOptions(api.ActionTypeRetriever, name, &core.ActionOptions{Metadata: metadata, InputSchema: inputSchema}, fn),
+		Action: *core.NewActionOf(api.ActionTypeRetriever, name, &core.ActionOptions{Metadata: metadata, InputSchema: inputSchema}, fn),
 	}
 }
 

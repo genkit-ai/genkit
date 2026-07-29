@@ -81,23 +81,23 @@ type ActionOptions struct {
 
 type noStream = func(context.Context, struct{}) error
 
-// NewActionWithOptions creates a new non-streaming [Action] without
+// NewActionOf creates a new non-streaming [Action] without
 // registering it.
-func NewActionWithOptions[In, Out any](
+func NewActionOf[In, Out any](
 	atype api.ActionType,
 	name string,
 	opts *ActionOptions,
 	fn Func[In, Out],
 ) *Action[In, Out, struct{}] {
-	return NewStreamingActionWithOptions(atype, name, opts,
+	return NewStreamingActionOf(atype, name, opts,
 		func(ctx context.Context, in In, _ noStream) (Out, error) {
 			return fn(ctx, in)
 		})
 }
 
-// NewStreamingActionWithOptions creates a new streaming [Action] without
+// NewStreamingActionOf creates a new streaming [Action] without
 // registering it.
-func NewStreamingActionWithOptions[In, Out, Stream any](
+func NewStreamingActionOf[In, Out, Stream any](
 	atype api.ActionType,
 	name string,
 	opts *ActionOptions,
@@ -111,7 +111,7 @@ func NewStreamingActionWithOptions[In, Out, Stream any](
 // NewAction creates a new non-streaming [Action] without registering it.
 // If inputSchema is nil, it is inferred from the function's input type.
 //
-// Deprecated: Use [NewActionWithOptions], which takes the action type first
+// Deprecated: Use [NewActionOf], which takes the action type first
 // and an [ActionOptions] struct covering all schema slots.
 func NewAction[In, Out any](
 	name string,
@@ -120,7 +120,7 @@ func NewAction[In, Out any](
 	inputSchema map[string]any,
 	fn Func[In, Out],
 ) *Action[In, Out, struct{}] {
-	return NewActionWithOptions(atype, name, &ActionOptions{
+	return NewActionOf(atype, name, &ActionOptions{
 		Metadata:    metadata,
 		InputSchema: inputSchema,
 	}, fn)
@@ -129,7 +129,7 @@ func NewAction[In, Out any](
 // NewStreamingAction creates a new streaming [Action] without registering it.
 // If inputSchema is nil, it is inferred from the function's input type.
 //
-// Deprecated: Use [NewStreamingActionWithOptions], which takes the action
+// Deprecated: Use [NewStreamingActionOf], which takes the action
 // type first and an [ActionOptions] struct covering all schema slots.
 func NewStreamingAction[In, Out, Stream any](
 	name string,
@@ -138,7 +138,7 @@ func NewStreamingAction[In, Out, Stream any](
 	inputSchema map[string]any,
 	fn StreamingFunc[In, Out, Stream],
 ) *Action[In, Out, Stream] {
-	return NewStreamingActionWithOptions(atype, name, &ActionOptions{
+	return NewStreamingActionOf(atype, name, &ActionOptions{
 		Metadata:    metadata,
 		InputSchema: inputSchema,
 	}, fn)
@@ -147,7 +147,7 @@ func NewStreamingAction[In, Out, Stream any](
 // DefineAction creates a new non-streaming Action and registers it.
 // If inputSchema is nil, it is inferred from the function's input type.
 //
-// Deprecated: Use [NewActionWithOptions] and register the result with
+// Deprecated: Use [NewActionOf] and register the result with
 // [Action.Register].
 func DefineAction[In, Out any](
 	r api.Registry,
@@ -157,7 +157,7 @@ func DefineAction[In, Out any](
 	inputSchema map[string]any,
 	fn Func[In, Out],
 ) *Action[In, Out, struct{}] {
-	a := NewActionWithOptions(atype, name, &ActionOptions{
+	a := NewActionOf(atype, name, &ActionOptions{
 		Metadata:    metadata,
 		InputSchema: inputSchema,
 	}, fn)
@@ -168,7 +168,7 @@ func DefineAction[In, Out any](
 // DefineStreamingAction creates a new streaming action and registers it.
 // If inputSchema is nil, it is inferred from the function's input type.
 //
-// Deprecated: Use [NewStreamingActionWithOptions] and register the result
+// Deprecated: Use [NewStreamingActionOf] and register the result
 // with [Action.Register].
 func DefineStreamingAction[In, Out, Stream any](
 	r api.Registry,
@@ -178,7 +178,7 @@ func DefineStreamingAction[In, Out, Stream any](
 	inputSchema map[string]any,
 	fn StreamingFunc[In, Out, Stream],
 ) *Action[In, Out, Stream] {
-	a := NewStreamingActionWithOptions(atype, name, &ActionOptions{
+	a := NewStreamingActionOf(atype, name, &ActionOptions{
 		Metadata:    metadata,
 		InputSchema: inputSchema,
 	}, fn)

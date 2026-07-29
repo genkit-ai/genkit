@@ -81,11 +81,11 @@ type BidiActionOptions struct {
 	InitSchema   map[string]any // JSON schema for the session's initial configuration. Inferred from Init if nil.
 }
 
-// NewBidiActionWithOptions creates a new bidirectional streaming [BidiAction]
+// NewBidiActionOf creates a new bidirectional streaming [BidiAction]
 // without registering it.
 //
 // Experimental: bidirectional streaming is experimental and subject to change.
-func NewBidiActionWithOptions[In, Out, Stream, Init any](
+func NewBidiActionOf[In, Out, Stream, Init any](
 	atype api.ActionType,
 	name string,
 	opts *BidiActionOptions,
@@ -119,7 +119,7 @@ func NewBidiActionWithOptions[In, Out, Stream, Init any](
 
 // NewBidiAction creates a new bidirectional streaming [BidiAction] without registering it.
 //
-// Deprecated: Use [NewBidiActionWithOptions], which takes the action type
+// Deprecated: Use [NewBidiActionOf], which takes the action type
 // first like the other action constructors.
 func NewBidiAction[In, Out, Stream, Init any](
 	name string,
@@ -127,12 +127,12 @@ func NewBidiAction[In, Out, Stream, Init any](
 	opts *BidiActionOptions,
 	fn BidiFunc[In, Out, Stream, Init],
 ) *BidiAction[In, Out, Stream, Init] {
-	return NewBidiActionWithOptions(atype, name, opts, fn)
+	return NewBidiActionOf(atype, name, opts, fn)
 }
 
 // DefineBidiAction creates and registers a bidirectional streaming [BidiAction].
 //
-// Deprecated: Use [NewBidiActionWithOptions] and register the result with
+// Deprecated: Use [NewBidiActionOf] and register the result with
 // [BidiAction.Register].
 func DefineBidiAction[In, Out, Stream, Init any](
 	r api.Registry,
@@ -141,7 +141,7 @@ func DefineBidiAction[In, Out, Stream, Init any](
 	opts *BidiActionOptions,
 	fn BidiFunc[In, Out, Stream, Init],
 ) *BidiAction[In, Out, Stream, Init] {
-	b := NewBidiActionWithOptions(atype, name, opts, fn)
+	b := NewBidiActionOf(atype, name, opts, fn)
 	b.Register(r)
 	return b
 }

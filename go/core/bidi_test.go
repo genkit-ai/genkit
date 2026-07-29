@@ -36,7 +36,7 @@ func TestBidiActionEcho(t *testing.T) {
 	ctx := context.Background()
 
 	// In=string (stream chunks), Out=string, Stream=string, Init=struct{} (no init data).
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "echo", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			var count int
@@ -95,7 +95,7 @@ func TestBidiActionWithConfig(t *testing.T) {
 	}
 
 	// In=string (stream chunks), Out=string, Stream=string, Init=Config.
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "prefixed", nil,
 		func(ctx context.Context, cfg Config, inCh <-chan string, outCh chan<- string) (string, error) {
 			for input := range inCh {
@@ -135,7 +135,7 @@ func TestRunBidi(t *testing.T) {
 
 	type Config struct{ Prefix string }
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "prefixed-oneshot", nil,
 		func(ctx context.Context, cfg Config, inCh <-chan string, outCh chan<- string) (string, error) {
 			var out string
@@ -200,7 +200,7 @@ func TestRunBidiJSON(t *testing.T) {
 		Prefix string `json:"prefix"`
 	}
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "prefixed-json", nil,
 		func(ctx context.Context, cfg Config, inCh <-chan string, outCh chan<- string) (string, error) {
 			for in := range inCh {
@@ -248,7 +248,7 @@ func TestRunBidiJSONInvalidInit(t *testing.T) {
 	type Config struct {
 		Prefix string `json:"prefix"`
 	}
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "bad-json-init", nil,
 		func(ctx context.Context, cfg Config, inCh <-chan string, outCh chan<- string) (string, error) {
 			return "", nil
@@ -279,7 +279,7 @@ func TestRunBidiJSONRequiresInput(t *testing.T) {
 	type Config struct {
 		Prefix string `json:"prefix"`
 	}
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "input-required", nil,
 		func(ctx context.Context, cfg Config, inCh <-chan string, outCh chan<- string) (string, error) {
 			return "ran", nil
@@ -322,7 +322,7 @@ func TestConnectJSONNullInit(t *testing.T) {
 
 	for _, opts := range []*api.BidiJSONOptions{nil, {Init: json.RawMessage(`null`)}} {
 		var sawInit Config
-		action := NewBidiActionWithOptions(
+		action := NewBidiActionOf(
 			api.ActionTypeCustom, "null-init", nil,
 			func(ctx context.Context, cfg Config, inCh <-chan string, outCh chan<- string) (string, error) {
 				sawInit = cfg
@@ -360,7 +360,7 @@ func TestInitSchemaValidationRejectsBadInit(t *testing.T) {
 		"required": []any{"prefix"},
 	}
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "validated-init",
 		&BidiActionOptions{InitSchema: initSchema},
 		func(ctx context.Context, cfg map[string]any, inCh <-chan string, outCh chan<- string) (string, error) {
@@ -395,7 +395,7 @@ func TestInitSchemaValidationAcceptsGoodInit(t *testing.T) {
 		"required": []any{"prefix"},
 	}
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "validated-init-ok",
 		&BidiActionOptions{InitSchema: initSchema},
 		func(ctx context.Context, cfg map[string]any, inCh <-chan string, outCh chan<- string) (string, error) {
@@ -442,7 +442,7 @@ func TestBidiJSONInitRejectsUnknownFields(t *testing.T) {
 		"additionalProperties": false,
 	}
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "json-init-unknown-fields",
 		&BidiActionOptions{InitSchema: initSchema},
 		func(ctx context.Context, cfg *Config, inCh <-chan string, outCh chan<- string) (string, error) {
@@ -506,7 +506,7 @@ func TestBidiJSONInitNormalizedLikeInput(t *testing.T) {
 	}
 
 	gotCount := make(chan any, 1)
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "json-init-normalized",
 		&BidiActionOptions{InitSchema: initSchema},
 		func(ctx context.Context, cfg any, inCh <-chan string, outCh chan<- string) (string, error) {
@@ -644,7 +644,7 @@ func TestBidiZeroStructInitValidatedWithoutInit(t *testing.T) {
 		"required": []any{"Prefix"},
 	}
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "required-init",
 		&BidiActionOptions{InitSchema: initSchema},
 		func(ctx context.Context, cfg Config, inCh <-chan string, outCh chan<- string) (string, error) {
@@ -678,7 +678,7 @@ func TestBidiConnectionSendAfterClose(t *testing.T) {
 	// Hold the action open so the only Send failure mode is the closed
 	// input side (a completed action would race in ErrActionCompleted).
 	release := make(chan struct{})
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "test", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			<-release
@@ -705,7 +705,7 @@ func TestBidiConnectionSendAfterClose(t *testing.T) {
 func TestBidiConnectionContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "blocking", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			<-ctx.Done()
@@ -759,7 +759,7 @@ func TestBidiActionRegistration(t *testing.T) {
 func TestBidiActionDone(t *testing.T) {
 	ctx := context.Background()
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "quick", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			for range inCh {
@@ -793,7 +793,7 @@ func TestBidiRunCallbackErrorStopsAction(t *testing.T) {
 	ctx := context.Background()
 
 	fnExited := make(chan struct{})
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "cb-error", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			defer close(fnExited)
@@ -828,7 +828,7 @@ func TestBidiRunCallbackErrorStopsAction(t *testing.T) {
 func TestBidiActionPanicRecovered(t *testing.T) {
 	ctx := context.Background()
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "panicky", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			panic("boom")
@@ -854,7 +854,7 @@ func TestBidiActionPanicRecovered(t *testing.T) {
 func TestBidiActionClosingOutChIsError(t *testing.T) {
 	ctx := context.Background()
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "closer", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			close(outCh)
@@ -881,7 +881,7 @@ func TestBidiActionClosingOutChIsError(t *testing.T) {
 func TestBidiReceiveBreakDoesNotCancelSession(t *testing.T) {
 	ctx := context.Background()
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "resumable", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			for i := range 3 {
@@ -932,7 +932,7 @@ func TestBidiReceiveBreakDoesNotCancelSession(t *testing.T) {
 
 // TestBidiConnectionCancel verifies that Cancel aborts the session.
 func TestBidiConnectionCancel(t *testing.T) {
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "cancellable", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			<-ctx.Done()
@@ -959,7 +959,7 @@ func TestBidiOutputAfterCompletionNotCancelled(t *testing.T) {
 	ctx := context.Background()
 
 	for range 50 {
-		action := NewBidiActionWithOptions(
+		action := NewBidiActionOf(
 			api.ActionTypeCustom, "completes", nil,
 			func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 				for range inCh {
@@ -996,7 +996,7 @@ func TestBidiConnectionCompletionReleasesContext(t *testing.T) {
 
 	// Capture the context the action runs under.
 	ctxCh := make(chan context.Context, 1)
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "capture", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			ctxCh <- ctx
@@ -1029,7 +1029,7 @@ func TestBidiConnectionCompletionReleasesContext(t *testing.T) {
 func TestBidiConnectionNoSpuriousErrorAfterCompletion(t *testing.T) {
 	ctx := context.Background()
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "clean", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			outCh <- "chunk"
@@ -1070,7 +1070,7 @@ func TestBidiConnectionNoSpuriousErrorAfterCompletion(t *testing.T) {
 func TestBidiConnectionReceiveResumesAfterBreak(t *testing.T) {
 	ctx := context.Background()
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "echo", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			for input := range inCh {
@@ -1120,7 +1120,7 @@ func TestBidiConnectionReceiveResumesAfterBreak(t *testing.T) {
 func TestBidiJSONConnSendValidatesChunks(t *testing.T) {
 	ctx := context.Background()
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "typed-in", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			var n int
@@ -1193,7 +1193,7 @@ func TestBidiJSONConnSendValidatesChunks(t *testing.T) {
 func TestBidiOutputSchemaValidatedOnConnection(t *testing.T) {
 	ctx := context.Background()
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "bad-output",
 		&BidiActionOptions{OutputSchema: map[string]any{"type": "string"}},
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (int, error) {
@@ -1220,7 +1220,7 @@ func TestBidiJSONConnReceiveMarshalErrorAbortsSession(t *testing.T) {
 	ctx := context.Background()
 
 	fnExited := make(chan struct{})
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "nan-stream", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- float64) (string, error) {
 			defer close(fnExited)
@@ -1266,7 +1266,7 @@ func TestBidiJSONConnReceiveMarshalErrorAbortsSession(t *testing.T) {
 func TestBidiInvalidChunkFailsCtxObliviousSession(t *testing.T) {
 	ctx := context.Background()
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "oblivious", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			for range inCh {
@@ -1294,7 +1294,7 @@ func TestBidiInvalidChunkFailsCtxObliviousSession(t *testing.T) {
 // once the action has completed, even when the input channel was never closed
 // and still has buffer space.
 func TestBidiSendAfterCompletionFails(t *testing.T) {
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "one-read", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			<-inCh
@@ -1328,7 +1328,7 @@ func TestBidiSessionWrapperPanicNotMislabeled(t *testing.T) {
 	// An unregistered action with a $ref output schema: schema resolution
 	// dereferences the nil registry after the function returns, panicking
 	// inside the session wrapper.
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "ref-output",
 		&BidiActionOptions{OutputSchema: SchemaRef("missing")},
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
@@ -1362,7 +1362,7 @@ func TestBidiRunCallbackPanicReleasesAction(t *testing.T) {
 	ctx := context.Background()
 
 	fnExited := make(chan struct{})
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "cb-panic", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			defer close(fnExited)
@@ -1409,7 +1409,7 @@ func TestBidiJSONConnEmptyChunkValidated(t *testing.T) {
 		"required":   []any{"name"},
 	}
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "required-in",
 		&BidiActionOptions{InputSchema: schema},
 		func(ctx context.Context, _ struct{}, inCh <-chan msg, outCh chan<- string) (string, error) {
@@ -1455,7 +1455,7 @@ func TestActionDescSchemaSentinels(t *testing.T) {
 		t.Error("streaming action StreamSchema = nil, want schema")
 	}
 
-	noInit := NewBidiActionWithOptions(api.ActionTypeCustom, "bidi-noinit-desc", nil,
+	noInit := NewBidiActionOf(api.ActionTypeCustom, "bidi-noinit-desc", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 			return "", nil
 		})
@@ -1467,7 +1467,7 @@ func TestActionDescSchemaSentinels(t *testing.T) {
 	}
 
 	type Config struct{ Prefix string }
-	withInit := NewBidiActionWithOptions(api.ActionTypeCustom, "bidi-init-desc", nil,
+	withInit := NewBidiActionOf(api.ActionTypeCustom, "bidi-init-desc", nil,
 		func(ctx context.Context, cfg Config, inCh <-chan string, outCh chan<- string) (string, error) {
 			return "", nil
 		})
@@ -1482,7 +1482,7 @@ func TestActionDescSchemaSentinels(t *testing.T) {
 func TestBidiEchoStress(t *testing.T) {
 	ctx := context.Background()
 
-	action := NewBidiActionWithOptions(
+	action := NewBidiActionOf(
 		api.ActionTypeCustom, "stress-echo", nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan int, outCh chan<- int) (int, error) {
 			var sum int
@@ -1582,7 +1582,7 @@ func TestResolveBidiActionFor(t *testing.T) {
 // defineTestBidiAction creates and registers a bidi action in one call for
 // the tests in this file.
 func defineTestBidiAction[In, Out, Stream, Init any](r api.Registry, atype api.ActionType, name string, opts *BidiActionOptions, fn BidiFunc[In, Out, Stream, Init]) *BidiAction[In, Out, Stream, Init] {
-	b := NewBidiActionWithOptions(atype, name, opts, fn)
+	b := NewBidiActionOf(atype, name, opts, fn)
 	b.Register(r)
 	return b
 }

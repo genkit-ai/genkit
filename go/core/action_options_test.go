@@ -25,9 +25,9 @@ import (
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
-func TestNewActionWithOptions(t *testing.T) {
+func TestNewActionOf(t *testing.T) {
 	t.Run("nil options infers schemas", func(t *testing.T) {
-		a := NewActionWithOptions(api.ActionTypeCustom, "double", nil,
+		a := NewActionOf(api.ActionTypeCustom, "double", nil,
 			func(ctx context.Context, n int) (int, error) { return n * 2, nil })
 
 		got, err := a.Run(context.Background(), 5, nil)
@@ -48,7 +48,7 @@ func TestNewActionWithOptions(t *testing.T) {
 	})
 
 	t.Run("description field wins over metadata", func(t *testing.T) {
-		a := NewActionWithOptions(api.ActionTypeCustom, "desc", &ActionOptions{
+		a := NewActionOf(api.ActionTypeCustom, "desc", &ActionOptions{
 			Description: "explicit",
 			Metadata:    map[string]any{"description": "from metadata"},
 		}, func(ctx context.Context, in struct{}) (bool, error) { return true, nil })
@@ -59,7 +59,7 @@ func TestNewActionWithOptions(t *testing.T) {
 	})
 
 	t.Run("description falls back to metadata", func(t *testing.T) {
-		a := NewActionWithOptions(api.ActionTypeCustom, "desc-meta", &ActionOptions{
+		a := NewActionOf(api.ActionTypeCustom, "desc-meta", &ActionOptions{
 			Metadata: map[string]any{"description": "from metadata"},
 		}, func(ctx context.Context, in struct{}) (bool, error) { return true, nil })
 
@@ -72,7 +72,7 @@ func TestNewActionWithOptions(t *testing.T) {
 		in := map[string]any{"type": "string", "title": "in"}
 		out := map[string]any{"type": "string", "title": "out"}
 		stream := map[string]any{"type": "string", "title": "stream"}
-		a := NewStreamingActionWithOptions(api.ActionTypeCustom, "override", &ActionOptions{
+		a := NewStreamingActionOf(api.ActionTypeCustom, "override", &ActionOptions{
 			InputSchema:  in,
 			OutputSchema: out,
 			StreamSchema: stream,
@@ -93,7 +93,7 @@ func TestNewActionWithOptions(t *testing.T) {
 	})
 
 	t.Run("streaming action infers stream schema", func(t *testing.T) {
-		a := NewStreamingActionWithOptions(api.ActionTypeCustom, "streamer", nil,
+		a := NewStreamingActionOf(api.ActionTypeCustom, "streamer", nil,
 			func(ctx context.Context, n int, cb StreamCallback[string]) (int, error) {
 				return n, nil
 			})
@@ -105,7 +105,7 @@ func TestNewActionWithOptions(t *testing.T) {
 
 	t.Run("register makes the action resolvable", func(t *testing.T) {
 		r := registry.New()
-		NewActionWithOptions(api.ActionTypeCustom, "registered", nil,
+		NewActionOf(api.ActionTypeCustom, "registered", nil,
 			func(ctx context.Context, s string) (string, error) { return s, nil }).Register(r)
 
 		if a := ResolveActionFor[string, string, struct{}](r, api.ActionTypeCustom, "registered"); a == nil {
@@ -123,7 +123,7 @@ func TestDeprecatedConstructorsDelegate(t *testing.T) {
 	fn := func(ctx context.Context, s string) (string, error) { return s, nil }
 
 	oldA := NewAction("legacy", api.ActionTypeCustom, metadata, inputSchema, fn)
-	newA := NewActionWithOptions(api.ActionTypeCustom, "legacy", &ActionOptions{
+	newA := NewActionOf(api.ActionTypeCustom, "legacy", &ActionOptions{
 		Metadata:    metadata,
 		InputSchema: inputSchema,
 	}, fn)
