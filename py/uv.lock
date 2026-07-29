@@ -1679,7 +1679,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "boto3", specifier = ">=1.36" },
+    { name = "boto3", specifier = ">=1.37.24" },
     { name = "genkit", editable = "packages/genkit" },
 ]
 

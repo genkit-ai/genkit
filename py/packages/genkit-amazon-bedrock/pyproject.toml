@@ -37,7 +37,7 @@ classifiers = [
   "Typing :: Typed",
   "License :: OSI Approved :: Apache Software License",
 ]
-dependencies = ["genkit", "boto3>=1.36"]
+dependencies = ["genkit", "boto3>=1.37.24"]
 description = "Genkit Amazon Bedrock Plugin"
 keywords = [
   "genkit",

@@ -23,17 +23,21 @@ from pydantic.alias_generators import to_camel
 
 from genkit import ModelConfig
 
-DEFAULT_REGION = 'us-east-1'
 DEFAULT_MAX_RETRIES = 3
-DEFAULT_REQUEST_TIMEOUT = 30.0
+# Socket read timeout, not a whole-call deadline: Bedrock generations can
+# legitimately run for many minutes (Nova allows 60-minute inference).
+DEFAULT_READ_TIMEOUT = 3600.0
+DEFAULT_CONNECT_TIMEOUT = 60.0
+# The botocore default of 10 pooled connections throttles LLM concurrency.
+DEFAULT_MAX_POOL_CONNECTIONS = 50
 
 
 class BedrockConfig(ModelConfig):
     """Per-call configuration for Bedrock models.
 
-    Mirrors the Go plugin's ``Config`` surface. Unknown keys are allowed and
-    forwarded so callers can use provider-specific options without a plugin
-    release.
+    Mirrors the Go plugin's ``Config`` surface. Unknown keys are tolerated for
+    forward compatibility but only the declared fields (and
+    ``additional_model_request_fields``) reach the Converse API.
     """
 
     model_config = ConfigDict(
@@ -41,6 +45,10 @@ class BedrockConfig(ModelConfig):
         populate_by_name=True,
         extra='allow',
     )
+
+    max_tokens: int | None = None
+    """Maximum tokens to generate. When unset, the plugin leaves the field
+    unset except for Claude models, where Bedrock requires a value."""
 
     tool_choice: str | None = None
     """Tool choice mode: ``auto``, ``required``/``any``, ``none``, or a tool name."""
@@ -59,5 +67,5 @@ class ModelDefinition(BaseModel):
     name: str
     """Bedrock model ID, e.g. ``anthropic.claude-sonnet-4-5-20250929-v1:0``."""
 
-    type: Literal['chat', 'image', 'embedding'] = 'chat'
+    type: Literal['chat', 'text', 'image', 'embedding'] = 'chat'
     """Routes generate calls: chat/text via Converse, image via InvokeModel."""
