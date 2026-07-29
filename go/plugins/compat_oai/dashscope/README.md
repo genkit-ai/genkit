@@ -28,47 +28,16 @@ default endpoint above works fine for standard usage too.
 
 See https://help.aliyun.com/en/model-studio/base-url for the full reference.
 
-## Running Tests
+## Tool Choice
 
-First, set your DashScope API key as an environment variable:
+Qwen models support tool calling, but forced tool-choice modes (`required`/`none`)
+carry model- and thinking-mode-specific restrictions. This plugin does not
+advertise `ToolChoice` support and always uses automatic tool selection.
+
+## Live tests
+
+Live tests are skipped unless `DASHSCOPE_API_KEY` is set:
 
 ```bash
-export DASHSCOPE_API_KEY=<your-api-key>
+go test -race ./plugins/compat_oai/dashscope -run '^TestPluginLive$' -v -count=1
 ```
-
-### Running All Tests
-To run all tests in the directory:
-```bash
-go test -v .
-```
-
-### Running Tests from Specific Files
-To run tests from a specific file:
-```bash
-# Run only generate_live_test.go tests
-go test -run "^TestGenerator"
-
-# Run only dashscope_live_test.go tests
-go test -run "^TestPlugin"
-```
-
-### Running Individual Tests
-To run a specific test case:
-```bash
-# Run only the streaming test from dashscope_live_test.go
-go test -run "TestPlugin/streaming"
-
-# Run only the Complete test from generate_live_test.go
-go test -run "TestGenerator_Complete"
-
-# Run only the Stream test from generate_live_test.go
-go test -run "TestGenerator_Stream"
-```
-
-### Test Output Verbosity
-Add the `-v` flag for verbose output:
-```bash
-go test -v -run "TestPlugin/streaming"
-```
-
-Note: All live tests require the DASHSCOPE_API_KEY environment variable to be set. Tests will be skipped if the API key is not provided.
