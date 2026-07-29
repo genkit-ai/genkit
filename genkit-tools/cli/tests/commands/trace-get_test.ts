@@ -213,6 +213,80 @@ describe('trace:get', () => {
     );
   });
 
+  it('should format arrays without parts nicely as bullet points', async () => {
+    mockedRunWithManager.mockImplementation(async (projectRoot, fn) => {
+      const mockManager = {
+        getTrace: jest.fn<any>().mockResolvedValue({
+          traceId: 'test-id',
+          displayName: 'testSpan',
+          startTime: 1000,
+          endTime: 2000,
+          spans: {
+            s1: {
+              spanId: 's1',
+              displayName: 'testSpan',
+              startTime: 1000,
+              endTime: 2000,
+              attributes: {
+                'genkit:input': JSON.stringify([{ a: 1 }, { b: 2 }]),
+              },
+            },
+          },
+        }),
+      };
+      await fn(mockManager as any);
+    });
+
+    await createCommand().parseAsync([
+      'node',
+      'trace:get',
+      'test-trace-id',
+      '-f',
+      'tree',
+    ]);
+
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringMatching(/- a: 1\s*- b: 2/s)
+    );
+  });
+
+  it('should cleanly fallback an empty message content to a generic Role placeholder', async () => {
+    mockedRunWithManager.mockImplementation(async (projectRoot, fn) => {
+      const mockManager = {
+        getTrace: jest.fn<any>().mockResolvedValue({
+          traceId: 'test-id',
+          displayName: 'testSpan',
+          startTime: 1000,
+          endTime: 2000,
+          spans: {
+            s1: {
+              spanId: 's1',
+              displayName: 'testSpan',
+              startTime: 1000,
+              endTime: 2000,
+              attributes: {
+                'genkit:input': JSON.stringify({ role: 'user', content: [] }),
+              },
+            },
+          },
+        }),
+      };
+      await fn(mockManager as any);
+    });
+
+    await createCommand().parseAsync([
+      'node',
+      'trace:get',
+      'test-trace-id',
+      '-f',
+      'tree',
+    ]);
+
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining('User: (empty)')
+    );
+  });
+
   it('should handle trace not found', async () => {
     mockedRunWithManager.mockImplementation(async (projectRoot, fn) => {
       const mockManager = {
