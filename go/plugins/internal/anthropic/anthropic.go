@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
@@ -37,7 +38,54 @@ import (
 
 const (
 	ToolNameRegex = `^[a-zA-Z0-9_-]{1,64}$`
+
+	// DefaultMaxOutputTokens is used when the request config does not set
+	// MaxTokens, which the Anthropic API requires. It matches the JS plugin's
+	// DEFAULT_MAX_OUTPUT_TOKENS and is low enough for every Claude model.
+	DefaultMaxOutputTokens = 4096
 )
+
+// metadataSignature extracts a reasoning signature from part metadata. It
+// handles both []byte (the value [ai.NewReasoningPart] stores) and string
+// (base64-encoded, after the part has been through a JSON roundtrip such as
+// persisted session history). Without the string case the signature is dropped
+// and Anthropic rejects the replayed thinking block.
+func metadataSignature(metadata map[string]any) []byte {
+	switch sig := metadata["signature"].(type) {
+	case []byte:
+		return sig
+	case string:
+		decoded, err := base64.StdEncoding.DecodeString(sig)
+		if err != nil {
+			return nil
+		}
+		return decoded
+	}
+	return nil
+}
+
+// toAnthropicMediaBlock converts a media or data [ai.Part] to the content block
+// its media type calls for. Anthropic only accepts images in an image block;
+// PDFs and plain text must be sent as document blocks.
+func toAnthropicMediaBlock(p *ai.Part, kind string) (anthropic.ContentBlockParamUnion, error) {
+	contentType, data, err := uri.Data(p)
+	if err != nil {
+		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("unable to parse %s part: %w", kind, err)
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(data)
+	switch {
+	case strings.HasPrefix(contentType, "image/"):
+		return anthropic.NewImageBlockBase64(contentType, encoded), nil
+	case contentType == "application/pdf":
+		return anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{Data: encoded}), nil
+	case contentType == "text/plain":
+		return anthropic.NewDocumentBlock(anthropic.PlainTextSourceParam{Data: string(data)}), nil
+	default:
+		return anthropic.ContentBlockParamUnion{}, fmt.Errorf(
+			"unsupported %s content type %q: Anthropic accepts image/*, application/pdf, and text/plain", kind, contentType)
+	}
+}
 
 func DefineModel(client anthropic.Client, provider, name string, info ai.ModelOptions) ai.Model {
 	label := "Anthropic"
@@ -217,8 +265,11 @@ func toAnthropicRequest(provider string, i *ai.ModelRequest) (*anthropic.Message
 		return nil, err
 	}
 
+	// max_tokens is required by the Anthropic API. Fall back to a conservative
+	// default that every Claude model accepts, mirroring the JS plugin's
+	// DEFAULT_MAX_OUTPUT_TOKENS, so a bare Generate call works without config.
 	if req.MaxTokens == 0 {
-		return nil, errors.New("maxTokens not set")
+		req.MaxTokens = DefaultMaxOutputTokens
 	}
 
 	// configure system prompt (if given)
@@ -227,51 +278,82 @@ func toAnthropicRequest(provider string, i *ai.ModelRequest) (*anthropic.Message
 		if message.Role == ai.RoleSystem {
 			// only text is supported for system messages
 			sysBlocks = append(sysBlocks, anthropic.TextBlockParam{Text: message.Text()})
-		} else if message.Content[len(message.Content)-1].IsToolResponse() {
+			continue
+		}
+
+		parts, err := toAnthropicParts(message.Content)
+		if err != nil {
+			return nil, err
+		}
+		// Anthropic rejects messages with an empty content array.
+		if len(parts) == 0 {
+			continue
+		}
+
+		if lastPart := message.Content[len(message.Content)-1]; lastPart.IsToolResponse() {
 			// if the last message is a ToolResponse, the conversation must continue
 			// and the ToolResponse message must be sent as a user
 			// see: https://docs.anthropic.com/en/docs/build-with-claude/tool-use#handling-tool-use-and-tool-result-content-blocks
-			parts, err := toAnthropicParts(message.Content)
-			if err != nil {
-				return nil, err
-			}
 			messages = append(messages, anthropic.NewUserMessage(parts...))
-		} else {
-			parts, err := toAnthropicParts(message.Content)
-			if err != nil {
-				return nil, err
-			}
-			role, err := toAnthropicRole(message.Role)
-			if err != nil {
-				return nil, err
-			}
-			messages = append(messages, anthropic.MessageParam{
-				Role:    role,
-				Content: parts,
-			})
+			continue
 		}
+
+		role, err := toAnthropicRole(message.Role)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, anthropic.MessageParam{
+			Role:    role,
+			Content: parts,
+		})
 	}
 
-	req.System = sysBlocks
+	// Only overwrite the config-provided system prompt when the request
+	// actually carries system messages, and never send an empty array.
+	if len(sysBlocks) > 0 {
+		req.System = sysBlocks
+	}
 	req.Messages = messages
 
 	tools, err := toAnthropicTools(provider, i.Tools)
 	if err != nil {
 		return nil, err
 	}
-	req.Tools = tools
+	// Append rather than assign: server-side tools (web search, code execution,
+	// ...) can only be expressed through the config, and assigning here would
+	// silently drop them.
+	req.Tools = append(req.Tools, tools...)
+
+	if toolChoice, ok := toAnthropicToolChoice(i.ToolChoice); ok {
+		req.ToolChoice = toolChoice
+	}
 
 	if i.Output != nil && i.Output.Format == "json" && i.Output.Schema != nil && i.Output.Constrained {
-		// Native structured output via OutputConfig.
-		req.OutputConfig = anthropic.OutputConfigParam{
-			Format: anthropic.JSONOutputFormatParam{
-				Schema: pluginjsonschema.EnforceStrict(i.Output.Schema),
-				// Type is elided, defaults to "json_schema"
-			},
+		// Native structured output via OutputConfig. Set only the format so a
+		// config-provided OutputConfig.Effort survives.
+		req.OutputConfig.Format = anthropic.JSONOutputFormatParam{
+			Schema: pluginjsonschema.EnforceStrict(i.Output.Schema),
+			// Type is elided, defaults to "json_schema"
 		}
 	}
 
 	return req, nil
+}
+
+// toAnthropicToolChoice translates [ai.ToolChoice] to the Anthropic tool_choice
+// union. The second return value reports whether a choice was set; when false
+// the caller leaves any config-provided tool_choice untouched.
+func toAnthropicToolChoice(choice ai.ToolChoice) (anthropic.ToolChoiceUnionParam, bool) {
+	switch choice {
+	case ai.ToolChoiceAuto:
+		return anthropic.ToolChoiceUnionParam{OfAuto: &anthropic.ToolChoiceAutoParam{}}, true
+	case ai.ToolChoiceRequired:
+		return anthropic.ToolChoiceUnionParam{OfAny: &anthropic.ToolChoiceAnyParam{}}, true
+	case ai.ToolChoiceNone:
+		return anthropic.ToolChoiceUnionParam{OfNone: &anthropic.ToolChoiceNoneParam{}}, true
+	default:
+		return anthropic.ToolChoiceUnionParam{}, false
+	}
 }
 
 // configFromRequest converts any supported config type to [anthropic.MessageNewParams]
@@ -299,7 +381,10 @@ func configFromRequest(input *ai.ModelRequest) (*anthropic.MessageNewParams, err
 
 // toAnthropicTools translates [ai.ToolDefinition] to an anthropic.ToolParam type
 func toAnthropicTools(provider string, tools []*ai.ToolDefinition) ([]anthropic.ToolUnionParam, error) {
-	resp := make([]anthropic.ToolUnionParam, 0)
+	if len(tools) == 0 {
+		return nil, nil
+	}
+	resp := make([]anthropic.ToolUnionParam, 0, len(tools))
 	regex := regexp.MustCompile(ToolNameRegex)
 
 	for _, t := range tools {
@@ -370,17 +455,17 @@ func toAnthropicParts(parts []*ai.Part) ([]anthropic.ContentBlockParamUnion, err
 		case p.IsText():
 			blocks = append(blocks, anthropic.NewTextBlock(p.Text))
 		case p.IsMedia():
-			contentType, data, err := uri.Data(p)
+			block, err := toAnthropicMediaBlock(p, "media")
 			if err != nil {
-				return nil, fmt.Errorf("unable to parse media part: %w", err)
+				return nil, err
 			}
-			blocks = append(blocks, anthropic.NewImageBlockBase64(contentType, base64.StdEncoding.EncodeToString(data)))
+			blocks = append(blocks, block)
 		case p.IsData():
-			contentType, data, err := uri.Data(p)
+			block, err := toAnthropicMediaBlock(p, "data")
 			if err != nil {
-				return nil, fmt.Errorf("unable to parse data part: %w", err)
+				return nil, err
 			}
-			blocks = append(blocks, anthropic.NewImageBlockBase64(contentType, base64.RawStdEncoding.EncodeToString(data)))
+			blocks = append(blocks, block)
 		case p.IsToolRequest():
 			toolReq := p.ToolRequest
 			blocks = append(blocks, anthropic.NewToolUseBlock(toolReq.Ref, toolReq.Input, toolReq.Name))
@@ -392,13 +477,7 @@ func toAnthropicParts(parts []*ai.Part) ([]anthropic.ContentBlockParamUnion, err
 			}
 			blocks = append(blocks, anthropic.NewToolResultBlock(toolResp.Ref, string(output), false))
 		case p.IsReasoning():
-			signature := []byte{}
-			if p.Metadata != nil {
-				if sig, ok := p.Metadata["signature"].([]byte); ok {
-					signature = sig
-				}
-			}
-			blocks = append(blocks, anthropic.NewThinkingBlock(string(signature), p.Text))
+			blocks = append(blocks, anthropic.NewThinkingBlock(string(metadataSignature(p.Metadata)), p.Text))
 		default:
 			return nil, errors.New("unknown part type in the request")
 		}
