@@ -60,11 +60,11 @@ type ModelOperation = core.Operation[*ModelResponse]
 // StartModelOpFunc starts a background model operation.
 type StartModelOpFunc = func(ctx context.Context, req *ModelRequest) (*ModelOperation, error)
 
-// StartModelOpFuncWithConfig is a [StartModelOpFunc] that additionally
+// TypedStartModelOpFunc is a [StartModelOpFunc] that additionally
 // receives the request's typed Config: the framework deserializes the
 // request's raw config into it before calling the function (see
-// [NewBackgroundModelWithConfig]).
-type StartModelOpFuncWithConfig[Config any] = func(ctx context.Context, req *ModelRequest, config Config) (*ModelOperation, error)
+// [NewTypedBackgroundModel]).
+type TypedStartModelOpFunc[Config any] = func(ctx context.Context, req *ModelRequest, config Config) (*ModelOperation, error)
 
 // CheckModelOpFunc checks the status of a background model operation.
 type CheckModelOpFunc = func(ctx context.Context, op *ModelOperation) (*ModelOperation, error)
@@ -90,21 +90,21 @@ func LookupBackgroundModel(r api.Registry, name string) BackgroundModel {
 	return &backgroundModel{*action}
 }
 
-// NewBackgroundModelWithConfig creates a new [BackgroundModel]. Register it
+// NewTypedBackgroundModel creates a new [BackgroundModel]. Register it
 // with [BackgroundModel.Register] to make it resolvable by name.
 //
 // Config is the model's typed configuration; it is usually inferred from
-// startFn's signature. See [NewModelWithConfig] for how the request's config
+// startFn's signature. See [NewTypedModel] for how the request's config
 // is deserialized.
-func NewBackgroundModelWithConfig[Config any](name string, opts *BackgroundModelOptions, startFn StartModelOpFuncWithConfig[Config], checkFn CheckModelOpFunc) BackgroundModel {
+func NewTypedBackgroundModel[Config any](name string, opts *BackgroundModelOptions, startFn TypedStartModelOpFunc[Config], checkFn CheckModelOpFunc) BackgroundModel {
 	if name == "" {
-		panic("ai.NewBackgroundModelWithConfig: name is required")
+		panic("ai.NewTypedBackgroundModel: name is required")
 	}
 	if startFn == nil {
-		panic("ai.NewBackgroundModelWithConfig: startFn is required")
+		panic("ai.NewTypedBackgroundModel: startFn is required")
 	}
 	if checkFn == nil {
-		panic("ai.NewBackgroundModelWithConfig: checkFn is required")
+		panic("ai.NewTypedBackgroundModel: checkFn is required")
 	}
 
 	if opts == nil {
@@ -194,21 +194,21 @@ func NewBackgroundModelWithConfig[Config any](name string, opts *BackgroundModel
 
 // NewBackgroundModel defines a new model that runs in the background.
 //
-// Deprecated: Use [NewBackgroundModelWithConfig], which passes the request's
+// Deprecated: Use [NewTypedBackgroundModel], which passes the request's
 // config to startFn as a typed value instead of leaving it type-erased on the
 // request.
 func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn StartModelOpFunc, checkFn CheckModelOpFunc) BackgroundModel {
 	if startFn == nil {
 		panic("ai.NewBackgroundModel: startFn is required")
 	}
-	return NewBackgroundModelWithConfig(name, opts, func(ctx context.Context, req *ModelRequest, _ any) (*ModelOperation, error) {
+	return NewTypedBackgroundModel(name, opts, func(ctx context.Context, req *ModelRequest, _ any) (*ModelOperation, error) {
 		return startFn(ctx, req)
 	}, checkFn)
 }
 
 // DefineBackgroundModel defines and registers a new model that runs in the background.
 //
-// Deprecated: Use [NewBackgroundModelWithConfig] and register the result with
+// Deprecated: Use [NewTypedBackgroundModel] and register the result with
 // [BackgroundModel.Register].
 func DefineBackgroundModel(r *registry.Registry, name string, opts *BackgroundModelOptions, fn StartModelOpFunc, checkFn CheckModelOpFunc) BackgroundModel {
 	m := NewBackgroundModel(name, opts, fn, checkFn)

@@ -71,10 +71,10 @@ type ToolConfig struct {
 // ModelFunc is a streaming function that takes in a ModelRequest and generates a ModelResponse, optionally streaming ModelResponseChunks.
 type ModelFunc = core.StreamingFunc[*ModelRequest, *ModelResponse, *ModelResponseChunk]
 
-// ModelFuncWithConfig is a [ModelFunc] that additionally receives the
+// TypedModelFunc is a [ModelFunc] that additionally receives the
 // request's typed Config: the framework deserializes the request's raw config
-// into it before calling the function (see [NewModelWithConfig]).
-type ModelFuncWithConfig[Config any] = func(context.Context, *ModelRequest, Config, ModelStreamCallback) (*ModelResponse, error)
+// into it before calling the function (see [NewTypedModel]).
+type TypedModelFunc[Config any] = func(context.Context, *ModelRequest, Config, ModelStreamCallback) (*ModelResponse, error)
 
 // ModelStreamCallback is a stream callback of a ModelAction.
 type ModelStreamCallback = func(context.Context, *ModelResponseChunk) error
@@ -142,7 +142,7 @@ func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 	return (*generateAction)(a)
 }
 
-// NewModelWithConfig creates a new [Model]. Register it with
+// NewTypedModel creates a new [Model]. Register it with
 // [Model.Register] to make it resolvable by name.
 //
 // Config is the model's typed configuration; it is usually inferred from fn's
@@ -159,9 +159,9 @@ func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 // wrapper types like Opt[float64] that marshal to primitives but reflect as
 // objects), set [ModelOptions.ConfigSchema] explicitly or requests will be
 // rejected at the action boundary.
-func NewModelWithConfig[Config any](name string, opts *ModelOptions, fn ModelFuncWithConfig[Config]) Model {
+func NewTypedModel[Config any](name string, opts *ModelOptions, fn TypedModelFunc[Config]) Model {
 	if name == "" {
-		panic("ai.NewModelWithConfig: name is required")
+		panic("ai.NewTypedModel: name is required")
 	}
 
 	if opts == nil {
@@ -225,20 +225,20 @@ func NewModelWithConfig[Config any](name string, opts *ModelOptions, fn ModelFun
 
 // NewModel creates a new [Model].
 //
-// Deprecated: Use [NewModelWithConfig], which passes the request's config to
+// Deprecated: Use [NewTypedModel], which passes the request's config to
 // fn as a typed value instead of leaving it type-erased on the request.
 func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
 	if name == "" {
 		panic("ai.NewModel: name is required")
 	}
-	return NewModelWithConfig(name, opts, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
+	return NewTypedModel(name, opts, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		return fn(ctx, req, cb)
 	})
 }
 
 // DefineModel creates a new [Model] and registers it.
 //
-// Deprecated: Use [NewModelWithConfig] and register the result with
+// Deprecated: Use [NewTypedModel] and register the result with
 // [Model.Register].
 func DefineModel(r api.Registry, name string, opts *ModelOptions, fn ModelFunc) Model {
 	m := NewModel(name, opts, fn)
