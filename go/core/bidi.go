@@ -66,11 +66,14 @@ type BidiAction[In, Out, Stream, Init any] struct {
 	bidiFn BidiFunc[In, Out, Stream, Init]
 }
 
-// BidiActionOptions configures a bidi action. Nil schema fields are inferred
-// from the corresponding type parameters.
+// BidiActionOptions configures the optional attributes of a [BidiAction]. It
+// is [ActionOptions] plus the init schema slot. A nil options value is valid:
+// schemas are inferred from the action's type parameters and the descriptor
+// carries no metadata.
 //
 // Experimental: bidirectional streaming is experimental and subject to change.
 type BidiActionOptions struct {
+	Description  string         // Human-readable description of the action. Metadata["description"] is used if empty.
 	Metadata     map[string]any // Arbitrary key-value data attached to the action descriptor.
 	InputSchema  map[string]any // JSON schema for messages streamed into the action. Inferred from In if nil.
 	OutputSchema map[string]any // JSON schema for the action's final output. Inferred from Out if nil.
@@ -78,12 +81,13 @@ type BidiActionOptions struct {
 	InitSchema   map[string]any // JSON schema for the session's initial configuration. Inferred from Init if nil.
 }
 
-// NewBidiAction creates a new bidirectional streaming [BidiAction] without registering it.
+// NewBidiActionWithOptions creates a new bidirectional streaming [BidiAction]
+// without registering it.
 //
 // Experimental: bidirectional streaming is experimental and subject to change.
-func NewBidiAction[In, Out, Stream, Init any](
-	name string,
+func NewBidiActionWithOptions[In, Out, Stream, Init any](
 	atype api.ActionType,
+	name string,
 	opts *BidiActionOptions,
 	fn BidiFunc[In, Out, Stream, Init],
 ) *BidiAction[In, Out, Stream, Init] {
@@ -96,32 +100,40 @@ func NewBidiAction[In, Out, Stream, Init any](
 	metadata["bidi"] = true
 
 	b := &BidiAction[In, Out, Stream, Init]{
-		Action: newAction[In, Out, Stream](name, atype, metadata, opts.InputSchema),
+		Action: newAction[In, Out, Stream](atype, name, &ActionOptions{
+			Description:  opts.Description,
+			Metadata:     metadata,
+			InputSchema:  opts.InputSchema,
+			OutputSchema: opts.OutputSchema,
+			StreamSchema: opts.StreamSchema,
+		}),
 		bidiFn: fn,
 	}
 	// The embedded action's fn backs the promoted unary surface (Run,
 	// RunJSON): a one-shot session with the zero Init value.
 	b.Action.fn = b.oneShotFn(base.Zero[Init]())
-
-	if opts.OutputSchema != nil {
-		b.desc.OutputSchema = opts.OutputSchema
-	}
-	if opts.StreamSchema != nil {
-		b.desc.StreamSchema = opts.StreamSchema
-	}
-
-	if opts.InitSchema != nil {
-		b.desc.InitSchema = opts.InitSchema
-	} else if !isUnitType[Init]() {
-		b.desc.InitSchema = inferSchema[Init]()
-	}
+	b.desc.InitSchema = schemaFor[Init](opts.InitSchema, true)
 
 	return b
 }
 
+// NewBidiAction creates a new bidirectional streaming [BidiAction] without registering it.
+//
+// Deprecated: Use [NewBidiActionWithOptions], which takes the action type
+// first like the other action constructors.
+func NewBidiAction[In, Out, Stream, Init any](
+	name string,
+	atype api.ActionType,
+	opts *BidiActionOptions,
+	fn BidiFunc[In, Out, Stream, Init],
+) *BidiAction[In, Out, Stream, Init] {
+	return NewBidiActionWithOptions(atype, name, opts, fn)
+}
+
 // DefineBidiAction creates and registers a bidirectional streaming [BidiAction].
 //
-// Experimental: bidirectional streaming is experimental and subject to change.
+// Deprecated: Use [NewBidiActionWithOptions] and register the result with
+// [BidiAction.Register].
 func DefineBidiAction[In, Out, Stream, Init any](
 	r api.Registry,
 	name string,
@@ -129,7 +141,7 @@ func DefineBidiAction[In, Out, Stream, Init any](
 	opts *BidiActionOptions,
 	fn BidiFunc[In, Out, Stream, Init],
 ) *BidiAction[In, Out, Stream, Init] {
-	b := NewBidiAction(name, atype, opts, fn)
+	b := NewBidiActionWithOptions(atype, name, opts, fn)
 	b.Register(r)
 	return b
 }
