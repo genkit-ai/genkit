@@ -33,8 +33,19 @@ import (
 // EvaluatorFunc is the function type for evaluator implementations.
 type EvaluatorFunc = func(context.Context, *EvaluatorCallbackRequest) (*EvaluatorCallbackResponse, error)
 
+// EvaluatorFuncWithConfig is an [EvaluatorFunc] that additionally receives
+// the request's typed Config: the framework deserializes the request's raw
+// options into it before calling the function (see [NewEvaluatorWithConfig]).
+type EvaluatorFuncWithConfig[Config any] = func(context.Context, *EvaluatorCallbackRequest, Config) (*EvaluatorCallbackResponse, error)
+
 // BatchEvaluatorFunc is the function type for batch evaluator implementations.
 type BatchEvaluatorFunc = func(context.Context, *EvaluatorRequest) (*EvaluatorResponse, error)
+
+// BatchEvaluatorFuncWithConfig is a [BatchEvaluatorFunc] that additionally
+// receives the request's typed Config: the framework deserializes the
+// request's raw options into it before calling the function (see
+// [NewBatchEvaluatorWithConfig]).
+type BatchEvaluatorFuncWithConfig[Config any] = func(context.Context, *EvaluatorRequest, Config) (*EvaluatorResponse, error)
 
 // Evaluator represents a evaluator action.
 type Evaluator interface {
@@ -163,19 +174,10 @@ type EvaluatorCallbackRequest struct {
 // EvaluatorCallbackResponse is the result on evaluating a single [Example]
 type EvaluatorCallbackResponse = EvaluationResult
 
-// NewEvaluator creates a new [Evaluator].
-// This method processes the input dataset one-by-one.
-func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluator {
-	if name == "" {
-		panic("ai.NewEvaluator: evaluator name is required")
-	}
-
-	if opts == nil {
-		opts = &EvaluatorOptions{}
-	}
-
+// evaluatorMetadata builds the shared action metadata for an evaluator.
+func evaluatorMetadata(opts *EvaluatorOptions) map[string]any {
 	// TODO(ssbushi): Set this on `evaluator` key on action metadata
-	metadata := map[string]any{
+	return map[string]any{
 		"type": api.ActionTypeEvaluator,
 		"evaluator": map[string]any{
 			"evaluatorIsBilled":    opts.IsBilled,
@@ -183,14 +185,42 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 			"evaluatorDefinition":  opts.Definition,
 		},
 	}
+}
 
-	inputSchema := requestInputSchema(EvaluatorRequest{}, "options", opts.ConfigSchema)
+// NewEvaluatorWithConfig creates a new [Evaluator]. Register it with
+// [Evaluator.Register] to make it resolvable by name.
+// This method processes the input dataset one-by-one.
+//
+// Config is the evaluator's typed configuration; it is usually inferred from
+// fn's signature. The framework deserializes the request's raw options into
+// Config before calling fn: the exact Config type (or a pointer to it) and
+// map[string]any (from the Dev UI and other JSON callers) are accepted, and
+// mismatched types are rejected. The config's JSON schema is inferred from
+// Config unless [EvaluatorOptions.ConfigSchema] overrides it.
+func NewEvaluatorWithConfig[Config any](name string, opts *EvaluatorOptions, fn EvaluatorFuncWithConfig[Config]) Evaluator {
+	if name == "" {
+		panic("ai.NewEvaluatorWithConfig: evaluator name is required")
+	}
+
+	if opts == nil {
+		opts = &EvaluatorOptions{}
+	}
+
+	_, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, EvaluatorRequest{}, "options")
 
 	return &evaluator{
 		Action: *core.NewActionOf(api.ActionTypeEvaluator, name, &core.ActionOptions{
-			Metadata:    metadata,
+			Metadata:    evaluatorMetadata(opts),
 			InputSchema: inputSchema,
 		}, func(ctx context.Context, req *EvaluatorRequest) (output *EvaluatorResponse, err error) {
+			cfg, err := resolveConfig[Config](req.Options)
+			if err != nil {
+				return nil, err
+			}
+			// Normalize the request so its type-erased Options always carries
+			// the same converted value the typed parameter does.
+			req.Options = cfg
+
 			var results []EvaluationResult
 			for _, datapoint := range req.Dataset {
 				if datapoint.TestCaseId == "" {
@@ -208,10 +238,10 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 
 						callbackRequest := EvaluatorCallbackRequest{
 							Input:   *input,
-							Options: req.Options,
+							Options: cfg,
 						}
 
-						result, err := fn(ctx, &callbackRequest)
+						result, err := fn(ctx, &callbackRequest, cfg)
 						if err != nil {
 							failedScore := Score{
 								Status: ScoreStatusFail.String(),
@@ -245,8 +275,64 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 	}
 }
 
+// NewBatchEvaluatorWithConfig creates a new [Evaluator]. Register it with
+// [Evaluator.Register] to make it resolvable by name.
+// This method provides the full [EvaluatorRequest] to the callback function,
+// giving more flexibility to the user for processing the data, such as batching or parallelization.
+//
+// Config is the evaluator's typed configuration; it is usually inferred from
+// fn's signature. See [NewEvaluatorWithConfig] for how the request's options
+// are deserialized.
+func NewBatchEvaluatorWithConfig[Config any](name string, opts *EvaluatorOptions, fn BatchEvaluatorFuncWithConfig[Config]) Evaluator {
+	if name == "" {
+		panic("ai.NewBatchEvaluatorWithConfig: batch evaluator name is required")
+	}
+
+	if opts == nil {
+		opts = &EvaluatorOptions{}
+	}
+
+	_, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, EvaluatorRequest{}, "options")
+
+	rawFn := func(ctx context.Context, req *EvaluatorRequest) (*EvaluatorResponse, error) {
+		cfg, err := resolveConfig[Config](req.Options)
+		if err != nil {
+			return nil, err
+		}
+		// Normalize the request so its type-erased Options always carries the
+		// same converted value the typed parameter does.
+		req.Options = cfg
+		return fn(ctx, req, cfg)
+	}
+
+	return &evaluator{
+		Action: *core.NewActionOf(api.ActionTypeEvaluator, name, &core.ActionOptions{
+			Metadata:    evaluatorMetadata(opts),
+			InputSchema: inputSchema,
+		}, rawFn),
+	}
+}
+
+// NewEvaluator creates a new [Evaluator].
+// This method processes the input dataset one-by-one.
+//
+// Deprecated: Use [NewEvaluatorWithConfig], which passes the request's
+// options to fn as a typed value instead of leaving them type-erased on the
+// request.
+func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluator {
+	if name == "" {
+		panic("ai.NewEvaluator: evaluator name is required")
+	}
+	return NewEvaluatorWithConfig(name, opts, func(ctx context.Context, req *EvaluatorCallbackRequest, _ any) (*EvaluatorCallbackResponse, error) {
+		return fn(ctx, req)
+	})
+}
+
 // DefineEvaluator creates a new [Evaluator] and registers it.
 // This method processes the input dataset one-by-one.
+//
+// Deprecated: Use [NewEvaluatorWithConfig] and register the result with
+// [Evaluator.Register].
 func DefineEvaluator(r api.Registry, name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluator {
 	e := NewEvaluator(name, opts, fn)
 	e.Register(r)
@@ -256,37 +342,28 @@ func DefineEvaluator(r api.Registry, name string, opts *EvaluatorOptions, fn Eva
 // NewBatchEvaluator creates a new [Evaluator].
 // This method provides the full [EvaluatorRequest] to the callback function,
 // giving more flexibility to the user for processing the data, such as batching or parallelization.
+//
+// Deprecated: Use [NewBatchEvaluatorWithConfig], which passes the request's
+// options to fn as a typed value instead of leaving them type-erased on the
+// request.
 func NewBatchEvaluator(name string, opts *EvaluatorOptions, fn BatchEvaluatorFunc) Evaluator {
 	if name == "" {
 		panic("ai.NewBatchEvaluator: batch evaluator name is required")
 	}
-
-	if opts == nil {
-		opts = &EvaluatorOptions{}
-	}
-
-	metadata := map[string]any{
-		"type": api.ActionTypeEvaluator,
-		"evaluator": map[string]any{
-			"evaluatorIsBilled":    opts.IsBilled,
-			"evaluatorDisplayName": opts.DisplayName,
-			"evaluatorDefinition":  opts.Definition,
-		},
-	}
-
-	return &evaluator{
-		Action: *core.NewActionOf(api.ActionTypeEvaluator, name, &core.ActionOptions{
-			Metadata: metadata,
-		}, fn),
-	}
+	return NewBatchEvaluatorWithConfig(name, opts, func(ctx context.Context, req *EvaluatorRequest, _ any) (*EvaluatorResponse, error) {
+		return fn(ctx, req)
+	})
 }
 
 // DefineBatchEvaluator creates a new [Evaluator] and registers it.
 // This method provides the full [EvaluatorRequest] to the callback function,
 // giving more flexibility to the user for processing the data, such as batching or parallelization.
+//
+// Deprecated: Use [NewBatchEvaluatorWithConfig] and register the result with
+// [Evaluator.Register].
 func DefineBatchEvaluator(r api.Registry, name string, opts *EvaluatorOptions, fn BatchEvaluatorFunc) Evaluator {
 	e := NewBatchEvaluator(name, opts, fn)
-	e.(*evaluator).Register(r)
+	e.Register(r)
 	return e
 }
 

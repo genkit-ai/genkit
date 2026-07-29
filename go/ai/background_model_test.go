@@ -57,9 +57,19 @@ func TestNewBackgroundModelInputSchema(t *testing.T) {
 		if !ok {
 			t.Fatalf("input schema has no config property: %v", props)
 		}
-		configProps, ok := config["properties"].(map[string]any)
+		// The config slot is advertised as the schema or an explicit null so
+		// that a typed-nil config passes input validation.
+		anyOf, ok := config["anyOf"].([]any)
+		if !ok || len(anyOf) != 2 {
+			t.Fatalf("config property is not null-tolerant: %v", config)
+		}
+		schema, ok := anyOf[0].(map[string]any)
 		if !ok {
-			t.Fatalf("config property is not the supplied schema: %v", config)
+			t.Fatalf("config property is not the supplied schema: %v", anyOf[0])
+		}
+		configProps, ok := schema["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("config property is not the supplied schema: %v", schema)
 		}
 		if configProps["temperature"] == nil {
 			t.Errorf("config schema was not carried through, got %v", configProps)

@@ -71,6 +71,11 @@ type ToolConfig struct {
 // ModelFunc is a streaming function that takes in a ModelRequest and generates a ModelResponse, optionally streaming ModelResponseChunks.
 type ModelFunc = core.StreamingFunc[*ModelRequest, *ModelResponse, *ModelResponseChunk]
 
+// ModelFuncWithConfig is a [ModelFunc] that additionally receives the
+// request's typed Config: the framework deserializes the request's raw config
+// into it before calling the function (see [NewModelWithConfig]).
+type ModelFuncWithConfig[Config any] = func(context.Context, *ModelRequest, Config, ModelStreamCallback) (*ModelResponse, error)
+
 // ModelStreamCallback is a stream callback of a ModelAction.
 type ModelStreamCallback = func(context.Context, *ModelResponseChunk) error
 
@@ -137,10 +142,26 @@ func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 	return (*generateAction)(a)
 }
 
-// NewModel creates a new [Model].
-func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
+// NewModelWithConfig creates a new [Model]. Register it with
+// [Model.Register] to make it resolvable by name.
+//
+// Config is the model's typed configuration; it is usually inferred from fn's
+// signature. The framework deserializes the request's raw config into Config
+// before calling fn: the exact Config type (or a pointer to it) and
+// map[string]any (from the Dev UI and other JSON callers) are accepted, and
+// mismatched types are rejected. The request's [ModelRequest.Config] is
+// normalized to the converted value, so it always matches the typed
+// parameter. The config's JSON schema is inferred from Config unless
+// [ModelOptions.ConfigSchema] overrides it.
+//
+// The config schema is enforced by input validation on every call, so if
+// Config's JSON marshaling diverges from its reflected schema (e.g. SDK
+// wrapper types like Opt[float64] that marshal to primitives but reflect as
+// objects), set [ModelOptions.ConfigSchema] explicitly or requests will be
+// rejected at the action boundary.
+func NewModelWithConfig[Config any](name string, opts *ModelOptions, fn ModelFuncWithConfig[Config]) Model {
 	if name == "" {
-		panic("ai.NewModel: name is required")
+		panic("ai.NewModelWithConfig: name is required")
 	}
 
 	if opts == nil {
@@ -151,6 +172,8 @@ func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
 	if opts.Supports == nil {
 		opts.Supports = &ModelSupports{}
 	}
+
+	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, ModelRequest{}, "config")
 
 	metadata := map[string]any{
 		"type": api.ActionTypeModel,
@@ -170,27 +193,53 @@ func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
 			},
 			"versions":      opts.Versions,
 			"stage":         opts.Stage,
-			"customOptions": opts.ConfigSchema,
+			"customOptions": configSchema,
 		},
 	}
 
-	inputSchema := requestInputSchema(ModelRequest{}, "config", opts.ConfigSchema)
+	typedFn := func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		// req.Config was normalized to the exact Config type by
+		// normalizeConfig below, so this hits the fast path.
+		cfg, err := resolveConfig[Config](req.Config)
+		if err != nil {
+			return nil, err
+		}
+		return fn(ctx, req, cfg, cb)
+	}
 
-	mws := []ModelMiddleware{
+	// normalizeConfig runs outermost so that the built-in wrappers and the
+	// model function all see the typed, converted config on the request.
+	rawFn := core.ChainMiddleware(
+		normalizeConfig[Config](name, opts.Versions),
 		simulateSystemPrompt(opts, nil),
 		augmentWithContext(opts, nil),
 		validateSupport(name, opts),
 		addAutomaticTelemetry(),
-	}
-	fn = core.ChainMiddleware(mws...)(fn)
+	)(typedFn)
 
 	return &model{*core.NewStreamingActionOf(api.ActionTypeModel, name, &core.ActionOptions{
 		Metadata:    metadata,
 		InputSchema: inputSchema,
-	}, fn)}
+	}, rawFn)}
+}
+
+// NewModel creates a new [Model].
+//
+// Deprecated: Use [NewModelWithConfig], which passes the request's config to
+// fn as a typed value instead of leaving it type-erased on the request.
+func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
+	if name == "" {
+		panic("ai.NewModel: name is required")
+	}
+	return NewModelWithConfig(name, opts, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
+		return fn(ctx, req, cb)
+	})
 }
 
 // DefineModel creates a new [Model] and registers it.
+//
+// Deprecated: Use [NewModelWithConfig] and register the result with
+// [Model.Register].
 func DefineModel(r api.Registry, name string, opts *ModelOptions, fn ModelFunc) Model {
 	m := NewModel(name, opts, fn)
 	m.Register(r)
