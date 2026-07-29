@@ -26,6 +26,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 from typing_extensions import TypeVar as TypeVarExt
 
+from genkit._core._action import ActionContext
 from genkit._core._error import GenkitError
 from genkit._core._loop_cache import _loop_local_client
 from genkit._core._typing import (
@@ -77,8 +78,13 @@ class SessionStore(Protocol, Generic[StateT_co]):
         *,
         snapshot_id: str | None = None,
         session_id: str | None = None,
+        context: ActionContext | None = None,
     ) -> SessionSnapshot | None:
-        """Retrieve a snapshot by id or the latest leaf for a session."""
+        """Retrieve a snapshot by id or the latest leaf for a session.
+
+        ``context`` is optional request side-channel data (e.g. auth) so
+        backends can isolate tenants; in-memory/file stores ignore it.
+        """
         ...
 
     async def save_snapshot(
@@ -88,6 +94,8 @@ class SessionStore(Protocol, Generic[StateT_co]):
             [SessionSnapshot | None],
             SessionSnapshot | None,
         ],
+        *,
+        context: ActionContext | None = None,
     ) -> SessionSnapshot | None:
         """Atomically read-modify-write a snapshot under ``snapshot_id``.
 
@@ -99,6 +107,9 @@ class SessionStore(Protocol, Generic[StateT_co]):
         known before the write — e.g. handed to a turn handler via
         ``TurnContext``. When no row exists yet, this creates under that id.
         The store also fills ``created_at`` and defaults status when left empty.
+
+        ``context`` is optional request side-channel data (e.g. auth) so
+        backends can isolate tenants; in-memory/file stores ignore it.
         """
         ...
 

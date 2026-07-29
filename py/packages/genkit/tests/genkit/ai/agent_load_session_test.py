@@ -66,6 +66,7 @@ class _ScriptedStore(SessionStore[Any]):
         *,
         snapshot_id: str | None = None,
         session_id: str | None = None,
+        context: object | None = None,
     ) -> SessionSnapshot | None:
         if snapshot_id is not None:
             return self._by_id.get(snapshot_id)
@@ -77,6 +78,8 @@ class _ScriptedStore(SessionStore[Any]):
         self,
         snapshot_id: str,
         fn: Callable[[SessionSnapshot | None], SessionSnapshot | None],
+        *,
+        context: object | None = None,
     ) -> SessionSnapshot | None:
         return None
 

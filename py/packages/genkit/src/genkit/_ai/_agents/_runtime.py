@@ -331,8 +331,10 @@ async def load_session(
         )
     assert_init_matches_state_management(init=init, store=store, agent_name=name)
 
+    ctx = get_current_context()
+
     if store is not None and init.snapshot_id:
-        snap = await store.get_snapshot(snapshot_id=init.snapshot_id)
+        snap = await store.get_snapshot(snapshot_id=init.snapshot_id, context=ctx)
         if snap is None:
             raise GenkitError(
                 status='NOT_FOUND',
@@ -361,7 +363,8 @@ async def load_session(
     if store is not None and session_id:
         # The latest leaf may be a failed/aborted/pending turn, which can't be
         # resumed — fall back to the last good snapshot behind it.
-        snap = await walk_back_to_resumable(store=store, snapshot=await store.get_snapshot(session_id=session_id))
+        snap = await store.get_snapshot(session_id=session_id, context=ctx)
+        snap = await walk_back_to_resumable(store=store, snapshot=snap)
         if snap is not None:
             validate_custom_state(
                 custom=snap.state.custom if snap.state else None, state_schema=state_schema, agent_name=name
@@ -520,7 +523,11 @@ class AgentRuntime:
                 error=error,
             )
 
-        snap = await self.store.save_snapshot(effective_id, make_snap)
+        snap = await self.store.save_snapshot(
+            effective_id,
+            make_snap,
+            context=get_current_context(),
+        )
         if snap is not None:
             self.last_snapshot = snap
             self.last_snapshot_version = self.session.version
@@ -559,7 +566,11 @@ class AgentRuntime:
                 finish_reason=self.session_runner.last_good_finish_reason,
             )
 
-        snap = await self.store.save_snapshot(recovery_id, recovery)
+        snap = await self.store.save_snapshot(
+            recovery_id,
+            recovery,
+            context=get_current_context(),
+        )
         if snap is not None:
             self.last_snapshot = snap
             if self.session_runner.last_good_state_version is not None:
@@ -632,6 +643,9 @@ class AgentRuntime:
         if self.store is None:
             return
         interval_s = DEFAULT_HEARTBEAT_INTERVAL_MS / 1000
+        # Capture at start (detach time) so beats keep using the request's
+        # tenant context even if ambient context later changes.
+        beat_context = get_current_context()
 
         def beat(existing: SessionSnapshot | None) -> SessionSnapshot | None:
             if existing is None or existing.status != SnapshotStatus.PENDING:
@@ -641,7 +655,7 @@ class AgentRuntime:
         while True:
             await asyncio.sleep(interval_s)
             try:
-                await self.store.save_snapshot(snapshot_id, beat)
+                await self.store.save_snapshot(snapshot_id, beat, context=beat_context)
             except Exception:  # noqa: BLE001
                 # Best-effort: a missed beat just ages the snapshot toward
                 # ``expired``, which is the right signal if the store is unhealthy.
@@ -693,7 +707,11 @@ class AgentRuntime:
             )
 
         try:
-            await self.store.save_snapshot(pending_snap.snapshot_id, finalize)  # type: ignore[union-attr]
+            await self.store.save_snapshot(  # type: ignore[union-attr]
+                pending_snap.snapshot_id,
+                finalize,
+                context=get_current_context(),
+            )
         except Exception:  # noqa: BLE001
             # Best-effort: the snapshot stays pending, but its heartbeat stopped
             # above, so a later read ages it into ``expired`` and resume walks back
@@ -813,7 +831,11 @@ class AgentRuntime:
                     heartbeat_at=now,
                 )
 
-            pending_snap = await self.store.save_snapshot(turn_snapshot_id, pending)
+            pending_snap = await self.store.save_snapshot(
+                turn_snapshot_id,
+                pending,
+                context=get_current_context(),
+            )
             if pending_snap is None:
                 raise ValueError(
                     f"Agent '{self.name}' failed to persist the initial 'PENDING' recovery snapshot "

@@ -38,6 +38,7 @@ from genkit._ai._agents._session_stores._util import (
     session_id_of,
     subscribe,
 )
+from genkit._core._action import ActionContext
 from genkit._core._typing import SessionSnapshot, SnapshotStatus
 
 
@@ -141,6 +142,7 @@ class FileSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[StateT]
         *,
         snapshot_id: str | None = None,
         session_id: str | None = None,
+        context: ActionContext | None = None,
     ) -> SessionSnapshot | None:
         """Return a snapshot by id, or the session's latest leaf, read from disk."""
         require_one_selector(snapshot_id=snapshot_id, session_id=session_id)
@@ -152,8 +154,15 @@ class FileSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[StateT]
             owned = await asyncio.to_thread(self.read_session_sync, session_id)
             return select_leaf(snapshots=owned, session_id=session_id, reject_ambiguous=self.reject_ambiguous)
 
-    async def save_snapshot(self, snapshot_id: str, fn: SaveFn) -> SessionSnapshot | None:
+    async def save_snapshot(
+        self,
+        snapshot_id: str,
+        fn: SaveFn,
+        *,
+        context: ActionContext | None = None,
+    ) -> SessionSnapshot | None:
         """Read-modify-write a snapshot on disk, prune the chain, and notify subscribers."""
+        _ = context
         async with self.lock:
             existing = await asyncio.to_thread(self.read_sync, snapshot_id)
             next_snapshot = apply_save(existing=existing, snapshot_id=snapshot_id, fn=fn)

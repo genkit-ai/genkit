@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 
 from genkit._ai._agents._session import SessionStore
 from genkit._ai._agents._types import StateTransform
+from genkit._core._action import ActionContext, get_current_context
 from genkit._core._error import GenkitError
 from genkit._core._typing import SessionSnapshot, SnapshotStatus
 
@@ -40,6 +41,9 @@ async def walk_back_to_resumable(
     a non-completed leaf walks its parent chain back to the last good turn —
     landing a reload on the same spot a live chat would resume from, instead of a
     dead handle. A visited set guards a corrupt or cyclic chain.
+
+    Parent hops use the ambient request context so tenant-scoped stores keep
+    reading under the same auth as the caller.
     """
     visited: set[str] = set()
     while snapshot is not None and snapshot.status != SnapshotStatus.COMPLETED:
@@ -52,7 +56,14 @@ async def walk_back_to_resumable(
                 ),
             )
         visited.add(snapshot.snapshot_id)
-        snapshot = await store.get_snapshot(snapshot_id=snapshot.parent_id) if snapshot.parent_id else None
+        snapshot = (
+            await store.get_snapshot(
+                snapshot_id=snapshot.parent_id,
+                context=get_current_context(),
+            )
+            if snapshot.parent_id
+            else None
+        )
     return snapshot
 
 
@@ -123,15 +134,17 @@ async def resolve_snapshot(
     snapshot_id: str | None = None,
     session_id: str | None = None,
     state_transform: StateTransform | None = None,
+    context: ActionContext | None = None,
 ) -> SessionSnapshot | None:
     snapshot_id, session_id = parse_snapshot_lookup_kw(snapshot_id=snapshot_id, session_id=session_id)
     if snapshot_id is not None:
-        snapshot = await store.get_snapshot(snapshot_id=snapshot_id)
+        snapshot = await store.get_snapshot(snapshot_id=snapshot_id, context=context)
     else:
         assert session_id is not None
         # Resolving a session means "where do I continue from", so skip a
         # failed/aborted/pending leaf back to the last resumable turn.
-        snapshot = await walk_back_to_resumable(store=store, snapshot=await store.get_snapshot(session_id=session_id))
+        snapshot = await store.get_snapshot(session_id=session_id, context=context)
+        snapshot = await walk_back_to_resumable(store=store, snapshot=snapshot)
     if snapshot is None:
         return None
     effective = (
@@ -147,7 +160,12 @@ def abort_if_pending(existing: SessionSnapshot | None) -> SessionSnapshot | None
     return existing.model_copy(update={'status': SnapshotStatus.ABORTED})
 
 
-async def abort_snapshot_in_store(*, store: SessionStore, snapshot_id: str) -> SnapshotStatus | None:
+async def abort_snapshot_in_store(
+    *,
+    store: SessionStore,
+    snapshot_id: str,
+    context: ActionContext | None = None,
+) -> SnapshotStatus | None:
     """Abort a running snapshot by flipping it to aborted.
 
     There's no dedicated store abort call: aborting is an ordinary atomic
@@ -158,10 +176,10 @@ async def abort_snapshot_in_store(*, store: SessionStore, snapshot_id: str) -> S
     resulting status (aborted when this call did the flip), or None if it doesn't
     exist.
     """
-    saved = await store.save_snapshot(snapshot_id, abort_if_pending)
+    saved = await store.save_snapshot(snapshot_id, abort_if_pending, context=context)
     if saved is not None:
         return saved.status
     # The mutator skipped the write: either the snapshot is gone or already
     # terminal. Report its current status without touching it.
-    current = await store.get_snapshot(snapshot_id=snapshot_id)
+    current = await store.get_snapshot(snapshot_id=snapshot_id, context=context)
     return current.status if current is not None else None

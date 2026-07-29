@@ -66,7 +66,7 @@ from genkit._ai._prompt import (
     register_prompt_actions,
 )
 from genkit._ai._tools import Tool
-from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction, BidiFn
+from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction, BidiFn, get_current_context
 from genkit._core._error import GenkitError
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import ModelConfig
@@ -183,13 +183,18 @@ class Agent(
             snapshot_id=snapshot_id,
             session_id=session_id,
             state_transform=self._state_transform,
+            context=get_current_context(),
         )
 
     async def abort_snapshot_data(self, snapshot_id: str) -> SnapshotStatus | None:
         """Abort a running snapshot."""
         if self.store is None:
             return None
-        return await abort_snapshot_in_store(store=self.store, snapshot_id=snapshot_id)
+        return await abort_snapshot_in_store(
+            store=self.store,
+            snapshot_id=snapshot_id,
+            context=get_current_context(),
+        )
 
 
 # ---------------------------------------------------------------------------

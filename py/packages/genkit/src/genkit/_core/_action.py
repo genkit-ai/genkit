@@ -963,11 +963,17 @@ class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
         return BidiConnection(in_queue, stream_response)
 
 
+# Request side-channel data (auth, etc.). Open-ended so invokers/middleware
+# decide the keys (e.g. auth.uid for tenant paths).
+ActionContext = Mapping[str, object]
+
+
 def get_current_context() -> dict[str, object] | None:
     """Get the current action execution context, or None if not in an action.
 
     This module-level helper provides public cross-boundary access to
-    the private _action_context ContextVar.
+    the private _action_context ContextVar. The returned dict is an
+    ``ActionContext`` bag (auth and other invoker side-channel data).
     """
     return _action_context.get(None)
 
