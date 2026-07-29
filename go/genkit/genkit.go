@@ -499,26 +499,30 @@ func ListTools(g *Genkit) []ai.Tool {
 	return tools
 }
 
-// DefineModel defines a custom model implementation, registers it as a [core.Action]
-// of type Model, and returns an [ai.Model] interface.
+// DefineModelWithConfig defines a custom model implementation, registers it
+// as a [core.Action] of type Model, and returns an [ai.Model] interface.
 //
 // The `name` argument is the unique identifier for the model (e.g., "myProvider/myModel").
 // The `opts` argument provides metadata about the model's capabilities ([ai.ModelOptions]).
-// The `fn` argument ([ai.ModelFunc]) implements the actual generation logic, handling
-// input requests ([ai.ModelRequest]) and producing responses ([ai.ModelResponse]),
+// The `fn` argument ([ai.ModelFuncWithConfig]) implements the actual generation logic,
+// handling input requests ([ai.ModelRequest]) and producing responses ([ai.ModelResponse]),
 // potentially streaming chunks ([ai.ModelResponseChunk]) via the callback.
 //
+// Config is the model's typed configuration; it is usually inferred from fn's
+// signature. See [ai.NewModelWithConfig] for how the request's config is
+// deserialized and validated.
+//
 // For models that don't need to be registered (e.g., for plugin development or testing),
-// use [ai.NewModel] instead.
+// use [ai.NewModelWithConfig] instead.
 //
 // Example:
 //
-//	echoModel := genkit.DefineModel(g, "custom/echo",
+//	echoModel := genkit.DefineModelWithConfig(g, "custom/echo",
 //		&ai.ModelOptions{
 //			Label:    "Echo Model",
 //			Supports: &ai.ModelSupports{Multiturn: true},
 //		},
-//		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+//		func(ctx context.Context, req *ai.ModelRequest, config MyConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 //			// Simple echo implementation
 //			resp := &ai.ModelResponse{
 //				Message: &ai.Message{
@@ -556,16 +560,43 @@ func ListTools(g *Genkit) []ai.Tool {
 //			return resp, nil
 //		},
 //	)
+func DefineModelWithConfig[Config any](g *Genkit, name string, opts *ai.ModelOptions, fn ai.ModelFuncWithConfig[Config]) ai.Model {
+	m := ai.NewModelWithConfig(name, opts, fn)
+	m.Register(g.reg)
+	return m
+}
+
+// DefineModel defines a custom model implementation, registers it as a [core.Action]
+// of type Model, and returns an [ai.Model] interface.
+//
+// Deprecated: Use [DefineModelWithConfig], which passes the request's config
+// to fn as a typed value instead of leaving it type-erased on the request.
 func DefineModel(g *Genkit, name string, opts *ai.ModelOptions, fn ai.ModelFunc) ai.Model {
 	return ai.DefineModel(g.reg, name, opts, fn)
+}
+
+// DefineBackgroundModelWithConfig defines a background model, registers it as
+// an [ai.BackgroundModel], and returns an [ai.BackgroundModel].
+//
+// The `name` is the identifier the model uses to request the background model. The `opts`
+// are the options for the background model. The `startFn` is the function that starts the background model.
+// The `checkFn` is the function that checks the status of the background model.
+//
+// Config is the model's typed configuration; it is usually inferred from
+// startFn's signature. See [ai.NewModelWithConfig] for how the request's
+// config is deserialized and validated.
+func DefineBackgroundModelWithConfig[Config any](g *Genkit, name string, opts *ai.BackgroundModelOptions, startFn ai.StartModelOpFuncWithConfig[Config], checkFn ai.CheckModelOpFunc) ai.BackgroundModel {
+	m := ai.NewBackgroundModelWithConfig(name, opts, startFn, checkFn)
+	m.Register(g.reg)
+	return m
 }
 
 // DefineBackgroundModel defines a background model, registers it as a [ai.BackgroundModel],
 // and returns an [ai.BackgroundModel].
 //
-// The `name` is the identifier the model uses to request the background model. The `opts`
-// are the options for the background model. The `startFn` is the function that starts the background model.
-// The `checkFn` is the function that checks the status of the background model.
+// Deprecated: Use [DefineBackgroundModelWithConfig], which passes the
+// request's config to startFn as a typed value instead of leaving it
+// type-erased on the request.
 func DefineBackgroundModel(g *Genkit, name string, opts *ai.BackgroundModelOptions, startFn ai.StartModelOpFunc, checkFn ai.CheckModelOpFunc) ai.BackgroundModel {
 	return ai.DefineBackgroundModel(g.reg, name, opts, startFn, checkFn)
 }
@@ -1379,16 +1410,33 @@ func LookupRetriever(g *Genkit, name string) ai.Retriever {
 	return ai.LookupRetriever(g.reg, name)
 }
 
-// DefineEmbedder defines a custom text embedding implementation, registers it as a
-// [core.Action] of type Embedder, and returns an [ai.Embedder].
-// Embedders convert text documents or queries into numerical vector representations (embeddings).
+// DefineEmbedderWithConfig defines a custom text embedding implementation,
+// registers it as a [core.Action] of type Embedder, and returns an
+// [ai.Embedder]. Embedders convert text documents or queries into numerical
+// vector representations (embeddings).
 //
 // The `name` is the unique identifier for the embedder.
 // The `fn` function contains the logic to process an [ai.EmbedRequest] (containing documents or a query)
 // and return an [ai.EmbedResponse] (containing the corresponding embeddings).
 //
+// Config is the embedder's typed configuration; it is usually inferred from
+// fn's signature. See [ai.NewEmbedderWithConfig] for how the request's
+// options are deserialized.
+//
 // For embedders that don't need to be registered (e.g., for plugin development),
-// use [ai.NewEmbedder] instead.
+// use [ai.NewEmbedderWithConfig] instead.
+func DefineEmbedderWithConfig[Config any](g *Genkit, name string, opts *ai.EmbedderOptions, fn ai.EmbedderFuncWithConfig[Config]) ai.Embedder {
+	e := ai.NewEmbedderWithConfig(name, opts, fn)
+	e.Register(g.reg)
+	return e
+}
+
+// DefineEmbedder defines a custom text embedding implementation, registers it as a
+// [core.Action] of type Embedder, and returns an [ai.Embedder].
+//
+// Deprecated: Use [DefineEmbedderWithConfig], which passes the request's
+// options to fn as a typed value instead of leaving them type-erased on the
+// request.
 func DefineEmbedder(g *Genkit, name string, opts *ai.EmbedderOptions, fn ai.EmbedderFunc) ai.Embedder {
 	return ai.DefineEmbedder(g.reg, name, opts, fn)
 }
@@ -1410,33 +1458,56 @@ func LookupPlugin(g *Genkit, name string) api.Plugin {
 	return g.reg.LookupPlugin(name)
 }
 
-// DefineEvaluator defines an evaluator that processes test cases one by one,
-// registers it as a [core.Action] of type Evaluator, and returns an [ai.Evaluator].
-// Evaluators are used to assess the quality or performance of AI models or flows
-// based on a dataset of test cases.
+// DefineEvaluatorWithConfig defines an evaluator that processes test cases
+// one by one, registers it as a [core.Action] of type Evaluator, and returns
+// an [ai.Evaluator]. Evaluators are used to assess the quality or performance
+// of AI models or flows based on a dataset of test cases.
 //
-// This variant calls the provided `eval` function for each individual test case
+// This variant calls the provided `fn` function for each individual test case
 // ([ai.EvaluatorCallbackRequest]) in the evaluation dataset.
 //
-// The `provider` and `name` form the unique identifier. `options` provide
-// metadata about the evaluator ([ai.EvaluatorOptions]). The `eval` function
-// implements the logic to score a single test case and returns the results
-// in an [ai.EvaluatorCallbackResponse].
+// Config is the evaluator's typed configuration; it is usually inferred from
+// fn's signature. See [ai.NewEvaluatorWithConfig] for how the request's
+// options are deserialized.
+func DefineEvaluatorWithConfig[Config any](g *Genkit, name string, opts *ai.EvaluatorOptions, fn ai.EvaluatorFuncWithConfig[Config]) ai.Evaluator {
+	e := ai.NewEvaluatorWithConfig(name, opts, fn)
+	e.Register(g.reg)
+	return e
+}
+
+// DefineEvaluator defines an evaluator that processes test cases one by one,
+// registers it as a [core.Action] of type Evaluator, and returns an [ai.Evaluator].
+//
+// Deprecated: Use [DefineEvaluatorWithConfig], which passes the request's
+// options to fn as a typed value instead of leaving them type-erased on the
+// request.
 func DefineEvaluator(g *Genkit, name string, opts *ai.EvaluatorOptions, fn ai.EvaluatorFunc) ai.Evaluator {
 	return ai.DefineEvaluator(g.reg, name, opts, fn)
+}
+
+// DefineBatchEvaluatorWithConfig defines an evaluator that processes the
+// entire dataset at once, registers it as a [core.Action] of type Evaluator,
+// and returns an [ai.Evaluator].
+//
+// This variant provides the full evaluation request ([ai.EvaluatorRequest]), including
+// the entire dataset, to the `fn` function. This allows for more flexible processing,
+// such as batching calls to external services or parallelizing computations.
+//
+// Config is the evaluator's typed configuration; it is usually inferred from
+// fn's signature. See [ai.NewEvaluatorWithConfig] for how the request's
+// options are deserialized.
+func DefineBatchEvaluatorWithConfig[Config any](g *Genkit, name string, opts *ai.EvaluatorOptions, fn ai.BatchEvaluatorFuncWithConfig[Config]) ai.Evaluator {
+	e := ai.NewBatchEvaluatorWithConfig(name, opts, fn)
+	e.Register(g.reg)
+	return e
 }
 
 // DefineBatchEvaluator defines an evaluator that processes the entire dataset at once,
 // registers it as a [core.Action] of type Evaluator, and returns an [ai.Evaluator].
 //
-// This variant provides the full evaluation request ([ai.EvaluatorRequest]), including
-// the entire dataset, to the `eval` function. This allows for more flexible processing,
-// such as batching calls to external services or parallelizing computations.
-//
-// The `provider` and `name` form the unique identifier. `options` provide
-// metadata about the evaluator ([ai.EvaluatorOptions]). The `eval` function
-// implements the logic to score the dataset and returns the aggregated results
-// in an [ai.EvaluatorResponse].
+// Deprecated: Use [DefineBatchEvaluatorWithConfig], which passes the
+// request's options to fn as a typed value instead of leaving them
+// type-erased on the request.
 func DefineBatchEvaluator(g *Genkit, name string, opts *ai.EvaluatorOptions, fn ai.BatchEvaluatorFunc) ai.Evaluator {
 	return ai.DefineBatchEvaluator(g.reg, name, opts, fn)
 }
