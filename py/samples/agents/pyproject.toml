@@ -24,7 +24,7 @@ dependencies = [
   "genkit-plugin-middleware",
   "genkit-plugin-fastapi",
   "fastapi>=0.100.0",
-  "uvicorn[standard]>=0.24.0",
+  "uvicorn[standard]>=0.52.0",
   "httpx>=0.27.0",
   "pydantic>=2.10.5",
 ]
