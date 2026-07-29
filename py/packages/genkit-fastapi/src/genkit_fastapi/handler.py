@@ -319,8 +319,7 @@ def _mount_action(
     path: str,
     action: Action[InputT, OutputT, ChunkT, InitT],
     *,
-    context_dependency: Callable[..., Any] | None,
-    ai: Genkit | None,
+    context_dependency: Callable[..., Any] | None = None,
 ) -> None:
     """Register one action on the router, honoring FastAPI DI when asked.
 
@@ -330,7 +329,7 @@ def _mount_action(
     """
     if context_dependency is not None:
 
-        async def endpoint(
+        async def endpoint_with_context(
             request: Request,
             context: Any = Depends(context_dependency),  # noqa: ANN401, B008
         ) -> Response | dict[str, Any]:
@@ -340,10 +339,13 @@ def _mount_action(
                 context=context if isinstance(context, dict) else None,
             )
 
-        router.post(path, response_model=None)(endpoint)
-    else:
-        handler = genkit_fastapi_handler(cast(Genkit, ai))(action)
-        router.post(path, response_model=None)(handler)
+        router.post(path, response_model=None)(endpoint_with_context)
+        return
+
+    async def endpoint(request: Request) -> Response | dict[str, Any]:
+        return await handle_genkit_request(request, action=action)
+
+    router.post(path, response_model=None)(endpoint)
 
 
 def serve_flow(
@@ -351,7 +353,6 @@ def serve_flow(
     *,
     base_path: str | None = None,
     context_dependency: Callable[..., Any] | None = None,
-    ai: Genkit | None = None,
 ) -> APIRouter:
     """Build an APIRouter serving a single flow over HTTP.
 
@@ -365,19 +366,17 @@ def serve_flow(
         context_dependency: A FastAPI dependency whose resolved value becomes the
             action context. Use this to reuse existing ``Depends``-based auth /
             resources.
-        ai: Optional Genkit instance.
 
     Returns:
         An APIRouter with the single flow route registered.
     """
     resolved_base_path = f'/{flow.name}' if base_path is None else base_path
-    router = APIRouter()
+    router = APIRouter(tags=[flow.name])
     _mount_action(
         router,
         resolved_base_path,
         flow,
         context_dependency=context_dependency,
-        ai=ai,
     )
     return router
 
@@ -387,7 +386,6 @@ def serve_agent(
     *,
     base_path: str | None = None,
     context_dependency: Callable[..., Any] | None = None,
-    ai: Genkit | None = None,
 ) -> APIRouter:
     """Build an APIRouter serving an agent and its snapshot/abort endpoints over HTTP.
 
@@ -401,20 +399,18 @@ def serve_agent(
         context_dependency: A FastAPI dependency whose resolved value becomes the
             action context, applied to the turn, getSnapshot, and abort routes.
             Use this to reuse existing ``Depends``-based auth / resources.
-        ai: Optional Genkit instance.
 
     Returns:
         An APIRouter with the turn route plus snapshot/abort endpoints.
     """
     resolved_base_path = f'/{agent.name}' if base_path is None else base_path
-    router = APIRouter()
+    router = APIRouter(tags=[agent.name])
 
     _mount_action(
         router,
         resolved_base_path,
         agent,
         context_dependency=context_dependency,
-        ai=ai,
     )
 
     if agent.store is not None:
@@ -446,14 +442,12 @@ def serve_agent(
             f'{resolved_base_path}/getSnapshot',
             snapshot_action,
             context_dependency=context_dependency,
-            ai=ai,
         )
         _mount_action(
             router,
             f'{resolved_base_path}/abort',
             abort_action,
             context_dependency=context_dependency,
-            ai=ai,
         )
 
     return router
