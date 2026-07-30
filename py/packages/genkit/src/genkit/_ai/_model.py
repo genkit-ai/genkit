@@ -71,12 +71,19 @@ def model_ref(
     info: ModelInfo | None = None,
     version: str | None = None,
     config: dict[str, object] | None = None,
+    config_schema: object | None = None,
 ) -> ModelRef:
     """Create a ModelRef, optionally prefixing name with namespace."""
     # Logic: if (options.namespace && !name.startsWith(options.namespace + '/'))
     final_name = f'{namespace}/{name}' if namespace and not name.startswith(f'{namespace}/') else name
 
-    return ModelRef(name=final_name, info=info, version=version, config=config)
+    return ModelRef(
+        name=final_name,
+        info=info,
+        version=version,
+        config=config,
+        config_schema=config_schema,
+    )
 
 
 def define_model(

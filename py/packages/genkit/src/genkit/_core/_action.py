@@ -695,8 +695,16 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         # signal that "no input" is a legitimate way to invoke this action.
         if input is None and self._first_arg_optional:
             return input
+        # When a BaseModel instance fails (e.g. generate hands ModelRequest with
+        # GenerationCommonConfig into an action typed as ModelRequest[PluginConfig]),
+        # dump to plain data and retry so the action's schema wins.
         try:
-            return self._input_type.validate_python(input)
+            try:
+                return self._input_type.validate_python(input)
+            except ValidationError:
+                if not isinstance(input, BaseModel):
+                    raise
+                return self._input_type.validate_python(input.model_dump(mode='python'))
         except ValidationError as e:
             if input is None:
                 raise GenkitError(

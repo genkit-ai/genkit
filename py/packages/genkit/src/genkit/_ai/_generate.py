@@ -70,6 +70,7 @@ from genkit._core._typing import (
     FinishReason,
     MiddlewareRef,
     MultipartToolResponse,
+    Operation,
     Part,
     Role,
     TextPart,
@@ -747,6 +748,12 @@ async def _generate_action_turn(
                 next_fn,
             )
 
+        # Background models return an Operation to poll, not a finished message.
+        # The tool loop below assumes response.message exists, so branch out first.
+        if model.kind == ActionKind.BACKGROUND_MODEL:
+            operation = cast(Operation, model_response)
+            return ModelResponse(operation=operation, request=request)
+
         def message_parser(msg: Message) -> Any:  # noqa: ANN401
             if formatter is None:
                 return None
@@ -755,10 +762,11 @@ async def _generate_action_turn(
         # Extract schema_type for runtime Pydantic validation
         schema_type = turn_options.output.schema_type if turn_options.output else None
 
-        # Plugin returns ModelResponse directly. Framework sets request and
-        # any output format context (message_parser, schema_type) as private attrs.
+        # Plugin returns ModelResponse directly. Framework fills request when the
+        # plugin didn't already attach one (e.g. with a normalized config echo).
         response = model_response
-        response.request = request
+        if response.request is None:
+            response.request = request
         if formatter:
             response._message_parser = message_parser
         if schema_type:
@@ -1079,11 +1087,17 @@ async def resolve_parameters(
         else cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
     )
     if not model:
-        raise Exception('No model configured.')
+        raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')
 
     model_action = await registry.resolve_model(model)
     if model_action is None:
-        raise Exception(f'Failed to to resolve model {model}')
+        hint = ''
+        if isinstance(model, str) and '/' not in model:
+            hint = f" Did you mean 'googleai/{model}' or 'vertexai/{model}'?"
+        raise GenkitError(
+            status='NOT_FOUND',
+            message=f"Failed to resolve model '{model}'.{hint}",
+        )
 
     # Resolve tools up front to fail fast on invalid caller-supplied tool names or
     # duplicate short names before running side effects or middleware.

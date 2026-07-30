@@ -85,11 +85,12 @@ from genkit._ai._resource import (
     define_resource,
 )
 from genkit._ai._tools import Tool, define_interrupt, define_tool
-from genkit._core._action import Action, ActionKind, get_current_context
+from genkit._core._action import Action, ActionKind, get_current_context  # noqa: F401 — re-exported via genkit.__init__
 from genkit._core._background import (
     BackgroundAction,
     CancelModelOpFn,
     CheckModelOpFn,
+    ConfigT,
     StartModelOpFn,
     check_operation,
     define_background_model,
@@ -146,7 +147,7 @@ T = TypeVar('T')
 MiddlewareT = TypeVar('MiddlewareT', bound=BaseMiddleware)
 
 
-def _model_supports_long_running(model_action: Action) -> bool:
+def model_supports_long_running(model_action: Action) -> bool:
     """Check if a model action supports long-running operations."""
     model_info = model_action.metadata.get('model') if model_action.metadata else None
     if not model_info:
@@ -423,12 +424,12 @@ class Genkit:
     def define_background_model(
         self,
         name: str,
-        start: StartModelOpFn,
+        start: StartModelOpFn[ConfigT],
         check: CheckModelOpFn,
         cancel: CancelModelOpFn | None = None,
         label: str | None = None,
         info: ModelInfo | None = None,
-        config_schema: type[BaseModel] | dict[str, object] | None = None,
+        config_schema: type[ConfigT] | dict[str, object] | None = None,
         metadata: dict[str, object] | None = None,
         description: str | None = None,
     ) -> BackgroundAction:
@@ -1412,7 +1413,7 @@ class Genkit:
                 message='No model specified for generate_operation.',
             )
 
-        model_action = await self.registry.resolve_action(ActionKind.MODEL, resolved_model)
+        model_action = await self.registry.resolve_model(resolved_model)
         if not model_action:
             raise GenkitError(
                 status='NOT_FOUND',
@@ -1420,7 +1421,7 @@ class Genkit:
             )
 
         # Check if model supports long-running operations
-        if not _model_supports_long_running(model_action):
+        if not model_supports_long_running(cast(Action, model_action)):
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f"Model '{model_action.name}' does not support long running operations.",

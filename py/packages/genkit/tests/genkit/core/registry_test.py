@@ -12,10 +12,13 @@ functionality, ensuring proper registration and management of Genkit resources.
 import pytest
 
 from genkit import Genkit, Plugin
-from genkit._core._action import Action, ActionKind, create_action_key
+from genkit._core._action import Action, ActionKind, ActionRunContext, create_action_key
+from genkit._core._background import define_background_model
 from genkit._core._dap import DapValue, define_dynamic_action_provider
+from genkit._core._model import ModelRequest
+from genkit._core._protocols import RegistryLike
 from genkit._core._registry import Registry
-from genkit._core._typing import ActionMetadata
+from genkit._core._typing import ActionMetadata, ModelInfo, Operation, Supports
 
 
 async def _identity(x: object) -> object:
@@ -432,9 +435,33 @@ async def test_list_actions_registered_canonical_coexists_with_qualified_dap_row
     assert provider_key in catalog
 
 
+@pytest.mark.asyncio
+async def test_resolve_model_falls_back_to_background_model() -> None:
+    """resolve_model finds models registered only under BACKGROUND_MODEL."""
+    registry = Registry()
+
+    async def start(request: ModelRequest, _: ActionRunContext) -> Operation:
+        return Operation(id='bg-start', done=False)
+
+    async def check(op: Operation) -> Operation:
+        return op
+
+    define_background_model(
+        registry=registry,
+        name='veo-model',
+        start=start,
+        check=check,
+        info=ModelInfo(supports=Supports(long_running=True)),
+    )
+
+    assert await registry.resolve_action(ActionKind.MODEL, 'veo-model') is None
+
+    resolved = await registry.resolve_model('veo-model')
+    assert resolved is not None
+    assert resolved.kind == ActionKind.BACKGROUND_MODEL
+    assert resolved.name == 'veo-model'
+
+
 def test_registry_satisfies_registry_like() -> None:
     """Registry must structurally satisfy RegistryLike so middleware can use it as such."""
-    from genkit._core._protocols import RegistryLike
-    from genkit._core._registry import Registry
-
     assert isinstance(Registry(None), RegistryLike)
