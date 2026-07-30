@@ -192,7 +192,14 @@ class Session(Generic[StateT]):
 
     def __init__(self, initial_state: SessionState | None = None) -> None:
         self.lock = asyncio.Lock()
-        self.session_state: SessionState = initial_state or SessionState()
+        # Own a copy so minting session_id (or later mutations) never reaches
+        # back into a caller's AgentInit.state / snapshot blob.
+        state = initial_state.model_copy(deep=True) if initial_state is not None else SessionState()
+        # Every conversation needs a stable id for trace correlation and so
+        # client-managed state is self-describing from the first turn.
+        if not state.session_id:
+            state.session_id = str(uuid4())
+        self.session_state: SessionState = state
         self.version: int = 0
         self.custom_changed_listeners: list[Callable[[], Awaitable[None]]] = []
         self.artifact_changed_listeners: list[Callable[[Artifact], Awaitable[None]]] = []

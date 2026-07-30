@@ -249,7 +249,7 @@ class AgentResponse(Generic[StateT]):
 
     @property
     def session_id(self) -> str | None:
-        """Server session id this turn belongs to, if store-backed."""
+        """Session id this turn belongs to (store- or client-managed)."""
         return self.raw.session_id
 
     @property
@@ -1232,10 +1232,9 @@ class AgentChat(Generic[StateT]):
         """
         if raw.state is not None:
             # Client-managed: the whole session round-trips, so the output is
-            # authoritative for the custom state and artifacts. There's no server
-            # store to key a session on, so session_id has no meaning here and is
-            # always None.
-            self._session_id = None
+            # authoritative for session id, custom state, and artifacts. Keep the
+            # id so the next turn's state blob stays self-describing.
+            self._session_id = raw.state.session_id
             self._custom = copy.deepcopy(raw.state.custom)
             self._artifacts = [a.model_copy(deep=True) for a in raw.state.artifacts] if raw.state.artifacts else []
             return

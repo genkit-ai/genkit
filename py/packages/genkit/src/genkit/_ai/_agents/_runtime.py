@@ -47,6 +47,7 @@ from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._model import GenerateActionOptions, Message, ModelResponse, ModelResponseChunk
 from genkit._core._registry import Registry
+from genkit._core._trace._attrs import metadata_key
 from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     AgentFinishReason,
@@ -91,7 +92,7 @@ class SessionRunner(Generic[StateT]):
         store: SessionStore | None = None,
         get_parent_snapshot_id: Callable[[], str | None] | None = None,
         on_begin_turn: Callable[[], Awaitable[None]] | None = None,
-        on_end_turn: Callable[[AgentFinishReason | None], Awaitable[None]] | None = None,
+        on_end_turn: Callable[[AgentFinishReason | None], Awaitable[str | None]] | None = None,
     ) -> None:
         self.session = session
         self.turn_inputs = turn_inputs
@@ -163,18 +164,27 @@ class SessionRunner(Generic[StateT]):
                 input=inp,
             )
             try:
-                with run_in_new_span(span_meta):
+                with run_in_new_span(span_meta) as span:
                     turn_result = await fn(inp, turn_ctx)
                     finish_reason = turn_result.finish_reason if turn_result else None
                     self.last_turn_finish_reason = finish_reason
                     self.last_turn_error = None
 
+                    snapshot_id: str | None = None
                     if self.on_end_turn is not None:
-                        await self.on_end_turn(finish_reason)
+                        snapshot_id = await self.on_end_turn(finish_reason)
 
-                    span_meta.output = {'finishReason': finish_reason}
-                    if turn_snapshot_id:
-                        span_meta.metadata = {'agent:snapshotId': turn_snapshot_id}
+                    # Span output is the session state this turn committed
+                    # (messages, artifacts, custom) so a trace can show what
+                    # changed without reading the client response.
+                    state = await self.session.state()
+                    span_meta.output = {
+                        'state': state.model_dump(by_alias=True, exclude_none=True, mode='json'),
+                    }
+                    # Tag with the id this turn actually persisted under
+                    # (server-managed only; omitted when nothing was written).
+                    if snapshot_id:
+                        span.set_attribute(metadata_key('agent:snapshotId'), snapshot_id)
 
                 self.last_good_state = await self.session.state()
                 self.last_good_state_version = self.session.version
@@ -578,10 +588,15 @@ class AgentRuntime:
             return snap.snapshot_id
         return self.last_snapshot.snapshot_id if self.last_snapshot else None
 
-    async def emit_turn_end(self, finish_reason: AgentFinishReason | None = None) -> None:
-        """Called by SessionRunner after each turn: snapshot + TurnEnd chunk."""
+    async def emit_turn_end(self, finish_reason: AgentFinishReason | None = None) -> str | None:
+        """Called by SessionRunner after each turn: snapshot + TurnEnd chunk.
+
+        Returns the snapshot id this turn persisted under (or None when
+        client-managed / detached / nothing written) so the turn span can
+        tag the same id.
+        """
         if self.detached:
-            return
+            return None
         is_failed = finish_reason == AgentFinishReason.FAILED
         snapshot_id = await self.maybe_snapshot(
             finish_reason=finish_reason,
@@ -600,6 +615,7 @@ class AgentRuntime:
                 )
             )
         )
+        return snapshot_id
 
     async def failed_agent_output(self, result: AgentResult | None) -> AgentOutput:
         last_good = self.session_runner.last_good_state or await self.session.state()
@@ -866,10 +882,15 @@ class AgentRuntime:
             t1.add_done_callback(self.background_tasks.discard)
             heartbeat_task.add_done_callback(self.background_tasks.discard)
             t2.add_done_callback(self.background_tasks.discard)
-            return AgentOutput(
+            state = await self.session.state()
+            out = AgentOutput(
+                session_id=state.session_id,
                 snapshot_id=pending_snap.snapshot_id,
                 finish_reason=AgentFinishReason.DETACHED,
             )
+            if self.store is None:
+                out.state = self.transform_state(state)
+            return out
 
         # --- Normal completion path ---
         await fn_task

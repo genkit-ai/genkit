@@ -463,11 +463,11 @@ async def test_client_managed_stitches_tool_messages_from_chunks_not_output_stat
 
     # The output round-trips state, but its messages deliberately omit the tool
     # steps so the test proves the view is stitched from chunks, not raw.state.
-    # A stray session_id here must be ignored: client-managed has no server store
-    # to key a session on, so the id stays None.
+    # session_id inside the round-tripped state is adopted so the next turn's
+    # state blob stays self-describing.
     transport.final_output = AgentOutput(
         message=MessageData(role='model', content=[Part(root=TextPart(text='It is 12C in Tokyo.'))]),
-        state=SessionState(session_id='ignored', custom={'unit': 'celsius'}),
+        state=SessionState(session_id='sess-client-1', custom={'unit': 'celsius'}),
         finish_reason=AgentFinishReason.STOP,
     )
     turn = chat.send('Weather in Tokyo?')
@@ -514,12 +514,12 @@ async def test_client_managed_stitches_tool_messages_from_chunks_not_output_stat
     assert chat.messages[-1].content[0].root.text == 'It is 12C in Tokyo.'
     # Custom is adopted from the round-tripped output.
     assert chat.state == {'unit': 'celsius'}
-    # session_id stays None for client-managed, even when the output carries one.
-    assert chat.session_id is None
+    assert chat.session_id == 'sess-client-1'
     # The running view is what ships back as state for a client-managed resume.
     init_state = chat._wire_init().state
     assert init_state is not None
     assert init_state.messages == chat.messages
+    assert init_state.session_id == 'sess-client-1'
 
 
 @pytest.mark.asyncio
@@ -632,13 +632,19 @@ async def test_no_store_inprocess_transport_assembles_output_message() -> None:
     assert out.text == 'Hi there!'
     assert len(chat.messages) == 2
     assert chat.messages[1].content[0].root.text == 'Hi there!'
-    assert chat.session_id is None
+    assert chat.session_id is not None
     assert chat.snapshot_id is None
 
     # You assemble the resume blob yourself from the chat's tracked fields.
-    saved = SessionState(messages=chat.messages, custom=chat.state, artifacts=chat.artifacts)
+    saved = SessionState(
+        session_id=chat.session_id,
+        messages=chat.messages,
+        custom=chat.state,
+        artifacts=chat.artifacts,
+    )
     assert saved.messages == chat.messages
     assert saved.custom == chat.state
+    assert saved.session_id == chat.session_id
 
 
 class _ServerEmulatingClientManagedTransport(AgentTransport[Any]):

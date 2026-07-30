@@ -71,6 +71,7 @@ from genkit._core._error import GenkitError
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import ModelConfig
 from genkit._core._registry import Registry
+from genkit._core._trace._attrs import metadata_key
 from genkit._core._typing import (
     AgentAbortRequest,
     AgentAbortResponse,
@@ -249,7 +250,7 @@ def define_custom_agent(
         if state.session_id:
             span = trace_api.get_current_span()
             if span.is_recording():
-                span.set_attribute('genkit:metadata:agent:sessionId', state.session_id)
+                span.set_attribute(metadata_key('agent:sessionId'), state.session_id)
 
         rt = AgentRuntime(
             name=name,
