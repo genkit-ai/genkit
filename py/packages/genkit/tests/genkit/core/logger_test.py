@@ -43,6 +43,7 @@ def test_configure_logging_mutes_quiet_loggers() -> None:
         mock.patch.dict(os.environ, {'GENKIT_LOG': 'info'}),
         mock.patch('logging.getLogger') as mock_get_logger,
     ):
+        mock_get_logger.return_value.level = logging.NOTSET
         configure_logging(shared_tty=True)
         for name in QUIET_LOGGERS:
             mock_get_logger.assert_any_call(name)
@@ -56,6 +57,7 @@ def test_configure_logging_allows_debug() -> None:
         mock.patch.dict(os.environ, {'GENKIT_LOG': 'debug'}),
         mock.patch('logging.getLogger') as mock_get_logger,
     ):
+        mock_get_logger.return_value.level = logging.NOTSET
         configure_logging(shared_tty=True)
         for name in QUIET_LOGGERS:
             mock_get_logger.assert_any_call(name)
@@ -69,6 +71,7 @@ def test_configure_logging_respects_higher_levels() -> None:
         mock.patch.dict(os.environ, {'GENKIT_LOG': 'error'}),
         mock.patch('logging.getLogger') as mock_get_logger,
     ):
+        mock_get_logger.return_value.level = logging.NOTSET
         configure_logging(shared_tty=True)
         for name in QUIET_LOGGERS:
             mock_get_logger.assert_any_call(name)
@@ -81,3 +84,14 @@ def test_configure_logging_leaves_loggers_alone_in_prod() -> None:
     with mock.patch('logging.getLogger') as mock_get_logger:
         configure_logging(shared_tty=False)
         mock_get_logger.assert_not_called()
+
+
+def test_configure_logging_respects_user_configured_levels() -> None:
+    """Test that configure_logging does not overwrite explicitly set logger levels."""
+    with (
+        mock.patch.dict(os.environ, {'GENKIT_LOG': 'info'}),
+        mock.patch('logging.getLogger') as mock_get_logger,
+    ):
+        mock_get_logger.return_value.level = logging.DEBUG
+        configure_logging(shared_tty=True)
+        mock_get_logger.return_value.setLevel.assert_not_called()

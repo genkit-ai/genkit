@@ -53,7 +53,9 @@ def configure_logging(*, shared_tty: bool | None = None) -> None:
     quiet_level = level if level == logging.DEBUG else max(level, logging.WARNING)
 
     for name in QUIET_LOGGERS:
-        logging.getLogger(name).setLevel(quiet_level)
+        logger = logging.getLogger(name)
+        if logger.level == logging.NOTSET:
+            logger.setLevel(quiet_level)
 
 
 def get_logger(name: str | None = None) -> FilteringBoundLogger:
