@@ -78,6 +78,7 @@ const (
 	FinishReasonStop        FinishReason = "stop"
 	FinishReasonLength      FinishReason = "length"
 	FinishReasonBlocked     FinishReason = "blocked"
+	FinishReasonAborted     FinishReason = "aborted"
 	FinishReasonInterrupted FinishReason = "interrupted"
 	FinishReasonOther       FinishReason = "other"
 	FinishReasonUnknown     FinishReason = "unknown"
