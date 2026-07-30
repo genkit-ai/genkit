@@ -19,18 +19,13 @@
 
 import asyncio
 import os
+import warnings
 import weakref
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypedDict, TypeVar, cast
 
-from dotpromptz.typing import (
-    DataArgument,
-    PromptFunction,
-    PromptInputConfig,
-    PromptMetadata,
-)
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import Never, Unpack
 
@@ -73,6 +68,22 @@ from genkit._core._typing import (
     ToolChoice,
     ToolRequestPart,
     ToolResponsePart,
+)
+
+# Fires at import time for every genkit app; not actionable for app authors.
+# Must run before ``dotpromptz.typing`` class bodies execute.
+warnings.filterwarnings(
+    'ignore',
+    message='Field name "schema" .* shadows an attribute in parent',
+    category=UserWarning,
+    module=r'dotpromptz(\.|$)',
+)
+
+from dotpromptz.typing import (  # noqa: E402
+    DataArgument,
+    PromptFunction,
+    PromptInputConfig,
+    PromptMetadata,
 )
 
 ModelStreamingCallback = StreamingCallback

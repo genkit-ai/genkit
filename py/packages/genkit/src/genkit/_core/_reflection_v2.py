@@ -363,8 +363,9 @@ class ReflectionServerV2:
                     )
                 else:
                     logger.debug('reflection V2: unknown notification', method=method)
-        except Exception:
-            logger.exception('reflection V2: handler error', method=method)
+        except Exception as e:
+            logger.error(f'Reflection error in {method}: {type(e).__name__}: {e}')
+            logger.debug('reflection V2: handler error', method=method, exc_info=e)
             if req_id is not None:
                 await self.send_error(str(req_id), JSON_RPC_SERVER_ERROR, 'internal error')
 
@@ -490,7 +491,8 @@ class ReflectionServerV2:
             await self.send_error(sid, JSON_RPC_SERVER_ERROR, 'Action was cancelled', err_data)
             return
 
-        logger.exception('reflection V2: runAction error')
+        # Dev UI already shows the error + stack from the JSON-RPC response.
+        logger.debug('Action failed: %s: %s', type(exc).__name__, exc, exc_info=True)
         # Wire contract requires ``details`` to carry only ``stack`` and ``traceId``
         # (see ``GenkitErrorSchema.data.genkitErrorDetails`` in genkit-tools); anything
         # else in ``GenkitError.details`` is runtime-internal and gets dropped.

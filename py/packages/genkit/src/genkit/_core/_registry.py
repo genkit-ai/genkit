@@ -165,6 +165,8 @@ class Registry:
         #   we key both the in-flight task cache and the "all done" flag by the
         #   running loop.
         self._plugins: dict[str, Plugin] = {}
+        # Plugin names whose init failure was already reported at error level.
+        self._plugin_init_error_logged: set[str] = set()
         self._plugin_init_tasks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Task[None]]] = (
             weakref.WeakKeyDictionary()
         )
@@ -306,8 +308,9 @@ class Registry:
         for plugin_name, plugin in plugins:
             try:
                 advertised = await plugin.list_actions()
-            except Exception:
-                logger.exception('Error listing actions for plugin %s', plugin_name)
+            except Exception as e:
+                logger.error('Error listing actions for plugin %s: %s', plugin_name, e)
+                logger.debug('Plugin list_actions failed', plugin=plugin_name, exc_info=True)
                 continue
             for meta in advertised or []:
                 if not meta.name:
@@ -330,11 +333,13 @@ class Registry:
                     # DAP action keys are prefixed with the provider action's ``name``;
                     # see :meth:`DynamicActionProvider.list_action_metadata_by_key`.
                     dap_actions = await dap.list_action_metadata_by_key(action.name)
-                except Exception:
-                    logger.exception(
-                        'Error listing actions for Dynamic Action Provider %s',
+                except Exception as e:
+                    logger.error(
+                        'Error listing actions for Dynamic Action Provider %s: %s',
                         action.name,
+                        e,
                     )
+                    logger.debug('DAP list_actions failed', provider=action.name, exc_info=True)
                     continue
                 # ``list_action_metadata_by_key`` already populates each entry's ``meta.key``
                 # to match its DAP action key, so we can merge straight into the catalog.
@@ -436,7 +441,22 @@ class Registry:
         with self._lock:
             plugin_names = list(self._plugins.keys())
         for name in plugin_names:
-            await self._ensure_plugin_initialized(name)
+            try:
+                await self._ensure_plugin_initialized(name)
+            except Exception as e:
+                # One bad plugin (bad API key, network down) must not take down
+                # the Dev UI reflection server or spam a traceback every health poll.
+                with self._lock:
+                    already_logged = name in self._plugin_init_error_logged
+                    if not already_logged:
+                        self._plugin_init_error_logged.add(name)
+                if not already_logged:
+                    # Keep the headline short — provider error payloads are often huge JSON.
+                    detail = str(e).replace('\n', ' ')
+                    if len(detail) > 180:
+                        detail = detail[:177] + '...'
+                    logger.error('Failed to initialize plugin %s: %s: %s', name, type(e).__name__, detail)
+                    logger.debug('Plugin initialization failed', plugin=name, exc_info=True)
         with self._lock:
             if len(self._plugins) == len(plugin_names):
                 self._all_plugins_initialized[loop] = True
@@ -530,7 +550,13 @@ class Registry:
             try:
                 await async_factory()
             except Exception as e:
-                logger.warning(f'Failed to load lazy action {action.name}: {e}')
+                # Prompt/schema load failures show up when Dev UI lists actions;
+                # keep one short line, not an ExceptionGroup wall.
+                detail = str(e).replace('\n', ' ')
+                if len(detail) > 160:
+                    detail = detail[:157] + '...'
+                logger.warning('Failed to load lazy action %s: %s', action.name, detail)
+                logger.debug('Lazy action load failed', action=action.name, exc_info=True)
             finally:
                 self._loading_actions.discard(action_id)
         return action

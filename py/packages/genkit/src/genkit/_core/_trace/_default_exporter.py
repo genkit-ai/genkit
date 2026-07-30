@@ -211,11 +211,17 @@ class TraceServerExporter(SpanExporter):
 
         url = urljoin(self.telemetry_server_url, self.telemetry_server_endpoint)
         headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
-        with httpx.Client() as client:
-            for span in spans:
-                if span.context and format(span.context.trace_id, '032x') in filtered_trace_ids:
-                    continue
-                client.post(url, json=extract_span_data(span), headers=headers)
+        try:
+            with httpx.Client() as client:
+                for span in spans:
+                    if span.context and format(span.context.trace_id, '032x') in filtered_trace_ids:
+                        continue
+                    client.post(url, json=extract_span_data(span), headers=headers)
+        except Exception as e:
+            # Network blips / proxy misconfig must not dump httpx tracebacks into
+            # the shared genkit start terminal. Traces are best-effort in dev.
+            logger.debug('Telemetry export failed: %s: %s', type(e).__name__, e)
+            return SpanExportResult.FAILURE
         return SpanExportResult.SUCCESS
 
     @override
