@@ -125,7 +125,8 @@ func TestBackgroundModelConfigValidation(t *testing.T) {
 		},
 		func(ctx context.Context, op *ModelOperation) (*ModelOperation, error) {
 			return op, nil
-		})
+		},
+		nil)
 	bm.Register(r)
 
 	// A config that violates the inferred schema is rejected by input
