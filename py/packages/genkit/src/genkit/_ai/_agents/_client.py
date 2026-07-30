@@ -758,7 +758,7 @@ class TurnDriver(Generic[StateT]):
         commit_custom_patch: Callable[[Any], StateT | None],
         accumulate_chunk: Callable[[AgentStreamChunk], None] | None = None,
         on_turn_error: Callable[[Exception], Exception] | None = None,
-        deliver_to_caller: bool = False,
+        chunks: CloseableQueue[AgentChunk[StateT] | Exception] | None = None,
     ) -> None:
         self.inp = inp
         self.init = init
@@ -772,17 +772,17 @@ class TurnDriver(Generic[StateT]):
         # Only the streaming path needs a caller-facing chunk queue; send() still
         # pumps the transport (for patches + message stitching) without buffering
         # chunks nobody will read.
-        self.chunks: CloseableQueue[AgentChunk[StateT] | Exception] | None = (
-            CloseableQueue() if deliver_to_caller else None
-        )
+        self.chunks = chunks
         self.run_task: asyncio.Task[None] | None = None
-        self.turn: AgentTurn[StateT] | None = None
-        if deliver_to_caller:
-            self.turn = AgentTurn(
+        self.turn: AgentTurn[StateT] | None = (
+            AgentTurn(
                 stream=self.stream(),
                 output=self.output,
                 abort_fn=self.abort,
             )
+            if chunks is not None
+            else None
+        )
 
     async def run(self) -> AgentResponse[StateT]:
         """Pump the transport stream, then return the committed response.
@@ -836,7 +836,7 @@ class TurnDriver(Generic[StateT]):
         ``run``, and the caller gets a ``.stream`` / ``.response`` surface on top.
         """
         if self.turn is None:
-            raise RuntimeError('TurnDriver.start() requires deliver_to_caller=True')
+            raise RuntimeError('TurnDriver.start() requires a chunks queue')
         self.run_task = asyncio.create_task(self._run_background())
         return self.turn
 
@@ -877,7 +877,7 @@ class TurnDriver(Generic[StateT]):
         """Yields transformed chunks until the turn ends, re-raising any failure."""
         chunks = self.chunks
         if chunks is None:
-            raise RuntimeError('TurnDriver.stream() requires deliver_to_caller=True')
+            raise RuntimeError('TurnDriver.stream() requires a chunks queue')
         async for item in chunks:
             if isinstance(item, Exception):
                 raise item
@@ -1011,7 +1011,7 @@ class AgentChat(Generic[StateT]):
         so custom-state patches and message stitching still apply; does not expose
         a chunk stream. For incremental chunks use :meth:`send_stream`.
         """
-        return await self._start_turn(input, deliver_to_caller=False).run()
+        return await self._start_turn(input).run()
 
     def send_stream(
         self,
@@ -1027,9 +1027,14 @@ class AgentChat(Generic[StateT]):
         deadline. Use ``chat.abort()`` to halt server-side work on a store-backed
         agent.
         """
-        return self._start_turn(input, deliver_to_caller=True).start()
+        return self._start_turn(input, chunks=CloseableQueue()).start()
 
-    def _start_turn(self, input: str | AgentInput, *, deliver_to_caller: bool) -> TurnDriver[StateT]:
+    def _start_turn(
+        self,
+        input: str | AgentInput,
+        *,
+        chunks: CloseableQueue[AgentChunk[StateT] | Exception] | None = None,
+    ) -> TurnDriver[StateT]:
         """Shared setup for :meth:`send` and :meth:`send_stream`."""
         inp = to_agent_input(input)
 
@@ -1055,7 +1060,7 @@ class AgentChat(Generic[StateT]):
             commit_custom_patch=self._commit_custom_patch,
             accumulate_chunk=self._turn_accumulator.add,
             on_turn_error=self._on_turn_error,
-            deliver_to_caller=deliver_to_caller,
+            chunks=chunks,
         )
 
     async def resume(
