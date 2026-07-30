@@ -89,8 +89,8 @@ func TestServeMux(t *testing.T) {
 	tc := tracing.NewTestOnlyTelemetryClient()
 	tracing.WriteTelemetryImmediate(tc)
 
-	core.DefineAction(g.reg, "test/inc", api.ActionTypeCustom, nil, nil, inc)
-	core.DefineAction(g.reg, "test/dec", api.ActionTypeCustom, nil, nil, dec)
+	defineTestAction(g.reg, "test/inc", api.ActionTypeCustom, nil, nil, inc)
+	defineTestAction(g.reg, "test/dec", api.ActionTypeCustom, nil, nil, dec)
 
 	s := &reflectionServer{
 		Server:        &http.Server{},
@@ -154,13 +154,13 @@ func TestServeMux(t *testing.T) {
 	})
 
 	t.Run("list actions resolves schema references", func(t *testing.T) {
-		core.DefineSchema(g.reg, "AgentRequest", map[string]any{
+		g.reg.RegisterSchema("AgentRequest", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"query": map[string]any{"type": "string"},
 			},
 		})
-		core.DefineAction(g.reg, "test/withRef", api.ActionTypeCustom, nil,
+		defineTestAction(g.reg, "test/withRef", api.ActionTypeCustom, nil,
 			core.SchemaRef("AgentRequest"),
 			func(ctx context.Context, in any) (any, error) { return nil, nil })
 
@@ -188,7 +188,7 @@ func TestServeMux(t *testing.T) {
 	})
 
 	t.Run("run action", func(t *testing.T) {
-		core.DefineAction(g.reg, "test/checkLabels", api.ActionTypeCustom, nil,
+		defineTestAction(g.reg, "test/checkLabels", api.ActionTypeCustom, nil,
 			nil,
 			func(ctx context.Context, in any) (any, error) {
 				labels := tracing.TelemetryLabelsFromContext(ctx)
@@ -276,7 +276,7 @@ func TestServeMux(t *testing.T) {
 			}
 			return x, nil
 		}
-		core.DefineStreamingAction(g.reg, "test/streaming", api.ActionTypeCustom, nil, nil, streamingInc)
+		defineTestStreamingAction(g.reg, "test/streaming", api.ActionTypeCustom, nil, nil, streamingInc)
 
 		body := `{"key": "/custom/test/streaming", "input": 3}`
 		req, err := http.NewRequest("POST", ts.URL+"/api/runAction?stream=true", strings.NewReader(body))
@@ -362,7 +362,7 @@ func TestEarlyTraceIDTransmission(t *testing.T) {
 		// goroutine, not with the httptest server's request goroutine.
 		actionStarted := make(chan struct{})
 		actionCanProceed := make(chan struct{})
-		core.DefineAction(g.reg, "test/slow", api.ActionTypeCustom, nil, nil,
+		defineTestAction(g.reg, "test/slow", api.ActionTypeCustom, nil, nil,
 			func(ctx context.Context, input any) (any, error) {
 				close(actionStarted)
 				<-actionCanProceed
@@ -429,7 +429,7 @@ func TestEarlyTraceIDTransmission(t *testing.T) {
 		// previous subtest.
 		actionStarted := make(chan struct{})
 		actionCanProceed := make(chan struct{})
-		core.DefineAction(g.reg, "test/slow2", api.ActionTypeCustom, nil, nil,
+		defineTestAction(g.reg, "test/slow2", api.ActionTypeCustom, nil, nil,
 			func(ctx context.Context, input any) (any, error) {
 				close(actionStarted)
 				<-actionCanProceed
@@ -496,7 +496,7 @@ func TestActionCancellation(t *testing.T) {
 	gotCancelled := make(chan struct{})
 
 	// Long-running action that respects cancellation
-	core.DefineStreamingAction(g.reg, "test/cancellable", api.ActionTypeCustom, nil, nil,
+	defineTestStreamingAction(g.reg, "test/cancellable", api.ActionTypeCustom, nil, nil,
 		func(ctx context.Context, input any, cb func(context.Context, any) error) (any, error) {
 			// Send trace ID so test can cancel us
 			gotTraceID <- tracing.SpanTraceInfo(ctx).TraceID
@@ -685,7 +685,7 @@ func TestRunActionWithInit(t *testing.T) {
 			}
 			return out, nil
 		})
-	core.DefineAction(g.reg, "test/no-init", api.ActionTypeCustom, nil, nil, inc)
+	defineTestAction(g.reg, "test/no-init", api.ActionTypeCustom, nil, nil, inc)
 
 	s := &reflectionServer{
 		Server:        &http.Server{},
@@ -749,4 +749,19 @@ func defineTestBidiAction[In, Out, Stream, Init any](r api.Registry, atype api.A
 	b := core.NewBidiActionOf(atype, name, opts, fn)
 	b.Register(r)
 	return b
+}
+
+// defineTestAction and defineTestStreamingAction register actions in one
+// call for the tests in this package, mirroring the removed registry-taking
+// core.Define* helpers.
+func defineTestAction[In, Out any](r api.Registry, name string, atype api.ActionType, metadata map[string]any, inputSchema map[string]any, fn core.Func[In, Out]) *core.Action[In, Out, struct{}] {
+	a := core.NewActionOf(atype, name, &core.ActionOptions{Metadata: metadata, InputSchema: inputSchema}, fn)
+	a.Register(r)
+	return a
+}
+
+func defineTestStreamingAction[In, Out, Stream any](r api.Registry, name string, atype api.ActionType, metadata map[string]any, inputSchema map[string]any, fn core.StreamingFunc[In, Out, Stream]) *core.Action[In, Out, Stream] {
+	a := core.NewStreamingActionOf(atype, name, &core.ActionOptions{Metadata: metadata, InputSchema: inputSchema}, fn)
+	a.Register(r)
+	return a
 }

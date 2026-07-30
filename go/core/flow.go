@@ -72,28 +72,6 @@ func NewStreamingFlow[In, Out, Stream any](name string, fn StreamingFunc[In, Out
 	})}
 }
 
-// DefineFlow creates a Flow that runs fn, and registers it as an action. fn takes an input of type In and returns an output of type Out.
-func DefineFlow[In, Out any](r api.Registry, name string, fn Func[In, Out]) *Flow[In, Out, struct{}] {
-	f := NewFlow(name, fn)
-	f.Register(r)
-	return f
-}
-
-// DefineStreamingFlow creates a streaming Flow that runs fn, and registers it as an action.
-//
-// fn takes an input of type In and returns an output of type Out, optionally
-// streaming values of type Stream incrementally by invoking a callback.
-//
-// If the function supports streaming and the callback is non-nil, it should
-// stream the results by invoking the callback periodically, ultimately returning
-// with a final return value that includes all the streamed data.
-// Otherwise, it should ignore the callback and just return a result.
-func DefineStreamingFlow[In, Out, Stream any](r api.Registry, name string, fn StreamingFunc[In, Out, Stream]) *Flow[In, Out, Stream] {
-	f := NewStreamingFlow(name, fn)
-	f.Register(r)
-	return f
-}
-
 // Run runs the function f in the context of the current flow
 // and returns what f returns.
 // It returns an error if no flow is active.
