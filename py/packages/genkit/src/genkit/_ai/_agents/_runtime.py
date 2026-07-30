@@ -183,7 +183,7 @@ class SessionRunner(Generic[StateT]):
                     }
                     # Tag with the id this turn actually persisted under
                     # (server-managed only; omitted when nothing was written).
-                    if snapshot_id:
+                    if snapshot_id and span.is_recording():
                         span.set_attribute(metadata_key('agent:snapshotId'), snapshot_id)
 
                 self.last_good_state = await self.session.state()
