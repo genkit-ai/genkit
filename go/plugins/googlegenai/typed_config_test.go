@@ -7,6 +7,7 @@ import (
 	"context"
 	"maps"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
@@ -142,6 +143,55 @@ func TestModelConfigSchema(t *testing.T) {
 				t.Error("expected the action boundary to reject this config")
 			}
 		})
+	}
+}
+
+// TestHiddenConfigFieldsReachPluginErrors walks the whole path a request takes
+// for each field hidden from the dev UI: past input validation, through the
+// framework's deserialization, into the plugin's own check. The plugin owns
+// these errors because it can name the primitive to use instead, which a
+// schema violation cannot.
+func TestHiddenConfigFieldsReachPluginErrors(t *testing.T) {
+	t.Parallel()
+	inputSchema := newModel(testClient(t), gemini25Flash, GetModelOptions(gemini25Flash, googleAIProvider)).Desc().InputSchema
+
+	tests := []struct {
+		name    string
+		config  map[string]any
+		wantErr string
+	}{
+		{"systemInstruction", map[string]any{"systemInstruction": map[string]any{"parts": []any{map[string]any{"text": "talk like a pirate"}}}}, "ai.WithSystemPrompt()"},
+		{"cachedContent", map[string]any{"cachedContent": "some cache uuid"}, "ai.WithCacheTTL()"},
+		{"responseSchema", map[string]any{"responseSchema": map[string]any{"type": "object"}}, "response schema must be set using Genkit feature"},
+		{"responseMimeType", map[string]any{"responseMimeType": "image/png"}, "response MIME type must be set using Genkit feature"},
+		{"responseJsonSchema", map[string]any{"responseJsonSchema": map[string]any{"type": "object"}}, "ai.WithOutputSchema()"},
+		{"functionDeclarations", map[string]any{"tools": []any{map[string]any{"functionDeclarations": []any{map[string]any{"name": "myCustomTool"}}}}}, "ai.WithTools()"},
+		{"candidateCount above 1", map[string]any{"candidateCount": 2}, "multiple candidates is not supported"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateConfig(t, inputSchema, tt.config); err != nil {
+				t.Fatalf("rejected at the action boundary, so the plugin's error is unreachable: %v", err)
+			}
+			req := &ai.ModelRequest{Config: tt.config}
+			_, err := toGeminiRequestFromRaw(req, nil)
+			if err == nil {
+				t.Fatalf("toGeminiRequest accepted %v, want an error naming the primitive to use", tt.config)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %q, want it to mention %q", err, tt.wantErr)
+			}
+		})
+	}
+
+	// The plugin pins candidateCount to 1 itself, so asking for 1 is a no-op
+	// rather than an error.
+	if err := validateConfig(t, inputSchema, map[string]any{"candidateCount": 1}); err != nil {
+		t.Fatalf("candidateCount 1 rejected at the action boundary: %v", err)
+	}
+	if _, err := toGeminiRequestFromRaw(&ai.ModelRequest{Config: map[string]any{"candidateCount": 1}}, nil); err != nil {
+		t.Errorf("candidateCount 1 should be accepted, got %v", err)
 	}
 }
 
