@@ -35,7 +35,7 @@ func defineStreamingAction[In, Out, Stream any](r api.Registry, name string, aty
 	return a
 }
 
-func defineBackgroundAction[In, Out any](r api.Registry, name string, atype api.ActionType, metadata map[string]any, startFn StartOpFunc[In, Out], checkFn CheckOpFunc[Out], cancelFn CancelOpFunc[Out]) *BackgroundActionDef[In, Out] {
+func defineBackgroundAction[In, Out any](r api.Registry, name string, atype api.ActionType, metadata map[string]any, startFn StartOpFunc[In, Out], checkFn CheckOpFunc[Out], cancelFn CancelOpFunc[Out]) *BackgroundAction[In, Out] {
 	a := NewBackgroundActionOf(atype, name, &BackgroundActionOptions{Metadata: metadata}, startFn, checkFn, cancelFn)
 	a.Register(r)
 	return a

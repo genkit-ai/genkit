@@ -44,7 +44,7 @@ type BackgroundModel interface {
 
 // backgroundModel is the concrete implementation of BackgroundModel interface.
 type backgroundModel struct {
-	core.BackgroundActionDef[*ModelRequest, *ModelResponse]
+	core.BackgroundAction[*ModelRequest, *ModelResponse]
 }
 
 // ModelOperation is a background operation for a model.
