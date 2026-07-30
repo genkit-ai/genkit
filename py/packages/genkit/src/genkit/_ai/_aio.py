@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
 import signal
 import socket
@@ -102,7 +103,7 @@ from genkit._core._dap import (
 )
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import GenkitError
-from genkit._core._logger import configure_logging, get_logger
+from genkit._core._logger import configure_logging, get_logger, resolve_level
 from genkit._core._middleware import (
     BaseMiddleware,
     GenerateMiddleware,
@@ -864,17 +865,10 @@ class Genkit:
                 sockets = [sock]
 
             app = create_reflection_asgi_app(registry=self.registry)
-            genkit_log = os.environ.get('GENKIT_LOG', '').strip().lower()
-            is_debug = genkit_log == 'debug'
-            log_level = {
-                'debug': 'debug',
-                'info': 'warning',
-                'warn': 'warning',
-                'warning': 'warning',
-                'error': 'error',
-                'critical': 'critical',
-                'fatal': 'critical',
-            }.get(genkit_log, 'warning')
+            level = resolve_level()
+            is_debug = level <= logging.DEBUG
+            level_name = logging.getLevelName(level).lower()
+            log_level = 'warning' if level_name in ('info', 'warning', 'warn') else level_name
             config = uvicorn.Config(
                 app,
                 host=spec.host,
