@@ -876,6 +876,7 @@ class Genkit:
             else:
                 log_level = 'critical'
 
+            # Pass log_level explicitly so uvicorn's internal server engine doesn't default to INFO on startup.
             config = uvicorn.Config(
                 app,
                 host=spec.host,
