@@ -15,8 +15,6 @@
 package ai
 
 import (
-	"strings"
-
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 )
@@ -83,25 +81,14 @@ type StreamingFormatHandler interface {
 
 // ConfigureFormats registers default formats in the registry
 func ConfigureFormats(reg api.Registry) {
-	for _, format := range DEFAULT_FORMATS {
-		reg.RegisterValue(formatKey(format.Name()), format)
+	DefineFormats(reg, DEFAULT_FORMATS...)
+}
+
+// DefineFormats registers each [Formatter] under the name returned by its Name method.
+func DefineFormats(r api.Registry, formatters ...Formatter) {
+	for _, f := range formatters {
+		r.RegisterValue("/format/"+f.Name(), f)
 	}
-}
-
-// DefineFormat registers a [Formatter] under the given name so that it can be
-// used via [WithOutputFormat].
-//
-// Deprecated: Registry-taking helpers in the ai package are being phased out.
-// Use genkit.DefineFormat instead.
-func DefineFormat(r api.Registry, name string, formatter Formatter) {
-	r.RegisterValue(formatKey(name), formatter)
-}
-
-// formatKey returns the registry key for a format name. It tolerates names
-// that already carry the "/format/" prefix, which callers historically had to
-// pass for the format to be resolvable.
-func formatKey(name string) string {
-	return "/format/" + strings.TrimPrefix(name, "/format/")
 }
 
 // resolveFormat returns a [Formatter], either a default one or one from the registry.
@@ -114,7 +101,7 @@ func resolveFormat(reg api.Registry, schema map[string]any, format string) (Form
 			format = OutputFormatText
 		}
 	}
-	formatter = reg.LookupValue(formatKey(format))
+	formatter = reg.LookupValue("/format/" + format)
 	if f, ok := formatter.(Formatter); ok {
 		return f, nil
 	}

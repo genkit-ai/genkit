@@ -21,6 +21,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 )
 
@@ -45,6 +46,70 @@ func TestStreamFlow(t *testing.T) {
 		}
 		want++
 		return true
+	})
+}
+
+type csvTestFormatter struct{}
+
+func (csvTestFormatter) Name() string { return "csv" }
+
+func (csvTestFormatter) Handler(schema map[string]any) (ai.FormatHandler, error) {
+	return csvTestHandler{}, nil
+}
+
+type csvTestHandler struct{}
+
+func (csvTestHandler) ParseMessage(m *ai.Message) (*ai.Message, error) { return m, nil }
+
+func (csvTestHandler) Instructions() string { return "Respond with CSV." }
+
+func (csvTestHandler) Config() ai.ModelOutputConfig {
+	return ai.ModelOutputConfig{Format: "csv", ContentType: "text/csv"}
+}
+
+func TestDefineFormats(t *testing.T) {
+	ctx := context.Background()
+	g := Init(ctx)
+
+	echo := DefineModel(g, "test/echo", &ai.ModelOptions{
+		Supports: &ai.ModelSupports{Multiturn: true},
+	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("a,b,c")}, nil
+	})
+
+	DefineFormats(g, csvTestFormatter{})
+
+	if !IsDefinedFormat(g, "csv") {
+		t.Fatal("IsDefinedFormat() = false, want true")
+	}
+
+	res, err := Generate(ctx, g,
+		ai.WithModel(echo),
+		ai.WithPrompt("list some letters"),
+		ai.WithOutputFormat("csv"),
+	)
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if res.Request.Output.Format != "csv" {
+		t.Errorf("output format = %q, want %q", res.Request.Output.Format, "csv")
+	}
+	if res.Request.Output.ContentType != "text/csv" {
+		t.Errorf("output content type = %q, want %q", res.Request.Output.ContentType, "text/csv")
+	}
+
+	t.Run("deprecated DefineFormat registers under the given name", func(t *testing.T) {
+		DefineFormat(g, "csv2", csvTestFormatter{})
+		if !IsDefinedFormat(g, "csv2") {
+			t.Error("IsDefinedFormat() = false, want true")
+		}
+	})
+
+	t.Run("deprecated DefineFormat tolerates a prefixed name", func(t *testing.T) {
+		DefineFormat(g, "/format/csv3", csvTestFormatter{})
+		if !IsDefinedFormat(g, "csv3") {
+			t.Error("IsDefinedFormat() = false, want true")
+		}
 	})
 }
 

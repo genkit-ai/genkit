@@ -708,23 +708,16 @@ func (bananaHandler) Config() ModelOutputConfig {
 	return ModelOutputConfig{Format: "banana", ContentType: "text/banana"}
 }
 
-func TestDefineFormatCustom(t *testing.T) {
-	DefineFormat(r, "banana", bananaFormatter{})
+func TestDefineFormatsCustom(t *testing.T) {
+	DefineFormats(r, bananaFormatter{})
 
-	t.Run("resolves a custom format registered under its bare name", func(t *testing.T) {
+	t.Run("resolves a custom format by its name", func(t *testing.T) {
 		formatter, err := resolveFormat(r, nil, "banana")
 		if err != nil {
 			t.Fatalf("resolveFormat() error = %v", err)
 		}
 		if formatter.Name() != "banana" {
 			t.Errorf("resolveFormat() = %q, want %q", formatter.Name(), "banana")
-		}
-	})
-
-	t.Run("resolves a custom format registered under a prefixed name", func(t *testing.T) {
-		DefineFormat(r, "/format/kiwi", bananaFormatter{})
-		if _, err := resolveFormat(r, nil, "kiwi"); err != nil {
-			t.Fatalf("resolveFormat() error = %v", err)
 		}
 	})
 

@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/firebase/genkit/go/ai"
@@ -1628,7 +1629,8 @@ func DefineHelper(g *Genkit, name string, fn any) {
 	g.reg.RegisterHelper(name, fn)
 }
 
-// DefineFormat defines a new [ai.Formatter] and registers it in the registry.
+// DefineFormats defines new [ai.Formatter]s and registers them in the registry,
+// each under the name returned by its Name method.
 // Formatters control how model responses are structured and parsed.
 //
 // Formatters can be used with [ai.WithOutputFormat] to inject specific formatting
@@ -1650,15 +1652,24 @@ func DefineHelper(g *Genkit, name string, fn any) {
 //	}
 //
 //	// Register the formatter
-//	genkit.DefineFormat(g, "csv", csvFormatter{})
+//	genkit.DefineFormats(g, csvFormatter{})
 //
 //	// Use the formatter in a generation request
 //	resp, err := genkit.Generate(ctx, g,
 //		ai.WithPrompt("List 3 countries and their capitals"),
 //		ai.WithOutputFormat("csv"), // Use the custom formatter
 //	)
+func DefineFormats(g *Genkit, formatters ...ai.Formatter) {
+	ai.DefineFormats(g.reg, formatters...)
+}
+
+// DefineFormat defines a new [ai.Formatter] and registers it in the registry
+// under the given name.
+//
+// Deprecated: Use [DefineFormats] instead, which takes the name from the
+// Formatter's Name method.
 func DefineFormat(g *Genkit, name string, formatter ai.Formatter) {
-	ai.DefineFormat(g.reg, name, formatter)
+	g.reg.RegisterValue("/format/"+strings.TrimPrefix(name, "/format/"), formatter)
 }
 
 // IsDefinedFormat checks if a formatter with the given name is registered in the registry.
