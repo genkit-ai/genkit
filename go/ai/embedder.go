@@ -118,7 +118,11 @@ var (
 // normalized to the converted value, so it always matches the typed
 // parameter. The config's JSON schema is inferred from Config unless
 // [EmbedderOptions.ConfigSchema] overrides it.
-func NewTypedEmbedder[Config any](name string, opts *EmbedderOptions, fn TypedEmbedderFunc[Config]) *EmbedderAction {
+func NewTypedEmbedder[Config any](
+	name string,
+	opts *EmbedderOptions,
+	fn TypedEmbedderFunc[Config],
+) *EmbedderAction {
 	if name == "" {
 		panic("ai.NewTypedEmbedder: name is required")
 	}
