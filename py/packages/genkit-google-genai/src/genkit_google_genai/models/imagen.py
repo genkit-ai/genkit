@@ -45,6 +45,7 @@ from genkit import (
     TextPart,
 )
 from genkit.plugin_api import ActionRunContext, tracer
+from genkit_google_genai.models.interactions_utils import map_genai_error
 
 
 def _to_dict(obj: Any) -> Any:  # noqa: ANN401
@@ -183,7 +184,12 @@ class ImagenModel:
                     'model': self._version,
                 }),
             )
-            response = await self._client.aio.models.generate_images(model=self._version, prompt=prompt, config=config)
+            try:
+                response = await self._client.aio.models.generate_images(
+                    model=self._version, prompt=prompt, config=config
+                )
+            except Exception as error:
+                raise map_genai_error(error) from error
             span.set_attribute('genkit:output', json.dumps(_to_dict(response), default=str))
 
         content = self._contents_from_response(response)

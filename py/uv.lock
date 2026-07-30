@@ -34,6 +34,7 @@ members = [
     "genkit-openai",
     "genkit-vertexai",
     "genkit-workspace",
+    "google-genai-deep-research",
     "google-genai-media",
     "middleware",
     "middleware-coding-agent",
@@ -2370,6 +2371,23 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/dc/df/4f820054c99f29f2fe3de4a8a7c9534dd795302e4a07483a0cb07c3a29b6/google_genai-2.14.0.tar.gz", hash = "sha256:a9d1f4f362d76280f1be1340fcb3c86e63dbca128f6a4ae09d86ab47ff7148e8", size = 641055, upload-time = "2026-07-22T21:35:44.717Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ba/86/5ac5fb53e44cca4a6607fb917eb331fa237c65a103b9ec2e8e8acc8a42db/google_genai-2.14.0-py3-none-any.whl", hash = "sha256:ae7172cdd35695189b516b33a878e4132e5daa2dbc03a5b44cddfa8a82fad664", size = 1030738, upload-time = "2026-07-22T21:35:42.785Z" },
+]
+
+[[package]]
+name = "google-genai-deep-research"
+version = "0.1.0"
+source = { editable = "samples/google-genai-deep-research" }
+dependencies = [
+    { name = "genkit" },
+    { name = "genkit-google-genai" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
+    { name = "pydantic" },
 ]
 
 [[package]]

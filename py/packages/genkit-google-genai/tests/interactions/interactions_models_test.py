@@ -19,11 +19,12 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from genkit_google_genai._interactions.converters import split_system_instruction
 from genkit_google_genai._interactions.options import ClientOptions
+from genkit_google_genai.google import GoogleAI, googleai_name
 from genkit_google_genai.models.antigravity import AntigravityConfig, create_antigravity_action
 from genkit_google_genai.models.deep_research import (
     create_deep_research_background_action,
@@ -32,7 +33,7 @@ from genkit_google_genai.models.deep_research import (
 from genkit_google_genai.models.lyria import LyriaConfig, create_lyria_action
 from google.genai.interactions import Interaction
 
-from genkit import GenkitError, Message, ModelRequest, Part, Role, TextPart
+from genkit import ActionKind, GenkitError, Message, ModelRequest, Part, Role, TextPart
 from genkit.model import Operation
 
 
@@ -491,3 +492,91 @@ async def test_deep_research_define_background_model_sets_action() -> None:
     supports = model_meta.get('supports')
     assert isinstance(supports, dict)
     assert supports.get('longRunning') is True
+
+
+@pytest.mark.asyncio
+async def test_googleai_resolve_model_skips_deep_research_foreground() -> None:
+    mock_client = MagicMock()
+    mock_client.models.list.return_value = iter([])
+
+    with patch('genkit_google_genai.google.genai.client.Client', return_value=mock_client):
+        plugin = GoogleAI(api_key='test-key')
+
+    dr_name = googleai_name('deep-research-preview-04-2026')
+    assert await plugin.resolve(ActionKind.MODEL, dr_name) is None
+    bg = await plugin.resolve(ActionKind.BACKGROUND_MODEL, dr_name)
+    assert bg is not None
+    assert bg.kind == ActionKind.BACKGROUND_MODEL
+
+
+@pytest.mark.asyncio
+async def test_googleai_plugin_registers_interactions_models() -> None:
+    mock_client = MagicMock()
+    mock_client.models.list.return_value = iter([])
+
+    with patch('genkit_google_genai.google.genai.client.Client', return_value=mock_client):
+        plugin = GoogleAI(api_key='test-key')
+        actions = await plugin.init()
+
+    kinds_by_name = {action.name: action.kind for action in actions}
+    dr_name = googleai_name('deep-research-preview-04-2026')
+    ag_name = googleai_name('antigravity-preview-05-2026')
+    ly_name = googleai_name('lyria-3-clip-preview')
+
+    assert kinds_by_name[dr_name] == ActionKind.BACKGROUND_MODEL
+    assert kinds_by_name[f'{dr_name}/check'] == ActionKind.CHECK_OPERATION
+    assert kinds_by_name[f'{dr_name}/cancel'] == ActionKind.CANCEL_OPERATION
+    assert kinds_by_name[ag_name] == ActionKind.MODEL
+    assert kinds_by_name[ly_name] == ActionKind.MODEL
+
+
+@pytest.mark.asyncio
+async def test_googleai_resolve_routes_interactions_models() -> None:
+    mock_client = MagicMock()
+    mock_client.models.list.return_value = iter([])
+
+    with patch('genkit_google_genai.google.genai.client.Client', return_value=mock_client):
+        plugin = GoogleAI(api_key='test-key')
+
+    dr_name = googleai_name('deep-research-pro-preview-12-2025')
+    bg = await plugin.resolve(ActionKind.BACKGROUND_MODEL, dr_name)
+    assert bg is not None
+    assert bg.kind == ActionKind.BACKGROUND_MODEL
+
+    check = await plugin.resolve(ActionKind.CHECK_OPERATION, f'{dr_name}/check')
+    assert check is not None
+
+    cancel = await plugin.resolve(ActionKind.CANCEL_OPERATION, f'{dr_name}/cancel')
+    assert cancel is not None
+
+    ag = await plugin.resolve(ActionKind.MODEL, googleai_name('antigravity-preview-05-2026'))
+    assert ag is not None
+    assert ag.kind == ActionKind.MODEL
+
+    ly = await plugin.resolve(ActionKind.MODEL, googleai_name('lyria-3-pro-preview'))
+    assert ly is not None
+
+    # Legacy Vertex name must not fall through to Gemini capabilities metadata.
+    ly_legacy = await plugin.resolve(ActionKind.MODEL, googleai_name('lyria-002'))
+    assert ly_legacy is not None
+    model_meta = (ly_legacy.metadata or {}).get('model')
+    assert isinstance(model_meta, dict)
+    supports = model_meta.get('supports')
+    assert isinstance(supports, dict)
+    assert supports.get('media') is True
+    assert supports.get('multiturn') is not True
+
+
+@pytest.mark.asyncio
+async def test_googleai_list_actions_includes_interactions_models() -> None:
+    mock_client = MagicMock()
+    mock_client.models.list.return_value = iter([])
+
+    with patch('genkit_google_genai.google.genai.client.Client', return_value=mock_client):
+        plugin = GoogleAI(api_key='test-key')
+        actions = await plugin.list_actions()
+
+    names = {action.name for action in actions}
+    assert googleai_name('deep-research-max-preview-04-2026') in names
+    assert googleai_name('antigravity-preview-05-2026') in names
+    assert googleai_name('lyria-3-pro-preview') in names
