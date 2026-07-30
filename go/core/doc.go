@@ -195,7 +195,6 @@ with an operation ID that can be polled for completion:
 			// Check operation status
 			return checkOperationStatus(op)
 		},
-		nil, // no cancel support
 	)
 	bgAction.Register(registry)
 
