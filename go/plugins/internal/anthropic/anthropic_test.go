@@ -24,6 +24,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -62,79 +63,114 @@ func TestAnthropic(t *testing.T) {
 type modelRequestTestCase struct {
 	name        string
 	req         *ai.ModelRequest
+	config      anthropic.MessageNewParams
 	expected    *anthropic.MessageNewParams
 	expectedErr string
 }
 
-func TestAnthropicConfig(t *testing.T) {
-	emptyConfig := anthropic.MessageNewParams{}
-	expectedConfig := anthropic.MessageNewParams{
+// validateConfig runs a config through the same check the action boundary
+// performs: the config schema the model advertises is enforced on every call.
+func validateConfig(t *testing.T, inputSchema map[string]any, config any) error {
+	t.Helper()
+	return base.ValidateValue(&ai.ModelRequest{
+		Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hello"))},
+		Config:   config,
+	}, inputSchema)
+}
+
+// TestModelConfig pins the contract between the schema a model advertises and
+// the SDK type the framework deserializes into: every config form the action
+// boundary accepts must convert to [anthropic.MessageNewParams], and the
+// wrapper types the SDK uses for optional primitives must survive the trip.
+// The schema is enforced on every request, so a form that the two disagree on
+// is either a request rejected for no reason or a value silently dropped.
+func TestModelConfig(t *testing.T) {
+	desc := NewModel(anthropic.Client{}, "anthropic", "claude-opus-4-5", "", ai.ModelOptions{}).Desc()
+
+	sampled := anthropic.MessageNewParams{
 		Temperature: anthropic.Float(1.0),
 		TopK:        anthropic.Int(1),
 	}
 
-	tests := []modelRequestTestCase{
-		{
-			name: "Input is anthropic.MessageNewParams struct",
-			req: &ai.ModelRequest{
-				Config: anthropic.MessageNewParams{
-					Temperature: anthropic.Float(1.0),
-					TopK:        anthropic.Int(1),
-				},
-			},
-			expected: &expectedConfig,
-		},
-		{
-			name: "Input is *anthropic.MessageNewParams struct",
-			req: &ai.ModelRequest{
-				Config: &anthropic.MessageNewParams{
-					Temperature: anthropic.Float(1.0),
-					TopK:        anthropic.Int(1),
-				},
-			},
-			expected: &expectedConfig,
-		},
-		{
-			name: "Input is map[string]any",
-			req: &ai.ModelRequest{
-				Config: map[string]any{
-					"temperature": 1.0,
-					"top_k":       1,
-				},
-			},
-			expected: &expectedConfig,
-		},
-		{
-			name: "Input is map[string]any (empty)",
-			req: &ai.ModelRequest{
-				Config: map[string]any{},
-			},
-			expected: &emptyConfig,
-		},
-		{
-			name: "Input is nil",
-			req: &ai.ModelRequest{
-				Config: nil,
-			},
-			expected: &emptyConfig,
-		},
-		{
-			name: "Input is an unexpected type",
-			req: &ai.ModelRequest{
-				Config: 123,
-			},
-			expectedErr: "unexpected config type: int",
-		},
+	accepted := []struct {
+		name   string
+		config any
+		want   anthropic.MessageNewParams
+	}{
+		{"struct config", sampled, sampled},
+		{"pointer config", &sampled, sampled},
+		{"map config", map[string]any{"temperature": 1.0, "top_k": 1}, sampled},
+		{"empty map config", map[string]any{}, anthropic.MessageNewParams{}},
+		{"nil config", nil, anthropic.MessageNewParams{}},
+		// A typed nil marshals to JSON null, which the config slot tolerates.
+		{"typed nil config", (*anthropic.MessageNewParams)(nil), anthropic.MessageNewParams{}},
+		{"thinking union", map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": 1024}}, anthropic.MessageNewParams{
+			Thinking: anthropic.ThinkingConfigParamOfEnabled(1024),
+		}},
+	}
+	for _, tt := range accepted {
+		t.Run("accepts "+tt.name, func(t *testing.T) {
+			if err := validateConfig(t, desc.InputSchema, tt.config); err != nil {
+				t.Fatalf("config rejected at the action boundary: %v", err)
+			}
+			got, err := base.ConvertToExact[anthropic.MessageNewParams](tt.config)
+			if err != nil {
+				t.Fatalf("config accepted by the schema but not deserializable: %v", err)
+			}
+			// Compared as JSON: the SDK's param structs carry the raw
+			// message they were deserialized from, so two values that send
+			// the same request are not deeply equal.
+			if diff := cmp.Diff(wireJSON(t, tt.want), wireJSON(t, got)); diff != "" {
+				t.Errorf("deserialized config mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+
+	rejected := []struct {
+		name   string
+		config any
+	}{
+		{"unknown field", map[string]any{"nope": 1}},
+		// The SDK's wire names are snake_case; camelCase would deserialize to
+		// nothing at all.
+		{"camelCase field name", map[string]any{"maxTokens": 10}},
+		{"mistyped value", map[string]any{"temperature": "hot"}},
+	}
+	for _, tt := range rejected {
+		t.Run("rejects "+tt.name, func(t *testing.T) {
+			if err := validateConfig(t, desc.InputSchema, tt.config); err == nil {
+				t.Error("expected the action boundary to reject this config")
+			}
+		})
+	}
+
+	// Another provider's config never reaches the model function.
+	if _, err := base.ConvertToExact[anthropic.MessageNewParams](123); err == nil {
+		t.Error("expected an int config to be rejected as a type mismatch")
+	}
+}
+
+// TestModelLabel covers the label a model advertises: the caller's when set,
+// otherwise one derived from the provider and the model name.
+func TestModelLabel(t *testing.T) {
+	tests := []struct {
+		provider string
+		name     string
+		opts     ai.ModelOptions
+		want     string
+	}{
+		{"anthropic", "claude-opus-4-5", ai.ModelOptions{Label: "Anthropic - Claude Opus 4.5"}, "Anthropic - Claude Opus 4.5"},
+		{"anthropic", "claude-something-new", ai.ModelOptions{}, "Anthropic - claude-something-new"},
+		{"vertexai", "claude-opus-4-5", ai.ModelOptions{Label: "Claude Opus 4.5"}, "Claude Opus 4.5"},
+		{"vertexai", "claude-something-new", ai.ModelOptions{}, "Vertex AI - claude-something-new"},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := configFromRequest(tt.req)
-			if checkError(t, err, tt.expectedErr) {
-				return
-			}
-			if !reflect.DeepEqual(tt.expected, got) {
-				t.Errorf("configFromRequest() got = %+v, want %+v", got, tt.expected)
+		t.Run(tt.provider+"/"+tt.name, func(t *testing.T) {
+			desc := NewModel(anthropic.Client{}, tt.provider, tt.name, "", tt.opts).Desc()
+			got := desc.Metadata["model"].(map[string]any)["label"]
+			if got != tt.want {
+				t.Errorf("label = %v, want %q", got, tt.want)
 			}
 		})
 	}
@@ -517,10 +553,8 @@ func TestToAnthropicRequest(t *testing.T) {
 						Content: []*ai.Part{ai.NewTextPart("hello")},
 					},
 				},
-				Config: map[string]any{
-					"max_tokens": 10,
-				},
 			},
+			config: anthropic.MessageNewParams{MaxTokens: 10},
 			expected: &anthropic.MessageNewParams{
 				MaxTokens: 10,
 				System:    []anthropic.TextBlockParam{},
@@ -542,10 +576,8 @@ func TestToAnthropicRequest(t *testing.T) {
 						Content: []*ai.Part{ai.NewTextPart("hello")},
 					},
 				},
-				Config: map[string]any{
-					"max_tokens": 10,
-				},
 			},
+			config: anthropic.MessageNewParams{MaxTokens: 10},
 			expected: &anthropic.MessageNewParams{
 				MaxTokens: 10,
 				System: []anthropic.TextBlockParam{
@@ -579,7 +611,7 @@ func TestToAnthropicRequest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := toAnthropicRequest("anthropic", tt.req)
+			got, err := toAnthropicRequest("anthropic", tt.req, tt.config)
 			if checkError(t, err, tt.expectedErr) {
 				return
 			}
@@ -612,9 +644,6 @@ func TestToAnthropicRequest_StructuredOutput(t *testing.T) {
 				Content: []*ai.Part{ai.NewTextPart("hello")},
 			},
 		},
-		Config: map[string]any{
-			"max_tokens": 100,
-		},
 		Output: &ai.ModelOutputConfig{
 			Format:      "json",
 			Schema:      schema,
@@ -622,7 +651,7 @@ func TestToAnthropicRequest_StructuredOutput(t *testing.T) {
 		},
 	}
 
-	got, err := toAnthropicRequest("anthropic", req)
+	got, err := toAnthropicRequest("anthropic", req, anthropic.MessageNewParams{MaxTokens: 100})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -646,10 +675,10 @@ func TestToAnthropicRequest_StructuredOutput(t *testing.T) {
 	}
 }
 
-// userRequest builds a minimal request carrying a single user message.
-func userRequest(config any) *ai.ModelRequest {
+// userRequest builds a minimal request carrying a single user message. The
+// config travels beside the request now, so it is not part of it.
+func userRequest() *ai.ModelRequest {
 	return &ai.ModelRequest{
-		Config:   config,
 		Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hi"))},
 	}
 }
@@ -745,15 +774,17 @@ func TestToAnthropicPartsReasoningSignature(t *testing.T) {
 
 func TestToAnthropicRequestPreservesConfig(t *testing.T) {
 	// Server-side tools can only be expressed through the config, so the
-	// genkit tool list must merge with them rather than replace them.
+	// genkit tool list must merge with them rather than replace them. The same
+	// config value is reused across both calls, which also pins that a request
+	// amends its own copy rather than the caller's.
 	t.Run("config tools survive", func(t *testing.T) {
-		config := &anthropic.MessageNewParams{
+		config := anthropic.MessageNewParams{
 			MaxTokens: 100,
 			Tools: []anthropic.ToolUnionParam{
 				{OfWebSearchTool20250305: &anthropic.WebSearchTool20250305Param{}},
 			},
 		}
-		got, err := toAnthropicRequest("anthropic", userRequest(config))
+		got, err := toAnthropicRequest("anthropic", userRequest(), config)
 		if err != nil {
 			t.Fatalf("toAnthropicRequest: %v", err)
 		}
@@ -761,27 +792,31 @@ func TestToAnthropicRequestPreservesConfig(t *testing.T) {
 			t.Fatalf("got %d tools, want the config tool preserved", len(got.Tools))
 		}
 
-		req := userRequest(config)
+		req := userRequest()
 		req.Tools = []*ai.ToolDefinition{{
 			Name:        "my_tool",
 			Description: "d",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		}}
-		got, err = toAnthropicRequest("anthropic", req)
+		got, err = toAnthropicRequest("anthropic", req, config)
 		if err != nil {
 			t.Fatalf("toAnthropicRequest: %v", err)
 		}
 		if len(got.Tools) != 2 {
 			t.Errorf("got %d tools, want the config tool plus the genkit tool", len(got.Tools))
 		}
+		if len(config.Tools) != 1 {
+			t.Errorf("the caller's config grew to %d tools", len(config.Tools))
+		}
 	})
 
 	// Assigning a fresh OutputConfig would drop a config-provided effort.
 	t.Run("output config effort survives structured output", func(t *testing.T) {
-		req := userRequest(&anthropic.MessageNewParams{
+		config := anthropic.MessageNewParams{
 			MaxTokens:    100,
 			OutputConfig: anthropic.OutputConfigParam{Effort: anthropic.OutputConfigEffort("high")},
-		})
+		}
+		req := userRequest()
 		req.Output = &ai.ModelOutputConfig{
 			Format:      "json",
 			Constrained: true,
@@ -790,7 +825,7 @@ func TestToAnthropicRequestPreservesConfig(t *testing.T) {
 				"properties": map[string]any{"a": map[string]any{"type": "string"}},
 			},
 		}
-		got, err := toAnthropicRequest("anthropic", req)
+		got, err := toAnthropicRequest("anthropic", req, config)
 		if err != nil {
 			t.Fatalf("toAnthropicRequest: %v", err)
 		}
@@ -804,10 +839,10 @@ func TestToAnthropicRequestPreservesConfig(t *testing.T) {
 	})
 
 	t.Run("config tool choice survives when unset", func(t *testing.T) {
-		got, err := toAnthropicRequest("anthropic", userRequest(&anthropic.MessageNewParams{
+		got, err := toAnthropicRequest("anthropic", userRequest(), anthropic.MessageNewParams{
 			MaxTokens:  100,
 			ToolChoice: anthropic.ToolChoiceUnionParam{OfTool: &anthropic.ToolChoiceToolParam{Name: "pinned"}},
-		}))
+		})
 		if err != nil {
 			t.Fatalf("toAnthropicRequest: %v", err)
 		}
@@ -819,7 +854,7 @@ func TestToAnthropicRequestPreservesConfig(t *testing.T) {
 	// Anthropic rejects an empty content array, and an empty tools array
 	// conflicts with a config-provided tool_choice.
 	t.Run("no empty arrays on the wire", func(t *testing.T) {
-		got, err := toAnthropicRequest("anthropic", userRequest(nil))
+		got, err := toAnthropicRequest("anthropic", userRequest(), anthropic.MessageNewParams{})
 		if err != nil {
 			t.Fatalf("toAnthropicRequest: %v", err)
 		}
@@ -842,9 +877,9 @@ func TestToAnthropicRequestToolChoice(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(string(tt.choice), func(t *testing.T) {
-			req := userRequest(nil)
+			req := userRequest()
 			req.ToolChoice = tt.choice
-			got, err := toAnthropicRequest("anthropic", req)
+			got, err := toAnthropicRequest("anthropic", req, anthropic.MessageNewParams{})
 			if err != nil {
 				t.Fatalf("toAnthropicRequest: %v", err)
 			}
@@ -858,12 +893,11 @@ func TestToAnthropicRequestToolChoice(t *testing.T) {
 // A message whose content is empty must be skipped rather than indexed into.
 func TestToAnthropicRequestSkipsEmptyMessages(t *testing.T) {
 	got, err := toAnthropicRequest("anthropic", &ai.ModelRequest{
-		Config: &anthropic.MessageNewParams{MaxTokens: 100},
 		Messages: []*ai.Message{
 			{Role: ai.RoleModel, Content: nil},
 			ai.NewUserMessage(ai.NewTextPart("hi")),
 		},
-	})
+	}, anthropic.MessageNewParams{MaxTokens: 100})
 	if err != nil {
 		t.Fatalf("toAnthropicRequest: %v", err)
 	}
