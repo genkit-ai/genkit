@@ -23,7 +23,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-func TestDefineSchema(t *testing.T) {
+func TestRegisterSchema(t *testing.T) {
 	t.Run("registers schema in registry", func(t *testing.T) {
 		r := registry.New()
 		schema := map[string]any{
@@ -35,7 +35,7 @@ func TestDefineSchema(t *testing.T) {
 			"required": []any{"name"},
 		}
 
-		DefineSchema(r, "Person", schema)
+		r.RegisterSchema("Person", schema)
 
 		found := r.LookupSchema("Person")
 		if found == nil {
@@ -44,106 +44,6 @@ func TestDefineSchema(t *testing.T) {
 		if diff := cmp.Diff(schema, found); diff != "" {
 			t.Errorf("schema mismatch (-want +got):\n%s", diff)
 		}
-	})
-}
-
-func TestDefineSchemasFor(t *testing.T) {
-	t.Run("registers schema derived from Go type", func(t *testing.T) {
-		r := registry.New()
-
-		type User struct {
-			Name  string `json:"name"`
-			Email string `json:"email"`
-		}
-
-		DefineSchemasFor(r, User{})
-
-		found := r.LookupSchema("User")
-		if found == nil {
-			t.Fatal("schema not found in registry")
-		}
-		// Check that the schema has expected properties
-		props, ok := found["properties"].(map[string]any)
-		if !ok {
-			t.Fatal("expected properties in schema")
-		}
-		if props["name"] == nil {
-			t.Error("expected 'name' property in schema")
-		}
-		if props["email"] == nil {
-			t.Error("expected 'email' property in schema")
-		}
-	})
-
-	t.Run("handles pointer types", func(t *testing.T) {
-		r := registry.New()
-
-		type Config struct {
-			Debug bool `json:"debug"`
-		}
-
-		DefineSchemasFor(r, &Config{})
-
-		found := r.LookupSchema("Config")
-		if found == nil {
-			t.Fatal("schema not found in registry for pointer type")
-		}
-	})
-
-	t.Run("registers multiple schemas at once", func(t *testing.T) {
-		r := registry.New()
-
-		type User struct {
-			Name string `json:"name"`
-		}
-		type Order struct {
-			ID string `json:"id"`
-		}
-
-		DefineSchemasFor(r, User{}, Order{})
-
-		if r.LookupSchema("User") == nil {
-			t.Error("schema User not found in registry")
-		}
-		if r.LookupSchema("Order") == nil {
-			t.Error("schema Order not found in registry")
-		}
-	})
-
-	t.Run("panics on map value", func(t *testing.T) {
-		r := registry.New()
-
-		defer func() {
-			if recover() == nil {
-				t.Error("expected panic for map value")
-			}
-		}()
-
-		DefineSchemasFor(r, map[string]any{"type": "object"})
-	})
-
-	t.Run("panics on unnamed type", func(t *testing.T) {
-		r := registry.New()
-
-		defer func() {
-			if recover() == nil {
-				t.Error("expected panic for unnamed type")
-			}
-		}()
-
-		DefineSchemasFor(r, struct{ Name string }{})
-	})
-
-	t.Run("panics on nil value", func(t *testing.T) {
-		r := registry.New()
-
-		defer func() {
-			if recover() == nil {
-				t.Error("expected panic for nil value")
-			}
-		}()
-
-		DefineSchemasFor(r, nil)
 	})
 }
 

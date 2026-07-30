@@ -24,7 +24,6 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/registry"
@@ -1610,7 +1609,7 @@ Generate a recipe for {{food}}.
 	}
 
 	// define the "Recipe" schema (deferred resolution)
-	core.DefineSchema(reg, "Recipe", map[string]any{
+	reg.RegisterSchema("Recipe", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"title": map[string]any{"type": "string"},
@@ -1722,7 +1721,7 @@ func TestWithOutputSchemaName_DefinePrompt(t *testing.T) {
 	})
 
 	// Define schema
-	core.DefineSchema(reg, "FooSchema", map[string]any{
+	reg.RegisterSchema("FooSchema", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"foo": map[string]any{"type": "string"},

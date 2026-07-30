@@ -150,48 +150,6 @@ func NewStreamingAction[In, Out, Stream any](
 	}, fn)
 }
 
-// DefineAction creates a new non-streaming Action and registers it.
-// If inputSchema is nil, it is inferred from the function's input type.
-//
-// Deprecated: Use [NewActionOf] and register the result with
-// [Action.Register].
-func DefineAction[In, Out any](
-	r api.Registry,
-	name string,
-	atype api.ActionType,
-	metadata map[string]any,
-	inputSchema map[string]any,
-	fn Func[In, Out],
-) *Action[In, Out, struct{}] {
-	a := NewActionOf(atype, name, &ActionOptions{
-		Metadata:    metadata,
-		InputSchema: inputSchema,
-	}, fn)
-	a.Register(r)
-	return a
-}
-
-// DefineStreamingAction creates a new streaming action and registers it.
-// If inputSchema is nil, it is inferred from the function's input type.
-//
-// Deprecated: Use [NewStreamingActionOf] and register the result
-// with [Action.Register].
-func DefineStreamingAction[In, Out, Stream any](
-	r api.Registry,
-	name string,
-	atype api.ActionType,
-	metadata map[string]any,
-	inputSchema map[string]any,
-	fn StreamingFunc[In, Out, Stream],
-) *Action[In, Out, Stream] {
-	a := NewStreamingActionOf(atype, name, &ActionOptions{
-		Metadata:    metadata,
-		InputSchema: inputSchema,
-	}, fn)
-	a.Register(r)
-	return a
-}
-
 // newAction builds an Action's descriptor from opts, inferring any schema not
 // explicitly provided. The caller is expected to assign a.fn.
 func newAction[In, Out, Stream any](atype api.ActionType, name string, opts *ActionOptions) *Action[In, Out, Stream] {
