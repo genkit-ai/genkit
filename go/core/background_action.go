@@ -85,15 +85,28 @@ func (b *BackgroundActionDef[In, Out]) Register(r api.Registry) {
 	}
 }
 
+// BackgroundActionOptions configures the optional attributes of a background
+// action. It is [ActionOptions] minus the stream slot (the component actions
+// are non-streaming) plus the cancel function, which is generic in the
+// operation's output type and so cannot live on the shared [ActionOptions].
+// A nil options value is valid: schemas are inferred from the action's type
+// parameters and cancellation is unsupported.
+type BackgroundActionOptions[Out any] struct {
+	Description  string            // Human-readable description of the action. Metadata["description"] is used if empty.
+	Metadata     map[string]any    // Arbitrary key-value data attached to the action descriptor.
+	InputSchema  map[string]any    // JSON schema for the start action's input. Inferred from In if nil.
+	OutputSchema map[string]any    // JSON schema for the start action's output. Inferred if nil.
+	Cancel       CancelOpFunc[Out] // Cancels a running operation. Nil means cancellation is unsupported.
+}
+
 // NewBackgroundActionOf creates a new background action without
 // registering it. Register it with [BackgroundActionDef.Register].
 func NewBackgroundActionOf[In, Out any](
 	atype api.ActionType,
 	name string,
-	opts *ActionOptions,
+	opts *BackgroundActionOptions[Out],
 	startFn StartOpFunc[In, Out],
 	checkFn CheckOpFunc[Out],
-	cancelFn CancelOpFunc[Out],
 ) *BackgroundActionDef[In, Out] {
 	if name == "" {
 		panic("core.NewBackgroundActionOf: name is required")
@@ -105,9 +118,18 @@ func NewBackgroundActionOf[In, Out any](
 		panic("core.NewBackgroundActionOf: checkFn is required")
 	}
 
+	if opts == nil {
+		opts = &BackgroundActionOptions[Out]{}
+	}
+
 	key := api.KeyFromName(atype, name)
 
-	startAction := NewActionOf(atype, name, opts,
+	startAction := NewActionOf(atype, name, &ActionOptions{
+		Description:  opts.Description,
+		Metadata:     opts.Metadata,
+		InputSchema:  opts.InputSchema,
+		OutputSchema: opts.OutputSchema,
+	},
 		func(ctx context.Context, input In) (*Operation[Out], error) {
 			op, err := startFn(ctx, input)
 			if err != nil {
@@ -120,10 +142,9 @@ func NewBackgroundActionOf[In, Out any](
 	// The schema slots in opts describe the start action's In/Out types; the
 	// check and cancel actions operate on Operation values, so they keep the
 	// shared description and metadata but infer their own schemas.
-	opOpts := &ActionOptions{}
-	if opts != nil {
-		opOpts.Description = opts.Description
-		opOpts.Metadata = opts.Metadata
+	opOpts := &ActionOptions{
+		Description: opts.Description,
+		Metadata:    opts.Metadata,
 	}
 
 	checkAction := NewActionOf(api.ActionTypeCheckOperation, name, opOpts,
@@ -137,7 +158,7 @@ func NewBackgroundActionOf[In, Out any](
 		})
 
 	var cancelAction *Action[*Operation[Out], *Operation[Out], struct{}]
-	if cancelFn != nil {
+	if cancelFn := opts.Cancel; cancelFn != nil {
 		cancelAction = NewActionOf(api.ActionTypeCancelOperation, name, opOpts,
 			func(ctx context.Context, op *Operation[Out]) (*Operation[Out], error) {
 				cancelledOp, err := cancelFn(ctx, op)
@@ -169,17 +190,19 @@ func DefineBackgroundAction[In, Out any](
 	checkFn CheckOpFunc[Out],
 	cancelFn CancelOpFunc[Out],
 ) *BackgroundActionDef[In, Out] {
-	a := NewBackgroundActionOf(atype, name, &ActionOptions{
+	a := NewBackgroundActionOf(atype, name, &BackgroundActionOptions[Out]{
 		Metadata: metadata,
-	}, startFn, checkFn, cancelFn)
+		Cancel:   cancelFn,
+	}, startFn, checkFn)
 	a.Register(r)
 	return a
 }
 
 // NewBackgroundAction creates a new background action without registering it.
 //
-// Deprecated: Use [NewBackgroundActionOf], which takes the action
-// type first and an [ActionOptions] struct covering all schema slots.
+// Deprecated: Use [NewBackgroundActionOf], which takes the action type first
+// and a [BackgroundActionOptions] struct covering the schema slots and the
+// optional cancel function.
 func NewBackgroundAction[In, Out any](
 	name string,
 	atype api.ActionType,
@@ -188,9 +211,10 @@ func NewBackgroundAction[In, Out any](
 	checkFn CheckOpFunc[Out],
 	cancelFn CancelOpFunc[Out],
 ) *BackgroundActionDef[In, Out] {
-	return NewBackgroundActionOf(atype, name, &ActionOptions{
+	return NewBackgroundActionOf(atype, name, &BackgroundActionOptions[Out]{
 		Metadata: metadata,
-	}, startFn, checkFn, cancelFn)
+		Cancel:   cancelFn,
+	}, startFn, checkFn)
 }
 
 // LookupBackgroundAction looks up a background action by key (which includes the action type, provider, and name).
