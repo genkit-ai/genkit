@@ -21,7 +21,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -156,9 +155,9 @@ func TestModelConfigSchemaInference(t *testing.T) {
 		}
 	}
 
-	configSchemaOf := func(t *testing.T, m Model) any {
+	configSchemaOf := func(t *testing.T, m *ModelAction) any {
 		t.Helper()
-		desc := m.(api.Action).Desc()
+		desc := m.Desc()
 		modelMeta, ok := desc.Metadata["model"].(map[string]any)
 		if !ok {
 			t.Fatalf("missing model metadata: %+v", desc.Metadata)
@@ -207,7 +206,7 @@ func TestModelConfigSchemaInference(t *testing.T) {
 		m := NewModel("test/legacy-schema", nil, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			return &ModelResponse{Message: NewModelTextMessage("ok"), Request: req}, nil
 		})
-		if s, _ := configSchemaOf(t, m).(map[string]any); len(s) != 0 {
+		if s, _ := configSchemaOf(t, m.(*ModelAction)).(map[string]any); len(s) != 0 {
 			t.Errorf("customOptions = %v, want no inferred schema for legacy models", s)
 		}
 	})

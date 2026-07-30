@@ -560,7 +560,7 @@ func ListTools(g *Genkit) []ai.Tool {
 //			return resp, nil
 //		},
 //	)
-func DefineTypedModel[Config any](g *Genkit, name string, opts *ai.ModelOptions, fn ai.TypedModelFunc[Config]) ai.Model {
+func DefineTypedModel[Config any](g *Genkit, name string, opts *ai.ModelOptions, fn ai.TypedModelFunc[Config]) *ai.ModelAction {
 	m := ai.NewTypedModel(name, opts, fn)
 	m.Register(g.reg)
 	return m
@@ -587,7 +587,7 @@ func DefineModel(g *Genkit, name string, opts *ai.ModelOptions, fn ai.ModelFunc)
 // Config is the model's typed configuration; it is usually inferred from
 // startFn's signature. See [ai.NewTypedModel] for how the request's
 // config is deserialized and validated.
-func DefineTypedBackgroundModel[Config any](g *Genkit, name string, opts *ai.BackgroundModelOptions, startFn ai.TypedStartModelOpFunc[Config], checkFn ai.CheckModelOpFunc) ai.BackgroundModel {
+func DefineTypedBackgroundModel[Config any](g *Genkit, name string, opts *ai.BackgroundModelOptions, startFn ai.TypedStartModelOpFunc[Config], checkFn ai.CheckModelOpFunc) *ai.BackgroundModelAction {
 	m := ai.NewTypedBackgroundModel(name, opts, startFn, checkFn)
 	m.Register(g.reg)
 	return m
@@ -1437,7 +1437,7 @@ func LookupRetriever(g *Genkit, name string) ai.Retriever {
 //
 // For embedders that don't need to be registered (e.g., for plugin development),
 // use [ai.NewTypedEmbedder] instead.
-func DefineTypedEmbedder[Config any](g *Genkit, name string, opts *ai.EmbedderOptions, fn ai.TypedEmbedderFunc[Config]) ai.Embedder {
+func DefineTypedEmbedder[Config any](g *Genkit, name string, opts *ai.EmbedderOptions, fn ai.TypedEmbedderFunc[Config]) *ai.EmbedderAction {
 	e := ai.NewTypedEmbedder(name, opts, fn)
 	e.Register(g.reg)
 	return e
@@ -1483,7 +1483,7 @@ func LookupPlugin(g *Genkit, name string) api.Plugin {
 // Config is the evaluator's typed configuration; it is usually inferred from
 // fn's signature. See [ai.NewTypedEvaluator] for how the request's
 // options are deserialized.
-func DefineTypedEvaluator[Config any](g *Genkit, name string, opts *ai.EvaluatorOptions, fn ai.TypedEvaluatorFunc[Config]) ai.Evaluator {
+func DefineTypedEvaluator[Config any](g *Genkit, name string, opts *ai.EvaluatorOptions, fn ai.TypedEvaluatorFunc[Config]) *ai.EvaluatorAction {
 	e := ai.NewTypedEvaluator(name, opts, fn)
 	e.Register(g.reg)
 	return e
@@ -1512,7 +1512,7 @@ func DefineEvaluator(g *Genkit, name string, opts *ai.EvaluatorOptions, fn ai.Ev
 // Config is the evaluator's typed configuration; it is usually inferred from
 // fn's signature. See [ai.NewTypedEvaluator] for how the request's
 // options are deserialized.
-func DefineTypedBatchEvaluator[Config any](g *Genkit, name string, opts *ai.EvaluatorOptions, fn ai.TypedBatchEvaluatorFunc[Config]) ai.Evaluator {
+func DefineTypedBatchEvaluator[Config any](g *Genkit, name string, opts *ai.EvaluatorOptions, fn ai.TypedBatchEvaluatorFunc[Config]) *ai.EvaluatorAction {
 	e := ai.NewTypedBatchEvaluator(name, opts, fn)
 	e.Register(g.reg)
 	return e

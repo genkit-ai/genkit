@@ -84,10 +84,26 @@ type ModelStreamCallback = func(context.Context, *ModelResponseChunk) error
 // Deprecated: Use [Middleware] interface with [WithUse] instead, which supports Generate, Model, and Tool hooks.
 type ModelMiddleware = core.Middleware[*ModelRequest, *ModelResponse, *ModelResponseChunk]
 
-// model is an action with functions specific to model generation such as Generate().
-type model struct {
-	core.Action[*ModelRequest, *ModelResponse, *ModelResponseChunk]
+// action is an unexported alias of [core.Action] used as the embedded field
+// in the ai primitives (ModelAction, EmbedderAction, EvaluatorAction).
+// Embedding via the alias promotes Action's methods without exporting the
+// field itself, so the containment stays an internal detail of each primitive.
+type action[In, Out, Stream any] = core.Action[In, Out, Stream]
+
+// ModelAction is a generative model backed by a registry action. It is the
+// concrete type returned by [NewTypedModel]; pass it to [WithModel] to use it
+// for generation, or return it from a plugin's Init for the framework to
+// register.
+type ModelAction struct {
+	action[*ModelRequest, *ModelResponse, *ModelResponseChunk]
 }
+
+// ModelAction is a full registry action and can be passed anywhere an
+// [api.Action] is accepted as well as anywhere a [Model] is accepted.
+var (
+	_ api.Action = (*ModelAction)(nil)
+	_ Model      = (*ModelAction)(nil)
+)
 
 // generateAction is the type for a utility model generation action that takes in a GenerateActionOptions instead of a ModelRequest.
 type generateAction = core.Action[*GenerateActionOptions, *ModelResponse, *ModelResponseChunk]
@@ -142,8 +158,10 @@ func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 	return (*generateAction)(a)
 }
 
-// NewTypedModel creates a new [Model]. Register it with
-// [Model.Register] to make it resolvable by name.
+// NewTypedModel creates an unregistered [ModelAction]: return it from a
+// plugin's Init for the framework to register, or call
+// [ModelAction.Register] directly. Applications should define models with
+// [genkit.DefineTypedModel].
 //
 // Config is the model's typed configuration; it is usually inferred from fn's
 // signature. The framework deserializes the request's raw config into Config
@@ -159,7 +177,7 @@ func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 // wrapper types like Opt[float64] that marshal to primitives but reflect as
 // objects), set [ModelOptions.ConfigSchema] explicitly or requests will be
 // rejected at the action boundary.
-func NewTypedModel[Config any](name string, opts *ModelOptions, fn TypedModelFunc[Config]) Model {
+func NewTypedModel[Config any](name string, opts *ModelOptions, fn TypedModelFunc[Config]) *ModelAction {
 	if name == "" {
 		panic("ai.NewTypedModel: name is required")
 	}
@@ -217,7 +235,7 @@ func NewTypedModel[Config any](name string, opts *ModelOptions, fn TypedModelFun
 		addAutomaticTelemetry(),
 	)(typedFn)
 
-	return &model{*core.NewStreamingActionOf(api.ActionTypeModel, name, &core.ActionOptions{
+	return &ModelAction{*core.NewStreamingActionOf(api.ActionTypeModel, name, &core.ActionOptions{
 		Metadata:    metadata,
 		InputSchema: inputSchema,
 	}, rawFn)}
@@ -244,9 +262,7 @@ func LookupModel(r api.Registry, name string) Model {
 	if action == nil {
 		return nil
 	}
-	return &model{
-		Action: *action,
-	}
+	return &ModelAction{*action}
 }
 
 // GenerateWithRequest is the central generation implementation for ai.Generate(), prompt.Execute(), and the GenerateAction direct call.
@@ -343,7 +359,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		// Native constrained output is enabled only when the user has
 		// requested it, the model supports it, and there's a JSON schema.
 		outputCfg.Constrained = opts.Output.JsonSchema != nil &&
-			opts.Output.Constrained && outputCfg.Constrained && m != nil && m.(*model).supportsConstrained(len(toolDefs) > 0)
+			opts.Output.Constrained && outputCfg.Constrained && m != nil && m.(*ModelAction).supportsConstrained(len(toolDefs) > 0)
 
 		// Add schema instructions to prompt when not using native constraints.
 		// This is a no-op for unstructured output requests.
@@ -972,21 +988,21 @@ func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...Ge
 }
 
 // Generate applies the [Action] to provided request.
-func (m *model) Generate(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+func (m *ModelAction) Generate(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 	if m == nil {
 		return nil, status.Errorf(status.ErrInvalidArgument, "Model.Generate: generate called on a nil model; check that all models are defined")
 	}
 
-	return m.Action.Run(ctx, req, cb)
+	return m.Run(ctx, req, cb)
 }
 
 // supportsConstrained returns whether the model supports constrained output.
-func (m *model) supportsConstrained(hasTools bool) bool {
+func (m *ModelAction) supportsConstrained(hasTools bool) bool {
 	if m == nil {
 		return false
 	}
 
-	metadata := m.Action.Desc().Metadata
+	metadata := m.Desc().Metadata
 	if metadata == nil {
 		return false
 	}

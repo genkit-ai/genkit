@@ -43,16 +43,27 @@ type BackgroundModel interface {
 	SupportsCancel() bool
 }
 
-// backgroundModel is the concrete implementation of BackgroundModel interface.
-type backgroundModel struct {
-	core.BackgroundAction[*ModelRequest, *ModelResponse]
+// backgroundAction is an unexported alias of [core.BackgroundAction] used as
+// the embedded field in [BackgroundModelAction]; see the action alias in
+// generate.go for why.
+type backgroundAction[In, Out any] = core.BackgroundAction[In, Out]
+
+// BackgroundModelAction is a background model backed by registry actions. It
+// is the concrete type returned by [NewTypedBackgroundModel]; return it from
+// a plugin's Init for the framework to register.
+type BackgroundModelAction struct {
+	backgroundAction[*ModelRequest, *ModelResponse]
 }
 
-// Plugin resolvers assert the value returned by [NewBackgroundModel] to
-// [api.Action] (e.g. googlegenai's resolveAction returns the whole model as
-// the resolved action). That only holds through the embedded action's
-// promoted methods, so pin it here where the embedding lives.
-var _ api.Action = (*backgroundModel)(nil)
+// BackgroundModelAction can be passed anywhere a [BackgroundModel] is
+// accepted. Plugin resolvers also assert it to [api.Action] (e.g.
+// googlegenai's resolveAction returns the whole model as the resolved
+// action). That only holds through the embedded action's promoted methods,
+// so pin both here where the embedding lives.
+var (
+	_ api.Action      = (*BackgroundModelAction)(nil)
+	_ BackgroundModel = (*BackgroundModelAction)(nil)
+)
 
 // ModelOperation is a background operation for a model.
 type ModelOperation = core.Operation[*ModelResponse]
@@ -87,16 +98,18 @@ func LookupBackgroundModel(r api.Registry, name string) BackgroundModel {
 	if action == nil {
 		return nil
 	}
-	return &backgroundModel{*action}
+	return &BackgroundModelAction{*action}
 }
 
-// NewTypedBackgroundModel creates a new [BackgroundModel]. Register it
-// with [BackgroundModel.Register] to make it resolvable by name.
+// NewTypedBackgroundModel creates an unregistered [BackgroundModelAction]:
+// return it from a plugin's Init for the framework to register, or call
+// [BackgroundModelAction.Register] directly. Applications should define
+// background models with [genkit.DefineTypedBackgroundModel].
 //
 // Config is the model's typed configuration; it is usually inferred from
 // startFn's signature. See [NewTypedModel] for how the request's config
 // is deserialized.
-func NewTypedBackgroundModel[Config any](name string, opts *BackgroundModelOptions, startFn TypedStartModelOpFunc[Config], checkFn CheckModelOpFunc) BackgroundModel {
+func NewTypedBackgroundModel[Config any](name string, opts *BackgroundModelOptions, startFn TypedStartModelOpFunc[Config], checkFn CheckModelOpFunc) *BackgroundModelAction {
 	if name == "" {
 		panic("ai.NewTypedBackgroundModel: name is required")
 	}
@@ -183,13 +196,11 @@ func NewTypedBackgroundModel[Config any](name string, opts *BackgroundModelOptio
 			description = ""
 		}
 	}
-	return &backgroundModel{*core.NewBackgroundActionOf(api.ActionTypeBackgroundModel, name, &core.BackgroundActionOptions[*ModelRequest, *ModelResponse]{
+	return &BackgroundModelAction{*core.NewBackgroundActionOf(api.ActionTypeBackgroundModel, name, &core.BackgroundActionOptions{
 		Description: description,
 		Metadata:    metadata,
 		InputSchema: inputSchema,
-		Check:       checkFn,
-		Cancel:      opts.Cancel,
-	}, wrappedFn)}
+	}, wrappedFn, checkFn, opts.Cancel)}
 }
 
 // NewBackgroundModel defines a new model that runs in the background.

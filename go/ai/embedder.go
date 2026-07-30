@@ -90,13 +90,25 @@ type EmbedderOptions struct {
 	Dimensions int `json:"dimensions,omitempty"`
 }
 
-// embedder is an action with functions specific to converting documents to multidimensional vectors such as Embed().
-type embedder struct {
-	core.Action[*EmbedRequest, *EmbedResponse, struct{}]
+// EmbedderAction is an embedder backed by a registry action. It is the
+// concrete type returned by [NewTypedEmbedder]; pass it to [WithEmbedder] to
+// use it for embedding, or return it from a plugin's Init for the framework
+// to register.
+type EmbedderAction struct {
+	action[*EmbedRequest, *EmbedResponse, struct{}]
 }
 
-// NewTypedEmbedder creates a new [Embedder]. Register it with
-// [Embedder.Register] to make it resolvable by name.
+// EmbedderAction is a full registry action and can be passed anywhere an
+// [api.Action] is accepted as well as anywhere an [Embedder] is accepted.
+var (
+	_ api.Action = (*EmbedderAction)(nil)
+	_ Embedder   = (*EmbedderAction)(nil)
+)
+
+// NewTypedEmbedder creates an unregistered [EmbedderAction]: return it from a
+// plugin's Init for the framework to register, or call
+// [EmbedderAction.Register] directly. Applications should define embedders
+// with [genkit.DefineTypedEmbedder].
 //
 // Config is the embedder's typed configuration; it is usually inferred from
 // fn's signature. The framework deserializes the request's raw options into
@@ -106,7 +118,7 @@ type embedder struct {
 // normalized to the converted value, so it always matches the typed
 // parameter. The config's JSON schema is inferred from Config unless
 // [EmbedderOptions.ConfigSchema] overrides it.
-func NewTypedEmbedder[Config any](name string, opts *EmbedderOptions, fn TypedEmbedderFunc[Config]) Embedder {
+func NewTypedEmbedder[Config any](name string, opts *EmbedderOptions, fn TypedEmbedderFunc[Config]) *EmbedderAction {
 	if name == "" {
 		panic("ai.NewTypedEmbedder: name is required")
 	}
@@ -149,8 +161,8 @@ func NewTypedEmbedder[Config any](name string, opts *EmbedderOptions, fn TypedEm
 		return fn(ctx, req, cfg)
 	}
 
-	return &embedder{
-		Action: *core.NewActionOf(api.ActionTypeEmbedder, name, &core.ActionOptions{
+	return &EmbedderAction{
+		action: *core.NewActionOf(api.ActionTypeEmbedder, name, &core.ActionOptions{
 			Metadata:    metadata,
 			InputSchema: inputSchema,
 		}, rawFn),
@@ -178,13 +190,11 @@ func LookupEmbedder(r api.Registry, name string) Embedder {
 	if action == nil {
 		return nil
 	}
-	return &embedder{
-		Action: *action,
-	}
+	return &EmbedderAction{*action}
 }
 
 // Embed runs the given [Embedder].
-func (e *embedder) Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+func (e *EmbedderAction) Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
 	if e == nil {
 		return nil, status.Errorf(status.ErrInvalidArgument, "Embedder.Embed: embedder called on a nil embedder; check that all embedders are defined")
 	}

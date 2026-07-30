@@ -199,7 +199,7 @@ func TestEmbedderEmbed(t *testing.T) {
 	})
 
 	t.Run("returns error on nil embedder", func(t *testing.T) {
-		var e *embedder
+		var e *EmbedderAction
 		_, err := e.Embed(context.Background(), &EmbedRequest{})
 		if err == nil {
 			t.Error("expected error for nil embedder")
