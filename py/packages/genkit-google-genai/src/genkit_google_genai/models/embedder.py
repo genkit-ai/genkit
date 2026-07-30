@@ -233,7 +233,7 @@ class Embedder:
         if api_client is None or not hasattr(api_client, 'async_request'):
             raise RuntimeError(
                 'Multimodal embedding relies on google-genai client internals that are '
-                'unavailable in the installed google-genai version; install google-genai>=1.63.0.'
+                'unavailable in the installed google-genai version; install google-genai>=2.3.0.'
             )
         http_response = await api_client.async_request(
             http_method='post',
