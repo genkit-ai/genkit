@@ -119,7 +119,13 @@ func LookupBackgroundModel(r api.Registry, name string) BackgroundModel {
 // Config is the model's typed configuration; it is usually inferred from
 // startFn's signature. See [NewTypedModel] for how the request's config
 // is deserialized.
-func NewTypedBackgroundModel[Config any](name string, opts *BackgroundModelOptions, startFn TypedStartModelOpFunc[Config], checkFn CheckModelOpFunc, cancelFn CancelModelOpFunc) *BackgroundModelAction {
+func NewTypedBackgroundModel[Config any](
+	name string,
+	opts *BackgroundModelOptions,
+	startFn TypedStartModelOpFunc[Config],
+	checkFn CheckModelOpFunc,
+	cancelFn CancelModelOpFunc,
+) *BackgroundModelAction {
 	if name == "" {
 		panic("ai.NewTypedBackgroundModel: name is required")
 	}

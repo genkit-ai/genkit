@@ -209,7 +209,11 @@ func evaluatorMetadata(opts *EvaluatorOptions) map[string]any {
 // map[string]any (from the Dev UI and other JSON callers) are accepted, and
 // mismatched types are rejected. The config's JSON schema is inferred from
 // Config unless [EvaluatorOptions.ConfigSchema] overrides it.
-func NewTypedEvaluator[Config any](name string, opts *EvaluatorOptions, fn TypedEvaluatorFunc[Config]) *EvaluatorAction {
+func NewTypedEvaluator[Config any](
+	name string,
+	opts *EvaluatorOptions,
+	fn TypedEvaluatorFunc[Config],
+) *EvaluatorAction {
 	if name == "" {
 		panic("ai.NewTypedEvaluator: evaluator name is required")
 	}
@@ -297,7 +301,11 @@ func NewTypedEvaluator[Config any](name string, opts *EvaluatorOptions, fn Typed
 // Config is the evaluator's typed configuration; it is usually inferred from
 // fn's signature. See [NewTypedEvaluator] for how the request's options
 // are deserialized.
-func NewTypedBatchEvaluator[Config any](name string, opts *EvaluatorOptions, fn TypedBatchEvaluatorFunc[Config]) *EvaluatorAction {
+func NewTypedBatchEvaluator[Config any](
+	name string,
+	opts *EvaluatorOptions,
+	fn TypedBatchEvaluatorFunc[Config],
+) *EvaluatorAction {
 	if name == "" {
 		panic("ai.NewTypedBatchEvaluator: batch evaluator name is required")
 	}

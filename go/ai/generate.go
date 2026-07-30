@@ -177,7 +177,11 @@ func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 // wrapper types like Opt[float64] that marshal to primitives but reflect as
 // objects), set [ModelOptions.ConfigSchema] explicitly or requests will be
 // rejected at the action boundary.
-func NewTypedModel[Config any](name string, opts *ModelOptions, fn TypedModelFunc[Config]) *ModelAction {
+func NewTypedModel[Config any](
+	name string,
+	opts *ModelOptions,
+	fn TypedModelFunc[Config],
+) *ModelAction {
 	if name == "" {
 		panic("ai.NewTypedModel: name is required")
 	}
