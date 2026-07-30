@@ -12,6 +12,8 @@ import threading
 import structlog
 from structlog.typing import FilteringBoundLogger
 
+from genkit._core._environment import is_dev_environment
+
 CONFIGURED = False
 LOCK = threading.Lock()
 
@@ -37,7 +39,7 @@ def resolve_level() -> int:
     }.get(raw, logging.INFO)
 
 
-def configure_logging(*, force: bool = False) -> None:
+def configure_logging(*, shared_tty: bool | None = None, force: bool = False) -> None:
     """Configure genkit console logging and mute noisy HTTP/health poll loggers.
 
     Safe to call more than once. Default level is ``info``; override with
@@ -45,10 +47,16 @@ def configure_logging(*, force: bool = False) -> None:
     """
     global CONFIGURED
     with LOCK:
+        if shared_tty is None:
+            shared_tty = is_dev_environment()
+
         if CONFIGURED and not force:
             return
 
         CONFIGURED = True
+        if not shared_tty:
+            return
+
         level = resolve_level()
 
         for name in QUIET_LOGGERS:

@@ -32,9 +32,9 @@ def test_resolve_level() -> None:
 
 
 def test_configure_logging_mutes_quiet_loggers() -> None:
-    """Test that configure_logging sets QUIET_LOGGERS to WARNING by default."""
+    """Test that configure_logging sets QUIET_LOGGERS to WARNING in dev environment."""
     with mock.patch.dict(os.environ, {'GENKIT_LOG': 'info'}):
-        configure_logging(force=True)
+        configure_logging(shared_tty=True, force=True)
         for name in QUIET_LOGGERS:
             assert logging.getLogger(name).level == logging.WARNING
 
@@ -42,6 +42,13 @@ def test_configure_logging_mutes_quiet_loggers() -> None:
 def test_configure_logging_allows_debug() -> None:
     """Test that GENKIT_LOG=debug sets QUIET_LOGGERS to DEBUG."""
     with mock.patch.dict(os.environ, {'GENKIT_LOG': 'debug'}):
-        configure_logging(force=True)
+        configure_logging(shared_tty=True, force=True)
         for name in QUIET_LOGGERS:
             assert logging.getLogger(name).level == logging.DEBUG
+
+
+def test_configure_logging_leaves_loggers_alone_in_prod() -> None:
+    """Test that configure_logging does not alter logger levels in non-dev env."""
+    with mock.patch('logging.getLogger') as mock_get_logger:
+        configure_logging(shared_tty=False, force=True)
+        mock_get_logger.assert_not_called()
