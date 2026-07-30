@@ -19,6 +19,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
@@ -88,6 +89,8 @@ type EmbedderOptions struct {
 	Supports *EmbedderSupports `json:"supports,omitempty"`
 	// Dimensions specifies the number of dimensions in the embedding vector.
 	Dimensions int `json:"dimensions,omitempty"`
+	// Metadata is arbitrary key-value data attached to the action descriptor.
+	Metadata map[string]any `json:"-"`
 }
 
 // EmbedderAction is an embedder backed by a registry action. It is the
@@ -138,20 +141,22 @@ func NewTypedEmbedder[Config any](
 
 	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, EmbedRequest{}, "options")
 
-	metadata := map[string]any{
-		"type": api.ActionTypeEmbedder,
-		// TODO: This should be under "embedder" but JS has it as "info".
-		"info": map[string]any{
-			"label":      opts.Label,
-			"dimensions": opts.Dimensions,
-			"supports": map[string]any{
-				"input":        opts.Supports.Input,
-				"multilingual": opts.Supports.Multilingual,
-			},
+	// Seed from the caller's metadata, then stamp the built-in keys over it so
+	// they cannot be corrupted; registry discovery depends on them.
+	metadata := make(map[string]any, len(opts.Metadata)+3)
+	maps.Copy(metadata, opts.Metadata)
+	metadata["type"] = api.ActionTypeEmbedder
+	// TODO: This should be under "embedder" but JS has it as "info".
+	metadata["info"] = map[string]any{
+		"label":      opts.Label,
+		"dimensions": opts.Dimensions,
+		"supports": map[string]any{
+			"input":        opts.Supports.Input,
+			"multilingual": opts.Supports.Multilingual,
 		},
-		"embedder": map[string]any{
-			"customOptions": configSchema,
-		},
+	}
+	metadata["embedder"] = map[string]any{
+		"customOptions": configSchema,
 	}
 
 	rawFn := func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {

@@ -117,6 +117,78 @@ func TestModelConfigNormalizedBeforeBuiltins(t *testing.T) {
 	}
 }
 
+func TestTypedModelMetadata(t *testing.T) {
+	m := NewTypedModel("test/model-metadata",
+		&ModelOptions{
+			Metadata: map[string]any{
+				"custom": "value",
+				"model":  "caller values must not clobber the reserved keys",
+			},
+		},
+		func(ctx context.Context, req *ModelRequest, cfg testTypedConfig, cb ModelStreamCallback) (*ModelResponse, error) {
+			return &ModelResponse{Message: NewModelTextMessage("ok"), Request: req}, nil
+		})
+
+	metadata := m.Desc().Metadata
+	if got := metadata["custom"]; got != "value" {
+		t.Errorf(`Metadata["custom"] = %v, want "value"`, got)
+	}
+	if got := metadata["type"]; got != api.ActionTypeModel {
+		t.Errorf(`Metadata["type"] = %v, want %v`, got, api.ActionTypeModel)
+	}
+	if _, ok := metadata["model"].(map[string]any); !ok {
+		t.Errorf(`Metadata["model"] = %v, want the built model info map`, metadata["model"])
+	}
+}
+
+func TestTypedEmbedderMetadata(t *testing.T) {
+	e := NewTypedEmbedder("test/embedder-metadata",
+		&EmbedderOptions{
+			Metadata: map[string]any{
+				"custom": "value",
+				"info":   "caller values must not clobber the reserved keys",
+			},
+		},
+		func(ctx context.Context, req *EmbedRequest, cfg testTypedConfig) (*EmbedResponse, error) {
+			return &EmbedResponse{}, nil
+		})
+
+	metadata := e.Desc().Metadata
+	if got := metadata["custom"]; got != "value" {
+		t.Errorf(`Metadata["custom"] = %v, want "value"`, got)
+	}
+	if got := metadata["type"]; got != api.ActionTypeEmbedder {
+		t.Errorf(`Metadata["type"] = %v, want %v`, got, api.ActionTypeEmbedder)
+	}
+	if _, ok := metadata["info"].(map[string]any); !ok {
+		t.Errorf(`Metadata["info"] = %v, want the built embedder info map`, metadata["info"])
+	}
+}
+
+func TestTypedEvaluatorMetadata(t *testing.T) {
+	e := NewTypedEvaluator("test/evaluator-metadata",
+		&EvaluatorOptions{
+			Metadata: map[string]any{
+				"custom":    "value",
+				"evaluator": "caller values must not clobber the reserved keys",
+			},
+		},
+		func(ctx context.Context, req *EvaluatorCallbackRequest, cfg testTypedConfig) (*EvaluatorCallbackResponse, error) {
+			return &EvaluatorCallbackResponse{}, nil
+		})
+
+	metadata := e.Desc().Metadata
+	if got := metadata["custom"]; got != "value" {
+		t.Errorf(`Metadata["custom"] = %v, want "value"`, got)
+	}
+	if got := metadata["type"]; got != api.ActionTypeEvaluator {
+		t.Errorf(`Metadata["type"] = %v, want %v`, got, api.ActionTypeEvaluator)
+	}
+	if _, ok := metadata["evaluator"].(map[string]any); !ok {
+		t.Errorf(`Metadata["evaluator"] = %v, want the built evaluator info map`, metadata["evaluator"])
+	}
+}
+
 func TestTypedBackgroundModelMetadata(t *testing.T) {
 	bm := NewTypedBackgroundModel("test/bg-metadata",
 		&TypedBackgroundModelOptions{
