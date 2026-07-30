@@ -39,26 +39,41 @@ def test_resolve_level() -> None:
 
 def test_configure_logging_mutes_quiet_loggers() -> None:
     """Test that configure_logging sets QUIET_LOGGERS to WARNING in dev environment."""
-    with mock.patch.dict(os.environ, {'GENKIT_LOG': 'info'}):
+    with (
+        mock.patch.dict(os.environ, {'GENKIT_LOG': 'info'}),
+        mock.patch('logging.getLogger') as mock_get_logger,
+    ):
         configure_logging(shared_tty=True)
         for name in QUIET_LOGGERS:
-            assert logging.getLogger(name).level == logging.WARNING
+            mock_get_logger.assert_any_call(name)
+        expected_calls = [mock.call(logging.WARNING)] * len(QUIET_LOGGERS)
+        mock_get_logger.return_value.setLevel.assert_has_calls(expected_calls, any_order=True)
 
 
 def test_configure_logging_allows_debug() -> None:
     """Test that GENKIT_LOG=debug sets QUIET_LOGGERS to DEBUG."""
-    with mock.patch.dict(os.environ, {'GENKIT_LOG': 'debug'}):
+    with (
+        mock.patch.dict(os.environ, {'GENKIT_LOG': 'debug'}),
+        mock.patch('logging.getLogger') as mock_get_logger,
+    ):
         configure_logging(shared_tty=True)
         for name in QUIET_LOGGERS:
-            assert logging.getLogger(name).level == logging.DEBUG
+            mock_get_logger.assert_any_call(name)
+        expected_calls = [mock.call(logging.DEBUG)] * len(QUIET_LOGGERS)
+        mock_get_logger.return_value.setLevel.assert_has_calls(expected_calls, any_order=True)
 
 
 def test_configure_logging_respects_higher_levels() -> None:
     """Test that GENKIT_LOG=error sets QUIET_LOGGERS to ERROR."""
-    with mock.patch.dict(os.environ, {'GENKIT_LOG': 'error'}):
+    with (
+        mock.patch.dict(os.environ, {'GENKIT_LOG': 'error'}),
+        mock.patch('logging.getLogger') as mock_get_logger,
+    ):
         configure_logging(shared_tty=True)
         for name in QUIET_LOGGERS:
-            assert logging.getLogger(name).level == logging.ERROR
+            mock_get_logger.assert_any_call(name)
+        expected_calls = [mock.call(logging.ERROR)] * len(QUIET_LOGGERS)
+        mock_get_logger.return_value.setLevel.assert_has_calls(expected_calls, any_order=True)
 
 
 def test_configure_logging_leaves_loggers_alone_in_prod() -> None:

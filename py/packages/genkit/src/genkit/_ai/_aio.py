@@ -864,13 +864,14 @@ class Genkit:
                 sockets = [sock]
 
             app = create_reflection_asgi_app(registry=self.registry)
+            is_debug = os.environ.get('GENKIT_LOG', '').strip().lower() == 'debug'
             config = uvicorn.Config(
                 app,
                 host=spec.host,
                 port=spec.port,
                 loop='asyncio',
-                access_log=False,
-                log_level='debug' if os.environ.get('GENKIT_LOG', '').lower() == 'debug' else 'warning',
+                access_log=is_debug,
+                log_level='debug' if is_debug else 'warning',
             )
             server = ReflectionServer(config, ready=self._reflection_ready)
             async with RuntimeManager(spec, lazy_write=True) as runtime_manager:
