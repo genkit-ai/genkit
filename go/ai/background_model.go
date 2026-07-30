@@ -79,7 +79,7 @@ type BackgroundModelOptions struct {
 	Metadata map[string]any    // Additional metadata.
 }
 
-// LookupBackgroundModel looks up a BackgroundAction registered by [DefineBackgroundModel].
+// LookupBackgroundModel looks up a registered [BackgroundModel] by name.
 // It returns nil if the background model was not found.
 func LookupBackgroundModel(r api.Registry, name string) BackgroundModel {
 	key := api.KeyFromName(api.ActionTypeBackgroundModel, name)
@@ -204,16 +204,6 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 	return NewTypedBackgroundModel(name, opts, func(ctx context.Context, req *ModelRequest, _ any) (*ModelOperation, error) {
 		return startFn(ctx, req)
 	}, checkFn)
-}
-
-// DefineBackgroundModel defines and registers a new model that runs in the background.
-//
-// Deprecated: Use [NewTypedBackgroundModel] and register the result with
-// [BackgroundModel.Register].
-func DefineBackgroundModel(r *registry.Registry, name string, opts *BackgroundModelOptions, fn StartModelOpFunc, checkFn CheckModelOpFunc) BackgroundModel {
-	m := NewBackgroundModel(name, opts, fn, checkFn)
-	m.Register(r)
-	return m
 }
 
 // GenerateOperation generates a model response as a long-running operation based on the provided options.

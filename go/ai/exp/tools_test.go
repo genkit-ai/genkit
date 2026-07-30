@@ -105,7 +105,7 @@ func TestToolOutputSchemaOptions(t *testing.T) {
 // reqs (typically tool requests), and once a tool response is in history it
 // returns the final text "done". This drives a single tool round per Generate.
 func defineToolThenFinishModel(reg *registry.Registry, reqs ...*ai.Part) {
-	ai.DefineModel(reg, "test/model",
+	defineTestModel(reg, "test/model",
 		&ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			for _, m := range req.Messages {
@@ -139,7 +139,7 @@ func TestDefineTool_PlainContext(t *testing.T) {
 	}))
 
 	var gotCity string
-	weather := DefineTool(reg, "getWeather", "fetches the weather",
+	weather := defineTestExpTool(reg, "getWeather", "fetches the weather",
 		func(ctx context.Context, in weatherIn) (string, error) {
 			gotCity = in.City
 			return "Sunny", nil
@@ -164,7 +164,7 @@ func TestDefineTool_PlainContext(t *testing.T) {
 // multipart response without changing the function signature.
 func TestTool_AttachParts(t *testing.T) {
 	reg := newToolTestRegistry(t)
-	shot := DefineTool(reg, "screenshot", "takes a screenshot",
+	shot := defineTestExpTool(reg, "screenshot", "takes a screenshot",
 		func(ctx context.Context, _ struct{}) (string, error) {
 			tool.AttachParts(ctx, ai.NewMediaPart("image/png", "pngbytes"))
 			return "captured", nil
@@ -237,7 +237,7 @@ func TestTool_OutputSchemaMatchesClassic(t *testing.T) {
 // when no streaming callback is wired (here, a direct RunRaw).
 func TestTool_SendPartialNoOpWithoutStreaming(t *testing.T) {
 	reg := newToolTestRegistry(t)
-	tl := DefineTool(reg, "noop", "streams when it can",
+	tl := defineTestExpTool(reg, "noop", "streams when it can",
 		func(ctx context.Context, _ struct{}) (string, error) {
 			tool.SendPartial(ctx, map[string]any{"progress": 50})
 			return "ok", nil
@@ -274,7 +274,7 @@ func TestDefineInterruptibleTool_TypedRoundTrip(t *testing.T) {
 	}))
 
 	var gotResume *confirmation
-	transfer := DefineInterruptibleTool(reg, "transfer", "transfers money",
+	transfer := defineTestInterruptibleTool(reg, "transfer", "transfers money",
 		func(ctx context.Context, in transferIn, res *confirmation) (string, error) {
 			if res == nil {
 				return "", tool.Interrupt(transferInterrupt{Reason: "large_amount", Amount: in.Amount})
@@ -365,7 +365,7 @@ func TestResume_NonObjectData_ReturnsClearError(t *testing.T) {
 // the tool runs.
 func TestInterrupt_NonObjectData_ReturnsClearError(t *testing.T) {
 	reg := newToolTestRegistry(t)
-	tl := DefineInterruptibleTool(reg, "bad", "interrupts with a scalar",
+	tl := defineTestInterruptibleTool(reg, "bad", "interrupts with a scalar",
 		func(ctx context.Context, _ struct{}, _ *struct{}) (string, error) {
 			return "", tool.Interrupt("not an object")
 		})
@@ -386,7 +386,7 @@ func TestSendPartial_StreamsPartialToolResponse(t *testing.T) {
 	reg := newToolTestRegistry(t)
 	defineToolThenFinishModel(reg, ai.NewToolRequestPart(&ai.ToolRequest{Name: "progressTool", Input: map[string]any{}}))
 
-	DefineTool(reg, "progressTool", "streams progress",
+	defineTestExpTool(reg, "progressTool", "streams progress",
 		func(ctx context.Context, _ struct{}) (string, error) {
 			tool.SendPartial(ctx, map[string]any{"progress": 50})
 			return "complete", nil
@@ -444,8 +444,8 @@ func TestConcurrentStreamingTools_NoDataRace(t *testing.T) {
 		}
 		return "ok", nil
 	}
-	DefineTool(reg, "toolA", "streams", streamer)
-	DefineTool(reg, "toolB", "streams", streamer)
+	defineTestExpTool(reg, "toolA", "streams", streamer)
+	defineTestExpTool(reg, "toolB", "streams", streamer)
 
 	for _, err := range ai.GenerateStream(context.Background(), reg,
 		ai.WithModelName("test/model"),

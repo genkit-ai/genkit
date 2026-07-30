@@ -328,17 +328,6 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 	})
 }
 
-// DefineEvaluator creates a new [Evaluator] and registers it.
-// This method processes the input dataset one-by-one.
-//
-// Deprecated: Use [NewTypedEvaluator] and register the result with
-// [Evaluator.Register].
-func DefineEvaluator(r api.Registry, name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluator {
-	e := NewEvaluator(name, opts, fn)
-	e.Register(r)
-	return e
-}
-
 // NewBatchEvaluator creates a new [Evaluator].
 // This method provides the full [EvaluatorRequest] to the callback function,
 // giving more flexibility to the user for processing the data, such as batching or parallelization.
@@ -355,19 +344,7 @@ func NewBatchEvaluator(name string, opts *EvaluatorOptions, fn BatchEvaluatorFun
 	})
 }
 
-// DefineBatchEvaluator creates a new [Evaluator] and registers it.
-// This method provides the full [EvaluatorRequest] to the callback function,
-// giving more flexibility to the user for processing the data, such as batching or parallelization.
-//
-// Deprecated: Use [NewTypedBatchEvaluator] and register the result with
-// [Evaluator.Register].
-func DefineBatchEvaluator(r api.Registry, name string, opts *EvaluatorOptions, fn BatchEvaluatorFunc) Evaluator {
-	e := NewBatchEvaluator(name, opts, fn)
-	e.Register(r)
-	return e
-}
-
-// LookupEvaluator looks up an [Evaluator] registered by [DefineEvaluator].
+// LookupEvaluator looks up a registered [Evaluator] by name.
 // It returns nil if the evaluator was not defined.
 func LookupEvaluator(r api.Registry, name string) Evaluator {
 	action := core.ResolveActionFor[*EvaluatorRequest, *EvaluatorResponse, struct{}](r, api.ActionTypeEvaluator, name)

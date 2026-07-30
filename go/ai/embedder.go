@@ -170,18 +170,7 @@ func NewEmbedder(name string, opts *EmbedderOptions, fn EmbedderFunc) Embedder {
 	})
 }
 
-// DefineEmbedder registers the given embed function as an action, and returns an
-// [Embedder] that runs it.
-//
-// Deprecated: Use [NewTypedEmbedder] and register the result with
-// [Embedder.Register].
-func DefineEmbedder(r api.Registry, name string, opts *EmbedderOptions, fn EmbedderFunc) Embedder {
-	e := NewEmbedder(name, opts, fn)
-	e.Register(r)
-	return e
-}
-
-// LookupEmbedder looks up an [Embedder] registered by [DefineEmbedder].
+// LookupEmbedder looks up a registered [Embedder] by name.
 // It will try to resolve the embedder dynamically if the embedder is not found.
 // It returns nil if the embedder was not resolved.
 func LookupEmbedder(r api.Registry, name string) Embedder {
