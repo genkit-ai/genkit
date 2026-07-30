@@ -788,6 +788,7 @@
         "stop",
         "length",
         "blocked",
+        "aborted",
         "interrupted",
         "other",
         "unknown"

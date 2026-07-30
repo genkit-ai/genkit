@@ -75,7 +75,7 @@ async def test_generate_uses_default_model(setup_test: SetupFixture) -> None:
     """Test that the generate function uses the default model."""
     ai, *_ = setup_test
 
-    want_txt = '[ECHO] user: "hi" {"temperature":11.0}'
+    want_txt = '[ECHO] user: "hi" {"temperature":11}'
 
     response = await ai.generate(prompt='hi', config={'temperature': 11})
 
@@ -125,11 +125,11 @@ async def test_generate_with_explicit_model(setup_test: SetupFixture) -> None:
 
     response = await ai.generate(model='echoModel', prompt='hi', config={'temperature': 11})
 
-    assert response.text == '[ECHO] user: "hi" {"temperature":11.0}'
+    assert response.text == '[ECHO] user: "hi" {"temperature":11}'
 
     stream_result = ai.generate_stream(model='echoModel', prompt='hi', config={'temperature': 11})
 
-    assert (await stream_result.response).text == '[ECHO] user: "hi" {"temperature":11.0}'
+    assert (await stream_result.response).text == '[ECHO] user: "hi" {"temperature":11}'
 
 
 @pytest.mark.asyncio
@@ -139,7 +139,7 @@ async def test_generate_with_str_prompt(setup_test: SetupFixture) -> None:
 
     response = await ai.generate(prompt='hi', config={'temperature': 11})
 
-    assert response.text == '[ECHO] user: "hi" {"temperature":11.0}'
+    assert response.text == '[ECHO] user: "hi" {"temperature":11}'
 
 
 @pytest.mark.asyncio
@@ -147,7 +147,7 @@ async def test_generate_with_part_prompt(setup_test: SetupFixture) -> None:
     """Test that the generate function with a part prompt works."""
     ai, *_ = setup_test
 
-    want_txt = '[ECHO] user: "hi" {"temperature":11.0}'
+    want_txt = '[ECHO] user: "hi" {"temperature":11}'
 
     response = await ai.generate(prompt=[Part(root=TextPart(text='hi'))], config={'temperature': 11})
 
@@ -163,7 +163,7 @@ async def test_generate_with_part_list_prompt(setup_test: SetupFixture) -> None:
     """Test that the generate function with a list of parts prompt works."""
     ai, *_ = setup_test
 
-    want_txt = '[ECHO] user: "hello","world" {"temperature":11.0}'
+    want_txt = '[ECHO] user: "hello","world" {"temperature":11}'
 
     response = await ai.generate(
         prompt=[Part(root=TextPart(text='hello')), Part(root=TextPart(text='world'))],
@@ -185,7 +185,7 @@ async def test_generate_with_str_system(setup_test: SetupFixture) -> None:
     """Test that the generate function with a string system works."""
     ai, *_ = setup_test
 
-    want_txt = '[ECHO] system: "talk like pirate" user: "hi" {"temperature":11.0}'
+    want_txt = '[ECHO] system: "talk like pirate" user: "hi" {"temperature":11}'
 
     response = await ai.generate(system='talk like pirate', prompt='hi', config={'temperature': 11})
 
@@ -201,7 +201,7 @@ async def test_generate_with_part_system(setup_test: SetupFixture) -> None:
     """Test that the generate function with a part system works."""
     ai, *_ = setup_test
 
-    want_txt = '[ECHO] system: "talk like pirate" user: "hi" {"temperature":11.0}'
+    want_txt = '[ECHO] system: "talk like pirate" user: "hi" {"temperature":11}'
 
     response = await ai.generate(
         system=[Part(root=TextPart(text='talk like pirate'))],
@@ -225,7 +225,7 @@ async def test_generate_with_part_list_system(setup_test: SetupFixture) -> None:
     """Test that the generate function with a list of parts system works."""
     ai, *_ = setup_test
 
-    want_txt = '[ECHO] system: "talk","like pirate" user: "hi" {"temperature":11.0}'
+    want_txt = '[ECHO] system: "talk","like pirate" user: "hi" {"temperature":11}'
 
     response = await ai.generate(
         system=[Part(root=TextPart(text='talk')), Part(root=TextPart(text='like pirate'))],
@@ -259,7 +259,7 @@ async def test_generate_with_messages(setup_test: SetupFixture) -> None:
         config={'temperature': 11},
     )
 
-    assert response.text == '[ECHO] user: "hi" {"temperature":11.0}'
+    assert response.text == '[ECHO] user: "hi" {"temperature":11}'
 
     stream_result = ai.generate_stream(
         messages=[
@@ -271,7 +271,7 @@ async def test_generate_with_messages(setup_test: SetupFixture) -> None:
         config={'temperature': 11},
     )
 
-    assert (await stream_result.response).text == '[ECHO] user: "hi" {"temperature":11.0}'
+    assert (await stream_result.response).text == '[ECHO] user: "hi" {"temperature":11}'
 
 
 @pytest.mark.asyncio
@@ -1506,7 +1506,7 @@ def test_define_model_default_metadata(setup_test: SetupFixture) -> None:
     """Test that the define model function works."""
     ai, _, _, *_ = setup_test
 
-    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def foo_model_fn(request: ModelRequest, _: ActionRunContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='banana!'))]))
 
     action = ai.define_model(
@@ -1527,7 +1527,7 @@ def test_define_model_with_schema(setup_test: SetupFixture) -> None:
         field_a: str = Field(description='a field')
         field_b: str = Field(description='b field')
 
-    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def foo_model_fn(request: ModelRequest, _: ActionRunContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='banana!'))]))
 
     action = ai.define_model(
@@ -1564,7 +1564,7 @@ def test_define_model_with_info(setup_test: SetupFixture) -> None:
     """Test that the define model function with info works."""
     ai, _, _, *_ = setup_test
 
-    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def foo_model_fn(request: ModelRequest, _: ActionRunContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='banana!'))]))
 
     action = ai.define_model(
