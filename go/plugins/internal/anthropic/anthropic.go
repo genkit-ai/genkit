@@ -45,6 +45,11 @@ const (
 	DefaultMaxOutputTokens = 4096
 )
 
+// defaultConfigSchema is the schema every Claude model advertises for its
+// config. Reflecting the SDK params struct is expensive and the result is
+// read-only, so it is built once and shared by every model of both plugins.
+var defaultConfigSchema = reflectConfigSchema(anthropic.MessageNewParams{})
+
 // metadataSignature extracts a reasoning signature from part metadata. It
 // handles both []byte (the value [ai.NewReasoningPart] stores) and string
 // (base64-encoded, after the part has been through a JSON roundtrip such as
@@ -86,36 +91,48 @@ func toAnthropicMediaBlock(p *ai.Part, kind string) (anthropic.ContentBlockParam
 	}
 }
 
-func DefineModel(client anthropic.Client, provider, name string, info ai.ModelOptions) ai.Model {
-	label := "Anthropic"
-
-	if provider == "vertexai" {
-		label = "Vertex AI"
+// NewModel creates a Claude model action without registering it. name is the
+// Genkit action name and apiModel is the model ID sent to the API, which
+// differ when the name is an alias for a dated release; an empty apiModel
+// falls back to name. opts is used as given, except that a nil ConfigSchema
+// defaults to the reflected [anthropic.MessageNewParams] schema and an empty
+// label is derived from the provider and the name.
+//
+// The framework validates the request's config against the config schema and
+// deserializes it into [anthropic.MessageNewParams] before the model function
+// runs, so the request arrives with the config already typed.
+func NewModel(client anthropic.Client, provider, name, apiModel string, opts ai.ModelOptions) *ai.ModelAction {
+	if opts.ConfigSchema == nil {
+		opts.ConfigSchema = defaultConfigSchema
+	}
+	if opts.Label == "" {
+		opts.Label = fmt.Sprintf("%s - %s", providerLabel(provider), name)
+	}
+	if apiModel == "" {
+		apiModel = name
 	}
 
-	configSchema := info.ConfigSchema
-	if configSchema == nil {
-		configSchema = ConfigSchema(anthropic.MessageNewParams{})
-	}
-
-	meta := &ai.ModelOptions{
-		Label:        label + "-" + name,
-		Supports:     info.Supports,
-		Versions:     info.Versions,
-		ConfigSchema: configSchema,
-	}
-
-	return ai.NewModel(api.NewName(provider, name), meta, func(
+	return ai.NewModelAction(api.NewName(provider, name), &opts, func(
 		ctx context.Context,
 		input *ai.ModelRequest,
-		cb func(context.Context, *ai.ModelResponseChunk) error,
+		config anthropic.MessageNewParams,
+		cb ai.ModelStreamCallback,
 	) (*ai.ModelResponse, error) {
-		return Generate(ctx, client, provider, name, input, cb)
+		return Generate(ctx, client, provider, apiModel, input, config, cb)
 	})
 }
 
-// ConfigSchema converts a config struct to a map[string]any.
-func ConfigSchema(config any) map[string]any {
+// providerLabel is the display name Claude models are labeled with when the
+// caller supplies no label of its own.
+func providerLabel(provider string) string {
+	if provider == "vertexai" {
+		return "Vertex AI"
+	}
+	return "Anthropic"
+}
+
+// reflectConfigSchema converts a config struct to a map[string]any.
+func reflectConfigSchema(config any) map[string]any {
 	r := jsonschema.Reflector{
 		DoNotReference:             true, // Prevent $ref usage
 		AllowAdditionalProperties:  false,
@@ -154,16 +171,19 @@ func ConfigSchema(config any) map[string]any {
 	return result
 }
 
-// Generate function defines how a generate request is done in Anthropic models
+// Generate function defines how a generate request is done in Anthropic models.
+// config is the request's config, already deserialized by the framework, and is
+// the base the request is built on.
 func Generate(
 	ctx context.Context,
 	client anthropic.Client,
 	provider string,
 	model string,
 	input *ai.ModelRequest,
+	config anthropic.MessageNewParams,
 	cb func(context.Context, *ai.ModelResponseChunk) error,
 ) (*ai.ModelResponse, error) {
-	req, err := toAnthropicRequest(provider, input)
+	req, err := toAnthropicRequest(provider, input, config)
 	if err != nil {
 		return nil, fmt.Errorf("unable to generate anthropic request: %w", err)
 	}
@@ -255,14 +275,14 @@ func toAnthropicRole(role ai.Role) (anthropic.MessageParamRole, error) {
 	}
 }
 
-// toAnthropicRequest translates [ai.ModelRequest] to an Anthropic request
-func toAnthropicRequest(provider string, i *ai.ModelRequest) (*anthropic.MessageNewParams, error) {
+// toAnthropicRequest folds an [ai.ModelRequest] into the config the framework
+// deserialized for the request, and returns the result to send to the API.
+// config is taken by value: the request's own copy is what gets amended, never
+// the caller's.
+func toAnthropicRequest(provider string, i *ai.ModelRequest, config anthropic.MessageNewParams) (*anthropic.MessageNewParams, error) {
 	messages := make([]anthropic.MessageParam, 0)
 
-	req, err := configFromRequest(i)
-	if err != nil {
-		return nil, err
-	}
+	req := &config
 
 	// max_tokens is required by the Anthropic API. Fall back to a conservative
 	// default that every Claude model accepts, mirroring the JS plugin's
@@ -353,29 +373,6 @@ func toAnthropicToolChoice(choice ai.ToolChoice) (anthropic.ToolChoiceUnionParam
 	default:
 		return anthropic.ToolChoiceUnionParam{}, false
 	}
-}
-
-// configFromRequest converts any supported config type to [anthropic.MessageNewParams]
-func configFromRequest(input *ai.ModelRequest) (*anthropic.MessageNewParams, error) {
-	var result anthropic.MessageNewParams
-
-	switch config := input.Config.(type) {
-	case anthropic.MessageNewParams:
-		result = config
-	case *anthropic.MessageNewParams:
-		result = *config
-	case map[string]any:
-		var err error
-		result, err = base.MapToStruct[anthropic.MessageNewParams](config)
-		if err != nil {
-			return nil, err
-		}
-	case nil:
-		// Empty configuration is considered valid
-	default:
-		return nil, fmt.Errorf("unexpected config type: %T", input.Config)
-	}
-	return &result, nil
 }
 
 // toAnthropicTools translates [ai.ToolDefinition] to an anthropic.ToolParam type
