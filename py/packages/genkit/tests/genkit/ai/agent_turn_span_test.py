@@ -50,11 +50,16 @@ def exporter() -> Generator[InMemorySpanExporter, None, None]:
         provider = TracerProvider()
         trace_api.set_tracer_provider(provider)
     exp = InMemorySpanExporter()
-    provider.add_span_processor(SimpleSpanProcessor(exp))
+    processor = SimpleSpanProcessor(exp)
+    provider.add_span_processor(processor)
     try:
         yield exp
     finally:
         exp.clear()
+        if hasattr(provider, '_active_span_processor'):
+            provider._active_span_processor._span_processors = tuple(
+                p for p in provider._active_span_processor._span_processors if p is not processor
+            )
 
 
 def _by_name(spans: Sequence[ReadableSpan], name: str) -> ReadableSpan:

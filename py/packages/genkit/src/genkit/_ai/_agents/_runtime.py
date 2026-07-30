@@ -883,14 +883,11 @@ class AgentRuntime:
             heartbeat_task.add_done_callback(self.background_tasks.discard)
             t2.add_done_callback(self.background_tasks.discard)
             state = await self.session.state()
-            out = AgentOutput(
+            return AgentOutput(
                 session_id=state.session_id,
                 snapshot_id=pending_snap.snapshot_id,
                 finish_reason=AgentFinishReason.DETACHED,
             )
-            if self.store is None:
-                out.state = self.transform_state(state)
-            return out
 
         # --- Normal completion path ---
         await fn_task
