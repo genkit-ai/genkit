@@ -134,6 +134,33 @@ func TestNewModelDescriptor(t *testing.T) {
 	}
 }
 
+// TestDefineModelNilOptions covers the nil ModelOptions path: the model gets
+// the capabilities the plugin resolves for its name rather than panicking or
+// advertising a model that supports nothing.
+func TestDefineModelNilOptions(t *testing.T) {
+	a := &Anthropic{}
+
+	m, err := a.DefineModel(nil, "claude-opus-4-5", nil)
+	if err != nil {
+		t.Fatalf("DefineModel() error = %v", err)
+	}
+
+	model, ok := m.(*ai.ModelAction).Desc().Metadata["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("model metadata missing")
+	}
+	if want := anthropicLabelPrefix + " - Claude Opus 4.5"; model["label"] != want {
+		t.Errorf("label = %v, want %q", model["label"], want)
+	}
+	supports, ok := model["supports"].(map[string]any)
+	if !ok {
+		t.Fatalf("supports metadata missing")
+	}
+	if supports["tools"] != true || supports["multiturn"] != true {
+		t.Errorf("supports = %v, want the curated Claude capabilities", supports)
+	}
+}
+
 // TestModelConfigIsValidated pins that the config schema reaches the request
 // input schema, so the framework rejects a config the SDK type cannot hold
 // before it reaches the model function.
