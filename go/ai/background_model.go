@@ -86,8 +86,8 @@ type CheckModelOpFunc = func(ctx context.Context, op *ModelOperation) (*ModelOpe
 type CancelModelOpFunc = func(ctx context.Context, op *ModelOperation) (*ModelOperation, error)
 
 // TypedBackgroundModelOptions configures a background model created with
-// [NewTypedBackgroundModel]. It holds descriptor data only; the cancel
-// function is a constructor argument.
+// [NewTypedBackgroundModel]. It holds descriptor data plus optional lifecycle
+// hooks; the required start and check functions are constructor arguments.
 type TypedBackgroundModelOptions struct {
 	ConfigSchema map[string]any // JSON schema for the model's config.
 	Label        string         // User-friendly name for the model.
@@ -95,6 +95,10 @@ type TypedBackgroundModelOptions struct {
 	Supports     *ModelSupports // Capabilities of the model.
 	Versions     []string       // Available versions of the model.
 	Metadata     map[string]any // Arbitrary key-value data attached to the action descriptor.
+
+	// Cancel cancels a running operation. Optional: nil means the model does
+	// not support canceling operations.
+	Cancel CancelModelOpFunc
 }
 
 // BackgroundModelOptions holds configuration for defining a background model.
@@ -124,9 +128,6 @@ func LookupBackgroundModel(r api.Registry, name string) BackgroundModel {
 // [BackgroundModelAction.Register] directly. Applications should define
 // background models with [genkit.DefineTypedBackgroundModel].
 //
-// cancelFn is optional; nil means the model does not support canceling
-// operations.
-//
 // Config is the model's typed configuration; it is usually inferred from
 // startFn's signature. See [NewTypedModel] for how the request's config
 // is deserialized.
@@ -135,7 +136,6 @@ func NewTypedBackgroundModel[Config any](
 	opts *TypedBackgroundModelOptions,
 	startFn TypedStartModelOpFunc[Config],
 	checkFn CheckModelOpFunc,
-	cancelFn CancelModelOpFunc,
 ) *BackgroundModelAction {
 	if name == "" {
 		panic("ai.NewTypedBackgroundModel: name is required")
@@ -235,7 +235,7 @@ func NewTypedBackgroundModel[Config any](
 		Description: description,
 		Metadata:    metadata,
 		InputSchema: inputSchema,
-	}, wrappedFn, checkFn, cancelFn)}
+	}, wrappedFn, checkFn, opts.Cancel)}
 }
 
 // NewBackgroundModel defines a new model that runs in the background.
@@ -257,9 +257,10 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 		Supports:     opts.Supports,
 		Versions:     opts.Versions,
 		Metadata:     opts.Metadata,
+		Cancel:       opts.Cancel,
 	}, func(ctx context.Context, req *ModelRequest, _ any) (*ModelOperation, error) {
 		return startFn(ctx, req)
-	}, checkFn, opts.Cancel)
+	}, checkFn)
 }
 
 // GenerateOperation generates a model response as a long-running operation based on the provided options.

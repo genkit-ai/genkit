@@ -588,8 +588,6 @@ func DefineModel(g *Genkit, name string, opts *ai.ModelOptions, fn ai.ModelFunc)
 // The `name` is the identifier the model uses to request the background model. The `opts`
 // are the options for the background model. The `startFn` is the function that starts the background model.
 // The `checkFn` is the function that checks the status of the background model.
-// The `cancelFn` is optional; nil means the model does not support canceling
-// operations.
 //
 // Config is the model's typed configuration; it is usually inferred from
 // startFn's signature. See [ai.NewTypedModel] for how the request's
@@ -600,9 +598,8 @@ func DefineTypedBackgroundModel[Config any](
 	opts *ai.TypedBackgroundModelOptions,
 	startFn ai.TypedStartModelOpFunc[Config],
 	checkFn ai.CheckModelOpFunc,
-	cancelFn ai.CancelModelOpFunc,
 ) *ai.BackgroundModelAction {
-	m := ai.NewTypedBackgroundModel(name, opts, startFn, checkFn, cancelFn)
+	m := ai.NewTypedBackgroundModel(name, opts, startFn, checkFn)
 	m.Register(g.reg)
 	return m
 }
