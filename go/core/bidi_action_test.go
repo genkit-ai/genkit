@@ -163,7 +163,7 @@ func TestRunBidi(t *testing.T) {
 func TestBidiActionInterfaceDetection(t *testing.T) {
 	r := registry.New()
 
-	DefineAction(r, "plain", api.ActionTypeCustom, nil, nil,
+	defineAction(r, "plain", api.ActionTypeCustom, nil, nil,
 		func(ctx context.Context, in string) (string, error) {
 			return "out:" + in, nil
 		})

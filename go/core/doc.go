@@ -65,7 +65,7 @@ Define a streaming action that sends chunks during execution:
 Flows are user-defined actions that orchestrate AI operations. They are the
 primary way application developers define business logic in Genkit:
 
-	flow := core.DefineFlow(registry, "myFlow",
+	flow := core.NewFlow("myFlow",
 		func(ctx context.Context, input string) (string, error) {
 			// Use Run to create traced sub-steps
 			result, err := core.Run(ctx, "step1", func() (string, error) {
@@ -77,10 +77,11 @@ primary way application developers define business logic in Genkit:
 			return result, nil
 		},
 	)
+	flow.Register(registry)
 
 Streaming flows can send intermediate results to callers:
 
-	streamingFlow := core.DefineStreamingFlow(registry, "generateReport",
+	streamingFlow := core.NewStreamingFlow("generateReport",
 		func(ctx context.Context, input Input, cb core.StreamCallback[Progress]) (Report, error) {
 			for i := 0; i < 100; i += 10 {
 				if cb != nil {
@@ -91,6 +92,7 @@ Streaming flows can send intermediate results to callers:
 			return Report{...}, nil
 		},
 	)
+	streamingFlow.Register(registry)
 
 # Traced Steps with Run
 
@@ -128,8 +130,8 @@ Chain multiple middleware together:
 
 Register JSON schemas for use in prompts and validation:
 
-	// Define a schema from a map
-	core.DefineSchema(registry, "Person", map[string]any{
+	// Register a schema from a map
+	registry.RegisterSchema("Person", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"name": map[string]any{"type": "string"},
@@ -138,8 +140,8 @@ Register JSON schemas for use in prompts and validation:
 		"required": []any{"name"},
 	})
 
-	// Define schemas from Go types (recommended)
-	core.DefineSchemasFor(registry, Person{}, Address{})
+	// Register a schema inferred from a Go type (recommended)
+	registry.RegisterSchema("Person", core.InferSchemaMap(Person{}))
 
 Schemas can be referenced in .prompt files by name.
 
@@ -158,8 +160,8 @@ and other capabilities. Implement the [api.Plugin] interface:
 
 	func (p *MyPlugin) Init(ctx context.Context) []api.Action {
 		// Initialize the plugin and return actions to register
-		model := ai.DefineModel(...)
-		tool := ai.DefineTool(...)
+		model := ai.NewModel(...)
+		tool := ai.NewTool(...)
 		return []api.Action{model, tool}
 	}
 

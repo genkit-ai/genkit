@@ -26,7 +26,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/internal/registry"
 	test_utils "github.com/firebase/genkit/go/tests/utils"
 	"github.com/google/go-cmp/cmp"
@@ -882,7 +881,7 @@ func TestGenerateWithOutputSchemaName(t *testing.T) {
 		}, nil
 	})
 
-	core.DefineSchema(r, "FooSchema", map[string]any{
+	r.RegisterSchema("FooSchema", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"foo": map[string]any{"type": "string"},

@@ -130,22 +130,6 @@ func NewBidiAction[In, Out, Stream, Init any](
 	return NewBidiActionOf(atype, name, opts, fn)
 }
 
-// DefineBidiAction creates and registers a bidirectional streaming [BidiAction].
-//
-// Deprecated: Use [NewBidiActionOf] and register the result with
-// [BidiAction.Register].
-func DefineBidiAction[In, Out, Stream, Init any](
-	r api.Registry,
-	name string,
-	atype api.ActionType,
-	opts *BidiActionOptions,
-	fn BidiFunc[In, Out, Stream, Init],
-) *BidiAction[In, Out, Stream, Init] {
-	b := NewBidiActionOf(atype, name, opts, fn)
-	b.Register(r)
-	return b
-}
-
 // Register registers the bidi action with the given registry. It overrides
 // the embedded Action's Register so that the registry holds the BidiAction
 // itself; registry lookups must satisfy api.BidiAction.

@@ -179,26 +179,6 @@ func NewBackgroundActionOf[In, Out any](
 	}
 }
 
-// DefineBackgroundAction creates and registers a background action with three component actions
-//
-// Deprecated: Use [NewBackgroundActionOf] and register the result
-// with [BackgroundActionDef.Register].
-func DefineBackgroundAction[In, Out any](
-	r api.Registry,
-	name string,
-	atype api.ActionType,
-	metadata map[string]any,
-	startFn StartOpFunc[In, Out],
-	checkFn CheckOpFunc[Out],
-	cancelFn CancelOpFunc[Out],
-) *BackgroundActionDef[In, Out] {
-	a := NewBackgroundActionOf(atype, name, &BackgroundActionOptions{
-		Metadata: metadata,
-	}, startFn, checkFn, cancelFn)
-	a.Register(r)
-	return a
-}
-
 // NewBackgroundAction creates a new background action without registering it.
 //
 // Deprecated: Use [NewBackgroundActionOf], which takes the action type first
