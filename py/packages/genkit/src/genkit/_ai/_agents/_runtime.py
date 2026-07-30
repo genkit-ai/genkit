@@ -882,7 +882,6 @@ class AgentRuntime:
             t1.add_done_callback(self.background_tasks.discard)
             heartbeat_task.add_done_callback(self.background_tasks.discard)
             t2.add_done_callback(self.background_tasks.discard)
-            state = await self.session.state()
             return AgentOutput(
                 session_id=state.session_id,
                 snapshot_id=pending_snap.snapshot_id,
