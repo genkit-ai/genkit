@@ -95,10 +95,16 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 }
 
 // DefineModel defines an unknown model with the given name.
-// The second argument describes the capability of the model.
+// The second argument describes the capability of the model; a nil opts gets
+// the capabilities the plugin resolves for that name, curated for a known
+// model and the Claude defaults for the rest.
 // Use [IsDefinedModel] to determine if a model is already defined.
 // After [Init] is called, only the known models are defined.
 func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
+	if opts == nil {
+		resolved := modelOptions(name)
+		opts = &resolved
+	}
 	return newModel(a.aclient, name, name, *opts), nil
 }
 
