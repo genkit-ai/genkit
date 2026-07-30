@@ -186,8 +186,12 @@ export function configurePineconeRetriever<
       const scopedIndex = !!options.namespace
         ? index.namespace(options.namespace)
         : index;
+      const embedding = queryEmbeddings[0]?.embedding;
+      if (!embedding) {
+        throw new Error('No embedding returned from the embedder.');
+      }
       const response = await scopedIndex.query(
-        toPineconeQuery(options, queryEmbeddings[0].embedding)
+        toPineconeQuery(options, embedding)
       );
       return {
         documents: response.matches

@@ -38,4 +38,15 @@ describe('toPineconeQuery', () => {
       includeMetadata: true,
     });
   });
+
+  it('includes sparseVector when provided', () => {
+    const sparseVector = { indices: [1, 2], values: [0.1, 0.2] };
+    assert.deepStrictEqual(toPineconeQuery({ k: 5, sparseVector }, [0.3]), {
+      topK: 5,
+      vector: [0.3],
+      includeValues: false,
+      includeMetadata: true,
+      sparseVector,
+    });
+  });
 });

@@ -21,6 +21,10 @@ export function toPineconeQuery(
   options: {
     k: number;
     filter?: Record<string, any>;
+    sparseVector?: {
+      indices: number[];
+      values: number[];
+    };
   },
   embedding: number[]
 ) {
@@ -30,5 +34,8 @@ export function toPineconeQuery(
     includeValues: false as const,
     includeMetadata: true as const,
     ...(options.filter !== undefined ? { filter: options.filter } : {}),
+    ...(options.sparseVector !== undefined
+      ? { sparseVector: options.sparseVector }
+      : {}),
   };
 }
