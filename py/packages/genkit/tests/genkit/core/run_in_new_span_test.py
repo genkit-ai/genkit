@@ -10,6 +10,7 @@ error, metadata) plus a regression test that ``Action._run_with_telemetry`` reco
 the original exception text in ``genkit:error`` rather than the wrapped GenkitError message.
 """
 
+import asyncio
 import json
 import logging
 from collections.abc import Generator, Sequence
@@ -214,6 +215,24 @@ def test_records_error_attributes(exporter: InMemorySpanExporter) -> None:
     assert span.status.status_code == trace_api.StatusCode.ERROR
 
 
+
+def test_cancelled_span_leaves_state_unset(
+    exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Abort/timeout is unfinished work — neither success nor error."""
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(asyncio.CancelledError):
+            with run_in_new_span(SpanMetadata(name='abortedTurn', type='util')):
+                raise asyncio.CancelledError()
+
+    span = _by_name(exporter.get_finished_spans(), 'abortedTurn')
+    attrs = dict(span.attributes or {})
+    assert 'genkit:state' not in attrs
+    assert 'genkit:error' not in attrs
+    assert span.status.status_code != trace_api.StatusCode.ERROR
+    assert not any('Error in run_in_new_span' in r.message for r in caplog.records)
+
+
 @pytest.mark.asyncio
 async def test_tool_interrupt_is_not_recorded_as_span_error(
     exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture
@@ -337,7 +356,8 @@ async def test_action_context_telemetry_sanitizes_unserializable(exporter: InMem
 
     Also verify that JSON-serializable values are kept.
     """
-    import json
+    import asyncio
+import json
 
     class UnserializableObject:
         def __repr__(self) -> str:
@@ -389,7 +409,8 @@ async def test_action_context_telemetry_sanitizes_unserializable(exporter: InMem
 @pytest.mark.asyncio
 async def test_action_context_telemetry_circular_references(exporter: InMemorySpanExporter) -> None:
     """Verify that circular references inside the context are proactively detected and dropped."""
-    import json
+    import asyncio
+import json
 
     async def noop() -> str:
         return 'ok'

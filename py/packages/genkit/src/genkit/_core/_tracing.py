@@ -17,6 +17,7 @@
 
 """Telemetry and tracing functionality for the Genkit framework."""
 
+import asyncio
 import json
 import traceback
 from collections.abc import Generator
@@ -196,6 +197,11 @@ def record_span_outcome(
         if metadata.output is not None:
             span.set_attribute(Attr.OUTPUT, _to_json_attr(metadata.output))
         span.set_attribute(Attr.STATE, State.SUCCESS)
+        raise
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        # Abort/timeout — unfinished work, not a win or a fail. Leave
+        # genkit:state absent (OTel stays UNSET) so cloud metrics don't count
+        # these as either. May log Unknown state until we have an aborted bucket.
         raise
     except Exception as e:
         logger.debug(f'Error in run_in_new_span: {e!s}')
