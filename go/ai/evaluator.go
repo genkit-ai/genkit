@@ -19,6 +19,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
@@ -165,6 +166,8 @@ type EvaluatorResponse = []EvaluationResult
 type EvaluatorOptions struct {
 	// ConfigSchema is the JSON schema for the evaluator's config.
 	ConfigSchema map[string]any `json:"configSchema,omitempty"`
+	// Metadata is arbitrary key-value data attached to the action descriptor.
+	Metadata map[string]any `json:"-"`
 	// DisplayName is the name of the evaluator as it appears in the UI.
 	DisplayName string `json:"displayName"`
 	// Definition is the definition of the evaluator.
@@ -186,15 +189,18 @@ type EvaluatorCallbackResponse = EvaluationResult
 
 // evaluatorMetadata builds the shared action metadata for an evaluator.
 func evaluatorMetadata(opts *EvaluatorOptions) map[string]any {
+	// Seed from the caller's metadata, then stamp the built-in keys over it so
+	// they cannot be corrupted; registry discovery depends on them.
+	metadata := make(map[string]any, len(opts.Metadata)+2)
+	maps.Copy(metadata, opts.Metadata)
 	// TODO(ssbushi): Set this on `evaluator` key on action metadata
-	return map[string]any{
-		"type": api.ActionTypeEvaluator,
-		"evaluator": map[string]any{
-			"evaluatorIsBilled":    opts.IsBilled,
-			"evaluatorDisplayName": opts.DisplayName,
-			"evaluatorDefinition":  opts.Definition,
-		},
+	metadata["type"] = api.ActionTypeEvaluator
+	metadata["evaluator"] = map[string]any{
+		"evaluatorIsBilled":    opts.IsBilled,
+		"evaluatorDisplayName": opts.DisplayName,
+		"evaluatorDefinition":  opts.Definition,
 	}
+	return metadata
 }
 
 // NewTypedEvaluator creates an unregistered [EvaluatorAction]: return it from

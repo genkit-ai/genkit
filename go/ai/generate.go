@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -136,6 +137,7 @@ type ModelOptions struct {
 	Stage        ModelStage     // Indicates the maturity stage of the model.
 	Supports     *ModelSupports // Capabilities of the model.
 	Versions     []string       // Available versions of the model.
+	Metadata     map[string]any // Arbitrary key-value data attached to the action descriptor.
 }
 
 // DefineGenerateAction defines a utility generate action.
@@ -197,26 +199,27 @@ func NewTypedModel[Config any](
 
 	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, ModelRequest{}, "config")
 
-	metadata := map[string]any{
-		"type": api.ActionTypeModel,
-		"model": map[string]any{
-			"label": opts.Label,
-			"supports": map[string]any{
-				"media":       opts.Supports.Media,
-				"context":     opts.Supports.Context,
-				"multiturn":   opts.Supports.Multiturn,
-				"systemRole":  opts.Supports.SystemRole,
-				"tools":       opts.Supports.Tools,
-				"toolChoice":  opts.Supports.ToolChoice,
-				"constrained": opts.Supports.Constrained,
-				"output":      opts.Supports.Output,
-				"contentType": opts.Supports.ContentType,
-				"longRunning": opts.Supports.LongRunning,
-			},
-			"versions":      opts.Versions,
-			"stage":         opts.Stage,
-			"customOptions": configSchema,
+	// The reserved type and model keys win over caller-provided metadata.
+	metadata := make(map[string]any, len(opts.Metadata)+2)
+	maps.Copy(metadata, opts.Metadata)
+	metadata["type"] = api.ActionTypeModel
+	metadata["model"] = map[string]any{
+		"label": opts.Label,
+		"supports": map[string]any{
+			"media":       opts.Supports.Media,
+			"context":     opts.Supports.Context,
+			"multiturn":   opts.Supports.Multiturn,
+			"systemRole":  opts.Supports.SystemRole,
+			"tools":       opts.Supports.Tools,
+			"toolChoice":  opts.Supports.ToolChoice,
+			"constrained": opts.Supports.Constrained,
+			"output":      opts.Supports.Output,
+			"contentType": opts.Supports.ContentType,
+			"longRunning": opts.Supports.LongRunning,
 		},
+		"versions":      opts.Versions,
+		"stage":         opts.Stage,
+		"customOptions": configSchema,
 	}
 
 	typedFn := func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
