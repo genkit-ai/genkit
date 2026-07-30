@@ -16,11 +16,14 @@
 
 """Error classes and utilities for the Genkit framework."""
 
+import traceback
 from enum import IntEnum
 from typing import Any, ClassVar, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
+
+from genkit._core._environment import is_dev_environment
 
 
 class StatusCodes(IntEnum):
@@ -333,15 +336,13 @@ def get_callable_json(error: object) -> dict[str, Any]:
 def get_error_stack(error: object) -> str | None:
     """Extract stack trace from an error object.
 
-    Args:
-        error: The error to get the stack trace from.
-
-    Returns:
-        The stack trace string if available, None otherwise.
+    In development, the Dev UI needs the real stack to debug playground runs.
+    In production we omit it so callable/HTTP error payloads stay lean.
     """
-    if isinstance(error, Exception):
-        # Stack traces are valuable for debugging; consider making this configurable
-        # to enable them in development/staging and suppress in production.
-        # For now, return an empty string to keep Dev UI clean as per requirements.
+    if not isinstance(error, Exception):
+        return None
+    if not is_dev_environment():
         return ''
-    return None
+    if error.__traceback__ is None:
+        return ''
+    return ''.join(traceback.format_exception(type(error), error, error.__traceback__))

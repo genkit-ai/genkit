@@ -16,6 +16,8 @@
 
 """Unit tests for the error module."""
 
+import os
+
 from genkit import ErrorResponseMetadata
 from genkit._core._error import (
     GenkitError,
@@ -122,4 +124,8 @@ def test_get_error_stack() -> None:
         raise ValueError('Example Error')
     except ValueError as e:
         tb = get_error_stack(e)
-        assert tb == ''
+        if os.environ.get('GENKIT_ENV') == 'dev':
+            assert tb is not None
+            assert 'ValueError: Example Error' in tb
+        else:
+            assert tb == ''

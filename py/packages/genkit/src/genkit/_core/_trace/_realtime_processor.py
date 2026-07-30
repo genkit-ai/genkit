@@ -37,14 +37,13 @@ class RealtimeSpanProcessor(SimpleSpanProcessor):
             return
         try:
             self.span_exporter.export([span])
-        except ConnectionError:
+        except Exception as e:  # noqa: BLE001 — must never crash the caller
+            # httpx.ConnectError isn't a builtins.ConnectionError; treat all export
+            # failures as best-effort and keep the shared terminal clean.
             logger.debug(
-                'RealtimeSpanProcessor: export failed on_start (collector unreachable)',
-                exc_info=True,
-            )
-        except Exception:  # noqa: BLE001 — must never crash the caller
-            logger.warning(
-                'RealtimeSpanProcessor: unexpected error during export on_start',
+                'RealtimeSpanProcessor: export failed on_start: %s: %s',
+                type(e).__name__,
+                e,
                 exc_info=True,
             )
 
