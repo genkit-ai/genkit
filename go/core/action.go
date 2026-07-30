@@ -445,6 +445,12 @@ func (a *Action[In, Out, Stream]) Desc() api.ActionDesc {
 
 // Register registers the action with the given registry.
 func (a *Action[In, Out, Stream]) Register(r api.Registry) {
+	// The "dynamic" metadata marker means "created at runtime, outside any
+	// registry" (constructors for detached actions, e.g. ai.NewTool, stamp
+	// it). That stops being true the moment the action registers, so the
+	// marker is registration-derived: it is removed here rather than left as
+	// stale construction-time state.
+	delete(a.desc.Metadata, "dynamic")
 	a.registry = r
 	r.RegisterAction(a.desc.Key, a)
 }
