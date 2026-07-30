@@ -27,6 +27,12 @@ def test_resolve_level() -> None:
     with mock.patch.dict(os.environ, {'GENKIT_LOG': 'error'}):
         assert resolve_level() == logging.ERROR
 
+    with mock.patch.dict(os.environ, {'GENKIT_LOG': 'critical'}):
+        assert resolve_level() == logging.CRITICAL
+
+    with mock.patch.dict(os.environ, {'GENKIT_LOG': 'fatal'}):
+        assert resolve_level() == logging.CRITICAL
+
     with mock.patch.dict(os.environ, {'GENKIT_LOG': 'invalid'}):
         assert resolve_level() == logging.INFO
 
@@ -34,7 +40,7 @@ def test_resolve_level() -> None:
 def test_configure_logging_mutes_quiet_loggers() -> None:
     """Test that configure_logging sets QUIET_LOGGERS to WARNING in dev environment."""
     with mock.patch.dict(os.environ, {'GENKIT_LOG': 'info'}):
-        configure_logging(shared_tty=True, force=True)
+        configure_logging(shared_tty=True)
         for name in QUIET_LOGGERS:
             assert logging.getLogger(name).level == logging.WARNING
 
@@ -42,13 +48,21 @@ def test_configure_logging_mutes_quiet_loggers() -> None:
 def test_configure_logging_allows_debug() -> None:
     """Test that GENKIT_LOG=debug sets QUIET_LOGGERS to DEBUG."""
     with mock.patch.dict(os.environ, {'GENKIT_LOG': 'debug'}):
-        configure_logging(shared_tty=True, force=True)
+        configure_logging(shared_tty=True)
         for name in QUIET_LOGGERS:
             assert logging.getLogger(name).level == logging.DEBUG
+
+
+def test_configure_logging_respects_higher_levels() -> None:
+    """Test that GENKIT_LOG=error sets QUIET_LOGGERS to ERROR."""
+    with mock.patch.dict(os.environ, {'GENKIT_LOG': 'error'}):
+        configure_logging(shared_tty=True)
+        for name in QUIET_LOGGERS:
+            assert logging.getLogger(name).level == logging.ERROR
 
 
 def test_configure_logging_leaves_loggers_alone_in_prod() -> None:
     """Test that configure_logging does not alter logger levels in non-dev env."""
     with mock.patch('logging.getLogger') as mock_get_logger:
-        configure_logging(shared_tty=False, force=True)
+        configure_logging(shared_tty=False)
         mock_get_logger.assert_not_called()

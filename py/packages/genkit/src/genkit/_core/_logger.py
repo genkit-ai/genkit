@@ -7,15 +7,11 @@ from __future__ import annotations
 
 import logging
 import os
-import threading
 
 import structlog
 from structlog.typing import FilteringBoundLogger
 
 from genkit._core._environment import is_dev_environment
-
-CONFIGURED = False
-LOCK = threading.Lock()
 
 # Libraries that log every HTTP request or poll. Under Dev UI, health checks
 # and span exports generate noise unless GENKIT_LOG=debug is explicitly set.
@@ -36,31 +32,28 @@ def resolve_level() -> int:
         'warn': logging.WARNING,
         'warning': logging.WARNING,
         'error': logging.ERROR,
+        'critical': logging.CRITICAL,
+        'fatal': logging.CRITICAL,
     }.get(raw, logging.INFO)
 
 
-def configure_logging(*, shared_tty: bool | None = None, force: bool = False) -> None:
+def configure_logging(*, shared_tty: bool | None = None) -> None:
     """Configure genkit console logging and mute noisy HTTP/health poll loggers.
 
     Safe to call more than once. Default level is ``info``; override with
     ``GENKIT_LOG=debug|info|warn|error``.
     """
-    global CONFIGURED
-    with LOCK:
-        if shared_tty is None:
-            shared_tty = is_dev_environment()
+    if shared_tty is None:
+        shared_tty = is_dev_environment()
 
-        if CONFIGURED and not force:
-            return
+    if not shared_tty:
+        return
 
-        CONFIGURED = True
-        if not shared_tty:
-            return
+    level = resolve_level()
+    quiet_level = level if level == logging.DEBUG else max(level, logging.WARNING)
 
-        level = resolve_level()
-
-        for name in QUIET_LOGGERS:
-            logging.getLogger(name).setLevel(logging.DEBUG if level <= logging.DEBUG else logging.WARNING)
+    for name in QUIET_LOGGERS:
+        logging.getLogger(name).setLevel(quiet_level)
 
 
 # Configure logger levels on import
