@@ -690,6 +690,78 @@ func TestResolveFormat(t *testing.T) {
 	})
 }
 
+type bananaFormatter struct{}
+
+func (bananaFormatter) Name() string { return "banana" }
+
+func (bananaFormatter) Handler(schema map[string]any) (FormatHandler, error) {
+	return bananaHandler{}, nil
+}
+
+type bananaHandler struct{}
+
+func (bananaHandler) ParseMessage(m *Message) (*Message, error) { return m, nil }
+
+func (bananaHandler) Instructions() string { return "Respond with bananas." }
+
+func (bananaHandler) Config() ModelOutputConfig {
+	return ModelOutputConfig{Format: "banana", ContentType: "text/banana"}
+}
+
+func TestDefineFormatCustom(t *testing.T) {
+	DefineFormat(r, "banana", bananaFormatter{})
+
+	t.Run("resolves a custom format registered under its bare name", func(t *testing.T) {
+		formatter, err := resolveFormat(r, nil, "banana")
+		if err != nil {
+			t.Fatalf("resolveFormat() error = %v", err)
+		}
+		if formatter.Name() != "banana" {
+			t.Errorf("resolveFormat() = %q, want %q", formatter.Name(), "banana")
+		}
+	})
+
+	t.Run("resolves a custom format registered under a prefixed name", func(t *testing.T) {
+		DefineFormat(r, "/format/kiwi", bananaFormatter{})
+		if _, err := resolveFormat(r, nil, "kiwi"); err != nil {
+			t.Fatalf("resolveFormat() error = %v", err)
+		}
+	})
+
+	t.Run("generates with a custom format", func(t *testing.T) {
+		res, err := Generate(context.Background(), r,
+			WithModel(echoModel),
+			WithPrompt("generate bananas"),
+			WithOutputFormat("banana"),
+		)
+		if err != nil {
+			t.Fatalf("Generate() error = %v", err)
+		}
+
+		if res.Request.Output.Format != "banana" {
+			t.Errorf("output format = %q, want %q", res.Request.Output.Format, "banana")
+		}
+		if res.Request.Output.ContentType != "text/banana" {
+			t.Errorf("output content type = %q, want %q", res.Request.Output.ContentType, "text/banana")
+		}
+
+		var foundInstructions bool
+		for _, msg := range res.Request.Messages {
+			for _, part := range msg.Content {
+				if part.Metadata != nil && part.Metadata["purpose"] == "output" {
+					foundInstructions = true
+					if part.Text != "Respond with bananas." {
+						t.Errorf("instructions = %q, want %q", part.Text, "Respond with bananas.")
+					}
+				}
+			}
+		}
+		if !foundInstructions {
+			t.Error("custom format instructions should be injected into the prompt")
+		}
+	})
+}
+
 func TestInjectInstructions(t *testing.T) {
 	t.Run("empty instructions returns unchanged messages", func(t *testing.T) {
 		msgs := []*Message{{Role: RoleUser, Content: []*Part{NewTextPart("hello")}}}
