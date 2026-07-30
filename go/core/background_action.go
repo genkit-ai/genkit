@@ -86,27 +86,29 @@ func (b *BackgroundActionDef[In, Out]) Register(r api.Registry) {
 }
 
 // BackgroundActionOptions configures the optional attributes of a background
-// action. It is [ActionOptions] minus the stream slot (the component actions
-// are non-streaming) plus the cancel function, which is generic in the
-// operation's output type and so cannot live on the shared [ActionOptions].
+// action. It is [ActionOptions] minus the stream slot: the component actions
+// are non-streaming, so a background action never advertises a stream schema.
 // A nil options value is valid: schemas are inferred from the action's type
-// parameters and cancellation is unsupported.
-type BackgroundActionOptions[Out any] struct {
-	Description  string            // Human-readable description of the action. Metadata["description"] is used if empty.
-	Metadata     map[string]any    // Arbitrary key-value data attached to the action descriptor.
-	InputSchema  map[string]any    // JSON schema for the start action's input. Inferred from In if nil.
-	OutputSchema map[string]any    // JSON schema for the start action's output. Inferred if nil.
-	Cancel       CancelOpFunc[Out] // Cancels a running operation. Nil means cancellation is unsupported.
+// parameters.
+type BackgroundActionOptions struct {
+	Description  string         // Human-readable description of the action. Metadata["description"] is used if empty.
+	Metadata     map[string]any // Arbitrary key-value data attached to the action descriptor.
+	InputSchema  map[string]any // JSON schema for the start action's input. Inferred from In if nil.
+	OutputSchema map[string]any // JSON schema for the start action's output. Inferred if nil.
 }
 
 // NewBackgroundActionOf creates a new background action without
 // registering it. Register it with [BackgroundActionDef.Register].
+//
+// cancelFn is optional; nil means the action does not support cancellation
+// and no cancel action is registered.
 func NewBackgroundActionOf[In, Out any](
 	atype api.ActionType,
 	name string,
-	opts *BackgroundActionOptions[Out],
+	opts *BackgroundActionOptions,
 	startFn StartOpFunc[In, Out],
 	checkFn CheckOpFunc[Out],
+	cancelFn CancelOpFunc[Out],
 ) *BackgroundActionDef[In, Out] {
 	if name == "" {
 		panic("core.NewBackgroundActionOf: name is required")
@@ -119,7 +121,7 @@ func NewBackgroundActionOf[In, Out any](
 	}
 
 	if opts == nil {
-		opts = &BackgroundActionOptions[Out]{}
+		opts = &BackgroundActionOptions{}
 	}
 
 	key := api.KeyFromName(atype, name)
@@ -158,7 +160,7 @@ func NewBackgroundActionOf[In, Out any](
 		})
 
 	var cancelAction *Action[*Operation[Out], *Operation[Out], struct{}]
-	if cancelFn := opts.Cancel; cancelFn != nil {
+	if cancelFn != nil {
 		cancelAction = NewActionOf(api.ActionTypeCancelOperation, name, opOpts,
 			func(ctx context.Context, op *Operation[Out]) (*Operation[Out], error) {
 				cancelledOp, err := cancelFn(ctx, op)
@@ -190,10 +192,9 @@ func DefineBackgroundAction[In, Out any](
 	checkFn CheckOpFunc[Out],
 	cancelFn CancelOpFunc[Out],
 ) *BackgroundActionDef[In, Out] {
-	a := NewBackgroundActionOf(atype, name, &BackgroundActionOptions[Out]{
+	a := NewBackgroundActionOf(atype, name, &BackgroundActionOptions{
 		Metadata: metadata,
-		Cancel:   cancelFn,
-	}, startFn, checkFn)
+	}, startFn, checkFn, cancelFn)
 	a.Register(r)
 	return a
 }
@@ -201,8 +202,7 @@ func DefineBackgroundAction[In, Out any](
 // NewBackgroundAction creates a new background action without registering it.
 //
 // Deprecated: Use [NewBackgroundActionOf], which takes the action type first
-// and a [BackgroundActionOptions] struct covering the schema slots and the
-// optional cancel function.
+// and a [BackgroundActionOptions] struct covering the schema slots.
 func NewBackgroundAction[In, Out any](
 	name string,
 	atype api.ActionType,
@@ -211,10 +211,9 @@ func NewBackgroundAction[In, Out any](
 	checkFn CheckOpFunc[Out],
 	cancelFn CancelOpFunc[Out],
 ) *BackgroundActionDef[In, Out] {
-	return NewBackgroundActionOf(atype, name, &BackgroundActionOptions[Out]{
+	return NewBackgroundActionOf(atype, name, &BackgroundActionOptions{
 		Metadata: metadata,
-		Cancel:   cancelFn,
-	}, startFn, checkFn)
+	}, startFn, checkFn, cancelFn)
 }
 
 // LookupBackgroundAction looks up a background action by key (which includes the action type, provider, and name).
