@@ -28,6 +28,7 @@ from typing import Any, Generic, Protocol, TypeVar, cast
 from pydantic import BaseModel
 from typing_extensions import TypeVar as TypeVarExt
 
+from genkit._ai._agents._runtime import AgentInitError
 from genkit._ai._agents._snapshot import lookup_label
 from genkit._ai._agents._types import StateManagement
 from genkit._ai._json_patch import apply_json_patch
@@ -523,7 +524,12 @@ class AgentAPI(Protocol, Generic[StateT]):
         artifacts: list[Artifact] | None = None,
         state: StateT | None = None,
     ) -> AgentChat[StateT]:
-        """Starts a new session, or attaches to one via a snapshot/session id or saved conversation state."""
+        """Starts a new session, or attaches to one via a snapshot/session id or saved conversation state.
+
+        ``messages`` / ``artifacts`` / ``state`` are only for client-managed agents
+        (no store). Store-backed agents take ``snapshot_id`` or ``session_id``;
+        passing a state blob raises :class:`AgentInitError`.
+        """
         ...
 
     async def load_chat(
@@ -579,7 +585,12 @@ class AgentClient(Generic[StateT]):
         artifacts: list[Artifact] | None = None,
         state: StateT | None = None,
     ) -> AgentChat[StateT]:
-        """Starts a new session, or attaches to one via a snapshot/session id or saved conversation state."""
+        """Starts a new session, or attaches to one via a snapshot/session id or saved conversation state.
+
+        ``messages`` / ``artifacts`` / ``state`` are only for client-managed agents
+        (no store). Store-backed agents take ``snapshot_id`` or ``session_id``;
+        passing a state blob raises :class:`AgentInitError`.
+        """
         session_transport = copy.copy(self._transport)
         return AgentChat(
             session_transport,
@@ -943,6 +954,17 @@ class AgentChat(Generic[StateT]):
 
         if init is not None:
             validate_init(init)
+            # Store-backed chats resume by snapshot/session id only. Accepting a
+            # seed state blob here would look live on the client while the server
+            # session stayed empty — so refuse up front instead of dropping it.
+            if init.state is not None and self._transport.state_management == 'server':
+                raise AgentInitError(
+                    status='FAILED_PRECONDITION',
+                    message=(
+                        "Cannot send 'state' to a server-managed agent (one with a "
+                        "store). Send 'snapshot_id' or 'session_id' instead."
+                    ),
+                )
             if init.state is not None:
                 self._set_state(init.state)
             elif init.snapshot_id:

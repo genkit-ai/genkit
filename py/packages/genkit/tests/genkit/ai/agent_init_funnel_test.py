@@ -110,6 +110,19 @@ async def test_state_on_server_managed_agent_raises_agent_init_error() -> None:
     assert "Cannot send 'state'" in str(exc.value)
 
 
+def test_chat_rejects_state_on_server_managed_agent() -> None:
+    """App-facing chat() refuses a state seed the same way the wire path does."""
+    registry = Registry()
+    store = InMemorySessionStore()
+    agent = define_custom_agent(registry, 'serverChatSeed', echo_fn, store=store)
+
+    with pytest.raises(AgentInitError) as exc:
+        agent.chat(state={'x': 1})
+
+    assert exc.value.status == 'FAILED_PRECONDITION'
+    assert "Cannot send 'state'" in str(exc.value)
+
+
 @pytest.mark.asyncio
 async def test_snapshot_id_on_client_managed_agent_raises_agent_init_error() -> None:
     registry = Registry()

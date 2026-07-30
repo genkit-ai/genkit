@@ -284,8 +284,18 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
                 input.limit,
             )
 
-        t_list = define_tool(scratch, list_files, name=self._tool_name('list_files'))
-        t_read = define_tool(scratch, read_file, name=self._tool_name('read_file'))
+        t_list = define_tool(
+            scratch,
+            list_files,
+            name=self._tool_name('list_files'),
+            description='List files and directories under a path (optional recursive).',
+        )
+        t_read = define_tool(
+            scratch,
+            read_file,
+            name=self._tool_name('read_file'),
+            description='Read a text file, optionally from an offset/limit in lines.',
+        )
         tools_out = [t_list.action(), t_read.action()]
 
         if self.config.allow_write_access:
@@ -300,8 +310,18 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
                     [e.model_dump() for e in input.edits],
                 )
 
-            t_write = define_tool(scratch, write_file, name=self._tool_name('write_file'))
-            t_edit = define_tool(scratch, edit_file, name=self._tool_name('edit_file'))
+            t_write = define_tool(
+                scratch,
+                write_file,
+                name=self._tool_name('write_file'),
+                description='Create or overwrite a text file with the given content.',
+            )
+            t_edit = define_tool(
+                scratch,
+                edit_file,
+                name=self._tool_name('edit_file'),
+                description='Apply search/replace edits to an existing text file.',
+            )
             tools_out += [t_write.action(), t_edit.action()]
 
         return tools_out

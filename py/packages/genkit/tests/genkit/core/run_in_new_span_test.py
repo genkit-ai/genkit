@@ -10,6 +10,7 @@ error, metadata) plus a regression test that ``Action._run_with_telemetry`` reco
 the original exception text in ``genkit:error`` rather than the wrapped GenkitError message.
 """
 
+import logging
 from collections.abc import Generator, Sequence
 
 import pytest
@@ -19,6 +20,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import BaseModel
 
+from genkit._ai._tools import Interrupt
 from genkit._core._action import Action, ActionKind
 from genkit._core._error import GenkitError
 from genkit._core._trace._attrs import metadata_key
@@ -208,6 +210,23 @@ def test_records_error_attributes(exporter: InMemorySpanExporter) -> None:
     assert attrs['genkit:state'] == 'error'
     assert attrs['genkit:error'] == 'boom'
     assert span.status.status_code == trace_api.StatusCode.ERROR
+
+
+def test_interrupt_is_not_recorded_as_span_error(
+    exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Tool interrupts are control flow — spans must not look like failures."""
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(Interrupt):
+            with run_in_new_span(SpanMetadata(name='awaitingApproval', type='util')):
+                raise Interrupt({'message': 'need approval'})
+
+    span = _by_name(exporter.get_finished_spans(), 'awaitingApproval')
+    attrs = dict(span.attributes or {})
+    assert attrs.get('genkit:state') != 'error'
+    assert 'genkit:error' not in attrs
+    assert span.status.status_code != trace_api.StatusCode.ERROR
+    assert not any('Error in run_in_new_span' in r.message for r in caplog.records)
 
 
 def test_nested_path_inherits_parent_qualified_path(exporter: InMemorySpanExporter) -> None:

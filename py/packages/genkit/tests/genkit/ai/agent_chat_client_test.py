@@ -27,6 +27,7 @@ from genkit._ai._agents._client import (
     AgentInterrupt,
     AgentTransport,
 )
+from genkit._ai._agents._runtime import AgentInitError
 from genkit._ai._agents._types import StateManagement
 from genkit._ai._aio import Genkit
 from genkit._ai._json_patch import apply_json_patch
@@ -172,11 +173,16 @@ def test_connect_init_rejects_multiple_resume_fields() -> None:
 
 def test_connect_init_applies_state_only() -> None:
     state = SessionState(session_id='sess-1', custom={'x': 1})
-    chat = AgentChat(MockAgentTransport(), AgentInit(state=state))
+    chat = AgentChat(MockAgentTransport(state_management='client'), AgentInit(state=state))
 
     assert chat.session_id == 'sess-1'
     assert chat.state == {'x': 1}
     assert chat.snapshot_id is None
+
+
+def test_connect_init_rejects_state_on_server_managed_chat() -> None:
+    with pytest.raises(AgentInitError, match="Cannot send 'state'"):
+        AgentChat(MockAgentTransport(state_management='server'), AgentInit(state=SessionState(custom={'x': 1})))
 
 
 def test_connect_init_applies_snapshot_id_only() -> None:

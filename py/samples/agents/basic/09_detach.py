@@ -100,7 +100,9 @@ agent = ai.define_custom_agent(
 
 
 async def main() -> None:
-    chat = agent.chat(state=JobState(step=0, completed=False))
+    # Store-backed agents resume by snapshot/session id; custom state is written
+    # inside the turn via update_custom (see slow_work_closure above).
+    chat = agent.chat()
 
     # Submit the turn and return right away — the work continues in the background.
     task = await chat.detach('Please run a long task using slowWork.')

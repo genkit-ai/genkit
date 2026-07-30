@@ -33,7 +33,7 @@ from pydantic.alias_generators import to_camel
 
 from ._base import GenkitModel
 from ._environment import is_dev_environment
-from ._error import GenkitError
+from ._error import GenkitError, GenkitInterrupt
 from ._logger import get_logger
 from ._trace._attrs import Attr, State, metadata_key
 from ._trace._default_exporter import create_span_processor, init_telemetry_server_exporter
@@ -189,6 +189,10 @@ def record_span_outcome(
     """Write success or error attrs after the span body finishes."""
     try:
         yield
+    except GenkitInterrupt:
+        # HITL / tool pause — control flow, not a failed span. Interrupt already
+        # stamps genkit:metadata:interrupt when raised; don't paint the span red.
+        raise
     except Exception as e:
         logger.debug(f'Error in run_in_new_span: {e!s}')
         logger.debug(traceback.format_exc())
@@ -227,6 +231,14 @@ def run_in_new_span(
     start_attrs = start_attributes(metadata, qualified_path=qualified_path)
 
     with push_parent_path(qualified_path):
-        with tracer.start_as_current_span(name=metadata.name, links=links, attributes=start_attrs) as span:
+        # record_span_outcome owns success/error attrs so control-flow
+        # GenkitInterrupt can re-raise without OTEL painting the span red.
+        with tracer.start_as_current_span(
+            name=metadata.name,
+            links=links,
+            attributes=start_attrs,
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
             with record_span_outcome(span, metadata):
                 yield span
