@@ -55,10 +55,12 @@ type BackgroundModelAction struct {
 	backgroundAction[*ModelRequest, *ModelResponse]
 }
 
-// BackgroundModelAction can be passed anywhere a [BackgroundModel] is
-// accepted. Plugin resolvers also assert it to [api.Action] (e.g.
+// BackgroundModelAction is a full registry action and can be passed anywhere
+// an [api.Action] is accepted as well as anywhere a [BackgroundModel] is
+// accepted. Its Register method registers the start, check, and cancel
+// actions together. Plugin resolvers rely on the [api.Action] side (e.g.
 // googlegenai's resolveAction returns the whole model as the resolved
-// action). That only holds through the embedded action's promoted methods,
+// action), which only holds through the embedded action's promoted methods,
 // so pin both here where the embedding lives.
 var (
 	_ api.Action      = (*BackgroundModelAction)(nil)
@@ -86,8 +88,12 @@ type CancelModelOpFunc = func(ctx context.Context, op *ModelOperation) (*ModelOp
 // BackgroundModelOptions holds configuration for defining a background model
 type BackgroundModelOptions struct {
 	ModelOptions
-	Cancel   CancelModelOpFunc // Function that cancels a background model operation.
-	Metadata map[string]any    // Additional metadata.
+	// Cancel is the function that cancels a background model operation.
+	//
+	// Deprecated: Pass cancelFn to [NewTypedBackgroundModel] instead;
+	// options hold descriptor data only.
+	Cancel   CancelModelOpFunc
+	Metadata map[string]any // Additional metadata.
 }
 
 // LookupBackgroundModel looks up a registered [BackgroundModel] by name.
@@ -106,10 +112,14 @@ func LookupBackgroundModel(r api.Registry, name string) BackgroundModel {
 // [BackgroundModelAction.Register] directly. Applications should define
 // background models with [genkit.DefineTypedBackgroundModel].
 //
+// cancelFn is optional; nil means the model does not support canceling
+// operations. When cancelFn is nil, the deprecated
+// [BackgroundModelOptions.Cancel] is used as a fallback.
+//
 // Config is the model's typed configuration; it is usually inferred from
 // startFn's signature. See [NewTypedModel] for how the request's config
 // is deserialized.
-func NewTypedBackgroundModel[Config any](name string, opts *BackgroundModelOptions, startFn TypedStartModelOpFunc[Config], checkFn CheckModelOpFunc) *BackgroundModelAction {
+func NewTypedBackgroundModel[Config any](name string, opts *BackgroundModelOptions, startFn TypedStartModelOpFunc[Config], checkFn CheckModelOpFunc, cancelFn CancelModelOpFunc) *BackgroundModelAction {
 	if name == "" {
 		panic("ai.NewTypedBackgroundModel: name is required")
 	}
@@ -185,6 +195,10 @@ func NewTypedBackgroundModel[Config any](name string, opts *BackgroundModelOptio
 		return modelOpFromResponse(resp)
 	}
 
+	if cancelFn == nil {
+		cancelFn = opts.Cancel
+	}
+
 	// The label doubles as the description on all three component actions,
 	// matching the JS background model surface. A label that was only
 	// defaulted from the name yields to an explicit caller
@@ -200,7 +214,7 @@ func NewTypedBackgroundModel[Config any](name string, opts *BackgroundModelOptio
 		Description: description,
 		Metadata:    metadata,
 		InputSchema: inputSchema,
-	}, wrappedFn, checkFn, opts.Cancel)}
+	}, wrappedFn, checkFn, cancelFn)}
 }
 
 // NewBackgroundModel defines a new model that runs in the background.
@@ -214,7 +228,7 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 	}
 	return NewTypedBackgroundModel(name, opts, func(ctx context.Context, req *ModelRequest, _ any) (*ModelOperation, error) {
 		return startFn(ctx, req)
-	}, checkFn)
+	}, checkFn, nil)
 }
 
 // GenerateOperation generates a model response as a long-running operation based on the provided options.
