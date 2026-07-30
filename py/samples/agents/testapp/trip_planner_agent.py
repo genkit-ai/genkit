@@ -73,7 +73,7 @@ trip_planner_agent = ai.define_agent(
 @ai.flow()
 async def test_trip_planner_agent(text: str, ctx: ActionRunContext) -> str:
     chat = trip_planner_agent.chat()
-    turn = chat.send(text or 'I want to plan a trip to Paris. What should I see there?')
+    turn = chat.send_stream(text or 'I want to plan a trip to Paris. What should I see there?')
     async for chunk in turn:
         for call in chunk.tool_requests:
             ctx.send_chunk(f'[tool] {call.tool_request.name}')

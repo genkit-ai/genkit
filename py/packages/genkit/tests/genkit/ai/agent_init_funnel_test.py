@@ -131,6 +131,6 @@ async def test_chat_surfaces_missing_snapshot_as_agent_error() -> None:
     agent = define_custom_agent(registry, 'missingSnapChat', echo_fn, store=store)
 
     with pytest.raises(AgentError) as exc:
-        await agent.chat(snapshot_id='gone').send('hi').response
+        await agent.chat(snapshot_id='gone').send('hi')
 
     assert exc.value.status == 'NOT_FOUND'

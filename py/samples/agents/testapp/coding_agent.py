@@ -66,7 +66,7 @@ coding_agent = ai.define_agent(
 async def test_coding_agent(text: str, ctx: ActionRunContext) -> str:
     """Auto-approve every write so the agent can finish a task unattended."""
     chat = coding_agent.chat()
-    turn = chat.send(text or 'Create a Python hello world file called hello.py in the workspace.')
+    turn = chat.send_stream(text or 'Create a Python hello world file called hello.py in the workspace.')
     async for chunk in turn:
         if chunk.text:
             ctx.send_chunk(chunk.text)
@@ -78,7 +78,7 @@ async def test_coding_agent(text: str, ctx: ActionRunContext) -> str:
             break
         ctx.send_chunk(f'[auto-approving] {", ".join(i.name for i in res.interrupts)}')
         restart = [i.restart(resumed_metadata={'tool_approved': True}) for i in res.interrupts]
-        resume_turn = chat.resume(restart=restart)
+        resume_turn = chat.resume_stream(restart=restart)
         async for chunk in resume_turn:
             if chunk.text:
                 ctx.send_chunk(chunk.text)

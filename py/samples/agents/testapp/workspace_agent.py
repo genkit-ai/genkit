@@ -64,7 +64,7 @@ workspace_agent = ai.define_agent(
 async def test_workspace_agent(text: str, ctx: ActionRunContext) -> dict[str, Any]:
     """Ask for a file; watch it arrive as an artifact chunk, then in chat.artifacts."""
     chat = workspace_agent.chat()
-    turn = chat.send(text or 'Write poem.txt with a short poem about genkit')
+    turn = chat.send_stream(text or 'Write poem.txt with a short poem about genkit')
     async for chunk in turn:
         if chunk.artifact is not None:
             ctx.send_chunk(f'[artifact] {chunk.artifact.name}')

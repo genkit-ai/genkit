@@ -17,12 +17,11 @@
 
 """A failing turn fails gracefully instead of crashing the chat.
 
-One turn succeeds; the next raises inside the agent. Rather than bubbling up and
-killing the process, the turn resolves with finish_reason FAILED, so your app can
-surface the error and keep the session alive. Crucially, the failed turn doesn't
-advance the session: it leaves the resume handle pinned to the last successful
-snapshot, so the next send picks up from that last good parent — the failure is
-a dead end, not a new branch point.
+One turn succeeds; the next raises inside the agent. The chat client surfaces
+that as AgentError so your app can catch it, but the session stays usable:
+the failed turn doesn't advance the resume handle — it stays pinned to the last
+successful snapshot — so the next send picks up from that last good parent. The
+failure is a dead end, not a new branch point.
 """
 
 from __future__ import annotations
@@ -31,6 +30,7 @@ from genkit_google_genai import GoogleAI
 
 from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, TextPart
 from genkit.agent import (
+    AgentError,
     AgentFinishReason,
     AgentInput,
     AgentResult,
@@ -69,21 +69,23 @@ async def main() -> None:
     chat = agent.chat()
 
     # A normal turn succeeds and becomes the session's last good parent.
-    out_ok = await chat.send('hello').response
+    out_ok = await chat.send('hello')
     assert out_ok.finish_reason == AgentFinishReason.STOP
     last_good_parent = chat.snapshot_id
 
-    # This turn raises inside the agent — but the failure is contained.
-    out_fail = await chat.send('please fail now').response
-    # → resolves as FAILED instead of throwing; the session stays usable
-    assert out_fail.finish_reason == AgentFinishReason.FAILED
-    # → the failure didn't advance the session: the resume handle is still the
-    #   last successful snapshot, so the next turn won't build on the failure.
-    assert chat.snapshot_id == last_good_parent
+    # This turn raises inside the agent — the client surfaces AgentError.
+    try:
+        await chat.send('please fail now')
+        raise AssertionError('expected AgentError')
+    except AgentError as err:
+        assert 'Simulated turn failure' in err.message
+        # → the failure didn't advance the session: the resume handle is still the
+        #   last successful snapshot, so the next turn won't build on the failure.
+        assert chat.snapshot_id == last_good_parent
 
     # The next send picks up from that last good parent, as if the failure never
     # branched the conversation.
-    out_ok2 = await chat.send('hello again').response
+    out_ok2 = await chat.send('hello again')
     assert out_ok2.finish_reason == AgentFinishReason.STOP
 
 

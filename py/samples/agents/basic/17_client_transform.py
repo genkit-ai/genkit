@@ -103,7 +103,7 @@ agent = ai.define_custom_agent(
 
 async def main() -> None:
     chat = agent.chat()
-    turn = chat.send('Say hello.')
+    turn = chat.send_stream('Say hello.')
 
     saw_artifact_chunk = False
     async for chunk in turn.stream:
@@ -118,9 +118,9 @@ async def main() -> None:
     assert not saw_artifact_chunk
     # state hook stripped the secret but kept the public counter.
     assert res.state is not None
-    assert res.state.custom.get('api_key') is None
-    assert res.state.custom.get('answers') == 1
-    print(f'client sees custom={res.state.custom}, {len(res.artifacts)} artifact(s)')
+    assert res.state.get('api_key') is None
+    assert res.state.get('answers') == 1
+    print(f'client sees custom={res.state}, {len(res.artifacts)} artifact(s)')
 
 
 if __name__ == '__main__':

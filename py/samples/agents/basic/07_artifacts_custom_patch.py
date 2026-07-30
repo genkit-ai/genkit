@@ -86,7 +86,7 @@ async def main() -> None:
     # live-updating component renders. accumulated_text is the reply so far;
     # chunk.custom is the Progress model after each patch, so reading
     # chunk.custom.turns is typed attribute access, never chunk.custom['turns'].
-    turn = chat.send('Go')
+    turn = chat.send_stream('Go')
     async for chunk in turn.stream:
         if chunk.custom is not None:
             print(f'\rturn {chunk.custom.turns} · {chunk.accumulated_text}', end='', flush=True)

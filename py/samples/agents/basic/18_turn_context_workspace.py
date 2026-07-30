@@ -93,7 +93,7 @@ async def main() -> None:
 
     # → handler creates .workspaces/<snapshotId>/turn.txt *during* the turn;
     #   the response's snapshot_id matches that directory name.
-    res1 = await chat.send('Draft a one-line plan.').response
+    res1 = await chat.send('Draft a one-line plan.')
     assert res1.snapshot_id is not None
     workspace = WORKSPACES / res1.snapshot_id
     print('reserved+persisted snapshot:', res1.snapshot_id)
@@ -102,7 +102,7 @@ async def main() -> None:
 
     # Resume from that exact snapshot — external dir is still findable by id.
     resumed = await agent.load_chat(snapshot_id=res1.snapshot_id)
-    res2 = await resumed.send('What snapshot workspace did we use?').response
+    res2 = await resumed.send('What snapshot workspace did we use?')
     assert res2.snapshot_id is not None
     assert res2.snapshot_id != res1.snapshot_id  # new turn, new reserved id
     print('follow-up snapshot:', res2.snapshot_id)

@@ -75,13 +75,13 @@ async def test_file_store_agent(user_name: str, ctx: ActionRunContext) -> FileSt
     """Two turns on one chat: the note logged in turn 1 is recalled in turn 2."""
     chat = file_store_agent.chat()
 
-    turn1 = chat.send('Hello! Please log this note: I started studying Genkit today.')
+    turn1 = chat.send_stream('Hello! Please log this note: I started studying Genkit today.')
     async for chunk in turn1:
         if chunk.text:
             ctx.send_chunk(chunk.text)
     res1 = await turn1
 
-    turn2 = chat.send('What did I study today?')
+    turn2 = chat.send_stream('What did I study today?')
     async for chunk in turn2:
         if chunk.text:
             ctx.send_chunk(chunk.text)
@@ -101,7 +101,7 @@ async def test_file_store_chain_pruning(user_name: str, ctx: ActionRunContext) -
 
     snapshot_ids: list[str] = []
     for n in range(1, 5):
-        turn = chat.send(f'Turn {n}')
+        turn = chat.send_stream(f'Turn {n}')
         async for _ in turn:
             pass
         res = await turn

@@ -32,9 +32,9 @@ store, which is the source of truth:
      store to resync — which skips the dead aborted leaf back to the last
      completed turn.
 
-  3. a real server error (e.g. the model is exhausted) — the turn settles FAILED,
-     the optimistic prompt is rolled back, and the resume handle stays pinned to
-     the last good turn, so the next send picks up from there.
+  3. a real server error (e.g. the model is exhausted) — the chat client raises
+     AgentError, the optimistic prompt is rolled back, and the resume handle stays
+     pinned to the last good turn, so the next send picks up from there.
 
 And a fourth, related point: a detached turn that *succeeds* still never streams
 its reply back to your in-memory chat, so before continuing you reload from the
@@ -51,6 +51,7 @@ import asyncio
 
 from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, TextPart
 from genkit.agent import (
+    AgentError,
     AgentFinishReason,
     AgentInput,
     AgentResult,
@@ -97,10 +98,10 @@ def turns(chat: object) -> list[str]:
 async def client_side_abort() -> None:
     """turn.abort(): the server finishes anyway; only the client detaches."""
     chat = agent.chat()
-    await chat.send('q1').response
+    await chat.send('q1')
     session_id = chat.session_id
 
-    turn = chat.send('slow q2')
+    turn = chat.send_stream('slow q2')
     await asyncio.sleep(0.2)
     await turn.abort()
 
@@ -118,7 +119,7 @@ async def client_side_abort() -> None:
 async def server_side_task_abort() -> None:
     """task.abort(): the snapshot settles ABORTED and is not a resume point."""
     chat = agent.chat()
-    await chat.send('a1').response
+    await chat.send('a1')
     session_id = chat.session_id
 
     task = await chat.detach('slow a2')
@@ -137,7 +138,7 @@ async def server_side_task_abort() -> None:
     chat = await agent.load_chat(session_id=session_id)
     assert turns(chat) == ['a1/user', 'reply/model']
 
-    out = await chat.send('a3').response
+    out = await chat.send('a3')
     assert out.finish_reason == AgentFinishReason.STOP
     assert turns(chat) == ['a1/user', 'reply/model', 'a3/user', 'reply/model']
 
@@ -145,18 +146,21 @@ async def server_side_task_abort() -> None:
 async def server_side_failure() -> None:
     """A real server error: FAILED, prompt rolled back, resume stays on last good."""
     chat = agent.chat()
-    await chat.send('b1').response
+    await chat.send('b1')
     last_good = chat.snapshot_id
 
-    out = await chat.send('please fail').response
-    assert out.finish_reason == AgentFinishReason.FAILED
+    try:
+        await chat.send('please fail')
+        raise AssertionError('expected AgentError')
+    except AgentError as err:
+        assert 'model exhausted' in err.message
     # No reply landed, so the prompt is dropped and the resume handle holds.
     assert turns(chat) == ['b1/user', 'reply/model']
     assert chat.snapshot_id == last_good
 
     # The next turn picks up from that last good parent, as if the failure never
     # branched the conversation.
-    out2 = await chat.send('b2').response
+    out2 = await chat.send('b2')
     assert out2.finish_reason == AgentFinishReason.STOP
     assert turns(chat) == ['b1/user', 'reply/model', 'b2/user', 'reply/model']
 
@@ -164,7 +168,7 @@ async def server_side_failure() -> None:
 async def detached_turn_reload_to_resync() -> None:
     """A detached turn that succeeds: its reply lands in the store, not the chat."""
     chat = agent.chat()
-    await chat.send('c1').response
+    await chat.send('c1')
     session_id = chat.session_id
 
     # Run a turn in the background and let it finish.
@@ -182,7 +186,7 @@ async def detached_turn_reload_to_resync() -> None:
     chat = await agent.load_chat(session_id=session_id)
     assert turns(chat) == ['c1/user', 'reply/model', 'c2/user', 'reply/model']
 
-    out = await chat.send('c3').response
+    out = await chat.send('c3')
     assert out.finish_reason == AgentFinishReason.STOP
     assert turns(chat) == ['c1/user', 'reply/model', 'c2/user', 'reply/model', 'c3/user', 'reply/model']
 

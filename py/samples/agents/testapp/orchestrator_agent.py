@@ -75,7 +75,7 @@ orchestrator_agent = ai.define_agent(
 @ai.flow()
 async def test_orchestrator_agent(text: str, ctx: ActionRunContext) -> str:
     chat = orchestrator_agent.chat()
-    turn = chat.send(text or 'Research quicksort, then write a Python implementation of it.')
+    turn = chat.send_stream(text or 'Research quicksort, then write a Python implementation of it.')
     async for chunk in turn:
         for call in chunk.tool_requests:
             ctx.send_chunk(f'[delegating] {call.tool_request.name}')

@@ -205,7 +205,7 @@ async def test_wire_init_derives_from_live_session_state() -> None:
         finish_reason=AgentFinishReason.STOP,
     )
 
-    turn = chat.send('Hello')
+    turn = chat.send_stream('Hello')
     transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-1', finish_reason=AgentFinishReason.STOP)))
     await turn.response
 
@@ -240,7 +240,7 @@ async def test_session_sends_input_and_aggregates_state() -> None:
     )
 
     chat = AgentChat(transport)
-    turn = chat.send('Weather in Tokyo?')
+    turn = chat.send_stream('Weather in Tokyo?')
 
     # Queue up chunks to simulate streaming
     transport.push_chunk(
@@ -301,7 +301,7 @@ async def test_state_schema_coerces_custom_into_model() -> None:
     )
 
     chat = AgentChat(transport, state_schema=_Progress)
-    turn = chat.send('go')
+    turn = chat.send_stream('go')
     transport.push_chunk(
         AgentStreamChunk(
             custom_patch=JsonPatch(root=[JsonPatchOperation(op=JsonPatchOp.REPLACE, path='', value={'turns': 1})])
@@ -329,7 +329,7 @@ async def test_no_state_schema_leaves_custom_as_dict() -> None:
     )
 
     chat = AgentChat(transport)
-    turn = chat.send('go')
+    turn = chat.send_stream('go')
     transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-1', finish_reason=AgentFinishReason.STOP)))
     res = await turn.response
 
@@ -349,7 +349,7 @@ async def test_server_managed_appends_messages_incrementally() -> None:
         message=MessageData(role='model', content=[Part(root=TextPart(text='A1'))]),
         finish_reason=AgentFinishReason.STOP,
     )
-    turn = chat.send('U1')
+    turn = chat.send_stream('U1')
     transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-1', finish_reason=AgentFinishReason.STOP)))
     await turn.response
 
@@ -361,7 +361,7 @@ async def test_server_managed_appends_messages_incrementally() -> None:
         message=MessageData(role='model', content=[Part(root=TextPart(text='A2'))]),
         finish_reason=AgentFinishReason.STOP,
     )
-    turn2 = chat.send('U2')
+    turn2 = chat.send_stream('U2')
     transport.push_chunk(AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-2', finish_reason=AgentFinishReason.STOP)))
     await turn2.response
 
@@ -383,7 +383,7 @@ async def test_server_managed_reconstructs_intermediate_tool_messages() -> None:
         message=MessageData(role='model', content=[Part(root=TextPart(text='It is 12C in Tokyo.'))]),
         finish_reason=AgentFinishReason.STOP,
     )
-    turn = chat.send('Weather in Tokyo?')
+    turn = chat.send_stream('Weather in Tokyo?')
 
     # Model message that calls a tool, streamed as text deltas + a tool request.
     transport.push_chunk(
@@ -470,7 +470,7 @@ async def test_client_managed_stitches_tool_messages_from_chunks_not_output_stat
         state=SessionState(session_id='ignored', custom={'unit': 'celsius'}),
         finish_reason=AgentFinishReason.STOP,
     )
-    turn = chat.send('Weather in Tokyo?')
+    turn = chat.send_stream('Weather in Tokyo?')
 
     transport.push_chunk(
         AgentStreamChunk(
@@ -565,7 +565,7 @@ async def test_server_managed_running_view_matches_snapshot_over_real_tool_loop(
     ]
 
     chat = agent.chat()
-    await chat.send('Weather in Tokyo?').response
+    await chat.send('Weather in Tokyo?')
 
     # The running view carries the whole turn, not just user + final reply.
     assert [m.role for m in chat.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
@@ -595,7 +595,7 @@ async def test_server_managed_failed_turn_rolls_back_optimistic_user_message() -
         snapshot_id='snap-good',
         finish_reason=AgentFinishReason.FAILED,
     )
-    turn = chat.send('U1')
+    turn = chat.send_stream('U1')
     transport.push_chunk(
         AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-good', finish_reason=AgentFinishReason.FAILED))
     )
@@ -627,7 +627,7 @@ async def test_no_store_inprocess_transport_assembles_output_message() -> None:
 
     agent = ai.define_agent(name='noStoreAgent', model='programmableModel', system='Reply briefly.')
     chat = agent.chat()
-    out = await chat.send('Hello').response
+    out = await chat.send('Hello')
 
     assert out.text == 'Hi there!'
     assert len(chat.messages) == 2
@@ -704,12 +704,12 @@ async def test_client_managed_does_not_double_append_messages() -> None:
     transport = _ServerEmulatingClientManagedTransport()
     chat = AgentChat(transport, AgentInit())
 
-    await chat.send('hello').response
+    await chat.send('hello')
     # The new message must NOT ride along in init — the server records it from input.
     assert transport.init_histories[0] == []
     assert [m.content[0].root.text for m in chat.messages] == ['hello', 'reply-1']
 
-    await chat.send('again').response
+    await chat.send('again')
     # Turn 2's init replays the prior two messages, never the message in flight.
     assert transport.init_histories[1] == ['hello', 'reply-1']
     assert [m.content[0].root.text for m in chat.messages] == ['hello', 'reply-1', 'again', 'reply-2']
@@ -733,7 +733,7 @@ async def test_session_id_populated_from_output_state() -> None:
     chat = AgentChat(transport)
     assert chat.session_id is None
 
-    turn = chat.send('Hello')
+    turn = chat.send_stream('Hello')
     transport.push_chunk(
         AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_1', finish_reason=AgentFinishReason.STOP))
     )
@@ -763,7 +763,7 @@ async def test_session_handling_tool_interrupt() -> None:
     )
 
     chat = AgentChat(transport)
-    turn = chat.send('Approve $500 transfer')
+    turn = chat.send_stream('Approve $500 transfer')
 
     # Queue up a tool request chunk representing an interrupt
     transport.push_chunk(
@@ -798,7 +798,7 @@ async def test_session_handling_tool_interrupt() -> None:
         finish_reason=AgentFinishReason.STOP,
     )
 
-    resume_turn = chat.resume(respond=[out.interrupts[0].respond({'approved': True})])
+    resume_turn = chat.resume_stream(respond=[out.interrupts[0].respond({'approved': True})])
 
     # Queue up turn_end for the resume turn
     transport.push_chunk(
@@ -844,7 +844,7 @@ async def test_session_handling_multiple_tool_interrupts() -> None:
     )
 
     chat = AgentChat(transport)
-    turn = chat.send('Transfer to two accounts')
+    turn = chat.send_stream('Transfer to two accounts')
 
     transport.push_chunk(
         AgentStreamChunk(
@@ -878,7 +878,7 @@ async def test_session_handling_multiple_tool_interrupts() -> None:
         finish_reason=AgentFinishReason.STOP,
     )
     restart_parts = [intr.restart(resumed_metadata={'tool_approved': True}) for intr in out.interrupts]
-    resume_turn = chat.resume(restart=restart_parts)
+    resume_turn = chat.resume_stream(restart=restart_parts)
     transport.push_chunk(
         AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_2', finish_reason=AgentFinishReason.STOP))
     )
@@ -916,7 +916,7 @@ async def test_in_process_persistent_connection() -> None:
 
     chat = agent.chat()
     # Turn 1
-    turn1 = chat.send('Hello')
+    turn1 = chat.send_stream('Hello')
     chunks1 = []
     async for chunk in turn1.stream:
         chunks1.append(chunk)
@@ -926,7 +926,7 @@ async def test_in_process_persistent_connection() -> None:
     assert res1.message.content[0].root.text == 'Echo 1'
 
     # Turn 2
-    turn2 = chat.send('World')
+    turn2 = chat.send_stream('World')
     chunks2 = []
     async for chunk in turn2.stream:
         chunks2.append(chunk)
@@ -958,7 +958,7 @@ async def test_attached_turn_abort() -> None:
     pm.response_cb = slow_response
 
     chat = agent.chat()
-    turn = chat.send('Hello')
+    turn = chat.send_stream('Hello')
 
     # Let it run a bit
     await asyncio.sleep(0.1)
@@ -985,7 +985,7 @@ async def test_attached_turn_abort() -> None:
     )
 
     # We can keep going; the next turn appends onto the kept history.
-    turn2 = chat.send('Continue conversation')
+    turn2 = chat.send_stream('Continue conversation')
     res2 = await turn2.response
 
     # The detached turn's 'Hello' is still there, followed by the new exchange.
@@ -1016,7 +1016,7 @@ async def test_await_turn_under_timeout_detaches() -> None:
     pm.response_cb = slow_response
 
     chat = agent.chat()
-    turn = chat.send('Hello')
+    turn = chat.send_stream('Hello')
 
     # The deadline fires before the slow model responds → surfaces as TimeoutError.
     async def _await_turn() -> None:
@@ -1037,7 +1037,7 @@ async def test_await_turn_under_timeout_detaches() -> None:
             message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Second turn echo'))]),
         )
     )
-    res2 = await chat.send('Continue conversation').response
+    res2 = await chat.send('Continue conversation')
     assert res2.message is not None
     assert res2.message.content[0].root.text == 'Second turn echo'
 
@@ -1061,7 +1061,7 @@ async def test_stream_turn_under_timeout_detaches() -> None:
     pm.response_cb = slow_response
 
     chat = agent.chat()
-    turn = chat.send('Hello')
+    turn = chat.send_stream('Hello')
 
     async def _drain() -> None:
         async for _chunk in turn.stream:
@@ -1162,7 +1162,7 @@ async def test_agent_turn_direct_async_iteration() -> None:
     )
 
     chat = AgentChat(transport)
-    turn = chat.send('Weather in Tokyo?')
+    turn = chat.send_stream('Weather in Tokyo?')
 
     # Queue up chunks
     transport.push_chunk(
@@ -1201,7 +1201,7 @@ async def test_agent_turn_direct_await() -> None:
     )
 
     chat = AgentChat(transport)
-    turn = chat.send('Weather in Tokyo?')
+    turn = chat.send_stream('Weather in Tokyo?')
 
     transport.push_chunk(
         AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='ignored chunk'))]))
@@ -1232,7 +1232,7 @@ async def test_agent_turn_stream_and_response_accessors() -> None:
     )
 
     chat = AgentChat(transport)
-    turn = chat.send('Weather in Tokyo?')
+    turn = chat.send_stream('Weather in Tokyo?')
 
     transport.push_chunk(
         AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text='Weather is '))]))
@@ -1248,3 +1248,258 @@ async def test_agent_turn_stream_and_response_accessors() -> None:
     output = await turn.response
     assert output.message is not None
     assert output.message.content[0].root.text == 'Final output!'
+
+
+# ---------------------------------------------------------------------------
+# Undrained stream / cross-turn isolation
+#
+# Each send_stream/resume_stream owns its own caller-facing chunk queue. The
+# transport is always pumped (patches + stitching), so awaiting .response
+# without reading chunks is fine — unread chunks stay on that turn handle and
+# must not show up on the next turn's stream.
+# ---------------------------------------------------------------------------
+
+
+async def text_chunks(turn: Any) -> list[str]:
+    return [c.text async for c in turn if c.text]
+
+
+def text_chunk(text: str) -> AgentStreamChunk:
+    return AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part(root=TextPart(text=text))]))
+
+
+def stop_end(snapshot_id: str) -> AgentStreamChunk:
+    return AgentStreamChunk(turn_end=TurnEnd(snapshot_id=snapshot_id, finish_reason=AgentFinishReason.STOP))
+
+
+def interrupt_tool_part() -> Part:
+    return Part(
+        root=ToolRequestPart(
+            tool_request=ToolRequest(name='userApproval', ref='c1', input={'amount': 1}),
+            metadata={'interrupt': True},
+        )
+    )
+
+
+class PerTurnMockTransport(AgentTransport[Any]):
+    """Fixture transport: each ``run_turn`` pops its own preloaded chunk queue."""
+
+    def __init__(self) -> None:
+        self.state_management: StateManagement = 'server'
+        self.queues: list[asyncio.Queue[AgentStreamChunk | None]] = []
+        self.finals: list[AgentOutput] = []
+
+    def enqueue(
+        self,
+        *,
+        chunks: list[AgentStreamChunk],
+        output: AgentOutput,
+    ) -> None:
+        q: asyncio.Queue[AgentStreamChunk | None] = asyncio.Queue()
+        for chunk in chunks:
+            q.put_nowait(chunk)
+        q.put_nowait(None)
+        self.queues.append(q)
+        self.finals.append(output)
+
+    def enqueue_text_turn(self, *, texts: list[str], snapshot_id: str, final_text: str) -> None:
+        self.enqueue(
+            chunks=[*(text_chunk(t) for t in texts), stop_end(snapshot_id)],
+            output=AgentOutput(
+                snapshot_id=snapshot_id,
+                message=MessageData(role='model', content=[Part(root=TextPart(text=final_text))]),
+                finish_reason=AgentFinishReason.STOP,
+            ),
+        )
+
+    def enqueue_interrupt_turn(self, *, snapshot_id: str) -> None:
+        part = interrupt_tool_part()
+        self.enqueue(
+            chunks=[
+                AgentStreamChunk(model_chunk=ModelResponseChunk(content=[part])),
+                AgentStreamChunk(
+                    turn_end=TurnEnd(snapshot_id=snapshot_id, finish_reason=AgentFinishReason.INTERRUPTED)
+                ),
+            ],
+            output=AgentOutput(
+                snapshot_id=snapshot_id,
+                message=MessageData(role='model', content=[part]),
+                finish_reason=AgentFinishReason.INTERRUPTED,
+            ),
+        )
+
+    async def run_turn(
+        self,
+        *,
+        agent_input: AgentInput,
+        init: AgentInit,
+    ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
+        q = self.queues.pop(0)
+        final = self.finals.pop(0)
+
+        async def generator() -> AsyncIterator[AgentStreamChunk]:
+            while True:
+                chunk = await q.get()
+                if chunk is None:
+                    break
+                yield chunk
+
+        async def output_waiter() -> AgentOutput:
+            return final
+
+        return generator(), output_waiter()
+
+    async def get_snapshot(
+        self,
+        *,
+        snapshot_id: str | None = None,
+        session_id: str | None = None,
+    ) -> SessionSnapshot | None:
+        return None
+
+    async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
+        return SnapshotStatus.ABORTED
+
+
+@pytest.mark.asyncio
+async def test_await_response_without_reading_chunks() -> None:
+    """``await turn.response`` works with zero chunk reads; late drain still sees them."""
+    transport = PerTurnMockTransport()
+    transport.enqueue_text_turn(texts=['Alpha-', 'one'], snapshot_id='s1', final_text='Alpha-one')
+    chat = AgentChat(transport)
+
+    turn = chat.send_stream('u1')
+    assert (await turn.response).text == 'Alpha-one'
+    assert await text_chunks(turn) == ['Alpha-', 'one']
+
+
+@pytest.mark.asyncio
+async def test_unread_chunks_do_not_appear_on_next_turn() -> None:
+    """Unread turn-1 chunks must not show up when iterating turn 2."""
+    transport = PerTurnMockTransport()
+    transport.enqueue_text_turn(texts=['TURN1-A', 'TURN1-B'], snapshot_id='s1', final_text='t1')
+    transport.enqueue_text_turn(texts=['TURN2-A', 'TURN2-B'], snapshot_id='s2', final_text='t2')
+    chat = AgentChat(transport)
+
+    turn1 = chat.send_stream('first')
+    await turn1.response  # leave turn1's chunk queue unread
+
+    turn2 = chat.send_stream('second')
+    assert await text_chunks(turn2) == ['TURN2-A', 'TURN2-B']
+    assert (await turn2.response).text == 't2'
+
+    # Late drain of turn1 is still only turn1.
+    assert await text_chunks(turn1) == ['TURN1-A', 'TURN1-B']
+
+
+@pytest.mark.asyncio
+async def test_partial_stream_read_then_await_keeps_remaining_on_same_turn() -> None:
+    """Reading one chunk, then awaiting response, leaves the rest on that turn."""
+    transport = PerTurnMockTransport()
+    transport.enqueue_text_turn(texts=['p1', 'p2', 'p3'], snapshot_id='s1', final_text='all')
+    chat = AgentChat(transport)
+
+    turn = chat.send_stream('go')
+    stream = turn.stream.__aiter__()
+    assert (await stream.__anext__()).text == 'p1'
+
+    assert (await turn.response).text == 'all'
+    assert [c.text async for c in stream if c.text] == ['p2', 'p3']
+
+
+@pytest.mark.asyncio
+async def test_send_applies_custom_patches_without_caller_stream() -> None:
+    """Internal pump applies patches even when the caller never reads chunks."""
+    transport = MockAgentTransport()
+    chat = AgentChat(transport)
+
+    transport.final_output = AgentOutput(
+        snapshot_id='snap-a',
+        message=MessageData(role='model', content=[Part(root=TextPart(text='hi'))]),
+        finish_reason=AgentFinishReason.STOP,
+    )
+    turn = chat.send_stream('hello')
+    transport.push_chunk(
+        AgentStreamChunk(
+            custom_patch=JsonPatch(
+                root=[JsonPatchOperation(op=JsonPatchOp.REPLACE, path='', value={'mark': 'from-stream'})]
+            )
+        )
+    )
+    transport.push_chunk(text_chunk('hi'))
+    transport.push_chunk(stop_end('snap-a'))
+    await turn.response
+    assert chat.state == {'mark': 'from-stream'}
+
+    transport.final_output = AgentOutput(
+        snapshot_id='snap-b',
+        message=MessageData(role='model', content=[Part(root=TextPart(text='again'))]),
+        finish_reason=AgentFinishReason.STOP,
+    )
+    send_task = asyncio.create_task(chat.send('next'))
+    await asyncio.sleep(0)  # let send() block on the mock receive queue
+    transport.push_chunk(
+        AgentStreamChunk(
+            custom_patch=JsonPatch(root=[JsonPatchOperation(op=JsonPatchOp.REPLACE, path='/mark', value='from-send')])
+        )
+    )
+    transport.push_chunk(stop_end('snap-b'))
+    assert (await send_task).text == 'again'
+    assert chat.state == {'mark': 'from-send'}
+
+
+@pytest.mark.asyncio
+async def test_undrained_resume_stream_does_not_leak_into_next_turn() -> None:
+    transport = PerTurnMockTransport()
+    transport.enqueue_interrupt_turn(snapshot_id='s1')
+    transport.enqueue_text_turn(texts=['RESUME-ONLY'], snapshot_id='s2', final_text='resumed')
+    transport.enqueue_text_turn(texts=['AFTER'], snapshot_id='s3', final_text='after')
+    chat = AgentChat(transport)
+
+    interrupted = await chat.send_stream('transfer').response
+    assert interrupted.interrupts
+
+    resume_turn = chat.resume_stream(respond=[interrupted.interrupts[0].respond({'approved': True})])
+    assert (await resume_turn.response).text == 'resumed'  # unread resume chunks
+
+    assert await text_chunks(chat.send_stream('follow-up')) == ['AFTER']
+    assert await text_chunks(resume_turn) == ['RESUME-ONLY']
+
+
+@pytest.mark.asyncio
+async def test_inprocess_undrained_streams_stay_isolated() -> None:
+    """Same isolation with a real in-process agent (programmable model)."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    ai.define_prompt(name='isoAgent', model='programmableModel', system='echo')
+    agent = ai.define_prompt_agent(name='isoAgent', store=InMemorySessionStore())
+
+    pm.chunks = [
+        [
+            ModelResponseChunkModel(content=[Part(TextPart(text='ONE-A'))]),
+            ModelResponseChunkModel(content=[Part(TextPart(text='ONE-B'))]),
+        ],
+        [
+            ModelResponseChunkModel(content=[Part(TextPart(text='TWO-A'))]),
+            ModelResponseChunkModel(content=[Part(TextPart(text='TWO-B'))]),
+        ],
+    ]
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='ONE-FINAL'))]),
+        ),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='TWO-FINAL'))]),
+        ),
+    ]
+
+    chat = agent.chat()
+    turn1 = chat.send_stream('first')
+    assert (await turn1.response).text == 'ONE-FINAL'
+
+    turn2 = chat.send_stream('second')
+    assert await text_chunks(turn2) == ['TWO-A', 'TWO-B']
+    assert (await turn2.response).text == 'TWO-FINAL'
+    assert await text_chunks(turn1) == ['ONE-A', 'ONE-B']

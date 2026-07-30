@@ -83,7 +83,7 @@ banking_agent = ai.define_agent(
 async def test_banking_agent(text: str, ctx: ActionRunContext) -> dict[str, Any]:
     """Run a turn that pauses for approval, approve it, then let the transfer land."""
     chat = banking_agent.chat()
-    turn = chat.send(text or 'Transfer $500 to my savings account.')
+    turn = chat.send_stream(text or 'Transfer $500 to my savings account.')
     async for chunk in turn:
         if chunk.text:
             ctx.send_chunk(chunk.text)
@@ -94,7 +94,7 @@ async def test_banking_agent(text: str, ctx: ActionRunContext) -> dict[str, Any]
         ctx.send_chunk('[interrupted] approving pending action…')
         approval = next((i for i in res.interrupts if i.name == 'userApproval'), None)
         if approval is not None:
-            resume_turn = chat.resume(respond=[approval.respond({'approved': True, 'feedback': 'Looks good'})])
+            resume_turn = chat.resume_stream(respond=[approval.respond({'approved': True, 'feedback': 'Looks good'})])
             async for chunk in resume_turn:
                 if chunk.text:
                     ctx.send_chunk(chunk.text)

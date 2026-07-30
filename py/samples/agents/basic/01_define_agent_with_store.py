@@ -70,11 +70,11 @@ agent = ai.define_agent(
 
 async def main() -> None:
     chat = agent.chat()
-    turn = chat.send('Weather in Paris?')
+    turn = chat.send_stream('Weather in Paris?')
 
     # Two ways to consume a turn:
-    #   await chat.send(msg).response          output only, skip the stream
-    #   async for chunk in turn.stream: ...    stream chunks, then await turn.response
+    #   await chat.send(msg)                          output only
+    #   turn = chat.send_stream(msg); async for ...   stream, then await turn.response
     async for chunk in turn.stream:
         for call in chunk.tool_requests:
             print(f'  → {call.tool_request.name}')  # tools light up as they're called
@@ -94,7 +94,7 @@ async def main() -> None:
     # Rehydrate chat directly from that snapshot string.
     resumed = await agent.load_chat(snapshot_id=checkpoint)
     # → answers "Paris" — the resumed session still has turn 1's context
-    res2 = await resumed.send('What city did I ask about? One word.').response
+    res2 = await resumed.send('What city did I ask about? One word.')
     print(f'{res2.text}\n')
 
 

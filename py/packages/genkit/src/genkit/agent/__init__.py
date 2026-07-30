@@ -28,7 +28,7 @@ from genkit._ai._agents._client import (
     AgentTurn,
     DetachedTask,
 )
-from genkit._ai._agents._runtime import AgentFn, SessionRunner
+from genkit._ai._agents._runtime import AgentFn, AgentInitError, SessionRunner
 from genkit._ai._agents._session import (
     Session,
     SessionStore,
@@ -66,6 +66,7 @@ __all__ = [
     'AgentTurn',
     'AgentChunk',
     'AgentError',
+    'AgentInitError',
     'AgentInterrupt',
     'AgentResponse',
     'DetachedTask',

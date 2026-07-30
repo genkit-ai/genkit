@@ -67,10 +67,10 @@ worker = ai.define_agent(
 async def main() -> None:
     # --- turn.abort(): client-side stop button ---
     chat = chatty.chat()
-    await chat.send('My name is Ada.').response  # turn 1 establishes context the session should keep
+    await chat.send('My name is Ada.')  # turn 1 establishes context the session should keep
 
     # Ask for something long, then bail out partway like a user hitting "stop".
-    turn = chat.send('Write a very long, multi-paragraph essay about the history of tea.')
+    turn = chat.send_stream('Write a very long, multi-paragraph essay about the history of tea.')
     seen = 0
     async for chunk in turn.stream:
         seen += len(chunk.text or '')
@@ -80,7 +80,7 @@ async def main() -> None:
 
     # Detach is client-side only: the prompt stays in history (it was still
     # asked), and turn 1's context is intact, so the session continues cleanly.
-    answer = await chat.send('What is my name? One word.').response
+    answer = await chat.send('What is my name? One word.')
     assert 'Ada' in answer.text  # → still remembers turn 1
 
     # --- chat.abort(): server-side cancel of background work ---

@@ -66,7 +66,7 @@ weather_agent = ai.define_agent(
 async def test_weather_agent(text: str, ctx: ActionRunContext) -> str:
     """One streamed turn. Tools light up as they're called; text streams as it lands."""
     chat = weather_agent.chat()
-    turn = chat.send(text or 'What is the weather like in London?')
+    turn = chat.send_stream(text or 'What is the weather like in London?')
     async for chunk in turn:
         for call in chunk.tool_requests:
             ctx.send_chunk(f'[tool] {call.tool_request.name}')
@@ -81,13 +81,13 @@ async def test_weather_agent_stream(text: str, ctx: ActionRunContext) -> str:
     """Multi-turn: one chat carries history across turns, so the follow-up just knows."""
     chat = weather_agent.chat()
 
-    turn = chat.send(text or 'What is the weather like in Paris?')
+    turn = chat.send_stream(text or 'What is the weather like in Paris?')
     async for chunk in turn:
         if chunk.text:
             ctx.send_chunk(chunk.text)
     await turn
 
-    followup = chat.send('now say that in French')
+    followup = chat.send_stream('now say that in French')
     async for chunk in followup:
         if chunk.text:
             ctx.send_chunk(chunk.text)

@@ -53,7 +53,7 @@ class StatelessTurn(BaseModel):
 async def test_weather_agent_stateless(input: StatelessTurn, ctx: ActionRunContext) -> dict[str, Any]:
     """Resume from the client-held state (or start fresh), then hand it back."""
     chat = weather_agent_stateless.chat(state=input.state) if input.state else weather_agent_stateless.chat()
-    turn = chat.send(input.text)
+    turn = chat.send_stream(input.text)
     async for chunk in turn:
         if chunk.text:
             ctx.send_chunk(chunk.text)

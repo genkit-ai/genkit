@@ -114,7 +114,7 @@ async def test_define_custom_agent_registers_snapshot_and_abort_actions() -> Non
     assert abort_action is not None
 
     chat = agent.chat()
-    turn = chat.send('hello')
+    turn = chat.send_stream('hello')
     async for _ in turn.stream:
         pass
     out = await turn.response
@@ -168,13 +168,13 @@ async def test_custom_agent_turn_that_raises_resolves_as_failed() -> None:
     agent = define_custom_agent(registry, 'flakyTest', fn, store=store)
     chat = agent.chat()
 
-    out_ok = await chat.send('hello').response
+    out_ok = await chat.send('hello')
     assert out_ok.finish_reason == AgentFinishReason.STOP
     last_good_parent = chat.snapshot_id
     history_before_failure = list(chat.messages)
 
     with pytest.raises(AgentError) as exc_info:
-        await chat.send('please fail now').response
+        await chat.send('please fail now')
     assert exc_info.value.status == 'INTERNAL'
     assert exc_info.value.message == 'boom'
     # The failed turn is a dead end: the resume handle stays on the last good
@@ -208,7 +208,7 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
     agent = define_custom_agent(registry, 'detachAbortTest', fn, store=store)
     chat = agent.chat()
 
-    await chat.send('hello').response
+    await chat.send('hello')
     session_id = chat.session_id
     history_before_detach = list(chat.messages)
 
@@ -219,7 +219,7 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
     assert chat._resume_snapshot_id == task.snapshot_id  # noqa: SLF001
 
     with pytest.raises(AgentError, match='not resumable'):
-        await chat.send('too soon').response
+        await chat.send('too soon')
 
     status = await task.abort()
     assert status == SnapshotStatus.ABORTED
@@ -227,10 +227,10 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
     # snapshot, so a bare send keeps failing until we reload.
     assert chat.messages == history_before_detach
     with pytest.raises(AgentError, match='not resumable'):
-        await chat.send('still stranded').response
+        await chat.send('still stranded')
 
     chat = await agent.load_chat(session_id=session_id)
-    out = await chat.send('are you there?').response
+    out = await chat.send('are you there?')
     assert out.finish_reason == AgentFinishReason.STOP
     assert chat.snapshot_id not in (None, task.snapshot_id)
 
@@ -255,7 +255,7 @@ async def test_load_chat_by_session_skips_aborted_leaf_to_last_resumable() -> No
 
     agent = define_custom_agent(registry, 'loadAfterAbortTest', fn, store=store)
     chat = agent.chat()
-    await chat.send('hello').response
+    await chat.send('hello')
     session_id = chat.session_id
     last_good_parent = chat.snapshot_id
 
@@ -266,5 +266,5 @@ async def test_load_chat_by_session_skips_aborted_leaf_to_last_resumable() -> No
     reloaded = await agent.load_chat(session_id=session_id)
     # Landed on the last completed turn, not the aborted leaf.
     assert reloaded.snapshot_id == last_good_parent
-    out = await reloaded.send('still there?').response
+    out = await reloaded.send('still there?')
     assert out.finish_reason == AgentFinishReason.STOP

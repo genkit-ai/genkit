@@ -82,7 +82,7 @@ async def test_prompt_agent_does_not_persist_system_preamble() -> None:
     )
 
     session = agent.chat()
-    turn = session.send('hello')
+    turn = session.send_stream('hello')
     async for _chunk in turn.stream:
         pass
     await turn.response
@@ -112,12 +112,12 @@ async def test_prompt_agent_multi_turn_session_has_no_accumulated_preamble() -> 
     ])
 
     session = agent.chat()
-    turn1 = session.send('hello')
+    turn1 = session.send_stream('hello')
     async for _chunk in turn1.stream:
         pass
     await turn1.response
 
-    turn2 = session.send('again')
+    turn2 = session.send_stream('again')
     async for _chunk in turn2.stream:
         pass
     await turn2.response
@@ -166,7 +166,7 @@ async def test_prompt_agent_explicit_history_tag_preamble() -> None:
     )
 
     session = agent.chat()
-    turn = session.send('turn 1')
+    turn = session.send_stream('turn 1')
     async for _chunk in turn.stream:
         pass
     await turn.response
@@ -229,7 +229,7 @@ async def test_prompt_agent_few_shot_preamble() -> None:
     )
 
     session = agent.chat()
-    turn = session.send('turn 1')
+    turn = session.send_stream('turn 1')
     async for _chunk in turn.stream:
         pass
     await turn.response
@@ -294,7 +294,7 @@ async def test_prompt_agent_tool_messages_preserved_verbatim() -> None:
 
     seed_messages = [MessageData.model_validate(m.model_dump()) for m in history]
     session = agent.chat(messages=seed_messages)
-    turn = session.send('continue')
+    turn = session.send_stream('continue')
     async for _chunk in turn.stream:
         pass
     await turn.response

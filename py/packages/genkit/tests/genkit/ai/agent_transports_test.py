@@ -92,7 +92,7 @@ async def test_http_transport_flow_envelope_integration() -> None:
         )
         client = AgentClient(transport)
         chat = client.chat()
-        res = await chat.send('Hello Genkit!').response
+        res = await chat.send('Hello Genkit!')
         assert res.text == 'Echo: Hello Genkit!'
         assert res.finish_reason == AgentFinishReason.STOP
     finally:
