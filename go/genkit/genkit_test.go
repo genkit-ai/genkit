@@ -208,6 +208,63 @@ func TestDefineSchemaWithType_Error(t *testing.T) {
 	DefineSchemasFor(g, Invalid{})
 }
 
+func TestDefineSchemasFor(t *testing.T) {
+	t.Run("registers multiple schemas at once", func(t *testing.T) {
+		g := Init(context.Background())
+
+		type User struct {
+			Name string `json:"name"`
+		}
+		type Order struct {
+			ID string `json:"id"`
+		}
+
+		DefineSchemasFor(g, User{}, &Order{})
+
+		for _, name := range []string{"User", "Order"} {
+			if g.reg.LookupSchema(name) == nil {
+				t.Errorf("Schema %s not found", name)
+			}
+		}
+	})
+
+	t.Run("panics on map value", func(t *testing.T) {
+		g := Init(context.Background())
+
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for map value")
+			}
+		}()
+
+		DefineSchemasFor(g, map[string]any{"type": "object"})
+	})
+
+	t.Run("panics on unnamed type", func(t *testing.T) {
+		g := Init(context.Background())
+
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for unnamed type")
+			}
+		}()
+
+		DefineSchemasFor(g, struct{ Name string }{})
+	})
+
+	t.Run("panics on nil value", func(t *testing.T) {
+		g := Init(context.Background())
+
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for nil value")
+			}
+		}()
+
+		DefineSchemasFor(g, nil)
+	})
+}
+
 func TestDefineSchemaFor(t *testing.T) {
 	g := Init(context.Background())
 

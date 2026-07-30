@@ -226,8 +226,8 @@ func TestReflectionServerV2_ListActions(t *testing.T) {
 	defer m.close()
 
 	g := Init(context.Background())
-	core.DefineAction(g.reg, "test/inc", api.ActionTypeCustom, nil, nil, inc)
-	core.DefineAction(g.reg, "test/dec", api.ActionTypeCustom, nil, nil, dec)
+	defineTestAction(g.reg, "test/inc", api.ActionTypeCustom, nil, nil, inc)
+	defineTestAction(g.reg, "test/dec", api.ActionTypeCustom, nil, nil, dec)
 
 	ctx, cancel := startRuntime(t, g, m)
 	defer cancel()
@@ -330,7 +330,7 @@ func TestReflectionServerV2_RunAction(t *testing.T) {
 	defer m.close()
 
 	g := Init(context.Background())
-	core.DefineAction(g.reg, "test/inc", api.ActionTypeCustom, nil, nil, inc)
+	defineTestAction(g.reg, "test/inc", api.ActionTypeCustom, nil, nil, inc)
 
 	ctx, cancel := startRuntime(t, g, m)
 	defer cancel()
@@ -455,7 +455,7 @@ func TestReflectionServerV2_StreamingRunAction(t *testing.T) {
 		}
 		return x, nil
 	}
-	core.DefineStreamingAction(g.reg, "test/streaming", api.ActionTypeCustom, nil, nil, streamInc)
+	defineTestStreamingAction(g.reg, "test/streaming", api.ActionTypeCustom, nil, nil, streamInc)
 
 	ctx, cancel := startRuntime(t, g, m)
 	defer cancel()
@@ -550,7 +550,7 @@ func TestReflectionServerV2_CancelAction(t *testing.T) {
 
 	g := Init(context.Background())
 	started := make(chan struct{})
-	core.DefineAction(g.reg, "test/slow", api.ActionTypeCustom, nil, nil,
+	defineTestAction(g.reg, "test/slow", api.ActionTypeCustom, nil, nil,
 		func(ctx context.Context, _ any) (any, error) {
 			close(started)
 			<-ctx.Done()

@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 
@@ -363,7 +364,9 @@ func LookupAction(g *Genkit, key string) api.Action {
 //	}
 //	fmt.Println(result) // Output: Hello, World!
 func DefineFlow[In, Out any](g *Genkit, name string, fn core.Func[In, Out]) *core.Flow[In, Out, struct{}] {
-	return core.DefineFlow(g.reg, name, fn)
+	f := core.NewFlow(name, fn)
+	f.Register(g.reg)
+	return f
 }
 
 // DefineStreamingFlow defines a streaming flow, registers it as a [core.Action] of type Flow,
@@ -414,7 +417,9 @@ func DefineFlow[In, Out any](g *Genkit, name string, fn core.Func[In, Out]) *cor
 //		}
 //	}
 func DefineStreamingFlow[In, Out, Stream any](g *Genkit, name string, fn core.StreamingFunc[In, Out, Stream]) *core.Flow[In, Out, Stream] {
-	return core.DefineStreamingFlow(g.reg, name, fn)
+	f := core.NewStreamingFlow(name, fn)
+	f.Register(g.reg)
+	return f
 }
 
 // NewFlow creates a [core.Flow] without registering it as an action.
@@ -935,7 +940,7 @@ func LookupPrompt(g *Genkit, name string) ai.Prompt {
 //
 //	genkit.Generate(ctx, g, ai.WithOutputSchemaName("User"), ai.WithPrompt("What is your name?"))
 func DefineSchema(g *Genkit, name string, schema map[string]any) {
-	core.DefineSchema(g.reg, name, schema)
+	g.reg.RegisterSchema(name, schema)
 }
 
 // DefineSchemasFor defines named JSON schemas derived from the given values'
@@ -958,7 +963,19 @@ func DefineSchema(g *Genkit, name string, schema map[string]any) {
 //
 //	genkit.Generate(ctx, g, ai.WithOutputSchemaName("User"), ai.WithPrompt("What is your name?"))
 func DefineSchemasFor(g *Genkit, values ...any) {
-	core.DefineSchemasFor(g.reg, values...)
+	for _, v := range values {
+		t := reflect.TypeOf(v)
+		for t != nil && t.Kind() == reflect.Ptr {
+			t = t.Elem()
+		}
+		switch {
+		case t != nil && t.Kind() == reflect.Map:
+			panic("genkit.DefineSchemasFor: got a map; use DefineSchema(name, schema) to register a raw JSON schema")
+		case t == nil || t.Name() == "":
+			panic("genkit.DefineSchemasFor: value must be of a named type; use DefineSchema(name, schema) to name it explicitly")
+		}
+		g.reg.RegisterSchema(t.Name(), core.InferSchemaMap(v))
+	}
 }
 
 // DefineSchemaFor defines a named JSON schema derived from a Go type
@@ -980,7 +997,7 @@ func DefineSchemasFor(g *Genkit, values ...any) {
 //	genkit.Generate(ctx, g, ai.WithOutputSchemaName("User"), ai.WithPrompt("What is your name?"))
 func DefineSchemaFor[T any](g *Genkit) {
 	var v T
-	core.DefineSchemasFor(g.reg, v)
+	DefineSchemasFor(g, v)
 }
 
 // DefineDataPrompt creates a new [ai.DataPrompt] with strongly-typed input and output.
