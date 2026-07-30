@@ -277,6 +277,27 @@ class AgentInitError(GenkitError):
     """
 
 
+def seeded_init_fields(state: SessionState) -> str:
+    """Caller-facing names for whatever seeded this ``SessionState`` blob.
+
+    ``messages`` / ``artifacts`` / ``state`` all get bundled into one
+    ``SessionState`` before the server-managed check, so the error should name
+    the field(s) the caller actually passed — not always ``'state'``.
+    """
+    names = [
+        name
+        for name, present in (
+            ('messages', state.messages is not None),
+            ('artifacts', state.artifacts is not None),
+            ('state', state.custom is not None),
+        )
+        if present
+    ]
+    if not names:
+        return "'state'"
+    return '/'.join(f"'{name}'" for name in names)
+
+
 def assert_init_matches_state_management(
     *,
     init: AgentInit,
@@ -294,10 +315,11 @@ def assert_init_matches_state_management(
             ),
         )
     if init.state is not None and store is not None:
+        fields = seeded_init_fields(init.state)
         raise AgentInitError(
             status='FAILED_PRECONDITION',
             message=(
-                f"Cannot send 'state' to agent '{agent_name}': this agent uses a "
+                f"Cannot send {fields} to agent '{agent_name}': this agent uses a "
                 "server-managed store. Send 'snapshot_id' or 'session_id' instead."
             ),
         )

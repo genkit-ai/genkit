@@ -28,7 +28,7 @@ from typing import Any, Generic, Protocol, TypeVar, cast
 from pydantic import BaseModel
 from typing_extensions import TypeVar as TypeVarExt
 
-from genkit._ai._agents._runtime import AgentInitError
+from genkit._ai._agents._runtime import AgentInitError, seeded_init_fields
 from genkit._ai._agents._snapshot import lookup_label
 from genkit._ai._agents._types import StateManagement
 from genkit._ai._json_patch import apply_json_patch
@@ -39,6 +39,7 @@ from genkit._core._error import (
     StatusCodes,
     StatusName,
 )
+from genkit._core._logger import get_logger
 from genkit._core._model import Message
 from genkit._core._typing import (
     AgentFinishReason,
@@ -64,6 +65,8 @@ from genkit._core._typing import (
     ToolResponse,
     ToolResponsePart,
 )
+
+logger = get_logger(__name__)
 
 # Custom state is a Pydantic model, so StateT is bound to BaseModel; the Any
 # default covers schemaless (client-managed) sessions where custom is plain JSON.
@@ -852,8 +855,13 @@ class TurnDriver(Generic[StateT]):
         """Background wrapper so task exceptions stay on ``self.output`` / the stream."""
         try:
             await self.run()
-        except Exception:  # noqa: S110 — surfaced via self.output / stream, not this task
-            pass
+        except Exception as e:
+            # Normal turn failures already resolve ``self.output`` inside ``run``.
+            # If ``on_turn_error`` (or anything else) blows up before that, resolve
+            # here so ``await turn.response`` can't hang forever with an empty log.
+            if not self.output.done():
+                logger.exception('TurnDriver background run failed without resolving output')
+                self.output.set_exception(e)
 
     def emit(self, chunk: AgentStreamChunk) -> None:
         """Applies any state patch, transforms the wire chunk, and optionally enqueues it."""
@@ -955,10 +963,11 @@ class AgentChat(Generic[StateT]):
             # seed state blob here would look live on the client while the server
             # session stayed empty — so refuse up front instead of dropping it.
             if init.state is not None and self._transport.state_management == 'server':
+                fields = seeded_init_fields(init.state)
                 raise AgentInitError(
                     status='FAILED_PRECONDITION',
                     message=(
-                        "Cannot send 'state' to a server-managed agent (one with a "
+                        f'Cannot send {fields} to a server-managed agent (one with a '
                         "store). Send 'snapshot_id' or 'session_id' instead."
                     ),
                 )

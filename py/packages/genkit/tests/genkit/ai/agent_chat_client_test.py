@@ -26,12 +26,14 @@ from genkit._ai._agents._client import (
     AgentError,
     AgentInterrupt,
     AgentTransport,
+    TurnDriver,
 )
 from genkit._ai._agents._runtime import AgentInitError
 from genkit._ai._agents._types import StateManagement
 from genkit._ai._aio import Genkit
 from genkit._ai._json_patch import apply_json_patch
 from genkit._ai._testing import define_programmable_model
+from genkit._core._channel import CloseableQueue
 from genkit._core._model import Message, ModelResponse, ModelResponseChunk as ModelResponseChunkModel
 from genkit._core._typing import (
     AgentFinishReason,
@@ -1254,6 +1256,40 @@ async def test_agent_turn_stream_and_response_accessors() -> None:
     output = await turn.response
     assert output.message is not None
     assert output.message.content[0].root.text == 'Final output!'
+
+
+# ---------------------------------------------------------------------------
+# TurnDriver background error surfacing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_background_resolves_output_when_on_turn_error_raises() -> None:
+    """If ``on_turn_error`` itself raises, ``await turn.response`` must not hang."""
+
+    async def boom_run_turn(
+        *,
+        agent_input: AgentInput,
+        init: AgentInit,
+    ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
+        raise RuntimeError('transport failed')
+
+    def broken_on_turn_error(e: Exception) -> Exception:
+        raise RuntimeError('on_turn_error failed') from e
+
+    driver = TurnDriver(
+        inp=AgentInput(),
+        init=AgentInit(),
+        run_turn=boom_run_turn,
+        commit_output=lambda _raw: (_ for _ in ()).throw(AssertionError('commit_output should not run')),
+        commit_custom_patch=lambda _patch: None,
+        on_turn_error=broken_on_turn_error,
+        chunks=CloseableQueue(),
+    )
+    turn = driver.start()
+
+    with pytest.raises(RuntimeError, match='on_turn_error failed'):
+        await asyncio.wait_for(turn.response, timeout=1.0)
 
 
 # ---------------------------------------------------------------------------

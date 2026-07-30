@@ -190,8 +190,12 @@ def record_span_outcome(
     try:
         yield
     except GenkitInterrupt:
-        # HITL / tool pause — control flow, not a failed span. Interrupt already
-        # stamps genkit:metadata:interrupt when raised; don't paint the span red.
+        # HITL / tool pause — control flow, not a failed span. Stamp success so
+        # cloud telemetry has a known genkit:state; interrupt metadata already
+        # lives on the raise. Don't paint the span red.
+        if metadata.output is not None:
+            span.set_attribute(Attr.OUTPUT, _to_json_attr(metadata.output))
+        span.set_attribute(Attr.STATE, State.SUCCESS)
         raise
     except Exception as e:
         logger.debug(f'Error in run_in_new_span: {e!s}')

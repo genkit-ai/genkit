@@ -10,6 +10,7 @@ error, metadata) plus a regression test that ``Action._run_with_telemetry`` reco
 the original exception text in ``genkit:error`` rather than the wrapped GenkitError message.
 """
 
+import json
 import logging
 from collections.abc import Generator, Sequence
 
@@ -20,8 +21,9 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import BaseModel
 
-from genkit._ai._tools import Interrupt
-from genkit._core._action import Action, ActionKind
+from genkit import ActionKind, Genkit
+from genkit._ai._tools import Interrupt, ToolRunContext
+from genkit._core._action import Action
 from genkit._core._error import GenkitError
 from genkit._core._trace._attrs import metadata_key
 from genkit._core._trace._realtime_processor import RealtimeSpanProcessor
@@ -212,20 +214,37 @@ def test_records_error_attributes(exporter: InMemorySpanExporter) -> None:
     assert span.status.status_code == trace_api.StatusCode.ERROR
 
 
-def test_interrupt_is_not_recorded_as_span_error(
+@pytest.mark.asyncio
+async def test_tool_interrupt_is_not_recorded_as_span_error(
     exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Tool interrupts are control flow — spans must not look like failures."""
-    with caplog.at_level(logging.DEBUG):
-        with pytest.raises(Interrupt):
-            with run_in_new_span(SpanMetadata(name='awaitingApproval', type='util')):
-                raise Interrupt({'message': 'need approval'})
+    """Tool interrupts are control flow — the tool span must not look like a failure.
 
-    span = _by_name(exporter.get_finished_spans(), 'awaitingApproval')
+    Drives a real ``@ai.tool`` that raises ``Interrupt``. The carve-out only
+    works because Action wraps that into ``GenkitError`` *outside* the span
+    body; this locks that ordering so a future refactor can't silently undo it.
+    """
+    ai = Genkit()
+
+    @ai.tool(name='transfer')
+    async def transfer(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        raise Interrupt({'reason': 'needs_approval'})
+
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='transfer')
+    assert action is not None
+
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(GenkitError) as ei:
+            await action.run({'amount': 100})
+
+    assert isinstance(ei.value.cause, Interrupt)
+
+    span = _by_name(exporter.get_finished_spans(), 'transfer')
     attrs = dict(span.attributes or {})
-    assert attrs.get('genkit:state') != 'error'
+    assert attrs['genkit:state'] == 'success'
     assert 'genkit:error' not in attrs
     assert span.status.status_code != trace_api.StatusCode.ERROR
+    assert json.loads(attrs['genkit:metadata:interrupt']) == {'reason': 'needs_approval'}
     assert not any('Error in run_in_new_span' in r.message for r in caplog.records)
 
 
