@@ -153,13 +153,6 @@ func NewMiddleware[M Middleware](description string, prototype M) *MiddlewareDes
 	}
 }
 
-// DefineMiddleware creates and registers a middleware descriptor in one step.
-func DefineMiddleware[M Middleware](r api.Registry, description string, prototype M) *MiddlewareDesc {
-	d := NewMiddleware(description, prototype)
-	d.Register(r)
-	return d
-}
-
 // MiddlewareFunc adapts a per-call factory closure to the [Middleware]
 // interface for ad-hoc inline use, without a registered descriptor or plugin
 // wiring. The adapted middleware does not appear in the Dev UI.

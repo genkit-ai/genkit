@@ -29,7 +29,7 @@ import (
 	"github.com/firebase/genkit/go/internal/base"
 )
 
-// ToolFunc is the function signature for tools created with [DefineTool] and [NewTool].
+// ToolFunc is the function signature for tools created with [NewTool].
 type ToolFunc[In, Out any] = func(ctx context.Context, input In) (Out, error)
 
 // InterruptibleToolFunc is the function signature for tools created with
@@ -172,20 +172,6 @@ func requireAnyOutForSchemaOptions[Out any](ctor, name string, opts []ai.ToolOpt
 	}
 }
 
-// DefineTool creates a new tool with a simple function signature and registers it.
-// The function receives a plain [context.Context] instead of [ai.ToolContext].
-// Use [tool.AttachParts] inside the function to return additional content parts.
-func DefineTool[In, Out any](
-	r api.Registry,
-	name, description string,
-	fn ToolFunc[In, Out],
-	opts ...ai.ToolOption,
-) *Tool[In, Out] {
-	t := NewTool(name, description, fn, opts...)
-	t.Register(r)
-	return t
-}
-
 // NewTool creates a new unregistered tool with a simple function signature.
 // Use [tool.AttachParts] inside the function to return additional content parts.
 func NewTool[In, Out any](
@@ -197,21 +183,6 @@ func NewTool[In, Out any](
 	// DEPRECATED(breaking): Call core.NewActionOf directly instead of wrapping ai.NewMultipartTool.
 	inner := ai.NewMultipartTool(name, description, wrapSimpleFunc(fn), opts...)
 	return &Tool[In, Out]{inner: inner}
-}
-
-// DefineInterruptibleTool creates a new interruptible tool and registers it.
-// The resumed parameter is non-nil when the tool is being resumed after an
-// interrupt. Use [tool.Interrupt] inside the function to interrupt execution
-// and send data to the caller.
-func DefineInterruptibleTool[In, Out, Res any](
-	r api.Registry,
-	name, description string,
-	fn InterruptibleToolFunc[In, Out, Res],
-	opts ...ai.ToolOption,
-) *InterruptibleTool[In, Out, Res] {
-	t := NewInterruptibleTool(name, description, fn, opts...)
-	t.Register(r)
-	return t
 }
 
 // NewInterruptibleTool creates a new unregistered interruptible tool.

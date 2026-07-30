@@ -126,14 +126,6 @@ type Resource interface {
 	Register(r api.Registry)
 }
 
-// DefineResource creates a resource and registers it with the given Registry.
-func DefineResource(r api.Registry, name string, opts *ResourceOptions, fn ResourceFunc) Resource {
-	metadata := resourceMetadata(name, opts)
-	a := core.NewActionOf(api.ActionTypeResource, name, &core.ActionOptions{Metadata: metadata}, fn)
-	a.Register(r)
-	return &resource{Action: *a}
-}
-
 // NewResource creates a resource but does not register it in the registry.
 // It can be registered later via the Register method.
 func NewResource(name string, opts *ResourceOptions, fn ResourceFunc) Resource {

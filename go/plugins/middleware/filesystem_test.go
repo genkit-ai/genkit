@@ -72,7 +72,7 @@ func scriptedModel(t *testing.T, r *registry.Registry, name string, script []mod
 	t.Helper()
 	var seen []*ai.ModelRequest
 	idx := 0
-	m := ai.DefineModel(r, name, &ai.ModelOptions{
+	m := registerTestModel(r, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true, Media: true},
 	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		seen = append(seen, req)
@@ -106,7 +106,7 @@ func TestFilesystemListFilesNonRecursive(t *testing.T) {
 	})
 
 	fs := &Filesystem{RootDir: root}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithUse(fs))
 	if err != nil {
@@ -162,7 +162,7 @@ func TestFilesystemListFilesRecursive(t *testing.T) {
 	})
 
 	fs := &Filesystem{RootDir: root}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithUse(fs))
 	if err != nil {
@@ -203,7 +203,7 @@ func TestFilesystemReadFileInjectsUserMessage(t *testing.T) {
 	})
 
 	fs := &Filesystem{RootDir: root}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithUse(fs)); err != nil {
 		t.Fatal(err)
@@ -258,7 +258,7 @@ func TestFilesystemReadFileInjectsImageAsMedia(t *testing.T) {
 	})
 
 	fs := &Filesystem{RootDir: root}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithUse(fs)); err != nil {
 		t.Fatal(err)
@@ -294,7 +294,7 @@ func TestFilesystemStreamsInjectedFileContents(t *testing.T) {
 	// Streaming model that emits the same payload it returns, so each turn
 	// produces at least one chunk.
 	turn := 0
-	m := ai.DefineModel(r, "test/fs-stream", &ai.ModelOptions{
+	m := registerTestModel(r, "test/fs-stream", &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true, Media: true},
 	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		turn++
@@ -320,7 +320,7 @@ func TestFilesystemStreamsInjectedFileContents(t *testing.T) {
 	})
 
 	fs := &Filesystem{RootDir: root}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 
 	var chunks []*ai.ModelResponseChunk
 	if _, err := ai.Generate(ctx, r,
@@ -386,7 +386,7 @@ func TestFilesystemWriteFileRequiresAllowWriteAccess(t *testing.T) {
 
 	// Only list_files/read_file should be registered; write_file must not be.
 	fs := &Filesystem{RootDir: root}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 
 	hooks, err := fs.New(ctx)
 	if err != nil {
@@ -420,7 +420,7 @@ func TestFilesystemWriteFileCreatesAndOverwrites(t *testing.T) {
 	})
 
 	fs := &Filesystem{RootDir: root, AllowWriteAccess: true}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithUse(fs)); err != nil {
 		t.Fatal(err)
@@ -460,7 +460,7 @@ func TestFilesystemEditFile(t *testing.T) {
 	})
 
 	fs := &Filesystem{RootDir: root, AllowWriteAccess: true}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithUse(fs)); err != nil {
 		t.Fatal(err)
@@ -503,7 +503,7 @@ func TestFilesystemEditFileNotFound(t *testing.T) {
 	})
 
 	fs := &Filesystem{RootDir: root, AllowWriteAccess: true}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithUse(fs))
 	if err != nil {
@@ -564,7 +564,7 @@ func TestFilesystemRejectsTraversal(t *testing.T) {
 	})
 
 	fs := &Filesystem{RootDir: root}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithUse(fs)); err != nil {
 		t.Fatal(err)
@@ -630,7 +630,7 @@ func TestFilesystemRespectsConfigOverride(t *testing.T) {
 	}
 
 	// Register the middleware with the proto root.
-	ai.DefineMiddleware(r, "filesystem", &Filesystem{RootDir: protoRoot})
+	registerTestMiddleware(r, "filesystem", &Filesystem{RootDir: protoRoot})
 
 	m, seen := scriptedModel(t, r, "test/fs-devui", []modelTurn{
 		{Tools: []*ai.ToolRequest{{Name: "read_file", Input: map[string]any{"filePath": "marker.txt"}}}},
@@ -679,7 +679,7 @@ func TestFilesystemMissingRootDirIsAnError(t *testing.T) {
 	})
 
 	fs := &Filesystem{}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 
 	_, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithUse(fs))
 	if err == nil {
@@ -705,7 +705,7 @@ func TestFilesystemListFilesIncludesSize(t *testing.T) {
 	})
 
 	fs := &Filesystem{RootDir: root}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithUse(fs))
 	if err != nil {
 		t.Fatal(err)
@@ -766,7 +766,7 @@ func TestFilesystemReadFileIncludesLineMetadata(t *testing.T) {
 	})
 
 	fs := &Filesystem{RootDir: root}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithUse(fs)); err != nil {
 		t.Fatal(err)
 	}
@@ -825,7 +825,7 @@ func TestFilesystemEditFileRequiresPriorRead(t *testing.T) {
 	})
 
 	fs := &Filesystem{RootDir: root, AllowWriteAccess: true}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithUse(fs)); err != nil {
 		t.Fatal(err)
 	}
@@ -868,7 +868,7 @@ func TestFilesystemEditFileDetectsExternalModification(t *testing.T) {
 	}
 
 	turn := 0
-	m := ai.DefineModel(r, "test/fs-edit-stale", &ai.ModelOptions{
+	m := registerTestModel(r, "test/fs-edit-stale", &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
 	}, func(ctx context.Context, req *ai.ModelRequest, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		// Between the read and the edit, simulate the user editing the file.
@@ -892,7 +892,7 @@ func TestFilesystemEditFileDetectsExternalModification(t *testing.T) {
 	})
 
 	fs := &Filesystem{RootDir: root, AllowWriteAccess: true}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithUse(fs)); err != nil {
 		t.Fatal(err)
 	}
@@ -926,7 +926,7 @@ func TestFilesystemReadFileDedupsUnchanged(t *testing.T) {
 	})
 
 	fs := &Filesystem{RootDir: root}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithUse(fs)); err != nil {
 		t.Fatal(err)
 	}
@@ -986,7 +986,7 @@ func TestFilesystemWriteFileRequiresReadOnOverwrite(t *testing.T) {
 	})
 
 	fs := &Filesystem{RootDir: root, AllowWriteAccess: true}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithUse(fs)); err != nil {
 		t.Fatal(err)
 	}
@@ -1019,7 +1019,7 @@ func TestFilesystemReadFileOffsetLimit(t *testing.T) {
 	})
 
 	fs := &Filesystem{RootDir: root}
-	ai.DefineMiddleware(r, "filesystem", fs)
+	registerTestMiddleware(r, "filesystem", fs)
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithUse(fs)); err != nil {
 		t.Fatal(err)
 	}

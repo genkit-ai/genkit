@@ -236,17 +236,7 @@ func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
 	})
 }
 
-// DefineModel creates a new [Model] and registers it.
-//
-// Deprecated: Use [NewTypedModel] and register the result with
-// [Model.Register].
-func DefineModel(r api.Registry, name string, opts *ModelOptions, fn ModelFunc) Model {
-	m := NewModel(name, opts, fn)
-	m.Register(r)
-	return m
-}
-
-// LookupModel looks up a [Model] registered by [DefineModel].
+// LookupModel looks up a registered [Model] by name.
 // It will try to resolve the model dynamically if the model is not found.
 // It returns nil if the model was not resolved.
 func LookupModel(r api.Registry, name string) Model {

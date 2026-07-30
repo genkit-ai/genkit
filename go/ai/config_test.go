@@ -220,7 +220,7 @@ func TestDeprecatedModelPassesConfigThrough(t *testing.T) {
 	r := registry.New()
 
 	var gotConfig any
-	m := DefineModel(r, "test/legacy-config", nil, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	m := defineModel(r, "test/legacy-config", nil, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		gotConfig = req.Config
 		return &ModelResponse{Message: NewModelTextMessage("ok"), Request: req}, nil
 	})

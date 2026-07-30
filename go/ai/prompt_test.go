@@ -36,7 +36,7 @@ type InputOutput struct {
 }
 
 func testTool(reg api.Registry, name string) Tool {
-	return DefineTool(reg, name, "use when need to execute a test",
+	return defineTool(reg, name, "use when need to execute a test",
 		func(ctx *ToolContext, input struct {
 			Test string
 		},
@@ -150,7 +150,7 @@ type HelloPromptInput struct {
 }
 
 func definePromptModel(reg api.Registry) Model {
-	return DefineModel(reg, "test/chat",
+	return defineModel(reg, "test/chat",
 		&ModelOptions{Supports: &ModelSupports{
 			Tools:      true,
 			Multiturn:  true,
@@ -690,7 +690,7 @@ func TestOptionsPatternExecute(t *testing.T) {
 
 	ConfigureFormats(reg)
 
-	testModel := DefineModel(reg, "options/test", nil, testGenerate)
+	testModel := defineModel(reg, "options/test", nil, testGenerate)
 
 	t.Run("Streaming", func(t *testing.T) {
 		p := DefinePrompt(reg, "TestExecute", WithInputType(InputOutput{}), WithPrompt("TestExecute"))
@@ -742,7 +742,7 @@ func TestDefaultsOverride(t *testing.T) {
 	// Set up default formats
 	ConfigureFormats(reg)
 
-	testModel := DefineModel(reg, "defineoptions/test", nil, testGenerate)
+	testModel := defineModel(reg, "defineoptions/test", nil, testGenerate)
 	model := definePromptModel(reg)
 
 	tests := []struct {
@@ -1573,7 +1573,7 @@ Generate a recipe for {{food}}.
 	reg := registry.New()
 	ConfigureFormats(reg)
 
-	DefineModel(reg, "test-model", &ModelOptions{
+	defineModel(reg, "test-model", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
 	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		// Mock response that matches the expected schema structure
@@ -1683,7 +1683,7 @@ Generate a recipe.
 	reg := registry.New()
 	ConfigureFormats(reg)
 
-	DefineModel(reg, "test-model", &ModelOptions{
+	defineModel(reg, "test-model", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
 	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{
@@ -1711,7 +1711,7 @@ func TestWithOutputSchemaName_DefinePrompt(t *testing.T) {
 	reg := registry.New()
 	ConfigureFormats(reg)
 
-	DefineModel(reg, "test-model", &ModelOptions{
+	defineModel(reg, "test-model", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
 	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{
@@ -1749,7 +1749,7 @@ func TestWithOutputSchemaName_DefinePrompt_Missing(t *testing.T) {
 	reg := registry.New()
 	ConfigureFormats(reg)
 
-	DefineModel(reg, "test-model", &ModelOptions{
+	defineModel(reg, "test-model", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
 	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{
@@ -1791,7 +1791,7 @@ func TestDataPromptExecute(t *testing.T) {
 	t.Run("typed input and output", func(t *testing.T) {
 		var capturedInput any
 
-		testModel := DefineModel(r, "test/dataPromptModel", &ModelOptions{
+		testModel := defineModel(r, "test/dataPromptModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
@@ -1833,7 +1833,7 @@ func TestDataPromptExecute(t *testing.T) {
 	})
 
 	t.Run("string output type", func(t *testing.T) {
-		testModel := DefineModel(r, "test/stringDataPromptModel", &ModelOptions{
+		testModel := defineModel(r, "test/stringDataPromptModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			return &ModelResponse{
@@ -1872,7 +1872,7 @@ func TestDataPromptExecute(t *testing.T) {
 	t.Run("additional options passed through", func(t *testing.T) {
 		var capturedConfig any
 
-		testModel := DefineModel(r, "test/optionsDataPromptModel", &ModelOptions{
+		testModel := defineModel(r, "test/optionsDataPromptModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
@@ -1910,7 +1910,7 @@ func TestDataPromptExecute(t *testing.T) {
 	})
 
 	t.Run("returns error for invalid output parsing", func(t *testing.T) {
-		testModel := DefineModel(r, "test/parseFailDataPromptModel", &ModelOptions{
+		testModel := defineModel(r, "test/parseFailDataPromptModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
@@ -1949,7 +1949,7 @@ func TestDataPromptExecuteStream(t *testing.T) {
 	}
 
 	t.Run("typed streaming with struct output", func(t *testing.T) {
-		testModel := DefineModel(r, "test/streamDataPromptModel", &ModelOptions{
+		testModel := defineModel(r, "test/streamDataPromptModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
@@ -2006,7 +2006,7 @@ func TestDataPromptExecuteStream(t *testing.T) {
 	})
 
 	t.Run("string output streaming", func(t *testing.T) {
-		testModel := DefineModel(r, "test/stringStreamDataPromptModel", &ModelOptions{
+		testModel := defineModel(r, "test/stringStreamDataPromptModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			if cb != nil {
@@ -2076,7 +2076,7 @@ func TestDataPromptExecuteStream(t *testing.T) {
 	t.Run("handles options passed at execute time", func(t *testing.T) {
 		var capturedConfig any
 
-		testModel := DefineModel(r, "test/optionsStreamModel", &ModelOptions{
+		testModel := defineModel(r, "test/optionsStreamModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
@@ -2119,7 +2119,7 @@ func TestDataPromptExecuteStream(t *testing.T) {
 	t.Run("propagates errors", func(t *testing.T) {
 		expectedErr := errors.New("stream failed")
 
-		testModel := DefineModel(r, "test/errorStreamDataPromptModel", &ModelOptions{
+		testModel := defineModel(r, "test/errorStreamDataPromptModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			return nil, expectedErr
@@ -2147,7 +2147,7 @@ func TestDataPromptExecuteStream(t *testing.T) {
 	})
 
 	t.Run("should not yield after stop", func(t *testing.T) {
-		testModel := DefineModel(r, "test/breakDataPromptStreamModel", &ModelOptions{
+		testModel := defineModel(r, "test/breakDataPromptStreamModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
@@ -2189,7 +2189,7 @@ func TestPromptExecuteStream(t *testing.T) {
 	t.Run("yields chunks then final response", func(t *testing.T) {
 		chunkTexts := []string{"A", "B", "C"}
 
-		testModel := DefineModel(r, "test/promptStreamModel", &ModelOptions{
+		testModel := defineModel(r, "test/promptStreamModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			if cb != nil {
@@ -2260,7 +2260,7 @@ func TestPromptExecuteStream(t *testing.T) {
 	t.Run("handles execution options", func(t *testing.T) {
 		var capturedConfig any
 
-		testModel := DefineModel(r, "test/optionsPromptExecModel", &ModelOptions{
+		testModel := defineModel(r, "test/optionsPromptExecModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			capturedConfig = req.Config
@@ -2295,7 +2295,7 @@ func TestPromptExecuteStream(t *testing.T) {
 	})
 
 	t.Run("should not yield after stop", func(t *testing.T) {
-		testModel := DefineModel(r, "test/breakPromptStreamModel", &ModelOptions{
+		testModel := defineModel(r, "test/breakPromptStreamModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn: true,
 			},
@@ -2337,7 +2337,7 @@ func TestSessionStateInjection(t *testing.T) {
 	t.Run("state accessible in prompt template", func(t *testing.T) {
 		var capturedPrompt string
 
-		testModel := DefineModel(r, "test/sessionStateModel", &ModelOptions{
+		testModel := defineModel(r, "test/sessionStateModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			capturedPrompt = req.Messages[0].Text()
@@ -2376,7 +2376,7 @@ func TestSessionStateInjection(t *testing.T) {
 	t.Run("prompt works without state in context", func(t *testing.T) {
 		var capturedPrompt string
 
-		testModel := DefineModel(r, "test/noSessionModel", &ModelOptions{
+		testModel := defineModel(r, "test/noSessionModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			capturedPrompt = req.Messages[0].Text()
@@ -2411,7 +2411,7 @@ func TestSessionStateInjection(t *testing.T) {
 	t.Run("state and input variables can be used together", func(t *testing.T) {
 		var capturedPrompt string
 
-		testModel := DefineModel(r, "test/mixedModel", &ModelOptions{
+		testModel := defineModel(r, "test/mixedModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			capturedPrompt = req.Messages[0].Text()
