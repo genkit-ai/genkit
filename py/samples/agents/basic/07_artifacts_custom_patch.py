@@ -57,10 +57,8 @@ async def stateful_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult
         prompt_text = ''
         if inp.message and inp.message.content:
             for p in inp.message.content:
-                root = getattr(p, 'root', p)
+                root = p.root
                 if isinstance(root, TextPart) and root.text:
-                    prompt_text += root.text
-                elif hasattr(root, 'text') and root.text:
                     prompt_text += root.text
 
         # 1. Update custom state (typed Progress model)
@@ -76,7 +74,12 @@ async def stateful_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult
         log_content = ''
         for art in existing_artifacts:
             if art.name == 'session_log.md':
-                log_content = ''.join(getattr(getattr(p, 'root', p), 'text', '') for p in art.parts)
+                log_parts: list[str] = []
+                for p in art.parts:
+                    root = p.root
+                    if isinstance(root, TextPart) and root.text:
+                        log_parts.append(root.text)
+                log_content = ''.join(log_parts)
                 break
 
         turn_num = sess.turn_index + 1
@@ -130,7 +133,12 @@ async def main() -> None:
         print(f'{res.state.turns} turn(s), {len(chat.artifacts)} artifact(s)')
         log_art = next((a for a in chat.artifacts if a.name == 'session_log.md'), None)
         if log_art:
-            log_text = ''.join(getattr(getattr(p, 'root', p), 'text', '') for p in log_art.parts)
+            log_parts: list[str] = []
+            for p in log_art.parts:
+                root = p.root
+                if isinstance(root, TextPart) and root.text:
+                    log_parts.append(root.text)
+            log_text = ''.join(log_parts)
             print(f"\nCreated artifact 'session_log.md':\n{log_text}")
 
 
