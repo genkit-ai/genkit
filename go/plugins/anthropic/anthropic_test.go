@@ -20,7 +20,9 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
 // TestModelOptionsKnownModels verifies the curated Claude models resolve through
@@ -81,8 +83,8 @@ func TestModelOptionsKnownVersionedModels(t *testing.T) {
 	}
 }
 
-// TestModelOptionsUnknownFallback verifies models not in knownModels fall back to
-// defaultClaudeOpts (no JSON output) but still get a provider-prefixed label.
+// TestModelOptionsUnknownFallback verifies models not in knownModels fall back
+// to defaultClaudeOpts (no JSON output).
 func TestModelOptionsUnknownFallback(t *testing.T) {
 	const name = "claude-something-unreleased"
 	opts := modelOptions(name)
@@ -93,8 +95,64 @@ func TestModelOptionsUnknownFallback(t *testing.T) {
 	if slices.Contains(opts.Supports.Output, "json") {
 		t.Errorf("modelOptions(%q): unknown model should use default supports without JSON output, got %v", name, opts.Supports.Output)
 	}
-	if want := anthropicLabelPrefix + " - " + name; opts.Label != want {
-		t.Errorf("modelOptions(%q): Label = %q, want %q", name, opts.Label, want)
+}
+
+// TestNewModelDescriptor covers what a built model advertises: a curated label
+// for known models and a name-derived one for the rest, plus the config schema
+// the framework validates every request against.
+func TestNewModelDescriptor(t *testing.T) {
+	tests := []struct {
+		name      string
+		wantLabel string
+	}{
+		{"claude-opus-4-5", anthropicLabelPrefix + " - Claude Opus 4.5"},
+		{"claude-opus-4-5-20251101", anthropicLabelPrefix + " - Claude Opus 4.5"},
+		{"claude-something-unreleased", anthropicLabelPrefix + " - claude-something-unreleased"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			desc := newModel(anthropic.Client{}, tt.name, tt.name, modelOptions(tt.name)).Desc()
+
+			model, ok := desc.Metadata["model"].(map[string]any)
+			if !ok {
+				t.Fatalf("model metadata missing, got %v", desc.Metadata)
+			}
+			if got := model["label"]; got != tt.wantLabel {
+				t.Errorf("label = %v, want %q", got, tt.wantLabel)
+			}
+
+			schema, ok := model["customOptions"].(map[string]any)
+			if !ok {
+				t.Fatalf("customOptions missing, got %v", model["customOptions"])
+			}
+			props, ok := schema["properties"].(map[string]any)
+			if !ok || props["max_tokens"] == nil {
+				t.Errorf("config schema is not the Anthropic message params schema, got %v", schema)
+			}
+		})
+	}
+}
+
+// TestModelConfigIsValidated pins that the config schema reaches the request
+// input schema, so the framework rejects a config the SDK type cannot hold
+// before it reaches the model function.
+func TestModelConfigIsValidated(t *testing.T) {
+	const name = "claude-opus-4-5"
+	inputSchema := newModel(anthropic.Client{}, name, name, modelOptions(name)).Desc().InputSchema
+
+	req := func(config any) *ai.ModelRequest {
+		return &ai.ModelRequest{
+			Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hello"))},
+			Config:   config,
+		}
+	}
+
+	if err := base.ValidateValue(req(map[string]any{"max_tokens": 100, "temperature": 0.4}), inputSchema); err != nil {
+		t.Errorf("config rejected at the action boundary: %v", err)
+	}
+	if err := base.ValidateValue(req(map[string]any{"max_tokens": "lots"}), inputSchema); err == nil {
+		t.Error("expected a mistyped max_tokens to be rejected")
 	}
 }
 
