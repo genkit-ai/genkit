@@ -64,6 +64,12 @@ type ActionDef[In, Out, Stream any] = Action[In, Out, Stream]
 // ActionOptions configures the optional attributes of an [Action]. A nil
 // options value is valid: schemas are inferred from the action's type
 // parameters and the descriptor carries no metadata.
+//
+// Options structs in this package hold descriptor data only (names, schemas,
+// metadata); an action's implementation functions are always positional
+// constructor arguments, with optional ones (e.g. a background action's
+// cancel function) accepting nil. This keeps every options struct non-generic
+// and every constructor reading as: identity, descriptor, implementation.
 type ActionOptions struct {
 	// Description is a human-readable description of the action. When empty,
 	// Metadata["description"] is used if present.
