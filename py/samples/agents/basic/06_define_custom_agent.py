@@ -58,7 +58,7 @@ async def custom_coder_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentRe
 
         res = await stream_resp.response
         if res.message:
-            await sess.add_messages(res.message)
+            await sess.add_messages([res.message])
 
         fr = AgentFinishReason.STOP if res.finish_reason == FinishReason.STOP else AgentFinishReason.UNKNOWN
         return TurnResult(finish_reason=fr)

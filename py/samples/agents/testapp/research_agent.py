@@ -97,7 +97,7 @@ async def research_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult
             ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
         res = await synthesis.response
         if res.message:
-            await sess.add_messages(res.message)
+            await sess.add_messages([res.message])
 
         await sess.update_custom(lambda s: {**(s or {}), 'status': 'Done'})
         return TurnResult(finish_reason=AgentFinishReason.STOP)

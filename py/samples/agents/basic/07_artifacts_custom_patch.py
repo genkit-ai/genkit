@@ -53,7 +53,7 @@ class Progress(BaseModel):
 async def stateful_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
     async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         await sess.update_custom(lambda c: {'turns': (c or {}).get('turns', 0) + 1})
-        await sess.add_artifacts(Artifact(name='status', parts=[Part(TextPart(text=f'turn {sess.turn_index + 1}'))]))
+        await sess.add_artifacts([Artifact(name='status', parts=[Part(TextPart(text=f'turn {sess.turn_index + 1}'))])])
         history = await sess.get_messages()
         messages = [Message(m) for m in history] if history else None
 
@@ -67,7 +67,7 @@ async def stateful_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult
 
         res = await stream_resp.response
         if res.message:
-            await sess.add_messages(res.message)
+            await sess.add_messages([res.message])
 
         fr = AgentFinishReason.STOP if res.finish_reason == FinishReason.STOP else AgentFinishReason.UNKNOWN
         return TurnResult(finish_reason=fr)

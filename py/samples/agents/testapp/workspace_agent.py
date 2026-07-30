@@ -45,7 +45,7 @@ async def write_artifact(input: WriteArtifactInput) -> dict[str, str]:
     # Adding to the session is what makes it stream out as an `artifact` chunk and
     # show up in chat.artifacts; same name replaces the prior version.
     if sess := ai.current_session():
-        await sess.add_artifacts(Artifact(name=input.name, parts=[Part(TextPart(text=input.content))]))
+        await sess.add_artifacts([Artifact(name=input.name, parts=[Part(TextPart(text=input.content))])])
     return {'name': input.name, 'status': 'written'}
 
 

@@ -56,7 +56,7 @@ async def guarded_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         # Server-side state carries a secret the client should never see.
         await sess.update_custom(lambda c: {'answers': (c or {}).get('answers', 0) + 1, 'api_key': 'sk-super-secret'})
         # An internal artifact the client shouldn't receive either.
-        await sess.add_artifacts(Artifact(name='debug', parts=[Part(TextPart(text='internal trace'))]))
+        await sess.add_artifacts([Artifact(name='debug', parts=[Part(TextPart(text='internal trace'))])])
 
         history = await sess.get_messages()
         messages = [Message(m) for m in history] if history else None
@@ -70,7 +70,7 @@ async def guarded_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
 
         res = await stream_resp.response
         if res.message:
-            await sess.add_messages(res.message)
+            await sess.add_messages([res.message])
 
         fr = AgentFinishReason.STOP if res.finish_reason == FinishReason.STOP else AgentFinishReason.UNKNOWN
         return TurnResult(finish_reason=fr)

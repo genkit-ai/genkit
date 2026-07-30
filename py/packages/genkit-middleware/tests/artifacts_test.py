@@ -89,7 +89,7 @@ async def test_write_artifact_uses_current_session(ctx: GenerateMiddlewareContex
 async def test_read_artifact_returns_found(ctx: GenerateMiddlewareContext) -> None:
     mw = Artifacts()
     session = Session(SessionState())
-    await session.add_artifacts(Artifact(name='notes.txt', parts=[Part(TextPart(text='hello'))]))
+    await session.add_artifacts([Artifact(name='notes.txt', parts=[Part(TextPart(text='hello'))])])
 
     async def check() -> None:
         read = next(t for t in mw.tools(ctx) if t.name == 'read_artifact')
@@ -167,7 +167,7 @@ async def test_wrap_generate_refreshes_listing(ctx: GenerateMiddlewareContext) -
 
     async def check() -> None:
         await mw.wrap_generate(_make_params(envelope), ctx, next_fn)
-        await session.add_artifacts(Artifact(name='b.txt', parts=[Part(TextPart(text='x'))]))
+        await session.add_artifacts([Artifact(name='b.txt', parts=[Part(TextPart(text='x'))])])
         await mw.wrap_generate(_make_params(envelope), ctx, next_fn)
 
         assert len(seen) == 2

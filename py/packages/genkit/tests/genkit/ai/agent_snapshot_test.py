@@ -100,7 +100,7 @@ async def test_define_custom_agent_registers_snapshot_and_abort_actions() -> Non
 
     async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
-            await session_runner.add_messages(MessageData(role='model', content=[Part(root=TextPart(text='hi'))]))
+            await session_runner.add_messages([MessageData(role='model', content=[Part(root=TextPart(text='hi'))])])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await session_runner.run(handle_turn)
@@ -159,7 +159,7 @@ async def test_custom_agent_turn_that_raises_resolves_as_failed() -> None:
             text = input_text(inp)
             if 'fail' in text.lower():
                 raise GenkitError(status='INTERNAL', message='boom')
-            await session_runner.add_messages(MessageData(role='model', content=[Part(root=TextPart(text='ok'))]))
+            await session_runner.add_messages([MessageData(role='model', content=[Part(root=TextPart(text='ok'))])])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await session_runner.run(handle_turn)
@@ -199,7 +199,7 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
             text = input_text(inp)
             if 'slow' in text.lower():
                 await asyncio.sleep(1.0)  # keep the turn pending long enough to abort it
-            await session_runner.add_messages(MessageData(role='model', content=[Part(root=TextPart(text='ok'))]))
+            await session_runner.add_messages([MessageData(role='model', content=[Part(root=TextPart(text='ok'))])])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await session_runner.run(handle_turn)
@@ -247,7 +247,7 @@ async def test_load_chat_by_session_skips_aborted_leaf_to_last_resumable() -> No
             text = input_text(inp)
             if 'slow' in text.lower():
                 await asyncio.sleep(1.0)
-            await session_runner.add_messages(MessageData(role='model', content=[Part(root=TextPart(text='ok'))]))
+            await session_runner.add_messages([MessageData(role='model', content=[Part(root=TextPart(text='ok'))])])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await session_runner.run(handle_turn)

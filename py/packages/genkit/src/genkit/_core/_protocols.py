@@ -83,7 +83,7 @@ class SessionLike(Protocol):
         """Return a copy of artifacts currently stored on the session."""
         ...
 
-    async def add_artifacts(self, *artifacts: Artifact) -> None:
+    async def add_artifacts(self, artifacts: list[Artifact]) -> None:
         """Append artifacts, replacing any existing entry with the same name."""
         ...
 
@@ -91,7 +91,7 @@ class SessionLike(Protocol):
         """Return a copy of messages currently stored on the session."""
         ...
 
-    async def add_messages(self, *messages: MessageData) -> None:
+    async def add_messages(self, messages: list[MessageData]) -> None:
         """Append messages to the session history."""
         ...
 

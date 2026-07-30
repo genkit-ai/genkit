@@ -222,7 +222,7 @@ class Session(Generic[StateT]):
         async with self.lock:
             return list(self.session_state.messages or [])
 
-    async def add_messages(self, *messages: MessageData) -> None:
+    async def add_messages(self, messages: list[MessageData]) -> None:
         async with self.lock:
             if self.session_state.messages is None:
                 self.session_state.messages = []
@@ -248,7 +248,7 @@ class Session(Generic[StateT]):
         async with self.lock:
             return list(self.session_state.artifacts or [])
 
-    async def add_artifacts(self, *artifacts: Artifact) -> None:
+    async def add_artifacts(self, artifacts: list[Artifact]) -> None:
         """Append artifacts; replace by name if artifact.name already exists."""
         changed: list[Artifact] = []
         async with self.lock:

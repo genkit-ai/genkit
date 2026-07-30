@@ -46,9 +46,9 @@ async def echo_fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentRe
         if inp.message and inp.message.content:
             root = inp.message.content[0].root
             text = getattr(root, 'text', '') or ''
-        await session_runner.add_messages(
+        await session_runner.add_messages([
             MessageData(role='model', content=[Part(root=TextPart(text=f'Echo: {text}'))])
-        )
+        ])
         return TurnResult(finish_reason=AgentFinishReason.STOP)
 
     await session_runner.run(handle_turn)

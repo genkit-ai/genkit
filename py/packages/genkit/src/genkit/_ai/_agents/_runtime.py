@@ -136,7 +136,7 @@ class SessionRunner(Generic[StateT]):
         async for inp in self.turn_inputs:
             # Auto-add inbound messages to session history
             if inp.message:
-                await self.session.add_messages(inp.message)
+                await self.session.add_messages([inp.message])
 
             parent_snapshot_id = self.get_parent_snapshot_id() if self.get_parent_snapshot_id else None
             # Reserve the turn's snapshot id up front (when a store is configured)
@@ -210,14 +210,14 @@ class SessionRunner(Generic[StateT]):
     async def set_messages(self, messages: list[MessageData]) -> None:
         await self.session.set_messages(messages)
 
-    async def add_messages(self, *messages: MessageData) -> None:
-        await self.session.add_messages(*messages)
+    async def add_messages(self, messages: list[MessageData]) -> None:
+        await self.session.add_messages(messages)
 
     async def get_artifacts(self) -> list[Artifact]:
         return await self.session.get_artifacts()
 
-    async def add_artifacts(self, *artifacts: Artifact) -> None:
-        await self.session.add_artifacts(*artifacts)
+    async def add_artifacts(self, artifacts: list[Artifact]) -> None:
+        await self.session.add_artifacts(artifacts)
 
     async def get_custom(self) -> StateT | None:
         return await self.session.get_custom()

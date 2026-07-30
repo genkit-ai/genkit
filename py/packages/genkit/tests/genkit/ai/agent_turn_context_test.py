@@ -56,7 +56,7 @@ async def test_handler_receives_reserved_id_reused_on_persisted_snapshot() -> No
             seen['snapshot_id'] = turn_ctx.snapshot_id
             seen['parent_snapshot_id'] = turn_ctx.parent_snapshot_id
             seen['turn_index'] = turn_ctx.turn_index
-            await session_runner.add_messages(MessageData(role='model', content=[Part(root=TextPart(text='ok'))]))
+            await session_runner.add_messages([MessageData(role='model', content=[Part(root=TextPart(text='ok'))])])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await session_runner.run(handle_turn)
@@ -86,7 +86,7 @@ async def test_second_turn_parent_is_first_turn_snapshot() -> None:
             assert turn_ctx.snapshot_id is not None
             snapshot_ids.append(turn_ctx.snapshot_id)
             parent_ids.append(turn_ctx.parent_snapshot_id)
-            await session_runner.add_messages(MessageData(role='model', content=[Part(root=TextPart(text='ok'))]))
+            await session_runner.add_messages([MessageData(role='model', content=[Part(root=TextPart(text='ok'))])])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await session_runner.run(handle_turn)
@@ -110,7 +110,7 @@ async def test_no_store_means_no_reserved_snapshot_id() -> None:
     async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
         async def handle_turn(_: AgentInput, turn_ctx: TurnContext) -> TurnResult | None:
             seen['snapshot_id'] = turn_ctx.snapshot_id
-            await session_runner.add_messages(MessageData(role='model', content=[Part(root=TextPart(text='ok'))]))
+            await session_runner.add_messages([MessageData(role='model', content=[Part(root=TextPart(text='ok'))])])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await session_runner.run(handle_turn)
@@ -134,12 +134,12 @@ async def test_handler_can_name_external_dir_after_reserved_id(tmp_path: Path) -
             work = workspace_root / turn_ctx.snapshot_id
             work.mkdir(parents=True)
             (work / 'notes.txt').write_text('drafted during the turn\n', encoding='utf-8')
-            await session_runner.add_messages(
+            await session_runner.add_messages([
                 MessageData(
                     role='model',
                     content=[Part(root=TextPart(text=f'wrote {work / "notes.txt"}'))],
                 )
-            )
+            ])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await session_runner.run(handle_turn)

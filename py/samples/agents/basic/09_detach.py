@@ -83,7 +83,7 @@ async def long_task_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
             tools=[slow_work_closure],
         )
         if res.message:
-            await sess.add_messages(res.message)
+            await sess.add_messages([res.message])
         fr = AgentFinishReason.STOP if res.finish_reason == FinishReason.STOP else AgentFinishReason.UNKNOWN
         return TurnResult(finish_reason=fr)
 
