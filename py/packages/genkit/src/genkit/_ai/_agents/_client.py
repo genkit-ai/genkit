@@ -824,15 +824,12 @@ class TurnDriver(Generic[StateT]):
             raise
         except Exception as e:
             wrapped = self.on_turn_error(e) if self.on_turn_error is not None else e
-            if not self.output.done():
-                self.output.set_exception(wrapped)
             if self.chunks is not None:
                 # Streaming path: callers retrieve the error via turn.response / stream.
+                # send() never exposes self.output, so leave it untouched and re-raise.
+                if not self.output.done():
+                    self.output.set_exception(wrapped)
                 self.chunks.put_nowait(wrapped)
-            else:
-                # send() path: we re-raise below; mark the future exception retrieved
-                # so asyncio doesn't warn about an orphaned Future.
-                self.output.exception()
             raise wrapped from e
         finally:
             # Closing wakes the stream consumer once buffered chunks drain, so the
