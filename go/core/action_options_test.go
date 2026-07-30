@@ -132,3 +132,21 @@ func TestDeprecatedConstructorsDelegate(t *testing.T) {
 		t.Errorf("descriptors diverge:\nold: %+v\nnew: %+v", oldA.Desc(), newA.Desc())
 	}
 }
+
+// TestRegisterClearsDynamicMarker pins that the "dynamic" metadata marker
+// ("created at runtime, outside any registry") is registration-derived: it
+// survives on detached actions and is removed when the action registers.
+func TestRegisterClearsDynamicMarker(t *testing.T) {
+	r := registry.New()
+	a := NewActionOf(api.ActionTypeCustom, "detached", &ActionOptions{
+		Metadata: map[string]any{"dynamic": true},
+	}, func(ctx context.Context, s string) (string, error) { return s, nil })
+
+	if v, ok := a.Desc().Metadata["dynamic"]; !ok || v != true {
+		t.Fatalf("unregistered action missing dynamic marker: %v", a.Desc().Metadata)
+	}
+	a.Register(r)
+	if _, ok := a.Desc().Metadata["dynamic"]; ok {
+		t.Errorf("registered action still carries dynamic marker: %v", a.Desc().Metadata)
+	}
+}
