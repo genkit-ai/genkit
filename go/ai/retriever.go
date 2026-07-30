@@ -159,9 +159,7 @@ func (r *retriever) Retrieve(ctx context.Context, req *RetrieverRequest) (*Retri
 func Retrieve(ctx context.Context, r api.Registry, opts ...RetrieverOption) (*RetrieverResponse, error) {
 	retOpts := &retrieverOptions{}
 	for _, opt := range opts {
-		if err := opt.applyRetriever(retOpts); err != nil {
-			return nil, fmt.Errorf("ai.Retrieve: error applying options: %w", err)
-		}
+		opt.applyRetriever(retOpts)
 	}
 
 	if len(retOpts.Documents) > 1 {

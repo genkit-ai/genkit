@@ -140,54 +140,49 @@ type RespondOptions struct {
 
 // RespondWithOption is a functional option for [ToolDef.RespondWith].
 type RespondWithOption[Out any] interface {
-	applyRespondWith(*RespondOptions) error
+	applyRespondWith(*RespondOptions)
 }
 
-// applyRespondWith applies the option to the respond options.
-func (o *RespondOptions) applyRespondWith(opts *RespondOptions) error {
+// applyRespondWith applies the option to the respond options. Metadata is a
+// single-value slot, so the last [WithResponseMetadata] set wins.
+func (o *RespondOptions) applyRespondWith(opts *RespondOptions) {
 	if o.Metadata != nil {
-		if opts.Metadata != nil {
-			return errors.New("cannot set metadata more than once (WithResponseMetadata)")
-		}
 		opts.Metadata = o.Metadata
 	}
-	return nil
 }
 
-// WithResponseMetadata sets metadata for the response.
+// WithResponseMetadata sets metadata for the response. Repeating this option
+// replaces the metadata rather than merging it.
 func WithResponseMetadata[Out any](meta map[string]any) RespondWithOption[Out] {
 	return &RespondOptions{Metadata: meta}
 }
 
 // RestartWithOption is a functional option for [ToolDef.RestartWith].
 type RestartWithOption[In any] interface {
-	applyRestartWith(*RestartOptions) error
+	applyRestartWith(*RestartOptions)
 }
 
-// applyRestartWith applies the option to the restart options.
-func (o *RestartOptions) applyRestartWith(opts *RestartOptions) error {
+// applyRestartWith applies the option to the restart options. The replacement
+// input and the resumed metadata are independent single-value slots, so the
+// last option to set each one wins.
+func (o *RestartOptions) applyRestartWith(opts *RestartOptions) {
 	if o.ReplaceInput != nil {
-		if opts.ReplaceInput != nil {
-			return errors.New("cannot set new input more than once (WithNewInput)")
-		}
 		opts.ReplaceInput = o.ReplaceInput
 	}
 	if o.ResumedMetadata != nil {
-		if opts.ResumedMetadata != nil {
-			return errors.New("cannot set resumed metadata more than once (WithResumedMetadata)")
-		}
 		opts.ResumedMetadata = o.ResumedMetadata
 	}
-	return nil
 }
 
 // WithNewInput sets a new input value to replace the original tool request input.
+// Repeating this option takes the last input set.
 func WithNewInput[In any](input In) RestartWithOption[In] {
 	return &RestartOptions{ReplaceInput: input}
 }
 
 // WithResumedMetadata sets metadata to pass to the resumed tool execution.
 // The metadata will be available in the tool's [ToolContext.Resumed] field.
+// Repeating this option replaces the metadata rather than merging it.
 func WithResumedMetadata[In any](meta map[string]any) RestartWithOption[In] {
 	return &RestartOptions{ResumedMetadata: meta}
 }
@@ -310,9 +305,7 @@ func DefineTool[In, Out any](
 ) *ToolDef[In, Out] {
 	toolOpts := &toolOptions{}
 	for _, opt := range opts {
-		if err := opt.applyTool(toolOpts); err != nil {
-			panic(fmt.Errorf("ai.DefineTool %q: %w", name, err))
-		}
+		opt.applyTool(toolOpts)
 	}
 
 	// If the user provided a custom input schema, enforce that In is 'any'
@@ -351,9 +344,7 @@ func DefineToolWithInputSchema[Out any](
 func NewTool[In, Out any](name, description string, fn ToolFunc[In, Out], opts ...ToolOption) *ToolDef[In, Out] {
 	toolOpts := &toolOptions{}
 	for _, opt := range opts {
-		if err := opt.applyTool(toolOpts); err != nil {
-			panic(fmt.Errorf("ai.NewTool %q: %w", name, err))
-		}
+		opt.applyTool(toolOpts)
 	}
 
 	// If the user provided a custom input schema, enforce that In is 'any'
@@ -390,9 +381,7 @@ func DefineMultipartTool[In any](
 ) *ToolDef[In, *MultipartToolResponse] {
 	toolOpts := &toolOptions{}
 	for _, opt := range opts {
-		if err := opt.applyTool(toolOpts); err != nil {
-			panic(fmt.Errorf("ai.DefineMultipartTool %q: %w", name, err))
-		}
+		opt.applyTool(toolOpts)
 	}
 
 	metadata, wrappedFn := wrapMultipartToolFunc(name, description, fn)
@@ -407,9 +396,7 @@ func DefineMultipartTool[In any](
 func NewMultipartTool[In any](name, description string, fn MultipartToolFunc[In], opts ...ToolOption) *ToolDef[In, *MultipartToolResponse] {
 	toolOpts := &toolOptions{}
 	for _, opt := range opts {
-		if err := opt.applyTool(toolOpts); err != nil {
-			panic(fmt.Errorf("ai.NewMultipartTool %q: %w", name, err))
-		}
+		opt.applyTool(toolOpts)
 	}
 
 	metadata, wrappedFn := wrapMultipartToolFunc(name, description, fn)
@@ -690,9 +677,7 @@ func (t *ToolDef[In, Out]) RespondWith(toolReq *Part, output Out, opts ...Respon
 
 	cfg := &RespondOptions{}
 	for _, opt := range opts {
-		if err := opt.applyRespondWith(cfg); err != nil {
-			return nil, status.Errorf(status.ErrInvalidArgument, "ai.RespondWith: %w", err)
-		}
+		opt.applyRespondWith(cfg)
 	}
 
 	newToolResp := NewResponseForToolRequest(toolReq, output)
@@ -724,9 +709,7 @@ func (t *ToolDef[In, Out]) RestartWith(toolReq *Part, opts ...RestartWithOption[
 
 	cfg := &RestartOptions{}
 	for _, opt := range opts {
-		if err := opt.applyRestartWith(cfg); err != nil {
-			return nil, status.Errorf(status.ErrInvalidArgument, "ai.RestartWith: %w", err)
-		}
+		opt.applyRestartWith(cfg)
 	}
 
 	newInput := toolReq.ToolRequest.Input

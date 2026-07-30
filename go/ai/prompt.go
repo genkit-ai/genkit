@@ -73,9 +73,7 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 
 	pOpts := &promptOptions{}
 	for _, opt := range opts {
-		if err := opt.applyPrompt(pOpts); err != nil {
-			panic(fmt.Errorf("ai.DefinePrompt: error applying options: %w", err))
-		}
+		opt.applyPrompt(pOpts)
 	}
 
 	p := &prompt{
@@ -161,9 +159,7 @@ func (p *prompt) Execute(ctx context.Context, opts ...PromptExecuteOption) (*Mod
 
 	execOpts := &promptExecutionOptions{}
 	for _, opt := range opts {
-		if err := opt.applyPromptExecute(execOpts); err != nil {
-			return nil, fmt.Errorf("Prompt.Execute: error applying options: %w", err)
-		}
+		opt.applyPromptExecute(execOpts)
 	}
 	// Render() should populate all data from the prompt. Prompt fields should
 	// *not* be referenced in this function as it may have been loaded from

@@ -592,9 +592,7 @@ func buildToolRunner(mws []*Hooks) func(ctx context.Context, tool Tool, req *Too
 func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*ModelResponse, error) {
 	genOpts := &generateOptions{}
 	for _, opt := range opts {
-		if err := opt.applyGenerate(genOpts); err != nil {
-			return nil, status.Errorf(status.ErrInvalidArgument, "ai.Generate: error applying options: %w", err)
-		}
+		opt.applyGenerate(genOpts)
 	}
 
 	if genOpts.OutputSchema != nil {
@@ -726,7 +724,11 @@ func GenerateText(ctx context.Context, r api.Registry, opts ...GenerateOption) (
 // Check resp.Interrupts() or resp.ToolRequests() to handle these cases.
 func GenerateData[Out any](ctx context.Context, r api.Registry, opts ...GenerateOption) (*Out, *ModelResponse, error) {
 	var value Out
-	opts = append(opts, WithOutputType(value))
+	// Prepend the inferred output type so an explicit WithOutputSchema or
+	// WithOutputSchemaName passed by the caller wins the schema slot (last set
+	// wins). The typed Out still drives value extraction below, so structured
+	// output keeps working whether or not the caller overrode the schema.
+	opts = append([]GenerateOption{WithOutputType(value)}, opts...)
 
 	resp, err := Generate(ctx, r, opts...)
 	if err != nil {

@@ -315,9 +315,7 @@ func (e *evaluator) Evaluate(ctx context.Context, req *EvaluatorRequest) (*Evalu
 func Evaluate(ctx context.Context, r api.Registry, opts ...EvaluatorOption) (*EvaluatorResponse, error) {
 	evalOpts := &evaluatorOptions{}
 	for _, opt := range opts {
-		if err := opt.applyEvaluator(evalOpts); err != nil {
-			return nil, err
-		}
+		opt.applyEvaluator(evalOpts)
 	}
 
 	if evalOpts.Evaluator == nil {
