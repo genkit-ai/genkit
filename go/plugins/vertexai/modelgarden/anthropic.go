@@ -72,8 +72,7 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 	// Models must be defined manually
 	var actions []api.Action
 	for name, opts := range AnthropicModels {
-		model := ant.DefineModel(a.client, provider, name, opts)
-		actions = append(actions, model.(api.Action))
+		actions = append(actions, ant.NewModel(a.client, provider, name, name, opts))
 	}
 
 	return actions
@@ -95,5 +94,5 @@ func (a *Anthropic) DefineModel(name string, opts *ai.ModelOptions) (ai.Model, e
 	if opts == nil {
 		return nil, fmt.Errorf("DefineModel called with nil ai.ModelOptions")
 	}
-	return ant.DefineModel(a.client, provider, name, *opts), nil
+	return ant.NewModel(a.client, provider, name, name, *opts), nil
 }

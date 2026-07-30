@@ -18,7 +18,6 @@ package anthropic
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"regexp"
@@ -100,21 +99,18 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 // Use [IsDefinedModel] to determine if a model is already defined.
 // After [Init] is called, only the known models are defined.
 func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
-	return ant.DefineModel(a.aclient, provider, name, *opts), nil
+	return newModel(a.aclient, name, name, *opts), nil
 }
 
 // modelOptions returns the ModelOptions for a Claude model name. Known models
-// (see knownModels) carry curated capabilities; any other model falls back to
-// defaultClaudeOpts. The returned options always carry a provider-prefixed
-// label. This is the single source of model capabilities shared by ListActions
+// (see knownModels) carry curated capabilities and labels; any other model
+// falls back to defaultClaudeOpts, whose label newModel fills in from the
+// name. This is the single source of model capabilities shared by ListActions
 // and ResolveAction, mirroring the JS plugin's claudeModelReference.
 func modelOptions(name string) ai.ModelOptions {
 	opts, ok := knownModels[baseModelName(name)]
 	if !ok {
 		opts = defaultClaudeOpts
-	}
-	if opts.Label == "" {
-		opts.Label = fmt.Sprintf("%s - %s", anthropicLabelPrefix, name)
 	}
 	return opts
 }
@@ -132,10 +128,7 @@ func (a *Anthropic) ListActions(ctx context.Context) []api.ActionDesc {
 	for _, name := range models {
 		// When listing discovered models, the Genkit action name and the
 		// Anthropic API model ID are identical.
-		model := newModel(a.aclient, name, name, modelOptions(name))
-		if action, ok := model.(api.Action); ok {
-			actions = append(actions, action.Desc())
-		}
+		actions = append(actions, newModel(a.aclient, name, name, modelOptions(name)).Desc())
 	}
 
 	return actions
@@ -169,7 +162,7 @@ func (a *Anthropic) ResolveAction(atype api.ActionType, id string) api.Action {
 
 		// We register the model using the ID requested by the user, but
 		// use the resolved 'realID' (e.g. versioned) for actual API calls.
-		return newModel(a.aclient, id, realID, modelOptions(id)).(api.Action)
+		return newModel(a.aclient, id, realID, modelOptions(id))
 	}
 	return nil
 }
@@ -193,32 +186,11 @@ func (a *Anthropic) getModels(ctx context.Context) ([]string, error) {
 	return models, nil
 }
 
-// newModel creates a model wihout registering it
-func newModel(client anthropic.Client, name, apiModelName string, opts ai.ModelOptions) ai.Model {
-	config := &anthropic.MessageNewParams{}
-
-	meta := &ai.ModelOptions{
-		Label:        opts.Label,
-		Supports:     opts.Supports,
-		Versions:     opts.Versions,
-		ConfigSchema: ant.ConfigSchema(config),
-		Stage:        opts.Stage,
-	}
-
-	targetModel := name
-	if apiModelName != "" {
-		targetModel = apiModelName
-	}
-
-	fn := func(
-		ctx context.Context,
-		input *ai.ModelRequest,
-		cb func(context.Context, *ai.ModelResponseChunk) error,
-	) (*ai.ModelResponse, error) {
-		return ant.Generate(ctx, client, provider, targetModel, input, cb)
-	}
-
-	return ai.NewModel(api.NewName(provider, name), meta, fn)
+// newModel creates a model without registering it. name is the Genkit action
+// name and apiModelName is the model ID sent to the API, which differ when the
+// name is an alias for a dated release.
+func newModel(client anthropic.Client, name, apiModelName string, opts ai.ModelOptions) *ai.ModelAction {
+	return ant.NewModel(client, provider, name, apiModelName, opts)
 }
 
 func baseModelName(name string) string {
