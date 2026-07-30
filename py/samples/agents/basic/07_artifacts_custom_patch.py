@@ -17,11 +17,11 @@
 
 """Stream live state patches as a typed model and accumulate artifacts.
 
-A custom turn bumps a counter and writes an artifact before answering. Declaring a
-``state_schema`` means the custom state comes back as that model — so ``chat.state``,
-``response.state``, and each streamed ``chunk.custom`` are a ``Progress`` with typed
-attribute access, not a bare dict. This is the state model behind a live-updating
-agent UI. Requires GEMINI_API_KEY.
+A custom turn bumps a state counter and maintains a live `session_log.md` artifact
+before answering. Declaring a ``state_schema`` means custom state comes back as a
+typed model — so ``chat.state``, ``response.state``, and each streamed ``chunk.custom``
+are a ``Progress`` model with typed attribute access. This demonstrates how live state
+and session artifacts work together in a custom agent turn. Requires GEMINI_API_KEY.
 """
 
 from __future__ import annotations
@@ -48,12 +48,49 @@ store = InMemorySessionStore()
 
 class Progress(BaseModel):
     turns: int = 0
+    last_prompt: str | None = None
 
 
 async def stateful_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
     async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
-        await sess.update_custom(lambda c: {'turns': (c or {}).get('turns', 0) + 1})
-        await sess.add_artifacts(Artifact(name='status', parts=[Part(TextPart(text=f'turn {sess.turn_index + 1}'))]))
+        # Extract user input text if present
+        prompt_text = ''
+        if inp.message and inp.message.content:
+            for p in inp.message.content:
+                root = getattr(p, 'root', p)
+                if isinstance(root, TextPart) and root.text:
+                    prompt_text += root.text
+                elif hasattr(root, 'text') and root.text:
+                    prompt_text += root.text
+
+        # 1. Update custom state (typed Progress model)
+        await sess.update_custom(
+            lambda c: {
+                'turns': (c or {}).get('turns', 0) + 1,
+                'last_prompt': prompt_text or (c or {}).get('last_prompt'),
+            }
+        )
+
+        # 2. Append turn log entry to session_log.md artifact
+        existing_artifacts = await sess.get_artifacts()
+        log_content = ''
+        for art in existing_artifacts:
+            if art.name == 'session_log.md':
+                log_content = ''.join(getattr(getattr(p, 'root', p), 'text', '') for p in art.parts)
+                break
+
+        turn_num = sess.turn_index + 1
+        entry_text = prompt_text or 'Turn request'
+        log_content += f'### Turn {turn_num}\n- **Prompt**: {entry_text}\n\n'
+
+        await sess.add_artifacts(
+            Artifact(
+                name='session_log.md',
+                parts=[Part(TextPart(text=log_content))],
+            )
+        )
+
+        # 3. Stream model response
         history = await sess.get_messages()
         messages = [Message(m) for m in history] if history else None
 
@@ -82,21 +119,19 @@ agent = ai.define_custom_agent(name='statefulAgent', fn=stateful_fn, store=store
 async def main() -> None:
     chat = agent.chat()  # AgentChat[Progress] — state is typed
 
-    # Text and live state stream through the same chunk — the two halves a
-    # live-updating component renders. accumulated_text is the reply so far;
-    # chunk.custom is the Progress model after each patch, so reading
-    # chunk.custom.turns is typed attribute access, never chunk.custom['turns'].
     turn = chat.send('Go')
     async for chunk in turn.stream:
         if chunk.custom is not None:
             print(f'\rturn {chunk.custom.turns} · {chunk.accumulated_text}', end='', flush=True)
     print()
 
-    # state_schema materializes the wire blob into the model on the way out, so
-    # the awaited response and the chat handle both expose .turns, not ['turns'].
     res = await turn.response
     if res.state is not None:
         print(f'{res.state.turns} turn(s), {len(chat.artifacts)} artifact(s)')
+        log_art = next((a for a in chat.artifacts if a.name == 'session_log.md'), None)
+        if log_art:
+            log_text = ''.join(getattr(getattr(p, 'root', p), 'text', '') for p in log_art.parts)
+            print(f"\nCreated artifact 'session_log.md':\n{log_text}")
 
 
 if __name__ == '__main__':
