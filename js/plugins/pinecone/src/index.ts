@@ -31,6 +31,7 @@ import {
   retrieverRef,
 } from 'genkit/retriever';
 import { Md5 } from 'ts-md5';
+import { toPineconeQuery } from './query.js';
 
 const SparseVectorSchema = z
   .object({
@@ -185,12 +186,9 @@ export function configurePineconeRetriever<
       const scopedIndex = !!options.namespace
         ? index.namespace(options.namespace)
         : index;
-      const response = await scopedIndex.query({
-        topK: options.k,
-        vector: queryEmbeddings[0].embedding,
-        includeValues: false,
-        includeMetadata: true,
-      });
+      const response = await scopedIndex.query(
+        toPineconeQuery(options, queryEmbeddings[0].embedding)
+      );
       return {
         documents: response.matches
           .map((m) => m.metadata)
