@@ -56,10 +56,6 @@ def configure_logging(*, shared_tty: bool | None = None) -> None:
         logging.getLogger(name).setLevel(quiet_level)
 
 
-# Configure logger levels on import
-configure_logging()
-
-
 def get_logger(name: str | None = None) -> FilteringBoundLogger:
     """Return a structlog bound logger with a concrete return type for checkers."""
     return structlog.get_logger(name)
