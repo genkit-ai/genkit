@@ -867,8 +867,15 @@ class Genkit:
             app = create_reflection_asgi_app(registry=self.registry)
             level = resolve_level()
             is_debug = level <= logging.DEBUG
-            level_name = logging.getLevelName(level).lower()
-            log_level = 'warning' if level_name in ('info', 'warning', 'warn') else level_name
+            if level <= logging.DEBUG:
+                log_level = 'debug'
+            elif level <= logging.WARNING:
+                log_level = 'warning'
+            elif level <= logging.ERROR:
+                log_level = 'error'
+            else:
+                log_level = 'critical'
+
             config = uvicorn.Config(
                 app,
                 host=spec.host,
