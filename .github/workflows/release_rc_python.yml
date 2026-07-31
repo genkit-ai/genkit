@@ -34,7 +34,7 @@ jobs:
       contents: write
     steps:
       # Checkout main so we can branch from it. Token needed for push later.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           token: ${{ secrets.GENKIT_RELEASER_GITHUB_TOKEN }}
           fetch-depth: 0
@@ -44,7 +44,7 @@ jobs:
         run: git pull origin main && git fetch --tags
 
       # uv used for uv lock after bump
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           python-version: "3.12"
