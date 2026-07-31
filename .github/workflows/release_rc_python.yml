@@ -34,7 +34,7 @@ jobs:
       contents: write
     steps:
       # Checkout main so we can branch from it. Token needed for push later.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GENKIT_RELEASER_GITHUB_TOKEN }}
           fetch-depth: 0
@@ -44,7 +44,7 @@ jobs:
         run: git pull origin main && git fetch --tags
 
       # uv used for uv lock after bump
-      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+      - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
           python-version: "3.12"
@@ -52,11 +52,9 @@ jobs:
 
       - name: Create release branch & bump version
         id: rc
-        env:
-          INPUT_TARGET_VERSION: ${{ inputs.target_version }}
         run: |
           set -e
-          TARGET="$INPUT_TARGET_VERSION"
+          TARGET="${{ inputs.target_version }}"
           [[ "$TARGET" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Error: target_version must be X.Y.Z"; exit 1; }
           # Next RC number: find highest existing py/v0.5.2-rc.N, add 1 (or 1 if none)
           EXISTING=$(git tag -l "py/v${TARGET}-rc.*" 2>/dev/null | sed -n 's/.*-rc\.\([0-9]*\)$/\1/p' | sort -n | tail -1)
@@ -69,7 +67,7 @@ jobs:
           git config user.email "genkit-releaser@google.com" && git config user.name "genkit-releaser"
           git checkout -b "${BRANCH}"
           cd py
-          for f in packages/genkit/pyproject.toml packages/*/pyproject.toml; do
+          for f in packages/genkit/pyproject.toml plugins/*/pyproject.toml; do
             [ -f "$f" ] && grep -q "version = \"$CUR\"" "$f" && sed -i "s/version = \"$CUR\"/version = \"$NEW\"/" "$f"
           done
           uv lock && cd ..
@@ -82,5 +80,4 @@ jobs:
       - name: Create tag & GitHub release
         env:
           GH_TOKEN: ${{ secrets.GENKIT_RELEASER_GITHUB_TOKEN }}
-          RC_VERSION: ${{ steps.rc.outputs.new }}
-        run: gh release create "py/v${RC_VERSION}" --target "release/py/${RC_VERSION}" --title "Genkit Python SDK v${RC_VERSION}" --notes "Release candidate." --prerelease
+        run: gh release create "py/v${{ steps.rc.outputs.new }}" --target "release/py/${{ steps.rc.outputs.new }}" --title "Genkit Python SDK v${{ steps.rc.outputs.new }}" --notes "Release candidate." --prerelease
