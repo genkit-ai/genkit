@@ -11,8 +11,7 @@ you can use Genkit independently of any Google services.
 ## Setup Instructions
 
 ```bash
-pip install genkit
-pip install genkit-plugin-google-genai
+uv add genkit genkit-google-genai
 ```
 
 
@@ -23,7 +22,7 @@ from genkit_google_genai import GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-2.0-flash',
+    model='googleai/gemini-flash-latest',
 )
 
 

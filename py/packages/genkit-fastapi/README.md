@@ -5,30 +5,28 @@ Serve Genkit flows as FastAPI endpoints.
 ## Installation
 
 ```bash
-pip install genkit-plugin-fastapi
+uv add genkit-fastapi genkit-google-genai
 ```
 
 ## Usage
 
+```python
 from fastapi import FastAPI
 from genkit import Genkit
 from genkit_fastapi import genkit_fastapi_handler
 from genkit_google_genai import GoogleAI
 
-ai = Genkit(plugins=[GoogleAI()])
+ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
 app = FastAPI()
 
 
+@app.post('/chat', response_model=None)
+@genkit_fastapi_handler(ai)
 @ai.flow()
 async def chat_flow(prompt: str) -> str:
     response = await ai.generate(prompt=prompt)
     return response.text
-
-
-@app.post('/chat')
-@genkit_fastapi_handler(ai)
-async def chat():
-    return chat_flow
+```
 
 ## Running
 

@@ -5,9 +5,7 @@ This Genkit plugin provides a unified interface for Google AI (Gemini) and Verte
 ## Setup environment
 
 ```bash
-uv venv
-source .venv/bin/activate
-pip install genkit-plugins-google-genai
+uv add genkit genkit-google-genai
 ```
 
 ## Configuration
@@ -32,7 +30,7 @@ gcloud auth application-default login
 
 ### Dynamic Models
 
-The plugin automatically discovers available models from the API upon initialization. You can use any model name supported by the API (e.g., `googleai/gemini-2.0-flash-exp`, `vertexai/gemini-1.5-pro`).
+The plugin automatically discovers available models from the API upon initialization. You can use any model name supported by the API (e.g., `googleai/gemini-flash-latest`, `vertexai/gemini-2.5-pro`).
 
 ### Dynamic Configuration
 
@@ -47,40 +45,13 @@ config = GeminiConfigSchema.model_validate({
 })
 ```
 
-### Vertex AI Rerankers
-
-The VertexAI plugin provides semantic rerankers for improving RAG quality by re-scoring documents based on relevance:
-
-```python
-from genkit import Genkit
-from genkit_google_genai import VertexAI
-
-ai = Genkit(plugins=[VertexAI(project='my-project')])
-
-# Rerank documents after retrieval
-ranked_docs = await ai.rerank(
-    reranker='vertexai/semantic-ranker-default@latest',
-    query='What is machine learning?',
-    documents=retrieved_docs,
-    options={'top_n': 5},
-)
-```
-
-**Supported Models:**
-
-| Model | Description |
-|-------|-------------|
-| `semantic-ranker-default@latest` | Latest default semantic ranker |
-| `semantic-ranker-default-004` | Semantic ranker version 004 |
-| `semantic-ranker-fast-004` | Fast variant (lower latency) |
-
 ### Vertex AI Evaluators
 
 Built-in evaluators for assessing model output quality. Evaluators are automatically registered when using the VertexAI plugin and are accessed via `ai.evaluate()`:
 
 ```python
 from genkit import Genkit
-from genkit._core.typing import BaseDataPoint
+from genkit.evaluator import BaseDataPoint
 from genkit_google_genai import VertexAI
 
 ai = Genkit(plugins=[VertexAI(project='my-project')])
@@ -104,22 +75,22 @@ for result in results.root:
 ```
 
 
-**Supported Metrics:**
+**Supported evaluators:**
 
-| Metric | Description |
-|--------|-------------|
-| `BLEU` | Translation quality (compare to reference) |
-| `ROUGE` | Summarization quality |
-| `FLUENCY` | Language mastery and readability |
-| `SAFETY` | Harmful/inappropriate content detection |
-| `GROUNDEDNESS` | Hallucination detection |
-| `SUMMARIZATION_QUALITY` | Overall summarization ability |
+| Evaluator | Description |
+|-----------|-------------|
+| `vertexai/bleu` | Translation quality (compare to reference) |
+| `vertexai/rouge` | Summarization quality |
+| `vertexai/fluency` | Language mastery and readability |
+| `vertexai/safety` | Harmful/inappropriate content detection |
+| `vertexai/groundedness` | Hallucination detection |
+| `vertexai/summarization_quality` | Overall summarization ability |
 
 ## Examples
 
 For comprehensive usage examples, see:
 
-- [`py/samples/google-genai-media/README.md`](../../samples/google-genai-media/README.md) - Speech, image, and video generation
-- [`py/samples/gemini-code-execution/README.md`](../../samples/gemini-code-execution/README.md) - Gemini code execution
-- [`py/samples/gemini-context-caching/README.md`](../../samples/gemini-context-caching/README.md) - Context caching for large prompts
-- [`py/samples/vertexai-imagen/README.md`](../../samples/vertexai-imagen/README.md) - Vertex AI Imagen generation
+- [google-genai-media](https://github.com/genkit-ai/genkit/tree/main/py/samples/google-genai-media) - Speech, image, and video generation
+- [gemini-code-execution](https://github.com/genkit-ai/genkit/tree/main/py/samples/gemini-code-execution) - Gemini code execution
+- [gemini-context-caching](https://github.com/genkit-ai/genkit/tree/main/py/samples/gemini-context-caching) - Context caching for large prompts
+- [vertexai-imagen](https://github.com/genkit-ai/genkit/tree/main/py/samples/vertexai-imagen) - Vertex AI Imagen generation

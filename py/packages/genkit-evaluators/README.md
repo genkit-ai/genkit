@@ -11,28 +11,32 @@ No LLM or API keys required.
 ## Installation
 
 ```bash
-pip install genkit-plugin-evaluators
+uv add genkit-evaluators
 ```
 
 ## Usage
 
 ```python
 from genkit import Genkit
-from genkit_evaluators import GenkitEval
+from genkit.evaluator import BaseDataPoint
+from genkit_evaluators import register_genkit_evaluators
 
-ai = Genkit(plugins=[GenkitEval()])
+ai = Genkit()
+register_genkit_evaluators(ai)
 
-# Run evaluation with genkit eval-flow or programmatically
-evaluator = await ai.registry.resolve_evaluator('genkitEval/regex')
-result = await evaluator.run(
-    input={
-        'dataset': [
-            {'input': 'sample', 'output': 'banana', 'reference': 'ba?a?a'},
-            {'input': 'sample', 'output': 'apple', 'reference': 'ba?a?a'},
-        ],
-        'evalRunId': 'test',
-    }
+results = await ai.evaluate(
+    evaluator='genkitEval/regex',
+    dataset=[
+        BaseDataPoint(input='sample', output='banana', reference='ba?a?a'),
+        BaseDataPoint(input='sample', output='apple', reference='ba?a?a'),
+    ],
 )
+```
+
+Or from the CLI:
+
+```bash
+genkit eval:run datasets/example.json --evaluators=genkitEval/regex
 ```
 
 ## Evaluators

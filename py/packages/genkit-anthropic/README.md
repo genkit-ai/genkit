@@ -5,7 +5,30 @@
 >
 > **Preview** — This plugin is in preview and may have API changes in future releases.
 
-This Genkit plugin provides a set of tools and utilities for working with Anthropic.
+Anthropic Claude model provider for Genkit.
+
+## Installation
+
+```bash
+uv add genkit-anthropic
+```
+
+## Usage
+
+```python
+from genkit import Genkit
+from genkit_anthropic import Anthropic
+
+ai = Genkit(plugins=[Anthropic()])
+
+res = await ai.generate(
+    model='anthropic/claude-sonnet-4-6',
+    prompt='Explain recursion in 10 words.',
+)
+print(res.text)
+```
+
+Set `ANTHROPIC_API_KEY` in the environment, or pass `api_key=` to `Anthropic()`.
 
 ## Disclaimer
 

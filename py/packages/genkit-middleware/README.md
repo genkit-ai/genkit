@@ -1,6 +1,6 @@
 # Genkit Middleware Plugin
 
-A collection of middleware implementations for Firebase Genkit Python.
+A collection of middleware implementations for Genkit Python.
 
 ## Overview
 
@@ -19,9 +19,10 @@ Import the middleware classes you need and pass instances directly into `use=[]`
 
 ```python
 from genkit import Genkit
+from genkit_google_genai import GoogleAI
 from genkit_middleware import Retry, Fallback, Middleware
 
-ai = Genkit(plugins=[Middleware()])
+ai = Genkit(plugins=[GoogleAI(), Middleware()])
 
 response = await ai.generate(
     model='googleai/gemini-flash-latest',
@@ -38,7 +39,7 @@ These pre-packaged middlewares will be available to play with in the Dev UI by d
 ## Installation
 
 ```bash
-pip install genkit-plugin-middleware
+uv add genkit-middleware genkit-google-genai
 ```
 
 ## Usage
@@ -79,7 +80,7 @@ fallback = Fallback(
 )
 
 response = await ai.generate(
-    model='googleai/gemini-2.5-ultra',
+    model='googleai/gemini-pro-latest',
     prompt='Hello!',
     use=[fallback],
 )
@@ -90,17 +91,29 @@ response = await ai.generate(
 Requires approval before executing tools (useful for sensitive operations):
 
 ```python
+from pydantic import BaseModel, Field
+
 from genkit import restart_tool
 from genkit_middleware import ToolApproval
+
+
+class DeleteInput(BaseModel):
+    name: str = Field(description='Database name to delete')
+
+
+@ai.tool()
+async def delete_database(input: DeleteInput) -> str:
+    return f'Deleted {input.name}'
+
 
 approval = ToolApproval(
     allowed_tools=['get_weather', 'search'],  # These tools run without approval
 )
 
-response = await ai.generate(
+first = await ai.generate(
     model='googleai/gemini-flash-latest',
     prompt='Delete the database',
-    tools=[delete_database_tool],
+    tools=['delete_database'],
     use=[approval],
 )
 ```
@@ -109,18 +122,11 @@ When a non-allowed tool is called, execution is interrupted. Approve and re-run 
 tool by restarting it with ``resumed_metadata`` that includes ``tool_approved``:
 
 ```python
-first = await ai.generate(
-    model='googleai/gemini-flash-latest',
-    prompt='Delete the database',
-    tools=[delete_database_tool],
-    use=[approval],
-)
-
 response = await ai.generate(
     model='googleai/gemini-flash-latest',
     prompt='Delete the database',
     messages=list(first.messages),
-    tools=[delete_database_tool],
+    tools=['delete_database'],
     use=[approval],
     resume_restart=restart_tool(
         interrupt=first.interrupts[0],
@@ -183,3 +189,29 @@ Provides four tools:
 - `read_file`: Read file content
 - `write_file`: Write to a file (requires `allow_write_access=True`)
 - `edit_file`: Edit file with string replacements (requires `allow_write_access=True`)
+
+### Artifacts
+
+Exposes `read_artifact` / `write_artifact` tools and lists session artifacts in the
+system prompt. Intended for agent sessions:
+
+```python
+from genkit_middleware import Artifacts, Middleware
+
+from genkit import Genkit
+from genkit.agent import InMemorySessionStore
+from genkit_google_genai import GoogleAI
+
+ai = Genkit(plugins=[GoogleAI(), Middleware()])
+
+agent = ai.define_agent(
+    name='workspaceAgent',
+    model='googleai/gemini-flash-latest',
+    use=[Artifacts()],
+    store=InMemorySessionStore(),
+)
+
+chat = agent.chat()
+await chat.send('Write poem.txt with a short poem about Python agents.')
+# chat.artifacts now includes poem.txt
+```
