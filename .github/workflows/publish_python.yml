@@ -39,10 +39,8 @@ jobs:
     environment:
       name: pypi_github_publishing
     steps:
-      # zizmor: ignore[unpinned-uses]
-      - uses: actions/checkout@v5
-      # zizmor: ignore[unpinned-uses]
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@f94382f0613738c64287c71d6e159ea3f521c750 # v5.1.0
         with:
           enable-cache: true
           python-version: "3.12"
@@ -89,9 +87,8 @@ jobs:
           python3 py/scripts/publish_tombstones.py --dist-dir dist/
           echo "::endgroup::"
 
-      # zizmor: ignore[unpinned-uses]
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@76fac9e8c050a4b62767073286780c0587d10e54 # v1.12.3
         with:
           packages-dir: dist/
           verbose: true
@@ -101,8 +98,7 @@ jobs:
     needs: publish
     runs-on: ubuntu-latest
     steps:
-      # zizmor: ignore[unpinned-uses]
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@42374261706d21bd6534fb08d3319b24873b5a9e # v5.3.0
         with:
           python-version: "3.12"
       - name: Smoke test
