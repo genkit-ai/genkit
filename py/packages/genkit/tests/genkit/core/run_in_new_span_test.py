@@ -215,10 +215,7 @@ def test_records_error_attributes(exporter: InMemorySpanExporter) -> None:
     assert span.status.status_code == trace_api.StatusCode.ERROR
 
 
-
-def test_cancelled_span_leaves_state_unset(
-    exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_cancelled_span_leaves_state_unset(exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture) -> None:
     """Abort/timeout is unfinished work — neither success nor error."""
     with caplog.at_level(logging.DEBUG):
         with pytest.raises(asyncio.CancelledError):
@@ -356,8 +353,6 @@ async def test_action_context_telemetry_sanitizes_unserializable(exporter: InMem
 
     Also verify that JSON-serializable values are kept.
     """
-    import asyncio
-import json
 
     class UnserializableObject:
         def __repr__(self) -> str:
@@ -409,8 +404,6 @@ import json
 @pytest.mark.asyncio
 async def test_action_context_telemetry_circular_references(exporter: InMemorySpanExporter) -> None:
     """Verify that circular references inside the context are proactively detected and dropped."""
-    import asyncio
-import json
 
     async def noop() -> str:
         return 'ok'
