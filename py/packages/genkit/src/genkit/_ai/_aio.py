@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
 import signal
 import socket
@@ -102,7 +103,7 @@ from genkit._core._dap import (
 )
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import GenkitError
-from genkit._core._logger import get_logger
+from genkit._core._logger import configure_logging, get_logger, resolve_level
 from genkit._core._middleware import (
     BaseMiddleware,
     GenerateMiddleware,
@@ -179,6 +180,7 @@ class Genkit:
         # Ensure the default generate action is registered for async usage.
         define_generate_action(self.registry)
         self._register_plugin_middleware(plugins)
+        configure_logging()
         # In dev mode, start the reflection server immediately in a background
         # daemon thread so it's available regardless of which web framework (or
         # none) the user chooses.
@@ -863,7 +865,26 @@ class Genkit:
                 sockets = [sock]
 
             app = create_reflection_asgi_app(registry=self.registry)
-            config = uvicorn.Config(app, host=spec.host, port=spec.port, loop='asyncio')
+            level = resolve_level()
+            is_debug = level <= logging.DEBUG
+            if level <= logging.DEBUG:
+                log_level = 'debug'
+            elif level <= logging.WARNING:
+                log_level = 'warning'
+            elif level <= logging.ERROR:
+                log_level = 'error'
+            else:
+                log_level = 'critical'
+
+            # Pass log_level explicitly so uvicorn's internal server engine doesn't default to INFO on startup.
+            config = uvicorn.Config(
+                app,
+                host=spec.host,
+                port=spec.port,
+                loop='asyncio',
+                access_log=is_debug,
+                log_level=log_level,
+            )
             server = ReflectionServer(config, ready=self._reflection_ready)
             async with RuntimeManager(spec, lazy_write=True) as runtime_manager:
                 server_task = asyncio.create_task(server.serve(sockets=sockets))

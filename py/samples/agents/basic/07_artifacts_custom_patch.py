@@ -17,17 +17,20 @@
 
 """Stream live state patches as a typed model and accumulate artifacts.
 
-A custom turn bumps a counter and writes an artifact before answering. Declaring a
-``state_schema`` means the custom state comes back as that model — so ``chat.state``,
-``response.state``, and each streamed ``chunk.custom`` are a ``Progress`` with typed
-attribute access, not a bare dict. This is the state model behind a live-updating
-agent UI. Requires GEMINI_API_KEY.
+A Research Assistant custom agent streams live research state (topics explored, depth,
+insights count) via a typed model while continuously building an executive briefing
+artifact (`research_brief.md`).
+
+Declaring a ``state_schema`` means custom state comes back as a typed model — so
+``chat.state``, ``response.state``, and each streamed ``chunk.custom`` are a ``ResearchState``
+with typed attribute access. This demonstrates how live state patches and session
+artifacts work together in a real-world custom agent workflow. Requires GEMINI_API_KEY.
 """
 
 from __future__ import annotations
 
 from genkit_google_genai import GoogleAI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from genkit import ActionRunContext, FinishReason, Genkit, Message, Part, TextPart
 from genkit.agent import (
@@ -46,20 +49,70 @@ ai = Genkit(plugins=[GoogleAI()])
 store = InMemorySessionStore()
 
 
-class Progress(BaseModel):
-    turns: int = 0
+class ResearchState(BaseModel):
+    topics_explored: list[str] = Field(default_factory=list)
+    depth: str = 'Initial Overview'
+    insights_count: int = 0
 
 
-async def stateful_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+async def research_agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
     async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
-        await sess.update_custom(lambda c: {'turns': (c or {}).get('turns', 0) + 1})
-        await sess.add_artifacts([Artifact(name='status', parts=[Part(TextPart(text=f'turn {sess.turn_index + 1}'))])])
+        # Extract user input text if present
+        prompt_text = ''
+        if inp.message and inp.message.content:
+            for p in inp.message.content:
+                root = p.root
+                if isinstance(root, TextPart) and root.text:
+                    prompt_text += root.text
+        topic = prompt_text.strip() or 'General Overview'
+
+        # 1. Update custom state (typed ResearchState model)
+        await sess.update_custom(
+            lambda c: {
+                'topics_explored': [*(c or {}).get('topics_explored', []), topic[:40]],
+                'depth': 'Deep Dive' if (c or {}).get('insights_count', 0) > 0 else 'Initial Overview',
+                'insights_count': (c or {}).get('insights_count', 0) + 1,
+            }
+        )
+
+        # 2. Build or update executive briefing artifact (research_brief.md)
+        existing_artifacts = await sess.get_artifacts()
+        brief_content = ''
+        for art in existing_artifacts:
+            if art.name == 'research_brief.md':
+                log_parts: list[str] = []
+                for p in art.parts:
+                    root = p.root
+                    if isinstance(root, TextPart) and root.text:
+                        log_parts.append(root.text)
+                brief_content = ''.join(log_parts)
+                break
+
+        turn_num = sess.turn_index + 1
+        if not brief_content:
+            brief_content = '# Executive Research Briefing\n\n'
+
+        brief_content += f'### Topic {turn_num}: {topic}\n'
+        brief_content += f'- **Added in Turn**: {turn_num}\n'
+        brief_content += f'- **Status**: Briefing compiled for *{topic}*\n\n---\n\n'
+
+        await sess.add_artifacts(
+            Artifact(
+                name='research_brief.md',
+                parts=[Part(TextPart(text=brief_content))],
+            )
+        )
+
+        # 3. Stream model response
         history = await sess.get_messages()
         messages = [Message(m) for m in history] if history else None
 
         stream_resp = ai.generate_stream(
             model='googleai/gemini-flash-latest',
-            system='Acknowledge progress in one sentence.',
+            system=(
+                'You are a Senior Research Analyst. Provide concise, clear, '
+                'and structured research insights for the user prompt.'
+            ),
             messages=messages,
         )
         async for chunk in stream_resp.stream:
@@ -76,27 +129,31 @@ async def stateful_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult
     return await sess.result()
 
 
-agent = ai.define_custom_agent(name='statefulAgent', fn=stateful_fn, store=store, state_schema=Progress)
+agent = ai.define_custom_agent(name='researchAgent', fn=research_agent_fn, store=store, state_schema=ResearchState)
 
 
 async def main() -> None:
-    chat = agent.chat()  # AgentChat[Progress] — state is typed
+    chat = agent.chat()  # AgentChat[ResearchState] — state is typed
 
-    # Text and live state stream through the same chunk — the two halves a
-    # live-updating component renders. accumulated_text is the reply so far;
-    # chunk.custom is the Progress model after each patch, so reading
-    # chunk.custom.turns is typed attribute access, never chunk.custom['turns'].
-    turn = chat.send_stream('Go')
+    turn = chat.send_stream('Analyze Python async performance best practices')
     async for chunk in turn.stream:
         if chunk.custom is not None:
-            print(f'\rturn {chunk.custom.turns} · {chunk.accumulated_text}', end='', flush=True)
+            topics = ', '.join(chunk.custom.topics_explored)
+            print(f'\r[State: {chunk.custom.depth} | Topics: {topics}] · {chunk.accumulated_text}', end='', flush=True)
     print()
 
-    # state_schema materializes the wire blob into the model on the way out, so
-    # the awaited response and the chat handle both expose .turns, not ['turns'].
     res = await turn.response
     if res.state is not None:
-        print(f'{res.state.turns} turn(s), {len(chat.artifacts)} artifact(s)')
+        print(f'\n{res.state.insights_count} insight(s) compiled across topics: {res.state.topics_explored}')
+        brief_art = next((a for a in chat.artifacts if a.name == 'research_brief.md'), None)
+        if brief_art:
+            log_parts: list[str] = []
+            for p in brief_art.parts:
+                root = p.root
+                if isinstance(root, TextPart) and root.text:
+                    log_parts.append(root.text)
+            brief_text = ''.join(log_parts)
+            print(f"\nGenerated Artifact 'research_brief.md':\n{brief_text}")
 
 
 if __name__ == '__main__':

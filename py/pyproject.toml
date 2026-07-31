@@ -128,6 +128,11 @@ source = ["packages"]
 default-groups = ["dev", "lint"]
 override-dependencies = ["werkzeug>=3.1.6"]
 
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
+
 [tool.uv.sources]
 # Samples (alphabetical by package name from pyproject.toml)
 agents               = { workspace = true }
