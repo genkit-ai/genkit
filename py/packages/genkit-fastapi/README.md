@@ -5,11 +5,12 @@ Serve Genkit flows as FastAPI endpoints.
 ## Installation
 
 ```bash
-pip install genkit-plugin-fastapi
+pip install genkit-fastapi
 ```
 
 ## Usage
 
+```python
 from fastapi import FastAPI
 from genkit import Genkit
 from genkit_fastapi import genkit_fastapi_handler
@@ -29,6 +30,7 @@ async def chat_flow(prompt: str) -> str:
 @genkit_fastapi_handler(ai)
 async def chat():
     return chat_flow
+```
 
 ## Running
 

@@ -7,7 +7,7 @@ This Genkit plugin provides a unified interface for Google AI (Gemini) and Verte
 ```bash
 uv venv
 source .venv/bin/activate
-pip install genkit-plugins-google-genai
+pip install genkit genkit-google-genai
 ```
 
 ## Configuration
@@ -80,7 +80,7 @@ Built-in evaluators for assessing model output quality. Evaluators are automatic
 
 ```python
 from genkit import Genkit
-from genkit._core.typing import BaseDataPoint
+from genkit.evaluator import BaseDataPoint
 from genkit_google_genai import VertexAI
 
 ai = Genkit(plugins=[VertexAI(project='my-project')])
@@ -119,7 +119,7 @@ for result in results.root:
 
 For comprehensive usage examples, see:
 
-- [`py/samples/google-genai-media/README.md`](../../samples/google-genai-media/README.md) - Speech, image, and video generation
-- [`py/samples/gemini-code-execution/README.md`](../../samples/gemini-code-execution/README.md) - Gemini code execution
-- [`py/samples/gemini-context-caching/README.md`](../../samples/gemini-context-caching/README.md) - Context caching for large prompts
-- [`py/samples/vertexai-imagen/README.md`](../../samples/vertexai-imagen/README.md) - Vertex AI Imagen generation
+- [google-genai-media](https://github.com/genkit-ai/genkit/tree/main/py/samples/google-genai-media) - Speech, image, and video generation
+- [gemini-code-execution](https://github.com/genkit-ai/genkit/tree/main/py/samples/gemini-code-execution) - Gemini code execution
+- [gemini-context-caching](https://github.com/genkit-ai/genkit/tree/main/py/samples/gemini-context-caching) - Context caching for large prompts
+- [vertexai-imagen](https://github.com/genkit-ai/genkit/tree/main/py/samples/vertexai-imagen) - Vertex AI Imagen generation

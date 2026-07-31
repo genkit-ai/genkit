@@ -12,7 +12,7 @@ you can use Genkit independently of any Google services.
 
 ```bash
 pip install genkit
-pip install genkit-plugin-google-genai
+pip install genkit-google-genai
 ```
 
 

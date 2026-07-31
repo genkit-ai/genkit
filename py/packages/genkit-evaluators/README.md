@@ -11,7 +11,7 @@ No LLM or API keys required.
 ## Installation
 
 ```bash
-pip install genkit-plugin-evaluators
+pip install genkit-evaluators
 ```
 
 ## Usage
