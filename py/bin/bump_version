@@ -164,10 +164,10 @@ update_version() {
 echo -e "${CYAN}Updating core package...${NC}"
 update_version "packages/genkit/pyproject.toml"
 
-# Update all plugins
-echo -e "\n${CYAN}Updating plugins...${NC}"
-for f in plugins/*/pyproject.toml; do
-  if [ -f "$f" ]; then
+# Update all packages
+echo -e "\n${CYAN}Updating packages...${NC}"
+for f in packages/*/pyproject.toml; do
+  if [ -f "$f" ] && [ "$f" != "packages/genkit/pyproject.toml" ]; then
     update_version "$f"
   fi
 done

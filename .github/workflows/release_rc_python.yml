@@ -67,7 +67,7 @@ jobs:
           git config user.email "genkit-releaser@google.com" && git config user.name "genkit-releaser"
           git checkout -b "${BRANCH}"
           cd py
-          for f in packages/genkit/pyproject.toml plugins/*/pyproject.toml; do
+          for f in packages/genkit/pyproject.toml packages/*/pyproject.toml; do
             [ -f "$f" ] && grep -q "version = \"$CUR\"" "$f" && sed -i "s/version = \"$CUR\"/version = \"$NEW\"/" "$f"
           done
           uv lock && cd ..
