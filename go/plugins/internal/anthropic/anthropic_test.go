@@ -805,8 +805,43 @@ func TestToAnthropicRequestPreservesConfig(t *testing.T) {
 		if len(got.Tools) != 2 {
 			t.Errorf("got %d tools, want the config tool plus the genkit tool", len(got.Tools))
 		}
-		if len(config.Tools) != 1 {
-			t.Errorf("the caller's config grew to %d tools", len(config.Tools))
+	})
+
+	// The request's config is a shallow copy, so its Tools header still points
+	// at the caller's backing array. Appending in place would write the genkit
+	// tools into that array's spare capacity, which concurrent requests over a
+	// hoisted config race over. Length alone does not catch it: an in-place
+	// append leaves the caller's length untouched while overwriting the slots
+	// past it.
+	t.Run("appending tools leaves the caller's array alone", func(t *testing.T) {
+		configTools := make([]anthropic.ToolUnionParam, 1, 4)
+		configTools[0] = anthropic.ToolUnionParam{OfWebSearchTool20250305: &anthropic.WebSearchTool20250305Param{}}
+		config := anthropic.MessageNewParams{MaxTokens: 100, Tools: configTools}
+
+		req := userRequest()
+		req.Tools = []*ai.ToolDefinition{{
+			Name:        "my_tool",
+			Description: "d",
+			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		}}
+
+		got, err := toAnthropicRequest("anthropic", req, config)
+		if err != nil {
+			t.Fatalf("toAnthropicRequest: %v", err)
+		}
+		if len(got.Tools) != 2 {
+			t.Fatalf("got %d tools, want the config tool plus the genkit tool", len(got.Tools))
+		}
+		if &got.Tools[0] == &configTools[0] {
+			t.Error("the request's tools share the caller's backing array")
+		}
+		for i, tool := range configTools[:cap(configTools)] {
+			if i == 0 {
+				continue
+			}
+			if tool.OfTool != nil {
+				t.Errorf("the caller's spare capacity was written at index %d", i)
+			}
 		}
 	})
 
