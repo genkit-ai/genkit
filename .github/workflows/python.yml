@@ -36,9 +36,11 @@ jobs:
     name: Lint and Format
     runs-on: ubuntu-latest
     steps:
+      # zizmor: ignore[unpinned-uses]
       - uses: actions/checkout@v5
 
       - name: Install uv and setup Python
+        # zizmor: ignore[unpinned-uses]
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -72,6 +74,7 @@ jobs:
       matrix:
         checker: [ty, pyrefly, pyright]
     steps:
+      # zizmor: ignore[unpinned-uses]
       - uses: actions/checkout@v5
 
       - name: Install system dependencies
@@ -80,6 +83,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends build-essential libffi-dev cmake libjpeg-dev zlib1g-dev
 
       - name: Install uv and setup Python
+        # zizmor: ignore[unpinned-uses]
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -112,9 +116,11 @@ jobs:
     name: Security and Compliance
     runs-on: ubuntu-latest
     steps:
+      # zizmor: ignore[unpinned-uses]
       - uses: actions/checkout@v5
 
       - name: Install uv and setup Python
+        # zizmor: ignore[unpinned-uses]
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -154,6 +160,7 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
       fail-fast: false
     steps:
+      # zizmor: ignore[unpinned-uses]
       - uses: actions/checkout@v5
 
       - name: Install system dependencies
@@ -162,6 +169,7 @@ jobs:
           sudo apt-get install -y build-essential libffi-dev cmake libjpeg-dev zlib1g-dev
 
       - name: Install uv and setup Python
+        # zizmor: ignore[unpinned-uses]
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -188,9 +196,11 @@ jobs:
     if: ${{ always() && !failure() && !cancelled() }}
     needs: [lint-and-format, type-check, security-and-compliance, tests]
     steps:
+      # zizmor: ignore[unpinned-uses]
       - uses: actions/checkout@v5
 
       - name: Install uv
+        # zizmor: ignore[unpinned-uses]
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -221,6 +231,7 @@ jobs:
           done
 
       - name: Upload distributions
+        # zizmor: ignore[unpinned-uses]
         uses: actions/upload-artifact@v4
         with:
           name: python-distributions

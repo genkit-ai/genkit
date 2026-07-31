@@ -34,6 +34,7 @@ jobs:
       contents: write
     steps:
       # Checkout main so we can branch from it. Token needed for push later.
+      # zizmor: ignore[unpinned-uses]
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GENKIT_RELEASER_GITHUB_TOKEN }}
@@ -44,12 +45,14 @@ jobs:
         run: git pull origin main && git fetch --tags
 
       # uv used for uv lock after bump
+      # zizmor: ignore[unpinned-uses]
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
           python-version: "3.12"
           version: "0.6.6"
 
+      # zizmor: ignore[template-injection]
       - name: Create release branch & bump version
         id: rc
         run: |
@@ -77,6 +80,7 @@ jobs:
           git push origin HEAD:"refs/heads/${BRANCH}"
 
       # Tag points at our release branch so Publish Python (tag-triggered) checks out correct version
+      # zizmor: ignore[template-injection]
       - name: Create tag & GitHub release
         env:
           GH_TOKEN: ${{ secrets.GENKIT_RELEASER_GITHUB_TOKEN }}

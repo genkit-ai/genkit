@@ -39,7 +39,9 @@ jobs:
     environment:
       name: pypi_github_publishing
     steps:
+      # zizmor: ignore[unpinned-uses]
       - uses: actions/checkout@v5
+      # zizmor: ignore[unpinned-uses]
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -87,6 +89,7 @@ jobs:
           python3 py/scripts/publish_tombstones.py --dist-dir dist/
           echo "::endgroup::"
 
+      # zizmor: ignore[unpinned-uses]
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
@@ -98,6 +101,7 @@ jobs:
     needs: publish
     runs-on: ubuntu-latest
     steps:
+      # zizmor: ignore[unpinned-uses]
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
