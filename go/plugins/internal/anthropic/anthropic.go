@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
@@ -341,7 +342,14 @@ func toAnthropicRequest(provider string, i *ai.ModelRequest, config anthropic.Me
 	// Append rather than assign: server-side tools (web search, code execution,
 	// ...) can only be expressed through the config, and assigning here would
 	// silently drop them.
-	req.Tools = append(req.Tools, tools...)
+	//
+	// Clip first so the append always allocates. config is only a shallow copy,
+	// so its slice header still points at the caller's backing array, and a
+	// config hoisted into a package-level var or a ModelRef is shared by every
+	// request made with it. Appending in place would write into that array's
+	// spare capacity, which two concurrent requests then race over, and one
+	// request's tools would surface in another's.
+	req.Tools = append(slices.Clip(req.Tools), tools...)
 
 	if toolChoice, ok := toAnthropicToolChoice(i.ToolChoice); ok {
 		req.ToolChoice = toolChoice
