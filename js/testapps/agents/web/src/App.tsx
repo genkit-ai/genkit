@@ -31,6 +31,7 @@ const NAV_ITEMS = [
   { to: '/tasks', icon: '✅', label: 'Task Tracker (Custom State)' },
   { to: '/research', icon: '🔬', label: 'Research (Custom Agent)' },
   { to: '/subagents', icon: '🤝', label: 'Sub-Agent Delegation' },
+  { to: '/customer-service', icon: '🔀', label: 'Customer Service (Handoff)' },
   { to: '/trip-planner', icon: '✈️', label: 'Trip Planner (Prompt File)' },
 ];
 
