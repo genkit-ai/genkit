@@ -168,7 +168,7 @@ type ChatInput struct {
 }
 
 // Register the schema so the .prompt file can reference it by name.
-genkit.DefineSchemaFor[ChatInput](g)
+genkit.DefineSchemasFor(g, ChatInput{})
 
 // Agent "chat" renders ./prompts/chat.prompt every turn (no source option needed).
 chatAgent := genkitx.DefinePromptAgent(g, "chat",
@@ -858,8 +858,7 @@ Dietary restrictions: {{#each dietaryRestrictions}}{{this}}{{#unless @last}}, {{
 
 ```go
 // Register schemas so .prompt files can reference them by name
-genkit.DefineSchemaFor[RecipeRequest](g)
-genkit.DefineSchemaFor[Recipe](g)
+genkit.DefineSchemasFor(g, RecipeRequest{}, Recipe{})
 
 // Look up and execute the prompt
 recipePrompt := genkit.LookupDataPrompt[RecipeRequest, *Recipe](g, "recipe")

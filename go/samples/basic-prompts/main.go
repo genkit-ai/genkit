@@ -110,11 +110,7 @@ func main() {
 	// Define schemas for the expected input and output types so that the Dotprompt files can reference them.
 	// Alternatively, you can specify the JSON schema by hand in the Dotprompt metadata.
 	// Code-defined prompts do not need to have schemas defined in advance but they too can reference them.
-	genkit.DefineSchemaFor[JokeRequest](g)
-	genkit.DefineSchemaFor[Joke](g)
-	genkit.DefineSchemaFor[RecipeRequest](g)
-	genkit.DefineSchemaFor[Recipe](g)
-	genkit.DefineSchemaFor[AssistantRequest](g)
+	genkit.DefineSchemasFor(g, JokeRequest{}, Joke{}, RecipeRequest{}, Recipe{}, AssistantRequest{})
 
 	// TODO: Include partials and helpers.
 
@@ -228,7 +224,7 @@ func DefineStructuredJokeWithInlinePrompt(g *genkit.Genkit) {
 
 // DefineStructuredJokeWithDotprompt demonstrates LookupDataPrompt to wrap a .prompt file
 // with Go type information. The .prompt file references registered schemas by name
-// (e.g., "schema: Joke"), which must be defined via DefineSchemaFor before loading.
+// (e.g., "schema: Joke"), which must be defined via DefineSchemasFor before loading.
 func DefineStructuredJokeWithDotprompt(g *genkit.Genkit) {
 	genkit.DefineStreamingFlow(g, "structuredJokeDotpromptFlow",
 		func(ctx context.Context, input JokeRequest, sendChunk core.StreamCallback[*Joke]) (*Joke, error) {
