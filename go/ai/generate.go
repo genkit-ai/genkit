@@ -1145,7 +1145,10 @@ func (mr *ModelResponse) History() []*Message {
 	if mr.Message == nil {
 		return slices.Clone(reqMsgs)
 	}
-	return append(slices.Clone(reqMsgs), mr.Message)
+	history := make([]*Message, len(reqMsgs)+1)
+	copy(history, reqMsgs)
+	history[len(reqMsgs)] = mr.Message
+	return history
 }
 
 // Reasoning concatenates all reasoning parts present in the message
