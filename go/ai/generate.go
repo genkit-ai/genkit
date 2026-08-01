@@ -1131,12 +1131,21 @@ func (mr *ModelResponse) Text() string {
 }
 
 // History returns messages from the request combined with the response message
-// to represent the conversation history.
+// to represent the conversation history. The result is always freshly
+// allocated, so callers may retain or append to it without disturbing
+// Request.Messages.
 func (mr *ModelResponse) History() []*Message {
-	if mr == nil || mr.Message == nil {
-		return mr.Request.Messages
+	if mr == nil {
+		return nil
 	}
-	return append(mr.Request.Messages, mr.Message)
+	var reqMsgs []*Message
+	if mr.Request != nil {
+		reqMsgs = mr.Request.Messages
+	}
+	if mr.Message == nil {
+		return slices.Clone(reqMsgs)
+	}
+	return append(slices.Clone(reqMsgs), mr.Message)
 }
 
 // Reasoning concatenates all reasoning parts present in the message
