@@ -15,11 +15,16 @@
 package compat_oai
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
 )
 
 func TestConvertChatCompletionToModelResponseReasoningContent(t *testing.T) {
@@ -63,6 +68,65 @@ func TestConvertChatCompletionToModelResponseReasoningContent(t *testing.T) {
 // logic is exercised, so no network call is made.
 func newGen() *ModelGenerator {
 	return NewModelGenerator((*openai.Client)(nil), "test-model")
+}
+
+// newStubGen returns a ModelGenerator pointed at a stub OpenAI-compatible
+// endpoint that replies with body, so both generate paths can be exercised
+// without a live API key.
+func newStubGen(t *testing.T, contentType, body string) *ModelGenerator {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", contentType)
+		io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	client := openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("stub"))
+	return NewModelGenerator(&client, "test-model")
+}
+
+// Regression test for #4683: the streaming path used to leave Request as an
+// empty &ai.ModelRequest{}, so History() dropped every input message.
+func TestGeneratePreservesRequest(t *testing.T) {
+	messages := []*ai.Message{
+		ai.NewUserTextMessage("first user turn"),
+		ai.NewModelTextMessage("first model turn"),
+		ai.NewUserTextMessage("second user turn"),
+	}
+
+	const streamBody = `data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"answer"},"finish_reason":null}]}
+
+data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+`
+	const completeBody = `{"id":"1","object":"chat.completion","created":1,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}]}`
+
+	for _, tc := range []struct {
+		name        string
+		contentType string
+		body        string
+		handleChunk func(context.Context, *ai.ModelResponseChunk) error
+	}{
+		{"streaming", "text/event-stream", streamBody, func(context.Context, *ai.ModelResponseChunk) error { return nil }},
+		{"complete", "application/json", completeBody, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &ai.ModelRequest{Messages: messages}
+			resp, err := newStubGen(t, tc.contentType, tc.body).
+				WithMessages(messages).
+				Generate(context.Background(), req, tc.handleChunk)
+			if err != nil {
+				t.Fatalf("Generate() error = %v", err)
+			}
+			if resp.Request != req {
+				t.Fatalf("Request = %#v, want the originating request", resp.Request)
+			}
+			if got := len(resp.History()); got != len(messages)+1 {
+				t.Errorf("len(History()) = %d, want %d (inputs plus model reply)", got, len(messages)+1)
+			}
+		})
+	}
 }
 
 func TestConvertChatCompletionToModelResponseProviderFinishReasons(t *testing.T) {

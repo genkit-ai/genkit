@@ -330,7 +330,7 @@ func (g *ModelGenerator) Generate(ctx context.Context, req *ai.ModelRequest, han
 	}
 
 	if handleChunk != nil {
-		return g.generateStream(ctx, handleChunk)
+		return g.generateStream(ctx, req, handleChunk)
 	}
 	return g.generateComplete(ctx, req)
 }
@@ -393,7 +393,7 @@ func concatenateReasoningContent(parts []*ai.Part) string {
 }
 
 // generateStream generates a streaming model response
-func (g *ModelGenerator) generateStream(ctx context.Context, handleChunk func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
+func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelRequest, handleChunk func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
 	stream := g.client.Chat.Completions.NewStreaming(ctx, *g.request)
 	defer func() {
 		_ = stream.Close()
@@ -463,6 +463,7 @@ func (g *ModelGenerator) generateStream(ctx context.Context, handleChunk func(co
 			resp.Message.Content...,
 		)
 	}
+	resp.Request = req
 	return resp, nil
 }
 
@@ -525,8 +526,7 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*a
 	}
 
 	resp := &ai.ModelResponse{
-		Request: &ai.ModelRequest{},
-		Usage:   usage,
+		Usage: usage,
 		Message: &ai.Message{
 			Role:    ai.RoleModel,
 			Content: make([]*ai.Part, 0),
