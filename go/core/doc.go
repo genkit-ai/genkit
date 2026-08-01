@@ -136,8 +136,8 @@ Register JSON schemas for use in prompts and validation:
 		"required": []any{"name"},
 	})
 
-	// Define a schema from a Go type (recommended)
-	core.DefineSchemaFor[Person](registry)
+	// Define schemas from Go types (recommended)
+	core.DefineSchemasFor(registry, Person{}, Address{})
 
 Schemas can be referenced in .prompt files by name.
 
