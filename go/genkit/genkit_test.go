@@ -68,7 +68,7 @@ func TestDefineSchemaWithType(t *testing.T) {
 		Age  int    `json:"age,omitempty"`
 	}
 
-	DefineSchemaFor[UserInfo](g)
+	DefineSchemasFor(g, UserInfo{})
 
 	schema := g.reg.LookupSchema("UserInfo")
 	if schema == nil {
@@ -122,7 +122,27 @@ func TestDefineSchemaWithType_Error(t *testing.T) {
 		Foo func() `json:"foo"`
 	}
 
-	DefineSchemaFor[Invalid](g)
+	DefineSchemasFor(g, Invalid{})
+}
+
+func TestDefineSchemaFor(t *testing.T) {
+	g := Init(context.Background())
+
+	type Legacy struct {
+		Name string `json:"name"`
+	}
+	type LegacyPtr struct {
+		Name string `json:"name"`
+	}
+
+	DefineSchemaFor[Legacy](g)
+	DefineSchemaFor[*LegacyPtr](g)
+
+	for _, name := range []string{"Legacy", "LegacyPtr"} {
+		if g.reg.LookupSchema(name) == nil {
+			t.Errorf("Schema %s not found", name)
+		}
+	}
 }
 
 func TestWithPromptFS(t *testing.T) {

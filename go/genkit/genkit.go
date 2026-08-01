@@ -937,10 +937,35 @@ func DefineSchema(g *Genkit, name string, schema map[string]any) {
 	core.DefineSchema(g.reg, name, schema)
 }
 
-// DefineSchemaFor defines a named JSON schema derived from a Go type
-// and registers it in the registry.
+// DefineSchemasFor defines named JSON schemas derived from the given values'
+// Go types and registers them, each under its type's name.
 //
-// This is an alternative to [DefineSchema].
+// This is an alternative to [DefineSchema] for schemas that mirror existing Go
+// types. Applications commonly register several schemas up front for `.prompt`
+// files to reference, so it takes one or many in a single call. It panics if a
+// value is a map, nil, or of an unnamed type; use [DefineSchema] to register a
+// raw JSON schema under an explicit name.
+//
+// Example:
+//
+//	type User struct {
+//	    Name string `json:"name"`
+//	    Age int `json:"age"`
+//	}
+//
+//	genkit.DefineSchemasFor(g, User{}, Order{})
+//
+//	genkit.Generate(ctx, g, ai.WithOutputSchemaName("User"), ai.WithPrompt("What is your name?"))
+func DefineSchemasFor(g *Genkit, values ...any) {
+	core.DefineSchemasFor(g.reg, values...)
+}
+
+// DefineSchemaFor defines a named JSON schema derived from a Go type
+// and registers it under that type's name.
+//
+// It is the single-type form of [DefineSchemasFor], for when naming the type is
+// more natural than constructing a value of it. Both register the same schema
+// under the same name; prefer [DefineSchemasFor] when registering several.
 //
 // Example:
 //
@@ -953,7 +978,8 @@ func DefineSchema(g *Genkit, name string, schema map[string]any) {
 //
 //	genkit.Generate(ctx, g, ai.WithOutputSchemaName("User"), ai.WithPrompt("What is your name?"))
 func DefineSchemaFor[T any](g *Genkit) {
-	core.DefineSchemaFor[T](g.reg)
+	var v T
+	core.DefineSchemasFor(g.reg, v)
 }
 
 // DefineDataPrompt creates a new [ai.DataPrompt] with strongly-typed input and output.

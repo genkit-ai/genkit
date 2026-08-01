@@ -169,7 +169,7 @@ Load prompts from .prompt files by specifying a prompt directory:
 
 When using .prompt files with custom output schemas, register the schema first:
 
-	genkit.DefineSchemaFor[Recipe](g)
+	genkit.DefineSchemasFor(g, Recipe{})
 
 # Tools
 
