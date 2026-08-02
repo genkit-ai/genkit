@@ -110,7 +110,7 @@ describe('gptModel', () => {
     });
   });
 
-  it('should correctly define gpt-5 and gpt-5-chat-latest', () => {
+  it('should correctly define gpt-5', () => {
     const gpt5 = defineCompatOpenAIModel({
       name: 'openai/gpt-5',
       client: {} as OpenAI,
