@@ -250,6 +250,7 @@ const gpt5ChatLatest = openAIModelRef({
       ...GPT_5_MODEL_INFO.supports,
       tools: false,
       output: ['text'],
+      constrained: undefined,
     },
   },
 });
