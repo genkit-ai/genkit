@@ -37,6 +37,7 @@ const MULTIMODAL_MODEL_INFO: ModelInfo = {
 export const OpenAIChatCompletionConfigSchema =
   ChatCompletionCommonConfigSchema.extend({
     store: z.boolean().optional(),
+    strict: z.boolean().optional(),
   });
 
 /** OpenAI ModelRef helper, with OpenAI specific config. */
@@ -227,6 +228,7 @@ const GPT_5_MODEL_INFO: ModelInfo = {
     media: true,
     systemRole: true,
     output: ['text', 'json'],
+    constrained: 'all',
   },
 };
 const gpt5 = openAIModelRef({
