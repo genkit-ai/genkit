@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/firebase/genkit/go/core"
 )
@@ -37,6 +38,12 @@ import (
 //     like each fill one slot, so the final call wins and earlier ones are
 //     overwritten rather than rejected.
 //
+// A zero value does not fill a slot: WithMaxTurns(0), WithToolChoice(""), or
+// WithConfig(nil) is a no-op, so an earlier non-zero value cannot be un-set by
+// a later zero one. The rules apply within a single options list; APIs that
+// layer two lists (a prompt's define-time options against Execute-time
+// options) document their own precedence.
+//
 // Applying options therefore never fails on a "set more than once" conflict.
 // The only failures are genuinely invalid arguments (for example a type that
 // WithInputType cannot turn into a schema), which panic at the call site where
@@ -51,7 +58,8 @@ type MessagesFn = func(context.Context, any) ([]*Message, error)
 // appendMessagesFn composes two message-producing functions so their outputs
 // concatenate in call order. It backs the accumulate semantics of
 // [WithMessages] and [WithMessagesFn]: passing several of them (in any mix)
-// appends their messages instead of overwriting.
+// appends their messages instead of overwriting. Either side may be nil, in
+// which case the other is returned unwrapped.
 func appendMessagesFn(existing, next MessagesFn) MessagesFn {
 	if existing == nil {
 		return next
@@ -68,13 +76,11 @@ func appendMessagesFn(existing, next MessagesFn) MessagesFn {
 		if err != nil {
 			return nil, err
 		}
-		// Copy rather than append onto before: WithMessages(history...) hands
-		// the caller's slice straight through, so appending in place would
-		// write into the spare capacity of the array backing their history.
-		msgs := make([]*Message, 0, len(before)+len(after))
-		msgs = append(msgs, before...)
-		msgs = append(msgs, after...)
-		return msgs, nil
+		// Concat rather than append onto before: WithMessages(history...)
+		// hands the caller's slice straight through, so appending in place
+		// would write into the spare capacity of the array backing their
+		// history. Concat always allocates a fresh slice.
+		return slices.Concat(before, after), nil
 	}
 }
 
@@ -168,9 +174,7 @@ type CommonGenOption interface {
 func (o *commonGenOptions) applyCommonGen(opts *commonGenOptions) {
 	o.configOptions.applyConfig(&opts.configOptions)
 
-	if o.MessagesFn != nil {
-		opts.MessagesFn = appendMessagesFn(opts.MessagesFn, o.MessagesFn)
-	}
+	opts.MessagesFn = appendMessagesFn(opts.MessagesFn, o.MessagesFn)
 	if o.Model != nil {
 		opts.Model = o.Model
 	}
@@ -306,14 +310,14 @@ type InputOption interface {
 	applyTool(*toolOptions)
 }
 
-// applyInput applies the option to the input options. The schema and the
-// default input are independent single-value slots, so the last option to set
-// each one wins.
+// applyInput applies the option to the input options. The input configuration
+// is one slot: the last option to set it replaces both the schema and the
+// default input together, so overriding [WithInputType] with [WithInputSchema]
+// or [WithInputSchemaName] does not leave the old type's defaults behind to be
+// rendered against the new schema.
 func (o *inputOptions) applyInput(opts *inputOptions) {
-	if o.InputSchema != nil {
+	if o.InputSchema != nil || o.DefaultInput != nil {
 		opts.InputSchema = o.InputSchema
-	}
-	if o.DefaultInput != nil {
 		opts.DefaultInput = o.DefaultInput
 	}
 }
@@ -625,9 +629,53 @@ func (o *executionOptions) applyPromptExecute(pgOpts *promptExecutionOptions) {
 
 // WithStreaming sets the stream callback for the generate request.
 // A callback is a function that is called with each chunk of the generated response before the final response is returned.
-// Repeating this option takes the last callback set.
+// Repeating this option takes the last callback set. The stream-returning
+// APIs ([GenerateStream], [Prompt.ExecuteStream], and their typed variants)
+// attach their own iterator callback without displacing one set here; both
+// receive every chunk.
 func WithStreaming(callback ModelStreamCallback) ExecutionOption {
 	return &executionOptions{Stream: callback}
+}
+
+// chainedStreamingOption installs a stream callback without displacing one the
+// caller already set: any existing callback runs first, then this one. The
+// stream-returning wrappers use it to attach their iterator callback while
+// keeping a caller-supplied [WithStreaming] observable; a plain WithStreaming
+// appended after the caller's options would win the last-win slot and
+// silently drop theirs.
+type chainedStreamingOption struct {
+	callback ModelStreamCallback
+}
+
+// applyExecution chains the callback after any existing one.
+func (o *chainedStreamingOption) applyExecution(execOpts *executionOptions) {
+	if prev := execOpts.Stream; prev != nil {
+		next := o.callback
+		execOpts.Stream = func(ctx context.Context, chunk *ModelResponseChunk) error {
+			if err := prev(ctx, chunk); err != nil {
+				return err
+			}
+			return next(ctx, chunk)
+		}
+		return
+	}
+	execOpts.Stream = o.callback
+}
+
+// applyGenerate applies the option to the generate options.
+func (o *chainedStreamingOption) applyGenerate(genOpts *generateOptions) {
+	o.applyExecution(&genOpts.executionOptions)
+}
+
+// applyPromptExecute applies the option to the prompt request options.
+func (o *chainedStreamingOption) applyPromptExecute(pgOpts *promptExecutionOptions) {
+	o.applyExecution(&pgOpts.executionOptions)
+}
+
+// withChainedStreaming returns an option that adds callback after any
+// already-set stream callback instead of replacing it.
+func withChainedStreaming(callback ModelStreamCallback) ExecutionOption {
+	return &chainedStreamingOption{callback: callback}
 }
 
 // documentOptions are options for providing context documents to a prompt or generate request or as input to an embedder.
@@ -910,7 +958,9 @@ func (o *promptExecutionOptions) applyPromptExecute(pgOpts *promptExecutionOptio
 
 // WithInput sets the input for the prompt request. Input must conform to the
 // prompt's input schema and can either be a map[string]any or a struct of the same api.
-// Repeating this option takes the last input set.
+// Repeating this option takes the last input set. APIs that take the input as
+// a typed argument ([DataPrompt.Execute], [DataPrompt.ExecuteStream]) apply
+// that argument after these options, so the typed argument wins.
 func WithInput(input any) PromptExecuteOption {
 	return &promptExecutionOptions{Input: input}
 }

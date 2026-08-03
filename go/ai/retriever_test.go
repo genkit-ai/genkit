@@ -201,6 +201,16 @@ func TestRetrieverRetrieve(t *testing.T) {
 		}
 	})
 
+	t.Run("Retrieve errors instead of panicking when no document is given", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		r := DefineRetriever(reg, "test/retrieveNoDocs", nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+			return &RetrieverResponse{}, nil
+		})
+
+		_, err := Retrieve(context.Background(), reg, WithRetriever(r))
+		assertError(t, err, "a query document is required")
+	})
+
 	t.Run("propagates function errors", func(t *testing.T) {
 		reg := newTestRegistry(t)
 		expectedErr := errors.New("retrieval failed")

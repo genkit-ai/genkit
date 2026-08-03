@@ -35,12 +35,12 @@ func applyGen(opts ...GenerateOption) *generateOptions {
 	return g
 }
 
-// messageText renders the concatenated text of a MessagesFn's output, for
+// messageText returns the text of each message a MessagesFn produces, for
 // asserting on accumulation order.
 func messageText(t *testing.T, fn MessagesFn) []string {
 	t.Helper()
 	if fn == nil {
-		return nil
+		t.Fatal("MessagesFn is nil")
 	}
 	msgs, err := fn(context.Background(), nil)
 	if err != nil {
@@ -65,10 +65,7 @@ func TestCollectionOptionsAccumulate(t *testing.T) {
 				return []*Message{NewUserTextMessage("d")}, nil
 			}),
 		)
-		want := []string{"a", "b", "c", "d"}
-		if diff := cmp.Diff(want, messageText(t, g.MessagesFn)); diff != "" {
-			t.Errorf("messages diff (-want +got):\n%s", diff)
-		}
+		assertEqual(t, messageText(t, g.MessagesFn), []string{"a", "b", "c", "d"})
 	})
 
 	t.Run("messages do not alias the caller's slice", func(t *testing.T) {
@@ -109,10 +106,7 @@ func TestCollectionOptionsAccumulate(t *testing.T) {
 		t2 := &mockTool{name: "t/2"}
 		t3 := &mockTool{name: "t/3"}
 		g := applyGen(WithTools(t1, t2), WithTools(t3))
-		if diff := cmp.Diff([]ToolRef{t1, t2, t3}, g.Tools,
-			cmpopts.IgnoreUnexported(mockTool{})); diff != "" {
-			t.Errorf("tools diff (-want +got):\n%s", diff)
-		}
+		assertEqual(t, g.Tools, []ToolRef{t1, t2, t3}, cmpopts.IgnoreUnexported(mockTool{}))
 	})
 
 	t.Run("docs append across WithDocs and WithTextDocs", func(t *testing.T) {
@@ -245,12 +239,12 @@ func TestSingleValueOptionsLastWins(t *testing.T) {
 		}
 	})
 
-	t.Run("input schema: last wins across variants", func(t *testing.T) {
+	t.Run("input config: last wins as one slot, stale defaults cleared", func(t *testing.T) {
 		opts := &promptOptions{}
 		for _, o := range []InputOption{
 			WithInputType(struct {
 				Test string `json:"test"`
-			}{}),
+			}{Test: "stale"}),
 			WithInputSchemaName("Override"),
 		} {
 			o.applyPrompt(opts)
@@ -258,28 +252,30 @@ func TestSingleValueOptionsLastWins(t *testing.T) {
 		if ref, _ := opts.InputSchema["$ref"].(string); ref != "genkit:Override" {
 			t.Errorf("InputSchema.$ref = %v, want genkit:Override", opts.InputSchema["$ref"])
 		}
+		// The schema override replaces the whole input config: the default
+		// input inferred from the overridden type must not survive to be
+		// rendered against the new schema.
+		if opts.DefaultInput != nil {
+			t.Errorf("DefaultInput = %v, want nil after schema override", opts.DefaultInput)
+		}
 	})
-}
 
-// TestOutputSchemaLastWins verifies the output-schema slot behaves as last-wins,
-// which is what lets GenerateData inject a schema that a caller can override.
-func TestOutputSchemaLastWins(t *testing.T) {
-	custom := map[string]any{"type": "object", "properties": map[string]any{"n": map[string]any{"type": "string"}}}
+	t.Run("output schema: last wins, keeping JSON format", func(t *testing.T) {
+		custom := map[string]any{"type": "object", "properties": map[string]any{"n": map[string]any{"type": "string"}}}
 
-	// Simulate GenerateData's prepend: the inferred type is applied first, the
-	// caller's explicit schema second.
-	g := applyGen(
-		WithOutputType(struct {
-			Value int `json:"value"`
-		}{}),
-		WithOutputSchema(custom),
-	)
-	if diff := cmp.Diff(custom, g.OutputSchema); diff != "" {
-		t.Errorf("OutputSchema not overridden by caller (-want +got):\n%s", diff)
-	}
-	if g.OutputFormat != OutputFormatJSON {
-		t.Errorf("OutputFormat = %q, want %q", g.OutputFormat, OutputFormatJSON)
-	}
+		// Mirrors GenerateData's prepend: the inferred type is applied first,
+		// the caller's explicit schema second.
+		g := applyGen(
+			WithOutputType(struct {
+				Value int `json:"value"`
+			}{}),
+			WithOutputSchema(custom),
+		)
+		assertEqual(t, g.OutputSchema, custom)
+		if g.OutputFormat != OutputFormatJSON {
+			t.Errorf("OutputFormat = %q, want %q", g.OutputFormat, OutputFormatJSON)
+		}
+	})
 }
 
 func TestPromptOptions(t *testing.T) {

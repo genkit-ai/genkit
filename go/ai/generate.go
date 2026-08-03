@@ -722,6 +722,12 @@ func GenerateText(ctx context.Context, r api.Registry, opts ...GenerateOption) (
 // If the response doesn't contain text output (e.g., contains tool requests
 // or interrupts instead), the output will be nil and no error is returned.
 // Check resp.Interrupts() or resp.ToolRequests() to handle these cases.
+//
+// The output format is JSON with a schema inferred from Out; an explicit
+// [WithOutputSchema] or [WithOutputSchemaName] overrides the schema while
+// extraction into Out keeps working. Overriding the format itself with a
+// non-JSON [WithOutputFormat] or [WithOutputEnums] breaks that extraction:
+// the response text will not parse into Out.
 func GenerateData[Out any](ctx context.Context, r api.Registry, opts ...GenerateOption) (*Out, *ModelResponse, error) {
 	var value Out
 	// Prepend the inferred output type so an explicit WithOutputSchema or
@@ -793,7 +799,9 @@ func GenerateStream(ctx context.Context, r api.Registry, opts ...GenerateOption)
 			return nil
 		}
 
-		allOpts := append(slices.Clone(opts), WithStreaming(cb))
+		// Chain rather than set the callback so a caller-supplied
+		// WithStreaming still receives every chunk.
+		allOpts := append(slices.Clone(opts), withChainedStreaming(cb))
 
 		resp, err := Generate(ctx, r, allOpts...)
 		if done || errors.Is(err, errStop) {
@@ -818,6 +826,10 @@ func GenerateStream(ctx context.Context, r api.Registry, opts ...GenerateOption)
 // will not be called again.
 //
 // Otherwise the Chunk field of the passed [StreamValue] holds a streamed chunk.
+//
+// Like [GenerateData], the output format is JSON with a schema inferred from
+// Out; overriding the format with a non-JSON [WithOutputFormat] or
+// [WithOutputEnums] breaks typed extraction.
 func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...GenerateOption) iter.Seq2[*StreamValue[Out, Out], error] {
 	return func(yield func(*StreamValue[Out, Out], error) bool) {
 		done := false
@@ -845,10 +857,12 @@ func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...Ge
 			return nil
 		}
 
-		// Prepend WithOutputType so the user can override the output format.
+		// Prepend WithOutputType so the user can override the output format,
+		// and chain the iterator callback so a caller-supplied WithStreaming
+		// still receives every chunk.
 		var value Out
 		allOpts := append([]GenerateOption{WithOutputType(value)}, opts...)
-		allOpts = append(allOpts, WithStreaming(cb))
+		allOpts = append(allOpts, withChainedStreaming(cb))
 
 		resp, err := Generate(ctx, r, allOpts...)
 		if done || errors.Is(err, errStop) {

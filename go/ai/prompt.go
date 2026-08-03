@@ -87,7 +87,9 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 	}
 
 	if modelRef, ok := pOpts.Model.(ModelRef); ok && pOpts.Config == nil {
-		pOpts.Config = modelRef.Config()
+		if cfg := modelRef.Config(); !base.IsNil(cfg) {
+			pOpts.Config = cfg
+		}
 	}
 
 	var tools []string
@@ -170,7 +172,9 @@ func (p *prompt) Execute(ctx context.Context, opts ...PromptExecuteOption) (*Mod
 	}
 
 	if modelRef, ok := execOpts.Model.(ModelRef); ok && execOpts.Config == nil {
-		execOpts.Config = modelRef.Config()
+		if cfg := modelRef.Config(); !base.IsNil(cfg) {
+			execOpts.Config = cfg
+		}
 	}
 
 	if execOpts.Config != nil {
@@ -297,7 +301,9 @@ func (p *prompt) ExecuteStream(ctx context.Context, opts ...PromptExecuteOption)
 			return nil
 		}
 
-		allOpts := append(slices.Clone(opts), WithStreaming(cb))
+		// Chain rather than set the callback so a caller-supplied
+		// WithStreaming still receives every chunk.
+		allOpts := append(slices.Clone(opts), withChainedStreaming(cb))
 		resp, err := p.Execute(ctx, allOpts...)
 		if done || errors.Is(err, errStop) {
 			return
@@ -1000,6 +1006,8 @@ func AsDataPrompt[In, Out any](p Prompt) *DataPrompt[In, Out] {
 // Execute executes the typed prompt and returns the strongly-typed output along with the full model response.
 // For structured output types (non-string Out), the prompt must be configured with the appropriate
 // output schema, either through [DefineDataPrompt] or by using [WithOutputType] when defining the prompt.
+// The typed input argument fills the input slot last, so it wins over any
+// [WithInput] passed in opts.
 func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...PromptExecuteOption) (Out, *ModelResponse, error) {
 	if dp == nil {
 		return base.Zero[Out](), nil, status.Errorf(status.ErrInvalidArgument, "DataPrompt.Execute: prompt is nil")
@@ -1032,6 +1040,8 @@ func (dp *DataPrompt[In, Out]) Execute(ctx context.Context, input In, opts ...Pr
 //
 // For structured output types (non-string Out), the prompt must be configured with the appropriate
 // output schema, either through [DefineDataPrompt] or by using [WithOutputType] when defining the prompt.
+// The typed input argument fills the input slot last, so it wins over any
+// [WithInput] passed in opts.
 func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts ...PromptExecuteOption) iter.Seq2[*StreamValue[Out, Out], error] {
 	return func(yield func(*StreamValue[Out, Out], error) bool) {
 		if dp == nil {
@@ -1064,7 +1074,10 @@ func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts
 			return nil
 		}
 
-		allOpts := append(slices.Clone(opts), WithInput(input), WithStreaming(cb))
+		// The typed input is applied last so it wins the input slot; the
+		// iterator callback is chained so a caller-supplied WithStreaming
+		// still receives every chunk.
+		allOpts := append(slices.Clone(opts), WithInput(input), withChainedStreaming(cb))
 		resp, err := dp.prompt.Execute(ctx, allOpts...)
 		if done || errors.Is(err, errStop) {
 			return

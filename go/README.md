@@ -416,6 +416,11 @@ if terse {
 response, _ := genkit.Generate(ctx, g, append(opts, ai.WithPrompt("What should I pack for Tokyo?"))...)
 ```
 
+Tool names must be unique across the merged list: repeating the same tool in
+two helpers is rejected when the request runs. These rules cover a single
+options list; APIs that layer two lists, like a prompt's define-time options
+against `Execute`-time options, document their own precedence.
+
 ### Generate Structured Data
 
 Get type-safe JSON output that maps directly to your Go structs:

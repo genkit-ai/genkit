@@ -23,6 +23,7 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
 // EmbedderFunc is the function type for embedding documents.
@@ -181,7 +182,9 @@ func Embed(ctx context.Context, r api.Registry, opts ...EmbedderOption) (*EmbedR
 	}
 
 	if embedRef, ok := embedOpts.Embedder.(EmbedderRef); ok && embedOpts.Config == nil {
-		embedOpts.Config = embedRef.Config()
+		if cfg := embedRef.Config(); !base.IsNil(cfg) {
+			embedOpts.Config = cfg
+		}
 	}
 
 	req := &EmbedRequest{
