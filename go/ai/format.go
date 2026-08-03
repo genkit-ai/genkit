@@ -520,6 +520,12 @@ func (j *jsonlHandler) parseJSONL(text string, cursor int, allowPartial bool) ([
 			if result != nil {
 				results = append(results, result)
 			}
+			if isLastLine {
+				// The line parsed as a complete object even though its
+				// terminating newline has not arrived yet. Consume it now, or
+				// the next chunk re-parses and re-emits the same object.
+				currentPos += lineLen
+			}
 		}
 
 		if !isLastLine {

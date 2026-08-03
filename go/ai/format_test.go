@@ -407,6 +407,58 @@ func TestJSONLFormatter(t *testing.T) {
 			t.Fatalf("second ParseChunk() should return 1 new item (partial), got %v", got2)
 		}
 	})
+
+	t.Run("ParseChunk does not re-emit an object whose newline arrives late", func(t *testing.T) {
+		handler, _ := jsonlFormatter{}.Handler(schema)
+		sfh := handler.(StreamingFormatHandler)
+
+		// The object completes before its terminating newline, which is the
+		// common case when a model streams one token at a time.
+		got1, _ := sfh.ParseChunk(&ModelResponseChunk{
+			Content: []*Part{NewTextPart(`{"id": 1}`)},
+			Index:   0,
+		})
+		if items, ok := got1.([]any); !ok || len(items) != 1 {
+			t.Fatalf("first ParseChunk() should return 1 item, got %v", got1)
+		}
+
+		got2, _ := sfh.ParseChunk(&ModelResponseChunk{
+			Content: []*Part{NewTextPart("\n" + `{"id": 2}`)},
+			Index:   0,
+		})
+		items2, ok := got2.([]any)
+		if !ok {
+			t.Fatalf("second ParseChunk() returned %T, want []any", got2)
+		}
+		if len(items2) != 1 {
+			t.Fatalf("second ParseChunk() should return only the new item, got %v", items2)
+		}
+		if id := items2[0].(map[string]any)["id"]; id != float64(2) {
+			t.Errorf("second ParseChunk() id = %v, want 2", id)
+		}
+	})
+
+	t.Run("ParseChunk still re-parses a genuinely partial trailing line", func(t *testing.T) {
+		handler, _ := jsonlFormatter{}.Handler(schema)
+		sfh := handler.(StreamingFormatHandler)
+
+		sfh.ParseChunk(&ModelResponseChunk{
+			Content: []*Part{NewTextPart(`{"id": 1}` + "\n" + `{"id":`)},
+			Index:   0,
+		})
+
+		got, _ := sfh.ParseChunk(&ModelResponseChunk{
+			Content: []*Part{NewTextPart(" 2}")},
+			Index:   0,
+		})
+		items, ok := got.([]any)
+		if !ok || len(items) != 1 {
+			t.Fatalf("ParseChunk() should complete the partial line into 1 item, got %v", got)
+		}
+		if id := items[0].(map[string]any)["id"]; id != float64(2) {
+			t.Errorf("ParseChunk() id = %v, want 2", id)
+		}
+	})
 }
 
 func TestArrayFormatter(t *testing.T) {
