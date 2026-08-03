@@ -101,6 +101,9 @@ func TestCacheControlOnUserContentBlocks(t *testing.T) {
 
 func TestCacheControlSkippedOnReasoning(t *testing.T) {
 	p := ai.NewReasoningPart("think", []byte("sig"))
+	if p.Metadata == nil {
+		p.Metadata = map[string]any{}
+	}
 	p.Metadata["cache_control"] = map[string]any{"type": "ephemeral"}
 	blocks, err := toAnthropicParts([]*ai.Part{p})
 	if err != nil {

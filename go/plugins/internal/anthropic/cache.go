@@ -66,6 +66,9 @@ func cacheControlFromMetadata(md map[string]any) (anthropic.CacheControlEphemera
 // applyCacheControl attaches cache_control to supported content-block variants.
 // Thinking / redacted_thinking blocks are left unchanged (API rejects cache on them).
 func applyCacheControl(block *anthropic.ContentBlockParamUnion, md map[string]any) error {
+	if block == nil {
+		return nil
+	}
 	cc, ok, err := cacheControlFromMetadata(md)
 	if err != nil || !ok {
 		return err

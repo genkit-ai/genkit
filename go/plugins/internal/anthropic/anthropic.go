@@ -277,6 +277,9 @@ func toAnthropicRequest(provider string, i *ai.ModelRequest) (*anthropic.Message
 	for _, message := range i.Messages {
 		if message.Role == ai.RoleSystem {
 			for _, p := range message.Content {
+				if p == nil {
+					continue
+				}
 				if !p.IsText() {
 					return nil, fmt.Errorf("system messages can only contain text parts")
 				}
@@ -463,6 +466,9 @@ func toAnthropicParts(parts []*ai.Part) ([]anthropic.ContentBlockParamUnion, err
 	blocks := []anthropic.ContentBlockParamUnion{}
 
 	for _, p := range parts {
+		if p == nil {
+			continue
+		}
 		var block anthropic.ContentBlockParamUnion
 		switch {
 		case p.IsText():
