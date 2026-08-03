@@ -277,7 +277,15 @@ def restart_interrupt_error(interrupt: Interrupt) -> GenkitError:
     interrupt reason (e.g. ToolApproval's ``Tool not in approved list: ...``) so the
     error points at missing approval metadata instead of sounding like a missing SDK feature.
     """
-    reason = interrupt.metadata.get('message') if interrupt.metadata else None
+    metadata = interrupt.metadata
+    if isinstance(metadata, dict):
+        reason = metadata.get('message')
+    elif isinstance(metadata, str):
+        # Defensive: Interrupt is typed as dict metadata, but a plain string
+        # argument would land here and must not AttributeError on .get().
+        reason = metadata
+    else:
+        reason = None
     if isinstance(reason, str) and reason.strip():
         message = f'Tool interrupted again during restart: {reason}'
     else:

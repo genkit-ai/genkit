@@ -12,6 +12,7 @@ from genkit._ai._tools import (
     _tool_original_input,
     _tool_resumed_metadata,
     respond_to_interrupt,
+    restart_interrupt_error,
     restart_tool,
     run_tool_after_restart,
 )
@@ -178,6 +179,14 @@ async def test_run_tool_after_restart_nested_interrupt_raises() -> None:
     assert ei.value.status == 'FAILED_PRECONDITION'
     assert 'interrupted again' in ei.value.original_message.lower()
     assert isinstance(ei.value.cause, Interrupt)
+
+
+def test_restart_interrupt_error_accepts_string_metadata() -> None:
+    """Plain-string Interrupt metadata must not crash; use it as the reason."""
+    intr = Interrupt('plain string reason')  # type: ignore[arg-type]
+    err = restart_interrupt_error(intr)
+    assert err.status == 'FAILED_PRECONDITION'
+    assert err.original_message == 'Tool interrupted again during restart: plain string reason'
 
 
 @pytest.mark.asyncio
