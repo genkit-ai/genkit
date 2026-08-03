@@ -45,7 +45,7 @@ See Also:
     - Cloud Monitoring: https://cloud.google.com/monitoring
 """
 
-from .session_store import FirestoreSessionStore
+from .session_store.firestore import FirestoreSessionStore
 from .telemetry import add_gcp_telemetry, enable_google_cloud_telemetry
 
 

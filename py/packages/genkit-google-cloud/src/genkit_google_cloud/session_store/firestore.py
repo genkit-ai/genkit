@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 from collections.abc import Callable
 from typing import Any, Generic, TypedDict
 
@@ -66,6 +67,7 @@ from genkit._core._typing import JsonPatchOperation, SessionSnapshot, SessionSta
 
 DEFAULT_COLLECTION = 'genkit-sessions'
 DEFAULT_PREFIX = 'global'
+logger = logging.getLogger(__name__)
 # Favor common chat workloads: enough diffs between checkpoints to keep write
 # amplification down, small enough that reconstruct stays cheap.
 DEFAULT_CHECKPOINT_INTERVAL = 25
@@ -101,6 +103,8 @@ def status_from_doc(doc_snapshot: Any) -> SnapshotStatus | None:  # noqa: ANN401
     try:
         out: Any = SnapshotStatus(status_val)
     except ValueError:
+        doc_id = getattr(doc_snapshot, 'id', 'unknown')
+        logger.warning("Unknown SnapshotStatus '%s' in Firestore document '%s'", status_val, doc_id)
         return None
     return out
 
@@ -547,12 +551,14 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 }
         snap = await self.snapshot_ref(parent_id, context).get(transaction=transaction)
         if not snap.exists:
+            logger.warning("Parent snapshot document '%s' does not exist", parent_id)
             return None
         data = snap.to_dict() or {}
         checkpoint_id = data.get('checkpointId')
         shard_count = data.get('checkpointShardCount')
         segment_path = data.get('segmentPath')
         if not isinstance(checkpoint_id, str) or not isinstance(shard_count, int) or not isinstance(segment_path, list):
+            logger.warning("Parent snapshot document '%s' contains invalid metadata", parent_id)
             return None
         return {
             'checkpointId': checkpoint_id,
@@ -621,9 +627,20 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         if target_is_checkpoint:
             checkpoint_snap = by_path.get(checkpoint_ref.path)
             if checkpoint_snap is None or not checkpoint_snap.exists:
+                logger.warning(
+                    "Checkpoint snapshot document '%s' does not exist for target '%s'",
+                    checkpoint_ref.path,
+                    target_id,
+                )
                 return None
             checkpoint_doc = checkpoint_snap.to_dict() or {}
             if checkpoint_doc.get('snapshotId') != target_id:
+                logger.warning(
+                    "Checkpoint document '%s' snapshotId mismatch (got '%s', expected '%s')",
+                    checkpoint_ref.path,
+                    checkpoint_doc.get('snapshotId'),
+                    target_id,
+                )
                 return None
             return {'doc': checkpoint_doc, 'state': state if isinstance(state, dict) else {}}
 
@@ -631,12 +648,21 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         for ref in seg_refs:
             seg_snap = by_path.get(ref.path)
             if seg_snap is None or not seg_snap.exists:
+                logger.warning(
+                    "Segment snapshot document '%s' does not exist for target '%s'",
+                    ref.path,
+                    target_id,
+                )
                 return None
             seg_doc = seg_snap.to_dict() or {}
             state = apply_json_patch(doc=state, patch=_patch_from_json(seg_doc.get('statePatch')))
             target_doc = seg_doc
 
         if target_doc is None or target_doc.get('snapshotId') != target_id:
+            logger.warning(
+                "Target segment snapshot document mismatch or missing for '%s'",
+                target_id,
+            )
             return None
         return {'doc': target_doc, 'state': state if isinstance(state, dict) else {}}
 
@@ -718,6 +744,11 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             try:
                 status = SnapshotStatus(status_raw)
             except ValueError:
+                logger.warning(
+                    "Unknown SnapshotStatus '%s' for snapshot '%s'",
+                    status_raw,
+                    doc.get('snapshotId'),
+                )
                 status = None
         return SessionSnapshot(
             snapshot_id=doc['snapshotId'],
