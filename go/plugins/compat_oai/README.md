@@ -50,7 +50,8 @@ func (p *MyPlugin) Name() string {
 }
 ```
 
-See the `openai`, `anthropic`, and `dashscope` directories for complete implementations.
+See the `openai`, `anthropic`, `dashscope`, `zai`, `kimi`, and `groq`
+directories for complete implementations.
 
 ## Running Tests
 
@@ -61,6 +62,7 @@ export ANTHROPIC_API_KEY=<your-anthropic-key>
 export DASHSCOPE_API_KEY=<your-dashscope-key>
 export ZAI_API_KEY=<your-zai-key>
 export KIMI_API_KEY=<your-kimi-key>
+export GROQ_API_KEY=<your-groq-key>
 ```
 
 Run all tests:
@@ -84,6 +86,9 @@ go test -v ./zai
 
 # Kimi tests
 go test -v ./kimi
+
+# Groq tests
+go test -v ./groq
 ```
 
 Note: Tests will be skipped if the required API keys are not set.
