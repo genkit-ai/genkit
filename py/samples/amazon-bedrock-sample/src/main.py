@@ -29,6 +29,7 @@ from genkit import Genkit, ModelResponse, ReasoningPart
 NOVA = 'bedrock/us.amazon.nova-lite-v1:0'
 LLAMA = 'bedrock/us.meta.llama3-3-70b-instruct-v1:0'
 DEEPSEEK = 'bedrock/us.deepseek.r1-v1:0'
+CLAUDE = 'bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0'
 
 # Declaring models is optional — resolve() serves any Bedrock model ID or ARN
 # on demand — but declared ones show up in the Dev UI model list.
@@ -39,6 +40,7 @@ ai = Genkit(
                 ModelDefinition(name='us.amazon.nova-lite-v1:0'),
                 ModelDefinition(name='us.meta.llama3-3-70b-instruct-v1:0'),
                 ModelDefinition(name='us.deepseek.r1-v1:0'),
+                ModelDefinition(name='us.anthropic.claude-sonnet-4-5-20250929-v1:0'),
             ]
         )
     ],
@@ -128,6 +130,25 @@ async def reasoning(data: TopicInput) -> dict[str, object]:
         model=DEEPSEEK,
         prompt=f'What is 17 * 23? Think it through, then state the answer. Mention {data.topic} once.',
         config={'maxTokens': 2048},
+    )
+    return _reasoning_summary(response)
+
+
+@ai.flow()
+async def thinking(data: TopicInput) -> dict[str, object]:
+    """Claude extended thinking: signed reasoning that survives replay.
+
+    Unlike DeepSeek, Claude signs its reasoning, so ``signatures_present`` is
+    true here and the parts are replayed verbatim on multi-turn follow-ups.
+    """
+    response = await ai.generate(
+        model=CLAUDE,
+        prompt=f'What is 17 * 23? Think it through, then state the answer. Mention {data.topic} once.',
+        config={
+            'maxTokens': 4096,
+            # Bedrock requires budget_tokens >= 1024, below maxTokens.
+            'additionalModelRequestFields': {'thinking': {'type': 'enabled', 'budget_tokens': 1024}},
+        },
     )
     return _reasoning_summary(response)
 

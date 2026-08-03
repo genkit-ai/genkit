@@ -18,7 +18,8 @@
 
 Opt-in: set ``BEDROCK_LIVE_TESTS=1`` plus working AWS credentials and a
 region (``AWS_REGION`` or ``~/.aws/config``). These call real models and
-incur cost. The models used need only default model access.
+incur cost. The Anthropic models additionally need the account's one-time
+use-case agreement (Bedrock console -> Model access).
 """
 
 import os
@@ -41,6 +42,7 @@ pytestmark = [
     ),
 ]
 
+CLAUDE = 'us.anthropic.claude-sonnet-4-5-20250929-v1:0'
 NOVA = 'us.amazon.nova-lite-v1:0'
 DEEPSEEK = 'us.deepseek.r1-v1:0'
 
@@ -122,6 +124,48 @@ async def test_undocumented_tool_round_trip() -> None:
         tools=[weather],
     )
     assert (await make_model(NOVA).generate(follow_up)).message is not None
+
+
+async def test_claude_sync_without_config() -> None:
+    # No config on purpose: Converse accepts Claude requests without maxTokens
+    # and applies a service default, so the plugin injects nothing.
+    response = await make_model(CLAUDE).generate(text_request("Reply with the single word 'pong'."))
+    assert response.finish_reason == FinishReason.STOP
+    assert response.message is not None
+    text = response.message.content[0].root.text
+    assert text is not None and 'pong' in text.lower()
+
+
+async def test_claude_reasoning_signature_round_trip() -> None:
+    model = make_model(CLAUDE)
+    # Bedrock requires budget_tokens >= 1024 and maxTokens above it; thinking
+    # requests reject custom temperature, so none is set.
+    config = BedrockConfig(
+        max_tokens=4096,
+        additional_model_request_fields={'thinking': {'type': 'enabled', 'budget_tokens': 1024}},
+    )
+    request = text_request('What is 17 * 23? Think it through.', config=config)
+    response = await model.generate(request)
+
+    assert response.message is not None
+    reasoning_parts = [
+        part.root for part in response.message.content if getattr(part.root, 'reasoning', None) is not None
+    ]
+    assert reasoning_parts, 'expected a reasoning part on a thinking-enabled sync call'
+    assert reasoning_parts[0].metadata is not None
+    assert reasoning_parts[0].metadata.get(REASONING_SIGNATURE_METADATA_KEY)
+
+    # Replaying the signed reasoning verbatim must be accepted by Bedrock.
+    follow_up = ModelRequest(
+        messages=[
+            *request.messages,
+            response.message,
+            Message(role=Role.USER, content=[Part(root=TextPart(text='Now add 100 to that.'))]),
+        ],
+        config=config,
+    )
+    follow_up_response = await model.generate(follow_up)
+    assert follow_up_response.finish_reason == FinishReason.STOP
 
 
 async def test_deepseek_reasoning_sync_and_round_trip() -> None:

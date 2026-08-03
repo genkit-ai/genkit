@@ -47,8 +47,8 @@ class BedrockConfig(ModelConfig):
     )
 
     max_tokens: int | None = None
-    """Maximum tokens to generate. When unset, the plugin leaves the field
-    unset except for Claude models, where Bedrock requires a value."""
+    """Maximum tokens to generate. When unset, the field is left unset and
+    the service applies its own default cap."""
 
     tool_choice: str | None = None
     """Tool choice mode: ``auto``, ``required``/``any``, ``none``, or a tool name."""

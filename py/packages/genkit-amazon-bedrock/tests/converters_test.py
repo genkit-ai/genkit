@@ -31,7 +31,6 @@ from genkit_amazon_bedrock.converters import (
     build_inference_config,
     cache_point_part,
     content_blocks_to_parts,
-    default_max_tokens_for_model,
     map_finish_reason,
     normalize_config,
     to_bedrock_role,
@@ -181,37 +180,20 @@ def test_top_k_and_version_are_accepted_but_ignored() -> None:
     assert 'additionalModelRequestFields' not in kwargs
 
 
-# --- Claude maxTokens injection --------------------------------------------
+# --- maxTokens --------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    'model_id,expected',
-    [
-        ('anthropic.claude-3-haiku-20240307-v1:0', 4096),
-        ('anthropic.claude-3-5-sonnet-20241022-v2:0', 8192),
-        ('anthropic.claude-3-7-sonnet-20250219-v1:0', 8192),
-        ('us.anthropic.claude-sonnet-4-5-20250929-v1:0', 8192),
-        ('anthropic.claude-opus-4-6-v1', 8192),
-        ('amazon.nova-lite-v1:0', None),
-    ],
-)
-def test_default_max_tokens_for_model(model_id, expected) -> None:
-    assert default_max_tokens_for_model(model_id) == expected
-
-
-def test_claude_gets_default_max_tokens_injected() -> None:
-    kwargs = build_converse_request('anthropic.claude-3-haiku-20240307-v1:0', user_text_request())
-    assert kwargs['inferenceConfig'] == {'maxTokens': 4096}
-
-
-def test_claude_keeps_user_configured_max_tokens() -> None:
+def test_configured_max_tokens_is_sent() -> None:
     request = user_text_request(config=BedrockConfig(max_tokens=32))
     kwargs = build_converse_request('anthropic.claude-3-haiku-20240307-v1:0', request)
     assert kwargs['inferenceConfig'] == {'maxTokens': 32}
 
 
-def test_non_claude_without_config_has_no_inference_config() -> None:
-    kwargs = build_converse_request('amazon.nova-lite-v1:0', user_text_request())
+@pytest.mark.parametrize('model_id', ['us.anthropic.claude-sonnet-4-5-20250929-v1:0', 'amazon.nova-lite-v1:0'])
+def test_no_max_tokens_is_injected_for_any_model(model_id) -> None:
+    # Verified live: Converse accepts Claude requests without maxTokens and
+    # applies a service default, so nothing is guessed on the caller's behalf.
+    kwargs = build_converse_request(model_id, user_text_request())
     assert 'inferenceConfig' not in kwargs
 
 
