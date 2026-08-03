@@ -395,7 +395,26 @@ Options compose, so you can build a request up from several helpers. Options
 carrying multiple items (`ai.WithMessages`, `ai.WithTools`, `ai.WithDocs`,
 `ai.WithUse`) accumulate across repeats, while single-value options
 (`ai.WithConfig`, `ai.WithModelName`, `ai.WithSystem`) take the last one set.
-Repeating an option is never an error.
+Repeating an option is never an error, so a request can be assembled in pieces:
+
+```go
+opts := []ai.GenerateOption{
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithSystem("You are a helpful assistant."),
+    ai.WithTools(searchTool, weatherTool),
+}
+
+if isAdmin {
+    // Appends to the tools above; the model sees all of them.
+    opts = append(opts, ai.WithTools(adminTools...))
+}
+if terse {
+    // Fills the same slot as the system prompt above, so this one wins.
+    opts = append(opts, ai.WithSystem("You are a terse assistant. One sentence."))
+}
+
+response, _ := genkit.Generate(ctx, g, append(opts, ai.WithPrompt("What should I pack for Tokyo?"))...)
+```
 
 ### Generate Structured Data
 
