@@ -964,6 +964,43 @@ e.Start(":8080")
 
 Any error returned by `genkit.HandlerFunc` will be handled by Echo's middleware stack.
 
+### Error Handling
+
+Classify a failure once, at its source, with a sentinel from `core/status`; add context up the stack with plain `fmt.Errorf` and `%w`, which preserves the classification; and branch on failures with `errors.Is` instead of matching message text:
+
+```go
+import "github.com/firebase/genkit/go/core/status"
+
+// Derive a subtype for failures you branch on. It keeps the parent's status
+// (NOT_FOUND, so HTTP 404) and errors.Is matches at either granularity:
+// this exact failure, or any status.ErrNotFound.
+var ErrRecipeNotFound = status.ErrNotFound.Subtype("recipe not found")
+
+func lookupRecipe(dish string) (string, error) {
+    recipe, ok := cookbook[dish]
+    if !ok {
+        // PublicErrorf marks the message safe to return to clients.
+        return "", status.PublicErrorf(ErrRecipeNotFound, "no recipe for %q in the cookbook", dish)
+    }
+    return recipe, nil
+}
+
+genkit.DefineFlow(g, "recipeFlow", func(ctx context.Context, dish string) (string, error) {
+    recipe, err := lookupRecipe(dish)
+    if errors.Is(err, ErrRecipeNotFound) {
+        return improvise(ctx, dish) // Recover from the one failure you expect.
+    }
+    if err != nil {
+        return "", fmt.Errorf("recipeFlow: %w", err) // Add context, keep the classification.
+    }
+    return recipe, nil
+})
+```
+
+At the flow HTTP boundary the status picks the response code (404 here), and only messages built with `status.PublicErrorf` reach the client. Everything else is redacted to a generic string and logged server-side, so provider text and internal identifiers stay out of responses; set `GENKIT_ENV=dev` to see messages unredacted during development. Framework failures classify the same way: `errors.Is(err, status.ErrNotFound)` catches a misconfigured model name, and `status.ErrUnavailable` or `status.ErrResourceExhausted` an overloaded provider.
+
+[See full example](samples/basic-errors)
+
 ### Durable Streaming
 
 > [!WARNING]
