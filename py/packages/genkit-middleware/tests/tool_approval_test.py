@@ -82,7 +82,7 @@ async def test_tool_approval_resumed_with_approval(ctx: GenerateMiddlewareContex
     tool_request = ToolRequest(name='some_tool', input={})
     tool_request_part = ToolRequestPart(
         tool_request=tool_request,
-        metadata={'resumed': {'toolApproved': True}},
+        metadata={'resumed': {'tool_approved': True}},
     )
     params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 

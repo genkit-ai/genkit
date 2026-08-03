@@ -38,6 +38,7 @@ class Attr(StrEnum):
     TYPE = f'{PREFIX}:type'
     INPUT = f'{PREFIX}:input'
     OUTPUT = f'{PREFIX}:output'
+    INIT = f'{PREFIX}:init'
     STATE = f'{PREFIX}:state'
     ERROR = f'{PREFIX}:error'
     IS_ROOT = f'{PREFIX}:isRoot'

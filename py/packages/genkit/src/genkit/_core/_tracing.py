@@ -17,6 +17,7 @@
 
 """Telemetry and tracing functionality for the Genkit framework."""
 
+import asyncio
 import json
 import traceback
 from collections.abc import Generator
@@ -33,7 +34,7 @@ from pydantic.alias_generators import to_camel
 
 from ._base import GenkitModel
 from ._environment import is_dev_environment
-from ._error import GenkitError
+from ._error import GenkitError, GenkitInterrupt
 from ._logger import get_logger
 from ._trace._attrs import Attr, State, metadata_key
 from ._trace._default_exporter import create_span_processor, init_telemetry_server_exporter
@@ -63,6 +64,7 @@ class SpanMetadata(GenkitModel):
     state: Literal['success', 'error'] | None = None
     input: Any | None = Field(default=None)
     output: Any | None = Field(default=None)
+    init: Any | None = Field(default=None)
     is_root: bool | None = None
     metadata: dict[str, Any] | None = None
     path: str | None = None
@@ -175,6 +177,8 @@ def start_attributes(
             attrs[metadata_key(meta_key)] = str(meta_value)
     if metadata.input is not None:
         attrs[Attr.INPUT] = _to_json_attr(metadata.input)
+    if metadata.init is not None:
+        attrs[Attr.INIT] = _to_json_attr(metadata.init)
     return attrs
 
 
@@ -186,6 +190,19 @@ def record_span_outcome(
     """Write success or error attrs after the span body finishes."""
     try:
         yield
+    except GenkitInterrupt:
+        # HITL / tool pause — control flow, not a failed span. Stamp success so
+        # cloud telemetry has a known genkit:state; interrupt metadata already
+        # lives on the raise. Don't paint the span red.
+        if metadata.output is not None:
+            span.set_attribute(Attr.OUTPUT, _to_json_attr(metadata.output))
+        span.set_attribute(Attr.STATE, State.SUCCESS)
+        raise
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        # Abort/timeout — unfinished work, not a win or a fail. Leave
+        # genkit:state absent (OTel stays UNSET) so cloud metrics don't count
+        # these as either. May log Unknown state until we have an aborted bucket.
+        raise
     except Exception as e:
         logger.debug(f'Error in run_in_new_span: {e!s}')
         logger.debug(traceback.format_exc())
@@ -224,6 +241,14 @@ def run_in_new_span(
     start_attrs = start_attributes(metadata, qualified_path=qualified_path)
 
     with push_parent_path(qualified_path):
-        with tracer.start_as_current_span(name=metadata.name, links=links, attributes=start_attrs) as span:
+        # record_span_outcome owns success/error attrs so control-flow
+        # GenkitInterrupt can re-raise without OTEL painting the span red.
+        with tracer.start_as_current_span(
+            name=metadata.name,
+            links=links,
+            attributes=start_attrs,
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
             with record_span_outcome(span, metadata):
                 yield span

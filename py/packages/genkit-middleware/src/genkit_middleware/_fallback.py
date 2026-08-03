@@ -55,7 +55,7 @@ class Fallback(BaseMiddleware[FallbackConfig]):
         model_name: str,
     ) -> Action[Any, Any, Any]:
         """Look up a fallback model on the per-call registry."""
-        action = await ctx.registry.resolve_action(ActionKind.MODEL, model_name)
+        action = await ctx.ai.registry.resolve_action(ActionKind.MODEL, model_name)
         if action is None:
             raise GenkitError(
                 status='NOT_FOUND',
@@ -87,6 +87,7 @@ class Fallback(BaseMiddleware[FallbackConfig]):
                     input=params.request,
                     context=ctx.custom_context,
                     on_chunk=on_chunk,
+                    abort_signal=ctx.abort_signal,
                 )
                 return result.response  # type: ignore[return-value]
             except Exception as e2:

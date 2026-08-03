@@ -1649,28 +1649,27 @@ export function validateResumeAgainstHistory(
   },
   history: MessageData[]
 ): void {
-  // Collect all tool requests from all model messages in the stored history.
-  const allToolRequests: Array<{
-    name: string;
-    ref?: string;
-    input?: unknown;
-  }> = [];
-  for (const msg of history) {
-    if (msg.role === 'model') {
-      for (const part of msg.content) {
-        if (part.toolRequest) {
-          allToolRequests.push(part.toolRequest);
+  // Searches history newest-first so a resume matches the most recent tool
+  // request for a given name + ref.
+  const findToolRequest = (name: string, ref?: string) => {
+    for (let i = history.length - 1; i >= 0; i--) {
+      const msg = history[i];
+      if (msg.role === 'model') {
+        for (const part of msg.content) {
+          const tr = part.toolRequest;
+          if (tr && tr.name === name && tr.ref === ref) {
+            return tr;
+          }
         }
       }
     }
-  }
+    return undefined;
+  };
 
   // Validate restart entries: name + ref must exist AND input must match exactly
   for (const restart of resume.restart || []) {
     const { name, ref, input } = restart.toolRequest;
-    const match = allToolRequests.find(
-      (tr) => tr.name === name && tr.ref === ref
-    );
+    const match = findToolRequest(name, ref);
     if (!match) {
       throw new GenkitError({
         status: 'INVALID_ARGUMENT',
@@ -1696,9 +1695,7 @@ export function validateResumeAgainstHistory(
   // Validate respond entries: name + ref must match a tool request in history
   for (const respond of resume.respond || []) {
     const { name, ref } = respond.toolResponse;
-    const match = allToolRequests.find(
-      (tr) => tr.name === name && tr.ref === ref
-    );
+    const match = findToolRequest(name, ref);
     if (!match) {
       throw new GenkitError({
         status: 'INVALID_ARGUMENT',

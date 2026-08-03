@@ -83,25 +83,24 @@ check_version() {
 echo -e "${YELLOW}Core package:${NC}"
 check_version "packages/genkit/pyproject.toml" "$CORE_VERSION" "core"
 
-# Check all plugins
+# Check all packages
 echo ""
-echo -e "${YELLOW}Plugins (should match core version):${NC}"
+echo -e "${YELLOW}Packages (should match core version):${NC}"
 PLUGIN_COUNT=0
-for f in plugins/*/pyproject.toml; do
-    if [ -f "$f" ]; then
-        check_version "$f" "$CORE_VERSION" "plugin"
+for f in packages/*/pyproject.toml; do
+    if [ -f "$f" ] && [ "$f" != "packages/genkit/pyproject.toml" ]; then
+        check_version "$f" "$CORE_VERSION" "package"
         PLUGIN_COUNT=$((PLUGIN_COUNT + 1))
     fi
 done
-echo -e "  Total plugins: $PLUGIN_COUNT"
+echo -e "  Total packages: $PLUGIN_COUNT"
 
-# Check samples (should also match core version)
+# Informational check of samples
 echo ""
-echo -e "${YELLOW}Samples (should match core version):${NC}"
+echo -e "${YELLOW}Samples (Local Demos):${NC}"
 SAMPLE_COUNT=0
 for f in samples/*/pyproject.toml; do
     if [ -f "$f" ]; then
-        check_version "$f" "$CORE_VERSION" "sample"
         SAMPLE_COUNT=$((SAMPLE_COUNT + 1))
     fi
 done

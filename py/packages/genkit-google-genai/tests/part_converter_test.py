@@ -26,7 +26,7 @@ import pytest
 from genkit_google_genai.models.utils import PartConverter
 from google import genai
 
-from genkit import Media, MediaPart, Part
+from genkit import Media, MediaPart, Part, ToolRequest, ToolRequestPart
 
 
 class TestIsGeminiNativeUrl:
@@ -178,3 +178,67 @@ class TestToGeminiMediaPart:
             pytest.fail(f'inline_data.data = {result.inline_data.data!r}, want {raw!r}')
         if result.inline_data.mime_type != 'text/plain':
             pytest.fail(f'mime_type = {result.inline_data.mime_type}, want text/plain')
+
+
+class TestFunctionCallRef:
+    """Tool-request refs come from the model's call id, not a part index."""
+
+    def test_from_gemini_uses_function_call_id(self) -> None:
+        part = genai.types.Part(
+            function_call=genai.types.FunctionCall(
+                id='call-abc',
+                name='write_file',
+                args={'file_path': 'a.py', 'content': 'hi'},
+            )
+        )
+        got = PartConverter.from_gemini(part)
+        assert isinstance(got.root, ToolRequestPart)
+        if got.root.tool_request.ref != 'call-abc':
+            pytest.fail(f'ref = {got.root.tool_request.ref!r}, want call-abc')
+        if got.root.tool_request.name != 'write_file':
+            pytest.fail(f'name = {got.root.tool_request.name!r}, want write_file')
+
+    def test_from_gemini_leaves_ref_unset_when_model_omits_id(self) -> None:
+        part = genai.types.Part(
+            function_call=genai.types.FunctionCall(
+                name='write_file',
+                args={'file_path': 'a.py', 'content': 'hi'},
+            )
+        )
+        got = PartConverter.from_gemini(part)
+        assert isinstance(got.root, ToolRequestPart)
+        if got.root.tool_request.ref is not None:
+            pytest.fail(f'ref = {got.root.tool_request.ref!r}, want None')
+
+    @pytest.mark.asyncio
+    async def test_to_gemini_round_trips_ref_as_function_call_id(self) -> None:
+        part = Part(
+            root=ToolRequestPart(
+                tool_request=ToolRequest(
+                    name='write_file',
+                    ref='call-abc',
+                    input={'file_path': 'a.py', 'content': 'hi'},
+                )
+            )
+        )
+        got = await PartConverter.to_gemini(part)
+        assert isinstance(got, genai.types.Part)
+        assert got.function_call is not None
+        if got.function_call.id != 'call-abc':
+            pytest.fail(f'function_call.id = {got.function_call.id!r}, want call-abc')
+
+    @pytest.mark.asyncio
+    async def test_to_gemini_omits_id_when_ref_unset(self) -> None:
+        part = Part(
+            root=ToolRequestPart(
+                tool_request=ToolRequest(
+                    name='write_file',
+                    input={'file_path': 'a.py', 'content': 'hi'},
+                )
+            )
+        )
+        got = await PartConverter.to_gemini(part)
+        assert isinstance(got, genai.types.Part)
+        assert got.function_call is not None
+        if got.function_call.id is not None:
+            pytest.fail(f'function_call.id = {got.function_call.id!r}, want None')
