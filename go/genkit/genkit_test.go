@@ -57,6 +57,11 @@ func (csvTestFormatter) Handler(schema map[string]any) (ai.FormatHandler, error)
 	return csvTestHandler{}, nil
 }
 
+// jsonNameFormatter collides with the built-in "json" format.
+type jsonNameFormatter struct{ csvTestFormatter }
+
+func (jsonNameFormatter) Name() string { return "json" }
+
 type csvTestHandler struct{}
 
 func (csvTestHandler) ParseMessage(m *ai.Message) (*ai.Message, error) { return m, nil }
@@ -114,6 +119,15 @@ func TestDefineFormats(t *testing.T) {
 		if !IsDefinedFormat(g, "/format/csv3") {
 			t.Error("IsDefinedFormat() = false for the prefixed name, want true")
 		}
+	})
+
+	t.Run("DefineFormats panics on a built-in name", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Error("DefineFormats() should panic when the name collides with a built-in")
+			}
+		}()
+		DefineFormats(g, jsonNameFormatter{})
 	})
 }
 

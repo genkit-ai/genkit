@@ -96,7 +96,10 @@ func ConfigureFormats(reg api.Registry) {
 	DefineFormats(reg, DEFAULT_FORMATS...)
 }
 
-// DefineFormats registers each [Formatter] under the name returned by its Name method.
+// DefineFormats registers each [Formatter] under the name returned by its Name
+// method. It panics if a format with that name is already registered, which
+// includes the built-in formats registered by [ConfigureFormats], so a format
+// cannot be replaced once defined.
 func DefineFormats(r api.Registry, formatters ...Formatter) {
 	for _, f := range formatters {
 		r.RegisterValue("/format/"+f.Name(), f)

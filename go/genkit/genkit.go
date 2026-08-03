@@ -1659,12 +1659,18 @@ func DefineHelper(g *Genkit, name string, fn any) {
 //		ai.WithPrompt("List 3 countries and their capitals"),
 //		ai.WithOutputFormat("csv"), // Use the custom formatter
 //	)
+//
+// It panics if a format with the same name is already registered, which
+// includes the built-in names above. Formats cannot be overridden.
 func DefineFormats(g *Genkit, formatters ...ai.Formatter) {
 	ai.DefineFormats(g.reg, formatters...)
 }
 
 // DefineFormat defines a new [ai.Formatter] and registers it in the registry
 // under the given name, which may optionally carry the "/format/" prefix.
+//
+// It panics if a format with the same name is already registered, including
+// the built-in "text", "json", "jsonl", "array", and "enum" formats.
 //
 // Deprecated: Use [DefineFormats] instead, which takes the name from the
 // Formatter's Name method.
