@@ -27,17 +27,19 @@ Install the plugin in your project with your favorite package manager:
 
 ### Initialize
 
+Import the OpenAI plugin from `@genkit-ai/compat-oai/openai` (not the package root). The package root exports `openAICompatible` for custom OpenAI-compatible providers.
+
 ```typescript
 import dotenv from 'dotenv';
 import { genkit } from 'genkit';
-import openAI, { gpt35Turbo } from '@genkit-ai/compat-oai';
+import { openAI } from '@genkit-ai/compat-oai/openai';
 
 dotenv.config();
 
 const ai = genkit({
   plugins: [openAI({ apiKey: process.env.OPENAI_API_KEY })],
   // specify a default model if not provided in generate params:
-  model: gpt35Turbo,
+  model: openAI.model('gpt-3.5-turbo'),
 });
 ```
 
@@ -47,7 +49,7 @@ The simplest way to generate text is by using the `generate` method:
 
 ```typescript
 const response = await ai.generate({
-  model: gpt4o
+  model: openAI.model('gpt-4o'),
   prompt: 'Tell me a joke.',
 });
 
@@ -58,7 +60,7 @@ console.log(response.text);
 
 ```typescript
 const response = await ai.generate({
-  model: gpt4o,
+  model: openAI.model('gpt-4o'),
   prompt: [
     { text: 'What animal is in the photo?' },
     { media: { url: imageUrl } },
@@ -75,10 +77,8 @@ console.log(response.text);
 ### Text Embeddings
 
 ```typescript
-import { textEmbeddingAda002 } from '@genkit-ai/compat-oai';
-
 const embedding = await ai.embed({
-  embedder: textEmbeddingAda002,
+  embedder: openAI.embedder('text-embedding-ada-002'),
   content: 'Hello world',
 });
 
@@ -142,31 +142,33 @@ console.log(result.text);
 
 ### Custom models & other Cloud providers
 
-```typescript
-import { GenerationCommonConfigSchema, genkit, z } from 'genkit';
-import { ModelInfo } from 'genkit/model';
-import openAI from '@genkit-ai/compat-oai';
+For non-OpenAI OpenAI-compatible APIs, use `openAICompatible` from the package root and provide a plugin `name`:
 
-const modelInfo: ModelInfo = {
-  label: 'Claude - Claude 3.7 Sonnet',
-  supports: {
-    multiturn: true,
-    tools: true,
-    media: false,
-    systemRole: true,
-    output: ['json', 'text'],
-  },
-};
-const schema = GenerationCommonConfigSchema.extend({});
+```typescript
+import { genkit, z } from 'genkit';
+import {
+  compatOaiModelRef,
+  defineCompatOpenAIModel,
+  openAICompatible,
+} from '@genkit-ai/compat-oai';
 
 const ai = genkit({
   plugins: [
-    openAI({
-      apiKey: process.env.ANTHROPIC_API_KEY,
-      baseURL: 'https://api.anthropic.com/v1/',
-      models: [
-        { name: 'claude-3-7-sonnet', info: modelInfo, configSchema: schema },
-      ],
+    openAICompatible({
+      name: 'openrouter',
+      apiKey: process.env.OPENROUTER_API_KEY,
+      baseURL: 'https://openrouter.ai/api/v1',
+      async initializer(client) {
+        return [
+          defineCompatOpenAIModel({
+            name: 'openrouter/z-ai/glm-4.5-air:free',
+            client,
+            modelRef: compatOaiModelRef({
+              name: 'openrouter/z-ai/glm-4.5-air:free',
+            }),
+          }),
+        ];
+      },
     }),
   ],
 });
@@ -180,10 +182,9 @@ export const customModelFlow = ai.defineFlow(
   async (subject) => {
     const llmResponse = await ai.generate({
       prompt: `tell me a joke about ${subject}`,
-      model: 'openai/claude-3-7-sonnet',
-      config: {
-        version: 'claude-3-7-sonnet-20250219',
-      },
+      model: compatOaiModelRef({
+        name: 'openrouter/z-ai/glm-4.5-air:free',
+      }),
     });
     return llmResponse.text;
   }
