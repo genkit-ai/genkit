@@ -103,4 +103,40 @@ describe('runInNewSpan exception recording', () => {
     assert.strictEqual(exceptionEvents(span).length, 1);
     assert.strictEqual(span.attributes['genkit:isFailureSource'], true);
   });
+
+  it('records shared sentinel errors once per independent trace', async () => {
+    const sentinelErr = new Error('sentinel');
+
+    await assert.rejects(
+      () =>
+        runInNewSpan({ metadata: { name: 'trace1' } }, async () => {
+          throw sentinelErr;
+        }),
+      (e: unknown) => e === sentinelErr
+    );
+
+    await assert.rejects(
+      () =>
+        runInNewSpan({ metadata: { name: 'trace2' } }, async () => {
+          throw sentinelErr;
+        }),
+      (e: unknown) => e === sentinelErr
+    );
+
+    await new Promise((r) => setImmediate(r));
+
+    const spans = spanExporter.exportedSpans;
+    assert.strictEqual(spans.length, 2);
+
+    const trace1Span = spans.find((s) => s.displayName === 'trace1');
+    const trace2Span = spans.find((s) => s.displayName === 'trace2');
+    assert.ok(trace1Span);
+    assert.ok(trace2Span);
+
+    assert.strictEqual(exceptionEvents(trace1Span).length, 1);
+    assert.strictEqual(exceptionEvents(trace2Span).length, 1);
+    assert.strictEqual(trace1Span.attributes['genkit:isFailureSource'], true);
+    assert.strictEqual(trace2Span.attributes['genkit:isFailureSource'], true);
+    assert.notStrictEqual(trace1Span.traceId, trace2Span.traceId);
+  });
 });

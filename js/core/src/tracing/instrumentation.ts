@@ -52,11 +52,12 @@ interface RunInNewSpanOpts {
  * Tracks errors that have already been recorded via ``recordException`` / marked
  * as ``isFailureSource`` while bubbling up nested ``runInNewSpan`` catches.
  *
- * Using a WeakSet avoids mutating caller-owned Error objects with Genkit-specific
- * properties (the old ``ignoreFailedSpan`` flag) that could leak into external
- * loggers or other telemetry systems.
+ * Maps error object → OpenTelemetry ``traceId`` so:
+ * - We avoid mutating caller-owned Error objects (old ``ignoreFailedSpan`` flag).
+ * - Shared/sentinel errors reused across independent traces are still recorded
+ *   once per trace (a global WeakSet would suppress later traces).
  */
-const failureSourceErrors = new WeakSet<object>();
+const failureSourceErrors = new WeakMap<object, string>();
 
 type RunInNewSpanFn<T> = (
   metadata: SpanMetadata,
@@ -173,14 +174,15 @@ export async function runInNewSpan<T>(
 
         // Mark the first failing span as the source of failure. Prevent parent
         // spans that catch re-thrown exceptions from also claiming to be the
-        // source or re-recording the same exception timeEvent.
+        // source or re-recording the same exception timeEvent within this trace.
         if (e !== null && typeof e === 'object') {
-          if (!failureSourceErrors.has(e)) {
+          const traceId = otSpan.spanContext().traceId;
+          if (failureSourceErrors.get(e) !== traceId) {
             opts.metadata.isFailureSource = true;
             if (e instanceof Error) {
               otSpan.recordException(e);
             }
-            failureSourceErrors.add(e);
+            failureSourceErrors.set(e, traceId);
           }
         }
 
