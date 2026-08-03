@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -28,6 +27,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
@@ -70,7 +70,7 @@ func metadataSignature(metadata map[string]any) []byte {
 func toAnthropicMediaBlock(p *ai.Part, kind string) (anthropic.ContentBlockParamUnion, error) {
 	contentType, data, err := uri.Data(p)
 	if err != nil {
-		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("unable to parse %s part: %w", kind, err)
+		return anthropic.ContentBlockParamUnion{}, status.Errorf(ai.ErrInvalidPart, "unable to parse %s part: %w", kind, err)
 	}
 
 	switch {
@@ -81,7 +81,7 @@ func toAnthropicMediaBlock(p *ai.Part, kind string) (anthropic.ContentBlockParam
 	case contentType == "text/plain":
 		return anthropic.NewDocumentBlock(anthropic.PlainTextSourceParam{Data: string(data)}), nil
 	default:
-		return anthropic.ContentBlockParamUnion{}, fmt.Errorf(
+		return anthropic.ContentBlockParamUnion{}, status.Errorf(ai.ErrUnsupportedByModel,
 			"unsupported %s content type %q: Anthropic accepts image/*, application/pdf, and text/plain", kind, contentType)
 	}
 }
@@ -478,7 +478,7 @@ func toAnthropicParts(parts []*ai.Part) ([]anthropic.ContentBlockParamUnion, err
 		case p.IsReasoning():
 			blocks = append(blocks, anthropic.NewThinkingBlock(string(metadataSignature(p.Metadata)), p.Text))
 		default:
-			return nil, errors.New("unknown part type in the request")
+			return nil, status.Errorf(ai.ErrInvalidPart, "unknown part type in the request")
 		}
 	}
 
@@ -518,7 +518,7 @@ func toGenkitResponse(m *anthropic.Message) (*ai.ModelResponse, error) {
 				Name:  part.Name,
 			})
 		default:
-			return nil, fmt.Errorf("unknown part: %#v", part)
+			return nil, status.Errorf(ai.ErrInvalidPart, "unknown part: %#v", part)
 		}
 		msg.Content = append(msg.Content, p)
 	}
