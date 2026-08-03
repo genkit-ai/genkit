@@ -271,12 +271,25 @@ func toAnthropicRequest(provider string, i *ai.ModelRequest) (*anthropic.Message
 		req.MaxTokens = DefaultMaxOutputTokens
 	}
 
-	// configure system prompt (if given)
+	// configure system prompt (if given). Preserve per-part cache_control so
+	// system breakpoints match the JS Anthropic plugin.
 	sysBlocks := []anthropic.TextBlockParam{}
 	for _, message := range i.Messages {
 		if message.Role == ai.RoleSystem {
-			// only text is supported for system messages
-			sysBlocks = append(sysBlocks, anthropic.TextBlockParam{Text: message.Text()})
+			for _, p := range message.Content {
+				if !p.IsText() {
+					return nil, fmt.Errorf("system messages can only contain text parts")
+				}
+				tb := anthropic.TextBlockParam{Text: p.Text}
+				cc, ok, err := cacheControlFromMetadata(p.Metadata)
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					tb.CacheControl = cc
+				}
+				sysBlocks = append(sysBlocks, tb)
+			}
 			continue
 		}
 
@@ -450,36 +463,43 @@ func toAnthropicParts(parts []*ai.Part) ([]anthropic.ContentBlockParamUnion, err
 	blocks := []anthropic.ContentBlockParamUnion{}
 
 	for _, p := range parts {
+		var block anthropic.ContentBlockParamUnion
 		switch {
 		case p.IsText():
-			blocks = append(blocks, anthropic.NewTextBlock(p.Text))
+			block = anthropic.NewTextBlock(p.Text)
 		case p.IsMedia():
-			block, err := toAnthropicMediaBlock(p, "media")
+			var err error
+			block, err = toAnthropicMediaBlock(p, "media")
 			if err != nil {
 				return nil, err
 			}
-			blocks = append(blocks, block)
 		case p.IsData():
-			block, err := toAnthropicMediaBlock(p, "data")
+			var err error
+			block, err = toAnthropicMediaBlock(p, "data")
 			if err != nil {
 				return nil, err
 			}
-			blocks = append(blocks, block)
 		case p.IsToolRequest():
 			toolReq := p.ToolRequest
-			blocks = append(blocks, anthropic.NewToolUseBlock(toolReq.Ref, toolReq.Input, toolReq.Name))
+			block = anthropic.NewToolUseBlock(toolReq.Ref, toolReq.Input, toolReq.Name)
 		case p.IsToolResponse():
 			toolResp := p.ToolResponse
 			output, err := json.Marshal(toolResp.Output)
 			if err != nil {
 				return nil, fmt.Errorf("unable to parse tool response, err: %w", err)
 			}
-			blocks = append(blocks, anthropic.NewToolResultBlock(toolResp.Ref, string(output), false))
+			block = anthropic.NewToolResultBlock(toolResp.Ref, string(output), false)
 		case p.IsReasoning():
+			// Anthropic rejects cache_control on thinking blocks.
 			blocks = append(blocks, anthropic.NewThinkingBlock(string(metadataSignature(p.Metadata)), p.Text))
+			continue
 		default:
 			return nil, status.Errorf(ai.ErrInvalidPart, "unknown part type in the request")
 		}
+		if err := applyCacheControl(&block, p.Metadata); err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, block)
 	}
 
 	return blocks, nil
@@ -525,10 +545,18 @@ func toGenkitResponse(m *anthropic.Message) (*ai.ModelResponse, error) {
 
 	r.Message = msg
 	r.Raw = m.JSON
+	// Mirror JS stable usage.custom cache fields while keeping CachedContentTokens
+	// as the Go convenience field for cache reads.
 	r.Usage = &ai.GenerationUsage{
 		InputTokens:         int(m.Usage.InputTokens),
 		OutputTokens:        int(m.Usage.OutputTokens),
 		CachedContentTokens: int(m.Usage.CacheReadInputTokens),
+		Custom: map[string]float64{
+			"cache_creation_input_tokens": float64(m.Usage.CacheCreationInputTokens),
+			"cache_read_input_tokens":     float64(m.Usage.CacheReadInputTokens),
+			"ephemeral_5m_input_tokens":   float64(m.Usage.CacheCreation.Ephemeral5mInputTokens),
+			"ephemeral_1h_input_tokens":   float64(m.Usage.CacheCreation.Ephemeral1hInputTokens),
+		},
 	}
 	return &r, nil
 }
