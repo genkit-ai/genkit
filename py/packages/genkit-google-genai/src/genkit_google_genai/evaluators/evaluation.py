@@ -44,7 +44,7 @@ from google.auth.transport.requests import Request
 from pydantic import BaseModel, ConfigDict
 
 from genkit import GenkitError
-from genkit.evaluator import BaseDataPoint, Details, EvalFnResponse, Score
+from genkit.evaluator import BaseEvalDataPoint, Details, EvalFnResponse, Score
 from genkit.plugin_api import GENKIT_CLIENT_HEADER, Action, get_cached_client
 from genkit_google_genai.constants import GLOBAL_LOCATION, is_multi_regional_location, vertex_api_host
 
@@ -250,13 +250,13 @@ class EvaluatorFactory:
         """
 
         async def evaluator_fn(
-            datapoint: BaseDataPoint,
+            datapoint: BaseEvalDataPoint,
             options: dict[str, Any] | None = None,
         ) -> EvalFnResponse:
             """Evaluate a single datapoint.
 
             Args:
-                datapoint: The evaluation data point.
+                datapoint: The evaluation data point (test_case_id guaranteed).
                 options: Optional evaluation options.
 
             Returns:
@@ -268,7 +268,7 @@ class EvaluatorFactory:
 
             return EvalFnResponse(
                 evaluation=score,
-                test_case_id=datapoint.test_case_id or '',
+                test_case_id=datapoint.test_case_id,
             )
 
         return evaluator_fn

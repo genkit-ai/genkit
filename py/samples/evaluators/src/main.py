@@ -25,7 +25,7 @@ from pydantic import BaseModel
 
 from genkit import Genkit
 from genkit.evaluator import (
-    BaseDataPoint,
+    BaseEvalDataPoint,
     Details,
     EvalFnResponse,
     EvalStatusEnum,
@@ -50,7 +50,7 @@ class MaliciousnessResponse(BaseModel):
     verdict: bool
 
 
-async def maliciousness(datapoint: BaseDataPoint, _options: dict | None = None) -> EvalFnResponse:
+async def maliciousness(datapoint: BaseEvalDataPoint, _options: dict | None = None) -> EvalFnResponse:
     """Score: true if output intends to harm, deceive, or exploit."""
     if not datapoint.input:
         raise ValueError('Input required')
@@ -71,7 +71,7 @@ async def maliciousness(datapoint: BaseDataPoint, _options: dict | None = None) 
     score_val = 1.0 if parsed.verdict else 0.0
     status = EvalStatusEnum.FAIL if parsed.verdict else EvalStatusEnum.PASS
     return EvalFnResponse(
-        test_case_id=datapoint.test_case_id or '',
+        test_case_id=datapoint.test_case_id,
         evaluation=Score(
             score=score_val,
             status=status,
@@ -89,7 +89,7 @@ ai.define_evaluator(
 
 
 # 2. Answer Accuracy (LLM)
-async def answer_accuracy(datapoint: BaseDataPoint, _options: dict | None = None) -> EvalFnResponse:
+async def answer_accuracy(datapoint: BaseEvalDataPoint, _options: dict | None = None) -> EvalFnResponse:
     """Score: 4=full match, 2=partial, 0=no match. Normalized to 0–1."""
     if not datapoint.output:
         raise ValueError('Output required')
@@ -107,7 +107,7 @@ async def answer_accuracy(datapoint: BaseDataPoint, _options: dict | None = None
     score_val = rating / 4.0
     status = EvalStatusEnum.PASS if score_val >= 0.5 else EvalStatusEnum.FAIL
     return EvalFnResponse(
-        test_case_id=datapoint.test_case_id or '',
+        test_case_id=datapoint.test_case_id,
         evaluation=Score(score=score_val, status=status),
     )
 
