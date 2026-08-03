@@ -150,6 +150,8 @@ func ConfigSchema(config any) map[string]any {
 	}
 	schema := r.Reflect(config)
 	result := base.SchemaAsMap(schema)
+	// Replace the opaque SDK thinking union with the Genkit/JS-shaped schema.
+	overlayThinkingConfigSchema(result)
 
 	return result
 }
@@ -365,10 +367,28 @@ func configFromRequest(input *ai.ModelRequest) (*anthropic.MessageNewParams, err
 	case *anthropic.MessageNewParams:
 		result = *config
 	case map[string]any:
+		cleaned := make(map[string]any, len(config))
+		var thinking any
+		for k, v := range config {
+			if k == "thinking" && looksLikeGenkitThinkingConfig(v) {
+				thinking = v
+				continue
+			}
+			cleaned[k] = v
+		}
 		var err error
-		result, err = base.MapToStruct[anthropic.MessageNewParams](config)
+		result, err = base.MapToStruct[anthropic.MessageNewParams](cleaned)
 		if err != nil {
 			return nil, err
+		}
+		if thinking != nil {
+			union, ok, err := toAnthropicThinkingConfig(thinking)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				result.Thinking = union
+			}
 		}
 	case nil:
 		// Empty configuration is considered valid
