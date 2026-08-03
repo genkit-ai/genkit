@@ -26,6 +26,7 @@ import (
 	"os"
 	"path"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -44,8 +45,34 @@ type Prompt interface {
 	// Name returns the name of the prompt.
 	Name() string
 	// Execute executes the prompt with the given options and returns a [ModelResponse].
+	//
+	// # Options
+	//
+	// Input:
+	//
+	//   - [WithInput]: Supply the prompt's input, overriding the default from [WithInputType]
+	//
+	// Conversation:
+	//
+	//   - [WithMessages]: Supply the conversation this execution continues
+	//   - [WithMessagesFn]: As above, computed from the input
+	//
+	// A prompt that declares a conversation of its own decides where these go,
+	// with {{history}} in a [WithMessagesTemplate] or [HistoryFromContext] in a
+	// [WithMessagesFn]. A prompt that declares none has them used as the
+	// conversation directly, between the system message and the user prompt.
+	//
+	// Overrides, each replacing what the prompt was defined with:
+	//
+	//   - [WithModel], [WithModelName]: Call a different model
+	//   - [WithConfig]: Replace the generation config
+	//   - [WithDocs], [WithTextDocs]: Replace the context documents, skipping any [WithDocsFn]
+	//   - [WithTools], [WithToolChoice], [WithMaxTurns], [WithReturnToolRequests]: Change tool behavior
+	//   - [WithMiddleware], [WithUse]: Add middleware for this execution
+	//   - [WithStreaming]: Receive streamed chunks
 	Execute(ctx context.Context, opts ...PromptExecuteOption) (*ModelResponse, error)
 	// ExecuteStream executes the prompt with streaming and returns an iterator.
+	// It accepts the same options as Execute.
 	ExecuteStream(ctx context.Context, opts ...PromptExecuteOption) iter.Seq2[*ModelStreamValue, error]
 	// Render renders the prompt with the given input and returns a [GenerateActionOptions] to be used with [GenerateWithRequest].
 	Render(ctx context.Context, input any) (*GenerateActionOptions, error)
@@ -163,10 +190,39 @@ func (p *prompt) Execute(ctx context.Context, opts ...PromptExecuteOption) (*Mod
 	for _, opt := range opts {
 		opt.applyPromptExecute(execOpts)
 	}
+	// A template belongs to the prompt, which is what compiles it; nothing
+	// here would render one, so accepting it silently would drop the
+	// caller's conversation.
+	if execOpts.MessagesText != nil {
+		return nil, status.Errorf(status.ErrInvalidArgument,
+			"Prompt.Execute: WithMessagesTemplate applies only to DefinePrompt, where the template is compiled. Pass this execution's conversation with WithMessages or WithMessagesFn.")
+	}
+	// Messages passed at execution time are resolved here and handed to
+	// Render through a context that exists only for that call. The prompt's
+	// own messages take precedence over them, but its content functions can
+	// still reach them via HistoryFromContext, so a prompt that manages its
+	// own history decides how these are woven in. The original ctx, not
+	// renderCtx, feeds the generation below: otherwise the history would ride
+	// the context into every tool call and nested prompt executed during the
+	// generate loop.
+	renderCtx := ctx
+	if execOpts.MessagesFn != nil {
+		history, err := p.resolveHistory(ctx, execOpts)
+		if err != nil {
+			return nil, err
+		}
+		renderCtx = withPromptHistory(renderCtx, history)
+	}
+	if len(execOpts.Documents) > 0 {
+		// Documents supplied at execution time replace the prompt's own, so
+		// tell Render not to run a WithDocsFn whose result would be discarded.
+		renderCtx = withPromptDocsOverride(renderCtx)
+	}
+
 	// Render() should populate all data from the prompt. Prompt fields should
 	// *not* be referenced in this function as it may have been loaded from
 	// the registry and is missing the options passed in at definition.
-	actionOpts, err := p.Render(ctx, execOpts.Input)
+	actionOpts, err := p.Render(renderCtx, execOpts.Input)
 	if err != nil {
 		return nil, err
 	}
@@ -199,40 +255,6 @@ func (p *prompt) Execute(ctx context.Context, opts ...PromptExecuteOption) (*Mod
 
 	if execOpts.ReturnToolRequests != nil {
 		actionOpts.ReturnToolRequests = *execOpts.ReturnToolRequests
-	}
-
-	if execOpts.MessagesFn != nil {
-		m, err := buildVariables(execOpts.Input)
-		if err != nil {
-			return nil, err
-		}
-
-		tempOpts := promptOptions{
-			commonGenOptions: commonGenOptions{
-				MessagesFn: execOpts.MessagesFn,
-			},
-		}
-
-		execMsgs, err := renderMessages(ctx, tempOpts, []*Message{}, m, execOpts.Input, p.registry.Dotprompt())
-		if err != nil {
-			return nil, err
-		}
-
-		var systemMsgs []*Message
-		var msgs []*Message
-		foundNonSystem := false
-
-		for _, msg := range actionOpts.Messages {
-			if msg.Role == RoleSystem && !foundNonSystem {
-				systemMsgs = append(systemMsgs, msg)
-			} else {
-				foundNonSystem = true
-				msgs = append(msgs, msg)
-			}
-		}
-
-		actionOpts.Messages = append(systemMsgs, execMsgs...)
-		actionOpts.Messages = append(actionOpts.Messages, msgs...)
 	}
 
 	toolRefs := execOpts.Tools
@@ -429,12 +451,32 @@ fieldLoop:
 	return m, nil
 }
 
+// resolveHistory resolves the messages supplied to [Prompt.Execute] into the
+// history that rendering sees, applying the same rules as messages declared on
+// the prompt: both static messages and a function's messages are used
+// verbatim. The result may alias caller-owned messages; renderMessages clones
+// everything it splices into the request, so no copy is needed here.
+func (p *prompt) resolveHistory(ctx context.Context, execOpts *promptExecutionOptions) ([]*Message, error) {
+	if execOpts.MessagesFn != nil {
+		return execOpts.MessagesFn(ctx, execOpts.Input)
+	}
+
+	return nil, nil
+}
+
 // buildRequest prepares a [GenerateActionOptions] based on the prompt,
 // using the input variables and other information in the [prompt].
 func (p *prompt) buildRequest(ctx context.Context, input any) (*GenerateActionOptions, error) {
-	m, err := buildVariables(input)
-	if err != nil {
-		return nil, err
+	// Template variables are only needed by the text options; content
+	// functions receive the raw input, so skip the conversion when the prompt
+	// has no template text.
+	var m map[string]any
+	var err error
+	if p.SystemText != nil || p.PromptText != nil || p.MessagesText != nil {
+		m, err = buildVariables(input)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	dp := p.registry.Dotprompt()
@@ -478,6 +520,18 @@ func (p *prompt) buildRequest(ctx context.Context, input any) (*GenerateActionOp
 		return nil, fmt.Errorf("prompt %q: %w", p.Name(), err)
 	}
 
+	docs := p.Documents
+	// Skip the function when the execution supplies its own documents:
+	// Execute overwrites the docs afterwards, and for the retrieval use case
+	// WithDocsFn is meant for, running it would spend a query on a result
+	// that is thrown away.
+	if p.DocsFn != nil && !promptDocsOverridden(ctx) {
+		docs, err = p.DocsFn(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("prompt %q: resolving docs: %w", p.Name(), err)
+		}
+	}
+
 	return &GenerateActionOptions{
 		Model:              modelName,
 		Config:             config,
@@ -485,6 +539,7 @@ func (p *prompt) buildRequest(ctx context.Context, input any) (*GenerateActionOp
 		MaxTurns:           p.MaxTurns,
 		ReturnToolRequests: p.ReturnToolRequests != nil && *p.ReturnToolRequests,
 		Messages:           messages,
+		Docs:               docs,
 		Tools:              tools,
 		Use:                useRefs,
 		Output: &GenerateActionOutputConfig{
@@ -497,129 +552,215 @@ func (p *prompt) buildRequest(ctx context.Context, input any) (*GenerateActionOp
 }
 
 // renderSystemPrompt renders a system prompt message.
+//
+// Template text from [WithSystem] is compiled as a dotprompt template against
+// the input. Content from [WithSystemFn] or [WithSystemPartsFn] is used
+// verbatim: the function already produced its final content, so compiling it
+// would reinterpret computed text (and any user data in it) as a template.
+//
+// The template fills one message. A {{role}} block that splits it into several
+// is an error rather than a silent reinterpretation of the slot, since this
+// message is the system preamble and has to stay one system message ahead of
+// the conversation. Use [WithMessagesTemplate] to write several turns.
 func renderSystemPrompt(ctx context.Context, opts promptOptions, messages []*Message, input map[string]any, raw any, dp *dotprompt.Dotprompt) ([]*Message, error) {
-	if opts.SystemFn == nil {
+	if opts.SystemFn != nil {
+		parts, err := opts.SystemFn(ctx, raw)
+		if err != nil {
+			return nil, err
+		}
+		if len(parts) == 0 {
+			return messages, nil
+		}
+		return append(messages, &Message{Role: RoleSystem, Content: parts}), nil
+	}
+
+	if opts.SystemText == nil {
 		return messages, nil
 	}
 
-	templateText, err := opts.SystemFn(ctx, raw)
+	rendered, err := renderSingleMessage(ctx, opts, *opts.SystemText, input, dp, "WithSystem", RoleSystem)
 	if err != nil {
 		return nil, err
 	}
 
-	renderedMessages, err := renderPrompt(ctx, opts, templateText, input, dp)
+	return append(messages, rendered), nil
+}
+
+// roleMarkerPattern matches a {{role ...}} helper call in template source.
+// Checking the source rather than the rendered messages is what makes the check
+// exact: dotprompt starts every render as a user message, so a rendered user
+// role is indistinguishable from an explicit {{role "user"}}.
+var roleMarkerPattern = regexp.MustCompile(`\{\{~?\s*role\s`)
+
+// renderSingleMessage renders template text that fills exactly one message of
+// role want, naming option in the error when the template asks for anything
+// else.
+//
+// The role is the slot's, not the template's: [WithSystem] is the system
+// preamble and [WithPrompt] is the final user turn, and the surrounding
+// conversation is positioned against them. A {{role}} marker is therefore
+// either redundant or a contradiction, and in both cases the author means to
+// write turns, so it is refused rather than silently overridden.
+func renderSingleMessage(ctx context.Context, opts promptOptions, text string, input map[string]any, dp *dotprompt.Dotprompt, option string, want Role) (*Message, error) {
+	if roleMarkerPattern.MatchString(text) {
+		return nil, status.Errorf(status.ErrInvalidArgument,
+			"%s contains a {{role}} marker: it fills a single %s message whose role is fixed, so use WithMessagesTemplate to write turns",
+			option, want)
+	}
+
+	rendered, err := renderPrompt(ctx, opts, text, input, nil, dp)
 	if err != nil {
 		return nil, err
 	}
-
-	for _, m := range renderedMessages {
-		if m.Role == "" || (len(renderedMessages) == 1 && m.Role == RoleUser) {
-			m.Role = RoleSystem
-		}
-		messages = append(messages, m)
+	if len(rendered) != 1 {
+		return nil, status.Errorf(status.ErrInvalidArgument,
+			"%s produced %d messages, want 1: its template fills a single message, so use WithMessagesTemplate for a multi-turn template",
+			option, len(rendered))
+	}
+	if got := rendered[0].Role; got != want && got != RoleUser {
+		// Belt and braces for a marker the pattern did not catch: RoleUser is
+		// dotprompt's default and so carries no intent.
+		return nil, status.Errorf(status.ErrInvalidArgument,
+			"%s produced a %s message, want %s: use WithMessagesTemplate to write turns with other roles",
+			option, got, want)
 	}
 
-	return messages, nil
+	rendered[0].Role = want
+	return rendered[0], nil
 }
 
 // renderUserPrompt renders a user prompt message.
+//
+// Template text from [WithPrompt] is compiled as a dotprompt template against
+// the input. Content from [WithPromptFn] or [WithPromptPartsFn] is used
+// verbatim, for the same reason as in [renderSystemPrompt].
+//
+// As with [renderSystemPrompt], the template fills exactly one message. This
+// one is the final user turn, so a template that produced several would place
+// content after it.
 func renderUserPrompt(ctx context.Context, opts promptOptions, messages []*Message, input map[string]any, raw any, dp *dotprompt.Dotprompt) ([]*Message, error) {
-	if opts.PromptFn == nil {
+	if opts.PromptFn != nil {
+		parts, err := opts.PromptFn(ctx, raw)
+		if err != nil {
+			return nil, err
+		}
+		if len(parts) == 0 {
+			return messages, nil
+		}
+		return append(messages, &Message{Role: RoleUser, Content: parts}), nil
+	}
+
+	if opts.PromptText == nil {
 		return messages, nil
 	}
 
-	templateText, err := opts.PromptFn(ctx, raw)
+	rendered, err := renderSingleMessage(ctx, opts, *opts.PromptText, input, dp, "WithPrompt", RoleUser)
 	if err != nil {
 		return nil, err
 	}
 
-	renderedMessages, err := renderPrompt(ctx, opts, templateText, input, dp)
-	if err != nil {
-		return nil, err
+	return append(messages, rendered), nil
+}
+
+// renderMessages appends the messages that sit between the system and user
+// prompts.
+//
+// A prompt that declares its own conversation owns the messages supplied at
+// execution time, because only it knows where its few-shot examples end and a
+// real conversation begins. Each form has a way to place them:
+// [WithMessagesTemplate] renders them at {{history}}, or before its final user
+// message when the template does not say; [WithMessagesFn] reads them from
+// [HistoryFromContext]. A prompt that declares nothing gets them here, in the
+// middle, which is where the caller of a system-and-prompt prompt expects a
+// conversation to go.
+//
+// Values from [WithMessages] and [WithMessagesFn] are used verbatim, so
+// conversation history containing literal braces passes through untouched.
+// Only [WithMessagesTemplate] text is compiled.
+func renderMessages(ctx context.Context, opts promptOptions, messages []*Message, input map[string]any, raw any, dp *dotprompt.Dotprompt) ([]*Message, error) {
+	history := HistoryFromContext(ctx)
+
+	// A prompt that declares no conversation of its own has the caller's used
+	// directly, between the system message and the user prompt.
+	if opts.MessagesFn == nil && opts.MessagesText == nil && opts.MessagesAfterFn == nil {
+		return appendMessageClones(messages, history), nil
 	}
 
-	for _, m := range renderedMessages {
-		if m.Role == "" || (len(renderedMessages) == 1 && m.Role != RoleUser) {
-			m.Role = RoleUser
+	// Otherwise the prompt owns the conversation and its contributions render
+	// in call order, the template sitting where it was first declared. Only the
+	// template can place the caller's history, with {{history}}; a function
+	// reaches it through HistoryFromContext and decides for itself.
+	if opts.MessagesFn != nil {
+		msgs, err := opts.MessagesFn(ctx, raw)
+		if err != nil {
+			return nil, err
 		}
-		messages = append(messages, m)
+		messages = appendMessageClones(messages, msgs)
+	}
+	if opts.MessagesText != nil {
+		rendered, err := renderPrompt(ctx, opts, *opts.MessagesText, input, history, dp)
+		if err != nil {
+			return nil, err
+		}
+		// Already fresh messages built by the renderer, so no clone is needed
+		// for them; the history dotprompt spliced in is not, and is cloned by
+		// renderPrompt before it goes downstream.
+		messages = append(messages, rendered...)
+	}
+	if opts.MessagesAfterFn != nil {
+		msgs, err := opts.MessagesAfterFn(ctx, raw)
+		if err != nil {
+			return nil, err
+		}
+		messages = appendMessageClones(messages, msgs)
 	}
 
 	return messages, nil
 }
 
-// renderMessages renders a slice of messages.
-func renderMessages(ctx context.Context, opts promptOptions, messages []*Message, input map[string]any, raw any, dp *dotprompt.Dotprompt) ([]*Message, error) {
-	if opts.MessagesFn == nil {
-		return messages, nil
+// appendMessageClones appends a clone of each message in src to dst.
+//
+// Everything renderMessages splices into a request is cloned, whichever
+// source it came from. Message text is deliberately not rendered as a
+// dotprompt template. These messages are overwhelmingly conversation history
+// holding user-authored text, so compiling them made any literal brace a hard
+// parse error and turned remote content, such as prompt messages fetched from
+// an MCP server, into a template-injection surface. Only the string form of
+// the conversation is compiled; message values pass through untouched.
+// Callers that want variables in message text can
+// interpolate it themselves, use [WithMessagesFn], which receives the typed
+// input, or write the turns with [WithMessagesTemplate], the string form,
+// where each {{role}} block produces a message of its own.
+//
+// The clones matter because later stages may mutate messages in place, as
+// middleware does when it stamps metadata. Messages declared with
+// [WithMessages] are stored on the prompt and reused by every execution, and
+// messages from a content function or execute-time history typically alias a
+// session or the caller's own conversation slice, so handing the originals
+// downstream lets one execution corrupt state it does not own. [Message.Clone]
+// copies the Content slice and Metadata map for the same reason: appending to
+// a shared backing array or writing a shared map races even when the
+// [Message] struct itself is fresh.
+func appendMessageClones(dst []*Message, src []*Message) []*Message {
+	for _, msg := range src {
+		dst = append(dst, msg.Clone())
 	}
-
-	msgs, err := opts.MessagesFn(ctx, raw)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create new message copies to avoid mutating shared messages during concurrent execution
-	renderedMsgs := make([]*Message, 0, len(msgs))
-	for _, msg := range msgs {
-		hasTextPart := slices.ContainsFunc(msg.Content, (*Part).IsText)
-
-		if !hasTextPart {
-			// Create a new message with non-text content instead of mutating the original
-			renderedMsg := &Message{
-				Role:     msg.Role,
-				Content:  msg.Content,
-				Metadata: msg.Metadata,
-			}
-			renderedMsgs = append(renderedMsgs, renderedMsg)
-			continue
-		}
-
-		for _, part := range msg.Content {
-			if part.IsText() {
-				messagesFromText, err := renderPrompt(ctx, opts, part.Text, input, dp)
-				if err != nil {
-					return nil, err
-				}
-				for _, m := range messagesFromText {
-					// If the rendered message has no role, or it is a single message with default role,
-					// use the original message's role.
-					role := m.Role
-					if role == "" || (len(messagesFromText) == 1 && role == RoleUser) {
-						role = msg.Role
-					}
-					renderedMsgs = append(renderedMsgs, &Message{
-						Role:     role,
-						Content:  m.Content,
-						Metadata: msg.Metadata,
-					})
-				}
-			} else {
-				// Preserve non-text parts as-is in the current last message if possible, or create a new one
-				if len(renderedMsgs) > 0 && renderedMsgs[len(renderedMsgs)-1].Role == msg.Role {
-					renderedMsgs[len(renderedMsgs)-1].Content = append(renderedMsgs[len(renderedMsgs)-1].Content, part)
-				} else {
-					renderedMsgs = append(renderedMsgs, &Message{
-						Role:     msg.Role,
-						Content:  []*Part{part},
-						Metadata: msg.Metadata,
-					})
-				}
-			}
-		}
-	}
-
-	return append(messages, renderedMsgs...), nil
+	return dst
 }
 
-// renderPrompt renders a prompt template using dotprompt functionalities
-func renderPrompt(ctx context.Context, opts promptOptions, templateText string, input map[string]any, dp *dotprompt.Dotprompt) ([]*Message, error) {
+// renderPrompt renders a prompt template using dotprompt functionalities.
+//
+// history is the conversation the template may place, which dotprompt renders
+// at {{history}} and otherwise inserts before the template's final user
+// message. Only the conversation slot passes it: the system and user prompt
+// slots each fill a single message, so history has no place inside them.
+func renderPrompt(ctx context.Context, opts promptOptions, templateText string, input map[string]any, history []*Message, dp *dotprompt.Dotprompt) ([]*Message, error) {
 	renderedFunc, err := dp.Compile(templateText, &dotprompt.PromptMetadata{})
 	if err != nil {
 		return nil, err
 	}
 
-	return renderDotpromptToMessages(ctx, renderedFunc, input, &dotprompt.PromptMetadata{
+	return renderDotpromptToMessages(ctx, renderedFunc, input, history, &dotprompt.PromptMetadata{
 		Input: dotprompt.PromptMetadataInput{
 			Default: opts.DefaultInput,
 		},
@@ -627,7 +768,7 @@ func renderPrompt(ctx context.Context, opts promptOptions, templateText string, 
 }
 
 // renderDotpromptToMessages executes a dotprompt prompt function and converts the result to a slice of messages
-func renderDotpromptToMessages(ctx context.Context, promptFn dotprompt.PromptFunction, input map[string]any, additionalMetadata *dotprompt.PromptMetadata) ([]*Message, error) {
+func renderDotpromptToMessages(ctx context.Context, promptFn dotprompt.PromptFunction, input map[string]any, history []*Message, additionalMetadata *dotprompt.PromptMetadata) ([]*Message, error) {
 	// Prepare the context for rendering
 	templateContext := map[string]any{}
 	actionCtx := core.FromContext(ctx)
@@ -640,15 +781,26 @@ func renderDotpromptToMessages(ctx context.Context, promptFn dotprompt.PromptFun
 
 	// Call the prompt function with the input and context
 	rendered, err := promptFn(&dotprompt.DataArgument{
-		Input:   input,
-		Context: templateContext,
+		Input:    input,
+		Messages: toDotpromptMessages(history),
+		Context:  templateContext,
 	}, additionalMetadata)
 	if err != nil {
 		return nil, fmt.Errorf("failed to render prompt: %w", err)
 	}
 
 	convertedMessages := []*Message{}
+	historyIdx := 0
 	for _, message := range rendered.Messages {
+		// Dotprompt marks the messages it spliced in for {{history}}. Restore
+		// the originals rather than converting the stand-ins back: a message
+		// carries kinds dotprompt has no representation for, such as tool
+		// requests and resources, so a round trip through it would drop them.
+		if message.Metadata["purpose"] == "history" && historyIdx < len(history) {
+			convertedMessages = append(convertedMessages, history[historyIdx].Clone())
+			historyIdx++
+			continue
+		}
 		parts, err := convertToPartPointers(message.Content)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert parts: %w", err)
@@ -661,6 +813,41 @@ func renderDotpromptToMessages(ctx context.Context, promptFn dotprompt.PromptFun
 	}
 
 	return convertedMessages, nil
+}
+
+// toDotpromptMessages converts history into the messages dotprompt places for
+// {{history}}.
+//
+// Only the roles have to be faithful. The content is a stand-in, since
+// renderDotpromptToMessages restores each original message once dotprompt has
+// decided where it goes, which is what keeps part kinds dotprompt cannot
+// represent from being lost.
+//
+// The stand-ins are marked as history on the way in. Dotprompt marks them
+// itself when the template places them at {{history}}, but not when it inserts
+// them before the final user message, and the restore needs to recognize them
+// either way.
+func toDotpromptMessages(history []*Message) []dotprompt.Message {
+	if len(history) == 0 {
+		return nil
+	}
+	msgs := make([]dotprompt.Message, 0, len(history))
+	for _, m := range history {
+		content := make([]dotprompt.Part, 0, len(m.Content))
+		for _, p := range m.Content {
+			text := ""
+			if p.IsText() {
+				text = p.Text
+			}
+			content = append(content, &dotprompt.TextPart{Text: text})
+		}
+		msgs = append(msgs, dotprompt.Message{
+			Role:        dotprompt.Role(m.Role),
+			Content:     content,
+			HasMetadata: dotprompt.HasMetadata{Metadata: map[string]any{"purpose": "history"}},
+		})
+	}
+	return msgs
 }
 
 // convertToPartPointers converts []dotprompt.Part to []*Part
@@ -863,7 +1050,7 @@ func LoadPromptFromSource(r api.Registry, source, name, namespace string) (Promp
 
 	key := promptKey(name, variant, namespace)
 
-	prompt := DefinePrompt(r, key, opts, WithPrompt(parsedPrompt.Template))
+	prompt := DefinePrompt(r, key, opts, WithMessagesTemplate(parsedPrompt.Template))
 
 	return prompt, nil
 }
@@ -871,7 +1058,7 @@ func LoadPromptFromSource(r api.Registry, source, name, namespace string) (Promp
 // parseDotpromptUse converts the value of the dotprompt `use:` frontmatter
 // field into a slice of lazy [Middleware] references. Each entry may be a
 // bare string (interpreted as a registered middleware name) or a map with
-// `name` and optional `config`, mirroring the TypeScript MiddlewareRef shape.
+// `name` and optional `config`, the two shapes the frontmatter accepts.
 // Returns nil if the input is nil or an empty slice.
 func parseDotpromptUse(raw any) ([]Middleware, error) {
 	if raw == nil {
@@ -940,7 +1127,7 @@ func contentType(ct, uri string) (string, []byte, error) {
 		// fills in the content type; for gs:// and other natively-supported
 		// URLs (e.g. YouTube) the model resolves it. Defer content-type
 		// validation to the model/plugin layer instead of failing to render
-		// the prompt, matching the behavior of the JS and Python SDKs.
+		// the prompt.
 		return ct, []byte(uri), nil
 	}
 	if contents, isData := strings.CutPrefix(uri, "data:"); isData {

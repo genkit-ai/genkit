@@ -136,7 +136,7 @@ func defineBankerAgent(g *genkit.Genkit) *aix.Agent[any] {
 		})
 
 	return genkitx.DefinePromptAgent[any](g, name,
-		aix.WithSessionStore(mustStore(name)),
+		aix.WithSessionStore(mustStore[any](name)),
 		aix.WithDescription[any]("Money transfer assistant (interruptible tool + human approval)"),
 	)
 }
