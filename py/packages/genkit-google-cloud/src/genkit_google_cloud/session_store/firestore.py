@@ -115,19 +115,21 @@ def status_from_doc(doc_snapshot: DocumentSnapshot) -> SnapshotStatus | None:
     return out
 
 
-def _sanitize(value: Any) -> Any:  # noqa: ANN401
+def sanitize(value: Any) -> Any:  # noqa: ANN401
     """Drop values Firestore rejects while keeping JSON round-trip semantics."""
     return json.loads(json.dumps(value, default=str))
 
 
-def _state_to_dict(state: SessionState | None) -> dict[str, Any]:
+def state_to_dict(state: SessionState | None) -> dict[str, Any]:
+    """Convert a SessionState object to a dictionary representation."""
     if state is None:
         return {}
     dumped = state.model_dump(by_alias=True, exclude_none=True, mode='json')
     return dumped if isinstance(dumped, dict) else {}
 
 
-def _state_from_dict(data: dict[str, Any] | SessionState | None) -> SessionState | None:
+def state_from_dict(data: dict[str, Any] | SessionState | None) -> SessionState | None:
+    """Parse a dictionary or SessionState object into a SessionState instance."""
     if data is None:
         return None
     if isinstance(data, SessionState):
@@ -135,17 +137,20 @@ def _state_from_dict(data: dict[str, Any] | SessionState | None) -> SessionState
     return SessionState.model_validate(data)
 
 
-def _patch_to_json(patch: list[JsonPatchOperation]) -> list[dict[str, Any]]:
+def patch_to_json(patch: list[JsonPatchOperation]) -> list[dict[str, Any]]:
+    """Convert a list of JsonPatchOperation objects to a list of dicts."""
     return [op.model_dump(by_alias=True, exclude_none=True, mode='json') for op in patch]
 
 
-def _patch_from_json(raw: list[dict[str, Any]] | None) -> list[JsonPatchOperation]:
+def patch_from_json(raw: list[dict[str, Any]] | None) -> list[JsonPatchOperation]:
+    """Parse a list of raw dict patch operations into JsonPatchOperation objects."""
     if not raw:
         return []
     return [JsonPatchOperation.model_validate(op) for op in raw]
 
 
-def _byte_length(value: Any) -> int:  # noqa: ANN401
+def byte_length(value: Any) -> int:  # noqa: ANN401
+    """Calculate the UTF-8 byte length of a JSON-serialized value."""
     return len(json.dumps(value, separators=(',', ':'), default=str).encode('utf-8'))
 
 
@@ -325,7 +330,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             pointer_ref = self.pointer_ref(session_id, context)
             pointer_snap = await pointer_ref.get(transaction=transaction)
             pointer = pointer_snap.to_dict() if pointer_snap.exists else None
-            new_state = _state_to_dict(next_snapshot.state)
+            new_state = state_to_dict(next_snapshot.state)
 
             meta: _SnapshotWriteMeta
             if existing_recon is not None:
@@ -344,8 +349,8 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                     if isinstance(parent_id, str):
                         parent_recon = await self._reconstruct(transaction, parent_id, context=context)
                         parent_state = parent_recon['state'] if parent_recon else None
-                    candidate_patch = _patch_to_json(diff_json(from_value=parent_state, to_value=new_state))
-                    if _byte_length(candidate_patch) > self.shard_size:
+                    candidate_patch = patch_to_json(diff_json(from_value=parent_state, to_value=new_state))
+                    if byte_length(candidate_patch) > self.shard_size:
                         meta = self._write_checkpoint(transaction, sid, new_state, context=context)
                     else:
                         meta = {
@@ -380,8 +385,8 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                         context=context,
                     )
                     parent_state = parent_recon['state'] if parent_recon else None
-                    candidate_patch = _patch_to_json(diff_json(from_value=parent_state, to_value=new_state))
-                    if _byte_length(candidate_patch) > self.shard_size:
+                    candidate_patch = patch_to_json(diff_json(from_value=parent_state, to_value=new_state))
+                    if byte_length(candidate_patch) > self.shard_size:
                         meta = self._write_checkpoint(transaction, sid, new_state, context=context)
                     else:
                         meta = {
@@ -428,7 +433,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             if state_patch is not None:
                 doc_payload['statePatch'] = state_patch
 
-            transaction.set(snap_ref, _sanitize(doc_payload))
+            transaction.set(snap_ref, sanitize(doc_payload))
             await self._update_pointer_in_transaction(
                 transaction,
                 session_id,
@@ -661,7 +666,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 )
                 return None
             seg_doc = seg_snap.to_dict() or {}
-            state = apply_json_patch(doc=state, patch=_patch_from_json(seg_doc.get('statePatch')))
+            state = apply_json_patch(doc=state, patch=patch_from_json(seg_doc.get('statePatch')))
             target_doc = seg_doc
 
         if target_doc is None or target_doc.get('snapshotId') != target_id:
@@ -743,7 +748,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         if reconstructed is None:
             return None
         doc = reconstructed['doc']
-        state = _state_from_dict(reconstructed.get('state'))
+        state = state_from_dict(reconstructed.get('state'))
         status_raw = doc.get('status')
         status = None
         if status_raw is not None:
