@@ -20,11 +20,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
 	"github.com/google/go-cmp/cmp"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // newTestRegistry creates a fresh registry for testing with formats configured.
@@ -281,6 +284,72 @@ func defineFakeTool(t *testing.T, r api.Registry, name, description string) Tool
 		}) (string, error) {
 			return "tool result: " + input.Value, nil
 		})
+}
+
+// spanCollector is a minimal sdktrace.SpanExporter that records finished
+// spans so a test can assert on their attributes.
+type spanCollector struct {
+	mu    sync.Mutex
+	spans []sdktrace.ReadOnlySpan
+}
+
+func (c *spanCollector) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.spans = append(c.spans, spans...)
+	return nil
+}
+
+func (c *spanCollector) Shutdown(context.Context) error { return nil }
+
+// allByName returns every recorded span with the given name.
+func (c *spanCollector) allByName(name string) []sdktrace.ReadOnlySpan {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []sdktrace.ReadOnlySpan
+	for _, s := range c.spans {
+		if s.Name() == name {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// collectSpans registers an in-memory exporter on the global tracer provider
+// (the one tracing.RunInNewSpan writes through) for the duration of the test.
+// The SimpleSpanProcessor exports each span synchronously as it ends, so by
+// the time the call under test returns its spans are already recorded.
+func collectSpans(t *testing.T) *spanCollector {
+	t.Helper()
+	c := &spanCollector{}
+	sp := sdktrace.NewSimpleSpanProcessor(c)
+	tp := tracing.TracerProvider()
+	tp.RegisterSpanProcessor(sp)
+	t.Cleanup(func() { tp.UnregisterSpanProcessor(sp) })
+	return c
+}
+
+// spanAttr returns the string value of the named span attribute, if present.
+func spanAttr(span sdktrace.ReadOnlySpan, key string) (string, bool) {
+	for _, kv := range span.Attributes() {
+		if string(kv.Key) == key {
+			return kv.Value.AsString(), true
+		}
+	}
+	return "", false
+}
+
+// assertSpanAttr fails the test unless span carries key with value want.
+func assertSpanAttr(t *testing.T, span sdktrace.ReadOnlySpan, key, want string) {
+	t.Helper()
+	got, ok := spanAttr(span, key)
+	if !ok {
+		t.Errorf("span %q: missing attribute %q", span.Name(), key)
+		return
+	}
+	if got != want {
+		t.Errorf("span %q: %s = %q, want %q", span.Name(), key, got, want)
+	}
 }
 
 // defineFakeEmbedder creates a simple embedder for testing.
