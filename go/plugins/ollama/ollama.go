@@ -299,12 +299,25 @@ type ollamaChatResponse struct {
 		Thinking  string           `json:"thinking"`
 		ToolCalls []ollamaToolCall `json:"tool_calls,omitempty"`
 	} `json:"message"`
+	PromptEvalCount int `json:"prompt_eval_count,omitempty"`
+	EvalCount       int `json:"eval_count,omitempty"`
 }
 
 type ollamaModelResponse struct {
-	Model     string `json:"model"`
-	CreatedAt string `json:"created_at"`
-	Response  string `json:"response"`
+	Model           string `json:"model"`
+	CreatedAt       string `json:"created_at"`
+	Response        string `json:"response"`
+	PromptEvalCount int    `json:"prompt_eval_count,omitempty"`
+	EvalCount       int    `json:"eval_count,omitempty"`
+}
+
+// ollamaUsage maps Ollama token counts into Genkit GenerationUsage.
+func ollamaUsage(promptEvalCount, evalCount int) *ai.GenerationUsage {
+	return &ai.GenerationUsage{
+		InputTokens:  promptEvalCount,
+		OutputTokens: evalCount,
+		TotalTokens:  promptEvalCount + evalCount,
+	}
 }
 
 // Ollama provides configuration options for the Init function.
@@ -503,6 +516,8 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 		var chunks []*ai.ModelResponseChunk
 		decoder := json.NewDecoder(resp.Body)
 		chunkCount := 0
+		// Ollama reports prompt_eval_count / eval_count on the final stream chunk.
+		usage := &ai.GenerationUsage{}
 
 		for {
 			var raw json.RawMessage
@@ -524,6 +539,16 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			}
 			chunks = append(chunks, chunk)
 			cb(ctx, chunk)
+
+			var counts struct {
+				PromptEvalCount int `json:"prompt_eval_count"`
+				EvalCount       int `json:"eval_count"`
+			}
+			if err := json.Unmarshal(raw, &counts); err == nil {
+				if counts.PromptEvalCount > 0 || counts.EvalCount > 0 {
+					usage = ollamaUsage(counts.PromptEvalCount, counts.EvalCount)
+				}
+			}
 		}
 
 		// Create a final response with the merged chunks
@@ -533,6 +558,7 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			Message: &ai.Message{
 				Role: ai.RoleModel,
 			},
+			Usage: usage,
 		}
 		// Add all the merged content to the final response's candidate
 		for _, chunk := range chunks {
@@ -660,6 +686,7 @@ func translateChatResponse(responseData []byte, thinkingEnabled bool) (*ai.Model
 		modelResponse.Message.Content = append(modelResponse.Message.Content, aiPart)
 	}
 
+	modelResponse.Usage = ollamaUsage(response.PromptEvalCount, response.EvalCount)
 	return modelResponse, nil
 }
 
@@ -680,7 +707,7 @@ func translateModelResponse(responseData []byte) (*ai.ModelResponse, error) {
 
 	aiPart := ai.NewTextPart(response.Response)
 	modelResponse.Message.Content = append(modelResponse.Message.Content, aiPart)
-	modelResponse.Usage = &ai.GenerationUsage{} // TODO: can we get any of this info?
+	modelResponse.Usage = ollamaUsage(response.PromptEvalCount, response.EvalCount)
 	return modelResponse, nil
 }
 

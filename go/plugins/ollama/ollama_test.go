@@ -495,3 +495,99 @@ func TestTranslateChatResponse(t *testing.T) {
 		})
 	}
 }
+
+func TestOllamaUsageMapping(t *testing.T) {
+	t.Run("chat response", func(t *testing.T) {
+		input := `{
+			"model": "llama3",
+			"created_at": "2024-06-20T12:34:56Z",
+			"message": {"role": "assistant", "content": "Hello"},
+			"prompt_eval_count": 26,
+			"eval_count": 12
+		}`
+		got, err := translateChatResponse([]byte(input), false)
+		if err != nil {
+			t.Fatalf("translateChatResponse() error = %v", err)
+		}
+		if got.Usage == nil {
+			t.Fatal("translateChatResponse() Usage is nil")
+		}
+		if got.Usage.InputTokens != 26 {
+			t.Errorf("InputTokens = %d, want 26", got.Usage.InputTokens)
+		}
+		if got.Usage.OutputTokens != 12 {
+			t.Errorf("OutputTokens = %d, want 12", got.Usage.OutputTokens)
+		}
+		if got.Usage.TotalTokens != 38 {
+			t.Errorf("TotalTokens = %d, want 38", got.Usage.TotalTokens)
+		}
+	})
+
+	t.Run("generate response", func(t *testing.T) {
+		input := `{
+			"model": "llama3",
+			"created_at": "2024-06-20T12:34:56Z",
+			"response": "Hello",
+			"prompt_eval_count": 10,
+			"eval_count": 5
+		}`
+		got, err := translateModelResponse([]byte(input))
+		if err != nil {
+			t.Fatalf("translateModelResponse() error = %v", err)
+		}
+		if got.Usage == nil {
+			t.Fatal("translateModelResponse() Usage is nil")
+		}
+		if got.Usage.InputTokens != 10 {
+			t.Errorf("InputTokens = %d, want 10", got.Usage.InputTokens)
+		}
+		if got.Usage.OutputTokens != 5 {
+			t.Errorf("OutputTokens = %d, want 5", got.Usage.OutputTokens)
+		}
+		if got.Usage.TotalTokens != 15 {
+			t.Errorf("TotalTokens = %d, want 15", got.Usage.TotalTokens)
+		}
+	})
+
+	t.Run("stream final chunk carries usage", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/chat" {
+				t.Errorf("unexpected path: %s", r.URL.Path)
+			}
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"model":"llama3","message":{"role":"assistant","content":"Hi"},"done":false}` + "\n"))
+			_, _ = w.Write([]byte(`{"model":"llama3","message":{"role":"assistant","content":"!"},"done":true,"prompt_eval_count":20,"eval_count":3}` + "\n"))
+		}))
+		defer server.Close()
+
+		g := &generator{
+			model:         ModelDefinition{Name: "llama3", Type: "chat"},
+			serverAddress: server.URL,
+			timeout:       30,
+		}
+		req := &ai.ModelRequest{
+			Messages: []*ai.Message{
+				{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("hello")}},
+			},
+		}
+		resp, err := g.generate(context.Background(), req, func(context.Context, *ai.ModelResponseChunk) error {
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("generate() error = %v", err)
+		}
+		if resp.Usage == nil {
+			t.Fatal("generate() Usage is nil")
+		}
+		if resp.Usage.InputTokens != 20 {
+			t.Errorf("InputTokens = %d, want 20", resp.Usage.InputTokens)
+		}
+		if resp.Usage.OutputTokens != 3 {
+			t.Errorf("OutputTokens = %d, want 3", resp.Usage.OutputTokens)
+		}
+		if resp.Usage.TotalTokens != 23 {
+			t.Errorf("TotalTokens = %d, want 23", resp.Usage.TotalTokens)
+		}
+	})
+}
