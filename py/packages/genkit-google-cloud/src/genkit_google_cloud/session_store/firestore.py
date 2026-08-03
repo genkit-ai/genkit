@@ -89,7 +89,7 @@ TERMINAL_STATUSES = frozenset({
 })
 
 
-class _SnapshotWriteMeta(TypedDict):
+class SnapshotWriteMeta(TypedDict):
     """Metadata written onto a snapshot doc for later reconstruction."""
 
     kind: str
@@ -332,7 +332,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             pointer = pointer_snap.to_dict() if pointer_snap.exists else None
             new_state = state_to_dict(next_snapshot.state)
 
-            meta: _SnapshotWriteMeta
+            meta: SnapshotWriteMeta
             if existing_recon is not None:
                 existing_doc = existing_recon['doc']
                 if existing_doc.get('kind') == 'checkpoint':
@@ -704,7 +704,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         *,
         old_shard_count: int = 0,
         context: dict[str, Any] | None = None,
-    ) -> _SnapshotWriteMeta:
+    ) -> SnapshotWriteMeta:
         shard_count = self._write_shards(
             transaction,
             snapshot_id,
