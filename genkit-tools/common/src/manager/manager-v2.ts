@@ -133,7 +133,28 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
     if (!port) {
       port = await getPort({ port: makeRange(3200, 3400) });
     }
-    this.wss = new WebSocketServer({ port });
+    this.wss = new WebSocketServer({
+      port,
+      // Bind to loopback and reject cross-origin (browser / DNS-rebinding)
+      // connections so the unauthenticated reflection control-plane is not
+      // exposed on the network. The runtime connects as a Node client with no
+      // Origin header; GENKIT_REFLECTION_HOST can override for container dev.
+      host: process.env.GENKIT_REFLECTION_HOST || '127.0.0.1',
+      verifyClient: ({ origin }, done) => {
+        if (!origin) return done(true);
+        try {
+          const hostname = new URL(origin).hostname;
+          done(
+            hostname === 'localhost' ||
+              hostname === '127.0.0.1' ||
+              hostname === '::1' ||
+              hostname === '[::1]'
+          );
+        } catch {
+          done(false);
+        }
+      },
+    });
 
     this._port = port;
     logger.info(`Starting reflection server: ws://localhost:${port}`);
