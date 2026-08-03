@@ -2502,10 +2502,17 @@ func validateUserMessage(m *ai.Message) error {
 // caller cannot drive a tool the model never asked for and interrupted on.
 // For restart entries it additionally checks the input is unchanged from the
 // original request, preventing a client from forging tool inputs on the
-// interrupted call. The whole history is searched (every model message), not
-// just the last turn, and newest-first: when a tool name + ref recurs across
-// turns, the entry is validated against the most recent one rather than a
-// stale earlier call. On a violation it returns an INVALID_ARGUMENT error.
+// interrupted call.
+//
+// Only the most recent model message in history is searched, and within it
+// newest-first. Resume handling resolves exactly that response's tool
+// requests, so an entry aimed at an earlier turn does nothing downstream;
+// worse, because refs are only made unique within a single response, a tool
+// name + ref recurs across turns, and searching further back would let a
+// client validate a restart whose input was forged from an already-settled
+// call. An entry naming an earlier turn is rejected as stale, separately
+// from one naming a tool request that never existed. On a violation it
+// returns an INVALID_ARGUMENT error.
 //
 // The prompt-backed agent loop ([DefineAgent]) calls this automatically. A
 // custom agent ([DefineCustomAgent]) that accepts an [AgentInput.Resume] from
@@ -2521,43 +2528,69 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 		return nil
 	}
 
-	// Search every model message in history newest-first, so a resume entry
-	// resolves against the most recent tool request carrying that name + ref.
-	// Refs are only made unique within a single model response, so the same
-	// name + ref recurs across turns; matching the oldest occurrence would
-	// both reject a legitimate restart of the pending interrupt and accept a
-	// restart whose input was forged from a stale turn.
-	find := func(name, ref string) *ai.ToolRequest {
-		for i := len(history) - 1; i >= 0; i-- {
-			msg := history[i]
-			if msg == nil || msg.Role != ai.RoleModel {
-				continue
-			}
-			for j := len(msg.Content) - 1; j >= 0; j-- {
-				p := msg.Content[j]
-				if p.IsToolRequest() && p.ToolRequest != nil &&
-					p.ToolRequest.Name == name && p.ToolRequest.Ref == ref {
-					return p.ToolRequest
-				}
+	// The pending response is the last model message. Trailing non-model
+	// messages are skipped rather than treated as "nothing pending": a
+	// caller that sends a turn message alongside a resume payload leaves a
+	// user message last, and that combination must keep failing downstream
+	// on generate's own precondition instead of being rejected here.
+	pending := -1
+	for i := len(history) - 1; i >= 0; i-- {
+		if msg := history[i]; msg != nil && msg.Role == ai.RoleModel {
+			pending = i
+			break
+		}
+	}
+
+	// findIn searches one model message's tool requests newest-first, so a
+	// malformed response repeating a name + ref resolves to its most recent
+	// occurrence.
+	findIn := func(idx int, name, ref string) *ai.ToolRequest {
+		if idx < 0 {
+			return nil
+		}
+		msg := history[idx]
+		if msg == nil || msg.Role != ai.RoleModel {
+			return nil
+		}
+		for j := len(msg.Content) - 1; j >= 0; j-- {
+			p := msg.Content[j]
+			if p.IsToolRequest() && p.ToolRequest != nil &&
+				p.ToolRequest.Name == name && p.ToolRequest.Ref == ref {
+				return p.ToolRequest
 			}
 		}
 		return nil
 	}
 
-	// Restart entries: name + ref must exist and the input must match the
-	// original request exactly. IsToolRequest only checks the part kind, so
-	// guard the pointer too: a hand-built NewToolRequestPart(nil) is kind
+	// unresolved renders the rejection for an entry that matches nothing in
+	// the pending response. Earlier turns are consulted only to pick the
+	// message: a caller replaying a settled payload should not be told the
+	// tool request never existed.
+	unresolved := func(field, name, ref string) error {
+		for i := pending - 1; i >= 0; i-- {
+			if findIn(i, name, ref) != nil {
+				return status.Errorf(status.ErrInvalidArgument,
+					"resume.%s references tool %q%s from an earlier turn which is no longer pending; only tool requests from the most recent model response can be resumed",
+					field, name, toolRefSuffix(ref))
+			}
+		}
+		return status.Errorf(status.ErrInvalidArgument,
+			"resume.%s references tool %q%s which was not found in session history",
+			field, name, toolRefSuffix(ref))
+	}
+
+	// Restart entries: name + ref must be pending and the input must match
+	// the original request exactly. IsToolRequest only checks the part kind,
+	// so guard the pointer too: a hand-built NewToolRequestPart(nil) is kind
 	// PartToolRequest with a nil ToolRequest.
 	for _, p := range resume.Restart {
 		if !p.IsToolRequest() || p.ToolRequest == nil {
 			continue
 		}
 		req := p.ToolRequest
-		match := find(req.Name, req.Ref)
+		match := findIn(pending, req.Name, req.Ref)
 		if match == nil {
-			return status.Errorf(status.ErrInvalidArgument,
-				"resume.restart references tool %q%s which was not found in session history",
-				req.Name, toolRefSuffix(req.Ref))
+			return unresolved("restart", req.Name, req.Ref)
 		}
 		if !jsonEqual(normalizeJSON(req.Input), normalizeJSON(match.Input)) {
 			return status.Errorf(status.ErrInvalidArgument,
@@ -2566,16 +2599,14 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 		}
 	}
 
-	// Respond entries: name + ref must match a tool request in history.
+	// Respond entries: name + ref must match a pending tool request.
 	for _, p := range resume.Respond {
 		if !p.IsToolResponse() || p.ToolResponse == nil {
 			continue
 		}
 		resp := p.ToolResponse
-		if find(resp.Name, resp.Ref) == nil {
-			return status.Errorf(status.ErrInvalidArgument,
-				"resume.respond references tool %q%s which was not found in session history",
-				resp.Name, toolRefSuffix(resp.Ref))
+		if findIn(pending, resp.Name, resp.Ref) == nil {
+			return unresolved("respond", resp.Name, resp.Ref)
 		}
 	}
 

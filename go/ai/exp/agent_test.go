@@ -2440,8 +2440,9 @@ func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 
 func TestValidateResumeAgainstHistory(t *testing.T) {
 	// History spans two model messages (each carrying a tool request) plus a
-	// user message that must be ignored. The whole history is searched, not
-	// just the last turn.
+	// user message. Only the last model message is pending, so entries
+	// targeting "second" resolve and entries targeting the settled "first"
+	// do not.
 	history := []*ai.Message{
 		{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("hi")}},
 		{Role: ai.RoleModel, Content: []*ai.Part{
@@ -2450,6 +2451,7 @@ func TestValidateResumeAgainstHistory(t *testing.T) {
 		{Role: ai.RoleModel, Content: []*ai.Part{
 			ai.NewTextPart("thinking"),
 			ai.NewToolRequestPart(&ai.ToolRequest{Name: "second", Ref: "r2", Input: map[string]any{"b": "x"}}),
+			ai.NewToolRequestPart(&ai.ToolRequest{Name: "numeric", Ref: "r3", Input: map[string]any{"a": float64(1)}}),
 		}},
 	}
 
@@ -2467,9 +2469,21 @@ func TestValidateResumeAgainstHistory(t *testing.T) {
 	}{
 		{name: "nil resume", resume: nil},
 		{name: "empty resume", resume: &ToolResume{}},
-		{name: "respond matches first model message", resume: &ToolResume{Respond: respond("first", "r1")}},
-		{name: "respond matches a later model message", resume: &ToolResume{Respond: respond("second", "r2")}},
-		{name: "restart matches input exactly", resume: &ToolResume{Restart: restart("first", "r1", map[string]any{"a": float64(1)})}},
+		{name: "respond matches the pending model message", resume: &ToolResume{Respond: respond("second", "r2")}},
+		{name: "restart matches input exactly", resume: &ToolResume{Restart: restart("second", "r2", map[string]any{"b": "x"})}},
+		{
+			// Only the last model message is pending. "first" was issued and
+			// settled a turn earlier, so resume handling would never resolve
+			// it; saying so beats claiming it was never requested.
+			name:    "respond references a settled earlier turn",
+			resume:  &ToolResume{Respond: respond("first", "r1")},
+			wantErr: "from an earlier turn which is no longer pending",
+		},
+		{
+			name:    "restart references a settled earlier turn",
+			resume:  &ToolResume{Restart: restart("first", "r1", map[string]any{"a": float64(1)})},
+			wantErr: "from an earlier turn which is no longer pending",
+		},
 		{
 			name:    "respond references unknown tool",
 			resume:  &ToolResume{Respond: respond("ghost", "r1")},
@@ -2477,7 +2491,7 @@ func TestValidateResumeAgainstHistory(t *testing.T) {
 		},
 		{
 			name:    "respond references known tool with wrong ref",
-			resume:  &ToolResume{Respond: respond("first", "wrong")},
+			resume:  &ToolResume{Respond: respond("second", "wrong")},
 			wantErr: "not found in session history",
 		},
 		{
@@ -2487,14 +2501,14 @@ func TestValidateResumeAgainstHistory(t *testing.T) {
 		},
 		{
 			name:    "restart forges modified input",
-			resume:  &ToolResume{Restart: restart("first", "r1", map[string]any{"a": float64(2)})},
+			resume:  &ToolResume{Restart: restart("second", "r2", map[string]any{"b": "forged"})},
 			wantErr: "modified inputs",
 		},
 		{
 			// An int 1 normalizes to the same JSON shape as the stored float64
 			// 1, so a faithful restart is not mistaken for a forgery.
 			name:   "restart input matches across json number types",
-			resume: &ToolResume{Restart: restart("first", "r1", map[string]any{"a": 1})},
+			resume: &ToolResume{Restart: restart("numeric", "r3", map[string]any{"a": 1})},
 		},
 		{
 			// A kind-PartToolRequest part with a nil ToolRequest pointer (e.g.
@@ -2595,6 +2609,39 @@ func TestValidateResumeAgainstHistory_RecurringRefs(t *testing.T) {
 		}}
 		if err := ValidateResumeAgainstHistory(resume, history); err != nil {
 			t.Fatalf("expected success, got error: %v", err)
+		}
+	})
+
+	t.Run("a trailing user message does not hide the pending response", func(t *testing.T) {
+		// Sending a turn message alongside a resume payload leaves a user
+		// message last. Validation still resolves against the pending model
+		// response so the combination keeps failing on generate's own
+		// precondition rather than being rejected here as a forgery.
+		withTurnMessage := append(append([]*ai.Message{}, history...),
+			&ai.Message{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("and also")}})
+		if err := ValidateResumeAgainstHistory(restart(currentInput), withTurnMessage); err != nil {
+			t.Fatalf("pending response hidden by a trailing user message: %v", err)
+		}
+		if err := ValidateResumeAgainstHistory(restart(staleInput), withTurnMessage); err == nil {
+			t.Fatal("stale input accepted when a user message trails history")
+		}
+	})
+
+	t.Run("a settled turn is rejected as stale, not as unknown", func(t *testing.T) {
+		// The tool ran to completion, so the last model message carries no
+		// tool requests at all and nothing is pending.
+		settled := append(append([]*ai.Message{}, history...),
+			&ai.Message{Role: ai.RoleTool, Content: []*ai.Part{
+				ai.NewToolResponsePart(&ai.ToolResponse{Name: "transfer", Ref: "r1", Output: "done"}),
+			}},
+			&ai.Message{Role: ai.RoleModel, Content: []*ai.Part{ai.NewTextPart("transferred")}},
+		)
+		err := ValidateResumeAgainstHistory(restart(currentInput), settled)
+		if err == nil {
+			t.Fatal("restart of an already-completed tool call accepted, want INVALID_ARGUMENT")
+		}
+		if !strings.Contains(err.Error(), "no longer pending") {
+			t.Fatalf("error %q does not contain %q", err.Error(), "no longer pending")
 		}
 	})
 }
