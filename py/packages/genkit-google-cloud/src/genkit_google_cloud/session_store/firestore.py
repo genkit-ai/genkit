@@ -37,10 +37,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
 import logging
-from collections.abc import Callable
-from typing import Any, Generic, TypedDict
+from collections.abc import AsyncIterable, Callable
+from typing import Any, Generic, TypedDict, cast
 
 from google.cloud import firestore
 from google.cloud.firestore import (
@@ -628,7 +629,9 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             return None
 
         by_path: dict[str, DocumentSnapshot] = {}
-        async for snap in transaction.get_all(refs):
+        res = transaction.get_all(refs)
+        gen = await res if inspect.iscoroutine(res) else res
+        async for snap in cast(AsyncIterable[DocumentSnapshot], gen):
             by_path[snap.reference.path] = snap
 
         shard_snaps = [by_path[ref.path] for ref in shard_refs]
