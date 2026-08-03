@@ -38,6 +38,20 @@ func newTestRegistry(t *testing.T) api.Registry {
 	return r
 }
 
+// childRegistry returns a per-test child of the package-level registry r. It
+// inherits r's fixtures (echoModel, gablorkenTool, the configured formats) by
+// lookup fallback, while anything the test defines lands in the child and is
+// discarded with it.
+//
+// Shadow r with it (`r := childRegistry(t)`) in any test that registers into
+// the package-level registry: r is built once per process, so a test that
+// registers directly into it panics on the second pass of `go test -count=N`,
+// which is how ordering and scheduling bugs get shaken out locally.
+func childRegistry(t *testing.T) api.Registry {
+	t.Helper()
+	return r.NewChild()
+}
+
 // fakeModelConfig holds configuration for creating a fake model.
 type fakeModelConfig struct {
 	name     string

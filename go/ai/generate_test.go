@@ -95,6 +95,7 @@ var gablorkenTool = DefineTool(r, "gablorken", "use when need to calculate a gab
 func TestStreamingChunksHaveRoleAndIndex(t *testing.T) {
 	t.Parallel()
 
+	r := childRegistry(t)
 	ctx := context.Background()
 
 	convertTempTool := DefineTool(r, "convertTemp", "converts temperature",
@@ -362,6 +363,7 @@ func TestValidMessage(t *testing.T) {
 }
 
 func TestGenerate(t *testing.T) {
+	r := childRegistry(t)
 	JSON := "{\"subject\": \"bananas\", \"location\": \"tropics\"}"
 	JSONmd := "```json" + JSON + "```"
 
@@ -748,6 +750,11 @@ func TestGenerate(t *testing.T) {
 	})
 
 	t.Run("registers dynamic tools", func(t *testing.T) {
+		// A root registry, not the enclosing child: Generate only quarantines
+		// dynamic tools in a child of its own when the caller hands it a root,
+		// which is the isolation this subtest asserts.
+		r := newTestRegistry(t)
+
 		// Create a tool that is NOT registered in the global registry
 		dynamicTool := NewTool("dynamicTestTool", "a tool that is dynamically registered",
 			func(ctx *ToolContext, input struct {
@@ -1006,6 +1013,7 @@ type resumableToolInput struct {
 }
 
 func TestToolInterruptsAndResume(t *testing.T) {
+	r := childRegistry(t)
 	conditionalTool := DefineTool(r, "conditional", "tool that may interrupt based on input",
 		func(ctx *ToolContext, input conditionalToolInput) (string, error) {
 			if input.Interrupt {
