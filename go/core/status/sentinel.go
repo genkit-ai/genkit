@@ -99,8 +99,9 @@ var (
 	// schema, e.g. a model produced malformed tool arguments.
 	ErrInvalidInput = ErrInvalidArgument.Subtype("invalid input")
 
-	// ErrInvalidOutput means an action produced a value that does not match its
-	// declared output schema. This is a bug in the action, hence Internal.
+	// ErrInvalidOutput means an action or model produced a value that does not
+	// match the declared output schema. The fault is on the producing side,
+	// not the caller's request, hence Internal.
 	ErrInvalidOutput = ErrInternal.Subtype("invalid output")
 
 	// ErrActionNotFound means no action is registered under the requested key.

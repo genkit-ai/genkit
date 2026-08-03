@@ -20,6 +20,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"math"
 	"math/rand"
 	"slices"
@@ -56,11 +57,11 @@ var sleepFunc = func(ctx context.Context, d time.Duration) error {
 // It only hooks the Model stage — individual model API calls are retried,
 // not the entire generate loop.
 //
-// An error is retried when its status is in Statuses, which defaults to
-// UNAVAILABLE, DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED, ABORTED, and INTERNAL.
-// An unclassified error reports INTERNAL (see [status.Of]), so network failures
-// and the like are retried by default; a cancelled context reports CANCELLED and
-// is not.
+// A classified error is retried when its status is in Statuses, which defaults
+// to UNAVAILABLE, DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED, ABORTED, and INTERNAL.
+// An unclassified error (no [status.Error] or sentinel in its chain) is always
+// retried, regardless of Statuses. A cancelled context reports CANCELLED and is
+// not retried.
 //
 // Usage:
 //
@@ -72,8 +73,8 @@ var sleepFunc = func(ctx context.Context, d time.Duration) error {
 type Retry struct {
 	// MaxRetries is the maximum number of retry attempts. Defaults to 3.
 	MaxRetries int `json:"maxRetries,omitempty"`
-	// Statuses is the set of status codes that trigger a retry. An error's
-	// status comes from [status.Of], so unclassified errors count as INTERNAL.
+	// Statuses is the set of status codes that trigger a retry for classified
+	// errors; unclassified errors are always retried regardless of this list.
 	// Defaults to [defaultRetryStatuses].
 	Statuses []status.Name `json:"statuses,omitempty"`
 	// InitialDelayMs is the delay before the first retry, in milliseconds. Defaults to 1000.
@@ -168,9 +169,31 @@ func (r *Retry) wrapModel(ctx context.Context, params *ai.ModelParams, next ai.M
 	return nil, lastErr
 }
 
-// isRetryable reports whether err should trigger a retry: its status must be
-// in statuses. Unclassified errors report INTERNAL, which is in the default
-// set, so they stay retryable unless a caller narrows Statuses.
+// isRetryable reports whether err should trigger a retry: a classified error's
+// status must be in statuses, and an unclassified error is always retryable,
+// preserving the v1 contract that non-GenkitError errors are retried
+// regardless of the Statuses setting.
 func isRetryable(err error, statuses []status.Name) bool {
-	return slices.Contains(statuses, status.Of(err))
+	if s, ok := classifiedStatus(err); ok {
+		return slices.Contains(statuses, s)
+	}
+	return true
+}
+
+// classifiedStatus returns the status err was explicitly classified with, or
+// false when nothing in err's chain carries one. The distinction keeps these
+// middlewares matching their v1 contracts: a classified error is checked
+// against the configured status list, while an unclassified one (a plain error
+// from a provider SDK or the network) keeps its v1 behavior instead of
+// silently inheriting INTERNAL's membership in the list. Cancellation and
+// deadline expiry count as classified, reporting CANCELLED and
+// DEADLINE_EXCEEDED per [status.Of].
+func classifiedStatus(err error) (status.Name, bool) {
+	var e *status.Error
+	var s *status.Sentinel
+	if errors.As(err, &e) || errors.As(err, &s) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return status.Of(err), true
+	}
+	return "", false
 }

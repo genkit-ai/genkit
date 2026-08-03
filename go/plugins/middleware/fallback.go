@@ -61,10 +61,9 @@ type Fallback struct {
 	// Config is used verbatim for that model -- the original request's
 	// Config is not inherited. Use [ai.NewModelRef] to attach config.
 	Models []ai.ModelRef `json:"models,omitempty"`
-	// Statuses is the set of status codes that trigger a fallback.
-	// An error's status comes from [status.Of], so unclassified errors count
-	// as INTERNAL and trigger a fallback under the defaults.
-	// Defaults to [defaultFallbackStatuses].
+	// Statuses is the set of status codes that trigger a fallback for
+	// classified errors; unclassified errors propagate immediately and never
+	// trigger one. Defaults to [defaultFallbackStatuses].
 	Statuses []status.Name `json:"statuses,omitempty"`
 }
 
@@ -115,9 +114,14 @@ func (f *Fallback) wrapModel(ctx context.Context, params *ai.ModelParams, next a
 }
 
 // isFallbackRetryable reports whether err should trigger trying the next model:
-// its status must be in statuses. Unclassified errors report INTERNAL, which is
-// in the default set, so a network failure now falls back the same way it
-// retries; previously only a *core.GenkitError could trigger fallback at all.
+// a classified error's status must be in statuses, and an unclassified error
+// propagates immediately, preserving the v1 contract. Failing over to a
+// different billed model is a bigger action than retrying the same one, so it
+// requires an explicit classification; without this, a deterministic bug in a
+// model plugin would silently reroute every request to the fallback.
 func isFallbackRetryable(err error, statuses []status.Name) bool {
-	return slices.Contains(statuses, status.Of(err))
+	if s, ok := classifiedStatus(err); ok {
+		return slices.Contains(statuses, s)
+	}
+	return false
 }

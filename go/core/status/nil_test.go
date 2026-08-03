@@ -94,13 +94,42 @@ func TestErrorsIsAndAsSurviveATypedNil(t *testing.T) {
 		t.Errorf("errors.As set e = %v, want nil", e)
 	}
 
-	// And through a wrapper, which is how it usually arrives.
+	// And through a wrapper. Unlike the bare typed nil, the wrapper is a real
+	// error: someone was on a failure path when they built it, so it classifies
+	// as an unclassified failure rather than vanishing into OK.
 	wrapped := fmt.Errorf("running agent: %w", err)
 	if errors.Is(wrapped, ErrNotFound) {
 		t.Error("errors.Is = true through a wrapped typed nil")
 	}
-	if got := Of(wrapped); got != OK {
-		t.Errorf("Of(wrapped) = %q, want %q", got, OK)
+	if got := Of(wrapped); got != Internal {
+		t.Errorf("Of(wrapped) = %q, want %q", got, Internal)
+	}
+	if got := Convert(wrapped); got == nil {
+		t.Error("Convert(wrapped) = nil; the wrapper's message is lost")
+	} else if got.Message != wrapped.Error() {
+		t.Errorf("Convert(wrapped).Message = %q, want %q", got.Message, wrapped.Error())
+	}
+}
+
+// A typed nil next to a real classification must not mask it: errors.As stops
+// at whichever node it visits first, but Of and Convert keep looking.
+func TestTypedNilDoesNotMaskARealClassification(t *testing.T) {
+	real := Errorf(ErrNotFound, "model %q not found", "x")
+
+	for name, err := range map[string]error{
+		"nil first":  fmt.Errorf("a: %w, b: %w", failedRun(), real),
+		"nil second": fmt.Errorf("a: %w, b: %w", real, failedRun()),
+		"joined":     errors.Join(failedRun(), real),
+	} {
+		if got := Of(err); got != NotFound {
+			t.Errorf("%s: Of = %q, want %q", name, got, NotFound)
+		}
+		if got := Convert(err); got != real {
+			t.Errorf("%s: Convert = %v, want the real error", name, got)
+		}
+		if msg, _ := PublicMessage(err); msg != "not found" {
+			t.Errorf("%s: PublicMessage = %q, want the real error's generic label", name, msg)
+		}
 	}
 }
 

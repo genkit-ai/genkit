@@ -27,7 +27,6 @@ package core
 
 import (
 	"fmt"
-	"runtime/debug"
 
 	"github.com/firebase/genkit/go/core/status"
 )
@@ -125,11 +124,12 @@ func (e *UserFacingError) PublicMessage() (string, bool) { return e.Message, tru
 // last error argument that this function performs.
 func NewError(name StatusName, message string, args ...any) *GenkitError {
 	ge := status.Errorf(status.Base(name), message, args...)
-	// status.Base coerces a name outside the canonical set to UNKNOWN, but v1
-	// put whatever it was given on the wire. Restore it: this constructor's
+	// status.Base has no sentinel for names outside the canonical set (they
+	// coerce to UNKNOWN) or for OK (an error cannot classify as success), but
+	// v1 put whatever it was given on the wire. Restore it: this constructor's
 	// contract is to behave exactly as it did, and the sentinel it was
 	// classified with stays ErrUnknown, which is the honest classification.
-	if !name.IsValid() {
+	if ge.Status != name {
 		ge.Status = name
 		ge.HTTPCode = name.HTTPCode()
 	}
@@ -141,7 +141,9 @@ func NewError(name StatusName, message string, args ...any) *GenkitError {
 			break
 		}
 	}
-	ge.Details = map[string]any{"stack": string(debug.Stack())}
+	// v1 recorded the stack in Details; format the one Errorf already captured
+	// rather than capturing a second with debug.Stack.
+	ge.Details = map[string]any{"stack": ge.Stack()}
 	return ge
 }
 

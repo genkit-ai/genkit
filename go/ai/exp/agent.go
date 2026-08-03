@@ -1441,6 +1441,31 @@ func (rt *agentRuntime[State]) outboundState(ctx context.Context, state *Session
 	return out, nil
 }
 
+// convertKeepText returns cause as a *status.Error for a persisted payload
+// (AgentOutput.Error, SessionSnapshot.Error), preserving both halves of the
+// failure: the classification of a buried *status.Error (a store's own status
+// survives, per [status.Convert]) and the full chain text of any context
+// wrapped around it with fmt.Errorf, which Convert alone would drop. A public
+// error is exempt from the text merge: its message may reach a client and must
+// stay exactly what was cleared as public. A cause that is itself a non-nil
+// interface holding a nil *status.Error still yields a payload, because a
+// failed invocation must carry one.
+func convertKeepText(cause error) *status.Error {
+	e := status.Convert(cause)
+	if e == nil {
+		if cause == nil {
+			return nil
+		}
+		return status.Errorf(status.ErrInternal, "%s", cause)
+	}
+	if !e.Public && e.Message != cause.Error() {
+		ne := *e
+		ne.Message = cause.Error()
+		return &ne
+	}
+	return e
+}
+
 // failedOutput assembles the output for an invocation that ended in
 // failure: [AgentFinishReasonFailed], the error with its original status,
 // and the last-good resume point: the last turn-end snapshot's ID when
@@ -1455,7 +1480,7 @@ func (rt *agentRuntime[State]) failedOutput(ctx context.Context, cause error) *A
 	out := &AgentOutput[State]{
 		SessionID:    rt.session.SessionID(),
 		FinishReason: AgentFinishReasonFailed,
-		Error:        status.Convert(cause),
+		Error:        convertKeepText(cause),
 	}
 	if rt.cfg.store == nil {
 		// This is already the failure path, so a transform that also fails
@@ -1714,12 +1739,12 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 				snapStatus = SnapshotStatusAborted
 				finishReason = AgentFinishReasonAborted
 				if fnErr != nil {
-					snapErr = status.Convert(fnErr) // aborted wins, preserve text
+					snapErr = convertKeepText(fnErr) // aborted wins, preserve text
 				}
 			case fnErr != nil:
 				snapStatus = SnapshotStatusFailed
 				finishReason = AgentFinishReasonFailed
-				snapErr = status.Convert(fnErr)
+				snapErr = convertKeepText(fnErr)
 			}
 
 			// Preserve the pending row's CreatedAt (so the finalize does not

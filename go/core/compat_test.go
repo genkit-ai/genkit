@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/core"
@@ -125,10 +126,27 @@ func TestV1ConstructorsPreserveV1Behaviour(t *testing.T) {
 		}
 	})
 
+	t.Run("NewError keeps OK on the wire", func(t *testing.T) {
+		// OK is the one canonical name status.Base has no sentinel for (an
+		// error cannot classify as success), so like a non-canonical name it
+		// must be restored rather than surfacing as UNKNOWN/500.
+		err := core.NewError(core.OK, "done")
+		if err.Status != core.OK {
+			t.Errorf("Status = %q, want %q", err.Status, core.OK)
+		}
+		if err.HTTPCode != http.StatusOK {
+			t.Errorf("HTTPCode = %d, want 200", err.HTTPCode)
+		}
+	})
+
 	t.Run("NewError records a stack in Details", func(t *testing.T) {
 		err := core.NewError(core.INTERNAL, "boom")
-		if _, ok := err.Details["stack"]; !ok {
-			t.Error(`Details["stack"] missing`)
+		stack, ok := err.Details["stack"].(string)
+		if !ok || stack == "" {
+			t.Fatal(`Details["stack"] missing`)
+		}
+		if !strings.Contains(stack, "TestV1ConstructorsPreserveV1Behaviour") {
+			t.Errorf("stack does not reach the caller:\n%s", stack)
 		}
 	})
 

@@ -122,8 +122,8 @@ func TestDevEnvironmentKeepsFullMessage(t *testing.T) {
 	if !strings.Contains(msg, "googleai/nope") {
 		t.Errorf("dev message = %q, want the full text", msg)
 	}
-	if code != http.StatusNotFound {
-		t.Errorf("code = %d, want %d", code, http.StatusNotFound)
+	if code.HTTPCode() != http.StatusNotFound {
+		t.Errorf("code = %v, want %d", code, http.StatusNotFound)
 	}
 }
 
@@ -139,8 +139,8 @@ func TestPublicErrorKeepsItsStatusCode(t *testing.T) {
 		{status.PublicErrorf(status.ErrInvalidArgument, "field %q is required", "email"), http.StatusBadRequest},
 	} {
 		msg, code := clientError(tt.err)
-		if code != tt.code {
-			t.Errorf("code = %d, want %d", code, tt.code)
+		if code.HTTPCode() != tt.code {
+			t.Errorf("code = %v, want %d", code, tt.code)
 		}
 		if msg != tt.err.Error() {
 			t.Errorf("msg = %q, want the public message %q", msg, tt.err.Error())
@@ -154,8 +154,8 @@ func TestPublicErrorKeepsItsStatusCode(t *testing.T) {
 func TestTypedNilErrorDoesNotReportSuccess(t *testing.T) {
 	var typedNil *status.Error
 	msg, code := clientError(error(typedNil))
-	if code != http.StatusInternalServerError {
-		t.Errorf("code = %d, want %d", code, http.StatusInternalServerError)
+	if code != status.Internal {
+		t.Errorf("code = %v, want %v", code, status.Internal)
 	}
 	if msg != "" {
 		t.Errorf("msg = %q, want empty", msg)

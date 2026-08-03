@@ -29,7 +29,6 @@ import (
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/x/streaming"
 	"github.com/firebase/genkit/go/genkit"
@@ -409,22 +408,22 @@ func (s *firestoreStreamInput) Error(ctx context.Context, err error) error {
 	}
 	s.closed = true
 
-	// Persist the full message either way: Firestore is the developer's own
-	// store and the text is worth having for diagnosis. Public is what governs
-	// whether a subscriber may pass it on.
-	_, public := status.PublicMessage(err)
+	// For a non-public error, persist the full text: Firestore is the
+	// developer's own store, the message is worth having for diagnosis, and
+	// Public=false keeps it from subscribers. For a public error, persist
+	// exactly the message PublicMessage cleared for clients, so an internal
+	// wrapper prefix around a public error cannot ride along and be replayed
+	// to a subscriber as public. This also keeps the deprecated
+	// core.UserFacingError's bare message rather than its "STATUS: message"
+	// stringification, which the Subscribe rebuild would double-prefix.
+	msg, public := status.PublicMessage(err)
+	if !public {
+		msg = err.Error()
+	}
 	streamErr := &streamError{
 		Status:  string(status.Of(err)),
-		Message: err.Error(),
+		Message: msg,
 		Public:  public,
-	}
-	// A status.Error stringifies as its bare message, but the deprecated
-	// core.UserFacingError stringifies as "STATUS: message" while the status is
-	// carried separately here. Keep the bare message so the Subscribe path, which
-	// rebuilds the error from status + message, does not double-prefix it.
-	var ufErr *core.UserFacingError
-	if errors.As(err, &ufErr) {
-		streamErr.Message = ufErr.Message
 	}
 
 	expiresAt := time.Now().Add(s.manager.ttl)

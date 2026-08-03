@@ -799,6 +799,12 @@ func (s *reflectionServerV2) sendRunActionError(id string, err error, traceID st
 	// developer causing it; the redaction that matters is at the flow HTTP
 	// boundary (see clientError in servers.go).
 	e := status.Convert(err)
+	if e == nil {
+		// err was a non-nil interface holding a nil *status.Error, which
+		// Convert documents as returning nil. There is no classification or
+		// stack to mine, but the run did fail, so report it as internal.
+		e = &status.Error{Status: status.Internal, Message: err.Error()}
+	}
 	code := e.Status
 	msg := err.Error()
 	if errors.Is(err, context.Canceled) {

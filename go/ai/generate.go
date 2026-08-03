@@ -465,7 +465,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 				resp.Message, err = formatHandler.ParseMessage(resp.Message)
 				if err != nil {
 					logger.FromContext(ctx).Debug("model failed to generate output matching expected schema", "error", err.Error())
-					return nil, status.Errorf(status.ErrInternal, "model failed to generate output matching expected schema: %w", err)
+					return nil, status.Errorf(status.ErrInvalidOutput, "model failed to generate output matching expected schema: %w", err)
 				}
 			}
 

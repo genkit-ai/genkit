@@ -175,11 +175,12 @@ func TestFallbackDoesNotTriggerOnNonRetryableError(t *testing.T) {
 	}
 }
 
-// An unclassified error reports INTERNAL, which is in the default set, so it
-// triggers fallback. Retry has always treated such errors as retryable; before
-// status.Of, fallback ignored them, so the two middlewares disagreed about the
-// same failure.
-func TestFallbackTriggersOnUnclassifiedError(t *testing.T) {
+// An unclassified error propagates immediately, per the v1 contract: failing
+// over to a different billed model requires an explicit classification, or a
+// deterministic bug in a model plugin would silently reroute every request to
+// the fallback. (Retry treats the same error the opposite way, retrying it
+// unconditionally; that asymmetry is also v1's.)
+func TestFallbackPropagatesUnclassifiedError(t *testing.T) {
 	g := newTestGenkit(t)
 	secondaryCalls := 0
 
@@ -193,15 +194,15 @@ func TestFallbackTriggersOnUnclassifiedError(t *testing.T) {
 
 	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
 
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
-	if err != nil {
-		t.Fatalf("Generate() = %v, want fallback to succeed", err)
+	_, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
+	if err == nil {
+		t.Fatal("expected the unclassified error to propagate, got nil")
 	}
-	if got := resp.Text(); got != "secondary" {
-		t.Errorf("text = %q, want %q", got, "secondary")
+	if !strings.Contains(err.Error(), "plain error") {
+		t.Errorf("error %q does not contain %q", err.Error(), "plain error")
 	}
-	if secondaryCalls != 1 {
-		t.Errorf("secondary called %d times, want 1", secondaryCalls)
+	if secondaryCalls != 0 {
+		t.Errorf("secondary called %d times, want 0 (unclassified errors never trigger fallback)", secondaryCalls)
 	}
 }
 

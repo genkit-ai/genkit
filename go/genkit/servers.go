@@ -149,23 +149,26 @@ func wrapHandler(h func(http.ResponseWriter, *http.Request) error) http.HandlerF
 
 		if err = h(w, r); err != nil {
 			msg, code := clientError(err)
-			http.Error(w, msg, code)
+			http.Error(w, msg, code.HTTPCode())
 		}
 	}
 }
 
-// clientError returns the message and HTTP status to send a client for err.
+// clientError returns the message and status to send a client for err. Both
+// the HTTP code (via [status.Name.HTTPCode]) and any wire status field must
+// come from this one derivation so the two can never disagree.
 //
 // The status always comes from the error, so an error deliberately marked
 // public reaches the client with its own code rather than falling through to
 // 500. The message only leaves the process when the error was built with
 // [status.PublicErrorf]; anything else becomes a generic string derived from
 // the status, so schema dumps, provider text, and internal identifiers stay
-// server-side. The full error is still logged by wrapHandler.
+// server-side. The full error is still logged server-side: by wrapHandler for
+// request failures, and by the streaming runners for mid-stream flow failures.
 //
 // GENKIT_ENV=dev is exempt: suppressing the message during local development
 // only hides the failure from the developer causing it.
-func clientError(err error) (string, int) {
+func clientError(err error) (string, status.Name) {
 	code := status.Of(err)
 	// Only reached on a failure path, so an error that classifies as OK is
 	// itself the bug: the usual cause is a non-nil interface holding a nil
@@ -178,7 +181,7 @@ func clientError(err error) (string, int) {
 	if !public && api.CurrentEnvironment() == api.EnvironmentDev {
 		msg = err.Error()
 	}
-	return msg, code.HTTPCode()
+	return msg, code
 }
 
 // handler returns an HTTP handler function that serves the action with the provided options.
@@ -304,6 +307,10 @@ func runWithStreaming(ctx context.Context, w http.ResponseWriter, run runJSONFun
 
 	out, err := run(ctx, input, callback)
 	if err != nil {
+		// The SSE frame carries only the redacted message and this function
+		// returns nil, so wrapHandler never sees the error: this log is the
+		// only server-side record of the real failure.
+		slog.ErrorContext(ctx, "streaming flow failed", "err", err)
 		if werr := writeSSEError(w, err); werr != nil {
 			return werr
 		}
@@ -359,6 +366,10 @@ func runWithDurableStreaming(ctx context.Context, w http.ResponseWriter, run run
 
 	out, err := run(durableCtx, input, callback)
 	if err != nil {
+		// As in runWithStreaming: the wire carries only the redacted message
+		// and wrapHandler never sees the error, so log the real failure here.
+		// The durable record is no substitute: it expires with the stream.
+		slog.ErrorContext(durableCtx, "streaming flow failed", "err", err)
 		durableStream.Error(durableCtx, err)
 		select {
 		case <-clientGone:
@@ -382,7 +393,11 @@ func runWithDurableStreaming(ctx context.Context, w http.ResponseWriter, run run
 func subscribeToStream(ctx context.Context, w http.ResponseWriter, sm streaming.StreamManager, streamID string) error {
 	events, unsubscribe, err := sm.Subscribe(ctx, streamID)
 	if err != nil {
-		if errors.Is(err, streaming.ErrStreamNotFound) {
+		// Subscribe's contract is any NOT_FOUND error, not the in-tree
+		// streaming.ErrStreamNotFound sentinel specifically, so match on the
+		// status: a third-party StreamManager returning a plain NOT_FOUND
+		// gets the 204 that resuming clients key on, not a 404.
+		if status.Of(err) == status.NotFound {
 			w.WriteHeader(http.StatusNoContent)
 			return nil
 		}
@@ -486,11 +501,13 @@ func writeSSEMessage(w http.ResponseWriter, msg json.RawMessage) error {
 }
 
 // writeSSEError writes an error as a server-sent event for streaming requests.
+// Status and message come from the same clientError derivation, so the frame
+// gets the identical redaction and OK-to-INTERNAL coercion as the HTTP path.
 func writeSSEError(w http.ResponseWriter, flowErr error) error {
-	msg, _ := clientError(flowErr)
+	msg, code := clientError(flowErr)
 	resp := flowErrorResponse{
 		Error: &flowError{
-			Status:  status.Of(flowErr),
+			Status:  code,
 			Message: msg,
 		},
 	}

@@ -216,17 +216,21 @@ func (e *Error) Stack() string {
 // errors map to Cancelled and DeadlineExceeded. Anything else is Internal: an
 // unclassified failure is a failure of ours, not of the caller's request.
 //
+// A typed-nil *Error carries no classification: when err itself is one, Of is
+// OK (nothing failed, the nil merely escaped through an error variable), and
+// when one appears inside a chain it is skipped so it cannot mask the rest of
+// the chain.
+//
 // Of(nil) is OK.
 func Of(err error) Name {
 	if err == nil {
 		return OK
 	}
-	var e *Error
-	if errors.As(err, &e) {
-		if e == nil {
-			return OK // a non-nil interface holding a nil *Error is not a failure
-		}
+	if e := firstError(err); e != nil {
 		return e.Status
+	}
+	if e, ok := err.(*Error); ok && e == nil {
+		return OK // a non-nil interface holding a nil *Error is not a failure
 	}
 	var s *Sentinel
 	if errors.As(err, &s) {
@@ -241,11 +245,55 @@ func Of(err error) Name {
 	return Internal
 }
 
+// firstError returns the first non-nil [Error] in err's chain, or nil. It is
+// errors.As with one refinement: a typed-nil *Error node does not count as a
+// match and does not end the search, so a nil that escaped through an error
+// variable cannot mask a real classification elsewhere in the chain.
+func firstError(err error) *Error {
+	var e *Error
+	if !errors.As(err, &e) {
+		return nil
+	}
+	if e != nil {
+		return e
+	}
+	// errors.As stopped at a typed-nil node. Nothing unwraps out of a nil
+	// *Error, but a multi-error wrapper can hold a real one in a sibling
+	// branch, so walk the tree skipping nil nodes.
+	return walkPastNil(err)
+}
+
+func walkPastNil(err error) *Error {
+	if e, ok := err.(*Error); ok {
+		if e != nil {
+			return e
+		}
+		return nil
+	}
+	switch x := err.(type) {
+	case interface{ Unwrap() error }:
+		if u := x.Unwrap(); u != nil {
+			return walkPastNil(u)
+		}
+	case interface{ Unwrap() []error }:
+		for _, u := range x.Unwrap() {
+			if u == nil {
+				continue
+			}
+			if e := walkPastNil(u); e != nil {
+				return e
+			}
+		}
+	}
+	return nil
+}
+
 // Convert returns err as an [Error], converting it if it is not one already.
 // The converted error takes its status from [Of] and is never public. Returns
-// nil for a nil err, and also for an err that is a non-nil interface holding a
-// nil *Error, so callers must check the result rather than assume it is
-// non-nil.
+// nil for a nil err, and also for an err that is itself a non-nil interface
+// holding a nil *Error, so callers must check the result rather than assume it
+// is non-nil. A typed-nil *Error inside a larger chain is skipped instead: the
+// chain is a real error and converts like any other.
 //
 // Prefer errors.As when you need to know whether err really is an [Error]; this
 // is for boundaries that must produce one either way.
@@ -253,9 +301,11 @@ func Convert(err error) *Error {
 	if err == nil {
 		return nil
 	}
-	var e *Error
-	if errors.As(err, &e) {
+	if e := firstError(err); e != nil {
 		return e
+	}
+	if e, ok := err.(*Error); ok && e == nil {
+		return nil
 	}
 	n := Of(err)
 	return &Error{Status: n, Message: err.Error(), HTTPCode: n.HTTPCode(), cause: err}
@@ -272,15 +322,14 @@ func PublicMessage(err error) (msg string, public bool) {
 	if err == nil {
 		return "", false
 	}
-	var e *Error
-	if errors.As(err, &e) {
-		if e == nil {
-			return "", false
-		}
+	if e := firstError(err); e != nil {
 		if e.Public {
 			return e.Message, true
 		}
 		return genericMessage(e.Status), false
+	}
+	if e, ok := err.(*Error); ok && e == nil {
+		return "", false
 	}
 	// No Error in the chain: fall back to the interface, which the deprecated
 	// core.UserFacingError implements so its message still reaches clients.
