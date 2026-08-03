@@ -110,6 +110,10 @@ func TestDefineFormats(t *testing.T) {
 		if !IsDefinedFormat(g, "csv3") {
 			t.Error("IsDefinedFormat() = false, want true")
 		}
+		// IsDefinedFormat has to accept whatever DefineFormat accepted.
+		if !IsDefinedFormat(g, "/format/csv3") {
+			t.Error("IsDefinedFormat() = false for the prefixed name, want true")
+		}
 	})
 }
 

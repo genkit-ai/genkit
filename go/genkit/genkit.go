@@ -1664,18 +1664,37 @@ func DefineFormats(g *Genkit, formatters ...ai.Formatter) {
 }
 
 // DefineFormat defines a new [ai.Formatter] and registers it in the registry
-// under the given name.
+// under the given name, which may optionally carry the "/format/" prefix.
 //
 // Deprecated: Use [DefineFormats] instead, which takes the name from the
 // Formatter's Name method.
 func DefineFormat(g *Genkit, name string, formatter ai.Formatter) {
-	g.reg.RegisterValue("/format/"+strings.TrimPrefix(name, "/format/"), formatter)
+	ai.DefineFormats(g.reg, renamedFormatter{Formatter: formatter, name: formatName(name)})
 }
 
-// IsDefinedFormat checks if a formatter with the given name is registered in the registry.
+// IsDefinedFormat checks if a formatter with the given name is registered in
+// the registry. The name may optionally carry the "/format/" prefix, matching
+// what [DefineFormat] accepts.
 func IsDefinedFormat(g *Genkit, name string) bool {
-	return g.reg.LookupValue("/format/"+name) != nil
+	return g.reg.LookupValue("/format/"+formatName(name)) != nil
 }
+
+// formatName normalizes a caller-supplied format name to its bare form. Before
+// custom formats resolved correctly, passing an already-prefixed name was the
+// only way to make one work, so both spellings have to keep resolving.
+func formatName(name string) string {
+	return strings.TrimPrefix(name, "/format/")
+}
+
+// renamedFormatter overrides a Formatter's Name so [DefineFormat] can honor an
+// explicit name while still registering through [ai.DefineFormats], which owns
+// the mapping from format name to registry key.
+type renamedFormatter struct {
+	ai.Formatter
+	name string
+}
+
+func (f renamedFormatter) Name() string { return f.name }
 
 // DefineResource defines a resource and registers it with the Genkit instance.
 // Resources provide content that can be referenced in prompts via URI.
