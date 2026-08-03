@@ -67,6 +67,9 @@ func thinkingConfigSchema() map[string]any {
 }
 
 func overlayThinkingConfigSchema(schema map[string]any) {
+	if schema == nil {
+		return
+	}
 	props, _ := schema["properties"].(map[string]any)
 	if props == nil {
 		props = map[string]any{}
@@ -165,12 +168,12 @@ func asInt64(v any) (int64, error) {
 	case int64:
 		return n, nil
 	case float32:
-		if float32(int64(n)) != n {
+		if n < float32(math.MinInt64) || n > float32(math.MaxInt64) || float32(int64(n)) != n {
 			return 0, fmt.Errorf("not an integer")
 		}
 		return int64(n), nil
 	case float64:
-		if math.Trunc(n) != n {
+		if n < float64(math.MinInt64) || n > float64(math.MaxInt64) || math.Trunc(n) != n {
 			return 0, fmt.Errorf("not an integer")
 		}
 		return int64(n), nil
@@ -195,16 +198,19 @@ func validateThinkingConfig(c ThinkingConfig) error {
 	if c.Display != "" && c.Display != ThinkingDisplaySummarized && c.Display != ThinkingDisplayOmitted {
 		return fmt.Errorf("display must be %q or %q", ThinkingDisplaySummarized, ThinkingDisplayOmitted)
 	}
-	if enabled {
+	if c.Display != "" && !adaptive {
+		return fmt.Errorf("display can only be set when adaptive thinking is enabled")
+	}
+
+	// budgetTokens is only meaningful for enabled thinking (explicit or implied).
+	implicitEnabled := c.Enabled == nil && c.BudgetTokens != nil && !adaptive
+	if enabled || implicitEnabled {
 		if c.BudgetTokens == nil {
 			return fmt.Errorf("budgetTokens is required when thinking is enabled")
 		}
 		if *c.BudgetTokens < minThinkingBudgetTokens {
 			return fmt.Errorf("budgetTokens must be >= %d", minThinkingBudgetTokens)
 		}
-	}
-	if c.BudgetTokens != nil && *c.BudgetTokens < minThinkingBudgetTokens {
-		return fmt.Errorf("budgetTokens must be >= %d", minThinkingBudgetTokens)
 	}
 	return nil
 }

@@ -114,6 +114,23 @@ func TestToAnthropicThinkingConfig(t *testing.T) {
 			wantErr: `display must be "summarized" or "omitted"`,
 		},
 		{
+			name:    "display without adaptive",
+			in:      map[string]any{"enabled": true, "budgetTokens": 2048, "display": "summarized"},
+			wantErr: "display can only be set when adaptive",
+		},
+		{
+			name:     "disabled ignores low budgetTokens",
+			in:       map[string]any{"enabled": false, "budgetTokens": 100},
+			wantOK:   true,
+			wantJSON: `{"type":"disabled"}`,
+		},
+		{
+			name:     "adaptive ignores budgetTokens",
+			in:       map[string]any{"adaptive": true, "budgetTokens": 100},
+			wantOK:   true,
+			wantJSON: `{"type":"adaptive"}`,
+		},
+		{
 			name: "typed ThinkingConfig",
 			in: ThinkingConfig{
 				Enabled:      boolPtr(true),
