@@ -25,11 +25,15 @@ import (
 
 // HeaderParams carries context passed to [RequestHeaderFunc] when resolving
 // dynamic auth or proxy headers for an Ollama HTTP request.
+//
+// Optional fields may be nil depending on the call site — for example,
+// /api/tags discovery only sets ServerAddress. Implementations must nil-check
+// before dereferencing Model, ModelRequest, or EmbedRequest.
 type HeaderParams struct {
 	ServerAddress string
-	Model         *ModelDefinition
-	ModelRequest  *ai.ModelRequest
-	EmbedRequest  *ai.EmbedRequest
+	Model         *ModelDefinition // may be nil (e.g. /api/tags discovery)
+	ModelRequest  *ai.ModelRequest // may be nil (e.g. embed or /api/tags)
+	EmbedRequest  *ai.EmbedRequest // may be nil (e.g. generate or /api/tags)
 }
 
 // RequestHeaderFunc generates request headers dynamically (for example, to
@@ -38,20 +42,23 @@ type HeaderParams struct {
 type RequestHeaderFunc func(ctx context.Context, params HeaderParams) (map[string]string, error)
 
 // resolveHeaders returns static or dynamic headers for an Ollama request.
+// When headerFunc is set it takes precedence over staticHeaders, matching the
+// JS plugin's static-map-or-function union.
+func resolveHeaders(ctx context.Context, staticHeaders map[string]string, headerFunc RequestHeaderFunc, params HeaderParams) (map[string]string, error) {
+	if headerFunc != nil {
+		return headerFunc(ctx, params)
+	}
+	return staticHeaders, nil
+}
+
+// resolveHeaders returns static or dynamic headers for an Ollama request.
 // When RequestHeaderFunc is set it takes precedence over RequestHeaders,
 // matching the JS plugin's static-map-or-function union.
 func (o *Ollama) resolveHeaders(ctx context.Context, params HeaderParams) (map[string]string, error) {
 	if o == nil {
 		return nil, nil
 	}
-	if o.RequestHeaderFunc != nil {
-		headers, err := o.RequestHeaderFunc(ctx, params)
-		if err != nil {
-			return nil, err
-		}
-		return headers, nil
-	}
-	return o.RequestHeaders, nil
+	return resolveHeaders(ctx, o.RequestHeaders, o.RequestHeaderFunc, params)
 }
 
 func applyHeaders(req *http.Request, headers map[string]string) {

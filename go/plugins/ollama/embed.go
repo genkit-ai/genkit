@@ -63,16 +63,13 @@ func embed(ctx context.Context, serverAddress string, req *ai.EmbedRequest, stat
 		return nil, fmt.Errorf("failed to marshal embed request: %w", err)
 	}
 
-	headers := staticHeaders
-	if headerFunc != nil {
-		headers, err = headerFunc(ctx, HeaderParams{
-			ServerAddress: serverAddress,
-			Model:         &ModelDefinition{Name: options.Model},
-			EmbedRequest:  req,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve request headers: %w", err)
-		}
+	headers, err := resolveHeaders(ctx, staticHeaders, headerFunc, HeaderParams{
+		ServerAddress: serverAddress,
+		Model:         &ModelDefinition{Name: options.Model},
+		EmbedRequest:  req,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve request headers: %w", err)
 	}
 
 	resp, err := sendEmbedRequest(ctx, serverAddress, jsonData, headers)

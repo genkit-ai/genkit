@@ -180,10 +180,7 @@ type generator struct {
 }
 
 func (g *generator) resolveHeaders(ctx context.Context, params HeaderParams) (map[string]string, error) {
-	if g.requestHeaderFunc != nil {
-		return g.requestHeaderFunc(ctx, params)
-	}
-	return g.requestHeaders, nil
+	return resolveHeaders(ctx, g.requestHeaders, g.requestHeaderFunc, params)
 }
 
 type ollamaMessage struct {
