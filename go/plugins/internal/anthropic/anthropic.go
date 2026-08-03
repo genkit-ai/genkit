@@ -197,10 +197,20 @@ func Generate(
 			content := []*ai.Part{}
 			switch event := event.AsAny().(type) {
 			case anthropic.ContentBlockDeltaEvent:
-				if event.Delta.Type == "thinking_delta" {
+				switch event.Delta.Type {
+				case "thinking_delta":
 					content = append(content, ai.NewReasoningPart(event.Delta.Thinking, []byte(event.Delta.Signature)))
-				} else {
-					content = append(content, ai.NewTextPart(event.Delta.Text))
+				case "citations_delta":
+					if p := citationsDeltaToPart(event.Delta); p != nil {
+						content = append(content, p)
+					}
+				default:
+					if event.Delta.Text != "" {
+						content = append(content, ai.NewTextPart(event.Delta.Text))
+					}
+				}
+				if len(content) == 0 {
+					continue
 				}
 				err := cb(ctx, &ai.ModelResponseChunk{
 					Content: content,
@@ -465,6 +475,19 @@ func toAnthropicParts(parts []*ai.Part) ([]anthropic.ContentBlockParamUnion, err
 				return nil, err
 			}
 			blocks = append(blocks, block)
+		case p.IsCustom():
+			opts, ok, err := documentOptionsFromCustom(p.Custom)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				return nil, status.Errorf(ai.ErrInvalidPart, "unknown custom part in the request")
+			}
+			block, err := toDocumentBlock(opts)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, block)
 		case p.IsToolRequest():
 			toolReq := p.ToolRequest
 			blocks = append(blocks, anthropic.NewToolUseBlock(toolReq.Ref, toolReq.Input, toolReq.Name))
@@ -510,7 +533,7 @@ func toGenkitResponse(m *anthropic.Message) (*ai.ModelResponse, error) {
 		case anthropic.ThinkingBlock:
 			p = ai.NewReasoningPart(part.Thinking, []byte(part.Signature))
 		case anthropic.TextBlock:
-			p = ai.NewTextPart(string(part.Text))
+			p = textBlockToPart(string(part.Text), part.Citations)
 		case anthropic.ToolUseBlock:
 			p = ai.NewToolRequestPart(&ai.ToolRequest{
 				Ref:   part.ID,
