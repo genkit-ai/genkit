@@ -30,7 +30,6 @@ import * as apis from '../types/apis';
 import { CancelActionRequestSchema } from '../types/apis';
 import type { EnvironmentVariable } from '../types/env';
 import * as evals from '../types/eval';
-import type { PromptFrontmatter } from '../types/prompt';
 import {
   PageViewEvent,
   SelectContentEvent,
@@ -39,7 +38,7 @@ import {
   recordRequestEvent,
 } from '../utils/analytics';
 import { toolsPackage } from '../utils/package';
-import { fromMessages } from '../utils/prompt';
+import { toPromptFile } from '../utils/prompt';
 
 const t = initTRPC.create({
   errorFormatter(opts) {
@@ -137,15 +136,7 @@ export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
     /** Generate a .prompt file from messages and model config. */
     createPrompt: loggedProcedure
       .input(apis.CreatePromptRequestSchema)
-      .mutation(async ({ input }) => {
-        const frontmatter: PromptFrontmatter = {
-          model: input.model.replace('/model/', ''),
-          config: input.config,
-          tools: input.tools?.map((toolDefinition) => toolDefinition.name),
-          use: input.use,
-        };
-        return fromMessages(frontmatter, input.messages);
-      }),
+      .mutation(async ({ input }) => toPromptFile(input)),
 
     /** Retrieves all traces for a given environment (e.g. dev or prod). */
     listTraces: loggedProcedure
