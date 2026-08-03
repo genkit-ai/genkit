@@ -22,7 +22,7 @@ plugin and core module to ensure there are no CommonJS/ESM interop issues.
 | `@genkit-ai/evaluator` | Evaluation framework |
 | `@genkit-ai/dev-local-vectorstore` | Local vector store |
 | `@genkit-ai/checks` | Checks plugin |
-| `@genkit-ai/compat-oai` | OpenAI-compatible (OpenAI, DeepSeek, xAI) |
+| `@genkit-ai/compat-oai` | OpenAI-compatible (OpenAI, DeepSeek, xAI, Groq) |
 | `genkitx-ollama` | Ollama |
 | `genkitx-chromadb` | ChromaDB |
 | `genkitx-pinecone` | Pinecone |

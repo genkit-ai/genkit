@@ -21,6 +21,7 @@ import {
   openAICompatible,
 } from '@genkit-ai/compat-oai';
 import { deepSeek } from '@genkit-ai/compat-oai/deepseek';
+import { groq } from '@genkit-ai/compat-oai/groq';
 import { openAI } from '@genkit-ai/compat-oai/openai';
 import { xAI } from '@genkit-ai/compat-oai/xai';
 import { startFlowServer } from '@genkit-ai/express';
@@ -37,6 +38,7 @@ const ai = genkit({
   plugins: [
     openAI(),
     deepSeek(),
+    groq(),
     xAI(),
     openAICompatible({
       name: 'openrouter',

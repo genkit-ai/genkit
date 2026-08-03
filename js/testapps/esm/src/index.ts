@@ -17,6 +17,7 @@
 import { checks } from '@genkit-ai/checks';
 import { openAICompatible } from '@genkit-ai/compat-oai';
 import { deepSeek } from '@genkit-ai/compat-oai/deepseek';
+import { groq } from '@genkit-ai/compat-oai/groq';
 import { openAI } from '@genkit-ai/compat-oai/openai';
 import { xAI } from '@genkit-ai/compat-oai/xai';
 import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
@@ -76,6 +77,7 @@ openAICompatible;
 openAI;
 xAI;
 deepSeek;
+groq;
 newGoogleAI;
 newVertexAI;
 

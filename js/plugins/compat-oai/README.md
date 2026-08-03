@@ -9,6 +9,7 @@ Official OpenAI-compatible provider documentation:
 - [OpenAI](https://genkit.dev/docs/integrations/openai/)
 - [xAI (Grok)](https://genkit.dev/docs/integrations/xai/)
 - [DeepSeek](https://genkit.dev/docs/integrations/deepseek/)
+- [Groq](https://genkit.dev/docs/integrations/openai-compatible/) (`@genkit-ai/compat-oai/groq`)
 - [Other compatible APIs](https://genkit.dev/docs/integrations/openai-compatible/)
 
 ## Supported models
