@@ -221,11 +221,8 @@ func textBlockToPart(text string, citations []anthropic.TextCitationUnion) *ai.P
 }
 
 // fromAnthropicCitation converts a document citation to camelCase Genkit
-// metadata. Web-search / search-result citations (no document_index) are skipped.
+// metadata. Web-search / search-result citations are skipped by type.
 func fromAnthropicCitation(c anthropic.TextCitationUnion) map[string]any {
-	if !c.JSON.DocumentIndex.Valid() {
-		return nil
-	}
 	switch c.Type {
 	case "char_location":
 		out := map[string]any{
@@ -263,10 +260,10 @@ func fromAnthropicCitation(c anthropic.TextCitationUnion) map[string]any {
 }
 
 func optionalCitationFields(out map[string]any, c anthropic.TextCitationUnion) {
-	if c.JSON.DocumentTitle.Valid() && c.DocumentTitle != "" {
+	if c.DocumentTitle != "" {
 		out["documentTitle"] = c.DocumentTitle
 	}
-	if c.JSON.FileID.Valid() && c.FileID != "" {
+	if c.FileID != "" {
 		out["fileId"] = c.FileID
 	}
 }

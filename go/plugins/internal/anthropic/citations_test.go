@@ -107,11 +107,11 @@ func TestToGenkitResponseTextCitations(t *testing.T) {
 		t.Fatalf("citations metadata = %#v", part.Metadata)
 	}
 	c := citations[0]
-	if c["type"] != "char_location" || c["documentIndex"] != int64(0) && c["documentIndex"] != float64(0) {
-		// documentIndex may be int64 from struct copy
-		if c["type"] != "char_location" {
-			t.Errorf("citation = %#v", c)
-		}
+	if c["type"] != "char_location" {
+		t.Errorf("expected type char_location, got %#v", c["type"])
+	}
+	if c["documentIndex"] != int64(0) && c["documentIndex"] != float64(0) {
+		t.Errorf("expected documentIndex 0, got %#v", c["documentIndex"])
 	}
 	if c["citedText"] != "The grass is green." || c["documentTitle"] != "Nature Facts" {
 		t.Errorf("citation fields = %#v", c)
