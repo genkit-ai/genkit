@@ -143,8 +143,10 @@ def _extract_text(request: ModelRequest) -> str:
     return ' '.join(prompt_parts)
 
 
-def _media_content_type(media: Media) -> str:
+def _media_content_type(media: Media | None) -> str:
     """Resolve a media content type from the part or a data: URL prefix."""
+    if not media:
+        return ''
     if media.content_type:
         return media.content_type
     url = media.url or ''
@@ -175,6 +177,8 @@ def _extract_veo_image(request: ModelRequest) -> genai_types.Image | None:
         if not isinstance(part.root, MediaPart):
             continue
         media = part.root.media
+        if not media:
+            continue
         content_type = _media_content_type(media)
         if not content_type.startswith('image/'):
             continue
@@ -186,15 +190,16 @@ def _extract_veo_image(request: ModelRequest) -> genai_types.Image | None:
         if url.startswith('data:'):
             _, _, payload = url.partition(',')
             if not payload:
-                return None
+                continue
             try:
                 image_bytes = base64.b64decode(payload, validate=False)
             except (ValueError, TypeError):
-                return None
+                continue
             return genai_types.Image(image_bytes=image_bytes, mime_type=content_type)
 
         # http(s) and other URL schemes are not inlined here (JS only accepts data: URLs).
-        return None
+        # Keep scanning later parts for a supported image.
+        continue
 
     return None
 

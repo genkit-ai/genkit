@@ -316,3 +316,22 @@ class TestExtractVeoImage:
         assert source.prompt is None
         assert source.image is not None
         assert source.image.image_bytes == raw
+
+    def test_skips_unsupported_url_and_uses_later_image(self) -> None:
+        """Unsupported http(s) image parts do not block a later supported image."""
+        request = ModelRequest(
+            messages=[
+                Message(
+                    role=Role.USER,
+                    content=[
+                        Part(
+                            root=MediaPart(media=Media(url='https://example.com/frame.png', content_type='image/png'))
+                        ),
+                        Part(root=MediaPart(media=Media(url='gs://bucket/frame.png', content_type='image/png'))),
+                    ],
+                )
+            ]
+        )
+        image = _extract_veo_image(request)
+        assert image is not None
+        assert image.gcs_uri == 'gs://bucket/frame.png'
