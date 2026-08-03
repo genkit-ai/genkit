@@ -39,7 +39,7 @@ from genkit._ai._model import (
     text_from_content,
 )
 from genkit._ai._resource import ResourceArgument, ResourceInput, find_matching_resource, resolve_resources
-from genkit._ai._tools import Interrupt, Tool, run_tool_after_restart, run_tool_request
+from genkit._ai._tools import Interrupt, Tool, restart_interrupt_error, run_tool_after_restart, run_tool_request
 from genkit._core._action import (
     GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR,
     Action,
@@ -1540,14 +1540,14 @@ async def _run_restart_through_middleware(
     try:
         multipart = await dispatch_tool(mw_list, params, mw_pipeline.ctx, next_fn)
     except Exception as e:
-        if _interrupt_from_tool_exc(e) is not None:
+        intr = _interrupt_from_tool_exc(e)
+        if intr is not None:
             # Re-interrupting during restart is a hard error — same as the legacy
             # run_tool_after_restart path, which raises FAILED_PRECONDITION when
-            # the inner tool throws an Interrupt during restart.
-            raise GenkitError(
-                status='FAILED_PRECONDITION',
-                message='Tool interrupted again during a restart execution; not supported yet.',
-            ) from e
+            # the inner tool throws an Interrupt during restart. Surface the
+            # underlying interrupt reason so callers know why (e.g. missing
+            # toolApproved metadata for ToolApproval).
+            raise restart_interrupt_error(intr) from e
         raise
 
     return ToolResponsePart(

@@ -270,6 +270,21 @@ async def run_tool_request(
         _tool_original_input.reset(token_input)
 
 
+def restart_interrupt_error(interrupt: Interrupt) -> GenkitError:
+    """Build the FAILED_PRECONDITION error for an Interrupt raised during tool restart.
+
+    Nested interrupts during restart are not supported yet. Include the underlying
+    interrupt reason (e.g. ToolApproval's ``Tool not in approved list: ...``) so the
+    error points at missing approval metadata instead of sounding like a missing SDK feature.
+    """
+    reason = interrupt.metadata.get('message') if interrupt.metadata else None
+    if isinstance(reason, str) and reason.strip():
+        message = f'Tool interrupted again during restart: {reason}'
+    else:
+        message = 'Tool interrupted again during a restart execution; not supported yet.'
+    return GenkitError(status='FAILED_PRECONDITION', message=message, cause=interrupt)
+
+
 async def run_tool_after_restart(
     *,
     tool: Action,
@@ -290,11 +305,7 @@ async def run_tool_after_restart(
             else (e if isinstance(e, Interrupt) else None)
         )
         if intr is not None:
-            raise GenkitError(
-                status='FAILED_PRECONDITION',
-                message='Tool interrupted again during a restart execution; not supported yet.',
-                cause=intr,
-            ) from e
+            raise restart_interrupt_error(intr) from e
         raise
 
     return ToolResponsePart(

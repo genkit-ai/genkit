@@ -23,6 +23,7 @@ from genkit._ai._testing import (
     define_programmable_model,
 )
 from genkit._ai._tools import Interrupt, ToolRunContext, define_tool
+from genkit._core._error import GenkitError
 from genkit._core._model import GenerateActionOptions, ModelRequest
 from genkit._core._registry import Registry
 from genkit._core._typing import (
@@ -1760,6 +1761,70 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
     )
     assert response.text == 'final'
     assert invocations == ['approveMe'], f'expected wrap_tool to fire once on restart, saw: {invocations}'
+
+
+@pytest.mark.asyncio
+async def test_restart_reinterrupt_surfaces_underlying_reason() -> None:
+    """Middleware Interrupt during restart includes the interrupt reason in GenkitError.
+
+    Regression for missing ToolApproval metadata: restart without ``toolApproved``
+    used to raise a generic "not supported yet" message that hid the real cause.
+    """
+    ai = Genkit()
+
+    @ai.middleware(name='approval_mw')
+    class ApprovalMW(BaseMiddleware):
+        async def wrap_tool(
+            self,
+            params: ToolHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+        ) -> MultipartToolResponse:
+            metadata = params.tool_request_part.metadata or {}
+            resumed = metadata.get('resumed')
+            if isinstance(resumed, dict) and resumed.get('toolApproved'):
+                return await next_fn(params, ctx)
+            raise Interrupt({'message': f'Tool not in approved list: {params.tool.name}'})
+
+    define_programmable_model(ai)
+
+    @ai.tool(name='sensitiveTool')
+    async def sensitive_tool() -> str:
+        return 'done'
+
+    interrupt_part = ToolRequestPart(
+        tool_request=ToolRequest(name='sensitiveTool', input={}, ref='r1'),
+        metadata={'interrupt': True},
+    )
+
+    with pytest.raises(GenkitError) as ei:
+        await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[
+                    Message(role=Role.USER, content=[Part(TextPart(text='do it'))]),
+                    Message(role=Role.MODEL, content=[Part(root=interrupt_part)]),
+                ],
+                tools=['sensitiveTool'],
+                use=[MiddlewareRef(name='approval_mw')],
+                resume=Resume(
+                    # Restart without toolApproved — middleware re-interrupts.
+                    restart=[
+                        ToolRequestPart(
+                            tool_request=ToolRequest(name='sensitiveTool', input={}, ref='r1'),
+                            metadata={'resumed': True},
+                        )
+                    ],
+                ),
+            ),
+        )
+
+    assert ei.value.status == 'FAILED_PRECONDITION'
+    assert ei.value.original_message == (
+        'Tool interrupted again during restart: Tool not in approved list: sensitiveTool'
+    )
+    assert isinstance(ei.value.cause, Interrupt)
 
 
 @pytest.mark.asyncio

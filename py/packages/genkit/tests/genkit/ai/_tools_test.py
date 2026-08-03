@@ -177,6 +177,32 @@ async def test_run_tool_after_restart_nested_interrupt_raises() -> None:
         await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert ei.value.status == 'FAILED_PRECONDITION'
     assert 'interrupted again' in ei.value.original_message.lower()
+    assert isinstance(ei.value.cause, Interrupt)
+
+
+@pytest.mark.asyncio
+async def test_run_tool_after_restart_nested_interrupt_includes_reason() -> None:
+    """Nested restart Interrupt with ``metadata.message`` is surfaced in the GenkitError text."""
+    ai = Genkit()
+
+    @ai.tool(name='t3')
+    async def t3(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        raise Interrupt({'message': 'Tool not in approved list: t3'})
+
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t3')
+    assert action is not None
+
+    restart_trp = ToolRequestPart(
+        tool_request=ToolRequest(name='t3', ref='x', input={}),
+        metadata={'resumed': True},
+    )
+    with pytest.raises(GenkitError) as ei:
+        await run_tool_after_restart(tool=action, restart_trp=restart_trp)
+    assert ei.value.status == 'FAILED_PRECONDITION'
+    assert ei.value.original_message == (
+        'Tool interrupted again during restart: Tool not in approved list: t3'
+    )
+    assert isinstance(ei.value.cause, Interrupt)
 
 
 def test_respond_to_interrupt_wire_format_basic() -> None:
