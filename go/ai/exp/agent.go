@@ -259,9 +259,10 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 			TurnIndex:        s.turnIndex,
 		}
 		spanMeta := &tracing.SpanMetadata{
-			// Match the JS agent's turn span so cross-language traces line up:
-			// name "runTurn-N" (1-indexed) and type flowStep with no subtype
-			// (JS's run() sets only genkit:type, no genkit:metadata:subtype).
+			// The turn span's shape is fixed so traces from every SDK
+			// line up: name "runTurn-N" (1-indexed) and type flowStep
+			// with no subtype (genkit:type only, no
+			// genkit:metadata:subtype).
 			Name: fmt.Sprintf("runTurn-%d", s.turnIndex+1),
 			Type: "flowStep",
 		}
@@ -1030,9 +1031,9 @@ type fnDoneResult[State any] struct {
 // keys under which an agent records its identifiers: the session ID on the
 // root action span, and the turn-end snapshot ID on each server-managed turn
 // span. They are the "genkit:metadata:"-prefixed forms of the
-// "agent:sessionId" / "agent:snapshotId" custom-metadata keys the JS agent
-// sets via setCustomMetadataAttributes; the prefix is inlined here because
-// Go's tracing package exposes no setCustomMetadataAttributes helper.
+// "agent:sessionId" / "agent:snapshotId" custom-metadata keys every agent
+// records; the prefix is inlined here because Go's tracing package exposes no
+// custom-metadata helper.
 const (
 	sessionIDSpanAttrKey  = "genkit:metadata:agent:sessionId"
 	snapshotIDSpanAttrKey = "genkit:metadata:agent:snapshotId"
@@ -1087,10 +1088,9 @@ func newAgentRuntime[State any](
 
 	// Tag the agent's root action span (the current span here, before any turn
 	// span is opened) with the session ID so traces from the same conversation
-	// can be correlated. Mirrors the JS agent, which calls
-	// setCustomMetadataAttributes({'agent:sessionId': ...}) once at the start of
-	// the action body. trace.SpanFromContext never returns nil (it yields a
-	// no-op span when none is active), so the SetAttributes is always safe.
+	// can be correlated. It is written once at the start of the action body.
+	// trace.SpanFromContext never returns nil (it yields a no-op span when none
+	// is active), so the SetAttributes is always safe.
 	trace.SpanFromContext(ctx).SetAttributes(
 		attribute.String(sessionIDSpanAttrKey, session.state.SessionID))
 
@@ -2473,6 +2473,94 @@ func (i *detachIntake) stopAndWait() {
 // excluded from session history after generation.
 const promptMessageKey = "_genkit_prompt"
 
+// sessionMessageKey marks the session's own messages on their way into the
+// prompt render. The prompt decides where they land, so afterwards this is the
+// only thing that separates them from the prompt's scaffolding. It never
+// reaches the model: [tagRenderedMessages] strips it in the same pass that
+// tags the scaffolding.
+const sessionMessageKey = "_genkit_history"
+
+// taggedMessage returns a copy of m carrying key in its metadata.
+//
+// The copy matters: Render may alias message metadata from shared prompt
+// config (e.g. messages registered via [ai.WithMessages]), so writing in place
+// would leak the tag into the registered prompt and race with concurrent
+// invocations.
+func taggedMessage(m *ai.Message, key string) *ai.Message {
+	tagged := *m
+	tagged.Metadata = maps.Clone(tagged.Metadata)
+	if tagged.Metadata == nil {
+		tagged.Metadata = make(map[string]any, 1)
+	}
+	tagged.Metadata[key] = true
+	return &tagged
+}
+
+// hasTag reports whether m carries key.
+func hasTag(m *ai.Message, key string) bool {
+	return m.Metadata != nil && m.Metadata[key] == true
+}
+
+// untaggedMessage returns m without key, copying only when it is present.
+func untaggedMessage(m *ai.Message, key string) *ai.Message {
+	if !hasTag(m, key) {
+		return m
+	}
+	stripped := *m
+	stripped.Metadata = maps.Clone(stripped.Metadata)
+	delete(stripped.Metadata, key)
+	if len(stripped.Metadata) == 0 {
+		stripped.Metadata = nil
+	}
+	return &stripped
+}
+
+// markSessionMessages copies the session's messages with [sessionMessageKey]
+// so the render can be handed them without the tag reaching session state.
+func markSessionMessages(history []*ai.Message) []*ai.Message {
+	marked := make([]*ai.Message, 0, len(history))
+	for _, m := range history {
+		if m == nil {
+			continue
+		}
+		marked = append(marked, taggedMessage(m, sessionMessageKey))
+	}
+	return marked
+}
+
+// tagRenderedMessages splits the render output in one pass: what came from the
+// session loses its marker, since that is an implementation detail the model
+// should not see, and everything else is tagged as the prompt's scaffolding so
+// it can be dropped from session history after generation.
+func tagRenderedMessages(messages []*ai.Message) []*ai.Message {
+	tagged := make([]*ai.Message, 0, len(messages))
+	for _, m := range messages {
+		if m == nil {
+			continue
+		}
+		if hasTag(m, sessionMessageKey) {
+			tagged = append(tagged, untaggedMessage(m, sessionMessageKey))
+			continue
+		}
+		tagged = append(tagged, taggedMessage(m, promptMessageKey))
+	}
+	return tagged
+}
+
+// turnSessionMessages reduces the generate response's full message list to what
+// the session should hold: everything except the prompt's scaffolding, which
+// leaves the placed conversation, the tool loop's messages, and the reply.
+func turnSessionMessages(full []*ai.Message) []*ai.Message {
+	msgs := make([]*ai.Message, 0, len(full))
+	for _, m := range full {
+		if m == nil || hasTag(m, promptMessageKey) {
+			continue
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs
+}
+
 // validateUserMessage rejects inputs the prompt-backed agent loop can't
 // safely consume: a non-user role would be appended to history under the
 // wrong speaker, and tool request / response parts belong on the
@@ -2639,35 +2727,34 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 				return nil, err
 			}
 
-			actionOpts, err := prompt.Render(ctx, defaultInput)
+			// Hand the conversation to the render instead of splicing it
+			// in afterwards: a prompt-backed agent is a prompt, so where
+			// the conversation goes is the prompt's decision, the same as
+			// it is for [ai.Prompt.Execute]. A prompt that declares no
+			// messages of its own gets it in the middle, between the
+			// system message and the user prompt. One that declares its
+			// own places it with {{history}} or [ai.HistoryFromContext],
+			// which is what makes trimming or summarizing possible.
+			//
+			// The conversation handed over is the whole session, this
+			// turn's message included, since sess.Run has already stored
+			// it. A prompt therefore sees every message the session holds,
+			// not a truncated view of it.
+			//
+			// Only the render sees this context. Generation below runs on
+			// the original, so the conversation does not ride along into
+			// tools and prompts invoked inside the generate loop.
+			history := sess.Messages()
+			actionOpts, err := prompt.Render(ai.NewHistoryContext(ctx, markSessionMessages(history)), defaultInput)
 			if err != nil {
 				return nil, fmt.Errorf("prompt render: %w", err)
 			}
 
-			// Tag base messages so they can be filtered out of session
-			// history after generation. Tag copies rather than the
-			// rendered messages themselves: Render can alias message
-			// metadata from shared prompt config (e.g. messages
-			// registered via [ai.WithMessages]), so tagging in place
-			// would leak the tag into the registered prompt and race
-			// with concurrent invocations.
-			base := make([]*ai.Message, 0, len(actionOpts.Messages))
-			for _, m := range actionOpts.Messages {
-				if m == nil {
-					continue
-				}
-				tagged := *m
-				tagged.Metadata = maps.Clone(tagged.Metadata)
-				if tagged.Metadata == nil {
-					tagged.Metadata = make(map[string]any, 1)
-				}
-				tagged.Metadata[promptMessageKey] = true
-				base = append(base, &tagged)
-			}
-
-			// Append conversation history after the base messages.
-			history := sess.Messages()
-			actionOpts.Messages = append(base, history...)
+			// Whatever the render produced that did not come from the
+			// session is the prompt's own scaffolding (system message,
+			// template output, few-shot examples). Tag it so it can be
+			// filtered out of session history after generation.
+			actionOpts.Messages = tagRenderedMessages(actionOpts.Messages)
 
 			// If a resume payload was provided, validate that every
 			// restart / respond entry references a tool request the model
@@ -2694,19 +2781,19 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 				return nil, fmt.Errorf("generate: %w", err)
 			}
 
-			// Replace session messages with the full history minus base
-			// messages. This captures intermediate tool call/response
-			// messages from the tool loop, not just the final response.
+			// Replace session messages with the full history minus the
+			// prompt's scaffolding. This captures intermediate tool
+			// call/response messages from the tool loop, not just the
+			// final response, and it is what carries a resumed tool
+			// request's resolved content back into the session.
+			//
+			// Because the result is the conversation the prompt actually
+			// placed, a prompt that trims or summarizes its history trims
+			// the session too: the compacted conversation is the agent's
+			// conversation from that turn on, rather than being recomputed
+			// from an ever-growing transcript every turn.
 			if modelResp.Request != nil {
-				history := modelResp.History()
-				msgs := make([]*ai.Message, 0, len(history))
-				for _, m := range history {
-					if m.Metadata != nil && m.Metadata[promptMessageKey] == true {
-						continue
-					}
-					msgs = append(msgs, m)
-				}
-				sess.SetMessages(msgs)
+				sess.SetMessages(turnSessionMessages(modelResp.History()))
 			} else if modelResp.Message != nil {
 				sess.AddMessages(modelResp.Message)
 			}

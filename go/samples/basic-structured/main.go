@@ -170,6 +170,20 @@ func DefineStructuredJoke(g *genkit.Genkit) {
 func DefineRecipe(g *genkit.Genkit) {
 	genkit.DefineStreamingFlow(g, "recipeFlow",
 		func(ctx context.Context, input RecipeRequest, sendChunk core.StreamCallback[[]*Ingredient]) (*Recipe, error) {
+			// Generate takes the request the caller already has in hand, so a
+			// prompt that needs string manipulation is simply built first. The
+			// content-function options (WithPromptFn and friends) exist for
+			// registered prompts, where the input arrives from the framework
+			// rather than from an enclosing scope; see the basic-prompt-content
+			// sample for what they buy you there.
+			prompt := fmt.Sprintf(
+				"Create a %s %s recipe for %d people that takes under %d minutes to prepare.",
+				input.Cuisine, input.Dish, input.ServingSize, input.MaxPrepMinutes,
+			)
+			if len(input.DietaryRestrictions) > 0 {
+				prompt += fmt.Sprintf(" Dietary restrictions: %v.", input.DietaryRestrictions)
+			}
+
 			stream := genkit.GenerateDataStream[*Recipe](ctx, g,
 				ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 					ThinkingConfig: &genai.ThinkingConfig{
@@ -177,18 +191,7 @@ func DefineRecipe(g *genkit.Genkit) {
 					},
 				})),
 				ai.WithSystem("You are an experienced chef. Come up with easy, creative recipes."),
-				// Here we are passing WithPromptFn() since our prompt takes some string manipulation to build.
-				// Alternatively, we could pass WithPrompt() with the complete prompt string.
-				ai.WithPromptFn(func(ctx context.Context, _ any) (string, error) {
-					prompt := fmt.Sprintf(
-						"Create a %s %s recipe for %d people that takes under %d minutes to prepare.",
-						input.Cuisine, input.Dish, input.ServingSize, input.MaxPrepMinutes,
-					)
-					if len(input.DietaryRestrictions) > 0 {
-						prompt += fmt.Sprintf(" Dietary restrictions: %v.", input.DietaryRestrictions)
-					}
-					return prompt, nil
-				}),
+				ai.WithPrompt(prompt),
 			)
 
 			for result, err := range stream {

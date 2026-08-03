@@ -59,9 +59,10 @@ func (ch *chatHistoryStore) Retrieve(sessionID string) chatHistory {
 
 func setup03(g *genkit.Genkit, m ai.Model) error {
 	chatPreamblePrompt := genkit.DefinePrompt(g, "s03_chatPreamble",
-		ai.WithMessages(
-			ai.NewUserTextMessage("Hi. What's on the menu today?"),
-			ai.NewModelTextMessage(`
+		// The turns are a template, so the menu listing is rendered from the
+		// input. Values passed to WithMessages would be used verbatim.
+		ai.WithMessagesTemplate(`{{role "user"}}Hi. What's on the menu today?
+{{role "model"}}
 I am Walt, a helpful AI assistant here at the restaurant.
 I can answer questions about the food on the menu or any other questions
 you have about food in general. I probably can't help you with anything else.
@@ -71,7 +72,6 @@ Here is today's menu:
 {{this.description}}
 {{~/each}}
 Do you have any questions about the menu?`),
-		),
 		ai.WithModel(m),
 		ai.WithInputType(dataMenuQuestionInput{}),
 		ai.WithOutputFormat(ai.OutputFormatText),

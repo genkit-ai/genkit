@@ -231,11 +231,11 @@ func TestValidPrompt(t *testing.T) {
 		name           string
 		model          Model
 		systemText     string
-		systemFn       PromptFn
+		systemFn       func(context.Context, HelloPromptInput) (string, error)
 		promptText     string
-		promptFn       PromptFn
+		promptFn       func(context.Context, HelloPromptInput) (string, error)
 		messages       []*Message
-		messagesFn     MessagesFn
+		messagesFn     func(context.Context, HelloPromptInput) ([]*Message, error)
 		tools          []ToolRef
 		config         *GenerationCommonConfig
 		inputType      any
@@ -283,11 +283,11 @@ func TestValidPrompt(t *testing.T) {
 			model:     model,
 			config:    &GenerationCommonConfig{Temperature: 11},
 			inputType: HelloPromptInput{},
-			systemFn: func(ctx context.Context, input any) (string, error) {
-				return "say hello to {{Name}}", nil
+			systemFn: func(ctx context.Context, input HelloPromptInput) (string, error) {
+				return "say hello to " + input.Name, nil
 			},
-			promptFn: func(ctx context.Context, input any) (string, error) {
-				return "my name is {{Name}}", nil
+			promptFn: func(ctx context.Context, input HelloPromptInput) (string, error) {
+				return "my name is " + input.Name, nil
 			},
 			input: HelloPromptInput{Name: "foo"},
 			executeOptions: []PromptExecuteOption{
@@ -363,11 +363,11 @@ func TestValidPrompt(t *testing.T) {
 			inputType:  HelloPromptInput{},
 			systemText: "say hello",
 			promptText: "my name is foo",
-			messagesFn: func(ctx context.Context, input any) ([]*Message, error) {
+			messagesFn: func(ctx context.Context, input HelloPromptInput) ([]*Message, error) {
 				return []*Message{
 					{
 						Role:    RoleModel,
-						Content: []*Part{NewTextPart("your name is {{Name}}")},
+						Content: []*Part{NewTextPart("your name is " + input.Name)},
 					},
 				}, nil
 			},
@@ -407,16 +407,11 @@ func TestValidPrompt(t *testing.T) {
 			inputType:  HelloPromptInput{},
 			systemText: "say hello",
 			promptText: "my name is foo",
-			messagesFn: func(ctx context.Context, input any) ([]*Message, error) {
-				var p HelloPromptInput
-				switch param := input.(type) {
-				case HelloPromptInput:
-					p = param
-				}
+			messagesFn: func(ctx context.Context, input HelloPromptInput) ([]*Message, error) {
 				return []*Message{
 					{
 						Role:    RoleModel,
-						Content: []*Part{NewTextPart(fmt.Sprintf("your name is %s", p.Name))},
+						Content: []*Part{NewTextPart(fmt.Sprintf("your name is %s", input.Name))},
 					},
 				}, nil
 			},
@@ -507,7 +502,10 @@ func TestValidPrompt(t *testing.T) {
 			},
 		},
 		{
-			name:       "execute with MessagesFn option",
+			// Message text is verbatim while the user prompt is still a
+			// template, so within one request {{Name}} survives in the
+			// message and expands in the prompt.
+			name:       "execute with Messages option",
 			model:      model,
 			config:     &GenerationCommonConfig{Temperature: 11},
 			inputType:  HelloPromptInput{},
@@ -518,7 +516,7 @@ func TestValidPrompt(t *testing.T) {
 				WithInput(HelloPromptInput{Name: "foo"}),
 				WithMessages(NewModelTextMessage("I remember you said your name is {{Name}}")),
 			},
-			wantTextOutput: "Echo: system: say hello; I remember you said your name is foo; my name is foo; config: {\n  \"temperature\": 11\n}; context: null",
+			wantTextOutput: "Echo: system: say hello; I remember you said your name is {{Name}}; my name is foo; config: {\n  \"temperature\": 11\n}; context: null",
 			wantGenerated: &ModelRequest{
 				Config: &GenerationCommonConfig{
 					Temperature: 11,
@@ -534,7 +532,7 @@ func TestValidPrompt(t *testing.T) {
 					},
 					{
 						Role:    RoleModel,
-						Content: []*Part{NewTextPart("I remember you said your name is foo")},
+						Content: []*Part{NewTextPart("I remember you said your name is {{Name}}")},
 					},
 					{
 						Role:    RoleUser,

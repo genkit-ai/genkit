@@ -160,6 +160,11 @@ input:
 ---
 {{role "system"}}
 You are {{personality}}. Keep responses concise.
+
+{{history}}
+
+{{role "user"}}
+If the question is ambiguous, ask one clarifying question instead of guessing.
 ```
 
 ```go
@@ -868,6 +873,42 @@ for result, err := range jokePrompt.ExecuteStream(ctx, JokeRequest{Topic: "cats"
 
 [See full example](samples/basic-prompts)
 
+### Build Prompts from Your Data
+
+Fill any part of a prompt with a Go function instead of a template. The function receives your input type, and what it returns is sent as written, so text from a user or a database never has to be escaped:
+
+```go
+type Ticket struct {
+    Question   string `json:"question"`
+    Screenshot string `json:"screenshot,omitempty"` // data URI, optional
+}
+
+supportPrompt := genkit.DefinePrompt(g, "support",
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithInputType(Ticket{}),
+    ai.WithSystem("You are a support agent. Answer in two sentences."),
+
+    // Text plus an image, assembled per request.
+    ai.WithPromptPartsFn(func(ctx context.Context, t Ticket) ([]*ai.Part, error) {
+        parts := []*ai.Part{ai.NewTextPart(t.Question)}
+        if t.Screenshot != "" {
+            parts = append(parts, ai.NewMediaPart("image/png", t.Screenshot))
+        }
+        return parts, nil
+    }),
+)
+
+// The braces below reach the model as typed, not as a template.
+resp, _ := supportPrompt.Execute(ctx, ai.WithInput(Ticket{
+    Question:   "Why does my {{template}} not render?",
+    Screenshot: screenshotDataURI,
+}))
+```
+
+Every slot has a function form: `WithSystemFn` and `WithPromptFn` for the single-message slots (with `WithSystemPartsFn` and `WithPromptPartsFn` for multi-part content), `WithMessagesFn` for the conversation, and `WithDocsFn` to attach retrieved documents.
+
+[See full example](samples/basic-prompt-content)
+
 ### Load Prompts from Files
 
 Keep prompts separate from code using `.prompt` files with YAML frontmatter:
@@ -1157,6 +1198,7 @@ Explore working examples to see Genkit in action:
 | [basic](samples/basic) | Simple text generation with streaming |
 | [basic-structured](samples/basic-structured) | Typed JSON output with `GenerateData` and `GenerateDataStream` |
 | [basic-prompts](samples/basic-prompts) | Prompt templates with Handlebars and `.prompt` files |
+| [basic-prompt-content](samples/basic-prompt-content) | Prompt content computed from your data, with media and retrieved docs |
 | [basic-agents](samples/basic-agents) | Multi-turn agents (inline, prompt-file, and custom-loop) with snapshots and background detach |
 | [basic-agents-server](samples/basic-agents-server) | Serving store-backed and stateless agents over HTTP |
 | [intermediate-interrupts](samples/intermediate-interrupts) | Human-in-the-loop with tool interrupts |
@@ -1164,6 +1206,7 @@ Explore working examples to see Genkit in action:
 | [basic-middleware/filesystem](samples/basic-middleware/filesystem) | Scoped filesystem tools for the model |
 | [basic-middleware/skills](samples/basic-middleware/skills) | On-demand loadable `SKILL.md` personas |
 | [prompts-embed](samples/prompts-embed) | Embed prompts in your binary |
+| [basic-errors](samples/basic-errors) | Classifying failures with sentinels and recovering with `errors.Is` |
 | [durable-streaming](samples/durable-streaming) | Reconnectable streams with replay |
 
 ---
