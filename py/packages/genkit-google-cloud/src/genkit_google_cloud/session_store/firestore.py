@@ -43,7 +43,13 @@ from collections.abc import Callable
 from typing import Any, Generic, TypedDict
 
 from google.cloud import firestore
-from google.cloud.firestore import AsyncClient
+from google.cloud.firestore import (
+    AsyncClient,
+    AsyncCollectionReference,
+    AsyncDocumentReference,
+    AsyncTransaction,
+    DocumentSnapshot,
+)
 from typing_extensions import NotRequired
 
 from genkit._ai._agents._session import (
@@ -93,7 +99,7 @@ class _SnapshotWriteMeta(TypedDict):
     statePatch: NotRequired[list[dict[str, Any]] | None]
 
 
-def status_from_doc(doc_snapshot: Any) -> SnapshotStatus | None:  # noqa: ANN401
+def status_from_doc(doc_snapshot: DocumentSnapshot) -> SnapshotStatus | None:
     """Extract and validate the snapshot status from a Firestore document."""
     if not doc_snapshot.exists:
         return None
@@ -121,7 +127,7 @@ def _state_to_dict(state: SessionState | None) -> dict[str, Any]:
     return dumped if isinstance(dumped, dict) else {}
 
 
-def _state_from_dict(data: Any) -> SessionState | None:  # noqa: ANN401
+def _state_from_dict(data: dict[str, Any] | SessionState | None) -> SessionState | None:
     if data is None:
         return None
     if isinstance(data, SessionState):
@@ -133,7 +139,7 @@ def _patch_to_json(patch: list[JsonPatchOperation]) -> list[dict[str, Any]]:
     return [op.model_dump(by_alias=True, exclude_none=True, mode='json') for op in patch]
 
 
-def _patch_from_json(raw: Any) -> list[JsonPatchOperation]:  # noqa: ANN401
+def _patch_from_json(raw: list[dict[str, Any]] | None) -> list[JsonPatchOperation]:
     if not raw:
         return []
     return [JsonPatchOperation.model_validate(op) for op in raw]
@@ -182,26 +188,26 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         self._owns_sync_client = sync_client is None
         self._watches: dict[str, Any] = {}
 
-    def snapshots_col(self, context: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
+    def snapshots_col(self, context: dict[str, Any] | None = None) -> AsyncCollectionReference:
         """Return the Firestore collection reference for snapshots."""
         prefix = self.prefix_fn(context)
         return self.client.collection(self.collection).document(prefix).collection('snapshots')
 
-    def pointers_col(self, context: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
+    def pointers_col(self, context: dict[str, Any] | None = None) -> AsyncCollectionReference:
         """Return the Firestore collection reference for session pointers."""
         prefix = self.prefix_fn(context)
         return self.client.collection(f'{self.collection}-pointers').document(prefix).collection('pointers')
 
-    def shards_col(self, context: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
+    def shards_col(self, context: dict[str, Any] | None = None) -> AsyncCollectionReference:
         """Return the Firestore collection reference for checkpoint shards."""
         prefix = self.prefix_fn(context)
         return self.client.collection(f'{self.collection}-shards').document(prefix).collection('shards')
 
-    def snapshot_ref(self, snapshot_id: str, context: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
+    def snapshot_ref(self, snapshot_id: str, context: dict[str, Any] | None = None) -> AsyncDocumentReference:
         """Return the Firestore document reference for a snapshot ID."""
         return self.snapshots_col(context).document(snapshot_id)
 
-    def pointer_ref(self, session_id: str, context: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
+    def pointer_ref(self, session_id: str, context: dict[str, Any] | None = None) -> AsyncDocumentReference:
         """Return the Firestore document reference for a session pointer ID."""
         return self.pointers_col(context).document(session_id)
 
@@ -218,7 +224,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         result: list[SessionSnapshot | None] = [None]
 
         @firestore.async_transactional
-        async def read_in_transaction(transaction: Any) -> None:  # noqa: ANN401
+        async def read_in_transaction(transaction: AsyncTransaction) -> None:
             if snapshot_id is not None:
                 reconstructed = await self._reconstruct(transaction, snapshot_id, context=context)
                 result[0] = self._to_snapshot(reconstructed) if reconstructed else None
@@ -300,7 +306,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         committed: list[SessionSnapshot | None] = [None]
 
         @firestore.async_transactional
-        async def rmw(transaction: Any) -> None:  # noqa: ANN401
+        async def rmw(transaction: AsyncTransaction) -> None:
             existing_recon = await self._reconstruct(transaction, snapshot_id, context=context)
             existing = self._to_snapshot(existing_recon) if existing_recon else None
             next_snapshot = apply_save(existing=existing, snapshot_id=snapshot_id, fn=fn)
@@ -472,7 +478,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         result: list[SessionSnapshot | None] = [None]
 
         @firestore.async_transactional
-        async def read_in_transaction(transaction: Any) -> None:  # noqa: ANN401
+        async def read_in_transaction(transaction: AsyncTransaction) -> None:
             reconstructed = await self._reconstruct(transaction, snapshot_id, context=context)
             result[0] = self._to_snapshot(reconstructed) if reconstructed else None
 
@@ -481,7 +487,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
 
     async def _update_pointer_in_transaction(
         self,
-        transaction: Any,  # noqa: ANN401
+        transaction: AsyncTransaction,
         session_id: str,
         snapshot_id: str,
         *,
@@ -532,7 +538,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
 
     async def _load_parent_chain_meta(
         self,
-        transaction: Any,  # noqa: ANN401
+        transaction: AsyncTransaction,
         parent_id: str,
         pointer: dict[str, Any] | None,
         *,
@@ -568,7 +574,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
 
     async def _reconstruct(
         self,
-        transaction: Any,  # noqa: ANN401
+        transaction: AsyncTransaction,
         snapshot_id: str,
         *,
         context: dict[str, Any] | None = None,
@@ -593,7 +599,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
 
     async def _reconstruct_from(
         self,
-        transaction: Any,  # noqa: ANN401
+        transaction: AsyncTransaction,
         *,
         checkpoint_id: str,
         shard_count: int,
@@ -608,7 +614,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         shard_refs = [shards_col.document(f'{checkpoint_id}_{i}') for i in range(max(shard_count, 0))]
         seg_refs = [snapshots_col.document(sid) for sid in segment_path]
 
-        refs: list[Any] = []
+        refs: list[AsyncDocumentReference] = []
         if target_is_checkpoint:
             refs.append(checkpoint_ref)
         refs.extend(shard_refs)
@@ -617,7 +623,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         if not refs:
             return None
 
-        by_path: dict[str, Any] = {}
+        by_path: dict[str, DocumentSnapshot] = {}
         async for snap in transaction.get_all(refs):
             by_path[snap.reference.path] = snap
 
@@ -668,7 +674,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
 
     def _write_shards(
         self,
-        transaction: Any,  # noqa: ANN401
+        transaction: AsyncTransaction,
         checkpoint_id: str,
         state: dict[str, Any],
         *,
@@ -687,7 +693,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
 
     def _write_checkpoint(
         self,
-        transaction: Any,  # noqa: ANN401
+        transaction: AsyncTransaction,
         snapshot_id: str,
         state: dict[str, Any],
         *,
@@ -709,7 +715,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             'statePatch': None,
         }
 
-    def _stitch(self, shard_snaps: list[Any]) -> Any:  # noqa: ANN401
+    def _stitch(self, shard_snaps: list[DocumentSnapshot]) -> dict[str, Any] | None:
         if not shard_snaps:
             return {}
         buffers: list[bytes] = []
@@ -797,7 +803,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             ref = sync_client.collection(self.collection).document(prefix).collection('snapshots').document(snapshot_id)
         loop = asyncio.get_running_loop()
 
-        def on_snapshot(doc_snapshots: list[Any], changes: Any, read_time: Any) -> None:  # noqa: ANN401
+        def on_snapshot(doc_snapshots: list[DocumentSnapshot], changes: Any, read_time: Any) -> None:  # noqa: ANN401
             if not doc_snapshots:
                 return
             doc_snapshot = doc_snapshots[0]
