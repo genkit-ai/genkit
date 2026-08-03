@@ -125,6 +125,9 @@ func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.M
 // prepareModel builds model metadata and a generator for the given definition.
 // It must be called with o.mu held or only after Init has completed.
 func (o *Ollama) prepareModel(model ModelDefinition, opts *ai.ModelOptions) (*ai.ModelOptions, *generator) {
+	if model.Type == "" {
+		model.Type = "chat"
+	}
 	var modelOpts ai.ModelOptions
 
 	if opts != nil {
@@ -167,7 +170,7 @@ func Model(g *genkit.Genkit, name string) ai.Model {
 // ModelDefinition represents a model with its name and api.
 type ModelDefinition struct {
 	Name string
-	Type string // "chat" or "generate"; empty defaults to "chat" when listed on [Ollama.Models]
+	Type string // "chat" or "generate"; empty defaults to "chat"
 }
 
 // EmbedderDefinition configures an embedding model defined at plugin Init time.
@@ -368,12 +371,8 @@ func (o *Ollama) Init(ctx context.Context) []api.Action {
 
 	var actions []api.Action
 	for _, model := range o.Models {
-		m := model
-		if m.Type == "" {
-			m.Type = "chat"
-		}
-		meta, gen := o.prepareModel(m, nil)
-		modelAction := ai.NewModel(api.NewName(provider, m.Name), meta, gen.generate)
+		meta, gen := o.prepareModel(model, nil)
+		modelAction := ai.NewModel(api.NewName(provider, model.Name), meta, gen.generate)
 		if a, ok := modelAction.(api.Action); ok {
 			actions = append(actions, a)
 		}

@@ -41,6 +41,15 @@ func TestInitPreservesExplicitServerAddress(t *testing.T) {
 	}
 }
 
+func TestPrepareModelDefaultsEmptyTypeToChat(t *testing.T) {
+	o := &Ollama{ServerAddress: defaultOllamaServerAddress, Timeout: 30}
+	o.Init(context.Background())
+	_, gen := o.prepareModel(ModelDefinition{Name: "tinyllama"}, nil)
+	if gen.model.Type != "chat" {
+		t.Fatalf("Type = %q, want chat", gen.model.Type)
+	}
+}
+
 func TestInitDefinesModelsAndEmbedders(t *testing.T) {
 	o := &Ollama{
 		Models: []ModelDefinition{
