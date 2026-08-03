@@ -749,7 +749,11 @@ async function renderDotpromptToParts<
     },
   });
   if (renderred.messages.length !== 1) {
-    throw new Error('parts tempate must produce only one message');
+    throw new Error(
+      `Prompt parts template must produce exactly one message, but produced ${renderred.messages.length}. ` +
+        'String values for `system`/`prompt` are rendered as message parts and must not expand into multiple messages. ' +
+        'Use `messages` (or a multi-message prompt) when you need more than one message.'
+    );
   }
   return renderred.messages[0].content;
 }
