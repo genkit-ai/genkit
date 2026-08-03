@@ -86,7 +86,7 @@ func toAnthropicMediaBlock(p *ai.Part, kind string) (anthropic.ContentBlockParam
 	}
 }
 
-func DefineModel(client anthropic.Client, provider, name string, info ai.ModelOptions) ai.Model {
+func DefineModel(client anthropic.Client, provider, name string, info ai.ModelOptions, defaultAPIVersion string) ai.Model {
 	label := "Anthropic"
 
 	if provider == "vertexai" {
@@ -95,7 +95,7 @@ func DefineModel(client anthropic.Client, provider, name string, info ai.ModelOp
 
 	configSchema := info.ConfigSchema
 	if configSchema == nil {
-		configSchema = ConfigSchema(anthropic.MessageNewParams{})
+		configSchema = ConfigSchemaWithRouting(anthropic.MessageNewParams{})
 	}
 
 	meta := &ai.ModelOptions{
@@ -110,7 +110,7 @@ func DefineModel(client anthropic.Client, provider, name string, info ai.ModelOp
 		input *ai.ModelRequest,
 		cb func(context.Context, *ai.ModelResponseChunk) error,
 	) (*ai.ModelResponse, error) {
-		return Generate(ctx, client, provider, name, input, cb)
+		return Generate(ctx, client, provider, name, input, cb, defaultAPIVersion)
 	})
 }
 
@@ -154,7 +154,31 @@ func ConfigSchema(config any) map[string]any {
 	return result
 }
 
-// Generate function defines how a generate request is done in Anthropic models
+// ConfigSchemaWithRouting extends [ConfigSchema] with Genkit-only routing
+// fields (apiVersion, betas) used to select the Anthropic beta Messages surface.
+func ConfigSchemaWithRouting(config any) map[string]any {
+	schema := ConfigSchema(config)
+	props, _ := schema["properties"].(map[string]any)
+	if props == nil {
+		props = map[string]any{}
+		schema["properties"] = props
+	}
+	props["apiVersion"] = map[string]any{
+		"type":        "string",
+		"enum":        []any{APIVersionStable, APIVersionBeta},
+		"description": "Anthropic API surface to use for this request (stable or beta).",
+	}
+	props["betas"] = map[string]any{
+		"type":        "array",
+		"items":       map[string]any{"type": "string"},
+		"description": "Beta feature headers when apiVersion is beta. Defaults to the plugin's standard beta set when omitted.",
+	}
+	return schema
+}
+
+// Generate function defines how a generate request is done in Anthropic models.
+// defaultAPIVersion is the plugin-wide default ("stable" or "beta"); per-request
+// config.apiVersion overrides it when present.
 func Generate(
 	ctx context.Context,
 	client anthropic.Client,
@@ -162,13 +186,20 @@ func Generate(
 	model string,
 	input *ai.ModelRequest,
 	cb func(context.Context, *ai.ModelResponseChunk) error,
+	defaultAPIVersion string,
 ) (*ai.ModelResponse, error) {
+	apiVersion, betas := resolveAPIVersion(input, defaultAPIVersion)
+
 	req, err := toAnthropicRequest(provider, input)
 	if err != nil {
 		return nil, fmt.Errorf("unable to generate anthropic request: %w", err)
 	}
 
 	req.Model = anthropic.Model(model)
+
+	if apiVersion == APIVersionBeta {
+		return generateBeta(ctx, client, req, betas, input, cb)
+	}
 
 	// no streaming
 	if cb == nil {
@@ -184,62 +215,90 @@ func Generate(
 
 		r.Request = input
 		return r, nil
-	} else {
-		stream := client.Messages.NewStreaming(ctx, *req)
-		message := anthropic.Message{}
-		for stream.Next() {
-			event := stream.Current()
-			err := message.Accumulate(event)
+	}
+
+	stream := client.Messages.NewStreaming(ctx, *req)
+	message := anthropic.Message{}
+	for stream.Next() {
+		event := stream.Current()
+		err := message.Accumulate(event)
+		if err != nil {
+			return nil, err
+		}
+
+		content := []*ai.Part{}
+		switch event := event.AsAny().(type) {
+		case anthropic.ContentBlockDeltaEvent:
+			if event.Delta.Type == "thinking_delta" {
+				content = append(content, ai.NewReasoningPart(event.Delta.Thinking, []byte(event.Delta.Signature)))
+			} else {
+				content = append(content, ai.NewTextPart(event.Delta.Text))
+			}
+			err := cb(ctx, &ai.ModelResponseChunk{
+				Content: content,
+			})
 			if err != nil {
 				return nil, err
 			}
-
-			content := []*ai.Part{}
-			switch event := event.AsAny().(type) {
-			case anthropic.ContentBlockDeltaEvent:
-				if event.Delta.Type == "thinking_delta" {
-					content = append(content, ai.NewReasoningPart(event.Delta.Thinking, []byte(event.Delta.Signature)))
-				} else {
-					content = append(content, ai.NewTextPart(event.Delta.Text))
-				}
-				err := cb(ctx, &ai.ModelResponseChunk{
-					Content: content,
-				})
+		case anthropic.ContentBlockStopEvent:
+			if int(event.Index) < len(message.Content) {
+				p, err := contentBlockToPart(message.Content[event.Index])
 				if err != nil {
 					return nil, err
 				}
-			case anthropic.ContentBlockStopEvent:
-				if int(event.Index) < len(message.Content) {
-					block := message.Content[event.Index]
-					if toolBlock, ok := block.AsAny().(anthropic.ToolUseBlock); ok {
-						p := ai.NewToolRequestPart(&ai.ToolRequest{
-							Ref:   toolBlock.ID,
-							Input: toolBlock.Input,
-							Name:  toolBlock.Name,
-						})
-						err := cb(ctx, &ai.ModelResponseChunk{
-							Content: []*ai.Part{p},
-						})
-						if err != nil {
-							return nil, err
-						}
+				if p != nil && (p.IsToolRequest() || p.Metadata != nil) {
+					err := cb(ctx, &ai.ModelResponseChunk{
+						Content: []*ai.Part{p},
+					})
+					if err != nil {
+						return nil, err
 					}
 				}
-			case anthropic.MessageStopEvent:
-				r, err := toGenkitResponse(&message)
-				if err != nil {
-					return nil, err
-				}
-				r.Request = input
-				return r, nil
 			}
+		case anthropic.MessageStopEvent:
+			r, err := toGenkitResponse(&message)
+			if err != nil {
+				return nil, err
+			}
+			r.Request = input
+			return r, nil
 		}
-		if stream.Err() != nil {
-			return nil, stream.Err()
-		}
+	}
+	if stream.Err() != nil {
+		return nil, stream.Err()
 	}
 
 	return nil, nil
+}
+
+// resolveAPIVersion picks the Anthropic API surface for a request.
+// Priority: request config.apiVersion > plugin default > stable.
+func resolveAPIVersion(input *ai.ModelRequest, pluginDefault string) (string, []anthropic.AnthropicBeta) {
+	version := pluginDefault
+	if version == "" {
+		version = APIVersionStable
+	}
+	var betas []anthropic.AnthropicBeta
+
+	if cfg, ok := input.Config.(map[string]any); ok {
+		if v, ok := cfg["apiVersion"].(string); ok && v != "" {
+			version = v
+		}
+		switch b := cfg["betas"].(type) {
+		case []string:
+			for _, s := range b {
+				betas = append(betas, anthropic.AnthropicBeta(s))
+			}
+		case []any:
+			for _, item := range b {
+				if s, ok := item.(string); ok {
+					betas = append(betas, anthropic.AnthropicBeta(s))
+				}
+			}
+		}
+	}
+
+	return version, betas
 }
 
 func toAnthropicRole(role ai.Role) (anthropic.MessageParamRole, error) {
@@ -365,8 +424,16 @@ func configFromRequest(input *ai.ModelRequest) (*anthropic.MessageNewParams, err
 	case *anthropic.MessageNewParams:
 		result = *config
 	case map[string]any:
+		cleaned := make(map[string]any, len(config))
+		for k, v := range config {
+			// Genkit-only routing fields — not part of MessageNewParams.
+			if k == "apiVersion" || k == "betas" {
+				continue
+			}
+			cleaned[k] = v
+		}
 		var err error
-		result, err = base.MapToStruct[anthropic.MessageNewParams](config)
+		result, err = base.MapToStruct[anthropic.MessageNewParams](cleaned)
 		if err != nil {
 			return nil, err
 		}
@@ -505,22 +572,13 @@ func toGenkitResponse(m *anthropic.Message) (*ai.ModelResponse, error) {
 	msg := &ai.Message{}
 	msg.Role = ai.RoleModel
 	for _, part := range m.Content {
-		var p *ai.Part
-		switch part.AsAny().(type) {
-		case anthropic.ThinkingBlock:
-			p = ai.NewReasoningPart(part.Thinking, []byte(part.Signature))
-		case anthropic.TextBlock:
-			p = ai.NewTextPart(string(part.Text))
-		case anthropic.ToolUseBlock:
-			p = ai.NewToolRequestPart(&ai.ToolRequest{
-				Ref:   part.ID,
-				Input: part.Input,
-				Name:  part.Name,
-			})
-		default:
-			return nil, status.Errorf(ai.ErrInvalidPart, "unknown part: %#v", part)
+		p, err := contentBlockToPart(part)
+		if err != nil {
+			return nil, err
 		}
-		msg.Content = append(msg.Content, p)
+		if p != nil {
+			msg.Content = append(msg.Content, p)
+		}
 	}
 
 	r.Message = msg
@@ -531,4 +589,32 @@ func toGenkitResponse(m *anthropic.Message) (*ai.ModelResponse, error) {
 		CachedContentTokens: int(m.Usage.CacheReadInputTokens),
 	}
 	return &r, nil
+}
+
+func contentBlockToPart(part anthropic.ContentBlockUnion) (*ai.Part, error) {
+	switch b := part.AsAny().(type) {
+	case anthropic.ThinkingBlock:
+		return ai.NewReasoningPart(part.Thinking, []byte(part.Signature)), nil
+	case anthropic.TextBlock:
+		return ai.NewTextPart(string(part.Text)), nil
+	case anthropic.ToolUseBlock:
+		return ai.NewToolRequestPart(&ai.ToolRequest{
+			Ref:   part.ID,
+			Input: part.Input,
+			Name:  part.Name,
+		}), nil
+	case anthropic.ServerToolUseBlock:
+		return serverToolUseToPart(b.ID, string(b.Name), b.Input), nil
+	case anthropic.WebSearchToolResultBlock:
+		return webSearchToolResultToPart(b.ToolUseID, parseJSONAny(b.Content.RawJSON())), nil
+	case anthropic.WebFetchToolResultBlock,
+		anthropic.CodeExecutionToolResultBlock,
+		anthropic.BashCodeExecutionToolResultBlock,
+		anthropic.TextEditorCodeExecutionToolResultBlock,
+		anthropic.ToolSearchToolResultBlock,
+		anthropic.ContainerUploadBlock:
+		return nil, unsupportedServerToolError(part.Type)
+	default:
+		return nil, status.Errorf(ai.ErrInvalidPart, "unknown part: %#v", part)
+	}
 }

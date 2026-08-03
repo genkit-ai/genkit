@@ -43,8 +43,9 @@ var dateSuffix = regexp.MustCompile(`-\d{8}$`)
 
 // Anthropic is a Genkit plugin for interacting with the Anthropic services
 type Anthropic struct {
-	APIKey  string // If not provided, defaults to ANTHROPIC_API_KEY
-	BaseURL string // Optional. If not provided, defaults to ANTHROPIC_BASE_URL
+	APIKey     string // If not provided, defaults to ANTHROPIC_API_KEY
+	BaseURL    string // Optional. If not provided, defaults to ANTHROPIC_BASE_URL
+	APIVersion string // Optional plugin default: "stable" (default) or "beta"
 
 	aclient     anthropic.Client // Anthropic client
 	mu          sync.Mutex       // Mutex to control access
@@ -100,7 +101,7 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 // Use [IsDefinedModel] to determine if a model is already defined.
 // After [Init] is called, only the known models are defined.
 func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
-	return ant.DefineModel(a.aclient, provider, name, *opts), nil
+	return ant.DefineModel(a.aclient, provider, name, *opts, a.APIVersion), nil
 }
 
 // modelOptions returns the ModelOptions for a Claude model name. Known models
@@ -132,7 +133,7 @@ func (a *Anthropic) ListActions(ctx context.Context) []api.ActionDesc {
 	for _, name := range models {
 		// When listing discovered models, the Genkit action name and the
 		// Anthropic API model ID are identical.
-		model := newModel(a.aclient, name, name, modelOptions(name))
+		model := newModel(a.aclient, name, name, modelOptions(name), a.APIVersion)
 		if actionDef, ok := model.(api.Action); ok {
 			actions = append(actions, actionDef.Desc())
 		}
@@ -169,7 +170,7 @@ func (a *Anthropic) ResolveAction(atype api.ActionType, id string) api.Action {
 
 		// We register the model using the ID requested by the user, but
 		// use the resolved 'realID' (e.g. versioned) for actual API calls.
-		return newModel(a.aclient, id, realID, modelOptions(id)).(api.Action)
+		return newModel(a.aclient, id, realID, modelOptions(id), a.APIVersion).(api.Action)
 	}
 	return nil
 }
@@ -194,14 +195,12 @@ func (a *Anthropic) getModels(ctx context.Context) ([]string, error) {
 }
 
 // newModel creates a model wihout registering it
-func newModel(client anthropic.Client, name, apiModelName string, opts ai.ModelOptions) ai.Model {
-	config := &anthropic.MessageNewParams{}
-
+func newModel(client anthropic.Client, name, apiModelName string, opts ai.ModelOptions, defaultAPIVersion string) ai.Model {
 	meta := &ai.ModelOptions{
 		Label:        opts.Label,
 		Supports:     opts.Supports,
 		Versions:     opts.Versions,
-		ConfigSchema: ant.ConfigSchema(config),
+		ConfigSchema: ant.ConfigSchemaWithRouting(anthropic.MessageNewParams{}),
 		Stage:        opts.Stage,
 	}
 
@@ -215,7 +214,7 @@ func newModel(client anthropic.Client, name, apiModelName string, opts ai.ModelO
 		input *ai.ModelRequest,
 		cb func(context.Context, *ai.ModelResponseChunk) error,
 	) (*ai.ModelResponse, error) {
-		return ant.Generate(ctx, client, provider, targetModel, input, cb)
+		return ant.Generate(ctx, client, provider, targetModel, input, cb, defaultAPIVersion)
 	}
 
 	return ai.NewModel(api.NewName(provider, name), meta, fn)
