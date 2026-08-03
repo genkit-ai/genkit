@@ -490,8 +490,8 @@ type inputOptions struct {
 	DefaultInput map[string]any // Default input that will be used if no input is provided.
 }
 
-// InputOption is an option for the input of a prompt.
-// It applies only to DefinePrompt().
+// InputOption is an option for the input of a prompt or a tool.
+// It applies only to DefinePrompt() and the tool definitions.
 type InputOption interface {
 	applyInput(*inputOptions)
 	applyPrompt(*promptOptions)
@@ -980,7 +980,8 @@ type documentOptions struct {
 }
 
 // DocumentOption is an option for providing context or input documents.
-// It applies only to [DefinePrompt], [Generate] and [prompt.Execute].
+// It applies only to [DefinePrompt], [Generate], [prompt.Execute], [Embed],
+// and [Retriever.Retrieve].
 type DocumentOption interface {
 	applyDocument(*documentOptions)
 	applyPrompt(*promptOptions)

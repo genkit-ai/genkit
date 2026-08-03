@@ -910,6 +910,38 @@ func TestHistoryFromContext(t *testing.T) {
 	})
 }
 
+// TestDocsAccumulateAcrossVariants pins that the three document options add to
+// one set rather than replacing each other, and that the fixed documents come
+// before the computed ones. Resolution used to overwrite the fixed documents
+// with the function's result, so declaring both silently lost the fixed ones.
+func TestDocsAccumulateAcrossVariants(t *testing.T) {
+	r := newTestRegistry(t)
+	m := defineFakeModel(t, r, fakeModelConfig{name: "test/docsAccum"})
+
+	p := DefinePrompt(r, "docsAccum",
+		WithModel(m),
+		WithPrompt("hi"),
+		WithTextDocs("fixed one"),
+		WithDocsFn(func(ctx context.Context, _ any) ([]*Document, error) {
+			return []*Document{DocumentFromText("computed", nil)}, nil
+		}),
+		WithTextDocs("fixed two"),
+	)
+
+	opts, err := p.Render(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	var got []string
+	for _, d := range opts.Docs {
+		got = append(got, d.Content[0].Text)
+	}
+	want := []string{"fixed one", "fixed two", "computed"}
+	if !slices.Equal(got, want) {
+		t.Errorf("docs = %v, want %v", got, want)
+	}
+}
+
 // TestContentFnErrorPropagates makes sure a coercion failure surfaces as an
 // error rather than a panic, which is what the old type assertions produced.
 func TestContentFnErrorPropagates(t *testing.T) {

@@ -513,16 +513,22 @@ func (p *prompt) buildRequest(ctx context.Context, input any) (*GenerateActionOp
 		return nil, fmt.Errorf("prompt %q: %w", p.Name(), err)
 	}
 
+	// Fixed documents first, then computed ones: the two accumulate rather
+	// than one replacing the other, matching how the options merged.
 	docs := p.Documents
 	// Skip the function when the execution supplies its own documents:
 	// Execute overwrites the docs afterwards, and for the retrieval use case
 	// WithDocsFn is meant for, running it would spend a query on a result
 	// that is thrown away.
 	if p.DocsFn != nil && !promptDocsOverridden(ctx) {
-		docs, err = p.DocsFn(ctx, input)
+		computed, err := p.DocsFn(ctx, input)
 		if err != nil {
 			return nil, fmt.Errorf("prompt %q: resolving docs: %w", p.Name(), err)
 		}
+		// Concat rather than append: p.Documents belongs to the prompt and is
+		// reused by every execution, so appending would write into the spare
+		// capacity of the array behind it.
+		docs = slices.Concat(docs, computed)
 	}
 
 	return &GenerateActionOptions{
