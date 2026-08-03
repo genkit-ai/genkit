@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -45,6 +44,11 @@ const (
 	// The value must be a string.
 	OutputFormatEnum string = "enum"
 )
+
+// quoteStripper removes the single and double quotes models sometimes wrap enum
+// values in. It runs on every streamed chunk, so it is built once here rather
+// than per call.
+var quoteStripper = strings.NewReplacer("'", "", `"`, "")
 
 // Default formats get automatically registered on registry init
 var DEFAULT_FORMATS = []Formatter{
@@ -693,12 +697,8 @@ func (e *enumHandler) ParseMessage(m *Message) (*Message, error) {
 			}
 		}
 
-		// replace single and double quotes
-		re := regexp.MustCompile(`['"]`)
-		clean := re.ReplaceAllString(accumulatedText.String(), "")
-
-		// trim whitespace
-		trimmed := strings.TrimSpace(clean)
+		// replace single and double quotes, then trim whitespace
+		trimmed := strings.TrimSpace(quoteStripper.Replace(accumulatedText.String()))
 
 		if !slices.Contains(e.enums, trimmed) {
 			return nil, fmt.Errorf("message %s not in list of valid enums: %s", trimmed, strings.Join(e.enums, ", "))
@@ -763,9 +763,7 @@ func (e *enumHandler) parseEnum(text string) (string, error) {
 		return "", nil
 	}
 
-	re := regexp.MustCompile(`['"]`)
-	clean := re.ReplaceAllString(text, "")
-	trimmed := strings.TrimSpace(clean)
+	trimmed := strings.TrimSpace(quoteStripper.Replace(text))
 
 	if !slices.Contains(e.enums, trimmed) {
 		return "", fmt.Errorf("message %s not in list of valid enums: %s", trimmed, strings.Join(e.enums, ", "))
