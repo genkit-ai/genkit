@@ -17,7 +17,7 @@ go get github.com/firebase/genkit/go/plugins/ollama
 
 ### Configuration
 
-You can configure the Ollama plugin with your server address. By default, Ollama runs on `http://localhost:11434`.
+`ServerAddress` defaults to `http://localhost:11434`. You can optionally list models and embedders to define at init time:
 
 ```go
 import (
@@ -30,10 +30,15 @@ import (
 func main() {
  ctx := context.Background()
 
- // Initialize the Ollama plugin
  o := &ollama.Ollama{
-  ServerAddress: "http://localhost:11434", // Required
-  Timeout:       60,                       // Optional: Response timeout in seconds (default: 30)
+  // ServerAddress defaults to http://localhost:11434 when empty
+  Timeout: 60, // Optional: response timeout in seconds (default: 30)
+  Models: []ollama.ModelDefinition{
+   {Name: "tinyllama", Type: "chat"},
+  },
+  Embedders: []ollama.EmbedderDefinition{
+   {Name: "nomic-embed-text", Dimensions: 768},
+  },
  }
 
  g := genkit.Init(ctx, genkit.WithPlugins(o))
@@ -42,17 +47,15 @@ func main() {
 
 ## Language Models
 
-Because Ollama models are locally hosted and the available models depend on what the user has pulled (`ollama pull <model>`), the plugin doesn't pre-initialize any default models. You must define them explicitly.
+Ollama models depend on what you have pulled (`ollama pull <model>`). List them on `Ollama.Models` at construction, or call `DefineModel` after init.
 
 ### Defining a Model
 
-To use an Ollama model, you must define it using `DefineModel` after initializing the plugin.
-
 ```go
-// Define a chat model (e.g., tinyllama)
+// Define a chat model (e.g., tinyllama) after init
 o.DefineModel(g, ollama.ModelDefinition{
  Name: "tinyllama",
- Type: "chat", // Use "chat" for interactive models, or "" for text-completion only
+ Type: "chat", // Use "chat" for interactive models, or "generate" for text-completion
 }, nil)
 
 // You can now retrieve and use it

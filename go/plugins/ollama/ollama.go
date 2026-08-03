@@ -40,7 +40,10 @@ import (
 	"github.com/invopop/jsonschema"
 )
 
-const provider = "ollama"
+const (
+	provider                   = "ollama"
+	defaultOllamaServerAddress = "http://localhost:11434"
+)
 
 var (
 	mediaSupportedModels = []string{"llava", "bakllava", "llava-llama3", "llava:13b", "llava:7b", "llava:latest", "gemma3:4b", "gemma3:12b", "gemma3:27b"}
@@ -115,6 +118,13 @@ func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.M
 	if !o.initted {
 		panic("ollama.Init not called")
 	}
+	meta, gen := o.prepareModel(model, opts)
+	return genkit.DefineModel(g, api.NewName(provider, model.Name), meta, gen.generate)
+}
+
+// prepareModel builds model metadata and a generator for the given definition.
+// It must be called with o.mu held or only after Init has completed.
+func (o *Ollama) prepareModel(model ModelDefinition, opts *ai.ModelOptions) (*ai.ModelOptions, *generator) {
 	var modelOpts ai.ModelOptions
 
 	if opts != nil {
@@ -140,7 +150,7 @@ func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.M
 		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
 	}
 	gen := &generator{model: model, serverAddress: o.ServerAddress, timeout: o.Timeout}
-	return genkit.DefineModel(g, api.NewName(provider, model.Name), meta, gen.generate)
+	return meta, gen
 }
 
 // IsDefinedModel reports whether a model is defined.
@@ -157,7 +167,14 @@ func Model(g *genkit.Genkit, name string) ai.Model {
 // ModelDefinition represents a model with its name and api.
 type ModelDefinition struct {
 	Name string
-	Type string
+	Type string // "chat" or "generate"; empty defaults to "chat" when listed on [Ollama.Models]
+}
+
+// EmbedderDefinition configures an embedding model defined at plugin Init time.
+// Matches the JS plugin's EmbeddingModelDefinition.
+type EmbedderDefinition struct {
+	Name       string
+	Dimensions int
 }
 
 type generator struct {
@@ -309,8 +326,14 @@ type ollamaModelResponse struct {
 
 // Ollama provides configuration options for the Init function.
 type Ollama struct {
-	ServerAddress string // Server address of oLLama.
-	Timeout       int    // Response timeout in seconds (defaulted to 30 seconds)
+	// ServerAddress is the Ollama server URL. Defaults to http://localhost:11434.
+	ServerAddress string
+	// Timeout is the response timeout in seconds (defaulted to 30 seconds).
+	Timeout int
+	// Models are optionally defined during Init (JS parity).
+	Models []ModelDefinition
+	// Embedders are optionally defined during Init (JS parity).
+	Embedders []EmbedderDefinition
 
 	mu      sync.Mutex   // Mutex to control access.
 	initted bool         // Whether the plugin has been initialized.
@@ -322,23 +345,46 @@ func (o *Ollama) Name() string {
 }
 
 // Init initializes the plugin.
-// Since Ollama models are locally hosted, the plugin doesn't initialize any default models.
-// After downloading a model, call [DefineModel] to use it.
+// ServerAddress defaults to http://localhost:11434 when empty.
+// Models and Embedders listed on the plugin are registered as actions.
+// Additional models can still be added later via [DefineModel] / [DefineEmbedder].
 func (o *Ollama) Init(ctx context.Context) []api.Action {
+	if o == nil {
+		panic("ollama plugin is nil")
+	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.initted {
 		panic("ollama.Init already called")
 	}
-	if o == nil || o.ServerAddress == "" {
-		panic("ollama: need ServerAddress")
+	if o.ServerAddress == "" {
+		o.ServerAddress = defaultOllamaServerAddress
 	}
 	o.initted = true
 	if o.Timeout == 0 {
 		o.Timeout = 30
 	}
 	o.client = &http.Client{}
-	return []api.Action{}
+
+	var actions []api.Action
+	for _, model := range o.Models {
+		m := model
+		if m.Type == "" {
+			m.Type = "chat"
+		}
+		meta, gen := o.prepareModel(m, nil)
+		modelAction := ai.NewModel(api.NewName(provider, m.Name), meta, gen.generate)
+		if a, ok := modelAction.(api.Action); ok {
+			actions = append(actions, a)
+		}
+	}
+	for _, emb := range o.Embedders {
+		embedder := o.newEmbedder(emb.Name, emb.Dimensions, nil)
+		if a, ok := embedder.(api.Action); ok {
+			actions = append(actions, a)
+		}
+	}
+	return actions
 }
 
 // newModel creates an Ollama model without registering it in the Genkit registry.

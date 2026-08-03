@@ -136,6 +136,20 @@ func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, 
 		panic("ollama.Init not called")
 	}
 
+	meta, fn := o.prepareEmbedder(model, dimensions, embedOpts)
+	return genkit.DefineEmbedder(g, api.NewName(provider, model), meta, fn)
+}
+
+// newEmbedder creates an embedder action without registering it via Genkit.
+// Used by Init to return embedders listed on [Ollama.Embedders].
+func (o *Ollama) newEmbedder(model string, dimensions int, embedOpts *ai.EmbedderOptions) ai.Embedder {
+	meta, fn := o.prepareEmbedder(model, dimensions, embedOpts)
+	return ai.NewEmbedder(api.NewName(provider, model), meta, fn)
+}
+
+// prepareEmbedder builds embedder options and the request handler.
+// It must be called with o.mu held or only after Init has completed.
+func (o *Ollama) prepareEmbedder(model string, dimensions int, embedOpts *ai.EmbedderOptions) (*ai.EmbedderOptions, ai.EmbedderFunc) {
 	if dimensions <= 0 {
 		panic("ollama.DefineEmbedder: dimensions must be greater than 0")
 	}
@@ -162,8 +176,9 @@ func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, 
 	}
 
 	meta.Dimensions = dimensions
+	serverAddress := o.ServerAddress
 
-	return genkit.DefineEmbedder(g, api.NewName(provider, model), meta, func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
+	fn := func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
 		normalizedReq := *req
 
 		if req.Options == nil {
@@ -182,8 +197,9 @@ func (o *Ollama) DefineEmbedder(g *genkit.Genkit, model string, dimensions int, 
 			}
 		}
 
-		return embed(ctx, o.ServerAddress, &normalizedReq)
-	})
+		return embed(ctx, serverAddress, &normalizedReq)
+	}
+	return meta, fn
 }
 
 // IsDefinedEmbedder reports whether the embedder with the given model is defined by this plugin.
