@@ -17,13 +17,13 @@
 import { describe, expect, it } from '@jest/globals';
 import type { GenerateRequest } from 'genkit';
 import type { ChatCompletionCreateParamsNonStreaming } from 'openai/resources/index.mjs';
-import { toOpenAIRequestBody } from '../src/model';
 import {
   GroqChatCompletionConfigSchema,
+  SUPPORTED_GROQ_MODELS,
   groqModelRef,
   groqRequestBuilder,
-  SUPPORTED_GROQ_MODELS,
 } from '../src/groq/groq';
+import { toOpenAIRequestBody } from '../src/model';
 
 describe('Groq request builder', () => {
   it('maps Groq-specific config fields onto the OpenAI request body', () => {

@@ -79,12 +79,8 @@ export function groqModelRef(params: {
 }
 
 export const groqRequestBuilder: ModelRequestBuilder = (req, params) => {
-  const {
-    reasoningEffort,
-    reasoningFormat,
-    includeReasoning,
-    serviceTier,
-  } = req.config ?? {};
+  const { reasoningEffort, reasoningFormat, includeReasoning, serviceTier } =
+    req.config ?? {};
 
   // Only set Groq-specific fields when provided so we do not pollute the
   // request with explicit `undefined` (and so `includeReasoning: false` is kept).
