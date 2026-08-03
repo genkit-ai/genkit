@@ -50,7 +50,6 @@ from google.cloud.firestore import (
     AsyncTransaction,
     DocumentSnapshot,
 )
-from typing_extensions import NotRequired
 
 from genkit._ai._agents._session import (
     SessionStore,
@@ -96,7 +95,7 @@ class SnapshotWriteMeta(TypedDict):
     checkpointId: str
     checkpointShardCount: int
     segmentPath: list[str]
-    statePatch: NotRequired[list[dict[str, Any]] | None]
+    statePatch: list[dict[str, Any]] | None
 
 
 def status_from_doc(doc_snapshot: DocumentSnapshot) -> SnapshotStatus | None:
