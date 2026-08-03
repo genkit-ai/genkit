@@ -208,9 +208,7 @@ async def test_run_tool_after_restart_nested_interrupt_includes_reason() -> None
     with pytest.raises(GenkitError) as ei:
         await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert ei.value.status == 'FAILED_PRECONDITION'
-    assert ei.value.original_message == (
-        'Tool interrupted again during restart: Tool not in approved list: t3'
-    )
+    assert ei.value.original_message == ('Tool interrupted again during restart: Tool not in approved list: t3')
     assert isinstance(ei.value.cause, Interrupt)
 
 
