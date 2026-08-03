@@ -176,12 +176,9 @@ func betaContentBlockToPart(part anthropic.BetaContentBlockUnion) (*ai.Part, err
 	case anthropic.BetaTextBlock:
 		return ai.NewTextPart(string(b.Text)), nil
 	case anthropic.BetaToolUseBlock:
-		var input any
-		if len(b.Input) > 0 {
-			if err := json.Unmarshal(b.Input, &input); err != nil {
-				input = json.RawMessage(b.Input)
-			}
-		}
+		// Prefer the union's raw input (json.RawMessage) so streaming
+		// accumulation stays intact; fall back to the concrete block value.
+		input := betaToolInput(part.Input, b.Input)
 		name := b.Name
 		if name == "" {
 			name = "unknown_tool"
@@ -217,4 +214,17 @@ func betaContentBlockToPart(part anthropic.BetaContentBlockUnion) (*ai.Part, err
 	default:
 		return nil, status.Errorf(ai.ErrInvalidPart, "unknown beta part: %#v", part)
 	}
+}
+
+// betaToolInput normalizes tool_use input from either the content-block union's
+// raw JSON or the concrete BetaToolUseBlock.Input (typed as any).
+func betaToolInput(raw json.RawMessage, concrete any) any {
+	if len(raw) > 0 {
+		var input any
+		if err := json.Unmarshal(raw, &input); err != nil {
+			return json.RawMessage(append([]byte(nil), raw...))
+		}
+		return input
+	}
+	return concrete
 }
