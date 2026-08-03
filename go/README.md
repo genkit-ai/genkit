@@ -561,18 +561,24 @@ resp, _ := genkit.Generate(ctx, g,
     ai.WithTools(transferTool),
 )
 
-if resp.FinishReason == ai.FinishReasonInterrupted {
-    for _, interrupt := range resp.Interrupts() {
-        meta, _ := ai.InterruptAs[TransferInterrupt](interrupt)
+// Interrupts() yields nothing unless the tool paused for input.
+var restarts []*ai.Part
+for _, interrupt := range resp.Interrupts() {
+    meta, _ := ai.InterruptAs[TransferInterrupt](interrupt)
 
-        // Get user confirmation, then resume
-        part, _ := transferTool.RestartWith(interrupt)
-        resp, _ = genkit.Generate(ctx, g,
-            ai.WithMessages(resp.History()...),
-            ai.WithTools(transferTool),
-            ai.WithToolRestarts(part),
-        )
-    }
+    // Use meta to get user confirmation, then resume with their answer.
+    part, _ := transferTool.RestartWith(interrupt)
+    restarts = append(restarts, part)
+}
+
+// Collect every restart first, then resume once: generating inside the loop
+// would resume later interrupts against a history that already moved on.
+if len(restarts) > 0 {
+    resp, _ = genkit.Generate(ctx, g,
+        ai.WithMessages(resp.History()...),
+        ai.WithTools(transferTool),
+        ai.WithToolRestarts(restarts...),
+    )
 }
 ```
 
