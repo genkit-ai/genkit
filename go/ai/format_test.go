@@ -814,6 +814,40 @@ func TestInjectInstructions(t *testing.T) {
 			t.Errorf("should not add additional output part when one exists")
 		}
 	})
+
+	t.Run("does not mutate the caller's messages", func(t *testing.T) {
+		original := &Message{Role: RoleUser, Content: []*Part{NewTextPart("user message")}}
+		msgs := []*Message{original}
+
+		result := injectInstructions(msgs, "output instructions")
+
+		if len(original.Content) != 1 {
+			t.Errorf("caller's message gained %d parts, want 0", len(original.Content)-1)
+		}
+		if msgs[0] != original {
+			t.Error("caller's slice was reassigned in place")
+		}
+		if result[0] == original {
+			t.Error("result should hold a copy of the target message, not the original")
+		}
+		if len(result[0].Content) != 2 {
+			t.Fatalf("result message should have 2 parts, got %d", len(result[0].Content))
+		}
+	})
+
+	t.Run("does not mutate a caller's shared content backing array", func(t *testing.T) {
+		// Content with spare capacity: an in-place append would write into the
+		// array the caller's other slice still points at.
+		content := make([]*Part, 1, 4)
+		content[0] = NewTextPart("user message")
+		msgs := []*Message{{Role: RoleUser, Content: content}}
+
+		injectInstructions(msgs, "output instructions")
+
+		if got := content[:2][1]; got != nil {
+			t.Errorf("injected into the caller's backing array: %+v", got)
+		}
+	})
 }
 
 func TestObjectEnums(t *testing.T) {

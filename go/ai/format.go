@@ -154,11 +154,19 @@ func injectInstructions(messages []*Message, instructions string) []*Message {
 		}
 	}
 
-	if targetIndex != -1 {
-		messages[targetIndex].Content = append(messages[targetIndex].Content, part)
+	if targetIndex == -1 {
+		return messages
 	}
 
-	return messages
+	// Copy the target message and both slices so the caller's messages are never
+	// mutated in place. Callers reuse their message slice across turns, so an
+	// in-place append would leak the instructions into stored history.
+	target := *messages[targetIndex]
+	target.Content = append(slices.Clone(target.Content), part)
+	out := slices.Clone(messages)
+	out[targetIndex] = &target
+
+	return out
 }
 
 type textFormatter struct{}
