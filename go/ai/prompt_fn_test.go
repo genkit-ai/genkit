@@ -609,8 +609,8 @@ func TestDocsFnSkippedOnExecuteOverride(t *testing.T) {
 // it, which is what keeps the template where it was first declared.
 func TestConversationMergeSemantics(t *testing.T) {
 	msg := func(text string) *Message { return NewUserTextMessage(text) }
-	opts := &generateOptions{}
-	for _, o := range []CommonGenOption{
+	opts := &promptOptions{}
+	for _, o := range []PromptOption{
 		WithMessages(msg("before one")),
 		WithMessagesFn(func(context.Context, any) ([]*Message, error) {
 			return []*Message{msg("before two")}, nil
@@ -620,7 +620,7 @@ func TestConversationMergeSemantics(t *testing.T) {
 		WithMessagesTemplate("second template"),
 		WithMessages(msg("after two")),
 	} {
-		o.applyGenerate(opts)
+		o.applyPrompt(opts)
 	}
 
 	collect := func(fn MessagesFn) []string {
@@ -908,22 +908,6 @@ func TestHistoryFromContext(t *testing.T) {
 		}
 		assertMessages(t, (*get)(), "system:sys", "user:example in", "model:example out", "user:now answer")
 	})
-}
-
-// TestExecuteRejectsMessagesTemplate pins that a template passed at execution
-// time is refused rather than silently dropped: nothing on that path compiles
-// one, so accepting it would lose the caller's conversation.
-func TestExecuteRejectsMessagesTemplate(t *testing.T) {
-	_, p, _ := capturePrompt(t, "execTemplate", WithSystem("sys"), WithPrompt("ask"))
-
-	_, err := p.Execute(context.Background(),
-		WithMessagesTemplate(`{{role "user"}}dropped on the floor`))
-	if err == nil {
-		t.Fatal("expected an error, got nil")
-	}
-	if !strings.Contains(err.Error(), "WithMessagesTemplate") || !strings.Contains(err.Error(), "WithMessages") {
-		t.Errorf("err = %v, want it to name the option and the alternative", err)
-	}
 }
 
 // TestContentFnErrorPropagates makes sure a coercion failure surfaces as an

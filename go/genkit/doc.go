@@ -390,7 +390,6 @@ Prompting:
   - [ai.WithSystem]: Set system instructions
   - [ai.WithSystemParts]: Set multi-part system content
   - [ai.WithMessages]: Provide conversation history, used verbatim
-  - [ai.WithMessagesTemplate]: Provide the conversation as a multi-turn template
 
 Tools and Output:
 

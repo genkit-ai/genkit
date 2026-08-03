@@ -1121,8 +1121,10 @@ func GenerateWithRequest(ctx context.Context, g *Genkit, actionOpts *ai.Generate
 //   - [ai.WithSystemParts]: Set fixed multi-part system content, such as text plus media
 //   - [ai.WithSystemPartsFn]: As above, from a function
 //   - [ai.WithMessages]: Provide conversation history
-//   - [ai.WithMessagesTemplate]: Provide the conversation as a multi-turn template
 //   - [ai.WithMessagesFn]: Provide a function that generates conversation history
+//
+// [ai.WithMessagesTemplate] is absent by design: compiling a template needs a
+// prompt, so it is a [ai.PromptOption] and passing it here does not compile.
 //
 // Tools and Resources:
 //   - [ai.WithTools]: Enable tools the model can call
