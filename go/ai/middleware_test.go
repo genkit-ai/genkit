@@ -627,48 +627,67 @@ func TestWrapToolShortCircuitEmitsToolSpan(t *testing.T) {
 
 // TestWrapToolPassThroughEmitsSingleToolSpan verifies the engine does not
 // double-count a hook that runs the tool: the action's own span is the only
-// one recorded for the call.
+// one recorded, however the hook chose to hand the call down. The rebuilt-params
+// case is why the ran flag rides the context and not ToolParams, which a hook
+// is free to replace.
 func TestWrapToolPassThroughEmitsSingleToolSpan(t *testing.T) {
-	r := newTestRegistry(t)
-	defineFakeModel(t, r, fakeModelConfig{
-		name:    "test/toolModel",
-		handler: toolCallingModelHandler("myTool", map[string]any{"value": "x"}, "done"),
-	})
-	var toolCalls int32
-	tool := defineCountingTool(t, r, "myTool", &toolCalls)
-	spans := collectSpans(t)
+	rewritten := map[string]any{"value": "rewritten"}
 
-	// Rewrites the request in place, the pass-through contract documented on
-	// Hooks.WrapTool, and runs the tool.
-	rewriter := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
-		return &Hooks{
-			WrapTool: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
-				p.Request = &ToolRequest{
-					Name:  p.Request.Name,
-					Ref:   p.Request.Ref,
-					Input: map[string]any{"value": "rewritten"},
-				}
+	tests := []struct {
+		name string
+		hook func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error)
+	}{
+		{
+			name: "mutates the params it was handed",
+			hook: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
+				p.Request = &ToolRequest{Name: p.Request.Name, Ref: p.Request.Ref, Input: rewritten}
 				return next(ctx, p)
 			},
-		}, nil
-	})
-
-	_, err := Generate(testCtx, r,
-		WithModelName("test/toolModel"),
-		WithPrompt("use it"),
-		WithTools(tool),
-		WithUse(rewriter),
-	)
-	assertNoError(t, err)
-
-	if got := atomic.LoadInt32(&toolCalls); got != 1 {
-		t.Errorf("tool ran %d times, want 1", got)
+		},
+		{
+			name: "hands next a params struct of its own",
+			hook: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
+				return next(ctx, &ToolParams{
+					Request: &ToolRequest{Name: p.Request.Name, Ref: p.Request.Ref, Input: rewritten},
+					Tool:    p.Tool,
+				})
+			},
+		},
 	}
-	toolSpans := spans.allByName(tool.Name())
-	if len(toolSpans) != 1 {
-		t.Fatalf("got %d spans named %q, want exactly 1", len(toolSpans), tool.Name())
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newTestRegistry(t)
+			defineFakeModel(t, r, fakeModelConfig{
+				name:    "test/toolModel",
+				handler: toolCallingModelHandler("myTool", map[string]any{"value": "x"}, "done"),
+			})
+			var toolCalls int32
+			tool := defineCountingTool(t, r, "myTool", &toolCalls)
+			spans := collectSpans(t)
+
+			rewriter := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+				return &Hooks{WrapTool: tt.hook}, nil
+			})
+
+			_, err := Generate(testCtx, r,
+				WithModelName("test/toolModel"),
+				WithPrompt("use it"),
+				WithTools(tool),
+				WithUse(rewriter),
+			)
+			assertNoError(t, err)
+
+			if got := atomic.LoadInt32(&toolCalls); got != 1 {
+				t.Errorf("tool ran %d times, want 1", got)
+			}
+			toolSpans := spans.allByName(tool.Name())
+			if len(toolSpans) != 1 {
+				t.Fatalf("got %d spans named %q, want exactly 1", len(toolSpans), tool.Name())
+			}
+			assertSpanAttr(t, toolSpans[0], "genkit:input", `{"value":"rewritten"}`)
+		})
 	}
-	assertSpanAttr(t, toolSpans[0], "genkit:input", `{"value":"rewritten"}`)
 }
 
 // --- WrapTool validation errors returned to model ---

@@ -42,10 +42,7 @@ type Hooks struct {
 	// WrapTool wraps each tool execution. It may be called concurrently when
 	// multiple tools execute in parallel for the same Generate() call; any
 	// state closed over from the enclosing scope that this hook mutates must
-	// be guarded with sync primitives. Pass the received params through to
-	// next (mutate its fields rather than replacing the struct): the engine
-	// carries per-call state on it, e.g. to attribute short-circuits in
-	// traces.
+	// be guarded with sync primitives.
 	WrapTool func(ctx context.Context, params *ToolParams, next ToolNext) (*MultipartToolResponse, error)
 }
 
@@ -82,11 +79,6 @@ type ToolParams struct {
 	Request *ToolRequest
 	// Tool is the resolved tool being called.
 	Tool Tool
-
-	// ran records whether the innermost runner actually executed the tool,
-	// letting the engine attribute hook short-circuits (interrupts, cached
-	// responses) to the tool in traces.
-	ran bool
 }
 
 // GenerateNext is the next function in the WrapGenerate hook chain.
