@@ -6,7 +6,8 @@
 """Tests for the action module."""
 
 import json
-from typing import cast
+from collections.abc import AsyncIterator, Callable
+from typing import Any, cast
 
 import pytest
 
@@ -375,13 +376,26 @@ async def test_stream_resets_action_context() -> None:
 
 
 @pytest.mark.asyncio
+async def test_action_context_is_shallow_copied() -> None:
+    """Action.run must not mutate the caller's context dict."""
+
+    async def mutate(_: None, ctx: ActionRunContext) -> None:
+        ctx.context['mutated'] = True
+
+    action = Action(name='mutate', kind=ActionKind.CUSTOM, fn=mutate)
+    caller_ctx: dict[str, object] = {'auth': 'user1'}
+    await action.run(context=caller_ctx)
+    assert caller_ctx == {'auth': 'user1'}
+
+
+@pytest.mark.asyncio
 async def test_bidi_stream_context_isolation_sequential_and_nested() -> None:
     """BidiAction.stream_bidi must isolate context like Action.run (#5555)."""
 
     async def bidi_fn(
         init: None,
-        inputs,
-        send_chunk,
+        inputs: AsyncIterator[Any],
+        send_chunk: Callable[[Any], None],
     ) -> dict[str, object] | None:
         # Drain the one-shot input stream; return ambient action context.
         async for _ in inputs:

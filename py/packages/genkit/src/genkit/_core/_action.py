@@ -550,9 +550,10 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         # nested child that overrides context restores the parent on exit
         # (see #5555). ``context is not None`` (not truthiness) so an explicit
         # empty dict clears ambient context instead of accidentally inheriting.
+        # Shallow-copy so actions cannot mutate the caller's context dict.
         token = None
         if context is not None:
-            token = _action_context.set(context)
+            token = _action_context.set(dict(context))
 
         streaming_cb = cast(StreamingCallback, on_chunk) if on_chunk else None
 
