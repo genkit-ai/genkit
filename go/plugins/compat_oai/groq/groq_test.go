@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
@@ -30,9 +31,9 @@ import (
 )
 
 func TestPluginRegistersGroqModelsAndForwardsConfig(t *testing.T) {
-	var requests int
+	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
+		requests.Add(1)
 		if r.URL.Path != "/openai/v1/chat/completions" && r.URL.Path != "/v1/chat/completions" {
 			// BaseURL may include /openai/v1 or just /v1 depending on how the test sets it.
 			if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
@@ -179,8 +180,8 @@ func TestPluginRegistersGroqModelsAndForwardsConfig(t *testing.T) {
 		}
 	})
 
-	if requests != 2 {
-		t.Fatalf("requests = %d, want 2", requests)
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("requests = %d, want 2", got)
 	}
 }
 
