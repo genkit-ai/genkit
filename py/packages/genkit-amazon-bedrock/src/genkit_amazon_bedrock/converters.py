@@ -57,18 +57,6 @@ REDACTED_CONTENT_METADATA_KEY = 'bedrockRedactedContent'
 CACHE_POINT_CUSTOM_KEY = 'bedrockCachePointType'
 DEFAULT_CACHE_POINT_TYPE = 'default'
 
-# Bedrock requires maxTokens for Claude models; newer families allow more.
-DEFAULT_CLAUDE_MAX_TOKENS = 4096
-DEFAULT_EXTENDED_CLAUDE_MAX_TOKENS = 8192
-EXTENDED_CLAUDE_MAX_TOKEN_PATTERNS = (
-    'claude-3-5',
-    'claude-3-7',
-    'claude-4',
-    'claude-haiku-4',
-    'claude-sonnet-4',
-    'claude-opus-4',
-)
-
 IMAGE_FORMATS = {
     'image/png': 'png',
     'image/jpeg': 'jpeg',
@@ -210,21 +198,6 @@ def _effective_max_tokens(config: BedrockConfig | None) -> int | None:
     if config.max_output_tokens is not None and config.max_output_tokens > 0:
         return int(config.max_output_tokens)
     return None
-
-
-def default_max_tokens_for_model(model_id: str) -> int | None:
-    """Default maxTokens for models that require one (Claude only).
-
-    Substring match on the full lowercased model ID so cross-region
-    inference-profile IDs (``us.anthropic.claude-...``) match too.
-    """
-    lowered = model_id.lower()
-    if 'claude' not in lowered:
-        return None
-    for pattern in EXTENDED_CLAUDE_MAX_TOKEN_PATTERNS:
-        if pattern in lowered:
-            return DEFAULT_EXTENDED_CLAUDE_MAX_TOKENS
-    return DEFAULT_CLAUDE_MAX_TOKENS
 
 
 def build_inference_config(config: BedrockConfig | None) -> dict[str, Any] | None:  # noqa: ANN401
@@ -540,14 +513,6 @@ def build_converse_request(model_id: str, request: ModelRequest[Any]) -> dict[st
         kwargs['system'] = system
 
     inference_config = build_inference_config(config)
-    max_tokens_set = bool(inference_config and 'maxTokens' in inference_config)
-    if not max_tokens_set:
-        # Bedrock requires maxTokens for Claude models; inject a default only
-        # when the caller didn't set one.
-        default_max_tokens = default_max_tokens_for_model(model_id)
-        if default_max_tokens is not None:
-            inference_config = dict(inference_config or {})
-            inference_config['maxTokens'] = default_max_tokens
     if inference_config:
         kwargs['inferenceConfig'] = inference_config
 
