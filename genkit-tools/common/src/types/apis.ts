@@ -178,6 +178,7 @@ export const CreatePromptRequestSchema = z.object({
   config: GenerationCommonConfigSchema.passthrough().optional(),
   tools: z.array(ToolDefinitionSchema).optional(),
   use: z.array(MiddlewareRefSchema).optional(),
+  picoSchema: z.boolean().optional(),
   input: z
     .object({
       schema: z.unknown().optional(),
