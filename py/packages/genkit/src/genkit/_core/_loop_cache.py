@@ -26,13 +26,27 @@ T = TypeVar('T')
 
 
 def _loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
-    """Return a getter that caches one resource instance per event loop."""
+    """Return a getter that caches one resource instance per event loop.
+
+    Sync Cloud Run / Cloud Functions callers commonly bridge into Genkit with
+    ``asyncio.new_event_loop()`` + ``run_until_complete`` + ``loop.close()`` per
+    request (#4925). Caching a single HTTP client for the process then leaves
+    aiohttp/httpx sessions bound to a closed loop. Keying by the running loop
+    (and dropping closed-loop entries) keeps each warm-instance request on a
+    live client.
+    """
     by_loop: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, T] = weakref.WeakKeyDictionary()
     lock = threading.Lock()
+
+    def _prune_closed_loops() -> None:
+        for loop in list(by_loop.keys()):
+            if loop.is_closed():
+                del by_loop[loop]
 
     def _get() -> T:
         loop = asyncio.get_running_loop()
         with lock:
+            _prune_closed_loops()
             existing = by_loop.get(loop)
             if existing is not None:
                 return existing

@@ -46,11 +46,23 @@ T = TypeVar('T')
 
 
 def _create_loop() -> AbstractEventLoop:
-    """Creates a new asyncio event loop or returns the current one."""
+    """Return a live asyncio event loop for sync Flask streaming bridges.
+
+    Never reuse a closed loop: warm Cloud Run / sync hosts often close the
+    previous request's loop (#4925), and ``asyncio.get_event_loop()`` can still
+    return that closed object.
+    """
     try:
-        return asyncio.get_event_loop()
-    except Exception:
-        return asyncio.new_event_loop()
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop
+
+    if loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop
 
 
 def _iter_over_async(ait: AsyncIterable[T], loop: AbstractEventLoop) -> Iterable[T]:
@@ -112,7 +124,6 @@ def genkit_flask_handler(
     ```
 
     """
-    loop = _create_loop()
 
     def decorator(flow: Action) -> Callable[..., Awaitable[FlaskRouteReturn]]:
         if not isinstance(flow, Action):
@@ -153,7 +164,9 @@ def genkit_flask_handler(
                             ex = ex.cause
                         yield f'data: {json.dumps({"error": get_callable_json(ex)}, separators=_JSON_SEPARATORS)}\n\n'
 
-                iter = _iter_over_async(async_gen(), loop)
+                # Resolve a live loop per request so warm instances that closed the
+                # previous loop do not stream on a dead event loop (#4925).
+                iter = _iter_over_async(async_gen(), _create_loop())
                 return iter
             else:
                 try:

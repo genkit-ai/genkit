@@ -16,8 +16,10 @@
 
 """Tests for Flask handler decorator validation."""
 
+import asyncio
+
 import pytest
-from genkit_flask.handler import genkit_flask_handler
+from genkit_flask.handler import _create_loop, genkit_flask_handler
 
 from genkit._core._error import GenkitError
 
@@ -54,6 +56,20 @@ class TestGenkitFlaskHandlerValidation:
         handler = genkit_flask_handler(FakeGenkit())  # type: ignore[arg-type]
         with pytest.raises(GenkitError, match='must apply @genkit_flask_handler on a @flow'):
             handler(None)  # type: ignore[arg-type]
+
+
+class TestCreateLoop:
+    """_create_loop must never hand back a closed event loop (#4925)."""
+
+    def test_returns_live_loop_when_current_is_closed(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.close()
+        assert loop.is_closed()
+
+        live = _create_loop()
+        assert not live.is_closed()
+        live.close()
 
 
 class TestFlaskHandlerImports:
