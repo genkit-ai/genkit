@@ -190,13 +190,6 @@ func (p *prompt) Execute(ctx context.Context, opts ...PromptExecuteOption) (*Mod
 	for _, opt := range opts {
 		opt.applyPromptExecute(execOpts)
 	}
-	// A template belongs to the prompt, which is what compiles it; nothing
-	// here would render one, so accepting it silently would drop the
-	// caller's conversation.
-	if execOpts.MessagesText != nil {
-		return nil, status.Errorf(status.ErrInvalidArgument,
-			"Prompt.Execute: WithMessagesTemplate applies only to DefinePrompt, where the template is compiled. Pass this execution's conversation with WithMessages or WithMessagesFn.")
-	}
 	// Messages passed at execution time are resolved here and handed to
 	// Render through a context that exists only for that call. The prompt's
 	// own messages take precedence over them, but its content functions can

@@ -650,13 +650,6 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 			messages = append(messages, &Message{Role: RoleSystem, Content: parts})
 		}
 	}
-	// A conversation template needs a prompt to compile it, and Generate has
-	// none. Rejecting beats rendering nothing, since the caller would otherwise
-	// lose the whole conversation silently.
-	if genOpts.MessagesText != nil {
-		return nil, status.Errorf(status.ErrInvalidArgument,
-			"Generate: WithMessagesTemplate needs a prompt to compile the template. Define one with DefinePrompt, or pass this conversation with WithMessages or WithMessagesFn.")
-	}
 	if genOpts.MessagesFn != nil {
 		msgs, err := genOpts.MessagesFn(ctx, nil)
 		if err != nil {

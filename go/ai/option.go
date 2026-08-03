@@ -382,16 +382,17 @@ func WithMessages(messages ...*Message) CommonGenOption {
 // template where it was first declared.
 //
 // Compiling the template needs a prompt, so this applies to [DefinePrompt]
-// only. Passing it to [Generate] or to [Prompt.Execute] is an error: use
-// [WithMessages] or [WithMessagesFn] there to supply the conversation the
-// prompt's own template will place.
-func WithMessagesTemplate(text string, args ...any) CommonGenOption {
+// only. That is why it returns a [PromptOption] rather than a
+// [CommonGenOption]: passing it to [Generate] or [Prompt.Execute] does not
+// compile. Use [WithMessages] or [WithMessagesFn] there to supply the
+// conversation the prompt's own template will place.
+func WithMessagesTemplate(text string, args ...any) PromptOption {
 	if len(args) > 0 {
 		// Assigning avoids a compile-time warning about non-constant text.
 		t := text
 		text = fmt.Sprintf(t, args...)
 	}
-	return &commonGenOptions{MessagesText: &text}
+	return &promptOptions{commonGenOptions: commonGenOptions{MessagesText: &text}}
 }
 
 // WithMessagesFn adds messages produced by fn at request time, placed between
