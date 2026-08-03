@@ -283,6 +283,37 @@ func TestJSONFormatter(t *testing.T) {
 			t.Error("ParseMessage() should fail for invalid JSON")
 		}
 	})
+
+	t.Run("ParseMessage fails on empty text rather than emptying content", func(t *testing.T) {
+		handler, _ := jsonFormatter{}.Handler(nil)
+
+		msg := &Message{
+			Role:    RoleModel,
+			Content: []*Part{NewTextPart("")},
+		}
+
+		got, err := handler.ParseMessage(msg)
+		if err == nil {
+			t.Fatalf("ParseMessage() should fail for content with no text, got %+v", got)
+		}
+	})
+
+	t.Run("ParseMessage keeps non-text parts when there is no text", func(t *testing.T) {
+		handler, _ := jsonFormatter{}.Handler(nil)
+
+		msg := &Message{
+			Role:    RoleModel,
+			Content: []*Part{NewMediaPart("image/png", "data:image/png;base64,abc")},
+		}
+
+		got, err := handler.ParseMessage(msg)
+		if err != nil {
+			t.Fatalf("ParseMessage() error = %v", err)
+		}
+		if len(got.Content) != 1 || !got.Content[0].IsMedia() {
+			t.Errorf("ParseMessage() should preserve the media part, got %+v", got.Content)
+		}
+	})
 }
 
 func TestJSONLFormatter(t *testing.T) {

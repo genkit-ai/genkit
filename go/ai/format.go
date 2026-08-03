@@ -338,6 +338,11 @@ func (j *jsonHandler) ParseMessage(m *Message) (*Message, error) {
 
 	newParts := []*Part{}
 	text := base.ExtractJSONFromMarkdown(accumulatedText.String())
+	if text == "" && len(nonTextParts) == 0 {
+		// Every part was empty text. Falling through would hand back a message
+		// with no content at all, which is the one input this method rejects.
+		return nil, errors.New("message has no content to parse as JSON")
+	}
 	if text != "" {
 		if j.config.Schema != nil {
 			schemaBytes, err := json.Marshal(j.config.Schema)
