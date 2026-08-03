@@ -40,28 +40,49 @@ interface RunOptions {
   directory?: string;
 }
 
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function errorCode(err: unknown): string | undefined {
+  return (err as NodeJS.ErrnoException | undefined)?.code;
+}
+
 /**
  * Resolve `-C/--directory` like git/make: change the process working directory
  * so project-root discovery and spawned app processes run from that location.
- * Returns false when the path is missing or not a directory (error already logged).
+ * Returns false when the path cannot be used (error already logged).
  */
 function chdirIfRequested(directory: string | undefined): boolean {
   if (!directory) {
     return true;
   }
   const dir = path.resolve(directory);
-  let isDirectory = false;
   try {
-    isDirectory = fs.statSync(dir).isDirectory();
-  } catch {
-    logger.error(`Directory not found: ${directory}`);
+    const stat = fs.statSync(dir);
+    if (!stat.isDirectory()) {
+      logger.error(`"${directory}" is not a directory`);
+      return false;
+    }
+  } catch (err) {
+    if (errorCode(err) === 'ENOENT') {
+      logger.error(`Directory not found: ${directory}`);
+    } else {
+      logger.error(
+        `Failed to access directory "${directory}": ${errorMessage(err)}`
+      );
+    }
     return false;
   }
-  if (!isDirectory) {
-    logger.error(`"${directory}" is not a directory`);
+
+  try {
+    process.chdir(dir);
+  } catch (err) {
+    logger.error(
+      `Failed to change directory to "${directory}": ${errorMessage(err)}`
+    );
     return false;
   }
-  process.chdir(dir);
   return true;
 }
 

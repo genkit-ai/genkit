@@ -216,4 +216,45 @@ describe('start command', () => {
       chdirSpy.mockRestore();
     }
   });
+
+  it('should surface non-ENOENT access errors for -C', async () => {
+    const statSpy = jest.spyOn(fs, 'statSync').mockImplementation(() => {
+      throw Object.assign(new Error('EACCES: permission denied'), {
+        code: 'EACCES',
+      });
+    });
+    const chdirSpy = jest.spyOn(process, 'chdir');
+
+    try {
+      await start.parseAsync(['node', 'genkit', '-C', '/secret', '--noui']);
+      expect(logger.error).toHaveBeenCalledWith(
+        'Failed to access directory "/secret": EACCES: permission denied'
+      );
+      expect(chdirSpy).not.toHaveBeenCalled();
+      expect(startManagerSpy).not.toHaveBeenCalled();
+    } finally {
+      statSpy.mockRestore();
+      chdirSpy.mockRestore();
+    }
+  });
+
+  it('should surface chdir failures for -C', async () => {
+    const statSpy = jest.spyOn(fs, 'statSync').mockReturnValue({
+      isDirectory: () => true,
+    } as fs.Stats);
+    const chdirSpy = jest.spyOn(process, 'chdir').mockImplementation(() => {
+      throw new Error('ENOTDIR: not a directory');
+    });
+
+    try {
+      await start.parseAsync(['node', 'genkit', '-C', '/race', '--noui']);
+      expect(logger.error).toHaveBeenCalledWith(
+        'Failed to change directory to "/race": ENOTDIR: not a directory'
+      );
+      expect(startManagerSpy).not.toHaveBeenCalled();
+    } finally {
+      statSpy.mockRestore();
+      chdirSpy.mockRestore();
+    }
+  });
 });
