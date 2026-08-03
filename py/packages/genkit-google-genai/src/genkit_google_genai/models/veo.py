@@ -16,10 +16,12 @@
 
 """Veo video generation model for Google GenAI plugin.
 
-Veo is Google's video generation model that creates videos from text prompts.
+Veo is Google's video generation model that creates videos from text prompts
+and supports image-to-video when an image media part is provided.
 """
 
 import asyncio
+import base64
 import sys
 from typing import Any, cast
 
@@ -42,7 +44,6 @@ from genkit import (
     Part,
     Role,
     Supports,
-    TextPart,
 )
 from genkit.model import Error, Operation
 from genkit.plugin_api import ActionRunContext, tracer
@@ -140,6 +141,69 @@ def _extract_text(request: ModelRequest) -> str:
         if hasattr(part.root, 'text') and part.root.text
     ]
     return ' '.join(prompt_parts)
+
+
+def _media_content_type(media: Media) -> str:
+    """Resolve a media content type from the part or a data: URL prefix."""
+    if media.content_type:
+        return media.content_type
+    url = media.url or ''
+    if url.startswith('data:') and ';' in url:
+        return url[len('data:') : url.index(';')]
+    if url.startswith('data:') and ',' in url:
+        return url[len('data:') : url.index(',')]
+    return ''
+
+
+def _extract_veo_image(request: ModelRequest) -> genai_types.Image | None:
+    """Extract an image from the last message for Veo image-to-video.
+
+    Matches JS ``extractVeoImage``: looks at the last message for an image/*
+    media part. Supports ``data:`` URLs (base64) and ``gs://`` URIs.
+
+    Args:
+        request: The generation request.
+
+    Returns:
+        A google-genai ``Image``, or None if no suitable image is present.
+    """
+    messages = request.messages or []
+    if not messages:
+        return None
+
+    for part in messages[-1].content or []:
+        if not isinstance(part.root, MediaPart):
+            continue
+        media = part.root.media
+        content_type = _media_content_type(media)
+        if not content_type.startswith('image/'):
+            continue
+
+        url = media.url or ''
+        if url.startswith('gs://'):
+            return genai_types.Image(gcs_uri=url, mime_type=content_type)
+
+        if url.startswith('data:'):
+            _, _, payload = url.partition(',')
+            if not payload:
+                return None
+            try:
+                image_bytes = base64.b64decode(payload, validate=False)
+            except (ValueError, TypeError):
+                return None
+            return genai_types.Image(image_bytes=image_bytes, mime_type=content_type)
+
+        # http(s) and other URL schemes are not inlined here (JS only accepts data: URLs).
+        return None
+
+    return None
+
+
+def _build_veo_source(request: ModelRequest) -> genai_types.GenerateVideosSource:
+    """Build a GenerateVideosSource from text and optional image parts."""
+    prompt = _extract_text(request) or None
+    image = _extract_veo_image(request)
+    return genai_types.GenerateVideosSource(prompt=prompt, image=image)
 
 
 def _to_veo_parameters(config: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -242,19 +306,6 @@ class VeoModel:
         self._version = version
         self._client = client
 
-    def _build_prompt(self, request: ModelRequest) -> str:
-        """Build prompt request from Genkit request."""
-        prompt = []
-        for message in request.messages:
-            for part in message.content:
-                if isinstance(part.root, TextPart):
-                    prompt.append(part.root.text)
-                else:
-                    # TODO(#4363): Support image input if Veo supports it (e.g. for image-to-video)
-                    # For now, strict text text-to-video
-                    pass
-        return ' '.join(prompt)
-
     async def generate(self, request: ModelRequest, _: ActionRunContext) -> ModelResponse:
         """Handle a generation request (synchronous/blocking mode for Vertex AI).
 
@@ -268,11 +319,14 @@ class VeoModel:
         if request.tools:
             raise ValueError('Tools are not supported for this model.')
 
-        prompt = self._build_prompt(request)
+        source = _build_veo_source(request)
+        if not source.prompt and not source.image:
+            raise ValueError('Veo requires a text prompt or an image for image-to-video')
+
         config = self._get_config(request)
 
         with tracer.start_as_current_span('generate_videos'):
-            operation = await self._client.aio.models.generate_videos(model=self._version, prompt=prompt, config=config)
+            operation = await self._client.aio.models.generate_videos(model=self._version, source=source, config=config)
 
             # Handling LRO. Using cast(Any) to avoid strict type definition issues for operation.result()
             op = cast(Any, operation)
@@ -308,14 +362,14 @@ class VeoModel:
         if request.tools:
             raise ValueError('Tools are not supported for this model.')
 
-        prompt = _extract_text(request)
-        if not prompt:
-            raise ValueError('Veo requires a text prompt')
+        source = _build_veo_source(request)
+        if not source.prompt and not source.image:
+            raise ValueError('Veo requires a text prompt or an image for image-to-video')
 
-        # Call the generateVideos API
+        # Call the generateVideos API via GenerateVideosSource (text and/or image).
         response = await self._client.aio.models.generate_videos(
             model=self._version,
-            prompt=prompt,
+            source=source,
             # pyrefly: ignore[bad-argument-type] - config dict matches GenerateVideosConfigDict
             config=request.config if isinstance(request.config, dict) else None,  # pyright: ignore[reportArgumentType]
         )
