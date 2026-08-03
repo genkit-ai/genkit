@@ -592,7 +592,7 @@ func (a *Agent[State]) Store() SessionStore[State] {
 // INVALID_ARGUMENT when snapshotID is empty; a missing snapshot is NOT_FOUND.
 func (a *Agent[State]) GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error) {
 	if a.store == nil {
-		return nil, status.Errorf(ErrNoSessionStore, "agent %q: GetSnapshot requires a session store", a.Name())
+		return nil, status.Errorf(ErrSessionStoreNotConfigured, "agent %q: GetSnapshot requires a session store", a.Name())
 	}
 	if snapshotID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetSnapshot: snapshotID is required", a.Name())
@@ -609,7 +609,7 @@ func (a *Agent[State]) GetSnapshot(ctx context.Context, snapshotID string) (*Ses
 // when sessionID is empty; an unknown session is NOT_FOUND.
 func (a *Agent[State]) GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[State], error) {
 	if a.store == nil {
-		return nil, status.Errorf(ErrNoSessionStore, "agent %q: GetLatestSnapshot requires a session store", a.Name())
+		return nil, status.Errorf(ErrSessionStoreNotConfigured, "agent %q: GetLatestSnapshot requires a session store", a.Name())
 	}
 	if sessionID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetLatestSnapshot: sessionID is required", a.Name())
@@ -628,7 +628,7 @@ func (a *Agent[State]) GetLatestSnapshot(ctx context.Context, sessionID string) 
 // when snapshotID is empty.
 func (a *Agent[State]) Abort(ctx context.Context, snapshotID string) (SnapshotStatus, error) {
 	if a.store == nil {
-		return "", status.Errorf(ErrNoSessionStore, "agent %q: Abort requires a session store", a.Name())
+		return "", status.Errorf(ErrSessionStoreNotConfigured, "agent %q: Abort requires a session store", a.Name())
 	}
 	if snapshotID == "" {
 		return "", status.Errorf(status.ErrInvalidArgument, "agent %q: Abort: snapshotID is required", a.Name())
@@ -1303,7 +1303,7 @@ func (rt *agentRuntime[State]) handleTransformFailure(
 // the abort flip and promptly cancel the background work without polling).
 func (rt *agentRuntime[State]) checkDetachCapabilities() error {
 	if rt.cfg.store == nil {
-		return status.Errorf(ErrNoSessionStore,
+		return status.Errorf(ErrSessionStoreNotConfigured,
 			"agent %q: detach requires a session store", rt.name)
 	}
 	if _, ok := rt.cfg.store.(SnapshotSubscriber); !ok {

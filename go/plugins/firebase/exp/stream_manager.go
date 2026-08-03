@@ -135,7 +135,7 @@ func (m *FirestoreStreamManager) Open(ctx context.Context, streamID string) (str
 	})
 	if err != nil {
 		if grpcstatus.Code(err) == codes.AlreadyExists {
-			return nil, status.PublicErrorf(streaming.ErrStreamExists, "stream already exists")
+			return nil, status.PublicErrorf(streaming.ErrStreamAlreadyExists, "stream already exists")
 		}
 		return nil, err
 	}
@@ -349,7 +349,7 @@ func (s *firestoreStreamInput) Write(ctx context.Context, chunk json.RawMessage)
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return status.PublicErrorf(streaming.ErrStreamClosed, "stream writer is closed")
+		return status.PublicErrorf(streaming.ErrStreamWriterClosed, "stream writer is closed")
 	}
 
 	_, err := s.docRef.Update(ctx, []firestore.Update{
@@ -374,7 +374,7 @@ func (s *firestoreStreamInput) Done(ctx context.Context, output json.RawMessage)
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return status.PublicErrorf(streaming.ErrStreamClosed, "stream writer is closed")
+		return status.PublicErrorf(streaming.ErrStreamWriterClosed, "stream writer is closed")
 	}
 	s.closed = true
 
@@ -404,7 +404,7 @@ func (s *firestoreStreamInput) Error(ctx context.Context, err error) error {
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return status.PublicErrorf(streaming.ErrStreamClosed, "stream writer is closed")
+		return status.PublicErrorf(streaming.ErrStreamWriterClosed, "stream writer is closed")
 	}
 	s.closed = true
 

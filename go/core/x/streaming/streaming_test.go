@@ -74,8 +74,8 @@ func TestInMemoryStreamManager_OpenDuplicateFails(t *testing.T) {
 		t.Fatal("Expected error when opening duplicate stream")
 	}
 
-	if !errors.Is(err, ErrStreamExists) {
-		t.Errorf("error = %v, want one matching ErrStreamExists", err)
+	if !errors.Is(err, ErrStreamAlreadyExists) {
+		t.Errorf("error = %v, want one matching ErrStreamAlreadyExists", err)
 	}
 }
 
@@ -254,8 +254,8 @@ func TestInMemoryStreamManager_WriteAfterDone(t *testing.T) {
 
 	// Done closes the writer, so a later write reports the closed writer rather
 	// than the completed stream. Both are FAILED_PRECONDITION.
-	if !errors.Is(err, ErrStreamClosed) {
-		t.Errorf("error = %v, want one matching ErrStreamClosed", err)
+	if !errors.Is(err, ErrStreamWriterClosed) {
+		t.Errorf("error = %v, want one matching ErrStreamWriterClosed", err)
 	}
 }
 
@@ -281,8 +281,8 @@ func TestInMemoryStreamManager_WriteAfterClose(t *testing.T) {
 		t.Fatal("Expected error when writing after close")
 	}
 
-	if !errors.Is(err, ErrStreamClosed) {
-		t.Errorf("error = %v, want one matching ErrStreamClosed", err)
+	if !errors.Is(err, ErrStreamWriterClosed) {
+		t.Errorf("error = %v, want one matching ErrStreamWriterClosed", err)
 	}
 }
 
@@ -730,8 +730,8 @@ func TestInMemoryStreamManager_ErrorAfterClose(t *testing.T) {
 		t.Fatal("Expected error when calling Error after Close")
 	}
 
-	if !errors.Is(err, ErrStreamClosed) {
-		t.Errorf("error = %v, want one matching ErrStreamClosed", err)
+	if !errors.Is(err, ErrStreamWriterClosed) {
+		t.Errorf("error = %v, want one matching ErrStreamWriterClosed", err)
 	}
 }
 
@@ -757,7 +757,7 @@ func TestInMemoryStreamManager_DoneAfterClose(t *testing.T) {
 		t.Fatal("Expected error when calling Done after Close")
 	}
 
-	if !errors.Is(err, ErrStreamClosed) {
-		t.Errorf("error = %v, want one matching ErrStreamClosed", err)
+	if !errors.Is(err, ErrStreamWriterClosed) {
+		t.Errorf("error = %v, want one matching ErrStreamWriterClosed", err)
 	}
 }

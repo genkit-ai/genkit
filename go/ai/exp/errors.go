@@ -24,9 +24,11 @@ var (
 	// session has none yet.
 	ErrSnapshotNotFound = status.ErrNotFound.Subtype("snapshot not found")
 
-	// ErrNoSessionStore means the operation needs server-managed state but the
-	// agent was defined without WithSessionStore.
-	ErrNoSessionStore = status.ErrFailedPrecondition.Subtype("no session store")
+	// ErrSessionStoreNotConfigured means the operation needs server-managed
+	// state but the agent was defined without WithSessionStore. It describes a
+	// gap in how the agent was set up, not anything the caller sent, which is
+	// why it is a failed precondition rather than an invalid argument.
+	ErrSessionStoreNotConfigured = status.ErrFailedPrecondition.Subtype("session store not configured")
 
 	// ErrSessionIDRequired means a snapshot reached a store without a session ID.
 	// Every store implementation rejects this: a snapshot with no session cannot

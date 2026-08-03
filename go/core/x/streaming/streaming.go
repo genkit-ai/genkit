@@ -92,12 +92,14 @@ var (
 	// ErrStreamNotFound means no stream is open under the given ID. Callers
 	// resuming a stream treat this as "nothing to resume" rather than a failure.
 	ErrStreamNotFound = status.ErrNotFound.Subtype("stream not found")
-	// ErrStreamExists means a stream is already open under the given ID.
-	ErrStreamExists = status.ErrAlreadyExists.Subtype("stream already exists")
-	// ErrStreamClosed means the writer was closed by a prior Done or Error.
-	ErrStreamClosed = status.ErrFailedPrecondition.Subtype("stream writer is closed")
-	// ErrStreamCompleted means the stream already reached a terminal state, so
-	// no further chunk, result, or error can be written to it.
+	// ErrStreamAlreadyExists means a stream is already open under the given ID.
+	ErrStreamAlreadyExists = status.ErrAlreadyExists.Subtype("stream already exists")
+	// ErrStreamWriterClosed means this writer handle is closed, by a prior Done
+	// or Error on it or by Close. It is about the handle in your hand, whereas
+	// ErrStreamCompleted is about the stream itself.
+	ErrStreamWriterClosed = status.ErrFailedPrecondition.Subtype("stream writer is closed")
+	// ErrStreamCompleted means the stream reached a terminal state, so no
+	// further chunk, result, or error can be written to it through any writer.
 	ErrStreamCompleted = status.ErrFailedPrecondition.Subtype("stream has already completed")
 	// ErrStreamTimeout means a subscriber gave up waiting for the next event.
 	ErrStreamTimeout = status.ErrDeadlineExceeded.Subtype("stream timed out")
@@ -213,7 +215,7 @@ func (m *InMemoryStreamManager) Open(ctx context.Context, streamID string) (Stre
 	defer m.mu.Unlock()
 
 	if _, exists := m.streams[streamID]; exists {
-		return nil, status.PublicErrorf(ErrStreamExists, "stream %q already exists", streamID)
+		return nil, status.PublicErrorf(ErrStreamAlreadyExists, "stream %q already exists", streamID)
 	}
 
 	state := &streamState{
@@ -300,7 +302,7 @@ func (s *inMemoryStreamInput) Write(_ context.Context, chunk json.RawMessage) er
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return status.PublicErrorf(ErrStreamClosed, "stream %q: writer is closed", s.streamID)
+		return status.PublicErrorf(ErrStreamWriterClosed, "stream %q: writer is closed", s.streamID)
 	}
 
 	s.state.mu.Lock()
@@ -330,7 +332,7 @@ func (s *inMemoryStreamInput) Done(_ context.Context, output json.RawMessage) er
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return status.PublicErrorf(ErrStreamClosed, "stream %q: writer is closed", s.streamID)
+		return status.PublicErrorf(ErrStreamWriterClosed, "stream %q: writer is closed", s.streamID)
 	}
 	s.closed = true
 
@@ -363,7 +365,7 @@ func (s *inMemoryStreamInput) Error(_ context.Context, err error) error {
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return status.PublicErrorf(ErrStreamClosed, "stream %q: writer is closed", s.streamID)
+		return status.PublicErrorf(ErrStreamWriterClosed, "stream %q: writer is closed", s.streamID)
 	}
 	s.closed = true
 
