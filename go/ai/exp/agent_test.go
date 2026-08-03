@@ -2530,6 +2530,75 @@ func TestValidateResumeAgainstHistory(t *testing.T) {
 	}
 }
 
+// TestValidateResumeAgainstHistory_RecurringRefs covers the case where the same
+// tool name + ref appears in more than one model message. Refs are only made
+// unique within a single model response, so a multi-turn session routinely
+// reuses them. Validation must resolve against the newest occurrence: matching
+// the oldest rejects a legitimate restart of the pending interrupt and accepts
+// a restart whose input was forged from a stale turn.
+func TestValidateResumeAgainstHistory_RecurringRefs(t *testing.T) {
+	staleInput := map[string]any{"amount": float64(10)}
+	currentInput := map[string]any{"amount": float64(1000000)}
+
+	// Both model messages carry transfer/r1; only the last one is pending.
+	history := []*ai.Message{
+		{Role: ai.RoleModel, Content: []*ai.Part{
+			ai.NewToolRequestPart(&ai.ToolRequest{Name: "transfer", Ref: "r1", Input: staleInput}),
+		}},
+		{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("again")}},
+		{Role: ai.RoleModel, Content: []*ai.Part{
+			ai.NewToolRequestPart(&ai.ToolRequest{Name: "transfer", Ref: "r1", Input: currentInput}),
+		}},
+	}
+	restart := func(input any) *ToolResume {
+		return &ToolResume{Restart: []*ai.Part{
+			ai.NewToolRequestPart(&ai.ToolRequest{Name: "transfer", Ref: "r1", Input: input}),
+		}}
+	}
+
+	t.Run("restart matching the newest request is accepted", func(t *testing.T) {
+		if err := ValidateResumeAgainstHistory(restart(currentInput), history); err != nil {
+			t.Fatalf("legitimate restart of the pending interrupt rejected: %v", err)
+		}
+	})
+
+	t.Run("restart forged from a stale request is rejected", func(t *testing.T) {
+		err := ValidateResumeAgainstHistory(restart(staleInput), history)
+		if err == nil {
+			t.Fatal("restart carrying a stale turn's input was accepted, want INVALID_ARGUMENT")
+		}
+		if !strings.Contains(err.Error(), "modified inputs") {
+			t.Fatalf("error %q does not contain %q", err.Error(), "modified inputs")
+		}
+		if ge := core.AsGenkitError(err); ge.Status != core.INVALID_ARGUMENT {
+			t.Fatalf("expected status %q, got %q", core.INVALID_ARGUMENT, ge.Status)
+		}
+	})
+
+	t.Run("newest occurrence within a single message wins", func(t *testing.T) {
+		// A malformed model response repeating one ref still resolves to the
+		// most recent request, keeping the newest-first rule consistent.
+		oneMessage := []*ai.Message{
+			{Role: ai.RoleModel, Content: []*ai.Part{
+				ai.NewToolRequestPart(&ai.ToolRequest{Name: "transfer", Ref: "r1", Input: staleInput}),
+				ai.NewToolRequestPart(&ai.ToolRequest{Name: "transfer", Ref: "r1", Input: currentInput}),
+			}},
+		}
+		if err := ValidateResumeAgainstHistory(restart(currentInput), oneMessage); err != nil {
+			t.Fatalf("restart matching the last request in the message rejected: %v", err)
+		}
+	})
+
+	t.Run("respond still matches on name and ref alone", func(t *testing.T) {
+		resume := &ToolResume{Respond: []*ai.Part{
+			ai.NewToolResponsePart(&ai.ToolResponse{Name: "transfer", Ref: "r1", Output: "ok"}),
+		}}
+		if err := ValidateResumeAgainstHistory(resume, history); err != nil {
+			t.Fatalf("expected success, got error: %v", err)
+		}
+	})
+}
+
 // TestPromptAgent_RejectsResumeForUnrequestedTool proves the resume validation
 // is wired into the prompt-backed loop: a caller cannot resume a tool the model
 // never requested, and the forged turn fails before the model is re-invoked.

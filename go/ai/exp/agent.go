@@ -2498,12 +2498,14 @@ func validateUserMessage(m *ai.Message) error {
 }
 
 // ValidateResumeAgainstHistory ensures every restart and respond entry on a
-// resume payload references a tool request the model actually issued, so a
+// resume payload references a tool request that is actually pending, so a
 // caller cannot drive a tool the model never asked for and interrupted on.
 // For restart entries it additionally checks the input is unchanged from the
 // original request, preventing a client from forging tool inputs on the
 // interrupted call. The whole history is searched (every model message), not
-// just the last turn. On a violation it returns an INVALID_ARGUMENT error.
+// just the last turn, and newest-first: when a tool name + ref recurs across
+// turns, the entry is validated against the most recent one rather than a
+// stale earlier call. On a violation it returns an INVALID_ARGUMENT error.
 //
 // The prompt-backed agent loop ([DefineAgent]) calls this automatically. A
 // custom agent ([DefineCustomAgent]) that accepts an [AgentInput.Resume] from
@@ -2519,22 +2521,24 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 		return nil
 	}
 
-	// Collect every tool request from all model messages in history.
-	var requests []*ai.ToolRequest
-	for _, msg := range history {
-		if msg == nil || msg.Role != ai.RoleModel {
-			continue
-		}
-		for _, p := range msg.Content {
-			if p.IsToolRequest() && p.ToolRequest != nil {
-				requests = append(requests, p.ToolRequest)
-			}
-		}
-	}
+	// Search every model message in history newest-first, so a resume entry
+	// resolves against the most recent tool request carrying that name + ref.
+	// Refs are only made unique within a single model response, so the same
+	// name + ref recurs across turns; matching the oldest occurrence would
+	// both reject a legitimate restart of the pending interrupt and accept a
+	// restart whose input was forged from a stale turn.
 	find := func(name, ref string) *ai.ToolRequest {
-		for _, req := range requests {
-			if req.Name == name && req.Ref == ref {
-				return req
+		for i := len(history) - 1; i >= 0; i-- {
+			msg := history[i]
+			if msg == nil || msg.Role != ai.RoleModel {
+				continue
+			}
+			for j := len(msg.Content) - 1; j >= 0; j-- {
+				p := msg.Content[j]
+				if p.IsToolRequest() && p.ToolRequest != nil &&
+					p.ToolRequest.Name == name && p.ToolRequest.Ref == ref {
+					return p.ToolRequest
+				}
 			}
 		}
 		return nil
