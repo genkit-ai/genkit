@@ -544,8 +544,14 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             input = self._validate_input(input)
         init = self._validate_init(init)
 
+        # Bind request-scoped context for this run only. Always capture the
+        # ContextVar token and reset it in ``finally`` so sequential runs in the
+        # same asyncio Task cannot inherit a previous action's context, and so a
+        # nested child that overrides context restores the parent on exit
+        # (see #5555). ``context is not None`` (not truthiness) so an explicit
+        # empty dict clears ambient context instead of accidentally inheriting.
         token = None
-        if context:
+        if context is not None:
             token = _action_context.set(context)
 
         streaming_cb = cast(StreamingCallback, on_chunk) if on_chunk else None
