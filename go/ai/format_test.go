@@ -249,6 +249,36 @@ func TestJSONFormatter(t *testing.T) {
 		}
 	})
 
+	t.Run("ParseChunk streams an array of objects", func(t *testing.T) {
+		// Completing the containers by type rather than by nesting order turned
+		// `[{"name": "Jo` into `[{"name": "Jo"]}`, which failed to parse and
+		// left every chunk of an array of objects empty until the array closed.
+		handler, _ := jsonFormatter{}.Handler(nil)
+		sfh := handler.(StreamingFormatHandler)
+
+		chunks := []string{`[{"name": "Jo`, `hn"}, {"nam`, `e": "Jane"}]`}
+		want := []any{
+			[]any{map[string]any{"name": "Jo"}},
+			// The second object has been opened but holds nothing yet: its key
+			// is still arriving, so there is no member to report.
+			[]any{map[string]any{"name": "John"}, map[string]any{}},
+			[]any{map[string]any{"name": "John"}, map[string]any{"name": "Jane"}},
+		}
+
+		for i, chunk := range chunks {
+			got, err := sfh.ParseChunk(&ModelResponseChunk{
+				Content: []*Part{NewTextPart(chunk)},
+				Index:   0,
+			})
+			if err != nil {
+				t.Fatalf("ParseChunk(%q) error = %v", chunk, err)
+			}
+			if diff := cmp.Diff(want[i], got); diff != "" {
+				t.Errorf("ParseChunk(%q) mismatch (-want +got):\n%s", chunk, diff)
+			}
+		}
+	})
+
 	t.Run("ParseMessage validates JSON and creates JSON part", func(t *testing.T) {
 		handler, _ := jsonFormatter{}.Handler(schema)
 
