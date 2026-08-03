@@ -72,22 +72,35 @@ func TestCollectionOptionsAccumulate(t *testing.T) {
 	})
 
 	t.Run("messages do not alias the caller's slice", func(t *testing.T) {
-		// WithMessages(history...) hands the caller's slice straight through,
-		// so appending onto it in place would corrupt their history.
+		// WithMessages(history...) hands the caller's slice straight through.
+		// Appending onto it would land in the spare capacity of the array
+		// backing history, which is invisible until the caller appends to
+		// their own slice and silently rewrites the messages we produced.
 		history := make([]*Message, 1, 4)
 		history[0] = NewUserTextMessage("original")
+
 		g := applyGen(
 			WithMessages(history...),
 			WithMessages(NewUserTextMessage("appended")),
 		)
-		if got := messageText(t, g.MessagesFn); len(got) != 2 {
-			t.Fatalf("messages = %v, want 2 entries", got)
+		msgs, err := g.MessagesFn(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("MessagesFn error: %v", err)
+		}
+		if len(msgs) != 2 {
+			t.Fatalf("len(msgs) = %d, want 2", len(msgs))
+		}
+
+		// The caller keeps building their own history, reusing index 1 of the
+		// shared array. Our already-produced messages must not change.
+		history = append(history, NewUserTextMessage("caller's next turn"))
+
+		if msgs[1].Text() != "appended" {
+			t.Errorf("produced messages aliased the caller's array: msgs[1] = %q, want %q",
+				msgs[1].Text(), "appended")
 		}
 		if history[0].Text() != "original" {
 			t.Errorf("caller history was mutated: got %q, want %q", history[0].Text(), "original")
-		}
-		if len(history) != 1 {
-			t.Errorf("len(history) = %d, want 1", len(history))
 		}
 	})
 

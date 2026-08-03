@@ -69,8 +69,8 @@ func appendMessagesFn(existing, next MessagesFn) MessagesFn {
 			return nil, err
 		}
 		// Copy rather than append onto before: WithMessages(history...) hands
-		// the caller's slice straight through, so appending in place could
-		// scribble over the array backing their history.
+		// the caller's slice straight through, so appending in place would
+		// write into the spare capacity of the array backing their history.
 		msgs := make([]*Message, 0, len(before)+len(after))
 		msgs = append(msgs, before...)
 		msgs = append(msgs, after...)
