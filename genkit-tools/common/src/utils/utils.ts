@@ -32,8 +32,11 @@ export interface DevToolsInfo {
  * Finds the project root by walking up the directory tree looking for a file
  * that marks the root of a supported runtime's project (for example
  * `package.json` for JS or `pubspec.yaml` for Dart).
+ *
+ * @param startDir Optional directory to start the search from. Defaults to
+ *   `process.cwd()`. Useful for `genkit start -C <dir>` and tests.
  */
-export async function findProjectRoot(): Promise<string> {
+export async function findProjectRoot(startDir?: string): Promise<string> {
   const projectMarkers = [
     'package.json',
     'go.mod',
@@ -44,7 +47,8 @@ export async function findProjectRoot(): Promise<string> {
     'pubspec.yaml',
   ];
 
-  let currentDir = process.cwd();
+  const fallback = path.resolve(startDir ?? process.cwd());
+  let currentDir = fallback;
   while (currentDir !== path.parse(currentDir).root) {
     const results = await Promise.all(
       projectMarkers.map((file) => markerExists(path.join(currentDir, file)))
@@ -54,7 +58,7 @@ export async function findProjectRoot(): Promise<string> {
     }
     currentDir = path.dirname(currentDir);
   }
-  return process.cwd();
+  return fallback;
 }
 
 /**

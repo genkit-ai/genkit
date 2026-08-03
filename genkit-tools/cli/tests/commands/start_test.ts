@@ -15,6 +15,7 @@
  */
 
 import { startServer } from '@genkit-ai/tools-common/server';
+import { logger } from '@genkit-ai/tools-common/utils';
 import {
   afterEach,
   beforeEach,
@@ -23,6 +24,8 @@ import {
   it,
   jest,
 } from '@jest/globals';
+import fs from 'fs';
+import path from 'path';
 import { start } from '../../src/commands/start';
 import * as managerUtils from '../../src/utils/manager-utils';
 
@@ -32,6 +35,7 @@ jest.mock('@genkit-ai/tools-common/utils', () => ({
   logger: {
     warn: jest.fn(),
     error: jest.fn(),
+    info: jest.fn(),
   },
 }));
 jest.mock('get-port', () => ({
@@ -144,5 +148,72 @@ describe('start command', () => {
       expect.anything(),
       expect.objectContaining({ disableRealtimeTelemetry: true })
     );
+  });
+
+  it('should chdir when -C/--directory is provided', async () => {
+    const dir = '/some/project';
+    const statSpy = jest.spyOn(fs, 'statSync').mockReturnValue({
+      isDirectory: () => true,
+    } as fs.Stats);
+    const chdirSpy = jest
+      .spyOn(process, 'chdir')
+      .mockImplementation(() => undefined as never);
+
+    try {
+      await start.parseAsync(['node', 'genkit', '-C', dir, 'run', 'app']);
+      expect(chdirSpy).toHaveBeenCalledWith(path.resolve(dir));
+      expect(startDevProcessManagerSpy).toHaveBeenCalledWith(
+        '/mock/root',
+        'run',
+        ['app'],
+        expect.anything()
+      );
+    } finally {
+      statSpy.mockRestore();
+      chdirSpy.mockRestore();
+    }
+  });
+
+  it('should error when -C directory does not exist', async () => {
+    const statSpy = jest.spyOn(fs, 'statSync').mockImplementation(() => {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    });
+    const chdirSpy = jest.spyOn(process, 'chdir');
+
+    try {
+      await start.parseAsync(['node', 'genkit', '-C', '/missing', '--noui']);
+      expect(logger.error).toHaveBeenCalledWith('Directory not found: /missing');
+      expect(chdirSpy).not.toHaveBeenCalled();
+      expect(startManagerSpy).not.toHaveBeenCalled();
+      expect(startDevProcessManagerSpy).not.toHaveBeenCalled();
+    } finally {
+      statSpy.mockRestore();
+      chdirSpy.mockRestore();
+    }
+  });
+
+  it('should error when -C path is not a directory', async () => {
+    const statSpy = jest.spyOn(fs, 'statSync').mockReturnValue({
+      isDirectory: () => false,
+    } as fs.Stats);
+    const chdirSpy = jest.spyOn(process, 'chdir');
+
+    try {
+      await start.parseAsync([
+        'node',
+        'genkit',
+        '-C',
+        '/tmp/file.txt',
+        '--noui',
+      ]);
+      expect(logger.error).toHaveBeenCalledWith(
+        '"/tmp/file.txt" is not a directory'
+      );
+      expect(chdirSpy).not.toHaveBeenCalled();
+      expect(startManagerSpy).not.toHaveBeenCalled();
+    } finally {
+      statSpy.mockRestore();
+      chdirSpy.mockRestore();
+    }
   });
 });

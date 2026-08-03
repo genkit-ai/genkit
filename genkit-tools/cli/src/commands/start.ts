@@ -21,6 +21,7 @@ import { Command } from 'commander';
 import fs from 'fs';
 import getPort, { makeRange } from 'get-port';
 import open from 'open';
+import path from 'path';
 import {
   getDevEnvVars,
   startDevProcessManager,
@@ -36,11 +37,41 @@ interface RunOptions {
   corsOrigin?: string;
   experimentalReflectionV2?: boolean;
   writeEnvFile?: string;
+  directory?: string;
+}
+
+/**
+ * Resolve `-C/--directory` like git/make: change the process working directory
+ * so project-root discovery and spawned app processes run from that location.
+ * Returns false when the path is missing or not a directory (error already logged).
+ */
+function chdirIfRequested(directory: string | undefined): boolean {
+  if (!directory) {
+    return true;
+  }
+  const dir = path.resolve(directory);
+  let isDirectory = false;
+  try {
+    isDirectory = fs.statSync(dir).isDirectory();
+  } catch {
+    logger.error(`Directory not found: ${directory}`);
+    return false;
+  }
+  if (!isDirectory) {
+    logger.error(`"${directory}" is not a directory`);
+    return false;
+  }
+  process.chdir(dir);
+  return true;
 }
 
 /** Command to run code in dev mode and/or the Dev UI. */
 export const start = new Command('start')
   .description('runs a command in Genkit dev mode')
+  .option(
+    '-C, --directory <dir>',
+    'run as if genkit was started in <dir> (change working directory first)'
+  )
   .option('-n, --noui', 'do not start the Dev UI', false)
   .option('-p, --port <port>', 'port for the Dev UI')
   .option(
@@ -66,6 +97,10 @@ export const start = new Command('start')
     'write environment variables in .env format to the provided file'
   )
   .action(async (options: RunOptions) => {
+    if (!chdirIfRequested(options.directory)) {
+      return;
+    }
+
     const projectRoot = await findProjectRoot();
     if (projectRoot.includes('/.Trash/')) {
       logger.warn(

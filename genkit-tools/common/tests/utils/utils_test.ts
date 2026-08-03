@@ -79,6 +79,23 @@ describe('utils', () => {
         cwdSpy.mockRestore();
       }
     });
+
+    it('honors an explicit startDir independent of process.cwd()', async () => {
+      const projectDir = path.join(tmpDir, 'js-app');
+      const nestedDir = path.join(projectDir, 'src');
+      const otherCwd = path.join(tmpDir, 'elsewhere');
+      fs.mkdirSync(nestedDir, { recursive: true });
+      fs.mkdirSync(otherCwd, { recursive: true });
+      fs.writeFileSync(path.join(projectDir, 'package.json'), '{}');
+
+      const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(otherCwd);
+
+      try {
+        expect(await findProjectRoot(nestedDir)).toEqual(projectDir);
+      } finally {
+        cwdSpy.mockRestore();
+      }
+    });
   });
 
   describe('projectNameFromGenkitFilePath', () => {
