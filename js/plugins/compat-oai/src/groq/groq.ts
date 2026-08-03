@@ -86,11 +86,20 @@ export const groqRequestBuilder: ModelRequestBuilder = (req, params) => {
     serviceTier,
   } = req.config ?? {};
 
-  params.reasoning_effort = reasoningEffort;
-  // These fields are Groq-specific extensions beyond the OpenAI SDK types.
-  (params as any).reasoning_format = reasoningFormat;
-  (params as any).include_reasoning = includeReasoning;
-  (params as any).service_tier = serviceTier;
+  // Only set Groq-specific fields when provided so we do not pollute the
+  // request with explicit `undefined` (and so `includeReasoning: false` is kept).
+  if (reasoningEffort !== undefined) {
+    params.reasoning_effort = reasoningEffort;
+  }
+  if (reasoningFormat !== undefined) {
+    (params as any).reasoning_format = reasoningFormat;
+  }
+  if (includeReasoning !== undefined) {
+    (params as any).include_reasoning = includeReasoning;
+  }
+  if (serviceTier !== undefined) {
+    (params as any).service_tier = serviceTier;
+  }
 };
 
 export const SUPPORTED_GROQ_MODELS = {

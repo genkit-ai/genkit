@@ -74,6 +74,21 @@ describe('Groq request builder', () => {
     expect(body).not.toHaveProperty('include_reasoning');
     expect(body).not.toHaveProperty('service_tier');
   });
+
+  it('assigns only defined Groq fields on the params object', () => {
+    const params = { model: 'openai/gpt-oss-20b', messages: [] } as any;
+    groqRequestBuilder(
+      {
+        messages: [],
+        config: { includeReasoning: false, serviceTier: 'flex' },
+      } as GenerateRequest,
+      params
+    );
+    expect(params.include_reasoning).toBe(false);
+    expect(params.service_tier).toBe('flex');
+    expect(params).not.toHaveProperty('reasoning_effort');
+    expect(params).not.toHaveProperty('reasoning_format');
+  });
 });
 
 describe('Groq model refs', () => {

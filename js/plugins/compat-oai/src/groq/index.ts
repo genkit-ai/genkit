@@ -60,9 +60,10 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
   return await client.models.list().then((response) =>
     response.data
       .filter((model) => model.object === 'model')
-      // Whisper / TTS / STT ids are not chat-completion models.
+      // Whisper / TTS / STT / embedding ids are not chat-completion models.
       .filter((model) => !model.id.startsWith('whisper'))
       .filter((model) => !model.id.includes('orpheus'))
+      .filter((model) => !model.id.includes('embed'))
       .map((model: OpenAI.Model) => {
         const modelRef =
           SUPPORTED_GROQ_MODELS[model.id] ??
@@ -80,7 +81,9 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
 
 export function groqPlugin(options?: GroqPluginOptions): GenkitPluginV2 {
   const apiKey = options?.apiKey ?? process.env.GROQ_API_KEY;
-  if (!apiKey) {
+  // Allow `apiKey: false` (openAICompatible maps it to a placeholder for
+  // local proxies / tests). Only reject missing/empty keys.
+  if (apiKey === undefined || apiKey === '') {
     throw new GenkitError({
       status: 'FAILED_PRECONDITION',
       message:
