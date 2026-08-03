@@ -18,11 +18,14 @@ package middleware
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func defineToolModel(t *testing.T, r *registry.Registry, name string, fn ai.ModelFunc) ai.Model {
@@ -40,6 +43,45 @@ func defineTool(t *testing.T, r api.Registry, name string) ai.Tool {
 		}) (string, error) {
 			return "result:" + input.V, nil
 		})
+}
+
+// spanCollector is a minimal sdktrace.SpanExporter that records finished
+// spans so a test can assert on them.
+type spanCollector struct {
+	mu    sync.Mutex
+	spans []sdktrace.ReadOnlySpan
+}
+
+func (c *spanCollector) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.spans = append(c.spans, spans...)
+	return nil
+}
+
+func (c *spanCollector) Shutdown(context.Context) error { return nil }
+
+// byName returns every recorded span with the given name.
+func (c *spanCollector) byName(name string) []sdktrace.ReadOnlySpan {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []sdktrace.ReadOnlySpan
+	for _, s := range c.spans {
+		if s.Name() == name {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// spanAttr returns the string value of the named span attribute, if present.
+func spanAttr(span sdktrace.ReadOnlySpan, key string) (string, bool) {
+	for _, kv := range span.Attributes() {
+		if string(kv.Key) == key {
+			return kv.Value.AsString(), true
+		}
+	}
+	return "", false
 }
 
 // twoToolModelHandler returns a model handler that requests two tools on the first call,
@@ -135,6 +177,47 @@ func TestToolApprovalInterruptsUnapprovedTools(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected interrupt for 'dangerous' tool")
+	}
+}
+
+// TestToolApprovalInterruptIsTracedOnce verifies the interrupt lands in the
+// trace as exactly one span named for the blocked tool. ToolApproval emits no
+// span of its own: the generate engine attributes a short-circuited tool call
+// to the tool, so hand-rolling one here would double-count it.
+func TestToolApprovalInterruptIsTracedOnce(t *testing.T) {
+	r := newTestRegistry(t)
+
+	m := defineToolModel(t, r, "test/twotools", twoToolModelHandler("safe", "dangerous"))
+	safe := defineTool(t, r, "safe")
+	dangerous := defineTool(t, r, "dangerous")
+
+	collector := &spanCollector{}
+	sp := sdktrace.NewSimpleSpanProcessor(collector)
+	tp := tracing.TracerProvider()
+	tp.RegisterSpanProcessor(sp)
+	t.Cleanup(func() { tp.UnregisterSpanProcessor(sp) })
+
+	ta := &ToolApproval{AllowedTools: []string{"safe"}}
+	if _, err := ai.Generate(ctx, r,
+		ai.WithModel(m),
+		ai.WithPrompt("go"),
+		ai.WithTools(safe, dangerous),
+		ai.WithUse(ta),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := collector.byName("dangerous")
+	if len(spans) != 1 {
+		t.Fatalf("got %d spans named %q, want exactly 1", len(spans), "dangerous")
+	}
+	const subtypeKey = "genkit:metadata:subtype"
+	subtype, ok := spanAttr(spans[0], subtypeKey)
+	if !ok {
+		t.Fatalf("span %q: missing attribute %q", "dangerous", subtypeKey)
+	}
+	if subtype != "tool" {
+		t.Errorf("span %q: %s = %q, want %q", "dangerous", subtypeKey, subtype, "tool")
 	}
 }
 
