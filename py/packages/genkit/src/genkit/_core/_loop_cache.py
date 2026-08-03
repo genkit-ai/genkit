@@ -41,7 +41,7 @@ def _loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
     def _prune_closed_loops() -> None:
         for loop in list(by_loop.keys()):
             if loop.is_closed():
-                del by_loop[loop]
+                by_loop.pop(loop, None)
 
     def _get() -> T:
         loop = asyncio.get_running_loop()
