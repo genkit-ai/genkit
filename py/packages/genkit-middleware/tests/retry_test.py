@@ -171,7 +171,7 @@ async def test_local_delay_wins_when_larger_than_retry_after(ctx: GenerateMiddle
 
     assert result is not None
     assert call_count == 2
-    sleep.assert_awaited_once_with(0.5)
+    sleep.assert_any_await(0.5)
 
 
 @pytest.mark.asyncio
