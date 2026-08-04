@@ -681,21 +681,15 @@ func renderMessages(ctx context.Context, opts promptOptions, messages []*Message
 
 	// A prompt that declares no conversation of its own has the caller's used
 	// directly, between the system message and the user prompt.
-	if opts.MessagesFn == nil && opts.MessagesText == nil && opts.MessagesAfterFn == nil {
+	if opts.MessagesFn == nil && opts.MessagesText == nil {
 		return appendMessageClones(messages, history), nil
 	}
 
-	// Otherwise the prompt owns the conversation and its contributions render
-	// in call order, the template sitting where it was first declared. Only the
-	// template can place the caller's history, with {{history}}; a function
-	// reaches it through HistoryFromContext and decides for itself.
-	if opts.MessagesFn != nil {
-		msgs, err := opts.MessagesFn(ctx, raw)
-		if err != nil {
-			return nil, err
-		}
-		messages = appendMessageClones(messages, msgs)
-	}
+	// Otherwise the prompt owns the conversation. A template resets it, so
+	// anything still in MessagesFn was set after the template and renders
+	// behind it. Only the template can place the caller's history, with
+	// {{history}}; a function reaches it through HistoryFromContext and
+	// decides for itself.
 	if opts.MessagesText != nil {
 		rendered, err := renderPrompt(ctx, opts, *opts.MessagesText, input, history, dp)
 		if err != nil {
@@ -706,8 +700,8 @@ func renderMessages(ctx context.Context, opts promptOptions, messages []*Message
 		// renderPrompt before it goes downstream.
 		messages = append(messages, rendered...)
 	}
-	if opts.MessagesAfterFn != nil {
-		msgs, err := opts.MessagesAfterFn(ctx, raw)
+	if opts.MessagesFn != nil {
+		msgs, err := opts.MessagesFn(ctx, raw)
 		if err != nil {
 			return nil, err
 		}

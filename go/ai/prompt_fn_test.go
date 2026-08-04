@@ -603,26 +603,11 @@ func TestDocsFnSkippedOnExecuteOverride(t *testing.T) {
 }
 
 // TestConversationMergeSemantics pins how the three conversation options
-// combine. Verbatim messages accumulate, but a template does not: it lays out
-// the whole conversation and is where {{history}} goes, so a second one
-// replaces the first. Messages that arrive after a template accumulate behind
-// it, which is what keeps the template where it was first declared.
+// combine. Verbatim messages accumulate with each other, but a template resets
+// the conversation: it lays the whole thing out, down to where {{history}} puts
+// the caller's, so anything set before it is dropped rather than folded in.
 func TestConversationMergeSemantics(t *testing.T) {
 	msg := func(text string) *Message { return NewUserTextMessage(text) }
-	opts := &promptOptions{}
-	for _, o := range []PromptOption{
-		WithMessages(msg("before one")),
-		WithMessagesFn(func(context.Context, any) ([]*Message, error) {
-			return []*Message{msg("before two")}, nil
-		}),
-		WithMessagesTemplate("first template"),
-		WithMessages(msg("after one")),
-		WithMessagesTemplate("second template"),
-		WithMessages(msg("after two")),
-	} {
-		o.applyPrompt(opts)
-	}
-
 	collect := func(fn MessagesFn) []string {
 		t.Helper()
 		if fn == nil {
@@ -638,16 +623,68 @@ func TestConversationMergeSemantics(t *testing.T) {
 		}
 		return got
 	}
+	apply := func(opts ...PromptOption) *promptOptions {
+		t.Helper()
+		p := &promptOptions{}
+		for _, o := range opts {
+			o.applyPrompt(p)
+		}
+		return p
+	}
 
-	if got, want := collect(opts.MessagesFn), []string{"before one", "before two"}; !slices.Equal(got, want) {
-		t.Errorf("before the template = %v, want %v", got, want)
-	}
-	if opts.MessagesText == nil || *opts.MessagesText != "second template" {
-		t.Errorf("template = %v, want the last one set", opts.MessagesText)
-	}
-	if got, want := collect(opts.MessagesAfterFn), []string{"after one", "after two"}; !slices.Equal(got, want) {
-		t.Errorf("after the template = %v, want %v", got, want)
-	}
+	t.Run("verbatim messages accumulate across both variants", func(t *testing.T) {
+		p := apply(
+			WithMessages(msg("one")),
+			WithMessagesFn(func(context.Context, any) ([]*Message, error) {
+				return []*Message{msg("two")}, nil
+			}),
+			WithMessages(msg("three")),
+		)
+		if got, want := collect(p.MessagesFn), []string{"one", "two", "three"}; !slices.Equal(got, want) {
+			t.Errorf("messages = %v, want %v", got, want)
+		}
+		if p.MessagesText != nil {
+			t.Errorf("MessagesText = %q, want none", *p.MessagesText)
+		}
+	})
+
+	t.Run("a template drops the messages set before it", func(t *testing.T) {
+		p := apply(
+			WithMessages(msg("dropped")),
+			WithMessagesTemplate("the conversation"),
+		)
+		if got := collect(p.MessagesFn); got != nil {
+			t.Errorf("messages = %v, want none: the template resets the conversation", got)
+		}
+		if p.MessagesText == nil || *p.MessagesText != "the conversation" {
+			t.Errorf("template = %v, want %q", p.MessagesText, "the conversation")
+		}
+	})
+
+	t.Run("messages set after a template accumulate onto it", func(t *testing.T) {
+		p := apply(
+			WithMessagesTemplate("the conversation"),
+			WithMessages(msg("after one")),
+			WithMessages(msg("after two")),
+		)
+		if got, want := collect(p.MessagesFn), []string{"after one", "after two"}; !slices.Equal(got, want) {
+			t.Errorf("messages = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("a later template drops an earlier one and everything between", func(t *testing.T) {
+		p := apply(
+			WithMessagesTemplate("first"),
+			WithMessages(msg("between")),
+			WithMessagesTemplate("second"),
+		)
+		if p.MessagesText == nil || *p.MessagesText != "second" {
+			t.Errorf("template = %v, want %q", p.MessagesText, "second")
+		}
+		if got := collect(p.MessagesFn); got != nil {
+			t.Errorf("messages = %v, want none", got)
+		}
+	})
 }
 
 // TestLiteralPercentSurvivesWithPrompt guards the Sprintf guard in
