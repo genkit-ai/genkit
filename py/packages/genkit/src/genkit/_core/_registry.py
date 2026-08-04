@@ -405,6 +405,14 @@ class Registry:
             return local
         return {**self._parent.list_values(kind), **local}
 
+    def plugin_names(self) -> list[str]:
+        """Names of registered plugins, parent-first, deduplicated."""
+        with self._lock:
+            local = list(self._plugins)
+        if self._parent is None:
+            return local
+        return list(dict.fromkeys([*self._parent.plugin_names(), *local]))
+
     def register_plugin(self, plugin: Plugin) -> None:
         """Register a plugin with the registry.
 
