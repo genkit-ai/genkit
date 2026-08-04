@@ -31,6 +31,7 @@ import pytest
 from genkit_google_cloud.session_store.firestore import FirestoreSessionStore
 
 from genkit._core._typing import (
+    AgentFinishReason,
     GenkitRuntimeError,
     MessageData,
     Part,
@@ -191,7 +192,7 @@ async def test_abort_turn_lifecycle_correctness() -> None:
             session_id='sess-abort-1',
             created_at=existing.created_at if existing else '2026-08-03T10:00:00Z',
             status=SnapshotStatus.ABORTED,
-            finish_reason='aborted',
+            finish_reason=AgentFinishReason.ABORTED,
             error=abort_err,
             state=existing.state if existing else None,
         ),
@@ -316,6 +317,8 @@ async def test_complex_state_type_reconstruction_fidelity() -> None:
     reconstructed = await store.get_snapshot(snapshot_id='snap-complex-1')
     assert reconstructed is not None
     assert reconstructed.state is not None
+    assert reconstructed.state.messages is not None
+    assert reconstructed.state.custom is not None
     assert reconstructed.state.session_id == 'sess-complex-1'
     assert len(reconstructed.state.messages) == 2
     assert reconstructed.state.messages[0].role == Role.USER
