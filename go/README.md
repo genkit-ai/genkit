@@ -400,7 +400,8 @@ Options compose, so you can build a request up from several helpers. Options
 carrying multiple items (`ai.WithMessages`, `ai.WithTools`, `ai.WithDocs`,
 `ai.WithUse`) accumulate across repeats, while single-value options
 (`ai.WithConfig`, `ai.WithModelName`, `ai.WithSystem`) take the last one set.
-Repeating an option is never an error, so a request can be assembled in pieces:
+Repeating an option is how a request gets assembled in pieces, not a mistake to
+be reported:
 
 ```go
 opts := []ai.GenerateOption{
@@ -421,10 +422,13 @@ if terse {
 response, _ := genkit.Generate(ctx, g, append(opts, ai.WithPrompt("What should I pack for Tokyo?"))...)
 ```
 
-Tool names must be unique across the merged list: repeating the same tool in
-two helpers is rejected when the request runs. These rules cover a single
-options list; APIs that layer two lists, like a prompt's define-time options
-against `Execute`-time options, document their own precedence.
+What still fails is a combination no merge could make sense of, rather than a
+repeat. Tool names must be unique across the merged list, so the same tool from
+two helpers is rejected when the request runs, and `genkit.DefinePrompt` panics
+if given a conversation template alongside separately supplied messages, since
+the template already is the conversation. These rules cover a single options
+list; APIs that layer two lists, like a prompt's define-time options against
+`Execute`-time options, document their own precedence.
 
 ### Generate Structured Data
 
