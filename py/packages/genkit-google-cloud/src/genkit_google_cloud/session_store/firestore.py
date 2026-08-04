@@ -48,7 +48,7 @@ from google.cloud.firestore import (
     AsyncTransaction,
     DocumentSnapshot,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 from genkit._ai._agents._session import (
@@ -101,6 +101,18 @@ class ShardDoc(BaseModel):
     model_config = ConfigDict(extra='ignore')
 
     chunk: bytes
+
+    @field_validator('chunk', mode='before')
+    @classmethod
+    def _coerce_chunk(cls, v: object) -> object:
+        """Coerce raw Firestore binary chunk representations to bytes."""
+        if isinstance(v, memoryview):
+            return v.tobytes()
+        if isinstance(v, (bytes, bytearray)):
+            return bytes(v)
+        if isinstance(v, str):
+            return v.encode('utf-8')
+        return v
 
 
 class SnapshotWriteMeta(BaseModel):
@@ -800,18 +812,14 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                     status='DATA_LOSS',
                     message=f"FirestoreSessionStore: missing checkpoint shard '{snap.id}'.",
                 )
-            chunk = (snap.to_dict() or {}).get('chunk')
-            if isinstance(chunk, memoryview):
-                buffers.append(chunk.tobytes())
-            elif isinstance(chunk, (bytes, bytearray)):
-                buffers.append(bytes(chunk))
-            elif isinstance(chunk, str):
-                buffers.append(chunk.encode('utf-8'))
-            else:
+            try:
+                shard = ShardDoc.model_validate(snap.to_dict())
+            except Exception as e:
                 raise GenkitError(
                     status='DATA_LOSS',
                     message=f"FirestoreSessionStore: invalid checkpoint shard '{snap.id}'.",
-                )
+                ) from e
+            buffers.append(shard.chunk)
         return json.loads(b''.join(buffers).decode('utf-8'))
 
     def _to_snapshot(self, reconstructed: tuple[SnapshotDoc, dict[str, Any]] | None) -> SessionSnapshot | None:
