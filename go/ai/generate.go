@@ -189,7 +189,10 @@ func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
 	}
 	fn = core.ChainMiddleware(mws...)(fn)
 
-	return &model{*core.NewStreamingAction(name, api.ActionTypeModel, metadata, inputSchema, fn)}
+	return &model{*core.NewStreamingActionOf(api.ActionTypeModel, name, &core.ActionOptions{
+		Metadata:    metadata,
+		InputSchema: inputSchema,
+	}, fn)}
 }
 
 // DefineModel creates a new [Model] and registers it.
