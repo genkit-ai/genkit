@@ -936,19 +936,15 @@ func TestToolWithOutputSchemaOptions(t *testing.T) {
 		}
 	})
 
-	t.Run("NewTool with WithOutputType", func(t *testing.T) {
-		type Result struct {
-			Score int `json:"score"`
-		}
-
-		tl := NewTool("typedOutput", "Output type derived",
+	t.Run("NewTool with WithOutputSchema", func(t *testing.T) {
+		tl := NewTool("customOutputNew", "Custom output schema",
 			func(ctx *ToolContext, input struct{}) (any, error) { return nil, nil },
-			WithOutputType(Result{}))
+			WithOutputSchema(customSchema))
 
 		def := tl.Definition()
 		props, ok := def.OutputSchema["properties"].(map[string]any)
-		if !ok || props["score"] == nil {
-			t.Errorf("OutputSchema = %v, want schema derived from Result", def.OutputSchema)
+		if !ok || props["answer"] == nil {
+			t.Errorf("OutputSchema = %v, want the custom schema", def.OutputSchema)
 		}
 	})
 
@@ -979,18 +975,6 @@ func TestToolWithOutputSchemaOptions(t *testing.T) {
 			WithOutputSchema(customSchema))
 	})
 
-	t.Run("panics on non-schema output options", func(t *testing.T) {
-		defer func() {
-			if recover() == nil {
-				t.Error("expected panic for WithOutputFormat on a tool")
-			}
-		}()
-
-		NewTool("badOption", "Format on a tool",
-			func(ctx *ToolContext, input struct{}) (any, error) { return nil, nil },
-			WithOutputFormat(OutputFormatText))
-	})
-
 	t.Run("panics when output schema is set twice", func(t *testing.T) {
 		defer func() {
 			if recover() == nil {
@@ -1000,7 +984,7 @@ func TestToolWithOutputSchemaOptions(t *testing.T) {
 
 		NewTool("doubleOut", "Two output schemas",
 			func(ctx *ToolContext, input struct{}) (any, error) { return nil, nil },
-			WithOutputSchema(customSchema), WithOutputType(struct{ A string }{}))
+			WithOutputSchema(customSchema), WithOutputSchemaName("Answer"))
 	})
 
 	t.Run("panics for multipart tools", func(t *testing.T) {

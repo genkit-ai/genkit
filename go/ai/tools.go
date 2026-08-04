@@ -338,7 +338,7 @@ func DefineTool[In, Out any](
 	if toolOpts.OutputSchema != nil {
 		typ := reflect.TypeFor[*Out]()
 		if typ != nil && typ.Elem().Kind() != reflect.Interface {
-			panic(fmt.Errorf("ai.DefineTool %q: output schema options require Out to be of type 'any', but got %v", name, typ.Elem()))
+			panic(fmt.Errorf("ai.DefineTool %q: WithOutputSchema and WithOutputSchemaName require Out to be of type 'any', but got %v", name, typ.Elem()))
 		}
 	}
 
@@ -392,7 +392,7 @@ func NewTool[In, Out any](name, description string, fn ToolFunc[In, Out], opts .
 		var zeroOut *Out
 		typ := reflect.TypeOf(zeroOut)
 		if typ != nil && typ.Elem().Kind() != reflect.Interface {
-			panic(fmt.Errorf("ai.NewTool %q: output schema options require Out to be of type 'any', but got %v", name, typ.Elem()))
+			panic(fmt.Errorf("ai.NewTool %q: WithOutputSchema and WithOutputSchemaName require Out to be of type 'any', but got %v", name, typ.Elem()))
 		}
 	}
 
@@ -427,7 +427,7 @@ func DefineMultipartTool[In any](
 		}
 	}
 	if toolOpts.OutputSchema != nil {
-		panic(fmt.Errorf("ai.DefineMultipartTool %q: output schema options are not supported for multipart tools; the output schema is the multipart response envelope", name))
+		panic(fmt.Errorf("ai.DefineMultipartTool %q: output schema options are not supported for multipart tools: the output schema is the multipart response envelope", name))
 	}
 
 	metadata, wrappedFn := wrapMultipartToolFunc(name, description, fn)

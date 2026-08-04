@@ -297,7 +297,16 @@ type inputOptions struct {
 type InputOption interface {
 	applyInput(*inputOptions) error
 	applyPrompt(*promptOptions) error
-	applyTool(*toolOptions) error
+}
+
+// InputSchemaOption is an [InputOption] that provides an explicit input
+// schema, inline or by name. Unlike the schema-inference options, it also
+// applies to the tool constructors, where an explicit schema stands in for an
+// In type parameter of 'any'; a tool whose input shape a Go type can express
+// should use the type parameter instead.
+type InputSchemaOption interface {
+	InputOption
+	ToolOption
 }
 
 // applyInput applies the option to the input options.
@@ -356,14 +365,14 @@ func WithInputType(input any) InputOption {
 	}
 }
 
-// WithInputSchema manually provides a schema map for the prompt's input.
-func WithInputSchema(schema map[string]any) InputOption {
+// WithInputSchema manually provides a schema map for the input.
+func WithInputSchema(schema map[string]any) InputSchemaOption {
 	return &inputOptions{InputSchema: schema}
 }
 
 // WithInputSchemaName sets a pre-registered schema by name for the input.
 // The schema will be resolved lazily at execution time using [DefineSchema].
-func WithInputSchemaName(name string) InputOption {
+func WithInputSchemaName(name string) InputSchemaOption {
 	return &inputOptions{InputSchema: core.SchemaRef(name)}
 }
 
@@ -515,14 +524,24 @@ type outputOptions struct {
 	CustomConstrained  bool           // Whether generation should use custom constrained output instead of native model constrained output.
 }
 
-// OutputOption is an option for the output of a prompt, generate request, or
-// tool. It applies to DefinePrompt(), Generate(), and the tool constructors;
-// tools accept only the schema-setting output options.
+// OutputOption is an option for the output of a prompt or generate request.
+// It applies only to DefinePrompt() and Generate().
 type OutputOption interface {
 	applyOutput(*outputOptions) error
 	applyPrompt(*promptOptions) error
 	applyGenerate(*generateOptions) error
-	applyTool(*toolOptions) error
+}
+
+// OutputSchemaOption is an [OutputOption] that provides an explicit output
+// schema, inline or by name. Unlike the schema-inference and
+// generation-steering options, it also applies to the tool constructors: a
+// tool's output shape is decided by its function, so the only output options
+// that make sense there are explicit schemas standing in for an Out type
+// parameter of 'any'; a tool whose output a Go type can express should use
+// the type parameter instead.
+type OutputSchemaOption interface {
+	OutputOption
+	ToolOption
 }
 
 // applyOutput applies the option to the output options.
@@ -562,16 +581,12 @@ func (o *outputOptions) applyGenerate(genOpts *generateOptions) error {
 	return o.applyOutput(&genOpts.outputOptions)
 }
 
-// applyTool applies the option to the tool options. Only the schema-setting
-// output options apply to a tool: its output schema is advertised to the
-// model, while format, instructions, and constrained-output settings steer
-// generation and have no meaning on a tool.
+// applyTool applies the option to the tool options. Only the explicit-schema
+// output options reach here: [OutputSchemaOption] is the sole output option
+// type that satisfies [ToolOption].
 func (o *outputOptions) applyTool(tOpts *toolOptions) error {
-	if o.OutputSchema == nil || o.OutputInstructions != nil || o.CustomConstrained {
-		return errors.New("only output schema options apply to tools (WithOutputType, WithOutputSchema, WithOutputSchemaName, or WithOutputEnums)")
-	}
 	if tOpts.OutputSchema != nil {
-		return errors.New("cannot set output schema more than once (WithOutputType, WithOutputSchema, or WithOutputSchemaName)")
+		return errors.New("cannot set output schema more than once (WithOutputSchema or WithOutputSchemaName)")
 	}
 	tOpts.OutputSchema = o.OutputSchema
 	return nil
@@ -585,9 +600,8 @@ func WithOutputType(output any) OutputOption {
 	}
 }
 
-// WithOutputSchema manually provides a schema map for the prompt's output.
-// The outputted value will serve as the default output if no output is given at generation time.
-func WithOutputSchema(schema map[string]any) OutputOption {
+// WithOutputSchema manually provides a schema map for the output.
+func WithOutputSchema(schema map[string]any) OutputSchemaOption {
 	return &outputOptions{
 		OutputSchema: schema,
 		OutputFormat: OutputFormatJSON,
@@ -595,7 +609,7 @@ func WithOutputSchema(schema map[string]any) OutputOption {
 }
 
 // WithOutputSchemaName sets the schema name that will be resolved at execution time.
-func WithOutputSchemaName(name string) OutputOption {
+func WithOutputSchemaName(name string) OutputSchemaOption {
 	return &outputOptions{
 		OutputSchema: core.SchemaRef(name),
 		OutputFormat: OutputFormatJSON,
