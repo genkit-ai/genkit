@@ -2475,16 +2475,13 @@ const promptMessageKey = "_genkit_prompt"
 
 // sessionMessageKey marks the session's own messages on their way into the
 // prompt render. The prompt decides where they land, so afterwards this is the
-// only thing that separates them from the prompt's scaffolding. It never
-// reaches the model: [tagRenderedMessages] strips it in the same pass that
-// tags the scaffolding.
+// only thing separating them from its scaffolding. [tagRenderedMessages] strips
+// it before the model sees anything.
 const sessionMessageKey = "_genkit_history"
 
-// taggedMessage returns a copy of m carrying key in its metadata.
-//
-// The copy matters: Render may alias message metadata from shared prompt
-// config (e.g. messages registered via [ai.WithMessages]), so writing in place
-// would leak the tag into the registered prompt and race with concurrent
+// taggedMessage returns a copy of m carrying key in its metadata. Copying
+// matters: Render may alias metadata from shared prompt config, so writing in
+// place would leak the tag into the registered prompt and race with concurrent
 // invocations.
 func taggedMessage(m *ai.Message, key string) *ai.Message {
 	tagged := *m
@@ -2529,9 +2526,8 @@ func markSessionMessages(history []*ai.Message) []*ai.Message {
 }
 
 // tagRenderedMessages splits the render output in one pass: what came from the
-// session loses its marker, since that is an implementation detail the model
-// should not see, and everything else is tagged as the prompt's scaffolding so
-// it can be dropped from session history after generation.
+// session loses its marker, and everything else is tagged as the prompt's
+// scaffolding so it can be dropped from session history after generation.
 func tagRenderedMessages(messages []*ai.Message) []*ai.Message {
 	tagged := make([]*ai.Message, 0, len(messages))
 	for _, m := range messages {
@@ -2729,21 +2725,14 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 
 			// Hand the conversation to the render instead of splicing it
 			// in afterwards: a prompt-backed agent is a prompt, so where
-			// the conversation goes is the prompt's decision, the same as
-			// it is for [ai.Prompt.Execute]. A prompt that declares no
-			// messages of its own gets it in the middle, between the
-			// system message and the user prompt. One that declares its
-			// own places it with {{history}} or [ai.HistoryFromContext],
-			// which is what makes trimming or summarizing possible.
+			// the conversation goes is the prompt's decision, which is
+			// what makes trimming or summarizing possible.
 			//
-			// The conversation handed over is the whole session, this
-			// turn's message included, since sess.Run has already stored
-			// it. A prompt therefore sees every message the session holds,
-			// not a truncated view of it.
-			//
-			// Only the render sees this context. Generation below runs on
-			// the original, so the conversation does not ride along into
-			// tools and prompts invoked inside the generate loop.
+			// This is the whole session, including this turn's message,
+			// since sess.Run has already stored it. Only the render sees
+			// the context: generation below runs on the original, so the
+			// conversation does not ride along into tools and prompts
+			// invoked inside the generate loop.
 			history := sess.Messages()
 			actionOpts, err := prompt.Render(ai.NewHistoryContext(ctx, markSessionMessages(history)), defaultInput)
 			if err != nil {
@@ -2787,11 +2776,10 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 			// final response, and it is what carries a resumed tool
 			// request's resolved content back into the session.
 			//
-			// Because the result is the conversation the prompt actually
-			// placed, a prompt that trims or summarizes its history trims
-			// the session too: the compacted conversation is the agent's
-			// conversation from that turn on, rather than being recomputed
-			// from an ever-growing transcript every turn.
+			// It is the conversation the prompt actually placed, so a
+			// prompt that trims or summarizes its history trims the
+			// session too, rather than recompacting an ever-growing
+			// transcript every turn.
 			if modelResp.Request != nil {
 				sess.SetMessages(turnSessionMessages(modelResp.History()))
 			} else if modelResp.Message != nil {

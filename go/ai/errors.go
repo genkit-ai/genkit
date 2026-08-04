@@ -56,9 +56,8 @@ var (
 
 	// ErrInputTypeMismatch means a prompt's input could not be interpreted as
 	// the type a content function declared, so the function was never called.
-	// Reaching it means the input a prompt was invoked with disagrees with the
-	// function that consumes it, whether that input came from [WithInput], the
-	// default recorded by [WithInputType], or the wire.
+	// The input may have come from [WithInput], the default recorded by
+	// [WithInputType], or the wire.
 	ErrInputTypeMismatch = status.ErrInvalidArgument.Subtype("input type mismatch")
 
 	// ErrUnresolvedToolRequest means a resumed generation left an interrupted

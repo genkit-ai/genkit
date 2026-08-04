@@ -149,13 +149,11 @@ func InferJSONSchema(x any) *jsonschema.Schema {
 }
 
 // ErrTypeMismatch reports that a value's Go type cannot be reinterpreted as
-// the requested type in [ConvertToExact]. Callers wrap it with their own
-// domain-specific message.
+// the requested type in [ConvertToExact].
 //
-// This package cannot classify it: core/status depends on this one. A caller
-// that surfaces the failure past the framework boundary is responsible for
-// attaching a sentinel users can match, as ai.ErrInputTypeMismatch does for
-// content-function input.
+// This package cannot classify it, since core/status depends on this one. A
+// caller that surfaces the failure past the framework boundary must attach a
+// sentinel users can match, as ai.ErrInputTypeMismatch does.
 var ErrTypeMismatch = errors.New("type mismatch")
 
 // ConvertToExact converts a dynamically typed value to T.
@@ -173,10 +171,9 @@ var ErrTypeMismatch = errors.New("type mismatch")
 // When T cannot carry JSON's types on its own, meaning T is an interface or a
 // map, slice or array whose elements are, the decoded value is normalized
 // against the schema inferred from v (see [NormalizeInput]) so that an integer
-// stays an int64 instead of widening to float64. This is the same
-// normalization the reflection API applies to action input, so a value reaches
-// T with the same Go types whichever way it arrived. That path also drops
-// null-valued keys, again matching the wire behavior.
+// stays an int64 instead of widening to float64. That is what the reflection
+// API does to action input, so a value reaches T with the same Go types
+// whichever way it arrived. It also drops null-valued keys, as the wire does.
 func ConvertToExact[T any](v any) (T, error) {
 	var zero T
 	if v == nil {

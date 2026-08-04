@@ -831,18 +831,18 @@ func LookupMiddleware(g *Genkit, name string) *ai.MiddlewareDesc {
 //
 // Prompt Content:
 //
-// Only [ai.WithSystem] and [ai.WithPrompt] take dotprompt templates, rendered
-// against the prompt's input. Everything else here is content the caller
-// already produced and is used verbatim, so it may hold user data and literal
-// braces without being reinterpreted as a template. Those two each fill a
-// single message whose role is fixed, so a {{role}} marker in either is an
-// error; [ai.WithMessagesTemplate] is where turns with their own roles belong.
+// Only [ai.WithSystem], [ai.WithPrompt], and [ai.WithMessagesTemplate] take
+// dotprompt templates. Everything else is content the caller already produced
+// and is used verbatim, so it may hold user data and literal braces. The first
+// two each fill a single message whose role is fixed, so a {{role}} marker in
+// either is an error; [ai.WithMessagesTemplate] is where turns with their own
+// roles belong.
 //
-// The ...Fn options take a function of the prompt's input that declares its own
-// input type. Genkit converts whatever the caller supplied, so one function
-// serves an in-process call, the default input recorded by [ai.WithInputType],
-// and the reflection API alike; an input that cannot be converted to that type
-// fails with [ai.ErrInputTypeMismatch].
+// The ...Fn options take a function that declares its own input type. Genkit
+// converts whatever the caller supplied, so one function serves an in-process
+// call, the default from [ai.WithInputType], and the reflection API alike. An
+// input that cannot be converted fails with [ai.ErrInputTypeMismatch].
+//
 //   - [ai.WithPrompt]: Set the user prompt template (supports {{variable}} syntax)
 //   - [ai.WithPromptFn]: Set a function that generates the user prompt from the input
 //   - [ai.WithPromptParts]: Set fixed multi-part user content, such as text plus media
@@ -862,13 +862,11 @@ func LookupMiddleware(g *Genkit, name string) *ai.MiddlewareDesc {
 // the caller's conversation used directly, between the system message and the
 // user prompt.
 //
-// Repeats merge rather than conflict, by the rules in the [ai] package doc. The
-// four system options fill one message and the four prompt options fill
-// another, so within each group the last one set wins and the others are
-// discarded. Documents accumulate, and so do messages, with one combination
-// refused rather than merged: [ai.WithMessagesTemplate] lays out the whole
-// conversation, so giving it alongside [ai.WithMessages] or [ai.WithMessagesFn]
-// panics here rather than picking one of them.
+// Repeats merge by the rules in the [ai] package doc: the four system options
+// share one message and the four prompt options share another, so the last one
+// set in each group wins, while documents and messages accumulate. The one
+// refused combination is [ai.WithMessagesTemplate] alongside [ai.WithMessages]
+// or [ai.WithMessagesFn], which panics here.
 //
 // Context Documents:
 //   - [ai.WithDocs]: Attach a fixed set of context documents
@@ -1073,10 +1071,10 @@ func LookupDataPrompt[In, Out any](g *Genkit, name string) *ai.DataPrompt[In, Ou
 // and an optional streaming callback (`cb`) of type [ai.ModelStreamCallback] to receive
 // response chunks as they arrive.
 //
-// [ai.Prompt.Execute] attaches the conversation it was given for the render;
-// pairing Render with this function does not, so a prompt that places the
-// conversation itself sees none unless the render context carries one. Pass it
-// with [ai.NewHistoryContext], which is how the agent runtime drives a prompt.
+// [ai.Prompt.Execute] attaches the conversation for the render; pairing Render
+// with this function does not, so a prompt that places the conversation itself
+// sees none unless the render context carries one. Pass it with
+// [ai.NewHistoryContext], which is how the agent runtime drives a prompt.
 //
 // Example (using options rendered from a prompt):
 //
@@ -1113,6 +1111,7 @@ func GenerateWithRequest(ctx context.Context, g *Genkit, actionOpts *ai.Generate
 // Nothing here is templated: Generate has no prompt input to render against, so
 // content functions receive the zero value of their input type. Use
 // [DefinePrompt] for templates and input-driven content.
+//
 //   - [ai.WithPrompt]: Set the user prompt (supports format strings)
 //   - [ai.WithPromptFn]: Set a function that generates the user prompt dynamically
 //   - [ai.WithPromptParts]: Set fixed multi-part user content, such as text plus media

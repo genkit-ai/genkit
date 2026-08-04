@@ -634,10 +634,9 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 		}
 	}
 
-	// Generate has no prompt input, so content functions are called with a nil
-	// raw input, which each option turns into the zero value of its own input
-	// type. Nothing here is rendered as a template: there are no input
-	// variables to render against.
+	// Generate has no prompt input, so content functions get a nil raw input,
+	// which each turns into the zero value of its own type, and no text is
+	// compiled: there would be nothing to render it against.
 	messages := []*Message{}
 	if genOpts.SystemText != nil {
 		messages = append(messages, NewSystemTextMessage(*genOpts.SystemText))
