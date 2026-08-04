@@ -37,7 +37,8 @@ var defaultBetas = []anthropic.AnthropicBeta{
 }
 
 // toBetaRequest converts a stable MessageNewParams body into BetaMessageNewParams
-// and attaches beta feature headers.
+// and attaches beta feature headers. A nil betas slice means "use defaults"; a
+// non-nil empty slice means the caller explicitly requested no beta headers.
 func toBetaRequest(req *anthropic.MessageNewParams, betas []anthropic.AnthropicBeta) (*anthropic.BetaMessageNewParams, error) {
 	data, err := json.Marshal(req)
 	if err != nil {
@@ -47,7 +48,7 @@ func toBetaRequest(req *anthropic.MessageNewParams, betas []anthropic.AnthropicB
 	if err := json.Unmarshal(data, &betaReq); err != nil {
 		return nil, fmt.Errorf("unable to convert anthropic request to beta: %w", err)
 	}
-	if len(betas) == 0 {
+	if betas == nil {
 		betas = append([]anthropic.AnthropicBeta(nil), defaultBetas...)
 	}
 	betaReq.Betas = betas
@@ -102,12 +103,12 @@ func generateBeta(
 				}
 			}
 		case anthropic.BetaRawContentBlockStopEvent:
-			if int(event.Index) < len(message.Content) {
+			if event.Index >= 0 && int(event.Index) < len(message.Content) {
 				p, err := betaContentBlockToPart(message.Content[event.Index])
 				if err != nil {
 					return nil, err
 				}
-				if p != nil && (p.IsToolRequest() || p.Metadata != nil) {
+				if shouldEmitOnContentBlockStop(p) {
 					if err := cb(ctx, &ai.ModelResponseChunk{Content: []*ai.Part{p}}); err != nil {
 						return nil, err
 					}
@@ -132,16 +133,19 @@ func toBetaGenkitResponse(m *anthropic.BetaMessage) (*ai.ModelResponse, error) {
 	r := ai.ModelResponse{}
 
 	switch m.StopReason {
-	case anthropic.BetaStopReasonMaxTokens:
+	case anthropic.BetaStopReasonMaxTokens, anthropic.BetaStopReasonModelContextWindowExceeded:
 		r.FinishReason = ai.FinishReasonLength
-	case anthropic.BetaStopReasonStopSequence:
+	case anthropic.BetaStopReasonStopSequence,
+		anthropic.BetaStopReasonEndTurn,
+		anthropic.BetaStopReasonToolUse,
+		anthropic.BetaStopReasonPauseTurn:
 		r.FinishReason = ai.FinishReasonStop
-	case anthropic.BetaStopReasonEndTurn:
-		r.FinishReason = ai.FinishReasonStop
-	case anthropic.BetaStopReasonToolUse:
-		r.FinishReason = ai.FinishReasonStop
-	default:
+	case anthropic.BetaStopReasonRefusal:
+		r.FinishReason = ai.FinishReasonOther
+	case "":
 		r.FinishReason = ai.FinishReasonUnknown
+	default:
+		r.FinishReason = ai.FinishReasonOther
 	}
 
 	msg := &ai.Message{Role: ai.RoleModel}
@@ -168,23 +172,34 @@ func toBetaGenkitResponse(m *anthropic.BetaMessage) (*ai.ModelResponse, error) {
 func betaContentBlockToPart(part anthropic.BetaContentBlockUnion) (*ai.Part, error) {
 	switch b := part.AsAny().(type) {
 	case anthropic.BetaThinkingBlock:
-		return ai.NewReasoningPart(part.Thinking, []byte(part.Signature)), nil
+		return ai.NewReasoningPart(b.Thinking, []byte(b.Signature)), nil
 	case anthropic.BetaTextBlock:
-		return ai.NewTextPart(string(part.Text)), nil
+		return ai.NewTextPart(string(b.Text)), nil
 	case anthropic.BetaToolUseBlock:
 		var input any
-		if len(part.Input) > 0 {
-			if err := json.Unmarshal(part.Input, &input); err != nil {
-				input = json.RawMessage(part.Input)
+		if len(b.Input) > 0 {
+			if err := json.Unmarshal(b.Input, &input); err != nil {
+				input = json.RawMessage(b.Input)
 			}
 		}
+		name := b.Name
+		if name == "" {
+			name = "unknown_tool"
+		}
 		return ai.NewToolRequestPart(&ai.ToolRequest{
-			Ref:   part.ID,
+			Ref:   b.ID,
 			Input: input,
-			Name:  part.Name,
+			Name:  name,
 		}), nil
 	case anthropic.BetaServerToolUseBlock:
-		return serverToolUseToPart(b.ID, string(b.Name), b.Input), nil
+		name := string(b.Name)
+		if name == "" {
+			name = "unknown_tool"
+		}
+		if part.ServerName != "" {
+			name = part.ServerName + "/" + name
+		}
+		return serverToolUseToPart(b.ID, name, b.Input), nil
 	case anthropic.BetaWebSearchToolResultBlock:
 		return webSearchToolResultToPart(b.ToolUseID, parseJSONAny(b.Content.RawJSON())), nil
 	case anthropic.BetaRedactedThinkingBlock:

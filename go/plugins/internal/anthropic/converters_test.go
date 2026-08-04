@@ -108,6 +108,35 @@ func TestToGenkitResponseServerTools(t *testing.T) {
 	}
 }
 
+func TestToBetaGenkitResponseStopReasons(t *testing.T) {
+	tests := []struct {
+		reason anthropic.BetaStopReason
+		want   ai.FinishReason
+	}{
+		{anthropic.BetaStopReasonMaxTokens, ai.FinishReasonLength},
+		{anthropic.BetaStopReasonModelContextWindowExceeded, ai.FinishReasonLength},
+		{anthropic.BetaStopReasonEndTurn, ai.FinishReasonStop},
+		{anthropic.BetaStopReasonPauseTurn, ai.FinishReasonStop},
+		{anthropic.BetaStopReasonRefusal, ai.FinishReasonOther},
+		{"", ai.FinishReasonUnknown},
+		{"something-new", ai.FinishReasonOther},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.reason), func(t *testing.T) {
+			got, err := toBetaGenkitResponse(&anthropic.BetaMessage{
+				StopReason: tt.reason,
+				Content:    []anthropic.BetaContentBlockUnion{},
+			})
+			if err != nil {
+				t.Fatalf("toBetaGenkitResponse: %v", err)
+			}
+			if got.FinishReason != tt.want {
+				t.Errorf("FinishReason = %q, want %q", got.FinishReason, tt.want)
+			}
+		})
+	}
+}
+
 func TestToBetaGenkitResponseServerTools(t *testing.T) {
 	raw := `{
 		"id": "msg_beta",
@@ -159,12 +188,14 @@ func TestResolveAPIVersion(t *testing.T) {
 		config         any
 		wantVersion    string
 		wantBetasCount int
+		wantBetasNil   bool
 	}{
-		{"default stable", "", nil, APIVersionStable, 0},
-		{"plugin beta", APIVersionBeta, nil, APIVersionBeta, 0},
-		{"request overrides plugin", APIVersionStable, map[string]any{"apiVersion": "beta"}, APIVersionBeta, 0},
-		{"request betas", "", map[string]any{"apiVersion": "beta", "betas": []any{"files-api-2025-04-14"}}, APIVersionBeta, 1},
-		{"typed params ignore routing", APIVersionBeta, &anthropic.MessageNewParams{MaxTokens: 1}, APIVersionBeta, 0},
+		{"default stable", "", nil, APIVersionStable, 0, true},
+		{"plugin beta", APIVersionBeta, nil, APIVersionBeta, 0, true},
+		{"request overrides plugin", APIVersionStable, map[string]any{"apiVersion": "beta"}, APIVersionBeta, 0, true},
+		{"request betas", "", map[string]any{"apiVersion": "beta", "betas": []any{"files-api-2025-04-14"}}, APIVersionBeta, 1, false},
+		{"explicit empty betas", "", map[string]any{"apiVersion": "beta", "betas": []any{}}, APIVersionBeta, 0, false},
+		{"typed params ignore routing", APIVersionBeta, &anthropic.MessageNewParams{MaxTokens: 1}, APIVersionBeta, 0, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -174,6 +205,9 @@ func TestResolveAPIVersion(t *testing.T) {
 			}
 			if len(gotBetas) != tt.wantBetasCount {
 				t.Errorf("betas = %#v, want len %d", gotBetas, tt.wantBetasCount)
+			}
+			if tt.wantBetasNil != (gotBetas == nil) {
+				t.Errorf("betas nil = %v, want %v", gotBetas == nil, tt.wantBetasNil)
 			}
 		})
 	}
@@ -196,6 +230,29 @@ func TestConfigFromRequestStripsRoutingFields(t *testing.T) {
 	}
 }
 
+func TestShouldEmitOnContentBlockStop(t *testing.T) {
+	tests := []struct {
+		name string
+		part *ai.Part
+		want bool
+	}{
+		{"nil", nil, false},
+		{"text", ai.NewTextPart("hi"), false},
+		{"reasoning with signature", ai.NewReasoningPart("think", []byte("sig")), false},
+		{"redacted thinking", ai.NewCustomPart(map[string]any{"redactedThinking": "x"}), false},
+		{"tool request", ai.NewToolRequestPart(&ai.ToolRequest{Name: "x"}), true},
+		{"server tool use", serverToolUseToPart("id", "web_search", map[string]any{"q": "a"}), true},
+		{"server tool result", webSearchToolResultToPart("id", []any{}), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldEmitOnContentBlockStop(tt.part); got != tt.want {
+				t.Errorf("shouldEmitOnContentBlockStop() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestToBetaRequestSetsDefaultBetas(t *testing.T) {
 	req := &anthropic.MessageNewParams{
 		MaxTokens: 100,
@@ -213,5 +270,13 @@ func TestToBetaRequestSetsDefaultBetas(t *testing.T) {
 	}
 	if len(got.Betas) == 0 {
 		t.Fatal("expected default betas")
+	}
+
+	empty, err := toBetaRequest(req, []anthropic.AnthropicBeta{})
+	if err != nil {
+		t.Fatalf("toBetaRequest empty: %v", err)
+	}
+	if empty.Betas == nil || len(empty.Betas) != 0 {
+		t.Fatalf("explicit empty betas = %#v, want non-nil empty", empty.Betas)
 	}
 }

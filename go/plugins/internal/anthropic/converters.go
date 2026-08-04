@@ -94,3 +94,26 @@ func unsupportedServerToolError(blockType string) error {
 		blockType,
 	)
 }
+
+// shouldEmitOnContentBlockStop is true for tool requests and Anthropic
+// server-tool parts (complete only at stop). Text/reasoning already stream via
+// deltas; reasoning parts always have signature metadata, so a bare Metadata
+// check would duplicate them.
+func shouldEmitOnContentBlockStop(p *ai.Part) bool {
+	if p == nil {
+		return false
+	}
+	if p.IsToolRequest() {
+		return true
+	}
+	if p.Metadata == nil {
+		return false
+	}
+	if _, ok := p.Metadata["anthropicServerToolUse"]; ok {
+		return true
+	}
+	if _, ok := p.Metadata["anthropicServerToolResult"]; ok {
+		return true
+	}
+	return false
+}

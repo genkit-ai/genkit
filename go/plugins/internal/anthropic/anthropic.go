@@ -241,12 +241,12 @@ func Generate(
 				return nil, err
 			}
 		case anthropic.ContentBlockStopEvent:
-			if int(event.Index) < len(message.Content) {
+			if event.Index >= 0 && int(event.Index) < len(message.Content) {
 				p, err := contentBlockToPart(message.Content[event.Index])
 				if err != nil {
 					return nil, err
 				}
-				if p != nil && (p.IsToolRequest() || p.Metadata != nil) {
+				if shouldEmitOnContentBlockStop(p) {
 					err := cb(ctx, &ai.ModelResponseChunk{
 						Content: []*ai.Part{p},
 					})
@@ -273,6 +273,8 @@ func Generate(
 
 // resolveAPIVersion picks the Anthropic API surface for a request.
 // Priority: request config.apiVersion > plugin default > stable.
+// Betas: nil means unset (use plugin defaults on the beta path); a non-nil
+// empty slice means the request explicitly set betas: [].
 func resolveAPIVersion(input *ai.ModelRequest, pluginDefault string) (string, []anthropic.AnthropicBeta) {
 	version := pluginDefault
 	if version == "" {
@@ -284,12 +286,16 @@ func resolveAPIVersion(input *ai.ModelRequest, pluginDefault string) (string, []
 		if v, ok := cfg["apiVersion"].(string); ok && v != "" {
 			version = v
 		}
+		// Match JS: only honor betas when it is an array. null/other types leave
+		// betas unset so the beta path applies defaultBetas.
 		switch b := cfg["betas"].(type) {
 		case []string:
+			betas = make([]anthropic.AnthropicBeta, 0, len(b))
 			for _, s := range b {
 				betas = append(betas, anthropic.AnthropicBeta(s))
 			}
 		case []any:
+			betas = make([]anthropic.AnthropicBeta, 0, len(b))
 			for _, item := range b {
 				if s, ok := item.(string); ok {
 					betas = append(betas, anthropic.AnthropicBeta(s))
@@ -594,15 +600,17 @@ func toGenkitResponse(m *anthropic.Message) (*ai.ModelResponse, error) {
 func contentBlockToPart(part anthropic.ContentBlockUnion) (*ai.Part, error) {
 	switch b := part.AsAny().(type) {
 	case anthropic.ThinkingBlock:
-		return ai.NewReasoningPart(part.Thinking, []byte(part.Signature)), nil
+		return ai.NewReasoningPart(b.Thinking, []byte(b.Signature)), nil
 	case anthropic.TextBlock:
-		return ai.NewTextPart(string(part.Text)), nil
+		return ai.NewTextPart(string(b.Text)), nil
 	case anthropic.ToolUseBlock:
 		return ai.NewToolRequestPart(&ai.ToolRequest{
-			Ref:   part.ID,
-			Input: part.Input,
-			Name:  part.Name,
+			Ref:   b.ID,
+			Input: b.Input,
+			Name:  b.Name,
 		}), nil
+	case anthropic.RedactedThinkingBlock:
+		return ai.NewCustomPart(map[string]any{"redactedThinking": b.Data}), nil
 	case anthropic.ServerToolUseBlock:
 		return serverToolUseToPart(b.ID, string(b.Name), b.Input), nil
 	case anthropic.WebSearchToolResultBlock:
