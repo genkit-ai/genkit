@@ -56,9 +56,9 @@ import (
 // options) document their own precedence.
 //
 // Applying options therefore never fails on a "set more than once" conflict.
-// The only failures are genuinely invalid arguments (for example a type that
-// WithInputType cannot turn into a schema), which panic at the call site where
-// the mistake is.
+// What does fail is a genuinely invalid argument (a type that WithInputType
+// cannot turn into a schema) or the refused combination above, and both panic
+// at the call site where the mistake is rather than deferring to the request.
 
 // PromptFn is a function that generates a prompt from a prompt's input.
 //
