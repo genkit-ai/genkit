@@ -23,9 +23,11 @@ import (
 	"net/http/httptest"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/genkit"
 )
 
 var _ api.Plugin = (*Ollama)(nil)
@@ -154,6 +156,19 @@ func newTestOllama(serverAddress string) *Ollama {
 	return o
 }
 
+func modelSupportsMetadata(t *testing.T, desc api.ActionDesc) map[string]any {
+	t.Helper()
+	modelMetadata, ok := desc.Metadata["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("model metadata has type %T, want map[string]any", desc.Metadata["model"])
+	}
+	supports, ok := modelMetadata["supports"].(map[string]any)
+	if !ok {
+		t.Fatalf("model supports metadata has type %T, want map[string]any", modelMetadata["supports"])
+	}
+	return supports
+}
+
 func TestDynamicPlugin(t *testing.T) {
 	t.Run("listLocalModels", func(t *testing.T) {
 		tests := []struct {
@@ -260,6 +275,53 @@ func TestDynamicPlugin(t *testing.T) {
 				t.Errorf("ListActions() should return nil when server is unreachable, got %v", actions)
 			}
 		})
+
+		t.Run("preserves dynamic model defaults when capabilities are unavailable", func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/tags" {
+					json.NewEncoder(w).Encode(ollamaTagsResponse{
+						Models: []ollamaLocalModel{{Name: "brand-new-model"}},
+					})
+					return
+				}
+				http.NotFound(w, r)
+			}))
+			defer server.Close()
+
+			actions := newTestOllama(server.URL).ListActions(context.Background())
+			if len(actions) != 1 {
+				t.Fatalf("ListActions() returned %d actions, want 1", len(actions))
+			}
+			supports := modelSupportsMetadata(t, actions[0])
+			if supports["tools"] != true || supports["media"] != true {
+				t.Errorf("fallback supports = %v, want tools and media enabled", supports)
+			}
+		})
+
+		t.Run("does not fall back for an explicitly empty capabilities list", func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/tags":
+					json.NewEncoder(w).Encode(ollamaTagsResponse{
+						Models: []ollamaLocalModel{{Name: "qwen2.5"}},
+					})
+				case "/api/show":
+					json.NewEncoder(w).Encode(map[string]any{"capabilities": []string{}})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			actions := newTestOllama(server.URL).ListActions(context.Background())
+			if len(actions) != 1 {
+				t.Fatalf("ListActions() returned %d actions, want 1", len(actions))
+			}
+			supports := modelSupportsMetadata(t, actions[0])
+			if supports["tools"] != false || supports["media"] != false {
+				t.Errorf("supports = %v, want tools and media disabled", supports)
+			}
+		})
 	})
 
 	t.Run("ResolveAction", func(t *testing.T) {
@@ -280,6 +342,37 @@ func TestDynamicPlugin(t *testing.T) {
 			action := o.ResolveAction(api.ActionTypeExecutablePrompt, "llama3:latest")
 			if action != nil {
 				t.Error("ResolveAction() should return nil for non-model action type")
+			}
+		})
+
+		t.Run("preserves dynamic model defaults when capabilities are unavailable", func(t *testing.T) {
+			server := httptest.NewServer(http.NotFoundHandler())
+			defer server.Close()
+
+			action := newTestOllama(server.URL).ResolveAction(api.ActionTypeModel, "brand-new-model")
+			if action == nil {
+				t.Fatal("ResolveAction() returned nil for model type")
+			}
+			supports := modelSupportsMetadata(t, action.Desc())
+			if supports["tools"] != true || supports["media"] != true {
+				t.Errorf("fallback supports = %v, want tools and media enabled", supports)
+			}
+		})
+
+		t.Run("works before Init", func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]any{"capabilities": []string{"completion", "tools"}})
+			}))
+			defer server.Close()
+
+			o := &Ollama{ServerAddress: server.URL}
+			action := o.ResolveAction(api.ActionTypeModel, "new-model")
+			if action == nil {
+				t.Fatal("ResolveAction() returned nil for model type")
+			}
+			supports := modelSupportsMetadata(t, action.Desc())
+			if supports["tools"] != true {
+				t.Errorf("resolved model supports = %v, want tools enabled", supports)
 			}
 		})
 	})
@@ -506,6 +599,7 @@ func TestGetModelCapabilities(t *testing.T) {
 				"gemma4:e2b":  {"completion", "vision", "audio", "tools", "thinking"},
 				"llama3.2":    {"completion", "tools"},
 				"nomic-embed": {"embedding"},
+				"empty-model": {},
 			}
 			json.NewEncoder(w).Encode(map[string]any{"capabilities": caps[req["model"]]})
 			return
@@ -517,30 +611,83 @@ func TestGetModelCapabilities(t *testing.T) {
 	o := &Ollama{ServerAddress: server.URL, client: &http.Client{}, initted: true}
 
 	t.Run("gemma4 reports tools capability", func(t *testing.T) {
-		caps := o.getModelCapabilities(context.Background(), "gemma4:e2b")
+		caps, detected := o.getModelCapabilities(context.Background(), "gemma4:e2b")
+		if !detected {
+			t.Fatal("expected capabilities to be detected")
+		}
 		if !slices.Contains(caps, "tools") {
 			t.Errorf("expected 'tools' in capabilities, got %v", caps)
 		}
 	})
 
 	t.Run("embed model has no tools", func(t *testing.T) {
-		caps := o.getModelCapabilities(context.Background(), "nomic-embed")
+		caps, detected := o.getModelCapabilities(context.Background(), "nomic-embed")
+		if !detected {
+			t.Fatal("expected capabilities to be detected")
+		}
 		if slices.Contains(caps, "tools") {
 			t.Error("embed model should not have tools capability")
 		}
 	})
 
-	t.Run("unknown model returns empty", func(t *testing.T) {
-		caps := o.getModelCapabilities(context.Background(), "unknown-model")
-		if len(caps) > 0 {
-			t.Errorf("expected empty capabilities for unknown model, got %v", caps)
+	t.Run("empty capabilities are detected", func(t *testing.T) {
+		caps, detected := o.getModelCapabilities(context.Background(), "empty-model")
+		if !detected {
+			t.Fatal("expected an explicitly empty capabilities list to be detected")
+		}
+		if len(caps) != 0 {
+			t.Errorf("expected empty capabilities, got %v", caps)
+		}
+	})
+
+	t.Run("missing capabilities are not detected", func(t *testing.T) {
+		caps, detected := o.getModelCapabilities(context.Background(), "unknown-model")
+		if detected {
+			t.Errorf("expected missing capabilities not to be detected, got %v", caps)
+		}
+	})
+
+	t.Run("uses default HTTP client before Init", func(t *testing.T) {
+		uninitialized := &Ollama{ServerAddress: server.URL}
+		caps, detected := uninitialized.getModelCapabilities(context.Background(), "llama3.2")
+		if !detected || !slices.Contains(caps, "tools") {
+			t.Errorf("capabilities = %v, detected = %v; want tools detected", caps, detected)
 		}
 	})
 }
 
+func TestModelCapabilitiesContext(t *testing.T) {
+	tests := []struct {
+		name        string
+		timeout     int
+		wantTimeout time.Duration
+	}{
+		{name: "unset timeout", timeout: 0, wantTimeout: modelCapabilitiesTimeout},
+		{name: "long generation timeout", timeout: 30, wantTimeout: modelCapabilitiesTimeout},
+		{name: "short configured timeout", timeout: 2, wantTimeout: 2 * time.Second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o := &Ollama{Timeout: tt.timeout}
+			ctx, cancel := o.modelCapabilitiesContext(context.Background())
+			defer cancel()
+
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatal("capability context has no deadline")
+			}
+			remaining := time.Until(deadline)
+			if remaining > tt.wantTimeout || remaining < tt.wantTimeout-time.Second {
+				t.Errorf("capability timeout = %v, want approximately %v", remaining, tt.wantTimeout)
+			}
+		})
+	}
+}
+
 func TestModelSupportsFromCapabilities(t *testing.T) {
 	t.Run("dynamic capabilities with tools and vision", func(t *testing.T) {
-		s := modelSupportsFromCapabilities([]string{"completion", "vision", "tools"}, "gemma4")
+		s := modelSupportsFromCapabilities([]string{"completion", "vision", "tools"})
 		if !s.Tools {
 			t.Error("expected Tools=true")
 		}
@@ -550,23 +697,83 @@ func TestModelSupportsFromCapabilities(t *testing.T) {
 	})
 
 	t.Run("no tools in capabilities", func(t *testing.T) {
-		s := modelSupportsFromCapabilities([]string{"completion"}, "some-model")
+		s := modelSupportsFromCapabilities([]string{"completion"})
 		if s.Tools {
 			t.Error("expected Tools=false")
 		}
 	})
 
-	t.Run("fallback to static list for qwen2.5", func(t *testing.T) {
-		s := modelSupportsFromCapabilities(nil, "qwen2.5")
+	t.Run("empty capabilities do not fall back", func(t *testing.T) {
+		s := modelSupportsFromCapabilities([]string{})
+		if s.Tools || s.Media {
+			t.Errorf("expected empty capabilities to disable tools and media, got %+v", s)
+		}
+	})
+}
+
+func TestModelSupportsFromStaticLists(t *testing.T) {
+	t.Run("qwen2.5 supports tools", func(t *testing.T) {
+		s := modelSupportsFromStaticLists("qwen2.5")
 		if !s.Tools {
 			t.Error("expected Tools=true from static fallback")
 		}
 	})
 
-	t.Run("fallback for unknown model", func(t *testing.T) {
-		s := modelSupportsFromCapabilities(nil, "brand-new-model")
+	t.Run("unknown model has no optional capabilities", func(t *testing.T) {
+		s := modelSupportsFromStaticLists("brand-new-model")
 		if s.Tools {
 			t.Error("expected Tools=false for unknown model")
 		}
 	})
+
+	t.Run("tagged tool model uses base name", func(t *testing.T) {
+		s := modelSupportsFromStaticLists("qwen2.5:7b")
+		if !s.Tools {
+			t.Error("expected tagged qwen2.5 model to support tools")
+		}
+	})
+
+	t.Run("tagged media model uses base name", func(t *testing.T) {
+		s := modelSupportsFromStaticLists("llava:34b")
+		if !s.Media {
+			t.Error("expected tagged llava model to support media")
+		}
+	})
+}
+
+func TestDefineModelNonChatDoesNotSupportTools(t *testing.T) {
+	tests := []struct {
+		name    string
+		handler http.Handler
+	}{
+		{
+			name: "reported capabilities",
+			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]any{"capabilities": []string{"completion", "tools"}})
+			}),
+		},
+		{
+			name:    "static fallback",
+			handler: http.NotFoundHandler(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(tt.handler)
+			defer server.Close()
+
+			o := newTestOllama(server.URL)
+			g := genkit.Init(context.Background())
+			model := o.DefineModel(g, ModelDefinition{Name: "qwen2.5", Type: "generate"}, nil)
+			action, ok := model.(api.Action)
+			if !ok {
+				t.Fatal("defined model does not implement api.Action")
+			}
+			supports := modelSupportsMetadata(t, action.Desc())
+			if supports["tools"] != false {
+				t.Errorf("non-chat model supports tools: %v", supports)
+			}
+		})
+	}
 }

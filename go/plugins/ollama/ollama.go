@@ -40,7 +40,10 @@ import (
 	"github.com/invopop/jsonschema"
 )
 
-const provider = "ollama"
+const (
+	provider                 = "ollama"
+	modelCapabilitiesTimeout = 5 * time.Second
+)
 
 var (
 	mediaSupportedModels = []string{"llava", "bakllava", "llava-llama3", "llava:13b", "llava:7b", "llava:latest", "gemma3:4b", "gemma3:12b", "gemma3:27b"}
@@ -59,9 +62,8 @@ var (
 		ai.RoleSystem: "system",
 		ai.RoleTool:   "tool",
 	}
-	// defaultOllamaSupports defines the default capabilities for dynamically
-	// discovered Ollama models. All capabilities are enabled since local models
-	// vary widely and we can't query their capabilities individually.
+	// defaultOllamaSupports preserves the historical fallback for dynamically
+	// discovered Ollama models when capability detection is unavailable.
 	defaultOllamaSupports = ai.ModelSupports{
 		Multiturn:  true,
 		Media:      true,
@@ -88,55 +90,74 @@ type ollamaLocalModel struct {
 
 // ollamaShowResponse represents the response from POST /api/show.
 type ollamaShowResponse struct {
-	Capabilities []string `json:"capabilities"`
+	Capabilities *[]string `json:"capabilities"`
 }
 
 // getModelCapabilities calls POST /api/show to retrieve the model's capabilities.
-// Returns nil if the endpoint is unavailable or the model doesn't report capabilities.
-func (o *Ollama) getModelCapabilities(ctx context.Context, modelName string) []string {
+// The boolean reports whether the server returned a capabilities field, allowing
+// callers to distinguish an explicitly empty list from an unavailable endpoint.
+func (o *Ollama) getModelCapabilities(ctx context.Context, modelName string) ([]string, bool) {
 	body, err := json.Marshal(map[string]string{"model": modelName})
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", o.ServerAddress+"/api/show", bytes.NewReader(body))
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := o.client.Do(req)
+	client := o.client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil
+		return nil, false
 	}
 	var showResp ollamaShowResponse
 	if err := json.NewDecoder(resp.Body).Decode(&showResp); err != nil {
-		return nil
+		return nil, false
 	}
-	return showResp.Capabilities
+	if showResp.Capabilities == nil {
+		return nil, false
+	}
+	return *showResp.Capabilities, true
+}
+
+// modelCapabilitiesContext bounds metadata lookups independently from the
+// potentially longer generation timeout. A smaller configured timeout is honored.
+func (o *Ollama) modelCapabilitiesContext(parent context.Context) (context.Context, context.CancelFunc) {
+	timeout := time.Duration(o.Timeout) * time.Second
+	if timeout <= 0 || timeout > modelCapabilitiesTimeout {
+		timeout = modelCapabilitiesTimeout
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 // modelSupportsFromCapabilities derives ModelSupports from capabilities reported
-// by the Ollama /api/show endpoint. Falls back to the static allowlists when
-// the server doesn't report capabilities (older Ollama versions).
-func modelSupportsFromCapabilities(caps []string, modelName string) *ai.ModelSupports {
-	if len(caps) > 0 {
-		return &ai.ModelSupports{
-			Multiturn:  true,
-			SystemRole: true,
-			Tools:      slices.Contains(caps, "tools"),
-			Media:      slices.Contains(caps, "vision") || slices.Contains(caps, "audio"),
-		}
-	}
-	// Fallback: use static allowlists for older Ollama servers that don't
-	// report capabilities via /api/show.
+// by the Ollama /api/show endpoint.
+func modelSupportsFromCapabilities(caps []string) *ai.ModelSupports {
 	return &ai.ModelSupports{
 		Multiturn:  true,
 		SystemRole: true,
-		Tools:      slices.Contains(toolSupportedModels, modelName),
-		Media:      slices.Contains(mediaSupportedModels, modelName),
+		Tools:      slices.Contains(caps, "tools"),
+		Media:      slices.Contains(caps, "vision") || slices.Contains(caps, "audio"),
+	}
+}
+
+// modelSupportsFromStaticLists preserves the fallback used by explicitly
+// defined models when the server does not report capabilities.
+func modelSupportsFromStaticLists(modelName string) *ai.ModelSupports {
+	baseName, _, _ := strings.Cut(modelName, ":")
+	return &ai.ModelSupports{
+		Multiturn:  true,
+		SystemRole: true,
+		Tools:      slices.Contains(toolSupportedModels, baseName) || slices.Contains(toolSupportedModels, modelName),
+		Media:      slices.Contains(mediaSupportedModels, baseName) || slices.Contains(mediaSupportedModels, modelName),
 	}
 }
 
@@ -182,12 +203,18 @@ func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.M
 		// /api/show. This replaces the hardcoded allowlist approach so that
 		// newly released models (e.g. gemma4) work automatically without
 		// code changes. Falls back to the static list for older servers.
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(o.Timeout)*time.Second)
+		ctx, cancel := o.modelCapabilitiesContext(context.Background())
 		defer cancel()
-		caps := o.getModelCapabilities(ctx, model.Name)
+		caps, detected := o.getModelCapabilities(ctx, model.Name)
+		supports := modelSupportsFromStaticLists(model.Name)
+		if detected {
+			supports = modelSupportsFromCapabilities(caps)
+		}
+		// Only chat models use /api/chat, which is the endpoint that accepts tools.
+		supports.Tools = model.Type == "chat" && supports.Tools
 		modelOpts = ai.ModelOptions{
 			Label:    model.Name,
-			Supports: modelSupportsFromCapabilities(caps, model.Name),
+			Supports: supports,
 			Versions: []string{},
 		}
 	}
@@ -440,8 +467,13 @@ func (o *Ollama) ListActions(ctx context.Context) []api.ActionDesc {
 			break
 		}
 		// Query each model's actual capabilities from the Ollama server.
-		caps := o.getModelCapabilities(ctx, name)
-		supports := modelSupportsFromCapabilities(caps, name)
+		capabilityCtx, cancel := o.modelCapabilitiesContext(ctx)
+		caps, detected := o.getModelCapabilities(capabilityCtx, name)
+		cancel()
+		supports := &defaultOllamaSupports
+		if detected {
+			supports = modelSupportsFromCapabilities(caps)
+		}
 		model := o.newModel(name, ai.ModelOptions{Supports: supports})
 		if action, ok := model.(api.Action); ok {
 			actions = append(actions, action.Desc())
@@ -456,10 +488,13 @@ func (o *Ollama) ResolveAction(atype api.ActionType, name string) api.Action {
 		return nil
 	}
 	// Query the model's actual capabilities from the Ollama server.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(o.Timeout)*time.Second)
+	ctx, cancel := o.modelCapabilitiesContext(context.Background())
 	defer cancel()
-	caps := o.getModelCapabilities(ctx, name)
-	supports := modelSupportsFromCapabilities(caps, name)
+	caps, detected := o.getModelCapabilities(ctx, name)
+	supports := &defaultOllamaSupports
+	if detected {
+		supports = modelSupportsFromCapabilities(caps)
+	}
 	model := o.newModel(name, ai.ModelOptions{Supports: supports})
 	if action, ok := model.(api.Action); ok {
 		return action
