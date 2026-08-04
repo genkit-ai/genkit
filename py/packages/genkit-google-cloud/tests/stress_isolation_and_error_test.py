@@ -167,13 +167,13 @@ async def test_multi_tenant_context_isolation_stress() -> None:
             state_data = {'tenant': tenant, 'round': round_idx, 'counter': round_idx * 100 + t_idx}
             tenant_states[tenant] = state_data
 
-            def make_save_fn(s_id: str, p_id: str | None, data: dict[str, Any]):
+            def make_save_fn(s_id: str, p_id: str | None, data: dict[str, Any], r_idx: int):
                 def save_fn(_e: SessionSnapshot | None) -> SessionSnapshot:
                     return SessionSnapshot(
                         snapshot_id=s_id,
                         parent_id=p_id,
                         session_id=shared_session_id,
-                        created_at=f'2026-08-03T00:0{round_idx}:00Z',
+                        created_at=f'2026-08-03T00:0{r_idx}:00Z',
                         status=SnapshotStatus.COMPLETED,
                         state=SessionState(session_id=shared_session_id, custom=data),
                     )
@@ -183,7 +183,7 @@ async def test_multi_tenant_context_isolation_stress() -> None:
             tasks.append(
                 store.save_snapshot(
                     snap_id,
-                    make_save_fn(snap_id, parent_id, state_data),
+                    make_save_fn(snap_id, parent_id, state_data, round_idx),
                     context=ctx,
                 )
             )
@@ -340,7 +340,7 @@ async def test_invalid_unapplyable_diff_patch_error_and_recovery() -> None:
 
     # Corrupt statePatch with invalid JSON Patch op name
     h.docs[child_path]['statePatch'] = [{'op': 'non_existent_op', 'path': '/custom/a', 'value': 123}]
-    with pytest.raises(Exception):  # Pydantic ValidationError or ValueError
+    with pytest.raises((ValueError, GenkitError, Exception)):  # noqa: B017
         await store.get_snapshot(snapshot_id='snap-diff-1')
 
     # Recovery scenario: Create a new full checkpoint to reset state for the session

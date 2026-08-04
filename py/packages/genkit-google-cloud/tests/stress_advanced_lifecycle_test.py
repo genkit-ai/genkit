@@ -162,7 +162,8 @@ def _pointer_path(session_id: str, prefix: str = 'global') -> str:
 
 @pytest.mark.asyncio
 async def test_abort_turn_lifecycle_correctness() -> None:
-    """Verify aborting an active turn updates status to ABORTED, records error/reason, and preserves pointer consistency."""
+    """Verify aborting an active turn updates status to ABORTED,
+    records error/reason, and preserves pointer consistency."""
     h = AdvancedHarness()
     store = h.store()
 
@@ -174,7 +175,10 @@ async def test_abort_turn_lifecycle_correctness() -> None:
             session_id='sess-abort-1',
             created_at='2026-08-03T10:00:00Z',
             status=SnapshotStatus.PENDING,
-            state=SessionState(session_id='sess-abort-1', messages=[MessageData(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])]),
+            state=SessionState(
+                session_id='sess-abort-1',
+                messages=[MessageData(role=Role.USER, content=[Part(root=TextPart(text='Hello'))])],
+            ),
         ),
     )
 
@@ -236,11 +240,11 @@ async def test_heartbeat_in_place_update_no_rebranching() -> None:
         hb_time = f'2026-08-03T10:00:0{i}Z'
         updated = await store.save_snapshot(
             'snap-hb-1',
-            lambda existing: SessionSnapshot(
+            lambda existing, ht=hb_time: SessionSnapshot(
                 snapshot_id='snap-hb-1',
                 session_id='sess-hb-1',
                 created_at='2026-08-03T10:00:00Z',
-                heartbeat_at=hb_time,
+                heartbeat_at=ht,
                 status=SnapshotStatus.PENDING,
                 state=existing.state if existing else None,
             ),
@@ -272,7 +276,10 @@ async def test_detach_skipped_save_mutator_returns_none() -> None:
 
 @pytest.mark.asyncio
 async def test_complex_state_type_reconstruction_fidelity() -> None:
-    """Verify deep product correctness for complex state objects (Message parts, nested dicts, float metrics, status)."""
+    """Verify deep product correctness for complex state objects.
+
+    (Message parts, nested dicts, float metrics, status).
+    """
     h = AdvancedHarness()
     store = h.store()
 

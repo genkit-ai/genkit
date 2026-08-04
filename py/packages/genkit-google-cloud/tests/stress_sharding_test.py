@@ -267,11 +267,11 @@ async def test_100_turn_continuous_session_history() -> None:
 
         saved = await store.save_snapshot(
             snap_id,
-            lambda _e, sid=snap_id, pid=parent_id, st=state: SessionSnapshot(
+            lambda _e, sid=snap_id, pid=parent_id, st=state, t_idx=turn: SessionSnapshot(
                 snapshot_id=sid,
                 parent_id=pid,
                 session_id=sess_id,
-                created_at=f'2026-08-03T00:00:{turn:02d}Z',
+                created_at=f'2026-08-03T00:00:{t_idx:02d}Z',
                 status=SnapshotStatus.COMPLETED,
                 state=st,
             ),
@@ -307,7 +307,9 @@ async def test_100_turn_continuous_session_history() -> None:
 
 @pytest.mark.asyncio
 async def test_state_reconstruction_accuracy_across_diffs_and_shards() -> None:
-    """Test state reconstruction accuracy comparing original vs reconstructed across diffs and multi-shard checkpoints."""
+    """Test state reconstruction accuracy comparing original vs reconstructed
+    across diffs and multi-shard checkpoints.
+    """
     h = FakeStoreHarness()
     shard_size = 64 * 1024  # 64 KB shard size for faster multi-shard testing
     store = h.store(shard_size=shard_size, checkpoint_interval=5)
@@ -338,11 +340,11 @@ async def test_state_reconstruction_accuracy_across_diffs_and_shards() -> None:
         state_i = SessionState(session_id=sess_id, custom=dict(curr_custom))
         await store.save_snapshot(
             snap_id,
-            lambda _e, sid=snap_id, pid=parent_id, st=state_i: SessionSnapshot(
+            lambda _e, sid=snap_id, pid=parent_id, st=state_i, idx=i: SessionSnapshot(
                 snapshot_id=sid,
                 parent_id=pid,
                 session_id=sess_id,
-                created_at=f'2026-08-03T00:00:0{i}Z',
+                created_at=f'2026-08-03T00:00:0{idx}Z',
                 state=st,
             ),
         )
@@ -373,11 +375,11 @@ async def test_state_reconstruction_accuracy_across_diffs_and_shards() -> None:
         state_i = SessionState(session_id=sess_id, custom=dict(curr_custom))
         await store.save_snapshot(
             snap_id,
-            lambda _e, sid=snap_id, pid=parent_id, st=state_i: SessionSnapshot(
+            lambda _e, sid=snap_id, pid=parent_id, st=state_i, idx=i: SessionSnapshot(
                 snapshot_id=sid,
                 parent_id=pid,
                 session_id=sess_id,
-                created_at=f'2026-08-03T00:00:0{i}Z',
+                created_at=f'2026-08-03T00:00:0{idx}Z',
                 state=st,
             ),
         )
@@ -393,7 +395,9 @@ async def test_state_reconstruction_accuracy_across_diffs_and_shards() -> None:
 
 @pytest.mark.asyncio
 async def test_checkpoint_update_stale_shard_cleanup_shrink() -> None:
-    """Test updating a checkpoint with a smaller state (old_shard_count > new_shard_count) to verify stale shard cleanup."""
+    """Test updating a checkpoint with a smaller state (old_shard_count > new_shard_count)
+    to verify stale shard cleanup.
+    """
     h = FakeStoreHarness()
     shard_size = 128 * 1024  # 128 KB
     store = h.store(shard_size=shard_size)
