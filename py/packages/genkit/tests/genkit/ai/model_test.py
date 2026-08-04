@@ -5,11 +5,14 @@
 
 """Tests for the action module."""
 
+import warnings
+
 import pytest
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from genkit import Message, ModelRequest, ModelResponse, ModelResponseChunk, ModelUsage
 from genkit._ai._model import text_from_content
+from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
     ActionMetadata,
     DocumentPart,
@@ -414,3 +417,54 @@ def test_parameterized_model_request_coerces_dict_to_plugin_config() -> None:
     )
     assert isinstance(request.config, PluginConfig)
     assert request.config.api_key == 'k'
+
+
+def test_parameterized_model_request_rejects_mismatched_config_instance() -> None:
+    class OtherConfig(BaseModel):
+        top_k: int | None = None
+
+    with pytest.raises(ValidationError):
+        ModelRequest[PluginConfig](
+            messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+            config=OtherConfig(top_k=3),  # pyright: ignore[reportArgumentType]
+        )
+
+
+def test_model_request_rejects_non_model_non_dict_config() -> None:
+    with pytest.raises(TypeError, match='config must be a BaseModel or dict'):
+        ModelRequest(
+            messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+            config='not-a-config',  # pyright: ignore[reportArgumentType]
+        )
+
+
+def test_parameterized_model_request_config_json_schema_refs_plugin_schema() -> None:
+    schema = to_json_schema(ModelRequest[PluginConfig])
+    config_prop = schema['properties']['config']
+    assert any('$ref' in arm for arm in config_prop.get('anyOf', [])), config_prop
+
+
+def test_model_request_dump_round_trip_preserves_output_config() -> None:
+    request = ModelRequest(
+        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        config={'temperature': 0.5},
+        output_format='json',
+        output_schema={'type': 'object'},
+        output_constrained=True,
+    )
+    round_tripped = ModelRequest.model_validate(request.model_dump(mode='python'))
+    assert round_tripped.output_format == 'json'
+    assert round_tripped.output_schema == {'type': 'object'}
+    assert round_tripped.output_constrained is True
+    assert round_tripped.config == {'temperature': 0.5}
+
+
+def test_model_request_dump_emits_no_serializer_warnings() -> None:
+    request = ModelRequest[PluginConfig](
+        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        config={'api_key': 'k'},
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        request.model_dump(mode='python')
+        request.model_dump_json()
