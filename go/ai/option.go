@@ -43,11 +43,11 @@ import (
 //     the others are discarded, not merged into it.
 //
 // The conversation is the one collection with an exception. WithMessages and
-// WithMessagesFn accumulate as above, but WithMessagesTemplate does not: a
-// template lays out the whole conversation and is where {{history}} places the
-// caller's, so a second template replaces the first rather than leaving two
-// layouts to divide one conversation. Messages given after a template
-// accumulate behind it, which keeps the template where it was first declared.
+// WithMessagesFn accumulate as above, but WithMessagesTemplate resets: a
+// template lays out the whole conversation, down to where {{history}} puts the
+// caller's, so there is no coherent way to fold separately supplied messages
+// into it. It drops whatever came before it, and messages set after it
+// accumulate onto it.
 //
 // A zero value does not fill a slot: WithMaxTurns(0), WithToolChoice(""), or
 // WithConfig(nil) is a no-op, so an earlier non-zero value cannot be un-set by
@@ -237,9 +237,8 @@ func WithConfig(config any) ConfigOption {
 type commonGenOptions struct {
 	configOptions
 	Model              ModelArg          // Model to use.
-	MessagesFn         MessagesFn        // Messages contributed before MessagesText. Used verbatim.
+	MessagesFn         MessagesFn        // Messages set since the last MessagesText, if any. Used verbatim.
 	MessagesText       *string           // Template text for the conversation, rendered as a dotprompt template.
-	MessagesAfterFn    MessagesFn        // Messages contributed after MessagesText. Used verbatim.
 	Tools              []ToolRef         // References to tools to use.
 	Resources          []Resource        // Resources to be temporarily available during generation.
 	ToolChoice         ToolChoice        // Whether tool calls are required, disabled, or optional.
@@ -261,19 +260,16 @@ type CommonGenOption interface {
 func (o *commonGenOptions) applyCommonGen(opts *commonGenOptions) {
 	o.configOptions.applyConfig(&opts.configOptions)
 
-	// Verbatim messages accumulate, but a conversation template does not: it
-	// lays out the whole conversation and is where {{history}} places the
-	// caller's, so a second template replaces the first rather than leaving two
-	// layouts to fight over one conversation. Messages that arrive after a
-	// template accumulate behind it, which keeps the template where it was
-	// first declared and lets the rest still read left to right.
-	if opts.MessagesText == nil {
-		opts.MessagesFn = appendMessagesFn(opts.MessagesFn, o.MessagesFn)
-	} else {
-		opts.MessagesAfterFn = appendMessagesFn(opts.MessagesAfterFn, o.MessagesFn)
-	}
+	// Verbatim messages accumulate with each other, but a template resets the
+	// conversation: it lays the whole thing out, down to where {{history}} puts
+	// the caller's, so there is no coherent way to fold separately supplied
+	// messages into it. Whatever was set before it is dropped, and messages set
+	// after it accumulate onto it.
 	if o.MessagesText != nil {
 		opts.MessagesText = o.MessagesText
+		opts.MessagesFn = nil
+	} else {
+		opts.MessagesFn = appendMessagesFn(opts.MessagesFn, o.MessagesFn)
 	}
 
 	if o.Model != nil {
@@ -341,12 +337,11 @@ func WithMessages(messages ...*Message) CommonGenOption {
 // template syntax. Content that came from a user or from a remote source
 // belongs in [WithMessages] or [WithMessagesFn], which never compile it.
 //
-// Repeating this option replaces the template rather than adding a second one:
-// the template lays out the whole conversation and is where {{history}} goes,
-// so two of them would divide one conversation between two layouts. Messages
-// from [WithMessages] and [WithMessagesFn] still accumulate around it, before
-// it or behind it according to where they were passed, which leaves the
-// template where it was first declared.
+// A template resets the conversation. It lays the whole thing out, down to
+// where {{history}} puts the caller's, so any [WithMessages],
+// [WithMessagesFn], or [WithMessagesTemplate] set before it is dropped rather
+// than folded into it. Messages set after it accumulate onto it, so ordering
+// still reads left to right.
 //
 // Compiling the template needs a prompt, so this applies to [DefinePrompt]
 // only. That is why it returns a [PromptOption] rather than a

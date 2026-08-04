@@ -865,9 +865,9 @@ func LookupMiddleware(g *Genkit, name string) *ai.MiddlewareDesc {
 // Repeats merge rather than conflict, by the rules in the [ai] package doc. The
 // four system options fill one message and the four prompt options fill
 // another, so within each group the last one set wins and the others are
-// discarded. Documents accumulate. So does the conversation, except that
-// [ai.WithMessagesTemplate] replaces a previous template instead of adding a
-// second layout, and the messages around it keep their position.
+// discarded. Documents accumulate, and so do messages, except that
+// [ai.WithMessagesTemplate] resets the conversation: a template lays the whole
+// thing out, so it drops whatever was set before it.
 //
 // Context Documents:
 //   - [ai.WithDocs]: Attach a fixed set of context documents
