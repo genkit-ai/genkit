@@ -105,7 +105,11 @@ class ShardDoc(BaseModel):
     @field_validator('chunk', mode='before')
     @classmethod
     def _coerce_chunk(cls, v: object) -> object:
-        """Coerce raw Firestore binary chunk representations to bytes."""
+        """Coerce raw Firestore binary chunk representations to bytes.
+
+        google-cloud-firestore's gRPC deserializer returns zero-copy memoryview
+        objects for binary blob fields in DocumentSnapshot.to_dict().
+        """
         if isinstance(v, memoryview):
             return v.tobytes()
         if isinstance(v, (bytes, bytearray)):
