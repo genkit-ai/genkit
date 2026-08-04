@@ -38,7 +38,7 @@ import inspect
 import json
 import logging
 from collections.abc import AsyncIterable, Callable
-from typing import Any, Generic, TypedDict, cast
+from typing import Any, Generic, Literal, TypedDict, cast
 
 from google.cloud import firestore
 from google.cloud.firestore import (
@@ -67,7 +67,14 @@ from genkit._ai._agents._session_stores._util import (
 from genkit._ai._json_patch import apply_json_patch, diff_json
 from genkit._core._action import get_current_context
 from genkit._core._error import GenkitError
-from genkit._core._typing import JsonPatchOperation, SessionSnapshot, SessionState, SnapshotStatus
+from genkit._core._typing import (
+    AgentFinishReason,
+    GenkitRuntimeError,
+    JsonPatchOperation,
+    SessionSnapshot,
+    SessionState,
+    SnapshotStatus,
+)
 
 DEFAULT_COLLECTION = 'genkit-sessions'
 DEFAULT_PREFIX = 'global'
@@ -90,11 +97,32 @@ TERMINAL_STATUSES = frozenset({
 class SnapshotWriteMeta(TypedDict):
     """Metadata written onto a snapshot doc for later reconstruction."""
 
-    kind: str
+    kind: Literal['diff', 'checkpoint']
     checkpointId: str
     checkpointShardCount: int
     segmentPath: list[str]
     statePatch: list[dict[str, Any]] | None
+
+
+class SnapshotDoc(BaseModel):
+    """Schema for turn snapshot document stored in Firestore."""
+
+    model_config = ConfigDict(extra='ignore', populate_by_name=True)
+
+    snapshot_id: str = Field(alias='snapshotId')
+    session_id: str = Field(alias='sessionId')
+    parent_id: str | None = Field(default=None, alias='parentId')
+    created_at: str = Field(alias='createdAt')
+    updated_at: str | None = Field(default=None, alias='updatedAt')
+    status: SnapshotStatus | None = Field(default=None)
+    heartbeat_at: str | None = Field(default=None, alias='heartbeatAt')
+    finish_reason: AgentFinishReason | str | None = Field(default=None, alias='finishReason')
+    error: GenkitRuntimeError | dict[str, Any] | None = Field(default=None)
+    kind: Literal['diff', 'checkpoint']
+    checkpoint_id: str = Field(alias='checkpointId')
+    checkpoint_shard_count: int = Field(alias='checkpointShardCount')
+    segment_path: list[str] = Field(default_factory=list, alias='segmentPath')
+    state_patch: list[dict[str, Any]] | None = Field(default=None, alias='statePatch')
 
 
 class PointerDoc(BaseModel):
@@ -333,19 +361,19 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
 
             meta: SnapshotWriteMeta
             if existing_recon is not None:
-                existing_doc = existing_recon['doc']
-                if existing_doc.get('kind') == 'checkpoint':
+                existing_doc: SnapshotDoc = existing_recon['doc']
+                if existing_doc.kind == 'checkpoint':
                     meta = self._write_checkpoint(
                         transaction,
                         sid,
                         new_state,
-                        old_shard_count=int(existing_doc.get('checkpointShardCount') or 0),
+                        old_shard_count=existing_doc.checkpoint_shard_count,
                         context=context,
                     )
                 else:
-                    parent_id = existing_doc.get('parentId')
+                    parent_id = existing_doc.parent_id
                     parent_state = None
-                    if isinstance(parent_id, str):
+                    if parent_id:
                         parent_recon = await self._reconstruct(transaction, parent_id, context=context)
                         parent_state = parent_recon['state'] if parent_recon else None
                     candidate_patch = patch_to_json(diff_json(from_value=parent_state, to_value=new_state))
@@ -354,9 +382,9 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                     else:
                         meta = {
                             'kind': 'diff',
-                            'checkpointId': str(existing_doc['checkpointId']),
-                            'checkpointShardCount': int(existing_doc['checkpointShardCount']),
-                            'segmentPath': [str(x) for x in (existing_doc.get('segmentPath') or [])],
+                            'checkpointId': existing_doc.checkpoint_id,
+                            'checkpointShardCount': existing_doc.checkpoint_shard_count,
+                            'segmentPath': existing_doc.segment_path,
                             'statePatch': candidate_patch,
                         }
             else:
@@ -402,37 +430,28 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             segment_path = meta['segmentPath']
             state_patch = meta.get('statePatch')
 
-            doc_payload: dict[str, Any] = {
+            err_dict = (
+                next_snapshot.error.model_dump(by_alias=True, exclude_none=True, mode='json')
+                if next_snapshot.error
+                else None
+            )
+            doc_model = SnapshotDoc.model_validate({
                 'snapshotId': sid,
                 'sessionId': session_id,
+                'parentId': next_snapshot.parent_id,
                 'createdAt': next_snapshot.created_at,
+                'updatedAt': next_snapshot.updated_at or next_snapshot.created_at,
+                'status': next_snapshot.status,
+                'heartbeatAt': next_snapshot.heartbeat_at,
+                'finishReason': next_snapshot.finish_reason,
+                'error': err_dict,
                 'kind': kind,
                 'checkpointId': checkpoint_id,
                 'checkpointShardCount': checkpoint_shard_count,
                 'segmentPath': segment_path,
-            }
-            if next_snapshot.parent_id is not None:
-                doc_payload['parentId'] = next_snapshot.parent_id
-            if next_snapshot.updated_at is not None:
-                doc_payload['updatedAt'] = next_snapshot.updated_at
-            else:
-                doc_payload['updatedAt'] = next_snapshot.created_at
-            if next_snapshot.status is not None:
-                doc_payload['status'] = (
-                    next_snapshot.status.value
-                    if isinstance(next_snapshot.status, SnapshotStatus)
-                    else next_snapshot.status
-                )
-            if next_snapshot.heartbeat_at is not None:
-                doc_payload['heartbeatAt'] = next_snapshot.heartbeat_at
-            if next_snapshot.finish_reason is not None:
-                doc_payload['finishReason'] = next_snapshot.finish_reason
-            if next_snapshot.error is not None:
-                doc_payload['error'] = next_snapshot.error.model_dump(by_alias=True, exclude_none=True, mode='json')
-            if state_patch is not None:
-                doc_payload['statePatch'] = state_patch
-
-            transaction.set(snap_ref, sanitize(doc_payload))
+                'statePatch': state_patch,
+            })
+            transaction.set(snap_ref, sanitize(doc_model.model_dump(by_alias=True, exclude_none=True, mode='json')))
             await self._update_pointer_in_transaction(
                 transaction,
                 session_id,
@@ -558,17 +577,15 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         if not snap.exists:
             logger.warning("Parent snapshot document '%s' does not exist", parent_id)
             return None
-        data = snap.to_dict() or {}
-        checkpoint_id = data.get('checkpointId')
-        shard_count = data.get('checkpointShardCount')
-        segment_path = data.get('segmentPath')
-        if not isinstance(checkpoint_id, str) or not isinstance(shard_count, int) or not isinstance(segment_path, list):
+        try:
+            doc = SnapshotDoc.model_validate(snap.to_dict())
+        except Exception:
             logger.warning("Parent snapshot document '%s' contains invalid metadata", parent_id)
             return None
         return {
-            'checkpointId': checkpoint_id,
-            'checkpointShardCount': shard_count,
-            'segmentPath': [str(x) for x in segment_path],
+            'checkpointId': doc.checkpoint_id,
+            'checkpointShardCount': doc.checkpoint_shard_count,
+            'segmentPath': doc.segment_path,
         }
 
     async def _reconstruct(
@@ -581,17 +598,15 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         snap = await self.snapshot_ref(snapshot_id, context).get(transaction=transaction)
         if not snap.exists:
             return None
-        data = snap.to_dict() or {}
-        checkpoint_id = data.get('checkpointId')
-        shard_count = data.get('checkpointShardCount')
-        segment_path = data.get('segmentPath')
-        if not isinstance(checkpoint_id, str) or not isinstance(shard_count, int) or not isinstance(segment_path, list):
+        try:
+            doc = SnapshotDoc.model_validate(snap.to_dict())
+        except Exception:
             return None
         return await self._reconstruct_from(
             transaction,
-            checkpoint_id=checkpoint_id,
-            shard_count=shard_count,
-            segment_path=[str(x) for x in segment_path],
+            checkpoint_id=doc.checkpoint_id,
+            shard_count=doc.checkpoint_shard_count,
+            segment_path=doc.segment_path,
             target_id=snapshot_id,
             context=context,
         )
@@ -644,18 +659,21 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                     target_id,
                 )
                 return None
-            checkpoint_doc = checkpoint_snap.to_dict() or {}
-            if checkpoint_doc.get('snapshotId') != target_id:
+            try:
+                checkpoint_doc = SnapshotDoc.model_validate(checkpoint_snap.to_dict())
+            except Exception:
+                return None
+            if checkpoint_doc.snapshot_id != target_id:
                 logger.warning(
                     "Checkpoint document '%s' snapshotId mismatch (got '%s', expected '%s')",
                     checkpoint_ref.path,
-                    checkpoint_doc.get('snapshotId'),
+                    checkpoint_doc.snapshot_id,
                     target_id,
                 )
                 return None
             return {'doc': checkpoint_doc, 'state': state if isinstance(state, dict) else {}}
 
-        target_doc: dict[str, Any] | None = None
+        target_doc: SnapshotDoc | None = None
         for ref in seg_refs:
             seg_snap = by_path.get(ref.path)
             if seg_snap is None or not seg_snap.exists:
@@ -665,11 +683,14 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                     target_id,
                 )
                 return None
-            seg_doc = seg_snap.to_dict() or {}
-            state = apply_json_patch(doc=state, patch=patch_from_json(seg_doc.get('statePatch')))
+            try:
+                seg_doc = SnapshotDoc.model_validate(seg_snap.to_dict())
+            except Exception:
+                return None
+            state = apply_json_patch(doc=state, patch=patch_from_json(seg_doc.state_patch))
             target_doc = seg_doc
 
-        if target_doc is None or target_doc.get('snapshotId') != target_id:
+        if target_doc is None or target_doc.snapshot_id != target_id:
             logger.warning(
                 "Target segment snapshot document mismatch or missing for '%s'",
                 target_id,
@@ -747,30 +768,22 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
     def _to_snapshot(self, reconstructed: dict[str, Any] | None) -> SessionSnapshot | None:
         if reconstructed is None:
             return None
-        doc = reconstructed['doc']
+        doc: SnapshotDoc = reconstructed['doc']
         state = state_from_dict(reconstructed.get('state'))
-        status_raw = doc.get('status')
-        status = None
-        if status_raw is not None:
-            try:
-                status = SnapshotStatus(status_raw)
-            except ValueError:
-                logger.warning(
-                    "Unknown SnapshotStatus '%s' for snapshot '%s'",
-                    status_raw,
-                    doc.get('snapshotId'),
-                )
-                status = None
+        finish_reason = (
+            AgentFinishReason(doc.finish_reason) if isinstance(doc.finish_reason, str) else doc.finish_reason
+        )
+        err = GenkitRuntimeError.model_validate(doc.error) if isinstance(doc.error, dict) else doc.error
         return SessionSnapshot(
-            snapshot_id=doc['snapshotId'],
-            session_id=doc.get('sessionId'),
-            parent_id=doc.get('parentId'),
-            created_at=doc['createdAt'],
-            updated_at=doc.get('updatedAt'),
-            heartbeat_at=doc.get('heartbeatAt'),
-            status=status,
-            finish_reason=doc.get('finishReason'),
-            error=doc.get('error'),
+            snapshot_id=doc.snapshot_id,
+            session_id=doc.session_id,
+            parent_id=doc.parent_id,
+            created_at=doc.created_at,
+            updated_at=doc.updated_at,
+            heartbeat_at=doc.heartbeat_at,
+            status=doc.status,
+            finish_reason=finish_reason,
+            error=err,
             state=state,
         )
 
