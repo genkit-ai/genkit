@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -563,7 +563,7 @@ async def test_firestore_session_store_status_change_and_cleanup() -> None:
     mock_sync_doc_ref.collection.return_value = mock_sync_col
     mock_sync_client = MagicMock()
     mock_sync_client.collection.return_value = mock_sync_col
-    setattr(store.client, '_to_sync_copy', MagicMock(return_value=mock_sync_client))
+    cast(Any, store.client)._to_sync_copy.return_value = mock_sync_client
     queue = await store.on_snapshot_status_change('snap-sub')
     assert await queue.get() == SnapshotStatus.PENDING
     assert len(captured_cb) == 1
@@ -612,7 +612,7 @@ async def test_firestore_session_store_close_stops_watches_and_sync_client() -> 
     mock_sync_client = MagicMock()
     mock_sync_client.collection.return_value = mock_sync_col
 
-    setattr(store.client, '_to_sync_copy', MagicMock(return_value=mock_sync_client))
+    cast(Any, store.client)._to_sync_copy.return_value = mock_sync_client
     await store.on_snapshot_status_change('snap-close')
     assert store.sync_client is mock_sync_client
     assert 'snap-close' in store._watches
