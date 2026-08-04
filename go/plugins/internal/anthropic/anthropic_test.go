@@ -474,6 +474,23 @@ func TestToAnthropicParts(t *testing.T) {
 			},
 			expectedErr: "unsupported part in tool response content",
 		},
+		{
+			// Only reachable by hand-constructing the part: unmarshaling never
+			// sets the kind without the payload.
+			name:        "tool response part without a tool response is rejected",
+			parts:       []*ai.Part{{Kind: ai.PartToolResponse}},
+			expectedErr: "tool response part carries no tool response",
+		},
+		{
+			name: "nil part in tool response content is rejected",
+			parts: []*ai.Part{
+				ai.NewToolResponsePart(&ai.ToolResponse{
+					Ref:     "ref1",
+					Content: []*ai.Part{nil},
+				}),
+			},
+			expectedErr: "unsupported part in tool response content",
+		},
 	}
 
 	for _, tt := range tests {

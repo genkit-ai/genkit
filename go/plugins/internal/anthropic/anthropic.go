@@ -492,6 +492,10 @@ func toAnthropicParts(parts []*ai.Part) ([]anthropic.ContentBlockParamUnion, err
 // fields, so the structured output is emitted as a leading text block and the
 // content parts follow as text, image, or document blocks.
 func toAnthropicToolResultBlock(toolResp *ai.ToolResponse) (anthropic.ContentBlockParamUnion, error) {
+	if toolResp == nil {
+		return anthropic.ContentBlockParamUnion{}, status.Errorf(ai.ErrInvalidPart, "tool response part carries no tool response")
+	}
+
 	content := make([]anthropic.ToolResultBlockParamContentUnion, 0, len(toolResp.Content)+1)
 
 	// Only send the structured output when the tool produced one. A multipart

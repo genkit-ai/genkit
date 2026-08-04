@@ -261,7 +261,7 @@ func TestAnthropicLive(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		tool := genkit.DefineMultipartTool(g, "getImage", "returns a misterious image",
+		tool := genkit.DefineMultipartTool(g, "getImage", "returns a mysterious image",
 			func(ctx *ai.ToolContext, input any) (*ai.MultipartToolResponse, error) {
 				return &ai.MultipartToolResponse{
 					Output: map[string]any{"status": "success"},
