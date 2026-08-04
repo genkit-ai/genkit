@@ -16,7 +16,25 @@
 
 package ai
 
-import "maps"
+import (
+	"maps"
+
+	"github.com/firebase/genkit/go/core"
+)
+
+// requestInputSchema infers the JSON schema for a request type and, when a
+// config schema is provided, advertises it under the request's config slot.
+// key names the request type's wire field for per-request configuration:
+// "config" for [ModelRequest], "options" for the other request types.
+func requestInputSchema(req any, key string, configSchema map[string]any) map[string]any {
+	inputSchema := core.InferSchemaMap(req)
+	if inputSchema != nil && configSchema != nil {
+		if props, ok := inputSchema["properties"].(map[string]any); ok {
+			props[key] = configSchema
+		}
+	}
+	return inputSchema
+}
 
 // NewModelRequest create a new ModelRequest with provided config and
 // messages.

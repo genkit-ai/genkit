@@ -124,12 +124,7 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 		"customOptions": opts.ConfigSchema,
 	}
 
-	inputSchema := core.InferSchemaMap(ModelRequest{})
-	if inputSchema != nil && opts.ConfigSchema != nil {
-		if props, ok := inputSchema["properties"].(map[string]any); ok {
-			props["config"] = opts.ConfigSchema
-		}
-	}
+	inputSchema := requestInputSchema(ModelRequest{}, "config", opts.ConfigSchema)
 
 	mws := []ModelMiddleware{
 		simulateSystemPrompt(&opts.ModelOptions, nil),
