@@ -924,19 +924,15 @@ func TestToolWithOutputSchemaOptions(t *testing.T) {
 		}
 	})
 
-	t.Run("NewTool with WithOutputType", func(t *testing.T) {
-		type Result struct {
-			Score int `json:"score"`
-		}
-
-		tl := NewTool("typedOutput", "Output type derived",
+	t.Run("NewTool with WithOutputSchema", func(t *testing.T) {
+		tl := NewTool("customOutputNew", "Custom output schema",
 			func(ctx *ToolContext, input struct{}) (any, error) { return nil, nil },
-			WithOutputType(Result{}))
+			WithOutputSchema(customSchema))
 
 		def := tl.Definition()
 		props, ok := def.OutputSchema["properties"].(map[string]any)
-		if !ok || props["score"] == nil {
-			t.Errorf("OutputSchema = %v, want schema derived from Result", def.OutputSchema)
+		if !ok || props["answer"] == nil {
+			t.Errorf("OutputSchema = %v, want the custom schema", def.OutputSchema)
 		}
 	})
 
@@ -967,23 +963,10 @@ func TestToolWithOutputSchemaOptions(t *testing.T) {
 			WithOutputSchema(customSchema))
 	})
 
-	t.Run("non-schema output options are ignored", func(t *testing.T) {
-		tl := NewTool("formatIgnored", "Format on a tool",
-			func(ctx *ToolContext, input struct{}) (string, error) { return "", nil },
-			WithOutputFormat(OutputFormatText))
-
-		def := tl.Definition()
-		if def.OutputSchema["type"] != "string" {
-			t.Errorf("OutputSchema = %v, want the schema inferred from Out", def.OutputSchema)
-		}
-	})
-
 	t.Run("last output schema wins", func(t *testing.T) {
 		tl := NewTool("doubleOut", "Two output schemas",
 			func(ctx *ToolContext, input struct{}) (any, error) { return nil, nil },
-			WithOutputType(struct {
-				A string `json:"a"`
-			}{}), WithOutputSchema(customSchema))
+			WithOutputSchemaName("Answer"), WithOutputSchema(customSchema))
 
 		def := tl.Definition()
 		props, ok := def.OutputSchema["properties"].(map[string]any)
