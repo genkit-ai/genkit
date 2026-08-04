@@ -1838,39 +1838,46 @@
         },
         "streamSchema": {},
         "metadata": {
-          "type": "object",
-          "additionalProperties": {
-            "anyOf": [
-              {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
                 "anyOf": [
                   {
-                    "type": "string"
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": true
+                      }
+                    ]
                   },
                   {
-                    "type": "number"
-                  },
-                  {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": true
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/ActionMetadata/properties/metadata/anyOf/0/additionalProperties/anyOf/0"
+                    }
                   }
                 ]
-              },
-              {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/ActionMetadata/properties/metadata/additionalProperties/anyOf/0"
-                }
               }
-            ]
-          }
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

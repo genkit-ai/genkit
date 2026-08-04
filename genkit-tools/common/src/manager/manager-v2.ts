@@ -248,15 +248,23 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
         error.data = massagedData;
         pending.reject(error);
       } else {
-        let result = response.result;
-        if (pending.method === 'listActions') {
-          result = ReflectionListActionsResponseSchema.parse(result);
-        } else if (pending.method === 'listValues') {
-          result = ReflectionListValuesResponseSchema.parse(result);
-        } else if (pending.method === 'cancelAction') {
-          result = ReflectionCancelActionResponseSchema.parse(result);
+        try {
+          let result = response.result;
+          if (pending.method === 'listActions') {
+            result = ReflectionListActionsResponseSchema.parse(result);
+          } else if (pending.method === 'listValues') {
+            result = ReflectionListValuesResponseSchema.parse(result);
+          } else if (pending.method === 'cancelAction') {
+            result = ReflectionCancelActionResponseSchema.parse(result);
+          }
+          pending.resolve(result);
+        } catch (err) {
+          // Reject this specific request instead of letting the exception
+          // bubble up to the message handler, which would log a generic
+          // "Failed to parse WebSocket message" and leave the promise pending
+          // until it times out.
+          pending.reject(err);
         }
-        pending.resolve(result);
       }
       this.pendingRequests.delete(response.id);
     } else {

@@ -221,11 +221,65 @@ export async function waitForRuntime(
 }
 
 /**
+ * Waits until all of the given action keys are registered with the runtime.
+ *
+ * Ephemeral runtimes (used by the `-- <cmd>` commands) register their actions
+ * asynchronously after startup. Some SDKs (notably Go) register the runtime
+ * with the CLI during initialization but define their actions slightly later.
+ * If we dispatch a runAction before the target action is registered, the
+ * runtime returns an "action not found" error. Polling until the actions
+ * appear closes that race. On timeout we proceed anyway and let the real
+ * error surface.
+ */
+export async function waitForActionKeys(
+  manager: BaseRuntimeManager,
+  keys: string[],
+  timeoutMs: number = 30000
+): Promise<void> {
+  const requiredKeys = keys.filter((k) => !!k);
+  if (requiredKeys.length === 0) return;
+
+  const delayMs = 200;
+  const deadline = Date.now() + timeoutMs;
+
+  while (true) {
+    try {
+      const actions = await manager.listActions();
+      const registered = new Set(Object.keys(actions));
+      const missing = requiredKeys.filter((k) => !registered.has(k));
+      if (missing.length === 0) return;
+      if (Date.now() >= deadline) {
+        logger.debug(
+          `Timed out waiting for action(s) to register: ${missing.join(
+            ', '
+          )}. Proceeding anyway.`
+        );
+        return;
+      }
+    } catch (e) {
+      // The actions endpoint may not be ready yet; keep polling until the
+      // deadline.
+      if (Date.now() >= deadline) {
+        logger.debug(`Timed out waiting for actions to register: ${e}`);
+        return;
+      }
+    }
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+}
+
+/**
  * Runs the given function with a runtime manager.
  */
 export interface RunWithManagerOptions {
   /** Command to start the runtime process. If provided, an ephemeral manager is used. */
   runtimeCommand?: string[];
+  /**
+   * Action keys to wait for before invoking the function. Only used for
+   * ephemeral runtimes to avoid dispatching before the runtime has finished
+   * registering the target action(s).
+   */
+  waitForActionKeys?: string[];
 }
 
 export async function runWithManager(
@@ -277,6 +331,9 @@ export async function runWithManager(
   }
 
   try {
+    if (useEphemeral && options?.waitForActionKeys?.length) {
+      await waitForActionKeys(manager, options.waitForActionKeys);
+    }
     await fn(manager);
   } catch (err) {
     logger.error('Command exited with an Error:');

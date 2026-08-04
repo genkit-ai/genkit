@@ -212,7 +212,10 @@ export const evalFlow = new Command('eval:flow')
         }
       };
 
-      await runWithManager(projectRoot, runAction, { runtimeCommand });
+      await runWithManager(projectRoot, runAction, {
+        runtimeCommand,
+        waitForActionKeys: [`/flow/${flowName}`],
+      });
     }
   );
 

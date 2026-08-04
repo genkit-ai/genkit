@@ -22,11 +22,11 @@ type ActionMetadata struct {
 	ActionType  string `json:"actionType,omitempty"`
 	Description string `json:"description,omitempty"`
 	// A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object.
-	InputJsonSchema any            `json:"inputJsonSchema,omitempty"`
-	InputSchema     any            `json:"inputSchema,omitempty"`
-	Key             string         `json:"key,omitempty"`
-	Metadata        map[string]any `json:"metadata,omitempty"`
-	Name            string         `json:"name,omitempty"`
+	InputJsonSchema any    `json:"inputJsonSchema,omitempty"`
+	InputSchema     any    `json:"inputSchema,omitempty"`
+	Key             string `json:"key,omitempty"`
+	Metadata        any    `json:"metadata,omitempty"`
+	Name            string `json:"name,omitempty"`
 	// A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object.
 	OutputJsonSchema any `json:"outputJsonSchema,omitempty"`
 	OutputSchema     any `json:"outputSchema,omitempty"`

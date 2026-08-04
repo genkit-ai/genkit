@@ -16,7 +16,10 @@
 
 import { RuntimeEvent } from '@genkit-ai/tools-common/manager';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
-import { waitForRuntime } from '../../src/utils/manager-utils';
+import {
+  waitForActionKeys,
+  waitForRuntime,
+} from '../../src/utils/manager-utils';
 
 describe('waitForRuntime', () => {
   let mockManager: any;
@@ -84,5 +87,52 @@ describe('waitForRuntime', () => {
       'Timeout waiting for runtime to be ready'
     );
     jest.useRealTimers();
+  });
+});
+
+describe('waitForActionKeys', () => {
+  let mockManager: any;
+
+  beforeEach(() => {
+    mockManager = {
+      listActions: jest.fn(),
+    };
+  });
+
+  it('resolves immediately when no keys are required', async () => {
+    await expect(waitForActionKeys(mockManager, [])).resolves.toBeUndefined();
+    expect(mockManager.listActions).not.toHaveBeenCalled();
+  });
+
+  it('resolves once all required actions are registered', async () => {
+    // First poll: action missing. Second poll: action present.
+    mockManager.listActions
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ '/flow/testFlow': {} });
+
+    await expect(
+      waitForActionKeys(mockManager, ['/flow/testFlow'], 5000)
+    ).resolves.toBeUndefined();
+    expect(mockManager.listActions).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps polling while listActions rejects, then resolves', async () => {
+    mockManager.listActions
+      .mockRejectedValueOnce(new Error('not ready'))
+      .mockResolvedValueOnce({ '/flow/testFlow': {} });
+
+    await expect(
+      waitForActionKeys(mockManager, ['/flow/testFlow'], 5000)
+    ).resolves.toBeUndefined();
+    expect(mockManager.listActions).toHaveBeenCalledTimes(2);
+  });
+
+  it('proceeds anyway (resolves) when the action never registers', async () => {
+    // Always missing; with a tiny timeout we should give up and resolve.
+    mockManager.listActions.mockResolvedValue({});
+
+    await expect(
+      waitForActionKeys(mockManager, ['/flow/missing'], 10)
+    ).resolves.toBeUndefined();
   });
 });
