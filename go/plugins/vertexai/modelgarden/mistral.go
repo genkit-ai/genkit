@@ -107,7 +107,11 @@ func (m *Mistral) Init(ctx context.Context) []api.Action {
 	actions = append(actions, m.oai.Init(ctx)...)
 
 	for name, opts := range MistralModels {
-		actions = append(actions, m.oai.DefineModel(provider, name, opts).(api.Action))
+		act, ok := m.oai.DefineModel(provider, name, opts).(api.Action)
+		if !ok {
+			panic(fmt.Sprintf("modelgarden: Mistral model %q does not implement api.Action", name))
+		}
+		actions = append(actions, act)
 	}
 
 	m.initted = true
