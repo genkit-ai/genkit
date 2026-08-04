@@ -17,6 +17,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -181,7 +182,15 @@ func TestToolOutputSchema(t *testing.T) {
 	mcpServer.AddTool(
 		mcp.NewTool("getWeather",
 			mcp.WithInputSchema[InputSchema](),
-			mcp.WithOutputSchema[OutputSchema](),
+			mcp.WithRawOutputSchema(json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"Weather": {"type": "string"},
+					"Temperature": {"type": "integer"}
+				},
+				"required": ["Weather", "Temperature"],
+				"x-fastmcp-wrap-result": true
+			}`)),
 		),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return mcp.NewToolResultStructured(
@@ -221,6 +230,9 @@ func TestToolOutputSchema(t *testing.T) {
 		outputSchema := tool.Definition().OutputSchema
 		assertSchemaProperty(t, outputSchema, "Weather", "string")
 		assertSchemaProperty(t, outputSchema, "Temperature", "integer")
+		if got := outputSchema["x-fastmcp-wrap-result"]; got != true {
+			t.Fatalf("x-fastmcp-wrap-result = %v, want true", got)
+		}
 
 		result, err := tool.RunRaw(t.Context(), InputSchema{
 			City: "Paris",
@@ -240,6 +252,37 @@ func TestToolOutputSchema(t *testing.T) {
 			t.Fatalf("unexpected temperature: %d", toolResultOutput.Temperature)
 		}
 	}
+}
+
+func TestGetOutputSchemaWithoutSchema(t *testing.T) {
+	client := &GenkitMCPClient{}
+	schema, err := client.getOutputSchema(mcp.NewTool("schema-less"))
+	if err != nil {
+		t.Fatalf("getOutputSchema() error = %v", err)
+	}
+	if schema != nil {
+		t.Fatalf("getOutputSchema() = %#v, want nil", schema)
+	}
+}
+
+func TestFetchToolsPageWithoutInitializedClient(t *testing.T) {
+	t.Run("missing server", func(t *testing.T) {
+		client := &GenkitMCPClient{}
+		_, _, err := client.fetchToolsPage(t.Context(), "")
+		if err == nil || !strings.Contains(err.Error(), "client not initialized") {
+			t.Fatalf("fetchToolsPage() error = %v, want client not initialized", err)
+		}
+	})
+
+	t.Run("initialization error", func(t *testing.T) {
+		client := &GenkitMCPClient{
+			server: &ServerRef{Error: "protocol version negotiation failed"},
+		}
+		_, _, err := client.fetchToolsPage(t.Context(), "")
+		if err == nil || !strings.Contains(err.Error(), "protocol version negotiation failed") {
+			t.Fatalf("fetchToolsPage() error = %v, want initialization error", err)
+		}
+	})
 }
 
 func ParseMapToStruct[T any](t *testing.T, v any) T {

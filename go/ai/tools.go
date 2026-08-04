@@ -383,14 +383,40 @@ func NewToolWithInputSchema[Out any](name, description string, inputSchema map[s
 type ToolSchema struct {
 	Input  map[string]any
 	Output map[string]any
+	// ValidationOutput is the schema used to validate the value returned by the
+	// tool function. If nil, Output is used. This allows adapters whose exposed
+	// output is nested inside a protocol response to validate that response
+	// without changing the schema advertised in Definition.
+	ValidationOutput map[string]any
 }
 
 // NewToolWithSchema creates a new [ToolDef] with custom input and output schemas. It can be passed directly to [Generate].
 func NewToolWithSchema[In, Out any](name, description string, schema ToolSchema, fn ToolFunc[In, Out]) *ToolDef[In, Out] {
-	metadata, wrappedFn := wrapToolFunc(name, description, fn)
+	validationOutput := schema.Output
+	if schema.ValidationOutput != nil {
+		validationOutput = schema.ValidationOutput
+	}
+	validatedFn := func(ctx *ToolContext, input In) (Out, error) {
+		output, err := fn(ctx, input)
+		if err != nil {
+			return output, err
+		}
+		if err := base.ValidateValue(output, validationOutput); err != nil {
+			return base.Zero[Out](), core.NewError(core.INTERNAL, "invalid output from tool %q: %v", name, err)
+		}
+		return output, nil
+	}
+
+	metadata, wrappedFn := wrapToolFunc(name, description, validatedFn)
 	metadata["dynamic"] = true
-	toolAction := core.NewStructuredAction(name, api.ActionTypeTool, metadata, schema.Input, schema.Output, wrappedFn)
-	return &ToolDef[In, Out]{action: toolAction}
+	if schema.Output != nil {
+		// Tool definitions describe the value returned by the tool function, while
+		// tool actions return a MultipartToolResponse internally. Keep those schemas
+		// separate so action validation still validates the multipart wrapper.
+		metadata["originalOutputSchema"] = schema.Output
+	}
+	action := core.NewAction(name, api.ActionTypeToolV2, metadata, schema.Input, wrappedFn)
+	return &ToolDef[In, Out]{action: action, multipart: false}
 }
 
 // DefineMultipartTool creates a new multipart [ToolDef] and registers it.
