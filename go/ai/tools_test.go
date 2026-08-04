@@ -914,6 +914,108 @@ func TestToolWithInputSchemaOption(t *testing.T) {
 	})
 }
 
+func TestToolWithOutputSchemaOptions(t *testing.T) {
+	customSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+	}
+
+	t.Run("DefineTool with WithOutputSchema", func(t *testing.T) {
+		r := newTestRegistry(t)
+
+		tl := DefineTool(r, "provider/customOutput", "Custom output schema",
+			func(ctx *ToolContext, input struct{}) (any, error) { return nil, nil },
+			WithOutputSchema(customSchema))
+
+		def := tl.Definition()
+		props, ok := def.OutputSchema["properties"].(map[string]any)
+		if !ok || props["answer"] == nil {
+			t.Errorf("OutputSchema = %v, want the custom schema", def.OutputSchema)
+		}
+	})
+
+	t.Run("NewTool with WithOutputType", func(t *testing.T) {
+		type Result struct {
+			Score int `json:"score"`
+		}
+
+		tl := NewTool("typedOutput", "Output type derived",
+			func(ctx *ToolContext, input struct{}) (any, error) { return nil, nil },
+			WithOutputType(Result{}))
+
+		def := tl.Definition()
+		props, ok := def.OutputSchema["properties"].(map[string]any)
+		if !ok || props["score"] == nil {
+			t.Errorf("OutputSchema = %v, want schema derived from Result", def.OutputSchema)
+		}
+	})
+
+	t.Run("WithOutputSchemaName resolves through the registry", func(t *testing.T) {
+		r := newTestRegistry(t)
+		r.RegisterSchema("Answer", customSchema)
+
+		tl := DefineTool(r, "provider/namedOutput", "Named output schema",
+			func(ctx *ToolContext, input struct{}) (any, error) { return nil, nil },
+			WithOutputSchemaName("Answer"))
+
+		def := tl.Definition()
+		props, ok := def.OutputSchema["properties"].(map[string]any)
+		if !ok || props["answer"] == nil {
+			t.Errorf("OutputSchema = %v, want the registered Answer schema", def.OutputSchema)
+		}
+	})
+
+	t.Run("panics when Out is not any", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for concrete Out with a custom output schema")
+			}
+		}()
+
+		NewTool("badOut", "Concrete out",
+			func(ctx *ToolContext, input struct{}) (string, error) { return "", nil },
+			WithOutputSchema(customSchema))
+	})
+
+	t.Run("panics on non-schema output options", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for WithOutputFormat on a tool")
+			}
+		}()
+
+		NewTool("badOption", "Format on a tool",
+			func(ctx *ToolContext, input struct{}) (any, error) { return nil, nil },
+			WithOutputFormat(OutputFormatText))
+	})
+
+	t.Run("panics when output schema is set twice", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for repeated output schema options")
+			}
+		}()
+
+		NewTool("doubleOut", "Two output schemas",
+			func(ctx *ToolContext, input struct{}) (any, error) { return nil, nil },
+			WithOutputSchema(customSchema), WithOutputType(struct{ A string }{}))
+	})
+
+	t.Run("panics for multipart tools", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for output schema options on a multipart tool")
+			}
+		}()
+
+		NewMultipartTool("multipartOut", "Multipart with output schema",
+			func(ctx *ToolContext, input struct{}) (*MultipartToolResponse, error) { return nil, nil },
+			WithOutputSchema(customSchema))
+	})
+}
+
 func TestResolveUniqueTools(t *testing.T) {
 	t.Run("resolves tools from registry", func(t *testing.T) {
 		r := newTestRegistry(t)

@@ -515,12 +515,14 @@ type outputOptions struct {
 	CustomConstrained  bool           // Whether generation should use custom constrained output instead of native model constrained output.
 }
 
-// OutputOption is an option for the output of a prompt or generate request.
-// It applies only to DefinePrompt() and Generate().
+// OutputOption is an option for the output of a prompt, generate request, or
+// tool. It applies to DefinePrompt(), Generate(), and the tool constructors;
+// tools accept only the schema-setting output options.
 type OutputOption interface {
 	applyOutput(*outputOptions) error
 	applyPrompt(*promptOptions) error
 	applyGenerate(*generateOptions) error
+	applyTool(*toolOptions) error
 }
 
 // applyOutput applies the option to the output options.
@@ -558,6 +560,21 @@ func (o *outputOptions) applyPrompt(pOpts *promptOptions) error {
 // applyGenerate applies the option to the generate options.
 func (o *outputOptions) applyGenerate(genOpts *generateOptions) error {
 	return o.applyOutput(&genOpts.outputOptions)
+}
+
+// applyTool applies the option to the tool options. Only the schema-setting
+// output options apply to a tool: its output schema is advertised to the
+// model, while format, instructions, and constrained-output settings steer
+// generation and have no meaning on a tool.
+func (o *outputOptions) applyTool(tOpts *toolOptions) error {
+	if o.OutputSchema == nil || o.OutputInstructions != nil || o.CustomConstrained {
+		return errors.New("only output schema options apply to tools (WithOutputType, WithOutputSchema, WithOutputSchemaName, or WithOutputEnums)")
+	}
+	if tOpts.OutputSchema != nil {
+		return errors.New("cannot set output schema more than once (WithOutputType, WithOutputSchema, or WithOutputSchemaName)")
+	}
+	tOpts.OutputSchema = o.OutputSchema
+	return nil
 }
 
 // WithOutputType sets the output format to JSON and the schema derived from the given value.
@@ -964,6 +981,7 @@ func WithToolRestarts(parts ...*Part) GenerateOption {
 // toolOptions holds configuration options for defining tools.
 type toolOptions struct {
 	inputOptions
+	OutputSchema map[string]any // JSON schema of the tool's output.
 	StrictSchema *bool
 }
 
