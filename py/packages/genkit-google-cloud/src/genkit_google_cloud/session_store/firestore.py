@@ -839,16 +839,9 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         ``AsyncClient`` to instantiate a sync client sharing the same project,
         credentials, and database.
         """
-        if self.sync_client is not None:
-            return self.sync_client
-        if isinstance(self.client, firestore.AsyncClient) and hasattr(self.client, '_to_sync_copy'):
+        if self.sync_client is None:
             self.sync_client = self.client._to_sync_copy()
-        else:
-            raise RuntimeError(
-                "Realtime watches require a synchronous Firestore client. "
-                "Unable to derive sync client from 'client'. Please pass 'sync_client' to FirestoreSessionStore."
-            )
-        self._owns_sync_client = True
+            self._owns_sync_client = True
         return self.sync_client
 
     def start_listener(

@@ -626,15 +626,6 @@ async def test_firestore_session_store_close_stops_watches_and_sync_client() -> 
 
 
 @pytest.mark.asyncio
-async def test_firestore_session_store_ensure_sync_client_raises_when_unable_to_derive() -> None:
-    """_ensure_sync_client() raises RuntimeError if client has no _to_sync_copy and no sync_client set."""
-    custom_client = MagicMock(spec=[])
-    store = FirestoreSessionStore(client=custom_client)
-    with pytest.raises(RuntimeError, match="Realtime watches require a synchronous Firestore client"):
-        store._ensure_sync_client()
-
-
-@pytest.mark.asyncio
 async def test_firestore_session_store_close_does_not_close_injected_sync_client() -> None:
     """Caller-owned sync_client is left open by close()."""
     h = FakeStoreHarness()
