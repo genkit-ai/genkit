@@ -144,7 +144,12 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 		return modelOpFromResponse(resp)
 	}
 
-	return &backgroundModel{*core.NewBackgroundAction(name, api.ActionTypeBackgroundModel, metadata, wrappedFn, checkFn, opts.Cancel)}
+	// NOTE: inputSchema above is computed but deliberately not passed here, matching
+	// the previous behavior. Wiring it in would start validating config against
+	// opts.ConfigSchema on every request, which is a behavior change, not a migration.
+	return &backgroundModel{*core.NewBackgroundActionOf(api.ActionTypeBackgroundModel, name, &core.BackgroundActionOptions{
+		Metadata: metadata,
+	}, wrappedFn, checkFn, opts.Cancel)}
 }
 
 // DefineBackgroundModel defines and registers a new model that runs in the background.
