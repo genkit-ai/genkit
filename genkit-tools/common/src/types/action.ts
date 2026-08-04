@@ -75,10 +75,7 @@ export const ActionMetadataSchema = z
     outputSchema: z.unknown().optional(),
     outputJsonSchema: JSONSchema7Schema.optional(),
     streamSchema: z.unknown().optional(),
-    // Some runtimes (e.g. Go) serialize actions with an explicit `null`
-    // metadata. Use nullish() to accept both null and undefined, matching
-    // ActionSchema above.
-    metadata: z.record(z.string(), CustomAnySchema).nullish(),
+    metadata: z.record(z.string(), CustomAnySchema).optional(),
   })
   .openapi('ActionMetadata');
 

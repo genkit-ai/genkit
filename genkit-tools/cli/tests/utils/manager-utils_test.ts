@@ -96,6 +96,7 @@ describe('waitForActionKeys', () => {
   beforeEach(() => {
     mockManager = {
       listActions: jest.fn(),
+      listRuntimes: jest.fn().mockReturnValue([{}]),
     };
   });
 
@@ -134,5 +135,23 @@ describe('waitForActionKeys', () => {
     await expect(
       waitForActionKeys(mockManager, ['/flow/missing'], 10)
     ).resolves.toBeUndefined();
+  });
+
+  it('stops early (does not wait for timeout) when the runtime disconnects', async () => {
+    // Runtime is present initially, then disconnects. The action is never
+    // registered. With a long timeout, the function should still return
+    // promptly instead of polling until the deadline.
+    mockManager.listRuntimes
+      .mockReturnValueOnce([{}]) // initial hasSeenRuntime check
+      .mockReturnValueOnce([{}]) // first loop iteration
+      .mockReturnValue([]); // subsequent iterations: disconnected
+    mockManager.listActions.mockResolvedValue({});
+
+    const start = Date.now();
+    await expect(
+      waitForActionKeys(mockManager, ['/flow/testFlow'], 30000)
+    ).resolves.toBeUndefined();
+    // Should return well before the 30s deadline.
+    expect(Date.now() - start).toBeLessThan(5000);
   });
 });

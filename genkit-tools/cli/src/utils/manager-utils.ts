@@ -241,8 +241,21 @@ export async function waitForActionKeys(
 
   const delayMs = 200;
   const deadline = Date.now() + timeoutMs;
+  let hasSeenRuntime = manager.listRuntimes().length > 0;
 
   while (true) {
+    // If the runtime process crashed or exited after registering but before
+    // registering its actions, stop waiting instead of hanging until the
+    // deadline. A subsequent runAction will surface the real error.
+    if (manager.listRuntimes().length > 0) {
+      hasSeenRuntime = true;
+    } else if (hasSeenRuntime) {
+      logger.debug(
+        'Runtime disconnected while waiting for actions. Stopping wait.'
+      );
+      return;
+    }
+
     try {
       const actions = await manager.listActions();
       const registered = new Set(Object.keys(actions));
