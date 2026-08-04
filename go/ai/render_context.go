@@ -22,14 +22,10 @@ import (
 	"github.com/firebase/genkit/go/internal/base"
 )
 
-// promptHistoryKey carries the messages passed to [Prompt.Execute] so that a
-// prompt's own content functions can read them. The prompt is an action whose
+// promptHistoryKey carries the messages passed to [Prompt.Execute] so a
+// prompt's own content functions can read them. A prompt is an action whose
 // only input is the prompt input, so execution options cannot be threaded
 // through the call directly.
-//
-// Prompt.Execute attaches these keys to a context used only for the Render
-// call; the generation itself runs on the caller's original context so the
-// values never reach tool handlers or prompts nested under the generate loop.
 var promptHistoryKey = base.NewContextKey[[]*Message]()
 
 // promptDocsOverrideKey marks that the execution supplies its own documents,
@@ -57,18 +53,16 @@ func withPromptHistory(ctx context.Context, messages []*Message) context.Context
 // NewHistoryContext returns ctx carrying a conversation for the next
 // [Prompt.Render] call to place, and is what [HistoryFromContext] reads back.
 //
-// [Prompt.Execute] does this itself for the messages passed to it, so callers
-// of Execute never need this. It is for a caller that drives a prompt by hand,
-// pairing Render with [GenerateWithRequest] to keep control of the generate
-// call, and that still wants the prompt to decide where the conversation goes.
-// The agent runtime is the main example.
+// [Prompt.Execute] does this itself, so its callers never need it. It is for
+// code that drives a prompt by hand, pairing Render with [GenerateWithRequest],
+// and still wants the prompt to decide where the conversation goes. The agent
+// runtime is the main example.
 //
-// Scope the returned context to the Render call. The generation itself should
-// run on the original context, so the conversation does not ride along into
-// tool handlers and prompts executed inside the generate loop.
+// Scope the returned context to the Render call. Generation should run on the
+// original, so the conversation does not ride along into tool handlers and
+// prompts executed inside the generate loop.
 //
-// The messages are not copied. Render clones everything it places into the
-// request, so the originals are left untouched.
+// The messages are not copied; Render clones what it places into the request.
 func NewHistoryContext(ctx context.Context, messages []*Message) context.Context {
 	return withPromptHistory(ctx, messages)
 }
@@ -77,16 +71,12 @@ func NewHistoryContext(ctx context.Context, messages []*Message) context.Context
 // [Prompt.Execute] via [WithMessages] or [WithMessagesFn], or nil if there is
 // none.
 //
-// It is meant to be called from a prompt's own content functions, where it is
-// the function-form counterpart of {{history}}. A prompt that declares its own
-// conversation takes responsibility
-// for the history: its messages are the whole middle of the conversation, so
-// the caller's messages are not appended on top and a function that wants them
-// must read them here and return them. This is what makes it possible to
-// summarize, truncate, or reorder history rather than only prepend to it. The
-// other way to place them is [WithMessagesTemplate], whose template renders
-// them at {{history}}. A prompt that declares no messages of its own has the
-// caller's history used as the conversation directly.
+// Call it from a prompt's own content functions, where it is the function-form
+// counterpart of {{history}}. A prompt that declares a conversation owns the
+// history: the caller's messages are not appended on top, so a function that
+// wants them must read them here and return them, which is what makes
+// summarizing or truncating possible. A prompt that declares no messages of its
+// own has the caller's history used as the conversation directly.
 //
 // The returned slice is the caller's; treat it as read-only.
 func HistoryFromContext(ctx context.Context) []*Message {
