@@ -102,6 +102,13 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 	for _, opt := range opts {
 		opt.applyPrompt(pOpts)
 	}
+	// A template lays out the whole conversation, so separately supplied
+	// messages have no position relative to it that means anything. Refuse
+	// rather than pick one: this is a wiring mistake, and the panic fires at
+	// definition, which is the call that has to change.
+	if pOpts.MessagesText != nil && pOpts.MessagesFn != nil {
+		panic(fmt.Sprintf("ai.DefinePrompt: %q sets both WithMessagesTemplate and WithMessages/WithMessagesFn, which have no meaningful combination: the template is the whole conversation. Write the messages as {{role}} blocks in the template, or drop the template and build the conversation from WithMessages and WithMessagesFn.", name))
+	}
 
 	p := &prompt{
 		registry:      r,
@@ -685,11 +692,10 @@ func renderMessages(ctx context.Context, opts promptOptions, messages []*Message
 		return appendMessageClones(messages, history), nil
 	}
 
-	// Otherwise the prompt owns the conversation. A template resets it, so
-	// anything still in MessagesFn was set after the template and renders
-	// behind it. Only the template can place the caller's history, with
-	// {{history}}; a function reaches it through HistoryFromContext and
-	// decides for itself.
+	// Otherwise the prompt owns the conversation. The template and the verbatim
+	// messages are mutually exclusive, so at most one of these runs. Only the
+	// template can place the caller's history, with {{history}}; a function
+	// reaches it through HistoryFromContext and decides for itself.
 	if opts.MessagesText != nil {
 		rendered, err := renderPrompt(ctx, opts, *opts.MessagesText, input, history, dp)
 		if err != nil {
@@ -698,15 +704,13 @@ func renderMessages(ctx context.Context, opts promptOptions, messages []*Message
 		// Already fresh messages built by the renderer, so no clone is needed
 		// for them; the history dotprompt spliced in is not, and is cloned by
 		// renderPrompt before it goes downstream.
-		messages = append(messages, rendered...)
+		return append(messages, rendered...), nil
 	}
-	if opts.MessagesFn != nil {
-		msgs, err := opts.MessagesFn(ctx, raw)
-		if err != nil {
-			return nil, err
-		}
-		messages = appendMessageClones(messages, msgs)
+	msgs, err := opts.MessagesFn(ctx, raw)
+	if err != nil {
+		return nil, err
 	}
+	messages = appendMessageClones(messages, msgs)
 
 	return messages, nil
 }
