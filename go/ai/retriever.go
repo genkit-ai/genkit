@@ -115,12 +115,7 @@ func NewRetriever(name string, opts *RetrieverOptions, fn RetrieverFunc) Retriev
 		},
 	}
 
-	inputSchema := core.InferSchemaMap(RetrieverRequest{})
-	if inputSchema != nil && opts.ConfigSchema != nil {
-		if props, ok := inputSchema["properties"].(map[string]any); ok {
-			props["options"] = opts.ConfigSchema
-		}
-	}
+	inputSchema := requestInputSchema(RetrieverRequest{}, "options", opts.ConfigSchema)
 
 	return &retriever{
 		Action: *core.NewActionOf(api.ActionTypeRetriever, name, &core.ActionOptions{Metadata: metadata, InputSchema: inputSchema}, fn),

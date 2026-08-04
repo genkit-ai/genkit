@@ -184,12 +184,7 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 		},
 	}
 
-	inputSchema := core.InferSchemaMap(EvaluatorRequest{})
-	if inputSchema != nil && opts.ConfigSchema != nil {
-		if props, ok := inputSchema["properties"].(map[string]any); ok {
-			props["options"] = opts.ConfigSchema
-		}
-	}
+	inputSchema := requestInputSchema(EvaluatorRequest{}, "options", opts.ConfigSchema)
 
 	return &evaluator{
 		Action: *core.NewActionOf(api.ActionTypeEvaluator, name, &core.ActionOptions{
