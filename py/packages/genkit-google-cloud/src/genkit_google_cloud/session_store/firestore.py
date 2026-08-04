@@ -106,8 +106,7 @@ def status_from_doc(doc_snapshot: DocumentSnapshot) -> SnapshotStatus | None:
     try:
         out: Any = SnapshotStatus(status_val)
     except ValueError:
-        doc_id = getattr(doc_snapshot, 'id', 'unknown')
-        logger.warning("Unknown SnapshotStatus '%s' in Firestore document '%s'", status_val, doc_id)
+        logger.warning("Unknown SnapshotStatus '%s' in Firestore document '%s'", status_val, doc_snapshot.id)
         return None
     return out
 
@@ -780,20 +779,16 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
     def _ensure_sync_client(self) -> firestore.Client:
         """Return the sync client used for realtime watches.
 
-        ``google-cloud-firestore`` stores credentials / database / client options
-        only on private attrs (``_credentials``, ``_database``,
-        ``_client_options``) — there is no public getter. We copy those so the
-        watch client hits the same project and database as ``self.client``. If a
-        library bump renames them, pass an explicit ``sync_client=`` instead.
+        Uses ``_to_sync_copy()`` provided by ``google-cloud-firestore``'s
+        ``AsyncClient`` to instantiate a sync client sharing the same project,
+        credentials, and database.
         """
         if self.sync_client is not None:
             return self.sync_client
-        self.sync_client = firestore.Client(
-            project=self.client.project,
-            credentials=getattr(self.client, '_credentials', None),
-            database=getattr(self.client, '_database', None),
-            client_options=getattr(self.client, '_client_options', None),
-        )
+        if isinstance(self.client, firestore.AsyncClient) and hasattr(self.client, '_to_sync_copy'):
+            self.sync_client = self.client._to_sync_copy()
+        else:
+            self.sync_client = firestore.Client(project=self.client.project)
         self._owns_sync_client = True
         return self.sync_client
 
