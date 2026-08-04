@@ -444,12 +444,14 @@ type outputOptions struct {
 	CustomConstrained  bool           // Whether generation should use custom constrained output instead of native model constrained output.
 }
 
-// OutputOption is an option for the output of a prompt or generate request.
-// It applies only to DefinePrompt() and Generate().
+// OutputOption is an option for the output of a prompt, generate request, or
+// tool. It applies to DefinePrompt(), Generate(), and the tool constructors;
+// tools accept only the schema-setting output options.
 type OutputOption interface {
 	PromptOption
 	GenerateOption
 	applyOutput(*outputOptions)
+	applyTool(*toolOptions)
 }
 
 // applyOutput applies the option to the output options. The schema, format,
@@ -473,6 +475,17 @@ func (o *outputOptions) applyOutput(opts *outputOptions) {
 
 func (o *outputOptions) applyPrompt(opts *promptOptions)     { o.applyOutput(&opts.outputOptions) }
 func (o *outputOptions) applyGenerate(opts *generateOptions) { o.applyOutput(&opts.outputOptions) }
+
+// applyTool applies the option to the tool options. Only the schema slot
+// transfers: a tool's output schema is advertised to the model, while format,
+// instructions, and constrained-output settings steer generation and have no
+// meaning on a tool. The schema is a single-value slot, so the last option to
+// set it wins.
+func (o *outputOptions) applyTool(tOpts *toolOptions) {
+	if o.OutputSchema != nil {
+		tOpts.OutputSchema = o.OutputSchema
+	}
+}
 
 // WithOutputType sets the output format to JSON and the schema derived from the given value.
 func WithOutputType(output any) OutputOption {
@@ -817,6 +830,7 @@ func WithToolRestarts(parts ...*Part) GenerateOption {
 // toolOptions holds configuration options for defining tools.
 type toolOptions struct {
 	inputOptions
+	OutputSchema map[string]any // JSON schema of the tool's output.
 	StrictSchema *bool
 }
 
