@@ -134,8 +134,11 @@ func NewBidiAction[In, Out, Stream, Init any](
 // the embedded Action's Register so that the registry holds the BidiAction
 // itself; registry lookups must satisfy api.BidiAction.
 func (b *BidiAction[In, Out, Stream, Init]) Register(r api.Registry) {
-	// See Action.Register: the "dynamic" marker is registration-derived.
-	delete(b.desc.Metadata, "dynamic")
+	// See Action.Register: the "dynamic" marker is dropped on
+	// definition-time registration only, into a fresh map.
+	if shouldStripDynamicMarker(b.desc.Metadata, r) {
+		b.desc.Metadata = withoutDynamicMarker(b.desc.Metadata)
+	}
 	b.Action.registry = r
 	r.RegisterAction(b.desc.Key, b)
 }
