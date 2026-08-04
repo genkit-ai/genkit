@@ -19,6 +19,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"reflect"
 	"time"
 
@@ -403,14 +404,36 @@ func (a *Action[In, Out, Stream]) Desc() api.ActionDesc {
 
 // Register registers the action with the given registry.
 func (a *Action[In, Out, Stream]) Register(r api.Registry) {
-	// The "dynamic" metadata marker means "created at runtime, outside any
-	// registry" (constructors for detached actions, e.g. ai.NewTool, stamp
-	// it). That stops being true the moment the action registers, so the
-	// marker is registration-derived: it is removed here rather than left as
-	// stale construction-time state.
-	delete(a.desc.Metadata, "dynamic")
+	if shouldStripDynamicMarker(a.desc.Metadata, r) {
+		a.desc.Metadata = withoutDynamicMarker(a.desc.Metadata)
+	}
 	a.registry = r
 	r.RegisterAction(a.desc.Key, a)
+}
+
+// shouldStripDynamicMarker reports whether registering into r makes the
+// "dynamic" metadata marker stale. The marker means "created at runtime,
+// outside any registry" (constructors for detached actions, e.g. ai.NewTool,
+// stamp it). Definition-time registration makes that untrue, so the marker is
+// dropped. Registration into a per-request child registry (e.g. Generate
+// registering detached tools for one call) does not change what the action
+// is, so the marker survives; that path must also never write to the
+// metadata: detached actions are shared across concurrent requests.
+func shouldStripDynamicMarker(metadata map[string]any, r api.Registry) bool {
+	if r.IsChild() {
+		return false
+	}
+	_, ok := metadata["dynamic"]
+	return ok
+}
+
+// withoutDynamicMarker returns a copy of metadata without the "dynamic"
+// marker. It copies rather than deletes in place: the map may be caller-owned
+// or shared with another action.
+func withoutDynamicMarker(metadata map[string]any) map[string]any {
+	m := maps.Clone(metadata)
+	delete(m, "dynamic")
+	return m
 }
 
 // ResolveActionFor returns the action for the given key in the global registry,

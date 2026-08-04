@@ -135,18 +135,63 @@ func TestDeprecatedConstructorsDelegate(t *testing.T) {
 
 // TestRegisterClearsDynamicMarker pins that the "dynamic" metadata marker
 // ("created at runtime, outside any registry") is registration-derived: it
-// survives on detached actions and is removed when the action registers.
+// survives on detached actions and is removed when the action registers into
+// a definition-time registry. Registration into a per-request child registry
+// (how Generate handles detached tools) keeps the marker and never writes to
+// the metadata map, which may be caller-owned and shared across concurrent
+// requests.
 func TestRegisterClearsDynamicMarker(t *testing.T) {
-	r := registry.New()
-	a := NewActionOf(api.ActionTypeCustom, "detached", &ActionOptions{
-		Metadata: map[string]any{"dynamic": true},
-	}, func(ctx context.Context, s string) (string, error) { return s, nil })
+	newDynamic := func(name string, metadata map[string]any) *Action[string, string, struct{}] {
+		return NewActionOf(api.ActionTypeCustom, name, &ActionOptions{Metadata: metadata},
+			func(ctx context.Context, s string) (string, error) { return s, nil })
+	}
 
-	if v, ok := a.Desc().Metadata["dynamic"]; !ok || v != true {
-		t.Fatalf("unregistered action missing dynamic marker: %v", a.Desc().Metadata)
-	}
-	a.Register(r)
-	if _, ok := a.Desc().Metadata["dynamic"]; ok {
-		t.Errorf("registered action still carries dynamic marker: %v", a.Desc().Metadata)
-	}
+	t.Run("definition-time registration strips the marker", func(t *testing.T) {
+		r := registry.New()
+		a := newDynamic("detached", map[string]any{"dynamic": true})
+
+		if v, ok := a.Desc().Metadata["dynamic"]; !ok || v != true {
+			t.Fatalf("unregistered action missing dynamic marker: %v", a.Desc().Metadata)
+		}
+		a.Register(r)
+		if _, ok := a.Desc().Metadata["dynamic"]; ok {
+			t.Errorf("registered action still carries dynamic marker: %v", a.Desc().Metadata)
+		}
+	})
+
+	t.Run("child-registry registration keeps the marker", func(t *testing.T) {
+		child := registry.New().NewChild()
+		a := newDynamic("detached", map[string]any{"dynamic": true})
+
+		a.Register(child)
+		if v, ok := a.Desc().Metadata["dynamic"]; !ok || v != true {
+			t.Errorf("child registration stripped the dynamic marker: %v", a.Desc().Metadata)
+		}
+	})
+
+	t.Run("caller's metadata map is not mutated", func(t *testing.T) {
+		r := registry.New()
+		metadata := map[string]any{"dynamic": true, "keep": "me"}
+		a := newDynamic("detached", metadata)
+
+		a.Register(r)
+		if v, ok := metadata["dynamic"]; !ok || v != true {
+			t.Errorf("Register mutated the caller's metadata map: %v", metadata)
+		}
+		if _, ok := a.Desc().Metadata["keep"]; !ok {
+			t.Errorf("stripped metadata lost unrelated keys: %v", a.Desc().Metadata)
+		}
+	})
+
+	t.Run("actions sharing a metadata map stay independent", func(t *testing.T) {
+		r := registry.New()
+		shared := map[string]any{"dynamic": true}
+		a := newDynamic("one", shared)
+		b := newDynamic("two", shared)
+
+		a.Register(r)
+		if _, ok := b.Desc().Metadata["dynamic"]; !ok {
+			t.Errorf("registering one action stripped the marker from its sibling: %v", b.Desc().Metadata)
+		}
+	})
 }
