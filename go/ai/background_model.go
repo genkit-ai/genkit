@@ -19,6 +19,7 @@ package ai
 import (
 	"context"
 	"errors"
+	"maps"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
@@ -99,34 +100,31 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 		opts.Supports = &ModelSupports{}
 	}
 
-	metadata := map[string]any{
-		"type": api.ActionTypeBackgroundModel,
-		"model": map[string]any{
-			"label": opts.Label,
-			"supports": map[string]any{
-				"media":       opts.Supports.Media,
-				"context":     opts.Supports.Context,
-				"multiturn":   opts.Supports.Multiturn,
-				"systemRole":  opts.Supports.SystemRole,
-				"tools":       opts.Supports.Tools,
-				"toolChoice":  opts.Supports.ToolChoice,
-				"constrained": opts.Supports.Constrained,
-				"output":      opts.Supports.Output,
-				"contentType": opts.Supports.ContentType,
-				"longRunning": opts.Supports.LongRunning,
-			},
-			"versions":      opts.Versions,
-			"stage":         opts.Stage,
-			"customOptions": opts.ConfigSchema,
+	// Seed from the caller's metadata, then stamp the built-in keys over it so
+	// they cannot be corrupted; registry discovery depends on them.
+	metadata := make(map[string]any, len(opts.Metadata)+2)
+	maps.Copy(metadata, opts.Metadata)
+	metadata["type"] = api.ActionTypeBackgroundModel
+	metadata["model"] = map[string]any{
+		"label": opts.Label,
+		"supports": map[string]any{
+			"media":       opts.Supports.Media,
+			"context":     opts.Supports.Context,
+			"multiturn":   opts.Supports.Multiturn,
+			"systemRole":  opts.Supports.SystemRole,
+			"tools":       opts.Supports.Tools,
+			"toolChoice":  opts.Supports.ToolChoice,
+			"constrained": opts.Supports.Constrained,
+			"output":      opts.Supports.Output,
+			"contentType": opts.Supports.ContentType,
+			"longRunning": opts.Supports.LongRunning,
 		},
+		"versions":      opts.Versions,
+		"stage":         opts.Stage,
+		"customOptions": opts.ConfigSchema,
 	}
 
-	inputSchema := core.InferSchemaMap(ModelRequest{})
-	if inputSchema != nil && opts.ConfigSchema != nil {
-		if props, ok := inputSchema["properties"].(map[string]any); ok {
-			props["config"] = opts.ConfigSchema
-		}
-	}
+	inputSchema := requestInputSchema(ModelRequest{}, "config", opts.ConfigSchema)
 
 	mws := []ModelMiddleware{
 		simulateSystemPrompt(&opts.ModelOptions, nil),
@@ -144,7 +142,10 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 		return modelOpFromResponse(resp)
 	}
 
+	// The label doubles as the description on all three component actions,
+	// matching the JS background model surface.
 	return &backgroundModel{*core.NewBackgroundActionOf(api.ActionTypeBackgroundModel, name, &core.BackgroundActionOptions{
+		Description: opts.Label,
 		Metadata:    metadata,
 		InputSchema: inputSchema,
 	}, wrappedFn, checkFn, opts.Cancel)}
