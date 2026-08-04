@@ -469,12 +469,11 @@ func toAnthropicParts(parts []*ai.Part) ([]anthropic.ContentBlockParamUnion, err
 			toolReq := p.ToolRequest
 			blocks = append(blocks, anthropic.NewToolUseBlock(toolReq.Ref, toolReq.Input, toolReq.Name))
 		case p.IsToolResponse():
-			toolResp := p.ToolResponse
-			output, err := json.Marshal(toolResp.Output)
+			block, err := toAnthropicToolResultBlock(p.ToolResponse)
 			if err != nil {
-				return nil, fmt.Errorf("unable to parse tool response, err: %w", err)
+				return nil, err
 			}
-			blocks = append(blocks, anthropic.NewToolResultBlock(toolResp.Ref, string(output), false))
+			blocks = append(blocks, block)
 		case p.IsReasoning():
 			blocks = append(blocks, anthropic.NewThinkingBlock(string(metadataSignature(p.Metadata)), p.Text))
 		default:
@@ -483,6 +482,77 @@ func toAnthropicParts(parts []*ai.Part) ([]anthropic.ContentBlockParamUnion, err
 	}
 
 	return blocks, nil
+}
+
+// toAnthropicToolResultBlock translates an [ai.ToolResponse] to an Anthropic
+// tool_result block.
+//
+// Multipart tools return rich content parts alongside their structured output.
+// Anthropic exposes a single content array per tool_result rather than separate
+// fields, so the structured output is emitted as a leading text block and the
+// content parts follow as text, image, or document blocks.
+func toAnthropicToolResultBlock(toolResp *ai.ToolResponse) (anthropic.ContentBlockParamUnion, error) {
+	content := make([]anthropic.ToolResultBlockParamContentUnion, 0, len(toolResp.Content)+1)
+
+	// Only send the structured output when the tool produced one. A multipart
+	// tool may return content parts alone, and a literal "null" text block
+	// would be noise to the model. Tool responses with neither output nor
+	// content still send "null" so the block is never empty, which the API
+	// rejects.
+	if toolResp.Output != nil || len(toolResp.Content) == 0 {
+		output, err := json.Marshal(toolResp.Output)
+		if err != nil {
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("unable to parse tool response, err: %w", err)
+		}
+		content = append(content, anthropic.ToolResultBlockParamContentUnion{
+			OfText: &anthropic.TextBlockParam{Text: string(output)},
+		})
+	}
+
+	for _, p := range toolResp.Content {
+		c, err := toAnthropicToolResultContent(p)
+		if err != nil {
+			return anthropic.ContentBlockParamUnion{}, err
+		}
+		content = append(content, c)
+	}
+
+	return anthropic.ContentBlockParamUnion{
+		OfToolResult: &anthropic.ToolResultBlockParam{
+			ToolUseID: toolResp.Ref,
+			Content:   content,
+			IsError:   anthropic.Bool(false),
+		},
+	}, nil
+}
+
+// toAnthropicToolResultContent translates a part of a multipart tool response
+// to a block accepted inside an Anthropic tool_result.
+func toAnthropicToolResultContent(p *ai.Part) (anthropic.ToolResultBlockParamContentUnion, error) {
+	switch {
+	case p.IsText():
+		return anthropic.ToolResultBlockParamContentUnion{
+			OfText: &anthropic.TextBlockParam{Text: p.Text},
+		}, nil
+	case p.IsMedia(), p.IsData():
+		kind := "media"
+		if p.IsData() {
+			kind = "data"
+		}
+		block, err := toAnthropicMediaBlock(p, kind)
+		if err != nil {
+			return anthropic.ToolResultBlockParamContentUnion{}, err
+		}
+		switch {
+		case block.OfImage != nil:
+			return anthropic.ToolResultBlockParamContentUnion{OfImage: block.OfImage}, nil
+		case block.OfDocument != nil:
+			return anthropic.ToolResultBlockParamContentUnion{OfDocument: block.OfDocument}, nil
+		}
+	}
+
+	return anthropic.ToolResultBlockParamContentUnion{}, status.Errorf(ai.ErrInvalidPart,
+		"unsupported part in tool response content: Anthropic tool results accept text, image, and document parts")
 }
 
 // toGenkitResponse translates an Anthropic Message to [ai.ModelResponse]

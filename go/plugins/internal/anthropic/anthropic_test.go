@@ -410,6 +410,70 @@ func TestToAnthropicParts(t *testing.T) {
 				anthropic.NewToolResultBlock("ref1", `{"result":"ok"}`, false),
 			},
 		},
+		{
+			name: "multipart tool response keeps output and content parts",
+			parts: []*ai.Part{
+				ai.NewToolResponsePart(&ai.ToolResponse{
+					Ref:    "ref1",
+					Output: map[string]any{"result": "ok"},
+					Content: []*ai.Part{
+						ai.NewTextPart("here is the chart"),
+						ai.NewMediaPart("image/png", "data:image/png;base64,iVBORw0KGgo="),
+					},
+				}),
+			},
+			expected: []anthropic.ContentBlockParamUnion{
+				{OfToolResult: &anthropic.ToolResultBlockParam{
+					ToolUseID: "ref1",
+					IsError:   anthropic.Bool(false),
+					Content: []anthropic.ToolResultBlockParamContentUnion{
+						{OfText: &anthropic.TextBlockParam{Text: `{"result":"ok"}`}},
+						{OfText: &anthropic.TextBlockParam{Text: "here is the chart"}},
+						{OfImage: anthropic.NewImageBlockBase64("image/png", "iVBORw0KGgo=").OfImage},
+					},
+				}},
+			},
+		},
+		{
+			name: "multipart tool response without output omits the null text block",
+			parts: []*ai.Part{
+				ai.NewToolResponsePart(&ai.ToolResponse{
+					Ref: "ref1",
+					Content: []*ai.Part{
+						ai.NewMediaPart("application/pdf", "data:application/pdf;base64,JVBERi0xLjQK"),
+					},
+				}),
+			},
+			expected: []anthropic.ContentBlockParamUnion{
+				{OfToolResult: &anthropic.ToolResultBlockParam{
+					ToolUseID: "ref1",
+					IsError:   anthropic.Bool(false),
+					Content: []anthropic.ToolResultBlockParamContentUnion{
+						{OfDocument: anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{Data: "JVBERi0xLjQK"}).OfDocument},
+					},
+				}},
+			},
+		},
+		{
+			name: "tool response content with unsupported media type is rejected",
+			parts: []*ai.Part{
+				ai.NewToolResponsePart(&ai.ToolResponse{
+					Ref:     "ref1",
+					Content: []*ai.Part{ai.NewMediaPart("audio/mpeg", "data:audio/mpeg;base64,SUQzAw==")},
+				}),
+			},
+			expectedErr: `unsupported media content type "audio/mpeg"`,
+		},
+		{
+			name: "tool response content with unsupported part kind is rejected",
+			parts: []*ai.Part{
+				ai.NewToolResponsePart(&ai.ToolResponse{
+					Ref:     "ref1",
+					Content: []*ai.Part{ai.NewReasoningPart("thinking", nil)},
+				}),
+			},
+			expectedErr: "unsupported part in tool response content",
+		},
 	}
 
 	for _, tt := range tests {

@@ -254,6 +254,40 @@ func TestAnthropicLive(t *testing.T) {
 			t.Fatal("expected a response but nothing was returned")
 		}
 	})
+	t.Run("multipart tool", func(t *testing.T) {
+		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
+		img64, err := fetchImgAsBase64()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		tool := genkit.DefineMultipartTool(g, "getImage", "returns a misterious image",
+			func(ctx *ai.ToolContext, input any) (*ai.MultipartToolResponse, error) {
+				return &ai.MultipartToolResponse{
+					Output: map[string]any{"status": "success"},
+					Content: []*ai.Part{
+						ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,"+img64),
+					},
+				}, nil
+			},
+		)
+
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModel(m),
+			ai.WithConfig(&anthropic.MessageNewParams{
+				MaxTokens: 1024,
+			}),
+			ai.WithTools(tool),
+			ai.WithPrompt("get an image and tell me what is in it"),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !strings.Contains(strings.ToLower(resp.Text()), "cat") {
+			t.Errorf("expected response to contain 'cat', got: %s", resp.Text())
+		}
+	})
 	t.Run("streaming", func(t *testing.T) {
 		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
 		out := ""
