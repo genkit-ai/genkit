@@ -597,7 +597,7 @@ func DefineModel(g *Genkit, name string, opts *ai.ModelOptions, fn ai.ModelFunc)
 func DefineTypedBackgroundModel[Config any](
 	g *Genkit,
 	name string,
-	opts *ai.BackgroundModelOptions,
+	opts *ai.TypedBackgroundModelOptions,
 	startFn ai.TypedStartModelOpFunc[Config],
 	checkFn ai.CheckModelOpFunc,
 	cancelFn ai.CancelModelOpFunc,

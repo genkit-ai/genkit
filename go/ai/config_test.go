@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -113,6 +114,34 @@ func TestModelConfigNormalizedBeforeBuiltins(t *testing.T) {
 	_, err := m.Generate(context.Background(), req, nil)
 	if err == nil || !strings.Contains(err.Error(), "invalid config type") {
 		t.Fatalf("Generate() error = %v, want config type error before media support error", err)
+	}
+}
+
+func TestTypedBackgroundModelMetadata(t *testing.T) {
+	bm := NewTypedBackgroundModel("test/bg-metadata",
+		&TypedBackgroundModelOptions{
+			Metadata: map[string]any{
+				"custom": "value",
+				"model":  "caller values must not clobber the reserved keys",
+			},
+		},
+		func(ctx context.Context, req *ModelRequest, cfg testTypedConfig) (*ModelOperation, error) {
+			return &ModelOperation{ID: "op1"}, nil
+		},
+		func(ctx context.Context, op *ModelOperation) (*ModelOperation, error) {
+			return op, nil
+		},
+		nil)
+
+	metadata := bm.Desc().Metadata
+	if got := metadata["custom"]; got != "value" {
+		t.Errorf(`Metadata["custom"] = %v, want "value"`, got)
+	}
+	if got := metadata["type"]; got != api.ActionTypeBackgroundModel {
+		t.Errorf(`Metadata["type"] = %v, want %v`, got, api.ActionTypeBackgroundModel)
+	}
+	if _, ok := metadata["model"].(map[string]any); !ok {
+		t.Errorf(`Metadata["model"] = %v, want the built model info map`, metadata["model"])
 	}
 }
 

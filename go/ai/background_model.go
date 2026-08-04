@@ -85,13 +85,25 @@ type CheckModelOpFunc = func(ctx context.Context, op *ModelOperation) (*ModelOpe
 // CancelModelOpFunc cancels a background model operation.
 type CancelModelOpFunc = func(ctx context.Context, op *ModelOperation) (*ModelOperation, error)
 
-// BackgroundModelOptions holds configuration for defining a background model
+// TypedBackgroundModelOptions configures a background model created with
+// [NewTypedBackgroundModel]. It holds descriptor data only; the cancel
+// function is a constructor argument.
+type TypedBackgroundModelOptions struct {
+	ConfigSchema map[string]any // JSON schema for the model's config.
+	Label        string         // User-friendly name for the model.
+	Stage        ModelStage     // Indicates the maturity stage of the model.
+	Supports     *ModelSupports // Capabilities of the model.
+	Versions     []string       // Available versions of the model.
+	Metadata     map[string]any // Arbitrary key-value data attached to the action descriptor.
+}
+
+// BackgroundModelOptions holds configuration for defining a background model.
+//
+// Deprecated: Use [TypedBackgroundModelOptions] with
+// [NewTypedBackgroundModel].
 type BackgroundModelOptions struct {
 	ModelOptions
 	// Cancel is the function that cancels a background model operation.
-	//
-	// Deprecated: Pass cancelFn to [NewTypedBackgroundModel] instead;
-	// options hold descriptor data only.
 	Cancel   CancelModelOpFunc
 	Metadata map[string]any // Additional metadata.
 }
@@ -113,15 +125,14 @@ func LookupBackgroundModel(r api.Registry, name string) BackgroundModel {
 // background models with [genkit.DefineTypedBackgroundModel].
 //
 // cancelFn is optional; nil means the model does not support canceling
-// operations. When cancelFn is nil, the deprecated
-// [BackgroundModelOptions.Cancel] is used as a fallback.
+// operations.
 //
 // Config is the model's typed configuration; it is usually inferred from
 // startFn's signature. See [NewTypedModel] for how the request's config
 // is deserialized.
 func NewTypedBackgroundModel[Config any](
 	name string,
-	opts *BackgroundModelOptions,
+	opts *TypedBackgroundModelOptions,
 	startFn TypedStartModelOpFunc[Config],
 	checkFn CheckModelOpFunc,
 	cancelFn CancelModelOpFunc,
@@ -137,7 +148,7 @@ func NewTypedBackgroundModel[Config any](
 	}
 
 	if opts == nil {
-		opts = &BackgroundModelOptions{}
+		opts = &TypedBackgroundModelOptions{}
 	}
 	labelExplicit := opts.Label != ""
 	if !labelExplicit {
@@ -183,13 +194,21 @@ func NewTypedBackgroundModel[Config any](
 		return startFn(ctx, req, cfg)
 	}
 
+	mopts := &ModelOptions{
+		ConfigSchema: opts.ConfigSchema,
+		Label:        opts.Label,
+		Stage:        opts.Stage,
+		Supports:     opts.Supports,
+		Versions:     opts.Versions,
+	}
+
 	// normalizeConfig runs outermost so that the built-in wrappers and the
 	// start function all see the typed, converted config on the request.
 	fn := core.ChainMiddleware(
 		normalizeConfig[Config](name, opts.Versions),
-		simulateSystemPrompt(&opts.ModelOptions, nil),
-		augmentWithContext(&opts.ModelOptions, nil),
-		validateSupport(name, &opts.ModelOptions),
+		simulateSystemPrompt(mopts, nil),
+		augmentWithContext(mopts, nil),
+		validateSupport(name, mopts),
 	)(backgroundModelToModelFn(typedStartFn))
 
 	wrappedFn := func(ctx context.Context, req *ModelRequest) (*ModelOperation, error) {
@@ -199,10 +218,6 @@ func NewTypedBackgroundModel[Config any](
 		}
 
 		return modelOpFromResponse(resp)
-	}
-
-	if cancelFn == nil {
-		cancelFn = opts.Cancel
 	}
 
 	// The label doubles as the description on all three component actions,
@@ -232,9 +247,19 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 	if startFn == nil {
 		panic("ai.NewBackgroundModel: startFn is required")
 	}
-	return NewTypedBackgroundModel(name, opts, func(ctx context.Context, req *ModelRequest, _ any) (*ModelOperation, error) {
+	if opts == nil {
+		opts = &BackgroundModelOptions{}
+	}
+	return NewTypedBackgroundModel(name, &TypedBackgroundModelOptions{
+		ConfigSchema: opts.ConfigSchema,
+		Label:        opts.Label,
+		Stage:        opts.Stage,
+		Supports:     opts.Supports,
+		Versions:     opts.Versions,
+		Metadata:     opts.Metadata,
+	}, func(ctx context.Context, req *ModelRequest, _ any) (*ModelOperation, error) {
 		return startFn(ctx, req)
-	}, checkFn, nil)
+	}, checkFn, opts.Cancel)
 }
 
 // GenerateOperation generates a model response as a long-running operation based on the provided options.
