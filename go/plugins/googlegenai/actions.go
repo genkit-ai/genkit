@@ -5,10 +5,7 @@ package googlegenai
 
 import (
 	"context"
-	"fmt"
 
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"google.golang.org/genai"
 )
@@ -98,53 +95,16 @@ func resolveAction(client *genai.Client, provider string, atype api.ActionType, 
 		opts := GetModelOptions(name, provider)
 		return newModel(client, name, opts).(api.Action)
 
-	case api.ActionTypeBackgroundModel:
+	// A background model is a bundle: registering it registers both its start
+	// and check actions, so the same value resolves either key. The registry
+	// registers what we return and then looks up the key it was asked for.
+	case api.ActionTypeBackgroundModel, api.ActionTypeCheckOperation:
 		if mt != ModelTypeVeo {
 			return nil
 		}
-		return createVeoBackgroundAction(client, name, provider)
-
-	case api.ActionTypeCheckOperation:
-		if mt != ModelTypeVeo {
-			return nil
-		}
-		return createVeoCheckAction(client, name, provider)
+		opts := GetModelOptions(name, provider)
+		return newVeoModel(client, name, opts).(api.Action)
 	}
 
 	return nil
-}
-
-// createVeoBackgroundAction creates a background model action for Veo.
-func createVeoBackgroundAction(client *genai.Client, name, provider string) api.Action {
-	opts := GetModelOptions(name, provider)
-	veoModel := newVeoModel(client, name, opts)
-	actionName := api.NewName(provider, name)
-
-	return core.NewAction(actionName, api.ActionTypeBackgroundModel, nil, nil,
-		func(ctx context.Context, input *ai.ModelRequest) (*core.Operation[*ai.ModelResponse], error) {
-			op, err := veoModel.Start(ctx, input)
-			if err != nil {
-				return nil, err
-			}
-			op.Action = api.KeyFromName(api.ActionTypeBackgroundModel, actionName)
-			return op, nil
-		})
-}
-
-// createVeoCheckAction creates a check operation action for Veo.
-func createVeoCheckAction(client *genai.Client, name, provider string) api.Action {
-	opts := GetModelOptions(name, provider)
-	veoModel := newVeoModel(client, name, opts)
-	actionName := api.NewName(provider, name)
-
-	return core.NewAction(actionName, api.ActionTypeCheckOperation,
-		map[string]any{"description": fmt.Sprintf("Check status of %s operation", name)}, nil,
-		func(ctx context.Context, op *core.Operation[*ai.ModelResponse]) (*core.Operation[*ai.ModelResponse], error) {
-			updatedOp, err := veoModel.Check(ctx, op)
-			if err != nil {
-				return nil, err
-			}
-			updatedOp.Action = api.KeyFromName(api.ActionTypeBackgroundModel, actionName)
-			return updatedOp, nil
-		})
 }

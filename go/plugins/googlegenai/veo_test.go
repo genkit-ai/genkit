@@ -21,6 +21,8 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/internal/registry"
 	"google.golang.org/genai"
 )
 
@@ -507,4 +509,67 @@ func TestCheckVeoOperationStructure(t *testing.T) {
 	} else {
 		t.Log("checkVeoOperation function structure test passed (mock client would be needed for full test)")
 	}
+}
+
+func TestResolveVeoActions(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		Backend: genai.BackendGeminiAPI,
+		APIKey:  "test-key",
+	})
+	if err != nil {
+		t.Fatalf("genai.NewClient: %v", err)
+	}
+
+	const modelName = "veo-3.0-generate-001"
+	startKey := api.KeyFromName(api.ActionTypeBackgroundModel, api.NewName(googleAIProvider, modelName))
+	checkKey := api.KeyFromName(api.ActionTypeCheckOperation, api.NewName(googleAIProvider, modelName))
+
+	// Resolving either key yields the background model bundle, and registering
+	// it makes both the start and check actions resolvable.
+	for _, tc := range []struct {
+		name  string
+		atype api.ActionType
+	}{
+		{"resolved as background model", api.ActionTypeBackgroundModel},
+		{"resolved as check operation", api.ActionTypeCheckOperation},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			action := resolveAction(client, googleAIProvider, tc.atype, modelName)
+			if action == nil {
+				t.Fatalf("resolveAction(%s, %q) = nil", tc.atype, modelName)
+			}
+
+			r := registry.New()
+			action.Register(r)
+
+			for _, key := range []string{startKey, checkKey} {
+				if r.LookupAction(key) == nil {
+					t.Errorf("action %q not registered", key)
+				}
+			}
+		})
+	}
+
+	t.Run("start action carries model metadata", func(t *testing.T) {
+		action := resolveAction(client, googleAIProvider, api.ActionTypeBackgroundModel, modelName)
+		if action == nil {
+			t.Fatal("resolveAction returned nil")
+		}
+
+		desc := action.Desc()
+		if desc.Metadata["model"] == nil {
+			t.Errorf("start action is missing model metadata, got %v", desc.Metadata)
+		}
+	})
+
+	t.Run("non-veo models do not resolve as background models", func(t *testing.T) {
+		for _, atype := range []api.ActionType{api.ActionTypeBackgroundModel, api.ActionTypeCheckOperation} {
+			if action := resolveAction(client, googleAIProvider, atype, "gemini-2.5-flash"); action != nil {
+				t.Errorf("resolveAction(%s, gemini-2.5-flash) = %v, want nil", atype, action)
+			}
+		}
+	})
 }
