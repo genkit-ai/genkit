@@ -21,6 +21,7 @@ import (
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
 // StartOpFunc starts a background operation.
@@ -92,7 +93,8 @@ func (b *BackgroundAction[In, Out]) Register(r api.Registry) {
 // action. It is [ActionOptions] minus the stream slot: the component actions
 // are non-streaming, so a background action never advertises a stream schema.
 // A nil options value is valid: schemas are inferred from the action's type
-// parameters.
+// parameters. When [ActionOptions] gains a field, mirror it here (and copy it
+// through in [NewBackgroundActionOf]) unless it is stream-specific.
 type BackgroundActionOptions struct {
 	Description  string         // Human-readable description of the action. Metadata["description"] is used if empty.
 	Metadata     map[string]any // Arbitrary key-value data attached to the action descriptor.
@@ -146,10 +148,14 @@ func NewBackgroundActionOf[In, Out any](
 
 	// The schema slots in opts describe the start action's In/Out types; the
 	// check and cancel actions operate on Operation values, so they keep the
-	// shared description and metadata but infer their own schemas.
+	// shared description and metadata but get their own schema, inferred once
+	// here rather than per slot per sub-action.
+	opSchema := base.SchemaMapFor[*Operation[Out]]()
 	opOpts := &ActionOptions{
-		Description: opts.Description,
-		Metadata:    opts.Metadata,
+		Description:  opts.Description,
+		Metadata:     opts.Metadata,
+		InputSchema:  opSchema,
+		OutputSchema: opSchema,
 	}
 
 	checkAction := NewActionOf(api.ActionTypeCheckOperation, name, opOpts,
