@@ -149,8 +149,8 @@ class SnapshotDoc(BaseModel):
     updated_at: str | None = None
     status: SnapshotStatus | None = None
     heartbeat_at: str | None = None
-    finish_reason: AgentFinishReason | str | None = None
-    error: GenkitRuntimeError | dict[str, Any] | None = None
+    finish_reason: AgentFinishReason | None = None
+    error: GenkitRuntimeError | None = None
     kind: Literal['diff', 'checkpoint']
     checkpoint_id: str
     checkpoint_shard_count: int
@@ -160,10 +160,6 @@ class SnapshotDoc(BaseModel):
     def to_session_snapshot(self, state_raw: dict[str, Any] | SessionState | None = None) -> SessionSnapshot:
         """Convert Firestore snapshot document and reconstructed state to a SessionSnapshot."""
         state = state_from_dict(state_raw)
-        finish_reason = (
-            AgentFinishReason(self.finish_reason) if isinstance(self.finish_reason, str) else self.finish_reason
-        )
-        err = GenkitRuntimeError.model_validate(self.error) if isinstance(self.error, dict) else self.error
         return SessionSnapshot(
             snapshot_id=self.snapshot_id,
             session_id=self.session_id,
@@ -172,8 +168,8 @@ class SnapshotDoc(BaseModel):
             updated_at=self.updated_at,
             heartbeat_at=self.heartbeat_at,
             status=self.status,
-            finish_reason=finish_reason,
-            error=err,
+            finish_reason=self.finish_reason,
+            error=self.error,
             state=state,
         )
 
@@ -487,11 +483,6 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             segment_path = meta.segment_path
             state_patch = meta.state_patch
 
-            err_dict = (
-                next_snapshot.error.model_dump(by_alias=True, exclude_none=True, mode='json')
-                if next_snapshot.error
-                else None
-            )
             doc_model = SnapshotDoc(
                 snapshot_id=sid,
                 session_id=session_id,
@@ -501,7 +492,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 status=next_snapshot.status,
                 heartbeat_at=next_snapshot.heartbeat_at,
                 finish_reason=next_snapshot.finish_reason,
-                error=err_dict,
+                error=next_snapshot.error,
                 kind=kind,
                 checkpoint_id=checkpoint_id,
                 checkpoint_shard_count=checkpoint_shard_count,
