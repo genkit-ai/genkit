@@ -629,7 +629,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         res = transaction.get_all(refs)
         gen = await res if inspect.iscoroutine(res) else res
         if isinstance(gen, list):
-            snaps: list[DocumentSnapshot] = gen
+            snaps = cast(list[DocumentSnapshot], gen)
         else:
             snaps = [s async for s in cast(AsyncIterable[DocumentSnapshot], gen)]
         for snap in snaps:
