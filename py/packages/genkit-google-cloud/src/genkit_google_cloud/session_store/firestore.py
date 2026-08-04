@@ -48,6 +48,7 @@ from google.cloud.firestore import (
     AsyncTransaction,
     DocumentSnapshot,
 )
+from pydantic import BaseModel, ConfigDict, Field
 
 from genkit._ai._agents._session import (
     SessionStore,
@@ -94,6 +95,19 @@ class SnapshotWriteMeta(TypedDict):
     checkpointShardCount: int
     segmentPath: list[str]
     statePatch: list[dict[str, Any]] | None
+
+
+class PointerDoc(BaseModel):
+    """Schema for session pointer document stored in Firestore."""
+
+    model_config = ConfigDict(extra='ignore', populate_by_name=True)
+
+    current_snapshot_id: str | None = Field(default=None, alias='currentSnapshotId')
+    checkpoint_id: str | None = Field(default=None, alias='checkpointId')
+    checkpoint_shard_count: int | None = Field(default=None, alias='checkpointShardCount')
+    segment_path: list[str] = Field(default_factory=list, alias='segmentPath')
+    is_ambiguous: bool = Field(default=False, alias='isAmbiguous')
+    leaves: dict[str, str] = Field(default_factory=dict)
 
 
 def status_from_doc(doc_snapshot: DocumentSnapshot) -> SnapshotStatus | None:
@@ -237,10 +251,8 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 result[0] = None
                 return
 
-            pointer = pointer_doc.to_dict() or {}
-            if pointer.get('isAmbiguous'):
-                leaves = pointer.get('leaves')
-                leaves_dict = leaves if isinstance(leaves, dict) else {}
+            pointer = PointerDoc.model_validate(pointer_doc.to_dict() or {})
+            if pointer.is_ambiguous:
                 if self.reject_ambiguous:
                     raise GenkitError(
                         status='FAILED_PRECONDITION',
@@ -250,39 +262,30 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                             'Resume by snapshot_id instead.'
                         ),
                     )
-                if leaves_dict:
+                if pointer.leaves:
                     newest_id = max(
-                        leaves_dict.items(),
+                        pointer.leaves.items(),
                         key=lambda kv: (str(kv[1]), str(kv[0])),
                     )[0]
                     reconstructed = await self._reconstruct(transaction, newest_id, context=context)
                     result[0] = self._to_snapshot(reconstructed) if reconstructed else None
                     return
 
-            current_id = pointer.get('currentSnapshotId')
-            checkpoint_id = pointer.get('checkpointId')
-            shard_count = pointer.get('checkpointShardCount')
-            segment_path = pointer.get('segmentPath')
-            if (
-                isinstance(current_id, str)
-                and isinstance(checkpoint_id, str)
-                and isinstance(shard_count, int)
-                and isinstance(segment_path, list)
-            ):
+            if pointer.current_snapshot_id and pointer.checkpoint_id and pointer.checkpoint_shard_count is not None:
                 reconstructed = await self._reconstruct_from(
                     transaction,
-                    checkpoint_id=checkpoint_id,
-                    shard_count=shard_count,
-                    segment_path=[str(x) for x in segment_path],
-                    target_id=current_id,
+                    checkpoint_id=pointer.checkpoint_id,
+                    shard_count=pointer.checkpoint_shard_count,
+                    segment_path=pointer.segment_path,
+                    target_id=pointer.current_snapshot_id,
                     context=context,
                 )
                 if reconstructed is not None:
                     result[0] = self._to_snapshot(reconstructed)
                     return
 
-            if isinstance(current_id, str):
-                reconstructed = await self._reconstruct(transaction, current_id, context=context)
+            if pointer.current_snapshot_id:
+                reconstructed = await self._reconstruct(transaction, pointer.current_snapshot_id, context=context)
                 result[0] = self._to_snapshot(reconstructed) if reconstructed else None
 
         await read_in_transaction(transaction)
@@ -325,7 +328,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
 
             pointer_ref = self.pointer_ref(session_id, context)
             pointer_snap = await pointer_ref.get(transaction=transaction)
-            pointer = pointer_snap.to_dict() if pointer_snap.exists else None
+            pointer = PointerDoc.model_validate(pointer_snap.to_dict()) if pointer_snap.exists else None
             new_state = state_to_dict(next_snapshot.state)
 
             meta: SnapshotWriteMeta
@@ -503,11 +506,9 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         """Update the session pointer inside an already-open transaction."""
         ref = self.pointer_ref(session_id, context)
         snapshot = await ref.get(transaction=transaction)
-        pointer = snapshot.to_dict() if snapshot.exists else None
+        pointer = PointerDoc.model_validate(snapshot.to_dict()) if snapshot.exists else None
 
-        leaves: dict[str, str] = {}
-        if pointer and isinstance(pointer.get('leaves'), dict):
-            leaves = {str(k): str(v) for k, v in pointer['leaves'].items() if isinstance(k, str) and isinstance(v, str)}
+        leaves: dict[str, str] = dict(pointer.leaves) if pointer else {}
 
         if is_new:
             if parent_snapshot_id and parent_snapshot_id in leaves:
@@ -529,10 +530,10 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         }
         if not is_ambiguous:
             payload['currentSnapshotId'] = next(iter(leaves.keys()))
-        elif pointer and 'currentSnapshotId' in pointer:
+        elif pointer and pointer.current_snapshot_id:
             payload['currentSnapshotId'] = firestore.DELETE_FIELD
 
-        if pointer:
+        if snapshot.exists:
             transaction.update(ref, payload)
         else:
             transaction.set(ref, payload)
@@ -541,20 +542,17 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         self,
         transaction: AsyncTransaction,
         parent_id: str,
-        pointer: dict[str, Any] | None,
+        pointer: PointerDoc | None,
         *,
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Resolve parent checkpoint/segment metadata without materializing state."""
-        if pointer and pointer.get('currentSnapshotId') == parent_id:
-            checkpoint_id = pointer.get('checkpointId')
-            shard_count = pointer.get('checkpointShardCount')
-            segment_path = pointer.get('segmentPath')
-            if isinstance(checkpoint_id, str) and isinstance(shard_count, int) and isinstance(segment_path, list):
+        if pointer and pointer.current_snapshot_id == parent_id:
+            if pointer.checkpoint_id and pointer.checkpoint_shard_count is not None:
                 return {
-                    'checkpointId': checkpoint_id,
-                    'checkpointShardCount': shard_count,
-                    'segmentPath': [str(x) for x in segment_path],
+                    'checkpointId': pointer.checkpoint_id,
+                    'checkpointShardCount': pointer.checkpoint_shard_count,
+                    'segmentPath': pointer.segment_path,
                 }
         snap = await self.snapshot_ref(parent_id, context).get(transaction=transaction)
         if not snap.exists:
