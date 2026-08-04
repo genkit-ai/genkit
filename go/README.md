@@ -907,6 +907,8 @@ resp, _ := supportPrompt.Execute(ctx, ai.WithInput(Ticket{
 
 Every slot has a function form: `WithSystemFn` and `WithPromptFn` for the single-message slots (with `WithSystemPartsFn` and `WithPromptPartsFn` for multi-part content), `WithMessagesFn` for the conversation, and `WithDocsFn` to attach retrieved documents.
 
+Each of the two single-message slots holds one message, so its text, parts, and function forms are four ways to write the same thing and the last one set wins. Documents and conversation messages accumulate instead.
+
 [See full example](samples/basic-prompt-content)
 
 ### Load Prompts from Files
