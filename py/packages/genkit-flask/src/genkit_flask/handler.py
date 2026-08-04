@@ -19,22 +19,18 @@
 import asyncio
 import json
 from asyncio import AbstractEventLoop
-from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable
 from typing import Any, TypeAlias, TypeVar
 
-from flask import Blueprint, Response, request
+from flask import Response, request
 from pydantic import BaseModel
 
 from genkit import Genkit, GenkitError
-from genkit._core._action import Action, ActionKind
-from genkit.agent import Agent, SessionSnapshot
+from genkit._core._action import Action
 from genkit.plugin_api import (
     ContextProvider,
     RequestData,
-    extract_action_input,
     get_callable_json,
-    parse_abort_input,
-    parse_snapshot_lookup_input,
 )
 
 # Compact JSON (no spaces) for smaller wire payload.
@@ -89,167 +85,89 @@ class _FlaskRequestData(RequestData):
         for key, value in request.headers:
             self.headers[key.lower()] = value
 
-        input_data = request.get_json(silent=True)
-        self.input = input_data.get('data') if isinstance(input_data, dict) else None
+        input_data = request.get_json()
+        self.input = input_data.get('data') if input_data else None
 
 
 def genkit_flask_handler(
-    ai: Genkit | None = None,
+    ai: Genkit,
     context_provider: ContextProvider | None = None,
-) -> Callable[[Action], Callable[..., Any]]:
-    """A decorator for serving Genkit flows via a flask server."""
+) -> Callable[[Action], Callable[..., Awaitable[FlaskRouteReturn]]]:
+    """A decorator for serving Genkit flows via a flask sever.
+
+    ```python
+    from genkit_flask import genkit_flask_handler
+
+    app = Flask(__name__)
+
+
+    @app.post('/chat')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def say_hi(name: str, ctx):
+        return await ai.generate(
+            on_chunk=ctx.send_chunk,
+            prompt=f'tell a medium sized joke about {name}',
+        )
+    ```
+
+    """
     loop = _create_loop()
 
-    def decorator(flow: Action) -> Callable[..., Any]:
+    def decorator(flow: Action) -> Callable[..., Awaitable[FlaskRouteReturn]]:
         if not isinstance(flow, Action):
             raise GenkitError(status='INVALID_ARGUMENT', message='must apply @genkit_flask_handler on a @flow')
 
         async def handler() -> FlaskRouteReturn:
-            try:
-                raw_body = request.get_json(silent=True)
-                body = (
-                    raw_body
-                    if isinstance(raw_body, dict)
-                    else ({})
-                    if raw_body is None and not request.data
-                    else raw_body
-                )
-                if not isinstance(body, dict):
-                    raise GenkitError(status='INVALID_ARGUMENT', message='Action request must be a JSON object')
-                input_val = extract_action_input(body)
-            except GenkitError as err:
-                ex = err.cause if err.cause is not None else err
-                return Response(
-                    status=400,
-                    response=json.dumps(get_callable_json(ex), separators=_JSON_SEPARATORS),
-                    content_type='application/json',
-                )
+            input_data = request.get_json()
+            if 'data' not in input_data:
+                return Response(status=400, response='flow request must be wrapped in {"data": data} object')
 
             request_data = _FlaskRequestData()
+            context = None
             action_context: dict[str, object] | None = None
             if context_provider:
-                try:
-                    context = context_provider(request_data)
-                    if asyncio.iscoroutine(context):
-                        context = await context
-                    if isinstance(context, dict):
-                        action_context = context
-                except Exception as e:
-                    ex = e.cause if isinstance(e, GenkitError) and e.cause is not None else e
-                    return Response(
-                        status=500,
-                        response=json.dumps(get_callable_json(ex), separators=_JSON_SEPARATORS),
-                        content_type='application/json',
-                    )
+                context = context_provider(request_data)
+                if asyncio.iscoroutine(context):
+                    context = await context
+                if isinstance(context, dict):
+                    action_context = context
 
+            # Substring match so Accept: text/event-stream, */* (and similar) still streams.
             accept = request_data.headers.get('accept', '')
             stream = 'text/event-stream' in accept or request.args.get('stream') == 'true'
-            init = body.get('init') if isinstance(body, dict) else None
+            init = input_data.get('init')
             if stream:
 
                 async def async_gen() -> AsyncIterator[str]:
                     try:
-                        stream_response = flow.stream(input_val, context=action_context, init=init)
+                        stream_response = flow.stream(input_data.get('data'), context=action_context, init=init)
                         async for chunk in stream_response.stream:
                             yield f'data: {json.dumps({"message": _to_dict(chunk)}, separators=_JSON_SEPARATORS)}\n\n'
 
                         result = await stream_response.response
                         yield f'data: {json.dumps({"result": _to_dict(result)}, separators=_JSON_SEPARATORS)}\n\n'
                     except Exception as e:
-                        ex = e.cause if isinstance(e, GenkitError) and e.cause is not None else e
+                        ex = e
+                        if isinstance(ex, GenkitError):
+                            ex = ex.cause
                         yield f'data: {json.dumps({"error": get_callable_json(ex)}, separators=_JSON_SEPARATORS)}\n\n'
 
                 iter = _iter_over_async(async_gen(), loop)
                 return iter
             else:
                 try:
-                    response = await flow.run(input_val, context=action_context, init=init)
-                    if response.response is None and flow.kind == ActionKind.AGENT_SNAPSHOT:
-                        return Response(status=404)
+                    response = await flow.run(input_data.get('data'), context=action_context, init=init)
                     return {'result': _to_dict(response.response)}
                 except Exception as e:
-                    ex = e.cause if isinstance(e, GenkitError) and e.cause is not None else e
+                    ex = e
+                    if isinstance(ex, GenkitError):
+                        ex = ex.cause
                     return Response(
                         status=500,
                         response=json.dumps(get_callable_json(ex), separators=_JSON_SEPARATORS),
-                        content_type='application/json',
                     )
 
         return handler
 
     return decorator
-
-
-def serve_flow(
-    flow: Action,
-    *,
-    base_path: str | None = None,
-    context_provider: ContextProvider | None = None,
-) -> Blueprint:
-    """Build a Flask Blueprint serving a single flow over HTTP."""
-    resolved_base_path = f'/{flow.name}' if base_path is None else base_path
-    bp = Blueprint(f'genkit_flow_{flow.name}', __name__)
-    bp.add_url_rule(
-        resolved_base_path,
-        endpoint=flow.name,
-        view_func=genkit_flask_handler(None, context_provider=context_provider)(flow),  # type: ignore[arg-type]
-        methods=['POST'],
-    )
-    return bp
-
-
-def serve_agent(
-    agent: Agent[Any],
-    *,
-    base_path: str | None = None,
-    context_provider: ContextProvider | None = None,
-) -> Blueprint:
-    """Build a Flask Blueprint serving an agent and its snapshot/abort endpoints over HTTP."""
-    resolved_base_path = f'/{agent.name}' if base_path is None else base_path
-    bp = Blueprint(f'genkit_agent_{agent.name}', __name__)
-
-    bp.add_url_rule(
-        resolved_base_path,
-        endpoint=f'{agent.name}_turn',
-        view_func=genkit_flask_handler(None, context_provider=context_provider)(agent),  # type: ignore[arg-type]
-        methods=['POST'],
-    )
-
-    if agent.store is not None:
-
-        async def snapshot_fn(input_val: dict[str, Any] | str | None = None) -> SessionSnapshot | None:
-            sid, sess_id = parse_snapshot_lookup_input(input_val)
-            return await agent.get_snapshot_data(snapshot_id=sid, session_id=sess_id)
-
-        async def abort_fn(input_val: dict[str, Any] | str | None = None) -> dict[str, object]:
-            snapshot_id = parse_abort_input(input_val)
-            status = await agent.abort_snapshot_data(snapshot_id)
-            return {'snapshotId': snapshot_id, 'status': str(status) if status else None}
-
-        snapshot_action = Action(
-            kind=ActionKind.AGENT_SNAPSHOT,
-            name=f'{agent.name}_snapshot',
-            fn=snapshot_fn,
-            description=f'Gets snapshot data for {agent.name}',
-        )
-        abort_action = Action(
-            kind=ActionKind.AGENT_ABORT,
-            name=f'{agent.name}_abort',
-            fn=abort_fn,
-            description=f'Aborts {agent.name} agent by snapshotId',
-        )
-
-        bp.add_url_rule(
-            f'{resolved_base_path}/getSnapshot',
-            endpoint=f'{agent.name}_getSnapshot',
-            view_func=genkit_flask_handler(None, context_provider=context_provider)(snapshot_action),  # type: ignore[arg-type]
-            methods=['POST'],
-        )
-        bp.add_url_rule(
-            f'{resolved_base_path}/abort',
-            endpoint=f'{agent.name}_abort',
-            view_func=genkit_flask_handler(None, context_provider=context_provider)(abort_action),  # type: ignore[arg-type]
-            methods=['POST'],
-        )
-
-    return bp
