@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from genkit_google_cloud import FirestoreSessionStore
@@ -33,7 +33,7 @@ from genkit._core._typing import SessionSnapshot, SessionState, SnapshotStatus
 
 def _mock_txn_client() -> tuple[MagicMock, MagicMock]:
     """Return (client, transaction) with async transactional plumbing mocked."""
-    mock_client = MagicMock()
+    mock_client = MagicMock(spec=firestore.AsyncClient)
     mock_transaction = MagicMock()
     mock_transaction._max_attempts = 1
     mock_transaction._read_only = False
@@ -563,29 +563,28 @@ async def test_firestore_session_store_status_change_and_cleanup() -> None:
     mock_sync_doc_ref.collection.return_value = mock_sync_col
     mock_sync_client = MagicMock()
     mock_sync_client.collection.return_value = mock_sync_col
+    store.client._to_sync_copy = MagicMock(return_value=mock_sync_client)  # pyright: ignore[reportAttributeAccessIssue]
+    queue = await store.on_snapshot_status_change('snap-sub')
+    assert await queue.get() == SnapshotStatus.PENDING
+    assert len(captured_cb) == 1
 
-    with patch('genkit_google_cloud.session_store.firestore.firestore.Client', return_value=mock_sync_client):
-        queue = await store.on_snapshot_status_change('snap-sub')
-        assert await queue.get() == SnapshotStatus.PENDING
-        assert len(captured_cb) == 1
+    terminal_doc = MagicMock()
+    terminal_doc.exists = True
+    terminal_doc.to_dict.return_value = {
+        'snapshotId': 'snap-sub',
+        'sessionId': 'sess-1',
+        'createdAt': '2026-07-03T00:00:00Z',
+        'status': 'aborted',
+    }
 
-        terminal_doc = MagicMock()
-        terminal_doc.exists = True
-        terminal_doc.to_dict.return_value = {
-            'snapshotId': 'snap-sub',
-            'sessionId': 'sess-1',
-            'createdAt': '2026-07-03T00:00:00Z',
-            'status': 'aborted',
-        }
+    captured_cb[0]([terminal_doc], None, None)
+    await asyncio.sleep(0.05)
 
-        captured_cb[0]([terminal_doc], None, None)
-        await asyncio.sleep(0.05)
-
-        assert await queue.get() == SnapshotStatus.ABORTED
-        assert await queue.get() is None
-        watch_mock.unsubscribe.assert_called_once()
-        assert 'snap-sub' not in store.subs
-        assert 'snap-sub' not in store._watches
+    assert await queue.get() == SnapshotStatus.ABORTED
+    assert await queue.get() is None
+    watch_mock.unsubscribe.assert_called_once()
+    assert 'snap-sub' not in store.subs
+    assert 'snap-sub' not in store._watches
 
 
 @pytest.mark.asyncio
@@ -613,17 +612,26 @@ async def test_firestore_session_store_close_stops_watches_and_sync_client() -> 
     mock_sync_client = MagicMock()
     mock_sync_client.collection.return_value = mock_sync_col
 
-    with patch('genkit_google_cloud.session_store.firestore.firestore.Client', return_value=mock_sync_client):
-        await store.on_snapshot_status_change('snap-close')
-        assert store.sync_client is mock_sync_client
-        assert 'snap-close' in store._watches
+    store.client._to_sync_copy = MagicMock(return_value=mock_sync_client)  # pyright: ignore[reportAttributeAccessIssue]
+    await store.on_snapshot_status_change('snap-close')
+    assert store.sync_client is mock_sync_client
+    assert 'snap-close' in store._watches
 
-        store.close()
-        watch_mock.unsubscribe.assert_called_once()
-        mock_sync_client.close.assert_called_once()
-        assert store.sync_client is None
-        assert store._watches == {}
-        assert store.subs == {}
+    store.close()
+    watch_mock.unsubscribe.assert_called_once()
+    mock_sync_client.close.assert_called_once()
+    assert store.sync_client is None
+    assert store._watches == {}
+    assert store.subs == {}
+
+
+@pytest.mark.asyncio
+async def test_firestore_session_store_ensure_sync_client_raises_when_unable_to_derive() -> None:
+    """_ensure_sync_client() raises RuntimeError if client has no _to_sync_copy and no sync_client set."""
+    custom_client = MagicMock(spec=[])
+    store = FirestoreSessionStore(client=custom_client)
+    with pytest.raises(RuntimeError, match="Realtime watches require a synchronous Firestore client"):
+        store._ensure_sync_client()
 
 
 @pytest.mark.asyncio
