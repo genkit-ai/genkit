@@ -216,7 +216,9 @@ def to_interaction_media(part: MediaPart) -> ContentParam:
     # Inline data URLs travel as base64; anything else is a reference the API fetches.
     url = part.media.url
     if url.startswith('data:'):
-        block['data'] = url[url.index(',') + 1 :]
+        if ',' not in url:
+            raise ValueError('Malformed data URL for media part: missing payload separator')
+        block['data'] = url.split(',', 1)[1]
     else:
         block['uri'] = url
     return cast(ContentParam, block)

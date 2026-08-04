@@ -175,7 +175,12 @@ def status_from_api_error(error: APIError) -> StatusName:
         }
         if candidate in valid:
             return cast(StatusName, candidate)
-    return status_for_http_code(int(error.code or 0))
+    # APIError.code comes straight from response JSON, so it may not be numeric.
+    try:
+        code = int(error.code or 0)
+    except (TypeError, ValueError):
+        code = 0
+    return status_for_http_code(code)
 
 
 def map_genai_error(exc: BaseException) -> GenkitError:

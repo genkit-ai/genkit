@@ -166,6 +166,12 @@ class TestToInteractionContent:
         )
         assert result == {'type': 'image', 'data': 'DATA', 'mime_type': 'image/png'}
 
+    def test_image_data_missing_separator(self) -> None:
+        with pytest.raises(ValueError, match='missing payload separator'):
+            to_interaction_content(
+                Part(MediaPart(media=Media(url='data:image/png;base64GARBAGE', content_type='image/png')))
+            )
+
     def test_image_uri(self) -> None:
         result = to_interaction_content(
             Part(MediaPart(media=Media(url='gs://bucket/image.png', content_type='image/png')))

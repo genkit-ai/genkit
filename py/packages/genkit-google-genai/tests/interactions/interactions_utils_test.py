@@ -58,6 +58,13 @@ def test_map_genai_error_maps_gaos_status_code() -> None:
     assert mapped.original_message == 'Missing input.'
 
 
+def test_map_genai_error_tolerates_non_numeric_code() -> None:
+    """APIError.code comes from response JSON, so it may be a non-numeric string."""
+    error = APIError('boom', {'error': {'message': 'weird proxy error', 'code': 'boom'}})
+    mapped = map_genai_error(error)
+    assert mapped.status == 'UNKNOWN'
+
+
 def test_map_genai_error_maps_gaos_not_found() -> None:
     error = SimpleNamespace(status_code=404, message="Did you mean 'lyria-3-pro-preview'?")
     mapped = map_genai_error(error)
