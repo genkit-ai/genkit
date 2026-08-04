@@ -34,7 +34,7 @@
     "@genkit-ai/google-cloud": "workspace:^"
   },
   "peerDependencies": {
-    "@google-cloud/firestore": ^7.11.0 || ^8.0.0",
+    "@google-cloud/firestore": "^7.11.0 || ^8.0.0",
     "firebase": ">=11.5.0",
     "firebase-admin": ">=12.2",
     "genkit": "workspace:^"
