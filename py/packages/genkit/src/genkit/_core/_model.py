@@ -25,9 +25,18 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from copy import deepcopy
 from functools import cached_property
-from typing import Any, ClassVar, Generic, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    SerializeAsAny,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypeVar
 
@@ -248,7 +257,15 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
     # Veneer types for IDE/typing (validators wrap MessageData->Message, DocumentData->Document)
     messages: list[Message]  # pyright: ignore[reportIncompatibleVariableOverride]
     docs: list[Document] | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
-    config: ConfigT | None = None
+    if TYPE_CHECKING:
+        # Reads are typed as the bound schema: after validation a parametrized
+        # request can only hold ConfigT (dicts are coerced, mismatches rejected).
+        # The runtime union is what pydantic validates and serializes against.
+        config: ConfigT | None = None
+    else:
+        # dict arm first + left_to_right: smart union would lax-coerce bare dict
+        # configs into an empty BaseModel via the unresolved ConfigT arm.
+        config: dict[str, Any] | SerializeAsAny[ConfigT] | None = Field(default=None, union_mode='left_to_right')
     tools: list[ToolDefinition] | None = None
     tool_choice: ToolChoice | None = Field(default=None)
     # Flat output fields (no nested OutputConfig)
@@ -257,17 +274,33 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
     output_constrained: bool | None = None
     output_content_type: str | None = None
 
-    @field_validator('config', mode='plain')
+    if TYPE_CHECKING:
+
+        def __init__(
+            self,
+            *,
+            messages: list[Message],
+            docs: list[Document] | None = None,
+            config: ConfigT | dict[str, Any] | None = None,
+            tools: list[ToolDefinition] | None = None,
+            tool_choice: ToolChoice | None = None,
+            output_format: str | None = None,
+            output_schema: dict[str, Any] | None = None,
+            output_constrained: bool | None = None,
+            output_content_type: str | None = None,
+            **extras: Any,  # noqa: ANN401
+        ) -> None: ...
+
+    @field_validator('config', mode='before')
     @classmethod
     def _validate_config(cls, v: object) -> object:
-        """Accept plugin config models and dicts without forcing ModelConfig.
+        """Coerce dict configs into the bound plugin schema when parametrized.
 
         Bare ModelRequest(config={...}) keeps the dict; ModelRequest[PluginConfig]
-        coerces that dict into the plugin schema. Plugin config instances pass through.
+        coerces that dict into the plugin schema. Plugin config instances pass
+        through here, then union validation rejects mismatched schemas.
         """
-        if v is None:
-            return None
-        if isinstance(v, BaseModel):
+        if v is None or isinstance(v, BaseModel):
             return v
         if isinstance(v, dict):
             args = cls.__pydantic_generic_metadata__['args']
@@ -277,6 +310,26 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
                     return schema.model_validate(v)
             return v
         raise TypeError(f'config must be a BaseModel or dict, got {type(v).__name__}')
+
+    @model_validator(mode='before')
+    @classmethod
+    def _flatten_output(cls, data: object) -> object:
+        """Accept spec wire format: unnest output into the flat output_* fields."""
+        if not isinstance(data, dict):
+            return data
+        flat = cast('dict[str, Any]', dict(data))
+        output = flat.pop('output', None)
+        if not isinstance(output, dict):
+            return data
+        for src, camel, snake in (
+            ('format', 'outputFormat', 'output_format'),
+            ('schema', 'outputSchema', 'output_schema'),
+            ('constrained', 'outputConstrained', 'output_constrained'),
+            ('contentType', 'outputContentType', 'output_content_type'),
+        ):
+            if src in output and camel not in flat and snake not in flat:
+                flat[camel] = output[src]
+        return flat
 
     @field_validator('messages', mode='before')
     @classmethod
