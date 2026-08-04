@@ -465,6 +465,7 @@ func wrapToolFunc[In, Out any](name, description string, fn ToolFunc[In, Out]) (
 	if reflect.TypeOf(o) != nil {
 		originalOutputSchema = core.InferSchemaMap(o)
 	}
+
 	metadata := map[string]any{
 		"type":        api.ActionTypeToolV2,
 		"name":        name,
