@@ -816,7 +816,7 @@ func DefinePromptAgent[State any](
 // [SessionRunner] for turn and state management; call [SessionRunner.Run]
 // to enter the per-turn loop.
 //
-// This is the agent counterpart of [core.NewStreamingAction]: use it when
+// This is the agent counterpart of [core.NewStreamingActionOf]: use it when
 // the agent must outlive or precede a registry (e.g. built in a library,
 // registered conditionally, or moved between registries). For the common
 // case, [DefineCustomAgent] creates and registers in one step.
