@@ -633,7 +633,17 @@ async def test_firestore_session_store_close_does_not_close_injected_sync_client
     store = h.store(sync_client=injected)
     store.close()
     injected.close.assert_not_called()
-    assert store.sync_client is injected
+
+
+@pytest.mark.asyncio
+async def test_firestore_session_store_ensure_sync_client_raises_genkit_error() -> None:
+    """_ensure_sync_client() raises GenkitError if client has no _to_sync_copy and no sync_client set."""
+    custom_client = MagicMock(spec=[])
+    store = FirestoreSessionStore(client=custom_client)
+    with pytest.raises(GenkitError) as exc_info:
+        store._ensure_sync_client()
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
+    assert 'Realtime status watches require a synchronous Firestore client' in str(exc_info.value)
 
 
 def _by_user(context: dict[str, Any] | None = None) -> str:

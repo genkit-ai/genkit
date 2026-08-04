@@ -840,8 +840,18 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         credentials, and database.
         """
         if self.sync_client is None:
-            self.sync_client = self.client._to_sync_copy()
-            self._owns_sync_client = True
+            if hasattr(self.client, '_to_sync_copy'):
+                self.sync_client = self.client._to_sync_copy()
+                self._owns_sync_client = True
+            else:
+                raise GenkitError(
+                    status='FAILED_PRECONDITION',
+                    message=(
+                        'Realtime status watches require a synchronous Firestore client. '
+                        'Unable to derive sync client from client. '
+                        "Please pass 'sync_client' to FirestoreSessionStore."
+                    ),
+                )
         return self.sync_client
 
     def start_listener(
