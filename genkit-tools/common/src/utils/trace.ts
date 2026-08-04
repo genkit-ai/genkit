@@ -67,10 +67,18 @@ export function stackTraceSpans(trace: TraceData): NestedSpanData | undefined {
 /** Extracts the display type/subtype of a span. */
 export function getSpanType(span: NestedSpanData): string {
   const attrs = span.attributes || {};
+  const kind = span.spanKind;
+  let kindStr = 'span';
+  if (typeof kind === 'string') {
+    kindStr = kind.toLowerCase();
+  } else if (typeof kind === 'number') {
+    const kinds = ['internal', 'server', 'client', 'producer', 'consumer'];
+    kindStr = kinds[kind] || 'span';
+  }
   return (
     (attrs['genkit:metadata:subtype'] as string) ||
     (attrs['genkit:type'] as string) ||
-    (span.spanKind ? span.spanKind.toLowerCase() : 'span')
+    kindStr
   );
 }
 
