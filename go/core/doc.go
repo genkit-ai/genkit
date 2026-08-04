@@ -189,7 +189,7 @@ For long-running operations, use background actions that return immediately
 with an operation ID that can be polled for completion:
 
 	bgAction := core.NewBackgroundActionOf(api.ActionTypeCustom, "longTask", nil,
-		func(ctx context.Context, input Input) (Output, error) {
+		func(ctx context.Context, input Input) (*core.Operation[Output], error) {
 			// Start the operation
 			return startLongOperation(input)
 		},
