@@ -55,8 +55,14 @@ interface RawEnvelope {
 const OPEN_FENCE_RE = /```[ \t]*a2ui[ \t]*\r?\n/i;
 /** The longest prefix of an opening fence, used to hold back a partial fence. */
 const MAX_PARTIAL_FENCE = '```a2ui\n'.length;
-/** Closing fence: ``` on its own (optionally indented) line, or end of text. */
-const CLOSE_FENCE_RE = /```/;
+/**
+ * Closing fence: ``` at the start of a line (optionally indented). Anchoring to
+ * line start (mirroring {@link OPEN_FENCE_RE}) is important: A2UI `Text` values
+ * "may use inline Markdown", so the JSON payload can legitimately contain a
+ * ```` ``` ```` inside a string. A bare `/```/` would match that and truncate
+ * the block mid-JSON, dropping the whole surface.
+ */
+const CLOSE_FENCE_RE = /(^|\n)[ \t]*```/;
 
 /**
  * A single ordered piece of parsed output: either a run of prose or one
@@ -244,15 +250,38 @@ export class A2uiStreamParser {
     }
     if (out.length === 0) return null;
 
-    // Guarantee the block opens with a `createSurface`, so the client always
-    // has a surface before any update targets it. Models often emit only
-    // `updateComponents`/`updateDataModel` on a follow-up (e.g. a "refresh")
-    // turn; without this the renderer would drop those updates as "surface not
-    // found". Idempotent re-creation is fine — it resets the surface.
-    const hasCreate = out.some(
-      (e) => (e as CreateSurfaceEnvelope).createSurface !== undefined
-    );
-    if (!hasCreate) {
+    const hasCreate = out.some(isCreateSurface);
+
+    if (hasCreate) {
+      // A full-surface render. Enforce the "must contain a root" protocol rule.
+      const err = this.validateRoot(out);
+      if (err) return this.reject(err);
+      return out;
+    }
+
+    // Update-only batch. Two cases:
+    //
+    //  1. The model targeted the *placeholder* (or omitted the id), so
+    //     `normalizeEnvelope` swapped in our freshly-minted `surfaceId`. That's
+    //     a fresh render the model forgot to `createSurface` for — synthesize
+    //     one so the client has a surface before the updates land, and enforce
+    //     the root rule as for any full render.
+    //
+    //  2. The updates target an *explicit, pre-existing* surface id (one the
+    //     model learned from a prior turn, e.g. via a summarized action). That's
+    //     a genuine incremental update: do NOT synthesize a `createSurface`
+    //     (that would reset the surface to empty and drop the update as
+    //     "surface not found" if ids disagreed), and do NOT require a `root`.
+    const targetId =
+      out.map(envelopeSurfaceId).find((id) => id !== undefined) ?? surfaceId;
+    const isFreshRender = targetId === surfaceId;
+
+    if (isFreshRender) {
+      const err = this.validateRoot(out);
+      if (err) return this.reject(err);
+      // Guarantee the block opens with a `createSurface`, so the client always
+      // has a surface before any update targets it. Idempotent re-creation is
+      // fine — it resets the surface.
       out.unshift({
         version: (this.options.version ?? A2UI_VERSION) as SupportedVersion,
         createSurface: {
@@ -329,6 +358,12 @@ export class A2uiStreamParser {
   /**
    * Ensures every component references a known catalog component. Returns an
    * error message describing the first problem found, or `null` if valid.
+   *
+   * This checks component *type names* against the catalog only. It intentionally
+   * does NOT enforce the "must contain a root" protocol rule — that applies only
+   * to full-surface renders and is enforced at the batch level in
+   * {@link finalizeBlock} (an incremental update to an existing surface may
+   * legitimately patch a subtree without re-declaring `root`).
    */
   private validateComponents(components: unknown): string | null {
     const catalog = this.options.catalog;
@@ -337,12 +372,6 @@ export class A2uiStreamParser {
       return 'updateComponents.components must be an array.';
     }
     const known = new Set(catalog.components.map((c) => c.name));
-    const hasRoot = (components as A2uiComponent[]).some(
-      (c) => c.id === 'root'
-    );
-    if (!hasRoot) {
-      return 'component list must contain a component id "root".';
-    }
     for (const c of components as A2uiComponent[]) {
       if (!c || typeof c.component !== 'string') {
         return 'every component needs a "component" type name.';
@@ -353,4 +382,50 @@ export class A2uiStreamParser {
     }
     return null;
   }
+
+  /**
+   * Enforces the "RE-RENDER THE WHOLE SURFACE" protocol rule for full-surface
+   * renders: any `updateComponents` in the batch must contain a component with
+   * `id: "root"`. Returns an error message, or `null` if valid. Unlike
+   * {@link validateComponents} this is a protocol check, not a catalog check, so
+   * it runs regardless of whether a catalog is configured.
+   */
+  private validateRoot(envelopes: A2uiEnvelope[]): string | null {
+    for (const e of envelopes) {
+      const uc = (e as UpdateComponentsEnvelope).updateComponents;
+      if (uc && Array.isArray(uc.components)) {
+        const hasRoot = uc.components.some((c) => c.id === 'root');
+        if (!hasRoot) {
+          return 'component list must contain a component id "root".';
+        }
+      }
+    }
+    return null;
+  }
+}
+
+/**
+ * Reads the surface id an envelope targets, regardless of its variant. Used to
+ * decide whether an update-only batch targets the freshly-minted surface (a
+ * fresh render the model forgot to `createSurface` for) or an explicit existing
+ * one (a genuine incremental update).
+ */
+function envelopeSurfaceId(e: A2uiEnvelope): string | undefined {
+  const anyE = e as {
+    createSurface?: { surfaceId?: string };
+    updateComponents?: { surfaceId?: string };
+    updateDataModel?: { surfaceId?: string };
+    deleteSurface?: { surfaceId?: string };
+  };
+  return (
+    anyE.createSurface?.surfaceId ??
+    anyE.updateComponents?.surfaceId ??
+    anyE.updateDataModel?.surfaceId ??
+    anyE.deleteSurface?.surfaceId
+  );
+}
+
+/** Type guard: does this envelope create a surface? */
+function isCreateSurface(e: A2uiEnvelope): e is CreateSurfaceEnvelope {
+  return (e as CreateSurfaceEnvelope).createSurface !== undefined;
 }

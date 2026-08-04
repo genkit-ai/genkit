@@ -26,9 +26,8 @@
  */
 
 import { remoteAgent } from 'genkit/beta/client';
-import { a2uiEnvelopesFromParts } from './part.js';
+import { a2uiEnvelopesFromParts, a2uiPart } from './part.js';
 import type { A2uiClientAction, A2uiEnvelope } from './types.js';
-import { A2UI_MIME_TYPE } from './types.js';
 
 export { a2uiEnvelopesFromParts, a2uiPart, isA2uiPart } from './part.js';
 export {
@@ -136,12 +135,6 @@ export function actionToMessage(action: A2uiClientAction) {
     '.';
   return {
     role: 'user',
-    content: [
-      { text: summary },
-      {
-        data: { envelopes: [{ action }] },
-        metadata: { mimeType: A2UI_MIME_TYPE },
-      },
-    ],
+    content: [{ text: summary }, a2uiPart([{ action }])],
   };
 }

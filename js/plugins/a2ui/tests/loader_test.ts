@@ -73,6 +73,17 @@ describe('loadCatalog', () => {
     assert.strictEqual(result.id, 'anon');
   });
 
+  it('falls back to the registration id when the catalog id is empty', async () => {
+    // `??` would let an empty-string id through, propagating catalogId:"" onto
+    // every surface. `||` covers it.
+    const ai = fakeAi();
+    const result = await loadCatalog(ai as any, {
+      id: 'anon',
+      catalog: { id: '', components: CUSTOM.components } as A2uiCatalog,
+    });
+    assert.strictEqual(result.id, 'anon');
+  });
+
   it('throws when neither catalog nor file is provided', async () => {
     const ai = fakeAi();
     await assert.rejects(

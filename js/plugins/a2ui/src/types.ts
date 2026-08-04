@@ -44,7 +44,16 @@ export const A2UI_VERSION = 'v0.9';
 export const BASIC_CATALOG_ID =
   'https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json';
 
-export type SupportedVersion = 'v0.9' | `v0.9.1`;
+/**
+ * The protocol versions this plugin knows how to emit. This is the single
+ * source of truth: {@link SupportedVersion} is derived from it, and the
+ * middleware's `version` config validates against it (so a typo like `'v0.10'`
+ * is rejected at config time rather than producing envelopes the renderer
+ * rejects at runtime).
+ */
+export const SUPPORTED_VERSIONS = ['v0.9', 'v0.9.1'] as const;
+
+export type SupportedVersion = (typeof SUPPORTED_VERSIONS)[number];
 
 /**
  * A single component entry in an A2UI adjacency list. UI is expressed as a flat
@@ -105,12 +114,30 @@ export interface DeleteSurfaceEnvelope {
   };
 }
 
-/** A single server → client A2UI envelope message. */
+/**
+ * A user action reported by a rendered surface (client → server), wrapped as an
+ * envelope so it rides the same a2ui part channel as server → client envelopes.
+ * This is the typed shape {@link actionToMessage} produces and
+ * {@link A2uiEnvelope} recognizes on the way back in.
+ */
+export interface ActionEnvelope {
+  action: A2uiClientAction;
+}
+
+/**
+ * A single A2UI envelope message.
+ *
+ * Most variants flow server → client (surfaces the agent renders); the
+ * {@link ActionEnvelope} variant flows client → server (a user interaction sent
+ * back as the next turn). Keeping both directions in one union lets
+ * {@link a2uiPart} be the single constructor for every a2ui part.
+ */
 export type A2uiEnvelope =
   | CreateSurfaceEnvelope
   | UpdateComponentsEnvelope
   | UpdateDataModelEnvelope
-  | DeleteSurfaceEnvelope;
+  | DeleteSurfaceEnvelope
+  | ActionEnvelope;
 
 /**
  * The canonical "a2ui part": a Genkit `data` part whose `data` is an object
