@@ -157,6 +157,26 @@ class SnapshotDoc(BaseModel):
     segment_path: list[str] = Field(default_factory=list)
     state_patch: list[dict[str, Any]] | None = None
 
+    def to_session_snapshot(self, state_raw: dict[str, Any] | SessionState | None = None) -> SessionSnapshot:
+        """Convert Firestore snapshot document and reconstructed state to a SessionSnapshot."""
+        state = state_from_dict(state_raw)
+        finish_reason = (
+            AgentFinishReason(self.finish_reason) if isinstance(self.finish_reason, str) else self.finish_reason
+        )
+        err = GenkitRuntimeError.model_validate(self.error) if isinstance(self.error, dict) else self.error
+        return SessionSnapshot(
+            snapshot_id=self.snapshot_id,
+            session_id=self.session_id,
+            parent_id=self.parent_id,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+            heartbeat_at=self.heartbeat_at,
+            status=self.status,
+            finish_reason=finish_reason,
+            error=err,
+            state=state,
+        )
+
 
 class PointerDoc(BaseModel):
     """Schema for session pointer document stored in Firestore."""
@@ -173,15 +193,6 @@ class PointerDoc(BaseModel):
     segment_path: list[str] = Field(default_factory=list)
     is_ambiguous: bool = False
     leaves: dict[str, str] = Field(default_factory=dict)
-
-
-class ReconstructedSnapshot(BaseModel):
-    """Reconstructed state and document meta for a snapshot turn."""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra='ignore')
-
-    doc: SnapshotDoc
-    state: dict[str, Any] = Field(default_factory=dict)
 
 
 def status_from_doc(doc_snapshot: DocumentSnapshot) -> SnapshotStatus | None:
@@ -407,7 +418,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
 
             meta: SnapshotWriteMeta
             if existing_recon is not None:
-                existing_doc = existing_recon.doc
+                existing_doc, _ = existing_recon
                 if existing_doc.kind == 'checkpoint':
                     meta = self._write_checkpoint(
                         transaction,
@@ -421,7 +432,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                     parent_state = None
                     if parent_id:
                         parent_recon = await self._reconstruct(transaction, parent_id, context=context)
-                        parent_state = parent_recon.state if parent_recon else None
+                        parent_state = parent_recon[1] if parent_recon else None
                     candidate_patch = patch_to_json(diff_json(from_value=parent_state, to_value=new_state))
                     if byte_length(candidate_patch) > self.shard_size:
                         meta = self._write_checkpoint(transaction, sid, new_state, context=context)
@@ -457,7 +468,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                         target_id=next_snapshot.parent_id,
                         context=context,
                     )
-                    parent_state = parent_recon.state if parent_recon else None
+                    parent_state = parent_recon[1] if parent_recon else None
                     candidate_patch = patch_to_json(diff_json(from_value=parent_state, to_value=new_state))
                     if byte_length(candidate_patch) > self.shard_size:
                         meta = self._write_checkpoint(transaction, sid, new_state, context=context)
@@ -640,7 +651,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         snapshot_id: str,
         *,
         context: dict[str, Any] | None = None,
-    ) -> ReconstructedSnapshot | None:
+    ) -> tuple[SnapshotDoc, dict[str, Any]] | None:
         snap = await self.snapshot_ref(snapshot_id, context).get(transaction=transaction)
         if not snap.exists:
             return None
@@ -666,7 +677,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         segment_path: list[str],
         target_id: str,
         context: dict[str, Any] | None = None,
-    ) -> ReconstructedSnapshot | None:
+    ) -> tuple[SnapshotDoc, dict[str, Any]] | None:
         target_is_checkpoint = len(segment_path) == 0
         snapshots_col = self.snapshots_col(context)
         shards_col = self.shards_col(context)
@@ -717,7 +728,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                     target_id,
                 )
                 return None
-            return ReconstructedSnapshot(doc=checkpoint_doc, state=state if isinstance(state, dict) else {})
+            return checkpoint_doc, state if isinstance(state, dict) else {}
 
         target_doc: SnapshotDoc | None = None
         for ref in seg_refs:
@@ -742,7 +753,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 target_id,
             )
             return None
-        return ReconstructedSnapshot(doc=target_doc, state=state if isinstance(state, dict) else {})
+        return target_doc, state if isinstance(state, dict) else {}
 
     def _write_shards(
         self,
@@ -812,27 +823,11 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 )
         return json.loads(b''.join(buffers).decode('utf-8'))
 
-    def _to_snapshot(self, reconstructed: ReconstructedSnapshot | None) -> SessionSnapshot | None:
+    def _to_snapshot(self, reconstructed: tuple[SnapshotDoc, dict[str, Any]] | None) -> SessionSnapshot | None:
         if reconstructed is None:
             return None
-        doc = reconstructed.doc
-        state = state_from_dict(reconstructed.state)
-        finish_reason = (
-            AgentFinishReason(doc.finish_reason) if isinstance(doc.finish_reason, str) else doc.finish_reason
-        )
-        err = GenkitRuntimeError.model_validate(doc.error) if isinstance(doc.error, dict) else doc.error
-        return SessionSnapshot(
-            snapshot_id=doc.snapshot_id,
-            session_id=doc.session_id,
-            parent_id=doc.parent_id,
-            created_at=doc.created_at,
-            updated_at=doc.updated_at,
-            heartbeat_at=doc.heartbeat_at,
-            status=doc.status,
-            finish_reason=finish_reason,
-            error=err,
-            state=state,
-        )
+        doc, state_raw = reconstructed
+        return doc.to_session_snapshot(state_raw)
 
     def _ensure_sync_client(self) -> firestore.Client:
         """Return the sync client used for realtime watches.
