@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/internal/registry"
 )
 
 func TestNewBackgroundModelInputSchema(t *testing.T) {
@@ -62,6 +63,41 @@ func TestNewBackgroundModelInputSchema(t *testing.T) {
 		}
 		if configProps["temperature"] == nil {
 			t.Errorf("config schema was not carried through, got %v", configProps)
+		}
+	})
+
+	t.Run("caller metadata is merged and built-ins win", func(t *testing.T) {
+		m := NewBackgroundModel("test/bgmodel", &BackgroundModelOptions{
+			Metadata: map[string]any{"team": "media", "type": "bogus"},
+		}, startFn, checkFn)
+
+		md := m.(api.Action).Desc().Metadata
+		if md["team"] != "media" {
+			t.Errorf("caller metadata dropped: %v", md)
+		}
+		if md["type"] != api.ActionTypeBackgroundModel {
+			t.Errorf("built-in type key must win over caller metadata, got %v", md["type"])
+		}
+	})
+
+	t.Run("label doubles as the description", func(t *testing.T) {
+		m := NewBackgroundModel("test/bgmodel", &BackgroundModelOptions{
+			ModelOptions: ModelOptions{Label: "Test Background Model"},
+		}, startFn, checkFn)
+
+		r := registry.New()
+		m.Register(r)
+		for _, key := range []string{
+			"/background-model/test/bgmodel",
+			"/check-operation/test/bgmodel",
+		} {
+			action := r.LookupAction(key)
+			if action == nil {
+				t.Fatalf("action %q not registered", key)
+			}
+			if got := action.Desc().Description; got != "Test Background Model" {
+				t.Errorf("%s description = %q, want the label", key, got)
+			}
 		}
 	})
 
