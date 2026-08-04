@@ -129,7 +129,10 @@ func NewEmbedder(name string, opts *EmbedderOptions, fn EmbedderFunc) Embedder {
 	}
 
 	return &embedder{
-		Action: *core.NewAction(name, api.ActionTypeEmbedder, metadata, inputSchema, fn),
+		Action: *core.NewActionOf(api.ActionTypeEmbedder, name, &core.ActionOptions{
+			Metadata:    metadata,
+			InputSchema: inputSchema,
+		}, fn),
 	}
 }
 
