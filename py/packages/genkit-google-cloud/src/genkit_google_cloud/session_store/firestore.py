@@ -49,6 +49,7 @@ from google.cloud.firestore import (
     DocumentSnapshot,
 )
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
 
 from genkit._ai._agents._session import (
     SessionStore,
@@ -107,34 +108,42 @@ class SnapshotWriteMeta(TypedDict):
 class SnapshotDoc(BaseModel):
     """Schema for turn snapshot document stored in Firestore."""
 
-    model_config = ConfigDict(extra='ignore', populate_by_name=True)
+    model_config = ConfigDict(
+        extra='ignore',
+        populate_by_name=True,
+        alias_generator=to_camel,
+    )
 
-    snapshot_id: str = Field(alias='snapshotId')
-    session_id: str = Field(alias='sessionId')
-    parent_id: str | None = Field(default=None, alias='parentId')
-    created_at: str = Field(alias='createdAt')
-    updated_at: str | None = Field(default=None, alias='updatedAt')
-    status: SnapshotStatus | None = Field(default=None)
-    heartbeat_at: str | None = Field(default=None, alias='heartbeatAt')
-    finish_reason: AgentFinishReason | str | None = Field(default=None, alias='finishReason')
-    error: GenkitRuntimeError | dict[str, Any] | None = Field(default=None)
+    snapshot_id: str
+    session_id: str
+    parent_id: str | None = None
+    created_at: str
+    updated_at: str | None = None
+    status: SnapshotStatus | None = None
+    heartbeat_at: str | None = None
+    finish_reason: AgentFinishReason | str | None = None
+    error: GenkitRuntimeError | dict[str, Any] | None = None
     kind: Literal['diff', 'checkpoint']
-    checkpoint_id: str = Field(alias='checkpointId')
-    checkpoint_shard_count: int = Field(alias='checkpointShardCount')
-    segment_path: list[str] = Field(default_factory=list, alias='segmentPath')
-    state_patch: list[dict[str, Any]] | None = Field(default=None, alias='statePatch')
+    checkpoint_id: str
+    checkpoint_shard_count: int
+    segment_path: list[str] = Field(default_factory=list)
+    state_patch: list[dict[str, Any]] | None = None
 
 
 class PointerDoc(BaseModel):
     """Schema for session pointer document stored in Firestore."""
 
-    model_config = ConfigDict(extra='ignore', populate_by_name=True)
+    model_config = ConfigDict(
+        extra='ignore',
+        populate_by_name=True,
+        alias_generator=to_camel,
+    )
 
-    current_snapshot_id: str | None = Field(default=None, alias='currentSnapshotId')
-    checkpoint_id: str | None = Field(default=None, alias='checkpointId')
-    checkpoint_shard_count: int | None = Field(default=None, alias='checkpointShardCount')
-    segment_path: list[str] = Field(default_factory=list, alias='segmentPath')
-    is_ambiguous: bool = Field(default=False, alias='isAmbiguous')
+    current_snapshot_id: str | None = None
+    checkpoint_id: str | None = None
+    checkpoint_shard_count: int | None = None
+    segment_path: list[str] = Field(default_factory=list)
+    is_ambiguous: bool = False
     leaves: dict[str, str] = Field(default_factory=dict)
 
 
@@ -435,22 +444,22 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 if next_snapshot.error
                 else None
             )
-            doc_model = SnapshotDoc.model_validate({
-                'snapshotId': sid,
-                'sessionId': session_id,
-                'parentId': next_snapshot.parent_id,
-                'createdAt': next_snapshot.created_at,
-                'updatedAt': next_snapshot.updated_at or next_snapshot.created_at,
-                'status': next_snapshot.status,
-                'heartbeatAt': next_snapshot.heartbeat_at,
-                'finishReason': next_snapshot.finish_reason,
-                'error': err_dict,
-                'kind': kind,
-                'checkpointId': checkpoint_id,
-                'checkpointShardCount': checkpoint_shard_count,
-                'segmentPath': segment_path,
-                'statePatch': state_patch,
-            })
+            doc_model = SnapshotDoc(
+                snapshot_id=sid,
+                session_id=session_id,
+                parent_id=next_snapshot.parent_id,
+                created_at=next_snapshot.created_at,
+                updated_at=next_snapshot.updated_at or next_snapshot.created_at,
+                status=next_snapshot.status,
+                heartbeat_at=next_snapshot.heartbeat_at,
+                finish_reason=next_snapshot.finish_reason,
+                error=err_dict,
+                kind=kind,
+                checkpoint_id=checkpoint_id,
+                checkpoint_shard_count=checkpoint_shard_count,
+                segment_path=segment_path,
+                state_patch=state_patch,
+            )
             transaction.set(snap_ref, sanitize(doc_model.model_dump(by_alias=True, exclude_none=True, mode='json')))
             await self._update_pointer_in_transaction(
                 transaction,
