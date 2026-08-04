@@ -42,12 +42,12 @@ import (
 //     are four ways to write one system message, so the last of them wins and
 //     the others are discarded, not merged into it.
 //
-// The conversation is the one collection with an exception. WithMessages and
-// WithMessagesFn accumulate as above, but WithMessagesTemplate resets: a
-// template lays out the whole conversation, down to where {{history}} puts the
-// caller's, so there is no coherent way to fold separately supplied messages
-// into it. It drops whatever came before it, and messages set after it
-// accumulate onto it.
+// One combination is refused rather than merged. WithMessagesTemplate lays out
+// the whole conversation, down to where {{history}} puts the caller's, so there
+// is no position relative to it that separately supplied messages could
+// meaningfully take. Giving it in the same DefinePrompt call as WithMessages or
+// WithMessagesFn panics, saying so. Repeating the template alone is fine and
+// takes the last one, as any other slot does.
 //
 // A zero value does not fill a slot: WithMaxTurns(0), WithToolChoice(""), or
 // WithConfig(nil) is a no-op, so an earlier non-zero value cannot be un-set by
@@ -260,16 +260,13 @@ type CommonGenOption interface {
 func (o *commonGenOptions) applyCommonGen(opts *commonGenOptions) {
 	o.configOptions.applyConfig(&opts.configOptions)
 
-	// Verbatim messages accumulate with each other, but a template resets the
-	// conversation: it lays the whole thing out, down to where {{history}} puts
-	// the caller's, so there is no coherent way to fold separately supplied
-	// messages into it. Whatever was set before it is dropped, and messages set
-	// after it accumulate onto it.
+	// The two standard rules, nothing special: verbatim messages accumulate,
+	// and the conversation template is a slot the last one set wins. Combining
+	// the two is refused by [DefinePrompt] rather than merged here, since no
+	// merge of them means anything.
+	opts.MessagesFn = appendMessagesFn(opts.MessagesFn, o.MessagesFn)
 	if o.MessagesText != nil {
 		opts.MessagesText = o.MessagesText
-		opts.MessagesFn = nil
-	} else {
-		opts.MessagesFn = appendMessagesFn(opts.MessagesFn, o.MessagesFn)
 	}
 
 	if o.Model != nil {
@@ -337,11 +334,15 @@ func WithMessages(messages ...*Message) CommonGenOption {
 // template syntax. Content that came from a user or from a remote source
 // belongs in [WithMessages] or [WithMessagesFn], which never compile it.
 //
-// A template resets the conversation. It lays the whole thing out, down to
-// where {{history}} puts the caller's, so any [WithMessages],
-// [WithMessagesFn], or [WithMessagesTemplate] set before it is dropped rather
-// than folded into it. Messages set after it accumulate onto it, so ordering
-// still reads left to right.
+// A template is the whole conversation, down to where {{history}} puts the
+// caller's, so nothing else can contribute to it: passing this in the same
+// [DefinePrompt] call as [WithMessages] or [WithMessagesFn] panics. Messages
+// that belong to the prompt go in the template as {{role}} blocks; the
+// conversation a caller passes to [Prompt.Execute] is a separate option list
+// and reaches the template at {{history}} as usual.
+//
+// Repeating this option alone is fine: it fills one slot, so the last one set
+// wins.
 //
 // Compiling the template needs a prompt, so this applies to [DefinePrompt]
 // only. That is why it returns a [PromptOption] rather than a
