@@ -22,7 +22,8 @@ import pytest
 from pydantic import BaseModel
 
 from genkit import Genkit, Message, ModelResponse, Part, Role, TextPart
-from genkit._core._action import ActionRunContext
+from genkit._core._action import ActionKind, ActionRunContext
+from genkit._core._background import BackgroundAction
 from genkit._core._error import GenkitError
 from genkit._core._model import ModelRequest
 from genkit._core._typing import ModelInfo, Operation, Supports
@@ -34,14 +35,14 @@ def ai() -> Genkit:
     return Genkit()
 
 
-async def register_bg_model(ai: Genkit, *, op_id: str = 'bg-op-123') -> None:
+async def register_bg_model(ai: Genkit, *, op_id: str = 'bg-op-123') -> BackgroundAction:
     async def start(request: ModelRequest, _: ActionRunContext) -> Operation:
         return Operation(id=op_id, done=False)
 
     async def check(op: Operation) -> Operation:
         return op
 
-    ai.define_background_model(
+    return ai.define_background_model(
         name='bg-model',
         start=start,
         check=check,
@@ -133,3 +134,60 @@ async def test_generate_operation_rejects_foreground_model_without_lro(ai: Genki
         await ai.generate_operation(model='fg-model', prompt='Hi')
 
     assert 'does not support long running operations' in str(exc_info.value)
+
+
+def register_cancellable_model(ai: Genkit, cancelled: list[str]) -> BackgroundAction:
+    async def start(request: ModelRequest, _: ActionRunContext) -> Operation:
+        return Operation(id='op-1', done=False)
+
+    async def check(op: Operation) -> Operation:
+        return op
+
+    async def cancel(op: Operation) -> Operation:
+        cancelled.append(op.id)
+        return Operation(id=op.id, done=True)
+
+    return ai.define_background_model(
+        name='cancellable-model',
+        start=start,
+        check=check,
+        cancel=cancel,
+        info=ModelInfo(supports=Supports(long_running=True)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_runs_handler_and_preserves_action_key(ai: Genkit) -> None:
+    """cancel() invokes the handler and stamps the background action key."""
+    cancelled: list[str] = []
+    action = register_cancellable_model(ai, cancelled)
+
+    assert action.supports_cancel
+
+    result = await action.cancel(Operation(id='op-1', done=False))
+
+    assert cancelled == ['op-1']
+    assert result.done is True
+    assert result.action == '/background-model/cancellable-model'
+
+
+@pytest.mark.asyncio
+async def test_cancel_action_resolvable_via_registry(ai: Genkit) -> None:
+    """Cancel registers under cancel-operation kind at {name}/cancel."""
+    action = register_cancellable_model(ai, [])
+
+    resolved = await ai.registry.resolve_action(ActionKind.CANCEL_OPERATION, 'cancellable-model/cancel')
+
+    assert resolved is action.cancel_action
+
+
+@pytest.mark.asyncio
+async def test_cancel_without_handler_returns_operation_unchanged(ai: Genkit) -> None:
+    """Without a cancel handler the operation comes back untouched (JS parity)."""
+    action = await register_bg_model(ai)
+
+    assert not action.supports_cancel
+    assert await ai.registry.resolve_action(ActionKind.CANCEL_OPERATION, 'bg-model/cancel') is None
+
+    op = Operation(id='bg-op-123', done=False)
+    assert await action.cancel(op) is op
