@@ -728,7 +728,7 @@ class ActionMetadata(GenkitModel):
         default=None, description='A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object.'
     )
     stream_schema: Any | None = Field(default=None)
-    metadata: Any | Metadata | None = Field(default=None)
+    metadata: Metadata | None = None
 
 
 class ReflectionCancelActionParams(GenkitModel):
