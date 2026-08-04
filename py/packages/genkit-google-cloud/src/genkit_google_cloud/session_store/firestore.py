@@ -21,10 +21,7 @@ full-state checkpoint. Checkpoint state is split across shard documents so no
 single write approaches Firestore's ~1 MiB document limit.
 
 Reads and writes use only document-ID lookups (pointer + snapshot + shards), so
-deployments need no secondary indexes and stay strongly consistent. A missing
-or corrupt session pointer means the session can't be resumed by ``session_id``
-until a later save rewrites the pointer — there is no collection-query repair
-path.
+deployments need no secondary indexes and stay strongly consistent.
 
 Paths (default collection ``genkit-sessions``, prefix ``global``):
 
