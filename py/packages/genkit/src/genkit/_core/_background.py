@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any, Generic, TypeVar, cast
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
@@ -276,7 +276,7 @@ def define_background_model(
     # TypeAdapter(ModelRequest[TypeVar]). When callers pass a concrete config
     # class, validate start input as ModelRequest[ConfigT].
     if isinstance(config_schema, type):
-        start_action._override_input_schema(cast(Any, ModelRequest)[config_schema])
+        start_action._override_input_schema(ModelRequest[config_schema])  # ty: ignore[invalid-type-form]
 
     # Register the check action
     check_action = registry.register_action(
