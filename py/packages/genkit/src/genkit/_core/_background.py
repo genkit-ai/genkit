@@ -162,7 +162,7 @@ class BackgroundAction(Generic[OutputT]):
         return ensure_operation(result.response)
 
 
-def ensure_operation(response: Any) -> Operation:  # noqa: ANN401
+def ensure_operation(response: object) -> Operation:
     """Convert response to Operation type."""
     if isinstance(response, Operation):
         return response
