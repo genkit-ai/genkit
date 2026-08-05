@@ -876,8 +876,6 @@ async def test_vertexai_list_actions(vertexai_plugin_instance: VertexAI) -> None
     # Verify Veo
     action4 = next(a for a in result if a.name == vertexai_name('veo-2.0-generate-001'))
     assert action4 is not None
-    # from genkit_google_genai.models.veo import VeoConfigSchema
-    # assert action4.config_schema == VeoConfigSchema
 
 
 @pytest.mark.asyncio
@@ -988,18 +986,13 @@ async def test_vertexai_list_known_models(vertexai_plugin_instance: VertexAI) ->
     vertexai_plugin_instance._runtime_client = lambda: mock_client
 
     result = vertexai_plugin_instance._list_known_models()
+    names = {a.name for a in result}
 
-    # Verify Gemini
-    action1 = next(a for a in result if a.name == vertexai_name('gemini-1.5-flash'))
-    assert action1 is not None
-
-    # Verify Imagen
-    action3 = next(a for a in result if a.name == vertexai_name('imagen-3.0-generate-001'))
-    assert action3 is not None
-
-    # Verify Veo
-    action4 = next(a for a in result if a.name == vertexai_name('veo-2.0-generate-001'))
-    assert action4 is not None
+    assert vertexai_name('gemini-1.5-flash') in names
+    assert vertexai_name('imagen-3.0-generate-001') in names
+    # Veo only produces video through a long-running operation, so it is offered
+    # as a background model and never as a plain MODEL action.
+    assert vertexai_name('veo-2.0-generate-001') not in names
 
 
 @pytest.mark.asyncio

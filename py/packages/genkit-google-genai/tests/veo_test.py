@@ -14,22 +14,29 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for Veo video generation model helpers.
+"""Tests for Veo video generation model helpers and background actions."""
 
-Verifies _from_veo_operation handles both dict-based responses (from the
-start path) and Pydantic GenerateVideosResponse objects (from the check
-path where the SDK returns a model instance).
-"""
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from genkit_google_genai import GoogleAI
+from genkit_google_genai.google import GenaiModels
 from genkit_google_genai.models.veo import (
-    VeoConfigSchema,
+    VeoConfig,
     VeoVersion,
-    _from_veo_operation,
-    _to_veo_parameters,
+    from_veo_operation,
     is_veo_model,
+    to_veo_parameters,
 )
 from google.genai import types as genai_types
+
+from genkit import FinishReason, Genkit, ModelResponse
+
+
+def veo_operation(**fields: Any) -> genai_types.GenerateVideosOperation:
+    """Build an SDK video operation the way the API delivers one."""
+    return genai_types.GenerateVideosOperation.model_validate(fields)
 
 
 class TestIsVeoModel:
@@ -43,9 +50,10 @@ class TestIsVeoModel:
         """Case-insensitive matching works."""
         assert is_veo_model('VEO-2.0-generate-001') is True
 
-    def test_non_veo_model(self) -> None:
-        """Non-Veo model names are rejected."""
+    def test_non_veo_model_name(self) -> None:
+        """Non-Veo models return False."""
         assert is_veo_model('gemini-2.0-flash') is False
+        assert is_veo_model('imagen-3.0-generate-001') is False
 
 
 class TestVeoVersion:
@@ -66,98 +74,67 @@ class TestVeoVersion:
 
 
 class TestToVeoParameters:
-    """Tests for _to_veo_parameters."""
+    """Tests for to_veo_parameters."""
 
-    def test_none_config(self) -> None:
-        """None config returns empty dict."""
-        assert _to_veo_parameters(None) == {}
-
-    def test_dict_config(self) -> None:
-        """Dict config filters out None values."""
-        config = {'aspect_ratio': '16:9', 'duration_seconds': 5, 'empty': None}
-        result = _to_veo_parameters(config)
-        assert result == {'aspect_ratio': '16:9', 'duration_seconds': 5}
+    def test_empty_config(self) -> None:
+        """Empty VeoConfig becomes an empty GenerateVideosConfig."""
+        result = to_veo_parameters(VeoConfig())
+        assert isinstance(result, genai_types.GenerateVideosConfig)
+        assert result.aspect_ratio is None
 
     def test_schema_config(self) -> None:
-        """VeoConfigSchema is converted with camelCase keys."""
-        config = VeoConfigSchema(aspect_ratio='16:9', duration_seconds=5)
-        result = _to_veo_parameters(config)
-        assert result['aspectRatio'] == '16:9'
-        assert result['durationSeconds'] == 5
+        """VeoConfig maps onto GenerateVideosConfig fields."""
+        config = VeoConfig(aspect_ratio='16:9', duration_seconds=5)
+        result = to_veo_parameters(config)
+        assert result.aspect_ratio == '16:9'
+        assert result.duration_seconds == 5
 
     def test_schema_config_includes_new_fields(self) -> None:
-        """VeoConfigSchema includes newer Veo parameters."""
-        config = VeoConfigSchema(resolution='1080p', seed=7)
-        result = _to_veo_parameters(config)
-        assert result['resolution'] == '1080p'
-        assert result['seed'] == 7
+        """VeoConfig includes newer Veo parameters."""
+        config = VeoConfig(resolution='1080p', seed=7)
+        result = to_veo_parameters(config)
+        assert result.resolution == '1080p'
+        assert result.seed == 7
 
 
 class TestFromVeoOperation:
-    """Tests for _from_veo_operation.
-
-    This function must handle two shapes for the 'response' value:
-
-    1. A plain dict — returned by the start() path or legacy REST.
-    2. A GenerateVideosResponse Pydantic model — returned by the check()
-       path where the SDK object is stored directly.
-
-    Regression: before the fix, case 2 raised
-    ``AttributeError: 'GenerateVideosResponse' object has no attribute 'get'``
-    because the code unconditionally called ``.get()`` on the response.
-    """
+    """Tests for from_veo_operation with typed GenerateVideosOperation."""
 
     def test_pending_operation(self) -> None:
         """An in-progress operation has no response — output stays None."""
-        op = _from_veo_operation({
-            'name': 'operations/123',
-            'done': False,
-        })
+        op = from_veo_operation(veo_operation(name='operations/123', done=False))
         assert op.id == 'operations/123'
         assert op.done is False
         assert op.output is None
         assert op.error is None
 
+    def test_pending_operation_null_done_normalized(self) -> None:
+        """API null/omitted done is pending, not a missing flag."""
+        for sdk_op in (
+            veo_operation(name='operations/null-done', done=None),
+            veo_operation(name='operations/omitted-done'),
+        ):
+            op = from_veo_operation(sdk_op)
+            assert op.done is False
+            assert op.output is None
+
     def test_error_operation(self) -> None:
         """An operation with an error populates op.error."""
-        op = _from_veo_operation({
-            'name': 'operations/456',
-            'done': True,
-            'error': {'message': 'Quota exceeded'},
-        })
+        op = from_veo_operation(
+            veo_operation(
+                name='operations/456',
+                done=True,
+                error={'message': 'Quota exceeded'},
+            )
+        )
         assert op.id == 'operations/456'
         assert op.done is True
         assert op.error is not None
         assert op.error.message == 'Quota exceeded'
         assert op.output is None
 
-    def test_dict_response_with_videos(self) -> None:
-        """Dict-shaped response extracts video URIs (start path)."""
-        op = _from_veo_operation({
-            'name': 'operations/789',
-            'done': True,
-            'response': {
-                'generateVideoResponse': {
-                    'generatedSamples': [
-                        {'video': {'uri': 'https://example.com/v1.mp4'}},
-                        {'video': {'uri': 'https://example.com/v2.mp4'}},
-                    ]
-                }
-            },
-        })
-        assert op.done is True
-        assert op.output is not None
-        assert op.output['finishReason'] == 'stop'
-        content = op.output['message']['content']
-        assert len(content) == 2
-        assert content[0]['media']['url'] == 'https://example.com/v1.mp4'
-        assert content[1]['media']['url'] == 'https://example.com/v2.mp4'
-
     def test_pydantic_response_with_videos(self) -> None:
-        """Pydantic GenerateVideosResponse extracts video URIs (check path).
-
-        This is the regression case — previously this raised AttributeError.
-        """
+        """GenerateVideosResponse extracts video URIs (check path)."""
         pydantic_response = genai_types.GenerateVideosResponse(
             generated_videos=[
                 genai_types.GeneratedVideo(
@@ -172,47 +149,120 @@ class TestFromVeoOperation:
                 ),
             ],
         )
-        op = _from_veo_operation({
-            'name': 'models/veo-2.0-generate-001/operations/abc',
-            'done': True,
-            'response': pydantic_response,
-        })
+        op = from_veo_operation(
+            veo_operation(
+                name='models/veo-2.0-generate-001/operations/abc',
+                done=True,
+                response=pydantic_response,
+            )
+        )
         assert op.done is True
-        assert op.output is not None
-        assert op.output['finishReason'] == 'stop'
-        content = op.output['message']['content']
+        assert isinstance(op.output, ModelResponse)
+        assert op.output.finish_reason == FinishReason.STOP
+        content = op.output.message.content if op.output.message else []
         assert len(content) == 2
-        assert content[0]['media']['url'] == 'https://example.com/video_a.mp4'
-        assert content[1]['media']['url'] == 'https://example.com/video_b.mp4'
+        media0 = content[0].root.media
+        media1 = content[1].root.media
+        assert media0 is not None and media0.url == 'https://example.com/video_a.mp4'
+        assert media1 is not None and media1.url == 'https://example.com/video_b.mp4'
 
     def test_pydantic_response_empty_videos(self) -> None:
-        """Pydantic response with no generated_videos produces no output."""
-        pydantic_response = genai_types.GenerateVideosResponse(
-            generated_videos=[],
+        """Response with no generated_videos produces no output."""
+        op = from_veo_operation(
+            veo_operation(
+                name='operations/empty',
+                done=True,
+                response=genai_types.GenerateVideosResponse(generated_videos=[]),
+            )
         )
-        op = _from_veo_operation({
-            'name': 'operations/empty',
-            'done': True,
-            'response': pydantic_response,
-        })
         assert op.done is True
         assert op.output is None
 
     def test_response_none_explicit(self) -> None:
         """Explicit None response is handled (no crash)."""
-        op = _from_veo_operation({
-            'name': 'operations/null',
-            'done': False,
-            'response': None,
-        })
+        op = from_veo_operation(
+            veo_operation(
+                name='operations/null',
+                done=False,
+                response=None,
+            )
+        )
         assert op.output is None
 
-    def test_dict_response_no_videos(self) -> None:
-        """Dict response with empty generatedSamples produces no output."""
-        op = _from_veo_operation({
-            'name': 'operations/empty-dict',
-            'done': True,
-            'response': {'generateVideoResponse': {'generatedSamples': []}},
-        })
-        assert op.done is True
-        assert op.output is None
+
+def mock_veo_client(start_done: bool = False) -> MagicMock:
+    """Build a mocked GenAI client for Veo background-model tests."""
+    client = MagicMock()
+    start_op = veo_operation(
+        name='operations/veo-start',
+        done=start_done,
+    )
+    completed_response = genai_types.GenerateVideosResponse(
+        generated_videos=[
+            genai_types.GeneratedVideo(
+                video=genai_types.Video(uri='https://example.com/generated.mp4'),
+            ),
+        ],
+    )
+    check_op = veo_operation(
+        name='operations/veo-start',
+        done=True,
+        response=completed_response,
+    )
+
+    client.aio.models.generate_videos = AsyncMock(return_value=start_op)
+    client.aio.operations.get = AsyncMock(return_value=check_op)
+    return client
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_veo_generate_returns_operation(mock_list_models: MagicMock, mock_client_ctor: MagicMock) -> None:
+    """generate() on a Veo model returns an Operation to poll."""
+    models = GenaiModels()
+    models.veo = ['veo-2.0-generate-001']
+    mock_list_models.return_value = models
+    mock_client_ctor.return_value = mock_veo_client()
+
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+    response = await ai.generate(
+        model='googleai/veo-2.0-generate-001',
+        prompt='a cat surfing',
+    )
+
+    assert response.operation is not None
+    assert response.operation.id == 'operations/veo-start'
+    assert response.operation.done is False
+    assert response.operation.action == '/background-model/googleai/veo-2.0-generate-001'
+    assert response.message is None
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_veo_generate_operation_poll_loop(mock_list_models: MagicMock, mock_client_ctor: MagicMock) -> None:
+    """generate_operation + check_operation poll Veo to a ModelResponse output."""
+    models = GenaiModels()
+    models.veo = ['veo-2.0-generate-001']
+    mock_list_models.return_value = models
+    mock_client_ctor.return_value = mock_veo_client()
+
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+    operation = await ai.generate_operation(
+        model='googleai/veo-2.0-generate-001',
+        prompt='a cat surfing',
+    )
+
+    assert operation.id == 'operations/veo-start'
+    assert operation.done is False
+
+    operation = await ai.check_operation(operation)
+
+    assert operation.done is True
+    assert isinstance(operation.output, ModelResponse)
+    assert operation.output.finish_reason == FinishReason.STOP
+    content = operation.output.message.content if operation.output.message else []
+    assert len(content) == 1
+    media = content[0].root.media
+    assert media is not None and media.url == 'https://example.com/generated.mp4'
