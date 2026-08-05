@@ -85,7 +85,7 @@ from genkit._ai._resource import (
     define_resource,
 )
 from genkit._ai._tools import Tool, define_interrupt, define_tool
-from genkit._core._action import Action, ActionKind, get_current_context  # noqa: F401 — re-exported via genkit.__init__
+from genkit._core._action import Action, ActionKind, get_current_context
 from genkit._core._background import (
     BackgroundAction,
     CancelModelOpFn,
