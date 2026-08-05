@@ -49,7 +49,7 @@ type BackgroundModel interface {
 type backgroundAction[In, Out any] = core.BackgroundAction[In, Out]
 
 // BackgroundModelAction is a background model backed by registry actions. It
-// is the concrete type returned by [NewTypedBackgroundModel]; return it from
+// is the concrete type returned by [NewBackgroundModelAction]; return it from
 // a plugin's Init for the framework to register.
 type BackgroundModelAction struct {
 	backgroundAction[*ModelRequest, *ModelResponse]
@@ -73,11 +73,11 @@ type ModelOperation = core.Operation[*ModelResponse]
 // StartModelOpFunc starts a background model operation.
 type StartModelOpFunc = func(ctx context.Context, req *ModelRequest) (*ModelOperation, error)
 
-// TypedStartModelOpFunc is a [StartModelOpFunc] that additionally
+// BackgroundModelActionFunc is a [StartModelOpFunc] that additionally
 // receives the request's typed Config: the framework deserializes the
 // request's raw config into it before calling the function (see
-// [NewTypedBackgroundModel]).
-type TypedStartModelOpFunc[Config any] = func(ctx context.Context, req *ModelRequest, config Config) (*ModelOperation, error)
+// [NewBackgroundModelAction]).
+type BackgroundModelActionFunc[Config any] = func(ctx context.Context, req *ModelRequest, config Config) (*ModelOperation, error)
 
 // CheckModelOpFunc checks the status of a background model operation.
 type CheckModelOpFunc = func(ctx context.Context, op *ModelOperation) (*ModelOperation, error)
@@ -86,7 +86,7 @@ type CheckModelOpFunc = func(ctx context.Context, op *ModelOperation) (*ModelOpe
 type CancelModelOpFunc = func(ctx context.Context, op *ModelOperation) (*ModelOperation, error)
 
 // TypedBackgroundModelOptions configures a background model created with
-// [NewTypedBackgroundModel]. It holds descriptor data plus optional lifecycle
+// [NewBackgroundModelAction]. It holds descriptor data plus optional lifecycle
 // hooks; the required start and check functions are constructor arguments.
 type TypedBackgroundModelOptions struct {
 	ConfigSchema map[string]any // JSON schema for the model's config.
@@ -104,7 +104,7 @@ type TypedBackgroundModelOptions struct {
 // BackgroundModelOptions holds configuration for defining a background model.
 //
 // Deprecated: Use [TypedBackgroundModelOptions] with
-// [NewTypedBackgroundModel].
+// [NewBackgroundModelAction].
 type BackgroundModelOptions struct {
 	ModelOptions
 	// Cancel is the function that cancels a background model operation.
@@ -123,28 +123,28 @@ func LookupBackgroundModel(r api.Registry, name string) BackgroundModel {
 	return &BackgroundModelAction{*action}
 }
 
-// NewTypedBackgroundModel creates an unregistered [BackgroundModelAction]:
+// NewBackgroundModelAction creates an unregistered [BackgroundModelAction]:
 // return it from a plugin's Init for the framework to register, or call
 // [BackgroundModelAction.Register] directly. Applications should define
-// background models with [genkit.DefineTypedBackgroundModel].
+// background models with [genkit.DefineBackgroundModelAction].
 //
 // Config is the model's typed configuration; it is usually inferred from
-// startFn's signature. See [NewTypedModel] for how the request's config
+// startFn's signature. See [NewModelAction] for how the request's config
 // is deserialized.
-func NewTypedBackgroundModel[Config any](
+func NewBackgroundModelAction[Config any](
 	name string,
 	opts *TypedBackgroundModelOptions,
-	startFn TypedStartModelOpFunc[Config],
+	startFn BackgroundModelActionFunc[Config],
 	checkFn CheckModelOpFunc,
 ) *BackgroundModelAction {
 	if name == "" {
-		panic("ai.NewTypedBackgroundModel: name is required")
+		panic("ai.NewBackgroundModelAction: name is required")
 	}
 	if startFn == nil {
-		panic("ai.NewTypedBackgroundModel: startFn is required")
+		panic("ai.NewBackgroundModelAction: startFn is required")
 	}
 	if checkFn == nil {
-		panic("ai.NewTypedBackgroundModel: checkFn is required")
+		panic("ai.NewBackgroundModelAction: checkFn is required")
 	}
 
 	if opts == nil {
@@ -240,7 +240,7 @@ func NewTypedBackgroundModel[Config any](
 
 // NewBackgroundModel defines a new model that runs in the background.
 //
-// Deprecated: Use [NewTypedBackgroundModel], which passes the request's
+// Deprecated: Use [NewBackgroundModelAction], which passes the request's
 // config to startFn as a typed value instead of leaving it type-erased on the
 // request.
 func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn StartModelOpFunc, checkFn CheckModelOpFunc) BackgroundModel {
@@ -250,7 +250,7 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 	if opts == nil {
 		opts = &BackgroundModelOptions{}
 	}
-	return NewTypedBackgroundModel(name, &TypedBackgroundModelOptions{
+	return NewBackgroundModelAction(name, &TypedBackgroundModelOptions{
 		ConfigSchema: opts.ConfigSchema,
 		Label:        opts.Label,
 		Stage:        opts.Stage,

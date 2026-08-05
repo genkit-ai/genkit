@@ -30,10 +30,10 @@ import (
 // EmbedderFunc is the function type for embedding documents.
 type EmbedderFunc = func(context.Context, *EmbedRequest) (*EmbedResponse, error)
 
-// TypedEmbedderFunc is an [EmbedderFunc] that additionally receives the
+// EmbedderActionFunc is an [EmbedderFunc] that additionally receives the
 // request's typed Config: the framework deserializes the request's raw
-// options into it before calling the function (see [NewTypedEmbedder]).
-type TypedEmbedderFunc[Config any] = func(context.Context, *EmbedRequest, Config) (*EmbedResponse, error)
+// options into it before calling the function (see [NewEmbedderAction]).
+type EmbedderActionFunc[Config any] = func(context.Context, *EmbedRequest, Config) (*EmbedResponse, error)
 
 // Embedder represents an embedder that can perform content embedding.
 type Embedder interface {
@@ -94,7 +94,7 @@ type EmbedderOptions struct {
 }
 
 // EmbedderAction is an embedder backed by a registry action. It is the
-// concrete type returned by [NewTypedEmbedder]; pass it to [WithEmbedder] to
+// concrete type returned by [NewEmbedderAction]; pass it to [WithEmbedder] to
 // use it for embedding, or return it from a plugin's Init for the framework
 // to register.
 type EmbedderAction struct {
@@ -108,10 +108,10 @@ var (
 	_ Embedder   = (*EmbedderAction)(nil)
 )
 
-// NewTypedEmbedder creates an unregistered [EmbedderAction]: return it from a
+// NewEmbedderAction creates an unregistered [EmbedderAction]: return it from a
 // plugin's Init for the framework to register, or call
 // [EmbedderAction.Register] directly. Applications should define embedders
-// with [genkit.DefineTypedEmbedder].
+// with [genkit.DefineEmbedderAction].
 //
 // Config is the embedder's typed configuration; it is usually inferred from
 // fn's signature. The framework deserializes the request's raw options into
@@ -121,13 +121,13 @@ var (
 // normalized to the converted value, so it always matches the typed
 // parameter. The config's JSON schema is inferred from Config unless
 // [EmbedderOptions.ConfigSchema] overrides it.
-func NewTypedEmbedder[Config any](
+func NewEmbedderAction[Config any](
 	name string,
 	opts *EmbedderOptions,
-	fn TypedEmbedderFunc[Config],
+	fn EmbedderActionFunc[Config],
 ) *EmbedderAction {
 	if name == "" {
-		panic("ai.NewTypedEmbedder: name is required")
+		panic("ai.NewEmbedderAction: name is required")
 	}
 
 	if opts == nil {
@@ -180,13 +180,13 @@ func NewTypedEmbedder[Config any](
 
 // NewEmbedder creates a new [Embedder].
 //
-// Deprecated: Use [NewTypedEmbedder], which passes the request's options
+// Deprecated: Use [NewEmbedderAction], which passes the request's options
 // to fn as a typed value instead of leaving them type-erased on the request.
 func NewEmbedder(name string, opts *EmbedderOptions, fn EmbedderFunc) Embedder {
 	if name == "" {
 		panic("ai.NewEmbedder: name is required")
 	}
-	return NewTypedEmbedder(name, opts, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
+	return NewEmbedderAction(name, opts, func(ctx context.Context, req *EmbedRequest, _ any) (*EmbedResponse, error) {
 		return fn(ctx, req)
 	})
 }

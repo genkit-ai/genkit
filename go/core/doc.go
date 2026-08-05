@@ -160,7 +160,7 @@ and other capabilities. Implement the [api.Plugin] interface:
 
 	func (p *MyPlugin) Init(ctx context.Context) []api.Action {
 		// Initialize the plugin and return actions to register
-		model := ai.NewTypedModel(...)
+		model := ai.NewModelAction(...)
 		tool := ai.NewTool(...)
 		return []api.Action{model, tool}
 	}

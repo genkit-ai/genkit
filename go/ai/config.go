@@ -27,7 +27,7 @@ import (
 
 // This file holds the typed-config plumbing shared by models, embedders, and
 // evaluators. Requests carry config as `any` on the wire; the
-// NewTyped* constructors wrap the user's typed function so that
+// New*Action constructors wrap the user's typed function so that
 // the raw value is deserialized into the Config type parameter before the
 // function runs, and the request's type-erased config slot is normalized to
 // that same converted value so the two views never disagree.
