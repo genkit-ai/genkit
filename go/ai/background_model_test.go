@@ -101,6 +101,27 @@ func TestNewBackgroundModelInputSchema(t *testing.T) {
 		}
 	})
 
+	t.Run("metadata description outranks a defaulted label", func(t *testing.T) {
+		m := NewBackgroundModel("test/bgmodel", &BackgroundModelOptions{
+			Metadata: map[string]any{"description": "generates videos"},
+		}, startFn, checkFn)
+
+		if got := m.(api.Action).Desc().Description; got != "generates videos" {
+			t.Errorf("Description = %q, want the caller's metadata description", got)
+		}
+	})
+
+	t.Run("explicit label outranks the metadata description", func(t *testing.T) {
+		m := NewBackgroundModel("test/bgmodel", &BackgroundModelOptions{
+			ModelOptions: ModelOptions{Label: "Test Background Model"},
+			Metadata:     map[string]any{"description": "generates videos"},
+		}, startFn, checkFn)
+
+		if got := m.(api.Action).Desc().Description; got != "Test Background Model" {
+			t.Errorf("Description = %q, want the explicit label", got)
+		}
+	})
+
 	t.Run("input schema is inferred without a config schema", func(t *testing.T) {
 		m := NewBackgroundModel("test/bgmodel", nil, startFn, checkFn)
 

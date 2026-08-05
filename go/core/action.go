@@ -82,7 +82,8 @@ type ActionOptions struct {
 	// OutputSchema is the JSON schema for the action's output. Inferred from Out if nil.
 	OutputSchema map[string]any
 	// StreamSchema is the JSON schema for outgoing stream chunks. Inferred
-	// from Stream if nil; non-streaming actions advertise none.
+	// from Stream if nil; when nil, non-streaming actions advertise none. An
+	// explicit schema is always advertised as given.
 	StreamSchema map[string]any
 }
 
@@ -403,6 +404,11 @@ func (a *Action[In, Out, Stream]) Desc() api.ActionDesc {
 }
 
 // Register registers the action with the given registry.
+//
+// Register writes the action's registry reference (and, on definition-time
+// registration, its metadata) without synchronization, like the constructors
+// it composes with. Register an action before sharing it across goroutines;
+// registering one that is concurrently in use is a data race.
 func (a *Action[In, Out, Stream]) Register(r api.Registry) {
 	if shouldStripDynamicMarker(a.desc.Metadata, r) {
 		a.desc.Metadata = withoutDynamicMarker(a.desc.Metadata)

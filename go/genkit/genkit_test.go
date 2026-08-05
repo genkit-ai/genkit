@@ -18,6 +18,7 @@ package genkit
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -283,6 +284,20 @@ func TestDefineSchemaFor(t *testing.T) {
 			t.Errorf("Schema %s not found", name)
 		}
 	}
+
+	t.Run("guard panic names DefineSchemaFor", func(t *testing.T) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("expected panic for map type")
+			}
+			if msg, ok := r.(string); !ok || !strings.HasPrefix(msg, "genkit.DefineSchemaFor:") {
+				t.Errorf("panic = %v, want it to name genkit.DefineSchemaFor", r)
+			}
+		}()
+
+		DefineSchemaFor[map[string]any](g)
+	})
 }
 
 func TestWithPromptFS(t *testing.T) {

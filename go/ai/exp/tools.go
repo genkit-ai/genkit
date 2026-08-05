@@ -65,6 +65,10 @@ func (t *Tool[In, Out]) Name() string { return t.inner.Name() }
 // [ai.NewTool] exposes (the real output type) rather than leaking the multipart
 // envelope to the model and Dev UI. Genkit infers schemas with DoNotReference,
 // so the result is fully inlined and needs no registry resolution.
+//
+// A custom schema from [ai.WithOutputSchema] or [ai.WithOutputSchemaName]
+// (which require Out to be 'any') passes through from the inner tool
+// untouched: with Out being 'any' there is no inferred schema to override it.
 func (t *Tool[In, Out]) Definition() *ai.ToolDefinition {
 	def := t.inner.Definition()
 	if schema := inferOutputSchema[Out](); schema != nil {
@@ -151,6 +155,23 @@ func (t *InterruptibleTool[In, Out, Resume]) Respond(part *ai.Part, output Out) 
 	return tool.Respond(part, output)
 }
 
+// requireAnyOutForSchemaOptions panics when an output schema option is
+// present and Out is a concrete type, mirroring [ai.NewTool]'s guard: the
+// custom schema stands in for an Out type parameter of 'any', and a concrete
+// Out would silently disagree with the advertised schema (this package's
+// [Tool.Definition] prefers the schema inferred from Out). With Out being
+// 'any', the option flows through the inner multipart tool untouched.
+func requireAnyOutForSchemaOptions[Out any](ctor, name string, opts []ai.ToolOption) {
+	for _, opt := range opts {
+		if _, ok := opt.(ai.OutputSchemaOption); ok {
+			if typ := reflect.TypeFor[Out](); typ.Kind() != reflect.Interface {
+				panic(fmt.Errorf("%s %q: WithOutputSchema and WithOutputSchemaName require Out to be of type 'any', but got %v", ctor, name, typ))
+			}
+			return
+		}
+	}
+}
+
 // DefineTool creates a new tool with a simple function signature and registers it.
 // The function receives a plain [context.Context] instead of [ai.ToolContext].
 // Use [tool.AttachParts] inside the function to return additional content parts.
@@ -172,6 +193,7 @@ func NewTool[In, Out any](
 	fn ToolFunc[In, Out],
 	opts ...ai.ToolOption,
 ) *Tool[In, Out] {
+	requireAnyOutForSchemaOptions[Out]("exp.NewTool", name, opts)
 	// DEPRECATED(breaking): Call core.NewActionOf directly instead of wrapping ai.NewMultipartTool.
 	inner := ai.NewMultipartTool(name, description, wrapSimpleFunc(fn), opts...)
 	return &Tool[In, Out]{inner: inner}
@@ -198,6 +220,7 @@ func NewInterruptibleTool[In, Out, Res any](
 	fn InterruptibleToolFunc[In, Out, Res],
 	opts ...ai.ToolOption,
 ) *InterruptibleTool[In, Out, Res] {
+	requireAnyOutForSchemaOptions[Out]("exp.NewInterruptibleTool", name, opts)
 	// DEPRECATED(breaking): Call core.NewActionOf directly instead of wrapping ai.NewMultipartTool.
 	inner := ai.NewMultipartTool(name, description, wrapInterruptibleFunc(fn), opts...)
 	return &InterruptibleTool[In, Out, Res]{Tool: Tool[In, Out]{inner: inner}}

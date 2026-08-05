@@ -963,6 +963,12 @@ func DefineSchema(g *Genkit, name string, schema map[string]any) {
 //
 //	genkit.Generate(ctx, g, ai.WithOutputSchemaName("User"), ai.WithPrompt("What is your name?"))
 func DefineSchemasFor(g *Genkit, values ...any) {
+	defineSchemasFor(g, "genkit.DefineSchemasFor", values...)
+}
+
+// defineSchemasFor implements [DefineSchemasFor]; fnName attributes the guard
+// panics to the exported function the caller actually used.
+func defineSchemasFor(g *Genkit, fnName string, values ...any) {
 	for _, v := range values {
 		t := reflect.TypeOf(v)
 		for t != nil && t.Kind() == reflect.Ptr {
@@ -970,9 +976,9 @@ func DefineSchemasFor(g *Genkit, values ...any) {
 		}
 		switch {
 		case t != nil && t.Kind() == reflect.Map:
-			panic("genkit.DefineSchemasFor: got a map; use DefineSchema(name, schema) to register a raw JSON schema")
+			panic(fnName + ": got a map; use DefineSchema(name, schema) to register a raw JSON schema")
 		case t == nil || t.Name() == "":
-			panic("genkit.DefineSchemasFor: value must be of a named type; use DefineSchema(name, schema) to name it explicitly")
+			panic(fnName + ": value must be of a named type; use DefineSchema(name, schema) to name it explicitly")
 		}
 		g.reg.RegisterSchema(t.Name(), core.InferSchemaMap(v))
 	}
@@ -997,7 +1003,7 @@ func DefineSchemasFor(g *Genkit, values ...any) {
 //	genkit.Generate(ctx, g, ai.WithOutputSchemaName("User"), ai.WithPrompt("What is your name?"))
 func DefineSchemaFor[T any](g *Genkit) {
 	var v T
-	DefineSchemasFor(g, v)
+	defineSchemasFor(g, "genkit.DefineSchemaFor", v)
 }
 
 // DefineDataPrompt creates a new [ai.DataPrompt] with strongly-typed input and output.

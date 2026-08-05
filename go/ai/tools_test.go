@@ -975,16 +975,16 @@ func TestToolWithOutputSchemaOptions(t *testing.T) {
 		}
 	})
 
-	t.Run("panics for multipart tools", func(t *testing.T) {
-		defer func() {
-			if recover() == nil {
-				t.Error("expected panic for output schema options on a multipart tool")
-			}
-		}()
-
-		NewMultipartTool("multipartOut", "Multipart with output schema",
+	t.Run("multipart tools advertise the custom schema over the envelope", func(t *testing.T) {
+		tl := NewMultipartTool("multipartOut", "Multipart with output schema",
 			func(ctx *ToolContext, input struct{}) (*MultipartToolResponse, error) { return nil, nil },
 			WithOutputSchema(customSchema))
+
+		def := tl.Definition()
+		props, ok := def.OutputSchema["properties"].(map[string]any)
+		if !ok || props["answer"] == nil {
+			t.Errorf("OutputSchema = %v, want the custom schema, not the envelope", def.OutputSchema)
+		}
 	})
 }
 
