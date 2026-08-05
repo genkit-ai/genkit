@@ -301,6 +301,66 @@ async def test_generate_media_response(mocker: MockerFixture, version: str) -> N
     assert base64.b64decode(encoded_data) == response_byte_string
 
 
+@pytest.mark.asyncio
+async def test_generate_echoes_normalized_effective_config(mocker: MockerFixture) -> None:
+    """response.request.config is snake_case + injected modalities; caller request untouched."""
+    candidate = genai.types.Candidate(
+        content=genai.types.Content(parts=[genai.types.Part(text='ok')]),
+        finish_reason='STOP',
+    )
+    resp = genai.types.GenerateContentResponse(candidates=[candidate])
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content.return_value = resp
+
+    original_config = {
+        'imageConfig': {'aspectRatio': '16:9'},
+        'apiKey': 'should-not-echo',
+        'temperature': 0.2,
+    }
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='draw a red circle'))])],
+        config=dict(original_config),
+    )
+    gemini = GeminiModel('gemini-2.5-flash-image', client)
+    response = await gemini.generate(request, ActionRunContext())
+
+    assert request.config == original_config
+    assert response.request is not None
+    assert response.request is not request
+    echoed = response.request.config
+    assert isinstance(echoed, dict)
+    assert echoed['image_config']['aspect_ratio'] == '16:9'
+    assert echoed['temperature'] == 0.2
+    assert echoed['response_modalities'] == ['TEXT', 'IMAGE']
+    assert 'api_key' not in echoed
+    assert 'apiKey' not in echoed
+    assert 'imageConfig' not in echoed
+
+
+@pytest.mark.asyncio
+async def test_generate_echoes_injected_modalities_when_config_omitted(
+    mocker: MockerFixture,
+) -> None:
+    """Image models still surface effective response_modalities with no caller config."""
+    candidate = genai.types.Candidate(
+        content=genai.types.Content(parts=[genai.types.Part(text='ok')]),
+        finish_reason='STOP',
+    )
+    resp = genai.types.GenerateContentResponse(candidates=[candidate])
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content.return_value = resp
+
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='draw a blue square'))])],
+    )
+    gemini = GeminiModel('gemini-2.5-flash-image', client)
+    response = await gemini.generate(request, ActionRunContext())
+
+    assert request.config is None
+    assert response.request is not None
+    assert response.request.config == {'response_modalities': ['TEXT', 'IMAGE']}
+
+
 def test_convert_schema_property(mocker: MockerFixture) -> None:
     """Test _convert_schema_property."""
     googleai_client_mock = mocker.AsyncMock()
@@ -504,20 +564,6 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
             'gemini-2.5-flash-image',
             ModelInfo(
                 label='Google AI - Gemini 2.5 Flash Image',
-                supports=Supports(
-                    multiturn=True,
-                    media=True,
-                    tools=True,
-                    tool_choice=True,
-                    system_role=True,
-                    constrained=Constrained.ALL,
-                ),
-            ),
-        ),
-        (
-            'gemini-2.5-flash-image-preview',
-            ModelInfo(
-                label='Google AI - Gemini 2.5 Flash Image Preview',
                 supports=Supports(
                     multiturn=True,
                     media=True,
