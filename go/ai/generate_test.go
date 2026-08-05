@@ -25,6 +25,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -4686,4 +4687,71 @@ func TestResumedToolMessageOrder(t *testing.T) {
 	if want := []string{"alpha", "beta"}; !slices.Equal(names, want) {
 		t.Errorf("resumed tool message order = %v, want %v", names, want)
 	}
+}
+
+// TestGenerateConcurrentSharedDynamicTool runs concurrent Generate calls that
+// share one detached tool. Each call registers the tool into its own
+// per-request child registry, so registration must not race with the other
+// calls reading and running the tool. Meaningful under -race.
+func TestGenerateConcurrentSharedDynamicTool(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRegistry(t)
+
+	// Stateless two-round script: request the shared tool, then echo its
+	// output back as the final text.
+	model := defineFakeModel(t, r, fakeModelConfig{
+		name: "test/shared-tool-model",
+		handler: func(_ context.Context, req *ModelRequest, _ ModelStreamCallback) (*ModelResponse, error) {
+			for _, msg := range req.Messages {
+				if msg.Role != RoleTool {
+					continue
+				}
+				for _, part := range msg.Content {
+					if part.ToolResponse != nil {
+						return &ModelResponse{
+							Request: req,
+							Message: NewModelTextMessage(fmt.Sprintf("%v", part.ToolResponse.Output)),
+						}, nil
+					}
+				}
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: &Message{
+					Role: RoleModel,
+					Content: []*Part{NewToolRequestPart(&ToolRequest{
+						Name:  "sharedDynamicTool",
+						Input: "ping",
+					})},
+				},
+			}, nil
+		},
+	})
+
+	tool := NewTool("sharedDynamicTool", "detached tool shared across requests",
+		func(_ *ToolContext, in string) (string, error) { return "pong:" + in, nil })
+
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 25 {
+				res, err := Generate(ctx, r,
+					WithModel(model),
+					WithPrompt("call the tool"),
+					WithTools(tool),
+				)
+				if err != nil {
+					t.Errorf("Generate: %v", err)
+					return
+				}
+				if got, want := res.Text(), "pong:ping"; got != want {
+					t.Errorf("Generate text = %q, want %q", got, want)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
