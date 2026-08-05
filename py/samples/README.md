@@ -32,6 +32,7 @@ Dev UI: http://localhost:4000. Most samples need `GEMINI_API_KEY`. See [plugins/
 | `flask-hello` | Expose Genkit flows through Flask |
 | `gemini-code-execution` | Ask Gemini to write and run code |
 | `gemini-context-caching` | Cache a large source document for follow-up prompts |
+| `google-genai-deep-research` | Background Deep Research with `generate_operation()` + polling |
 | `google-genai-media` | Speech, image, and video generation |
 | `middleware` | Observe or modify model requests |
 | `ollama-sample` | Local chat, streaming, tools, and embeddings via Ollama |
