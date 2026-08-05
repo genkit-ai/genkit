@@ -89,57 +89,31 @@ type configOptions struct {
 	Config any // Primitive (model, embedder, retriever, etc) configuration.
 }
 
-// ConfigOption is an option for model configuration.
+// ConfigOption is an option for model configuration. It is accepted anywhere
+// a primitive takes a config: generation, prompt definition and execution,
+// embedding, retrieval, and evaluation.
 type ConfigOption interface {
+	CommonGenOption
+	EmbedderOption
+	RetrieverOption
+	EvaluatorOption
 	applyConfig(*configOptions)
-	applyCommonGen(*commonGenOptions)
-	applyPrompt(*promptOptions)
-	applyGenerate(*generateOptions)
-	applyPromptExecute(*promptExecutionOptions)
-	applyEmbedder(*embedderOptions)
-	applyRetriever(*retrieverOptions)
-	applyEvaluator(*evaluatorOptions)
 }
 
-// applyConfig applies the option to the config options.
 func (o *configOptions) applyConfig(opts *configOptions) {
 	if o.Config != nil {
 		opts.Config = o.Config
 	}
 }
 
-// applyCommonGen applies the option to the common options.
-func (o *configOptions) applyCommonGen(opts *commonGenOptions) {
-	o.applyConfig(&opts.configOptions)
-}
+func (o *configOptions) applyCommonGen(opts *commonGenOptions) { o.applyConfig(&opts.configOptions) }
+func (o *configOptions) applyPrompt(opts *promptOptions)       { o.applyConfig(&opts.configOptions) }
+func (o *configOptions) applyGenerate(opts *generateOptions)   { o.applyConfig(&opts.configOptions) }
+func (o *configOptions) applyEmbedder(opts *embedderOptions)   { o.applyConfig(&opts.configOptions) }
+func (o *configOptions) applyRetriever(opts *retrieverOptions) { o.applyConfig(&opts.configOptions) }
+func (o *configOptions) applyEvaluator(opts *evaluatorOptions) { o.applyConfig(&opts.configOptions) }
 
-// applyPrompt applies the option to the prompt options.
-func (o *configOptions) applyPrompt(opts *promptOptions) {
-	o.applyConfig(&opts.configOptions)
-}
-
-// applyGenerate applies the option to the generate options.
-func (o *configOptions) applyGenerate(opts *generateOptions) {
-	o.applyConfig(&opts.configOptions)
-}
-
-// applyPromptExecute applies the option to the prompt generate options.
 func (o *configOptions) applyPromptExecute(opts *promptExecutionOptions) {
-	o.applyConfig(&opts.configOptions)
-}
-
-// applyEmbedder applies the option to the embed options.
-func (o *configOptions) applyEmbedder(opts *embedderOptions) {
-	o.applyConfig(&opts.configOptions)
-}
-
-// applyRetriever applies the option to the retrieve options.
-func (o *configOptions) applyRetriever(opts *retrieverOptions) {
-	o.applyConfig(&opts.configOptions)
-}
-
-// applyEvaluator applies the option to the evaluate options.
-func (o *configOptions) applyEvaluator(opts *evaluatorOptions) {
 	o.applyConfig(&opts.configOptions)
 }
 
@@ -163,14 +137,15 @@ type commonGenOptions struct {
 	Use                []Middleware      // Middleware to apply to generation (Generate, Model, and Tool hooks).
 }
 
+// CommonGenOption is an option common to model generation, prompt definition,
+// and prompt execution.
 type CommonGenOption interface {
+	PromptOption
+	GenerateOption
+	PromptExecuteOption
 	applyCommonGen(*commonGenOptions)
-	applyPrompt(*promptOptions)
-	applyGenerate(*generateOptions)
-	applyPromptExecute(*promptExecutionOptions)
 }
 
-// applyCommonGen applies the option to the common options.
 func (o *commonGenOptions) applyCommonGen(opts *commonGenOptions) {
 	o.configOptions.applyConfig(&opts.configOptions)
 
@@ -193,30 +168,22 @@ func (o *commonGenOptions) applyCommonGen(opts *commonGenOptions) {
 	opts.Use = append(opts.Use, o.Use...)
 }
 
-// applyPromptExecute applies the option to the prompt request options.
-func (o *commonGenOptions) applyPromptExecute(reqOpts *promptExecutionOptions) {
-	o.applyCommonGen(&reqOpts.commonGenOptions)
+func (o *commonGenOptions) applyPrompt(opts *promptOptions) { o.applyCommonGen(&opts.commonGenOptions) }
+func (o *commonGenOptions) applyGenerate(opts *generateOptions) {
+	o.applyCommonGen(&opts.commonGenOptions)
 }
 
-// applyPrompt applies the option to the prompt options.
-func (o *commonGenOptions) applyPrompt(pOpts *promptOptions) {
-	o.applyCommonGen(&pOpts.commonGenOptions)
-}
-
-// applyGenerate applies the option to the generate options.
-func (o *commonGenOptions) applyGenerate(genOpts *generateOptions) {
-	o.applyCommonGen(&genOpts.commonGenOptions)
+func (o *commonGenOptions) applyPromptExecute(opts *promptExecutionOptions) {
+	o.applyCommonGen(&opts.commonGenOptions)
 }
 
 // WithMessages adds messages to the request, placed between the system and
 // user prompts. Repeating this option, or mixing it with [WithMessagesFn],
 // appends: messages accumulate in the order the options are passed.
 func WithMessages(messages ...*Message) CommonGenOption {
-	return &commonGenOptions{
-		MessagesFn: func(ctx context.Context, _ any) ([]*Message, error) {
-			return messages, nil
-		},
-	}
+	return WithMessagesFn(func(context.Context, any) ([]*Message, error) {
+		return messages, nil
+	})
 }
 
 // WithMessagesFn adds messages produced by fn at request time, placed between
@@ -244,7 +211,7 @@ func WithModel(model ModelArg) CommonGenOption {
 // The model name will be resolved to a [Model] and may error if the reference is invalid.
 // Repeating this option, or mixing it with [WithModel], takes the last model set.
 func WithModelName(name string) CommonGenOption {
-	return &commonGenOptions{Model: NewModelRef(name, nil)}
+	return WithModel(NewModelRef(name, nil))
 }
 
 // WithMiddleware adds middleware to apply to the model request. Repeating this
@@ -302,12 +269,12 @@ type inputOptions struct {
 	DefaultInput map[string]any // Default input that will be used if no input is provided.
 }
 
-// InputOption is an option for the input of a prompt.
-// It applies only to DefinePrompt().
+// InputOption is an option for the input of a prompt or tool.
+// It applies only to DefinePrompt() and DefineTool().
 type InputOption interface {
+	PromptOption
+	ToolOption
 	applyInput(*inputOptions)
-	applyPrompt(*promptOptions)
-	applyTool(*toolOptions)
 }
 
 // applyInput applies the option to the input options. The input configuration
@@ -322,15 +289,8 @@ func (o *inputOptions) applyInput(opts *inputOptions) {
 	}
 }
 
-// applyPrompt applies the option to the prompt options.
-func (o *inputOptions) applyPrompt(pOpts *promptOptions) {
-	o.applyInput(&pOpts.inputOptions)
-}
-
-// applyTool applies the option to the tool options.
-func (o *inputOptions) applyTool(tOpts *toolOptions) {
-	o.applyInput(&tOpts.inputOptions)
-}
+func (o *inputOptions) applyPrompt(opts *promptOptions) { o.applyInput(&opts.inputOptions) }
+func (o *inputOptions) applyTool(opts *toolOptions)     { o.applyInput(&opts.inputOptions) }
 
 // WithInputType uses the type provided to derive the input schema.
 // The inputted value may serve as the default input if no input is given at generation time depending on the action.
@@ -386,7 +346,6 @@ type PromptOption interface {
 	applyPrompt(*promptOptions)
 }
 
-// applyPrompt applies the option to the prompt options.
 func (o *promptOptions) applyPrompt(opts *promptOptions) {
 	o.commonGenOptions.applyPrompt(opts)
 	o.promptingOptions.applyPrompt(opts)
@@ -422,9 +381,9 @@ type promptingOptions struct {
 // PromptingOption is an option for the system and user prompts of a prompt or generate request.
 // It applies only to DefinePrompt() and Generate().
 type PromptingOption interface {
+	PromptOption
+	GenerateOption
 	applyPrompting(*promptingOptions)
-	applyPrompt(*promptOptions)
-	applyGenerate(*generateOptions)
 }
 
 // applyPrompting applies the option to the prompting options. The system and
@@ -439,26 +398,24 @@ func (o *promptingOptions) applyPrompting(opts *promptingOptions) {
 	}
 }
 
-// applyPrompt applies the option to the prompt options.
-func (o *promptingOptions) applyPrompt(opts *promptOptions) {
+func (o *promptingOptions) applyPrompt(opts *promptOptions) { o.applyPrompting(&opts.promptingOptions) }
+func (o *promptingOptions) applyGenerate(opts *generateOptions) {
 	o.applyPrompting(&opts.promptingOptions)
 }
 
-// applyGenerate applies the option to the generate options.
-func (o *promptingOptions) applyGenerate(opts *generateOptions) {
-	o.applyPrompting(&opts.promptingOptions)
+// textPromptFn adapts fmt.Sprintf-style text and args into a [PromptFn].
+func textPromptFn(text string, args []any) PromptFn {
+	return func(context.Context, any) (string, error) {
+		// Avoids a compile-time warning about non-constant text.
+		t := text
+		return fmt.Sprintf(t, args...), nil
+	}
 }
 
 // WithSystem sets the system prompt message.
 // The system prompt is always the first message in the list.
 func WithSystem(text string, args ...any) PromptingOption {
-	return &promptingOptions{
-		SystemFn: func(ctx context.Context, _ any) (string, error) {
-			// Avoids a compile-time warning about non-constant text.
-			t := text
-			return fmt.Sprintf(t, args...), nil
-		},
-	}
+	return &promptingOptions{SystemFn: textPromptFn(text, args)}
 }
 
 // WithSystemFn sets the function that generates the system prompt message.
@@ -470,13 +427,7 @@ func WithSystemFn(fn PromptFn) PromptingOption {
 // WithPrompt sets the user prompt message.
 // The user prompt is always the last message in the list.
 func WithPrompt(text string, args ...any) PromptingOption {
-	return &promptingOptions{
-		PromptFn: func(ctx context.Context, _ any) (string, error) {
-			// Avoids a compile-time warning about non-constant text.
-			t := text
-			return fmt.Sprintf(t, args...), nil
-		},
-	}
+	return &promptingOptions{PromptFn: textPromptFn(text, args)}
 }
 
 // WithPromptFn sets the function that generates the user prompt message.
@@ -496,9 +447,9 @@ type outputOptions struct {
 // OutputOption is an option for the output of a prompt or generate request.
 // It applies only to DefinePrompt() and Generate().
 type OutputOption interface {
+	PromptOption
+	GenerateOption
 	applyOutput(*outputOptions)
-	applyPrompt(*promptOptions)
-	applyGenerate(*generateOptions)
 }
 
 // applyOutput applies the option to the output options. The schema, format,
@@ -520,15 +471,8 @@ func (o *outputOptions) applyOutput(opts *outputOptions) {
 	}
 }
 
-// applyPrompt applies the option to the prompt options.
-func (o *outputOptions) applyPrompt(pOpts *promptOptions) {
-	o.applyOutput(&pOpts.outputOptions)
-}
-
-// applyGenerate applies the option to the generate options.
-func (o *outputOptions) applyGenerate(genOpts *generateOptions) {
-	o.applyOutput(&genOpts.outputOptions)
-}
+func (o *outputOptions) applyPrompt(opts *promptOptions)     { o.applyOutput(&opts.outputOptions) }
+func (o *outputOptions) applyGenerate(opts *generateOptions) { o.applyOutput(&opts.outputOptions) }
 
 // WithOutputType sets the output format to JSON and the schema derived from the given value.
 func WithOutputType(output any) OutputOption {
@@ -600,31 +544,41 @@ func WithCustomConstrainedOutput() OutputOption {
 
 // executionOptions are options for the execution of a prompt or generate request.
 type executionOptions struct {
-	Stream ModelStreamCallback // Function to call with each chunk of the generated response.
+	Stream      ModelStreamCallback // Function to call with each chunk of the generated response.
+	chainStream bool                // Chain Stream after an existing callback instead of replacing it.
 }
 
 // ExecutionOption is an option for the execution of a prompt or generate request. It applies only to Generate() and prompt.Execute().
 type ExecutionOption interface {
+	GenerateOption
+	PromptExecuteOption
 	applyExecution(*executionOptions)
-	applyGenerate(*generateOptions)
-	applyPromptExecute(*promptExecutionOptions)
 }
 
-// applyExecution applies the option to the runtime options.
+// applyExecution fills the stream slot, honoring chainStream: a chained
+// callback runs after any existing one instead of replacing it.
 func (o *executionOptions) applyExecution(execOpts *executionOptions) {
-	if o.Stream != nil {
-		execOpts.Stream = o.Stream
+	if o.Stream == nil {
+		return
 	}
+	if prev, next := execOpts.Stream, o.Stream; o.chainStream && prev != nil {
+		execOpts.Stream = func(ctx context.Context, chunk *ModelResponseChunk) error {
+			if err := prev(ctx, chunk); err != nil {
+				return err
+			}
+			return next(ctx, chunk)
+		}
+		return
+	}
+	execOpts.Stream = o.Stream
 }
 
-// applyGenerate applies the option to the generate options.
-func (o *executionOptions) applyGenerate(genOpts *generateOptions) {
-	o.applyExecution(&genOpts.executionOptions)
+func (o *executionOptions) applyGenerate(opts *generateOptions) {
+	o.applyExecution(&opts.executionOptions)
 }
 
-// applyPromptExecute applies the option to the prompt request options.
-func (o *executionOptions) applyPromptExecute(pgOpts *promptExecutionOptions) {
-	o.applyExecution(&pgOpts.executionOptions)
+func (o *executionOptions) applyPromptExecute(opts *promptExecutionOptions) {
+	o.applyExecution(&opts.executionOptions)
 }
 
 // WithStreaming sets the stream callback for the generate request.
@@ -637,45 +591,14 @@ func WithStreaming(callback ModelStreamCallback) ExecutionOption {
 	return &executionOptions{Stream: callback}
 }
 
-// chainedStreamingOption installs a stream callback without displacing one the
+// withChainedStreaming installs a stream callback without displacing one the
 // caller already set: any existing callback runs first, then this one. The
 // stream-returning wrappers use it to attach their iterator callback while
 // keeping a caller-supplied [WithStreaming] observable; a plain WithStreaming
 // appended after the caller's options would win the last-win slot and
 // silently drop theirs.
-type chainedStreamingOption struct {
-	callback ModelStreamCallback
-}
-
-// applyExecution chains the callback after any existing one.
-func (o *chainedStreamingOption) applyExecution(execOpts *executionOptions) {
-	if prev := execOpts.Stream; prev != nil {
-		next := o.callback
-		execOpts.Stream = func(ctx context.Context, chunk *ModelResponseChunk) error {
-			if err := prev(ctx, chunk); err != nil {
-				return err
-			}
-			return next(ctx, chunk)
-		}
-		return
-	}
-	execOpts.Stream = o.callback
-}
-
-// applyGenerate applies the option to the generate options.
-func (o *chainedStreamingOption) applyGenerate(genOpts *generateOptions) {
-	o.applyExecution(&genOpts.executionOptions)
-}
-
-// applyPromptExecute applies the option to the prompt request options.
-func (o *chainedStreamingOption) applyPromptExecute(pgOpts *promptExecutionOptions) {
-	o.applyExecution(&pgOpts.executionOptions)
-}
-
-// withChainedStreaming returns an option that adds callback after any
-// already-set stream callback instead of replacing it.
 func withChainedStreaming(callback ModelStreamCallback) ExecutionOption {
-	return &chainedStreamingOption{callback: callback}
+	return &executionOptions{Stream: callback, chainStream: true}
 }
 
 // documentOptions are options for providing context documents to a prompt or generate request or as input to an embedder.
@@ -684,38 +607,31 @@ type documentOptions struct {
 }
 
 // DocumentOption is an option for providing context or input documents.
-// It applies only to [Generate] and [prompt.Execute].
+// It applies to [Generate], [Prompt.Execute], [Embed], and [Retrieve].
 type DocumentOption interface {
+	GenerateOption
+	PromptExecuteOption
+	EmbedderOption
+	RetrieverOption
 	applyDocument(*documentOptions)
-	applyGenerate(*generateOptions)
-	applyPromptExecute(*promptExecutionOptions)
-	applyEmbedder(*embedderOptions)
-	applyRetriever(*retrieverOptions)
 }
 
-// applyDocument applies the option to the context options.
-func (o *documentOptions) applyDocument(docOpts *documentOptions) {
-	docOpts.Documents = append(docOpts.Documents, o.Documents...)
+func (o *documentOptions) applyDocument(opts *documentOptions) {
+	opts.Documents = append(opts.Documents, o.Documents...)
 }
 
-// applyGenerate applies the option to the generate options.
-func (o *documentOptions) applyGenerate(genOpts *generateOptions) {
-	o.applyDocument(&genOpts.documentOptions)
+func (o *documentOptions) applyGenerate(opts *generateOptions) {
+	o.applyDocument(&opts.documentOptions)
+}
+func (o *documentOptions) applyEmbedder(opts *embedderOptions) {
+	o.applyDocument(&opts.documentOptions)
+}
+func (o *documentOptions) applyRetriever(opts *retrieverOptions) {
+	o.applyDocument(&opts.documentOptions)
 }
 
-// applyPromptExecute applies the option to the prompt generate options.
-func (o *documentOptions) applyPromptExecute(pgOpts *promptExecutionOptions) {
-	o.applyDocument(&pgOpts.documentOptions)
-}
-
-// applyEmbedder applies the option to the embed options.
-func (o *documentOptions) applyEmbedder(embedOpts *embedderOptions) {
-	o.applyDocument(&embedOpts.documentOptions)
-}
-
-// applyRetriever applies the option to the retrieve options.
-func (o *documentOptions) applyRetriever(retOpts *retrieverOptions) {
-	o.applyDocument(&retOpts.documentOptions)
+func (o *documentOptions) applyPromptExecute(opts *promptExecutionOptions) {
+	o.applyDocument(&opts.documentOptions)
 }
 
 // WithTextDocs adds text as context documents for generation or as input to an
@@ -725,7 +641,7 @@ func WithTextDocs(text ...string) DocumentOption {
 	for i, t := range text {
 		docs[i] = DocumentFromText(t, nil)
 	}
-	return &documentOptions{Documents: docs}
+	return WithDocs(docs...)
 }
 
 // WithDocs adds documents as context for generation or as input to an
@@ -748,7 +664,6 @@ type EvaluatorOption interface {
 	applyEvaluator(*evaluatorOptions)
 }
 
-// applyEvaluator applies the option to the evaluator options.
 func (o *evaluatorOptions) applyEvaluator(evalOpts *evaluatorOptions) {
 	o.applyConfig(&evalOpts.configOptions)
 
@@ -782,7 +697,7 @@ func WithEvaluator(evaluator EvaluatorArg) EvaluatorOption {
 // WithEvaluatorName sets the evaluator name to call for document evaluation.
 // The evaluator name will be resolved to a [Evaluator] and may error if the reference is invalid.
 func WithEvaluatorName(name string) EvaluatorOption {
-	return &evaluatorOptions{Evaluator: NewEvaluatorRef(name, nil)}
+	return WithEvaluator(NewEvaluatorRef(name, nil))
 }
 
 // embedderOptions holds configuration and input for an embedder request.
@@ -798,7 +713,6 @@ type EmbedderOption interface {
 	applyEmbedder(*embedderOptions)
 }
 
-// applyEmbedder applies the option to the embed options.
 func (o *embedderOptions) applyEmbedder(embedOpts *embedderOptions) {
 	o.applyConfig(&embedOpts.configOptions)
 	o.applyDocument(&embedOpts.documentOptions)
@@ -817,7 +731,7 @@ func WithEmbedder(embedder EmbedderArg) EmbedderOption {
 // WithEmbedderName sets the embedder name to call for document embedding.
 // The embedder name will be resolved to a [Embedder] and may error if the reference is invalid.
 func WithEmbedderName(name string) EmbedderOption {
-	return &embedderOptions{Embedder: NewEmbedderRef(name, nil)}
+	return WithEmbedder(NewEmbedderRef(name, nil))
 }
 
 // retrieverOptions holds configuration and input for a retriever request.
@@ -833,7 +747,6 @@ type RetrieverOption interface {
 	applyRetriever(*retrieverOptions)
 }
 
-// applyRetriever applies the option to the retrieve options.
 func (o *retrieverOptions) applyRetriever(retOpts *retrieverOptions) {
 	o.applyConfig(&retOpts.configOptions)
 	o.applyDocument(&retOpts.documentOptions)
@@ -852,7 +765,7 @@ func WithRetriever(retriever RetrieverArg) RetrieverOption {
 // WithRetrieverName sets the retriever name to call for document retrieval.
 // The retriever name will be resolved to a [Retriever] and may error if the reference is invalid.
 func WithRetrieverName(name string) RetrieverOption {
-	return &retrieverOptions{Retriever: NewRetrieverRef(name, nil)}
+	return WithRetriever(NewRetrieverRef(name, nil))
 }
 
 // generateOptions are options for generating a model response by calling a model directly.
@@ -872,7 +785,6 @@ type GenerateOption interface {
 	applyGenerate(*generateOptions)
 }
 
-// applyGenerate applies the option to the generate options.
 func (o *generateOptions) applyGenerate(genOpts *generateOptions) {
 	o.commonGenOptions.applyGenerate(genOpts)
 	o.promptingOptions.applyGenerate(genOpts)
@@ -913,7 +825,6 @@ type ToolOption interface {
 	applyTool(*toolOptions)
 }
 
-// applyTool applies the option to the tool options.
 func (o *toolOptions) applyTool(opts *toolOptions) {
 	if o.StrictSchema != nil {
 		opts.StrictSchema = o.StrictSchema
@@ -945,7 +856,6 @@ type PromptExecuteOption interface {
 	applyPromptExecute(*promptExecutionOptions)
 }
 
-// applyPromptExecute applies the option to the prompt request options.
 func (o *promptExecutionOptions) applyPromptExecute(pgOpts *promptExecutionOptions) {
 	o.commonGenOptions.applyPromptExecute(pgOpts)
 	o.executionOptions.applyPromptExecute(pgOpts)
