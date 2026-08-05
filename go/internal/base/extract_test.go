@@ -338,6 +338,72 @@ func TestCompleteJSON(t *testing.T) {
 			input: `{"a": "}]{[", "b": [{"c": "\"[`,
 			want:  `{"a": "}]{[", "b": [{"c": "\"["}]}`,
 		},
+		{
+			// Malformed rather than truncated: a container cannot open where a
+			// key belongs, so the scan ends and takes the rest with it.
+			name:  "object opened where a key belongs",
+			input: `{"a": 1, {`,
+			want:  `{"a": 1}`,
+		},
+		{
+			name:  "array opened where a key belongs",
+			input: `{"a": 1, [`,
+			want:  `{"a": 1}`,
+		},
+		{
+			name:  "container opened immediately inside an object",
+			input: `{{`,
+			want:  `{}`,
+		},
+		{
+			// The closer arrives, but a trailing comma means the container is
+			// not closable at that point, so it is closed at the last value.
+			name:  "trailing comma before an explicit closer",
+			input: `[1, 2,]`,
+			want:  `[1, 2]`,
+		},
+		{
+			name:  "trailing comma before an explicit brace",
+			input: `{"a": 1,}`,
+			want:  `{"a": 1}`,
+		},
+		{
+			name:  "colon where a key belongs",
+			input: `{:}`,
+			want:  `{}`,
+		},
+		{
+			name:  "key with no value before the closer",
+			input: `{"a"}`,
+			want:  `{}`,
+		},
+		{
+			name:  "comma where a key belongs",
+			input: `{,}`,
+			want:  `{}`,
+		},
+		{
+			name:  "value with no separator",
+			input: `[1 2]`,
+			want:  `[1]`,
+		},
+		{
+			// A raw newline is illegal inside a JSON string, and a closing
+			// quote further on cannot make the bytes before it legal.
+			name:  "raw control character inside a string",
+			input: "{\"a\": \"line1\nline2\", \"b\": 2}",
+			want:  `{"a": "line1"}`,
+		},
+		{
+			name:  "unrecognized escape",
+			input: `{"a": "x\q"}`,
+			want:  `{"a": "x"}`,
+		},
+		{
+			name:  "non-hex unicode escape",
+			input: `{"a": "x\u12zz"}`,
+			want:  `{"a": "x"}`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -480,9 +546,35 @@ func isJSONPrefixOf(got, want any) bool {
 	}
 }
 
+// FuzzCompleteJSONArbitrary asserts the whole contract against unconstrained
+// input: whatever it is handed, the result parses. Truncation is only half of
+// what reaches this function, and a corpus of well-formed documents cannot
+// reach the other half, so this target takes the input as given rather than
+// deriving it from something already valid.
+func FuzzCompleteJSONArbitrary(f *testing.F) {
+	f.Add(`{"a": 1, {`)
+	f.Add(`[1, 2,]`)
+	f.Add(`{"a"}`)
+	f.Add(`[1 2]`)
+	f.Add("{\"a\": \"raw\ncontrol\"}")
+	f.Add(`{"a": "x\q"}`)
+	for _, doc := range jsonPrefixCorpus {
+		f.Add(doc)
+	}
+
+	f.Fuzz(func(t *testing.T, s string) {
+		completed := CompleteJSON(s)
+
+		if !json.Valid([]byte(completed)) {
+			t.Errorf("CompleteJSON(%q) = %q, which is not valid JSON", s, completed)
+		}
+	})
+}
+
 // FuzzCompleteJSON explores documents beyond the fixed corpus, cutting each one
-// at an arbitrary point. Documents that are not themselves valid JSON are
-// skipped: completion only promises to repair truncation, not corruption.
+// at an arbitrary point. Where FuzzCompleteJSONArbitrary only pins validity,
+// this one holds the input to being a genuine prefix, which is what lets the
+// corpus tests above check that the content is right and not merely parseable.
 func FuzzCompleteJSON(f *testing.F) {
 	for _, doc := range jsonPrefixCorpus {
 		for _, n := range []uint{0, 1, 5, uint(len(doc))} {

@@ -111,13 +111,26 @@ func ParsePartialJSON(jsonStr string) (any, error) {
 	return result, err
 }
 
-// jsonFrame is a container left open by a truncated JSON document.
+// What the grammar allows at the current position. A token that is not allowed
+// where it appears means the document is malformed rather than truncated, and
+// completion rewinds instead of trying to make sense of it.
+const (
+	allowValue = 1 << iota // a value may start here
+	allowKey               // an object key may start here
+	allowColon             // the ':' between a key and its value
+	allowComma             // the ',' between members
+	allowClose             // this container's own closer
+)
+
+// jsonFrame is a container the scan is currently inside. The outermost frame is
+// the document itself, which has no closer and holds exactly one value.
 type jsonFrame struct {
-	closer    byte // '}' or ']'
-	expectKey bool // the next string in this object is a key, not a value
+	closer byte // '}' or ']', or 0 for the document
+	allow  uint8
 }
 
-// CompleteJSON attempts to complete an incomplete JSON string.
+// CompleteJSON attempts to complete an incomplete JSON string. The result is
+// always valid JSON.
 //
 // Containers are closed innermost first, so an object nested in an array is
 // closed before the array. A string value cut off mid-stream is kept and
@@ -125,60 +138,87 @@ type jsonFrame struct {
 // finished because only one keyword can start with a given letter. A tail that
 // cannot be finished without inventing a value is dropped instead: a
 // half-written key, a key whose value has not arrived yet, or a truncated
-// number such as "1.". Input that is malformed rather than merely truncated is
-// cut back to the last position that was still well formed.
+// number such as "1.".
+//
+// Input that is malformed rather than truncated is cut back to the last
+// position that was still well formed, which is why the grammar is tracked at
+// all: a trailing comma before a closer, a container opened where a key
+// belongs, or a raw control character inside a string all end the scan and take
+// everything after them with it.
 func CompleteJSON(jsonStr string) string {
 	s := strings.TrimSpace(jsonStr)
 	if s == "" {
 		return "{}"
 	}
 
-	var stack []jsonFrame
+	stack := []jsonFrame{{allow: allowValue}}
 	// safe is the length of the prefix that becomes valid JSON once the closers
 	// for stack are appended. It only advances past a completed value, so a
-	// truncated tail is discarded by rewinding to it.
+	// truncated or malformed tail is discarded by rewinding to it.
 	safe := 0
 
+	// valueDone records that a complete value ended at end, leaving its
+	// container ready for a separator and the document ready for nothing.
+	valueDone := func(end int) {
+		top := &stack[len(stack)-1]
+		if top.closer == 0 {
+			top.allow = 0
+		} else {
+			top.allow = allowComma | allowClose
+		}
+		safe = end
+	}
+
 	for i := 0; i < len(s); {
+		top := &stack[len(stack)-1]
+
 		switch c := s[i]; c {
 		case ' ', '\t', '\n', '\r':
 			i++
 
 		case '{', '[':
-			closer := byte('}')
-			if c == '[' {
-				closer = ']'
+			if top.allow&allowValue == 0 {
+				return closeJSON(s[:safe], stack)
 			}
-			stack = append(stack, jsonFrame{closer: closer, expectKey: c == '{'})
+			frame := jsonFrame{closer: '}', allow: allowKey | allowClose}
+			if c == '[' {
+				frame = jsonFrame{closer: ']', allow: allowValue | allowClose}
+			}
+			stack = append(stack, frame)
 			i++
 			safe = i
 
 		case '}', ']':
-			if len(stack) == 0 || stack[len(stack)-1].closer != c {
+			if top.allow&allowClose == 0 || top.closer != c {
 				return closeJSON(s[:safe], stack)
 			}
 			stack = stack[:len(stack)-1]
 			i++
-			safe = i
-			if len(stack) == 0 {
-				// Root value is complete; anything after it is not ours.
-				return s[:safe]
-			}
+			valueDone(i)
 
 		case ',':
-			if len(stack) > 0 {
-				stack[len(stack)-1].expectKey = stack[len(stack)-1].closer == '}'
+			if top.allow&allowComma == 0 {
+				return closeJSON(s[:safe], stack)
+			}
+			if top.closer == '}' {
+				top.allow = allowKey
+			} else {
+				top.allow = allowValue
 			}
 			i++
 
 		case ':':
-			if len(stack) > 0 {
-				stack[len(stack)-1].expectKey = false
+			if top.allow&allowColon == 0 {
+				return closeJSON(s[:safe], stack)
 			}
+			top.allow = allowValue
 			i++
 
 		case '"':
-			isKey := len(stack) > 0 && stack[len(stack)-1].expectKey
+			isKey := top.allow&allowKey != 0
+			if !isKey && top.allow&allowValue == 0 {
+				return closeJSON(s[:safe], stack)
+			}
 			end, cut := scanJSONString(s, i)
 			if end < 0 {
 				// The string is still streaming. A partial value is worth
@@ -189,16 +229,15 @@ func CompleteJSON(jsonStr string) string {
 				return closeJSON(trimPartialRune(s[:cut])+`"`, stack)
 			}
 			i = end
-			if !isKey {
-				safe = i
-				if len(stack) == 0 {
-					return s[:safe]
-				}
+			if isKey {
+				top.allow = allowColon
+			} else {
+				valueDone(i)
 			}
 
 		default:
-			if len(stack) > 0 && stack[len(stack)-1].expectKey {
-				return closeJSON(s[:safe], stack) // A number or keyword cannot be a key.
+			if top.allow&allowValue == 0 {
+				return closeJSON(s[:safe], stack)
 			}
 			end := scanJSONAtom(s, i)
 			if !json.Valid([]byte(s[i:end])) {
@@ -210,10 +249,7 @@ func CompleteJSON(jsonStr string) string {
 				return closeJSON(s[:safe], stack)
 			}
 			i = end
-			safe = i
-			if len(stack) == 0 {
-				return s[:safe]
-			}
+			valueDone(i)
 		}
 	}
 
@@ -221,46 +257,67 @@ func CompleteJSON(jsonStr string) string {
 }
 
 // closeJSON appends the closers for the containers left open in stack,
-// innermost first.
+// innermost first. The document frame has no closer to append.
 func closeJSON(prefix string, stack []jsonFrame) string {
-	if prefix == "" && len(stack) == 0 {
-		return "{}"
-	}
-
 	var b strings.Builder
 	b.Grow(len(prefix) + len(stack))
 	b.WriteString(prefix)
 	for i := len(stack) - 1; i >= 0; i-- {
-		b.WriteByte(stack[i].closer)
+		if stack[i].closer != 0 {
+			b.WriteByte(stack[i].closer)
+		}
+	}
+	if b.Len() == 0 {
+		return "{}"
 	}
 	return b.String()
 }
 
 // scanJSONString scans the string literal starting at s[start], which is the
 // opening quote. It returns the index just past the closing quote, or -1 if the
-// literal is truncated along with cut, the length of the prefix that stays
-// valid once a closing quote is appended.
+// literal does not end there along with cut, the length of the prefix that
+// stays valid once a closing quote is appended.
+//
+// Content JSON does not permit inside a string ends the literal early, at the
+// offending byte, rather than being carried into the result. A closing quote
+// later in the input cannot rescue it: the bytes before that quote would still
+// be illegal.
 func scanJSONString(s string, start int) (end, cut int) {
 	for i := start + 1; i < len(s); i++ {
-		switch s[i] {
-		case '"':
+		switch c := s[i]; {
+		case c == '"':
 			return i + 1, 0
-		case '\\':
+
+		case c < 0x20:
+			// A raw control character. Models emit these for newlines inside
+			// string values, where JSON requires \n.
+			return -1, i
+
+		case c == '\\':
 			// The escape and everything it consumes must both have arrived, or
 			// the quote we append would be swallowed by the escape.
 			if i+1 >= len(s) {
 				return -1, i
 			}
-			if s[i+1] == 'u' {
-				if i+5 >= len(s) {
+			switch s[i+1] {
+			case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
+			case 'u':
+				if i+5 >= len(s) || !isHex(s[i+2]) || !isHex(s[i+3]) || !isHex(s[i+4]) || !isHex(s[i+5]) {
 					return -1, i
 				}
 				i += 4 // Skip \uXXXX; the loop's i++ accounts for the 'u'.
+			default:
+				return -1, i // Not an escape JSON recognizes.
 			}
 			i++
 		}
 	}
 	return -1, len(s)
+}
+
+// isHex reports whether c is a hexadecimal digit.
+func isHex(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }
 
 // completeKeyword returns the JSON keyword that tok is an unfinished prefix of.
