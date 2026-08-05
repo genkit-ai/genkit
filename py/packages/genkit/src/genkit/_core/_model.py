@@ -263,13 +263,10 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
     output_constrained: bool | None = None
     output_content_type: str | None = None
 
-    @field_validator('config', mode='before')
-    @classmethod
-    def _validate_config(cls, v: object) -> object:
+    def model_post_init(self, __context: object) -> None:
         """Ensure config is None, a dict, or a BaseModel instance."""
-        if v is None or isinstance(v, (BaseModel, dict)):
-            return v
-        raise TypeError(f'config must be a BaseModel or dict, got {type(v).__name__}')
+        if self.config is not None and not isinstance(self.config, (BaseModel, dict)):
+            raise TypeError(f'config must be a BaseModel or dict, got {type(self.config).__name__}')
 
     @model_validator(mode='before')
     @classmethod
