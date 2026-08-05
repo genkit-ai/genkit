@@ -684,10 +684,10 @@ async def _generate_action_turn(
     async def dispatch_model(
         params: ModelHookParams,
         ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
-    ) -> ModelResponse:
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse | Operation]],
+    ) -> ModelResponse | Operation:
         """Chain wrap_model middleware and call next_fn."""
-        runner: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]] = next_fn
+        runner: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse | Operation]] = next_fn
         for mw in reversed(middleware):
             _mw = mw
             _inner = runner
@@ -696,11 +696,15 @@ async def _generate_action_turn(
                 params: ModelHookParams,
                 c: GenerateMiddlewareContext,
                 _mw: MiddlewareDef = _mw,
-                _inner: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]] = _inner,
-            ) -> ModelResponse:
+                _inner: Callable[
+                    [ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse | Operation]
+                ] = _inner,
+            ) -> ModelResponse | Operation:
                 return await _mw.wrap_model(params, c, _inner)
 
-            runner = cast(Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]], run_next)
+            runner = cast(
+                Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse | Operation]], run_next
+            )
         return await runner(params, ctx)
 
     # if resolving the 'resume' option above generated a tool message, stream it.
@@ -731,7 +735,7 @@ async def _generate_action_turn(
         if request.docs:
             request = _augment_with_context(request)
 
-        async def next_fn(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
+        async def next_fn(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse | Operation:
             return (
                 await model.run(
                     input=params.request,
@@ -750,9 +754,8 @@ async def _generate_action_turn(
 
         # Background models return an Operation to poll, not a finished message.
         # The tool loop below assumes response.message exists, so branch out first.
-        if model.kind == ActionKind.BACKGROUND_MODEL:
-            operation = cast(Operation, model_response)
-            return ModelResponse(operation=operation, request=request)
+        if isinstance(model_response, Operation):
+            return ModelResponse(operation=model_response, request=request)
 
         def message_parser(msg: Message) -> Any:  # noqa: ANN401
             if formatter is None:
