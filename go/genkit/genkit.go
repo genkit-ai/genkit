@@ -1423,7 +1423,9 @@ func Embed(ctx context.Context, g *Genkit, opts ...ai.EmbedderOption) (*ai.Embed
 // For retrievers that don't need to be registered (e.g., for plugin development),
 // use [ai.NewRetriever] instead.
 func DefineRetriever(g *Genkit, name string, opts *ai.RetrieverOptions, fn ai.RetrieverFunc) ai.Retriever {
-	return ai.DefineRetriever(g.reg, name, opts, fn)
+	ret := ai.NewRetriever(name, opts, fn)
+	ret.Register(g.reg)
+	return ret
 }
 
 // LookupRetriever retrieves a registered [ai.Retriever] by its provider and name.

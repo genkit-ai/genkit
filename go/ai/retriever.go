@@ -122,14 +122,7 @@ func NewRetriever(name string, opts *RetrieverOptions, fn RetrieverFunc) Retriev
 	}
 }
 
-// DefineRetriever creates a new [Retriever] and registers it.
-func DefineRetriever(r api.Registry, name string, opts *RetrieverOptions, fn RetrieverFunc) Retriever {
-	ret := NewRetriever(name, opts, fn)
-	ret.Register(r)
-	return ret
-}
-
-// LookupRetriever looks up a [Retriever] registered by [DefineRetriever].
+// LookupRetriever looks up a registered [Retriever] by name.
 // It will try to resolve the retriever dynamically if the retriever is not found.
 // It returns nil if the retriever was not resolved.
 func LookupRetriever(r api.Registry, name string) Retriever {
