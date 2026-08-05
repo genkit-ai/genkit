@@ -60,8 +60,9 @@ func main() {
 
  g := genkit.Init(ctx,
   genkit.WithPlugins(&googlegenai.VertexAI{
-   ProjectID: "your-project-id", // Optional: defaults to GOOGLE_CLOUD_PROJECT
-   Location:  "us-central1",     // Optional: defaults to GOOGLE_CLOUD_LOCATION
+   ProjectID:  "your-project-id", // Optional: defaults to GOOGLE_CLOUD_PROJECT
+   Location:   "us-central1",     // Optional: defaults to GOOGLE_CLOUD_LOCATION. Also accepts multi-region ("us", "eu") or "global".
+   APIVersion: "v1",              // Optional: defaults to v1beta1. Can be overridden per-request via config.HTTPOptions.APIVersion.
   }),
  )
 }
@@ -83,9 +84,9 @@ Genkit automatically discovers available models supported by the [Go GenAI SDK](
 
 Commonly used models include:
 
-- **Gemini Series**: `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-2.5-flash`, `gemini-2.5-pro`
-- **Imagen Series**: `imagen-3.0-generate-001`
-- **Veo Series**: `veo-3.0-generate-001`
+- **Gemini Series**: `gemini-flash-latest`, `gemini-3.5-flash`, `gemini-3.1-flash-lite`
+- **Imagen Series**: `imagen-4.0-generate-001`
+- **Veo Series**: `veo-3.1-generate-preview`
 
 > **Note:** You can use any model ID supported by the underlying SDK. For a complete and up-to-date list of models and their specific capabilities, refer to the [Google Generative AI models documentation](https://ai.google.dev/gemini-api/docs/models).
 
@@ -105,7 +106,7 @@ func main() {
  // ... Init genkit with googlegenai plugin ...
 
  resp, err := genkit.Generate(ctx, g,
-  ai.WithModelName("googleai/gemini-2.5-flash"),
+  ai.WithModelName("googleai/gemini-flash-latest"),
   ai.WithPrompt("Explain how neural networks learn in simple terms."),
  )
  if err != nil {
@@ -131,7 +132,7 @@ type Character struct {
 
 // Automatically infers schema from the struct and unmarshals the result
 char, resp, err := genkit.GenerateData[Character](ctx, g,
- ai.WithModelName("googleai/gemini-2.5-flash"),
+ ai.WithModelName("googleai/gemini-flash-latest"),
  ai.WithPrompt("Generate a profile for a fictional character"),
 )
 if err != nil {
@@ -147,7 +148,7 @@ You can also use the standard `Generate` function and unmarshal manually:
 
 ```go
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-2.5-flash"),
+ ai.WithModelName("googleai/gemini-flash-latest"),
  ai.WithPrompt("Generate a profile for a fictional character"),
  ai.WithOutputType(Character{}),
 )
@@ -179,7 +180,7 @@ Gemini 2.5 and newer models use an internal thinking process that improves reaso
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-2.5-flash"),
+ ai.WithModelName("googleai/gemini-flash-latest"),
  ai.WithPrompt("what is heavier, one kilo of steel or one kilo of feathers"),
  ai.WithConfig(&genai.GenerateContentConfig{
   ThinkingConfig: &genai.ThinkingConfig{
@@ -200,14 +201,14 @@ cachedMsg := ai.NewUserTextMessage(largeContent).WithCacheTTL(300)
 
 // First request - content will be cached
 resp1, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-2.5-flash"),
+ ai.WithModelName("googleai/gemini-flash-latest"),
  ai.WithMessages(cachedMsg),
  ai.WithPrompt("Task 1..."),
 )
 
 // Second request with same prefix - eligible for cache hit
 resp2, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-2.5-flash"),
+ ai.WithModelName("googleai/gemini-flash-latest"),
  // Reuse the history from previous response or construct messages with same prefix
  ai.WithMessages(resp1.History()...),
  ai.WithPrompt("Task 2..."),
@@ -222,7 +223,7 @@ You can configure safety settings to control content filtering:
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-2.5-flash"),
+ ai.WithModelName("googleai/gemini-flash-latest"),
  ai.WithPrompt("Your prompt here"),
  ai.WithConfig(&genai.GenerateContentConfig{
   SafetySettings: []*genai.SafetySetting{
@@ -247,7 +248,7 @@ Enable Google Search to provide answers with current information and verifiable 
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-2.5-flash"),
+ ai.WithModelName("googleai/gemini-flash-latest"),
  ai.WithPrompt("What are the top tech news stories this week?"),
  ai.WithConfig(&genai.GenerateContentConfig{
   Tools: []*genai.Tool{
@@ -267,7 +268,7 @@ Enable Google Maps to provide location-aware responses.
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-2.5-flash"),
+ ai.WithModelName("googleai/gemini-flash-latest"),
  ai.WithPrompt("Find coffee shops near Times Square"),
  ai.WithConfig(&genai.GenerateContentConfig{
   Tools: []*genai.Tool{
@@ -306,7 +307,7 @@ Enable the model to write and execute Python code for calculations and logic.
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-2.5-pro"),
+ ai.WithModelName("googleai/gemini-flash-latest"),
  ai.WithPrompt("Calculate the 20th Fibonacci number"),
  ai.WithConfig(&genai.GenerateContentConfig{
   Tools: []*genai.Tool{
@@ -320,13 +321,13 @@ resp, err := genkit.Generate(ctx, g,
 
 ### Generating Text and Images
 
-Some Gemini models (like `gemini-2.5-flash-image`) can output images natively alongside text.
+Some Gemini models (like `gemini-3.1-flash-image`) can output images natively alongside text.
 
 ```go
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-2.5-flash-image"),
+ ai.WithModelName("googleai/gemini-3.1-flash-image"),
  ai.WithPrompt("Create a picture of a futuristic city and describe it"),
  ai.WithConfig(&genai.GenerateContentConfig{
   ResponseModalities: []string{"IMAGE", "TEXT"},
@@ -355,7 +356,7 @@ videoPart := ai.NewMediaPart("video/mp4", "https://example.com/video.mp4")
 imagePart := ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,...")
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-2.5-flash"),
+ ai.WithModelName("googleai/gemini-flash-latest"),
  ai.WithMessages(
   ai.NewUserMessage(
    ai.NewTextPart("Describe this content"),
@@ -391,10 +392,11 @@ fmt.Printf("Embedding: %v\n", res.Embeddings[0].Embedding)
 
 ### Available Models
 
-**Imagen 3 Series**:
+**Imagen 4 Series**:
 
-- `imagen-3.0-generate-001`
-- `imagen-3.0-fast-generate-001`
+- `imagen-4.0-generate-001`
+- `imagen-4.0-fast-generate-001`
+- `imagen-4.0-ultra-generate-001`
 
 ### Usage
 
@@ -402,7 +404,7 @@ fmt.Printf("Embedding: %v\n", res.Embeddings[0].Embedding)
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/imagen-3.0-generate-001"),
+ ai.WithModelName("googleai/imagen-4.0-generate-001"),
  ai.WithPrompt("A serene Japanese garden with cherry blossoms"),
  ai.WithConfig(&genai.GenerateImagesConfig{
   NumberOfImages: 4,
@@ -423,15 +425,7 @@ The Google AI plugin provides access to video generation capabilities through th
 **Veo 3.1 Series**:
 
 - `veo-3.1-generate-preview`
-
-**Veo 3.0 Series**:
-
-- `veo-3.0-generate-001`
-- `veo-3.0-fast-generate-001`
-
-**Veo 2.0 Series**:
-
-- `veo-2.0-generate-001`
+- `veo-3.1-fast-generate-preview`
 
 ### Usage
 
@@ -547,7 +541,16 @@ op, err := genkit.GenerateOperation(ctx, g,
 
 ## Speech Models
 
-Use `gemini-2.5-flash` or `gemini-2.5-pro` with audio output modality.
+Use Gemini TTS models to generate speech. Dedicated TTS models include
+`gemini-3.1-flash-tts-preview`.
+
+Gemini TTS responses are returned as media parts. The media data may be raw PCM
+audio, commonly `audio/L16;codec=pcm;rate=24000`, rather than a WAV or MP3 file.
+Genkit preserves the provider MIME type and bytes as returned. If you need a
+browser- or player-friendly file, decode the media data URI and wrap `audio/L16`
+PCM bytes in a WAV container before playback. This is the same pattern used by
+the JavaScript Gemini TTS samples, which convert the returned PCM bytes with a
+`toWav` helper.
 
 ### Usage
 
@@ -555,10 +558,9 @@ Use `gemini-2.5-flash` or `gemini-2.5-pro` with audio output modality.
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-2.5-flash"),
+ ai.WithModelName("googleai/gemini-3.1-flash-tts-preview"),
  ai.WithPrompt("Say that Genkit is an amazing AI framework"),
  ai.WithConfig(&genai.GenerateContentConfig{
-  ResponseModalities: []string{"AUDIO"},
   SpeechConfig: &genai.SpeechConfig{
    VoiceConfig: &genai.VoiceConfig{
     PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{
@@ -569,5 +571,19 @@ resp, err := genkit.Generate(ctx, g,
  }),
 )
 
-// The audio data will be in resp.Message.Content as a media part
+// Audio-only TTS responses usually have no text output.
+audio := resp.Media()
 ```
+
+For conversational Gemini models that can produce multiple modalities, set
+`ResponseModalities: []string{"AUDIO"}`. For dedicated `*-tts` models, configure
+the voice with `SpeechConfig`; the model already produces audio.
+
+The returned `audio` value may look like:
+
+```text
+data:audio/L16;codec=pcm;rate=24000;base64,...
+```
+
+For a complete Go sample that writes a playable WAV file, see
+`go/samples/text-to-speech/gemini`.

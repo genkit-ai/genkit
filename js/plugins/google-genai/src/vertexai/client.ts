@@ -339,6 +339,8 @@ export function getVertexAIUrl(params: {
 
   if (params.clientOptions.kind == 'regional') {
     basePath = `${params.clientOptions.location}-${API_BASE_PATH}`;
+  } else if (params.clientOptions.kind == 'multi-regional') {
+    basePath = `aiplatform.${params.clientOptions.location}.rep.googleapis.com`;
   } else {
     basePath = API_BASE_PATH;
   }
@@ -352,7 +354,9 @@ export function getVertexAIUrl(params: {
     resourcePath = `${parent}/${params.resourcePath}`;
   }
 
-  let url = `https://${basePath}/${DEFAULT_API_VERSION}/${resourcePath}`;
+  const version = params.clientOptions.apiVersion ?? DEFAULT_API_VERSION;
+
+  let url = `https://${basePath}/${version}/${resourcePath}`;
   if (params.resourceMethod) {
     url += `:${params.resourceMethod}`;
   }

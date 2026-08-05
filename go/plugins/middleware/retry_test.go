@@ -162,6 +162,34 @@ func TestRetryRetriesNonGenkitErrors(t *testing.T) {
 	}
 }
 
+// The v1 contract: unclassified errors are retried regardless of Statuses, so
+// narrowing the list must not silently stop retrying transient network errors.
+func TestRetryRetriesUnclassifiedErrorWithNarrowedStatuses(t *testing.T) {
+	r := newTestRegistry(t)
+	calls := 0
+	m := defineModel(t, r, "test/narrowed", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		calls++
+		if calls == 1 {
+			return nil, fmt.Errorf("connection reset")
+		}
+		return &ai.ModelResponse{Message: ai.NewModelTextMessage("ok")}, nil
+	})
+
+	retry := &Retry{Statuses: []core.StatusName{core.UNAVAILABLE}}
+	ai.DefineMiddleware(r, "retry", retry)
+
+	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text() != "ok" {
+		t.Errorf("got %q, want %q", resp.Text(), "ok")
+	}
+	if calls != 2 {
+		t.Errorf("got %d calls, want 2 (unclassified errors retry regardless of Statuses)", calls)
+	}
+}
+
 func TestRetryCustomStatuses(t *testing.T) {
 	r := newTestRegistry(t)
 	calls := 0

@@ -89,6 +89,18 @@ ai.defineFlow(
   }
 );
 
+ai.defineFlow('multi-regional', async () => {
+  const { text } = await ai.generate({
+    model: vertexAI.model('gemini-3.5-flash'),
+    prompt: 'You are a helpful AI assistant named Walt, say hello.',
+    config: {
+      location: 'us', // OR 'eu'
+      apiVersion: 'v1',
+    },
+  });
+  return text;
+});
+
 ai.defineFlow(
   {
     name: 'thinking-level-flash',
@@ -600,7 +612,7 @@ ai.defineFlow('veo-photo-move', async (_, { sendChunk }) => {
   const startingImage = fs.readFileSync('photo.jpg', { encoding: 'base64' });
 
   let { operation } = await ai.generate({
-    model: vertexAI.model('veo-3.0-generate-001'),
+    model: vertexAI.model('veo-3.1-generate-001'),
     prompt: [
       {
         text: 'make the subject in the photo move',

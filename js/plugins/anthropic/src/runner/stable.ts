@@ -43,7 +43,7 @@ import { logger } from 'genkit/logging';
 import {
   AnthropicConfigSchema,
   type AnthropicDocumentOptions,
-  type ClaudeRunnerParams,
+  type RunnerConstructorParams,
 } from '../types.js';
 import { checkModelName, removeUndefinedProperties } from '../utils.js';
 import { BaseRunner } from './base.js';
@@ -83,7 +83,7 @@ interface RunnerTypes extends BaseRunnerTypes {
 }
 
 export class Runner extends BaseRunner<RunnerTypes> {
-  constructor(params: ClaudeRunnerParams) {
+  constructor(params: RunnerConstructorParams) {
     super(params);
   }
 

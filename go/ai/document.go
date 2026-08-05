@@ -18,10 +18,11 @@ package ai
 
 import (
 	"encoding/json"
-	"fmt"
 	"maps"
 	"slices"
 	"strings"
+
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // A Document is a piece of data that can be embedded, indexed, or retrieved.
@@ -183,6 +184,21 @@ func (p *Part) IsInterrupt() bool {
 	return p != nil && p.IsToolRequest() && p.Metadata != nil && p.Metadata["interrupt"] != nil
 }
 
+// IsPartial reports whether the [Part] contains a partial tool response
+// streamed during tool execution (e.g., a progress update).
+func (p *Part) IsPartial() bool {
+	return p != nil && p.IsToolResponse() && p.Metadata != nil && p.Metadata["partial"] == true
+}
+
+// NewPartialToolResponsePart returns a [Part] containing a partial tool response.
+// Partial tool responses are streamed during tool execution for client-side
+// display (e.g., progress indicators) and are not included in conversation history.
+func NewPartialToolResponsePart(r *ToolResponse) *Part {
+	p := NewToolResponsePart(r)
+	p.Metadata = map[string]any{"partial": true}
+	return p
+}
+
 // IsCustom reports whether the [Part] contains custom plugin-specific data.
 func (p *Part) IsCustom() bool {
 	return p != nil && p.Kind == PartCustom
@@ -225,7 +241,7 @@ func (p *Part) IsResource() bool {
 // MarshalJSON is called by the JSON marshaler to write out a Part.
 func (p *Part) MarshalJSON() ([]byte, error) {
 	if p == nil {
-		return nil, fmt.Errorf("part is nil")
+		return nil, status.Errorf(ErrInvalidPart, "part is nil")
 	}
 
 	// This is not handled by the schema generator because
@@ -283,7 +299,7 @@ func (p *Part) MarshalJSON() ([]byte, error) {
 		}
 		return json.Marshal(v)
 	default:
-		return nil, fmt.Errorf("invalid part kind %v", p.Kind)
+		return nil, status.Errorf(ErrInvalidPart, "invalid part kind %v", p.Kind)
 	}
 }
 

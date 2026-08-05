@@ -391,4 +391,72 @@ func TestVertexAILive(t *testing.T) {
 			t.Errorf("expecting 0 thought tokens, got %d", resp.Usage.ThoughtsTokens)
 		}
 	})
+	t.Run("tuned gemini endpoint", func(t *testing.T) {
+		endpointID := os.Getenv("GENKIT_VERTEX_TUNED_ENDPOINT")
+		if endpointID == "" {
+			t.Skip("GENKIT_VERTEX_TUNED_ENDPOINT not set; skipping tuned endpoint live test")
+		}
+		modelName := endpointID
+		if !strings.HasPrefix(modelName, "endpoints/") && !strings.HasPrefix(modelName, "projects/") {
+			modelName = "endpoints/" + modelName
+		}
+
+		// Use a fresh Genkit instance so we can DefineModel on the Vertex
+		// plugin before Generate runs.
+		plugin := &googlegenai.VertexAI{ProjectID: projectID, Location: location}
+		gTuned := genkit.Init(ctx, genkit.WithPlugins(plugin))
+		m, err := plugin.DefineModel(gTuned, modelName, nil)
+		if err != nil {
+			t.Fatalf("failed to register tuned model %q: %v", modelName, err)
+		}
+
+		resp, err := genkit.Generate(ctx, gTuned,
+			ai.WithModel(m),
+			ai.WithPrompt("Say hello in one short sentence."),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimSpace(resp.Text()) == "" {
+			t.Fatal("expected a non-empty response from the tuned endpoint")
+		}
+	})
+	t.Run("multi-region location", func(t *testing.T) {
+		// Multi-region ("us"/"eu") endpoints aren't necessarily enabled on
+		// every Vertex AI project, so this is opt-in like the tuned endpoint
+		// test above rather than assumed to work whenever GOOGLE_CLOUD_PROJECT
+		// is set.
+		multiRegion, ok := requireEnv("GENKIT_VERTEX_MULTIREGION_LOCATION")
+		if !ok {
+			t.Skip("GENKIT_VERTEX_MULTIREGION_LOCATION not set; skipping multi-region live test")
+		}
+		// "us" and "eu" are multi-region locations routed to
+		// aiplatform.{location}.rep.googleapis.com by the genai SDK.
+		plugin := &googlegenai.VertexAI{ProjectID: projectID, Location: multiRegion}
+		gMultiRegion := genkit.Init(ctx, genkit.WithPlugins(plugin))
+		resp, err := genkit.Generate(ctx, gMultiRegion,
+			ai.WithModelName("vertexai/gemini-2.5-flash"),
+			ai.WithPrompt("Say hello in one short sentence."),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimSpace(resp.Text()) == "" {
+			t.Fatal("expected a non-empty response from the multi-region endpoint")
+		}
+	})
+	t.Run("plugin-level apiVersion override", func(t *testing.T) {
+		plugin := &googlegenai.VertexAI{ProjectID: projectID, Location: location, APIVersion: "v1"}
+		gAPIVersion := genkit.Init(ctx, genkit.WithPlugins(plugin))
+		resp, err := genkit.Generate(ctx, gAPIVersion,
+			ai.WithModelName("vertexai/gemini-2.5-flash"),
+			ai.WithPrompt("Say hello in one short sentence."),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimSpace(resp.Text()) == "" {
+			t.Fatal("expected a non-empty response with apiVersion override")
+		}
+	})
 }

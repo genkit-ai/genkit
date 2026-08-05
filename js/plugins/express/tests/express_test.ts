@@ -161,6 +161,38 @@ describe('expressHandler', async () => {
       '/echoModelWithAuth',
       expressHandler(echoModel, { contextProvider })
     );
+    // A flow that echoes back the init data to verify it was received.
+    const flowWithInit = ai.defineFlow(
+      {
+        name: 'flowWithInit',
+        inputSchema: z.string(),
+      },
+      async (input) => {
+        return `input: ${input}`;
+      }
+    );
+    // Monkey-patch the run method to capture and return init data.
+    const originalRun = flowWithInit.run.bind(flowWithInit);
+    flowWithInit.run = async (input: any, options: any) => {
+      const result = await originalRun(input, options);
+      // Embed init in the result so we can verify it was passed through.
+      result.result = `input: ${input}, init: ${JSON.stringify(options?.init)}`;
+      return result;
+    };
+
+    // A flow with an initSchema to exercise real init validation.
+    const flowWithInitSchema = ai.defineFlow(
+      {
+        name: 'flowWithInitSchema',
+        inputSchema: z.string(),
+        initSchema: z.object({ sessionId: z.string() }),
+      },
+      async (input, { init }) =>
+        `input: ${input}, sessionId: ${(init as { sessionId: string }).sessionId}`
+    );
+
+    app.post('/flowWithInit', expressHandler(flowWithInit));
+    app.post('/flowWithInitSchema', expressHandler(flowWithInitSchema));
     app.post('/abortableFlow', expressHandler(abortableFlow));
 
     server = app.listen(port, () => {
@@ -289,6 +321,47 @@ describe('expressHandler', async () => {
       });
     });
 
+    it('should pass init data to the action', async () => {
+      const result = await runFlow<string>({
+        url: `http://localhost:${port}/flowWithInit`,
+        input: 'hello',
+        init: { sessionId: 'abc123', temperature: 0.7 },
+      });
+      assert.strictEqual(
+        result,
+        'input: hello, init: {"sessionId":"abc123","temperature":0.7}'
+      );
+    });
+
+    it('should pass undefined init when not provided', async () => {
+      const result = await runFlow<string>({
+        url: `http://localhost:${port}/flowWithInit`,
+        input: 'hello',
+      });
+      assert.strictEqual(result, 'input: hello, init: undefined');
+    });
+
+    it('should validate init against initSchema and pass it to the action', async () => {
+      const result = await runFlow<string>({
+        url: `http://localhost:${port}/flowWithInitSchema`,
+        input: 'hello',
+        init: { sessionId: 'abc123' },
+      });
+      assert.strictEqual(result, 'input: hello, sessionId: abc123');
+    });
+
+    it('should reject init that does not conform to initSchema', async () => {
+      const result = runFlow<string>({
+        url: `http://localhost:${port}/flowWithInitSchema`,
+        input: 'hello',
+        // sessionId should be a string, not a number.
+        init: { sessionId: 123 },
+      });
+      await assert.rejects(result, (err: Error) => {
+        return err.message.includes('INVALID_ARGUMENT');
+      });
+    });
+
     // TODO: This test is flaky, skipping until fixed.
     it.skip('should abort a flow with auth', async () => {
       const controller = new AbortController();
@@ -405,7 +478,7 @@ describe('expressHandler', async () => {
       assert.strictEqual(await subscription.output, 'Echo: durable');
     });
 
-    it.only('should return 204 for a non-existent stream', async () => {
+    it('should return 204 for a non-existent stream', async () => {
       try {
         const result = streamFlow({
           url: `http://localhost:${port}/streamingFlowDurable`,
@@ -420,6 +493,22 @@ describe('expressHandler', async () => {
       } catch (err: any) {
         assert.strictEqual(err.message, 'NOT_FOUND: Stream not found.');
       }
+    });
+
+    it('detects streaming for a multi-value, mixed-case Accept header', async () => {
+      // Clients/proxies can send a media-type list and mixed casing, e.g.
+      // "Text/Event-Stream, */*"; the handler should still stream rather than
+      // fall back to a single JSON response.
+      const response = await fetch(`http://localhost:${port}/streamingFlow`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'Text/Event-Stream, */*',
+        },
+        body: JSON.stringify({ data: { question: 'hi' } }),
+      });
+      const text = await response.text();
+      assert.match(text, /^data: /m); // SSE frames, not a single JSON body
     });
 
     it('stream a model', async () => {

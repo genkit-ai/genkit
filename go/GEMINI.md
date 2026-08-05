@@ -84,7 +84,7 @@ type Recipe struct {
 }
 
 recipe, _, err := genkit.GenerateData[Recipe](ctx, g,
-	ai.WithModelName("googleai/gemini-2.0-flash"),
+	ai.WithModelName("googleai/gemini-flash-latest"),
 	ai.WithPrompt("Suggest a pancake recipe"),
 )
 ```

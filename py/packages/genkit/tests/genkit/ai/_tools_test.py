@@ -6,17 +6,23 @@
 import pytest
 
 from genkit import ActionKind, Genkit
-from genkit._ai._generate import run_tool_after_restart
 from genkit._ai._tools import (
     Interrupt,
     ToolRunContext,
     _tool_original_input,
     _tool_resumed_metadata,
     respond_to_interrupt,
+    restart_interrupt_error,
     restart_tool,
+    run_tool_after_restart,
 )
 from genkit._core._error import GenkitError
+from genkit._core._middleware import GenerateMiddlewareContext
 from genkit._core._typing import ToolRequest, ToolRequestPart, ToolResponsePart
+
+
+async def _echo_tool(x: object) -> object:
+    return x
 
 
 def test_restart_sets_resumed_metadata_and_preserves_interrupt() -> None:
@@ -25,7 +31,7 @@ def test_restart_sets_resumed_metadata_and_preserves_interrupt() -> None:
         tool_request=ToolRequest(name='pay', ref='r1', input={'amount': 10}),
         metadata={'interrupt': {'reason': 'hold'}},
     )
-    out = restart_tool(interrupt_trp, resumed_metadata={'k': 'v'})
+    out = restart_tool(interrupt=interrupt_trp, resumed_metadata={'k': 'v'})
     assert isinstance(out, ToolRequestPart)
     assert out.metadata is not None
     assert out.metadata.get('resumed') == {'k': 'v'}
@@ -39,7 +45,7 @@ def test_restart_replace_input_sets_replaced_input() -> None:
         tool_request=ToolRequest(name='pay', ref='r1', input={'amount': 10}),
         metadata={'interrupt': True},
     )
-    out = restart_tool(interrupt_trp, resumed_metadata={'by': 'u'}, replace_input={'amount': 99})
+    out = restart_tool(replace_input={'amount': 99}, interrupt=interrupt_trp, resumed_metadata={'by': 'u'})
     assert isinstance(out, ToolRequestPart)
     assert out.metadata is not None
     assert out.metadata.get('replacedInput') == {'amount': 10}
@@ -54,7 +60,7 @@ def test_restart_resumed_defaults_to_true() -> None:
         tool_request=ToolRequest(name='pay', ref='r1', input={}),
         metadata={'interrupt': True},
     )
-    out = restart_tool(interrupt_trp, resumed_metadata=None)
+    out = restart_tool(interrupt=interrupt_trp, resumed_metadata=None)
     assert isinstance(out, ToolRequestPart)
     assert out.metadata is not None
     assert out.metadata.get('resumed') is True
@@ -79,7 +85,7 @@ async def test_run_tool_after_restart_resumed_true_maps_to_empty_dict_in_context
         tool_request=ToolRequest(name='t2', ref='x', input={'q': 1}),
         metadata={'resumed': True},
     )
-    await run_tool_after_restart(action, restart_trp)
+    await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert len(captured) == 1
     assert captured[0][0] == {}
     assert captured[0][1] is None
@@ -103,7 +109,7 @@ async def test_run_tool_after_restart_resumed_dict() -> None:
         tool_request=ToolRequest(name='t2', ref='x', input={}),
         metadata={'resumed': {'by': 'x'}},
     )
-    await run_tool_after_restart(action, restart_trp)
+    await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert captured == [{'by': 'x'}]
 
 
@@ -125,7 +131,7 @@ async def test_run_tool_after_restart_replaced_input() -> None:
         tool_request=ToolRequest(name='t2', ref='x', input={'new': True}),
         metadata={'resumed': True, 'replacedInput': {'old': True}},
     )
-    await run_tool_after_restart(action, restart_trp)
+    await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert len(captured) == 1
     assert captured[0][0] == {'new': True}
     assert captured[0][1] == {'old': True}
@@ -147,7 +153,7 @@ async def test_run_tool_after_restart_resets_contextvars() -> None:
         tool_request=ToolRequest(name='t2', ref='x', input={}),
         metadata={'resumed': True},
     )
-    await run_tool_after_restart(action, restart_trp)
+    await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert _tool_resumed_metadata.get() is None
     assert _tool_original_input.get() is None
 
@@ -169,9 +175,41 @@ async def test_run_tool_after_restart_nested_interrupt_raises() -> None:
         metadata={'resumed': True},
     )
     with pytest.raises(GenkitError) as ei:
-        await run_tool_after_restart(action, restart_trp)
+        await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert ei.value.status == 'FAILED_PRECONDITION'
     assert 'interrupted again' in ei.value.original_message.lower()
+    assert isinstance(ei.value.cause, Interrupt)
+
+
+def test_restart_interrupt_error_accepts_string_metadata() -> None:
+    """Plain-string Interrupt metadata must not crash; use it as the reason."""
+    intr = Interrupt('plain string reason')  # type: ignore[arg-type]
+    err = restart_interrupt_error(intr)
+    assert err.status == 'FAILED_PRECONDITION'
+    assert err.original_message == 'Tool interrupted again during restart: plain string reason'
+
+
+@pytest.mark.asyncio
+async def test_run_tool_after_restart_nested_interrupt_includes_reason() -> None:
+    """Nested restart Interrupt with ``metadata.message`` is surfaced in the GenkitError text."""
+    ai = Genkit()
+
+    @ai.tool(name='t3')
+    async def t3(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        raise Interrupt({'message': 'Tool not in approved list: t3'})
+
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t3')
+    assert action is not None
+
+    restart_trp = ToolRequestPart(
+        tool_request=ToolRequest(name='t3', ref='x', input={}),
+        metadata={'resumed': True},
+    )
+    with pytest.raises(GenkitError) as ei:
+        await run_tool_after_restart(tool=action, restart_trp=restart_trp)
+    assert ei.value.status == 'FAILED_PRECONDITION'
+    assert ei.value.original_message == ('Tool interrupted again during restart: Tool not in approved list: t3')
+    assert isinstance(ei.value.cause, Interrupt)
 
 
 def test_respond_to_interrupt_wire_format_basic() -> None:
@@ -206,25 +244,18 @@ def test_respond_to_interrupt_wire_format_with_metadata() -> None:
     assert result.metadata.get('interruptResponse') == {'by': 'admin'}
 
 
-def test_restart_tool_does_not_require_tool_reference() -> None:
-    """``restart_tool`` works from an interrupt alone — no ``Tool`` needed.
-
-    Middleware-contributed tools (``read_file`` from a filesystem middleware,
-    anything gated by a ``ToolApproval`` middleware) never give the caller
-    a ``Tool`` reference; they just appear in ``response.interrupts``. The
-    helper has to be callable from the interrupt by itself.
-    """
+def test_restart_tool_directly() -> None:
+    """``restart_tool`` works directly without a ``Tool`` reference."""
     interrupt_trp = ToolRequestPart(
         tool_request=ToolRequest(name='middleware_tool', ref='r1', input={'p': 1}),
         metadata={'interrupt': True},
     )
-
-    out = restart_tool(interrupt_trp, resumed_metadata={'toolApproved': True})
+    out = restart_tool(interrupt=interrupt_trp, resumed_metadata={'tool_approved': True})
 
     assert out.tool_request.name == 'middleware_tool'
     assert out.tool_request.input == {'p': 1}
     assert out.metadata is not None
-    assert out.metadata.get('resumed') == {'toolApproved': True}
+    assert out.metadata.get('resumed') == {'tool_approved': True}
 
 
 def test_restart_preserves_ref_on_wire() -> None:
@@ -233,7 +264,7 @@ def test_restart_preserves_ref_on_wire() -> None:
         tool_request=ToolRequest(name='pay', ref='corr-id-1', input={'amount': 50}),
         metadata={'interrupt': True},
     )
-    out = restart_tool(interrupt_trp)
+    out = restart_tool(interrupt=interrupt_trp)
 
     assert out.tool_request.ref == 'corr-id-1'
 
@@ -254,7 +285,7 @@ async def test_run_tool_after_restart_response_preserves_ref() -> None:
         tool_request=ToolRequest(name='t_ref', ref='wire-ref-99', input={}),
         metadata={'resumed': True},
     )
-    part = await run_tool_after_restart(action, restart_trp)
+    part = await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert part.tool_response.ref == 'wire-ref-99'
 
 
@@ -285,7 +316,7 @@ async def test_run_tool_after_restart_response_preserves_ref_and_uses_new_input(
         tool_request=ToolRequest(name='transfer', ref='ref-42', input={'amount': 100, 'confirmed': True}),
         metadata={'resumed': True, 'replacedInput': prior},
     )
-    result = await run_tool_after_restart(action, restart_trp)
+    result = await run_tool_after_restart(tool=action, restart_trp=restart_trp)
 
     # Ref is preserved from the restart TRP.
     assert result.tool_response.ref == 'ref-42'
@@ -294,3 +325,27 @@ async def test_run_tool_after_restart_response_preserves_ref_and_uses_new_input(
     assert received_inputs == [{'amount': 100, 'confirmed': True}]
     assert original_inputs == [prior]
     assert result.tool_response.output == 'transferred 100'
+
+
+@pytest.mark.asyncio
+async def test_run_tool_after_restart_pipes_generate_context() -> None:
+    """``run_tool_after_restart(..., ctx=ctx)`` pipes custom_context into ``ToolRunContext.context``."""
+    ai = Genkit()
+    seen: list[dict[str, object]] = []
+
+    @ai.tool(name='ctx_restart_tool')
+    async def ctx_restart_tool(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        seen.append(dict(ctx.context))
+        return 'resumed_ok'
+
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='ctx_restart_tool')
+    assert action is not None
+
+    restart_trp = ToolRequestPart(
+        tool_request=ToolRequest(name='ctx_restart_tool', ref='r1', input={}),
+        metadata={'resumed': True},
+    )
+    mw_ctx = GenerateMiddlewareContext(ai, custom_context={'auth_role': 'admin'})
+    await run_tool_after_restart(tool=action, restart_trp=restart_trp, ctx=mw_ctx)
+
+    assert seen == [{'auth_role': 'admin'}]

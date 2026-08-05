@@ -26,19 +26,24 @@ type Output<A extends Action> =
   A extends Action<any, infer O extends z.ZodTypeAny, any> ? z.infer<O> : never;
 type Stream<A extends Action> =
   A extends Action<any, any, infer S extends z.ZodTypeAny> ? z.infer<S> : never;
+type InitData<A extends Action> =
+  A extends Action<any, any, any, any, infer Init extends z.ZodTypeAny>
+    ? z.infer<Init>
+    : never;
 
-export interface RequestData<T> {
+export interface RequestData<T, Init = any> {
   url: string;
   headers?: Record<string, string>;
   input?: T;
+  init?: Init;
   streamId?: string;
   abortSignal?: AbortSignal;
 }
 
 export function runFlow<A extends Action = Action>(
-  req: RequestData<Input<A>>
+  req: RequestData<Input<A>, InitData<A>>
 ): Promise<Output<A>> {
-  return baseRunFlow<Output<A>>(req);
+  return baseRunFlow<Output<A>, InitData<A>>(req);
 }
 
 export interface StreamResponse<A extends Action> {
@@ -48,9 +53,9 @@ export interface StreamResponse<A extends Action> {
 }
 
 export function streamFlow<A extends Action = Action>(
-  req: RequestData<Input<A>>
+  req: RequestData<Input<A>, InitData<A>>
 ): StreamResponse<A> {
-  const res = baseStreamFlow<Output<A>, Stream<A>>(req);
+  const res = baseStreamFlow<Output<A>, Stream<A>, InitData<A>>(req);
   return {
     output: res.output,
     stream: res.stream,

@@ -31,7 +31,7 @@ var (
 		ToolChoice:  true,
 		SystemRole:  true,
 		Media:       true,
-		Constrained: ai.ConstrainedSupportNoTools,
+		Constrained: ai.ConstrainedSupportAll,
 	}
 
 	// Media describes model capabilities for image generation models (Imagen).
@@ -51,6 +51,20 @@ var (
 		SystemRole:  false,
 		Output:      []string{"media"},
 		LongRunning: true,
+	}
+
+	// TTSSupports describes model capabilities for text-to-speech models
+	// (gemini-*-tts). They emit audio and, unlike conversational Gemini models,
+	// do not support tools, multi-turn history, or system roles. Output is
+	// "media" to match the convention used by the other media producers
+	// (Imagen, Veo) rather than a TTS-only token.
+	TTSSupports = ai.ModelSupports{
+		Multiturn:  false,
+		Media:      false,
+		Tools:      false,
+		ToolChoice: false,
+		SystemRole: false,
+		Output:     []string{"media"},
 	}
 )
 
@@ -81,93 +95,79 @@ var (
 )
 
 const (
-	gemini20Flash     = "gemini-2.0-flash"
-	gemini20FlashExp  = "gemini-2.0-flash-exp"
-	gemini20FlashLite = "gemini-2.0-flash-lite"
-
 	gemini25Flash     = "gemini-2.5-flash"
 	gemini25FlashLite = "gemini-2.5-flash-lite"
 
 	gemini25Pro = "gemini-2.5-pro"
 
-	gemini31FlashLitePreview  = "gemini-3.1-flash-lite-preview"
-	gemini31FlashImagePreview = "gemini-3.1-flash-image-preview"
+	gemini35Flash      = "gemini-3.5-flash"
+	gemini31FlashLite  = "gemini-3.1-flash-lite"
+	gemini31FlashImage = "gemini-3.1-flash-image"
+	gemini3ProImage    = "gemini-3-pro-image"
 
-	imagen3Generate001     = "imagen-3.0-generate-001"
-	imagen3FastGenerate001 = "imagen-3.0-fast-generate-001"
+	gemini25FlashPreviewTTS = "gemini-2.5-flash-preview-tts"
+	gemini25ProPreviewTTS   = "gemini-2.5-pro-preview-tts"
+	gemini31FlashTTSPreview = "gemini-3.1-flash-tts-preview"
 
-	veo20Generate001         = "veo-2.0-generate-001"
-	veo30Generate001         = "veo-3.0-generate-001"
-	veo30FastGenerate001     = "veo-3.0-fast-generate-001"
+	imagen40FastGenerate001  = "imagen-4.0-fast-generate-001"
+	imagen40Generate001      = "imagen-4.0-generate-001"
+	imagen40UltraGenerate001 = "imagen-4.0-ultra-generate-001"
+
 	veo31Generate001         = "veo-3.1-generate-001"
 	veo31FastGenerate001     = "veo-3.1-fast-generate-001"
 	veo31GeneratePreview     = "veo-3.1-generate-preview"
 	veo31FastGeneratePreview = "veo-3.1-fast-generate-preview"
 
-	embedding001                      = "embedding-001"
 	textembeddinggecko003             = "textembedding-gecko@003"
 	textembeddinggecko002             = "textembedding-gecko@002"
 	textembeddinggecko001             = "textembedding-gecko@001"
 	textembeddinggeckomultilingual001 = "textembedding-gecko-multilingual@001"
 	textmultilingualembedding002      = "text-multilingual-embedding-002"
 	multimodalembedding               = "multimodalembedding"
+	geminiEmbedding2                  = "gemini-embedding-2"
 )
 
 var (
 	// eventually, Vertex AI and Google AI models will match, in the meantime,
 	// keep them sepparated
 	vertexAIModels = []string{
-		gemini20Flash,
-		gemini20FlashLite,
 		gemini25Flash,
 		gemini25FlashLite,
 		gemini25Pro,
-		gemini31FlashLitePreview,
-		gemini31FlashImagePreview,
+		gemini35Flash,
+		gemini31FlashLite,
+		gemini31FlashImage,
+		gemini3ProImage,
 
-		imagen3Generate001,
-		imagen3FastGenerate001,
+		imagen40FastGenerate001,
+		imagen40Generate001,
+		imagen40UltraGenerate001,
 
-		veo20Generate001,
-		veo30Generate001,
-		veo30FastGenerate001,
 		veo31Generate001,
 		veo31FastGenerate001,
 	}
 
 	googleAIModels = []string{
-		gemini20Flash,
-		gemini20FlashExp,
 		gemini25Flash,
 		gemini25FlashLite,
 		gemini25Pro,
-		gemini31FlashLitePreview,
-		gemini31FlashImagePreview,
+		gemini35Flash,
+		gemini31FlashImage,
+		gemini3ProImage,
 
-		veo20Generate001,
-		veo30Generate001,
-		veo30FastGenerate001,
+		imagen40FastGenerate001,
+		imagen40Generate001,
+		imagen40UltraGenerate001,
+
+		gemini25FlashPreviewTTS,
+		gemini25ProPreviewTTS,
+		gemini31FlashTTSPreview,
+
 		veo31GeneratePreview,
 		veo31FastGeneratePreview,
 	}
 
 	supportedGeminiModels = map[string]ai.ModelOptions{
-		gemini20Flash: {
-			Label: "Gemini 2.0 Flash",
-			Versions: []string{
-				"gemini-2.0-flash-001",
-			},
-			Supports: &Multimodal,
-			Stage:    ai.ModelStageStable,
-		},
-		gemini20FlashLite: {
-			Label: "Gemini 2.0 Flash Lite",
-			Versions: []string{
-				"gemini-2.0-flash-lite-001",
-			},
-			Supports: &Multimodal,
-			Stage:    ai.ModelStageStable,
-		},
 		gemini25Flash: {
 			Label:    "Gemini 2.5 Flash",
 			Versions: []string{},
@@ -186,29 +186,65 @@ var (
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
 		},
-		gemini31FlashLitePreview: {
-			Label:    "Gemini 3.1 Flash Lite Preview",
+		gemini35Flash: {
+			Label:    "Gemini 3.5 Flash",
 			Versions: []string{},
 			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini31FlashLite: {
+			Label:    "Gemini 3.1 Flash Lite",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini31FlashImage: {
+			Label:    "Gemini 3.1 Flash Image",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini3ProImage: {
+			Label:    "Gemini 3 Pro Image",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini25FlashPreviewTTS: {
+			Label:    "Gemini 2.5 Flash Preview TTS",
+			Versions: []string{},
+			Supports: &TTSSupports,
 			Stage:    ai.ModelStageUnstable,
 		},
-		gemini31FlashImagePreview: {
-			Label:    "Gemini 3.1 Flash Image Preview",
+		gemini25ProPreviewTTS: {
+			Label:    "Gemini 2.5 Pro Preview TTS",
 			Versions: []string{},
-			Supports: &Multimodal,
+			Supports: &TTSSupports,
+			Stage:    ai.ModelStageUnstable,
+		},
+		gemini31FlashTTSPreview: {
+			Label:    "Gemini 3.1 Flash TTS Preview",
+			Versions: []string{},
+			Supports: &TTSSupports,
 			Stage:    ai.ModelStageUnstable,
 		},
 	}
 
 	supportedImagenModels = map[string]ai.ModelOptions{
-		imagen3Generate001: {
-			Label:    "Imagen 3 Generate 001",
+		imagen40FastGenerate001: {
+			Label:    "Imagen 4 Fast Generate 001",
 			Versions: []string{},
 			Supports: &Media,
 			Stage:    ai.ModelStageStable,
 		},
-		imagen3FastGenerate001: {
-			Label:    "Imagen 3 Fast Generate 001",
+		imagen40Generate001: {
+			Label:    "Imagen 4 Generate 001",
+			Versions: []string{},
+			Supports: &Media,
+			Stage:    ai.ModelStageStable,
+		},
+		imagen40UltraGenerate001: {
+			Label:    "Imagen 4 Ultra Generate 001",
 			Versions: []string{},
 			Supports: &Media,
 			Stage:    ai.ModelStageStable,
@@ -216,24 +252,6 @@ var (
 	}
 
 	supportedVideoModels = map[string]ai.ModelOptions{
-		veo20Generate001: {
-			Label:    "Veo 2.0 Generate 001",
-			Versions: []string{},
-			Supports: &VeoSupports,
-			Stage:    ai.ModelStageStable,
-		},
-		veo30Generate001: {
-			Label:    "Veo 3.0 Generate 001",
-			Versions: []string{},
-			Supports: &VeoSupports,
-			Stage:    ai.ModelStageStable,
-		},
-		veo30FastGenerate001: {
-			Label:    "Veo 3.0 Fast Generate 001",
-			Versions: []string{},
-			Supports: &VeoSupports,
-			Stage:    ai.ModelStageStable,
-		},
 		veo31Generate001: {
 			Label:    "Veo 3.1 Generate 001",
 			Versions: []string{},
@@ -261,13 +279,6 @@ var (
 	}
 
 	embedderConfig = map[string]ai.EmbedderOptions{
-		embedding001: {
-			Dimensions: 768,
-			Label:      "Google Gen AI - Text Embedding Gecko (Legacy)",
-			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
-			},
-		},
 		textembeddinggecko003: {
 			Dimensions: 768,
 			Label:      "Google Gen AI - Text Embedding Gecko 003",
@@ -306,6 +317,17 @@ var (
 		multimodalembedding: {
 			Dimensions: 768,
 			Label:      "Google Gen AI - Text Embedding Gecko (Legacy)",
+			Supports: &ai.EmbedderSupports{
+				Input: []string{
+					"text",
+					"image",
+					"video",
+				},
+			},
+		},
+		geminiEmbedding2: {
+			Dimensions: 3072,
+			Label:      "Gemini Embedding 2",
 			Supports: &ai.EmbedderSupports{
 				Input: []string{
 					"text",

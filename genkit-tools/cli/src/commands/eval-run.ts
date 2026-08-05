@@ -149,5 +149,15 @@ export const evalRun = new Command('eval:run')
       }
     };
 
-    await runWithManager(projectRoot, runAction, { runtimeCommand });
+    // If specific evaluators were requested, wait for them to register before
+    // dispatching. When none are specified we cannot know the keys ahead of
+    // time, so we skip the wait and let discovery handle it.
+    const waitForActionKeys = options.evaluators
+      ? options.evaluators.split(',').map((k) => `/evaluator/${k}`)
+      : undefined;
+
+    await runWithManager(projectRoot, runAction, {
+      runtimeCommand,
+      waitForActionKeys,
+    });
   });

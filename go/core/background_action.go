@@ -20,6 +20,7 @@ import (
 	"context"
 
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // StartOpFunc starts a background operation.
@@ -45,10 +46,10 @@ type Operation[Out any] struct {
 //
 // For internal use only.
 type BackgroundActionDef[In, Out any] struct {
-	*ActionDef[In, *Operation[Out], struct{}]
+	*Action[In, *Operation[Out], struct{}]
 
-	check  *ActionDef[*Operation[Out], *Operation[Out], struct{}] // Sub-action that checks the status of a background operation.
-	cancel *ActionDef[*Operation[Out], *Operation[Out], struct{}] // Sub-action that cancels a background operation.
+	check  *Action[*Operation[Out], *Operation[Out], struct{}] // Sub-action that checks the status of a background operation.
+	cancel *Action[*Operation[Out], *Operation[Out], struct{}] // Sub-action that cancels a background operation.
 }
 
 // Start starts a background operation.
@@ -64,7 +65,7 @@ func (b *BackgroundActionDef[In, Out]) Check(ctx context.Context, op *Operation[
 // Cancel attempts to cancel a background operation. It returns an error if the background action does not support cancellation.
 func (b *BackgroundActionDef[In, Out]) Cancel(ctx context.Context, op *Operation[Out]) (*Operation[Out], error) {
 	if !b.SupportsCancel() {
-		return nil, NewError(UNAVAILABLE, "model %q does not support canceling operations", b.Name())
+		return nil, status.Errorf(status.ErrUnavailable, "model %q does not support canceling operations", b.Name())
 	}
 
 	return b.cancel.Run(ctx, op, nil)
@@ -77,7 +78,7 @@ func (b *BackgroundActionDef[In, Out]) SupportsCancel() bool {
 
 // Register registers the model with the given registry.
 func (b *BackgroundActionDef[In, Out]) Register(r api.Registry) {
-	b.ActionDef.Register(r)
+	b.Action.Register(r)
 	b.check.Register(r)
 	if b.cancel != nil {
 		b.cancel.Register(r)
@@ -140,7 +141,7 @@ func NewBackgroundAction[In, Out any](
 			return updatedOp, nil
 		})
 
-	var cancelAction *ActionDef[*Operation[Out], *Operation[Out], struct{}]
+	var cancelAction *Action[*Operation[Out], *Operation[Out], struct{}]
 	if cancelFn != nil {
 		cancelAction = NewAction(name, api.ActionTypeCancelOperation, metadata, nil,
 			func(ctx context.Context, op *Operation[Out]) (*Operation[Out], error) {
@@ -154,9 +155,9 @@ func NewBackgroundAction[In, Out any](
 	}
 
 	return &BackgroundActionDef[In, Out]{
-		ActionDef: startAction,
-		check:     checkAction,
-		cancel:    cancelAction,
+		Action: startAction,
+		check:  checkAction,
+		cancel: cancelAction,
 	}
 }
 
@@ -178,25 +179,25 @@ func LookupBackgroundAction[In, Out any](r api.Registry, key string) *Background
 	cancelAction := ResolveActionFor[*Operation[Out], *Operation[Out], struct{}](r, api.ActionTypeCancelOperation, name)
 
 	return &BackgroundActionDef[In, Out]{
-		ActionDef: startAction,
-		check:     checkAction,
-		cancel:    cancelAction,
+		Action: startAction,
+		check:  checkAction,
+		cancel: cancelAction,
 	}
 }
 
 // CheckOperation checks the status of a background operation by looking up the action and calling its Check method.
 func CheckOperation[In, Out any](ctx context.Context, r api.Registry, op *Operation[Out]) (*Operation[Out], error) {
 	if op == nil {
-		return nil, NewError(INVALID_ARGUMENT, "core.CheckOperation: operation is nil")
+		return nil, status.Errorf(status.ErrInvalidArgument, "core.CheckOperation: operation is nil")
 	}
 
 	if op.Action == "" {
-		return nil, NewError(INVALID_ARGUMENT, "core.CheckOperation: operation is missing original request information")
+		return nil, status.Errorf(status.ErrInvalidArgument, "core.CheckOperation: operation is missing original request information")
 	}
 
 	m := LookupBackgroundAction[In, Out](r, op.Action)
 	if m == nil {
-		return nil, NewError(INVALID_ARGUMENT, "core.CheckOperation: failed to resolve background model %q from original request", op.Action)
+		return nil, status.Errorf(status.ErrInvalidArgument, "core.CheckOperation: failed to resolve background model %q from original request", op.Action)
 	}
 
 	return m.Check(ctx, op)

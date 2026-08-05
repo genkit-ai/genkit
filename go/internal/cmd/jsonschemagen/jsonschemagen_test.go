@@ -58,6 +58,27 @@ func Test(t *testing.T) {
 	}
 }
 
+func TestTypeParamArgs(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"[]", ""},
+		{"[State any]", "[State]"},
+		{"  [State any]  ", "[State]"},
+		{"[A any, B comparable]", "[A, B]"},
+		{"[K, V any]", "[K, V]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := typeParamArgs(tt.in); got != tt.want {
+				t.Errorf("typeParamArgs(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSkipOmitEmpty(t *testing.T) {
 	tests := []struct {
 		name     string

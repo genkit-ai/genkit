@@ -21,8 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/internal/registry"
@@ -1628,7 +1630,7 @@ func TestMultipartTools(t *testing.T) {
 		}
 	})
 
-	t.Run("multipart tool returns content in response", func(t *testing.T) {
+	t.Run("multipart tool returns metadata and content in response", func(t *testing.T) {
 		r := registry.New()
 		ConfigureFormats(r)
 		DefineGenerateAction(context.Background(), r)
@@ -1636,7 +1638,8 @@ func TestMultipartTools(t *testing.T) {
 		multipartTool := DefineMultipartTool(r, "imageGenerator", "generates images",
 			func(ctx *ToolContext, input struct{ Prompt string }) (*MultipartToolResponse, error) {
 				return &MultipartToolResponse{
-					Output: map[string]any{"description": "generated image"},
+					Output:   map[string]any{"description": "generated image"},
+					Metadata: map[string]any{"size": 1},
 					Content: []*Part{
 						NewMediaPart("image/png", "data:image/png;base64,iVBORw0..."),
 					},
@@ -1651,7 +1654,10 @@ func TestMultipartTools(t *testing.T) {
 				if msg.Role == RoleTool {
 					for _, part := range msg.Content {
 						if part.IsToolResponse() {
-							// Verify the content is present
+							// Verify the metadata and content are present
+							if len(part.Metadata) == 0 {
+								return nil, fmt.Errorf("expected tool response to have metadata")
+							}
 							if len(part.ToolResponse.Content) == 0 {
 								return nil, fmt.Errorf("expected tool response to have content")
 							}
@@ -1931,6 +1937,31 @@ func TestGenerateStream(t *testing.T) {
 		}
 		if receivedErr == nil {
 			t.Error("expected error from cancelled context")
+		}
+	})
+
+	t.Run("should not yield after stop", func(t *testing.T) {
+		streamModel := DefineModel(r, "test/breakStreamModel", &ModelOptions{
+			Supports: &ModelSupports{
+				Multiturn: true,
+			},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			for range 3 {
+				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart("chunk")}}); err != nil {
+					return nil, err
+				}
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: NewModelTextMessage("done"),
+			}, nil
+		})
+
+		for _, err := range GenerateStream(t.Context(), r, WithModel(streamModel)) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			break
 		}
 	})
 }
@@ -2226,6 +2257,35 @@ func TestGenerateDataStream(t *testing.T) {
 			t.Error("expected parsing error to be propagated")
 		}
 	})
+
+	t.Run("should not yield after stop", func(t *testing.T) {
+		streamModel := DefineModel(r, "test/breakDataStreamModel", &ModelOptions{
+			Supports: &ModelSupports{
+				Multiturn:   true,
+				Constrained: ConstrainedSupportAll,
+			},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			for i := range 3 {
+				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewJSONPart(fmt.Sprintf(`{"name":"chunk","value":%d}`, i))}}); err != nil {
+					return nil, err
+				}
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: &Message{
+					Role:    RoleModel,
+					Content: []*Part{NewJSONPart(`{"name":"done","value":4}`)},
+				},
+			}, nil
+		})
+
+		for _, err := range GenerateDataStream[streamingTestData](t.Context(), r, WithModel(streamModel)) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			break
+		}
+	})
 }
 
 func TestGenerateText(t *testing.T) {
@@ -2284,6 +2344,108 @@ func TestGenerateData(t *testing.T) {
 	})
 }
 
+// TestGenerateDataCallerSchemaOverride verifies that GenerateData injects the
+// output type inferred from Out but still lets a caller-supplied
+// WithOutputSchema win the schema slot, while typed extraction keeps working.
+func TestGenerateDataCallerSchemaOverride(t *testing.T) {
+	r := newTestRegistry(t)
+
+	type TestOutput struct {
+		Value int `json:"value"`
+	}
+
+	var capturedSchema map[string]any
+	model := defineFakeModel(t, r, fakeModelConfig{
+		name: "test/captureSchema",
+		handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			if req.Output != nil {
+				capturedSchema = req.Output.Schema
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: NewModelTextMessage(`{"value": 42}`),
+			}, nil
+		},
+	})
+
+	// A distinctive schema the inferred one would never produce.
+	customSchema := map[string]any{
+		"type":  "object",
+		"title": "CallerProvided",
+		"properties": map[string]any{
+			"value": map[string]any{"type": "integer"},
+		},
+	}
+
+	output, _, err := GenerateData[TestOutput](context.Background(), r,
+		WithModel(model),
+		WithPrompt("get value"),
+		WithOutputSchema(customSchema),
+	)
+	if err != nil {
+		t.Fatalf("GenerateData error: %v", err)
+	}
+
+	// The caller's schema reaches the model, overriding the type-inferred one.
+	if capturedSchema["title"] != "CallerProvided" {
+		t.Errorf("request output schema = %v, want caller-provided schema (title CallerProvided)", capturedSchema)
+	}
+	// Typed extraction from Out still works.
+	if output.Value != 42 {
+		t.Errorf("output.Value = %d, want 42", output.Value)
+	}
+}
+
+// TestGenerateStreamChainsUserCallback verifies that the stream-returning
+// wrappers chain a caller-supplied WithStreaming callback with their internal
+// iterator callback instead of displacing it: both must see every chunk.
+func TestGenerateStreamChainsUserCallback(t *testing.T) {
+	r := newTestRegistry(t)
+
+	model := defineFakeModel(t, r, fakeModelConfig{
+		name: "test/chunkedModel",
+		handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			if cb != nil {
+				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart("one")}}); err != nil {
+					return nil, err
+				}
+				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart("two")}}); err != nil {
+					return nil, err
+				}
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: NewModelTextMessage("onetwo"),
+			}, nil
+		},
+	})
+
+	var userChunks []string
+	userCB := func(ctx context.Context, chunk *ModelResponseChunk) error {
+		userChunks = append(userChunks, chunk.Text())
+		return nil
+	}
+
+	var iterChunks []string
+	for v, err := range GenerateStream(context.Background(), r,
+		WithModel(model),
+		WithPrompt("count"),
+		WithStreaming(userCB),
+	) {
+		if err != nil {
+			t.Fatalf("GenerateStream error: %v", err)
+		}
+		if v.Done {
+			break
+		}
+		iterChunks = append(iterChunks, v.Chunk.Text())
+	}
+
+	want := []string{"one", "two"}
+	assertEqual(t, userChunks, want)
+	assertEqual(t, iterChunks, want)
+}
+
 func TestModelResponseReasoning(t *testing.T) {
 	t.Run("returns reasoning from response", func(t *testing.T) {
 		resp := &ModelResponse{
@@ -2312,6 +2474,102 @@ func TestModelResponseReasoning(t *testing.T) {
 
 		if reasoning != "" {
 			t.Errorf("Reasoning() = %q, want empty string", reasoning)
+		}
+	})
+}
+
+func TestModelResponseHistory(t *testing.T) {
+	userMsg := NewUserTextMessage("question")
+	modelMsg := NewModelTextMessage("answer")
+
+	t.Run("combines request messages with the response message", func(t *testing.T) {
+		resp := &ModelResponse{
+			Request: &ModelRequest{Messages: []*Message{userMsg}},
+			Message: modelMsg,
+		}
+
+		history := resp.History()
+
+		if len(history) != 2 || history[0] != userMsg || history[1] != modelMsg {
+			t.Errorf("History() = %v, want [userMsg modelMsg]", history)
+		}
+	})
+
+	t.Run("returns nil for a nil response", func(t *testing.T) {
+		var resp *ModelResponse
+
+		if history := resp.History(); history != nil {
+			t.Errorf("History() = %v, want nil", history)
+		}
+	})
+
+	t.Run("returns the response message when request is nil", func(t *testing.T) {
+		resp := &ModelResponse{Message: modelMsg}
+
+		history := resp.History()
+
+		if len(history) != 1 || history[0] != modelMsg {
+			t.Errorf("History() = %v, want [modelMsg]", history)
+		}
+	})
+
+	t.Run("returns request messages when response message is nil", func(t *testing.T) {
+		resp := &ModelResponse{Request: &ModelRequest{Messages: []*Message{userMsg}}}
+
+		history := resp.History()
+
+		if len(history) != 1 || history[0] != userMsg {
+			t.Errorf("History() = %v, want [userMsg]", history)
+		}
+	})
+
+	t.Run("returns nil when request and response message are both nil", func(t *testing.T) {
+		resp := &ModelResponse{}
+
+		if history := resp.History(); history != nil {
+			t.Errorf("History() = %v, want nil", history)
+		}
+	})
+
+	// Request.Messages with spare capacity used to let History() append into the
+	// caller's backing array, so the result aliased whatever else pointed at it.
+	t.Run("does not write into spare capacity of request messages", func(t *testing.T) {
+		backing := make([]*Message, 3, 8)
+		backing[0], backing[1], backing[2] = userMsg, modelMsg, userMsg
+		sentinel := NewUserTextMessage("caller owns this slot")
+		extended := backing[:4]
+		extended[3] = sentinel
+
+		resp := &ModelResponse{
+			Request: &ModelRequest{Messages: backing},
+			Message: modelMsg,
+		}
+
+		resp.History()
+
+		if extended[3] != sentinel {
+			t.Errorf("History() overwrote the caller's backing array at index 3: got %v, want the sentinel", extended[3])
+		}
+	})
+
+	t.Run("successive calls return independent slices", func(t *testing.T) {
+		backing := make([]*Message, 3, 8)
+		backing[0], backing[1], backing[2] = userMsg, modelMsg, userMsg
+		resp := &ModelResponse{
+			Request: &ModelRequest{Messages: backing},
+			Message: modelMsg,
+		}
+
+		first := resp.History()
+		replacement := NewModelTextMessage("second answer")
+		resp.Message = replacement
+		second := resp.History()
+
+		if first[3] != modelMsg {
+			t.Errorf("first History() result was mutated by the second call: got %v, want the original model message", first[3])
+		}
+		if second[3] != replacement {
+			t.Errorf("second History() = %v at index 3, want the replacement message", second[3])
 		}
 	})
 }
@@ -2485,4 +2743,65 @@ func TestGenerateWithMarkdownJSON(t *testing.T) {
 			t.Errorf("Unexpected output: %+v", out)
 		}
 	})
+}
+
+func TestGenerateNoGoroutineLeak(t *testing.T) {
+	r := registry.New()
+	ConfigureFormats(r)
+	DefineGenerateAction(t.Context(), r)
+
+	done := make(chan struct{})
+
+	slowTool := DefineTool(r, "slow", "slow",
+		func(*ToolContext, any) (any, error) {
+			<-done
+			return nil, nil
+		},
+	)
+
+	failTool := DefineTool(r, "fail", "fail",
+		func(*ToolContext, any) (any, error) {
+			return nil, errors.New("boom")
+		},
+	)
+
+	testModel := DefineModel(r, "test/testModel", &ModelOptions{
+		Supports: &ModelSupports{
+			Multiturn: true,
+			Tools:     true,
+		},
+	}, func(_ context.Context, req *ModelRequest, _ ModelStreamCallback) (*ModelResponse, error) {
+		return &ModelResponse{
+			Request: req,
+			Message: &Message{
+				Role: RoleModel,
+				Content: []*Part{
+					NewToolRequestPart(&ToolRequest{Name: "slow", Input: map[string]any{}, Ref: "a"}),
+					NewToolRequestPart(&ToolRequest{Name: "slow", Input: map[string]any{}, Ref: "b"}),
+					NewToolRequestPart(&ToolRequest{Name: "slow", Input: map[string]any{}, Ref: "c"}),
+					NewToolRequestPart(&ToolRequest{Name: "fail", Input: map[string]any{}, Ref: "d"}),
+				},
+			},
+		}, nil
+	})
+
+	before := runtime.NumGoroutine()
+
+	if _, err := Generate(t.Context(), r,
+		WithModel(testModel),
+		WithTools(slowTool, failTool),
+	); err == nil {
+		t.Fatal("expected tool error")
+	}
+
+	close(done)
+
+	for i := 0; i < 100; i++ {
+		if runtime.NumGoroutine() <= before {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("goroutines leaked: %d", runtime.NumGoroutine()-before)
 }

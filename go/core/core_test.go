@@ -47,7 +47,7 @@ func TestDefineSchema(t *testing.T) {
 	})
 }
 
-func TestDefineSchemaFor(t *testing.T) {
+func TestDefineSchemasFor(t *testing.T) {
 	t.Run("registers schema derived from Go type", func(t *testing.T) {
 		r := registry.New()
 
@@ -56,7 +56,7 @@ func TestDefineSchemaFor(t *testing.T) {
 			Email string `json:"email"`
 		}
 
-		DefineSchemaFor[User](r)
+		DefineSchemasFor(r, User{})
 
 		found := r.LookupSchema("User")
 		if found == nil {
@@ -82,12 +82,68 @@ func TestDefineSchemaFor(t *testing.T) {
 			Debug bool `json:"debug"`
 		}
 
-		DefineSchemaFor[*Config](r)
+		DefineSchemasFor(r, &Config{})
 
 		found := r.LookupSchema("Config")
 		if found == nil {
 			t.Fatal("schema not found in registry for pointer type")
 		}
+	})
+
+	t.Run("registers multiple schemas at once", func(t *testing.T) {
+		r := registry.New()
+
+		type User struct {
+			Name string `json:"name"`
+		}
+		type Order struct {
+			ID string `json:"id"`
+		}
+
+		DefineSchemasFor(r, User{}, Order{})
+
+		if r.LookupSchema("User") == nil {
+			t.Error("schema User not found in registry")
+		}
+		if r.LookupSchema("Order") == nil {
+			t.Error("schema Order not found in registry")
+		}
+	})
+
+	t.Run("panics on map value", func(t *testing.T) {
+		r := registry.New()
+
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for map value")
+			}
+		}()
+
+		DefineSchemasFor(r, map[string]any{"type": "object"})
+	})
+
+	t.Run("panics on unnamed type", func(t *testing.T) {
+		r := registry.New()
+
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for unnamed type")
+			}
+		}()
+
+		DefineSchemasFor(r, struct{ Name string }{})
+	})
+
+	t.Run("panics on nil value", func(t *testing.T) {
+		r := registry.New()
+
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for nil value")
+			}
+		}()
+
+		DefineSchemasFor(r, nil)
 	})
 }
 

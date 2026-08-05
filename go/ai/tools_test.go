@@ -19,7 +19,6 @@ package ai
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -531,27 +530,16 @@ func TestWithStrictSchema(t *testing.T) {
 		check(true)(t, tl)
 	})
 
-	t.Run("setting strict twice returns an error via panic", func(t *testing.T) {
-		// DefineTool surfaces applyTool errors as a panic.
-		defer func() {
-			r := recover()
-			if r == nil {
-				t.Fatal("expected panic from setting WithStrictSchema twice, got none")
-			}
-			msg, ok := r.(error)
-			if !ok {
-				t.Fatalf("expected error from panic, got %T: %v", r, r)
-			}
-			if got := msg.Error(); !strings.Contains(got, "strict schema") {
-				t.Errorf("expected panic to mention strict schema, got %q", got)
-			}
-		}()
+	t.Run("setting strict twice takes the last value", func(t *testing.T) {
+		// WithStrictSchema fills a single slot, so repeating it overwrites
+		// rather than failing.
 		r := newTestRegistry(t)
-		DefineTool(r, "strict/double-set", "double set",
+		tl := DefineTool(r, "strict/double-set", "double set",
 			func(ctx *ToolContext, input struct{}) (string, error) { return "", nil },
 			WithStrictSchema(true),
 			WithStrictSchema(false),
 		)
+		check(false)(t, tl)
 	})
 }
 

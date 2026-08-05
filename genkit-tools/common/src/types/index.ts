@@ -17,6 +17,8 @@
 export { RuntimeEvent, RuntimeInfo } from '../manager/types';
 export { GenkitError } from '../types/error';
 export * from './action';
+export * from './agent';
+export * from './agents-conformance';
 export * from './analytics';
 export * from './apis';
 export * from './document';

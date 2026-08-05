@@ -20,12 +20,14 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
-	"github.com/google/uuid"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // EvaluatorFunc is the function type for evaluator implementations.
@@ -72,7 +74,7 @@ func (e EvaluatorRef) Config() any {
 
 // evaluator is an action with functions specific to evaluating a dataset.
 type evaluator struct {
-	core.ActionDef[*EvaluatorRequest, *EvaluatorResponse, struct{}]
+	core.Action[*EvaluatorRequest, *EvaluatorResponse, struct{}]
 }
 
 // Example is a single example that requires evaluation
@@ -190,7 +192,7 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 	}
 
 	return &evaluator{
-		ActionDef: *core.NewAction(name, api.ActionTypeEvaluator, metadata, inputSchema, func(ctx context.Context, req *EvaluatorRequest) (output *EvaluatorResponse, err error) {
+		Action: *core.NewAction(name, api.ActionTypeEvaluator, metadata, inputSchema, func(ctx context.Context, req *EvaluatorRequest) (output *EvaluatorResponse, err error) {
 			var results []EvaluationResult
 			for _, datapoint := range req.Dataset {
 				if datapoint.TestCaseId == "" {
@@ -275,7 +277,7 @@ func NewBatchEvaluator(name string, opts *EvaluatorOptions, fn BatchEvaluatorFun
 	}
 
 	return &evaluator{
-		ActionDef: *core.NewAction(name, api.ActionTypeEvaluator, metadata, nil, fn),
+		Action: *core.NewAction(name, api.ActionTypeEvaluator, metadata, nil, fn),
 	}
 }
 
@@ -296,14 +298,14 @@ func LookupEvaluator(r api.Registry, name string) Evaluator {
 		return nil
 	}
 	return &evaluator{
-		ActionDef: *action,
+		Action: *action,
 	}
 }
 
 // Evaluate runs the given [Evaluator].
 func (e *evaluator) Evaluate(ctx context.Context, req *EvaluatorRequest) (*EvaluatorResponse, error) {
 	if e == nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "Evaluator.Evaluate: evaluator called on a nil evaluator; check that all evaluators are defined")
+		return nil, status.Errorf(status.ErrInvalidArgument, "Evaluator.Evaluate: evaluator called on a nil evaluator; check that all evaluators are defined")
 	}
 
 	return e.Run(ctx, req, nil)
@@ -313,9 +315,7 @@ func (e *evaluator) Evaluate(ctx context.Context, req *EvaluatorRequest) (*Evalu
 func Evaluate(ctx context.Context, r api.Registry, opts ...EvaluatorOption) (*EvaluatorResponse, error) {
 	evalOpts := &evaluatorOptions{}
 	for _, opt := range opts {
-		if err := opt.applyEvaluator(evalOpts); err != nil {
-			return nil, err
-		}
+		opt.applyEvaluator(evalOpts)
 	}
 
 	if evalOpts.Evaluator == nil {

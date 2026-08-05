@@ -136,12 +136,12 @@ func ExampleNewMediaPart() {
 func ExampleNewModelRef() {
 	// Create a reference to a model with custom configuration
 	// The config type depends on the model provider
-	modelRef := ai.NewModelRef("googleai/gemini-2.5-flash", map[string]any{
+	modelRef := ai.NewModelRef("googleai/gemini-flash-latest", map[string]any{
 		"temperature": 0.7,
 	})
 
 	fmt.Println("Model name:", modelRef.Name())
-	// Output: Model name: googleai/gemini-2.5-flash
+	// Output: Model name: googleai/gemini-flash-latest
 }
 
 // This example demonstrates building a multi-turn conversation.

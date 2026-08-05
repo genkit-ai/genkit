@@ -16,10 +16,10 @@
 
 """Context - pass request data through `generate()`, flows, and tools."""
 
+from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
 from genkit import ActionRunContext, Genkit
-from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
 

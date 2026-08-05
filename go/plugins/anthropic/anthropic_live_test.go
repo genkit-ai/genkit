@@ -61,6 +61,26 @@ func TestAnthropicLive(t *testing.T) {
 			t.Fatalf("not a pirate :( :%s", resp.Text())
 		}
 	})
+	t.Run("latest opus models", func(t *testing.T) {
+		for _, modelName := range []string{"claude-opus-4-7", "claude-opus-4-8"} {
+			t.Run(modelName, func(t *testing.T) {
+				m := anthropicPlugin.Model(g, modelName)
+				resp, err := genkit.Generate(ctx, g,
+					ai.WithConfig(&anthropic.MessageNewParams{
+						MaxTokens: 64,
+					}),
+					ai.WithModel(m),
+					ai.WithPrompt("Reply with exactly: ok"),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.TrimSpace(resp.Text()) == "" {
+					t.Fatal("expected a response but nothing was returned")
+				}
+			})
+		}
+	})
 	t.Run("model version not ok", func(t *testing.T) {
 		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
 		_, err := genkit.Generate(ctx, g,
@@ -232,6 +252,40 @@ func TestAnthropicLive(t *testing.T) {
 
 		if len(resp.Text()) == 0 {
 			t.Fatal("expected a response but nothing was returned")
+		}
+	})
+	t.Run("multipart tool", func(t *testing.T) {
+		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
+		img64, err := fetchImgAsBase64()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		tool := genkit.DefineMultipartTool(g, "getImage", "returns a mysterious image",
+			func(ctx *ai.ToolContext, input any) (*ai.MultipartToolResponse, error) {
+				return &ai.MultipartToolResponse{
+					Output: map[string]any{"status": "success"},
+					Content: []*ai.Part{
+						ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,"+img64),
+					},
+				}, nil
+			},
+		)
+
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModel(m),
+			ai.WithConfig(&anthropic.MessageNewParams{
+				MaxTokens: 1024,
+			}),
+			ai.WithTools(tool),
+			ai.WithPrompt("get an image and tell me what is in it"),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !strings.Contains(strings.ToLower(resp.Text()), "cat") {
+			t.Errorf("expected response to contain 'cat', got: %s", resp.Text())
 		}
 	})
 	t.Run("streaming", func(t *testing.T) {

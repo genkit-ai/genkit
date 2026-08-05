@@ -4,8 +4,8 @@ version = "0.2.0"
 requires-python = ">=3.10"
 dependencies = [
   "genkit",
-  "genkit-plugin-fastapi",
-  "genkit-plugin-google-genai",
+  "genkit-fastapi",
+  "genkit-google-genai",
   "python-dotenv>=1.0.0",
   "uvicorn[standard]>=0.34.0",
 ]

@@ -361,6 +361,51 @@ describe('action', () => {
     );
   });
 
+  it('records init in telemetry', async () => {
+    const act = action(
+      {
+        name: 'initAction',
+        inputSchema: z.string(),
+        outputSchema: z.number(),
+        initSchema: z.object({ setting: z.string() }),
+        actionType: 'custom',
+      },
+      async (input) => {
+        return input.length;
+      }
+    );
+
+    await act.run('foo', { init: { setting: 'value' } });
+
+    assert.strictEqual(spanExporter.exportedSpans.length, 1);
+    assert.strictEqual(
+      spanExporter.exportedSpans[0].attributes['genkit:init'],
+      JSON.stringify({ setting: 'value' })
+    );
+  });
+
+  it('does not record init in telemetry when not provided', async () => {
+    const act = action(
+      {
+        name: 'noInitAction',
+        inputSchema: z.string(),
+        outputSchema: z.number(),
+        actionType: 'custom',
+      },
+      async (input) => {
+        return input.length;
+      }
+    );
+
+    await act.run('foo');
+
+    assert.strictEqual(spanExporter.exportedSpans.length, 1);
+    assert.strictEqual(
+      spanExporter.exportedSpans[0].attributes['genkit:init'],
+      undefined
+    );
+  });
+
   it('sets genkit:key on action metadata when using defineActionAsync', async () => {
     const actPromise = defineActionAsync(
       registry,

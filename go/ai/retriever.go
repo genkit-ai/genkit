@@ -23,6 +23,8 @@ import (
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
 // RetrieverFunc is the function type for retriever implementations.
@@ -40,7 +42,7 @@ type Retriever interface {
 
 // retriever is an action with functions specific to document retrieval such as Retrieve().
 type retriever struct {
-	core.ActionDef[*RetrieverRequest, *RetrieverResponse, struct{}]
+	core.Action[*RetrieverRequest, *RetrieverResponse, struct{}]
 }
 
 // RetrieverArg is the interface for retriever arguments. It can either be the retriever action itself or a reference to be looked up.
@@ -121,7 +123,7 @@ func NewRetriever(name string, opts *RetrieverOptions, fn RetrieverFunc) Retriev
 	}
 
 	return &retriever{
-		ActionDef: *core.NewAction(name, api.ActionTypeRetriever, metadata, inputSchema, fn),
+		Action: *core.NewAction(name, api.ActionTypeRetriever, metadata, inputSchema, fn),
 	}
 }
 
@@ -141,14 +143,14 @@ func LookupRetriever(r api.Registry, name string) Retriever {
 		return nil
 	}
 	return &retriever{
-		ActionDef: *action,
+		Action: *action,
 	}
 }
 
 // Retrieve runs the given [Retriever].
 func (r *retriever) Retrieve(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
 	if r == nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "Retriever.Retrieve: retriever called on a nil retriever; check that all retrievers are defined")
+		return nil, status.Errorf(status.ErrInvalidArgument, "Retriever.Retrieve: retriever called on a nil retriever; check that all retrievers are defined")
 	}
 
 	return r.Run(ctx, req, nil)
@@ -158,11 +160,12 @@ func (r *retriever) Retrieve(ctx context.Context, req *RetrieverRequest) (*Retri
 func Retrieve(ctx context.Context, r api.Registry, opts ...RetrieverOption) (*RetrieverResponse, error) {
 	retOpts := &retrieverOptions{}
 	for _, opt := range opts {
-		if err := opt.applyRetriever(retOpts); err != nil {
-			return nil, fmt.Errorf("ai.Retrieve: error applying options: %w", err)
-		}
+		opt.applyRetriever(retOpts)
 	}
 
+	if len(retOpts.Documents) == 0 {
+		return nil, errors.New("ai.Retrieve: a query document is required (WithDocs or WithTextDocs)")
+	}
 	if len(retOpts.Documents) > 1 {
 		return nil, errors.New("ai.Retrieve: only supports a single document as input")
 	}
@@ -180,7 +183,9 @@ func Retrieve(ctx context.Context, r api.Registry, opts ...RetrieverOption) (*Re
 	}
 
 	if retRef, ok := retOpts.Retriever.(RetrieverRef); ok && retOpts.Config == nil {
-		retOpts.Config = retRef.Config()
+		if cfg := retRef.Config(); !base.IsNil(cfg) {
+			retOpts.Config = cfg
+		}
 	}
 
 	req := &RetrieverRequest{

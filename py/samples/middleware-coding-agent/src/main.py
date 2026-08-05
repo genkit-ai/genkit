@@ -36,9 +36,10 @@ Re-running cleanly:
 
 from pathlib import Path
 
+from genkit_google_genai import GoogleAI
+from genkit_middleware import Filesystem, Middleware, Skills, ToolApproval
+
 from genkit import Genkit, Message, ModelResponse, Part, Role, TextPart, ToolRequestPart, restart_tool
-from genkit.plugins.google_genai import GoogleAI
-from genkit.plugins.middleware import Filesystem, Middleware, Skills, ToolApproval
 
 _HERE = Path(__file__).resolve().parent.parent
 _WORKSPACE = _HERE / 'workspace'
@@ -71,7 +72,7 @@ class CodingAgent:
             Filesystem(root_dir=str(_WORKSPACE), allow_write_access=True),
         ]
         self.messages: list[Message] = [
-            Message(role=Role.SYSTEM, content=[Part(root=TextPart(text=SYSTEM_PROMPT))]),
+            Message(role=Role.SYSTEM, content=[Part(TextPart(text=SYSTEM_PROMPT))]),
         ]
 
     async def turn(self, user_input: str) -> ModelResponse:
@@ -109,7 +110,7 @@ async def _ask_for_approvals(interrupts: list[ToolRequestPart]) -> list[ToolRequ
         print(f'Input: {trp.tool_request.input}')  # noqa: T201
         if input('Approve? (y/N): ').strip().lower() in ('y', 'yes'):
             approved.append(
-                restart_tool(interrupt=trp, resumed_metadata={'toolApproved': True}),
+                restart_tool(interrupt=trp, resumed_metadata={'tool_approved': True}),
             )
     return approved
 

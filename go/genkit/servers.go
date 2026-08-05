@@ -28,11 +28,13 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/google/uuid"
+
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/x/streaming"
-	"github.com/google/uuid"
 )
 
 // HandlerOption configures a Handler.
@@ -146,14 +148,40 @@ func wrapHandler(h func(http.ResponseWriter, *http.Request) error) http.HandlerF
 		}()
 
 		if err = h(w, r); err != nil {
-			var herr *core.GenkitError
-			if errors.As(err, &herr) {
-				http.Error(w, herr.Error(), core.HTTPStatusCode(herr.Status))
-			} else {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-			}
+			msg, code := clientError(err)
+			http.Error(w, msg, code.HTTPCode())
 		}
 	}
+}
+
+// clientError returns the message and status to send a client for err. Both
+// the HTTP code (via [status.Name.HTTPCode]) and any wire status field must
+// come from this one derivation so the two can never disagree.
+//
+// The status always comes from the error, so an error deliberately marked
+// public reaches the client with its own code rather than falling through to
+// 500. The message only leaves the process when the error was built with
+// [status.PublicErrorf]; anything else becomes a generic string derived from
+// the status, so schema dumps, provider text, and internal identifiers stay
+// server-side. The full error is still logged server-side: by wrapHandler for
+// request failures, and by the streaming runners for mid-stream flow failures.
+//
+// GENKIT_ENV=dev is exempt: suppressing the message during local development
+// only hides the failure from the developer causing it.
+func clientError(err error) (string, status.Name) {
+	code := status.Of(err)
+	// Only reached on a failure path, so an error that classifies as OK is
+	// itself the bug: the usual cause is a non-nil interface holding a nil
+	// *status.Error, which would otherwise report success on a request whose
+	// result was never written.
+	if code == status.OK {
+		code = status.Internal
+	}
+	msg, public := status.PublicMessage(err)
+	if !public && api.CurrentEnvironment() == api.EnvironmentDev {
+		msg = err.Error()
+	}
+	return msg, code
 }
 
 // handler returns an HTTP handler function that serves the action with the provided options.
@@ -166,12 +194,28 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 
 		var body struct {
 			Data json.RawMessage `json:"data"`
+			Init json.RawMessage `json:"init,omitempty"` // Per-session init for bidi actions; rejected otherwise.
 		}
 		if r.Body != nil && r.ContentLength > 0 {
 			defer r.Body.Close()
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				return core.NewPublicError(core.INVALID_ARGUMENT, err.Error(), nil)
+				return status.PublicErrorf(status.ErrInvalidArgument, "%w", err)
 			}
+		}
+
+		// Rejected before the streaming branch commits to SSE headers, so a
+		// non-bidi action receiving init fails with a proper HTTP 400 on
+		// every path rather than an in-band SSE error event on a 200.
+		if err := checkInitSupported(a, body.Init); err != nil {
+			return err
+		}
+
+		run := func(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (json.RawMessage, error) {
+			r, err := runActionWithOptionalInit(ctx, a, input, body.Init, cb)
+			if err != nil {
+				return nil, err
+			}
+			return r.Result, nil
 		}
 
 		stream, err := parseBoolQueryParam(r, "stream")
@@ -180,30 +224,9 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 		}
 		stream = stream || r.Header.Get("Accept") == "text/event-stream"
 
-		ctx := r.Context()
-		if opts.ContextProviders != nil {
-			for _, ctxProvider := range opts.ContextProviders {
-				headers := make(map[string]string, len(r.Header))
-				for k, v := range r.Header {
-					headers[strings.ToLower(k)] = strings.Join(v, " ")
-				}
-
-				actionCtx, err := ctxProvider(ctx, core.RequestData{
-					Method:  r.Method,
-					Headers: headers,
-					Input:   body.Data,
-				})
-				if err != nil {
-					logger.FromContext(ctx).Error("error providing action context from request", "err", err)
-					return err
-				}
-
-				if existing := core.FromContext(ctx); existing != nil {
-					maps.Copy(existing, actionCtx)
-					actionCtx = existing
-				}
-				ctx = core.WithActionContext(ctx, actionCtx)
-			}
+		ctx, err := applyContextProviders(r.Context(), r, opts.ContextProviders, body.Data)
+		if err != nil {
+			return err
 		}
 
 		if stream {
@@ -219,14 +242,14 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 			w.Header().Set("Transfer-Encoding", "chunked")
 
 			if opts.StreamManager != nil {
-				return runWithDurableStreaming(ctx, w, a, opts.StreamManager, body.Data)
+				return runWithDurableStreaming(ctx, w, run, opts.StreamManager, body.Data)
 			}
 
-			return runWithStreaming(ctx, w, a, body.Data)
+			return runWithStreaming(ctx, w, run, body.Data)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		out, err := a.RunJSON(ctx, body.Data, nil)
+		out, err := run(ctx, body.Data, nil)
 		if err != nil {
 			return err
 		}
@@ -234,8 +257,44 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 	}
 }
 
+// applyContextProviders runs the configured context providers against the
+// request and folds their results into ctx, so request-derived action
+// context (e.g. auth from headers) is available to the action. input is
+// handed to each provider as the request's decoded input
+// ([core.RequestData.Input]). A nil or empty providers slice returns ctx
+// unchanged.
+func applyContextProviders(ctx context.Context, r *http.Request, providers []core.ContextProvider, input json.RawMessage) (context.Context, error) {
+	for _, ctxProvider := range providers {
+		headers := make(map[string]string, len(r.Header))
+		for k, v := range r.Header {
+			headers[strings.ToLower(k)] = strings.Join(v, " ")
+		}
+
+		actionCtx, err := ctxProvider(ctx, core.RequestData{
+			Method:  r.Method,
+			Headers: headers,
+			Input:   input,
+		})
+		if err != nil {
+			logger.FromContext(ctx).Error("error providing action context from request", "err", err)
+			return ctx, err
+		}
+
+		if existing := core.FromContext(ctx); existing != nil {
+			maps.Copy(existing, actionCtx)
+			actionCtx = existing
+		}
+		ctx = core.WithActionContext(ctx, actionCtx)
+	}
+	return ctx, nil
+}
+
+// runJSONFunc abstracts over RunJSON and RunBidiJSON for the handler's
+// execution paths.
+type runJSONFunc = func(context.Context, json.RawMessage, func(context.Context, json.RawMessage) error) (json.RawMessage, error)
+
 // runWithStreaming executes the action with standard HTTP streaming (no durability).
-func runWithStreaming(ctx context.Context, w http.ResponseWriter, a api.Action, input json.RawMessage) error {
+func runWithStreaming(ctx context.Context, w http.ResponseWriter, run runJSONFunc, input json.RawMessage) error {
 	callback := func(ctx context.Context, msg json.RawMessage) error {
 		if err := writeSSEMessage(w, msg); err != nil {
 			return err
@@ -246,8 +305,12 @@ func runWithStreaming(ctx context.Context, w http.ResponseWriter, a api.Action, 
 		return nil
 	}
 
-	out, err := a.RunJSON(ctx, input, callback)
+	out, err := run(ctx, input, callback)
 	if err != nil {
+		// The SSE frame carries only the redacted message and this function
+		// returns nil, so wrapHandler never sees the error: this log is the
+		// only server-side record of the real failure.
+		slog.ErrorContext(ctx, "streaming flow failed", "err", err)
 		if werr := writeSSEError(w, err); werr != nil {
 			return werr
 		}
@@ -263,7 +326,7 @@ func runWithStreaming(ctx context.Context, w http.ResponseWriter, a api.Action, 
 // original client disconnects, the flow continues running and writing to durable
 // storage. This allows other clients to subscribe to the stream and receive the
 // remaining chunks and final result.
-func runWithDurableStreaming(ctx context.Context, w http.ResponseWriter, a api.Action, sm streaming.StreamManager, input json.RawMessage) error {
+func runWithDurableStreaming(ctx context.Context, w http.ResponseWriter, run runJSONFunc, sm streaming.StreamManager, input json.RawMessage) error {
 	streamID := uuid.New().String()
 
 	durableStream, err := sm.Open(ctx, streamID)
@@ -301,8 +364,12 @@ func runWithDurableStreaming(ctx context.Context, w http.ResponseWriter, a api.A
 		return nil
 	}
 
-	out, err := a.RunJSON(durableCtx, input, callback)
+	out, err := run(durableCtx, input, callback)
 	if err != nil {
+		// As in runWithStreaming: the wire carries only the redacted message
+		// and wrapHandler never sees the error, so log the real failure here.
+		// The durable record is no substitute: it expires with the stream.
+		slog.ErrorContext(durableCtx, "streaming flow failed", "err", err)
 		durableStream.Error(durableCtx, err)
 		select {
 		case <-clientGone:
@@ -326,8 +393,11 @@ func runWithDurableStreaming(ctx context.Context, w http.ResponseWriter, a api.A
 func subscribeToStream(ctx context.Context, w http.ResponseWriter, sm streaming.StreamManager, streamID string) error {
 	events, unsubscribe, err := sm.Subscribe(ctx, streamID)
 	if err != nil {
-		var ufErr *core.UserFacingError
-		if errors.As(err, &ufErr) && ufErr.Status == core.NOT_FOUND {
+		// Subscribe's contract is any NOT_FOUND error, not the in-tree
+		// streaming.ErrStreamNotFound sentinel specifically, so match on the
+		// status: a third-party StreamManager returning a plain NOT_FOUND
+		// gets the 204 that resuming clients key on, not a 404.
+		if status.Of(err) == status.NotFound {
 			w.WriteHeader(http.StatusNoContent)
 			return nil
 		}
@@ -385,10 +455,12 @@ type flowErrorResponse struct {
 }
 
 // flowError represents the error payload in a streaming error response.
+//
+// It carries no details field: it used to hold the full err.Error() text, which
+// put internal failure detail on the wire on every streamed error.
 type flowError struct {
-	Status  core.StatusName `json:"status"`
-	Message string          `json:"message"`
-	Details string          `json:"details,omitempty"`
+	Status  status.Name `json:"status"`
+	Message string      `json:"message"`
 }
 
 // writeResultResponse writes a JSON result response for non-streaming requests.
@@ -429,21 +501,14 @@ func writeSSEMessage(w http.ResponseWriter, msg json.RawMessage) error {
 }
 
 // writeSSEError writes an error as a server-sent event for streaming requests.
+// Status and message come from the same clientError derivation, so the frame
+// gets the identical redaction and OK-to-INTERNAL coercion as the HTTP path.
 func writeSSEError(w http.ResponseWriter, flowErr error) error {
-	status := core.INTERNAL
-	var ufErr *core.UserFacingError
-	var gErr *core.GenkitError
-	if errors.As(flowErr, &ufErr) {
-		status = ufErr.Status
-	} else if errors.As(flowErr, &gErr) {
-		status = gErr.Status
-	}
-
+	msg, code := clientError(flowErr)
 	resp := flowErrorResponse{
 		Error: &flowError{
-			Status:  status,
-			Message: "stream flow error",
-			Details: flowErr.Error(),
+			Status:  code,
+			Message: msg,
 		},
 	}
 	data, err := json.Marshal(resp)
@@ -460,7 +525,7 @@ func parseBoolQueryParam(r *http.Request, name string) (bool, error) {
 		var err error
 		b, err = strconv.ParseBool(s)
 		if err != nil {
-			return false, core.NewPublicError(core.INVALID_ARGUMENT, err.Error(), nil)
+			return false, status.PublicErrorf(status.ErrInvalidArgument, "%w", err)
 		}
 	}
 	return b, nil

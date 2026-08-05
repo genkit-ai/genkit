@@ -26,7 +26,6 @@ import (
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/core/x/session"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/registry"
 	"github.com/google/go-cmp/cmp"
@@ -2149,6 +2148,40 @@ func TestDataPromptExecuteStream(t *testing.T) {
 			t.Errorf("expected error %v, got %v", expectedErr, receivedErr)
 		}
 	})
+
+	t.Run("should not yield after stop", func(t *testing.T) {
+		testModel := DefineModel(r, "test/breakDataPromptStreamModel", &ModelOptions{
+			Supports: &ModelSupports{
+				Multiturn:   true,
+				Constrained: ConstrainedSupportAll,
+			},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			for i := range 3 {
+				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewJSONPart(fmt.Sprintf(`{"text":"chunk","index":%d}`, i))}}); err != nil {
+					return nil, err
+				}
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: &Message{
+					Role:    RoleModel,
+					Content: []*Part{NewJSONPart(`{"text":"done","index":4}`)},
+				},
+			}, nil
+		})
+
+		dp := DefineDataPrompt[StreamInput, StreamOutput](r, "breakStreamPrompt",
+			WithModel(testModel),
+			WithPrompt("Test {{topic}}"),
+		)
+
+		for _, err := range dp.ExecuteStream(t.Context(), StreamInput{Topic: "yielding"}) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			break
+		}
+	})
 }
 
 func TestPromptExecuteStream(t *testing.T) {
@@ -2263,21 +2296,48 @@ func TestPromptExecuteStream(t *testing.T) {
 			t.Errorf("expected temperature 0.9, got %v", config.Temperature)
 		}
 	})
+
+	t.Run("should not yield after stop", func(t *testing.T) {
+		testModel := DefineModel(r, "test/breakPromptStreamModel", &ModelOptions{
+			Supports: &ModelSupports{
+				Multiturn: true,
+			},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			for range 3 {
+				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart("chunk")}}); err != nil {
+					return nil, err
+				}
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: NewModelTextMessage("done"),
+			}, nil
+		})
+
+		p := DefinePrompt(r, "breakStreamTestPrompt",
+			WithModel(testModel),
+			WithPrompt("Test"),
+		)
+
+		for _, err := range p.ExecuteStream(t.Context()) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			break
+		}
+	})
 }
 
-// TestSessionStateInjection tests that session state is automatically injected
-// into prompt templates and accessible via {{@state.field}} syntax.
+// TestSessionStateInjection tests that state attached to the context via
+// base.WithPromptState is automatically injected into prompt templates and
+// accessible via {{@state.field}} syntax. Sessions attach their custom state
+// this way (see exp.NewSessionContext), decoupled so go/ai needs no dependency
+// on the session package.
 func TestSessionStateInjection(t *testing.T) {
 	r := registry.New()
 	ConfigureFormats(r)
 
-	// Define a test state type
-	type UserState struct {
-		Name        string            `json:"name"`
-		Preferences map[string]string `json:"preferences"`
-	}
-
-	t.Run("session state accessible in prompt template", func(t *testing.T) {
+	t.Run("state accessible in prompt template", func(t *testing.T) {
 		var capturedPrompt string
 
 		testModel := DefineModel(r, "test/sessionStateModel", &ModelOptions{
@@ -2296,33 +2356,27 @@ func TestSessionStateInjection(t *testing.T) {
 			WithPrompt("Hello {{@state.name}}, your theme is {{@state.preferences.theme}}"),
 		)
 
-		// Create a session with state
-		ctx := context.Background()
-		sess, err := session.New(ctx, session.WithInitialState(UserState{
-			Name:        "Alice",
-			Preferences: map[string]string{"theme": "dark"},
-		}))
-		if err != nil {
-			t.Fatalf("Failed to create session: %v", err)
-		}
+		// Attach state to the context the way a session does.
+		ctx := base.WithPromptState(context.Background(), func() any {
+			return map[string]any{
+				"name":        "Alice",
+				"preferences": map[string]any{"theme": "dark"},
+			}
+		})
 
-		// Attach session to context
-		ctx = session.NewContext(ctx, sess)
-
-		// Execute prompt with session in context
-		_, err = p.Execute(ctx)
-		if err != nil {
+		// Execute prompt with state in context
+		if _, err := p.Execute(ctx); err != nil {
 			t.Fatalf("Execute failed: %v", err)
 		}
 
-		// Verify the session state was injected into the template
+		// Verify the state was injected into the template
 		expected := "Hello Alice, your theme is dark"
 		if capturedPrompt != expected {
 			t.Errorf("Expected prompt %q, got %q", expected, capturedPrompt)
 		}
 	})
 
-	t.Run("prompt works without session in context", func(t *testing.T) {
+	t.Run("prompt works without state in context", func(t *testing.T) {
 		var capturedPrompt string
 
 		testModel := DefineModel(r, "test/noSessionModel", &ModelOptions{
@@ -2357,7 +2411,7 @@ func TestSessionStateInjection(t *testing.T) {
 		}
 	})
 
-	t.Run("session state and input variables can be used together", func(t *testing.T) {
+	t.Run("state and input variables can be used together", func(t *testing.T) {
 		var capturedPrompt string
 
 		testModel := DefineModel(r, "test/mixedModel", &ModelOptions{
@@ -2379,18 +2433,13 @@ func TestSessionStateInjection(t *testing.T) {
 			}{}),
 		)
 
-		// Create session
-		ctx := context.Background()
-		sess, err := session.New(ctx, session.WithInitialState(UserState{
-			Name: "Charlie",
-		}))
-		if err != nil {
-			t.Fatalf("Failed to create session: %v", err)
-		}
-		ctx = session.NewContext(ctx, sess)
+		// Attach state to the context the way a session does.
+		ctx := base.WithPromptState(context.Background(), func() any {
+			return map[string]any{"name": "Charlie"}
+		})
 
-		// Execute with both session and input
-		_, err = p.Execute(ctx, WithInput(map[string]any{"question": "What is the weather?"}))
+		// Execute with both state and input
+		_, err := p.Execute(ctx, WithInput(map[string]any{"question": "What is the weather?"}))
 		if err != nil {
 			t.Fatalf("Execute failed: %v", err)
 		}
@@ -3062,11 +3111,13 @@ func TestContentType(t *testing.T) {
 			wantData: "gs://bucket/image.png",
 		},
 		{
-			name:        "gs:// URL without content type",
-			ct:          "",
-			uri:         "gs://bucket/image.png",
-			wantErr:     true,
-			errContains: "must supply contentType",
+			// The content type is optional at render time; the model/plugin
+			// layer resolves gs:// URLs natively.
+			name:     "gs:// URL without content type",
+			ct:       "",
+			uri:      "gs://bucket/image.png",
+			wantCT:   "",
+			wantData: "gs://bucket/image.png",
 		},
 		{
 			name:     "http URL with content type",
@@ -3076,11 +3127,14 @@ func TestContentType(t *testing.T) {
 			wantData: "https://example.com/image.jpg",
 		},
 		{
-			name:        "http URL without content type",
-			ct:          "",
-			uri:         "https://example.com/image.jpg",
-			wantErr:     true,
-			errContains: "must supply contentType",
+			// The content type is optional at render time; the download
+			// middleware fetches http(s) media and fills it in from the
+			// response's Content-Type header.
+			name:     "http URL without content type",
+			ct:       "",
+			uri:      "https://example.com/image.jpg",
+			wantCT:   "",
+			wantData: "https://example.com/image.jpg",
 		},
 		{
 			name:     "data URI with base64",
@@ -3140,6 +3194,65 @@ func TestContentType(t *testing.T) {
 			}
 			if string(gotData) != tt.wantData {
 				t.Errorf("data = %q, want %q", string(gotData), tt.wantData)
+			}
+		})
+	}
+}
+
+// TestPromptRenderMediaURL verifies that a prompt using {{media url=...}} with
+// an http(s) or gs:// URL renders without requiring an explicit content type.
+// The content type is resolved downstream: the download middleware fetches
+// http(s) media, and the model natively resolves gs:// and similar URLs.
+// Regression test for https://github.com/genkit-ai/genkit/issues/5332.
+func TestPromptRenderMediaURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "http URL", url: "https://example.com/image.jpg"},
+		{name: "gs:// URL", url: "gs://bucket/image.png"},
+	}
+
+	source := `---
+model: test/chat
+input:
+  schema:
+    image: string
+---
+Analyze the image.
+
+{{media url=image}}
+`
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := registry.New()
+			p, err := LoadPromptFromSource(reg, source, "analyze", "")
+			if err != nil {
+				t.Fatalf("LoadPromptFromSource failed: %v", err)
+			}
+
+			actionOpts, err := p.Render(context.Background(), map[string]any{"image": tt.url})
+			if err != nil {
+				t.Fatalf("Render failed: %v", err)
+			}
+
+			var media *Part
+			for _, msg := range actionOpts.Messages {
+				for _, part := range msg.Content {
+					if part.IsMedia() {
+						media = part
+					}
+				}
+			}
+			if media == nil {
+				t.Fatal("expected a media part in the rendered messages, got none")
+			}
+			if media.Text != tt.url {
+				t.Errorf("media URL = %q, want %q", media.Text, tt.url)
+			}
+			if media.ContentType != "" {
+				t.Errorf("content type = %q, want empty (resolved downstream)", media.ContentType)
 			}
 		})
 	}

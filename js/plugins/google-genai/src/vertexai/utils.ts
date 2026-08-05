@@ -16,12 +16,14 @@
 
 import { GenkitError, z } from 'genkit';
 import { GoogleAuth } from 'google-auth-library';
-import type {
-  ClientOptions,
-  ExpressClientOptions,
-  GlobalClientOptions,
-  RegionalClientOptions,
-  VertexPluginOptions,
+import {
+  isMultiRegionalLocation,
+  type ClientOptions,
+  type ExpressClientOptions,
+  type GlobalClientOptions,
+  type MultiRegionalClientOptions,
+  type RegionalClientOptions,
+  type VertexPluginOptions,
 } from './types.js';
 
 export {
@@ -66,27 +68,81 @@ export async function getDerivedOptions(
     return Promise.resolve(__mockDerivedOptions);
   }
 
+  // Lazy instantiate the authClient
+  let authClientPromise: Promise<GoogleAuth> | undefined;
+  const getAuthClientInternal = (): Promise<GoogleAuth> => {
+    if (!authClientPromise) {
+      authClientPromise = getAuthClient(AuthClass, options);
+    }
+    return authClientPromise;
+  };
+
+  // Lazy instantiate the projectId
+  let projectIdPromise: Promise<string> | undefined;
+  const getProjectIdInternal = (): Promise<string> => {
+    if (!projectIdPromise) {
+      projectIdPromise = (async () => {
+        const authClient = await getAuthClientInternal();
+        return getProjectId(authClient, options);
+      })();
+    }
+    return projectIdPromise;
+  };
+
   // Figure out the type of preferred options if possible
   // The order of the if statements is important.
   if (options?.location == 'global') {
-    return await getGlobalDerivedOptions(AuthClass, options);
+    return await getGlobalDerivedOptions(
+      await getAuthClientInternal(),
+      await getProjectIdInternal(),
+      options
+    );
+  } else if (isMultiRegionalLocation(options?.location)) {
+    return await getMultiRegionalDerivedOptions(
+      await getAuthClientInternal(),
+      await getProjectIdInternal(),
+      options
+    );
   } else if (options?.location) {
-    return await getRegionalDerivedOptions(AuthClass, options);
+    return await getRegionalDerivedOptions(
+      await getAuthClientInternal(),
+      await getProjectIdInternal(),
+      options
+    );
   } else if (options?.apiKey !== undefined) {
     // apiKey = false still indicates apiKey expectation
     return getExpressDerivedOptions(options);
   }
 
   // If we got here then we're relying on environment variables.
-  // Try regional first, it's the most common usage.
+  // Try multi-regional first, it's very narrowly defined location
   try {
-    const regionalOptions = await getRegionalDerivedOptions(AuthClass, options);
+    const multiRegionalOptions = await getMultiRegionalDerivedOptions(
+      await getAuthClientInternal(),
+      await getProjectIdInternal(),
+      options
+    );
+    return multiRegionalOptions;
+  } catch (e: unknown) {
+    /* no-op - try regional next */
+  }
+  // Try regional second, it's the most common usage.
+  try {
+    const regionalOptions = await getRegionalDerivedOptions(
+      await getAuthClientInternal(),
+      await getProjectIdInternal(),
+      options
+    );
     return regionalOptions;
   } catch (e: unknown) {
     /* no-op - try global next */
   }
   try {
-    const globalOptions = await getGlobalDerivedOptions(AuthClass, options);
+    const globalOptions = await getGlobalDerivedOptions(
+      await getAuthClientInternal(),
+      await getProjectIdInternal(),
+      options
+    );
     return globalOptions;
   } catch (e: unknown) {
     /* no-op - try express last */
@@ -108,45 +164,10 @@ export async function getDerivedOptions(
 }
 
 async function getGlobalDerivedOptions(
-  AuthClass: typeof GoogleAuth,
+  authClient: GoogleAuth,
+  projectId: string,
   options?: VertexPluginOptions
 ): Promise<GlobalClientOptions> {
-  let authOptions = options?.googleAuth;
-  let authClient: GoogleAuth;
-  const providedProjectId =
-    options?.projectId ||
-    process.env.GCLOUD_PROJECT ||
-    parseFirebaseProjectId();
-  if (process.env.GCLOUD_SERVICE_ACCOUNT_CREDS) {
-    const serviceAccountCreds = JSON.parse(
-      process.env.GCLOUD_SERVICE_ACCOUNT_CREDS
-    );
-    authOptions = {
-      credentials: serviceAccountCreds,
-      scopes: [CLOUD_PLATFORM_OAUTH_SCOPE],
-      projectId: providedProjectId,
-    };
-    authClient = new AuthClass(authOptions);
-  } else {
-    authClient = new AuthClass(
-      authOptions ?? {
-        scopes: [CLOUD_PLATFORM_OAUTH_SCOPE],
-        projectId: providedProjectId,
-      }
-    );
-  }
-
-  const projectId =
-    options?.projectId ||
-    process.env.GCLOUD_PROJECT ||
-    (await authClient.getProjectId());
-
-  if (!projectId) {
-    throw new Error(
-      `VertexAI Plugin is missing the 'project' configuration. Please set the 'GCLOUD_PROJECT' environment variable or explicitly pass 'project' into genkit config.`
-    );
-  }
-
   const clientOpt: GlobalClientOptions = {
     kind: 'global',
     location: 'global',
@@ -157,6 +178,9 @@ async function getGlobalDerivedOptions(
   if (options?.apiKey) {
     clientOpt.apiKey = options.apiKey;
   }
+  if (options?.apiVersion) {
+    clientOpt.apiVersion = options.apiVersion;
+  }
 
   return clientOpt;
 }
@@ -165,17 +189,21 @@ function getExpressDerivedOptions(
   options?: VertexPluginOptions
 ): ExpressClientOptions {
   const apiKey = checkApiKey(options?.apiKey);
-  return {
+  const clientOpt: ExpressClientOptions = {
     kind: 'express',
     apiKey,
     experimental_debugTraces: options?.experimental_debugTraces,
   };
+  if (options?.apiVersion) {
+    clientOpt.apiVersion = options.apiVersion;
+  }
+  return clientOpt;
 }
 
-async function getRegionalDerivedOptions(
+async function getAuthClient(
   AuthClass: typeof GoogleAuth,
   options?: VertexPluginOptions
-): Promise<RegionalClientOptions> {
+): Promise<GoogleAuth> {
   let authOptions = options?.googleAuth;
   let authClient: GoogleAuth;
   const providedProjectId =
@@ -200,22 +228,69 @@ async function getRegionalDerivedOptions(
       }
     );
   }
+  return authClient;
+}
 
+async function getProjectId(
+  authClient: GoogleAuth,
+  options?: VertexPluginOptions
+): Promise<string> {
   const projectId =
     options?.projectId ||
     process.env.GCLOUD_PROJECT ||
     (await authClient.getProjectId());
-  const location =
-    options?.location || process.env.GCLOUD_LOCATION || 'us-central1';
+  if (!projectId) {
+    throw new Error(
+      `VertexAI Plugin is missing the 'project' configuration. Please set the 'GCLOUD_PROJECT' environment variable or explicitly pass 'project' into genkit config.`
+    );
+  }
+  return projectId;
+}
+
+async function getMultiRegionalDerivedOptions(
+  authClient: GoogleAuth,
+  projectId: string,
+  options?: VertexPluginOptions
+): Promise<MultiRegionalClientOptions> {
+  const location = options?.location || process.env.GCLOUD_LOCATION;
 
   if (!location) {
     throw new Error(
       `VertexAI Plugin is missing the 'location' configuration. Please set the 'GCLOUD_LOCATION' environment variable or explicitly pass 'location' into genkit config.`
     );
   }
-  if (!projectId) {
+  if (!isMultiRegionalLocation(location)) {
     throw new Error(
-      `VertexAI Plugin is missing the 'project' configuration. Please set the 'GCLOUD_PROJECT' environment variable or explicitly pass 'project' into genkit config.`
+      `Tried to set multi regional location to an invalid region: ${location}`
+    );
+  }
+
+  const clientOpt: MultiRegionalClientOptions = {
+    kind: 'multi-regional',
+    location,
+    projectId,
+    authClient,
+    experimental_debugTraces: options?.experimental_debugTraces,
+  };
+  if (options?.apiKey) {
+    clientOpt.apiKey = options.apiKey;
+  }
+  if (options?.apiVersion) {
+    clientOpt.apiVersion = options.apiVersion;
+  }
+  return clientOpt;
+}
+
+async function getRegionalDerivedOptions(
+  authClient: GoogleAuth,
+  projectId: string,
+  options?: VertexPluginOptions
+): Promise<RegionalClientOptions> {
+  const location =
+    options?.location || process.env.GCLOUD_LOCATION || 'us-central1';
+  if (!location) {
+    throw new Error(
+      `VertexAI Plugin is missing the 'location' configuration. Please set the 'GCLOUD_LOCATION' environment variable or explicitly pass 'location' into genkit config.`
     );
   }
 
@@ -228,6 +303,9 @@ async function getRegionalDerivedOptions(
   };
   if (options?.apiKey) {
     clientOpt.apiKey = options.apiKey;
+  }
+  if (options?.apiVersion) {
+    clientOpt.apiVersion = options.apiVersion;
   }
   return clientOpt;
 }
@@ -256,6 +334,9 @@ export function calculateRequestOptions<T extends z.ZodObject<any, any, any>>(
   reqConfig?: z.infer<T>
 ): RequestClientOptions | ClientOptions {
   let newOptions = { ...clientOptions };
+  if (reqConfig?.apiVersion) {
+    newOptions.apiVersion = reqConfig.apiVersion;
+  }
   if (
     reqConfig?.location &&
     typeof reqConfig.location == 'string' &&
@@ -266,6 +347,9 @@ export function calculateRequestOptions<T extends z.ZodObject<any, any, any>>(
     if (reqConfig.location == 'global') {
       newOptions.location = 'global';
       newOptions.kind = 'global';
+    } else if (isMultiRegionalLocation(reqConfig.location)) {
+      newOptions.kind = 'multi-regional';
+      newOptions.location = reqConfig.location;
     } else {
       newOptions.kind = 'regional';
       newOptions.location = reqConfig.location;

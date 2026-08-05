@@ -17,6 +17,7 @@
 
 """Telemetry and tracing functionality for the Genkit framework."""
 
+import asyncio
 import json
 import traceback
 from collections.abc import Generator
@@ -31,12 +32,13 @@ from opentelemetry.sdk.trace.export import SpanExporter
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
-from genkit._core._base import GenkitModel
-from genkit._core._environment import is_dev_environment
-from genkit._core._error import GenkitError
-from genkit._core._logger import get_logger
-from genkit._core._trace._default_exporter import create_span_processor, init_telemetry_server_exporter
-from genkit._core._trace._path import build_path
+from ._base import GenkitModel
+from ._environment import is_dev_environment
+from ._error import GenkitError, GenkitInterrupt
+from ._logger import get_logger
+from ._trace._attrs import Attr, State, metadata_key
+from ._trace._default_exporter import create_span_processor, init_telemetry_server_exporter
+from ._trace._path import build_path
 
 logger = get_logger(__name__)
 
@@ -44,12 +46,12 @@ logger = get_logger(__name__)
 class SpanMetadata(GenkitModel):
     """Input parameters for opening a Genkit span via :func:`run_in_new_span`.
 
-    Mapping from SpanMetadata to span attributes:
-      - name                 -> genkit:name (and span name)
-      - input / output       -> genkit:input / genkit:output (JSON-serialized)
-      - type                 -> genkit:type
-      - subtype              -> genkit:metadata:subtype
-      - metadata[k]          -> genkit:metadata:<k> (auto-prefixed)
+    Mapping from SpanMetadata to span attributes (see ``Attr`` for wire names):
+      - name                 -> Attr.NAME (and span name)
+      - input / output       -> Attr.INPUT / Attr.OUTPUT (JSON-serialized)
+      - type                 -> Attr.TYPE
+      - subtype              -> Attr.SUBTYPE
+      - metadata[k]          -> metadata_key(k)
       - telemetry_labels[k]  -> <k> verbatim (caller-controlled keys)
 
     """
@@ -62,6 +64,7 @@ class SpanMetadata(GenkitModel):
     state: Literal['success', 'error'] | None = None
     input: Any | None = Field(default=None)
     output: Any | None = Field(default=None)
+    init: Any | None = Field(default=None)
     is_root: bool | None = None
     metadata: dict[str, Any] | None = None
     path: str | None = None
@@ -79,13 +82,13 @@ _parent_path_context: ContextVar[str] = ContextVar('genkit_parent_path', default
 
 
 @contextmanager
-def save_parent_path() -> Generator[None, None, None]:
-    """Save the parent path on entry and restore it on exit."""
-    saved = _parent_path_context.get()
+def push_parent_path(path: str) -> Generator[None, None, None]:
+    """Push ``path`` as the active parent path for nested spans; restore on exit."""
+    token = _parent_path_context.set(path)
     try:
         yield
     finally:
-        _parent_path_context.set(saved)
+        _parent_path_context.reset(token)
 
 
 def init_provider() -> TracerProvider:
@@ -134,13 +137,85 @@ if is_dev_environment():
 
 
 def _to_json_attr(value: object) -> str:
-    """Serialize an arbitrary object for a ``genkit:input``/``genkit:output`` attribute."""
+    """Serialize an arbitrary object for an input/output span attribute."""
     if isinstance(value, BaseModel):
         return value.model_dump_json(by_alias=True, exclude_none=True)
     try:
         return json.dumps(value)
     except (TypeError, ValueError):
         return str(value)
+
+
+def start_attributes(
+    metadata: SpanMetadata,
+    *,
+    qualified_path: str,
+) -> dict[str, str | bool]:
+    """Attrs known when the span begins (identity/shape + input).
+
+    Live-trace export snapshots the span the instant it starts, so these have to
+    be on the span *before* start returns; otherwise Dev UI shows a blank
+    in-progress entry until the span ends. State/output are excluded — they
+    aren't known until the body finishes.
+    """
+    attrs: dict[str, str | bool] = {}
+    if metadata.telemetry_labels:
+        attrs.update(metadata.telemetry_labels)
+    attrs.update({
+        Attr.NAME: metadata.name,
+        Attr.PATH: qualified_path,
+        Attr.QUALIFIED_PATH: qualified_path,
+    })
+    if metadata.type:
+        attrs[Attr.TYPE] = metadata.type
+    if metadata.subtype:
+        attrs[Attr.SUBTYPE] = metadata.subtype
+    if metadata.is_root:
+        attrs[Attr.IS_ROOT] = True
+    if metadata.metadata:
+        for meta_key, meta_value in metadata.metadata.items():
+            attrs[metadata_key(meta_key)] = str(meta_value)
+    if metadata.input is not None:
+        attrs[Attr.INPUT] = _to_json_attr(metadata.input)
+    if metadata.init is not None:
+        attrs[Attr.INIT] = _to_json_attr(metadata.init)
+    return attrs
+
+
+@contextmanager
+def record_span_outcome(
+    span: trace_api.Span,
+    metadata: SpanMetadata,
+) -> Generator[None, None, None]:
+    """Write success or error attrs after the span body finishes."""
+    try:
+        yield
+    except GenkitInterrupt:
+        # HITL / tool pause — control flow, not a failed span. Stamp success so
+        # cloud telemetry has a known genkit:state; interrupt metadata already
+        # lives on the raise. Don't paint the span red.
+        if metadata.output is not None:
+            span.set_attribute(Attr.OUTPUT, _to_json_attr(metadata.output))
+        span.set_attribute(Attr.STATE, State.SUCCESS)
+        raise
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        # Abort/timeout — unfinished work, not a win or a fail. Leave
+        # genkit:state absent (OTel stays UNSET) so cloud metrics don't count
+        # these as either. May log Unknown state until we have an aborted bucket.
+        raise
+    except Exception as e:
+        logger.debug(f'Error in run_in_new_span: {e!s}')
+        logger.debug(traceback.format_exc())
+        span.set_attribute(Attr.STATE, State.ERROR)
+        err_text = e.original_message if isinstance(e, GenkitError) else str(e)
+        span.set_attribute(Attr.ERROR, err_text)
+        span.set_status(status=trace_api.StatusCode.ERROR, description=str(e))
+        span.record_exception(e)
+        raise
+
+    if metadata.output is not None:
+        span.set_attribute(Attr.OUTPUT, _to_json_attr(metadata.output))
+    span.set_attribute(Attr.STATE, State.SUCCESS)
 
 
 @contextmanager
@@ -161,37 +236,19 @@ def run_in_new_span(
         The OpenTelemetry Span object.
     """
     qualified_path = build_path(metadata.name, _parent_path_context.get(), metadata.type or '', metadata.subtype)
+    # Seed start-known attrs as span-start options so RealtimeSpanProcessor's
+    # on_start export already carries them for the Dev UI.
+    start_attrs = start_attributes(metadata, qualified_path=qualified_path)
 
-    with save_parent_path():
-        with tracer.start_as_current_span(name=metadata.name, links=links) as span:
-            if metadata.telemetry_labels:
-                span.set_attributes(metadata.telemetry_labels)
-            span.set_attribute('genkit:name', metadata.name)
-            span.set_attribute('genkit:path', qualified_path)
-            span.set_attribute('genkit:qualifiedPath', qualified_path)
-            if metadata.type:
-                span.set_attribute('genkit:type', metadata.type)
-            if metadata.subtype:
-                span.set_attribute('genkit:metadata:subtype', metadata.subtype)
-            if metadata.input is not None:
-                span.set_attribute('genkit:input', _to_json_attr(metadata.input))
-            if metadata.metadata:
-                for meta_key, meta_value in metadata.metadata.items():
-                    span.set_attribute(f'genkit:metadata:{meta_key}', str(meta_value))
-            _parent_path_context.set(qualified_path)
-
-            try:
+    with push_parent_path(qualified_path):
+        # record_span_outcome owns success/error attrs so control-flow
+        # GenkitInterrupt can re-raise without OTEL painting the span red.
+        with tracer.start_as_current_span(
+            name=metadata.name,
+            links=links,
+            attributes=start_attrs,
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
+            with record_span_outcome(span, metadata):
                 yield span
-            except Exception as e:
-                logger.debug(f'Error in run_in_new_span: {e!s}')
-                logger.debug(traceback.format_exc())
-                span.set_attribute('genkit:state', 'error')
-                err_text = e.original_message if isinstance(e, GenkitError) else str(e)
-                span.set_attribute('genkit:error', err_text)
-                span.set_status(status=trace_api.StatusCode.ERROR, description=str(e))
-                span.record_exception(e)
-                raise
-
-            if metadata.output is not None:
-                span.set_attribute('genkit:output', _to_json_attr(metadata.output))
-            span.set_attribute('genkit:state', 'success')

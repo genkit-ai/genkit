@@ -224,6 +224,14 @@ export function httpStatusCode(status: StatusName): number {
   return statusCodeMap[status];
 }
 
+export function statusNameToCode(
+  status?: string | StatusName
+): StatusCodes | undefined {
+  if (!status || typeof status !== 'string') return undefined;
+  const val = StatusCodes[status as keyof typeof StatusCodes];
+  return typeof val === 'number' ? (val as StatusCodes) : undefined;
+}
+
 const StatusCodesSchema = z.nativeEnum(StatusCodes);
 
 // If changing below

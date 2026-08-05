@@ -93,7 +93,7 @@ describe('toGeminiMessage', () => {
         ],
       },
       expectedOutput: {
-        role: 'function',
+        role: 'user',
         parts: [
           {
             functionResponse: {
@@ -142,7 +142,7 @@ describe('toGeminiMessage', () => {
         ],
       },
       expectedOutput: {
-        role: 'function',
+        role: 'user',
         parts: [
           {
             functionResponse: {
@@ -189,7 +189,7 @@ describe('toGeminiMessage', () => {
         ],
       },
       expectedOutput: {
-        role: 'function',
+        role: 'user',
         parts: [
           {
             functionResponse: {
@@ -231,7 +231,7 @@ describe('toGeminiMessage', () => {
         ],
       },
       expectedOutput: {
-        role: 'function',
+        role: 'user',
         parts: [
           {
             functionResponse: {
@@ -469,7 +469,7 @@ describe('toGeminiMessage', () => {
         ],
       },
       expectedOutput: {
-        role: 'function',
+        role: 'user',
         parts: [
           {
             codeExecutionResult: {

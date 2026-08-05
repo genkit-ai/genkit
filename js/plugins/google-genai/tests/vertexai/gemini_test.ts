@@ -65,12 +65,21 @@ describe('Vertex AI Gemini', () => {
     apiKey: 'test-express-api-key',
   };
 
+  const defaultMultiRegionalClientOptions: ClientOptions = {
+    kind: 'multi-regional',
+    projectId: 'test-project',
+    location: 'eu',
+    authClient: {} as any,
+  };
+
   beforeEach(() => {
     authMock = sinon.createStubInstance(GoogleAuth);
 
     authMock.getAccessToken.resolves('test-token');
     defaultRegionalClientOptions.authClient = authMock as unknown as GoogleAuth;
     defaultGlobalClientOptions.authClient = authMock as unknown as GoogleAuth;
+    defaultMultiRegionalClientOptions.authClient =
+      authMock as unknown as GoogleAuth;
 
     fetchStub = sinon.stub(global, 'fetch');
   });
@@ -208,6 +217,8 @@ describe('Vertex AI Gemini', () => {
 
         if (clientOptions.kind === 'regional') {
           baseUrl = `https://${clientOptions.location}-aiplatform.googleapis.com/v1beta1/${projectAndLocation}`;
+        } else if (clientOptions.kind === 'multi-regional') {
+          baseUrl = `https://aiplatform.${clientOptions.location}.rep.googleapis.com/v1beta1/${projectAndLocation}`;
         } else if (clientOptions.kind === 'global') {
           baseUrl = `https://aiplatform.googleapis.com/v1beta1/${projectAndLocation}`;
         } else {
@@ -689,6 +700,35 @@ describe('Vertex AI Gemini', () => {
         assert.ok(url.includes(overrideLocation));
       });
 
+      it('handles config.apiVersion override', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const overrideApiVersion = 'v1';
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: { apiVersion: overrideApiVersion },
+        };
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
+        sinon.assert.calledOnce(fetchStub);
+        const fetchArgs = fetchStub.lastCall.args;
+        const url = fetchArgs[0];
+
+        const newClientOptions = {
+          ...clientOptions,
+          apiVersion: overrideApiVersion as 'v1' | 'v1beta1',
+        };
+
+        const expectedUrl = getVertexAIUrl({
+          includeProjectAndLocation: true, // gets ignored inside getVertexAIUrl for express
+          resourcePath: 'publishers/google/models/gemini-2.5-flash',
+          resourceMethod: 'generateContent',
+          clientOptions: newClientOptions,
+        });
+
+        assert.strictEqual(url, expectedUrl);
+        assert.ok(url.includes(`/v1/`));
+      });
+
       it('handles config.payGo priority spillover mode', async () => {
         mockFetchResponse(defaultApiResponse);
         const request: GenerateRequest<typeof GeminiConfigSchema> = {
@@ -785,5 +825,9 @@ describe('Vertex AI Gemini', () => {
 
   describe('defineModel - Express Client', () => {
     runCommonTests(defaultExpressClientOptions);
+  });
+
+  describe('defineModel - Multi-Regional Client', () => {
+    runCommonTests(defaultMultiRegionalClientOptions);
   });
 });

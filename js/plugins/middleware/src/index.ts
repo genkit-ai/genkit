@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+export { agents } from './agents.js';
+export { artifacts } from './artifacts.js';
 export { fallback } from './fallback.js';
 export { filesystem } from './filesystem.js';
 export { retry } from './retry.js';

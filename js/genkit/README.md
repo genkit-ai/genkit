@@ -105,6 +105,7 @@ const { text } = await ai.generate({
 ### Interrupts (Human-in-the-Loop)
 
 > **Beta feature:** Interrupts require importing from `genkit/beta` instead of `genkit`:
+>
 > ```ts
 > import { genkit } from 'genkit/beta';
 > ```
@@ -296,6 +297,68 @@ for await (const chunk of stream) {
 }
 ```
 
+### Agents
+
+> **Beta feature:** Agents require importing from `genkit/beta` instead of `genkit`:
+>
+> ```ts
+> import { genkit } from 'genkit/beta';
+> ```
+
+Agents are stateful, multi-turn conversations built on top of prompts and tools. `defineAgent` bundles a system prompt, tools, and (optionally) a session store into a single ergonomic chat API. A `chat` carries state across turns automatically, so you don't have to thread message history by hand:
+
+```ts
+import { genkit, z, FileSessionStore } from 'genkit/beta';
+import { googleAI } from '@genkit-ai/google-genai';
+
+const ai = genkit({ plugins: [googleAI()] });
+
+const getWeather = ai.defineTool(
+  {
+    name: 'getWeather',
+    description: 'Get the current weather for a given location.',
+    inputSchema: z.object({ location: z.string() }),
+    outputSchema: z.object({ weather: z.string() }),
+  },
+  async ({ location }) => ({ weather: `Sunny in ${location}` })
+);
+
+const weatherAgent = ai.defineAgent({
+  name: 'weatherAgent',
+  system: 'You are a helpful weather assistant. Use the getWeather tool.',
+  tools: [getWeather],
+  // Optional: persist each turn as a resumable snapshot.
+  store: new FileSessionStore('./.snapshots'),
+});
+
+const chat = weatherAgent.chat();
+
+// First turn (streaming).
+const turn = chat.sendStream('What is the weather in London?');
+for await (const chunk of turn.stream) {
+  process.stdout.write(chunk.text ?? '');
+}
+await turn.response;
+
+// Follow-up turn reuses the same chat - state is carried automatically.
+const res = await chat.send('Now say that in French');
+console.log(res.text);
+```
+
+Agents can be served over HTTP and accessed from the client with `remoteAgent`, which returns the exact same chat API as the server:
+
+```ts
+import { remoteAgent } from 'genkit/beta/client';
+
+const AGENT_URL = 'YOUR_AGENT_URL';
+const agent = remoteAgent({ url: AGENT_URL });
+const chat = agent.chat();
+const res = await chat.send('Weather in Tokyo?');
+console.log(res.text);
+```
+
+Learn more in the [Agents documentation](https://genkit.dev/docs/js/agents/overview/).
+
 ## Middleware
 
 The [`@genkit-ai/middleware`](https://www.npmjs.com/package/@genkit-ai/middleware) package provides ready-made middleware to add common functionality to your AI requests:
@@ -305,6 +368,8 @@ The [`@genkit-ai/middleware`](https://www.npmjs.com/package/@genkit-ai/middlewar
 - **`toolApproval`** - Restrict tool execution to an approved list, interrupting unapproved calls for review.
 - **`filesystem`** - Give the model sandboxed read/write access to a directory on the filesystem.
 - **`skills`** - Scan for skill definitions and inject them as available tools.
+- **`agents`** - Delegate to sub-agents by exposing each as a dedicated delegation tool.
+- **`artifacts`** - Give the model tools to read, create, and update session artifacts.
 
 ```posix-terminal
 npm install @genkit-ai/middleware
@@ -360,6 +425,7 @@ Genkit flows can be deployed anywhere Node.js runs:
 
 - [Developer tools](https://genkit.dev/docs/js/devtools/): Set up and use Genkit's CLI and developer UI.
 - [Generating content](https://genkit.dev/docs/js/models/): Use Genkit's unified generation API.
+- [Building agents](https://genkit.dev/docs/js/agents/overview/): Build stateful, multi-turn agents.
 - [Creating flows](https://genkit.dev/docs/js/flows/): Build observable workflows with rich debugging.
 - [Managing prompts](https://genkit.dev/docs/js/dotprompt/): Manage prompts and configuration as code.
 

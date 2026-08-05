@@ -24,13 +24,24 @@ import os from 'os';
 import path from 'path';
 import type { GenkitToolsError } from '../manager';
 import type { BaseRuntimeManager } from '../manager/manager';
-import { writeToolsInfoFile } from '../utils';
-import { logger } from '../utils/logger';
+import { detectRuntimeSync, logger, writeToolsInfoFile } from '../utils';
+import {
+  createToolsRequestEvent,
+  extractActionType,
+  recordRequestEvent,
+} from '../utils/analytics';
 import { toolsPackage } from '../utils/package';
 import { downloadAndExtractUiAssets } from '../utils/ui-assets';
 import { TOOLS_SERVER_ROUTER } from './router';
 
 const MAX_PAYLOAD_SIZE = 30000000;
+/**
+ * Default host for the Dev UI / Tools API server. Binding to loopback keeps the
+ * (unauthenticated) developer server off the network by default. Callers can
+ * opt into a different interface (e.g. `0.0.0.0` for container/remote dev) by
+ * passing an explicit host.
+ */
+const DEFAULT_HOST = '127.0.0.1';
 const UI_ASSETS_GCS_BUCKET = `https://storage.googleapis.com/genkit-assets`;
 const UI_ASSETS_ZIP_FILE_NAME = `${toolsPackage.version}.zip`;
 const UI_ASSETS_ZIP_GCS_PATH = `${UI_ASSETS_GCS_BUCKET}/${UI_ASSETS_ZIP_FILE_NAME}`;
@@ -83,10 +94,56 @@ class PushableAsyncIterable<T> implements AsyncIterable<T> {
 
 const activeInputStreams = new Map<string, PushableAsyncIterable<any>>();
 
+const loggedExpressRoute = (routeName: string, projectRuntime?: string) => {
+  return (
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction
+  ) => {
+    const start = Date.now();
+    let recorded = false;
+
+    const onDone = () => {
+      res.off('finish', onDone);
+      res.off('close', onDone);
+      if (recorded) return;
+      recorded = true;
+
+      const durationMs = Date.now() - start;
+      const status =
+        res.statusCode >= 200 && res.statusCode < 400 && !res.locals?.hasError
+          ? 'success'
+          : 'failure';
+
+      const action =
+        routeName === 'runAction' || routeName === 'streamAction'
+          ? extractActionType(req.body?.key)
+          : undefined;
+
+      recordRequestEvent(
+        createToolsRequestEvent(routeName, durationMs, status, {
+          action,
+          project_runtime: projectRuntime,
+        })
+      );
+    };
+
+    res.once('finish', onDone);
+    res.once('close', onDone);
+
+    next();
+  };
+};
+
 /**
  * Starts up the Genkit Tools server which includes static files for the UI and the Tools API.
  */
-export function startServer(manager: BaseRuntimeManager, port: number) {
+export function startServer(
+  manager: BaseRuntimeManager,
+  port: number,
+  host: string = DEFAULT_HOST
+) {
+  const projectRuntime = detectRuntimeSync(manager.projectRoot);
   let server: Server;
   const app = express();
 
@@ -112,6 +169,7 @@ export function startServer(manager: BaseRuntimeManager, port: number) {
   app.post(
     '/api/runAction',
     bodyParser.json({ limit: MAX_PAYLOAD_SIZE }),
+    loggedExpressRoute('runAction', projectRuntime),
     async (req, res) => {
       // Set headers but don't flush yet - wait for trace ID (if realtime telemetry enabled)
       res.setHeader('Content-Type', 'application/json');
@@ -142,6 +200,7 @@ export function startServer(manager: BaseRuntimeManager, port: number) {
 
         res.end(JSON.stringify(result));
       } catch (err) {
+        res.locals.hasError = true;
         const error = err as GenkitToolsError;
 
         // If headers not sent, we can send error status
@@ -158,6 +217,7 @@ export function startServer(manager: BaseRuntimeManager, port: number) {
   app.post(
     '/api/streamAction',
     bodyParser.json({ limit: MAX_PAYLOAD_SIZE }),
+    loggedExpressRoute('streamAction', projectRuntime),
     async (req, res) => {
       // Set streaming headers but don't flush yet - wait for trace ID (if realtime telemetry enabled)
       res.setHeader('Content-Type', 'text/plain');
@@ -201,6 +261,7 @@ export function startServer(manager: BaseRuntimeManager, port: number) {
         );
         res.write(JSON.stringify(result));
       } catch (err) {
+        res.locals.hasError = true;
         res.write(JSON.stringify({ error: (err as GenkitToolsError).data }));
       } finally {
         if (capturedTraceId) {
@@ -214,6 +275,7 @@ export function startServer(manager: BaseRuntimeManager, port: number) {
   app.post(
     '/api/sendBidiInput',
     bodyParser.json({ limit: MAX_PAYLOAD_SIZE }),
+    loggedExpressRoute('sendBidiInput', projectRuntime),
     (req, res) => {
       const { traceId, chunk } = req.body;
       const stream = activeInputStreams.get(traceId);
@@ -226,24 +288,30 @@ export function startServer(manager: BaseRuntimeManager, port: number) {
     }
   );
 
-  app.post('/api/endBidiInput', bodyParser.json(), (req, res) => {
-    const { traceId } = req.body;
-    const stream = activeInputStreams.get(traceId);
-    if (stream) {
-      stream.close();
-      // Don't delete here, wait for action to complete (finally block)
-      // or delete if we want to ensure no more writes.
-      // If we delete here, subsequent writes will fail, which is correct.
-      // But finally block handles cleanup anyway.
-      res.status(200).send('OK');
-    } else {
-      res.status(404).send('Stream not found');
+  app.post(
+    '/api/endBidiInput',
+    bodyParser.json(),
+    loggedExpressRoute('endBidiInput', projectRuntime),
+    (req, res) => {
+      const { traceId } = req.body;
+      const stream = activeInputStreams.get(traceId);
+      if (stream) {
+        stream.close();
+        // Don't delete here, wait for action to complete (finally block)
+        // or delete if we want to ensure no more writes.
+        // If we delete here, subsequent writes will fail, which is correct.
+        // But finally block handles cleanup anyway.
+        res.status(200).send('OK');
+      } else {
+        res.status(404).send('Stream not found');
+      }
     }
-  });
+  );
 
   app.post(
     '/api/streamTrace',
     bodyParser.json({ limit: MAX_PAYLOAD_SIZE }),
+    loggedExpressRoute('streamTrace', projectRuntime),
     async (req, res) => {
       const { traceId } = req.body;
 
@@ -266,6 +334,7 @@ export function startServer(manager: BaseRuntimeManager, port: number) {
         });
         res.end();
       } catch (err) {
+        res.locals.hasError = true;
         const error = err as GenkitToolsError;
         if (!res.headersSent) {
           res.writeHead(500, {
@@ -320,7 +389,7 @@ export function startServer(manager: BaseRuntimeManager, port: number) {
   };
   app.use(errorHandler);
 
-  server = app.listen(port, async () => {
+  server = app.listen(port, host, async () => {
     const uiUrl = 'http://localhost:' + port;
     const projectRoot = manager.projectRoot;
     logger.info(`${clc.green(clc.bold('Project root:'))} ${projectRoot}`);

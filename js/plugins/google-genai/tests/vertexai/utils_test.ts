@@ -93,6 +93,50 @@ describe('Vertex AI Utils', () => {
       mockAuthClass = sinon.stub().returns(authInstance);
     });
 
+    describe('Multi-Regional Options', () => {
+      it('should use multi-regional options when location is a valid multi-regional location', async () => {
+        const pluginOptions: VertexPluginOptions = {
+          projectId: 'options-project',
+          location: 'eu',
+        };
+        const options = (await getDerivedOptions(
+          pluginOptions,
+          mockAuthClass as any
+        )) as any;
+        assert.strictEqual(options.kind, 'multi-regional');
+        assert.strictEqual(options.projectId, 'options-project');
+        assert.strictEqual(options.location, 'eu');
+        assert.ok(options.authClient);
+        sinon.assert.calledOnce(mockAuthClass);
+        sinon.assert.notCalled(authInstance.getProjectId);
+      });
+
+      it('should use GCLOUD_LOCATION for multi-regional options', async () => {
+        process.env.GCLOUD_PROJECT = 'env-project';
+        process.env.GCLOUD_LOCATION = 'us';
+        const options = (await getDerivedOptions(
+          undefined,
+          mockAuthClass as any
+        )) as any;
+        assert.strictEqual(options.kind, 'multi-regional');
+        assert.strictEqual(options.projectId, 'env-project');
+        assert.strictEqual(options.location, 'us');
+      });
+
+      it('should pass apiVersion from options', async () => {
+        const pluginOptions: VertexPluginOptions = {
+          projectId: 'options-project',
+          location: 'eu',
+          apiVersion: 'v1',
+        };
+        const options = (await getDerivedOptions(
+          pluginOptions,
+          mockAuthClass as any
+        )) as any;
+        assert.strictEqual(options.apiVersion, 'v1');
+      });
+    });
+
     describe('Regional Options', () => {
       it('should use options for projectId and location', async () => {
         const pluginOptions: VertexPluginOptions = {
@@ -229,6 +273,19 @@ describe('Vertex AI Utils', () => {
         assert.strictEqual(options.apiKey, 'test-api-key');
         sinon.assert.calledOnce(mockAuthClass);
       });
+
+      it('should pass apiVersion from options', async () => {
+        const pluginOptions: VertexPluginOptions = {
+          projectId: 'options-project',
+          location: 'us-central1',
+          apiVersion: 'v1',
+        };
+        const options = (await getDerivedOptions(
+          pluginOptions,
+          mockAuthClass as any
+        )) as RegionalClientOptions;
+        assert.strictEqual(options.apiVersion, 'v1');
+      });
     });
 
     describe('Global Options', () => {
@@ -300,6 +357,19 @@ describe('Vertex AI Utils', () => {
         assert.strictEqual(options.apiKey, 'test-api-key');
         sinon.assert.calledOnce(mockAuthClass);
       });
+
+      it('should pass apiVersion from options', async () => {
+        const pluginOptions: VertexPluginOptions = {
+          location: 'global',
+          projectId: 'options-project',
+          apiVersion: 'v1',
+        };
+        const options = (await getDerivedOptions(
+          pluginOptions,
+          mockAuthClass as any
+        )) as GlobalClientOptions;
+        assert.strictEqual(options.apiVersion, 'v1');
+      });
     });
 
     describe('Express Options', () => {
@@ -333,7 +403,7 @@ describe('Vertex AI Utils', () => {
         )) as ExpressClientOptions;
         assert.strictEqual(options.kind, 'express');
         assert.strictEqual(options.apiKey, 'key2');
-        sinon.assert.calledTwice(mockAuthClass); // Fallback attempts
+        sinon.assert.calledOnce(mockAuthClass);
       });
 
       it('should use GOOGLE_API_KEY env var for express', async () => {
@@ -344,7 +414,19 @@ describe('Vertex AI Utils', () => {
         )) as ExpressClientOptions;
         assert.strictEqual(options.kind, 'express');
         assert.strictEqual(options.apiKey, 'key3');
-        sinon.assert.calledTwice(mockAuthClass); // Fallback attempts
+        sinon.assert.calledOnce(mockAuthClass);
+      });
+
+      it('should pass apiVersion from options', async () => {
+        const pluginOptions: VertexPluginOptions = {
+          apiKey: 'key1',
+          apiVersion: 'v1',
+        };
+        const options = (await getDerivedOptions(
+          pluginOptions,
+          mockAuthClass as any
+        )) as ExpressClientOptions;
+        assert.strictEqual(options.apiVersion, 'v1');
       });
     });
 
@@ -361,7 +443,7 @@ describe('Vertex AI Utils', () => {
         sinon.assert.calledOnce(mockAuthClass);
       });
 
-      it('should fallback to express if regional/global fail and API key env exists', async () => {
+      it('should fallback to express if regional/global/multi fail and API key env exists', async () => {
         authInstance.getProjectId.resolves(undefined);
         process.env.GOOGLE_API_KEY = 'fallback-api-key';
 
@@ -372,7 +454,7 @@ describe('Vertex AI Utils', () => {
 
         assert.strictEqual(options.kind, 'express');
         assert.strictEqual(options.apiKey, 'fallback-api-key');
-        sinon.assert.calledTwice(mockAuthClass);
+        sinon.assert.calledOnce(mockAuthClass);
       });
     });
 
@@ -383,7 +465,7 @@ describe('Vertex AI Utils', () => {
           getDerivedOptions(undefined, mockAuthClass as any),
           /Unable to determine client options/
         );
-        sinon.assert.calledTwice(mockAuthClass);
+        sinon.assert.calledOnce(mockAuthClass);
       });
     });
   });
@@ -594,6 +676,19 @@ describe('Vertex AI Utils', () => {
       });
       assert.strictEqual(newOptions.kind, 'regional');
       assert.strictEqual(newOptions.location, 'us-west1');
+    });
+    it('should override location to multi-regional', () => {
+      const newOptions = calculateRequestOptions(regionalClientOptions, {
+        location: 'eu',
+      });
+      assert.strictEqual(newOptions.kind, 'multi-regional');
+      assert.strictEqual(newOptions.location, 'eu');
+    });
+    it('should override apiVersion', () => {
+      const newOptions = calculateRequestOptions(regionalClientOptions, {
+        apiVersion: 'v1',
+      });
+      assert.strictEqual(newOptions.apiVersion, 'v1');
     });
     it('should override location to global', () => {
       const newOptions = calculateRequestOptions(regionalClientOptions, {

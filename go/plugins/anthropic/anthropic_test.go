@@ -17,8 +17,86 @@
 package anthropic
 
 import (
+	"slices"
 	"testing"
+
+	"github.com/firebase/genkit/go/ai"
 )
+
+// TestModelOptionsKnownModels verifies the curated Claude models resolve through
+// the shared modelOptions helper (used by both ListActions and ResolveAction)
+// with JS ADVANCED_MODEL_INFO-equivalent supports (JSON output) and a stable
+// stage. The set mirrors the JS plugin's ADVANCED entries in KNOWN_MODELS.
+func TestModelOptionsKnownModels(t *testing.T) {
+	advancedModels := []string{
+		"claude-opus-4-8",
+		"claude-opus-4-7",
+		"claude-opus-4-6",
+		"claude-opus-4-5",
+		"claude-opus-4-1",
+		"claude-sonnet-4-6",
+		"claude-sonnet-4-5",
+		"claude-haiku-4-5",
+	}
+	for _, name := range advancedModels {
+		opts := modelOptions(name)
+		if opts.Supports == nil {
+			t.Errorf("modelOptions(%q): Supports is nil", name)
+			continue
+		}
+		if !slices.Contains(opts.Supports.Output, "json") {
+			t.Errorf("modelOptions(%q): Output = %v, want it to include \"json\"", name, opts.Supports.Output)
+		}
+		if !opts.Supports.Tools || !opts.Supports.SystemRole {
+			t.Errorf("modelOptions(%q): expected Tools and SystemRole supported, got %+v", name, opts.Supports)
+		}
+		if opts.Stage != ai.ModelStageStable {
+			t.Errorf("modelOptions(%q): Stage = %q, want Stable", name, opts.Stage)
+		}
+		if opts.Label == "" {
+			t.Errorf("modelOptions(%q): Label is empty", name)
+		}
+	}
+}
+
+func TestModelOptionsKnownVersionedModels(t *testing.T) {
+	advancedModels := []string{
+		"claude-opus-4-5-20251101",
+		"claude-opus-4-1-20250805",
+		"claude-sonnet-4-5-20250929",
+		"claude-haiku-4-5-20251001",
+	}
+	for _, name := range advancedModels {
+		opts := modelOptions(name)
+		if opts.Supports == nil {
+			t.Errorf("modelOptions(%q): Supports is nil", name)
+			continue
+		}
+		if !slices.Contains(opts.Supports.Output, "json") {
+			t.Errorf("modelOptions(%q): Output = %v, want it to include \"json\"", name, opts.Supports.Output)
+		}
+		if !opts.Supports.Tools || !opts.Supports.SystemRole {
+			t.Errorf("modelOptions(%q): expected Tools and SystemRole supported, got %+v", name, opts.Supports)
+		}
+	}
+}
+
+// TestModelOptionsUnknownFallback verifies models not in knownModels fall back to
+// defaultClaudeOpts (no JSON output) but still get a provider-prefixed label.
+func TestModelOptionsUnknownFallback(t *testing.T) {
+	const name = "claude-something-unreleased"
+	opts := modelOptions(name)
+
+	if opts.Supports == nil {
+		t.Fatalf("modelOptions(%q): Supports is nil", name)
+	}
+	if slices.Contains(opts.Supports.Output, "json") {
+		t.Errorf("modelOptions(%q): unknown model should use default supports without JSON output, got %v", name, opts.Supports.Output)
+	}
+	if want := anthropicLabelPrefix + " - " + name; opts.Label != want {
+		t.Errorf("modelOptions(%q): Label = %q, want %q", name, opts.Label, want)
+	}
+}
 
 func TestResolveModelID(t *testing.T) {
 	availableModels := []string{

@@ -665,6 +665,57 @@ describe('localFileDatasetStore', () => {
     });
   });
 
+  describe('path traversal protection', () => {
+    const MALICIOUS_IDS = [
+      '../evil',
+      '../../etc/passwd',
+      '/etc/passwd',
+      '..',
+      '.',
+      'foo/bar',
+      'foo\\bar',
+      'foo\0bar',
+      '',
+    ];
+
+    beforeEach(() => {
+      // Pretend every file exists so that, absent the guard, the operation
+      // would proceed to touch the filesystem.
+      fs.existsSync = jest.fn(() => true);
+      fs.promises.readFile = jest.fn(async () =>
+        Promise.resolve(JSON.stringify({}) as any)
+      );
+      fs.promises.writeFile = jest.fn(async () => Promise.resolve(undefined));
+      fs.promises.rm = jest.fn(async () => Promise.resolve());
+    });
+
+    for (const maliciousId of MALICIOUS_IDS) {
+      it(`rejects getDataset for id ${JSON.stringify(maliciousId)}`, async () => {
+        await expect(DatasetStore.getDataset(maliciousId)).rejects.toThrow(
+          'Invalid dataset id'
+        );
+        expect(fs.promises.readFile).not.toHaveBeenCalled();
+      });
+
+      it(`rejects deleteDataset for id ${JSON.stringify(maliciousId)}`, async () => {
+        await expect(DatasetStore.deleteDataset(maliciousId)).rejects.toThrow(
+          'Invalid dataset id'
+        );
+        expect(fs.promises.rm).not.toHaveBeenCalled();
+      });
+
+      it(`rejects updateDataset for id ${JSON.stringify(maliciousId)}`, async () => {
+        await expect(
+          DatasetStore.updateDataset({
+            datasetId: maliciousId,
+            data: SAMPLE_DATASET_1_V1,
+          })
+        ).rejects.toThrow('Invalid dataset id');
+        expect(fs.promises.writeFile).not.toHaveBeenCalled();
+      });
+    }
+  });
+
   describe('generateDatasetId', () => {
     it('returns ID if present', async () => {
       const id = await (

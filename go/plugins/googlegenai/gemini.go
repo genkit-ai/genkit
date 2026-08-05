@@ -26,14 +26,16 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/invopop/jsonschema"
+	"google.golang.org/genai"
+
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
-	"github.com/invopop/jsonschema"
-	"google.golang.org/genai"
 )
 
 var (
@@ -76,12 +78,12 @@ func configFromRequest(input *ai.ModelRequest) (*genai.GenerateContentConfig, er
 		var err error
 		result, err = base.MapToStruct[genai.GenerateContentConfig](config)
 		if err != nil {
-			return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("The configuration settings are not in the correct format. Check that the names and values match what the model expects: %v", err), nil)
+			return nil, status.PublicErrorf(status.ErrInvalidArgument, "The configuration settings are not in the correct format. Check that the names and values match what the model expects: %w", err)
 		}
 	case nil:
 		// Empty but valid config
 	default:
-		return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("Invalid configuration type: %T. Expected *genai.GenerateContentConfig. Ensure you are using the correct ModelRef helper (e.g., ModelRef) or passing the correct configuration struct.", input.Config), nil)
+		return nil, status.PublicErrorf(status.ErrInvalidArgument, "Invalid configuration type: %T. Expected *genai.GenerateContentConfig. Ensure you are using the correct ModelRef helper (e.g., ModelRef) or passing the correct configuration struct.", input.Config)
 	}
 
 	return &result, nil
@@ -146,6 +148,26 @@ func newModel(client *genai.Client, name string, opts ai.ModelOptions) ai.Model 
 	return ai.NewModel(api.NewName(provider, name), meta, fn)
 }
 
+// resolveVertexModelName prepares a model name for the google.golang.org/genai
+// SDK. The SDK transforms most names into `publishers/google/models/NAME`,
+// which is wrong for tuned endpoints. For a short-form tuned endpoint name
+// (`endpoints/ID`), this expands it to the full resource path
+// `projects/PROJECT/locations/LOCATION/endpoints/ID` using the client's
+// configured project and location. Other names are returned unchanged.
+func resolveVertexModelName(client *genai.Client, name string) string {
+	if !isTunedGeminiName(name) {
+		return name
+	}
+	if strings.HasPrefix(name, "projects/") {
+		return name
+	}
+	cc := client.ClientConfig()
+	if cc.Backend != genai.BackendVertexAI || cc.Project == "" || cc.Location == "" {
+		return name
+	}
+	return fmt.Sprintf("projects/%s/locations/%s/%s", cc.Project, cc.Location, name)
+}
+
 // generate requests generate call to the specified model with the provided
 // configuration.
 func generate(
@@ -158,33 +180,21 @@ func generate(
 	if model == "" {
 		return nil, errors.New("model not provided")
 	}
+	model = resolveVertexModelName(client, model)
 
 	cache, err := handleCache(ctx, client, input, model)
 	if err != nil {
 		return nil, err
 	}
 
-	gcc, err := toGeminiRequest(input, cache)
+	gcc, err := toGeminiRequest(input, cache, model)
 	if err != nil {
 		return nil, err
 	}
 
-	var contents []*genai.Content
-	for _, m := range input.Messages {
-		// system parts are handled separately
-		if m.Role == ai.RoleSystem {
-			continue
-		}
-
-		parts, err := toGeminiParts(m.Content)
-		if err != nil {
-			return nil, err
-		}
-
-		contents = append(contents, &genai.Content{
-			Parts: parts,
-			Role:  string(m.Role),
-		})
+	contents, err := toGeminiContents(input)
+	if err != nil {
+		return nil, err
 	}
 	if len(contents) == 0 {
 		return nil, fmt.Errorf("at least one message is required in generate request")
@@ -271,23 +281,81 @@ func generate(
 	return r, nil
 }
 
+// toGeminiContents converts the non-system messages of an [*ai.ModelRequest]
+// to a slice of [*genai.Content]. System messages are handled separately via
+// the request's system instruction.
+func toGeminiContents(input *ai.ModelRequest) ([]*genai.Content, error) {
+	var contents []*genai.Content
+	for _, m := range input.Messages {
+		// system parts are handled separately
+		if m.Role == ai.RoleSystem {
+			continue
+		}
+
+		parts, err := toGeminiParts(m.Content)
+		if err != nil {
+			return nil, err
+		}
+
+		contents = append(contents, &genai.Content{
+			Parts: parts,
+			Role:  toGeminiRole(m.Role),
+		})
+	}
+	return contents, nil
+}
+
+// toGeminiRole maps a Genkit [ai.Role] to a Gemini content role. The Gemini
+// Content API only accepts "user" or "model"; tool responses are sent under
+// the "user" role.
+func toGeminiRole(role ai.Role) string {
+	switch role {
+	case ai.RoleModel:
+		return string(ai.RoleModel)
+	case ai.RoleTool:
+		return string(ai.RoleUser)
+	default:
+		return string(ai.RoleUser)
+	}
+}
+
 // toGeminiRequest translates an [*ai.ModelRequest] to
 // *genai.GenerateContentConfig
-func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent) (*genai.GenerateContentConfig, error) {
+func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent, modelName ...string) (*genai.GenerateContentConfig, error) {
 	gcc, err := configFromRequest(input)
 	if err != nil {
 		return nil, err
 	}
 
+	isTTS := len(modelName) > 0 && isTTSModelName(modelName[0])
+
 	// candidate count might not be set to 1 and will keep its zero value if not set
-	// e.g. default value from reflection server is 0
-	if gcc.CandidateCount == 0 {
+	// e.g. default value from reflection server is 0. TTS models leave it unset.
+	if gcc.CandidateCount == 0 && !isTTS {
 		gcc.CandidateCount = 1
+	}
+	if isTTS && len(gcc.ResponseModalities) == 0 {
+		gcc.ResponseModalities = []string{"AUDIO"}
+	}
+	// TTS generateContent requires a speechConfig with a voice; the API rejects
+	// audio requests without one. Supply a default voice so the dedicated TTS
+	// models are runnable from a bare prompt (e.g. the dev UI), while still
+	// letting callers override it via ai.WithConfig.
+	if isTTS && !hasSpeechVoiceConfig(gcc.SpeechConfig) {
+		if gcc.SpeechConfig == nil {
+			gcc.SpeechConfig = &genai.SpeechConfig{}
+		}
+		gcc.SpeechConfig.VoiceConfig = &genai.VoiceConfig{
+			PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{VoiceName: defaultTTSVoice},
+		}
 	}
 
 	// Genkit primitive fields must be used instead of go-genai fields
 	// i.e.: system prompt, tools, cached content, response schema, etc
-	if gcc.CandidateCount != 1 {
+	if !isTTS && gcc.CandidateCount != 1 {
+		return nil, errors.New("multiple candidates is not supported")
+	}
+	if isTTS && gcc.CandidateCount > 1 {
 		return nil, errors.New("multiple candidates is not supported")
 	}
 	if gcc.SystemInstruction != nil {
@@ -314,8 +382,7 @@ func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent) (*genai
 	// Set response MIME type and schema based on output format.
 	// Gemini supports constrained output with application/json and text/x.enum.
 	hasOutput := input.Output != nil
-	// JSON mode is not compatible with tools
-	if hasOutput && len(input.Tools) == 0 {
+	if hasOutput {
 		switch {
 		case input.Output.ContentType == "application/json" || input.Output.Format == "json":
 			gcc.ResponseMIMEType = "application/json"
@@ -373,6 +440,27 @@ func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent) (*genai
 	}
 
 	return gcc, nil
+}
+
+// defaultTTSVoice is the prebuilt voice used for TTS requests that don't
+// specify one. It must be a valid Gemini TTS voice name.
+const defaultTTSVoice = "Algenib"
+
+func hasSpeechVoiceConfig(sc *genai.SpeechConfig) bool {
+	if sc == nil {
+		return false
+	}
+	if sc.MultiSpeakerVoiceConfig != nil {
+		return true
+	}
+	if sc.VoiceConfig == nil {
+		return false
+	}
+	return sc.VoiceConfig.PrebuiltVoiceConfig != nil || sc.VoiceConfig.ReplicatedVoiceConfig != nil
+}
+
+func isTTSModelName(name string) bool {
+	return strings.Contains(strings.TrimPrefix(name, "googleai/"), "-tts")
 }
 
 // translateCandidate translates from a genai.GenerateContentResponse to an ai.ModelResponse.

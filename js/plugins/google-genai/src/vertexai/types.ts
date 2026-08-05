@@ -89,9 +89,11 @@ export {
 export interface VertexPluginOptions {
   /** The Vertex API key for express mode */
   apiKey?: string | false;
+  /** The api version (v1 or v1beta1). Default is v1beta1 if none is specified */
+  apiVersion?: 'v1' | 'v1beta1';
   /** The Google Cloud project id to call. */
   projectId?: string;
-  /** The Google Cloud region to call. */
+  /** The Google Cloud location/region to call. This can be 'global' or a multi-region like 'us' or 'eu' or any of the other locations like us-central1 etc. */
   location?: string;
   /** Provide custom authentication configuration for connecting to Vertex AI. */
   googleAuth?: GoogleAuthOptions;
@@ -106,6 +108,7 @@ interface BaseClientOptions {
   timeout?: number;
   signal?: AbortSignal;
   customHeaders?: Record<string, string>;
+  apiVersion?: 'v1' | 'v1beta1';
   /** Enables additional debug traces (e.g. raw model API call details). */
   experimental_debugTraces?: boolean;
 }
@@ -113,6 +116,23 @@ interface BaseClientOptions {
 export interface RegionalClientOptions extends BaseClientOptions {
   kind: 'regional';
   location: string;
+  projectId: string;
+  authClient: GoogleAuth;
+  apiKey?: string; // In addition to regular auth
+}
+
+export const MULTI_REGIONAL_LOCATIONS = ['eu', 'us'] as const;
+export type MultiRegionalLocations = (typeof MULTI_REGIONAL_LOCATIONS)[number];
+export function isMultiRegionalLocation(
+  loc?: string
+): loc is MultiRegionalLocations {
+  if (!loc) return false;
+  return MULTI_REGIONAL_LOCATIONS.includes(loc as MultiRegionalLocations);
+}
+
+export interface MultiRegionalClientOptions extends BaseClientOptions {
+  kind: 'multi-regional';
+  location: MultiRegionalLocations;
   projectId: string;
   authClient: GoogleAuth;
   apiKey?: string; // In addition to regular auth
@@ -134,6 +154,7 @@ export interface ExpressClientOptions extends BaseClientOptions {
 /** Resolved options for use with the client */
 export type ClientOptions =
   | RegionalClientOptions
+  | MultiRegionalClientOptions
   | GlobalClientOptions
   | ExpressClientOptions;
 

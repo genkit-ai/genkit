@@ -47,7 +47,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
-          enable-cache: false
+          enable-cache: true
           python-version: "3.12"
           version: "0.6.6"
 
@@ -55,17 +55,20 @@ jobs:
         run: |
           set -uo pipefail
 
+          # Publish all core and plugin packages for v0.9.0 release.
           PACKAGES=(
             py/packages/genkit
-            py/plugins/anthropic
-            py/plugins/compat-oai
-            py/plugins/google-cloud
-            py/plugins/google-genai
-            py/plugins/ollama
-            py/plugins/fastapi
-            py/plugins/flask
-            py/plugins/vertex-ai
-            py/plugins/evaluators
+            py/packages/genkit-anthropic
+            py/packages/genkit-django
+            py/packages/genkit-evaluators
+            py/packages/genkit-fastapi
+            py/packages/genkit-flask
+            py/packages/genkit-google-cloud
+            py/packages/genkit-google-genai
+            py/packages/genkit-middleware
+            py/packages/genkit-ollama
+            py/packages/genkit-openai
+            py/packages/genkit-vertexai
           )
 
           FAILED=()
@@ -84,6 +87,10 @@ jobs:
             echo "::error::Failed packages: ${FAILED[*]}"
             exit 1
           fi
+
+          echo "::group::Build tombstone packages"
+          python3 py/scripts/publish_tombstones.py --dist-dir dist/
+          echo "::endgroup::"
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
@@ -108,4 +115,4 @@ jobs:
           VERSION="${TAG#py/v}"
           [[ "$VERSION" == "$TAG" ]] && VERSION="${TAG#release/py/}"
           pip install "genkit==${VERSION}"
-          python -c "from genkit.ai import Genkit; print('ok')"
+          python -c "from genkit import Genkit; Genkit(); print('ok')"

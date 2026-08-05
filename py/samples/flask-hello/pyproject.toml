@@ -5,8 +5,8 @@ requires-python = ">=3.10"
 dependencies = [
   "flask",
   "genkit",
-  "genkit-plugin-flask",
-  "genkit-plugin-google-genai",
+  "genkit-flask",
+  "genkit-google-genai",
   "pydantic",
 ]
 

@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/firebase/genkit/go/ai"
@@ -40,9 +41,10 @@ import (
 var genkitCtxKey = base.NewContextKey[*Genkit]()
 
 // FromContext returns the [*Genkit] instance stored in the context.
-// This is set automatically by [Generate] and related functions.
-// Middleware implementations can use this to access the Genkit instance
-// during generation.
+// This is set automatically by [Generate] and related functions, and seeded
+// into each agent turn by the agent constructors in
+// [github.com/firebase/genkit/go/genkit/exp]. Middleware implementations can
+// use this to access the Genkit instance during generation.
 func FromContext(ctx context.Context) *Genkit {
 	return genkitCtxKey.FromContext(ctx)
 }
@@ -62,6 +64,7 @@ type genkitOptions struct {
 	PromptDir    string       // Directory where dotprompts are stored. Will be loaded automatically on initialization.
 	PromptFS     fs.FS        // Embedded filesystem containing prompts (alternative to PromptDir).
 	Plugins      []api.Plugin // Plugin to initialize automatically.
+	Experimental bool         // Whether the experimental genkit/exp surface is allowed to be used.
 }
 
 type GenkitOption interface {
@@ -96,6 +99,12 @@ func (o *genkitOptions) apply(gOpts *genkitOptions) error {
 			return errors.New("cannot set plugins more than once (WithPlugins)")
 		}
 		gOpts.Plugins = o.Plugins
+	}
+
+	// Experimental is a pure opt-in toggle, so applying it more than once is
+	// harmless and idempotent rather than an error.
+	if o.Experimental {
+		gOpts.Experimental = true
 	}
 
 	return nil
@@ -159,6 +168,20 @@ func WithPromptFS(fsys fs.FS) GenkitOption {
 	return &genkitOptions{PromptFS: fsys}
 }
 
+// WithExperimental opts the Genkit instance into its experimental surface: the
+// constructors in the genkit/exp package, such as DefineAgent, DefineTool, and
+// DefineStreamingFlow. Without this option, calling any of those constructors
+// panics with a message pointing back here.
+//
+// These features are in preview and/or under active development. Their APIs are
+// still taking shape, so opting in means accepting that they may have breaking
+// or backward-incompatible changes between minor releases, without the
+// source-stability guarantees that apply to the rest of Genkit. Pin your Genkit
+// version if you build on them.
+func WithExperimental() GenkitOption {
+	return &genkitOptions{Experimental: true}
+}
+
 // Init creates and initializes a new [Genkit] instance with the provided options.
 // It sets up the registry, initializes plugins ([WithPlugins]), loads prompts
 // ([WithPromptDir]), and configures other settings like the default model
@@ -191,7 +214,7 @@ func WithPromptFS(fsys fs.FS) GenkitOption {
 //		// Assumes a prompt file at ./prompts/jokePrompt.prompt
 //		g := genkit.Init(ctx,
 //			genkit.WithPlugins(&googlegenai.GoogleAI{}),
-//			genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+//			genkit.WithDefaultModel("googleai/gemini-3-flash-preview"),
 //			genkit.WithPromptDir("./prompts"),
 //		)
 //
@@ -259,6 +282,7 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 
 	r.RegisterValue(api.DefaultModelKey, gOpts.DefaultModel)
 	r.RegisterValue(api.PromptDirKey, gOpts.PromptDir)
+	r.RegisterValue(api.ExperimentalKey, gOpts.Experimental)
 
 	if api.CurrentEnvironment() == api.EnvironmentDev {
 		errCh := make(chan error, 1)
@@ -301,6 +325,19 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 //	genkit.RegisterAction(g, model)
 func RegisterAction(g *Genkit, action api.Registerable) {
 	action.Register(g.reg)
+}
+
+// LookupAction returns the action registered with g under key, or nil if
+// none is registered. key is an action's fully qualified
+// "/type/provider/name" identifier; build it with [api.NewKey] or
+// [api.KeyFromName]. For example, an agent's getSnapshot companion is keyed
+// by api.KeyFromName(api.ActionTypeAgentSnapshot, agentName).
+//
+// This is the generic, type-agnostic lookup. Prefer a typed accessor
+// ([LookupModel], [LookupPrompt], etc.) when one exists for the kind of
+// action you need.
+func LookupAction(g *Genkit, key string) api.Action {
+	return g.reg.LookupAction(key)
 }
 
 // DefineFlow defines a non-streaming flow, registers it as a [core.Action] of type Flow,
@@ -834,7 +871,7 @@ func LookupMiddleware(g *Genkit, name string) *ai.MiddlewareDesc {
 //	// Define the prompt
 //	capitalPrompt := genkit.DefinePrompt(g, "findCapital",
 //		ai.WithDescription("Finds the capital of a country."),
-//		ai.WithModelName("googleai/gemini-2.5-flash"),
+//		ai.WithModelName("googleai/gemini-3-flash-preview"),
 //		ai.WithSystem("You are a helpful geography assistant."),
 //		ai.WithPrompt("What is the capital of {{country}}?"),
 //		ai.WithInputType(GeoInput{Country: "USA"}),
@@ -901,10 +938,35 @@ func DefineSchema(g *Genkit, name string, schema map[string]any) {
 	core.DefineSchema(g.reg, name, schema)
 }
 
-// DefineSchemaFor defines a named JSON schema derived from a Go type
-// and registers it in the registry.
+// DefineSchemasFor defines named JSON schemas derived from the given values'
+// Go types and registers them, each under its type's name.
 //
-// This is an alternative to [DefineSchema].
+// This is an alternative to [DefineSchema] for schemas that mirror existing Go
+// types. Applications commonly register several schemas up front for `.prompt`
+// files to reference, so it takes one or many in a single call. It panics if a
+// value is a map, nil, or of an unnamed type; use [DefineSchema] to register a
+// raw JSON schema under an explicit name.
+//
+// Example:
+//
+//	type User struct {
+//	    Name string `json:"name"`
+//	    Age int `json:"age"`
+//	}
+//
+//	genkit.DefineSchemasFor(g, User{}, Order{})
+//
+//	genkit.Generate(ctx, g, ai.WithOutputSchemaName("User"), ai.WithPrompt("What is your name?"))
+func DefineSchemasFor(g *Genkit, values ...any) {
+	core.DefineSchemasFor(g.reg, values...)
+}
+
+// DefineSchemaFor defines a named JSON schema derived from a Go type
+// and registers it under that type's name.
+//
+// It is the single-type form of [DefineSchemasFor], for when naming the type is
+// more natural than constructing a value of it. Both register the same schema
+// under the same name; prefer [DefineSchemasFor] when registering several.
 //
 // Example:
 //
@@ -917,7 +979,8 @@ func DefineSchema(g *Genkit, name string, schema map[string]any) {
 //
 //	genkit.Generate(ctx, g, ai.WithOutputSchemaName("User"), ai.WithPrompt("What is your name?"))
 func DefineSchemaFor[T any](g *Genkit) {
-	core.DefineSchemaFor[T](g.reg)
+	var v T
+	core.DefineSchemasFor(g.reg, v)
 }
 
 // DefineDataPrompt creates a new [ai.DataPrompt] with strongly-typed input and output.
@@ -943,7 +1006,7 @@ func DefineSchemaFor[T any](g *Genkit) {
 //	}
 //
 //	capitalPrompt := genkit.DefineDataPrompt[GeoInput, GeoOutput](g, "findCapital",
-//		ai.WithModelName("googleai/gemini-2.5-flash"),
+//		ai.WithModelName("googleai/gemini-3-flash-preview"),
 //		ai.WithSystem("You are a helpful geography assistant."),
 //		ai.WithPrompt("What is the capital of {{country}}?"),
 //	)
@@ -1000,7 +1063,7 @@ func GenerateWithRequest(ctx context.Context, g *Genkit, actionOpts *ai.Generate
 //
 // Model and Configuration:
 //   - [ai.WithModel]: Specify the model (accepts [ai.Model] or [ai.ModelRef])
-//   - [ai.WithModelName]: Specify model by name string (e.g., "googleai/gemini-2.5-flash")
+//   - [ai.WithModelName]: Specify model by name string (e.g., "googleai/gemini-3-flash-preview")
 //   - [ai.WithConfig]: Set generation parameters (temperature, max tokens, etc.)
 //
 // Prompting:
@@ -1038,7 +1101,7 @@ func GenerateWithRequest(ctx context.Context, g *Genkit, actionOpts *ai.Generate
 // Example:
 //
 //	resp, err := genkit.Generate(ctx, g,
-//		ai.WithModelName("googleai/gemini-2.5-flash"),
+//		ai.WithModelName("googleai/gemini-3-flash-preview"),
 //		ai.WithPrompt("Write a short poem about clouds."),
 //	)
 //	if err != nil {
@@ -1096,7 +1159,7 @@ func GenerateStream(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) i
 // Example:
 //
 //	op, err := genkit.GenerateOperation(ctx, g,
-//		ai.WithModelName("googleai/veo-2.0-generate-001"),
+//		ai.WithModelName("googleai/veo-3.1-generate-preview"),
 //		ai.WithPrompt("A banana riding a bicycle."),
 //	)
 //	if err != nil {
@@ -1525,7 +1588,7 @@ func LoadPrompt(g *Genkit, path, namespace string) ai.Prompt {
 // Example:
 //
 //	promptSource := `---
-//	model: googleai/gemini-2.5-flash
+//	model: googleai/gemini-3-flash-preview
 //	input:
 //	  schema:
 //	    name: string
@@ -1566,7 +1629,8 @@ func DefineHelper(g *Genkit, name string, fn any) {
 	g.reg.RegisterHelper(name, fn)
 }
 
-// DefineFormat defines a new [ai.Formatter] and registers it in the registry.
+// DefineFormats defines new [ai.Formatter]s and registers them in the registry,
+// each under the name returned by its Name method.
 // Formatters control how model responses are structured and parsed.
 //
 // Formatters can be used with [ai.WithOutputFormat] to inject specific formatting
@@ -1588,21 +1652,55 @@ func DefineHelper(g *Genkit, name string, fn any) {
 //	}
 //
 //	// Register the formatter
-//	genkit.DefineFormat(g, "csv", csvFormatter{})
+//	genkit.DefineFormats(g, csvFormatter{})
 //
 //	// Use the formatter in a generation request
 //	resp, err := genkit.Generate(ctx, g,
 //		ai.WithPrompt("List 3 countries and their capitals"),
 //		ai.WithOutputFormat("csv"), // Use the custom formatter
 //	)
-func DefineFormat(g *Genkit, name string, formatter ai.Formatter) {
-	ai.DefineFormat(g.reg, name, formatter)
+//
+// It panics if a format with the same name is already registered, which
+// includes the built-in names above. Formats cannot be overridden.
+func DefineFormats(g *Genkit, formatters ...ai.Formatter) {
+	ai.DefineFormats(g.reg, formatters...)
 }
 
-// IsDefinedFormat checks if a formatter with the given name is registered in the registry.
-func IsDefinedFormat(g *Genkit, name string) bool {
-	return g.reg.LookupValue("/format/"+name) != nil
+// DefineFormat defines a new [ai.Formatter] and registers it in the registry
+// under the given name, which may optionally carry the "/format/" prefix.
+//
+// It panics if a format with the same name is already registered, including
+// the built-in "text", "json", "jsonl", "array", and "enum" formats.
+//
+// Deprecated: Use [DefineFormats] instead, which takes the name from the
+// Formatter's Name method.
+func DefineFormat(g *Genkit, name string, formatter ai.Formatter) {
+	ai.DefineFormats(g.reg, renamedFormatter{Formatter: formatter, name: formatName(name)})
 }
+
+// IsDefinedFormat checks if a formatter with the given name is registered in
+// the registry. The name may optionally carry the "/format/" prefix, matching
+// what [DefineFormat] accepts.
+func IsDefinedFormat(g *Genkit, name string) bool {
+	return g.reg.LookupValue("/format/"+formatName(name)) != nil
+}
+
+// formatName normalizes a caller-supplied format name to its bare form. Before
+// custom formats resolved correctly, passing an already-prefixed name was the
+// only way to make one work, so both spellings have to keep resolving.
+func formatName(name string) string {
+	return strings.TrimPrefix(name, "/format/")
+}
+
+// renamedFormatter overrides a Formatter's Name so [DefineFormat] can honor an
+// explicit name while still registering through [ai.DefineFormats], which owns
+// the mapping from format name to registry key.
+type renamedFormatter struct {
+	ai.Formatter
+	name string
+}
+
+func (f renamedFormatter) Name() string { return f.name }
 
 // DefineResource defines a resource and registers it with the Genkit instance.
 // Resources provide content that can be referenced in prompts via URI.

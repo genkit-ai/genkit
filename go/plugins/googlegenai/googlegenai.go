@@ -40,8 +40,9 @@ type GoogleAI struct {
 
 // VertexAI is a Genkit plugin for interacting with the Google Vertex AI service.
 type VertexAI struct {
-	ProjectID string // Google Cloud project to use for Vertex AI. If empty, the value of the environment variable GOOGLE_CLOUD_PROJECT will be consulted.
-	Location  string // Location of the Vertex AI service. If empty, GOOGLE_CLOUD_LOCATION and GOOGLE_CLOUD_REGION environment variables will be consulted, in that order.
+	ProjectID  string // Google Cloud project to use for Vertex AI. If empty, the value of the environment variable GOOGLE_CLOUD_PROJECT will be consulted.
+	Location   string // Location of the Vertex AI service. If empty, GOOGLE_CLOUD_LOCATION and GOOGLE_CLOUD_REGION environment variables will be consulted, in that order. Accepts a regional location (e.g. "us-central1"), a multi-region location ("us" or "eu"), or "global".
+	APIVersion string // API version to use ("v1" or "v1beta1"). If empty, the genai SDK default (v1beta1) is used. Can be overridden per-request via config.HTTPOptions.APIVersion.
 
 	gclient *genai.Client // Client for the Vertex AI service.
 	mu      sync.Mutex    // Mutex to control access.
@@ -134,6 +135,13 @@ func (v *VertexAI) Init(ctx context.Context) []api.Action {
 			panic("Vertex AI requires setting GOOGLE_CLOUD_LOCATION or GOOGLE_CLOUD_REGION in the environment. You can get a location at https://cloud.google.com/vertex-ai/docs/general/locations")
 		}
 	}
+
+	switch v.APIVersion {
+	case "", "v1", "v1beta1":
+	default:
+		panic(fmt.Sprintf("Vertex AI APIVersion must be %q or %q, got %q", "v1", "v1beta1", v.APIVersion))
+	}
+
 	cred, err := credentials.DetectDefault(&credentials.DetectOptions{
 		Scopes: []string{"https://www.googleapis.com/auth/cloud-platform"},
 	})
@@ -162,7 +170,8 @@ func (v *VertexAI) Init(ctx context.Context) []api.Action {
 		Location:   location,
 		HTTPClient: httpClient,
 		HTTPOptions: genai.HTTPOptions{
-			Headers: genkitClientHeader,
+			Headers:    genkitClientHeader,
+			APIVersion: v.APIVersion,
 		},
 	}
 
@@ -207,24 +216,33 @@ func (ga *GoogleAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOpt
 // The second argument describes the capability of the model.
 // Use [IsDefinedModel] to determine if a model is already defined.
 // After [Init] is called, only the known models are defined.
+//
+// Tuned Gemini endpoints are accepted in either the short form
+// `endpoints/ID` or the full resource path
+// `projects/PROJECT/locations/LOCATION/endpoints/ID`. When opts is nil the
+// caller gets the default Gemini capability set.
 func (v *VertexAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if !v.initted {
 		return nil, errors.New("VertexAI plugin not initialized")
 	}
-	models, err := listModels(vertexAIProvider)
-	if err != nil {
-		return nil, err
-	}
 
 	if opts == nil {
-		var ok bool
-		modelOpts, ok := models[name]
-		if !ok {
-			return nil, fmt.Errorf("VertexAI.DefineModel: called with unknown model %q and nil ModelOptions", name)
+		if isTunedGeminiName(name) {
+			defaults := GetModelOptions(name, vertexAIProvider)
+			opts = &defaults
+		} else {
+			models, err := listModels(vertexAIProvider)
+			if err != nil {
+				return nil, err
+			}
+			modelOpts, ok := models[name]
+			if !ok {
+				return nil, fmt.Errorf("VertexAI.DefineModel: called with unknown model %q and nil ModelOptions", name)
+			}
+			opts = &modelOpts
 		}
-		opts = &modelOpts
 	}
 
 	return newModel(v.gclient, name, *opts), nil

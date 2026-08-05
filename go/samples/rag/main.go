@@ -85,7 +85,7 @@ func main() {
 	}
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &evaluators.GenkitEval{Metrics: metrics}))
 
-	embedder := googlegenai.GoogleAIEmbedder(g, "embedding-001")
+	embedder := googlegenai.GoogleAIEmbedder(g, "gemini-embedding-001")
 	if embedder == nil {
 		log.Fatal("embedder is not defined")
 	}
@@ -106,7 +106,7 @@ func main() {
 	}
 
 	simpleQaPrompt := genkit.DefinePrompt(g, "simpleQaPrompt",
-		ai.WithModelName("googleai/gemini-2.5-flash"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithPrompt(simpleQaPromptTemplate),
 		ai.WithInputType(simpleQaPromptInput{}),
 		ai.WithOutputFormat(ai.OutputFormatText),

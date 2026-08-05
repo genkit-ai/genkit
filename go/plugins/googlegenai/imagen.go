@@ -21,10 +21,11 @@ import (
 	"encoding/base64"
 	"fmt"
 
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
-	"github.com/firebase/genkit/go/internal/base"
 	"google.golang.org/genai"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
 // imagenConfigFromRequest translates an [*ai.ModelRequest] configuration to [*genai.GenerateImagesConfig]
@@ -40,12 +41,12 @@ func imagenConfigFromRequest(input *ai.ModelRequest) (*genai.GenerateImagesConfi
 		var err error
 		result, err = base.MapToStruct[genai.GenerateImagesConfig](config)
 		if err != nil {
-			return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("The image configuration settings are not in the correct format. Check that the names and values match what the model expects: %v", err), nil)
+			return nil, status.PublicErrorf(status.ErrInvalidArgument, "The image configuration settings are not in the correct format. Check that the names and values match what the model expects: %w", err)
 		}
 	case nil:
 		// empty but valid config
 	default:
-		return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("Invalid configuration type: %T. Expected *genai.GenerateImagesConfig. Ensure you are using the correct ModelRef helper (e.g., ImageModelRef) or passing the correct configuration struct.", input.Config), nil)
+		return nil, status.PublicErrorf(status.ErrInvalidArgument, "Invalid configuration type: %T. Expected *genai.GenerateImagesConfig. Ensure you are using the correct ModelRef helper (e.g., ImageModelRef) or passing the correct configuration struct.", input.Config)
 	}
 
 	return &result, nil

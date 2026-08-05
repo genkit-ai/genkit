@@ -16,6 +16,7 @@
 
 """Unit tests for the error module."""
 
+from genkit import ErrorResponseMetadata
 from genkit._core._error import (
     GenkitError,
     PublicError,
@@ -63,6 +64,22 @@ def test_genkit_error_to_json() -> None:
     assert serializable.message == 'Resource not found'
     assert serializable.details is not None
     assert serializable.details.model_dump()['id'] == 123
+
+
+def test_genkit_error_response_metadata_is_in_process_only() -> None:
+    response_metadata: ErrorResponseMetadata = {
+        'retry_after_ms': 1500.5,
+        'headers': {'retry-after': '1.5005'},
+    }
+    error = GenkitError(
+        status='RESOURCE_EXHAUSTED',
+        message='Rate limited',
+        response_metadata=response_metadata,
+    )
+
+    assert error.response_metadata == response_metadata
+    assert 'response_metadata' not in error.to_callable_serializable().model_dump()
+    assert 'response_metadata' not in error.to_serializable().model_dump()
 
 
 def test_public_error() -> None:
