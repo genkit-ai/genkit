@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, ClassVar, Generic, cast
 
@@ -47,6 +48,7 @@ from genkit._core._typing import (
     MediaPart,
     MessageData,
     MiddlewareRef,
+    ModelInfo,
     ModelResponseChunk as ModelResponseChunkSchema,
     Operation,
     Part,
@@ -64,17 +66,23 @@ ModelUsage = GenerationUsage  # public name for GenerationUsage
 
 # TypeVars for generic types
 OutputT = TypeVar('OutputT', default=object)
-ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
+# Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
+# Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
+ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
+# Unbounded so ModelRequest supports any config payload (BaseModel instances, dicts, custom options)
+# across action execution boundaries without forcing assumptions.
+ModelRequestConfigT = TypeVar('ModelRequestConfigT', covariant=True)
 
 
-class ModelRef(BaseModel):
-    """Reference to a model with configuration."""
+@dataclass(frozen=True, kw_only=True)
+class ModelRef(Generic[ModelRefConfigT]):
+    """Frozen reference to a model, optionally tied to a config schema."""
 
     name: str
-    config_schema: object | None = None
-    info: object | None = None
+    config_schema: type[ModelRefConfigT]
+    info: ModelInfo | None = None
     version: str | None = None
-    config: dict[str, object] | None = None
+    config: ModelRefConfigT | None = None
 
 
 class Message(MessageData):
@@ -223,7 +231,7 @@ class Document(DocumentData):
         return None
 
 
-class ModelRequest(GenkitModel, Generic[ConfigT]):
+class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
     """Hand-written model request with flat output fields and veneer types.
 
     Output config is inlined as flat fields (output_format, output_schema, etc.)
@@ -246,7 +254,7 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
     # Veneer types for IDE/typing (validators wrap MessageData->Message, DocumentData->Document)
     messages: list[Message]  # pyright: ignore[reportIncompatibleVariableOverride]
     docs: list[Document] | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
-    config: ConfigT | None = None
+    config: ModelRequestConfigT | None = None
     tools: list[ToolDefinition] | None = None
     tool_choice: ToolChoice | None = Field(default=None)
     # Flat output fields (no nested OutputConfig)
@@ -254,6 +262,11 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
     output_schema: dict[str, Any] | None = None
     output_constrained: bool | None = None
     output_content_type: str | None = None
+
+    def model_post_init(self, __context: object) -> None:
+        """Ensure config is None, a dict, or a BaseModel instance."""
+        if self.config is not None and not isinstance(self.config, (BaseModel, dict)):
+            raise TypeError(f'config must be a BaseModel or dict, got {type(self.config).__name__}')
 
     @field_validator('messages', mode='before')
     @classmethod
@@ -273,7 +286,7 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
 
     @model_serializer(mode='wrap')
     def _serialize_for_spec(self, serializer: Callable[..., dict[str, Any]]) -> dict[str, Any]:
-        """Serialize to spec wire format with nested output (matches JS/Go)."""
+        """Serialize to spec wire format with nested output."""
         data = serializer(self)
         # Build nested output from flat fields - spec expects output key always present
         output: dict[str, Any] = {}

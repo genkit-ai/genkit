@@ -695,22 +695,25 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         # signal that "no input" is a legitimate way to invoke this action.
         if input is None and self._first_arg_optional:
             return input
+        payload: object = input
+        # If input is a BaseModel of a different type (e.g. ModelRequest[dict] vs ModelRequest[PluginConfig]),
+        # Pydantic rejects direct class validation. We dump it to a plain dict so Pydantic can re-parse
+        # the raw fields into the action's schema.
+        if isinstance(input, BaseModel):
+            try:
+                return self._input_type.validate_python(input)
+            except ValidationError:
+                payload = input.model_dump(mode='python')
+
         try:
-            return self._input_type.validate_python(input)
+            return self._input_type.validate_python(payload)
         except ValidationError as e:
-            if input is None:
-                raise GenkitError(
-                    message=(
-                        f"Action '{self.name}' requires input but none was provided. "
-                        'Please supply a valid input payload.'
-                    ),
-                    status='INVALID_ARGUMENT',
-                ) from e
-            raise GenkitError(
-                message=f"Invalid input for action '{self.name}': {e}",
-                status='INVALID_ARGUMENT',
-                cause=e,
-            ) from e
+            msg = (
+                f"Action '{self.name}' requires input but none was provided. Please supply a valid input payload."
+                if input is None
+                else f"Invalid input for action '{self.name}': {e}"
+            )
+            raise GenkitError(message=msg, status='INVALID_ARGUMENT', cause=e) from e
 
     async def _run_with_telemetry(
         self,
