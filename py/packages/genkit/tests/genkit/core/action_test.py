@@ -282,7 +282,13 @@ async def test_run_no_input_type_allows_none() -> None:
 
 @pytest.mark.asyncio
 async def test_validate_input_reparses_generic_pydantic_mismatch() -> None:
-    """Action input validation dumps and re-parses Pydantic instances when direct class validation fails."""
+    """Verify Action._validate_input plain-dict re-parsing for generic Pydantic model mismatches.
+
+    Why this test exists: When a caller passes a generic BaseModel instance (e.g. ModelRequest[dict])
+    to an action expecting a parameterized schema (e.g. ModelRequest[SubConfig]), Pydantic's direct
+    validate_python(input) fails because the Python class types do not match. Dumping to a plain dict
+    and re-parsing forces Pydantic to validate the raw payload into the action's target schema.
+    """
 
     class SubConfig(BaseModel):
         foo: str
@@ -302,7 +308,12 @@ async def test_validate_input_reparses_generic_pydantic_mismatch() -> None:
 
 @pytest.mark.asyncio
 async def test_validate_input_reparses_model_request_plugin_config() -> None:
-    """Action input validation dumps and re-parses ModelRequest[dict] to ModelRequest[PluginConfig]."""
+    """Verify ModelRequest[dict] payload re-parsing into ModelRequest[PluginConfig].
+
+    Why this test exists: Real-world Model actions registered with custom PluginConfig schemas
+    receive raw dict configs from ai.generate() wrapped in ModelRequest[dict]. This verifies that
+    Action._validate_input successfully coerces the raw dict config into the model's PluginConfig instance.
+    """
 
     class PluginConfig(BaseModel):
         thinking_summaries: str
