@@ -765,8 +765,7 @@ async def _generate_action_turn(
         # Extract schema_type for runtime Pydantic validation
         schema_type = turn_options.output.schema_type if turn_options.output else None
 
-        # Plugin returns ModelResponse directly. Framework fills request when the
-        # plugin didn't already attach one (e.g. with a normalized config echo).
+        # Attach the request to the response if the model plugin did not already include one.
         response = model_response
         if response.request is None:
             response.request = request
