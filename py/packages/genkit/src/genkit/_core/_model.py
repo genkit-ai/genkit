@@ -268,25 +268,7 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
         if self.config is not None and not isinstance(self.config, (BaseModel, dict)):
             raise TypeError(f'config must be a BaseModel or dict, got {type(self.config).__name__}')
 
-    @model_validator(mode='before')
-    @classmethod
-    def _flatten_output(cls, data: object) -> object:
-        """Accept spec wire format: unnest output into the flat output_* fields."""
-        if not isinstance(data, dict):
-            return data
-        flat = cast('dict[str, Any]', dict(data))
-        output = flat.pop('output', None)
-        if not isinstance(output, dict):
-            return data
-        for src, camel, snake in (
-            ('format', 'outputFormat', 'output_format'),
-            ('schema', 'outputSchema', 'output_schema'),
-            ('constrained', 'outputConstrained', 'output_constrained'),
-            ('contentType', 'outputContentType', 'output_content_type'),
-        ):
-            if src in output and camel not in flat and snake not in flat:
-                flat[camel] = output[src]
-        return flat
+
 
     @field_validator('messages', mode='before')
     @classmethod
