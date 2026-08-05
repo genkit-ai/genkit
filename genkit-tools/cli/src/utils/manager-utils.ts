@@ -252,14 +252,16 @@ export interface WaitForActionKeysOptions {
 export async function waitForActionKeys(
   manager: BaseRuntimeManager,
   keys: string[],
-  options: WaitForActionKeysOptions = {}
+  {
+    pollIntervalMs = 500,
+    stableForMs = 5000,
+    timeoutMs = 30000,
+  }: WaitForActionKeysOptions = {}
 ): Promise<void> {
   const requiredKeys = keys.filter((k) => !!k);
   if (requiredKeys.length === 0) return;
 
-  const pollIntervalMs = options.pollIntervalMs ?? 500;
-  const stableForMs = options.stableForMs ?? 5000;
-  const deadline = Date.now() + (options.timeoutMs ?? 30000);
+  const deadline = Date.now() + timeoutMs;
 
   let hasSeenRuntime = manager.listRuntimes().length > 0;
   let lastCount = -1;

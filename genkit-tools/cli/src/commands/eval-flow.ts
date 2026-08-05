@@ -212,9 +212,19 @@ export const evalFlow = new Command('eval:flow')
         }
       };
 
+      // Wait for the target flow to register. If specific evaluators were
+      // requested, wait for those too. When none are specified we cannot know
+      // the keys ahead of time, so we skip them and let discovery handle it.
+      const waitForActionKeys = [`/flow/${flowName}`];
+      if (options.evaluators) {
+        waitForActionKeys.push(
+          ...options.evaluators.split(',').map((k) => `/evaluator/${k}`)
+        );
+      }
+
       await runWithManager(projectRoot, runAction, {
         runtimeCommand,
-        waitForActionKeys: [`/flow/${flowName}`],
+        waitForActionKeys,
       });
     }
   );
