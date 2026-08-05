@@ -282,20 +282,29 @@ async def test_run_no_input_type_allows_none() -> None:
 
 @pytest.mark.asyncio
 async def test_validate_input_reparses_generic_pydantic_mismatch() -> None:
-    """Action input validation dumps and re-parses Pydantic instances when direct class validation fails."""
+    """Action input validation dumps and re-parses ModelRequest[dict] to ModelRequest[PluginConfig]."""
 
-    class SubConfig(BaseModel):
-        foo: str
+    class PluginConfig(BaseModel):
+        thinking_summaries: str
+        google_search: bool
 
-    async def fn(request: ModelRequest[SubConfig]) -> str:
-        assert isinstance(request.config, SubConfig)
-        return request.config.foo
+    async def fn(request: ModelRequest[PluginConfig]) -> str:
+        assert isinstance(request.config, PluginConfig)
+        assert request.config.thinking_summaries == 'auto'
+        assert request.config.google_search is True
+        return f'summaries={request.config.thinking_summaries}'
 
-    action = Action(name='genericAction', kind=ActionKind.CUSTOM, fn=fn)
-    action._override_input_schema(ModelRequest[SubConfig])  # ty: ignore[invalid-type-form]
+    action = Action(name='genericAction', kind=ActionKind.MODEL, fn=fn)
+    action._override_input_schema(ModelRequest[PluginConfig])  # ty: ignore[invalid-type-form]
 
-    input_req = ModelRequest(messages=[], config={'foo': 'bar'})
+    # Caller passes bare ModelRequest (ModelRequest[dict]) with raw dict config
+    raw_req = ModelRequest(
+        messages=[],
+        config={'thinking_summaries': 'auto', 'google_search': True},
+    )
+    assert not isinstance(raw_req.config, PluginConfig)
 
-    result = await action.run(input=input_req)
-    assert result.response == 'bar'
+    # Action._validate_input dumps raw_req to dict and re-parses into ModelRequest[PluginConfig]
+    result = await action.run(input=raw_req)
+    assert result.response == 'summaries=auto'
 
