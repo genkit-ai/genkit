@@ -71,7 +71,7 @@ class Tool:
             output_schema=self.output_schema,
         )
 
-    def action(self) -> Action[Any, Any, Any]:
+    def action(self) -> Action:
         """Return the underlying :class:`~genkit._core._action.Action` registered for this tool."""
         return self._action
 
@@ -102,7 +102,11 @@ class ToolRunContext(ActionRunContext):
             resumed_metadata: Metadata from previous interrupt (if resumed)
             original_input: Original tool input before replacement (if resumed)
         """
-        super().__init__(context=ctx.context)
+        super().__init__(
+            context=ctx.context,
+            streaming_callback=ctx.streaming_callback,
+            abort_signal=ctx.abort_signal,
+        )
         self.resumed_metadata = resumed_metadata
         self.original_input = original_input
 
@@ -177,10 +181,10 @@ def respond_to_interrupt(
 
 
 def restart_tool(
-    interrupt: ToolRequestPart,
     *,
-    resumed_metadata: dict[str, Any] | None = None,
+    interrupt: ToolRequestPart,
     replace_input: Any | None = None,  # noqa: ANN401 - new tool input; shape is per tool
+    resumed_metadata: dict[str, Any] | None = None,
 ) -> ToolRequestPart:
     """Build a restart ``ToolRequestPart`` for a pending tool interrupt.
 
@@ -188,20 +192,17 @@ def restart_tool(
 
     Args:
         interrupt: The interrupted ``ToolRequestPart`` (e.g. from ``response.interrupts``).
-        resumed_metadata: Passed to the tool as ``ToolRunContext.resumed_metadata``. The
-            common case is a small dict the tool / middleware checks
-            (e.g. ``{'toolApproved': True}`` for ``ToolApproval``).
-        replace_input: Optional new ``tool_request.input`` for this run; the previous input
-            is stashed in ``metadata.replacedInput`` so the tool can see what changed.
+        replace_input: Optional new ``tool_request.input`` for this run (previous input is
+            stored in ``metadata.replacedInput`` when this is set).
+        resumed_metadata: Passed to the tool as ``ToolRunContext.resumed_metadata``.
 
     Returns:
         A ``ToolRequestPart`` for ``resume_restart`` / message history.
 
     Example:
-        ``restart_tool(trp, resumed_metadata={'toolApproved': True})``
+        ``restart_tool(interrupt=trp, resumed_metadata={"tool_approved": True})``
     """
     tool_req = interrupt.tool_request
-
     new_meta: dict[str, Any] = dict(interrupt.metadata or {})
 
     new_meta['resumed'] = resumed_metadata if resumed_metadata is not None else True
@@ -233,13 +234,14 @@ def _resume_context_from_tool_request_part(
         resumed_meta = raw_resumed
     else:
         resumed_meta = None
+
     original_input = meta.get('replacedInput')
     return resumed_meta, original_input
 
 
 async def run_tool_request(
     *,
-    tool: Action[Any, Any, Any],
+    tool: Action,
     tool_request_part: ToolRequestPart,
     ctx: GenerateMiddlewareContext | None = None,
 ) -> Any:  # noqa: ANN401 - tool output follows registered handler
@@ -260,6 +262,7 @@ async def run_tool_request(
                 tool_request_part.tool_request.input,
                 context=run_context,
                 telemetry_labels=telemetry_labels,
+                abort_signal=ctx.abort_signal if ctx else None,
             )
         ).response
     finally:
@@ -267,9 +270,32 @@ async def run_tool_request(
         _tool_original_input.reset(token_input)
 
 
+def restart_interrupt_error(interrupt: Interrupt) -> GenkitError:
+    """Build the FAILED_PRECONDITION error for an Interrupt raised during tool restart.
+
+    Nested interrupts during restart are not supported yet. Include the underlying
+    interrupt reason (e.g. ToolApproval's ``Tool not in approved list: ...``) so the
+    error points at missing approval metadata instead of sounding like a missing SDK feature.
+    """
+    metadata = interrupt.metadata
+    if isinstance(metadata, dict):
+        reason = metadata.get('message')
+    elif isinstance(metadata, str):
+        # Defensive: Interrupt is typed as dict metadata, but a plain string
+        # argument would land here and must not AttributeError on .get().
+        reason = metadata
+    else:
+        reason = None
+    if isinstance(reason, str) and reason.strip():
+        message = f'Tool interrupted again during restart: {reason}'
+    else:
+        message = 'Tool interrupted again during a restart execution; not supported yet.'
+    return GenkitError(status='FAILED_PRECONDITION', message=message, cause=interrupt)
+
+
 async def run_tool_after_restart(
     *,
-    tool: Action[Any, Any, Any],
+    tool: Action,
     restart_trp: ToolRequestPart,
     ctx: GenerateMiddlewareContext | None = None,
 ) -> ToolResponsePart:
@@ -287,11 +313,7 @@ async def run_tool_after_restart(
             else (e if isinstance(e, Interrupt) else None)
         )
         if intr is not None:
-            raise GenkitError(
-                status='FAILED_PRECONDITION',
-                message='Tool interrupted again during a restart execution; not supported yet.',
-                cause=intr,
-            ) from e
+            raise restart_interrupt_error(intr) from e
         raise
 
     return ToolResponsePart(

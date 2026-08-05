@@ -95,7 +95,9 @@ export async function loadCatalog(
 
   // Register under the requested id. Keep the catalog's own `id` (used as the
   // `catalogId` on surfaces) intact if present; otherwise default it to the id.
-  const registered: A2uiCatalog = { ...catalog, id: catalog.id ?? id };
+  // Use `||` (not `??`) so an empty-string id in the source catalog also falls
+  // back — an empty `catalogId` would otherwise propagate onto every surface.
+  const registered: A2uiCatalog = { ...catalog, id: catalog.id || id };
   ai.registry.registerValue(A2UI_CATALOG_VALUE_TYPE, id, registered);
   return registered;
 }

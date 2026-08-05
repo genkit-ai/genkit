@@ -106,7 +106,7 @@ Always pass owner='%s' repo='%s' pull_number='%d'.`,
 		pr, repo, owner, name, pr,
 	)
 
-	m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
+	m := googlegenai.GoogleAIModel(g, "gemini-flash-latest")
 	resp, err := genkit.Generate(ctx, g,
 		ai.WithModel(m),
 		ai.WithPrompt(prompt),

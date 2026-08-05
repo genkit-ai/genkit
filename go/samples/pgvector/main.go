@@ -67,7 +67,7 @@ func run(g *genkit.Genkit) error {
 		return errors.New("need -apikey")
 	}
 	ctx := context.Background()
-	const embedderName = "embedding-001"
+	const embedderName = "gemini-embedding-001"
 	embedder := googlegenai.GoogleAIEmbedder(g, embedderName)
 	if embedder == nil {
 		return fmt.Errorf("embedder %s is not known to the googlegenai plugin", embedderName)

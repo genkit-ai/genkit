@@ -31,8 +31,10 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal"
 )
@@ -792,10 +794,24 @@ func (s *bidiSession) stop() {
 // sendRunActionError maps a runAction error to a JSON-RPC error response
 // with a Status-shaped data field matching the JS implementation.
 func (s *reflectionServerV2) sendRunActionError(id string, err error, traceID string) {
-	code := core.INTERNAL
+	// The reflection API serves the Dev UI, so it reports the real message and
+	// stack. Suppressing them here would only hide the failure from the
+	// developer causing it; the redaction that matters is at the flow HTTP
+	// boundary (see clientError in servers.go).
+	e := status.Convert(err)
+	if e == nil {
+		// err was a non-nil interface holding a nil *status.Error, which
+		// Convert documents as returning nil. There is no classification or
+		// stack to mine, but the run did fail, so report it as internal.
+		e = &status.Error{Status: status.Internal, Message: err.Error()}
+	}
+	code := e.Status
 	msg := err.Error()
 	if errors.Is(err, context.Canceled) {
-		code = core.CANCELLED
+		// A cancellation anywhere in the chain wins, even when an intermediate
+		// frame reclassified the error; the Dev UI keys on CANCELLED to tell a
+		// user-initiated cancel from a failure.
+		code = status.Cancelled
 		msg = "Action was cancelled"
 	}
 
@@ -803,15 +819,16 @@ func (s *reflectionServerV2) sendRunActionError(id string, err error, traceID st
 	if traceID != "" {
 		details["traceId"] = traceID
 	}
-	var ge *core.GenkitError
-	if errors.As(err, &ge) && ge.Details != nil {
-		if stack, ok := ge.Details["stack"].(string); ok {
-			details["stack"] = stack
-		}
+	// status.Errorf records the stack out of band; core.NewError still puts
+	// one in Details for compatibility. Prefer whichever is present.
+	if stack, ok := e.Details["stack"].(string); ok {
+		details["stack"] = stack
+	} else if stack := e.Stack(); stack != "" {
+		details["stack"] = stack
 	}
 
 	data := map[string]any{
-		"code":    core.StatusNameToCode[code],
+		"code":    code.Code(),
 		"message": msg,
 	}
 	if len(details) > 0 {

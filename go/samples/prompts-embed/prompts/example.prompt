@@ -1,5 +1,5 @@
 ---
-model: googleai/gemini-2.5-flash
+model: googleai/gemini-flash-latest
 ---
 
 Say hello!.

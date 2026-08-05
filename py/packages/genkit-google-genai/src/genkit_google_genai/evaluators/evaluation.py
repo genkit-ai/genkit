@@ -17,40 +17,13 @@
 """Vertex AI Evaluation implementation.
 
 This module implements the Vertex AI Evaluation API for evaluating model outputs
-using built-in metrics like BLEU, ROUGE, fluency, safety, and more.
-
-Architecture::
-
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                    Vertex AI Evaluators Module                          │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  Types & Configuration                                                  │
-    │  ├── VertexAIEvaluationMetricType (enum) - Available metrics            │
-    │  └── VertexAIEvaluationMetricConfig - Per-metric configuration          │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  EvaluatorFactory                                                       │
-    │  ├── evaluate_instances() - Async API call to evaluateInstances         │
-    │  └── create_evaluator_fn() - Creates evaluator function for metric      │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  Evaluator Configurations (per metric)                                  │
-    │  ├── BLEU - to_request(), response_handler()                            │
-    │  ├── ROUGE - to_request(), response_handler()                           │
-    │  ├── FLUENCY - to_request(), response_handler()                         │
-    │  ├── SAFETY - to_request(), response_handler()                          │
-    │  ├── GROUNDEDNESS - to_request(), response_handler()                    │
-    │  ├── SUMMARIZATION_QUALITY - to_request(), response_handler()           │
-    │  ├── SUMMARIZATION_HELPFULNESS - to_request(), response_handler()       │
-    │  └── SUMMARIZATION_VERBOSITY - to_request(), response_handler()         │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  Plugin Integration                                                     │
-    │  └── create_vertex_evaluators() - Register evaluators with Genkit       │
-    └─────────────────────────────────────────────────────────────────────────┘
+using built-in metrics such as BLEU, ROUGE, fluency, safety, groundedness, and
+summarization quality.
 
 Implementation Notes:
-    - Uses Google Cloud Application Default Credentials (ADC) for auth
-    - Calls the Vertex AI Platform evaluateInstances v1beta1 endpoint
-    - Each metric has a specific request format and response handler
-    - Supports custom metric_spec for fine-tuning metric behavior
+    - Uses Google Cloud Application Default Credentials (ADC) for authentication.
+    - Calls the Vertex AI Platform ``evaluateInstances`` v1beta1 endpoint.
+    - Supports custom metric specifications for fine-tuning evaluation behavior.
 """
 
 from __future__ import annotations

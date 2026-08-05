@@ -47,6 +47,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // ANSI styling for the small amount of tasteful color the CLI uses: cyan as
@@ -561,6 +562,17 @@ repl:
 		// snapshot to resume from.
 		if out.Error != nil {
 			fmt.Fprintf(os.Stderr, "%s\n", style(fmt.Sprintf("Agent failed (%s): %s", out.Error.Status, out.Error.Message), ansiYellow))
+			// The output's error carries the status the failure was
+			// classified with, so the client can offer the right next step
+			// without parsing message text.
+			switch out.Error.Status {
+			case status.Unavailable, status.ResourceExhausted:
+				fmt.Println(style("The model looks overloaded. Resume from the snapshot below in a moment and try again.", ansiDim))
+			case status.InvalidArgument:
+				fmt.Println(style("The model or a tool rejected the request. Rephrase and try again.", ansiDim))
+			case status.Cancelled, status.DeadlineExceeded:
+				fmt.Println(style("The turn was cut short. Resume from the snapshot below to continue.", ansiDim))
+			}
 		}
 		if out.SnapshotID != "" {
 			fmt.Printf("%s\n", style(fmt.Sprintf("Last-good snapshot: %s. Pick this agent again to resume from it.", shortID(out.SnapshotID)), ansiDim))

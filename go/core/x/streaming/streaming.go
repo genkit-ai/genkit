@@ -29,7 +29,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // StreamEventType indicates the type of stream event.
@@ -84,6 +84,25 @@ const (
 	streamStatusOpen streamStatus = iota
 	streamStatusDone
 	streamStatusError
+)
+
+// Failure modes stream operations report. Match them with errors.Is; every
+// implementation (in-memory, Firestore, ...) returns errors that satisfy these.
+var (
+	// ErrStreamNotFound means no stream is open under the given ID. Callers
+	// resuming a stream treat this as "nothing to resume" rather than a failure.
+	ErrStreamNotFound = status.ErrNotFound.Subtype("stream not found")
+	// ErrStreamAlreadyExists means a stream is already open under the given ID.
+	ErrStreamAlreadyExists = status.ErrAlreadyExists.Subtype("stream already exists")
+	// ErrStreamWriterClosed means this writer handle is closed, by a prior Done
+	// or Error on it or by Close. It is about the handle in your hand, whereas
+	// ErrStreamCompleted is about the stream itself.
+	ErrStreamWriterClosed = status.ErrFailedPrecondition.Subtype("stream writer is closed")
+	// ErrStreamCompleted means the stream reached a terminal state, so no
+	// further chunk, result, or error can be written to it through any writer.
+	ErrStreamCompleted = status.ErrFailedPrecondition.Subtype("stream has already completed")
+	// ErrStreamTimeout means a subscriber gave up waiting for the next event.
+	ErrStreamTimeout = status.ErrDeadlineExceeded.Subtype("stream timed out")
 )
 
 // streamState holds the internal state of a single stream.
@@ -196,7 +215,7 @@ func (m *InMemoryStreamManager) Open(ctx context.Context, streamID string) (Stre
 	defer m.mu.Unlock()
 
 	if _, exists := m.streams[streamID]; exists {
-		return nil, core.NewPublicError(core.ALREADY_EXISTS, "stream already exists", nil)
+		return nil, status.PublicErrorf(ErrStreamAlreadyExists, "stream %q already exists", streamID)
 	}
 
 	state := &streamState{
@@ -221,7 +240,7 @@ func (m *InMemoryStreamManager) Subscribe(ctx context.Context, streamID string) 
 	m.mu.RUnlock()
 
 	if !exists {
-		return nil, nil, core.NewPublicError(core.NOT_FOUND, "stream not found", nil)
+		return nil, nil, status.PublicErrorf(ErrStreamNotFound, "stream %q not found", streamID)
 	}
 
 	ch := make(chan StreamEvent, inMemoryStreamBufferSize)
@@ -283,14 +302,14 @@ func (s *inMemoryStreamInput) Write(_ context.Context, chunk json.RawMessage) er
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return core.NewPublicError(core.FAILED_PRECONDITION, "stream writer is closed", nil)
+		return status.PublicErrorf(ErrStreamWriterClosed, "stream %q: writer is closed", s.streamID)
 	}
 
 	s.state.mu.Lock()
 	defer s.state.mu.Unlock()
 
 	if s.state.status != streamStatusOpen {
-		return core.NewPublicError(core.FAILED_PRECONDITION, "stream has already completed", nil)
+		return status.PublicErrorf(ErrStreamCompleted, "stream %q has already completed", s.streamID)
 	}
 
 	s.state.chunks = append(s.state.chunks, chunk)
@@ -313,7 +332,7 @@ func (s *inMemoryStreamInput) Done(_ context.Context, output json.RawMessage) er
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return core.NewPublicError(core.FAILED_PRECONDITION, "stream writer is closed", nil)
+		return status.PublicErrorf(ErrStreamWriterClosed, "stream %q: writer is closed", s.streamID)
 	}
 	s.closed = true
 
@@ -321,7 +340,7 @@ func (s *inMemoryStreamInput) Done(_ context.Context, output json.RawMessage) er
 	defer s.state.mu.Unlock()
 
 	if s.state.status != streamStatusOpen {
-		return core.NewPublicError(core.FAILED_PRECONDITION, "stream has already completed", nil)
+		return status.PublicErrorf(ErrStreamCompleted, "stream %q has already completed", s.streamID)
 	}
 
 	s.state.status = streamStatusDone
@@ -346,7 +365,7 @@ func (s *inMemoryStreamInput) Error(_ context.Context, err error) error {
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return core.NewPublicError(core.FAILED_PRECONDITION, "stream writer is closed", nil)
+		return status.PublicErrorf(ErrStreamWriterClosed, "stream %q: writer is closed", s.streamID)
 	}
 	s.closed = true
 
@@ -354,7 +373,7 @@ func (s *inMemoryStreamInput) Error(_ context.Context, err error) error {
 	defer s.state.mu.Unlock()
 
 	if s.state.status != streamStatusOpen {
-		return core.NewPublicError(core.FAILED_PRECONDITION, "stream has already completed", nil)
+		return status.PublicErrorf(ErrStreamCompleted, "stream %q has already completed", s.streamID)
 	}
 
 	s.state.status = streamStatusError

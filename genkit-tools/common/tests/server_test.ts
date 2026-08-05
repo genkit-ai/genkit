@@ -511,5 +511,47 @@ describe('Tools Server', () => {
         })
       );
     });
+
+    it('should record analytics event for sendPageView', async () => {
+      const recordDirectSpy = jest.spyOn(analytics, 'record');
+
+      await axios.get(
+        `http://localhost:${port}/api/sendPageView?input=${encodeURIComponent(
+          JSON.stringify({ pageTitle: 'test-page' })
+        )}`
+      );
+
+      expect(recordDirectSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'page_view',
+          parameters: { page_title: 'test-page' },
+        })
+      );
+    });
+
+    it('should record analytics event for sendSelectContent', async () => {
+      const recordDirectSpy = jest.spyOn(analytics, 'record');
+
+      await axios.get(
+        `http://localhost:${port}/api/sendSelectContent?input=${encodeURIComponent(
+          JSON.stringify({
+            contentType: 'button',
+            contentId: 'run',
+            pageTitle: 'test-page',
+          })
+        )}`
+      );
+
+      expect(recordDirectSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'select_content',
+          parameters: {
+            content_type: 'button',
+            content_id: 'run',
+            page_title: 'test-page',
+          },
+        })
+      );
+    });
   });
 });

@@ -28,11 +28,13 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/google/uuid"
+
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/x/streaming"
-	"github.com/google/uuid"
 )
 
 // HandlerOption configures a Handler.
@@ -146,14 +148,40 @@ func wrapHandler(h func(http.ResponseWriter, *http.Request) error) http.HandlerF
 		}()
 
 		if err = h(w, r); err != nil {
-			var herr *core.GenkitError
-			if errors.As(err, &herr) {
-				http.Error(w, herr.Error(), core.HTTPStatusCode(herr.Status))
-			} else {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-			}
+			msg, code := clientError(err)
+			http.Error(w, msg, code.HTTPCode())
 		}
 	}
+}
+
+// clientError returns the message and status to send a client for err. Both
+// the HTTP code (via [status.Name.HTTPCode]) and any wire status field must
+// come from this one derivation so the two can never disagree.
+//
+// The status always comes from the error, so an error deliberately marked
+// public reaches the client with its own code rather than falling through to
+// 500. The message only leaves the process when the error was built with
+// [status.PublicErrorf]; anything else becomes a generic string derived from
+// the status, so schema dumps, provider text, and internal identifiers stay
+// server-side. The full error is still logged server-side: by wrapHandler for
+// request failures, and by the streaming runners for mid-stream flow failures.
+//
+// GENKIT_ENV=dev is exempt: suppressing the message during local development
+// only hides the failure from the developer causing it.
+func clientError(err error) (string, status.Name) {
+	code := status.Of(err)
+	// Only reached on a failure path, so an error that classifies as OK is
+	// itself the bug: the usual cause is a non-nil interface holding a nil
+	// *status.Error, which would otherwise report success on a request whose
+	// result was never written.
+	if code == status.OK {
+		code = status.Internal
+	}
+	msg, public := status.PublicMessage(err)
+	if !public && api.CurrentEnvironment() == api.EnvironmentDev {
+		msg = err.Error()
+	}
+	return msg, code
 }
 
 // handler returns an HTTP handler function that serves the action with the provided options.
@@ -171,7 +199,7 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 		if r.Body != nil && r.ContentLength > 0 {
 			defer r.Body.Close()
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				return core.NewPublicError(core.INVALID_ARGUMENT, err.Error(), nil)
+				return status.PublicErrorf(status.ErrInvalidArgument, "%w", err)
 			}
 		}
 
@@ -279,6 +307,10 @@ func runWithStreaming(ctx context.Context, w http.ResponseWriter, run runJSONFun
 
 	out, err := run(ctx, input, callback)
 	if err != nil {
+		// The SSE frame carries only the redacted message and this function
+		// returns nil, so wrapHandler never sees the error: this log is the
+		// only server-side record of the real failure.
+		slog.ErrorContext(ctx, "streaming flow failed", "err", err)
 		if werr := writeSSEError(w, err); werr != nil {
 			return werr
 		}
@@ -334,6 +366,10 @@ func runWithDurableStreaming(ctx context.Context, w http.ResponseWriter, run run
 
 	out, err := run(durableCtx, input, callback)
 	if err != nil {
+		// As in runWithStreaming: the wire carries only the redacted message
+		// and wrapHandler never sees the error, so log the real failure here.
+		// The durable record is no substitute: it expires with the stream.
+		slog.ErrorContext(durableCtx, "streaming flow failed", "err", err)
 		durableStream.Error(durableCtx, err)
 		select {
 		case <-clientGone:
@@ -357,8 +393,11 @@ func runWithDurableStreaming(ctx context.Context, w http.ResponseWriter, run run
 func subscribeToStream(ctx context.Context, w http.ResponseWriter, sm streaming.StreamManager, streamID string) error {
 	events, unsubscribe, err := sm.Subscribe(ctx, streamID)
 	if err != nil {
-		var ufErr *core.UserFacingError
-		if errors.As(err, &ufErr) && ufErr.Status == core.NOT_FOUND {
+		// Subscribe's contract is any NOT_FOUND error, not the in-tree
+		// streaming.ErrStreamNotFound sentinel specifically, so match on the
+		// status: a third-party StreamManager returning a plain NOT_FOUND
+		// gets the 204 that resuming clients key on, not a 404.
+		if status.Of(err) == status.NotFound {
 			w.WriteHeader(http.StatusNoContent)
 			return nil
 		}
@@ -416,10 +455,12 @@ type flowErrorResponse struct {
 }
 
 // flowError represents the error payload in a streaming error response.
+//
+// It carries no details field: it used to hold the full err.Error() text, which
+// put internal failure detail on the wire on every streamed error.
 type flowError struct {
-	Status  core.StatusName `json:"status"`
-	Message string          `json:"message"`
-	Details string          `json:"details,omitempty"`
+	Status  status.Name `json:"status"`
+	Message string      `json:"message"`
 }
 
 // writeResultResponse writes a JSON result response for non-streaming requests.
@@ -460,21 +501,14 @@ func writeSSEMessage(w http.ResponseWriter, msg json.RawMessage) error {
 }
 
 // writeSSEError writes an error as a server-sent event for streaming requests.
+// Status and message come from the same clientError derivation, so the frame
+// gets the identical redaction and OK-to-INTERNAL coercion as the HTTP path.
 func writeSSEError(w http.ResponseWriter, flowErr error) error {
-	status := core.INTERNAL
-	var ufErr *core.UserFacingError
-	var gErr *core.GenkitError
-	if errors.As(flowErr, &ufErr) {
-		status = ufErr.Status
-	} else if errors.As(flowErr, &gErr) {
-		status = gErr.Status
-	}
-
+	msg, code := clientError(flowErr)
 	resp := flowErrorResponse{
 		Error: &flowError{
-			Status:  status,
-			Message: "stream flow error",
-			Details: flowErr.Error(),
+			Status:  code,
+			Message: msg,
 		},
 	}
 	data, err := json.Marshal(resp)
@@ -491,7 +525,7 @@ func parseBoolQueryParam(r *http.Request, name string) (bool, error) {
 		var err error
 		b, err = strconv.ParseBool(s)
 		if err != nil {
-			return false, core.NewPublicError(core.INVALID_ARGUMENT, err.Error(), nil)
+			return false, status.PublicErrorf(status.ErrInvalidArgument, "%w", err)
 		}
 	}
 	return b, nil

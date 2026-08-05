@@ -16,14 +16,23 @@
 
 import { defineConfig } from 'vite';
 
+// Proxy /api to the backend (Express JS backend or the Go agent server, both on
+// :8080) for both the dev server (`pnpm dev`) and the preview server
+// (`pnpm preview`), so the built app talks to whichever backend is running.
+const proxy = {
+  '/api': {
+    target: 'http://localhost:8080',
+    changeOrigin: true,
+  },
+};
+
 export default defineConfig({
   server: {
     port: 5173,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-      },
-    },
+    proxy,
+  },
+  preview: {
+    port: 4173,
+    proxy,
   },
 });

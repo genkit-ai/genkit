@@ -33,16 +33,18 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/genkitbridge"
-	"github.com/google/uuid"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // --- Heartbeat ---
@@ -442,7 +444,7 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 // ([SessionRunner.Result], [Session.Artifacts]) or turn-end snapshot taken
 // afterward observes them. Only the forward to the client is asynchronous, and
 // it is dropped once the work context is cancelled (client disconnect, abort,
-// or agent completion); the side effects still apply.
+// or agent completion) or the run has detached; the side effects still apply.
 type Responder struct {
 	in  chan<- *AgentStreamChunk
 	ctx context.Context
@@ -451,6 +453,10 @@ type Responder struct {
 	// the sender's goroutine, so reads and snapshots that follow a Send
 	// cannot miss the chunk.
 	effects func(*AgentStreamChunk)
+	// detached mirrors the router's ingress latch: once the run detaches,
+	// send skips the wire forward (a detached run streams nothing) while
+	// still applying side effects.
+	detached *atomic.Bool
 }
 
 // SendModelChunk sends a generation chunk (token-level streaming).
@@ -478,6 +484,9 @@ func (r Responder) SendArtifact(artifact *Artifact) {
 func (r Responder) send(chunk *AgentStreamChunk) {
 	if r.effects != nil {
 		r.effects(chunk)
+	}
+	if r.detached != nil && r.detached.Load() {
+		return
 	}
 	select {
 	case r.in <- chunk:
@@ -583,10 +592,10 @@ func (a *Agent[State]) Store() SessionStore[State] {
 // INVALID_ARGUMENT when snapshotID is empty; a missing snapshot is NOT_FOUND.
 func (a *Agent[State]) GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error) {
 	if a.store == nil {
-		return nil, core.NewError(core.FAILED_PRECONDITION, "agent %q: GetSnapshot requires a session store", a.Name())
+		return nil, status.Errorf(ErrSessionStoreNotConfigured, "agent %q: GetSnapshot requires a session store", a.Name())
 	}
 	if snapshotID == "" {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "agent %q: GetSnapshot: snapshotID is required", a.Name())
+		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetSnapshot: snapshotID is required", a.Name())
 	}
 	return readSnapshot(ctx, a.store, a.transform, snapshotID, "")
 }
@@ -600,10 +609,10 @@ func (a *Agent[State]) GetSnapshot(ctx context.Context, snapshotID string) (*Ses
 // when sessionID is empty; an unknown session is NOT_FOUND.
 func (a *Agent[State]) GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[State], error) {
 	if a.store == nil {
-		return nil, core.NewError(core.FAILED_PRECONDITION, "agent %q: GetLatestSnapshot requires a session store", a.Name())
+		return nil, status.Errorf(ErrSessionStoreNotConfigured, "agent %q: GetLatestSnapshot requires a session store", a.Name())
 	}
 	if sessionID == "" {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "agent %q: GetLatestSnapshot: sessionID is required", a.Name())
+		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetLatestSnapshot: sessionID is required", a.Name())
 	}
 	return readSnapshot(ctx, a.store, a.transform, "", sessionID)
 }
@@ -619,10 +628,10 @@ func (a *Agent[State]) GetLatestSnapshot(ctx context.Context, sessionID string) 
 // when snapshotID is empty.
 func (a *Agent[State]) Abort(ctx context.Context, snapshotID string) (SnapshotStatus, error) {
 	if a.store == nil {
-		return "", core.NewError(core.FAILED_PRECONDITION, "agent %q: Abort requires a session store", a.Name())
+		return "", status.Errorf(ErrSessionStoreNotConfigured, "agent %q: Abort requires a session store", a.Name())
 	}
 	if snapshotID == "" {
-		return "", core.NewError(core.INVALID_ARGUMENT, "agent %q: Abort: snapshotID is required", a.Name())
+		return "", status.Errorf(status.ErrInvalidArgument, "agent %q: Abort: snapshotID is required", a.Name())
 	}
 	return abortPendingSnapshot(ctx, a.store, snapshotID)
 }
@@ -1007,7 +1016,7 @@ func (rt *agentRuntime[State]) takeFatal() error {
 // it crash the process.
 func panicError(ctx context.Context, what string, rec any) error {
 	logger.FromContext(ctx).Error(what+" panicked", "panic", rec, "stack", string(debug.Stack()))
-	return core.NewError(core.INTERNAL, "%s panicked: %v", what, rec)
+	return status.Errorf(status.ErrPanic, "%s panicked: %v", what, rec)
 }
 
 // fnDoneResult carries the user fn's return values across the goroutine
@@ -1089,13 +1098,16 @@ func newAgentRuntime[State any](
 		name:     name,
 		cfg:      cfg,
 		session:  session,
-		intake:   startDetachIntake(inCh),
 		fnDone:   make(chan fnDoneResult[State], 1),
 		fatalErr: make(chan error, 1),
 	}
 	// Started after rt exists so the router can signal a fail-closed stream
 	// transform error back through rt.failTransform.
 	rt.router = startChunkRouter(ctx, session, outCh, cfg.streamTransform, rt.failTransform)
+	// Started after the router so the intake's reader can latch the router's
+	// ingress filter the moment a detach directive lands, before the inputs
+	// riding it reach the runner (see detachIntake.handleDetach).
+	rt.intake = startDetachIntake(inCh, rt.router.markDetached)
 
 	rt.sess = &SessionRunner[State]{
 		Session: session,
@@ -1226,14 +1238,26 @@ func (rt *agentRuntime[State]) run(
 
 	select {
 	case <-rt.intake.detachSignal():
-		if err := rt.checkDetachCapabilities(); err != nil {
-			rt.drainAndWait(cancelWork)
-			return rt.failedOutput(clientCtx, err), nil
-		}
 		return rt.handleDetach(clientCtx, workCtx, cancelWork, markDetached)
 
 	case res := <-rt.fnDone:
-		return rt.handleFnDone(clientCtx, cancelWork, res)
+		// A detach that raced fn's completion still wins: the intake
+		// suppressed the wire the moment it read the directive, so
+		// resolving this as a synchronous completion would hand back a
+		// completed output whose stream was silently truncated. Both arms
+		// being ready is a coin flip (select picks among ready cases at
+		// random); checking the signal explicitly settles the race at
+		// directive-read time, like the JS runtime's input pump.
+		select {
+		case <-rt.intake.detachSignal():
+			// Hand the settled result back to handleDetach's finalizer
+			// (or drainAndWait, on the capability-rejection path). fnDone
+			// is buffered and fn sends exactly once, so this cannot block.
+			rt.fnDone <- res
+			return rt.handleDetach(clientCtx, workCtx, cancelWork, markDetached)
+		default:
+			return rt.handleFnDone(clientCtx, cancelWork, res)
+		}
 
 	case cause := <-rt.fatalErr:
 		return rt.handleTransformFailure(clientCtx, cancelWork, cause)
@@ -1279,11 +1303,11 @@ func (rt *agentRuntime[State]) handleTransformFailure(
 // the abort flip and promptly cancel the background work without polling).
 func (rt *agentRuntime[State]) checkDetachCapabilities() error {
 	if rt.cfg.store == nil {
-		return core.NewError(core.FAILED_PRECONDITION,
+		return status.Errorf(ErrSessionStoreNotConfigured,
 			"agent %q: detach requires a session store", rt.name)
 	}
 	if _, ok := rt.cfg.store.(SnapshotSubscriber); !ok {
-		return core.NewError(core.FAILED_PRECONDITION,
+		return status.Errorf(status.ErrFailedPrecondition,
 			"agent %q: detach requires a session store implementing SnapshotSubscriber", rt.name)
 	}
 	return nil
@@ -1417,6 +1441,31 @@ func (rt *agentRuntime[State]) outboundState(ctx context.Context, state *Session
 	return out, nil
 }
 
+// convertKeepText returns cause as a *status.Error for a persisted payload
+// (AgentOutput.Error, SessionSnapshot.Error), preserving both halves of the
+// failure: the classification of a buried *status.Error (a store's own status
+// survives, per [status.Convert]) and the full chain text of any context
+// wrapped around it with fmt.Errorf, which Convert alone would drop. A public
+// error is exempt from the text merge: its message may reach a client and must
+// stay exactly what was cleared as public. A cause that is itself a non-nil
+// interface holding a nil *status.Error still yields a payload, because a
+// failed invocation must carry one.
+func convertKeepText(cause error) *status.Error {
+	e := status.Convert(cause)
+	if e == nil {
+		if cause == nil {
+			return nil
+		}
+		return status.Errorf(status.ErrInternal, "%s", cause)
+	}
+	if !e.Public && e.Message != cause.Error() {
+		ne := *e
+		ne.Message = cause.Error()
+		return &ne
+	}
+	return e
+}
+
 // failedOutput assembles the output for an invocation that ended in
 // failure: [AgentFinishReasonFailed], the error with its original status,
 // and the last-good resume point: the last turn-end snapshot's ID when
@@ -1431,7 +1480,7 @@ func (rt *agentRuntime[State]) failedOutput(ctx context.Context, cause error) *A
 	out := &AgentOutput[State]{
 		SessionID:    rt.session.SessionID(),
 		FinishReason: AgentFinishReasonFailed,
-		Error:        core.AsGenkitError(cause),
+		Error:        convertKeepText(cause),
 	}
 	if rt.cfg.store == nil {
 		// This is already the failure path, so a transform that also fails
@@ -1451,18 +1500,28 @@ func (rt *agentRuntime[State]) failedOutput(ctx context.Context, cause error) *A
 	return out
 }
 
-// handleDetach commits the pending snapshot, returns its ID, and spawns the
-// status-subscriber and finalizer goroutines that own the rest of the
-// invocation. Per-turn snapshots are suspended for the remainder so the
-// queued inputs roll into a single finalize rewrite; the chunk router
-// stops writing to outCh and discards further chunks, whose in-process
-// side effects (e.g. artifacts added via Responder.SendArtifact) still
-// apply at Send time, so user code does not have to branch on detach.
+// handleDetach resolves an observed detach signal: it rejects the detach
+// when the store cannot support it, and otherwise commits the pending
+// snapshot, returns its ID, and spawns the status-subscriber and finalizer
+// goroutines that own the rest of the invocation. Per-turn snapshots are
+// suspended for the remainder so the queued inputs roll into a single
+// finalize rewrite.
+//
+// The router's ingress filter has been latched since the intake read the
+// detach directive, so nothing the detached turn produces enters the pipe.
+// Filtered chunks keep their in-process side effects (e.g. artifacts added
+// via Responder.SendArtifact), which apply at Send time, so user code does
+// not have to branch on detach.
 func (rt *agentRuntime[State]) handleDetach(
 	clientCtx, workCtx context.Context,
 	cancelWork context.CancelFunc,
 	markDetached func(),
 ) (*AgentOutput[State], error) {
+	if err := rt.checkDetachCapabilities(); err != nil {
+		rt.drainAndWait(cancelWork)
+		return rt.failedOutput(clientCtx, err), nil
+	}
+
 	// Stop mirroring clientCtx. From here, only the abort subscription or
 	// fn completion can cancel workCtx.
 	markDetached()
@@ -1478,8 +1537,8 @@ func (rt *agentRuntime[State]) handleDetach(
 	// already cancelled (or cancels mid-write), we still want the pending
 	// row durable so observers can find it later. Decouple this write.
 	//
-	// checkDetachCapabilities (run before detach is honored) guarantees the
-	// store is a SnapshotSubscriber, so the runtime can observe the abort flip.
+	// The capability check above guarantees the store is a
+	// SnapshotSubscriber, so the runtime can observe the abort flip.
 	subscriber := rt.cfg.store.(SnapshotSubscriber)
 
 	// Stamp the pending row's timestamps and an initial heartbeat (refreshed on
@@ -1500,12 +1559,12 @@ func (rt *agentRuntime[State]) handleDetach(
 		})
 	if err != nil {
 		rt.drainAndWait(cancelWork)
-		return rt.failedOutput(clientCtx, core.NewError(core.INTERNAL,
-			"agent %q: detach: save pending snapshot: %v", rt.name, err)), nil
+		return rt.failedOutput(clientCtx, fmt.Errorf("agent %q: detach: save pending snapshot: %w", rt.name, err)), nil
 	}
 	// The router can no longer write to outCh once we return; the bidi
-	// framework closes it shortly after. The router stops writing and
-	// trashes any further chunks.
+	// framework closes it shortly after. Post-detach chunks never entered
+	// the pipe (ingress filter), so this only flushes or drops a pre-detach
+	// turn's in-flight tail.
 	rt.router.stopAndWait()
 
 	// Refresh the heartbeat on an interval, decoupled from clientCtx (the work
@@ -1669,23 +1728,23 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 				return &annotated, nil
 			}
 
-			status := SnapshotStatusCompleted
+			snapStatus := SnapshotStatusCompleted
 			// The persisted finish reason records how the background work
 			// actually ended, distinct from the detached reason the client
 			// already saw on AgentOutput.
 			finishReason := completedReason
-			var snapErr *core.GenkitError
+			var snapErr *status.Error
 			switch {
 			case abortedByUser:
-				status = SnapshotStatusAborted
+				snapStatus = SnapshotStatusAborted
 				finishReason = AgentFinishReasonAborted
 				if fnErr != nil {
-					snapErr = core.AsGenkitError(fnErr) // aborted wins, preserve text
+					snapErr = convertKeepText(fnErr) // aborted wins, preserve text
 				}
 			case fnErr != nil:
-				status = SnapshotStatusFailed
+				snapStatus = SnapshotStatusFailed
 				finishReason = AgentFinishReasonFailed
-				snapErr = core.AsGenkitError(fnErr)
+				snapErr = convertKeepText(fnErr)
 			}
 
 			// Preserve the pending row's CreatedAt (so the finalize does not
@@ -1694,7 +1753,7 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 			return &SessionSnapshot[State]{
 				SessionID:    pending.SessionID,
 				ParentID:     pending.ParentID,
-				Status:       status,
+				Status:       snapStatus,
 				FinishReason: finishReason,
 				Error:        snapErr,
 				State:        &finalState,
@@ -1729,14 +1788,19 @@ func loadSession[State any](
 	}
 
 	if init.State != nil && (init.SessionID != "" || init.SnapshotID != "") {
-		return nil, nil, core.NewError(core.INVALID_ARGUMENT,
+		return nil, nil, status.Errorf(status.ErrInvalidArgument,
 			"state is mutually exclusive with session ID and snapshot ID; a client-managed conversation's identity rides inside the state (SessionState.SessionID)")
 	}
 
+	// The three store-mode mismatches below stay internal: they describe how the
+	// agent was wired, not what the caller sent, so an anonymous client should
+	// not learn from them whether state is server- or client-managed. A
+	// developer integrating against the agent sees the full text under
+	// GENKIT_ENV=dev and in the server log.
 	switch {
 	case init.State != nil:
 		if store != nil {
-			return nil, nil, core.NewError(core.FAILED_PRECONDITION,
+			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 				"state provided but agent has a session store configured (server-managed state); use snapshot ID instead")
 		}
 		// Deep-copy at the entry boundary: an in-process caller retains
@@ -1749,33 +1813,33 @@ func loadSession[State any](
 
 	case init.SnapshotID != "":
 		if store == nil {
-			return nil, nil, core.NewError(core.FAILED_PRECONDITION,
+			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 				"snapshot ID %q provided but agent has no session store configured (client-managed state); use state instead", init.SnapshotID)
 		}
 		snap, err := store.GetSnapshot(ctx, init.SnapshotID)
 		if err != nil {
-			return nil, nil, core.NewError(core.INTERNAL, "failed to load snapshot %q: %v", init.SnapshotID, err)
+			return nil, nil, fmt.Errorf("failed to load snapshot %q: %w", init.SnapshotID, err)
 		}
 		if snap == nil {
-			return nil, nil, core.NewError(core.NOT_FOUND, "snapshot %q not found", init.SnapshotID)
+			return nil, nil, status.PublicErrorf(ErrSnapshotNotFound, "snapshot %q not found", init.SnapshotID)
 		}
 		// A session ID sent alongside the snapshot ID asserts which
 		// conversation the snapshot belongs to; a mismatch means the
 		// caller would silently continue the wrong conversation.
 		if init.SessionID != "" && snap.SessionID != init.SessionID {
-			return nil, nil, core.NewError(core.INVALID_ARGUMENT,
+			return nil, nil, status.Errorf(status.ErrInvalidArgument,
 				"snapshot %q does not belong to session %q (snapshot's session: %q)", init.SnapshotID, init.SessionID, snap.SessionID)
 		}
 		return resumeSessionFrom(s, snap)
 
 	case init.SessionID != "":
 		if store == nil {
-			return nil, nil, core.NewError(core.FAILED_PRECONDITION,
+			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 				"session ID %q provided but agent has no session store configured (client-managed state); the conversation's identity rides inside the state object (SessionState.SessionID)", init.SessionID)
 		}
 		snap, err := store.GetLatestSnapshot(ctx, init.SessionID)
 		if err != nil {
-			return nil, nil, core.NewError(core.INTERNAL, "failed to resolve latest snapshot for session %q: %v", init.SessionID, err)
+			return nil, nil, fmt.Errorf("failed to resolve latest snapshot for session %q: %w", init.SessionID, err)
 		}
 		if snap == nil {
 			// No snapshot exists for this session ID yet: the caller is
@@ -1786,7 +1850,7 @@ func loadSession[State any](
 			return s, nil, nil
 		}
 		if snap.SessionID != init.SessionID {
-			return nil, nil, core.NewError(core.INTERNAL,
+			return nil, nil, status.Errorf(status.ErrInternal,
 				"store resolved session %q to snapshot %q, which belongs to session %q; the store violates the GetLatestSnapshot contract", init.SessionID, snap.SnapshotID, snap.SessionID)
 		}
 		return resumeSessionFrom(s, snap)
@@ -1808,13 +1872,13 @@ func resumeSessionFrom[State any](s *Session[State], snap *SessionSnapshot[State
 		if snap.Error != nil && snap.Error.Message != "" {
 			msg = snap.Error.Message
 		}
-		return nil, nil, core.NewError(core.FAILED_PRECONDITION,
+		return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 			"snapshot %q terminated with error: %s", snap.SnapshotID, msg)
 	case SnapshotStatusPending:
-		return nil, nil, core.NewError(core.FAILED_PRECONDITION,
+		return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 			"snapshot %q is still pending: its detached invocation is still running; wait for it to finalize or abort it before resuming", snap.SnapshotID)
 	case SnapshotStatusAborted:
-		return nil, nil, core.NewError(core.FAILED_PRECONDITION,
+		return nil, nil, status.Errorf(status.ErrFailedPrecondition,
 			"snapshot %q was aborted", snap.SnapshotID)
 	}
 	if snap.State != nil {
@@ -1835,10 +1899,10 @@ func resumeSessionFrom[State any](s *Session[State], snap *SessionSnapshot[State
 // an artifact chunk's artifact to the session) is applied synchronously by
 // Responder.send before the chunk enters the router, so every chunk gets it
 // in its sender's goroutine regardless of whether detach has landed; the
-// router owns only the wire forward to outCh, which is the one thing detach
-// suppresses, since the bidi framework closes outCh shortly after bidiFn
-// returns. The router
-// commits to not writing before we return so that close is safe, and
+// wire forward is the one thing detach suppresses, by latching the
+// detached ingress filter so a detached run's chunks never enter the pipe.
+// The router commits to not writing before we return so that close is safe
+// (the bidi framework closes outCh shortly after bidiFn returns), and
 // keeps draining its input so the user fn never blocks on a responder
 // send.
 
@@ -1854,6 +1918,14 @@ type chunkRouter[State any] struct {
 	// the invocation resolves as a failed output. Nil only when no transform is
 	// configured, since that is the only thing that can fail here.
 	fail func(error)
+
+	// detached latches when the intake reader observes a detach directive:
+	// from then on chunks are filtered at ingress (Responder.send and
+	// sendChunk skip the r.in send), so nothing a detached run produces
+	// enters the pipe. The latch store happens-before the detach's inputs
+	// are released to the runner, so every chunk of the detached turn
+	// observes it; in-process side effects still apply at Send time.
+	detached atomic.Bool
 
 	done          chan struct{}
 	stopWriting   chan struct{}
@@ -1884,15 +1956,14 @@ func startChunkRouter[State any](
 
 func (r *chunkRouter[State]) run() {
 	defer close(r.done)
-	if !r.forward() {
-		// r.in closed while writes were still allowed; nothing left to do.
-		return
-	}
+	r.forward()
+	// forward has committed to not writing. Signal before draining so a
+	// stopAndWait waiter is released whichever way forward exited.
 	close(r.writerStopped)
-	// Writes stopped (detach, shutdown, or client disconnect): keep
-	// draining so a producer mid-send never blocks. The chunks' side
+	// Keep draining so a producer mid-send never blocks. The chunks' side
 	// effects already happened at Send time; only the wire forward to
-	// outCh is suppressed, so the chunks are simply discarded.
+	// outCh is suppressed, so the chunks are simply discarded. (When
+	// forward exited because r.in closed, this exits immediately.)
 	for range r.in {
 	}
 }
@@ -1912,14 +1983,14 @@ func (r *chunkRouter[State]) applySideEffects(chunk *AgentStreamChunk) {
 }
 
 // forward delivers chunks to outCh until told to stop writing, the
-// action context ends, or r.in closes. Returns true if the router must
-// keep draining (writes stopped), false if r.in closed.
-func (r *chunkRouter[State]) forward() bool {
+// action context ends, or r.in closes. On every return it has committed
+// to never writing to out again.
+func (r *chunkRouter[State]) forward() {
 	for {
 		select {
 		case chunk, ok := <-r.in:
 			if !ok {
-				return false
+				return
 			}
 			shaped, err := r.shape(chunk)
 			if err != nil {
@@ -1928,7 +1999,7 @@ func (r *chunkRouter[State]) forward() bool {
 				// output, and switch to discard mode so no further chunk
 				// reaches the wire: fail-closed means stop forwarding entirely.
 				r.fail(err)
-				return true
+				return
 			}
 			if shaped == nil {
 				// The stream transform dropped the chunk from the wire. Its
@@ -1940,16 +2011,16 @@ func (r *chunkRouter[State]) forward() bool {
 			select {
 			case r.out <- chunk:
 			case <-r.stopWriting:
-				return true
+				return
 			case <-r.ctx.Done():
 				// The client is gone (disconnect cancels the action
 				// context), so nothing will drain out again and a blocked
 				// forward would wedge close. Drop the chunk and switch to
 				// side-effects-only mode.
-				return true
+				return
 			}
 		case <-r.stopWriting:
-			return true
+			return
 		}
 	}
 }
@@ -1985,21 +2056,31 @@ func (r *chunkRouter[State]) shape(chunk *AgentStreamChunk) (out *AgentStreamChu
 // responder returns a [Responder] that applies chunk side effects
 // synchronously and sends chunks into the router for the wire forward.
 // The returned Responder's Send methods drop the forward (returning
-// promptly) when ctx is cancelled.
+// promptly) when ctx is cancelled or the run has detached.
 func (r *chunkRouter[State]) responder(ctx context.Context) Responder {
-	return Responder{in: r.in, ctx: ctx, effects: r.applySideEffects}
+	return Responder{in: r.in, ctx: ctx, effects: r.applySideEffects, detached: &r.detached}
 }
 
 // sendChunk delivers chunk to the router for producers other than the
 // user agent function (e.g. the runtime's emitTurnEnd). It skips the
 // in-process side effects (the only runtime-produced chunk is TurnEnd,
-// which has none: no artifact) and returns promptly if ctx is cancelled,
-// dropping the chunk.
+// which has none: no artifact) and returns promptly if ctx is cancelled
+// or the run has detached, dropping the chunk.
 func (r *chunkRouter[State]) sendChunk(ctx context.Context, chunk *AgentStreamChunk) {
+	if r.detached.Load() {
+		return
+	}
 	select {
 	case r.in <- chunk:
 	case <-ctx.Done():
 	}
+}
+
+// markDetached latches the router into detached mode, filtering chunks at
+// ingress from here on (see the detached field). Called by the intake
+// reader the instant it observes a detach directive.
+func (r *chunkRouter[State]) markDetached() {
+	r.detached.Store(true)
 }
 
 // stopAndWait tells the router to stop writing to out and blocks until it
@@ -2128,13 +2209,25 @@ func (p *customPatcher[State]) onChange() {
 //
 // Snapshot suspension after detach is not the intake's concern: the
 // runner gates writes itself (see SessionRunner.suspendSnapshots), so a
-// detach can atomically wait out an in-flight turn-end write. The intake
-// only owns input pacing.
+// detach can atomically wait out an in-flight turn-end write.
+//
+// Wire suppression is the intake's concern, though, because it is an
+// ordering constraint on input release that only the reader can enforce:
+// a detached run streams nothing to the client, so the router's ingress
+// filter must be latched before the inputs riding the detach directive
+// reach the runner. The runtime's detach handler cannot guarantee that
+// itself - it runs in another goroutine, behind a store write, by which
+// time the background turn may already have emitted.
 
 type detachIntake struct {
 	src    <-chan *AgentInput
 	dst    chan *AgentInput
 	notify chan struct{} // buffered size 1; wakes forwarder when queue grows
+
+	// onDetach suppresses the client stream, called by the reader the
+	// instant a detach directive is observed. Never nil: the runtime wires
+	// it to the router's markDetached; standalone intake tests pass a no-op.
+	onDetach func()
 
 	// turnDone is signaled at each turn end to release the forwarder so
 	// it may pop the next input. Initialized with one token so the very
@@ -2145,20 +2238,21 @@ type detachIntake struct {
 	queue []*AgentInput
 
 	readDone atomic.Bool
-	detachCh chan struct{} // signaled by reader when detach observed
+	detachCh chan struct{} // closed by reader when detach observed
 
 	stop     chan struct{}
 	stopOnce sync.Once
 	done     chan struct{}
 }
 
-func startDetachIntake(src <-chan *AgentInput) *detachIntake {
+func startDetachIntake(src <-chan *AgentInput, onDetach func()) *detachIntake {
 	i := &detachIntake{
 		src:      src,
 		dst:      make(chan *AgentInput),
 		notify:   make(chan struct{}, 1),
+		onDetach: onDetach,
 		turnDone: make(chan struct{}, 1),
-		detachCh: make(chan struct{}, 1),
+		detachCh: make(chan struct{}),
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
 	}
@@ -2231,9 +2325,14 @@ func (i *detachIntake) enqueue(input *AgentInput) {
 	i.signal()
 }
 
-// handleDetach drains any buffered src inputs into the queue and signals
-// the detach handler. The detach handler then suspends turn-end snapshots
-// (via the runner) while the queued inputs finish processing.
+// handleDetach suppresses the client stream, drains any buffered src
+// inputs into the queue, and signals the detach handler. The detach
+// handler then suspends turn-end snapshots (via the runner) while the
+// queued inputs finish processing.
+//
+// onDetach comes first: the inputs released below are the ones whose turn
+// produces the chunks a detached run must not stream (see the type
+// comment above for why only the reader can enforce that ordering).
 //
 // A pure detach signal (no Messages, no Resume payload) is dropped
 // rather than enqueued: it carries no payload to process, so it would
@@ -2241,6 +2340,8 @@ func (i *detachIntake) enqueue(input *AgentInput) {
 // on the detach signal can do so by calling
 // Send(&AgentInput{Detach: true, Message: ...}) explicitly.
 func (i *detachIntake) handleDetach(first *AgentInput) {
+	i.onDetach()
+
 	var drained []*AgentInput
 	if hasInputPayload(first) {
 		drained = append(drained, first)
@@ -2267,10 +2368,11 @@ drainLoop:
 		i.signal()
 	}
 
-	select {
-	case i.detachCh <- struct{}{}:
-	case <-i.stop:
-	}
+	// A latch rather than a token: closing lets any number of observers
+	// (the run select's detach arm and its fnDone-arm re-check) see the
+	// signal without consuming it. handleDetach runs at most once (read
+	// returns right after it), so the close cannot double-fire.
+	close(i.detachCh)
 }
 
 // hasInputPayload reports whether the input carries data the runner would
@@ -2380,7 +2482,7 @@ func validateUserMessage(m *ai.Message) error {
 		return nil
 	}
 	if m.Role != "" && m.Role != ai.RoleUser {
-		return core.NewError(core.INVALID_ARGUMENT,
+		return status.Errorf(status.ErrInvalidArgument,
 			"agent input message must have role %q, got %q", ai.RoleUser, m.Role)
 	}
 	for _, p := range m.Content {
@@ -2388,7 +2490,7 @@ func validateUserMessage(m *ai.Message) error {
 			continue
 		}
 		if p.IsToolRequest() || p.IsToolResponse() {
-			return core.NewError(core.INVALID_ARGUMENT,
+			return status.Errorf(status.ErrInvalidArgument,
 				"agent input message must not contain tool request or response parts; use AgentInput.Resume instead")
 		}
 	}
@@ -2449,12 +2551,12 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 		req := p.ToolRequest
 		match := find(req.Name, req.Ref)
 		if match == nil {
-			return core.NewError(core.INVALID_ARGUMENT,
+			return status.Errorf(status.ErrInvalidArgument,
 				"resume.restart references tool %q%s which was not found in session history",
 				req.Name, toolRefSuffix(req.Ref))
 		}
 		if !jsonEqual(normalizeJSON(req.Input), normalizeJSON(match.Input)) {
-			return core.NewError(core.INVALID_ARGUMENT,
+			return status.Errorf(status.ErrInvalidArgument,
 				"resume.restart for tool %q%s has modified inputs that do not match the original tool request in session history; restart inputs must exactly match the interrupted tool request",
 				req.Name, toolRefSuffix(req.Ref))
 		}
@@ -2467,7 +2569,7 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 		}
 		resp := p.ToolResponse
 		if find(resp.Name, resp.Ref) == nil {
-			return core.NewError(core.INVALID_ARGUMENT,
+			return status.Errorf(status.ErrInvalidArgument,
 				"resume.respond references tool %q%s which was not found in session history",
 				resp.Name, toolRefSuffix(resp.Ref))
 		}
@@ -2496,7 +2598,7 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 	return func(ctx context.Context, resp Responder, sess *SessionRunner[State]) (*AgentResult, error) {
 		if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 			if !hasInputPayload(input) {
-				return nil, core.NewError(core.INVALID_ARGUMENT, "agent input message or resume is required")
+				return nil, status.Errorf(status.ErrInvalidArgument, "agent input message or resume is required")
 			}
 			if err := validateUserMessage(input.Message); err != nil {
 				return nil, err
@@ -2708,7 +2810,7 @@ type AgentConnection[State any] struct {
 // SendText, SendResume, and Detach helpers.
 func (c *AgentConnection[State]) Send(input *AgentInput) error {
 	if input == nil {
-		return core.NewError(core.INVALID_ARGUMENT, "agent input must not be nil")
+		return status.Errorf(status.ErrInvalidArgument, "agent input must not be nil")
 	}
 	return c.conn.Send(input)
 }

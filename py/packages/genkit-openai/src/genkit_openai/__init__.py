@@ -18,135 +18,34 @@
 """OpenAI-compatible model provider for Genkit.
 
 This plugin provides integration with OpenAI and any OpenAI-compatible API
-endpoints (like Azure OpenAI, Together AI, Anyscale, etc.) for the Genkit
-framework. It uses the official OpenAI Python SDK.
-
-Key Concepts (ELI5)::
-
-    ┌─────────────────────┬────────────────────────────────────────────────────┐
-    │ Concept             │ ELI5 Explanation                                   │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ OpenAI              │ The company that made ChatGPT. This plugin        │
-    │                     │ talks to their API directly.                      │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ OpenAI-compatible   │ Many AI providers copy OpenAI's API format.       │
-    │                     │ This plugin works with ALL of them!               │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ GPT-4o              │ OpenAI's latest flagship model. The "o" means     │
-    │                     │ "omni" - it can see, hear, and chat.              │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ base_url            │ Where to send requests. Change this to use        │
-    │                     │ Together AI, Anyscale, or any compatible API.     │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Chat Completions    │ The API endpoint for conversations. Send          │
-    │                     │ messages, get responses - like texting.           │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Streaming           │ Get the response word-by-word as it's generated.  │
-    │                     │ Feels faster, like watching someone type.         │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Function Calling    │ Let GPT use tools you define. Like giving it      │
-    │                     │ a calculator or database access.                  │
-    └─────────────────────┴────────────────────────────────────────────────────┘
-
-Data Flow::
-
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                HOW OPENAI-COMPATIBLE REQUESTS WORK                      │
-    │                                                                         │
-    │    Your Code                                                            │
-    │    ai.generate(prompt="Write a poem")                                   │
-    │         │                                                               │
-    │         │  (1) Request goes to OpenAI plugin                            │
-    │         ▼                                                               │
-    │    ┌─────────────────┐                                                  │
-    │    │  OpenAI Plugin  │   Adds API key, selects base_url                 │
-    │    │                 │   (openai.com, together.xyz, etc.)               │
-    │    └────────┬────────┘                                                  │
-    │             │                                                           │
-    │             │  (2) Convert to Chat Completions format                   │
-    │             ▼                                                           │
-    │    ┌─────────────────┐                                                  │
-    │    │  OpenAIModel    │   Standard OpenAI SDK format works               │
-    │    │                 │   with any compatible provider                   │
-    │    └────────┬────────┘                                                  │
-    │             │                                                           │
-    │             │  (3) HTTPS to base_url/v1/chat/completions                │
-    │             ▼                                                           │
-    │    ════════════════════════════════════════════════════                 │
-    │             │  Internet                                                 │
-    │             ▼                                                           │
-    │    ┌─────────────────────────────────────────────────────┐              │
-    │    │  OpenAI / Together AI / Anyscale / etc.             │              │
-    │    │  (any OpenAI-compatible endpoint)                   │              │
-    │    └─────────────────────────┬───────────────────────────┘              │
-    │             │                                                           │
-    │             │  (4) Streaming response                                   │
-    │             ▼                                                           │
-    │    ┌─────────────────┐                                                  │
-    │    │  Your App       │   response.text = "Roses are red..."             │
-    │    └─────────────────┘                                                  │
-    └─────────────────────────────────────────────────────────────────────────┘
-
-Architecture Overview::
-
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                     OpenAI-Compatible Plugin                            │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  Plugin Entry Point (__init__.py)                                       │
-    │  ├── OpenAI - Plugin class                                              │
-    │  ├── openai_model() - Helper to create model references                 │
-    │  └── OpenAIConfig - Configuration schema                                │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  typing.py - Type-Safe Configuration Classes                            │
-    │  ├── OpenAIConfig (base configuration)                                  │
-    │  └── Model-specific parameters                                          │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  openai_plugin.py - Plugin Implementation                               │
-    │  ├── OpenAI class (registers models)                                    │
-    │  └── Client initialization with OpenAI SDK                              │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  models/model.py - Model Implementation                                 │
-    │  ├── OpenAIModel (chat completions API)                                 │
-    │  ├── Request/response conversion                                        │
-    │  └── Streaming support                                                  │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  models/handler.py - Request Handler                                    │
-    │  └── Message conversion and tool handling                               │
-    └─────────────────────────────────────────────────────────────────────────┘
-
-Supported Providers:
-    - OpenAI (api.openai.com)
-    - Azure OpenAI
-    - Together AI
-    - Anyscale
-    - Any OpenAI-compatible endpoint
+endpoints (such as Azure OpenAI, Together AI, or Anyscale) using the official
+OpenAI Python SDK.
 
 Example:
     ```python
     from genkit import Genkit
     from genkit_openai import OpenAI
 
-    # Uses OPENAI_API_KEY env var or pass api_key explicitly
-    ai = Genkit(plugins=[OpenAI()], model='openai/gpt-4o')
+    # 1. Initialize Genkit with OpenAI plugin
+    ai = Genkit(plugins=[OpenAI()])
 
-    response = await ai.generate(prompt='Hello, GPT!')
-    print(response.text)
-
-    # With custom endpoint (e.g., Together AI)
-    ai = Genkit(
-        plugins=[OpenAI(base_url='https://api.together.xyz/v1')],
-        model='openai/meta-llama/Llama-3-70b-chat-hf',
+    # 2. Generate content using GPT-4o
+    res = await ai.generate(
+        model='openai/gpt-4o',
+        prompt='Suggest 2 catchy names for an AI newsletter.',
     )
+
+    # 3. Inspect output shapes directly
+    print(res.text)
+    # => 1. Prompt Daily
+    #    2. Neural Notes
     ```
 
-Caveats:
-    - Requires OPENAI_API_KEY environment variable or api_key parameter
-    - Model names are prefixed with 'openai/' (e.g., 'openai/gpt-4o')
-    - Custom endpoints may have different model availability
+Requirements:
+    - Requires the ``OPENAI_API_KEY`` environment variable or explicit ``api_key``.
 
 See Also:
     - OpenAI documentation: https://platform.openai.com/docs/
-    - Genkit documentation: https://genkit.dev/
 """
 
 from .openai_plugin import OpenAI, openai_model

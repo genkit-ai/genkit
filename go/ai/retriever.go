@@ -23,6 +23,7 @@ import (
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // RetrieverFunc is the function type for retriever implementations.
@@ -148,7 +149,7 @@ func LookupRetriever(r api.Registry, name string) Retriever {
 // Retrieve runs the given [Retriever].
 func (r *retriever) Retrieve(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
 	if r == nil {
-		return nil, core.NewError(core.INVALID_ARGUMENT, "Retriever.Retrieve: retriever called on a nil retriever; check that all retrievers are defined")
+		return nil, status.Errorf(status.ErrInvalidArgument, "Retriever.Retrieve: retriever called on a nil retriever; check that all retrievers are defined")
 	}
 
 	return r.Run(ctx, req, nil)

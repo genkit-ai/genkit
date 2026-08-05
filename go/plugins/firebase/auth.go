@@ -19,11 +19,12 @@ package firebase
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"firebase.google.com/go/v4/auth"
+
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 )
 
@@ -52,19 +53,22 @@ func ContextProvider(ctx context.Context, g *genkit.Genkit, policy AuthPolicy) (
 	return func(ctx context.Context, input core.RequestData) (core.ActionContext, error) {
 		authHeader, ok := input.Headers["authorization"]
 		if !ok {
-			return nil, core.NewPublicError(core.UNAUTHENTICATED, "authorization header is required but not provided", nil)
+			return nil, status.PublicErrorf(status.ErrUnauthenticated, "authorization header is required but not provided")
 		}
 
 		const bearerPrefix = "bearer "
 
 		if !strings.HasPrefix(strings.ToLower(authHeader), bearerPrefix) {
-			return nil, core.NewPublicError(core.UNAUTHENTICATED, "invalid authorization header format", nil)
+			return nil, status.PublicErrorf(status.ErrUnauthenticated, "invalid authorization header format")
 		}
 
 		token := authHeader[len(bearerPrefix):]
 		authCtx, err := client.VerifyIDToken(ctx, token)
 		if err != nil {
-			return nil, core.NewPublicError(core.UNAUTHENTICATED, fmt.Sprintf("error verifying ID token: %v", err), nil)
+			// Not public: the Admin SDK's text can name the project (an audience
+			// claim mismatch quotes the expected project ID). The caller gets
+			// UNAUTHENTICATED; the detail goes to the log and to GENKIT_ENV=dev.
+			return nil, status.Errorf(status.ErrUnauthenticated, "error verifying ID token: %w", err)
 		}
 
 		if policy != nil {

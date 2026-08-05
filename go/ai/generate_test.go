@@ -2376,6 +2376,102 @@ func TestModelResponseReasoning(t *testing.T) {
 	})
 }
 
+func TestModelResponseHistory(t *testing.T) {
+	userMsg := NewUserTextMessage("question")
+	modelMsg := NewModelTextMessage("answer")
+
+	t.Run("combines request messages with the response message", func(t *testing.T) {
+		resp := &ModelResponse{
+			Request: &ModelRequest{Messages: []*Message{userMsg}},
+			Message: modelMsg,
+		}
+
+		history := resp.History()
+
+		if len(history) != 2 || history[0] != userMsg || history[1] != modelMsg {
+			t.Errorf("History() = %v, want [userMsg modelMsg]", history)
+		}
+	})
+
+	t.Run("returns nil for a nil response", func(t *testing.T) {
+		var resp *ModelResponse
+
+		if history := resp.History(); history != nil {
+			t.Errorf("History() = %v, want nil", history)
+		}
+	})
+
+	t.Run("returns the response message when request is nil", func(t *testing.T) {
+		resp := &ModelResponse{Message: modelMsg}
+
+		history := resp.History()
+
+		if len(history) != 1 || history[0] != modelMsg {
+			t.Errorf("History() = %v, want [modelMsg]", history)
+		}
+	})
+
+	t.Run("returns request messages when response message is nil", func(t *testing.T) {
+		resp := &ModelResponse{Request: &ModelRequest{Messages: []*Message{userMsg}}}
+
+		history := resp.History()
+
+		if len(history) != 1 || history[0] != userMsg {
+			t.Errorf("History() = %v, want [userMsg]", history)
+		}
+	})
+
+	t.Run("returns nil when request and response message are both nil", func(t *testing.T) {
+		resp := &ModelResponse{}
+
+		if history := resp.History(); history != nil {
+			t.Errorf("History() = %v, want nil", history)
+		}
+	})
+
+	// Request.Messages with spare capacity used to let History() append into the
+	// caller's backing array, so the result aliased whatever else pointed at it.
+	t.Run("does not write into spare capacity of request messages", func(t *testing.T) {
+		backing := make([]*Message, 3, 8)
+		backing[0], backing[1], backing[2] = userMsg, modelMsg, userMsg
+		sentinel := NewUserTextMessage("caller owns this slot")
+		extended := backing[:4]
+		extended[3] = sentinel
+
+		resp := &ModelResponse{
+			Request: &ModelRequest{Messages: backing},
+			Message: modelMsg,
+		}
+
+		resp.History()
+
+		if extended[3] != sentinel {
+			t.Errorf("History() overwrote the caller's backing array at index 3: got %v, want the sentinel", extended[3])
+		}
+	})
+
+	t.Run("successive calls return independent slices", func(t *testing.T) {
+		backing := make([]*Message, 3, 8)
+		backing[0], backing[1], backing[2] = userMsg, modelMsg, userMsg
+		resp := &ModelResponse{
+			Request: &ModelRequest{Messages: backing},
+			Message: modelMsg,
+		}
+
+		first := resp.History()
+		replacement := NewModelTextMessage("second answer")
+		resp.Message = replacement
+		second := resp.History()
+
+		if first[3] != modelMsg {
+			t.Errorf("first History() result was mutated by the second call: got %v, want the original model message", first[3])
+		}
+		if second[3] != replacement {
+			t.Errorf("second History() = %v at index 3, want the replacement message", second[3])
+		}
+	})
+}
+
 func TestModelResponseInterrupts(t *testing.T) {
 	t.Run("returns interrupt tool requests", func(t *testing.T) {
 		interruptPart := NewToolRequestPart(&ToolRequest{

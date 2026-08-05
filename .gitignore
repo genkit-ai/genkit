@@ -57,6 +57,8 @@ js/testapps/agents/.snapshots-coding/
 js/testapps/agents/.snapshots-pruning/
 js/testapps/agents/web/tsconfig.tsbuildinfo
 js/testapps/agents/workspace/
+py/samples/agents/.snapshots/
+py/samples/agents/testapp/workspace/
 
 # auto-generated
 /js/core/src/__codegen

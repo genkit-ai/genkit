@@ -83,7 +83,7 @@ class EngagementTelemetry implements Telemetry {
         attributes['genkit:metadata:textFeedback'] as string
       );
     }
-    logger.logStructured(`UserFeedback[${name}]`, metadata);
+    logger.info(`UserFeedback[${name}]`, metadata);
   }
 
   private writeUserAcceptance(span: ReadableSpan, projectId?: string) {
@@ -102,7 +102,7 @@ class EngagementTelemetry implements Telemetry {
       ...createCommonLogAttributes(span, projectId),
       acceptanceValue: attributes['genkit:metadata:acceptanceValue'],
     };
-    logger.logStructured(`UserAcceptance[${name}]`, metadata);
+    logger.info(`UserAcceptance[${name}]`, metadata);
   }
 
   private extractTraceName(attributes: Attributes) {

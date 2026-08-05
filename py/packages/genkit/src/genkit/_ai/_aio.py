@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
 import signal
 import socket
@@ -34,6 +35,15 @@ import anyio
 import uvicorn
 from pydantic import BaseModel
 
+from genkit._ai._agents._base import (
+    Agent,
+    define_agent,
+    define_custom_agent,
+    define_prompt_agent,
+)
+from genkit._ai._agents._runtime import AgentFn
+from genkit._ai._agents._session import SessionStore, StateT, get_current_session
+from genkit._ai._agents._types import ChunkTransform, StateTransform
 from genkit._ai._embedding import EmbedderFn, EmbedderOptions, EmbedderRef, define_embedder
 from genkit._ai._evaluator import (
     BatchEvaluatorFn,
@@ -93,7 +103,7 @@ from genkit._core._dap import (
 )
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import GenkitError
-from genkit._core._logger import get_logger
+from genkit._core._logger import configure_logging, get_logger, resolve_level
 from genkit._core._middleware import (
     BaseMiddleware,
     GenerateMiddleware,
@@ -101,6 +111,7 @@ from genkit._core._middleware import (
 )
 from genkit._core._model import Document
 from genkit._core._plugin import Plugin
+from genkit._core._protocols import SessionLike
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
 from genkit._core._reflection_v2 import ReflectionServerV2
 from genkit._core._registry import Registry
@@ -121,7 +132,7 @@ from genkit._core._typing import (
 )
 
 from ._decorators import _FlowDecorator, _FlowDecoratorWithChunk
-from ._runtime import RuntimeManager
+from ._runtime import RuntimeManager, setup_signal_handlers
 
 logger = get_logger(__name__)
 
@@ -169,10 +180,16 @@ class Genkit:
         # Ensure the default generate action is registered for async usage.
         define_generate_action(self.registry)
         self._register_plugin_middleware(plugins)
+        configure_logging()
         # In dev mode, start the reflection server immediately in a background
         # daemon thread so it's available regardless of which web framework (or
         # none) the user chooses.
         if is_dev_environment():
+            # SIGINT (Ctrl+C) always hits handle_signal. SIGTERM inside the
+            # run_main wait loop is stolen by anyio (clean exit → atexit);
+            # elsewhere SIGTERM also goes through handle_signal. Both paths
+            # remove the runtime discovery files.
+            setup_signal_handlers()
             self._start_reflection_background()
 
         # Load prompts
@@ -671,6 +688,124 @@ class Genkit:
             output_schema=output_schema,
         )
 
+    async def agent(self, name: str) -> Agent:
+        """Look up a registered agent by name."""
+        resolved = await self.registry.resolve_action(ActionKind.AGENT, name)
+        if resolved is None:
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=f"Agent '{name}' not found in registry.",
+            )
+        if not isinstance(resolved, Agent):
+            raise GenkitError(
+                status='INTERNAL',
+                message=f"Registry entry '{name}' is not an Agent.",
+            )
+        return resolved
+
+    def define_custom_agent(
+        self,
+        name: str,
+        fn: AgentFn,
+        *,
+        store: SessionStore[StateT] | None = None,
+        state_transform: StateTransform | None = None,
+        chunk_transform: ChunkTransform | None = None,
+        state_schema: type[StateT] | None = None,
+        description: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> Agent[StateT]:
+        """Define and register an agent with full control over the turn loop.
+
+        fn receives (SessionRunner, ActionRunContext) and must call sess.run(handle_turn)
+        to process inputs, then return an AgentResult.
+
+        Pass ``state_schema`` (a Pydantic model) to type the custom state, so the
+        chat's ``state``, ``response.state``, and streamed ``chunk.custom`` come
+        back as that model instead of a dict.
+        """
+        return define_custom_agent(
+            registry=self.registry,
+            name=name,
+            fn=fn,
+            store=store,
+            state_transform=state_transform,
+            chunk_transform=chunk_transform,
+            state_schema=state_schema,
+            description=description,
+            metadata=metadata,
+        )
+
+    def define_agent(
+        self,
+        name: str,
+        *,
+        model: str | None = None,
+        system: str | list[Part] | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        config: dict[str, object] | ModelConfig | None = None,
+        max_turns: int | None = None,
+        description: str | None = None,
+        metadata: dict[str, object] | None = None,
+        store: SessionStore[StateT] | None = None,
+        state_transform: StateTransform | None = None,
+        chunk_transform: ChunkTransform | None = None,
+        state_schema: type[StateT] | None = None,
+    ) -> Agent[StateT]:
+        """Define a prompt-backed agent.
+
+        Each turn: attaches session history, calls generate with streaming,
+        updates session. Pass resume in AgentInput to resume from an interrupt.
+
+        Pass ``state_schema`` (a Pydantic model) to type the custom state tools
+        read and write — the chat's ``state``, ``response.state``, and streamed
+        ``chunk.custom`` come back as that model instead of a dict.
+        """
+        return define_agent(
+            registry=self.registry,
+            name=name,
+            model=model,
+            system=system,
+            tools=tools,
+            use=use,
+            config=config,
+            max_turns=max_turns,
+            description=description,
+            metadata=metadata,
+            store=store,
+            state_transform=state_transform,
+            chunk_transform=chunk_transform,
+            state_schema=state_schema,
+        )
+
+    def define_prompt_agent(
+        self,
+        name: str,
+        *,
+        store: SessionStore[StateT] | None = None,
+        state_transform: StateTransform | None = None,
+        chunk_transform: ChunkTransform | None = None,
+        state_schema: type[StateT] | None = None,
+        description: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> Agent[StateT]:
+        """Wire an already-registered prompt as an agent.
+
+        Looks up the prompt named `name` from the registry. Use when the prompt
+        is defined via ai.define_prompt() or loaded from a .prompt file.
+        """
+        return define_prompt_agent(
+            registry=self.registry,
+            name=name,
+            store=store,
+            state_transform=state_transform,
+            chunk_transform=chunk_transform,
+            state_schema=state_schema,
+            description=description,
+            metadata=metadata,
+        )
+
     def define_resource(
         self,
         *,
@@ -730,7 +865,26 @@ class Genkit:
                 sockets = [sock]
 
             app = create_reflection_asgi_app(registry=self.registry)
-            config = uvicorn.Config(app, host=spec.host, port=spec.port, loop='asyncio')
+            level = resolve_level()
+            is_debug = level <= logging.DEBUG
+            if level <= logging.DEBUG:
+                log_level = 'debug'
+            elif level <= logging.WARNING:
+                log_level = 'warning'
+            elif level <= logging.ERROR:
+                log_level = 'error'
+            else:
+                log_level = 'critical'
+
+            # Pass log_level explicitly so uvicorn's internal server engine doesn't default to INFO on startup.
+            config = uvicorn.Config(
+                app,
+                host=spec.host,
+                port=spec.port,
+                loop='asyncio',
+                access_log=is_debug,
+                log_level=log_level,
+            )
             server = ReflectionServer(config, ready=self._reflection_ready)
             async with RuntimeManager(spec, lazy_write=True) as runtime_manager:
                 server_task = asyncio.create_task(server.serve(sockets=sockets))
@@ -1170,7 +1324,7 @@ class Genkit:
                     dataset=dataset,
                     options=final_options,
                     eval_run_id=eval_run_id,
-                )
+                ),
             )
         ).response
 
@@ -1178,6 +1332,11 @@ class Genkit:
     def current_context() -> dict[str, Any] | None:
         """Get the current execution context, or None if not in an action."""
         return get_current_context()
+
+    @staticmethod
+    def current_session() -> SessionLike | None:
+        """Return the active agent session, or None if not inside a session."""
+        return get_current_session()
 
     async def run(
         self,

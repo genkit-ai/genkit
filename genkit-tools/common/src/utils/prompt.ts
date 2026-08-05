@@ -18,7 +18,90 @@ import { stringify } from 'yaml';
 import type { MessageData, Part } from '../types/model';
 import type { PromptFrontmatter } from '../types/prompt';
 
-export function fromMessages(
+function toFrontmatterSchema(config?: {
+  schema?: unknown;
+  jsonSchema?: unknown;
+}): unknown | undefined {
+  const schema = config?.jsonSchema ?? config?.schema;
+  return schema && typeof schema === 'object' ? schema : undefined;
+}
+
+/**
+ * Maps a generate request's output config onto `.prompt` frontmatter. The
+ * frontmatter format is limited to json/text/media, so the JSON-producing
+ * formats (json, jsonl, array, enum) map onto `json`. Returns undefined when
+ * there is nothing to record.
+ */
+export function toFrontmatterOutput(output?: {
+  format?: string;
+  jsonSchema?: unknown;
+  schema?: unknown;
+}): PromptFrontmatter['output'] | undefined {
+  if (!output) return undefined;
+  const result: NonNullable<PromptFrontmatter['output']> = {};
+  if (output.format === 'text') {
+    result.format = 'text';
+  } else if (output.format === 'media') {
+    result.format = 'media';
+  } else if (output.format) {
+    result.format = 'json';
+  }
+  const schema = toFrontmatterSchema(output);
+  if (schema !== undefined) {
+    result.schema = schema;
+  }
+  return result.format || result.schema ? result : undefined;
+}
+
+/**
+ * Maps a request's input config onto `.prompt` frontmatter. Returns undefined
+ * when there is nothing to record.
+ */
+export function toFrontmatterInput(input?: {
+  schema?: unknown;
+  jsonSchema?: unknown;
+  default?: unknown;
+}): PromptFrontmatter['input'] | undefined {
+  if (!input) return undefined;
+  const result: NonNullable<PromptFrontmatter['input']> = {
+    schema: toFrontmatterSchema(input),
+    default: input.default,
+  };
+  return result.schema || result.default !== undefined ? result : undefined;
+}
+
+/**
+ * Converts a prompt creation request into a complete `.prompt` template file string.
+ */
+export function toPromptFile(request: {
+  model: string;
+  messages: MessageData[];
+  config?: Record<string, unknown>;
+  tools?: { name: string }[];
+  use?: PromptFrontmatter['use'];
+  input?: {
+    schema?: unknown;
+    jsonSchema?: unknown;
+    default?: unknown;
+  };
+  output?: {
+    format?: string;
+    jsonSchema?: unknown;
+    schema?: unknown;
+  };
+}): string {
+  const frontmatter: PromptFrontmatter = {
+    model: request.model.replace('/model/', ''),
+    config: request.config,
+    tools: request.tools?.map((toolDefinition) => toolDefinition.name),
+    use: request.use,
+    input: toFrontmatterInput(request.input),
+    output: toFrontmatterOutput(request.output),
+  };
+  return renderPromptFile(frontmatter, request.messages);
+}
+
+export function renderPromptFile(
   frontmatter: PromptFrontmatter,
   messages: MessageData[]
 ): string {

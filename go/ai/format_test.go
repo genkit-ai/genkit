@@ -283,6 +283,37 @@ func TestJSONFormatter(t *testing.T) {
 			t.Error("ParseMessage() should fail for invalid JSON")
 		}
 	})
+
+	t.Run("ParseMessage fails on empty text rather than emptying content", func(t *testing.T) {
+		handler, _ := jsonFormatter{}.Handler(nil)
+
+		msg := &Message{
+			Role:    RoleModel,
+			Content: []*Part{NewTextPart("")},
+		}
+
+		got, err := handler.ParseMessage(msg)
+		if err == nil {
+			t.Fatalf("ParseMessage() should fail for content with no text, got %+v", got)
+		}
+	})
+
+	t.Run("ParseMessage keeps non-text parts when there is no text", func(t *testing.T) {
+		handler, _ := jsonFormatter{}.Handler(nil)
+
+		msg := &Message{
+			Role:    RoleModel,
+			Content: []*Part{NewMediaPart("image/png", "data:image/png;base64,abc")},
+		}
+
+		got, err := handler.ParseMessage(msg)
+		if err != nil {
+			t.Fatalf("ParseMessage() error = %v", err)
+		}
+		if len(got.Content) != 1 || !got.Content[0].IsMedia() {
+			t.Errorf("ParseMessage() should preserve the media part, got %+v", got.Content)
+		}
+	})
 }
 
 func TestJSONLFormatter(t *testing.T) {
@@ -374,6 +405,58 @@ func TestJSONLFormatter(t *testing.T) {
 		items2, ok := got2.([]any)
 		if !ok || len(items2) != 1 {
 			t.Fatalf("second ParseChunk() should return 1 new item (partial), got %v", got2)
+		}
+	})
+
+	t.Run("ParseChunk does not re-emit an object whose newline arrives late", func(t *testing.T) {
+		handler, _ := jsonlFormatter{}.Handler(schema)
+		sfh := handler.(StreamingFormatHandler)
+
+		// The object completes before its terminating newline, which is the
+		// common case when a model streams one token at a time.
+		got1, _ := sfh.ParseChunk(&ModelResponseChunk{
+			Content: []*Part{NewTextPart(`{"id": 1}`)},
+			Index:   0,
+		})
+		if items, ok := got1.([]any); !ok || len(items) != 1 {
+			t.Fatalf("first ParseChunk() should return 1 item, got %v", got1)
+		}
+
+		got2, _ := sfh.ParseChunk(&ModelResponseChunk{
+			Content: []*Part{NewTextPart("\n" + `{"id": 2}`)},
+			Index:   0,
+		})
+		items2, ok := got2.([]any)
+		if !ok {
+			t.Fatalf("second ParseChunk() returned %T, want []any", got2)
+		}
+		if len(items2) != 1 {
+			t.Fatalf("second ParseChunk() should return only the new item, got %v", items2)
+		}
+		if id := items2[0].(map[string]any)["id"]; id != float64(2) {
+			t.Errorf("second ParseChunk() id = %v, want 2", id)
+		}
+	})
+
+	t.Run("ParseChunk still re-parses a genuinely partial trailing line", func(t *testing.T) {
+		handler, _ := jsonlFormatter{}.Handler(schema)
+		sfh := handler.(StreamingFormatHandler)
+
+		sfh.ParseChunk(&ModelResponseChunk{
+			Content: []*Part{NewTextPart(`{"id": 1}` + "\n" + `{"id":`)},
+			Index:   0,
+		})
+
+		got, _ := sfh.ParseChunk(&ModelResponseChunk{
+			Content: []*Part{NewTextPart(" 2}")},
+			Index:   0,
+		})
+		items, ok := got.([]any)
+		if !ok || len(items) != 1 {
+			t.Fatalf("ParseChunk() should complete the partial line into 1 item, got %v", got)
+		}
+		if id := items[0].(map[string]any)["id"]; id != float64(2) {
+			t.Errorf("ParseChunk() id = %v, want 2", id)
 		}
 	})
 }
@@ -690,6 +773,71 @@ func TestResolveFormat(t *testing.T) {
 	})
 }
 
+type bananaFormatter struct{}
+
+func (bananaFormatter) Name() string { return "banana" }
+
+func (bananaFormatter) Handler(schema map[string]any) (FormatHandler, error) {
+	return bananaHandler{}, nil
+}
+
+type bananaHandler struct{}
+
+func (bananaHandler) ParseMessage(m *Message) (*Message, error) { return m, nil }
+
+func (bananaHandler) Instructions() string { return "Respond with bananas." }
+
+func (bananaHandler) Config() ModelOutputConfig {
+	return ModelOutputConfig{Format: "banana", ContentType: "text/banana"}
+}
+
+func TestDefineFormatsCustom(t *testing.T) {
+	DefineFormats(r, bananaFormatter{})
+
+	t.Run("resolves a custom format by its name", func(t *testing.T) {
+		formatter, err := resolveFormat(r, nil, "banana")
+		if err != nil {
+			t.Fatalf("resolveFormat() error = %v", err)
+		}
+		if formatter.Name() != "banana" {
+			t.Errorf("resolveFormat() = %q, want %q", formatter.Name(), "banana")
+		}
+	})
+
+	t.Run("generates with a custom format", func(t *testing.T) {
+		res, err := Generate(context.Background(), r,
+			WithModel(echoModel),
+			WithPrompt("generate bananas"),
+			WithOutputFormat("banana"),
+		)
+		if err != nil {
+			t.Fatalf("Generate() error = %v", err)
+		}
+
+		if res.Request.Output.Format != "banana" {
+			t.Errorf("output format = %q, want %q", res.Request.Output.Format, "banana")
+		}
+		if res.Request.Output.ContentType != "text/banana" {
+			t.Errorf("output content type = %q, want %q", res.Request.Output.ContentType, "text/banana")
+		}
+
+		var foundInstructions bool
+		for _, msg := range res.Request.Messages {
+			for _, part := range msg.Content {
+				if part.Metadata != nil && part.Metadata["purpose"] == "output" {
+					foundInstructions = true
+					if part.Text != "Respond with bananas." {
+						t.Errorf("instructions = %q, want %q", part.Text, "Respond with bananas.")
+					}
+				}
+			}
+		}
+		if !foundInstructions {
+			t.Error("custom format instructions should be injected into the prompt")
+		}
+	})
+}
+
 func TestInjectInstructions(t *testing.T) {
 	t.Run("empty instructions returns unchanged messages", func(t *testing.T) {
 		msgs := []*Message{{Role: RoleUser, Content: []*Part{NewTextPart("hello")}}}
@@ -747,6 +895,40 @@ func TestInjectInstructions(t *testing.T) {
 
 		if len(result[0].Content) != 2 {
 			t.Errorf("should not add additional output part when one exists")
+		}
+	})
+
+	t.Run("does not mutate the caller's messages", func(t *testing.T) {
+		original := &Message{Role: RoleUser, Content: []*Part{NewTextPart("user message")}}
+		msgs := []*Message{original}
+
+		result := injectInstructions(msgs, "output instructions")
+
+		if len(original.Content) != 1 {
+			t.Errorf("caller's message gained %d parts, want 0", len(original.Content)-1)
+		}
+		if msgs[0] != original {
+			t.Error("caller's slice was reassigned in place")
+		}
+		if result[0] == original {
+			t.Error("result should hold a copy of the target message, not the original")
+		}
+		if len(result[0].Content) != 2 {
+			t.Fatalf("result message should have 2 parts, got %d", len(result[0].Content))
+		}
+	})
+
+	t.Run("does not mutate a caller's shared content backing array", func(t *testing.T) {
+		// Content with spare capacity: an in-place append would write into the
+		// array the caller's other slice still points at.
+		content := make([]*Part, 1, 4)
+		content[0] = NewTextPart("user message")
+		msgs := []*Message{{Role: RoleUser, Content: content}}
+
+		injectInstructions(msgs, "output instructions")
+
+		if got := content[:2][1]; got != nil {
+			t.Errorf("injected into the caller's backing array: %+v", got)
 		}
 	})
 }

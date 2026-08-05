@@ -52,7 +52,11 @@ import {
 import { resolveCatalog } from './loader.js';
 import { A2uiStreamParser, type ParseResult } from './parser.js';
 import { a2uiPart, isA2uiPart } from './part.js';
-import { A2UI_VERSION, type A2uiClientAction } from './types.js';
+import {
+  A2UI_VERSION,
+  SUPPORTED_VERSIONS,
+  type A2uiEnvelope,
+} from './types.js';
 
 /** Zod schema for the {@link a2ui} middleware configuration. */
 export const A2uiOptionsSchema = z.object({
@@ -75,6 +79,15 @@ export const A2uiOptionsSchema = z.object({
    * warning and drops the offending block/envelope, keeping the rest of the
    * turn alive; `'strict'` throws on malformed JSON or unknown components (best
    * for development); `'off'` passes them through unchecked.
+   *
+   * IMPORTANT: this validates envelope structure and component *type names*
+   * against the catalog only. It does NOT validate component props or
+   * data-model values. Model-controlled values such as `Image.url` and `Text`
+   * (inline Markdown, which the renderer may turn into HTML) pass through
+   * untouched even under `'strict'`. `'strict'` is a well-formedness check, not
+   * a security boundary — see the "Security / trust boundary" section of the
+   * README. Prop sanitization is the renderer/catalog's responsibility, and
+   * hosts should CSP-restrict image and other remote sources.
    */
   validate: z.enum(['strict', 'warn', 'off']).optional(),
 
@@ -84,8 +97,14 @@ export const A2uiOptionsSchema = z.object({
    */
   surfaceId: z.string().optional(),
 
-  /** Protocol version stamped on emitted envelopes. Defaults to `'v0.9'`. */
-  version: z.string().optional(),
+  /**
+   * Protocol version stamped on emitted envelopes. Defaults to `'v0.9'`.
+   * Constrained to the versions the renderer understands so a typo can't emit
+   * envelopes that fail at runtime.
+   */
+  version: z
+    .enum(SUPPORTED_VERSIONS as unknown as [string, ...string[]])
+    .optional(),
 });
 
 /** Configuration for the {@link a2ui} middleware. */
@@ -237,9 +256,21 @@ export const a2ui: GenerateMiddleware<typeof A2uiOptionsSchema> =
               }
             : ctx;
 
-          // 3) Run downstream model, then transform the final message. The
-          //    final parse replays the same surface ids the stream minted.
+          // 3) Run downstream model, then flush the stream parser so the last
+          //    withheld prose tail (the parser holds back up to a partial
+          //    opening fence) and any unterminated trailing block still reach
+          //    the streaming consumer. Without this, clients that render purely
+          //    from stream deltas would show truncated prose / miss a final
+          //    block (the aggregated message recovers it, but the stream would
+          //    not).
           const response = await next(request, wrappedCtx);
+          if (originalOnChunk) {
+            const tail = partsFromParse(streamParser.flush());
+            if (tail.length > 0) originalOnChunk({ content: tail });
+          }
+
+          // 4) Transform the final message. The final parse replays the same
+          //    surface ids the stream minted.
           surfaceIds.reset();
           return transformResponse(response, {
             catalog,
@@ -355,31 +386,25 @@ function sanitizeInboundA2ui(req: GenerateRequest): GenerateRequest {
   return changed ? { ...req, messages } : req;
 }
 
-/** The shapes {@link summarizeA2uiPart} narrows inbound envelope values into. */
-interface SummarizableEnvelope {
-  action?: A2uiClientAction;
-  createSurface?: { surfaceId: string };
-  updateComponents?: unknown;
-  updateDataModel?: unknown;
-  deleteSurface?: unknown;
-}
-
 /** Summarizes an array of a2ui envelopes / actions into a short text string. */
-function summarizeA2uiPart(envelopes: unknown[]): string {
+function summarizeA2uiPart(envelopes: A2uiEnvelope[]): string {
   const lines: string[] = [];
   for (const env of envelopes) {
     if (!env || typeof env !== 'object') continue;
-    const e = env as SummarizableEnvelope;
-    if (e.action) {
-      const a = e.action;
+    if ('action' in env && env.action) {
+      const a = env.action;
       const ctx =
         a.context && Object.keys(a.context).length
           ? ` context=${JSON.stringify(a.context)}`
           : '';
       lines.push(`[UI action "${a.name}" on surface ${a.surfaceId}${ctx}]`);
-    } else if (e.createSurface) {
-      lines.push(`[UI surface ${e.createSurface.surfaceId} created]`);
-    } else if (e.updateComponents || e.updateDataModel || e.deleteSurface) {
+    } else if ('createSurface' in env && env.createSurface) {
+      lines.push(`[UI surface ${env.createSurface.surfaceId} created]`);
+    } else if (
+      ('updateComponents' in env && env.updateComponents) ||
+      ('updateDataModel' in env && env.updateDataModel) ||
+      ('deleteSurface' in env && env.deleteSurface)
+    ) {
       // Prior assistant surface content — summarize as a rendered surface.
       lines.push('[rendered UI surface]');
     }

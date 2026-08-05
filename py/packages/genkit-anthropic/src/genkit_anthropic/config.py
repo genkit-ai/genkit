@@ -165,7 +165,10 @@ def _anthropic_config_schema_extra(schema: JsonDict) -> None:
                     'type': 'array',
                     'items': {'type': 'string'},
                     'title': 'Betas',
-                    'description': 'Anthropic beta feature headers to enable for this request.',
+                    'description': (
+                        'Anthropic beta feature headers to enable for this request. '
+                        'An empty list suppresses the defaults.'
+                    ),
                 },
             },
         )
@@ -313,7 +316,7 @@ class AnthropicConfig(ModelConfig):
     )
     betas: list[str] | None = Field(
         default=None,
-        description='Anthropic beta feature headers to enable for this request.',
+        description='Anthropic beta feature headers to enable for this request. An empty list suppresses the defaults.',
     )
 
     def beta_only_fields(self) -> set[str]:

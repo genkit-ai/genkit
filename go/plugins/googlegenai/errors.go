@@ -19,16 +19,17 @@ package googlegenai
 import (
 	"errors"
 
-	"github.com/firebase/genkit/go/core"
 	"google.golang.org/genai"
+
+	"github.com/firebase/genkit/go/core/status"
 )
 
-// wrapAPIError wraps a [genai.APIError] in a [core.GenkitError] whose status
+// wrapAPIError wraps a [genai.APIError] in a [status.Error] whose status
 // matches the one the server reported so status-aware middleware (retry,
 // fallback, ...) can reason about it. Non-APIError values pass through.
 //
 // The SDK's Status string is a canonical Google / gRPC status name and so
-// matches the string value of each [core.StatusName] constant directly.
+// matches the string value of each [status.Name] constant directly.
 // When Status is missing or unrecognised the HTTP Code is the fallback.
 func wrapAPIError(err error) error {
 	if err == nil {
@@ -38,13 +39,12 @@ func wrapAPIError(err error) error {
 	if !errors.As(err, &apiErr) {
 		return err
 	}
-	return core.NewError(statusForAPIError(apiErr), "%s", err)
+	return status.Errorf(status.Base(statusForAPIError(apiErr)), "%w", err)
 }
 
-func statusForAPIError(e genai.APIError) core.StatusName {
-	s := core.StatusName(e.Status)
-	if _, ok := core.StatusNameToCode[s]; ok {
-		return s
+func statusForAPIError(e genai.APIError) status.Name {
+	if n := status.Name(e.Status); n.IsValid() {
+		return n
 	}
-	return core.StatusFromHTTPCode(e.Code)
+	return status.FromHTTPCode(e.Code)
 }

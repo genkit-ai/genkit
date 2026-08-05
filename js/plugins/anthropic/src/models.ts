@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-import { APIError } from '@anthropic-ai/sdk';
+import Anthropic, { APIError } from '@anthropic-ai/sdk';
 import type {
   GenerateRequest,
   GenerateResponseData,
@@ -36,6 +36,7 @@ import type { ModelInfo } from 'genkit/model';
 import { BetaRunner, Runner } from './runner/index.js';
 import {
   AnthropicConfigSchema,
+  calculateApiKey,
   resolveBetaEnabled,
   type AnthropicConfigSchemaType,
   type ClaudeModelParams,
@@ -120,11 +121,10 @@ export type KnownClaudeModels = keyof typeof KNOWN_MODELS;
 export type ClaudeModelName = `claude-${string}`;
 
 export function listKnownModels(
-  client: any,
-  defaultApiVersion?: 'stable' | 'beta'
+  params: Omit<ClaudeModelParams, 'name'>
 ): ModelAction<ConfigSchemaType>[] {
   return Object.keys(KNOWN_MODELS).map((name: string) =>
-    claudeModel({ name, client, defaultApiVersion })
+    claudeModel({ ...params, name })
   );
 }
 
@@ -138,14 +138,7 @@ export function claudeRunner<TConfigSchema extends z.ZodTypeAny>(
   params: ClaudeRunnerParams,
   configSchema: TConfigSchema
 ) {
-  const { defaultApiVersion, ...runnerParams } = params;
-
-  if (!runnerParams.client) {
-    throw new Error('Anthropic client is required to create a runner');
-  }
-
-  let stableRunner: Runner | null = null;
-  let betaRunner: BetaRunner | null = null;
+  const { defaultApiVersion, pluginApiKey, testClient, name } = params;
 
   return async (
     request: GenerateRequest<TConfigSchema>,
@@ -163,13 +156,27 @@ export function claudeRunner<TConfigSchema extends z.ZodTypeAny>(
     const normalizedRequest = request as unknown as GenerateRequest<
       typeof AnthropicConfigSchema
     >;
+
+    // Determine the client to use
+    // Test client takes precedence, otherwise calculate API key at request time
+    const client = testClient
+      ? testClient
+      : new Anthropic({
+          apiKey: calculateApiKey(
+            pluginApiKey,
+            normalizedRequest.config?.apiKey
+          ),
+        });
+
     const isBeta = resolveBetaEnabled(
       normalizedRequest.config,
       defaultApiVersion
     );
+
+    // Create runner with the client
     const runner = isBeta
-      ? (betaRunner ??= new BetaRunner(runnerParams))
-      : (stableRunner ??= new Runner(runnerParams));
+      ? new BetaRunner({ name, client })
+      : new Runner({ name, client });
     try {
       return await runner.run(normalizedRequest, {
         streamingRequested,
@@ -242,14 +249,19 @@ export function claudeModelReference(
 }
 
 /**
- * Defines a Claude model with the given name and Anthropic client.
+ * Defines a Claude model with the given name and API key configuration.
  * Accepts any model name and lets the API validate it. If the model is in KNOWN_CLAUDE_MODELS, uses that modelRef
  * for better defaults; otherwise creates a generic model reference.
  */
 export function claudeModel(
   params: ClaudeModelParams
 ): ModelAction<ConfigSchemaType> {
-  const { name, client: runnerClient, defaultApiVersion: apiVersion } = params;
+  const {
+    name,
+    pluginApiKey,
+    defaultApiVersion: apiVersion,
+    testClient,
+  } = params;
 
   const ref = claudeModelReference(name);
 
@@ -262,8 +274,9 @@ export function claudeModel(
     claudeRunner(
       {
         name,
-        client: runnerClient,
+        pluginApiKey,
         defaultApiVersion: apiVersion,
+        testClient,
       },
       ref.configSchema!
     )

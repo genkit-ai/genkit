@@ -37,6 +37,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/tool"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
@@ -88,6 +89,16 @@ func defineBankerAgent(g *genkit.Genkit) *aix.Agent[any] {
 	genkitx.DefineInterruptibleTool(g, "transferMoney",
 		"Transfers money to another account. Use when the user wants to send money.",
 		func(ctx context.Context, input TransferInput, confirm *Confirmation) (*TransferOutput, error) {
+			if input.Amount <= 0 {
+				// A tool error fails the turn. Classify it anyway: the
+				// runtime wraps it as ai.ErrToolFailed with the cause
+				// preserved, so server-side code can still branch with
+				// errors.Is(err, status.ErrInvalidArgument) instead of
+				// matching message text.
+				return nil, status.Errorf(status.ErrInvalidArgument,
+					"transfer amount must be positive, got $%.2f", input.Amount)
+			}
+
 			if confirm != nil {
 				if !confirm.Approved {
 					return &TransferOutput{Status: "cancelled", Message: "Transfer cancelled by user.", NewBalance: accountBalance}, nil

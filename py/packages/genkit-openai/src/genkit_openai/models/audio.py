@@ -21,36 +21,6 @@ capabilities via the OpenAI Audio API.
 
 Supported TTS models: tts-1, tts-1-hd, gpt-4o-mini-tts
 Supported STT models: gpt-4o-transcribe, gpt-4o-mini-transcribe, whisper-1
-
-Data Flow (TTS)::
-
-    ┌─────────────────────────────────────────────────────────────────────┐
-    │  ModelRequest (text input)                                       │
-    │         │                                                           │
-    │         ▼                                                           │
-    │  to_tts_params()  ──►  SpeechCreateParams                           │
-    │         │                                                           │
-    │         ▼                                                           │
-    │  client.audio.speech.create()                                       │
-    │         │                                                           │
-    │         ▼                                                           │
-    │  to_tts_response()  ──►  ModelResponse (audio media part)        │
-    └─────────────────────────────────────────────────────────────────────┘
-
-Data Flow (STT)::
-
-    ┌─────────────────────────────────────────────────────────────────────┐
-    │  ModelRequest (audio media input)                                │
-    │         │                                                           │
-    │         ▼                                                           │
-    │  to_stt_params()  ──►  TranscriptionCreateParams                    │
-    │         │                                                           │
-    │         ▼                                                           │
-    │  client.audio.transcriptions.create()                               │
-    │         │                                                           │
-    │         ▼                                                           │
-    │  to_stt_response()  ──►  ModelResponse (text part)               │
-    └─────────────────────────────────────────────────────────────────────┘
 """
 
 from __future__ import annotations

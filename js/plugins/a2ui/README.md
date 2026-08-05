@@ -224,6 +224,34 @@ to do this; without both, the action arrives with an empty `context`.
 
 See `js/testapps/a2ui` for a complete runnable sample.
 
+## Security / trust boundary
+
+Generative UI moves model output into the DOM, so treat every surface an agent
+emits as **untrusted input**. The `a2ui()` middleware's `validate` option
+(including `'strict'`) checks envelope structure and component *type names*
+against the catalog only. It does **not** validate component props or data-model
+values: model-controlled values such as `Image.url` and `Text` (inline Markdown,
+which a renderer may turn into HTML) pass through untouched. `'strict'` is a
+well-formedness check, not a security boundary.
+
+A prompt-injected or simply mistaken model can therefore emit an arbitrary
+remote image URL, or Markdown a renderer turns into HTML. To keep that safe:
+
+- **The renderer/catalog owns prop sanitization.** Whatever renders a surface
+  (e.g. `@a2ui/lit` plus your Markdown renderer) is responsible for escaping and
+  sanitizing prop values before they reach the DOM. If you ship a custom
+  catalog, its renderer must sanitize its own components' props.
+- **Restrict remote sources at the host.** Serve the app with a Content Security
+  Policy that limits `img-src` (and other fetch directives) to origins you
+  trust, so a model-supplied image or link URL cannot exfiltrate data or load
+  unexpected content.
+- **Do not put secrets in the data model.** Anything bound into a surface's data
+  model can be echoed back through an action's `context`.
+
+If you need server-side control over props (e.g. allow-listing image hosts),
+add your own model middleware after `a2ui()` to inspect and rewrite the emitted
+a2ui parts.
+
 ## License
 
 Apache-2.0

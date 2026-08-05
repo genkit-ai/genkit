@@ -254,6 +254,76 @@ describe('A2uiStreamParser', () => {
     assert.strictEqual(createCount, 1);
   });
 
+  it('does not synthesize a createSurface for an incremental update to an explicit existing surface', () => {
+    // A block whose only envelope targets a real, pre-existing surface id (one
+    // the model learned from a prior turn) is a genuine incremental update: the
+    // parser must NOT prepend a createSurface (which would reset the surface and
+    // make the client drop the update as "surface not found").
+    const parser = new A2uiStreamParser({
+      catalog: basicCatalog,
+      surfaceId: fixedId,
+    });
+    const incremental = `\`\`\`a2ui
+[{ "updateComponents": { "surfaceId": "existing-surface", "components": [
+  { "id": "root", "component": "Text", "text": "patched" }
+] } }]
+\`\`\`
+`;
+    const { batches } = collect(parser, [incremental]);
+    assert.strictEqual(batches.length, 1);
+    assert.strictEqual(batches[0].length, 1, 'expected no synthesized create');
+    const update = batches[0][0] as any;
+    assert.ok(update.updateComponents, 'expected the update to pass through');
+    assert.strictEqual(update.updateComponents.surfaceId, 'existing-surface');
+  });
+
+  it('allows a rootless incremental update to an explicit existing surface (no root required)', () => {
+    // The "must contain root" rule is a full-render protocol rule, not a catalog
+    // check. An incremental patch of an existing surface may omit root.
+    const parser = new A2uiStreamParser({
+      catalog: basicCatalog,
+      surfaceId: fixedId,
+      validate: 'strict',
+    });
+    const incremental = `\`\`\`a2ui
+[{ "updateComponents": { "surfaceId": "existing-surface", "components": [
+  { "id": "subtitle", "component": "Text", "text": "patched" }
+] } }]
+\`\`\`
+`;
+    const { batches } = collect(parser, [incremental]);
+    assert.strictEqual(batches.length, 1);
+    assert.strictEqual(batches[0].length, 1);
+    assert.ok((batches[0][0] as any).updateComponents);
+  });
+
+  it('does not treat a code fence inside a Text markdown value as the closing fence', () => {
+    // Text "may use inline Markdown", so a Text value can legitimately contain a
+    // ``` fence. The closing-fence match must be anchored to line start so this
+    // does not truncate the JSON block.
+    const parser = new A2uiStreamParser({
+      catalog: basicCatalog,
+      surfaceId: fixedId,
+    });
+    const withFenceInText = [
+      '```a2ui\n',
+      '[\n',
+      '  { "createSurface": { "surfaceId": "SURFACE_ID", "catalogId": "' +
+        basicCatalog.id +
+        '" } },\n',
+      '  { "updateComponents": { "surfaceId": "SURFACE_ID", "components": [\n',
+      '    { "id": "root", "component": "Text", "text": "Run ```npm test``` to check." }\n',
+      '  ] } }\n',
+      ']\n',
+      '```\n',
+    ].join('');
+    const { batches } = collect(parser, [withFenceInText]);
+    assert.strictEqual(batches.length, 1, 'block should not be truncated');
+    assert.strictEqual(batches[0].length, 2);
+    const update = batches[0][1] as any;
+    assert.match(update.updateComponents.components[0].text, /npm test/);
+  });
+
   it('handles two separate blocks in one turn', () => {
     const parser = new A2uiStreamParser({
       catalog: basicCatalog,

@@ -188,8 +188,8 @@ func ExampleDefinePrompt() {
 	// Output: Say hello to Alice in a friendly way.
 }
 
-// This example demonstrates registering a Go type as a named schema.
-func ExampleDefineSchemaFor() {
+// This example demonstrates registering Go types as named schemas.
+func ExampleDefineSchemasFor() {
 	ctx := context.Background()
 	g := genkit.Init(ctx)
 
@@ -201,7 +201,7 @@ func ExampleDefineSchemaFor() {
 
 	// Register the schema - this makes it available for .prompt files
 	// that reference it by name (e.g., "output: { schema: Person }")
-	genkit.DefineSchemaFor[Person](g)
+	genkit.DefineSchemasFor(g, Person{})
 
 	fmt.Println("Schema registered: Person")
 	// Output: Schema registered: Person

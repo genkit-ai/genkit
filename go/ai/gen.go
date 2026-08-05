@@ -94,7 +94,7 @@ type GenerateActionOptions struct {
 	MaxTurns int `json:"maxTurns,omitempty"`
 	// Messages contains the conversation history for multi-turn prompting when supported.
 	Messages []*Message `json:"messages,omitempty"`
-	// Model is a model name (e.g., "vertexai/gemini-1.0-pro").
+	// Model is a model name (e.g., "vertexai/gemini-flash-latest").
 	Model string `json:"model,omitempty"`
 	// Output specifies the desired output format. Defaults to the model's default if unspecified.
 	Output    *GenerateActionOutputConfig `json:"output,omitempty"`
@@ -165,7 +165,7 @@ type GenerationCommonConfig struct {
 	// TopP (nucleus sampling) limits sampling to tokens whose cumulative probability exceeds P.
 	TopP float64 `json:"topP,omitempty"`
 	// Version specifies a particular version of a model family,
-	// e.g., "gemini-1.0-pro-001" for the "gemini-1.0-pro" family.
+	// e.g., "gemini-3.5-flash-001" for the "gemini-3.5-flash" family.
 	Version string `json:"version,omitempty"`
 }
 

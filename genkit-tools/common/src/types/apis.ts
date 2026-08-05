@@ -178,6 +178,25 @@ export const CreatePromptRequestSchema = z.object({
   config: GenerationCommonConfigSchema.passthrough().optional(),
   tools: z.array(ToolDefinitionSchema).optional(),
   use: z.array(MiddlewareRefSchema).optional(),
+  input: z
+    .object({
+      schema: z.unknown().optional(),
+      jsonSchema: z.unknown().optional(),
+      default: z.any().optional(),
+    })
+    .passthrough()
+    .optional(),
+  output: z
+    .object({
+      format: z.string().optional(),
+      // Resolved JSON Schema lives under jsonSchema for a generate action; a
+      // model request carries it under schema. Either is accepted.
+      jsonSchema: z.unknown().optional(),
+      schema: z.unknown().optional(),
+      contentType: z.string().optional(),
+    })
+    .passthrough()
+    .optional(),
 });
 
 export type CreatePromptRequest = z.infer<typeof CreatePromptRequestSchema>;
@@ -187,6 +206,14 @@ export const PageViewSchema = z.object({
 });
 
 export type PageView = z.infer<typeof PageViewSchema>;
+
+export const SelectContentSchema = z.object({
+  contentType: z.string().describe('Type of content selected.'),
+  contentId: z.string().describe('ID of the selected content.'),
+  pageTitle: z.string().describe('Page where content selection occurred.'),
+});
+
+export type SelectContent = z.infer<typeof SelectContentSchema>;
 
 // TODO: Add return types if deemed necessary.
 

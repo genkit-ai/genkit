@@ -168,7 +168,7 @@ type ChatInput struct {
 }
 
 // Register the schema so the .prompt file can reference it by name.
-genkit.DefineSchemaFor[ChatInput](g)
+genkit.DefineSchemasFor(g, ChatInput{})
 
 // Agent "chat" renders ./prompts/chat.prompt every turn (no source option needed).
 chatAgent := genkitx.DefinePromptAgent(g, "chat",
@@ -658,7 +658,7 @@ response, _ := genkit.Generate(ctx, g,
     ai.WithUse(
         &middleware.Retry{MaxRetries: 3},
         &middleware.Fallback{Models: []ai.ModelRef{
-            googlegenai.ModelRef("googleai/gemini-2.5-flash", nil),
+            googlegenai.ModelRef("googleai/gemini-3.5-flash", nil),
         }},
     ),
 )
@@ -858,8 +858,7 @@ Dietary restrictions: {{#each dietaryRestrictions}}{{this}}{{#unless @last}}, {{
 
 ```go
 // Register schemas so .prompt files can reference them by name
-genkit.DefineSchemaFor[RecipeRequest](g)
-genkit.DefineSchemaFor[Recipe](g)
+genkit.DefineSchemasFor(g, RecipeRequest{}, Recipe{})
 
 // Look up and execute the prompt
 recipePrompt := genkit.LookupDataPrompt[RecipeRequest, *Recipe](g, "recipe")
@@ -964,6 +963,54 @@ e.Start(":8080")
 ```
 
 Any error returned by `genkit.HandlerFunc` will be handled by Echo's middleware stack.
+
+### Error Handling
+
+The framework classifies its own failures with sentinels, so you can tell what went wrong with `errors.Is` instead of matching message text. Each sentinel also matches the base it derives from, so you can branch at whichever granularity you need:
+
+```go
+import (
+    "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/core/status"
+)
+
+_, err := genkit.GenerateText(ctx, g,
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("Summarize this."),
+)
+switch {
+case errors.Is(err, ai.ErrModelNotFound):
+    // The plugin providing this model isn't registered in genkit.Init.
+case errors.Is(err, ai.ErrMaxTurnsExceeded):
+    // The tool loop hit its limit; raise it with ai.WithMaxTurns.
+case errors.Is(err, ai.ErrToolFailed):
+    // A tool returned an error. It's wrapped, so errors.As reaches yours.
+case errors.Is(err, status.ErrResourceExhausted):
+    // Rate limited or out of quota: back off and retry.
+}
+```
+
+Models, tools, prompts, and provider APIs all report failures this way, so recovery logic reads as a switch rather than a string match.
+
+Your own failures work the same way. Derive a subtype to keep a parent's status, and use `PublicErrorf` when the message is safe to return to a client:
+
+```go
+// Keeps NOT_FOUND (so HTTP 404), and matches both ErrRecipeNotFound
+// and status.ErrNotFound.
+var ErrRecipeNotFound = status.ErrNotFound.Subtype("recipe not found")
+
+genkit.DefineFlow(g, "recipeFlow", func(ctx context.Context, dish string) (string, error) {
+    recipe, ok := cookbook[dish]
+    if !ok {
+        return "", status.PublicErrorf(ErrRecipeNotFound, "no recipe for %q", dish)
+    }
+    return recipe, nil
+})
+```
+
+Wrapping with `fmt.Errorf` and `%w` preserves the classification, so context added up the stack costs you nothing. Served over HTTP, the status picks the response code and only `PublicErrorf` messages reach the client: everything else is redacted and logged server-side, so provider text and internal identifiers stay out of responses. Set `GENKIT_ENV=dev` to see them unredacted while developing.
+
+[See full example](samples/basic-errors)
 
 ### Durable Streaming
 

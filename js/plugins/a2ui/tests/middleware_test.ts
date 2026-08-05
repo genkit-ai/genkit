@@ -22,7 +22,11 @@ import {
   basicCatalog,
   type A2uiCatalog,
 } from '../src/catalog.js';
-import { a2ui, type A2uiOptions } from '../src/middleware.js';
+import {
+  A2uiOptionsSchema,
+  a2ui,
+  type A2uiOptions,
+} from '../src/middleware.js';
 import { a2uiEnvelopesFromParts, isA2uiPart } from '../src/part.js';
 
 const SAMPLE_TEXT = `Here is the weather:
@@ -322,6 +326,60 @@ describe('a2ui() middleware', () => {
       .map((p: any) => p.text)
       .join('');
     assert.match(text, /oops/);
+  });
+
+  it('flushes the withheld prose tail to the stream at end of turn', async () => {
+    // The parser holds back up to a partial-opening-fence tail on every push,
+    // so without a final flush the last <=8 chars of trailing prose would never
+    // reach the streaming consumer. Stream a short prose turn one char at a time
+    // and assert the streamed deltas reconstruct the full text.
+    const mw = modelHook({});
+    const emitted: any[] = [];
+    const ctx = { onChunk: (c: any) => emitted.push(c) };
+    const full = 'Hello there, friend!';
+    await mw(req('sys'), ctx as any, async (_r: any, wrappedCtx: any) => {
+      for (const ch of full) wrappedCtx.onChunk({ content: [{ text: ch }] });
+      return { message: { role: 'model', content: [{ text: full }] } };
+    });
+    const streamedProse = emitted
+      .flatMap((c) => c.content ?? [])
+      .filter((p: any) => typeof p.text === 'string')
+      .map((p: any) => p.text)
+      .join('');
+    assert.strictEqual(streamedProse, full);
+  });
+
+  it('flushes an unterminated trailing block to the stream at end of turn', async () => {
+    // A block whose closing fence never arrives on the stream should still be
+    // recovered (parsed from what we have) and emitted when the turn ends.
+    const mw = modelHook({ surfaceId: 'sfc' });
+    const emitted: any[] = [];
+    const ctx = { onChunk: (c: any) => emitted.push(c) };
+    const unterminated =
+      '```a2ui\n[{ "updateComponents": { "surfaceId": "SURFACE_ID", ' +
+      '"components": [{ "id": "root", "component": "Text", "text": "hi" }] } }]';
+    await mw(req('sys'), ctx as any, async (_r: any, wrappedCtx: any) => {
+      wrappedCtx.onChunk({ content: [{ text: unterminated }] });
+      return {
+        message: { role: 'model', content: [{ text: unterminated }] },
+      };
+    });
+    const streamedEnvelopes = emitted.flatMap((c) =>
+      a2uiEnvelopesFromParts(c.content)
+    );
+    assert.ok(
+      streamedEnvelopes.some((e: any) => e.updateComponents),
+      'expected the unterminated block to reach the stream after flush'
+    );
+  });
+
+  it('rejects an unsupported protocol version in the config schema', () => {
+    // A typo like 'v0.10' would otherwise be cast to SupportedVersion and emit
+    // envelopes the renderer rejects at runtime; the enum catches it at config
+    // validation time.
+    assert.ok(A2uiOptionsSchema.safeParse({ version: 'v0.9' }).success);
+    assert.ok(A2uiOptionsSchema.safeParse({ version: 'v0.9.1' }).success);
+    assert.ok(!A2uiOptionsSchema.safeParse({ version: 'v0.10' }).success);
   });
 
   it('preserves prose ordering around a block in the final message', async () => {

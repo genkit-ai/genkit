@@ -23,12 +23,14 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/genai"
+
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
-	"google.golang.org/genai"
 )
 
 // defineVeoModels defines a new Veo background model for video generation.
@@ -216,11 +218,11 @@ func toVeoParameters(request *ai.ModelRequest) (*genai.GenerateVideosConfig, err
 		var err error
 		result, err = base.MapToStruct[genai.GenerateVideosConfig](config)
 		if err != nil {
-			return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("The video configuration settings are not in the correct format. Check that the names and values match what the model expects: %v", err), nil)
+			return nil, status.PublicErrorf(status.ErrInvalidArgument, "The video configuration settings are not in the correct format. Check that the names and values match what the model expects: %w", err)
 		}
 		return &result, nil
 	default:
-		return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("The configuration type %T is not supported. Use the correct configuration for this model (like VideoModelRef) or a configuration struct.", request.Config), nil)
+		return nil, status.PublicErrorf(status.ErrInvalidArgument, "The configuration type %T is not supported. Use the correct configuration for this model (like VideoModelRef) or a configuration struct.", request.Config)
 	}
 }
 

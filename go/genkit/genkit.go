@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/firebase/genkit/go/ai"
@@ -962,10 +963,35 @@ func DefineSchema(g *Genkit, name string, schema map[string]any) {
 	core.DefineSchema(g.reg, name, schema)
 }
 
-// DefineSchemaFor defines a named JSON schema derived from a Go type
-// and registers it in the registry.
+// DefineSchemasFor defines named JSON schemas derived from the given values'
+// Go types and registers them, each under its type's name.
 //
-// This is an alternative to [DefineSchema].
+// This is an alternative to [DefineSchema] for schemas that mirror existing Go
+// types. Applications commonly register several schemas up front for `.prompt`
+// files to reference, so it takes one or many in a single call. It panics if a
+// value is a map, nil, or of an unnamed type; use [DefineSchema] to register a
+// raw JSON schema under an explicit name.
+//
+// Example:
+//
+//	type User struct {
+//	    Name string `json:"name"`
+//	    Age int `json:"age"`
+//	}
+//
+//	genkit.DefineSchemasFor(g, User{}, Order{})
+//
+//	genkit.Generate(ctx, g, ai.WithOutputSchemaName("User"), ai.WithPrompt("What is your name?"))
+func DefineSchemasFor(g *Genkit, values ...any) {
+	core.DefineSchemasFor(g.reg, values...)
+}
+
+// DefineSchemaFor defines a named JSON schema derived from a Go type
+// and registers it under that type's name.
+//
+// It is the single-type form of [DefineSchemasFor], for when naming the type is
+// more natural than constructing a value of it. Both register the same schema
+// under the same name; prefer [DefineSchemasFor] when registering several.
 //
 // Example:
 //
@@ -978,7 +1004,8 @@ func DefineSchema(g *Genkit, name string, schema map[string]any) {
 //
 //	genkit.Generate(ctx, g, ai.WithOutputSchemaName("User"), ai.WithPrompt("What is your name?"))
 func DefineSchemaFor[T any](g *Genkit) {
-	core.DefineSchemaFor[T](g.reg)
+	var v T
+	core.DefineSchemasFor(g.reg, v)
 }
 
 // DefineDataPrompt creates a new [ai.DataPrompt] with strongly-typed input and output.
@@ -1157,7 +1184,7 @@ func GenerateStream(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) i
 // Example:
 //
 //	op, err := genkit.GenerateOperation(ctx, g,
-//		ai.WithModelName("googleai/veo-2.0-generate-001"),
+//		ai.WithModelName("googleai/veo-3.1-generate-preview"),
 //		ai.WithPrompt("A banana riding a bicycle."),
 //	)
 //	if err != nil {
@@ -1627,7 +1654,8 @@ func DefineHelper(g *Genkit, name string, fn any) {
 	g.reg.RegisterHelper(name, fn)
 }
 
-// DefineFormat defines a new [ai.Formatter] and registers it in the registry.
+// DefineFormats defines new [ai.Formatter]s and registers them in the registry,
+// each under the name returned by its Name method.
 // Formatters control how model responses are structured and parsed.
 //
 // Formatters can be used with [ai.WithOutputFormat] to inject specific formatting
@@ -1649,21 +1677,55 @@ func DefineHelper(g *Genkit, name string, fn any) {
 //	}
 //
 //	// Register the formatter
-//	genkit.DefineFormat(g, "csv", csvFormatter{})
+//	genkit.DefineFormats(g, csvFormatter{})
 //
 //	// Use the formatter in a generation request
 //	resp, err := genkit.Generate(ctx, g,
 //		ai.WithPrompt("List 3 countries and their capitals"),
 //		ai.WithOutputFormat("csv"), // Use the custom formatter
 //	)
-func DefineFormat(g *Genkit, name string, formatter ai.Formatter) {
-	ai.DefineFormat(g.reg, name, formatter)
+//
+// It panics if a format with the same name is already registered, which
+// includes the built-in names above. Formats cannot be overridden.
+func DefineFormats(g *Genkit, formatters ...ai.Formatter) {
+	ai.DefineFormats(g.reg, formatters...)
 }
 
-// IsDefinedFormat checks if a formatter with the given name is registered in the registry.
-func IsDefinedFormat(g *Genkit, name string) bool {
-	return g.reg.LookupValue("/format/"+name) != nil
+// DefineFormat defines a new [ai.Formatter] and registers it in the registry
+// under the given name, which may optionally carry the "/format/" prefix.
+//
+// It panics if a format with the same name is already registered, including
+// the built-in "text", "json", "jsonl", "array", and "enum" formats.
+//
+// Deprecated: Use [DefineFormats] instead, which takes the name from the
+// Formatter's Name method.
+func DefineFormat(g *Genkit, name string, formatter ai.Formatter) {
+	ai.DefineFormats(g.reg, renamedFormatter{Formatter: formatter, name: formatName(name)})
 }
+
+// IsDefinedFormat checks if a formatter with the given name is registered in
+// the registry. The name may optionally carry the "/format/" prefix, matching
+// what [DefineFormat] accepts.
+func IsDefinedFormat(g *Genkit, name string) bool {
+	return g.reg.LookupValue("/format/"+formatName(name)) != nil
+}
+
+// formatName normalizes a caller-supplied format name to its bare form. Before
+// custom formats resolved correctly, passing an already-prefixed name was the
+// only way to make one work, so both spellings have to keep resolving.
+func formatName(name string) string {
+	return strings.TrimPrefix(name, "/format/")
+}
+
+// renamedFormatter overrides a Formatter's Name so [DefineFormat] can honor an
+// explicit name while still registering through [ai.DefineFormats], which owns
+// the mapping from format name to registry key.
+type renamedFormatter struct {
+	ai.Formatter
+	name string
+}
+
+func (f renamedFormatter) Name() string { return f.name }
 
 // DefineResource defines a resource and registers it with the Genkit instance.
 // Resources provide content that can be referenced in prompts via URI.
