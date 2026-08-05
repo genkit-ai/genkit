@@ -14,11 +14,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Google AI Interactions Lyria audio model action."""
+"""Google AI Interactions Antigravity model action."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
@@ -33,8 +33,8 @@ from genkit_google_genai._interactions.converters import (
     split_system_instruction,
     to_interaction_steps,
 )
-from genkit_google_genai._interactions.options import ClientOptions, ResponseModality
-from genkit_google_genai.models.interactions_registry import lyria_model_info
+from genkit_google_genai._interactions.options import ClientOptions
+from genkit_google_genai.models.interactions_registry import antigravity_model_info
 from genkit_google_genai.models.interactions_utils import (
     calculate_api_key,
     client_overrides_from_config,
@@ -44,11 +44,18 @@ from genkit_google_genai.models.interactions_utils import (
     require_interaction_steps,
 )
 
-CREATE_OPTION_KEYS = ('response_modalities',)
+DEFAULT_ENVIRONMENT: dict[str, str] = {'type': 'remote'}
+
+CREATE_OPTION_KEYS = (
+    'previous_interaction_id',
+    'store',
+    'environment',
+    'response_modalities',
+)
 
 
-class LyriaConfig(BaseModel):
-    """Google AI Interactions Lyria model configuration."""
+class AntigravityConfig(BaseModel):
+    """Antigravity model configuration."""
 
     # Per-request options arrive camelCased (apiKey).
     model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
@@ -58,21 +65,24 @@ class LyriaConfig(BaseModel):
     # Milliseconds — applied to the HTTP call, not the create body.
     timeout: float | None = None
     custom_headers: dict[str, str] | None = None
-    response_modalities: list[ResponseModality] | None = None
+    previous_interaction_id: str | None = None
+    store: bool | None = None
+    environment: str | dict[str, Any] | None = None
+    response_modalities: list[Literal['text', 'image']] | None = None
 
 
-def create_lyria_action(
+def create_antigravity_action(
     name: str,
     *,
     plugin_api_key: str | None,
     client_options: ClientOptions,
-) -> Action[ModelRequest[LyriaConfig], ModelResponse, Never]:
-    """Build a foreground model action for Interactions Lyria."""
+) -> Action[ModelRequest[AntigravityConfig], ModelResponse, Never]:
+    """Build a foreground model action for Antigravity."""
     version = extract_version(name)
-    info = lyria_model_info(version)
+    info = antigravity_model_info(version)
 
-    async def run(request: ModelRequest[LyriaConfig], _: ActionRunContext) -> ModelResponse:
-        config = request.config or LyriaConfig()
+    async def run(request: ModelRequest[AntigravityConfig], _: ActionRunContext) -> ModelResponse:
+        config = request.config or AntigravityConfig()
         api_key = calculate_api_key(plugin_api_key, config.api_key)
         merged_options = client_options.merge(
             client_overrides_from_config(
@@ -82,24 +92,31 @@ def create_lyria_action(
                 custom_headers=config.custom_headers,
             )
         )
-        # Known create fields vs undocumented passthrough (same as JS ...rest).
+
+        # Known create kwargs vs undocumented passthrough — non-mutating split.
         dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
         create_options, passthrough = partition_keys(dumped, CREATE_OPTION_KEYS)
-        modalities = create_options.get('response_modalities') or ['audio', 'text']
+        # Antigravity doesn't take system_instruction; fold system text into the
+        # leading user turn so guidance still reaches the model.
         system_instruction, turns = split_system_instruction(request.messages or [])
         steps = to_interaction_steps(ensure_tool_ids(turns))
+        if system_instruction:
+            steps.insert(
+                0,
+                {
+                    'type': 'user_input',
+                    'content': [{'type': 'text', 'text': system_instruction}],
+                },
+            )
+        require_interaction_steps(steps)
         create_kwargs: dict[str, Any] = {
-            'model': version,
+            'agent': version,
             'input': steps,
-            'response_modalities': modalities,
+            **create_options,
             **passthrough,
         }
-        if system_instruction:
-            create_kwargs['system_instruction'] = system_instruction
-        # Reject empty prompts before the round trip; system_instruction alone
-        # is enough for Lyria, so only require steps when there is no system text.
-        if not system_instruction:
-            require_interaction_steps(steps)
+        # Default missing environment to remote; the API rejects unsupported values.
+        create_kwargs.setdefault('environment', DEFAULT_ENVIRONMENT)
 
         created = await create_interaction(api_key, create_kwargs, merged_options)
         return from_interaction_sync(created)
@@ -111,6 +128,6 @@ def create_lyria_action(
         metadata=model_action_metadata(
             name=name,
             info=info.model_dump(by_alias=True),
-            config_schema=LyriaConfig,
+            config_schema=AntigravityConfig,
         ).metadata,
     )
