@@ -696,9 +696,10 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         if input is None and self._first_arg_optional:
             return input
         payload: object = input
-        # When a BaseModel instance fails (e.g. generate hands ModelRequest with
-        # GenerationCommonConfig into an action typed as ModelRequest[PluginConfig]),
-        # dump to plain data and retry so the action's schema wins.
+        # If input is a BaseModel instance of a different generic type (e.g. caller passes
+        # ModelRequest[dict] to an action typed as ModelRequest[PluginConfig]), Pydantic rejects
+        # direct validation due to class mismatch. Try validating directly first; if it fails,
+        # dump to a plain dict so the action's target schema wins.
         if isinstance(input, BaseModel):
             try:
                 return self._input_type.validate_python(input)
