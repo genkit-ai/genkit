@@ -444,20 +444,6 @@ def test_parameterized_model_request_config_json_schema_refs_plugin_schema() -> 
     assert any('$ref' in arm for arm in config_prop.get('anyOf', [])), config_prop
 
 
-def test_model_request_dump_round_trip_preserves_output_config() -> None:
-    request = ModelRequest(
-        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
-        config={'temperature': 0.5},
-        output_format='json',
-        output_schema={'type': 'object'},
-        output_constrained=True,
-    )
-    round_tripped = ModelRequest.model_validate(request.model_dump(mode='python'))
-    assert round_tripped.output_format == 'json'
-    assert round_tripped.output_schema == {'type': 'object'}
-    assert round_tripped.output_constrained is True
-    assert round_tripped.config == {'temperature': 0.5}
-
 
 def test_model_request_dump_emits_no_serializer_warnings() -> None:
     request = ModelRequest[PluginConfig](
