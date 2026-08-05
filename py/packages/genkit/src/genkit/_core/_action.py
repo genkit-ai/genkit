@@ -465,22 +465,26 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         """
         # Validate input if we have a schema
         if self._input_type is not None:
-            try:
-                input = self._input_type.validate_python(input)
-            except ValidationError as e:
-                if input is None:
-                    raise GenkitError(
-                        message=(
-                            f"Action '{self.name}' requires input but none was provided. "
-                            'Please supply a valid input payload.'
-                        ),
-                        status='INVALID_ARGUMENT',
-                    ) from e
-                raise GenkitError(
-                    message=f"Invalid input for action '{self.name}': {e}",
-                    status='INVALID_ARGUMENT',
-                    cause=e,
-                ) from e
+            payload: object = input
+            # If input is a BaseModel of a different type (e.g. ModelRequest[dict] vs ModelRequest[PluginConfig]),
+            # Pydantic rejects direct class validation. We dump it to a plain dict so Pydantic can re-parse
+            # the raw fields into the action's schema.
+            if isinstance(input, BaseModel):
+                try:
+                    input = self._input_type.validate_python(input)
+                except ValidationError:
+                    payload = input.model_dump(mode='python')
+
+            if payload is not input or not isinstance(input, BaseModel):
+                try:
+                    input = self._input_type.validate_python(payload)
+                except ValidationError as e:
+                    msg = (
+                        f"Action '{self.name}' requires input but none was provided. Please supply a valid input payload."
+                        if input is None
+                        else f"Invalid input for action '{self.name}': {e}"
+                    )
+                    raise GenkitError(message=msg, status='INVALID_ARGUMENT', cause=e) from e
 
         if context:
             _ = _action_context.set(context)

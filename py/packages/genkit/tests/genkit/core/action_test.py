@@ -10,6 +10,8 @@ from typing import cast
 
 import pytest
 
+from pydantic import BaseModel
+
 from genkit._core._action import (
     Action,
     ActionKind,
@@ -21,6 +23,7 @@ from genkit._core._action import (
     parse_plugin_name_from_action_name,
 )
 from genkit._core._error import GenkitError
+from genkit._core._model import ModelRequest
 
 
 def test_action_enum_behaves_like_str() -> None:
@@ -275,3 +278,24 @@ async def test_run_no_input_type_allows_none() -> None:
 
     result = await action.run(input=None)
     assert result.response == 'no input needed'
+
+
+@pytest.mark.asyncio
+async def test_validate_input_reparses_generic_pydantic_mismatch() -> None:
+    """Action input validation dumps and re-parses Pydantic instances when direct class validation fails."""
+
+    class SubConfig(BaseModel):
+        foo: str
+
+    async def fn(request: ModelRequest[SubConfig]) -> str:
+        assert isinstance(request.config, SubConfig)
+        return request.config.foo
+
+    action = Action(name='genericAction', kind=ActionKind.CUSTOM, fn=fn)
+    action._override_input_schema(ModelRequest[SubConfig])  # ty: ignore[invalid-type-form]
+
+    input_req = ModelRequest(messages=[], config={'foo': 'bar'})
+
+    result = await action.run(input=input_req)
+    assert result.response == 'bar'
+
