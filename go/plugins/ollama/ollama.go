@@ -120,19 +120,6 @@ func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.M
 
 	if opts != nil {
 		modelOpts = *opts
-		// When the caller provides opts without Supports, derive capabilities
-		// from the model name and type (same logic as the nil-opts path) rather
-		// than applying blanket defaults, so Media/Tools are not over-granted.
-		if modelOpts.Supports == nil {
-			supportsTools := model.Type == "chat" && slices.Contains(toolSupportedModels, model.Name)
-			modelOpts.Supports = &ai.ModelSupports{
-				Multiturn:   true,
-				SystemRole:  true,
-				Media:       slices.Contains(mediaSupportedModels, model.Name),
-				Tools:       supportsTools,
-				Constrained: ai.ConstrainedSupportNoTools,
-			}
-		}
 	} else {
 		// Check if the model supports tools (must be a chat model and in the supported list)
 		supportsTools := model.Type == "chat" && slices.Contains(toolSupportedModels, model.Name)
@@ -579,27 +566,17 @@ func ollamaFormatValue(output *ai.ModelOutputConfig) any {
 // resolveSchemaRefs returns a copy of schema with $ref pointers inlined from
 // the top-level $defs / definitions map where possible. Ollama's constrained
 // output engine does not resolve JSON Schema references itself, so schemas
-// produced by Go struct reflection (which use $defs + $ref) should be
-// flattened before forwarding. $defs (draft 2019-09+) takes precedence over
-// definitions (draft-07) when both define the same name.
+// supplied through WithOutputSchema or a registered schema can therefore be
+// flattened before forwarding. Schemas inferred from Go types are already
+// emitted without references.
 func resolveSchemaRefs(schema map[string]any) map[string]any {
-	defs := make(map[string]any)
-	// Populate definitions first so that $defs entries overwrite on collision.
-	if d, ok := schema["definitions"].(map[string]any); ok {
-		for k, v := range d {
-			defs[k] = v
-		}
-	}
-	if d, ok := schema["$defs"].(map[string]any); ok {
-		for k, v := range d {
-			defs[k] = v
-		}
-	}
-	if len(defs) == 0 {
+	defs, _ := schema["$defs"].(map[string]any)
+	definitions, _ := schema["definitions"].(map[string]any)
+	if len(defs) == 0 && len(definitions) == 0 {
 		return schema
 	}
 	visited := make(map[string]bool)
-	result, _ := inlineSchemaRefs(schema, defs, visited).(map[string]any)
+	result, _ := inlineSchemaRefs(schema, defs, definitions, visited).(map[string]any)
 	if result == nil {
 		return schema
 	}
@@ -616,26 +593,26 @@ func resolveSchemaRefs(schema map[string]any) map[string]any {
 }
 
 // inlineSchemaRefs recursively replaces $ref nodes with the definition they
-// reference. Sibling keywords alongside a $ref are merged into the resolved
-// definition (JSON Schema draft 2019-09+ semantics). Non-map $defs entries
-// (e.g. boolean schemas), unknown $refs, and cycles are left in place.
-// visited tracks names on the current DFS stack to terminate circular $refs.
-func inlineSchemaRefs(v any, defs map[string]any, visited map[string]bool) any {
+// reference. Annotation siblings are copied onto the resolved definition.
+// Structural siblings cannot be represented by a simple merge because modern
+// JSON Schema applies them together with the referenced schema, so those refs
+// are left intact. Non-map definitions, unknown refs, and cycles are also left
+// in place. visited tracks refs on the current DFS stack to terminate cycles.
+func inlineSchemaRefs(v any, defs, definitions map[string]any, visited map[string]bool) any {
 	switch node := v.(type) {
 	case map[string]any:
 		if ref, ok := node["$ref"].(string); ok {
-			name := refName(ref)
-			def, found := defs[name]
+			def, found := schemaRefTarget(ref, defs, definitions)
 			defMap, isMap := def.(map[string]any)
-			if found && isMap && !visited[name] {
-				visited[name] = true
-				resolved, _ := inlineSchemaRefs(defMap, defs, visited).(map[string]any)
-				visited[name] = false
+			if found && isMap && !visited[ref] && hasOnlyAnnotationSiblings(node) {
+				visited[ref] = true
+				resolved, _ := inlineSchemaRefs(defMap, defs, definitions, visited).(map[string]any)
+				delete(visited, ref)
 				if resolved == nil {
 					return node
 				}
-				// Merge sibling keywords from the $ref node into the resolved
-				// definition; caller annotations (description, title, etc.) win.
+				// Annotation siblings describe the reference site and can safely
+				// be overlaid on the resolved definition.
 				if len(node) > 1 {
 					merged := make(map[string]any, len(resolved)+len(node))
 					for k, val := range resolved {
@@ -643,7 +620,7 @@ func inlineSchemaRefs(v any, defs map[string]any, visited map[string]bool) any {
 					}
 					for k, val := range node {
 						if k != "$ref" {
-							merged[k] = inlineSchemaRefs(val, defs, visited)
+							merged[k] = inlineSchemaRefs(val, defs, definitions, visited)
 						}
 					}
 					return merged
@@ -655,23 +632,65 @@ func inlineSchemaRefs(v any, defs map[string]any, visited map[string]bool) any {
 		}
 		result := make(map[string]any, len(node))
 		for k, val := range node {
-			result[k] = inlineSchemaRefs(val, defs, visited)
+			result[k] = inlineSchemaRefs(val, defs, definitions, visited)
 		}
 		return result
 	case []any:
 		result := make([]any, len(node))
 		for i, item := range node {
-			result[i] = inlineSchemaRefs(item, defs, visited)
+			result[i] = inlineSchemaRefs(item, defs, definitions, visited)
 		}
 		return result
 	case []map[string]any:
 		result := make([]any, len(node))
 		for i, item := range node {
-			result[i] = inlineSchemaRefs(item, defs, visited)
+			result[i] = inlineSchemaRefs(item, defs, definitions, visited)
 		}
 		return result
 	default:
 		return v
+	}
+}
+
+func schemaRefTarget(ref string, defs, definitions map[string]any) (any, bool) {
+	var encodedName string
+	var pool map[string]any
+	switch {
+	case strings.HasPrefix(ref, "#/$defs/"):
+		encodedName = strings.TrimPrefix(ref, "#/$defs/")
+		pool = defs
+	case strings.HasPrefix(ref, "#/definitions/"):
+		encodedName = strings.TrimPrefix(ref, "#/definitions/")
+		pool = definitions
+	default:
+		return nil, false
+	}
+	// Only direct entries in the definition maps are supported. A raw slash
+	// denotes a deeper JSON Pointer path; escaped slashes remain valid names.
+	if encodedName == "" || strings.Contains(encodedName, "/") {
+		return nil, false
+	}
+	name := strings.ReplaceAll(encodedName, "~1", "/")
+	name = strings.ReplaceAll(name, "~0", "~")
+	def, ok := pool[name]
+	return def, ok
+}
+
+func hasOnlyAnnotationSiblings(node map[string]any) bool {
+	for key := range node {
+		if key != "$ref" && key != "$defs" && key != "definitions" && !isSchemaAnnotation(key) {
+			return false
+		}
+	}
+	return true
+}
+
+func isSchemaAnnotation(key string) bool {
+	switch key {
+	case "description", "title", "default", "examples", "deprecated", "readOnly", "writeOnly":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -706,13 +725,6 @@ func hasLocalRefsOutsideDefs(v any) bool {
 		}
 	}
 	return false
-}
-
-func refName(ref string) string {
-	name := ref[strings.LastIndex(ref, "/")+1:]
-	name = strings.ReplaceAll(name, "~1", "/")
-	name = strings.ReplaceAll(name, "~0", "~")
-	return name
 }
 
 // convertTools converts Genkit tool definitions to Ollama tool format

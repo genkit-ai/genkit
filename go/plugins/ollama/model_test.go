@@ -306,6 +306,70 @@ func TestResolveSchemaRefs(t *testing.T) {
 		}
 	})
 
+	t.Run("definitions ref resolves from definitions on name collision", func(t *testing.T) {
+		schema := map[string]any{
+			"$defs": map[string]any{
+				"Tag": map[string]any{"type": "integer"},
+			},
+			"definitions": map[string]any{
+				"Tag": map[string]any{"type": "string"},
+			},
+			"properties": map[string]any{
+				"tag": map[string]any{"$ref": "#/definitions/Tag"},
+			},
+		}
+		got := resolveSchemaRefs(schema)
+		props, _ := got["properties"].(map[string]any)
+		tag, _ := props["tag"].(map[string]any)
+		if tag["type"] != "string" {
+			t.Errorf("expected definitions ref to resolve as string, got type=%v", tag["type"])
+		}
+	})
+
+	t.Run("unrelated local pointer is not resolved from defs", func(t *testing.T) {
+		schema := map[string]any{
+			"$defs": map[string]any{
+				"b": map[string]any{"type": "string"},
+			},
+			"properties": map[string]any{
+				"a": map[string]any{"$ref": "#/properties/b"},
+				"b": map[string]any{"type": "integer"},
+			},
+		}
+		got := resolveSchemaRefs(schema)
+		props, _ := got["properties"].(map[string]any)
+		a, _ := props["a"].(map[string]any)
+		if a["$ref"] != "#/properties/b" {
+			t.Errorf("expected unrelated local pointer to remain intact, got %v", a)
+		}
+		if _, ok := got["$defs"]; !ok {
+			t.Error("expected $defs to remain while an unresolved local ref exists")
+		}
+	})
+
+	t.Run("structural ref siblings are not merged", func(t *testing.T) {
+		schema := map[string]any{
+			"$defs": map[string]any{
+				"Addr": map[string]any{
+					"type":       "object",
+					"properties": map[string]any{"s": map[string]any{"type": "string"}},
+				},
+			},
+			"properties": map[string]any{
+				"addr": map[string]any{"$ref": "#/$defs/Addr", "type": "string"},
+			},
+		}
+		got := resolveSchemaRefs(schema)
+		props, _ := got["properties"].(map[string]any)
+		addr, _ := props["addr"].(map[string]any)
+		if addr["$ref"] != "#/$defs/Addr" || addr["type"] != "string" {
+			t.Errorf("expected structural sibling ref to remain intact, got %v", addr)
+		}
+		if _, ok := got["$defs"]; !ok {
+			t.Error("expected $defs to remain for an unflattened structural sibling ref")
+		}
+	})
+
 	t.Run("unknown $ref left in place", func(t *testing.T) {
 		schema := map[string]any{
 			"properties": map[string]any{

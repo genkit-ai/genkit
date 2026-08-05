@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
@@ -309,7 +310,7 @@ func TestDefaultSupports(t *testing.T) {
 }
 
 func TestDefineModelSupports(t *testing.T) {
-	t.Run("derives supports when opts provided without Supports", func(t *testing.T) {
+	t.Run("preserves nil Supports in custom options", func(t *testing.T) {
 		o := &Ollama{ServerAddress: "http://localhost:11434"}
 		g := genkit.Init(context.Background(), genkit.WithPlugins(o))
 		model := o.DefineModel(g, ModelDefinition{Name: "llama3.1", Type: "chat"}, &ai.ModelOptions{Label: "custom label"})
@@ -319,11 +320,11 @@ func TestDefineModelSupports(t *testing.T) {
 		}
 
 		supports := modelSupportsFromAction(t, action)
-		if !supports.Tools {
-			t.Error("Supports.Tools = false, want true for known tool-capable chat model")
+		if supports.Tools {
+			t.Error("Supports.Tools = true, want false when custom options omit Supports")
 		}
-		if supports.Constrained != ai.ConstrainedSupportNoTools {
-			t.Errorf("Supports.Constrained = %q, want %q", supports.Constrained, ai.ConstrainedSupportNoTools)
+		if supports.Constrained != "" {
+			t.Errorf("Supports.Constrained = %q, want empty legacy value", supports.Constrained)
 		}
 	})
 
@@ -360,9 +361,17 @@ func modelSupportsFromAction(t *testing.T, action api.Action) ai.ModelSupports {
 	if !ok {
 		t.Fatal("action metadata missing supports map")
 	}
+	tools, ok := supports["tools"].(bool)
+	if !ok {
+		t.Fatalf("action metadata tools has type %T, want bool", supports["tools"])
+	}
+	constrained, ok := supports["constrained"].(ai.ConstrainedSupport)
+	if !ok {
+		t.Fatalf("action metadata constrained has type %T, want ai.ConstrainedSupport", supports["constrained"])
+	}
 	return ai.ModelSupports{
-		Tools:       supports["tools"].(bool),
-		Constrained: supports["constrained"].(ai.ConstrainedSupport),
+		Tools:       tools,
+		Constrained: constrained,
 	}
 }
 
@@ -373,6 +382,23 @@ func TestGenerate_StructuredOutput(t *testing.T) {
 	generateResponse := `{"model":"llama3","created_at":"2024-01-01T00:00:00Z","response":"{\"answer\":\"42\"}"}`
 
 	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+	}
+	refSchema := map[string]any{
+		"$defs": map[string]any{
+			"Answer": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"answer": map[string]any{"type": "string"},
+				},
+			},
+		},
+		"$ref": "#/$defs/Answer",
+	}
+	flattenedRefSchema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"answer": map[string]any{"type": "string"},
@@ -392,6 +418,13 @@ func TestGenerate_StructuredOutput(t *testing.T) {
 			modelType:  "chat",
 			output:     &ai.ModelOutputConfig{Format: "json", Schema: schema, Constrained: true},
 			wantFormat: schema,
+			mockBody:   chatResponse,
+		},
+		{
+			name:       "chat model, referenced schema is flattened",
+			modelType:  "chat",
+			output:     &ai.ModelOutputConfig{Format: "json", Schema: refSchema, Constrained: true},
+			wantFormat: flattenedRefSchema,
 			mockBody:   chatResponse,
 		},
 		{
@@ -496,12 +529,84 @@ func TestGenerate_StructuredOutput(t *testing.T) {
 				if !ok {
 					t.Fatalf("format = %v (%T), want map[string]any", gotFormat, gotFormat)
 				}
-				if gotMap["type"] != want["type"] {
-					t.Errorf("format[\"type\"] = %v, want %v", gotMap["type"], want["type"])
+				if !reflect.DeepEqual(gotMap, want) {
+					t.Errorf("format = %#v, want %#v", gotMap, want)
 				}
-				if _, hasProps := gotMap["properties"]; !hasProps {
-					t.Errorf("format[\"properties\"] missing; got: %v", gotMap)
+			}
+		})
+	}
+}
+
+func TestGenerateStructuredOutputWiring(t *testing.T) {
+	refSchema := map[string]any{
+		"$defs": map[string]any{
+			"Answer": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"answer": map[string]any{"type": "string"},
+				},
+				"required": []any{"answer"},
+			},
+		},
+		"$ref": "#/$defs/Answer",
+	}
+	flattenedSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+		"required": []any{"answer"},
+	}
+
+	tests := []struct {
+		name       string
+		withTool   bool
+		wantFormat any
+	}{
+		{name: "framework enables native constrained output", wantFormat: flattenedSchema},
+		{name: "framework uses prompt injection when tools are present", withTool: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedBody map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
+					t.Errorf("failed to decode request body: %v", err)
 				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"model":"llama3.1","message":{"role":"assistant","content":"{\"answer\":\"42\"}"},"done":true}`))
+			}))
+			defer server.Close()
+
+			o := &Ollama{ServerAddress: server.URL}
+			g := genkit.Init(t.Context(), genkit.WithPlugins(o))
+			model := o.DefineModel(g, ModelDefinition{Name: "llama3.1", Type: "chat"}, nil)
+
+			opts := []ai.GenerateOption{
+				ai.WithModel(model),
+				ai.WithPrompt("give me the answer"),
+				ai.WithOutputSchema(refSchema),
+			}
+			if tt.withTool {
+				tool := genkit.DefineTool(g, "noop", "does nothing",
+					func(*ai.ToolContext, struct{}) (string, error) { return "ok", nil })
+				opts = append(opts, ai.WithTools(tool))
+			}
+
+			if _, err := genkit.Generate(t.Context(), g, opts...); err != nil {
+				t.Fatalf("Generate() error: %v", err)
+			}
+
+			gotFormat, hasFormat := capturedBody["format"]
+			if tt.wantFormat == nil {
+				if hasFormat {
+					t.Fatalf("format = %#v, want field omitted", gotFormat)
+				}
+				return
+			}
+			if !hasFormat || !reflect.DeepEqual(gotFormat, tt.wantFormat) {
+				t.Fatalf("format = %#v, want %#v", gotFormat, tt.wantFormat)
 			}
 		})
 	}
