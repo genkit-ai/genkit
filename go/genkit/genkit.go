@@ -1159,7 +1159,7 @@ func GenerateStream(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) i
 // Example:
 //
 //	op, err := genkit.GenerateOperation(ctx, g,
-//		ai.WithModelName("googleai/veo-2.0-generate-001"),
+//		ai.WithModelName("googleai/veo-3.1-generate-preview"),
 //		ai.WithPrompt("A banana riding a bicycle."),
 //	)
 //	if err != nil {

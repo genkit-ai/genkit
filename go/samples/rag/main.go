@@ -85,7 +85,7 @@ func main() {
 	}
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &evaluators.GenkitEval{Metrics: metrics}))
 
-	embedder := googlegenai.GoogleAIEmbedder(g, "embedding-001")
+	embedder := googlegenai.GoogleAIEmbedder(g, "gemini-embedding-001")
 	if embedder == nil {
 		log.Fatal("embedder is not defined")
 	}

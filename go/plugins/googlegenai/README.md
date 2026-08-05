@@ -85,8 +85,8 @@ Genkit automatically discovers available models supported by the [Go GenAI SDK](
 Commonly used models include:
 
 - **Gemini Series**: `gemini-flash-latest`, `gemini-3.5-flash`, `gemini-3.1-flash-lite`
-- **Imagen Series**: `imagen-3.0-generate-001`
-- **Veo Series**: `veo-3.0-generate-001`
+- **Imagen Series**: `imagen-4.0-generate-001`
+- **Veo Series**: `veo-3.1-generate-preview`
 
 > **Note:** You can use any model ID supported by the underlying SDK. For a complete and up-to-date list of models and their specific capabilities, refer to the [Google Generative AI models documentation](https://ai.google.dev/gemini-api/docs/models).
 
@@ -392,10 +392,11 @@ fmt.Printf("Embedding: %v\n", res.Embeddings[0].Embedding)
 
 ### Available Models
 
-**Imagen 3 Series**:
+**Imagen 4 Series**:
 
-- `imagen-3.0-generate-001`
-- `imagen-3.0-fast-generate-001`
+- `imagen-4.0-generate-001`
+- `imagen-4.0-fast-generate-001`
+- `imagen-4.0-ultra-generate-001`
 
 ### Usage
 
@@ -403,7 +404,7 @@ fmt.Printf("Embedding: %v\n", res.Embeddings[0].Embedding)
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/imagen-3.0-generate-001"),
+ ai.WithModelName("googleai/imagen-4.0-generate-001"),
  ai.WithPrompt("A serene Japanese garden with cherry blossoms"),
  ai.WithConfig(&genai.GenerateImagesConfig{
   NumberOfImages: 4,
@@ -424,15 +425,7 @@ The Google AI plugin provides access to video generation capabilities through th
 **Veo 3.1 Series**:
 
 - `veo-3.1-generate-preview`
-
-**Veo 3.0 Series**:
-
-- `veo-3.0-generate-001`
-- `veo-3.0-fast-generate-001`
-
-**Veo 2.0 Series**:
-
-- `veo-2.0-generate-001`
+- `veo-3.1-fast-generate-preview`
 
 ### Usage
 
