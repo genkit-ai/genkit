@@ -47,13 +47,13 @@ func defineBatchEvaluator(r api.Registry, name string, opts *EvaluatorOptions, f
 	return e
 }
 
-func defineTool[In, Out any](r api.Registry, name, description string, fn ToolFunc[In, Out], opts ...ToolOption) *ToolDef[In, Out] {
+func defineTool[In, Out any](r api.Registry, name, description string, fn ToolFunc[In, Out], opts ...ToolOption) *ToolAction[In, Out] {
 	t := NewTool(name, description, fn, opts...)
 	t.Register(r)
 	return t
 }
 
-func defineMultipartTool[In any](r api.Registry, name, description string, fn MultipartToolFunc[In], opts ...ToolOption) *ToolDef[In, *MultipartToolResponse] {
+func defineMultipartTool[In any](r api.Registry, name, description string, fn MultipartToolFunc[In], opts ...ToolOption) *ToolAction[In, *MultipartToolResponse] {
 	t := NewMultipartTool(name, description, fn, opts...)
 	t.Register(r)
 	return t
@@ -71,6 +71,6 @@ func defineResource(r api.Registry, name string, opts *ResourceOptions, fn Resou
 	return res
 }
 
-func defineToolWithInputSchema[Out any](r api.Registry, name, description string, inputSchema map[string]any, fn ToolFunc[any, Out]) *ToolDef[any, Out] {
+func defineToolWithInputSchema[Out any](r api.Registry, name, description string, inputSchema map[string]any, fn ToolFunc[any, Out]) *ToolAction[any, Out] {
 	return defineTool(r, name, description, fn, WithInputSchema(inputSchema))
 }

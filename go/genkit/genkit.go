@@ -675,14 +675,14 @@ func LookupBackgroundModel(g *Genkit, name string) ai.BackgroundModel {
 //	}
 //
 //	fmt.Println(resp.Text()) // Might output something like "The weather in Paris is Sunny, 25°C."
-func DefineTool[In, Out any](g *Genkit, name, description string, fn ai.ToolFunc[In, Out], opts ...ai.ToolOption) *ai.ToolDef[In, Out] {
+func DefineTool[In, Out any](g *Genkit, name, description string, fn ai.ToolFunc[In, Out], opts ...ai.ToolOption) *ai.ToolAction[In, Out] {
 	t := ai.NewTool(name, description, fn, opts...)
 	t.Register(g.reg)
 	return t
 }
 
 // DefineToolWithInputSchema defines a tool with a custom input schema that can be used by models during generation,
-// registers it as a [core.Action] of type Tool, and returns an [*ai.ToolDef].
+// registers it as a [core.Action] of type Tool, and returns an [*ai.ToolAction].
 //
 // This variant of [DefineTool] allows specifying a JSON Schema for the tool's input, providing more
 // control over input validation and model guidance. The input parameter to the tool function will be
@@ -726,14 +726,14 @@ func DefineTool[In, Out any](g *Genkit, name, description string, fn ai.ToolFunc
 //		},
 //		ai.WithToolInputSchema(inputSchema),
 //	)
-func DefineToolWithInputSchema[Out any](g *Genkit, name, description string, inputSchema map[string]any, fn ai.ToolFunc[any, Out]) *ai.ToolDef[any, Out] {
+func DefineToolWithInputSchema[Out any](g *Genkit, name, description string, inputSchema map[string]any, fn ai.ToolFunc[any, Out]) *ai.ToolAction[any, Out] {
 	t := ai.NewTool(name, description, fn, ai.WithInputSchema(inputSchema))
 	t.Register(g.reg)
 	return t
 }
 
 // DefineMultipartTool defines a multipart tool that can be used by models during generation,
-// registers it as a [core.Action] of type Tool, and returns an [*ai.ToolDef].
+// registers it as a [core.Action] of type Tool, and returns an [*ai.ToolAction].
 // Unlike regular tools that return just an output value, multipart tools can return
 // both an output value and additional content parts (like images or other media).
 //
@@ -788,7 +788,7 @@ func DefineToolWithInputSchema[Out any](g *Genkit, name, description string, inp
 //	}
 //
 //	fmt.Println(resp.Text())
-func DefineMultipartTool[In any](g *Genkit, name, description string, fn ai.MultipartToolFunc[In], opts ...ai.ToolOption) *ai.ToolDef[In, *ai.MultipartToolResponse] {
+func DefineMultipartTool[In any](g *Genkit, name, description string, fn ai.MultipartToolFunc[In], opts ...ai.ToolOption) *ai.ToolAction[In, *ai.MultipartToolResponse] {
 	t := ai.NewMultipartTool(name, description, fn, opts...)
 	t.Register(g.reg)
 	return t
