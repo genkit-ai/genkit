@@ -194,7 +194,7 @@ func TestRetrieverRetrieve(t *testing.T) {
 	})
 
 	t.Run("returns error on nil retriever", func(t *testing.T) {
-		var r *retriever
+		var r *RetrieverAction
 		_, err := r.Retrieve(context.Background(), &RetrieverRequest{})
 		if err == nil {
 			t.Error("expected error for nil retriever")

@@ -409,3 +409,75 @@ func TestEvaluatorTypedConfig(t *testing.T) {
 		t.Errorf("config = %+v, want Temperature 0.8", gotBatch)
 	}
 }
+
+func TestRetrieverTypedConfig(t *testing.T) {
+	r := registry.New()
+
+	var got testTypedConfig
+	var gotReqOptions any
+	ret := NewTypedRetriever("test/typed-config-retriever", nil, func(ctx context.Context, req *RetrieverRequest, cfg testTypedConfig) (*RetrieverResponse, error) {
+		got = cfg
+		gotReqOptions = req.Options
+		return &RetrieverResponse{}, nil
+	})
+	ret.Register(r)
+
+	req := &RetrieverRequest{Query: DocumentFromText("q", nil), Options: map[string]any{"maxTokens": 7}}
+	if _, err := ret.Retrieve(context.Background(), req); err != nil {
+		t.Fatalf("Retrieve() unexpected error: %v", err)
+	}
+	if got.MaxTokens != 7 {
+		t.Errorf("config = %+v, want MaxTokens 7", got)
+	}
+	if gotReqOptions != any(got) {
+		t.Errorf("req.Options = %#v, want normalized to %#v", gotReqOptions, got)
+	}
+
+	req = &RetrieverRequest{Query: DocumentFromText("q", nil), Options: otherProviderConfig{Temperature: 0.1}}
+	if _, err := ret.Retrieve(context.Background(), req); err == nil || !strings.Contains(err.Error(), "invalid config type") {
+		t.Fatalf("Retrieve() error = %v, want invalid config type error", err)
+	}
+}
+
+func TestRetrieverConfigSchemaInference(t *testing.T) {
+	ret := NewTypedRetriever("test/inferred-retriever", nil, func(ctx context.Context, req *RetrieverRequest, cfg testTypedConfig) (*RetrieverResponse, error) {
+		return &RetrieverResponse{}, nil
+	})
+
+	md, ok := ret.Desc().Metadata["retriever"].(map[string]any)
+	if !ok {
+		t.Fatalf("retriever metadata missing: %v", ret.Desc().Metadata)
+	}
+	schema, ok := md["customOptions"].(map[string]any)
+	if !ok {
+		t.Fatalf("customOptions is not an inferred schema: %v", md["customOptions"])
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok || props["temperature"] == nil || props["maxTokens"] == nil {
+		t.Errorf("inferred config schema = %v, want temperature and maxTokens", schema)
+	}
+}
+
+func TestTypedRetrieverMetadata(t *testing.T) {
+	ret := NewTypedRetriever("test/retriever-metadata",
+		&RetrieverOptions{
+			Metadata: map[string]any{
+				"custom":    "value",
+				"retriever": "caller values must not clobber the reserved keys",
+			},
+		},
+		func(ctx context.Context, req *RetrieverRequest, cfg testTypedConfig) (*RetrieverResponse, error) {
+			return &RetrieverResponse{}, nil
+		})
+
+	metadata := ret.Desc().Metadata
+	if got := metadata["custom"]; got != "value" {
+		t.Errorf(`Metadata["custom"] = %v, want "value"`, got)
+	}
+	if got := metadata["type"]; got != api.ActionTypeRetriever {
+		t.Errorf(`Metadata["type"] = %v, want %v`, got, api.ActionTypeRetriever)
+	}
+	if _, ok := metadata["retriever"].(map[string]any); !ok {
+		t.Errorf(`Metadata["retriever"] = %v, want the built retriever info map`, metadata["retriever"])
+	}
+}
