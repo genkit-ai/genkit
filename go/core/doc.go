@@ -188,16 +188,18 @@ from an API), implement [api.DynamicPlugin]:
 For long-running operations, use background actions that return immediately
 with an operation ID that can be polled for completion:
 
-	bgAction := core.NewBackgroundActionOf(api.ActionTypeCustom, "longTask", nil,
+	bgAction := core.NewBackgroundActionOf(api.ActionTypeCustom, "longTask",
+		&core.BackgroundActionOptions[Input, Output]{
+			// Check polls operation status; omitting Cancel means the
+			// action does not support cancellation.
+			Check: func(ctx context.Context, op *core.Operation[Output]) (*core.Operation[Output], error) {
+				return checkOperationStatus(op)
+			},
+		},
 		func(ctx context.Context, input Input) (*core.Operation[Output], error) {
 			// Start the operation
 			return startLongOperation(input)
 		},
-		func(ctx context.Context, op *core.Operation[Output]) (*core.Operation[Output], error) {
-			// Check operation status
-			return checkOperationStatus(op)
-		},
-		nil, // cancellation not supported
 	)
 	bgAction.Register(registry)
 
