@@ -383,7 +383,7 @@ func defineFakeEmbedder(t *testing.T, r api.Registry, name string) Embedder {
 // defineFakeRetriever creates a simple retriever for testing.
 func defineFakeRetriever(t *testing.T, r api.Registry, name string, docs []*Document) Retriever {
 	t.Helper()
-	return DefineRetriever(r, name, nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+	return defineRetriever(r, name, nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
 		return &RetrieverResponse{Documents: docs}, nil
 	})
 }

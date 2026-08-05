@@ -59,6 +59,12 @@ func defineMultipartTool[In any](r api.Registry, name, description string, fn Mu
 	return t
 }
 
+func defineRetriever(r api.Registry, name string, opts *RetrieverOptions, fn RetrieverFunc) Retriever {
+	ret := NewRetriever(name, opts, fn)
+	ret.Register(r)
+	return ret
+}
+
 func defineResource(r api.Registry, name string, opts *ResourceOptions, fn ResourceFunc) Resource {
 	res := NewResource(name, opts, fn)
 	res.Register(r)
