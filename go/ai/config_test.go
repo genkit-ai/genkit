@@ -26,7 +26,7 @@ import (
 )
 
 // testTypedConfig is a provider-style config struct used to exercise the
-// typed-config deserialization that NewTyped* constructors wrap around user
+// typed-config deserialization that New*Action constructors wrap around user
 // functions.
 type testTypedConfig struct {
 	Temperature float64 `json:"temperature,omitempty"`
@@ -46,7 +46,7 @@ func TestModelTypedConfig(t *testing.T) {
 
 	var got testTypedConfig
 	var gotReqConfig any
-	m := NewTypedModel("test/typed-config", nil, func(ctx context.Context, req *ModelRequest, cfg testTypedConfig, cb ModelStreamCallback) (*ModelResponse, error) {
+	m := NewModelAction("test/typed-config", nil, func(ctx context.Context, req *ModelRequest, cfg testTypedConfig, cb ModelStreamCallback) (*ModelResponse, error) {
 		got = cfg
 		gotReqConfig = req.Config
 		return &ModelResponse{Message: NewModelTextMessage("ok"), Request: req}, nil
@@ -100,7 +100,7 @@ func TestModelTypedConfig(t *testing.T) {
 func TestModelConfigNormalizedBeforeBuiltins(t *testing.T) {
 	r := registry.New()
 
-	m := NewTypedModel("test/config-order", &ModelOptions{
+	m := NewModelAction("test/config-order", &ModelOptions{
 		Supports: &ModelSupports{Multiturn: true}, // no media support
 	}, func(ctx context.Context, req *ModelRequest, cfg testTypedConfig, cb ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{Message: NewModelTextMessage("ok"), Request: req}, nil
@@ -117,8 +117,8 @@ func TestModelConfigNormalizedBeforeBuiltins(t *testing.T) {
 	}
 }
 
-func TestTypedModelMetadata(t *testing.T) {
-	m := NewTypedModel("test/model-metadata",
+func TestModelActionMetadata(t *testing.T) {
+	m := NewModelAction("test/model-metadata",
 		&ModelOptions{
 			Metadata: map[string]any{
 				"custom": "value",
@@ -141,8 +141,8 @@ func TestTypedModelMetadata(t *testing.T) {
 	}
 }
 
-func TestTypedEmbedderMetadata(t *testing.T) {
-	e := NewTypedEmbedder("test/embedder-metadata",
+func TestEmbedderActionMetadata(t *testing.T) {
+	e := NewEmbedderAction("test/embedder-metadata",
 		&EmbedderOptions{
 			Metadata: map[string]any{
 				"custom": "value",
@@ -165,8 +165,8 @@ func TestTypedEmbedderMetadata(t *testing.T) {
 	}
 }
 
-func TestTypedEvaluatorMetadata(t *testing.T) {
-	e := NewTypedEvaluator("test/evaluator-metadata",
+func TestEvaluatorActionMetadata(t *testing.T) {
+	e := NewEvaluatorAction("test/evaluator-metadata",
 		&EvaluatorOptions{
 			Metadata: map[string]any{
 				"custom":    "value",
@@ -189,8 +189,8 @@ func TestTypedEvaluatorMetadata(t *testing.T) {
 	}
 }
 
-func TestTypedBackgroundModelMetadata(t *testing.T) {
-	bm := NewTypedBackgroundModel("test/bg-metadata",
+func TestBackgroundModelActionMetadata(t *testing.T) {
+	bm := NewBackgroundModelAction("test/bg-metadata",
 		&TypedBackgroundModelOptions{
 			Metadata: map[string]any{
 				"custom": "value",
@@ -219,7 +219,7 @@ func TestTypedBackgroundModelMetadata(t *testing.T) {
 func TestBackgroundModelConfigValidation(t *testing.T) {
 	r := registry.New()
 
-	bm := NewTypedBackgroundModel("test/bg-typed-config", nil,
+	bm := NewBackgroundModelAction("test/bg-typed-config", nil,
 		func(ctx context.Context, req *ModelRequest, cfg testTypedConfig) (*ModelOperation, error) {
 			return &ModelOperation{ID: "op1", Done: false}, nil
 		},
@@ -249,7 +249,7 @@ func TestBackgroundModelConfigValidation(t *testing.T) {
 }
 
 func TestModelConfigSchemaInference(t *testing.T) {
-	newFn := func() TypedModelFunc[testTypedConfig] {
+	newFn := func() ModelActionFunc[testTypedConfig] {
 		return func(ctx context.Context, req *ModelRequest, cfg testTypedConfig, cb ModelStreamCallback) (*ModelResponse, error) {
 			return &ModelResponse{Message: NewModelTextMessage("ok"), Request: req}, nil
 		}
@@ -266,7 +266,7 @@ func TestModelConfigSchemaInference(t *testing.T) {
 	}
 
 	t.Run("inferred from Config type", func(t *testing.T) {
-		m := NewTypedModel("test/inferred-schema", nil, newFn())
+		m := NewModelAction("test/inferred-schema", nil, newFn())
 		schema, ok := configSchemaOf(t, m).(map[string]any)
 		if !ok {
 			t.Fatalf("customOptions = %v, want inferred schema map", configSchemaOf(t, m))
@@ -282,7 +282,7 @@ func TestModelConfigSchemaInference(t *testing.T) {
 
 	t.Run("explicit ConfigSchema wins", func(t *testing.T) {
 		override := map[string]any{"type": "object", "properties": map[string]any{"custom": map[string]any{"type": "string"}}}
-		m := NewTypedModel("test/override-schema", &ModelOptions{ConfigSchema: override}, newFn())
+		m := NewModelAction("test/override-schema", &ModelOptions{ConfigSchema: override}, newFn())
 		schema, ok := configSchemaOf(t, m).(map[string]any)
 		if !ok {
 			t.Fatalf("customOptions missing")
@@ -294,7 +294,7 @@ func TestModelConfigSchemaInference(t *testing.T) {
 	})
 
 	t.Run("any config infers no schema", func(t *testing.T) {
-		m := NewTypedModel("test/any-schema", nil, func(ctx context.Context, req *ModelRequest, cfg any, cb ModelStreamCallback) (*ModelResponse, error) {
+		m := NewModelAction("test/any-schema", nil, func(ctx context.Context, req *ModelRequest, cfg any, cb ModelStreamCallback) (*ModelResponse, error) {
 			return &ModelResponse{Message: NewModelTextMessage("ok"), Request: req}, nil
 		})
 		if s, _ := configSchemaOf(t, m).(map[string]any); len(s) != 0 {
@@ -342,7 +342,7 @@ func TestEmbedderTypedConfig(t *testing.T) {
 
 	var got testTypedConfig
 	var gotReqOptions any
-	e := NewTypedEmbedder("test/typed-config-embedder", nil, func(ctx context.Context, req *EmbedRequest, cfg testTypedConfig) (*EmbedResponse, error) {
+	e := NewEmbedderAction("test/typed-config-embedder", nil, func(ctx context.Context, req *EmbedRequest, cfg testTypedConfig) (*EmbedResponse, error) {
 		got = cfg
 		gotReqOptions = req.Options
 		return &EmbedResponse{}, nil
@@ -370,7 +370,7 @@ func TestEvaluatorTypedConfig(t *testing.T) {
 	r := registry.New()
 
 	var got testTypedConfig
-	e := NewTypedEvaluator("test/typed-config-evaluator", nil, func(ctx context.Context, req *EvaluatorCallbackRequest, cfg testTypedConfig) (*EvaluatorCallbackResponse, error) {
+	e := NewEvaluatorAction("test/typed-config-evaluator", nil, func(ctx context.Context, req *EvaluatorCallbackRequest, cfg testTypedConfig) (*EvaluatorCallbackResponse, error) {
 		got = cfg
 		return &EvaluatorCallbackResponse{
 			TestCaseId: req.Input.TestCaseId,
@@ -392,7 +392,7 @@ func TestEvaluatorTypedConfig(t *testing.T) {
 	}
 
 	var gotBatch testTypedConfig
-	be := NewTypedBatchEvaluator("test/typed-config-batch-evaluator", nil, func(ctx context.Context, req *EvaluatorRequest, cfg testTypedConfig) (*EvaluatorResponse, error) {
+	be := NewBatchEvaluatorAction("test/typed-config-batch-evaluator", nil, func(ctx context.Context, req *EvaluatorRequest, cfg testTypedConfig) (*EvaluatorResponse, error) {
 		gotBatch = cfg
 		return &EvaluatorResponse{}, nil
 	})
@@ -415,7 +415,7 @@ func TestRetrieverTypedConfig(t *testing.T) {
 
 	var got testTypedConfig
 	var gotReqOptions any
-	ret := NewTypedRetriever("test/typed-config-retriever", nil, func(ctx context.Context, req *RetrieverRequest, cfg testTypedConfig) (*RetrieverResponse, error) {
+	ret := NewRetrieverAction("test/typed-config-retriever", nil, func(ctx context.Context, req *RetrieverRequest, cfg testTypedConfig) (*RetrieverResponse, error) {
 		got = cfg
 		gotReqOptions = req.Options
 		return &RetrieverResponse{}, nil
@@ -440,7 +440,7 @@ func TestRetrieverTypedConfig(t *testing.T) {
 }
 
 func TestRetrieverConfigSchemaInference(t *testing.T) {
-	ret := NewTypedRetriever("test/inferred-retriever", nil, func(ctx context.Context, req *RetrieverRequest, cfg testTypedConfig) (*RetrieverResponse, error) {
+	ret := NewRetrieverAction("test/inferred-retriever", nil, func(ctx context.Context, req *RetrieverRequest, cfg testTypedConfig) (*RetrieverResponse, error) {
 		return &RetrieverResponse{}, nil
 	})
 
@@ -458,8 +458,8 @@ func TestRetrieverConfigSchemaInference(t *testing.T) {
 	}
 }
 
-func TestTypedRetrieverMetadata(t *testing.T) {
-	ret := NewTypedRetriever("test/retriever-metadata",
+func TestRetrieverActionMetadata(t *testing.T) {
+	ret := NewRetrieverAction("test/retriever-metadata",
 		&RetrieverOptions{
 			Metadata: map[string]any{
 				"custom":    "value",

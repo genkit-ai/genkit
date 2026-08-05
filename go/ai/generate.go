@@ -72,10 +72,10 @@ type ToolConfig struct {
 // ModelFunc is a streaming function that takes in a ModelRequest and generates a ModelResponse, optionally streaming ModelResponseChunks.
 type ModelFunc = core.StreamingFunc[*ModelRequest, *ModelResponse, *ModelResponseChunk]
 
-// TypedModelFunc is a [ModelFunc] that additionally receives the
+// ModelActionFunc is a [ModelFunc] that additionally receives the
 // request's typed Config: the framework deserializes the request's raw config
-// into it before calling the function (see [NewTypedModel]).
-type TypedModelFunc[Config any] = func(context.Context, *ModelRequest, Config, ModelStreamCallback) (*ModelResponse, error)
+// into it before calling the function (see [NewModelAction]).
+type ModelActionFunc[Config any] = func(context.Context, *ModelRequest, Config, ModelStreamCallback) (*ModelResponse, error)
 
 // ModelStreamCallback is a stream callback of a ModelAction.
 type ModelStreamCallback = func(context.Context, *ModelResponseChunk) error
@@ -92,7 +92,7 @@ type ModelMiddleware = core.Middleware[*ModelRequest, *ModelResponse, *ModelResp
 type action[In, Out, Stream any] = core.Action[In, Out, Stream]
 
 // ModelAction is a generative model backed by a registry action. It is the
-// concrete type returned by [NewTypedModel]; pass it to [WithModel] to use it
+// concrete type returned by [NewModelAction]; pass it to [WithModel] to use it
 // for generation, or return it from a plugin's Init for the framework to
 // register.
 type ModelAction struct {
@@ -160,10 +160,10 @@ func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 	return (*generateAction)(a)
 }
 
-// NewTypedModel creates an unregistered [ModelAction]: return it from a
+// NewModelAction creates an unregistered [ModelAction]: return it from a
 // plugin's Init for the framework to register, or call
 // [ModelAction.Register] directly. Applications should define models with
-// [genkit.DefineTypedModel].
+// [genkit.DefineModelAction].
 //
 // Config is the model's typed configuration; it is usually inferred from fn's
 // signature. The framework deserializes the request's raw config into Config
@@ -179,13 +179,13 @@ func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 // wrapper types like Opt[float64] that marshal to primitives but reflect as
 // objects), set [ModelOptions.ConfigSchema] explicitly or requests will be
 // rejected at the action boundary.
-func NewTypedModel[Config any](
+func NewModelAction[Config any](
 	name string,
 	opts *ModelOptions,
-	fn TypedModelFunc[Config],
+	fn ModelActionFunc[Config],
 ) *ModelAction {
 	if name == "" {
-		panic("ai.NewTypedModel: name is required")
+		panic("ai.NewModelAction: name is required")
 	}
 
 	if opts == nil {
@@ -250,13 +250,13 @@ func NewTypedModel[Config any](
 
 // NewModel creates a new [Model].
 //
-// Deprecated: Use [NewTypedModel], which passes the request's config to
+// Deprecated: Use [NewModelAction], which passes the request's config to
 // fn as a typed value instead of leaving it type-erased on the request.
 func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
 	if name == "" {
 		panic("ai.NewModel: name is required")
 	}
-	return NewTypedModel(name, opts, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
+	return NewModelAction(name, opts, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
 		return fn(ctx, req, cb)
 	})
 }

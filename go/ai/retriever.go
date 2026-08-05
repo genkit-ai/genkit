@@ -31,10 +31,10 @@ import (
 // RetrieverFunc is the function type for retriever implementations.
 type RetrieverFunc = func(context.Context, *RetrieverRequest) (*RetrieverResponse, error)
 
-// TypedRetrieverFunc is a [RetrieverFunc] that additionally receives the
+// RetrieverActionFunc is a [RetrieverFunc] that additionally receives the
 // request's typed Config: the framework deserializes the request's raw
-// options into it before calling the function (see [NewTypedRetriever]).
-type TypedRetrieverFunc[Config any] = func(context.Context, *RetrieverRequest, Config) (*RetrieverResponse, error)
+// options into it before calling the function (see [NewRetrieverAction]).
+type RetrieverActionFunc[Config any] = func(context.Context, *RetrieverRequest, Config) (*RetrieverResponse, error)
 
 // Retriever represents a document retriever.
 type Retriever interface {
@@ -47,7 +47,7 @@ type Retriever interface {
 }
 
 // RetrieverAction is a retriever backed by a registry action. It is the
-// concrete type returned by [NewTypedRetriever]; pass it to [WithRetriever] to
+// concrete type returned by [NewRetrieverAction]; pass it to [WithRetriever] to
 // retrieve with it, or return it from a plugin's Init for the framework to
 // register.
 type RetrieverAction struct {
@@ -105,10 +105,10 @@ type RetrieverOptions struct {
 	Metadata map[string]any `json:"-"`
 }
 
-// NewTypedRetriever creates an unregistered [RetrieverAction]: return it from
+// NewRetrieverAction creates an unregistered [RetrieverAction]: return it from
 // a plugin's Init for the framework to register, or call
 // [RetrieverAction.Register] directly. Applications should define retrievers
-// with [genkit.DefineTypedRetriever].
+// with [genkit.DefineRetrieverAction].
 //
 // Config is the retriever's typed configuration; it is usually inferred from
 // fn's signature. The framework deserializes the request's raw options into
@@ -118,13 +118,13 @@ type RetrieverOptions struct {
 // normalized to the converted value, so it always matches the typed
 // parameter. The config's JSON schema is inferred from Config unless
 // [RetrieverOptions.ConfigSchema] overrides it.
-func NewTypedRetriever[Config any](
+func NewRetrieverAction[Config any](
 	name string,
 	opts *RetrieverOptions,
-	fn TypedRetrieverFunc[Config],
+	fn RetrieverActionFunc[Config],
 ) *RetrieverAction {
 	if name == "" {
-		panic("ai.NewTypedRetriever: retriever name is required")
+		panic("ai.NewRetrieverAction: retriever name is required")
 	}
 
 	if opts == nil {
@@ -174,13 +174,13 @@ func NewTypedRetriever[Config any](
 
 // NewRetriever creates a new [Retriever].
 //
-// Deprecated: Use [NewTypedRetriever], which passes the request's options to
+// Deprecated: Use [NewRetrieverAction], which passes the request's options to
 // fn as a typed value instead of leaving them type-erased on the request.
 func NewRetriever(name string, opts *RetrieverOptions, fn RetrieverFunc) Retriever {
 	if name == "" {
 		panic("ai.NewRetriever: retriever name is required")
 	}
-	return NewTypedRetriever(name, opts, func(ctx context.Context, req *RetrieverRequest, _ any) (*RetrieverResponse, error) {
+	return NewRetrieverAction(name, opts, func(ctx context.Context, req *RetrieverRequest, _ any) (*RetrieverResponse, error) {
 		return fn(ctx, req)
 	})
 }
