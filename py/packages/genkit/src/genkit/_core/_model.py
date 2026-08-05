@@ -309,7 +309,7 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
 
     @model_serializer(mode='wrap')
     def _serialize_for_spec(self, serializer: Callable[..., dict[str, Any]]) -> dict[str, Any]:
-        """Serialize to spec wire format with nested output (matches JS/Go)."""
+        """Serialize to spec wire format with nested output."""
         data = serializer(self)
         # Build nested output from flat fields - spec expects output key always present
         output: dict[str, Any] = {}
