@@ -246,9 +246,9 @@ def define_background_model(
     # Wrap the start function to add the action key and timing.
     # Annotate as bare ModelRequest so Action doesn't build TypeAdapter(ModelRequest[TypeVar]);
     # when config_schema is set we override to ModelRequest[that schema] below.
-    async def wrapped_start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def wrapped_start(request: ModelRequest[ModelRequestConfigT], ctx: ActionRunContext) -> Operation:
         start_time = time.perf_counter()
-        op = await start(cast(ModelRequest[ModelRequestConfigT], request), ctx)
+        op = await start(request, ctx)
         # Set action key in format: /{actionType}/{name}
         op.action = action_key
         latency_ms = (time.perf_counter() - start_time) * 1000
