@@ -273,8 +273,7 @@ def define_background_model(
     # TypeAdapter(ModelRequest[TypeVar]). When callers pass a concrete config
     # class, validate start input as ModelRequest[ConfigT].
     if isinstance(config_schema, type):
-        # Parameterizing at runtime, so the subscript can't be a type expression.
-        start_action._override_input_schema(cast('type[BaseModel]', cast(Any, ModelRequest)[config_schema]))
+        start_action._override_input_schema(cast(Any, ModelRequest)[config_schema])
 
     # Register the check action
     check_action = registry.register_action(
