@@ -23,6 +23,9 @@ on:
       - "genkit-tools/**"
       - ".github/workflows/python.yml"
 
+permissions:
+  contents: read
+
 # Cancel in-progress runs for the same PR
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -35,6 +38,8 @@ jobs:
   lint-and-format:
     name: Lint and Format
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
@@ -67,6 +72,8 @@ jobs:
   type-check:
     name: Type Check (${{ matrix.checker }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -111,6 +118,8 @@ jobs:
   security-and-compliance:
     name: Security and Compliance
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
@@ -148,6 +157,8 @@ jobs:
   tests:
     name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     # No 'needs' - runs in parallel. If lint fails, concurrency will cancel this.
     strategy:
       matrix:
@@ -185,6 +196,8 @@ jobs:
   build:
     name: Build Distributions
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     if: ${{ always() && !failure() && !cancelled() }}
     needs: [lint-and-format, type-check, security-and-compliance, tests]
     steps:
