@@ -1126,6 +1126,9 @@ type ToolOption interface {
 }
 
 func (o *toolOptions) applyTool(opts *toolOptions) {
+	if o.OutputSchema != nil {
+		opts.OutputSchema = o.OutputSchema
+	}
 	if o.StrictSchema != nil {
 		opts.StrictSchema = o.StrictSchema
 	}

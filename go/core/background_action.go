@@ -131,11 +131,21 @@ func NewBackgroundActionOf[In, Out any](
 
 	key := api.KeyFromName(atype, name)
 
+	// One inferred Operation schema serves the whole bundle: the start action
+	// outputs an Operation, and the check and cancel actions consume and
+	// produce one, so absent caller overrides every Operation-typed slot below
+	// shares this map rather than re-running the inference.
+	opSchema := base.SchemaMapFor[*Operation[Out]]()
+
+	startOutputSchema := opts.OutputSchema
+	if startOutputSchema == nil {
+		startOutputSchema = opSchema
+	}
 	startAction := NewActionOf(atype, name, &ActionOptions{
 		Description:  opts.Description,
 		Metadata:     opts.Metadata,
 		InputSchema:  opts.InputSchema,
-		OutputSchema: opts.OutputSchema,
+		OutputSchema: startOutputSchema,
 	},
 		func(ctx context.Context, input In) (*Operation[Out], error) {
 			op, err := startFn(ctx, input)
@@ -146,11 +156,9 @@ func NewBackgroundActionOf[In, Out any](
 			return op, nil
 		})
 
-	// The schema slots in opts describe the start action's In/Out types; the
-	// check and cancel actions operate on Operation values, so they keep the
-	// shared description and metadata but get their own schema, inferred once
-	// here rather than per slot per sub-action.
-	opSchema := base.SchemaMapFor[*Operation[Out]]()
+	// The schema slots in opts describe the start action; the check and
+	// cancel actions keep the shared description and metadata but always use
+	// the Operation schema.
 	opOpts := &ActionOptions{
 		Description:  opts.Description,
 		Metadata:     opts.Metadata,

@@ -48,6 +48,12 @@ type backgroundModel struct {
 	core.BackgroundAction[*ModelRequest, *ModelResponse]
 }
 
+// Plugin resolvers assert the value returned by [NewBackgroundModel] to
+// [api.Action] (e.g. googlegenai's resolveAction returns the whole model as
+// the resolved action). That only holds through the embedded action's
+// promoted methods, so pin it here where the embedding lives.
+var _ api.Action = (*backgroundModel)(nil)
+
 // ModelOperation is a background operation for a model.
 type ModelOperation = core.Operation[*ModelResponse]
 
@@ -93,7 +99,8 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 	if opts == nil {
 		opts = &BackgroundModelOptions{}
 	}
-	if opts.Label == "" {
+	labelExplicit := opts.Label != ""
+	if !labelExplicit {
 		opts.Label = name
 	}
 	if opts.Supports == nil {
@@ -143,9 +150,18 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 	}
 
 	// The label doubles as the description on all three component actions,
-	// matching the JS background model surface.
+	// matching the JS background model surface. A label that was only
+	// defaulted from the name yields to an explicit caller
+	// Metadata["description"]: leaving Description empty lets core's
+	// metadata fallback apply it.
+	description := opts.Label
+	if !labelExplicit {
+		if _, ok := metadata["description"].(string); ok {
+			description = ""
+		}
+	}
 	return &backgroundModel{*core.NewBackgroundActionOf(api.ActionTypeBackgroundModel, name, &core.BackgroundActionOptions{
-		Description: opts.Label,
+		Description: description,
 		Metadata:    metadata,
 		InputSchema: inputSchema,
 	}, wrappedFn, checkFn, opts.Cancel)}

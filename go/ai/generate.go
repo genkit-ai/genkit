@@ -257,7 +257,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			if _, ok := toolDefMap[t.Name()]; ok {
 				return nil, status.Errorf(status.ErrInvalidArgument, "ai.GenerateWithRequest: tool %q is contributed by middleware but already declared elsewhere", t.Name())
 			}
-			toolDefMap[t.Name()] = t.Definition()
+			toolDefMap[t.Name()] = nil // Reserves the name; the definition is captured after registration.
 			middlewareTools = append(middlewareTools, t)
 		}
 	}
@@ -265,8 +265,12 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		if !r.IsChild() {
 			r = r.NewChild()
 		}
+		// Definitions are captured only after registration: Definition resolves
+		// schema $refs (e.g. from WithOutputSchemaName) only once the tool has
+		// a registry.
 		for _, t := range middlewareTools {
 			t.Register(r)
+			toolDefMap[t.Name()] = t.Definition()
 		}
 	}
 	toolDefs := make([]*ToolDefinition, 0, len(toolDefMap))

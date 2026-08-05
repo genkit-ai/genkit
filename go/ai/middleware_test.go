@@ -456,6 +456,67 @@ func TestMiddlewareContributesTool(t *testing.T) {
 	assertNoError(t, err)
 }
 
+// Middleware-contributed tools are registered before their definitions are
+// captured, so schema names (WithInputSchemaName/WithOutputSchemaName) reach
+// the model resolved rather than as raw {"$ref": "genkit:..."} maps.
+func TestMiddlewareToolSchemaNamesResolve(t *testing.T) {
+	r := newTestRegistry(t)
+	r.RegisterSchema("Answer", map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+	})
+
+	var captured *ModelRequest
+	defineFakeModel(t, r, fakeModelConfig{
+		name: "test/refModel",
+		handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			captured = req
+			return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+		},
+	})
+
+	inject := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{
+			Tools: []Tool{NewTool("mw/schemaTool", "named schemas",
+				func(tc *ToolContext, in any) (any, error) { return "ok", nil },
+				WithInputSchemaName("Answer"), WithOutputSchemaName("Answer"))},
+		}, nil
+	})
+
+	_, err := Generate(testCtx, r,
+		WithModelName("test/refModel"),
+		WithPrompt("hi"),
+		WithUse(inject),
+	)
+	assertNoError(t, err)
+
+	if captured == nil {
+		t.Fatal("model was never called")
+	}
+	var def *ToolDefinition
+	for _, td := range captured.Tools {
+		if td.Name == "mw/schemaTool" {
+			def = td
+		}
+	}
+	if def == nil {
+		t.Fatalf("middleware tool not sent to the model: %v", captured.Tools)
+	}
+	for slot, schema := range map[string]map[string]any{
+		"InputSchema":  def.InputSchema,
+		"OutputSchema": def.OutputSchema,
+	} {
+		if _, ok := schema["$ref"]; ok {
+			t.Errorf("%s = %v, want the resolved Answer schema, not a $ref", slot, schema)
+		}
+		if props, ok := schema["properties"].(map[string]any); !ok || props["answer"] == nil {
+			t.Errorf("%s = %v, want the registered Answer schema", slot, schema)
+		}
+	}
+}
+
 // --- duplicate tool collision: two middleware with same tool name ---
 
 func TestDuplicateMiddlewareToolRejected(t *testing.T) {

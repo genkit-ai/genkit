@@ -38,6 +38,69 @@ func newToolTestRegistry(t *testing.T) *registry.Registry {
 	return reg
 }
 
+// Output schema options flow through to the inner tool when Out is 'any' and
+// panic under the exp constructors' own names (not the inner multipart type)
+// when Out is concrete, mirroring ai.NewTool's guard.
+func TestToolOutputSchemaOptions(t *testing.T) {
+	customSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+	}
+
+	t.Run("custom schema reaches the definition when Out is any", func(t *testing.T) {
+		tl := NewTool("t", "d",
+			func(ctx context.Context, input any) (any, error) { return nil, nil },
+			ai.WithOutputSchema(customSchema))
+
+		def := tl.Definition()
+		props, ok := def.OutputSchema["properties"].(map[string]any)
+		if !ok || props["answer"] == nil {
+			t.Errorf("OutputSchema = %v, want the custom schema, not the envelope", def.OutputSchema)
+		}
+	})
+
+	t.Run("interruptible tools carry the custom schema too", func(t *testing.T) {
+		tl := NewInterruptibleTool("t", "d",
+			func(ctx context.Context, input any, res *struct{}) (any, error) { return nil, nil },
+			ai.WithOutputSchema(customSchema))
+
+		def := tl.Definition()
+		props, ok := def.OutputSchema["properties"].(map[string]any)
+		if !ok || props["answer"] == nil {
+			t.Errorf("OutputSchema = %v, want the custom schema, not the envelope", def.OutputSchema)
+		}
+	})
+
+	for name, construct := range map[string]func(){
+		"NewTool": func() {
+			NewTool("t", "d",
+				func(ctx context.Context, input any) (string, error) { return "", nil },
+				ai.WithOutputSchema(map[string]any{"type": "string"}))
+		},
+		"NewInterruptibleTool": func() {
+			NewInterruptibleTool("t", "d",
+				func(ctx context.Context, input any, res *struct{}) (string, error) { return "", nil },
+				ai.WithOutputSchemaName("Answer"))
+		},
+	} {
+		t.Run(name+" panics for concrete Out", func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatal("expected panic for an output schema option with concrete Out")
+				}
+				err, ok := r.(error)
+				if !ok || !strings.Contains(err.Error(), "exp."+name) {
+					t.Errorf("panic = %v, want it to name exp.%s", r, name)
+				}
+			}()
+			construct()
+		})
+	}
+}
+
 // defineToolThenFinishModel defines "test/model": on the first turn it returns
 // reqs (typically tool requests), and once a tool response is in history it
 // returns the final text "done". This drives a single tool round per Generate.
