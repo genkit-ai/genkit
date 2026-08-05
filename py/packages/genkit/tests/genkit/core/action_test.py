@@ -282,6 +282,26 @@ async def test_run_no_input_type_allows_none() -> None:
 
 @pytest.mark.asyncio
 async def test_validate_input_reparses_generic_pydantic_mismatch() -> None:
+    """Action input validation dumps and re-parses Pydantic instances when direct class validation fails."""
+
+    class SubConfig(BaseModel):
+        foo: str
+
+    async def fn(request: ModelRequest[SubConfig]) -> str:
+        assert isinstance(request.config, SubConfig)
+        return request.config.foo
+
+    action = Action(name='genericAction', kind=ActionKind.CUSTOM, fn=fn)
+    action._override_input_schema(ModelRequest[SubConfig])  # ty: ignore[invalid-type-form]
+
+    input_req = ModelRequest(messages=[], config={'foo': 'bar'})
+
+    result = await action.run(input=input_req)
+    assert result.response == 'bar'
+
+
+@pytest.mark.asyncio
+async def test_validate_input_reparses_model_request_plugin_config() -> None:
     """Action input validation dumps and re-parses ModelRequest[dict] to ModelRequest[PluginConfig]."""
 
     class PluginConfig(BaseModel):
@@ -294,7 +314,7 @@ async def test_validate_input_reparses_generic_pydantic_mismatch() -> None:
         assert request.config.google_search is True
         return f'summaries={request.config.thinking_summaries}'
 
-    action = Action(name='genericAction', kind=ActionKind.MODEL, fn=fn)
+    action = Action(name='modelAction', kind=ActionKind.MODEL, fn=fn)
     action._override_input_schema(ModelRequest[PluginConfig])  # ty: ignore[invalid-type-form]
 
     # Caller passes bare ModelRequest (ModelRequest[dict]) with raw dict config
