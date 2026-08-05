@@ -1093,7 +1093,7 @@ async def resolve_parameters(
     if model_action is None:
         message = f"Failed to resolve model '{model}'."
         if isinstance(model, str) and '/' not in model:
-            message += ' Ensure the model name includes a plugin prefix.'
+            message += ' Ensure the model name includes the plugin namespace.'
         raise GenkitError(
             status='NOT_FOUND',
             message=message,
