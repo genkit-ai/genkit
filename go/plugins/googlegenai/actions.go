@@ -33,8 +33,8 @@ func listActions(ctx context.Context, client *genai.Client, provider string) []a
 	for _, name := range models.gemini {
 		opts := GetModelOptions(name, provider)
 		model := newModel(client, name, opts)
-		if actionDef, ok := model.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
+		if action, ok := model.(api.Action); ok {
+			actions = append(actions, action.Desc())
 		}
 	}
 
@@ -42,8 +42,8 @@ func listActions(ctx context.Context, client *genai.Client, provider string) []a
 	for _, name := range models.imagen {
 		opts := GetModelOptions(name, provider)
 		model := newModel(client, name, opts)
-		if actionDef, ok := model.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
+		if action, ok := model.(api.Action); ok {
+			actions = append(actions, action.Desc())
 		}
 	}
 
@@ -51,8 +51,8 @@ func listActions(ctx context.Context, client *genai.Client, provider string) []a
 	for _, name := range models.veo {
 		opts := GetModelOptions(name, provider)
 		veoModel := newVeoModel(client, name, opts)
-		if actionDef, ok := veoModel.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
+		if action, ok := veoModel.(api.Action); ok {
+			actions = append(actions, action.Desc())
 		}
 	}
 
@@ -60,8 +60,8 @@ func listActions(ctx context.Context, client *genai.Client, provider string) []a
 	for _, name := range models.embedders {
 		opts := GetEmbedderOptions(name, provider)
 		embedder := newEmbedder(client, name, &opts)
-		if actionDef, ok := embedder.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
+		if action, ok := embedder.(api.Action); ok {
+			actions = append(actions, action.Desc())
 		}
 	}
 

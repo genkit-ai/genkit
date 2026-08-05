@@ -1506,7 +1506,7 @@ func (m *Message) Text() string {
 // NewResume constructs a [GenerateActionResume] from Part slices.
 // This is useful when building [GenerateActionOptions] directly (e.g., from a
 // rendered prompt) and need to set the Resume field from [*Part] values
-// produced by [ToolDef.RestartWith] or [ToolDef.RespondWith].
+// produced by [ToolAction.RestartWith] or [ToolAction.RespondWith].
 func NewResume(restarts, responds []*Part) *GenerateActionResume {
 	return &GenerateActionResume{
 		Restart: restarts,
@@ -1628,14 +1628,14 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 					return nil, status.Errorf(ErrToolNotFound, "handleResumedToolRequest: tool %q not found", toolReq.Name)
 				}
 
-				toolDef := tool.Definition()
-				if len(toolDef.OutputSchema) > 0 {
+				toolDefinition := tool.Definition()
+				if len(toolDefinition.OutputSchema) > 0 {
 					outputBytes, err := json.Marshal(respondPart.ToolResponse.Output)
 					if err != nil {
 						return nil, status.Errorf(status.ErrInvalidArgument, "handleResumedToolRequest: failed to marshal tool output for validation: %w", err)
 					}
 
-					schemaBytes, err := json.Marshal(toolDef.OutputSchema)
+					schemaBytes, err := json.Marshal(toolDefinition.OutputSchema)
 					if err != nil {
 						return nil, status.Errorf(status.ErrInternal, "handleResumedToolRequest: tool %q has invalid output schema: %w", toolReq.Name, err)
 					}

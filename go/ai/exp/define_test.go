@@ -30,7 +30,7 @@ func defineTestModel(r api.Registry, name string, opts *ai.ModelOptions, fn ai.M
 	return m
 }
 
-func defineTestTool[In, Out any](r api.Registry, name, description string, fn ai.ToolFunc[In, Out], opts ...ai.ToolOption) *ai.ToolDef[In, Out] {
+func defineTestTool[In, Out any](r api.Registry, name, description string, fn ai.ToolFunc[In, Out], opts ...ai.ToolOption) *ai.ToolAction[In, Out] {
 	t := ai.NewTool(name, description, fn, opts...)
 	t.Register(r)
 	return t

@@ -40,15 +40,15 @@ type InterruptibleToolFunc[In, Out, Resume any] = func(ctx context.Context, inpu
 // Tool wraps an [ai.Tool] with experimental x package features
 // such as a plain [context.Context] function signature and [tool.AttachParts].
 //
-// DEPRECATED(breaking): With breaking changes, Tool would not wrap ai.ToolDef.
+// DEPRECATED(breaking): With breaking changes, Tool would not wrap ai.ToolAction.
 // It would be the primary tool type, backed directly by core.NewActionOf,
 // eliminating the inner field and all delegation methods below.
 type Tool[In, Out any] struct {
-	inner *ai.ToolDef[In, *ai.MultipartToolResponse] // DEPRECATED(breaking): remove wrapper; Tool owns the action directly.
+	inner *ai.ToolAction[In, *ai.MultipartToolResponse] // DEPRECATED(breaking): remove wrapper; Tool owns the action directly.
 }
 
 // DEPRECATED(breaking): The methods below exist to implement ai.Tool on top of
-// the wrapped ai.ToolDef. Most are pure delegation; Definition additionally
+// the wrapped ai.ToolAction. Most are pure delegation; Definition additionally
 // restores the real output schema (see its comment). With breaking changes, Tool
 // would own the action directly and implement these natively, inferring the
 // output schema from Out without the override.

@@ -1593,8 +1593,8 @@ Generate a recipe for {{food}}.
 
 	// verify the prompt is loaded with a schema reference
 	// the internal representation stores the schema with $ref for lazy resolution
-	actionDef := prompt.(api.Action).Desc()
-	outputSchema := actionDef.Metadata["prompt"].(map[string]any)["output"].(map[string]any)["schema"]
+	desc := prompt.(api.Action).Desc()
+	outputSchema := desc.Metadata["prompt"].(map[string]any)["output"].(map[string]any)["schema"]
 	if outputSchema == nil {
 		t.Fatal("Output schema should not be nil")
 	}
