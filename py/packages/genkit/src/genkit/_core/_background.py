@@ -228,7 +228,7 @@ def define_background_model(
 
     if info:
         # Export camelCase wire keys (e.g. longRunning) for Dev UI compatibility.
-        model_options.update(info.model_dump(by_alias=True))
+        model_options.update(info.model_dump(by_alias=True, exclude_none=True))
 
     model_options['label'] = label
     if config_schema:
