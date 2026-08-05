@@ -112,7 +112,9 @@ describe('waitForActionKeys', () => {
       .mockResolvedValueOnce({ '/flow/testFlow': {} });
 
     await expect(
-      waitForActionKeys(mockManager, ['/flow/testFlow'], 5000)
+      waitForActionKeys(mockManager, ['/flow/testFlow'], {
+        pollIntervalMs: 1,
+      })
     ).resolves.toBeUndefined();
     expect(mockManager.listActions).toHaveBeenCalledTimes(2);
   });
@@ -123,18 +125,46 @@ describe('waitForActionKeys', () => {
       .mockResolvedValueOnce({ '/flow/testFlow': {} });
 
     await expect(
-      waitForActionKeys(mockManager, ['/flow/testFlow'], 5000)
+      waitForActionKeys(mockManager, ['/flow/testFlow'], {
+        pollIntervalMs: 1,
+      })
     ).resolves.toBeUndefined();
     expect(mockManager.listActions).toHaveBeenCalledTimes(2);
   });
 
-  it('proceeds anyway (resolves) when the action never registers', async () => {
-    // Always missing; with a tiny timeout we should give up and resolve.
-    mockManager.listActions.mockResolvedValue({});
+  it('stops early once the action list stabilizes without the target', async () => {
+    // The action list never contains the target and stops changing, so we
+    // should give up after the stability window rather than the full timeout.
+    mockManager.listActions.mockResolvedValue({ '/flow/other': {} });
+
+    const start = Date.now();
+    await expect(
+      waitForActionKeys(mockManager, ['/flow/missing'], {
+        pollIntervalMs: 1,
+        stableForMs: 20,
+        timeoutMs: 30000,
+      })
+    ).resolves.toBeUndefined();
+    // Should return around the stability window, well before the timeout.
+    expect(Date.now() - start).toBeLessThan(5000);
+  });
+
+  it('keeps waiting while the action list is still growing', async () => {
+    // The list keeps changing (still registering), so the stability window
+    // should keep resetting until the target finally appears.
+    mockManager.listActions
+      .mockResolvedValueOnce({ a: {} })
+      .mockResolvedValueOnce({ a: {}, b: {} })
+      .mockResolvedValueOnce({ a: {}, b: {}, c: {} })
+      .mockResolvedValue({ a: {}, b: {}, c: {}, '/flow/testFlow': {} });
 
     await expect(
-      waitForActionKeys(mockManager, ['/flow/missing'], 10)
+      waitForActionKeys(mockManager, ['/flow/testFlow'], {
+        pollIntervalMs: 1,
+        stableForMs: 20,
+      })
     ).resolves.toBeUndefined();
+    expect(mockManager.listActions).toHaveBeenCalledTimes(4);
   });
 
   it('stops early (does not wait for timeout) when the runtime disconnects', async () => {
@@ -149,7 +179,10 @@ describe('waitForActionKeys', () => {
 
     const start = Date.now();
     await expect(
-      waitForActionKeys(mockManager, ['/flow/testFlow'], 30000)
+      waitForActionKeys(mockManager, ['/flow/testFlow'], {
+        pollIntervalMs: 1,
+        timeoutMs: 30000,
+      })
     ).resolves.toBeUndefined();
     // Should return well before the 30s deadline.
     expect(Date.now() - start).toBeLessThan(5000);

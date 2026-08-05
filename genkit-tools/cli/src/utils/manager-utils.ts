@@ -220,6 +220,19 @@ export async function waitForRuntime(
   }
 }
 
+export interface WaitForActionKeysOptions {
+  /** How often to poll the runtime for its action list. */
+  pollIntervalMs?: number;
+  /**
+   * If the set of registered actions stops changing for this long and the
+   * target action(s) still haven't appeared, stop waiting. This keeps a
+   * mistyped action name from blocking for the full timeout.
+   */
+  stableForMs?: number;
+  /** Hard upper bound as a safety net. */
+  timeoutMs?: number;
+}
+
 /**
  * Waits until all of the given action keys are registered with the runtime.
  *
@@ -228,25 +241,34 @@ export async function waitForRuntime(
  * with the CLI during initialization but define their actions slightly later.
  * If we dispatch a runAction before the target action is registered, the
  * runtime returns an "action not found" error. Polling until the actions
- * appear closes that race. On timeout we proceed anyway and let the real
- * error surface.
+ * appear closes that race.
+ *
+ * To avoid making a mistyped action name block for the full timeout, we watch
+ * the number of registered actions: while it keeps changing, registration is
+ * still in progress; once it settles (stops changing for `stableForMs`) without
+ * the target appearing, we stop waiting and let the subsequent runAction
+ * surface the real "not found" error.
  */
 export async function waitForActionKeys(
   manager: BaseRuntimeManager,
   keys: string[],
-  timeoutMs: number = 30000
+  options: WaitForActionKeysOptions = {}
 ): Promise<void> {
   const requiredKeys = keys.filter((k) => !!k);
   if (requiredKeys.length === 0) return;
 
-  const delayMs = 200;
-  const deadline = Date.now() + timeoutMs;
+  const pollIntervalMs = options.pollIntervalMs ?? 500;
+  const stableForMs = options.stableForMs ?? 5000;
+  const deadline = Date.now() + (options.timeoutMs ?? 30000);
+
   let hasSeenRuntime = manager.listRuntimes().length > 0;
+  let lastCount = -1;
+  let lastChange = Date.now();
 
   while (true) {
     // If the runtime process crashed or exited after registering but before
-    // registering its actions, stop waiting instead of hanging until the
-    // deadline. A subsequent runAction will surface the real error.
+    // registering its actions, stop waiting instead of hanging. A subsequent
+    // runAction will surface the real error.
     if (manager.listRuntimes().length > 0) {
       hasSeenRuntime = true;
     } else if (hasSeenRuntime) {
@@ -258,26 +280,32 @@ export async function waitForActionKeys(
 
     try {
       const actions = await manager.listActions();
-      const registered = new Set(Object.keys(actions));
-      const missing = requiredKeys.filter((k) => !registered.has(k));
+      const registered = Object.keys(actions);
+      const missing = requiredKeys.filter((k) => !registered.includes(k));
       if (missing.length === 0) return;
-      if (Date.now() >= deadline) {
+
+      if (registered.length !== lastCount) {
+        // Still registering actions; reset the stability window.
+        lastCount = registered.length;
+        lastChange = Date.now();
+      } else if (Date.now() - lastChange >= stableForMs) {
         logger.debug(
-          `Timed out waiting for action(s) to register: ${missing.join(
+          `Action list stabilized without registering: ${missing.join(
             ', '
-          )}. Proceeding anyway.`
+          )}. Stopping wait.`
         );
         return;
       }
     } catch (e) {
-      // The actions endpoint may not be ready yet; keep polling until the
-      // deadline.
-      if (Date.now() >= deadline) {
-        logger.debug(`Timed out waiting for actions to register: ${e}`);
-        return;
-      }
+      // The actions endpoint may not be ready yet; keep polling.
+      logger.debug(`Polling for actions failed, will retry: ${e}`);
     }
-    await new Promise((r) => setTimeout(r, delayMs));
+
+    if (Date.now() >= deadline) {
+      logger.debug('Timed out waiting for actions to register. Proceeding.');
+      return;
+    }
+    await new Promise((r) => setTimeout(r, pollIntervalMs));
   }
 }
 
