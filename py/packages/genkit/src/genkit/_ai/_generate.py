@@ -1091,12 +1091,12 @@ async def resolve_parameters(
 
     model_action = await registry.resolve_model(model)
     if model_action is None:
-        hint = ''
+        message = f"Failed to resolve model '{model}'."
         if isinstance(model, str) and '/' not in model:
-            hint = f" Did you mean 'googleai/{model}' or 'vertexai/{model}'?"
+            message += f" Ensure the model name includes a provider prefix (e.g., 'googleai/{model}' or 'vertexai/{model}')."
         raise GenkitError(
             status='NOT_FOUND',
-            message=f"Failed to resolve model '{model}'.{hint}",
+            message=message,
         )
 
     # Resolve tools up front to fail fast on invalid caller-supplied tool names or
