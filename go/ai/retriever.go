@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
@@ -29,6 +30,11 @@ import (
 
 // RetrieverFunc is the function type for retriever implementations.
 type RetrieverFunc = func(context.Context, *RetrieverRequest) (*RetrieverResponse, error)
+
+// TypedRetrieverFunc is a [RetrieverFunc] that additionally receives the
+// request's typed Config: the framework deserializes the request's raw
+// options into it before calling the function (see [NewTypedRetriever]).
+type TypedRetrieverFunc[Config any] = func(context.Context, *RetrieverRequest, Config) (*RetrieverResponse, error)
 
 // Retriever represents a document retriever.
 type Retriever interface {
@@ -40,10 +46,20 @@ type Retriever interface {
 	Register(r api.Registry)
 }
 
-// retriever is an action with functions specific to document retrieval such as Retrieve().
-type retriever struct {
-	core.Action[*RetrieverRequest, *RetrieverResponse, struct{}]
+// RetrieverAction is a retriever backed by a registry action. It is the
+// concrete type returned by [NewTypedRetriever]; pass it to [WithRetriever] to
+// retrieve with it, or return it from a plugin's Init for the framework to
+// register.
+type RetrieverAction struct {
+	action[*RetrieverRequest, *RetrieverResponse, struct{}]
 }
+
+// RetrieverAction is a full registry action and can be passed anywhere an
+// [api.Action] is accepted as well as anywhere a [Retriever] is accepted.
+var (
+	_ api.Action = (*RetrieverAction)(nil)
+	_ Retriever  = (*RetrieverAction)(nil)
+)
 
 // RetrieverArg is the interface for retriever arguments. It can either be the retriever action itself or a reference to be looked up.
 type RetrieverArg interface {
@@ -85,12 +101,30 @@ type RetrieverOptions struct {
 	Label string `json:"label,omitempty"`
 	// Supports defines the capabilities of the retriever, such as media support.
 	Supports *RetrieverSupports `json:"supports,omitempty"`
+	// Metadata is arbitrary key-value data attached to the action descriptor.
+	Metadata map[string]any `json:"-"`
 }
 
-// NewRetriever creates a new [Retriever].
-func NewRetriever(name string, opts *RetrieverOptions, fn RetrieverFunc) Retriever {
+// NewTypedRetriever creates an unregistered [RetrieverAction]: return it from
+// a plugin's Init for the framework to register, or call
+// [RetrieverAction.Register] directly. Applications should define retrievers
+// with [genkit.DefineTypedRetriever].
+//
+// Config is the retriever's typed configuration; it is usually inferred from
+// fn's signature. The framework deserializes the request's raw options into
+// Config before calling fn: the exact Config type (or a pointer to it) and
+// map[string]any (from the Dev UI and other JSON callers) are accepted, and
+// mismatched types are rejected. The request's [RetrieverRequest.Options] is
+// normalized to the converted value, so it always matches the typed
+// parameter. The config's JSON schema is inferred from Config unless
+// [RetrieverOptions.ConfigSchema] overrides it.
+func NewTypedRetriever[Config any](
+	name string,
+	opts *RetrieverOptions,
+	fn TypedRetrieverFunc[Config],
+) *RetrieverAction {
 	if name == "" {
-		panic("ai.NewRetriever: retriever name is required")
+		panic("ai.NewTypedRetriever: retriever name is required")
 	}
 
 	if opts == nil {
@@ -102,24 +136,53 @@ func NewRetriever(name string, opts *RetrieverOptions, fn RetrieverFunc) Retriev
 		opts.Supports = &RetrieverSupports{}
 	}
 
-	metadata := map[string]any{
-		"type": api.ActionTypeRetriever,
-		"info": map[string]any{
-			"label": opts.Label,
-			"supports": map[string]any{
-				"media": opts.Supports.Media,
-			},
-		},
-		"retriever": map[string]any{
-			"customOptions": opts.ConfigSchema,
+	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, RetrieverRequest{}, "options")
+
+	// Seed from the caller's metadata, then stamp the built-in keys over it so
+	// they cannot be corrupted; registry discovery depends on them.
+	metadata := make(map[string]any, len(opts.Metadata)+3)
+	maps.Copy(metadata, opts.Metadata)
+	metadata["type"] = api.ActionTypeRetriever
+	metadata["info"] = map[string]any{
+		"label": opts.Label,
+		"supports": map[string]any{
+			"media": opts.Supports.Media,
 		},
 	}
-
-	inputSchema := requestInputSchema(RetrieverRequest{}, "options", opts.ConfigSchema)
-
-	return &retriever{
-		Action: *core.NewActionOf(api.ActionTypeRetriever, name, &core.ActionOptions{Metadata: metadata, InputSchema: inputSchema}, fn),
+	metadata["retriever"] = map[string]any{
+		"customOptions": configSchema,
 	}
+
+	rawFn := func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+		cfg, err := resolveConfig[Config](req.Options)
+		if err != nil {
+			return nil, err
+		}
+		// Normalize the request so its type-erased Options always carries the
+		// same converted value the typed parameter does.
+		req.Options = cfg
+		return fn(ctx, req, cfg)
+	}
+
+	return &RetrieverAction{
+		action: *core.NewActionOf(api.ActionTypeRetriever, name, &core.ActionOptions{
+			Metadata:    metadata,
+			InputSchema: inputSchema,
+		}, rawFn),
+	}
+}
+
+// NewRetriever creates a new [Retriever].
+//
+// Deprecated: Use [NewTypedRetriever], which passes the request's options to
+// fn as a typed value instead of leaving them type-erased on the request.
+func NewRetriever(name string, opts *RetrieverOptions, fn RetrieverFunc) Retriever {
+	if name == "" {
+		panic("ai.NewRetriever: retriever name is required")
+	}
+	return NewTypedRetriever(name, opts, func(ctx context.Context, req *RetrieverRequest, _ any) (*RetrieverResponse, error) {
+		return fn(ctx, req)
+	})
 }
 
 // LookupRetriever looks up a registered [Retriever] by name.
@@ -130,13 +193,11 @@ func LookupRetriever(r api.Registry, name string) Retriever {
 	if action == nil {
 		return nil
 	}
-	return &retriever{
-		Action: *action,
-	}
+	return &RetrieverAction{*action}
 }
 
 // Retrieve runs the given [Retriever].
-func (r *retriever) Retrieve(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+func (r *RetrieverAction) Retrieve(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
 	if r == nil {
 		return nil, status.Errorf(status.ErrInvalidArgument, "Retriever.Retrieve: retriever called on a nil retriever; check that all retrievers are defined")
 	}
