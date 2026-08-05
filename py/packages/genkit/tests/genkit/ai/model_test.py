@@ -451,6 +451,7 @@ def test_model_request_dump_emits_no_serializer_warnings() -> None:
         messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
         config={'api_key': 'k'},
     )
+    # Convert all Python/Pydantic warnings into hard errors so silent serialization warnings fail the test.
     with warnings.catch_warnings():
         warnings.simplefilter('error')
         request.model_dump(mode='python')
