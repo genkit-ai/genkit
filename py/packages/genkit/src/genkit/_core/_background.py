@@ -125,7 +125,8 @@ class BackgroundAction(Generic[OutputT]):
             An Operation with an ID to track the job.
         """
         result = await self.start_action.run(input)
-        return ensure_operation(result.response)
+        res = result.response
+        return Operation.model_validate(res) if isinstance(res, dict) else res
 
     async def check(self, operation: Operation) -> Operation:
         """Check the status of a background operation.
@@ -139,7 +140,8 @@ class BackgroundAction(Generic[OutputT]):
             Updated Operation with current status.
         """
         result = await self.check_action.run(operation)
-        return ensure_operation(result.response)
+        res = result.response
+        return Operation.model_validate(res) if isinstance(res, dict) else res
 
     async def cancel(self, operation: Operation) -> Operation:
         """Cancel a background operation.
@@ -159,16 +161,8 @@ class BackgroundAction(Generic[OutputT]):
             # Match JS behavior: return operation unchanged if cancel not supported
             return operation
         result = await self.cancel_action.run(operation)
-        return ensure_operation(result.response)
-
-
-def ensure_operation(response: object) -> Operation:
-    """Convert response to Operation type."""
-    if isinstance(response, Operation):
-        return response
-    if isinstance(response, dict):
-        return Operation.model_validate(response)
-    raise TypeError(f'Expected Operation, got {type(response)}')
+        res = result.response
+        return Operation.model_validate(res) if isinstance(res, dict) else res
 
 
 class DefineBackgroundModelOptions(BaseModel):
