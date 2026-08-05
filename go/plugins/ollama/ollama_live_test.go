@@ -101,7 +101,7 @@ func assertLiveCapabilities(t *testing.T, desc api.ActionDesc, capabilities []st
 	wantMedia := true
 	if detected {
 		wantTools = slices.Contains(capabilities, "tools")
-		wantMedia = slices.Contains(capabilities, "vision") || slices.Contains(capabilities, "audio")
+		wantMedia = slices.Contains(capabilities, "vision")
 	}
 	if got, ok := supports["tools"].(bool); !ok || got != wantTools {
 		t.Errorf("%q tools support = %v, want %v from /api/show capabilities %v", desc.Name, supports["tools"], wantTools, capabilities)

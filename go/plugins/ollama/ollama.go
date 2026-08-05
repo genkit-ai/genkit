@@ -41,8 +41,9 @@ import (
 )
 
 const (
-	provider                 = "ollama"
-	modelCapabilitiesTimeout = 5 * time.Second
+	provider                       = "ollama"
+	modelCapabilitiesTimeout       = 5 * time.Second
+	capabilityFailureCacheLifetime = 30 * time.Second
 )
 
 var (
@@ -84,8 +85,9 @@ type ollamaTagsResponse struct {
 
 // ollamaLocalModel represents a locally available Ollama model from /api/tags.
 type ollamaLocalModel struct {
-	Name  string `json:"name"`
-	Model string `json:"model"`
+	Name   string `json:"name"`
+	Model  string `json:"model"`
+	Digest string `json:"digest"`
 }
 
 // ollamaShowResponse represents the response from POST /api/show.
@@ -94,16 +96,14 @@ type ollamaShowResponse struct {
 }
 
 // getModelCapabilities calls POST /api/show to retrieve the model's capabilities.
-// The boolean reports whether the server returned a capabilities field, allowing
-// callers to distinguish an explicitly empty list from an unavailable endpoint.
-func (o *Ollama) getModelCapabilities(ctx context.Context, modelName string) ([]string, bool) {
+func (o *Ollama) getModelCapabilities(ctx context.Context, modelName string) ([]string, error) {
 	body, err := json.Marshal(map[string]string{"model": modelName})
 	if err != nil {
-		return nil, false
+		return nil, fmt.Errorf("failed to encode /api/show request for %q: %w", modelName, err)
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", o.ServerAddress+"/api/show", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", o.endpoint("/api/show"), bytes.NewReader(body))
 	if err != nil {
-		return nil, false
+		return nil, fmt.Errorf("failed to create /api/show request for %q: %w", modelName, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	client := o.client
@@ -112,20 +112,24 @@ func (o *Ollama) getModelCapabilities(ctx context.Context, modelName string) ([]
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, false
+		return nil, fmt.Errorf("failed to query capabilities for %q: %w", modelName, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, false
+		return nil, fmt.Errorf("ollama /api/show returned status %d for %q", resp.StatusCode, modelName)
 	}
 	var showResp ollamaShowResponse
 	if err := json.NewDecoder(resp.Body).Decode(&showResp); err != nil {
-		return nil, false
+		return nil, fmt.Errorf("failed to decode /api/show response for %q: %w", modelName, err)
 	}
 	if showResp.Capabilities == nil {
-		return nil, false
+		return nil, fmt.Errorf("ollama /api/show response for %q omitted capabilities", modelName)
 	}
-	return *showResp.Capabilities, true
+	return *showResp.Capabilities, nil
+}
+
+func (o *Ollama) endpoint(path string) string {
+	return strings.TrimRight(o.ServerAddress, "/") + path
 }
 
 // modelCapabilitiesContext bounds metadata lookups independently from the
@@ -145,25 +149,25 @@ func modelSupportsFromCapabilities(caps []string) *ai.ModelSupports {
 		Multiturn:  true,
 		SystemRole: true,
 		Tools:      slices.Contains(caps, "tools"),
-		Media:      slices.Contains(caps, "vision") || slices.Contains(caps, "audio"),
+		// concatImages only forwards image parts; audio input is not supported.
+		Media: slices.Contains(caps, "vision"),
 	}
 }
 
 // modelSupportsFromStaticLists preserves the fallback used by explicitly
 // defined models when the server does not report capabilities.
 func modelSupportsFromStaticLists(modelName string) *ai.ModelSupports {
-	baseName, _, _ := strings.Cut(modelName, ":")
 	return &ai.ModelSupports{
 		Multiturn:  true,
 		SystemRole: true,
-		Tools:      slices.Contains(toolSupportedModels, baseName) || slices.Contains(toolSupportedModels, modelName),
-		Media:      slices.Contains(mediaSupportedModels, baseName) || slices.Contains(mediaSupportedModels, modelName),
+		Tools:      slices.Contains(toolSupportedModels, modelName),
+		Media:      slices.Contains(mediaSupportedModels, modelName),
 	}
 }
 
 // listLocalModels calls GET /api/tags to list locally installed Ollama models.
 func (o *Ollama) listLocalModels(ctx context.Context) ([]ollamaLocalModel, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", o.ServerAddress+"/api/tags", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", o.endpoint("/api/tags"), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -194,21 +198,17 @@ func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.M
 	}
 	o.mu.Unlock()
 
-	// Detect capabilities outside the lock to avoid holding it during HTTP I/O.
 	var modelOpts ai.ModelOptions
 	if opts != nil {
 		modelOpts = *opts
 	} else {
-		// Query the Ollama server for the model's actual capabilities via
-		// /api/show. This replaces the hardcoded allowlist approach so that
-		// newly released models (e.g. gemma4) work automatically without
-		// code changes. Falls back to the static list for older servers.
-		ctx, cancel := o.modelCapabilitiesContext(context.Background())
-		defer cancel()
-		caps, detected := o.getModelCapabilities(ctx, model.Name)
+		// Explicitly registered models retain the static capability fallback used
+		// before dynamic discovery was added. Reuse successful discovery results
+		// when available without doing network I/O during registration.
 		supports := modelSupportsFromStaticLists(model.Name)
-		if detected {
-			supports = modelSupportsFromCapabilities(caps)
+		if cached, ok := o.cachedModelCapabilities(model.Name, ""); ok && cached.detected {
+			cachedSupports := cached.supports
+			supports = &cachedSupports
 		}
 		// Only chat models use /api/chat, which is the endpoint that accepts tools.
 		supports.Tools = model.Type == "chat" && supports.Tools
@@ -401,9 +401,17 @@ type Ollama struct {
 	ServerAddress string // Server address of oLLama.
 	Timeout       int    // Response timeout in seconds (defaulted to 30 seconds)
 
-	mu      sync.Mutex   // Mutex to control access.
-	initted bool         // Whether the plugin has been initialized.
-	client  *http.Client // Shared HTTP client for API calls (e.g., /api/tags).
+	mu                sync.Mutex   // Mutex to control access.
+	initted           bool         // Whether the plugin has been initialized.
+	client            *http.Client // Shared HTTP client for API calls (e.g., /api/tags).
+	capabilitiesCache map[string]modelCapabilitiesCacheEntry
+}
+
+type modelCapabilitiesCacheEntry struct {
+	digest   string
+	supports ai.ModelSupports
+	detected bool
+	expires  time.Time
 }
 
 func (o *Ollama) Name() string {
@@ -427,7 +435,40 @@ func (o *Ollama) Init(ctx context.Context) []api.Action {
 		o.Timeout = 30
 	}
 	o.client = &http.Client{}
+	o.capabilitiesCache = make(map[string]modelCapabilitiesCacheEntry)
 	return []api.Action{}
+}
+
+func (o *Ollama) cachedModelCapabilities(name, digest string) (modelCapabilitiesCacheEntry, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	entry, ok := o.capabilitiesCache[name]
+	if !ok || (digest != "" && entry.digest != digest) {
+		return modelCapabilitiesCacheEntry{}, false
+	}
+	if !entry.expires.IsZero() && time.Now().After(entry.expires) {
+		delete(o.capabilitiesCache, name)
+		return modelCapabilitiesCacheEntry{}, false
+	}
+	return entry, true
+}
+
+func (o *Ollama) cacheModelSupports(name, digest string, supports *ai.ModelSupports, detected bool) {
+	if supports == nil {
+		return
+	}
+	var expires time.Time
+	if !detected {
+		expires = time.Now().Add(capabilityFailureCacheLifetime)
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.capabilitiesCache == nil {
+		o.capabilitiesCache = make(map[string]modelCapabilitiesCacheEntry)
+	}
+	o.capabilitiesCache[name] = modelCapabilitiesCacheEntry{
+		digest: digest, supports: *supports, detected: detected, expires: expires,
+	}
 }
 
 // newModel creates an Ollama model without registering it in the Genkit registry.
@@ -455,26 +496,52 @@ func (o *Ollama) ListActions(ctx context.Context) []api.ActionDesc {
 		return nil
 	}
 
-	var actions []api.ActionDesc
+	filtered := make([]ollamaLocalModel, 0, len(models))
 	for _, m := range models {
-		name := m.Name
 		// Filter out embedding models (following JS: !m.model.includes('embed'))
-		if strings.Contains(name, "embed") {
+		if strings.Contains(m.Name, "embed") {
 			continue
 		}
-		// Check for context cancellation before each potentially slow HTTP call.
-		if ctx.Err() != nil {
-			break
+		filtered = append(filtered, m)
+	}
+
+	supports := make([]*ai.ModelSupports, len(filtered))
+	var wg sync.WaitGroup
+	for i, m := range filtered {
+		if cached, ok := o.cachedModelCapabilities(m.Name, m.Digest); ok {
+			cachedSupports := cached.supports
+			supports[i] = &cachedSupports
+			continue
 		}
-		// Query each model's actual capabilities from the Ollama server.
-		capabilityCtx, cancel := o.modelCapabilitiesContext(ctx)
-		caps, detected := o.getModelCapabilities(capabilityCtx, name)
-		cancel()
-		supports := &defaultOllamaSupports
-		if detected {
-			supports = modelSupportsFromCapabilities(caps)
-		}
-		model := o.newModel(name, ai.ModelOptions{Supports: supports})
+		wg.Add(1)
+		go func(i int, m ollamaLocalModel) {
+			defer wg.Done()
+			capabilityCtx, cancel := o.modelCapabilitiesContext(ctx)
+			defer cancel()
+			caps, err := o.getModelCapabilities(capabilityCtx, m.Name)
+			modelSupports := &defaultOllamaSupports
+			if err != nil {
+				if ctx.Err() == nil {
+					slog.Warn("unable to detect ollama model capabilities", "model", m.Name, "error", err)
+				}
+			} else {
+				modelSupports = modelSupportsFromCapabilities(caps)
+			}
+			supports[i] = modelSupports
+			if ctx.Err() == nil {
+				o.cacheModelSupports(m.Name, m.Digest, modelSupports, err == nil)
+			}
+		}(i, m)
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		slog.Warn("ollama model discovery canceled", "error", err)
+		return nil
+	}
+
+	actions := make([]api.ActionDesc, 0, len(filtered))
+	for i, m := range filtered {
+		model := o.newModel(m.Name, ai.ModelOptions{Supports: supports[i]})
 		if action, ok := model.(api.Action); ok {
 			actions = append(actions, action.Desc())
 		}
@@ -487,13 +554,10 @@ func (o *Ollama) ResolveAction(atype api.ActionType, name string) api.Action {
 	if atype != api.ActionTypeModel {
 		return nil
 	}
-	// Query the model's actual capabilities from the Ollama server.
-	ctx, cancel := o.modelCapabilitiesContext(context.Background())
-	defer cancel()
-	caps, detected := o.getModelCapabilities(ctx, name)
 	supports := &defaultOllamaSupports
-	if detected {
-		supports = modelSupportsFromCapabilities(caps)
+	if cached, ok := o.cachedModelCapabilities(name, ""); ok {
+		cachedSupports := cached.supports
+		supports = &cachedSupports
 	}
 	model := o.newModel(name, ai.ModelOptions{Supports: supports})
 	if action, ok := model.(api.Action); ok {
