@@ -191,9 +191,13 @@ func TestEvaluatorActionMetadata(t *testing.T) {
 
 func TestBackgroundModelActionMetadata(t *testing.T) {
 	bm := NewBackgroundModelAction("test/bg-metadata",
-		&TypedBackgroundModelOptions{
+		&BackgroundModelOptions{
+			ModelOptions: ModelOptions{
+				Metadata: map[string]any{"inner": "kept", "shared": "inner"},
+			},
 			Metadata: map[string]any{
 				"custom": "value",
+				"shared": "outer",
 				"model":  "caller values must not clobber the reserved keys",
 			},
 		},
@@ -207,6 +211,12 @@ func TestBackgroundModelActionMetadata(t *testing.T) {
 	metadata := bm.Desc().Metadata
 	if got := metadata["custom"]; got != "value" {
 		t.Errorf(`Metadata["custom"] = %v, want "value"`, got)
+	}
+	if got := metadata["inner"]; got != "kept" {
+		t.Errorf(`Metadata["inner"] = %v, want the embedded ModelOptions metadata carried through`, got)
+	}
+	if got := metadata["shared"]; got != "outer" {
+		t.Errorf(`Metadata["shared"] = %v, want the top-level Metadata to win`, got)
 	}
 	if got := metadata["type"]; got != api.ActionTypeBackgroundModel {
 		t.Errorf(`Metadata["type"] = %v, want %v`, got, api.ActionTypeBackgroundModel)

@@ -85,31 +85,21 @@ type CheckModelOpFunc = func(ctx context.Context, op *ModelOperation) (*ModelOpe
 // CancelModelOpFunc cancels a background model operation.
 type CancelModelOpFunc = func(ctx context.Context, op *ModelOperation) (*ModelOperation, error)
 
-// TypedBackgroundModelOptions configures a background model created with
-// [NewBackgroundModelAction]. It holds descriptor data plus optional lifecycle
-// hooks; the required start and check functions are constructor arguments.
-type TypedBackgroundModelOptions struct {
-	ConfigSchema map[string]any // JSON schema for the model's config.
-	Label        string         // User-friendly name for the model.
-	Stage        ModelStage     // Indicates the maturity stage of the model.
-	Supports     *ModelSupports // Capabilities of the model.
-	Versions     []string       // Available versions of the model.
-	Metadata     map[string]any // Arbitrary key-value data attached to the action descriptor.
+// BackgroundModelOptions configures a background model created with
+// [NewBackgroundModelAction]. It extends [ModelOptions] with the operation
+// lifecycle hooks a background model needs; the required start and check
+// functions are constructor arguments.
+type BackgroundModelOptions struct {
+	ModelOptions
 
 	// Cancel cancels a running operation. Optional: nil means the model does
 	// not support canceling operations.
 	Cancel CancelModelOpFunc
-}
 
-// BackgroundModelOptions holds configuration for defining a background model.
-//
-// Deprecated: Use [TypedBackgroundModelOptions] with
-// [NewBackgroundModelAction].
-type BackgroundModelOptions struct {
-	ModelOptions
-	// Cancel is the function that cancels a background model operation.
-	Cancel   CancelModelOpFunc
-	Metadata map[string]any // Additional metadata.
+	// Metadata is arbitrary key-value data attached to the action descriptor.
+	// It is merged over [ModelOptions.Metadata]; this field wins on key
+	// conflicts.
+	Metadata map[string]any
 }
 
 // LookupBackgroundModel looks up a registered [BackgroundModel] by name.
@@ -133,7 +123,7 @@ func LookupBackgroundModel(r api.Registry, name string) BackgroundModel {
 // is deserialized.
 func NewBackgroundModelAction[Config any](
 	name string,
-	opts *TypedBackgroundModelOptions,
+	opts *BackgroundModelOptions,
 	startFn BackgroundModelActionFunc[Config],
 	checkFn CheckModelOpFunc,
 ) *BackgroundModelAction {
@@ -148,7 +138,7 @@ func NewBackgroundModelAction[Config any](
 	}
 
 	if opts == nil {
-		opts = &TypedBackgroundModelOptions{}
+		opts = &BackgroundModelOptions{}
 	}
 	labelExplicit := opts.Label != ""
 	if !labelExplicit {
@@ -161,8 +151,11 @@ func NewBackgroundModelAction[Config any](
 	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, ModelRequest{}, "config")
 
 	// Seed from the caller's metadata, then stamp the built-in keys over it so
-	// they cannot be corrupted; registry discovery depends on them.
-	metadata := make(map[string]any, len(opts.Metadata)+2)
+	// they cannot be corrupted; registry discovery depends on them. The
+	// top-level Metadata wins over the embedded ModelOptions.Metadata on key
+	// conflicts.
+	metadata := make(map[string]any, len(opts.ModelOptions.Metadata)+len(opts.Metadata)+2)
+	maps.Copy(metadata, opts.ModelOptions.Metadata)
 	maps.Copy(metadata, opts.Metadata)
 	metadata["type"] = api.ActionTypeBackgroundModel
 	metadata["model"] = map[string]any{
@@ -194,13 +187,7 @@ func NewBackgroundModelAction[Config any](
 		return startFn(ctx, req, cfg)
 	}
 
-	mopts := &ModelOptions{
-		ConfigSchema: opts.ConfigSchema,
-		Label:        opts.Label,
-		Stage:        opts.Stage,
-		Supports:     opts.Supports,
-		Versions:     opts.Versions,
-	}
+	mopts := &opts.ModelOptions
 
 	// normalizeConfig runs outermost so that the built-in wrappers and the
 	// start function all see the typed, converted config on the request.
@@ -247,18 +234,7 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 	if startFn == nil {
 		panic("ai.NewBackgroundModel: startFn is required")
 	}
-	if opts == nil {
-		opts = &BackgroundModelOptions{}
-	}
-	return NewBackgroundModelAction(name, &TypedBackgroundModelOptions{
-		ConfigSchema: opts.ConfigSchema,
-		Label:        opts.Label,
-		Stage:        opts.Stage,
-		Supports:     opts.Supports,
-		Versions:     opts.Versions,
-		Metadata:     opts.Metadata,
-		Cancel:       opts.Cancel,
-	}, func(ctx context.Context, req *ModelRequest, _ any) (*ModelOperation, error) {
+	return NewBackgroundModelAction(name, opts, func(ctx context.Context, req *ModelRequest, _ any) (*ModelOperation, error) {
 		return startFn(ctx, req)
 	}, checkFn)
 }

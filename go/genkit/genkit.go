@@ -595,7 +595,7 @@ func DefineModel(g *Genkit, name string, opts *ai.ModelOptions, fn ai.ModelFunc)
 func DefineBackgroundModelAction[Config any](
 	g *Genkit,
 	name string,
-	opts *ai.TypedBackgroundModelOptions,
+	opts *ai.BackgroundModelOptions,
 	startFn ai.BackgroundModelActionFunc[Config],
 	checkFn ai.CheckModelOpFunc,
 ) *ai.BackgroundModelAction {
