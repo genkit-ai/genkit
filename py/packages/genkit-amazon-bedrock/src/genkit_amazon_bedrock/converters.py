@@ -602,12 +602,9 @@ def _coerce_tool_input(name: str, value: Any, tools: list[ToolDefinition] | None
 def _reasoning_block_to_part(block: dict[str, Any]) -> Part | None:  # noqa: ANN401
     reasoning_text = block.get('reasoningText')
     if reasoning_text is not None:
-        # Both wire shapes occur: {'text': ...} and a bare string.
-        if isinstance(reasoning_text, str):
-            text, signature = reasoning_text, None
-        else:
-            text = reasoning_text.get('text') or ''
-            signature = reasoning_text.get('signature')
+        # A ReasoningTextBlock structure on the wire, so botocore parses it to a dict.
+        text = reasoning_text.get('text') or ''
+        signature = reasoning_text.get('signature')
         if not text and not signature:
             return None
         return _bedrock_reasoning_part(text, signature, None)

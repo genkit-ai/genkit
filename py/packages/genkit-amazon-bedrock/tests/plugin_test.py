@@ -101,6 +101,12 @@ async def test_resolve_ignores_non_model_kinds() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolve_ignores_other_plugin_namespaces() -> None:
+    plugin = Bedrock(region='us-east-1')
+    assert await plugin.resolve(ActionKind.MODEL, 'openai/gpt-4') is None
+
+
+@pytest.mark.asyncio
 async def test_resolve_skips_non_chat_model_definitions() -> None:
     plugin = Bedrock(
         region='us-east-1',

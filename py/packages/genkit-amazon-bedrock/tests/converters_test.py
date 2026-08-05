@@ -752,11 +752,6 @@ def test_reasoning_text_block_becomes_reasoning_part_with_both_keys() -> None:
     assert root.metadata[REASONING_SIGNATURE_METADATA_KEY] == 'sig'
 
 
-def test_reasoning_text_bare_string_shape_is_handled() -> None:
-    parts = content_blocks_to_parts([{'reasoningContent': {'reasoningText': 'raw thought'}}])
-    assert parts[0].root.reasoning == 'raw thought'
-
-
 def test_redacted_content_block_becomes_reasoning_part() -> None:
     parts = content_blocks_to_parts([{'reasoningContent': {'redactedContent': b'blob'}}])
     root = parts[0].root
