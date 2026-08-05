@@ -101,8 +101,8 @@ func main() {
 	// GEMINI_API_KEY or GOOGLE_API_KEY environment variable, which is the recommended
 	// practice. The Vertex AI plugin is added conditionally when GOOGLE_CLOUD_PROJECT
 	// and a location are set, so the gemini-3.1 Vertex flows only register when
-	// that config is present. Vertex's gemini-3.1-flash-*-preview models are
-	// Global-only — set GOOGLE_CLOUD_LOCATION=global.
+	// that config is present. Vertex's gemini-3.1-flash-* models are
+	// Global-only, so set GOOGLE_CLOUD_LOCATION=global.
 	plugins := []api.Plugin{&googlegenai.GoogleAI{}}
 	hasVertex := hasVertexAIConfig()
 	if hasVertex {
@@ -145,20 +145,20 @@ func main() {
 	})
 
 	genkit.DefineFlow(g, "gemini31LiteGoogleAIFlow", func(ctx context.Context, input string) (string, error) {
-		return generateGemini31Lite(ctx, g, "googleai/gemini-3.1-flash-lite-preview", input)
+		return generateGemini31Lite(ctx, g, "googleai/gemini-3.1-flash-lite", input)
 	})
 
 	genkit.DefineFlow(g, "gemini31ImageGoogleAIFlow", func(ctx context.Context, input string) (*imageFlowResult, error) {
-		return generateGemini31Image(ctx, g, "googleai/gemini-3.1-flash-image-preview", input)
+		return generateGemini31Image(ctx, g, "googleai/gemini-3.1-flash-image", input)
 	})
 
 	if hasVertex {
 		genkit.DefineFlow(g, "gemini31LiteVertexAIFlow", func(ctx context.Context, input string) (string, error) {
-			return generateGemini31Lite(ctx, g, "vertexai/gemini-3.1-flash-lite-preview", input)
+			return generateGemini31Lite(ctx, g, "vertexai/gemini-3.1-flash-lite", input)
 		})
 
 		genkit.DefineFlow(g, "gemini31ImageVertexAIFlow", func(ctx context.Context, input string) (*imageFlowResult, error) {
-			return generateGemini31Image(ctx, g, "vertexai/gemini-3.1-flash-image-preview", input)
+			return generateGemini31Image(ctx, g, "vertexai/gemini-3.1-flash-image", input)
 		})
 	}
 
