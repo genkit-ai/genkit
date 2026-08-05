@@ -78,12 +78,6 @@ def model_ref(
     """Create a ModelRef, optionally prefixing name with namespace."""
     final_name = f'{namespace}/{name}' if namespace and not name.startswith(f'{namespace}/') else name
 
-    if config is not None:
-        if isinstance(config, dict):
-            config = config_schema.model_validate(config)
-        elif not isinstance(config, config_schema):
-            raise TypeError(f'config must conform to {config_schema.__name__}, got {type(config).__name__}')
-
     return ModelRef[ModelRefConfigT](
         name=final_name,
         config_schema=config_schema,
