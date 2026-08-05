@@ -25,7 +25,7 @@ from typing import Any, Generic, TypeVar, cast
 from pydantic import BaseModel
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
-from genkit._core._model import ConfigT, ModelRequest, ModelResponse
+from genkit._core._model import ModelRequestConfigT, ModelRequest, ModelResponse
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
@@ -51,7 +51,7 @@ def make_action_key(action_type: ActionKind | str, name: str) -> str:
 
 
 # Type aliases for background model start/check/cancel handlers.
-StartModelOpFn = Callable[[ModelRequest[ConfigT], ActionRunContext], Awaitable[Operation]]
+StartModelOpFn = Callable[[ModelRequest[ModelRequestConfigT], ActionRunContext], Awaitable[Operation]]
 CheckModelOpFn = Callable[[Operation], Awaitable[Operation]]
 CancelModelOpFn = Callable[[Operation], Awaitable[Operation]]
 
@@ -194,12 +194,12 @@ class DefineBackgroundModelOptions(BaseModel):
 def define_background_model(
     registry: Registry,
     name: str,
-    start: StartModelOpFn[ConfigT],
+    start: StartModelOpFn[ModelRequestConfigT],
     check: CheckModelOpFn,
     cancel: CancelModelOpFn | None = None,
     label: str | None = None,
     info: ModelInfo | None = None,
-    config_schema: type[ConfigT] | dict[str, Any] | None = None,
+    config_schema: type[ModelRequestConfigT] | dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     description: str | None = None,
 ) -> BackgroundAction[ModelResponse]:
@@ -269,7 +269,7 @@ def define_background_model(
     # when config_schema is set we override to ModelRequest[that schema] below.
     async def wrapped_start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
         start_time = time.perf_counter()
-        op = await start(cast(ModelRequest[ConfigT], request), ctx)
+        op = await start(cast(ModelRequest[ModelRequestConfigT], request), ctx)
         # Set action key matching JS format: /{actionType}/{name}
         op.action = action_key
         latency_ms = (time.perf_counter() - start_time) * 1000
