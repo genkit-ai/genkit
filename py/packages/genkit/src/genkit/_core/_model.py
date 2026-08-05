@@ -25,18 +25,9 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from copy import deepcopy
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, cast
+from typing import Any, ClassVar, Generic, cast
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    PrivateAttr,
-    SerializeAsAny,
-    field_validator,
-    model_serializer,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer, model_validator
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypeVar
 
@@ -75,7 +66,9 @@ ModelUsage = GenerationUsage  # public name for GenerationUsage
 OutputT = TypeVar('OutputT', default=object)
 # No default — callers/actions bind ModelRequest[TheirConfig]. A ModelConfig
 # default would reject plugin config instances on bare ModelRequest.
-ConfigT = TypeVar('ConfigT', bound=BaseModel)
+# Unbounded so ModelRequest supports any config payload (BaseModel instances, dicts, custom options)
+# across action execution boundaries without forcing assumptions.
+ModelRequestConfigT = TypeVar('ModelRequestConfigT', covariant=True)
 
 
 class ModelRef(BaseModel):
@@ -234,7 +227,7 @@ class Document(DocumentData):
         return None
 
 
-class ModelRequest(GenkitModel, Generic[ConfigT]):
+class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
     """Hand-written model request with flat output fields and veneer types.
 
     Output config is inlined as flat fields (output_format, output_schema, etc.)
@@ -257,15 +250,7 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
     # Veneer types for IDE/typing (validators wrap MessageData->Message, DocumentData->Document)
     messages: list[Message]  # pyright: ignore[reportIncompatibleVariableOverride]
     docs: list[Document] | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
-    if TYPE_CHECKING:
-        # Reads are typed as the bound schema: after validation a parametrized
-        # request can only hold ConfigT (dicts are coerced, mismatches rejected).
-        # The runtime union is what pydantic validates and serializes against.
-        config: ConfigT | None = None
-    else:
-        # dict arm first + left_to_right: smart union would lax-coerce bare dict
-        # configs into an empty BaseModel via the unresolved ConfigT arm.
-        config: dict[str, Any] | SerializeAsAny[ConfigT] | None = Field(default=None, union_mode='left_to_right')
+    config: ModelRequestConfigT | None = None
     tools: list[ToolDefinition] | None = None
     tool_choice: ToolChoice | None = Field(default=None)
     # Flat output fields (no nested OutputConfig)
@@ -274,40 +259,11 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
     output_constrained: bool | None = None
     output_content_type: str | None = None
 
-    if TYPE_CHECKING:
-
-        def __init__(
-            self,
-            *,
-            messages: list[Message],
-            docs: list[Document] | None = None,
-            config: ConfigT | dict[str, Any] | None = None,
-            tools: list[ToolDefinition] | None = None,
-            tool_choice: ToolChoice | None = None,
-            output_format: str | None = None,
-            output_schema: dict[str, Any] | None = None,
-            output_constrained: bool | None = None,
-            output_content_type: str | None = None,
-            **extras: Any,  # noqa: ANN401
-        ) -> None: ...
-
     @field_validator('config', mode='before')
     @classmethod
     def _validate_config(cls, v: object) -> object:
-        """Coerce dict configs into the bound plugin schema when parametrized.
-
-        Bare ModelRequest(config={...}) keeps the dict; ModelRequest[PluginConfig]
-        coerces that dict into the plugin schema. Plugin config instances pass
-        through here, then union validation rejects mismatched schemas.
-        """
-        if v is None or isinstance(v, BaseModel):
-            return v
-        if isinstance(v, dict):
-            args = cls.__pydantic_generic_metadata__['args']
-            if args:
-                schema = args[0]
-                if isinstance(schema, type) and issubclass(schema, BaseModel):
-                    return schema.model_validate(v)
+        """Ensure config is None, a dict, or a BaseModel instance."""
+        if v is None or isinstance(v, (BaseModel, dict)):
             return v
         raise TypeError(f'config must be a BaseModel or dict, got {type(v).__name__}')
 

@@ -90,7 +90,7 @@ from genkit._core._background import (
     BackgroundAction,
     CancelModelOpFn,
     CheckModelOpFn,
-    ConfigT,
+    ModelRequestConfigT,
     StartModelOpFn,
     check_operation,
     define_background_model,
@@ -424,12 +424,12 @@ class Genkit:
     def define_background_model(
         self,
         name: str,
-        start: StartModelOpFn[ConfigT],
+        start: StartModelOpFn[ModelRequestConfigT],
         check: CheckModelOpFn,
         cancel: CancelModelOpFn | None = None,
         label: str | None = None,
         info: ModelInfo | None = None,
-        config_schema: type[ConfigT] | dict[str, object] | None = None,
+        config_schema: type[ModelRequestConfigT] | dict[str, object] | None = None,
         metadata: dict[str, object] | None = None,
         description: str | None = None,
     ) -> BackgroundAction:
