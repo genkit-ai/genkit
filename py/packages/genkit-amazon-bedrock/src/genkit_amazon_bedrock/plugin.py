@@ -145,7 +145,11 @@ class Bedrock(Plugin):
         """
         if action_type != ActionKind.MODEL:
             return None
-        model_id = name.removeprefix(f'{BEDROCK_PLUGIN_NAME}/')
+        prefix = f'{BEDROCK_PLUGIN_NAME}/'
+        # Direct plugin.model() calls can pass any namespace; only ours resolves.
+        if not name.startswith(prefix):
+            return None
+        model_id = name.removeprefix(prefix)
         model_type = self._configured_model_type(model_id)
         if model_type not in ('chat', 'text'):
             # Image generation lands in a later slice.
