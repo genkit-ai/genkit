@@ -33,8 +33,8 @@ async def test_resolve_parameters_missing_prefix_hints_plugin_namespace() -> Non
             GenerateActionOptions(model='lyria-3-clip-preview', messages=[]),
         )
     assert exc_info.value.status == 'NOT_FOUND'
-    assert 'googleai/lyria-3-clip-preview' in str(exc_info.value)
-    assert 'vertexai/lyria-3-clip-preview' in str(exc_info.value)
+    assert "Failed to resolve model 'lyria-3-clip-preview'." in str(exc_info.value)
+    assert 'Ensure the model name includes a plugin prefix' in str(exc_info.value)
 
 
 @pytest.mark.asyncio
