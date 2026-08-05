@@ -40,6 +40,7 @@ type Part struct {
 	Kind         PartKind       `json:"kind,omitempty"`
 	ContentType  string         `json:"contentType,omitempty"`  // valid for kind==blob
 	Text         string         `json:"text,omitempty"`         // valid for kind∈{text,blob}
+	Data         any            `json:"data,omitempty"`         // valid for kind==data
 	ToolRequest  *ToolRequest   `json:"toolRequest,omitempty"`  // valid for kind==partToolRequest
 	ToolResponse *ToolResponse  `json:"toolResponse,omitempty"` // valid for kind==partToolResponse
 	Resource     *ResourcePart  `json:"resource,omitempty"`     // valid for kind==partResource
@@ -101,9 +102,11 @@ func NewMediaPart(mimeType, contents string) *Part {
 	return &Part{Kind: PartMedia, ContentType: mimeType, Text: contents}
 }
 
-// NewDataPart returns a Part containing raw string data.
-func NewDataPart(contents string) *Part {
-	return &Part{Kind: PartData, Text: contents}
+// NewDataPart returns a Part containing arbitrary structured data. The value is
+// serialized to the part's `data` field as-is, so it may be a string, a map, a
+// slice, or any other JSON-serializable value.
+func NewDataPart(data any) *Part {
+	return &Part{Kind: PartData, Data: data}
 }
 
 // NewToolRequestPart returns a Part containing a request from
@@ -264,7 +267,7 @@ func (p *Part) MarshalJSON() ([]byte, error) {
 		return json.Marshal(v)
 	case PartData:
 		v := dataPart{
-			Data:     p.Text,
+			Data:     p.Data,
 			Metadata: p.Metadata,
 		}
 		return json.Marshal(v)
@@ -306,7 +309,7 @@ func (p *Part) MarshalJSON() ([]byte, error) {
 type partSchema struct {
 	Text         string         `json:"text,omitempty" yaml:"text,omitempty"`
 	Media        *Media         `json:"media,omitempty" yaml:"media,omitempty"`
-	Data         string         `json:"data,omitempty" yaml:"data,omitempty"`
+	Data         any            `json:"data,omitempty" yaml:"data,omitempty"`
 	ToolRequest  *ToolRequest   `json:"toolRequest,omitempty" yaml:"toolRequest,omitempty"`
 	ToolResponse *ToolResponse  `json:"toolResponse,omitempty" yaml:"toolResponse,omitempty"`
 	Resource     *ResourcePart  `json:"resource,omitempty" yaml:"resource,omitempty"`
@@ -338,15 +341,14 @@ func (p *Part) unmarshalPartFromSchema(s partSchema) {
 		p.Kind = PartReasoning
 		p.Text = s.Reasoning
 		p.ContentType = "plain/text"
+	case s.Data != nil:
+		p.Kind = PartData
+		p.Data = s.Data
 	default:
+		// Note: if part is completely empty, we use text by default.
 		p.Kind = PartText
 		p.Text = s.Text
 		p.ContentType = ""
-		if s.Data != "" {
-			// Note: if part is completely empty, we use text by default.
-			p.Kind = PartData
-			p.Text = s.Data
-		}
 	}
 	p.Metadata = s.Metadata
 }
