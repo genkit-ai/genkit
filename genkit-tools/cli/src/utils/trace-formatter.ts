@@ -392,8 +392,11 @@ export function formatTraceTree(
  * Creates a cloned, sanitized version of a trace for pure JSON output. Base64
  * media data inside span attributes can optionally be stripped for brevity.
  */
-export function cleanTraceJson(trace: TraceData, keepMedia: boolean): any {
-  const result: any = JSON.parse(JSON.stringify(trace));
+export function cleanTraceJson(
+  trace: TraceData,
+  keepMedia: boolean
+): TraceData {
+  const result: TraceData = JSON.parse(JSON.stringify(trace));
   if (result.spans) {
     for (const spanId of Object.keys(result.spans)) {
       const span = result.spans[spanId];

@@ -15,7 +15,11 @@
  */
 
 import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
-import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
+import {
+  findProjectRoot,
+  forceStderr,
+  logger,
+} from '@genkit-ai/tools-common/utils';
 import { yellow } from 'colorette';
 import { Command, Option } from 'commander';
 import { runWithManager } from '../utils/manager-utils';
@@ -42,6 +46,9 @@ export const traceGet = new Command('trace:get')
   )
   .option('--keep-media', 'do not strip base64 data URLs in output', false)
   .action(async (traceId: string, options: TraceGetOptions) => {
+    // Route all logs (like manager startup logs) to stderr
+    forceStderr();
+
     const projectRoot = await findProjectRoot();
 
     const runAction = async (manager: BaseRuntimeManager) => {
@@ -52,24 +59,19 @@ export const traceGet = new Command('trace:get')
           return;
         }
 
-        const format = (options.format || 'tree').toLowerCase();
         const keepMedia = !!options.keepMedia;
 
-        if (format === 'tree') {
+        if (options.format === 'json') {
+          console.log(
+            JSON.stringify(cleanTraceJson(response, keepMedia), undefined, 2)
+          );
+        } else {
           console.log(
             yellow(
               'Hint: pass `--format json` flag to get trace data in JSON format\n'
             )
           );
           console.log(formatTraceTree(response, keepMedia));
-        } else if (format === 'json') {
-          console.log(
-            JSON.stringify(cleanTraceJson(response, keepMedia), undefined, 2)
-          );
-        } else {
-          logger.error(
-            `Unknown format '${options.format}'. Supported formats: tree, json.`
-          );
         }
       } catch (e) {
         logger.error(`Error retrieving trace: ${e}`);
