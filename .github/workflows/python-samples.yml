@@ -85,13 +85,17 @@ jobs:
           python-version: "3.12"
 
       - name: Install sample dependencies
+        env:
+          SAMPLE: ${{ matrix.sample }}
         run: |
           cd py
-          uv sync --package ${{ matrix.sample }}
+          uv sync --package "$SAMPLE"
 
       - name: Verify sample imports
+        env:
+          SAMPLE: ${{ matrix.sample }}
         run: |
-          cd py/samples/${{ matrix.sample }}
+          cd py/samples/"$SAMPLE"
           # Attempt to import the sample's main module.
           uv run python -c "
           import importlib, pathlib, sys
@@ -136,13 +140,17 @@ jobs:
           models: ${{ matrix.models }}
 
       - name: Install sample dependencies
+        env:
+          SAMPLE: ${{ matrix.sample }}
         run: |
           cd py
-          uv sync --package ${{ matrix.sample }}
+          uv sync --package "$SAMPLE"
 
       - name: Verify sample imports
+        env:
+          SAMPLE: ${{ matrix.sample }}
         run: |
-          cd py/samples/${{ matrix.sample }}
+          cd py/samples/"$SAMPLE"
           uv run python -c "
           import importlib, pathlib
           src = pathlib.Path('src')

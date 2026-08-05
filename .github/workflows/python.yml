@@ -187,8 +187,10 @@ jobs:
         run: ./py/bin/generate_schema_typing --ci
 
       - name: Run tests
+        env:
+          PY_VER: ${{ matrix.python-version }}
         run: |
-          uv run --python ${{ matrix.python-version }} --active --isolated --directory py \
+          uv run --python "$PY_VER" --active --isolated --directory py \
             pytest -xvs --log-level=DEBUG .
   # =============================================================================
   # Build verification (runs after tests pass)
