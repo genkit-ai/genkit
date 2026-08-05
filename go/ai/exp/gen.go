@@ -249,6 +249,11 @@ type AgentStreamChunk struct {
 	// check a single field. When set, the client should stop iterating and may
 	// send the next input.
 	TurnEnd *TurnEnd `json:"turnEnd,omitempty"`
+	// TurnStart is non-nil before the agent starts processing the current input,
+	// ahead of any content chunks. It groups all turn-start signals (the reserved
+	// snapshot ID, etc.) so a caller can correlate the streaming turn with its
+	// (eventual) snapshot up front.
+	TurnStart *TurnStart `json:"turnStart,omitempty"`
 }
 
 // Artifact represents a named collection of parts produced during a session.
@@ -441,4 +446,19 @@ type TurnEnd struct {
 	// Empty if no snapshot was written (no store configured, the turn failed, or
 	// snapshots were suspended after detach).
 	SnapshotID string `json:"snapshotId,omitempty"`
+}
+
+// TurnStart groups the signals emitted when an agent turn begins.
+// A TurnStart value is emitted exactly once per turn, before any of the turn's
+// content chunks.
+type TurnStart struct {
+	// ParentSnapshotID is the ID of the parent snapshot this turn continues from.
+	// Empty on the first turn of a fresh session.
+	ParentSnapshotID string `json:"parentSnapshotId,omitempty"`
+	// SnapshotID is the ID of the snapshot this turn will be persisted under,
+	// reserved before the turn runs. Empty when no snapshot will be written (no
+	// store configured).
+	SnapshotID string `json:"snapshotId,omitempty"`
+	// TurnIndex is the zero-based index of this turn within the current invocation.
+	TurnIndex float64 `json:"turnIndex"`
 }

@@ -265,6 +265,36 @@ export interface AgentOutput<S = unknown> {
 }
 
 /**
+ * Schema identifying a turn start event.
+ *
+ * Emitted exactly once per turn, before any of the turn's content chunks
+ * (`modelChunk` / `artifact` / `customPatch`). Carries the `snapshotId` the
+ * turn's snapshot will be persisted under - reserved up front - so a consumer
+ * can correlate the streaming turn with its (eventual) snapshot before any
+ * output arrives. Omitted `snapshotId` when no snapshot will be written (no
+ * store configured).
+ */
+export const TurnStartSchema = z.object({
+  /**
+   * ID of the snapshot this turn will be persisted under, reserved before the
+   * turn runs. Absent when no snapshot will be written (no store configured).
+   */
+  snapshotId: z.string().optional(),
+  /**
+   * ID of the parent snapshot this turn continues from, or absent on the first
+   * turn of a fresh session.
+   */
+  parentSnapshotId: z.string().optional(),
+  /** Zero-based index of this turn within the current invocation. */
+  turnIndex: z.number().optional(),
+});
+
+/**
+ * Identifies a turn start event.
+ */
+export type TurnStart = z.infer<typeof TurnStartSchema>;
+
+/**
  * Schema identifying a turn termination event.
  */
 export const TurnEndSchema = z.object({
@@ -326,6 +356,7 @@ export const AgentStreamChunkSchema = z.object({
    */
   customPatch: JsonPatchSchema.optional(),
   artifact: ArtifactSchema.optional(),
+  turnStart: TurnStartSchema.optional(),
   turnEnd: TurnEndSchema.optional(),
 });
 

@@ -1394,3 +1394,54 @@ tests:
         expectError:
           status: INVALID_ARGUMENT
           message: 'does not belong to session'
+
+  # ---------------------------------------------------------------------------
+  # turnStart
+  # ---------------------------------------------------------------------------
+  - name: turnStart precedes content each turn - server managed
+    description: >
+      Every turn begins with a turnStart chunk, emitted before any content and
+      before turnEnd. A spec opts into asserting turnStart by including it in
+      expectChunks (harnesses filter it out otherwise). turnIndex is asserted;
+      snapshotId / parentSnapshotId are dynamic. Two turns in one invocation
+      produce two turnStart / turnEnd pairs with increasing turnIndex.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: turn1 }] }
+          - message: { role: user, content: [{ text: turn2 }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
+        expectChunks:
+          - turnStart: { turnIndex: 0 }
+          - turnEnd: { finishReason: stop }
+          - turnStart: { turnIndex: 1 }
+          - turnEnd: { finishReason: stop }
+        expectOutput:
+          finishReason: stop
+          hasSnapshotId: true
+
+  - name: turnStart emitted for a client-managed agent
+    description: >
+      A client-managed agent (no store) also emits a turnStart chunk at the
+      start of its turn; its snapshotId is absent since no snapshot is written.
+      turnIndex is still reported.
+    agent: promptAgent
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - message: { role: user, content: [{ text: hi }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: hello }] }
+            finishReason: stop
+        expectChunks:
+          - turnStart: { turnIndex: 0 }
+          - turnEnd: { finishReason: stop }
+        expectOutput:
+          finishReason: stop

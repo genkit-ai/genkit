@@ -638,10 +638,23 @@ async function executeSendInvocation(
 
   // expectChunks: strict ordered comparison
   if (resolvedInvocation.expectChunks) {
-    const strippedChunks = chunks.map((c) => deepStrip(stripUndefinedProps(c)));
+    let strippedChunks = chunks.map((c) => deepStrip(stripUndefinedProps(c)));
     const expectedChunks = resolvedInvocation.expectChunks.map((c: any) =>
       deepStrip(c)
     );
+
+    // turnStart is emitted at the start of every turn. A spec opts into
+    // asserting it by including turnStart chunks in expectChunks; specs that
+    // don't (the majority, which focus on content/turnEnd) have the actual
+    // turnStart chunks filtered out so they stay concise.
+    const expectsTurnStart = expectedChunks.some(
+      (c: any) => c.turnStart !== undefined
+    );
+    if (!expectsTurnStart) {
+      strippedChunks = strippedChunks.filter(
+        (c: any) => c.turnStart === undefined
+      );
+    }
 
     // For strict comparison, we compare each expected chunk against actual.
     // turnEnd chunks may contain dynamic snapshotIds, so we do field-level
@@ -659,7 +672,22 @@ async function executeSendInvocation(
       const expected = expectedChunks[i];
       const actual = strippedChunks[i];
 
-      if (expected.turnEnd !== undefined) {
+      if (expected.turnStart !== undefined) {
+        // turnStart: verify turnStart key exists, but snapshotId /
+        // parentSnapshotId are dynamic. turnIndex, when specified in the
+        // spec, must match exactly.
+        assert.ok(
+          actual.turnStart !== undefined,
+          `Chunk ${i}: expected turnStart, got ${JSON.stringify(actual)}`
+        );
+        if (expected.turnStart.turnIndex !== undefined) {
+          assert.strictEqual(
+            actual.turnStart?.turnIndex,
+            expected.turnStart.turnIndex,
+            `Chunk ${i}: expected turnStart.turnIndex '${expected.turnStart.turnIndex}', got '${actual.turnStart?.turnIndex}'`
+          );
+        }
+      } else if (expected.turnEnd !== undefined) {
         // turnEnd: verify turnEnd key exists, but snapshotId is dynamic.
         // finishReason, when specified in the spec, must match exactly.
         assert.ok(
