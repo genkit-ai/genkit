@@ -1458,7 +1458,7 @@ func (ModelRef) JSONSchema() *jsonschema.Schema {
 	props := jsonschema.NewProperties()
 	props.Set("name", &jsonschema.Schema{
 		Type:        "string",
-		Description: "Model name (e.g. \"googleai/gemini-2.5-flash\")",
+		Description: "Model name (e.g. \"googleai/gemini-flash-latest\")",
 	})
 	props.Set("config", &jsonschema.Schema{
 		Description: "Optional model configuration",

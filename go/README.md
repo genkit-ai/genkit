@@ -658,7 +658,7 @@ response, _ := genkit.Generate(ctx, g,
     ai.WithUse(
         &middleware.Retry{MaxRetries: 3},
         &middleware.Fallback{Models: []ai.ModelRef{
-            googlegenai.ModelRef("googleai/gemini-2.5-flash", nil),
+            googlegenai.ModelRef("googleai/gemini-3.5-flash", nil),
         }},
     ),
 )

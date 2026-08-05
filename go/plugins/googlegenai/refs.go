@@ -11,7 +11,7 @@ import (
 // --- Gemini (text generation) ---
 
 // ModelRef creates a ModelRef for a Gemini model.
-// The name should include provider prefix (e.g., "googleai/gemini-2.0-flash").
+// The name should include provider prefix (e.g., "googleai/gemini-flash-latest").
 func ModelRef(name string, config *genai.GenerateContentConfig) ai.ModelRef {
 	return ai.NewModelRef(name, config)
 }

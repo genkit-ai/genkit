@@ -51,8 +51,8 @@ var defaultFallbackStatuses = []status.Name{
 //	    ai.WithModel(primary),
 //	    ai.WithPrompt("hello"),
 //	    ai.WithUse(&middleware.Fallback{Models: []ai.ModelRef{
-//	        googlegenai.ModelRef("googleai/gemini-2.5-flash", ...),
-//	        googlegenai.ModelRef("vertexai/gemini-2.5-flash", ...),
+//	        googlegenai.ModelRef("googleai/gemini-flash-latest", ...),
+//	        googlegenai.ModelRef("vertexai/gemini-flash-latest", ...),
 //	    }}),
 //	)
 type Fallback struct {
