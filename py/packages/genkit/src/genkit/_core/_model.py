@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, ClassVar, Generic, cast
 
@@ -47,6 +48,7 @@ from genkit._core._typing import (
     MediaPart,
     MessageData,
     MiddlewareRef,
+    ModelInfo,
     ModelResponseChunk as ModelResponseChunkSchema,
     Operation,
     Part,
@@ -64,21 +66,23 @@ ModelUsage = GenerationUsage  # public name for GenerationUsage
 
 # TypeVars for generic types
 OutputT = TypeVar('OutputT', default=object)
-# No default — callers/actions bind ModelRequest[TheirConfig]. A ModelConfig
-# default would reject plugin config instances on bare ModelRequest.
+# Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
+# Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
+ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
 # Unbounded so ModelRequest supports any config payload (BaseModel instances, dicts, custom options)
 # across action execution boundaries without forcing assumptions.
 ModelRequestConfigT = TypeVar('ModelRequestConfigT', covariant=True)
 
 
-class ModelRef(BaseModel):
-    """Reference to a model with configuration."""
+@dataclass(frozen=True, kw_only=True)
+class ModelRef(Generic[ModelRefConfigT]):
+    """Frozen reference to a model, optionally tied to a config schema."""
 
     name: str
-    config_schema: object | None = None
-    info: object | None = None
+    config_schema: type[ModelRefConfigT]
+    info: ModelInfo | None = None
     version: str | None = None
-    config: dict[str, object] | None = None
+    config: ModelRefConfigT | None = None
 
 
 class Message(MessageData):
