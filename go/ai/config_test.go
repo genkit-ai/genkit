@@ -184,8 +184,11 @@ func TestEvaluatorActionMetadata(t *testing.T) {
 	if got := metadata["type"]; got != api.ActionTypeEvaluator {
 		t.Errorf(`Metadata["type"] = %v, want %v`, got, api.ActionTypeEvaluator)
 	}
-	if _, ok := metadata["evaluator"].(map[string]any); !ok {
+	evalInfo, ok := metadata["evaluator"].(map[string]any)
+	if !ok {
 		t.Errorf(`Metadata["evaluator"] = %v, want the built evaluator info map`, metadata["evaluator"])
+	} else if evalInfo["customOptions"] == nil {
+		t.Errorf(`Metadata["evaluator"]["customOptions"] = nil, want the inferred config schema advertised`)
 	}
 }
 
@@ -255,6 +258,151 @@ func TestBackgroundModelConfigValidation(t *testing.T) {
 	}
 	if _, err := bm.Start(context.Background(), req); err != nil {
 		t.Fatalf("Start() unexpected error: %v", err)
+	}
+}
+
+// TestModelVersionWithTypedConfig pins that the framework-level "version" key
+// stays admissible on the config slot even when the inferred Config type has
+// no version field: version validation must see the key before conversion
+// drops it, not have it rejected by the closed inferred schema.
+func TestModelVersionWithTypedConfig(t *testing.T) {
+	r := registry.New()
+	m := NewModelAction("test/versioned", &ModelOptions{Versions: []string{"v1"}},
+		func(ctx context.Context, req *ModelRequest, cfg testTypedConfig, cb ModelStreamCallback) (*ModelResponse, error) {
+			return &ModelResponse{Message: NewModelTextMessage("ok"), Request: req}, nil
+		})
+	m.Register(r)
+
+	req := &ModelRequest{
+		Messages: []*Message{NewUserTextMessage("hi")},
+		Config:   map[string]any{"version": "v1", "temperature": 0.5},
+	}
+	if _, err := m.Generate(context.Background(), req, nil); err != nil {
+		t.Fatalf("Generate() with a valid version: %v", err)
+	}
+
+	req = &ModelRequest{
+		Messages: []*Message{NewUserTextMessage("hi")},
+		Config:   map[string]any{"version": "v9"},
+	}
+	_, err := m.Generate(context.Background(), req, nil)
+	if err == nil || !strings.Contains(err.Error(), "version") {
+		t.Fatalf("Generate() error = %v, want a version validation error", err)
+	}
+	if strings.Contains(err.Error(), "schema") {
+		t.Fatalf("Generate() error = %v, want the version error, not a schema rejection", err)
+	}
+}
+
+// strictFieldConfig has fields without omitempty; the inferred schema must
+// not turn them into required config keys, since a config is partial by
+// nature.
+type strictFieldConfig struct {
+	Temperature float64 `json:"temperature"`
+	MaxTokens   int     `json:"maxTokens"`
+}
+
+func TestPartialConfigNotRequired(t *testing.T) {
+	r := registry.New()
+	m := NewModelAction("test/partial-config", nil,
+		func(ctx context.Context, req *ModelRequest, cfg strictFieldConfig, cb ModelStreamCallback) (*ModelResponse, error) {
+			return &ModelResponse{Message: NewModelTextMessage("ok"), Request: req}, nil
+		})
+	m.Register(r)
+
+	req := &ModelRequest{
+		Messages: []*Message{NewUserTextMessage("hi")},
+		Config:   map[string]any{"temperature": 0.5},
+	}
+	if _, err := m.Generate(context.Background(), req, nil); err != nil {
+		t.Fatalf("Generate() with a partial config: %v", err)
+	}
+
+	// Stripping required must not open the schema: unknown keys stay rejected.
+	req = &ModelRequest{
+		Messages: []*Message{NewUserTextMessage("hi")},
+		Config:   map[string]any{"unknownOption": true},
+	}
+	if _, err := m.Generate(context.Background(), req, nil); err == nil || !strings.Contains(err.Error(), "schema") {
+		t.Fatalf("Generate() error = %v, want schema validation error for an unknown key", err)
+	}
+}
+
+// TestPointerConfigNilStaysNil pins that a request carrying no config keeps a
+// nil config slot when Config is a pointer type: boxing the typed nil would
+// make req.Config compare non-nil while dereferencing it still panics.
+func TestPointerConfigNilStaysNil(t *testing.T) {
+	r := registry.New()
+	var gotCfg *testTypedConfig
+	var gotReqConfig any
+	m := NewModelAction("test/pointer-config", nil,
+		func(ctx context.Context, req *ModelRequest, cfg *testTypedConfig, cb ModelStreamCallback) (*ModelResponse, error) {
+			gotCfg = cfg
+			gotReqConfig = req.Config
+			return &ModelResponse{Message: NewModelTextMessage("ok"), Request: req}, nil
+		})
+	m.Register(r)
+
+	req := &ModelRequest{Messages: []*Message{NewUserTextMessage("hi")}}
+	if _, err := m.Generate(context.Background(), req, nil); err != nil {
+		t.Fatalf("Generate() unexpected error: %v", err)
+	}
+	if gotCfg != nil {
+		t.Errorf("cfg = %v, want nil pointer for a request without config", gotCfg)
+	}
+	if gotReqConfig != nil {
+		t.Errorf("req.Config = %#v, want nil for a request without config", gotReqConfig)
+	}
+
+	// A populated map still resolves and normalizes to the pointer type.
+	req = &ModelRequest{
+		Messages: []*Message{NewUserTextMessage("hi")},
+		Config:   map[string]any{"temperature": 0.5},
+	}
+	if _, err := m.Generate(context.Background(), req, nil); err != nil {
+		t.Fatalf("Generate() unexpected error: %v", err)
+	}
+	if gotCfg == nil || gotCfg.Temperature != 0.5 {
+		t.Errorf("cfg = %+v, want Temperature 0.5", gotCfg)
+	}
+	if _, ok := gotReqConfig.(*testTypedConfig); !ok {
+		t.Errorf("req.Config = %#v, want normalized to *testTypedConfig", gotReqConfig)
+	}
+}
+
+// TestCallerRequestNotMutated pins that config normalization happens on the
+// action's shallow copy of the request: the caller's struct keeps its raw
+// config, so one request can be fanned out to actions with different Config
+// types.
+func TestCallerRequestNotMutated(t *testing.T) {
+	r := registry.New()
+	m := NewModelAction("test/no-mutation", nil,
+		func(ctx context.Context, req *ModelRequest, cfg testTypedConfig, cb ModelStreamCallback) (*ModelResponse, error) {
+			return &ModelResponse{Message: NewModelTextMessage("ok"), Request: req}, nil
+		})
+	m.Register(r)
+
+	raw := map[string]any{"temperature": 0.5}
+	req := &ModelRequest{Messages: []*Message{NewUserTextMessage("hi")}, Config: raw}
+	if _, err := m.Generate(context.Background(), req, nil); err != nil {
+		t.Fatalf("Generate() unexpected error: %v", err)
+	}
+	if got, ok := req.Config.(map[string]any); !ok || got["temperature"] != 0.5 {
+		t.Errorf("req.Config = %#v, want the caller's raw map left untouched", req.Config)
+	}
+
+	ret := NewRetrieverAction("test/no-mutation-retriever", nil,
+		func(ctx context.Context, req *RetrieverRequest, cfg testTypedConfig) (*RetrieverResponse, error) {
+			return &RetrieverResponse{}, nil
+		})
+	ret.Register(r)
+
+	rreq := &RetrieverRequest{Query: DocumentFromText("q", nil), Options: raw}
+	if _, err := ret.Retrieve(context.Background(), rreq); err != nil {
+		t.Fatalf("Retrieve() unexpected error: %v", err)
+	}
+	if got, ok := rreq.Options.(map[string]any); !ok || got["temperature"] != 0.5 {
+		t.Errorf("req.Options = %#v, want the caller's raw map left untouched", rreq.Options)
 	}
 }
 

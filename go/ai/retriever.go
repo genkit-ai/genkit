@@ -154,13 +154,14 @@ func NewRetrieverAction[Config any](
 	}
 
 	rawFn := func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
-		cfg, err := resolveConfig[Config](req.Options)
+		// Normalize a shallow copy so the type-erased Options and the typed
+		// parameter always agree without clobbering the caller-owned request.
+		reqCopy := *req
+		req = &reqCopy
+		cfg, err := resolveConfigInto[Config](&req.Options)
 		if err != nil {
 			return nil, err
 		}
-		// Normalize the request so its type-erased Options always carries the
-		// same converted value the typed parameter does.
-		req.Options = cfg
 		return fn(ctx, req, cfg)
 	}
 

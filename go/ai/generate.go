@@ -197,30 +197,8 @@ func NewModelAction[Config any](
 		opts.Supports = &ModelSupports{}
 	}
 
-	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, ModelRequest{}, "config")
-
-	// The reserved type and model keys win over caller-provided metadata.
-	metadata := make(map[string]any, len(opts.Metadata)+2)
-	maps.Copy(metadata, opts.Metadata)
-	metadata["type"] = api.ActionTypeModel
-	metadata["model"] = map[string]any{
-		"label": opts.Label,
-		"supports": map[string]any{
-			"media":       opts.Supports.Media,
-			"context":     opts.Supports.Context,
-			"multiturn":   opts.Supports.Multiturn,
-			"systemRole":  opts.Supports.SystemRole,
-			"tools":       opts.Supports.Tools,
-			"toolChoice":  opts.Supports.ToolChoice,
-			"constrained": opts.Supports.Constrained,
-			"output":      opts.Supports.Output,
-			"contentType": opts.Supports.ContentType,
-			"longRunning": opts.Supports.LongRunning,
-		},
-		"versions":      opts.Versions,
-		"stage":         opts.Stage,
-		"customOptions": configSchema,
-	}
+	configSchema, inputSchema := modelConfigSchemas[Config](opts.ConfigSchema)
+	metadata := modelActionMetadata(api.ActionTypeModel, opts, configSchema, opts.Metadata)
 
 	typedFn := func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		// req.Config was normalized to the exact Config type by
@@ -246,6 +224,41 @@ func NewModelAction[Config any](
 		Metadata:    metadata,
 		InputSchema: inputSchema,
 	}, rawFn)}
+}
+
+// modelActionMetadata builds the descriptor metadata shared by model and
+// background-model actions: the caller metadata maps are merged in order,
+// then the reserved type and model keys are stamped over them so they cannot
+// be corrupted; registry discovery depends on them.
+func modelActionMetadata(actionType api.ActionType, opts *ModelOptions, configSchema map[string]any, callerMetadata ...map[string]any) map[string]any {
+	size := 2
+	for _, m := range callerMetadata {
+		size += len(m)
+	}
+	metadata := make(map[string]any, size)
+	for _, m := range callerMetadata {
+		maps.Copy(metadata, m)
+	}
+	metadata["type"] = actionType
+	metadata["model"] = map[string]any{
+		"label": opts.Label,
+		"supports": map[string]any{
+			"media":       opts.Supports.Media,
+			"context":     opts.Supports.Context,
+			"multiturn":   opts.Supports.Multiturn,
+			"systemRole":  opts.Supports.SystemRole,
+			"tools":       opts.Supports.Tools,
+			"toolChoice":  opts.Supports.ToolChoice,
+			"constrained": opts.Supports.Constrained,
+			"output":      opts.Supports.Output,
+			"contentType": opts.Supports.ContentType,
+			"longRunning": opts.Supports.LongRunning,
+		},
+		"versions":      opts.Versions,
+		"stage":         opts.Stage,
+		"customOptions": configSchema,
+	}
+	return metadata
 }
 
 // NewModel creates a new [Model].
