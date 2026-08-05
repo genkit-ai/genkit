@@ -112,7 +112,7 @@ func main() {
 
 	// Define a simple flow that generates an image of a given topic
 	genkit.DefineFlow(g, "imageFlow", func(ctx context.Context, input string) ([]string, error) {
-		m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash-image")
+		m := googlegenai.GoogleAIModel(g, "gemini-3.1-flash-image")
 		if m == nil {
 			return nil, errors.New("imageFlow: failed to find model")
 		}

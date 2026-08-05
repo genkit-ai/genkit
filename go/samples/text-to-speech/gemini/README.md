@@ -23,7 +23,7 @@ go run ./samples/text-to-speech/gemini
 ```
 
 Invoke the `text-to-speech-flow` from Dev UI. The default model is
-`googleai/gemini-2.5-flash-preview-tts`, and the generated WAV path defaults to
+`googleai/gemini-3.1-flash-tts-preview`, and the generated WAV path defaults to
 `./generated-tts.wav`.
 
 The dedicated `*-tts` models produce audio by default, so this sample configures
