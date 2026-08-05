@@ -36,7 +36,7 @@ from genkit._core._model import (
     ModelResponseChunk,
 )
 from genkit._core._protocols import GenkitLike, RegistryLike
-from genkit._core._typing import MiddlewareDesc, MultipartToolResponse, ToolRequestPart
+from genkit._core._typing import MiddlewareDesc, MultipartToolResponse, Operation, ToolRequestPart
 
 logger = get_logger(__name__)
 
@@ -268,8 +268,8 @@ class BaseMiddleware(Generic[TConfig]):
         self,
         params: ModelHookParams,
         ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
-    ) -> ModelResponse:
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse | Operation]],
+    ) -> ModelResponse | Operation:
         """Wrap each model API call."""
         return await next_fn(params, ctx)
 
@@ -317,8 +317,8 @@ class MiddlewareDef(Protocol):
         self,
         params: ModelHookParams,
         ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
-    ) -> ModelResponse:
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse | Operation]],
+    ) -> ModelResponse | Operation:
         """Wrap each model API call."""
         ...
 
