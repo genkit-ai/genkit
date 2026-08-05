@@ -58,6 +58,20 @@ export class PageViewEvent extends GAEvent {
   }
 }
 
+export class SelectContentEvent extends GAEvent {
+  name = 'select_content';
+  duration = 1;
+
+  constructor(content_type: string, content_id: string, page_title: string) {
+    super();
+    this.parameters = {
+      content_type,
+      content_id,
+      page_title,
+    };
+  }
+}
+
 export class FirstUsageEvent extends GAEvent {
   name = 'first_visit';
   duration = 1;
@@ -81,9 +95,13 @@ export class RunCommandEvent extends GAEvent {
   name = 'run_command';
   duration = 1; // Should we actually track command duration?
 
-  constructor(command: string, runtime_type: string) {
+  constructor(command: string, runtime_type: string, project_runtime?: string) {
     super();
-    this.stickyParameters = { command, runtime_type };
+    this.stickyParameters = {
+      command,
+      runtime_type,
+      ...(project_runtime && { project_runtime }),
+    };
   }
 }
 
@@ -125,7 +143,7 @@ export function createToolsRequestEvent(
   route: string,
   durationMs: number,
   status: string,
-  options?: { action?: string }
+  options?: { action?: string; project_runtime?: string }
 ): ToolsRequestEvent {
   const event = new ToolsRequestEvent(route);
   event.duration = Math.max(1, durationMs);
@@ -133,6 +151,9 @@ export function createToolsRequestEvent(
     ...event.parameters,
     status,
     ...(options?.action && { action: options.action }),
+    ...(options?.project_runtime && {
+      project_runtime: options.project_runtime,
+    }),
   };
   return event;
 }

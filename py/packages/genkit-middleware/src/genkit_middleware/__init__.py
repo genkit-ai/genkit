@@ -26,12 +26,14 @@ Provides concrete middleware implementations:
   ``use_skill`` tool.
 * ``Filesystem`` — sandboxed filesystem operations (list / read / write /
   edit).
+* ``Artifacts`` — ``read_artifact`` / ``write_artifact`` plus artifact listing in the system prompt.
 
 Import the classes you need and pass instances into ``use=[...]``.
 See below for an example.
 """
 
 from genkit.plugin_api import MiddlewarePlugin, new_middleware
+from genkit_middleware._artifacts import Artifacts
 from genkit_middleware._fallback import Fallback
 from genkit_middleware._filesystem import Filesystem
 from genkit_middleware._retry import Retry
@@ -64,27 +66,44 @@ _MIDDLEWARE_DESCS = [
         name='filesystem',
         description='Sandboxed filesystem operations',
     ),
+    new_middleware(
+        Artifacts,
+        name='artifacts',
+        description='read_artifact and write_artifact tools with session artifact listing in system prompt',
+    ),
 ]
 
 
 class Middleware(MiddlewarePlugin):
-    """Plugin that registers Retry, Fallback, ToolApproval, Skills, and Filesystem.
+    """Plugin that registers Retry, Fallback, ToolApproval, Skills, Filesystem, and Artifacts.
 
-    Registers all five middleware descriptors so they show up in the Dev
+    Registers all six middleware descriptors so they show up in the Dev
     UI.
 
     ``Filesystem`` has no default root — supply ``root_dir`` when
     constructing an instance, for example
     ``Filesystem(root_dir='./workspace')``.
 
-    Usage:
-        from genkit_middleware import Middleware, Retry, Skills
+    Example:
+        ```python
+        from genkit import Genkit
+        from genkit_google_genai import GoogleAI
+        from genkit_middleware import Middleware, Retry
 
+        # 1. Register middleware plugin
         ai = Genkit(plugins=[GoogleAI(), Middleware()])
-        await ai.generate(
-            prompt='Hello',
-            use=[Retry(max_retries=5), Skills(skill_paths=['skills'])],
+
+        # 2. Generate with automatic retry resilience
+        res = await ai.generate(
+            model='googleai/gemini-flash-latest',
+            prompt='Summarize quantum computing.',
+            use=[Retry(max_retries=3)],
         )
+
+        # 3. Inspect output
+        print(res.text)
+        # => Quantum computing uses quantum mechanics for complex calculations...
+        ```
     """
 
     name = 'genkit-middleware'
@@ -92,6 +111,7 @@ class Middleware(MiddlewarePlugin):
 
 
 __all__ = [
+    'Artifacts',
     'Fallback',
     'Filesystem',
     'Middleware',

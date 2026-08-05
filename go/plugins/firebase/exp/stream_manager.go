@@ -25,12 +25,13 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
-	"github.com/firebase/genkit/go/core"
-	"github.com/firebase/genkit/go/core/x/streaming"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	grpcstatus "google.golang.org/grpc/status"
+
+	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/core/x/streaming"
+	"github.com/firebase/genkit/go/genkit"
 )
 
 const (
@@ -77,6 +78,13 @@ type streamEntry struct {
 type streamError struct {
 	Status  string `firestore:"status"`
 	Message string `firestore:"message"`
+	// Public records whether Message was safe to return to a client. Without
+	// it, a subscriber resuming the stream would have to guess, and treating
+	// every persisted message as public would let an internal failure from the
+	// producing process reach a client by round-tripping through Firestore.
+	// Absent on documents written before this field existed, which decodes to
+	// false: the safe default.
+	Public bool `firestore:"public,omitempty"`
 }
 
 // NewFirestoreStreamManager creates a [FirestoreStreamManager] for durable streaming.
@@ -126,8 +134,8 @@ func (m *FirestoreStreamManager) Open(ctx context.Context, streamID string) (str
 		ExpiresAt: &expiresAt,
 	})
 	if err != nil {
-		if status.Code(err) == codes.AlreadyExists {
-			return nil, core.NewPublicError(core.ALREADY_EXISTS, "stream already exists", nil)
+		if grpcstatus.Code(err) == codes.AlreadyExists {
+			return nil, status.PublicErrorf(streaming.ErrStreamAlreadyExists, "stream already exists")
 		}
 		return nil, err
 	}
@@ -145,12 +153,12 @@ func (m *FirestoreStreamManager) Subscribe(ctx context.Context, streamID string)
 	snapshot, err := docRef.Get(ctx)
 	if err != nil {
 		if isNotFound(err) {
-			return nil, nil, core.NewPublicError(core.NOT_FOUND, "stream not found", nil)
+			return nil, nil, status.PublicErrorf(streaming.ErrStreamNotFound, "stream not found")
 		}
 		return nil, nil, err
 	}
 	if !snapshot.Exists() {
-		return nil, nil, core.NewPublicError(core.NOT_FOUND, "stream not found", nil)
+		return nil, nil, status.PublicErrorf(streaming.ErrStreamNotFound, "stream not found")
 	}
 
 	ch := make(chan streaming.StreamEvent, streamBufferSize)
@@ -175,7 +183,7 @@ func (m *FirestoreStreamManager) Subscribe(ctx context.Context, streamID string)
 				unsubscribed = true
 				ch <- streaming.StreamEvent{
 					Type: streaming.StreamEventError,
-					Err:  core.NewPublicError(core.DEADLINE_EXCEEDED, "stream timed out", nil),
+					Err:  status.PublicErrorf(streaming.ErrStreamTimeout, "stream %q timed out", streamID),
 				}
 				close(ch)
 				cancelSnapshot()
@@ -274,18 +282,27 @@ func (m *FirestoreStreamManager) Subscribe(ctx context.Context, streamID string)
 					return
 				case streamEventError:
 					if !unsubscribed {
-						var errStatus core.StatusName = core.UNKNOWN
+						errStatus := status.Unknown
 						var errMsg string
+						var errPublic bool
 						if entry.Err != nil {
 							errMsg = entry.Err.Message
+							errPublic = entry.Err.Public
 							if entry.Err.Status != "" {
-								errStatus = core.StatusName(entry.Err.Status)
+								errStatus = status.Name(entry.Err.Status)
 							}
+						}
+						// Rebuild with the publicness the producer recorded, so a
+						// message that was never safe to return does not become
+						// safe by having been persisted.
+						rebuild := status.Errorf
+						if errPublic {
+							rebuild = status.PublicErrorf
 						}
 						select {
 						case ch <- streaming.StreamEvent{
 							Type: streaming.StreamEventError,
-							Err:  core.NewPublicError(errStatus, errMsg, nil),
+							Err:  rebuild(status.Base(errStatus), "%s", errMsg),
 						}:
 						default:
 						}
@@ -312,7 +329,7 @@ func isNotFound(err error) bool {
 	if err == nil {
 		return false
 	}
-	if grpcErr, ok := status.FromError(err); ok {
+	if grpcErr, ok := grpcstatus.FromError(err); ok {
 		return grpcErr.Code() == codes.NotFound
 	}
 	return false
@@ -332,7 +349,7 @@ func (s *firestoreStreamInput) Write(ctx context.Context, chunk json.RawMessage)
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return core.NewPublicError(core.FAILED_PRECONDITION, "stream writer is closed", nil)
+		return status.PublicErrorf(streaming.ErrStreamWriterClosed, "stream writer is closed")
 	}
 
 	_, err := s.docRef.Update(ctx, []firestore.Update{
@@ -357,7 +374,7 @@ func (s *firestoreStreamInput) Done(ctx context.Context, output json.RawMessage)
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return core.NewPublicError(core.FAILED_PRECONDITION, "stream writer is closed", nil)
+		return status.PublicErrorf(streaming.ErrStreamWriterClosed, "stream writer is closed")
 	}
 	s.closed = true
 
@@ -387,22 +404,26 @@ func (s *firestoreStreamInput) Error(ctx context.Context, err error) error {
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return core.NewPublicError(core.FAILED_PRECONDITION, "stream writer is closed", nil)
+		return status.PublicErrorf(streaming.ErrStreamWriterClosed, "stream writer is closed")
 	}
 	s.closed = true
 
-	streamErr := &streamError{
-		Status:  string(core.UNKNOWN),
-		Message: err.Error(),
+	// For a non-public error, persist the full text: Firestore is the
+	// developer's own store, the message is worth having for diagnosis, and
+	// Public=false keeps it from subscribers. For a public error, persist
+	// exactly the message PublicMessage cleared for clients, so an internal
+	// wrapper prefix around a public error cannot ride along and be replayed
+	// to a subscriber as public. This also keeps the deprecated
+	// core.UserFacingError's bare message rather than its "STATUS: message"
+	// stringification, which the Subscribe rebuild would double-prefix.
+	msg, public := status.PublicMessage(err)
+	if !public {
+		msg = err.Error()
 	}
-	var ufErr *core.UserFacingError
-	if errors.As(err, &ufErr) {
-		streamErr.Status = string(ufErr.Status)
-		// Store the bare message, not err.Error(): a UserFacingError stringifies
-		// as "STATUS: message", and the status is already carried separately. This
-		// keeps the persisted message clean and prevents the Subscribe path (which
-		// rebuilds the error from status + message) from double-prefixing it.
-		streamErr.Message = ufErr.Message
+	streamErr := &streamError{
+		Status:  string(status.Of(err)),
+		Message: msg,
+		Public:  public,
 	}
 
 	expiresAt := time.Now().Add(s.manager.ttl)

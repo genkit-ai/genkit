@@ -268,7 +268,7 @@ export class ReflectionServerV2 {
       id: process.env.GENKIT_RUNTIME_ID || this.runtimeId,
       pid: process.pid,
       name: this.options.name || this.runtimeId,
-      genkitVersion: GENKIT_VERSION,
+      genkitVersion: `nodejs/${GENKIT_VERSION}`,
       reflectionApiSpecVersion: GENKIT_REFLECTION_API_SPEC_VERSION,
       envs: this.options.configuredEnvs,
     };

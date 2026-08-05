@@ -3530,6 +3530,106 @@ func TestAgent_Detach_SendArtifactPostDetachLandsInSnapshot(t *testing.T) {
 	}
 }
 
+func TestAgent_Detach_SuppressesChunksFromTheDetachedTurn(t *testing.T) {
+	// A detached run streams nothing to the client: it hands back a pending
+	// snapshot and the rest is observed through the store (see
+	// tests/specs/agent.yaml, "detached run emits no customPatch chunks").
+	//
+	// The suppression has to be in force before the input riding the detach
+	// directive reaches the runner, not merely by the time the runtime
+	// finishes handling the detach. This turn emits the instant it starts,
+	// and the store gate parks the detach path at its first write (the
+	// pending row, or a turn-end write racing snapshot suspension, which
+	// blocks the detach handler just the same), so the detach handler
+	// cannot finish before the turn has emitted. That is the ordering that
+	// used to leak chunks onto the wire.
+	reg := newTestRegistry(t)
+	store := &blockingSaveStore[testState]{
+		testInMemStore: newTestInMemStore[testState](),
+		entered:        make(chan struct{}),
+		release:        make(chan struct{}),
+	}
+
+	emitted := make(chan struct{})
+	af := DefineCustomAgent(reg, "detachSuppressesChunks",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				// Every way a turn produces a chunk: the custom-state
+				// patcher, an explicit responder send, and the turn end.
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter++
+					return s
+				})
+				resp.SendArtifact(&Artifact{
+					Name:  "background.txt",
+					Parts: []*ai.Part{ai.NewTextPart("written in the background")},
+				})
+				close(emitted)
+				return nil, nil
+			})
+		},
+		WithSessionStore[testState](store),
+	)
+
+	conn, err := af.Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	// chunks is only read after <-drained, i.e. after the collector
+	// goroutine has exited, so no synchronization is needed beyond the
+	// channel close.
+	var chunks []*AgentStreamChunk
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		for chunk, rerr := range conn.Receive() {
+			if rerr != nil {
+				return
+			}
+			chunks = append(chunks, chunk)
+		}
+	}()
+
+	if err := conn.Send(&AgentInput{
+		Detach:  true,
+		Message: ai.NewUserTextMessage("go"),
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	// The detach path is parked at its first store write and the
+	// background turn has emitted everything it is going to; whatever the
+	// client sees now, it would still see if the store were slower.
+	<-store.entered
+	<-emitted
+	close(store.release)
+
+	conn.Close()
+	<-drained
+	out, err := outputWithin(t, conn, 2*time.Second)
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonDetached {
+		t.Fatalf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonDetached)
+	}
+	if len(chunks) != 0 {
+		b, _ := json.Marshal(chunks)
+		t.Errorf("detached run streamed %d chunk(s), want none: %s", len(chunks), b)
+	}
+
+	// The turn's work still lands: only the wire forward is suppressed.
+	final := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusCompleted
+	})
+	if final.State.Custom.Counter != 1 {
+		t.Errorf("final custom counter = %d, want 1", final.State.Custom.Counter)
+	}
+	if len(final.State.Artifacts) != 1 || final.State.Artifacts[0].Name != "background.txt" {
+		t.Errorf("final artifacts = %v, want [background.txt]", final.State.Artifacts)
+	}
+}
+
 func TestAgent_Detach_FlowErrorsBecomesError(t *testing.T) {
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
@@ -6975,7 +7075,7 @@ func TestDetachIntake_SkipsNilInputs(t *testing.T) {
 		src <- nil
 		close(src)
 
-		intake := startDetachIntake(src)
+		intake := startDetachIntake(src, func() {})
 		defer intake.stopAndWait()
 
 		var got []string
@@ -6995,7 +7095,7 @@ func TestDetachIntake_SkipsNilInputs(t *testing.T) {
 		src <- &AgentInput{Message: ai.NewUserTextMessage("two")}
 		close(src)
 
-		intake := startDetachIntake(src)
+		intake := startDetachIntake(src, func() {})
 		defer intake.stopAndWait()
 		go func() { <-intake.detachSignal() }()
 

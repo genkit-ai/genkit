@@ -20,165 +20,30 @@ This plugin provides integration with Anthropic's Claude models for the
 Genkit framework. It registers Claude models as Genkit actions, enabling
 text generation operations.
 
-Key Concepts (ELI5)::
-
-    ┌─────────────────────┬────────────────────────────────────────────────────┐
-    │ Concept             │ ELI5 Explanation                                   │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Claude              │ Anthropic's AI assistant. Like a helpful friend   │
-    │                     │ who's great at explaining things and writing.     │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Sonnet              │ The "just right" Claude model. Good at most       │
-    │                     │ tasks without being too slow or expensive.        │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Haiku               │ The fast & cheap Claude model. Perfect for        │
-    │                     │ quick tasks like classification or summaries.     │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Opus                │ The most capable Claude. For complex tasks        │
-    │                     │ like research, analysis, or creative writing.     │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ API Key             │ Your password to use Claude. Keep it secret!      │
-    │                     │ Set as ANTHROPIC_API_KEY environment variable.    │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ System Prompt       │ Instructions that shape Claude's personality.     │
-    │                     │ Like giving a new employee their job description. │
-    ├─────────────────────┼────────────────────────────────────────────────────┤
-    │ Tool Calling        │ Claude can use functions you define. Like         │
-    │                     │ giving it a calculator or search engine to use.   │
-    └─────────────────────┴────────────────────────────────────────────────────┘
-
-Data Flow::
-
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                     HOW CLAUDE PROCESSES YOUR REQUEST                   │
-    │                                                                         │
-    │    Your Code                                                            │
-    │    ai.generate(prompt="Explain quantum computing")                      │
-    │         │                                                               │
-    │         │  (1) Request goes to Anthropic plugin                         │
-    │         ▼                                                               │
-    │    ┌─────────────────┐                                                  │
-    │    │  Anthropic      │   Plugin adds API key to request                 │
-    │    │  Plugin         │                                                  │
-    │    └────────┬────────┘                                                  │
-    │             │                                                           │
-    │             │  (2) Converts Genkit format → Claude Messages API         │
-    │             ▼                                                           │
-    │    ┌─────────────────┐                                                  │
-    │    │  AnthropicModel │   Handles message roles, images,                 │
-    │    │                 │   tools, and streaming                           │
-    │    └────────┬────────┘                                                  │
-    │             │                                                           │
-    │             │  (3) HTTPS request to api.anthropic.com                   │
-    │             ▼                                                           │
-    │    ════════════════════════════════════════════════════                 │
-    │             │  Internet                                                 │
-    │             ▼                                                           │
-    │    ┌─────────────────┐                                                  │
-    │    │  Anthropic      │   Claude thinks about your prompt                │
-    │    │  Claude API     │   and generates a response                       │
-    │    └────────┬────────┘                                                  │
-    │             │                                                           │
-    │             │  (4) Response parsed back to Genkit format                │
-    │             ▼                                                           │
-    │    ┌─────────────────┐                                                  │
-    │    │  Your App       │   response.text = "Quantum computing..."         │
-    │    └─────────────────┘                                                  │
-    └─────────────────────────────────────────────────────────────────────────┘
-
-Architecture Overview::
-
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                        Anthropic Plugin                                 │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  Plugin Entry Point (__init__.py)                                       │
-    │  ├── Anthropic - Plugin class                                           │
-    │  └── anthropic_name() - Helper to create namespaced model names         │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  plugin.py - Plugin Implementation                                      │
-    │  ├── Anthropic class (registers models)                                 │
-    │  └── Client initialization with Anthropic SDK                           │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  models.py - Model Implementation                                       │
-    │  ├── AnthropicModel (Messages API integration)                          │
-    │  ├── Request/response conversion                                        │
-    │  └── Streaming support                                                  │
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │  model_info.py - Model Registry                                         │
-    │  ├── SUPPORTED_MODELS (claude-sonnet-4-5, opus, haiku, etc.)            │
-    │  └── Model capabilities and metadata                                    │
-    └─────────────────────────────────────────────────────────────────────────┘
-
-Overview:
-    The Anthropic plugin adds support for Claude models to Genkit. It uses
-    the official Anthropic Python SDK and registers models that can be used
-    with ai.generate() and other Genkit generation methods.
-
-Supported Models:
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │ Model                     │ Description                                 │
-    ├───────────────────────────┼─────────────────────────────────────────────┤
-    │ claude-sonnet-4-5         │ Balanced performance and capability         │
-    │ claude-haiku-4-5          │ Fast and cost-effective                     │
-    │ claude-opus-4-5           │ Most capable, complex tasks                 │
-    │ claude-sonnet-5           │ Latest Sonnet model                         │
-    └───────────────────────────┴─────────────────────────────────────────────┘
-
-Key Components:
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │ Component           │ Purpose                                           │
-    ├─────────────────────┼───────────────────────────────────────────────────┤
-    │ Anthropic           │ Plugin class to register with Genkit              │
-    │ anthropic_name()    │ Helper to create namespaced model names           │
-    └─────────────────────┴───────────────────────────────────────────────────┘
-
 Example:
-    Basic usage:
-
     ```python
     from genkit import Genkit
     from genkit_anthropic import Anthropic, AnthropicConfig
 
-    # Uses ANTHROPIC_API_KEY env var or pass api_key explicitly
-    ai = Genkit(
-        plugins=[Anthropic()],
+    # 1. Initialize Genkit with the Anthropic plugin
+    ai = Genkit(plugins=[Anthropic()])
+
+    # 2. Generate content using Claude Sonnet 4.5
+    res = await ai.generate(
         model='anthropic/claude-sonnet-4-5',
+        prompt='Explain recursion in 10 words.',
     )
 
-    response = await ai.generate(prompt='Hello, Claude!')
-    print(response.text)
-
-    # With custom configuration
-    response = await ai.generate(
-        model='anthropic/claude-haiku-4-5',
-        prompt='Write a haiku about AI',
-        config=AnthropicConfig(temperature=0.7, max_output_tokens=100),
-    )
+    # 3. Inspect output shapes directly
+    print(res.text)
+    # => A function calling itself until reaching a base stopping condition.
     ```
 
-    With tools:
-
-    ```python
-    @ai.tool()
-    def get_weather(city: str) -> str:
-        return f'Weather in {city}: Sunny, 72°F'
-
-
-    response = await ai.generate(
-        model='anthropic/claude-sonnet-4-5',
-        prompt='What is the weather in Paris?',
-        tools=['get_weather'],
-    )
-    ```
-
-Caveats:
-    - Requires ANTHROPIC_API_KEY environment variable or api_key parameter
-    - Model names are prefixed with 'anthropic/' (e.g., 'anthropic/claude-sonnet-4-5')
-    - Anthropic models may have different tool calling behavior than Google models
+Requirements:
+    - Requires the ``ANTHROPIC_API_KEY`` environment variable or explicit ``api_key``.
 
 See Also:
     - Anthropic documentation: https://docs.anthropic.com/
-    - Genkit documentation: https://genkit.dev/
 """
 
 from genkit_anthropic.config import (

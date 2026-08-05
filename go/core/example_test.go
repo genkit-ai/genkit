@@ -116,8 +116,8 @@ func ExampleRun() {
 	// Output: RESULT: HELLO
 }
 
-// This example demonstrates defining a schema from a Go type.
-func ExampleDefineSchemaFor() {
+// This example demonstrates defining schemas from Go types.
+func ExampleDefineSchemasFor() {
 	r := registry.New()
 
 	// Define a struct type
@@ -127,7 +127,7 @@ func ExampleDefineSchemaFor() {
 	}
 
 	// Register the schema
-	core.DefineSchemaFor[Person](r)
+	core.DefineSchemasFor(r, Person{})
 
 	// The schema is now registered and can be referenced in .prompt files
 	fmt.Println("Schema registered")

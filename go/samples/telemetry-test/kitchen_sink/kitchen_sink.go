@@ -69,7 +69,7 @@ func main() {
 		}
 
 		searchResp, err := genkit.Generate(ctx, g,
-			ai.WithModelName("googleai/gemini-2.5-flash"),
+			ai.WithModelName("googleai/gemini-flash-latest"),
 			ai.WithTools(searchTool),
 			ai.WithConfig(&genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](0.7),
@@ -94,7 +94,7 @@ func main() {
 		}
 
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithModelName("googleai/gemini-2.5-flash"),
+			ai.WithModelName("googleai/gemini-flash-latest"),
 			ai.WithMessages(
 				ai.NewUserMessage(
 					ai.NewTextPart(prompt),
@@ -116,7 +116,7 @@ func main() {
 
 		for _, topic := range topics {
 			resp, err := genkit.Generate(ctx, g,
-				ai.WithModelName("googleai/gemini-2.5-flash"),
+				ai.WithModelName("googleai/gemini-flash-latest"),
 				ai.WithConfig(&genai.GenerateContentConfig{
 					Temperature: genai.Ptr[float32](0.8),
 				}),

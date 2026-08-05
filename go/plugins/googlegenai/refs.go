@@ -11,7 +11,7 @@ import (
 // --- Gemini (text generation) ---
 
 // ModelRef creates a ModelRef for a Gemini model.
-// The name should include provider prefix (e.g., "googleai/gemini-2.0-flash").
+// The name should include provider prefix (e.g., "googleai/gemini-flash-latest").
 func ModelRef(name string, config *genai.GenerateContentConfig) ai.ModelRef {
 	return ai.NewModelRef(name, config)
 }
@@ -33,7 +33,7 @@ func VertexAIModelRef(id string, config *genai.GenerateContentConfig) ai.ModelRe
 // --- Image generation (Imagen) ---
 
 // ImageModelRef creates a ModelRef for an image generation model.
-// The name should include provider prefix (e.g., "googleai/imagen-3.0-generate-001").
+// The name should include provider prefix (e.g., "googleai/imagen-4.0-generate-001").
 func ImageModelRef(name string, config *genai.GenerateImagesConfig) ai.ModelRef {
 	return ai.NewModelRef(name, config)
 }
@@ -41,7 +41,7 @@ func ImageModelRef(name string, config *genai.GenerateImagesConfig) ai.ModelRef 
 // --- Video generation (Veo) ---
 
 // VideoModelRef creates a ModelRef for a video generation model.
-// The name should include provider prefix (e.g., "googleai/veo-2.0-generate-001").
+// The name should include provider prefix (e.g., "googleai/veo-3.1-generate-preview").
 func VideoModelRef(name string, config *genai.GenerateVideosConfig) ai.ModelRef {
 	return ai.NewModelRef(name, config)
 }

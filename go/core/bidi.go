@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
 )
@@ -227,7 +228,7 @@ func (b *BidiAction[In, Out, Stream, Init]) RunBidiJSON(ctx context.Context, inp
 	// schema). Deferring input past startup is a streaming session
 	// capability; see ConnectJSON.
 	if !base.HasJSONValue(input) {
-		return nil, NewError(INVALID_ARGUMENT, "action %q requires input for a one-shot run; open a streaming session to defer input", b.desc.Key)
+		return nil, status.PublicErrorf(status.ErrInvalidArgument, "action %q requires input for a one-shot run; open a streaming session to defer input", b.desc.Key)
 	}
 	init, hasInit, err := b.decodeInit(opts)
 	if err != nil {
@@ -269,13 +270,13 @@ func (b *BidiAction[In, Out, Stream, Init]) ConnectJSON(ctx context.Context, opt
 	}
 	inputSchema, err := ResolveSchema(b.registry, b.desc.InputSchema)
 	if err != nil {
-		return nil, NewError(INVALID_ARGUMENT, "invalid input schema for action %q: %v", b.desc.Key, err)
+		return nil, status.Errorf(status.ErrInvalidSchema, "invalid input schema for action %q: %v", b.desc.Key, err)
 	}
 	// Compiled once per session: Send validates every inbound chunk, and
 	// recompiling the schema per chunk would dominate the streaming hot path.
 	compiledInput, err := base.CompileSchema(inputSchema)
 	if err != nil {
-		return nil, NewError(INVALID_ARGUMENT, "invalid input schema for action %q: %v", b.desc.Key, err)
+		return nil, status.Errorf(status.ErrInvalidSchema, "invalid input schema for action %q: %v", b.desc.Key, err)
 	}
 	// Like RunBidiJSON, record init on the span only when the client actually
 	// supplied one; the zero value from an absent init is not meaningful.
@@ -314,11 +315,11 @@ func (b *BidiAction[In, Out, Stream, Init]) decodeInit(opts *api.BidiJSONOptions
 	}
 	schema, err := ResolveSchema(b.registry, b.desc.InitSchema)
 	if err != nil {
-		return init, false, NewError(INVALID_ARGUMENT, "invalid init schema for action %q: %v", b.desc.Key, err)
+		return init, false, status.Errorf(status.ErrInvalidSchema, "invalid init schema for action %q: %v", b.desc.Key, err)
 	}
 	init, err = base.UnmarshalAndNormalize[Init](opts.Init, schema)
 	if err != nil {
-		return init, false, NewError(INVALID_ARGUMENT, "invalid init for action %q: %v", b.desc.Key, err)
+		return init, false, status.Errorf(status.ErrInvalidInput, "invalid init for action %q: %v", b.desc.Key, err)
 	}
 	return init, true, nil
 }
@@ -341,10 +342,10 @@ func (b *BidiAction[In, Out, Stream, Init]) validateInit(init Init) error {
 	}
 	schema, err := ResolveSchema(b.registry, b.desc.InitSchema)
 	if err != nil {
-		return NewError(INVALID_ARGUMENT, "invalid init schema for action %q: %v", b.desc.Key, err)
+		return status.Errorf(status.ErrInvalidSchema, "invalid init schema for action %q: %v", b.desc.Key, err)
 	}
 	if err := base.ValidateValue(init, schema); err != nil {
-		return NewError(INVALID_ARGUMENT, "invalid init for action %q: %v", b.desc.Key, err)
+		return status.Errorf(status.ErrInvalidInput, "invalid init for action %q: %v", b.desc.Key, err)
 	}
 	return nil
 }
@@ -414,7 +415,7 @@ func callBidiFn[In, Out, Stream, Init any](
 ) (out Out, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = NewError(INTERNAL, "panic in bidi action %q: %v", name, r)
+			err = status.Errorf(status.ErrPanic, "panic in bidi action %q: %v", name, r)
 		}
 	}()
 	return fn(ctx, init, inCh, outCh)
@@ -485,12 +486,12 @@ func (c *BidiConnection[In, Out, Stream]) run(name string, fn func(context.Conte
 				if closingStream {
 					// The close below panicked: the action closed the output
 					// channel itself, which the framework owns.
-					c.err = NewError(INTERNAL, "bidi action %q closed its output channel; the framework owns closing it", name)
+					c.err = status.Errorf(status.ErrInternal, "bidi action %q closed its output channel; the framework owns closing it", name)
 				} else {
 					// A panic escaped fn's own wrapping (span, schema
 					// resolution, metrics); report it as what it is rather
 					// than misattributing it to the channel close.
-					c.err = NewError(INTERNAL, "panic in bidi session %q: %v", name, r)
+					c.err = status.Errorf(status.ErrPanic, "panic in bidi session %q: %v", name, r)
 				}
 			}
 			c.mu.Unlock()
@@ -522,12 +523,12 @@ func (c *BidiConnection[In, Out, Stream]) run(name string, fn func(context.Conte
 
 // ErrConnectionClosed indicates a Send on a connection whose input side
 // was closed with [BidiConnection.Close]. Test with [errors.Is].
-var ErrConnectionClosed = errors.New("connection is closed")
+var ErrConnectionClosed = status.ErrFailedPrecondition.Subtype("connection is closed")
 
 // ErrActionCompleted indicates a Send on a connection whose action has
 // already returned. Test with [errors.Is]; the action's result is
 // available via [BidiConnection.Output].
-var ErrActionCompleted = errors.New("action has completed")
+var ErrActionCompleted = status.ErrFailedPrecondition.Subtype("action has completed")
 
 // Send sends an input message to the bidi action. It blocks until the action
 // reads the message (backpressure), the connection is cancelled, or the
@@ -542,7 +543,7 @@ func (c *BidiConnection[In, Out, Stream]) Send(input In) (err error) {
 	// "connection is closed" error a pre-checked Send would return.
 	defer func() {
 		if r := recover(); r != nil {
-			err = NewError(FAILED_PRECONDITION, "%v", ErrConnectionClosed)
+			err = status.Errorf(ErrConnectionClosed, "connection is closed")
 		}
 	}()
 
@@ -554,7 +555,7 @@ func (c *BidiConnection[In, Out, Stream]) Send(input In) (err error) {
 	// cancellation.
 	select {
 	case <-c.doneCh:
-		return NewError(FAILED_PRECONDITION, "%v", ErrActionCompleted)
+		return status.Errorf(ErrActionCompleted, "action has completed")
 	default:
 	}
 	select {
@@ -569,7 +570,7 @@ func (c *BidiConnection[In, Out, Stream]) Send(input In) (err error) {
 	case <-c.ctx.Done():
 		return c.ctxErr()
 	case <-c.doneCh:
-		return NewError(FAILED_PRECONDITION, "%v", ErrActionCompleted)
+		return status.Errorf(ErrActionCompleted, "action has completed")
 	}
 }
 
@@ -694,7 +695,7 @@ func (b *bidiJSONConn[In, Out, Stream]) Send(chunk json.RawMessage) error {
 		// the one-shot path, where invalid input fails the call): the error
 		// poisons the connection as its cancel cause so Output reports it,
 		// and is also returned for the transport to log or relay.
-		err = NewError(INVALID_ARGUMENT, "invalid stream chunk for action %q: %v", b.key, err)
+		err = status.Errorf(status.ErrInvalidArgument, "invalid stream chunk for action %q: %v", b.key, err)
 		b.conn.cancel(err)
 		return err
 	}

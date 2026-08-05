@@ -17,6 +17,8 @@
 import { ToolPluginSubCommandsSchema } from '@genkit-ai/tools-common/plugin';
 import {
   RunCommandEvent,
+  detectRuntime,
+  findProjectRoot,
   logger,
   notifyAnalyticsIfFirstRun,
   record,
@@ -89,7 +91,7 @@ export async function startCLI(): Promise<void> {
       // For now only record known command names, to avoid tools plugins causing
       // arbitrary text to get recorded. Once we launch tools plugins, we'll have
       // to give this more thought
-      const commandNames = commands.map((c) => c.name());
+      const commandNames = commands.map((c) => c.name()).concat('help');
       let commandName: string;
       if (commandNames.includes(actionCommand.name())) {
         commandName = actionCommand.name();
@@ -110,8 +112,14 @@ export async function startCLI(): Promise<void> {
       }
 
       const { isCompiledBinary } = detectCLIRuntime();
+      const projectRoot = await findProjectRoot();
+      const projectRuntime = await detectRuntime(projectRoot);
       await record(
-        new RunCommandEvent(commandName, isCompiledBinary ? 'binary' : 'node')
+        new RunCommandEvent(
+          commandName,
+          isCompiledBinary ? 'binary' : 'node',
+          projectRuntime
+        )
       );
     });
 

@@ -45,7 +45,7 @@ func main() {
 	genkit.DefineFlow(g, "jokeFlow", func(ctx context.Context, topic string) (string, error) {
 		// Generate a joke using Gemini
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithModelName("googleai/gemini-2.5-flash"),
+			ai.WithModelName("googleai/gemini-flash-latest"),
 			ai.WithConfig(&genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](1.0),
 			}),

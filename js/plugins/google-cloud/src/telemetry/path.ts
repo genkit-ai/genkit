@@ -92,7 +92,7 @@ class PathsTelemetry implements Telemetry {
     this.pathLatencies.record(latency, pathDimensions);
 
     const displayPath = truncatePath(toDisplayPath(path));
-    logger.logStructuredError(`Error[${displayPath}, ${errorName}]`, {
+    logger.error(`Error[${displayPath}, ${errorName}]`, {
       ...createCommonLogAttributes(span, projectId),
       path: displayPath,
       qualifiedPath: path,

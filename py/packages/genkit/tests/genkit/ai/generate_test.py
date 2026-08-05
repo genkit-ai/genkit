@@ -23,6 +23,7 @@ from genkit._ai._testing import (
     define_programmable_model,
 )
 from genkit._ai._tools import Interrupt, ToolRunContext, define_tool
+from genkit._core._error import GenkitError
 from genkit._core._model import GenerateActionOptions, ModelRequest
 from genkit._core._registry import Registry
 from genkit._core._typing import (
@@ -141,9 +142,7 @@ async def test_simulates_doc_grounding(
         ),
     )
 
-    assert response.request is not None
-    assert response.request.messages is not None
-    assert response.request.messages[0] == Message(
+    grounded_msg = Message(
         role=Role.USER,
         content=[
             Part(TextPart(text='hi')),
@@ -155,6 +154,17 @@ async def test_simulates_doc_grounding(
             ),
         ],
     )
+
+    # the model receives the grounded prompt with docs injected as a context part.
+    assert pm.last_request is not None
+    assert pm.last_request.messages[0] == grounded_msg
+
+    # the returned request is the conversation we persist: the clean turn. The
+    # docs ride along as structured data, not inlined into the message.
+    assert response.request is not None
+    assert response.request.messages is not None
+    assert response.request.messages[0] == Message(role=Role.USER, content=[Part(TextPart(text='hi'))])
+    assert response.request.docs is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -1551,11 +1561,11 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
         ) -> ModelResponse:
             # Resolve the tool ProviderMW just contributed — only works if
             # both middleware share the same per-call registry scope.
-            tool = await ctx.registry.resolve_action(ActionKind.TOOL, 'shared_tool')
+            tool = await ctx.ai.registry.resolve_action(ActionKind.TOOL, 'shared_tool')
             if tool is not None:
                 seen_by_b.append(tool.name)
             # Also exercise the write path: anything we register through
-            # ctx.registry must not survive the call.
+            # ctx.ai.registry must not survive the call.
             scratch = Registry()
 
             async def leaky_tool() -> str:
@@ -1563,7 +1573,7 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
                 return 'nope'
 
             leak = define_tool(scratch, leaky_tool, name='leaky_tool').action()
-            ctx.registry.register_action_from_instance(leak)
+            ctx.ai.registry.register_action_from_instance(leak)
             return await next_fn(params, ctx)
 
     pm, _ = define_programmable_model(ai)
@@ -1743,7 +1753,7 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
                 restart=[
                     ToolRequestPart(
                         tool_request=ToolRequest(name='approveMe', input={}, ref='r1'),
-                        metadata={'resumed': {'toolApproved': True}},
+                        metadata={'resumed': {'tool_approved': True}},
                     )
                 ],
             ),
@@ -1751,6 +1761,70 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
     )
     assert response.text == 'final'
     assert invocations == ['approveMe'], f'expected wrap_tool to fire once on restart, saw: {invocations}'
+
+
+@pytest.mark.asyncio
+async def test_restart_reinterrupt_surfaces_underlying_reason() -> None:
+    """Middleware Interrupt during restart includes the interrupt reason in GenkitError.
+
+    Regression for missing ToolApproval metadata: restart without ``toolApproved``
+    used to raise a generic "not supported yet" message that hid the real cause.
+    """
+    ai = Genkit()
+
+    @ai.middleware(name='approval_mw')
+    class ApprovalMW(BaseMiddleware):
+        async def wrap_tool(
+            self,
+            params: ToolHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+        ) -> MultipartToolResponse:
+            metadata = params.tool_request_part.metadata or {}
+            resumed = metadata.get('resumed')
+            if isinstance(resumed, dict) and resumed.get('toolApproved'):
+                return await next_fn(params, ctx)
+            raise Interrupt({'message': f'Tool not in approved list: {params.tool.name}'})
+
+    define_programmable_model(ai)
+
+    @ai.tool(name='sensitiveTool')
+    async def sensitive_tool() -> str:
+        return 'done'
+
+    interrupt_part = ToolRequestPart(
+        tool_request=ToolRequest(name='sensitiveTool', input={}, ref='r1'),
+        metadata={'interrupt': True},
+    )
+
+    with pytest.raises(GenkitError) as ei:
+        await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='programmableModel',
+                messages=[
+                    Message(role=Role.USER, content=[Part(TextPart(text='do it'))]),
+                    Message(role=Role.MODEL, content=[Part(root=interrupt_part)]),
+                ],
+                tools=['sensitiveTool'],
+                use=[MiddlewareRef(name='approval_mw')],
+                resume=Resume(
+                    # Restart without toolApproved — middleware re-interrupts.
+                    restart=[
+                        ToolRequestPart(
+                            tool_request=ToolRequest(name='sensitiveTool', input={}, ref='r1'),
+                            metadata={'resumed': True},
+                        )
+                    ],
+                ),
+            ),
+        )
+
+    assert ei.value.status == 'FAILED_PRECONDITION'
+    assert ei.value.original_message == (
+        'Tool interrupted again during restart: Tool not in approved list: sensitiveTool'
+    )
+    assert isinstance(ei.value.cause, Interrupt)
 
 
 @pytest.mark.asyncio
@@ -2232,7 +2306,6 @@ async def test_generate_action_spec(spec: dict[str, Any]) -> None:
             captured_chunks.append(chunk)
 
         action_response = await action.run(
-            ai.registry,
             TypeAdapter(GenerateActionOptions).validate_python(spec['input']),  # type: ignore[arg-type]
             on_chunk=on_chunk,  # type: ignore[misc]
         )

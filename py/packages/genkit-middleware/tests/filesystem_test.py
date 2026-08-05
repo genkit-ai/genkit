@@ -181,3 +181,12 @@ async def test_tools_returns_write_when_allowed(ctx) -> None:
         names = {t.name for t in tool_actions}
         assert 'write_file' in names
         assert 'edit_file' in names
+
+
+@pytest.mark.asyncio
+async def test_tools_have_nonempty_descriptions(ctx) -> None:
+    """Model-facing tool descriptions must be set — nested defs have no docstring."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fs = Filesystem(root_dir=tmpdir, allow_write_access=True)
+        for action in fs.tools(ctx):
+            assert action.description, f'{action.name} has empty description'

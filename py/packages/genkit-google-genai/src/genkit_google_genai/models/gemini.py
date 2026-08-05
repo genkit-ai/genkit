@@ -1788,8 +1788,8 @@ class GeminiModel:
             for i, c in enumerate(response.candidates):
                 c_content = []
                 if c.content and c.content.parts:
-                    for j, part in enumerate(c.content.parts):
-                        converted = PartConverter.from_gemini(part=part, ref=str(j))
+                    for part in c.content.parts:
+                        converted = PartConverter.from_gemini(part=part)
                         if converted:
                             c_content.append(converted)
 
@@ -1943,7 +1943,7 @@ class GeminiModel:
                     content_parts.extend(converted)
                 else:
                     content_parts.append(converted)
-            role = 'user' if msg.role == Role.TOOL else msg.role
+            role = 'model' if msg.role in (Role.MODEL, 'model') else 'user'
             request_contents.append(genai_types.Content(parts=content_parts, role=role))
 
             if msg.metadata and msg.metadata.get('cache'):
@@ -1976,8 +1976,8 @@ class GeminiModel:
         if response.candidates:
             for candidate in response.candidates:
                 if candidate.content and candidate.content.parts:
-                    for i, part in enumerate(candidate.content.parts):
-                        converted = PartConverter.from_gemini(part=part, ref=str(i))
+                    for part in candidate.content.parts:
+                        converted = PartConverter.from_gemini(part=part)
                         if converted:  # Only append if conversion succeeded
                             content.append(converted)
 

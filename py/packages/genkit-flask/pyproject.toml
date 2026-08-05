@@ -48,7 +48,7 @@ dependencies = [
   "pydantic>=2.10.5",
   "flask>=3.1.3",
 ]
-description = "Genkit Firebase Plugin"
+description = "Genkit Flask Plugin"
 keywords = [
   "genkit",
   "ai",
@@ -64,11 +64,10 @@ license = "Apache-2.0"
 name = "genkit-flask"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.8.0"
+version = "0.9.0"
 
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"
-Changelog       = "https://github.com/genkit-ai/genkit/blob/main/py/packages/genkit-flask/CHANGELOG.md"
 "Documentation" = "https://firebase.google.com/docs/genkit"
 "Homepage"      = "https://github.com/genkit-ai/genkit"
 "Repository"    = "https://github.com/genkit-ai/genkit/tree/main/py"

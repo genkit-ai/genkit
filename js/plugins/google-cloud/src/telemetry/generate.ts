@@ -229,7 +229,7 @@ class GenerateTelemetry implements Telemetry {
       sessionId,
       threadName,
     };
-    logger.logStructured(`Config[${path}, ${model}]`, {
+    logger.info(`Config[${path}, ${model}]`, {
       ...sharedMetadata,
       maxOutputTokens: input.config?.maxOutputTokens,
       stopSequences: input.config?.stopSequences, // array
@@ -264,7 +264,7 @@ class GenerateTelemetry implements Telemetry {
       const parts = msg.content.length;
       msg.content.forEach((part, partIdx) => {
         const partCounts = this.toPartCounts(partIdx, parts, msgIdx, messages);
-        logger.logStructured(`Input[${path}, ${model}] ${partCounts}`, {
+        logger.info(`Input[${path}, ${model}] ${partCounts}`, {
           ...sharedMetadata,
           content: this.toPartLogContent(part),
           role: msg.role,
@@ -306,7 +306,7 @@ class GenerateTelemetry implements Telemetry {
         const initial = output.finishMessage
           ? { finishMessage: truncate(output.finishMessage) }
           : {};
-        logger.logStructured(`Output[${path}, ${model}] ${partCounts}`, {
+        logger.info(`Output[${path}, ${model}] ${partCounts}`, {
           ...initial,
           ...sharedMetadata,
           content: this.toPartLogContent(part),

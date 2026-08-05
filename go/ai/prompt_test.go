@@ -3111,11 +3111,13 @@ func TestContentType(t *testing.T) {
 			wantData: "gs://bucket/image.png",
 		},
 		{
-			name:        "gs:// URL without content type",
-			ct:          "",
-			uri:         "gs://bucket/image.png",
-			wantErr:     true,
-			errContains: "must supply contentType",
+			// The content type is optional at render time; the model/plugin
+			// layer resolves gs:// URLs natively.
+			name:     "gs:// URL without content type",
+			ct:       "",
+			uri:      "gs://bucket/image.png",
+			wantCT:   "",
+			wantData: "gs://bucket/image.png",
 		},
 		{
 			name:     "http URL with content type",
@@ -3125,11 +3127,14 @@ func TestContentType(t *testing.T) {
 			wantData: "https://example.com/image.jpg",
 		},
 		{
-			name:        "http URL without content type",
-			ct:          "",
-			uri:         "https://example.com/image.jpg",
-			wantErr:     true,
-			errContains: "must supply contentType",
+			// The content type is optional at render time; the download
+			// middleware fetches http(s) media and fills it in from the
+			// response's Content-Type header.
+			name:     "http URL without content type",
+			ct:       "",
+			uri:      "https://example.com/image.jpg",
+			wantCT:   "",
+			wantData: "https://example.com/image.jpg",
 		},
 		{
 			name:     "data URI with base64",
@@ -3189,6 +3194,65 @@ func TestContentType(t *testing.T) {
 			}
 			if string(gotData) != tt.wantData {
 				t.Errorf("data = %q, want %q", string(gotData), tt.wantData)
+			}
+		})
+	}
+}
+
+// TestPromptRenderMediaURL verifies that a prompt using {{media url=...}} with
+// an http(s) or gs:// URL renders without requiring an explicit content type.
+// The content type is resolved downstream: the download middleware fetches
+// http(s) media, and the model natively resolves gs:// and similar URLs.
+// Regression test for https://github.com/genkit-ai/genkit/issues/5332.
+func TestPromptRenderMediaURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "http URL", url: "https://example.com/image.jpg"},
+		{name: "gs:// URL", url: "gs://bucket/image.png"},
+	}
+
+	source := `---
+model: test/chat
+input:
+  schema:
+    image: string
+---
+Analyze the image.
+
+{{media url=image}}
+`
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := registry.New()
+			p, err := LoadPromptFromSource(reg, source, "analyze", "")
+			if err != nil {
+				t.Fatalf("LoadPromptFromSource failed: %v", err)
+			}
+
+			actionOpts, err := p.Render(context.Background(), map[string]any{"image": tt.url})
+			if err != nil {
+				t.Fatalf("Render failed: %v", err)
+			}
+
+			var media *Part
+			for _, msg := range actionOpts.Messages {
+				for _, part := range msg.Content {
+					if part.IsMedia() {
+						media = part
+					}
+				}
+			}
+			if media == nil {
+				t.Fatal("expected a media part in the rendered messages, got none")
+			}
+			if media.Text != tt.url {
+				t.Errorf("media URL = %q, want %q", media.Text, tt.url)
+			}
+			if media.ContentType != "" {
+				t.Errorf("content type = %q, want empty (resolved downstream)", media.ContentType)
 			}
 		})
 	}

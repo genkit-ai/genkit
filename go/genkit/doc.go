@@ -36,7 +36,7 @@ Initialize Genkit with a plugin to connect to an AI provider:
 Generate text with a simple prompt:
 
 	text, err := genkit.GenerateText(ctx, g,
-		ai.WithModelName("googleai/gemini-2.5-flash"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithPrompt("Tell me a joke"),
 	)
 	if err != nil {
@@ -51,7 +51,7 @@ models from providers like Google AI, Vertex AI, Anthropic, or Ollama. Models ar
 referenced by name and can include provider-specific configuration:
 
 	resp, err := genkit.Generate(ctx, g,
-		ai.WithModelName("googleai/gemini-2.5-flash"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithPrompt("Explain quantum computing in simple terms"),
 	)
 
@@ -59,7 +59,7 @@ You can set a default model during initialization:
 
 	g := genkit.Init(ctx,
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
-		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+		genkit.WithDefaultModel("googleai/gemini-flash-latest"),
 	)
 
 # Flows
@@ -114,7 +114,7 @@ They encapsulate model configuration, input schemas, and template logic for reus
 Define a prompt in code:
 
 	jokePrompt := genkit.DefinePrompt(g, "joke",
-		ai.WithModelName("googleai/gemini-2.5-flash"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithInputType(JokeRequest{Topic: "default topic"}),
 		ai.WithPrompt("Share a joke about {{topic}}."),
 	)
@@ -169,7 +169,7 @@ Load prompts from .prompt files by specifying a prompt directory:
 
 When using .prompt files with custom output schemas, register the schema first:
 
-	genkit.DefineSchemaFor[Recipe](g)
+	genkit.DefineSchemasFor(g, Recipe{})
 
 # Tools
 
@@ -354,7 +354,7 @@ accept options from the [ai] package to control behavior. The most common option
 Model and Configuration:
 
   - [ai.WithModel]: Specify the model (accepts [ai.ModelRef] or plugin model refs)
-  - [ai.WithModelName]: Specify model by name string (e.g., "googleai/gemini-2.5-flash")
+  - [ai.WithModelName]: Specify model by name string (e.g., "googleai/gemini-flash-latest")
   - [ai.WithConfig]: Set generation parameters (temperature, max tokens, etc.)
 
 Prompting:
@@ -376,7 +376,7 @@ Streaming:
 Example combining multiple options:
 
 	resp, err := genkit.Generate(ctx, g,
-		ai.WithModelName("googleai/gemini-2.5-flash"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithSystem("You are a helpful coding assistant."),
 		ai.WithMessages(conversationHistory...),
 		ai.WithPrompt("Explain this code: %s", code),
