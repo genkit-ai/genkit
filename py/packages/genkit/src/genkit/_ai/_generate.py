@@ -1093,10 +1093,7 @@ async def resolve_parameters(
     if model_action is None:
         hint = ''
         if isinstance(model, str) and '/' not in model:
-            namespaces = registry.plugin_names()
-            if namespaces:
-                suggestions = ' or '.join(f"'{ns}/{model}'" for ns in namespaces)
-                hint = f' Did you mean {suggestions}?'
+            hint = f" Did you mean 'googleai/{model}' or 'vertexai/{model}'?"
         raise GenkitError(
             status='NOT_FOUND',
             message=f"Failed to resolve model '{model}'.{hint}",
