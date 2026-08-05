@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, ClassVar, Generic, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypeVar
 
@@ -267,8 +267,6 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
         """Ensure config is None, a dict, or a BaseModel instance."""
         if self.config is not None and not isinstance(self.config, (BaseModel, dict)):
             raise TypeError(f'config must be a BaseModel or dict, got {type(self.config).__name__}')
-
-
 
     @field_validator('messages', mode='before')
     @classmethod
