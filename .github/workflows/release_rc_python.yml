@@ -40,6 +40,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           token: ${{ secrets.GENKIT_RELEASER_GITHUB_TOKEN }}
+          persist-credentials: false
           fetch-depth: 0
 
       # Ensure we're on latest main and have tags (for RC numbering)
