@@ -391,9 +391,9 @@ components without registering them in Genkit. This is useful for plugins
 or when you need to pass components directly:
 
   - [ai.NewTool]: Create an unregistered tool
-  - [ai.NewModel]: Create an unregistered model
-  - [ai.NewRetriever]: Create an unregistered retriever
-  - [ai.NewEmbedder]: Create an unregistered embedder
+  - [ai.NewTypedModel]: Create an unregistered model
+  - [ai.NewTypedRetriever]: Create an unregistered retriever
+  - [ai.NewTypedEmbedder]: Create an unregistered embedder
 
 Use the corresponding Define* functions in this package to create and register
 components for use with Genkit's action system, tracing, and Dev UI.

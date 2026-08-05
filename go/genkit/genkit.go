@@ -1411,8 +1411,8 @@ func Embed(ctx context.Context, g *Genkit, opts ...ai.EmbedderOption) (*ai.Embed
 	return ai.Embed(ctx, g.reg, opts...)
 }
 
-// DefineRetriever defines a custom retriever implementation, registers it as a
-// [core.Action] of type Retriever, and returns an [ai.Retriever].
+// DefineTypedRetriever defines a custom retriever implementation, registers it
+// as a [core.Action] of type Retriever, and returns an [ai.RetrieverAction].
 // Retrievers are used to find documents relevant to a given query, often by
 // performing similarity searches in a vector database.
 //
@@ -1420,8 +1420,28 @@ func Embed(ctx context.Context, g *Genkit, opts ...ai.EmbedderOption) (*ai.Embed
 // contains the logic to process an [ai.RetrieverRequest] (containing the query)
 // and return an [ai.RetrieverResponse] (containing the relevant documents).
 //
+// Config is the retriever's typed configuration; it is usually inferred from
+// fn's signature. See [ai.NewTypedRetriever] for how the request's options are
+// deserialized.
+//
 // For retrievers that don't need to be registered (e.g., for plugin development),
-// use [ai.NewRetriever] instead.
+// use [ai.NewTypedRetriever] instead.
+func DefineTypedRetriever[Config any](
+	g *Genkit,
+	name string,
+	opts *ai.RetrieverOptions,
+	fn ai.TypedRetrieverFunc[Config],
+) *ai.RetrieverAction {
+	ret := ai.NewTypedRetriever(name, opts, fn)
+	ret.Register(g.reg)
+	return ret
+}
+
+// DefineRetriever defines a custom retriever implementation, registers it as a
+// [core.Action] of type Retriever, and returns an [ai.Retriever].
+//
+// Deprecated: Use [DefineTypedRetriever], which passes the request's options
+// to fn as a typed value instead of leaving them type-erased on the request.
 func DefineRetriever(g *Genkit, name string, opts *ai.RetrieverOptions, fn ai.RetrieverFunc) ai.Retriever {
 	ret := ai.NewRetriever(name, opts, fn)
 	ret.Register(g.reg)
