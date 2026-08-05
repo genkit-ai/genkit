@@ -439,13 +439,14 @@ def test_model_request_rejects_non_model_non_dict_config() -> None:
 
 
 def test_parameterized_model_request_config_json_schema_refs_plugin_schema() -> None:
+    """Verify JSON schema for ModelRequest[PluginConfig] includes a $ref to PluginConfig for Reflection API / Dev UI."""
     schema = to_json_schema(ModelRequest[PluginConfig])
     config_prop = schema['properties']['config']
     assert any('$ref' in arm for arm in config_prop.get('anyOf', [])), config_prop
 
 
-
 def test_model_request_dump_emits_no_serializer_warnings() -> None:
+    """Verify model_dump() and model_dump_json() execute without triggering Pydantic serialization warnings."""
     request = ModelRequest[PluginConfig](
         messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
         config={'api_key': 'k'},
