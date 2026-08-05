@@ -19,7 +19,6 @@ package ai
 import (
 	"context"
 	"errors"
-	"maps"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
@@ -148,34 +147,11 @@ func NewBackgroundModelAction[Config any](
 		opts.Supports = &ModelSupports{}
 	}
 
-	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, ModelRequest{}, "config")
+	configSchema, inputSchema := modelConfigSchemas[Config](opts.ConfigSchema)
 
-	// Seed from the caller's metadata, then stamp the built-in keys over it so
-	// they cannot be corrupted; registry discovery depends on them. The
-	// top-level Metadata wins over the embedded ModelOptions.Metadata on key
-	// conflicts.
-	metadata := make(map[string]any, len(opts.ModelOptions.Metadata)+len(opts.Metadata)+2)
-	maps.Copy(metadata, opts.ModelOptions.Metadata)
-	maps.Copy(metadata, opts.Metadata)
-	metadata["type"] = api.ActionTypeBackgroundModel
-	metadata["model"] = map[string]any{
-		"label": opts.Label,
-		"supports": map[string]any{
-			"media":       opts.Supports.Media,
-			"context":     opts.Supports.Context,
-			"multiturn":   opts.Supports.Multiturn,
-			"systemRole":  opts.Supports.SystemRole,
-			"tools":       opts.Supports.Tools,
-			"toolChoice":  opts.Supports.ToolChoice,
-			"constrained": opts.Supports.Constrained,
-			"output":      opts.Supports.Output,
-			"contentType": opts.Supports.ContentType,
-			"longRunning": opts.Supports.LongRunning,
-		},
-		"versions":      opts.Versions,
-		"stage":         opts.Stage,
-		"customOptions": configSchema,
-	}
+	// The top-level Metadata wins over the embedded ModelOptions.Metadata on
+	// key conflicts.
+	metadata := modelActionMetadata(api.ActionTypeBackgroundModel, &opts.ModelOptions, configSchema, opts.ModelOptions.Metadata, opts.Metadata)
 
 	typedStartFn := func(ctx context.Context, req *ModelRequest) (*ModelOperation, error) {
 		// req.Config was normalized to the exact Config type by
@@ -231,8 +207,14 @@ func NewBackgroundModelAction[Config any](
 // config to startFn as a typed value instead of leaving it type-erased on the
 // request.
 func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn StartModelOpFunc, checkFn CheckModelOpFunc) BackgroundModel {
+	if name == "" {
+		panic("ai.NewBackgroundModel: name is required")
+	}
 	if startFn == nil {
 		panic("ai.NewBackgroundModel: startFn is required")
+	}
+	if checkFn == nil {
+		panic("ai.NewBackgroundModel: checkFn is required")
 	}
 	return NewBackgroundModelAction(name, opts, func(ctx context.Context, req *ModelRequest, _ any) (*ModelOperation, error) {
 		return startFn(ctx, req)

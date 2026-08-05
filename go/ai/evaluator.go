@@ -188,7 +188,7 @@ type EvaluatorCallbackRequest struct {
 type EvaluatorCallbackResponse = EvaluationResult
 
 // evaluatorMetadata builds the shared action metadata for an evaluator.
-func evaluatorMetadata(opts *EvaluatorOptions) map[string]any {
+func evaluatorMetadata(opts *EvaluatorOptions, configSchema map[string]any) map[string]any {
 	// Seed from the caller's metadata, then stamp the built-in keys over it so
 	// they cannot be corrupted; registry discovery depends on them.
 	metadata := make(map[string]any, len(opts.Metadata)+2)
@@ -199,6 +199,7 @@ func evaluatorMetadata(opts *EvaluatorOptions) map[string]any {
 		"evaluatorIsBilled":    opts.IsBilled,
 		"evaluatorDisplayName": opts.DisplayName,
 		"evaluatorDefinition":  opts.Definition,
+		"customOptions":        configSchema,
 	}
 	return metadata
 }
@@ -228,20 +229,22 @@ func NewEvaluatorAction[Config any](
 		opts = &EvaluatorOptions{}
 	}
 
-	_, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, EvaluatorRequest{}, "options")
+	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, EvaluatorRequest{}, "options")
 
 	return &EvaluatorAction{
 		action: *core.NewActionOf(api.ActionTypeEvaluator, name, &core.ActionOptions{
-			Metadata:    evaluatorMetadata(opts),
+			Metadata:    evaluatorMetadata(opts, configSchema),
 			InputSchema: inputSchema,
 		}, func(ctx context.Context, req *EvaluatorRequest) (output *EvaluatorResponse, err error) {
-			cfg, err := resolveConfig[Config](req.Options)
+			// Normalize a shallow copy so the type-erased Options and the
+			// typed parameter always agree without clobbering the caller-owned
+			// request.
+			reqCopy := *req
+			req = &reqCopy
+			cfg, err := resolveConfigInto[Config](&req.Options)
 			if err != nil {
 				return nil, err
 			}
-			// Normalize the request so its type-erased Options always carries
-			// the same converted value the typed parameter does.
-			req.Options = cfg
 
 			var results []EvaluationResult
 			for _, datapoint := range req.Dataset {
@@ -320,22 +323,23 @@ func NewBatchEvaluatorAction[Config any](
 		opts = &EvaluatorOptions{}
 	}
 
-	_, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, EvaluatorRequest{}, "options")
+	configSchema, inputSchema := actionConfigSchemas[Config](opts.ConfigSchema, EvaluatorRequest{}, "options")
 
 	rawFn := func(ctx context.Context, req *EvaluatorRequest) (*EvaluatorResponse, error) {
-		cfg, err := resolveConfig[Config](req.Options)
+		// Normalize a shallow copy so the type-erased Options and the typed
+		// parameter always agree without clobbering the caller-owned request.
+		reqCopy := *req
+		req = &reqCopy
+		cfg, err := resolveConfigInto[Config](&req.Options)
 		if err != nil {
 			return nil, err
 		}
-		// Normalize the request so its type-erased Options always carries the
-		// same converted value the typed parameter does.
-		req.Options = cfg
 		return fn(ctx, req, cfg)
 	}
 
 	return &EvaluatorAction{
 		action: *core.NewActionOf(api.ActionTypeEvaluator, name, &core.ActionOptions{
-			Metadata:    evaluatorMetadata(opts),
+			Metadata:    evaluatorMetadata(opts, configSchema),
 			InputSchema: inputSchema,
 		}, rawFn),
 	}

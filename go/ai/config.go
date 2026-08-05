@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/internal/base"
@@ -45,11 +46,14 @@ func nullableConfigSchema(schema map[string]any) map[string]any {
 }
 
 // normalizeConfig returns a model middleware that resolves the request's raw
-// config into Config and writes the converted value back into the request.
-// It runs as the outermost step of a model's built-in chain so that every
-// wrapper after it, and the model function itself, sees the typed value; by
-// then the config has already been validated against the model's config
-// schema at the action boundary.
+// config into Config and passes the request on with its config slot
+// normalized to the converted value. It runs as the outermost step of a
+// model's built-in chain so that every wrapper after it, and the model
+// function itself, sees the typed value; by then the config has already been
+// validated against the model's config schema at the action boundary. The
+// normalization happens on a shallow copy: the incoming request is
+// caller-owned memory that may be reused across actions or turns, so it must
+// keep carrying the raw config.
 //
 // Version validation runs here, against the raw config, because conversion is
 // lossy: a "version" key sent by a JSON caller would be silently dropped when
@@ -60,28 +64,91 @@ func normalizeConfig[Config any](model string, versions []string) ModelMiddlewar
 			if err := validateVersion(model, versions, req.Config); err != nil {
 				return nil, err
 			}
-			cfg, err := resolveConfig[Config](req.Config)
-			if err != nil {
+			reqCopy := *req
+			req = &reqCopy
+			if _, err := resolveConfigInto[Config](&req.Config); err != nil {
 				return nil, err
 			}
-			req.Config = cfg
 			return next(ctx, req, cb)
 		}
 	}
 }
 
-// actionConfigSchemas returns the action's effective config schema (the
-// explicit override when set, otherwise the schema inferred from Config) and
-// the request input schema with its config slot replaced by the null-tolerant
-// wrapping of that schema. reqZero is the zero request value to infer the
-// input schema from and key is the config slot's wire name ("config" for
-// models, "options" for embedders and evaluators).
+// actionConfigSchemas returns the action's effective config schema (see
+// effectiveConfigSchema) and the request input schema with its config slot
+// replaced by the null-tolerant wrapping of that schema. reqZero is the zero
+// request value to infer the input schema from and key is the config slot's
+// wire name ("options" for embedders, retrievers, and evaluators; models go
+// through [modelConfigSchemas]).
 func actionConfigSchemas[Config any](override map[string]any, reqZero any, key string) (configSchema, inputSchema map[string]any) {
-	configSchema = override
-	if configSchema == nil {
-		configSchema = base.SchemaMapFor[Config]()
-	}
+	configSchema = effectiveConfigSchema[Config](override)
 	return configSchema, requestInputSchema(reqZero, key, nullableConfigSchema(configSchema))
+}
+
+// modelConfigSchemas is [actionConfigSchemas] for the model config slot. It
+// additionally keeps the framework-level "version" key admissible: callers
+// pin a model version through the config, validateVersion consumes the key on
+// the raw value, and conversion drops it, so the schema must not reject it.
+// The property is added to the advertised schema as well, which is honest:
+// the key is accepted on the wire.
+func modelConfigSchemas[Config any](override map[string]any) (configSchema, inputSchema map[string]any) {
+	configSchema = withVersionProperty(effectiveConfigSchema[Config](override))
+	return configSchema, requestInputSchema(ModelRequest{}, "config", nullableConfigSchema(configSchema))
+}
+
+// effectiveConfigSchema returns the explicit override when set, otherwise the
+// schema inferred from Config. Inferred schemas have their "required" lists
+// stripped: a config is partial by nature (callers set only the fields they
+// want to override), so a struct field lacking omitempty must not become a
+// mandatory config key. An explicit override is the caller's contract and
+// passes through untouched.
+func effectiveConfigSchema[Config any](override map[string]any) map[string]any {
+	if override != nil {
+		return override
+	}
+	schema := base.SchemaMapFor[Config]()
+	stripRequired(schema)
+	return schema
+}
+
+// stripRequired removes "required" lists from schema and its nested object
+// schemas (properties, items, and schema-valued additionalProperties).
+func stripRequired(schema map[string]any) {
+	if schema == nil {
+		return
+	}
+	delete(schema, "required")
+	if props, ok := schema["properties"].(map[string]any); ok {
+		for _, sub := range props {
+			if m, ok := sub.(map[string]any); ok {
+				stripRequired(m)
+			}
+		}
+	}
+	if items, ok := schema["items"].(map[string]any); ok {
+		stripRequired(items)
+	}
+	if extra, ok := schema["additionalProperties"].(map[string]any); ok {
+		stripRequired(extra)
+	}
+}
+
+// withVersionProperty returns schema with a string "version" property added
+// unless one is already declared or the schema constrains no properties. The
+// maps are cloned before modification since an override is caller-owned.
+func withVersionProperty(schema map[string]any) map[string]any {
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return schema
+	}
+	if _, ok := props["version"]; ok {
+		return schema
+	}
+	schema = maps.Clone(schema)
+	props = maps.Clone(props)
+	props["version"] = map[string]any{"type": "string"}
+	schema["properties"] = props
+	return schema
 }
 
 // resolveConfig converts the raw config value carried by a request into the
@@ -97,6 +164,24 @@ func resolveConfig[Config any](raw any) (Config, error) {
 			return cfg, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("invalid config type %T, want %T or map[string]any", raw, cfg), nil)
 		}
 		return cfg, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("invalid config for %T; check that field names and value types match: %v", cfg, err), nil)
+	}
+	return cfg, nil
+}
+
+// resolveConfigInto resolves the type-erased config slot at *slot into the
+// typed Config (see [resolveConfig]) and normalizes the slot to the converted
+// value so the request's two views of the config never disagree. The slot is
+// left untouched when the resolved value is a nil pointer, map, or slice:
+// boxing a typed nil would make the slot compare non-nil for a request that
+// carried no config, flipping every `== nil` default check downstream while
+// dereferences still panic.
+func resolveConfigInto[Config any](slot *any) (Config, error) {
+	cfg, err := resolveConfig[Config](*slot)
+	if err != nil {
+		return cfg, err
+	}
+	if !base.IsNil(cfg) {
+		*slot = cfg
 	}
 	return cfg, nil
 }
