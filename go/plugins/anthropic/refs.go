@@ -16,12 +16,12 @@ import (
 //		MaxTokens: 1024,
 //	}))
 //
-// name is the model ID, with or without the provider prefix: "claude-opus-4-5"
+// id is the model ID, with or without the provider prefix: "claude-opus-4-5"
 // and "anthropic/claude-opus-4-5" name the same model, as they do everywhere
 // else in this package.
 //
 // This package and the Anthropic SDK are both named anthropic, so one of them
 // needs an import alias; the example above aliases the SDK to sdk.
-func ModelRef(name string, config *anthropic.MessageNewParams) ai.ModelRef {
-	return ai.NewModelRef(modelName(name), config)
+func ModelRef(id string, config *anthropic.MessageNewParams) ai.ModelRef {
+	return ai.NewModelRef(modelName(id), config)
 }

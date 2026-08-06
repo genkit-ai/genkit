@@ -96,25 +96,25 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 }
 
 // buildModel builds an unregistered Claude model. A nil opts takes the
-// capabilities the plugin resolves for that name, and name is the model ID,
+// capabilities the plugin resolves for that ID, and id is the model ID,
 // bare or provider-prefixed.
-func (a *Anthropic) buildModel(name string, opts *ai.ModelOptions) *ai.ModelAction {
-	// Trim before resolving, so a prefixed name still hits knownModels.
-	name = strings.TrimPrefix(name, provider+"/")
+func (a *Anthropic) buildModel(id string, opts *ai.ModelOptions) *ai.ModelAction {
+	// Trim before resolving, so a prefixed id still hits knownModels.
+	id = strings.TrimPrefix(id, provider+"/")
 
 	var modelOpts ai.ModelOptions
 	if opts != nil {
 		modelOpts = *opts
 	} else {
-		modelOpts = modelOptions(name)
+		modelOpts = modelOptions(id)
 	}
 
-	return newModel(a.aclient, name, name, modelOpts)
+	return newModel(a.aclient, id, id, modelOpts)
 }
 
 // RegisterModel registers a Claude model with g and returns it. The plugin
 // supplies the implementation; opts describes what the model supports, and a
-// nil opts takes the capabilities the plugin resolves for that name, curated
+// nil opts takes the capabilities the plugin resolves for that ID, curated
 // for a known model and the Claude defaults for the rest.
 //
 // Most applications never need this. Every Claude model resolves on demand,
@@ -125,11 +125,11 @@ func (a *Anthropic) buildModel(name string, opts *ai.ModelOptions) *ai.ModelActi
 // Reach for RegisterModel only to pin capabilities that differ from the ones
 // the plugin resolves, which is what opts is for.
 //
-// Registering a name that is already registered panics, and generating with a
-// name registers it, so register a model before its first use or guard with
-// [IsDefinedModel]. name is the model ID, bare or provider-prefixed.
-func (a *Anthropic) RegisterModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
-	model := a.buildModel(name, opts)
+// Registering an ID that is already registered panics, and generating with an
+// ID registers it, so register a model before its first use or guard with
+// [IsDefinedModel]. id is the model ID, bare or provider-prefixed.
+func (a *Anthropic) RegisterModel(g *genkit.Genkit, id string, opts *ai.ModelOptions) (ai.Model, error) {
+	model := a.buildModel(id, opts)
 	genkit.RegisterAction(g, model)
 	return model, nil
 }
@@ -142,17 +142,17 @@ func (a *Anthropic) RegisterModel(g *genkit.Genkit, name string, opts *ai.ModelO
 // to ai.WithModel contributes only that name and serves the request with a
 // model resolved from it instead; registering it with [genkit.RegisterAction]
 // is what makes these capabilities the ones used.
-func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
-	return a.buildModel(name, opts), nil
+func (a *Anthropic) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOptions) (ai.Model, error) {
+	return a.buildModel(id, opts), nil
 }
 
-// modelOptions returns the ModelOptions for a Claude model name. Known models
+// modelOptions returns the ModelOptions for a Claude model ID. Known models
 // (see knownModels) carry curated capabilities and labels; any other model
 // falls back to defaultClaudeOpts, whose label newModel fills in from the
-// name. This is the single source of model capabilities shared by ListActions
+// ID. This is the single source of model capabilities shared by ListActions
 // and ResolveAction, mirroring the JS plugin's claudeModelReference.
-func modelOptions(name string) ai.ModelOptions {
-	opts, ok := knownModels[baseModelName(name)]
+func modelOptions(id string) ai.ModelOptions {
+	opts, ok := knownModels[baseModelName(id)]
 	if !ok {
 		opts = defaultClaudeOpts
 	}
@@ -184,28 +184,28 @@ func (a *Anthropic) ListActions(ctx context.Context) []api.ActionDesc {
 // first is rarely necessary: pass ai.WithModelName("anthropic/claude-opus-4-5")
 // or, to carry config with it, [ModelRef]. Use [genkit.LookupModel] when the
 // action itself is what you need.
-func Model(g *genkit.Genkit, name string) ai.Model {
-	return genkit.LookupModel(g, modelName(name))
+func Model(g *genkit.Genkit, id string) ai.Model {
+	return genkit.LookupModel(g, modelName(id))
 }
 
 // IsDefinedModel reports whether a model is already registered, which is the
 // guard against registering one twice (see [Anthropic.RegisterModel]). The lookup
 // deliberately does not resolve dynamically: a resolving lookup would ask the
 // plugin to resolve the very model the caller is checking for, registering it
-// and answering true for any name the Anthropic API can serve.
-func IsDefinedModel(g *genkit.Genkit, name string) bool {
-	return genkit.LookupAction(g, fmt.Sprintf("/%s/%s", api.ActionTypeModel, modelName(name))) != nil
+// and answering true for any ID the Anthropic API can serve.
+func IsDefinedModel(g *genkit.Genkit, id string) bool {
+	return genkit.LookupAction(g, fmt.Sprintf("/%s/%s", api.ActionTypeModel, modelName(id))) != nil
 }
 
 // modelName builds the action name for a Claude model ID, taking the ID either
 // bare or already provider-prefixed. The prefix is applied by concatenation,
-// so without the trim an already-prefixed name would double up and name a
+// so without the trim an already-prefixed ID would double up and name a
 // model that resolves nowhere.
-func modelName(name string) string {
-	return api.NewName(provider, strings.TrimPrefix(name, provider+"/"))
+func modelName(id string) string {
+	return api.NewName(provider, strings.TrimPrefix(id, provider+"/"))
 }
 
-// ResolveAction resolves an action with the given name
+// ResolveAction resolves an action with the given ID
 func (a *Anthropic) ResolveAction(atype api.ActionType, id string) api.Action {
 	switch atype {
 	case api.ActionTypeModel:
@@ -254,8 +254,8 @@ func newModel(client anthropic.Client, name, apiModelName string, opts ai.ModelO
 	return ant.NewModel(client, provider, name, apiModelName, opts)
 }
 
-func baseModelName(name string) string {
-	return dateSuffix.ReplaceAllString(name, "")
+func baseModelName(id string) string {
+	return dateSuffix.ReplaceAllString(id, "")
 }
 
 func resolveModelID(id string, availableModels []string) (string, bool) {
