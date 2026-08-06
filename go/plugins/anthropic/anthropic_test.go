@@ -139,24 +139,24 @@ func TestNewModelDescriptor(t *testing.T) {
 	}
 }
 
-// TestDefineModelNilOptions covers the nil ModelOptions path: the model gets
+// TestRegisterModelNilOptions covers the nil ModelOptions path: the model gets
 // the capabilities the plugin resolves for its name rather than panicking or
-// advertising a model that supports nothing. It also pins that DefineModel
+// advertising a model that supports nothing. It also pins that RegisterModel
 // registers, so the lookup helpers can find what it defined.
-func TestDefineModelNilOptions(t *testing.T) {
+func TestRegisterModelNilOptions(t *testing.T) {
 	a := &Anthropic{}
 	g := genkit.Init(context.Background())
 
-	m, err := a.DefineModel(g, "claude-opus-4-5", nil)
+	m, err := a.RegisterModel(g, "claude-opus-4-5", nil)
 	if err != nil {
-		t.Fatalf("DefineModel() error = %v", err)
+		t.Fatalf("RegisterModel() error = %v", err)
 	}
 
 	if !IsDefinedModel(g, "claude-opus-4-5") {
-		t.Error("IsDefinedModel() = false after DefineModel(), want the model registered")
+		t.Error("IsDefinedModel() = false after RegisterModel(), want the model registered")
 	}
 	if Model(g, "claude-opus-4-5") == nil {
-		t.Error("Model() = nil after DefineModel(), want the registered model")
+		t.Error("Model() = nil after RegisterModel(), want the registered model")
 	}
 
 	model, ok := m.(*ai.ModelAction).Desc().Metadata["model"].(map[string]any)
@@ -242,14 +242,14 @@ func TestResolveModelID(t *testing.T) {
 	}
 }
 
-// TestDefineModelThenResolve pins the ordinary path: a model defined before
+// TestRegisterModelThenResolve pins the ordinary path: a model defined before
 // its first use is the one generation resolves, and defining it does not make
 // the plugin resolve it a second time. Generate turns a name into an action
 // through the same resolving lookup Model uses, and the plugin's ResolveAction
 // would call the Anthropic API, which this fake key cannot reach, so the
 // caller's own capabilities coming back prove the registry short-circuited to
 // the defined model instead of resolving again.
-func TestDefineModelThenResolve(t *testing.T) {
+func TestRegisterModelThenResolve(t *testing.T) {
 	a := &Anthropic{APIKey: "test-key"}
 	g := genkit.Init(context.Background(), genkit.WithPlugins(a))
 
@@ -258,33 +258,33 @@ func TestDefineModelThenResolve(t *testing.T) {
 		Label:    "Custom Claude",
 		Supports: &ai.ModelSupports{Multiturn: true, Tools: true},
 	}
-	if _, err := a.DefineModel(g, name, &opts); err != nil {
-		t.Fatalf("DefineModel() error = %v", err)
+	if _, err := a.RegisterModel(g, name, &opts); err != nil {
+		t.Fatalf("RegisterModel() error = %v", err)
 	}
 
 	m := Model(g, name)
 	if m == nil {
-		t.Fatal("Model() = nil, want the model DefineModel registered")
+		t.Fatal("Model() = nil, want the model RegisterModel registered")
 	}
 	model, ok := m.(*ai.ModelAction).Desc().Metadata["model"].(map[string]any)
 	if !ok {
 		t.Fatalf("model metadata missing")
 	}
 	if model["label"] != "Custom Claude" {
-		t.Errorf("label = %v, want the capabilities DefineModel was given", model["label"])
+		t.Errorf("label = %v, want the capabilities RegisterModel was given", model["label"])
 	}
 }
 
-// TestDefineModelTwicePanics pins what registering costs: the registry rejects
+// TestRegisterModelTwicePanics pins what registering costs: the registry rejects
 // a duplicate key, so a name can only be defined once and [IsDefinedModel] is
 // the guard.
-func TestDefineModelTwicePanics(t *testing.T) {
+func TestRegisterModelTwicePanics(t *testing.T) {
 	a := &Anthropic{APIKey: "test-key"}
 	g := genkit.Init(context.Background())
 
 	const name = "claude-opus-4-1"
-	if _, err := a.DefineModel(g, name, nil); err != nil {
-		t.Fatalf("DefineModel() error = %v", err)
+	if _, err := a.RegisterModel(g, name, nil); err != nil {
+		t.Fatalf("RegisterModel() error = %v", err)
 	}
 
 	defer func() {
@@ -292,7 +292,7 @@ func TestDefineModelTwicePanics(t *testing.T) {
 			t.Error("defining the same name twice did not panic, want the registry to reject it")
 		}
 	}()
-	a.DefineModel(g, name, nil)
+	a.RegisterModel(g, name, nil)
 }
 
 // TestModelRef pins the name a ref carries and that the typed config rides
@@ -322,15 +322,15 @@ func TestModelRef(t *testing.T) {
 
 // TestPrefixedNamesAreEquivalent pins that the exported entry points take a
 // model ID either bare or provider-prefixed. The prefix is applied by
-// concatenation, so an untrimmed name would double up: DefineModel would
+// concatenation, so an untrimmed name would double up: RegisterModel would
 // register a key IsDefinedModel never checks, breaking the guard the
-// DefineModel godoc points at.
+// RegisterModel godoc points at.
 func TestPrefixedNamesAreEquivalent(t *testing.T) {
 	a := &Anthropic{APIKey: "test-key"}
 	g := genkit.Init(context.Background())
 
-	if _, err := a.DefineModel(g, "anthropic/claude-opus-4-5", nil); err != nil {
-		t.Fatalf("DefineModel() error = %v", err)
+	if _, err := a.RegisterModel(g, "anthropic/claude-opus-4-5", nil); err != nil {
+		t.Fatalf("RegisterModel() error = %v", err)
 	}
 
 	for _, name := range []string{"claude-opus-4-5", "anthropic/claude-opus-4-5"} {
@@ -357,7 +357,7 @@ func TestPrefixedNamesAreEquivalent(t *testing.T) {
 // TestIsDefinedModelDoesNotResolve pins the guard semantics: checking whether
 // a model is defined must not itself resolve and register one. The plugin
 // resolves any name the Anthropic API can serve, so a resolving lookup would
-// answer true for every name and make the guarded DefineModel panic. The fake
+// answer true for every name and make the guarded RegisterModel panic. The fake
 // endpoint serves the models list to make resolution reachable, which is
 // exactly what the guard must not trigger.
 func TestIsDefinedModelDoesNotResolve(t *testing.T) {
@@ -373,10 +373,32 @@ func TestIsDefinedModelDoesNotResolve(t *testing.T) {
 	if IsDefinedModel(g, "claude-opus-4-5") {
 		t.Fatal("IsDefinedModel() = true for a model that was never defined")
 	}
-	if _, err := a.DefineModel(g, "claude-opus-4-5", nil); err != nil {
-		t.Fatalf("DefineModel() after the guard error = %v", err)
+	if _, err := a.RegisterModel(g, "claude-opus-4-5", nil); err != nil {
+		t.Fatalf("RegisterModel() after the guard error = %v", err)
 	}
 	if !IsDefinedModel(g, "claude-opus-4-5") {
-		t.Error("IsDefinedModel() = false after DefineModel()")
+		t.Error("IsDefinedModel() = false after RegisterModel()")
+	}
+}
+
+// TestDefineModelDoesNotRegister pins the deprecated builder: it hands back a
+// model without touching the registry, which is what it has always done and
+// what separates it from RegisterModel.
+func TestDefineModelDoesNotRegister(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+
+	a := &Anthropic{}
+	g := genkit.Init(context.Background(), genkit.WithPlugins(a))
+
+	const name = "claude-opus-4-5"
+	m, err := a.DefineModel(g, name, nil)
+	if err != nil {
+		t.Fatalf("DefineModel() error = %v", err)
+	}
+	if m == nil {
+		t.Fatal("DefineModel() = nil, want the built model")
+	}
+	if IsDefinedModel(g, name) {
+		t.Errorf("IsDefinedModel(%q) = true after DefineModel(), want the deprecated builder to leave the registry alone", name)
 	}
 }
