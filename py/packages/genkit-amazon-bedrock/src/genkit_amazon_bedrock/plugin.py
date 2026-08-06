@@ -18,8 +18,8 @@
 
 Registers Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama,
 Mistral, Cohere, and others) as Genkit model actions. Text generation uses the
-Bedrock Converse API, non-streaming; streaming, embedders, image generation,
-and reranking are not supported yet.
+Bedrock Converse and ConverseStream APIs; embedders, image generation, and
+reranking are not supported yet.
 """
 
 from typing import TYPE_CHECKING

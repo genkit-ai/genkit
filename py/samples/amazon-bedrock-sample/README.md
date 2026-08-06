@@ -1,7 +1,8 @@
 # Amazon Bedrock
 
-Run text generation, structured output, tool calling, and reasoning through
-Genkit with Amazon Bedrock's Converse API.
+Run text generation, streaming, structured output, tool calling, and
+reasoning through Genkit with Amazon Bedrock's Converse and ConverseStream
+APIs.
 
 You need an AWS account with Amazon Bedrock model access granted for the four
 models the sample uses:
@@ -41,10 +42,18 @@ genkit start -- uv run src/main.py
 Then open [http://localhost:4000](http://localhost:4000) and try:
 
 - `haiku`
+- `haiku_stream`
 - `cat_profile`
 - `weather_report`
+- `weather_report_stream`
 - `reasoning`
 - `thinking`
+- `thinking_stream`
+
+The `*_stream` flows go through ConverseStream. Chunks are deltas rather than
+snapshots, so the Dev UI's streamed output is the concatenation of them; a tool
+call is the exception, arriving whole in one chunk because its arguments come
+over the wire as JSON fragments.
 
 The plugin resolves any Bedrock model ID, inference profile, or ARN on demand,
 so the Dev UI model runner also works with models beyond the four declared
