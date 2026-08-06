@@ -250,7 +250,7 @@ def define_background_model(
     model_options: dict[str, Any] = {}
 
     if info:
-        model_options.update(info.model_dump())
+        model_options.update(info.model_dump(by_alias=True, exclude_none=True))
 
     model_options['label'] = label
     if config_schema:
