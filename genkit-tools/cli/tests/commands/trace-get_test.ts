@@ -72,7 +72,7 @@ describe('trace:get', () => {
 
     // Reset option values on the commander object
     traceGet.setOptionValue('format', undefined);
-    traceGet.setOptionValue('keepMedia', undefined);
+    traceGet.setOptionValue('keepBase64', undefined);
 
     // Mock console.log to avoid spamming test output
     jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -139,7 +139,7 @@ describe('trace:get', () => {
     expect(parsed.spans.s1.attributes.img).toContain('base64 data');
   });
 
-  it('should preserve base64 data when --keep-media is specified', async () => {
+  it('should preserve base64 data when --keep-base64 is specified', async () => {
     const rawImage =
       'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
     mockedRunWithManager.mockImplementation(async (projectRoot, fn) => {
@@ -165,7 +165,7 @@ describe('trace:get', () => {
       'test-trace-id',
       '-f',
       'json',
-      '--keep-media',
+      '--keep-base64',
     ]);
 
     const loggedStr = (console.log as jest.Mock).mock.calls[0][0] as string;

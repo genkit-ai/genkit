@@ -308,15 +308,15 @@ export async function removeToolsInfoFile(
 
 /**
  * Sanitizes base64 data URLs (e.g. `data:image/png;base64,...`) in strings or nested objects
- * by replacing inline data with summary placeholders, unless `keepMedia` is true.
+ * by replacing inline data with summary placeholders, unless `keepBase64` is true.
  */
 export function sanitizeBase64DataUrls(
   val: any,
-  keepMedia: boolean = false
+  keepBase64: boolean = false
 ): any {
   if (typeof val === 'string') {
-    if (!keepMedia) {
-      return val.replace(
+    if (!keepBase64) {
+      const result = val.replace(
         /data:([a-zA-Z0-9-]+\/[a-zA-Z0-9-+.]+);base64,([A-Za-z0-9+/=]+)/g,
         (match, mime, b64) => {
           const approxBytes = Math.round((b64.length * 3) / 4);
@@ -327,16 +327,27 @@ export function sanitizeBase64DataUrls(
           return `data:${mime};base64,<... ${sizeStr} base64 data ...>`;
         }
       );
+
+      // Heuristic for generic base64 data.
+      if (result.length > 80 && /^[A-Za-z0-9+/=]+$/.test(result)) {
+        const approxBytes = Math.round((result.length * 3) / 4);
+        const sizeStr =
+          approxBytes > 1024
+            ? `${(approxBytes / 1024).toFixed(1)} KB`
+            : `${approxBytes} B`;
+        return `${result.substring(0, 15)}<... ${sizeStr} base64 data ...>`;
+      }
+      return result;
     }
     return val;
   }
   if (Array.isArray(val)) {
-    return val.map((item) => sanitizeBase64DataUrls(item, keepMedia));
+    return val.map((item) => sanitizeBase64DataUrls(item, keepBase64));
   }
   if (val && typeof val === 'object') {
     const res: Record<string, any> = {};
     for (const [k, v] of Object.entries(val)) {
-      res[k] = sanitizeBase64DataUrls(v, keepMedia);
+      res[k] = sanitizeBase64DataUrls(v, keepBase64);
     }
     return res;
   }
@@ -348,7 +359,7 @@ export function sanitizeBase64DataUrls(
  */
 export function parseAndSanitizeJson(
   val: any,
-  keepMedia: boolean = false
+  keepBase64: boolean = false
 ): any {
   if (typeof val === 'string') {
     const trimmed = val.trim();
@@ -358,13 +369,13 @@ export function parseAndSanitizeJson(
     ) {
       try {
         const parsed = JSON.parse(trimmed);
-        return sanitizeBase64DataUrls(parsed, keepMedia);
+        return sanitizeBase64DataUrls(parsed, keepBase64);
       } catch {
         // Not valid JSON
       }
     }
   }
-  return sanitizeBase64DataUrls(val, keepMedia);
+  return sanitizeBase64DataUrls(val, keepBase64);
 }
 
 /** Formats a start and end timestamp into a human-readable duration string (e.g. "12ms" or "0.50ms"). */

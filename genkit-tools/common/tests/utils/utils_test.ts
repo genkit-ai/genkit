@@ -138,7 +138,11 @@ describe('utils', () => {
       );
     });
 
+<<<<<<< HEAD
     it('keeps media if keepMedia is true', () => {
+=======
+    it('keeps media if keepBase64 is true', () => {
+>>>>>>> 7cecd6b9c (trimmed)
       const b64 =
         'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
       expect(sanitizeBase64DataUrls(b64, true)).toBe(b64);
