@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -557,6 +558,33 @@ async def test_firestore_session_store_missing_segment_path_raises() -> None:
     with pytest.raises(GenkitError) as exc_info:
         await store.get_snapshot(snapshot_id='snap-no-seg')
     assert exc_info.value.status == 'DATA_LOSS'
+
+
+@pytest.mark.asyncio
+async def test_firestore_session_store_datetime_in_custom_round_trips() -> None:
+    """SessionState mode='json' coerces datetimes before they are persisted."""
+    h = FakeStoreHarness()
+    store = h.store()
+    when = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    await store.save_snapshot(
+        'snap-dt',
+        lambda _e: SessionSnapshot(
+            snapshot_id='snap-dt',
+            session_id='sess-dt',
+            created_at='2026-07-03T00:00:00Z',
+            state=SessionState(session_id='sess-dt', custom={'when': when}),
+        ),
+    )
+
+    shard = h.docs[_shard_path('snap-dt', 0)]
+    stored = json.loads(shard['chunk'].decode('utf-8'))
+    assert stored['custom']['when'] == '2026-01-01T00:00:00Z'
+
+    loaded = await store.get_snapshot(snapshot_id='snap-dt')
+    assert loaded is not None
+    assert loaded.state is not None
+    assert loaded.state.custom == {'when': '2026-01-01T00:00:00Z'}
 
 
 @pytest.mark.asyncio

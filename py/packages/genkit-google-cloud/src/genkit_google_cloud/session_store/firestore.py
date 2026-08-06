@@ -223,11 +223,6 @@ def status_from_doc(doc_snapshot: DocumentSnapshot) -> SnapshotStatus | None:
     return out
 
 
-def sanitize(value: Any) -> Any:  # noqa: ANN401
-    """Drop values Firestore rejects while keeping JSON round-trip semantics."""
-    return json.loads(json.dumps(value, default=str))
-
-
 def state_to_dict(state: SessionState | None) -> dict[str, Any]:
     """Convert a SessionState object to a dictionary representation."""
     if state is None:
@@ -259,7 +254,7 @@ def patch_from_json(raw: list[dict[str, Any]] | None) -> list[JsonPatchOperation
 
 def byte_length(value: Any) -> int:  # noqa: ANN401
     """Calculate the UTF-8 byte length of a JSON-serialized value."""
-    return len(json.dumps(value, separators=(',', ':'), default=str).encode('utf-8'))
+    return len(json.dumps(value, separators=(',', ':')).encode('utf-8'))
 
 
 class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[StateT]):
@@ -523,7 +518,10 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 segment_path=segment_path,
                 state_patch=state_patch,
             )
-            transaction.set(snap_ref, sanitize(doc_model.model_dump(by_alias=True, exclude_none=True, mode='json')))
+            transaction.set(
+                snap_ref,
+                doc_model.model_dump(by_alias=True, exclude_none=True, mode='json'),
+            )
             await self._update_pointer_in_transaction(
                 transaction,
                 session_id,
@@ -793,7 +791,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         context: dict[str, Any] | None = None,
     ) -> int:
         shards_col = self.shards_col(context)
-        buf = json.dumps(state if state is not None else None, separators=(',', ':'), default=str).encode('utf-8')
+        buf = json.dumps(state, separators=(',', ':')).encode('utf-8')
         count = max(1, (len(buf) + self.shard_size - 1) // self.shard_size)
         for i in range(count):
             chunk = buf[i * self.shard_size : (i + 1) * self.shard_size]
