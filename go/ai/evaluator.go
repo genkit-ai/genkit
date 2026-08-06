@@ -184,15 +184,13 @@ func NewEvaluator(name string, opts *EvaluatorOptions, fn EvaluatorFunc) Evaluat
 		},
 	}
 
-	inputSchema := core.InferSchemaMap(EvaluatorRequest{})
-	if inputSchema != nil && opts.ConfigSchema != nil {
-		if props, ok := inputSchema["properties"].(map[string]any); ok {
-			props["options"] = opts.ConfigSchema
-		}
-	}
+	inputSchema := requestInputSchema(EvaluatorRequest{}, "options", opts.ConfigSchema)
 
 	return &evaluator{
-		Action: *core.NewAction(name, api.ActionTypeEvaluator, metadata, inputSchema, func(ctx context.Context, req *EvaluatorRequest) (output *EvaluatorResponse, err error) {
+		Action: *core.NewActionOf(api.ActionTypeEvaluator, name, &core.ActionOptions{
+			Metadata:    metadata,
+			InputSchema: inputSchema,
+		}, func(ctx context.Context, req *EvaluatorRequest) (output *EvaluatorResponse, err error) {
 			var results []EvaluationResult
 			for _, datapoint := range req.Dataset {
 				if datapoint.TestCaseId == "" {
@@ -277,7 +275,9 @@ func NewBatchEvaluator(name string, opts *EvaluatorOptions, fn BatchEvaluatorFun
 	}
 
 	return &evaluator{
-		Action: *core.NewAction(name, api.ActionTypeEvaluator, metadata, nil, fn),
+		Action: *core.NewActionOf(api.ActionTypeEvaluator, name, &core.ActionOptions{
+			Metadata: metadata,
+		}, fn),
 	}
 }
 

@@ -382,11 +382,11 @@ func (o *Ollama) ListActions(ctx context.Context) []api.ActionDesc {
 }
 
 // ResolveAction dynamically creates a model action on demand.
-func (o *Ollama) ResolveAction(atype api.ActionType, name string) api.Action {
+func (o *Ollama) ResolveAction(atype api.ActionType, id string) api.Action {
 	if atype != api.ActionTypeModel {
 		return nil
 	}
-	model := o.newModel(name, ai.ModelOptions{Supports: &defaultOllamaSupports})
+	model := o.newModel(id, ai.ModelOptions{Supports: &defaultOllamaSupports})
 	if action, ok := model.(api.Action); ok {
 		return action
 	}

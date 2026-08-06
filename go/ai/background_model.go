@@ -19,6 +19,7 @@ package ai
 import (
 	"context"
 	"errors"
+	"maps"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
@@ -44,8 +45,14 @@ type BackgroundModel interface {
 
 // backgroundModel is the concrete implementation of BackgroundModel interface.
 type backgroundModel struct {
-	core.BackgroundActionDef[*ModelRequest, *ModelResponse]
+	core.BackgroundAction[*ModelRequest, *ModelResponse]
 }
+
+// Plugin resolvers assert the value returned by [NewBackgroundModel] to
+// [api.Action] (e.g. googlegenai's resolveAction returns the whole model as
+// the resolved action). That only holds through the embedded action's
+// promoted methods, so pin it here where the embedding lives.
+var _ api.Action = (*backgroundModel)(nil)
 
 // ModelOperation is a background operation for a model.
 type ModelOperation = core.Operation[*ModelResponse]
@@ -92,41 +99,39 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 	if opts == nil {
 		opts = &BackgroundModelOptions{}
 	}
-	if opts.Label == "" {
+	labelExplicit := opts.Label != ""
+	if !labelExplicit {
 		opts.Label = name
 	}
 	if opts.Supports == nil {
 		opts.Supports = &ModelSupports{}
 	}
 
-	metadata := map[string]any{
-		"type": api.ActionTypeBackgroundModel,
-		"model": map[string]any{
-			"label": opts.Label,
-			"supports": map[string]any{
-				"media":       opts.Supports.Media,
-				"context":     opts.Supports.Context,
-				"multiturn":   opts.Supports.Multiturn,
-				"systemRole":  opts.Supports.SystemRole,
-				"tools":       opts.Supports.Tools,
-				"toolChoice":  opts.Supports.ToolChoice,
-				"constrained": opts.Supports.Constrained,
-				"output":      opts.Supports.Output,
-				"contentType": opts.Supports.ContentType,
-				"longRunning": opts.Supports.LongRunning,
-			},
-			"versions":      opts.Versions,
-			"stage":         opts.Stage,
-			"customOptions": opts.ConfigSchema,
+	// Seed from the caller's metadata, then stamp the built-in keys over it so
+	// they cannot be corrupted; registry discovery depends on them.
+	metadata := make(map[string]any, len(opts.Metadata)+2)
+	maps.Copy(metadata, opts.Metadata)
+	metadata["type"] = api.ActionTypeBackgroundModel
+	metadata["model"] = map[string]any{
+		"label": opts.Label,
+		"supports": map[string]any{
+			"media":       opts.Supports.Media,
+			"context":     opts.Supports.Context,
+			"multiturn":   opts.Supports.Multiturn,
+			"systemRole":  opts.Supports.SystemRole,
+			"tools":       opts.Supports.Tools,
+			"toolChoice":  opts.Supports.ToolChoice,
+			"constrained": opts.Supports.Constrained,
+			"output":      opts.Supports.Output,
+			"contentType": opts.Supports.ContentType,
+			"longRunning": opts.Supports.LongRunning,
 		},
+		"versions":      opts.Versions,
+		"stage":         opts.Stage,
+		"customOptions": opts.ConfigSchema,
 	}
 
-	inputSchema := core.InferSchemaMap(ModelRequest{})
-	if inputSchema != nil && opts.ConfigSchema != nil {
-		if props, ok := inputSchema["properties"].(map[string]any); ok {
-			props["config"] = opts.ConfigSchema
-		}
-	}
+	inputSchema := requestInputSchema(ModelRequest{}, "config", opts.ConfigSchema)
 
 	mws := []ModelMiddleware{
 		simulateSystemPrompt(&opts.ModelOptions, nil),
@@ -144,7 +149,24 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 		return modelOpFromResponse(resp)
 	}
 
-	return &backgroundModel{*core.NewBackgroundAction(name, api.ActionTypeBackgroundModel, metadata, wrappedFn, checkFn, opts.Cancel)}
+	// The label doubles as the description on all three component actions,
+	// matching the JS background model surface. A label that was only
+	// defaulted from the name yields to an explicit caller
+	// Metadata["description"]: leaving Description empty lets core's
+	// metadata fallback apply it.
+	description := opts.Label
+	if !labelExplicit {
+		if _, ok := metadata["description"].(string); ok {
+			description = ""
+		}
+	}
+	return &backgroundModel{*core.NewBackgroundActionOf(api.ActionTypeBackgroundModel, name, &core.BackgroundActionOptions[*ModelRequest, *ModelResponse]{
+		Description: description,
+		Metadata:    metadata,
+		InputSchema: inputSchema,
+		Check:       checkFn,
+		Cancel:      opts.Cancel,
+	}, wrappedFn)}
 }
 
 // DefineBackgroundModel defines and registers a new model that runs in the background.

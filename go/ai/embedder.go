@@ -121,15 +121,13 @@ func NewEmbedder(name string, opts *EmbedderOptions, fn EmbedderFunc) Embedder {
 		},
 	}
 
-	inputSchema := core.InferSchemaMap(EmbedRequest{})
-	if inputSchema != nil && opts.ConfigSchema != nil {
-		if props, ok := inputSchema["properties"].(map[string]any); ok {
-			props["options"] = opts.ConfigSchema
-		}
-	}
+	inputSchema := requestInputSchema(EmbedRequest{}, "options", opts.ConfigSchema)
 
 	return &embedder{
-		Action: *core.NewAction(name, api.ActionTypeEmbedder, metadata, inputSchema, fn),
+		Action: *core.NewActionOf(api.ActionTypeEmbedder, name, &core.ActionOptions{
+			Metadata:    metadata,
+			InputSchema: inputSchema,
+		}, fn),
 	}
 }
 

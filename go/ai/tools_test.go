@@ -902,6 +902,92 @@ func TestToolWithInputSchemaOption(t *testing.T) {
 	})
 }
 
+func TestToolWithOutputSchemaOptions(t *testing.T) {
+	customSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+	}
+
+	t.Run("DefineTool with WithOutputSchema", func(t *testing.T) {
+		r := newTestRegistry(t)
+
+		tl := DefineTool(r, "provider/customOutput", "Custom output schema",
+			func(ctx *ToolContext, input struct{}) (any, error) { return nil, nil },
+			WithOutputSchema(customSchema))
+
+		def := tl.Definition()
+		props, ok := def.OutputSchema["properties"].(map[string]any)
+		if !ok || props["answer"] == nil {
+			t.Errorf("OutputSchema = %v, want the custom schema", def.OutputSchema)
+		}
+	})
+
+	t.Run("NewTool with WithOutputSchema", func(t *testing.T) {
+		tl := NewTool("customOutputNew", "Custom output schema",
+			func(ctx *ToolContext, input struct{}) (any, error) { return nil, nil },
+			WithOutputSchema(customSchema))
+
+		def := tl.Definition()
+		props, ok := def.OutputSchema["properties"].(map[string]any)
+		if !ok || props["answer"] == nil {
+			t.Errorf("OutputSchema = %v, want the custom schema", def.OutputSchema)
+		}
+	})
+
+	t.Run("WithOutputSchemaName resolves through the registry", func(t *testing.T) {
+		r := newTestRegistry(t)
+		r.RegisterSchema("Answer", customSchema)
+
+		tl := DefineTool(r, "provider/namedOutput", "Named output schema",
+			func(ctx *ToolContext, input struct{}) (any, error) { return nil, nil },
+			WithOutputSchemaName("Answer"))
+
+		def := tl.Definition()
+		props, ok := def.OutputSchema["properties"].(map[string]any)
+		if !ok || props["answer"] == nil {
+			t.Errorf("OutputSchema = %v, want the registered Answer schema", def.OutputSchema)
+		}
+	})
+
+	t.Run("panics when Out is not any", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for concrete Out with a custom output schema")
+			}
+		}()
+
+		NewTool("badOut", "Concrete out",
+			func(ctx *ToolContext, input struct{}) (string, error) { return "", nil },
+			WithOutputSchema(customSchema))
+	})
+
+	t.Run("last output schema wins", func(t *testing.T) {
+		tl := NewTool("doubleOut", "Two output schemas",
+			func(ctx *ToolContext, input struct{}) (any, error) { return nil, nil },
+			WithOutputSchemaName("Answer"), WithOutputSchema(customSchema))
+
+		def := tl.Definition()
+		props, ok := def.OutputSchema["properties"].(map[string]any)
+		if !ok || props["answer"] == nil {
+			t.Errorf("OutputSchema = %v, want the last schema set", def.OutputSchema)
+		}
+	})
+
+	t.Run("multipart tools advertise the custom schema over the envelope", func(t *testing.T) {
+		tl := NewMultipartTool("multipartOut", "Multipart with output schema",
+			func(ctx *ToolContext, input struct{}) (*MultipartToolResponse, error) { return nil, nil },
+			WithOutputSchema(customSchema))
+
+		def := tl.Definition()
+		props, ok := def.OutputSchema["properties"].(map[string]any)
+		if !ok || props["answer"] == nil {
+			t.Errorf("OutputSchema = %v, want the custom schema, not the envelope", def.OutputSchema)
+		}
+	})
+}
+
 func TestResolveUniqueTools(t *testing.T) {
 	t.Run("resolves tools from registry", func(t *testing.T) {
 		r := newTestRegistry(t)

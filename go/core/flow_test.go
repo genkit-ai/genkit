@@ -32,7 +32,7 @@ func TestRunInFlow(t *testing.T) {
 		return n, nil
 	}
 
-	flow := DefineFlow(r, "run", func(ctx context.Context, _ any) ([]int, error) {
+	flow := defineFlow(r, "run", func(ctx context.Context, _ any) ([]int, error) {
 		g1, err := Run(ctx, "s1", stepf)
 		if err != nil {
 			return nil, err
@@ -55,7 +55,7 @@ func TestRunInFlow(t *testing.T) {
 
 func TestRunFlow(t *testing.T) {
 	r := registry.New()
-	f := DefineFlow(r, "inc", func(ctx context.Context, i int) (int, error) {
+	f := defineFlow(r, "inc", func(ctx context.Context, i int) (int, error) {
 		return i + 1, nil
 	})
 	got, err := f.Run(context.Background(), 2)
@@ -70,10 +70,10 @@ func TestRunFlow(t *testing.T) {
 func TestFlowNameFromContext(t *testing.T) {
 	r := registry.New()
 	flows := []*Flow[struct{}, string, struct{}]{
-		DefineFlow(r, "DefineFlow", func(ctx context.Context, _ struct{}) (string, error) {
+		defineFlow(r, "DefineFlow", func(ctx context.Context, _ struct{}) (string, error) {
 			return FlowNameFromContext(ctx), nil
 		}),
-		DefineStreamingFlow(r, "DefineStreamingFlow", func(ctx context.Context, _ struct{}, s StreamCallback[struct{}]) (string, error) {
+		defineStreamingFlow(r, "DefineStreamingFlow", func(ctx context.Context, _ struct{}, s StreamCallback[struct{}]) (string, error) {
 			return FlowNameFromContext(ctx), nil
 		}),
 	}
@@ -106,7 +106,7 @@ func TestRunOutsideFlow(t *testing.T) {
 func TestFlowStream(t *testing.T) {
 	t.Run("streams values correctly", func(t *testing.T) {
 		r := registry.New()
-		f := DefineStreamingFlow(r, "counter", func(ctx context.Context, n int, cb StreamCallback[int]) (int, error) {
+		f := defineStreamingFlow(r, "counter", func(ctx context.Context, n int, cb StreamCallback[int]) (int, error) {
 			for i := 0; i < n; i++ {
 				if err := cb(ctx, i); err != nil {
 					return 0, err
@@ -145,7 +145,7 @@ func TestFlowStream(t *testing.T) {
 
 	t.Run("yields error on flow failure", func(t *testing.T) {
 		r := registry.New()
-		f := DefineStreamingFlow(r, "failing", func(ctx context.Context, input int, cb StreamCallback[int]) (int, error) {
+		f := defineStreamingFlow(r, "failing", func(ctx context.Context, input int, cb StreamCallback[int]) (int, error) {
 			return 0, NewError(INTERNAL, "flow failed")
 		})
 
@@ -165,7 +165,7 @@ func TestFlowStream(t *testing.T) {
 func TestFlowRegister(t *testing.T) {
 	t.Run("flow can be registered with registry", func(t *testing.T) {
 		r := registry.New()
-		f := DefineFlow(r, "test/registerable", func(ctx context.Context, input string) (string, error) {
+		f := defineFlow(r, "test/registerable", func(ctx context.Context, input string) (string, error) {
 			return input, nil
 		})
 
@@ -179,7 +179,7 @@ func TestFlowRegister(t *testing.T) {
 func TestFlowDesc(t *testing.T) {
 	t.Run("returns flow descriptor", func(t *testing.T) {
 		r := registry.New()
-		f := DefineFlow(r, "test/described", func(ctx context.Context, input struct {
+		f := defineFlow(r, "test/described", func(ctx context.Context, input struct {
 			Name string `json:"name"`
 		}) (struct {
 			Greeting string `json:"greeting"`
@@ -206,7 +206,7 @@ func TestFlowDesc(t *testing.T) {
 func TestFlowRunJSON(t *testing.T) {
 	t.Run("runs flow with JSON input and output", func(t *testing.T) {
 		r := registry.New()
-		f := DefineFlow(r, "test/jsonFlow", func(ctx context.Context, input int) (int, error) {
+		f := defineFlow(r, "test/jsonFlow", func(ctx context.Context, input int) (int, error) {
 			return input * 2, nil
 		})
 
@@ -224,7 +224,7 @@ func TestFlowRunJSON(t *testing.T) {
 func TestFlowRunJSONWithTelemetry(t *testing.T) {
 	t.Run("returns telemetry info with result", func(t *testing.T) {
 		r := registry.New()
-		f := DefineFlow(r, "test/telemetryFlow", func(ctx context.Context, input int) (int, error) {
+		f := defineFlow(r, "test/telemetryFlow", func(ctx context.Context, input int) (int, error) {
 			return input + 1, nil
 		})
 
