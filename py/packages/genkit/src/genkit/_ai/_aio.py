@@ -77,6 +77,7 @@ from genkit._ai._prompt import (
     define_schema,
     load_prompt_folder,
     register_prompt_actions,
+    resolve_model_arg,
     to_generate_action_options,
 )
 from genkit._ai._resource import (
@@ -109,7 +110,7 @@ from genkit._core._middleware import (
     GenerateMiddleware,
     _validate_middleware_key_segment,
 )
-from genkit._core._model import Document
+from genkit._core._model import Document, ModelRef
 from genkit._core._plugin import Plugin
 from genkit._core._protocols import SessionLike
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
@@ -984,7 +985,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: str | None = None,
+        model: str | ModelRef[BaseModel] | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1011,7 +1012,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: str | None = None,
+        model: str | ModelRef[BaseModel] | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1036,7 +1037,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: str | None = None,
+        model: str | ModelRef[BaseModel] | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1101,7 +1102,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: str | None = None,
+        model: str | ModelRef[BaseModel] | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1129,7 +1130,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: str | None = None,
+        model: str | ModelRef[BaseModel] | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1155,7 +1156,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: str | None = None,
+        model: str | ModelRef[BaseModel] | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1385,7 +1386,7 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: str | None = None,
+        model: str | ModelRef[BaseModel] | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1405,7 +1406,8 @@ class Genkit:
     ) -> Operation:
         """Generate content using a long-running model, returning an Operation to poll."""
         # Resolve the model and check for long_running support
-        resolved_model = model or cast(str | None, self.registry.lookup_value('defaultModel', 'defaultModel'))
+        model_name, _ = resolve_model_arg(model, config)
+        resolved_model = model_name or cast(str | None, self.registry.lookup_value('defaultModel', 'defaultModel'))
         if not resolved_model:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
