@@ -91,6 +91,7 @@ async def test_generate_with_model_ref_accepts_matching_dict(ai_with_echo: tuple
         prompt='Hello',
         config={'customSetting': 'camel_val'},  # ty: ignore[invalid-key]
     )
+    assert isinstance(echo.last_request.config, dict)
     assert echo.last_request.config['customSetting'] == 'camel_val'
 
 
