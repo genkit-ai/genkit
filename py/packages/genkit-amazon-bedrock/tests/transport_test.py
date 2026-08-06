@@ -14,10 +14,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Region resolution tests. Client construction needs no credentials."""
+"""Region resolution and event-pump tests; neither needs credentials."""
+
+import asyncio
+import threading
+from typing import Any
 
 import boto3.session
 import pytest
+from botocore.exceptions import EventStreamError
 from genkit_amazon_bedrock.transport import BedrockTransport
 
 from genkit.plugin_api import GenkitError
@@ -95,3 +100,186 @@ def test_botocore_config_carries_the_timeouts() -> None:
     # botocore normalizes max_attempts to total attempts: 3 retries plus the first call.
     assert config.retries['total_max_attempts'] == 4
     assert config.retries['mode'] == 'standard'
+
+
+class FakeEventStream:
+    """Stands in for botocore's blocking EventStream.
+
+    ``__iter__`` is a generator, as botocore's is, and each ``next()`` blocks
+    on an event so the test fails if the pump stops crossing the thread bridge.
+    """
+
+    def __init__(self, events: list[dict[str, Any]], error: Exception | None = None) -> None:
+        self._events = events
+        self._error = error
+        self.close_calls = 0
+        self.iter_threads: list[int] = []
+        self._resume = threading.Event()
+        self._resume.set()
+
+    def __iter__(self):  # noqa: ANN204
+        for event in self._events:
+            # Bounded so a transport that stops closing the stream fails the
+            # test instead of parking this worker for the whole run.
+            self._resume.wait(timeout=5)
+            self.iter_threads.append(threading.get_ident())
+            yield event
+        if self._error is not None:
+            raise self._error
+
+    def close(self) -> None:
+        self.close_calls += 1
+        # Releases a worker parked in next(), which is why the real close is
+        # called inline rather than through the bridge.
+        self._resume.set()
+
+    def block(self) -> None:
+        self._resume.clear()
+
+
+class FakeClient:
+    """Minimal bedrock-runtime stand-in returning a FakeEventStream.
+
+    ``gate``, when given, holds the call open so a test can cancel while it is
+    still in flight on its worker thread.
+    """
+
+    def __init__(self, stream: FakeEventStream | None, gate: threading.Event | None = None) -> None:
+        self._stream = stream
+        self._gate = gate
+        self.calls: list[dict[str, Any]] = []
+
+    def converse_stream(self, **kwargs: Any) -> dict[str, Any]:
+        if self._gate is not None:
+            self._gate.wait(timeout=5)
+        self.calls.append(kwargs)
+        return {'stream': self._stream} if self._stream is not None else {}
+
+
+def streaming_transport(
+    events: list[dict[str, Any]] | None = None,
+    error: Exception | None = None,
+    with_stream: bool = True,
+    gate: threading.Event | None = None,
+) -> tuple[BedrockTransport, FakeClient, FakeEventStream | None]:
+    fake_stream = FakeEventStream(events or [], error) if with_stream else None
+    client = FakeClient(fake_stream, gate)
+    transport = make_transport(region='eu-west-1')
+    transport._client = client  # noqa: SLF001
+    return transport, client, fake_stream
+
+
+TEXT_EVENT = {'contentBlockDelta': {'contentBlockIndex': 0, 'delta': {'text': 'hi'}}}
+STOP_EVENT = {'messageStop': {'stopReason': 'end_turn'}}
+
+
+@pytest.mark.asyncio
+async def test_converse_stream_yields_events_in_order_and_closes() -> None:
+    transport, client, stream = streaming_transport([TEXT_EVENT, STOP_EVENT])
+
+    received = [event async for event in transport.converse_stream(modelId='m', messages=[])]
+
+    assert received == [TEXT_EVENT, STOP_EVENT]
+    assert client.calls == [{'modelId': 'm', 'messages': []}]
+    assert stream is not None and stream.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_converse_stream_runs_the_iterator_off_the_event_loop() -> None:
+    transport, _client, stream = streaming_transport([TEXT_EVENT, STOP_EVENT])
+
+    async for _event in transport.converse_stream(modelId='m'):
+        pass
+
+    # One missed bridge freezes the loop for the minutes a generation can take.
+    assert stream is not None
+    assert stream.iter_threads and threading.get_ident() not in stream.iter_threads
+
+
+@pytest.mark.asyncio
+async def test_converse_stream_propagates_mid_stream_errors_and_closes() -> None:
+    error = EventStreamError({'Error': {'Code': 'modelStreamErrorException', 'Message': 'boom'}}, 'ConverseStream')
+    transport, _client, stream = streaming_transport([TEXT_EVENT], error=error)
+    received = []
+
+    with pytest.raises(EventStreamError) as excinfo:
+        async for event in transport.converse_stream(modelId='m'):
+            received.append(event)
+
+    assert excinfo.value is error
+    # Events delivered before the failure stand.
+    assert received == [TEXT_EVENT]
+    assert stream is not None and stream.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_converse_stream_closes_when_the_consumer_stops_early() -> None:
+    transport, _client, stream = streaming_transport([TEXT_EVENT, STOP_EVENT])
+
+    generator = transport.converse_stream(modelId='m')
+    async for _event in generator:
+        break
+    await generator.aclose()
+
+    assert stream is not None and stream.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_converse_stream_closes_when_cancelled_mid_pump() -> None:
+    transport, _client, stream = streaming_transport([TEXT_EVENT, STOP_EVENT])
+    assert stream is not None
+    first_event = asyncio.Event()
+
+    async def consume() -> None:
+        async for _event in transport.converse_stream(modelId='m'):
+            # Parks the next worker in next() so the cancel lands mid-pump.
+            stream.block()
+            first_event.set()
+
+    task = asyncio.ensure_future(consume())
+    await asyncio.wait_for(first_event.wait(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert stream.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_converse_stream_closes_when_cancelled_during_the_initial_call() -> None:
+    # A worker thread cannot be interrupted, so the call still opens a stream
+    # after the consumer is gone; it has to be closed on their behalf.
+    released = threading.Event()
+    transport, _client, stream = streaming_transport([TEXT_EVENT], gate=released)
+    assert stream is not None
+
+    async def consume() -> None:
+        async for _event in transport.converse_stream(modelId='m'):
+            pass
+
+    task = asyncio.ensure_future(consume())
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert stream.close_calls == 0, 'the call has not returned yet'
+
+    released.set()
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        if stream.close_calls:
+            break
+
+    assert stream.close_calls == 1
+    assert stream.iter_threads == [], 'no events should be consumed after cancellation'
+
+
+@pytest.mark.asyncio
+async def test_converse_stream_without_a_stream_member_fails_loudly() -> None:
+    transport, _client, _stream = streaming_transport(with_stream=False)
+
+    with pytest.raises(GenkitError, match='no stream') as excinfo:
+        async for _event in transport.converse_stream(modelId='m'):
+            pass
+
+    assert excinfo.value.status == 'INTERNAL'

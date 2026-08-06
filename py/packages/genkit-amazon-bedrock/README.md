@@ -2,11 +2,11 @@
 
 Amazon Bedrock plugin for Genkit Python. Provides text generation with
 Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama, Mistral,
-Cohere, and others) through the Bedrock Converse API.
+Cohere, and others) through the Bedrock Converse and ConverseStream APIs.
 
-> Status: in progress. Only non-streaming text generation (Converse) is
-> available so far. Streaming, embedders, image generation, and reranking are
-> still being ported from the mature Go plugin
+> Status: in progress. Text generation is available, streaming and
+> non-streaming. Embedders, image generation, and reranking are still being
+> ported from the mature Go plugin
 > ([genkit-ai/aws-bedrock-go-plugin](https://github.com/genkit-ai/aws-bedrock-go-plugin)).
 
 ## Installation

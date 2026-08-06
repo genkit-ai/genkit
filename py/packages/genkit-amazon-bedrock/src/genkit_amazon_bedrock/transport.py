@@ -26,6 +26,7 @@ matures without touching converters or models.
 import asyncio
 import os
 import threading
+from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any
 
 from genkit.plugin_api import GenkitError
@@ -37,6 +38,22 @@ NO_REGION_MESSAGE = (
     'bedrock: no AWS region resolved; set Bedrock(region=...), AWS_REGION, '
     'AWS_DEFAULT_REGION, or a region in ~/.aws/config'
 )
+
+# Distinguishes stream exhaustion from a legitimately falsy event.
+_STREAM_DONE = object()
+
+
+def _close_abandoned_stream(call: 'asyncio.Future[dict[str, Any]]') -> None:
+    """Closes an event stream nobody is left to consume.
+
+    A worker thread cannot be interrupted, so a call cancelled in flight still
+    opens a stream; without this it stays open until garbage collection.
+    """
+    if call.cancelled() or call.exception() is not None:
+        return
+    stream = call.result().get('stream')
+    if stream is not None:
+        stream.close()
 
 
 class BedrockTransport:
@@ -114,6 +131,51 @@ class BedrockTransport:
 
     def _converse_sync(self, kwargs: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
         return self.client().converse(**kwargs)
+
+    async def converse_stream(self, **kwargs: Any) -> AsyncGenerator[dict[str, Any], None]:  # noqa: ANN401
+        """Calls ConverseStream and yields raw event dicts.
+
+        botocore hands back a blocking ``EventStream``, so both the initial
+        call and every ``next()`` cross the thread bridge — a stream idles for
+        seconds between events and must not hold the event loop.
+
+        Args:
+            kwargs: Keyword arguments passed verbatim to ``converse_stream``.
+
+        Yields:
+            One raw event dict per event, e.g. ``{'contentBlockDelta': {...}}``.
+
+        Raises:
+            GenkitError: INTERNAL when the response carries no event stream.
+            botocore.exceptions.EventStreamError: For mid-stream failures; it
+                subclasses ``ClientError``, so callers map it like any other
+                AWS error.
+        """
+        # Shielded so a cancellation here can still close the stream the
+        # uninterruptible worker goes on to open.
+        call = asyncio.ensure_future(asyncio.to_thread(self._converse_stream_sync, kwargs))
+        try:
+            response = await asyncio.shield(call)
+        except asyncio.CancelledError:
+            call.add_done_callback(_close_abandoned_stream)
+            raise
+        stream = response.get('stream')
+        if stream is None:
+            raise GenkitError(message='bedrock: converse stream response has no stream', status='INTERNAL')
+        events = iter(stream)
+        try:
+            while True:
+                event: Any = await asyncio.to_thread(next, events, _STREAM_DONE)
+                if event is _STREAM_DONE:
+                    return
+                yield event
+        finally:
+            # Called inline rather than through the bridge: it is a socket
+            # teardown, and awaiting here would be re-cancelled on cancellation.
+            stream.close()
+
+    def _converse_stream_sync(self, kwargs: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
+        return self.client().converse_stream(**kwargs)
 
     def _build_client(self) -> Any:  # noqa: ANN401
         import boto3.session
