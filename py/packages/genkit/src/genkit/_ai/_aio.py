@@ -29,11 +29,12 @@ import threading
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from pathlib import Path
-from typing import Any, TypeVar, cast, overload
+from typing import Any, cast, overload
 
 import anyio
 import uvicorn
 from pydantic import BaseModel
+from typing_extensions import TypeVar
 
 from genkit._ai._agents._base import (
     Agent,
@@ -139,8 +140,8 @@ from ._runtime import RuntimeManager, setup_signal_handlers
 logger = get_logger(__name__)
 
 # TypeVars for generic input/output typing
-InputT = TypeVar('InputT')
-OutputT = TypeVar('OutputT')
+InputT = TypeVar('InputT', default=dict[str, Any])
+OutputT = TypeVar('OutputT', default=object)
 ChunkT = TypeVar('ChunkT')
 
 R = TypeVar('R')
