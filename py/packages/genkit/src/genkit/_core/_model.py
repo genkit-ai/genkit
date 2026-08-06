@@ -74,13 +74,26 @@ ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
 
 @dataclass(frozen=True, kw_only=True)
 class ModelRef(Generic[ModelRefConfigT]):
-    """Frozen reference to a model, optionally tied to a config schema."""
+    """Frozen reference to a model tied to a config schema."""
 
     name: str
     config_schema: type[ModelRefConfigT]
     info: ModelInfo | None = None
     version: str | None = None
     config: ModelRefConfigT | None = None
+
+    # Config schemas are Pydantic models and usually aren't hashable, so a
+    # generated __hash__ would work when config is None and blow up once one is
+    # set — a nasty footgun if someone keys a cache or set by ModelRef.
+    __hash__ = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        # Catch dicts / wrong types at construction so plugins don't discover
+        # the mismatch later when they touch typed config fields.
+        if self.config is not None and not isinstance(self.config, self.config_schema):
+            raise TypeError(
+                f'config must be an instance of {self.config_schema.__name__}, got {type(self.config).__name__}'
+            )
 
 
 class Message(MessageData):

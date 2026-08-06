@@ -78,7 +78,7 @@ def model_ref(
     """Create a ModelRef, optionally prefixing name with namespace."""
     final_name = f'{namespace}/{name}' if namespace and not name.startswith(f'{namespace}/') else name
 
-    return ModelRef[ModelRefConfigT](
+    return ModelRef(
         name=final_name,
         config_schema=config_schema,
         info=info,
