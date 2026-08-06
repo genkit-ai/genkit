@@ -30,10 +30,10 @@ from genkit._core._action import (
     get_func_description,
 )
 from genkit._core._model import (
+    ConfigT,
     Message,
     ModelConfig,
     ModelRef,
-    ModelRefConfigT,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -69,16 +69,16 @@ def model_action_metadata(
 def model_ref(
     name: str,
     *,
-    config_schema: type[ModelRefConfigT],
+    config_schema: type[ConfigT],
     namespace: str | None = None,
     info: ModelInfo | None = None,
     version: str | None = None,
-    config: ModelRefConfigT | None = None,
-) -> ModelRef[ModelRefConfigT]:
+    config: ConfigT | None = None,
+) -> ModelRef[ConfigT]:
     """Create a ModelRef, optionally prefixing name with namespace."""
     final_name = f'{namespace}/{name}' if namespace and not name.startswith(f'{namespace}/') else name
 
-    return ModelRef[ModelRefConfigT](
+    return ModelRef[ConfigT](
         name=final_name,
         config_schema=config_schema,
         info=info,
