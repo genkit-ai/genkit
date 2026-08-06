@@ -120,7 +120,7 @@ class FakeStoreHarness:
 
         self.client.collection.side_effect = collection
 
-        async def txn_get_all(refs: list[Any]) -> Any:  # noqa: ANN401
+        async def get_all(refs: list[Any], transaction: Any = None, **_kwargs: Any) -> Any:  # noqa: ANN401
             for ref in refs:
                 path = ref.path
                 if path in self.docs:
@@ -128,7 +128,10 @@ class FakeStoreHarness:
                 else:
                     yield _doc(path=path, exists=False, data=None, doc_id=ref.id)
 
-        self.transaction.get_all = txn_get_all
+        # Production reads go through AsyncClient.get_all(transaction=...); keep
+        # transaction.get_all as a thin alias for older call sites/tests.
+        self.client.get_all = get_all
+        self.transaction.get_all = get_all
 
         def txn_set(ref: Any, data: dict[str, Any]) -> None:  # noqa: ANN401
             self.docs[ref.path] = dict(data)

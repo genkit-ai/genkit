@@ -34,11 +34,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import inspect
 import json
 import logging
-from collections.abc import AsyncIterable, Callable
-from typing import Any, Generic, Literal, cast
+from collections.abc import Callable
+from typing import Any, Generic, Literal
 
 from google.cloud import firestore
 from google.cloud.firestore import (
@@ -288,6 +287,13 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         ``on_snapshot``). Pass ``sync_client`` to own that client yourself; otherwise
         one is created lazily to match ``client``'s project/database and closed by
         :meth:`close`.
+
+        ``snapshot_path_prefix`` receives the per-call ``context`` dict (e.g. auth)
+        that ``get_snapshot`` / ``save_snapshot`` thread as a kwarg — not a wrapper
+        options object — so a tenant key can come straight from request context.
+
+        When ``reject_ambiguous_session`` is set, a ``session_id`` lookup on a
+        forked history raises instead of returning the newest leaf.
         """
         self.client = client or firestore.AsyncClient()
         self.collection = collection
@@ -520,6 +526,8 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 transaction,
                 session_id,
                 sid,
+                pointer=pointer,
+                pointer_exists=pointer_snap.exists,
                 parent_snapshot_id=next_snapshot.parent_id,
                 created_at=next_snapshot.created_at,
                 is_new=existing_recon is None,
@@ -578,6 +586,8 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         session_id: str,
         snapshot_id: str,
         *,
+        pointer: PointerDoc | None,
+        pointer_exists: bool,
         parent_snapshot_id: str | None,
         created_at: str,
         is_new: bool,
@@ -586,11 +596,12 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         segment_path: list[str],
         context: dict[str, Any] | None = None,
     ) -> None:
-        """Update the session pointer inside an already-open transaction."""
-        ref = self.pointer_ref(session_id, context)
-        snapshot = await ref.get(transaction=transaction)
-        pointer = PointerDoc.model_validate(snapshot.to_dict()) if snapshot.exists else None
+        """Update the session pointer inside an already-open transaction.
 
+        Callers must pass the pointer already loaded earlier in the same
+        transaction — Firestore rejects reads after any buffered writes.
+        """
+        ref = self.pointer_ref(session_id, context)
         leaves: dict[str, str] = dict(pointer.leaves) if pointer else {}
 
         if is_new:
@@ -616,7 +627,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         if is_ambiguous and pointer and pointer.current_snapshot_id:
             payload['currentSnapshotId'] = firestore.DELETE_FIELD
 
-        if snapshot.exists:
+        if pointer_exists:
             transaction.update(ref, payload)
         else:
             transaction.set(ref, payload)
@@ -665,6 +676,12 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         try:
             doc = SnapshotDoc.model_validate(snap.to_dict())
         except Exception:
+            # Don't treat a corrupt doc as missing — save_snapshot would otherwise
+            # mint a fresh checkpoint and advance the pointer over the bad leaf.
+            logger.warning(
+                "Snapshot document '%s' failed validation; treating as unreadable",
+                snap.reference.path,
+            )
             return None
         return await self._reconstruct_from(
             transaction,
@@ -702,12 +719,9 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             return None
 
         by_path: dict[str, DocumentSnapshot] = {}
-        res = transaction.get_all(refs)
-        gen = await res if inspect.iscoroutine(res) else res
-        if isinstance(gen, list):
-            snaps = cast(list[DocumentSnapshot], gen)
-        else:
-            snaps = [s async for s in cast(AsyncIterable[DocumentSnapshot], gen)]
+        # AsyncTransaction.get_all awaits an async generator (library bug), so
+        # batch-read through the client with the open transaction instead.
+        snaps = [snap async for snap in self.client.get_all(refs, transaction=transaction)]
         for snap in snaps:
             by_path[snap.reference.path] = snap
 
