@@ -38,7 +38,7 @@ def test_model_ref_with_custom_pydantic_schema() -> None:
 
 
 def test_model_ref_with_bare_base_model_schema() -> None:
-    """ModelRef parameterized with bare BaseModel allows untyped/generic model references."""
+    """model_ref() accepts bare BaseModel when no model-specific Pydantic config class is provided."""
     ref = model_ref('generic-model', config_schema=BaseModel)
 
     assert isinstance(ref, ModelRef)
