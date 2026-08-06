@@ -376,3 +376,41 @@ def test_text_from_content_with_none_text() -> None:
         Part(root=TextPart(text=' world')),
     ]
     assert text_from_content(content) == 'hello world'
+
+
+def test_model_ref_generic_construction() -> None:
+    """Test ModelRef generic dataclass construction and properties."""
+    from pydantic import BaseModel
+
+    from genkit.model import ModelRef, model_ref
+
+    class DummyConfig(BaseModel):
+        temperature: float = 0.7
+
+    ref = model_ref(
+        'gemini-1.5-flash',
+        config_schema=DummyConfig,
+        namespace='googleai',
+        config=DummyConfig(temperature=0.5),
+    )
+
+    assert isinstance(ref, ModelRef)
+    assert ref.name == 'googleai/gemini-1.5-flash'
+    assert ref.config_schema is DummyConfig
+    assert ref.config is not None
+    assert ref.config.temperature == 0.5
+
+
+def test_model_ref_immutability() -> None:
+    """Test that ModelRef instances are frozen and immutable."""
+    from pydantic import BaseModel
+
+    from genkit.model import model_ref
+
+    class DummyConfig(BaseModel):
+        pass
+
+    ref = model_ref('custom-model', config_schema=DummyConfig)
+
+    with pytest.raises(AttributeError):
+        ref.name = 'changed'  # pyright: ignore[reportAttributeAccessIssue]
