@@ -316,3 +316,37 @@ func TestModelRef(t *testing.T) {
 		t.Errorf("Config() = %v for a nil config, want a typed nil", got)
 	}
 }
+
+// TestPrefixedNamesAreEquivalent pins that the exported entry points take a
+// model ID either bare or provider-prefixed. The prefix is applied by
+// concatenation, so an untrimmed name would double up: DefineModel would
+// register a key IsDefinedModel never checks, breaking the guard the
+// DefineModel godoc points at.
+func TestPrefixedNamesAreEquivalent(t *testing.T) {
+	a := &Anthropic{APIKey: "test-key"}
+	g := genkit.Init(context.Background())
+
+	if _, err := a.DefineModel(g, "anthropic/claude-opus-4-5", nil); err != nil {
+		t.Fatalf("DefineModel() error = %v", err)
+	}
+
+	for _, name := range []string{"claude-opus-4-5", "anthropic/claude-opus-4-5"} {
+		if !IsDefinedModel(g, name) {
+			t.Errorf("IsDefinedModel(%q) = false, want the model defined under either form", name)
+		}
+		if Model(g, name) == nil {
+			t.Errorf("Model(%q) = nil, want the model defined under either form", name)
+		}
+	}
+
+	// Defining by the prefixed name must resolve the curated capabilities, not
+	// the unknown-model defaults, which is why the trim precedes the lookup.
+	m := Model(g, "claude-opus-4-5")
+	model, ok := m.(*ai.ModelAction).Desc().Metadata["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("model metadata missing")
+	}
+	if want := anthropicLabelPrefix + " - Claude Opus 4.5"; model["label"] != want {
+		t.Errorf("label = %v, want %q", model["label"], want)
+	}
+}

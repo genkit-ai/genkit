@@ -109,8 +109,10 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 //
 // Registering a name that is already registered panics, and generating with a
 // name registers it, so define a model before its first use or guard with
-// [IsDefinedModel].
+// [IsDefinedModel]. name is the model ID, bare or provider-prefixed.
 func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
+	// Trim before resolving, so a prefixed name still hits knownModels.
+	name = strings.TrimPrefix(name, provider+"/")
 	if opts == nil {
 		resolved := modelOptions(name)
 		opts = &resolved
@@ -152,14 +154,23 @@ func (a *Anthropic) ListActions(ctx context.Context) []api.ActionDesc {
 	return actions
 }
 
-// Model returns a previously registered model
+// Model returns a previously registered model.
 func Model(g *genkit.Genkit, name string) ai.Model {
-	return genkit.LookupModel(g, api.NewName(provider, name))
+	return genkit.LookupModel(g, modelName(name))
 }
 
-// IsDefinedModel returns whether a model is already defined
+// IsDefinedModel reports whether a model is already registered, which is the
+// guard against defining one twice (see [Anthropic.DefineModel]).
 func IsDefinedModel(g *genkit.Genkit, name string) bool {
-	return genkit.LookupModel(g, api.NewName(provider, name)) != nil
+	return genkit.LookupModel(g, modelName(name)) != nil
+}
+
+// modelName builds the action name for a Claude model ID, taking the ID either
+// bare or already provider-prefixed. The prefix is applied by concatenation,
+// so without the trim an already-prefixed name would double up and name a
+// model that resolves nowhere.
+func modelName(name string) string {
+	return api.NewName(provider, strings.TrimPrefix(name, provider+"/"))
 }
 
 // ResolveAction resolves an action with the given name
