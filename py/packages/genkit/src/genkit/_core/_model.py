@@ -66,21 +66,20 @@ ModelUsage = GenerationUsage  # public name for GenerationUsage
 
 # TypeVars for generic types
 OutputT = TypeVar('OutputT', default=object)
-ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
 # Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
 # Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
-ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True, default=BaseModel)
+ConfigT = TypeVar('ConfigT', bound=BaseModel, covariant=True)
 
 
 @dataclass(frozen=True, kw_only=True)
-class ModelRef(Generic[ModelRefConfigT]):
+class ModelRef(Generic[ConfigT]):
     """Frozen reference to a model bound to a Pydantic config schema."""
 
     name: str
-    config_schema: type[ModelRefConfigT]
+    config_schema: type[ConfigT]
     info: ModelInfo | None = None
     version: str | None = None
-    config: ModelRefConfigT | None = None
+    config: ConfigT | None = None
 
 
 class Message(MessageData):
