@@ -17,7 +17,6 @@
 """Framework primitives for plugin authors."""
 
 # Base class and framework primitives
-from genkit._ai._model import ModelConfig
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._constants import GENKIT_CLIENT_HEADER, GENKIT_VERSION
 from genkit._core._context import ContextProvider, RequestData
@@ -49,6 +48,7 @@ from genkit.evaluator import (
 
 # Model domain re-exports
 from genkit.model import (
+    ModelConfig,
     ModelRef,
     model_action_metadata,
     model_ref,
