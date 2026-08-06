@@ -13,16 +13,27 @@ import (
 var ttsModels = []string{
 	gemini25FlashPreviewTTS,
 	gemini25ProPreviewTTS,
+	gemini25FlashTTS,
+	gemini25ProTTS,
+	gemini25FlashLitePreviewTTS,
 	gemini31FlashTTSPreview,
 }
 
-// googleAIOnlyTTSModels are the TTS models Vertex AI does not serve under
-// these IDs: it names the 2.5 pair gemini-2.5-flash-tts and
-// gemini-2.5-pro-tts, without the -preview- infix.
-var googleAIOnlyTTSModels = []string{
-	gemini25FlashPreviewTTS,
-	gemini25ProPreviewTTS,
-}
+// The two backends spell the 2.5 TTS models differently: Google AI uses the
+// -preview- infix, Vertex AI does not. Only gemini-3.1-flash-tts-preview is
+// served under one ID by both.
+var (
+	googleAIOnlyTTSModels = []string{
+		gemini25FlashPreviewTTS,
+		gemini25ProPreviewTTS,
+	}
+
+	vertexAIOnlyTTSModels = []string{
+		gemini25FlashTTS,
+		gemini25ProTTS,
+		gemini25FlashLitePreviewTTS,
+	}
+)
 
 func TestTTSModelClassification(t *testing.T) {
 	t.Parallel()
@@ -74,7 +85,7 @@ func TestTTSModelOptions(t *testing.T) {
 	}
 }
 
-func TestTTSModelsRegisteredForGoogleAIOnly(t *testing.T) {
+func TestTTSModelsPerBackend(t *testing.T) {
 	t.Parallel()
 
 	googleModels, err := listModels(googleAIProvider)
@@ -86,21 +97,29 @@ func TestTTSModelsRegisteredForGoogleAIOnly(t *testing.T) {
 		t.Fatalf("listModels(vertexAI) error = %v", err)
 	}
 
-	for _, name := range ttsModels {
+	for _, name := range googleAIOnlyTTSModels {
 		if _, ok := googleModels[name]; !ok {
 			t.Errorf("Google AI model list is missing TTS model %q", name)
 		}
+		if _, ok := vertexModels[name]; ok {
+			t.Errorf("Vertex AI model list unexpectedly includes Google AI TTS name %q", name)
+		}
 	}
 
-	for _, name := range googleAIOnlyTTSModels {
-		if _, ok := vertexModels[name]; ok {
-			t.Errorf("Vertex AI model list unexpectedly includes TTS model %q", name)
+	for _, name := range vertexAIOnlyTTSModels {
+		if _, ok := vertexModels[name]; !ok {
+			t.Errorf("Vertex AI model list is missing TTS model %q", name)
+		}
+		if _, ok := googleModels[name]; ok {
+			t.Errorf("Google AI model list unexpectedly includes Vertex AI TTS name %q", name)
 		}
 	}
 
 	// gemini-3.1-flash-tts-preview is the one TTS model both backends serve
 	// under the same ID.
-	if _, ok := vertexModels[gemini31FlashTTSPreview]; !ok {
-		t.Errorf("Vertex AI model list is missing TTS model %q", gemini31FlashTTSPreview)
+	for _, models := range []map[string]ai.ModelOptions{googleModels, vertexModels} {
+		if _, ok := models[gemini31FlashTTSPreview]; !ok {
+			t.Errorf("model list is missing TTS model %q", gemini31FlashTTSPreview)
+		}
 	}
 }
