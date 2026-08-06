@@ -9,11 +9,19 @@ import (
 	"github.com/firebase/genkit/go/ai"
 )
 
-// ttsModels are the dedicated text-to-speech models registered for Google AI.
+// ttsModels are the dedicated text-to-speech models the plugin registers.
 var ttsModels = []string{
 	gemini25FlashPreviewTTS,
 	gemini25ProPreviewTTS,
 	gemini31FlashTTSPreview,
+}
+
+// googleAIOnlyTTSModels are the TTS models Vertex AI does not serve under
+// these IDs: it names the 2.5 pair gemini-2.5-flash-tts and
+// gemini-2.5-pro-tts, without the -preview- infix.
+var googleAIOnlyTTSModels = []string{
+	gemini25FlashPreviewTTS,
+	gemini25ProPreviewTTS,
 }
 
 func TestTTSModelClassification(t *testing.T) {
@@ -82,8 +90,17 @@ func TestTTSModelsRegisteredForGoogleAIOnly(t *testing.T) {
 		if _, ok := googleModels[name]; !ok {
 			t.Errorf("Google AI model list is missing TTS model %q", name)
 		}
+	}
+
+	for _, name := range googleAIOnlyTTSModels {
 		if _, ok := vertexModels[name]; ok {
 			t.Errorf("Vertex AI model list unexpectedly includes TTS model %q", name)
 		}
+	}
+
+	// gemini-3.1-flash-tts-preview is the one TTS model both backends serve
+	// under the same ID.
+	if _, ok := vertexModels[gemini31FlashTTSPreview]; !ok {
+		t.Errorf("Vertex AI model list is missing TTS model %q", gemini31FlashTTSPreview)
 	}
 }
