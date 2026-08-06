@@ -8,7 +8,6 @@
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
 
 from genkit import Genkit
 from genkit._ai._model import ModelConfig
@@ -72,14 +71,19 @@ async def test_generate_with_model_ref_accepts_matching_dict(ai_with_echo: tuple
     ai, echo = ai_with_echo
     ref = model_ref('testEcho', config_schema=CustomConfig, config=CustomConfig(temperature=0.9))
 
-    # Passing a dict matching CustomConfig fields
-    await ai.generate(model=ref, prompt='Hello', config={'temperature': 0.3, 'stop_sequences': ['\n']})
+    # Passing a dict literal matching CustomConfig schema (including plugin-specific fields)
+    await ai.generate(
+        model=ref,
+        prompt='Hello',
+        config={'temperature': 0.3, 'stop_sequences': ['\n'], 'custom_setting': 'special_val'},  # ty: ignore[invalid-key]
+    )
 
     assert echo.last_request is not None
     cfg = echo.last_request.config
     assert isinstance(cfg, dict)
     assert cfg['temperature'] == 0.3
     assert cfg['stopSequences'] == ['\n']
+    assert (cfg.get('customSetting') or cfg.get('custom_setting')) == 'special_val'
 
 
 @pytest.mark.asyncio
