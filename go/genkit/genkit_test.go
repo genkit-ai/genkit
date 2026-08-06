@@ -24,6 +24,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/api"
 )
 
 func TestStreamFlow(t *testing.T) {
@@ -357,5 +358,47 @@ input:
 				t.Fatalf("Expected prompt %q to be loaded", tt.promptName)
 			}
 		})
+	}
+}
+
+// pluginWithTool returns one of each primitive that a plugin is expected to be
+// able to ship, matching the plugin-authoring example in the core package
+// documentation.
+type pluginWithTool struct{}
+
+func (p *pluginWithTool) Name() string { return "toolplugin" }
+
+func (p *pluginWithTool) Init(ctx context.Context) []api.Action {
+	model := ai.NewModelAction("toolplugin/model", nil,
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{Message: ai.NewModelTextMessage("ok")}, nil
+		})
+	tool := ai.NewTool("toolplugin/tool", "a tool shipped by a plugin",
+		func(ctx *ai.ToolContext, in string) (string, error) {
+			return in + "!", nil
+		})
+	return []api.Action{model, tool}
+}
+
+// A plugin ships tools the same way it ships models: by returning them in its
+// action slice. This is the shape the core package documentation prescribes,
+// and it only compiles because *ai.ToolAction satisfies api.Action.
+func TestPluginCanReturnTools(t *testing.T) {
+	g := Init(context.Background(), WithPlugins(&pluginWithTool{}))
+
+	if m := LookupModel(g, "toolplugin/model"); m == nil {
+		t.Error("LookupModel() = nil, want the model the plugin returned")
+	}
+
+	tool := LookupTool(g, "toolplugin/tool")
+	if tool == nil {
+		t.Fatal("LookupTool() = nil, want the tool the plugin returned")
+	}
+	out, err := tool.RunRaw(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("RunRaw() error: %v", err)
+	}
+	if out != "hi!" {
+		t.Errorf("RunRaw() = %v, want %q", out, "hi!")
 	}
 }
