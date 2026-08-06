@@ -38,7 +38,10 @@ import (
 	"github.com/firebase/genkit/go/internal/base"
 )
 
-// Model represents a model that can generate content based on a request.
+// Model represents a model that can generate content based on a request. It
+// is the type to accept as an argument and to look up by name; implementations
+// are created with [NewModelAction], or [genkit.DefineModelAction] in an
+// application.
 type Model interface {
 	// Name returns the registry name of the model.
 	Name() string
@@ -89,22 +92,56 @@ type ModelMiddleware = core.Middleware[*ModelRequest, *ModelResponse, *ModelResp
 // in the ai primitives (ModelAction, EmbedderAction, EvaluatorAction).
 // Embedding via the alias promotes Action's methods without exporting the
 // field itself, so the containment stays an internal detail of each primitive.
+//
+// Each primitive redeclares the promoted methods that satisfy its interfaces,
+// forwarding to the embedded action. Promotion alone would compile, but godoc
+// cannot see through an alias into another package: a promoted method appears
+// in no documentation and no doc link to it resolves, so a reader would find
+// a model with one method that nonetheless claims to be an [api.Action].
 type action[In, Out, Stream any] = core.Action[In, Out, Stream]
 
 // ModelAction is a generative model backed by a registry action. It is the
 // concrete type returned by [NewModelAction]; pass it to [WithModel] to use it
 // for generation, or return it from a plugin's Init for the framework to
 // register.
+//
+// It implements [Model] and [api.Action], so it can be passed anywhere either
+// is accepted. It also promotes [core.Action.Run], the typed equivalent of
+// [ModelAction.Generate].
 type ModelAction struct {
 	action[*ModelRequest, *ModelResponse, *ModelResponseChunk]
 }
 
-// ModelAction is a full registry action and can be passed anywhere an
-// [api.Action] is accepted as well as anywhere a [Model] is accepted.
+// Pinned here so that breaking either interface fails the build at the type
+// rather than at a call site.
 var (
 	_ api.Action = (*ModelAction)(nil)
 	_ Model      = (*ModelAction)(nil)
 )
+
+// Name returns the registry name of the model.
+func (m *ModelAction) Name() string { return m.action.Name() }
+
+// Register registers the model with r, making it available to lookups and to
+// the Dev UI. A plugin that returns the model from its Init does not need to
+// call this.
+func (m *ModelAction) Register(r api.Registry) { m.action.Register(r) }
+
+// Desc returns the model's action descriptor: its name, schemas, and metadata.
+func (m *ModelAction) Desc() api.ActionDesc { return m.action.Desc() }
+
+// RunJSON runs the model on a JSON-encoded [ModelRequest] and returns a
+// JSON-encoded [ModelResponse]. The framework uses it to serve reflection and
+// registry-driven calls; prefer [ModelAction.Generate].
+func (m *ModelAction) RunJSON(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (json.RawMessage, error) {
+	return m.action.RunJSON(ctx, input, cb)
+}
+
+// RunJSONWithTelemetry is [ModelAction.RunJSON] with the run's telemetry
+// returned alongside the output.
+func (m *ModelAction) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	return m.action.RunJSONWithTelemetry(ctx, input, cb)
+}
 
 // generateAction is the type for a utility model generation action that takes in a GenerateActionOptions instead of a ModelRequest.
 type generateAction = core.Action[*GenerateActionOptions, *ModelResponse, *ModelResponseChunk]

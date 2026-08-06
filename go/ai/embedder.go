@@ -18,6 +18,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 
@@ -35,7 +36,10 @@ type EmbedderFunc = func(context.Context, *EmbedRequest) (*EmbedResponse, error)
 // options into it before calling the function (see [NewEmbedderAction]).
 type EmbedderActionFunc[Config any] = func(context.Context, *EmbedRequest, Config) (*EmbedResponse, error)
 
-// Embedder represents an embedder that can perform content embedding.
+// Embedder represents an embedder that can perform content embedding. It is
+// the type to accept as an argument and to look up by name; implementations
+// are created with [NewEmbedderAction], or [genkit.DefineEmbedderAction] in an
+// application.
 type Embedder interface {
 	// Name returns the registry name of the embedder.
 	Name() string
@@ -97,16 +101,45 @@ type EmbedderOptions struct {
 // concrete type returned by [NewEmbedderAction]; pass it to [WithEmbedder] to
 // use it for embedding, or return it from a plugin's Init for the framework
 // to register.
+//
+// It implements [Embedder] and [api.Action], so it can be passed anywhere
+// either is accepted. It also promotes [core.Action.Run], the typed
+// equivalent of [EmbedderAction.Embed].
 type EmbedderAction struct {
 	action[*EmbedRequest, *EmbedResponse, struct{}]
 }
 
-// EmbedderAction is a full registry action and can be passed anywhere an
-// [api.Action] is accepted as well as anywhere an [Embedder] is accepted.
+// Pinned here so that breaking either interface fails the build at the type
+// rather than at a call site.
 var (
 	_ api.Action = (*EmbedderAction)(nil)
 	_ Embedder   = (*EmbedderAction)(nil)
 )
+
+// Name returns the registry name of the embedder.
+func (e *EmbedderAction) Name() string { return e.action.Name() }
+
+// Register registers the embedder with r, making it available to lookups and
+// to the Dev UI. A plugin that returns the embedder from its Init does not
+// need to call this.
+func (e *EmbedderAction) Register(r api.Registry) { e.action.Register(r) }
+
+// Desc returns the embedder's action descriptor: its name, schemas, and
+// metadata.
+func (e *EmbedderAction) Desc() api.ActionDesc { return e.action.Desc() }
+
+// RunJSON runs the embedder on a JSON-encoded [EmbedRequest] and returns a
+// JSON-encoded [EmbedResponse]. The framework uses it to serve reflection and
+// registry-driven calls; prefer [EmbedderAction.Embed].
+func (e *EmbedderAction) RunJSON(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (json.RawMessage, error) {
+	return e.action.RunJSON(ctx, input, cb)
+}
+
+// RunJSONWithTelemetry is [EmbedderAction.RunJSON] with the run's telemetry
+// returned alongside the output.
+func (e *EmbedderAction) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	return e.action.RunJSONWithTelemetry(ctx, input, cb)
+}
 
 // NewEmbedderAction creates an unregistered [EmbedderAction]: return it from a
 // plugin's Init for the framework to register, or call

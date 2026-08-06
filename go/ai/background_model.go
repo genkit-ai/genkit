@@ -18,6 +18,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/firebase/genkit/go/core"
@@ -26,7 +27,10 @@ import (
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
-// BackgroundModel represents a model that can run operations in the background.
+// BackgroundModel represents a model that can run operations in the
+// background. It is the type to accept as an argument and to look up by name;
+// implementations are created with [NewBackgroundModelAction], or
+// [genkit.DefineBackgroundModelAction] in an application.
 type BackgroundModel interface {
 	// Name returns the registry name of the background model.
 	Name() string
@@ -44,27 +48,75 @@ type BackgroundModel interface {
 
 // backgroundAction is an unexported alias of [core.BackgroundAction] used as
 // the embedded field in [BackgroundModelAction]; see the action alias in
-// generate.go for why.
+// generate.go for why, including why the promoted methods are redeclared
+// below.
 type backgroundAction[In, Out any] = core.BackgroundAction[In, Out]
 
 // BackgroundModelAction is a background model backed by registry actions. It
 // is the concrete type returned by [NewBackgroundModelAction]; return it from
 // a plugin's Init for the framework to register.
+//
+// It implements [BackgroundModel] and [api.Action], so it can be passed
+// anywhere either is accepted. The [api.Action] side is what lets a plugin
+// resolver return the whole model as the resolved action (googlegenai's
+// resolveAction does this), and the three component actions register
+// together through [BackgroundModelAction.Register].
 type BackgroundModelAction struct {
 	backgroundAction[*ModelRequest, *ModelResponse]
 }
 
-// BackgroundModelAction is a full registry action and can be passed anywhere
-// an [api.Action] is accepted as well as anywhere a [BackgroundModel] is
-// accepted. Its Register method registers the start, check, and cancel
-// actions together. Plugin resolvers rely on the [api.Action] side (e.g.
-// googlegenai's resolveAction returns the whole model as the resolved
-// action), which only holds through the embedded action's promoted methods,
-// so pin both here where the embedding lives.
+// Pinned here so that breaking either interface fails the build at the type
+// rather than during plugin resolution.
 var (
 	_ api.Action      = (*BackgroundModelAction)(nil)
 	_ BackgroundModel = (*BackgroundModelAction)(nil)
 )
+
+// Name returns the registry name of the background model.
+func (b *BackgroundModelAction) Name() string { return b.backgroundAction.Name() }
+
+// Register registers the model's start, check, and cancel actions with r. The
+// cancel action is registered only if the model supports cancellation. A
+// plugin that returns the model from its Init does not need to call this.
+func (b *BackgroundModelAction) Register(r api.Registry) { b.backgroundAction.Register(r) }
+
+// Desc returns the start action's descriptor: its name, schemas, and metadata.
+func (b *BackgroundModelAction) Desc() api.ActionDesc { return b.backgroundAction.Desc() }
+
+// Start starts a background operation and returns it without waiting for
+// completion. Poll it with [BackgroundModelAction.Check].
+func (b *BackgroundModelAction) Start(ctx context.Context, req *ModelRequest) (*ModelOperation, error) {
+	return b.backgroundAction.Start(ctx, req)
+}
+
+// Check returns the current state of a background operation.
+func (b *BackgroundModelAction) Check(ctx context.Context, op *ModelOperation) (*ModelOperation, error) {
+	return b.backgroundAction.Check(ctx, op)
+}
+
+// Cancel cancels a running background operation. It fails with UNAVAILABLE if
+// the model does not support cancellation; see
+// [BackgroundModelAction.SupportsCancel].
+func (b *BackgroundModelAction) Cancel(ctx context.Context, op *ModelOperation) (*ModelOperation, error) {
+	return b.backgroundAction.Cancel(ctx, op)
+}
+
+// SupportsCancel reports whether the model was defined with a cancel
+// function.
+func (b *BackgroundModelAction) SupportsCancel() bool { return b.backgroundAction.SupportsCancel() }
+
+// RunJSON starts an operation from a JSON-encoded [ModelRequest] and returns
+// the JSON-encoded operation. The framework uses it to serve reflection and
+// registry-driven calls; prefer [BackgroundModelAction.Start].
+func (b *BackgroundModelAction) RunJSON(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (json.RawMessage, error) {
+	return b.backgroundAction.RunJSON(ctx, input, cb)
+}
+
+// RunJSONWithTelemetry is [BackgroundModelAction.RunJSON] with the run's
+// telemetry returned alongside the output.
+func (b *BackgroundModelAction) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	return b.backgroundAction.RunJSONWithTelemetry(ctx, input, cb)
+}
 
 // ModelOperation is a background operation for a model.
 type ModelOperation = core.Operation[*ModelResponse]

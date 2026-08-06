@@ -61,11 +61,19 @@ func (t ToolName) Name() string {
 // returned by [NewTool] and [NewMultipartTool].
 // Internally, all tools use the v2 format (returning MultipartToolResponse).
 // For regular tools, RunRaw unwraps the Output field for backward compatibility.
+//
+// It implements [Tool], so it can be passed anywhere one is accepted. Unlike
+// the other primitives it holds its action in a named field rather than
+// embedding it, so its documented methods are its whole surface.
 type ToolAction[In, Out any] struct {
 	action    api.Action   // The underlying action.
 	multipart bool         // Whether this is a multipart-only tool.
 	registry  api.Registry // Registry for schema resolution. Set when registered.
 }
+
+// Pinned here so that breaking the interface fails the build at the type
+// rather than at a call site.
+var _ Tool = (*ToolAction[any, any])(nil)
 
 // ToolDef is the previous name for [ToolAction]. It was renamed because it
 // read as a sibling of [ToolDefinition], the wire type a tool advertises to
@@ -74,7 +82,10 @@ type ToolAction[In, Out any] struct {
 // Deprecated: use [ToolAction].
 type ToolDef[In, Out any] = ToolAction[In, Out]
 
-// Tool represents a tool that can be called by a model.
+// Tool represents a tool that can be called by a model. It is the type to
+// accept as an argument and to look up by name; implementations are created
+// with [NewTool] or [NewMultipartTool], or their [genkit.DefineTool] and
+// [genkit.DefineMultipartTool] counterparts in an application.
 type Tool interface {
 	// Name returns the name of the tool.
 	Name() string

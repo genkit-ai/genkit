@@ -18,6 +18,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 
@@ -48,7 +49,11 @@ type BatchEvaluatorFunc = func(context.Context, *EvaluatorRequest) (*EvaluatorRe
 // [NewBatchEvaluatorAction]).
 type BatchEvaluatorActionFunc[Config any] = func(context.Context, *EvaluatorRequest, Config) (*EvaluatorResponse, error)
 
-// Evaluator represents a evaluator action.
+// Evaluator represents an evaluator. It is the type to accept as an argument
+// and to look up by name; implementations are created with
+// [NewEvaluatorAction] or [NewBatchEvaluatorAction], or their
+// [genkit.DefineEvaluatorAction] and [genkit.DefineBatchEvaluatorAction]
+// counterparts in an application.
 type Evaluator interface {
 	// Name returns the name of the evaluator.
 	Name() string
@@ -88,16 +93,45 @@ func (e EvaluatorRef) Config() any {
 // concrete type returned by [NewEvaluatorAction] and [NewBatchEvaluatorAction];
 // pass it to [WithEvaluator], or return it from a plugin's Init for the
 // framework to register.
+//
+// It implements [Evaluator] and [api.Action], so it can be passed anywhere
+// either is accepted. It also promotes [core.Action.Run], the typed
+// equivalent of [EvaluatorAction.Evaluate].
 type EvaluatorAction struct {
 	action[*EvaluatorRequest, *EvaluatorResponse, struct{}]
 }
 
-// EvaluatorAction is a full registry action and can be passed anywhere an
-// [api.Action] is accepted as well as anywhere an [Evaluator] is accepted.
+// Pinned here so that breaking either interface fails the build at the type
+// rather than at a call site.
 var (
 	_ api.Action = (*EvaluatorAction)(nil)
 	_ Evaluator  = (*EvaluatorAction)(nil)
 )
+
+// Name returns the registry name of the evaluator.
+func (e *EvaluatorAction) Name() string { return e.action.Name() }
+
+// Register registers the evaluator with r, making it available to lookups and
+// to the Dev UI. A plugin that returns the evaluator from its Init does not
+// need to call this.
+func (e *EvaluatorAction) Register(r api.Registry) { e.action.Register(r) }
+
+// Desc returns the evaluator's action descriptor: its name, schemas, and
+// metadata.
+func (e *EvaluatorAction) Desc() api.ActionDesc { return e.action.Desc() }
+
+// RunJSON runs the evaluator on a JSON-encoded [EvaluatorRequest] and returns
+// a JSON-encoded [EvaluatorResponse]. The framework uses it to serve
+// reflection and registry-driven calls; prefer [EvaluatorAction.Evaluate].
+func (e *EvaluatorAction) RunJSON(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (json.RawMessage, error) {
+	return e.action.RunJSON(ctx, input, cb)
+}
+
+// RunJSONWithTelemetry is [EvaluatorAction.RunJSON] with the run's telemetry
+// returned alongside the output.
+func (e *EvaluatorAction) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	return e.action.RunJSONWithTelemetry(ctx, input, cb)
+}
 
 // Example is a single example that requires evaluation
 type Example struct {
