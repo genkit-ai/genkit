@@ -73,17 +73,33 @@ def parse_snapshot_lookup_kw(
     snapshot_id: str | None = None,
     session_id: str | None = None,
 ) -> tuple[str | None, str | None]:
-    """Require exactly one of ``snapshot_id`` or ``session_id``.
+    """Require exactly one non-blank ``snapshot_id`` or ``session_id``.
 
-    A bad selector is a caller mistake, so it raises ``INVALID_ARGUMENT`` — over a
-    transport that surfaces as a 400, not a 500 the way a bare ``ValueError`` would.
+    Whitespace-only ids are rejected so they can't become unusable document keys.
+    A bad selector raises ``INVALID_ARGUMENT`` (400 over HTTP), not a bare
+    ``ValueError``.
     """
-    if bool(snapshot_id) == bool(session_id):
+    if snapshot_id and not snapshot_id.strip():
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'get_snapshot rejected whitespace-only snapshot_id={snapshot_id!r}.',
+        )
+    if session_id and not session_id.strip():
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'get_snapshot rejected whitespace-only session_id={session_id!r}.',
+        )
+    if not snapshot_id and not session_id:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=("get_snapshot requires exactly one of 'snapshot_id' or 'session_id' (got neither)."),
+        )
+    if snapshot_id and session_id:
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=(
                 "get_snapshot requires exactly one of 'snapshot_id' or 'session_id' "
-                f'(got snapshot_id={snapshot_id!r}, session_id={session_id!r}).'
+                f'(got both snapshot_id={snapshot_id!r} and session_id={session_id!r}).'
             ),
         )
     return snapshot_id, session_id

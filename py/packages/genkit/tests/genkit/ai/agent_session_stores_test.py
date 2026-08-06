@@ -123,6 +123,19 @@ async def test_get_snapshot_requires_exactly_one_selector() -> None:
         await store.get_snapshot(snapshot_id='a', session_id='b')
 
 
+@pytest.mark.asyncio
+async def test_get_snapshot_rejects_whitespace_only_selector() -> None:
+    """Whitespace-only ids are rejected (unusable as document keys)."""
+    store = InMemorySessionStore()
+    with pytest.raises(GenkitError) as exc_info:
+        await store.get_snapshot(snapshot_id='   ')
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+    with pytest.raises(GenkitError) as exc_info:
+        await store.get_snapshot(session_id='\t')
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
 # --- Abort lifecycle ---
 
 
