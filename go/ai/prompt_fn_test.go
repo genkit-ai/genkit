@@ -1277,3 +1277,104 @@ func TestInstructionInjectionDoesNotMutateCallerMessages(t *testing.T) {
 		}
 	}
 }
+
+// TestNilMessagesAreDropped covers a nil slipping into a conversation, which
+// reaches the framework from a caller-owned slice or a user-written function
+// and used to have no safe path through it: the template renderer dereferenced
+// it, and every other path carried it as far as the action's output schema,
+// which rejects a null message.
+func TestNilMessagesAreDropped(t *testing.T) {
+	// The conversation is placed by a template, so it round-trips through
+	// dotprompt as a placeholder and back. Dropping nils anywhere but on the
+	// way in would shift that positional restore.
+	t.Run("template", func(t *testing.T) {
+		_, p, get := capturePrompt(t, "nil_tpl",
+			WithMessagesTemplate(`{{role "system"}}sys{{history}}{{role "user"}}end`))
+		ctx := NewHistoryContext(context.Background(), []*Message{
+			NewUserTextMessage("A"), nil, NewUserTextMessage("B"),
+		})
+		if _, err := p.Execute(ctx); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		assertNoNilMessages(t, (*get)().Messages)
+		assertUserTexts(t, (*get)().Messages, "A", "B", "end")
+	})
+
+	// No conversation of its own, so the caller's is used directly.
+	t.Run("placed for the prompt", func(t *testing.T) {
+		_, p, get := capturePrompt(t, "nil_plain", WithPrompt("q"))
+		if _, err := p.Execute(context.Background(), WithMessages(
+			NewUserTextMessage("A"), nil, NewUserTextMessage("B"),
+		)); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		assertNoNilMessages(t, (*get)().Messages)
+		assertUserTexts(t, (*get)().Messages, "A", "B", "q")
+	})
+
+	// The prompt's own conversation, returned by a user's function.
+	t.Run("from a content function", func(t *testing.T) {
+		_, p, get := capturePrompt(t, "nil_fn",
+			WithMessagesFn(func(context.Context, any) ([]*Message, error) {
+				return []*Message{NewUserTextMessage("A"), nil, NewUserTextMessage("B")}, nil
+			}))
+		if _, err := p.Execute(context.Background()); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		assertNoNilMessages(t, (*get)().Messages)
+		assertUserTexts(t, (*get)().Messages, "A", "B")
+	})
+
+	// A prompt's own function reads the conversation back, so it must see the
+	// same filtered slice the renderer does.
+	t.Run("read back by HistoryFromContext", func(t *testing.T) {
+		var seen []*Message
+		_, p, _ := capturePrompt(t, "nil_readback",
+			WithMessagesFn(func(ctx context.Context, _ any) ([]*Message, error) {
+				seen = HistoryFromContext(ctx)
+				return seen, nil
+			}))
+		if _, err := p.Execute(context.Background(), WithMessages(
+			NewUserTextMessage("A"), nil, NewUserTextMessage("B"),
+		)); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		assertNoNilMessages(t, seen)
+	})
+}
+
+// TestCompactMessagesKeepsSliceWhenClean pins the allocation-free path: a
+// conversation without nils is passed through, not copied.
+func TestCompactMessagesKeepsSliceWhenClean(t *testing.T) {
+	src := []*Message{NewUserTextMessage("A"), NewUserTextMessage("B")}
+	if got := compactMessages(src); &got[0] != &src[0] {
+		t.Error("compactMessages copied a slice that had no nils")
+	}
+	if got := compactMessages(nil); got != nil {
+		t.Errorf("compactMessages(nil) = %v, want nil", got)
+	}
+}
+
+func assertNoNilMessages(t *testing.T, msgs []*Message) {
+	t.Helper()
+	for i, m := range msgs {
+		if m == nil {
+			t.Fatalf("messages[%d] is nil", i)
+		}
+	}
+}
+
+// assertUserTexts checks the user turns in order, which is what carries the
+// conversation in these cases.
+func assertUserTexts(t *testing.T, msgs []*Message, want ...string) {
+	t.Helper()
+	var got []string
+	for _, m := range msgs {
+		if m.Role == RoleUser {
+			got = append(got, m.Text())
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("user turns = %v, want %v", got, want)
+	}
+}

@@ -654,9 +654,31 @@ func renderMessages(ctx context.Context, opts promptOptions, messages []*Message
 	if err != nil {
 		return nil, err
 	}
-	messages = appendMessageClones(messages, msgs)
+	messages = appendMessageClones(messages, compactMessages(msgs))
 
 	return messages, nil
+}
+
+// compactMessages returns src without its nil entries, or src itself when it
+// has none. A conversation arrives from a caller-owned slice or a user-written
+// function, and a nil in one has no representation downstream: the template
+// renderer dereferences it, and every other path carries it as far as the
+// action's output schema, which rejects it as a null message.
+//
+// Drop them where the conversation enters, never later. [renderPrompt] hands
+// dotprompt one placeholder per message and restores the originals by position,
+// so a filter applied to only one of those two lists shifts the rest.
+func compactMessages(src []*Message) []*Message {
+	if !slices.Contains(src, nil) {
+		return src
+	}
+	out := make([]*Message, 0, len(src))
+	for _, m := range src {
+		if m != nil {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // appendMessageClones appends a clone of each message in src to dst.

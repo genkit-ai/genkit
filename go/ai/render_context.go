@@ -45,9 +45,11 @@ func promptDocsOverridden(ctx context.Context) bool {
 }
 
 // withPromptHistory returns ctx carrying the messages supplied at execution
-// time, for [HistoryFromContext] to return.
+// time, for [HistoryFromContext] to return. Nil messages are dropped on the way
+// in, so every reader, rendering and a prompt's own content functions alike,
+// sees the same usable conversation.
 func withPromptHistory(ctx context.Context, messages []*Message) context.Context {
-	return promptHistoryKey.NewContext(ctx, messages)
+	return promptHistoryKey.NewContext(ctx, compactMessages(messages))
 }
 
 // NewHistoryContext returns ctx carrying a conversation for the next
@@ -63,6 +65,7 @@ func withPromptHistory(ctx context.Context, messages []*Message) context.Context
 // prompts executed inside the generate loop.
 //
 // The messages are not copied; Render clones what it places into the request.
+// Nil entries are dropped.
 func NewHistoryContext(ctx context.Context, messages []*Message) context.Context {
 	return withPromptHistory(ctx, messages)
 }
