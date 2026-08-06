@@ -9,12 +9,31 @@ import (
 	"github.com/firebase/genkit/go/ai"
 )
 
-// ttsModels are the dedicated text-to-speech models registered for Google AI.
+// ttsModels are the dedicated text-to-speech models the plugin registers.
 var ttsModels = []string{
 	gemini25FlashPreviewTTS,
 	gemini25ProPreviewTTS,
+	gemini25FlashTTS,
+	gemini25ProTTS,
+	gemini25FlashLitePreviewTTS,
 	gemini31FlashTTSPreview,
 }
+
+// The two backends spell the 2.5 TTS models differently: Google AI uses the
+// -preview- infix, Vertex AI does not. Only gemini-3.1-flash-tts-preview is
+// served under one ID by both.
+var (
+	googleAIOnlyTTSModels = []string{
+		gemini25FlashPreviewTTS,
+		gemini25ProPreviewTTS,
+	}
+
+	vertexAIOnlyTTSModels = []string{
+		gemini25FlashTTS,
+		gemini25ProTTS,
+		gemini25FlashLitePreviewTTS,
+	}
+)
 
 func TestTTSModelClassification(t *testing.T) {
 	t.Parallel()
@@ -54,8 +73,8 @@ func TestTTSModelOptions(t *testing.T) {
 			if opts.Supports.Media {
 				t.Error("Media = true, want false")
 			}
-			if opts.Stage != ai.ModelStageUnstable {
-				t.Errorf("Stage = %v, want Unstable", opts.Stage)
+			if opts.Stage != ai.ModelStageStable {
+				t.Errorf("Stage = %v, want Stable", opts.Stage)
 			}
 			// ConfigSchema falls back to GenerateContentConfig, which carries the
 			// speechConfig field used to select voices.
@@ -66,7 +85,7 @@ func TestTTSModelOptions(t *testing.T) {
 	}
 }
 
-func TestTTSModelsRegisteredForGoogleAIOnly(t *testing.T) {
+func TestTTSModelsPerBackend(t *testing.T) {
 	t.Parallel()
 
 	googleModels, err := listModels(googleAIProvider)
@@ -78,12 +97,29 @@ func TestTTSModelsRegisteredForGoogleAIOnly(t *testing.T) {
 		t.Fatalf("listModels(vertexAI) error = %v", err)
 	}
 
-	for _, name := range ttsModels {
+	for _, name := range googleAIOnlyTTSModels {
 		if _, ok := googleModels[name]; !ok {
 			t.Errorf("Google AI model list is missing TTS model %q", name)
 		}
 		if _, ok := vertexModels[name]; ok {
-			t.Errorf("Vertex AI model list unexpectedly includes TTS model %q", name)
+			t.Errorf("Vertex AI model list unexpectedly includes Google AI TTS name %q", name)
+		}
+	}
+
+	for _, name := range vertexAIOnlyTTSModels {
+		if _, ok := vertexModels[name]; !ok {
+			t.Errorf("Vertex AI model list is missing TTS model %q", name)
+		}
+		if _, ok := googleModels[name]; ok {
+			t.Errorf("Google AI model list unexpectedly includes Vertex AI TTS name %q", name)
+		}
+	}
+
+	// gemini-3.1-flash-tts-preview is the one TTS model both backends serve
+	// under the same ID.
+	for _, models := range []map[string]ai.ModelOptions{googleModels, vertexModels} {
+		if _, ok := models[gemini31FlashTTSPreview]; !ok {
+			t.Errorf("model list is missing TTS model %q", gemini31FlashTTSPreview)
 		}
 	}
 }
