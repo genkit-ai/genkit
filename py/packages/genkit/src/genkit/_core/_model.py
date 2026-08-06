@@ -82,9 +82,8 @@ class ModelRef(Generic[ModelRefConfigT]):
     version: str | None = None
     config: ModelRefConfigT | None = None
 
-    # Config schemas are Pydantic models and usually aren't hashable, so a
-    # generated __hash__ would work when config is None and blow up once one is
-    # set — a nasty footgun if someone keys a cache or set by ModelRef.
+    # Explicitly opt out of hashing: Pydantic configs are unhashable, so an
+    # auto-generated __hash__ would fail once set.
     __hash__ = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
