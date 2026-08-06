@@ -594,7 +594,7 @@ func TestWrapToolInterrupts(t *testing.T) {
 // body ran, so a test can tell a short-circuited call from a real one.
 func defineCountingTool(t *testing.T, r api.Registry, name string, calls *int32) Tool {
 	t.Helper()
-	return DefineTool(r, name, "A test tool",
+	return defineTool(r, name, "A test tool",
 		func(ctx *ToolContext, input struct {
 			Value string `json:"value"`
 		}) (string, error) {
@@ -792,7 +792,7 @@ func TestWrapToolValidationErrorReturnedToModel(t *testing.T) {
 		handler: modelHandler,
 	})
 
-	DefineTool(r, "validateMe", "A tool that requires a numeric value",
+	defineTool(r, "validateMe", "A tool that requires a numeric value",
 		func(ctx *ToolContext, input any) (string, error) {
 			m := input.(map[string]any)
 			return fmt.Sprintf("success: %v", m["value"]), nil
@@ -920,7 +920,7 @@ func TestMiddlewareHookOrderOnToolRestart(t *testing.T) {
 		Interrupt bool `json:"interrupt"`
 	}
 
-	tool := DefineTool(r, "restartable", "interrupts, then runs on resume",
+	tool := defineTool(r, "restartable", "interrupts, then runs on resume",
 		func(ctx *ToolContext, in restartInput) (string, error) {
 			if in.Interrupt {
 				return "", ctx.Interrupt(&InterruptOptions{})
@@ -931,7 +931,7 @@ func TestMiddlewareHookOrderOnToolRestart(t *testing.T) {
 
 	// Requests the tool on the first turn, returns a final text response once a
 	// tool response is present in history.
-	model := DefineModel(r, "test/restartModel", &ModelOptions{
+	model := defineModel(r, "test/restartModel", &ModelOptions{
 		Supports: &ModelSupports{Multiturn: true, Tools: true},
 	}, func(ctx context.Context, req *ModelRequest, _ ModelStreamCallback) (*ModelResponse, error) {
 		for _, msg := range req.Messages {

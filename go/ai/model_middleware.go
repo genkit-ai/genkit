@@ -265,16 +265,15 @@ func validateSupport(model string, opts *ModelOptions) ModelMiddleware {
 				return nil, status.Errorf(ErrUnsupportedByModel, "model %q does not support native constrained output, but constrained output was requested. Request: %+v", model, input)
 			}
 
-			if err := validateVersion(model, opts.Versions, input.Config); err != nil {
-				return nil, err
-			}
-
 			return next(ctx, input, cb)
 		}
 	}
 }
 
 // validateVersion validates that the requested model version is supported.
+// It runs against the raw, pre-conversion config (see [normalizeConfig])
+// because conversion into a Config type without a version field would
+// silently drop the key.
 func validateVersion(model string, versions []string, config any) error {
 	var configMap map[string]any
 

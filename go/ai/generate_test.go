@@ -61,7 +61,7 @@ var (
 		Stage:    ModelStageDeprecated,
 	}
 
-	echoModel = DefineModel(r, "test/"+modelName, &metadata, func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
+	echoModel = defineModel(r, "test/"+modelName, &metadata, func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
 		if msc != nil {
 			msc(ctx, &ModelResponseChunk{
 				Content: []*Part{NewTextPart("stream!")},
@@ -81,7 +81,7 @@ var (
 )
 
 // with tools
-var gablorkenTool = DefineTool(r, "gablorken", "use when need to calculate a gablorken",
+var gablorkenTool = defineTool(r, "gablorken", "use when need to calculate a gablorken",
 	func(ctx *ToolContext, input struct {
 		Value float64
 		Over  float64
@@ -97,7 +97,7 @@ func TestStreamingChunksHaveRoleAndIndex(t *testing.T) {
 	r := childRegistry(t)
 	ctx := context.Background()
 
-	convertTempTool := DefineTool(r, "convertTemp", "converts temperature",
+	convertTempTool := defineTool(r, "convertTemp", "converts temperature",
 		func(ctx *ToolContext, input struct {
 			From        string
 			To          string
@@ -111,7 +111,7 @@ func TestStreamingChunksHaveRoleAndIndex(t *testing.T) {
 		},
 	)
 
-	toolModel := DefineModel(r, "test/toolModel", &metadata, func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
+	toolModel := defineModel(r, "test/toolModel", &metadata, func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
 		hasToolResponse := false
 		for _, msg := range gr.Messages {
 			if msg.Role == RoleTool {
@@ -366,7 +366,7 @@ func TestGenerate(t *testing.T) {
 	JSON := "{\"subject\": \"bananas\", \"location\": \"tropics\"}"
 	JSONmd := "```json" + JSON + "```"
 
-	bananaModel := DefineModel(r, "test/banana", &metadata, func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
+	bananaModel := defineModel(r, "test/banana", &metadata, func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
 		if msc != nil {
 			msc(ctx, &ModelResponseChunk{
 				Content: []*Part{NewTextPart("stream!")},
@@ -480,7 +480,7 @@ func TestGenerate(t *testing.T) {
 	})
 
 	t.Run("handles tool interrupts", func(t *testing.T) {
-		interruptTool := DefineTool(r, "interruptor", "always interrupts",
+		interruptTool := defineTool(r, "interruptor", "always interrupts",
 			func(ctx *ToolContext, input any) (any, error) {
 				return nil, ctx.Interrupt(&InterruptOptions{
 					Metadata: map[string]any{
@@ -496,7 +496,7 @@ func TestGenerate(t *testing.T) {
 				Tools:     true,
 			},
 		}
-		interruptModel := DefineModel(r, "test/interrupt", info,
+		interruptModel := defineModel(r, "test/interrupt", info,
 			func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
 				return &ModelResponse{
 					Request: gr,
@@ -555,7 +555,7 @@ func TestGenerate(t *testing.T) {
 				Tools:     true,
 			},
 		}
-		parallelModel := DefineModel(r, "test/parallel", info,
+		parallelModel := defineModel(r, "test/parallel", info,
 			func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
 				roundCount++
 				if roundCount == 1 {
@@ -620,7 +620,7 @@ func TestGenerate(t *testing.T) {
 				Tools:     true,
 			},
 		}
-		multiRoundModel := DefineModel(r, "test/multiround", info,
+		multiRoundModel := defineModel(r, "test/multiround", info,
 			func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
 				roundCount++
 				if roundCount == 1 {
@@ -688,7 +688,7 @@ func TestGenerate(t *testing.T) {
 				Tools:     true,
 			},
 		}
-		infiniteModel := DefineModel(r, "test/infinite", info,
+		infiniteModel := defineModel(r, "test/infinite", info,
 			func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
 				return &ModelResponse{
 					Request: gr,
@@ -777,7 +777,7 @@ func TestGenerate(t *testing.T) {
 				Tools:     true,
 			},
 		}
-		toolCallModel := DefineModel(r, "test/toolcall", info,
+		toolCallModel := defineModel(r, "test/toolcall", info,
 			func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
 				roundCount++
 				if roundCount == 1 {
@@ -878,7 +878,7 @@ func TestGenerateWithOutputSchemaName(t *testing.T) {
 	ConfigureFormats(r)
 
 	// Define a model that supports constrained output
-	model := DefineModel(r, "test/constrained", &ModelOptions{
+	model := defineModel(r, "test/constrained", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
 	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		// Mock response
@@ -1013,7 +1013,7 @@ type resumableToolInput struct {
 
 func TestToolInterruptsAndResume(t *testing.T) {
 	r := childRegistry(t)
-	conditionalTool := DefineTool(r, "conditional", "tool that may interrupt based on input",
+	conditionalTool := defineTool(r, "conditional", "tool that may interrupt based on input",
 		func(ctx *ToolContext, input conditionalToolInput) (string, error) {
 			if input.Interrupt {
 				return "", ctx.Interrupt(&InterruptOptions{
@@ -1028,7 +1028,7 @@ func TestToolInterruptsAndResume(t *testing.T) {
 		},
 	)
 
-	resumableTool := DefineTool(r, "resumable", "tool that can be resumed",
+	resumableTool := defineTool(r, "resumable", "tool that can be resumed",
 		func(ctx *ToolContext, input resumableToolInput) (string, error) {
 			if ctx.Resumed != nil {
 				resumedData, ok := ctx.Resumed["data"].(string)
@@ -1048,7 +1048,7 @@ func TestToolInterruptsAndResume(t *testing.T) {
 		},
 	}
 
-	toolModel := DefineModel(r, "test/toolmodel", info,
+	toolModel := defineModel(r, "test/toolmodel", info,
 		func(ctx context.Context, mr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
 			return &ModelResponse{
 				Request: mr,
@@ -1287,14 +1287,14 @@ func TestResourceProcessing(t *testing.T) {
 	r := registry.New()
 
 	// Create test resources using DefineResource
-	DefineResource(r, "test-file", &ResourceOptions{
+	defineResource(r, "test-file", &ResourceOptions{
 		URI:         "file:///test.txt",
 		Description: "Test file resource",
 	}, func(ctx context.Context, input *ResourceInput) (*ResourceOutput, error) {
 		return &ResourceOutput{Content: []*Part{NewTextPart("FILE CONTENT")}}, nil
 	})
 
-	DefineResource(r, "test-api", &ResourceOptions{
+	defineResource(r, "test-api", &ResourceOptions{
 		URI:         "api://data/123",
 		Description: "Test API resource",
 	}, func(ctx context.Context, input *ResourceInput) (*ResourceOutput, error) {
@@ -1587,7 +1587,7 @@ func TestMultipartTools(t *testing.T) {
 	t.Run("define multipart tool registers as tool.v2 only", func(t *testing.T) {
 		r := registry.New()
 
-		DefineMultipartTool(r, "multipartTest", "a multipart tool",
+		defineMultipartTool(r, "multipartTest", "a multipart tool",
 			func(ctx *ToolContext, input struct{ Query string }) (*MultipartToolResponse, error) {
 				return &MultipartToolResponse{
 					Output:  "main output",
@@ -1615,7 +1615,7 @@ func TestMultipartTools(t *testing.T) {
 	t.Run("regular tool registers as both tool and tool.v2", func(t *testing.T) {
 		r := registry.New()
 
-		DefineTool(r, "regularTestTool", "a regular tool",
+		defineTool(r, "regularTestTool", "a regular tool",
 			func(ctx *ToolContext, input struct{ Value int }) (int, error) {
 				return input.Value * 2, nil
 			},
@@ -1642,7 +1642,7 @@ func TestMultipartTools(t *testing.T) {
 		ConfigureFormats(r)
 		DefineGenerateAction(context.Background(), r)
 
-		multipartTool := DefineMultipartTool(r, "imageGenerator", "generates images",
+		multipartTool := defineMultipartTool(r, "imageGenerator", "generates images",
 			func(ctx *ToolContext, input struct{ Prompt string }) (*MultipartToolResponse, error) {
 				return &MultipartToolResponse{
 					Output:   map[string]any{"description": "generated image"},
@@ -1655,7 +1655,7 @@ func TestMultipartTools(t *testing.T) {
 		)
 
 		// Create a model that requests the tool
-		multipartToolModel := DefineModel(r, "test/multipartToolModel", &metadata, func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
+		multipartToolModel := defineModel(r, "test/multipartToolModel", &metadata, func(ctx context.Context, gr *ModelRequest, msc ModelStreamCallback) (*ModelResponse, error) {
 			// Check if we already have a tool response
 			for _, msg := range gr.Messages {
 				if msg.Role == RoleTool {
@@ -1708,7 +1708,7 @@ func TestMultipartTools(t *testing.T) {
 	t.Run("RunRawMultipart returns MultipartToolResponse for regular tool", func(t *testing.T) {
 		r := registry.New()
 
-		tool := DefineTool(r, "multipartWrapperTest", "test multipart wrapper",
+		tool := defineTool(r, "multipartWrapperTest", "test multipart wrapper",
 			func(ctx *ToolContext, input struct{ Value int }) (int, error) {
 				return input.Value * 3, nil
 			},
@@ -1737,7 +1737,7 @@ func TestMultipartTools(t *testing.T) {
 	t.Run("RunRawMultipart returns full response for multipart tool", func(t *testing.T) {
 		r := registry.New()
 
-		tool := DefineMultipartTool(r, "multipartFullTest", "test multipart",
+		tool := defineMultipartTool(r, "multipartFullTest", "test multipart",
 			func(ctx *ToolContext, input struct{ Query string }) (*MultipartToolResponse, error) {
 				return &MultipartToolResponse{
 					Output:  "result",
@@ -1780,7 +1780,7 @@ func TestGenerateStream(t *testing.T) {
 		chunkTexts := []string{"Hello", " ", "World"}
 		chunkIndex := 0
 
-		streamModel := DefineModel(r, "test/streamModel", &ModelOptions{
+		streamModel := defineModel(r, "test/streamModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			if cb != nil {
@@ -1833,7 +1833,7 @@ func TestGenerateStream(t *testing.T) {
 	})
 
 	t.Run("handles no streaming callback gracefully", func(t *testing.T) {
-		noStreamModel := DefineModel(r, "test/noStreamModel", &ModelOptions{
+		noStreamModel := defineModel(r, "test/noStreamModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			return &ModelResponse{
@@ -1873,7 +1873,7 @@ func TestGenerateStream(t *testing.T) {
 	t.Run("propagates generation errors", func(t *testing.T) {
 		expectedErr := errors.New("generation failed")
 
-		errorModel := DefineModel(r, "test/errorModel", &ModelOptions{
+		errorModel := defineModel(r, "test/errorModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			return nil, expectedErr
@@ -1902,7 +1902,7 @@ func TestGenerateStream(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		streamModel := DefineModel(r, "test/cancelModel", &ModelOptions{
+		streamModel := defineModel(r, "test/cancelModel", &ModelOptions{
 			Supports: &ModelSupports{Multiturn: true},
 		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			if cb != nil {
@@ -1948,7 +1948,7 @@ func TestGenerateStream(t *testing.T) {
 	})
 
 	t.Run("should not yield after stop", func(t *testing.T) {
-		streamModel := DefineModel(r, "test/breakStreamModel", &ModelOptions{
+		streamModel := defineModel(r, "test/breakStreamModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn: true,
 			},
@@ -1979,7 +1979,7 @@ func TestGenerateDataStream(t *testing.T) {
 	DefineGenerateAction(context.Background(), r)
 
 	t.Run("yields typed chunks and final output", func(t *testing.T) {
-		streamModel := DefineModel(r, "test/typedStreamModel", &ModelOptions{
+		streamModel := defineModel(r, "test/typedStreamModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
@@ -2034,7 +2034,7 @@ func TestGenerateDataStream(t *testing.T) {
 	})
 
 	t.Run("final output is correctly typed", func(t *testing.T) {
-		streamModel := DefineModel(r, "test/finalTypedModel", &ModelOptions{
+		streamModel := defineModel(r, "test/finalTypedModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
@@ -2076,7 +2076,7 @@ func TestGenerateDataStream(t *testing.T) {
 	t.Run("automatically sets output type", func(t *testing.T) {
 		var capturedRequest *ModelRequest
 
-		streamModel := DefineModel(r, "test/autoOutputModel", &ModelOptions{
+		streamModel := defineModel(r, "test/autoOutputModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
@@ -2107,7 +2107,7 @@ func TestGenerateDataStream(t *testing.T) {
 	})
 
 	t.Run("handles tool interrupts", func(t *testing.T) {
-		interruptTool := DefineTool(r, "streamInterruptor", "always interrupts",
+		interruptTool := defineTool(r, "streamInterruptor", "always interrupts",
 			func(ctx *ToolContext, input any) (any, error) {
 				return nil, ctx.Interrupt(&InterruptOptions{
 					Metadata: map[string]any{
@@ -2117,7 +2117,7 @@ func TestGenerateDataStream(t *testing.T) {
 			},
 		)
 
-		streamModel := DefineModel(r, "test/streamInterruptModel", &ModelOptions{
+		streamModel := defineModel(r, "test/streamInterruptModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Tools:       true,
@@ -2175,13 +2175,13 @@ func TestGenerateDataStream(t *testing.T) {
 	})
 
 	t.Run("handles returnToolRequests", func(t *testing.T) {
-		greetTool := DefineTool(r, "streamGreeter", "greets",
+		greetTool := defineTool(r, "streamGreeter", "greets",
 			func(ctx *ToolContext, input any) (any, error) {
 				return "hello", nil
 			},
 		)
 
-		streamModel := DefineModel(r, "test/streamReturnToolModel", &ModelOptions{
+		streamModel := defineModel(r, "test/streamReturnToolModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Tools:       true,
@@ -2232,7 +2232,7 @@ func TestGenerateDataStream(t *testing.T) {
 	})
 
 	t.Run("propagates chunk parsing errors", func(t *testing.T) {
-		streamModel := DefineModel(r, "test/parseErrorModel", &ModelOptions{
+		streamModel := defineModel(r, "test/parseErrorModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
@@ -2266,7 +2266,7 @@ func TestGenerateDataStream(t *testing.T) {
 	})
 
 	t.Run("should not yield after stop", func(t *testing.T) {
-		streamModel := DefineModel(r, "test/breakDataStreamModel", &ModelOptions{
+		streamModel := defineModel(r, "test/breakDataStreamModel", &ModelOptions{
 			Supports: &ModelSupports{
 				Multiturn:   true,
 				Constrained: ConstrainedSupportAll,
@@ -2298,7 +2298,7 @@ func TestGenerateDataStream(t *testing.T) {
 func TestGenerateText(t *testing.T) {
 	r := newTestRegistry(t)
 
-	echoModel := DefineModel(r, "test/echoTextModel", nil, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	echoModel := defineModel(r, "test/echoTextModel", nil, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{
 			Request: req,
 			Message: NewModelTextMessage("echo: " + req.Messages[0].Content[0].Text),
@@ -2326,7 +2326,7 @@ func TestGenerateData(t *testing.T) {
 		Value int `json:"value"`
 	}
 
-	jsonModel := DefineModel(r, "test/jsonDataModel", &ModelOptions{
+	jsonModel := defineModel(r, "test/jsonDataModel", &ModelOptions{
 		Supports: &ModelSupports{
 			Constrained: ConstrainedSupportAll,
 		},
@@ -2685,7 +2685,7 @@ func TestGenerateWithMarkdownJSON(t *testing.T) {
 	DefineGenerateAction(context.Background(), r)
 
 	// A model that returns JSON wrapped in markdown
-	markdownModel := DefineModel(r, "test/markdownJson", &ModelOptions{
+	markdownModel := defineModel(r, "test/markdownJson", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
 	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		jsonContent := "{\"name\": \"test\", \"value\": 123}"
@@ -2696,7 +2696,7 @@ func TestGenerateWithMarkdownJSON(t *testing.T) {
 	})
 
 	// A model that returns JSON wrapped in markdown with loose formatting (spaces)
-	looseMarkdownModel := DefineModel(r, "test/looseMarkdownJson", &ModelOptions{
+	looseMarkdownModel := defineModel(r, "test/looseMarkdownJson", &ModelOptions{
 		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
 	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		jsonContent := "{\"name\": \"test\", \"value\": 123}"
@@ -2759,20 +2759,20 @@ func TestGenerateNoGoroutineLeak(t *testing.T) {
 
 	done := make(chan struct{})
 
-	slowTool := DefineTool(r, "slow", "slow",
+	slowTool := defineTool(r, "slow", "slow",
 		func(*ToolContext, any) (any, error) {
 			<-done
 			return nil, nil
 		},
 	)
 
-	failTool := DefineTool(r, "fail", "fail",
+	failTool := defineTool(r, "fail", "fail",
 		func(*ToolContext, any) (any, error) {
 			return nil, errors.New("boom")
 		},
 	)
 
-	testModel := DefineModel(r, "test/testModel", &ModelOptions{
+	testModel := defineModel(r, "test/testModel", &ModelOptions{
 		Supports: &ModelSupports{
 			Multiturn: true,
 			Tools:     true,

@@ -499,26 +499,30 @@ func ListTools(g *Genkit) []ai.Tool {
 	return tools
 }
 
-// DefineModel defines a custom model implementation, registers it as a [core.Action]
-// of type Model, and returns an [ai.Model] interface.
+// DefineModelAction defines a custom model implementation, registers it
+// as a [core.Action] of type Model, and returns an [ai.Model] interface.
 //
 // The `name` argument is the unique identifier for the model (e.g., "myProvider/myModel").
 // The `opts` argument provides metadata about the model's capabilities ([ai.ModelOptions]).
-// The `fn` argument ([ai.ModelFunc]) implements the actual generation logic, handling
-// input requests ([ai.ModelRequest]) and producing responses ([ai.ModelResponse]),
+// The `fn` argument ([ai.ModelActionFunc]) implements the actual generation logic,
+// handling input requests ([ai.ModelRequest]) and producing responses ([ai.ModelResponse]),
 // potentially streaming chunks ([ai.ModelResponseChunk]) via the callback.
 //
+// Config is the model's typed configuration; it is usually inferred from fn's
+// signature. See [ai.NewModelAction] for how the request's config is
+// deserialized and validated.
+//
 // For models that don't need to be registered (e.g., for plugin development or testing),
-// use [ai.NewModel] instead.
+// use [ai.NewModelAction] instead.
 //
 // Example:
 //
-//	echoModel := genkit.DefineModel(g, "custom/echo",
+//	echoModel := genkit.DefineModelAction(g, "custom/echo",
 //		&ai.ModelOptions{
 //			Label:    "Echo Model",
 //			Supports: &ai.ModelSupports{Multiturn: true},
 //		},
-//		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+//		func(ctx context.Context, req *ai.ModelRequest, config MyConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 //			// Simple echo implementation
 //			resp := &ai.ModelResponse{
 //				Message: &ai.Message{
@@ -556,18 +560,60 @@ func ListTools(g *Genkit) []ai.Tool {
 //			return resp, nil
 //		},
 //	)
+func DefineModelAction[Config any](
+	g *Genkit,
+	name string,
+	opts *ai.ModelOptions,
+	fn ai.ModelActionFunc[Config],
+) *ai.ModelAction {
+	m := ai.NewModelAction(name, opts, fn)
+	m.Register(g.reg)
+	return m
+}
+
+// DefineModel defines a custom model implementation, registers it as a [core.Action]
+// of type Model, and returns an [ai.Model] interface.
+//
+// Deprecated: Use [DefineModelAction], which passes the request's config
+// to fn as a typed value instead of leaving it type-erased on the request.
 func DefineModel(g *Genkit, name string, opts *ai.ModelOptions, fn ai.ModelFunc) ai.Model {
-	return ai.DefineModel(g.reg, name, opts, fn)
+	m := ai.NewModel(name, opts, fn)
+	m.Register(g.reg)
+	return m
+}
+
+// DefineBackgroundModelAction defines a background model, registers it, and
+// returns the concrete [ai.BackgroundModelAction].
+//
+// The `name` is the identifier the model uses to request the background model. The `opts`
+// are the options for the background model. The `startFn` is the function that starts the background model.
+// The `checkFn` is the function that checks the status of the background model.
+//
+// Config is the model's typed configuration; it is usually inferred from
+// startFn's signature. See [ai.NewModelAction] for how the request's
+// config is deserialized and validated.
+func DefineBackgroundModelAction[Config any](
+	g *Genkit,
+	name string,
+	opts *ai.BackgroundModelOptions,
+	startFn ai.BackgroundModelActionFunc[Config],
+	checkFn ai.CheckModelOpFunc,
+) *ai.BackgroundModelAction {
+	m := ai.NewBackgroundModelAction(name, opts, startFn, checkFn)
+	m.Register(g.reg)
+	return m
 }
 
 // DefineBackgroundModel defines a background model, registers it as a [ai.BackgroundModel],
 // and returns an [ai.BackgroundModel].
 //
-// The `name` is the identifier the model uses to request the background model. The `opts`
-// are the options for the background model. The `startFn` is the function that starts the background model.
-// The `checkFn` is the function that checks the status of the background model.
+// Deprecated: Use [DefineBackgroundModelAction], which passes the
+// request's config to startFn as a typed value instead of leaving it
+// type-erased on the request.
 func DefineBackgroundModel(g *Genkit, name string, opts *ai.BackgroundModelOptions, startFn ai.StartModelOpFunc, checkFn ai.CheckModelOpFunc) ai.BackgroundModel {
-	return ai.DefineBackgroundModel(g.reg, name, opts, startFn, checkFn)
+	m := ai.NewBackgroundModel(name, opts, startFn, checkFn)
+	m.Register(g.reg)
+	return m
 }
 
 // LookupModel retrieves a registered [ai.Model] by its provider and name.
@@ -629,12 +675,14 @@ func LookupBackgroundModel(g *Genkit, name string) ai.BackgroundModel {
 //	}
 //
 //	fmt.Println(resp.Text()) // Might output something like "The weather in Paris is Sunny, 25°C."
-func DefineTool[In, Out any](g *Genkit, name, description string, fn ai.ToolFunc[In, Out], opts ...ai.ToolOption) *ai.ToolDef[In, Out] {
-	return ai.DefineTool(g.reg, name, description, fn, opts...)
+func DefineTool[In, Out any](g *Genkit, name, description string, fn ai.ToolFunc[In, Out], opts ...ai.ToolOption) *ai.ToolAction[In, Out] {
+	t := ai.NewTool(name, description, fn, opts...)
+	t.Register(g.reg)
+	return t
 }
 
 // DefineToolWithInputSchema defines a tool with a custom input schema that can be used by models during generation,
-// registers it as a [core.Action] of type Tool, and returns an [*ai.ToolDef].
+// registers it as a [core.Action] of type Tool, and returns an [*ai.ToolAction].
 //
 // This variant of [DefineTool] allows specifying a JSON Schema for the tool's input, providing more
 // control over input validation and model guidance. The input parameter to the tool function will be
@@ -678,12 +726,14 @@ func DefineTool[In, Out any](g *Genkit, name, description string, fn ai.ToolFunc
 //		},
 //		ai.WithToolInputSchema(inputSchema),
 //	)
-func DefineToolWithInputSchema[Out any](g *Genkit, name, description string, inputSchema map[string]any, fn ai.ToolFunc[any, Out]) *ai.ToolDef[any, Out] {
-	return ai.DefineTool(g.reg, name, description, fn, ai.WithInputSchema(inputSchema))
+func DefineToolWithInputSchema[Out any](g *Genkit, name, description string, inputSchema map[string]any, fn ai.ToolFunc[any, Out]) *ai.ToolAction[any, Out] {
+	t := ai.NewTool(name, description, fn, ai.WithInputSchema(inputSchema))
+	t.Register(g.reg)
+	return t
 }
 
 // DefineMultipartTool defines a multipart tool that can be used by models during generation,
-// registers it as a [core.Action] of type Tool, and returns an [*ai.ToolDef].
+// registers it as a [core.Action] of type Tool, and returns an [*ai.ToolAction].
 // Unlike regular tools that return just an output value, multipart tools can return
 // both an output value and additional content parts (like images or other media).
 //
@@ -738,8 +788,10 @@ func DefineToolWithInputSchema[Out any](g *Genkit, name, description string, inp
 //	}
 //
 //	fmt.Println(resp.Text())
-func DefineMultipartTool[In any](g *Genkit, name, description string, fn ai.MultipartToolFunc[In], opts ...ai.ToolOption) *ai.ToolDef[In, *ai.MultipartToolResponse] {
-	return ai.DefineMultipartTool(g.reg, name, description, fn, opts...)
+func DefineMultipartTool[In any](g *Genkit, name, description string, fn ai.MultipartToolFunc[In], opts ...ai.ToolOption) *ai.ToolAction[In, *ai.MultipartToolResponse] {
+	t := ai.NewMultipartTool(name, description, fn, opts...)
+	t.Register(g.reg)
+	return t
 }
 
 // LookupTool retrieves a registered tool by its name.
@@ -801,7 +853,9 @@ func LookupTool(g *Genkit, name string) ai.Tool {
 //		ai.WithUse(Trace{Label: "debug"}),
 //	)
 func DefineMiddleware[M ai.Middleware](g *Genkit, description string, prototype M) *ai.MiddlewareDesc {
-	return ai.DefineMiddleware(g.reg, description, prototype)
+	d := ai.NewMiddleware(description, prototype)
+	d.Register(g.reg)
+	return d
 }
 
 // LookupMiddleware retrieves a registered middleware descriptor by its name.
@@ -1357,8 +1411,8 @@ func Embed(ctx context.Context, g *Genkit, opts ...ai.EmbedderOption) (*ai.Embed
 	return ai.Embed(ctx, g.reg, opts...)
 }
 
-// DefineRetriever defines a custom retriever implementation, registers it as a
-// [core.Action] of type Retriever, and returns an [ai.Retriever].
+// DefineRetrieverAction defines a custom retriever implementation, registers it
+// as a [core.Action] of type Retriever, and returns an [ai.RetrieverAction].
 // Retrievers are used to find documents relevant to a given query, often by
 // performing similarity searches in a vector database.
 //
@@ -1366,10 +1420,32 @@ func Embed(ctx context.Context, g *Genkit, opts ...ai.EmbedderOption) (*ai.Embed
 // contains the logic to process an [ai.RetrieverRequest] (containing the query)
 // and return an [ai.RetrieverResponse] (containing the relevant documents).
 //
+// Config is the retriever's typed configuration; it is usually inferred from
+// fn's signature. See [ai.NewRetrieverAction] for how the request's options are
+// deserialized.
+//
 // For retrievers that don't need to be registered (e.g., for plugin development),
-// use [ai.NewRetriever] instead.
+// use [ai.NewRetrieverAction] instead.
+func DefineRetrieverAction[Config any](
+	g *Genkit,
+	name string,
+	opts *ai.RetrieverOptions,
+	fn ai.RetrieverActionFunc[Config],
+) *ai.RetrieverAction {
+	ret := ai.NewRetrieverAction(name, opts, fn)
+	ret.Register(g.reg)
+	return ret
+}
+
+// DefineRetriever defines a custom retriever implementation, registers it as a
+// [core.Action] of type Retriever, and returns an [ai.Retriever].
+//
+// Deprecated: Use [DefineRetrieverAction], which passes the request's options
+// to fn as a typed value instead of leaving them type-erased on the request.
 func DefineRetriever(g *Genkit, name string, opts *ai.RetrieverOptions, fn ai.RetrieverFunc) ai.Retriever {
-	return ai.DefineRetriever(g.reg, name, opts, fn)
+	ret := ai.NewRetriever(name, opts, fn)
+	ret.Register(g.reg)
+	return ret
 }
 
 // LookupRetriever retrieves a registered [ai.Retriever] by its provider and name.
@@ -1379,18 +1455,42 @@ func LookupRetriever(g *Genkit, name string) ai.Retriever {
 	return ai.LookupRetriever(g.reg, name)
 }
 
-// DefineEmbedder defines a custom text embedding implementation, registers it as a
-// [core.Action] of type Embedder, and returns an [ai.Embedder].
-// Embedders convert text documents or queries into numerical vector representations (embeddings).
+// DefineEmbedderAction defines a custom text embedding implementation,
+// registers it as a [core.Action] of type Embedder, and returns an
+// [ai.Embedder]. Embedders convert text documents or queries into numerical
+// vector representations (embeddings).
 //
 // The `name` is the unique identifier for the embedder.
 // The `fn` function contains the logic to process an [ai.EmbedRequest] (containing documents or a query)
 // and return an [ai.EmbedResponse] (containing the corresponding embeddings).
 //
+// Config is the embedder's typed configuration; it is usually inferred from
+// fn's signature. See [ai.NewEmbedderAction] for how the request's
+// options are deserialized.
+//
 // For embedders that don't need to be registered (e.g., for plugin development),
-// use [ai.NewEmbedder] instead.
+// use [ai.NewEmbedderAction] instead.
+func DefineEmbedderAction[Config any](
+	g *Genkit,
+	name string,
+	opts *ai.EmbedderOptions,
+	fn ai.EmbedderActionFunc[Config],
+) *ai.EmbedderAction {
+	e := ai.NewEmbedderAction(name, opts, fn)
+	e.Register(g.reg)
+	return e
+}
+
+// DefineEmbedder defines a custom text embedding implementation, registers it as a
+// [core.Action] of type Embedder, and returns an [ai.Embedder].
+//
+// Deprecated: Use [DefineEmbedderAction], which passes the request's
+// options to fn as a typed value instead of leaving them type-erased on the
+// request.
 func DefineEmbedder(g *Genkit, name string, opts *ai.EmbedderOptions, fn ai.EmbedderFunc) ai.Embedder {
-	return ai.DefineEmbedder(g.reg, name, opts, fn)
+	e := ai.NewEmbedder(name, opts, fn)
+	e.Register(g.reg)
+	return e
 }
 
 // LookupEmbedder retrieves a registered [ai.Embedder] by its provider and name.
@@ -1410,35 +1510,72 @@ func LookupPlugin(g *Genkit, name string) api.Plugin {
 	return g.reg.LookupPlugin(name)
 }
 
-// DefineEvaluator defines an evaluator that processes test cases one by one,
-// registers it as a [core.Action] of type Evaluator, and returns an [ai.Evaluator].
-// Evaluators are used to assess the quality or performance of AI models or flows
-// based on a dataset of test cases.
+// DefineEvaluatorAction defines an evaluator that processes test cases
+// one by one, registers it as a [core.Action] of type Evaluator, and returns
+// an [ai.Evaluator]. Evaluators are used to assess the quality or performance
+// of AI models or flows based on a dataset of test cases.
 //
-// This variant calls the provided `eval` function for each individual test case
+// This variant calls the provided `fn` function for each individual test case
 // ([ai.EvaluatorCallbackRequest]) in the evaluation dataset.
 //
-// The `provider` and `name` form the unique identifier. `options` provide
-// metadata about the evaluator ([ai.EvaluatorOptions]). The `eval` function
-// implements the logic to score a single test case and returns the results
-// in an [ai.EvaluatorCallbackResponse].
+// Config is the evaluator's typed configuration; it is usually inferred from
+// fn's signature. See [ai.NewEvaluatorAction] for how the request's
+// options are deserialized.
+func DefineEvaluatorAction[Config any](
+	g *Genkit,
+	name string,
+	opts *ai.EvaluatorOptions,
+	fn ai.EvaluatorActionFunc[Config],
+) *ai.EvaluatorAction {
+	e := ai.NewEvaluatorAction(name, opts, fn)
+	e.Register(g.reg)
+	return e
+}
+
+// DefineEvaluator defines an evaluator that processes test cases one by one,
+// registers it as a [core.Action] of type Evaluator, and returns an [ai.Evaluator].
+//
+// Deprecated: Use [DefineEvaluatorAction], which passes the request's
+// options to fn as a typed value instead of leaving them type-erased on the
+// request.
 func DefineEvaluator(g *Genkit, name string, opts *ai.EvaluatorOptions, fn ai.EvaluatorFunc) ai.Evaluator {
-	return ai.DefineEvaluator(g.reg, name, opts, fn)
+	e := ai.NewEvaluator(name, opts, fn)
+	e.Register(g.reg)
+	return e
+}
+
+// DefineBatchEvaluatorAction defines an evaluator that processes the
+// entire dataset at once, registers it as a [core.Action] of type Evaluator,
+// and returns an [ai.Evaluator].
+//
+// This variant provides the full evaluation request ([ai.EvaluatorRequest]), including
+// the entire dataset, to the `fn` function. This allows for more flexible processing,
+// such as batching calls to external services or parallelizing computations.
+//
+// Config is the evaluator's typed configuration; it is usually inferred from
+// fn's signature. See [ai.NewEvaluatorAction] for how the request's
+// options are deserialized.
+func DefineBatchEvaluatorAction[Config any](
+	g *Genkit,
+	name string,
+	opts *ai.EvaluatorOptions,
+	fn ai.BatchEvaluatorActionFunc[Config],
+) *ai.EvaluatorAction {
+	e := ai.NewBatchEvaluatorAction(name, opts, fn)
+	e.Register(g.reg)
+	return e
 }
 
 // DefineBatchEvaluator defines an evaluator that processes the entire dataset at once,
 // registers it as a [core.Action] of type Evaluator, and returns an [ai.Evaluator].
 //
-// This variant provides the full evaluation request ([ai.EvaluatorRequest]), including
-// the entire dataset, to the `eval` function. This allows for more flexible processing,
-// such as batching calls to external services or parallelizing computations.
-//
-// The `provider` and `name` form the unique identifier. `options` provide
-// metadata about the evaluator ([ai.EvaluatorOptions]). The `eval` function
-// implements the logic to score the dataset and returns the aggregated results
-// in an [ai.EvaluatorResponse].
+// Deprecated: Use [DefineBatchEvaluatorAction], which passes the
+// request's options to fn as a typed value instead of leaving them
+// type-erased on the request.
 func DefineBatchEvaluator(g *Genkit, name string, opts *ai.EvaluatorOptions, fn ai.BatchEvaluatorFunc) ai.Evaluator {
-	return ai.DefineBatchEvaluator(g.reg, name, opts, fn)
+	e := ai.NewBatchEvaluator(name, opts, fn)
+	e.Register(g.reg)
+	return e
 }
 
 // LookupEvaluator retrieves a registered [ai.Evaluator] by its provider and name.
@@ -1743,7 +1880,9 @@ func (f renamedFormatter) Name() string { return f.name }
 //	  }, nil
 //	})
 func DefineResource(g *Genkit, name string, opts *ai.ResourceOptions, fn ai.ResourceFunc) ai.Resource {
-	return ai.DefineResource(g.reg, name, opts, fn)
+	res := ai.NewResource(name, opts, fn)
+	res.Register(g.reg)
+	return res
 }
 
 // FindMatchingResource finds a resource that matches the given URI.

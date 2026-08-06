@@ -30,14 +30,14 @@ import (
 
 func defineToolModel(t *testing.T, r *registry.Registry, name string, fn ai.ModelFunc) ai.Model {
 	t.Helper()
-	return ai.DefineModel(r, name, &ai.ModelOptions{
+	return registerTestModel(r, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
 	}, fn)
 }
 
 func defineTool(t *testing.T, r api.Registry, name string) ai.Tool {
 	t.Helper()
-	return ai.DefineTool(r, name, "test tool",
+	return registerTestTool(r, name, "test tool",
 		func(ctx *ai.ToolContext, input struct {
 			V string `json:"v"`
 		}) (string, error) {
@@ -119,7 +119,7 @@ func TestToolApprovalAllowsApprovedTools(t *testing.T) {
 	alsoAllowed := defineTool(t, r, "alsoAllowed")
 
 	ta := &ToolApproval{AllowedTools: []string{"allowed", "alsoAllowed"}}
-	ai.DefineMiddleware(r, "toolApproval", ta)
+	registerTestMiddleware(r, "toolApproval", ta)
 
 	resp, err := ai.Generate(ctx, r,
 		ai.WithModel(m),
@@ -146,7 +146,7 @@ func TestToolApprovalInterruptsUnapprovedTools(t *testing.T) {
 	dangerous := defineTool(t, r, "dangerous")
 
 	ta := &ToolApproval{AllowedTools: []string{"safe"}}
-	ai.DefineMiddleware(r, "toolApproval", ta)
+	registerTestMiddleware(r, "toolApproval", ta)
 
 	resp, err := ai.Generate(ctx, r,
 		ai.WithModel(m),
@@ -247,7 +247,7 @@ func TestToolApprovalEmptyListInterruptsAll(t *testing.T) {
 	myTool := defineTool(t, r, "myTool")
 
 	ta := &ToolApproval{}
-	ai.DefineMiddleware(r, "toolApproval", ta)
+	registerTestMiddleware(r, "toolApproval", ta)
 
 	resp, err := ai.Generate(ctx, r,
 		ai.WithModel(m),
@@ -287,7 +287,7 @@ func TestToolApprovalResumedCallRuns(t *testing.T) {
 	needsApproval := defineTool(t, r, "needsApproval")
 
 	ta := &ToolApproval{} // deny all
-	ai.DefineMiddleware(r, "toolApproval", ta)
+	registerTestMiddleware(r, "toolApproval", ta)
 
 	resp, err := ai.Generate(ctx, r,
 		ai.WithModel(m),
@@ -351,7 +351,7 @@ func TestToolApprovalResumedWithoutApprovalInterrupts(t *testing.T) {
 	needsApproval := defineTool(t, r, "needsApproval")
 
 	ta := &ToolApproval{}
-	ai.DefineMiddleware(r, "toolApproval", ta)
+	registerTestMiddleware(r, "toolApproval", ta)
 
 	resp, err := ai.Generate(ctx, r,
 		ai.WithModel(m),
