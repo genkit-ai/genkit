@@ -68,7 +68,7 @@ ModelUsage = GenerationUsage  # public name for GenerationUsage
 OutputT = TypeVar('OutputT', default=object)
 # Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
 # Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
-ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
+ConfigT = TypeVar('ConfigT', bound=BaseModel, covariant=True)
 # Unbounded so ModelRequest supports any config payload (BaseModel instances, dicts, custom options)
 # across action execution boundaries without forcing assumptions.
 ModelRequestConfigT = TypeVar('ModelRequestConfigT', covariant=True)
@@ -97,14 +97,14 @@ class ModelConfigDict(TypedDict, total=False):
 
 
 @dataclass(frozen=True, kw_only=True)
-class ModelRef(Generic[ModelRefConfigT]):
+class ModelRef(Generic[ConfigT]):
     """Frozen reference to a model bound to a Pydantic config schema."""
 
     name: str
-    config_schema: type[ModelRefConfigT]
+    config_schema: type[ConfigT]
     info: ModelInfo | None = None
     version: str | None = None
-    config: ModelRefConfigT | None = None
+    config: ConfigT | None = None
 
 
 class Message(MessageData):
