@@ -20,7 +20,7 @@
 import asyncio
 import os
 import weakref
-from collections.abc import AsyncIterable, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypedDict, TypeVar, cast
@@ -59,7 +59,14 @@ from genkit._core._channel import Channel
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._middleware import BaseMiddleware, middleware_class_index
-from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfig
+from genkit._core._model import (
+    Document,
+    GenerateActionOptions,
+    Message,
+    ModelConfig,
+    ModelConfigDict,
+    ModelRef,
+)
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
@@ -84,12 +91,85 @@ InputT = TypeVar('InputT')
 OutputT = TypeVar('OutputT')
 
 
+def normalize_config(
+    config: object,
+) -> dict[str, Any] | None:
+    """Normalize any configuration object (Pydantic schema or mapping) into a plain dict.
+
+    Dumping BaseModel instances guarantees a consistent runtime representation and
+    prevents Pydantic serialization gotchas with inheritance or union ordering.
+    """
+    if config is None:
+        return None
+    if isinstance(config, BaseModel):
+        return config.model_dump(exclude_unset=True)
+    if isinstance(config, Mapping):
+        d = cast(dict[str, Any], config)
+        try:
+            return ModelConfig(**d).model_dump(exclude_none=True)
+        except Exception:
+            return dict(d)
+    return dict(cast(Any, config))
+
+
+def _to_dict(val: Any) -> dict[str, Any]:  # noqa: ANN401
+    if isinstance(val, BaseModel):
+        return val.model_dump(exclude_unset=True)
+    return dict(val) if val is not None else {}  # type: ignore[arg-type]
+
+
+def _get_concrete_schema(*candidates: object) -> type[BaseModel] | None:
+    """Return the first candidate that is a concrete BaseModel subclass."""
+    for cand in candidates:
+        if isinstance(cand, type) and issubclass(cand, BaseModel) and cand is not BaseModel:
+            return cand
+    return None
+
+
+def resolve_model_arg(
+    model: str | ModelRef[Any] | None,
+    config: BaseModel | ModelConfigDict | Mapping[str, Any] | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Resolve a ModelRef or string model argument to a wire name and merged config dict.
+
+    If a ModelRef carries default configuration, call-time overrides are cleanly
+    merged on top of it, validated against the ModelRef's concrete schema, and dumped.
+    """
+    if model is None:
+        return None, normalize_config(config)
+
+    if isinstance(model, str):
+        return model, normalize_config(config)
+
+    wire_name = model.name
+    default_config: Any = model.config
+
+    # No default config on the ref: use whatever was passed at call-time.
+    if default_config is None:
+        return wire_name, normalize_config(config)
+
+    # No call-time overrides provided: inherit the default config directly.
+    if config is None:
+        return wire_name, normalize_config(default_config)
+
+    # Merge call-time overrides on top of the ModelRef's default configuration.
+    merged = {**_to_dict(default_config), **_to_dict(config)}
+
+    # Validate against the concrete schema to enforce constraints, then dump to dict.
+    schema = _get_concrete_schema(model.config_schema, type(default_config), type(config))
+    if schema:
+        validated = schema.model_validate(merged)
+        return wire_name, validated.model_dump(exclude_unset=True)
+
+    return wire_name, merged
+
+
 class OutputOptions(TypedDict, total=False):
     """Output format/schema configuration for prompt generation."""
 
     format: str | None
     content_type: str | None
-    instructions: str | None
+    instructions: bool | str | None
     schema: type | dict[str, Any] | str | None
     json_schema: dict[str, Any] | None
     constrained: bool | None
@@ -128,20 +208,19 @@ def resume_options_to_resume(
 class PromptGenerateOptions(TypedDict, total=False):
     """Runtime options for prompt execution (config, tools, messages, etc.)."""
 
-    model: str | None
-    config: dict[str, Any] | ModelConfig | None
+    model: str | ModelRef[BaseModel] | None
+    config: BaseModel | dict[str, Any] | None
     messages: list[Message] | None
     docs: list[Document] | None
     tools: Sequence[str | Tool] | None
-    resources: list[str] | None
     tool_choice: ToolChoice | None
     output: OutputOptions | None
+    on_chunk: Callable[[ModelResponseChunk], None] | None
     resume_respond: ToolResponsePart | list[ToolResponsePart] | None
     resume_restart: ToolRequestPart | list[ToolRequestPart] | None
     resume_metadata: dict[str, Any] | None
     return_tool_requests: bool | None
     max_turns: int | None
-    on_chunk: ModelStreamingCallback | None
     use: Sequence[BaseMiddleware | MiddlewareRef] | None
     context: dict[str, Any] | None
     metadata: dict[str, Any] | None
@@ -161,7 +240,7 @@ class ModelStreamResponse(Generic[OutputT]):
 
     @property
     def stream(self) -> AsyncIterable[ModelResponseChunk]:
-        """Get the async iterable of response chunks.
+        """Async iterable of response chunks.
 
         Returns:
             An async iterable that yields ModelResponseChunk objects
@@ -174,7 +253,7 @@ class ModelStreamResponse(Generic[OutputT]):
 
     @property
     def response(self) -> Awaitable[ModelResponse[OutputT]]:
-        """Get the awaitable for the complete response.
+        """Awaitable for the complete response.
 
         Returns:
             An awaitable that resolves to a ModelResponse containing:
@@ -186,6 +265,13 @@ class ModelStreamResponse(Generic[OutputT]):
             - Any tool calls or interrupts from the response
         """
         return self._response_future
+
+    # The natural Python expectation is `async for chunk in ai.generate_stream(...)`.
+    # Delegating to the underlying channel lets that work without forcing the
+    # caller to remember the extra `.stream` hop, while `.stream` and `.response`
+    # remain available for cases where you want both halves explicitly.
+    def __aiter__(self) -> AsyncIterator[ModelResponseChunk]:
+        return self._channel.__aiter__()
 
 
 @dataclass
@@ -203,7 +289,7 @@ class PromptConfig(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
     variant: str | None = None
-    model: str | None = None
+    model: str | ModelRef[BaseModel] | None = None
     config: dict[str, Any] | ModelConfig | None = None
     description: str | None = None
     input_schema: type | dict[str, Any] | str | None = None
@@ -212,7 +298,7 @@ class PromptConfig(BaseModel):
     messages: str | list[Message] | None = None
     output_format: str | None = None
     output_content_type: str | None = None
-    output_instructions: str | None = None
+    output_instructions: bool | str | None = None
     output_schema: type | dict[str, Any] | str | None = None
     output_constrained: bool | None = None
     max_turns: int | None = None
@@ -235,7 +321,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         self,
         registry: Registry,
         variant: str | None = None,
-        model: str | None = None,
+        model: str | ModelRef[BaseModel] | None = None,
         config: dict[str, Any] | ModelConfig | None = None,
         description: str | None = None,
         input_schema: type | dict[str, Any] | str | None = None,
@@ -244,7 +330,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         messages: str | list[Message] | None = None,
         output_format: str | None = None,
         output_content_type: str | None = None,
-        output_instructions: str | None = None,
+        output_instructions: bool | str | None = None,
         output_schema: type | dict[str, Any] | str | None = None,
         output_constrained: bool | None = None,
         max_turns: int | None = None,
@@ -341,8 +427,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             input: Template variables for rendering.
             **opts: Runtime prompt options (e.g. model, tools, config).
         """
-        # ty doesn't infer Unpack[TD] as TD in function body (PEP 692 gap)
-        return await self._call_impl(input, opts)  # ty: ignore[invalid-argument-type]
+        return await self._call_impl(input, opts)  # type: ignore[arg-type]
 
     async def _call_impl(
         self,
@@ -372,9 +457,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
                 else (self._config or {})
             )
             opt_config = opts.get('config')
-            override = (
-                opt_config.model_dump(exclude_none=True) if isinstance(opt_config, BaseModel) else (opt_config or {})
-            )
+            override = normalize_config(opt_config) or {}
             merged_config = {**base, **override} if base or override else None
         else:
             merged_config = self._config
@@ -386,15 +469,20 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         def _or(opt_val: Any, default: Any) -> Any:  # noqa: ANN401
             return opt_val if opt_val is not None else default
 
+        model_name, resolved_config = resolve_model_arg(
+            opts.get('model') or self._model,
+            merged_config,
+        )
+
         return PromptConfig(
-            model=opts.get('model') or self._model,
+            model=model_name,
             prompt=self._prompt,
             system=self._system,
             messages=self._messages,
             tools=opts.get('tools') or self._tools,
             return_tool_requests=_or(opts.get('return_tool_requests'), self._return_tool_requests),
             tool_choice=opts.get('tool_choice') or self._tool_choice,
-            config=merged_config,
+            config=resolved_config,
             max_turns=_or(opts.get('max_turns'), self._max_turns),
             output_format=output_opts.get('format') or self._output_format,
             output_content_type=output_opts.get('content_type') or self._output_content_type,
@@ -439,8 +527,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
 
         Same keyword options as ``__call__`` (see PromptGenerateOptions).
         """
-        # ty treats **opts as a plain dict here; callers are still validated against PromptGenerateOptions.
-        call_opts: PromptGenerateOptions = opts  # ty: ignore[invalid-assignment]
+        call_opts: PromptGenerateOptions = opts  # type: ignore[assignment]
         _child_registry, gen_options = await _prepare(self, input, call_opts)
         return gen_options
 
@@ -616,7 +703,8 @@ async def to_generate_action_options(
     options: PromptConfig,
 ) -> GenerateActionOptions:
     """Render ``PromptConfig`` into `GenerateActionOptions`."""
-    model = options.model or cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
+    model_name, config = resolve_model_arg(options.model, options.config)
+    model = model_name or cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
     if model is None:
         raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')
 
@@ -661,7 +749,7 @@ async def to_generate_action_options(
     return GenerateActionOptions(
         model=model,
         messages=resolved_msgs,  # type: ignore[arg-type]
-        config=options.config,
+        config=config,
         tools=tools_refs,
         return_tool_requests=options.return_tool_requests,
         tool_choice=options.tool_choice,
@@ -1173,6 +1261,7 @@ def _transform_prompt_metadata(
             schema.pop('description', None)
 
     raw = md.get('raw')
+    raw_output = raw.get('output') if isinstance(raw, dict) and isinstance(raw.get('output'), dict) else {}
     raw_use = raw.get('use') if isinstance(raw, dict) else None
     parsed_use = _parse_dotprompt_use(raw_use)
 
@@ -1209,6 +1298,13 @@ def _transform_prompt_metadata(
         'output': {
             'jsonSchema': output.get('schema') if isinstance(output, dict) else None,
             'format': output.get('format') if isinstance(output, dict) else None,
+            # Fall back to raw YAML (raw_output) because dotpromptz's PromptOutputConfig
+            # does not define 'instructions', causing it to be dropped from 'output'.
+            'instructions': (
+                output.get('instructions')
+                if isinstance(output, dict) and 'instructions' in output
+                else (raw_output.get('instructions') if isinstance(raw_output, dict) else None)
+            ),
         },
         'input': {
             'default': input_cfg.get('default') if isinstance(input_cfg, dict) else None,
@@ -1266,6 +1362,7 @@ def load_prompt(registry: Registry, path: Path, filename: str, prefix: str = '',
             output_schema=metadata.get('output', {}).get('jsonSchema'),
             output_constrained=True if metadata.get('output', {}).get('jsonSchema') else None,
             output_format=metadata.get('output', {}).get('format'),
+            output_instructions=metadata.get('output', {}).get('instructions'),
             messages=metadata.get('messages'),
             max_turns=metadata.get('maxTurns'),
             tool_choice=metadata.get('toolChoice'),
