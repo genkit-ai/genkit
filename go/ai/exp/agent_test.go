@@ -31,6 +31,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -1009,7 +1010,7 @@ func defineLastGoodTestAgent(reg api.Registry, name string, opts ...AgentOption[
 						s.Counter = 999
 						return s
 					})
-					return nil, core.NewError(core.UNAVAILABLE, "model timeout")
+					return nil, status.Errorf(status.ErrUnavailable, "model timeout")
 				}
 				sess.AddMessages(ai.NewModelTextMessage("echo: " + text))
 				sess.UpdateCustom(func(s testState) testState {
@@ -5048,7 +5049,7 @@ func TestAgent_StateTransform_ErrorFailsClientManagedOutputClosed(t *testing.T) 
 	reg := newTestRegistry(t)
 
 	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
-		return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape state")
+		return nil, status.Errorf(status.ErrPermissionDenied, "cannot shape state")
 	}
 
 	af := DefineCustomAgent(reg, "clientXformErr",
@@ -5071,6 +5072,9 @@ func TestAgent_StateTransform_ErrorFailsClientManagedOutputClosed(t *testing.T) 
 	if out.Error == nil || out.Error.Status != core.PERMISSION_DENIED {
 		t.Errorf("Error = %+v, want status %q from the transform", out.Error, core.PERMISSION_DENIED)
 	}
+	if !errors.Is(out.Error, status.ErrPermissionDenied) {
+		t.Errorf("Error = %+v, want it to match status.ErrPermissionDenied", out.Error)
+	}
 	// failedOutput shapes the last-good state through the same transform, which
 	// errors again here; the runtime omits state rather than leaking it.
 	if out.State != nil {
@@ -5088,7 +5092,7 @@ func TestAgent_StateTransform_ErrorFailsSnapshotReadClosed(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
-		return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape state")
+		return nil, status.Errorf(status.ErrPermissionDenied, "cannot shape state")
 	}
 
 	af := DefineCustomAgent(reg, "snapXformErr",
@@ -7100,10 +7104,13 @@ func TestPromptAgent_InlineMessages_DoesNotMutateSharedMetadata(t *testing.T) {
 	if _, ok := shared.Metadata[promptMessageKey]; ok {
 		t.Errorf("prompt message tag leaked into shared config message metadata: %v", shared.Metadata)
 	}
-	// The base message must still be filtered out of session history:
-	// 1 user message + 1 model reply = 2.
-	if got := len(response.State.Messages); got != 2 {
-		t.Errorf("expected 2 messages, got %d", got)
+	// The base message must still be filtered out of session history. This
+	// prompt declares its own conversation, so it owns the placement and
+	// never places the session's messages: what comes back is the reply
+	// alone. See TestPromptAgent_HistoryPlacement for the rule and the forms
+	// that do place it.
+	if got := len(response.State.Messages); got != 1 {
+		t.Errorf("expected 1 message, got %d", got)
 		for i, m := range response.State.Messages {
 			t.Logf("  msg[%d]: role=%s text=%s", i, m.Role, m.Text())
 		}

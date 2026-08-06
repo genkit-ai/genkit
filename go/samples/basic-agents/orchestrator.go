@@ -27,8 +27,7 @@ import (
 //
 // The middleware injects one delegation tool per sub-agent (delegate_to_<name>),
 // lists the sub-agents and their descriptions in the system prompt, and runs the
-// chosen sub-agent when the orchestrator model calls its tool. It mirrors the
-// JS "orchestrator" sample.
+// chosen sub-agent when the orchestrator model calls its tool.
 //
 // The two sub-agents (researcher, engineer) are client-managed (no session
 // store): each delegation runs them one-shot and leaves no snapshots behind, so
@@ -88,7 +87,7 @@ func defineOrchestratorAgent(g *genkit.Genkit) *aix.Agent[any] {
 				&middlewarex.Artifacts{Readonly: true},
 			),
 		},
-		aix.WithSessionStore(mustStore("orchestrator")),
+		aix.WithSessionStore(mustStore[any]("orchestrator")),
 		aix.WithDescription[any]("Coordinates research and coding sub-agents via the agents middleware"),
 	)
 }

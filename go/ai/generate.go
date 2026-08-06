@@ -671,14 +671,20 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 		}
 	}
 
+	// Generate has no prompt input, so content functions get a nil raw input,
+	// which each turns into the zero value of its own type, and no text is
+	// compiled: there would be nothing to render it against.
 	messages := []*Message{}
-	if genOpts.SystemFn != nil {
-		system, err := genOpts.SystemFn(ctx, nil)
+	if genOpts.SystemText != nil {
+		messages = append(messages, NewSystemTextMessage(*genOpts.SystemText))
+	} else if genOpts.SystemFn != nil {
+		parts, err := genOpts.SystemFn(ctx, nil)
 		if err != nil {
 			return nil, err
 		}
-
-		messages = append(messages, NewSystemTextMessage(system))
+		if len(parts) > 0 {
+			messages = append(messages, &Message{Role: RoleSystem, Content: parts})
+		}
 	}
 	if genOpts.MessagesFn != nil {
 		msgs, err := genOpts.MessagesFn(ctx, nil)
@@ -688,13 +694,16 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 
 		messages = append(messages, msgs...)
 	}
-	if genOpts.PromptFn != nil {
-		prompt, err := genOpts.PromptFn(ctx, nil)
+	if genOpts.PromptText != nil {
+		messages = append(messages, NewUserTextMessage(*genOpts.PromptText))
+	} else if genOpts.PromptFn != nil {
+		parts, err := genOpts.PromptFn(ctx, nil)
 		if err != nil {
 			return nil, err
 		}
-
-		messages = append(messages, NewUserTextMessage(prompt))
+		if len(parts) > 0 {
+			messages = append(messages, &Message{Role: RoleUser, Content: parts})
+		}
 	}
 
 	if modelRef, ok := genOpts.Model.(ModelRef); ok && genOpts.Config == nil {

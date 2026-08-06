@@ -153,16 +153,47 @@ func (s *spinner) stop() {
 // bubbles up through openAgent and breaks runCLI's outer loop.
 var errQuit = errors.New("quit")
 
-// agentEntry pairs an agent with the optional, agent-specific hooks the
-// generic CLI needs to drive it. The CLI itself knows nothing about any
-// particular agent: it lists them, streams their turns, and (when set)
-// routes tool interrupts to onInterrupt. Agents without interruptible
-// tools leave onInterrupt nil and the rest of the flow is identical. That
-// split is what lets this same cli.go back any future sample, with tool
-// interrupts or without.
+// agentEntry is the CLI's view of one agent, with its session-state type
+// erased. Each agent picks the state type that suits it (see barista.go for
+// one that carries a structured order), so a single list cannot hold them as
+// concrete values; it holds closures instead, and newEntry is the one place
+// the concrete type is captured. Everything the closures call is generic over
+// State, so nothing downstream loses the type.
+//
+// The CLI itself knows nothing about any particular agent: it lists them,
+// streams their turns, and (when set) routes tool interrupts to onInterrupt.
+// Agents without interruptible tools leave onInterrupt nil and the rest of the
+// flow is identical. That split is what lets this same cli.go back any future
+// sample, with tool interrupts or without.
 type agentEntry struct {
-	agent       *aix.Agent[any]
+	name        string
+	description string
+	// summarize renders the one-line status shown under the agent in the list.
+	summarize func(ctx context.Context, sessionID string) string
+	// open runs one visit to the agent, returning the session ID it ran under.
+	open func(ctx context.Context, inputCh <-chan string, lastSessionID string) (string, error)
+}
+
+// agentHooks is what the streaming path needs about an agent beyond its
+// connection: what to call it in messages, and how to resolve interrupts.
+type agentHooks struct {
+	name        string
 	onInterrupt InterruptHandler
+}
+
+// newEntry builds a list entry for an agent of any session-state type.
+func newEntry[State any](a *aix.Agent[State], onInterrupt InterruptHandler) agentEntry {
+	hooks := agentHooks{name: a.Name(), onInterrupt: onInterrupt}
+	return agentEntry{
+		name:        a.Name(),
+		description: a.Desc().Description,
+		summarize: func(ctx context.Context, sessionID string) string {
+			return summarizeLatest(ctx, a, sessionID)
+		},
+		open: func(ctx context.Context, inputCh <-chan string, lastSessionID string) (string, error) {
+			return openAgent(ctx, inputCh, a, hooks, lastSessionID)
+		},
+	}
 }
 
 // InterruptHandler resolves a single tool interrupt into a resume part. It
@@ -217,14 +248,14 @@ func runCLI(ctx context.Context, agents []agentEntry) error {
 			return nil
 		}
 		entry := agents[choice]
-		sessionID, err := openAgent(ctx, inputCh, entry, lastSession[entry.agent.Name()])
+		sessionID, err := entry.open(ctx, inputCh, lastSession[entry.name])
 		if err != nil {
 			if errors.Is(err, errQuit) {
 				return nil
 			}
 			return err
 		}
-		lastSession[entry.agent.Name()] = sessionID
+		lastSession[entry.name] = sessionID
 	}
 }
 
@@ -236,12 +267,11 @@ func pickAgent(ctx context.Context, inputCh <-chan string, agents []agentEntry, 
 		fmt.Println()
 		fmt.Println(style("Agents:", ansiBold))
 		for i, entry := range agents {
-			a := entry.agent
 			fmt.Printf("  %s %s %s\n",
 				style(fmt.Sprintf("%d.", i+1), ansiCyan),
-				style(a.Name(), ansiBold),
-				style("— "+a.Desc().Description, ansiDim))
-			if summary := summarizeLatest(ctx, a, lastSession[a.Name()]); summary != "" {
+				style(entry.name, ansiBold),
+				style("— "+entry.description, ansiDim))
+			if summary := entry.summarize(ctx, lastSession[entry.name]); summary != "" {
 				fmt.Printf("       %s\n", summary)
 			}
 		}
@@ -274,13 +304,12 @@ func pickAgent(ctx context.Context, inputCh <-chan string, agents []agentEntry, 
 // so the rest of the flow is uniform: ok=false means the user backed
 // out, otherwise hand the chosen snapshot (or nil for fresh) to
 // runChat.
-func openAgent(ctx context.Context, inputCh <-chan string, entry agentEntry, lastSessionID string) (string, error) {
-	a := entry.agent
+func openAgent[State any](ctx context.Context, inputCh <-chan string, a *aix.Agent[State], hooks agentHooks, lastSessionID string) (string, error) {
 	// Resolve where the last conversation left off. With no tracked
 	// session (a first visit this run) there is nothing to resume;
 	// otherwise the store resolves the session's latest snapshot, which
 	// also surfaces a still-pending detached invocation.
-	var tip *aix.SessionSnapshot[any]
+	var tip *aix.SessionSnapshot[State]
 	if lastSessionID != "" {
 		var err error
 		tip, err = a.Store().GetLatestSnapshot(ctx, lastSessionID)
@@ -290,7 +319,7 @@ func openAgent(ctx context.Context, inputCh <-chan string, entry agentEntry, las
 	}
 
 	var (
-		resume *aix.SessionSnapshot[any]
+		resume *aix.SessionSnapshot[State]
 		ok     bool
 	)
 	if tip != nil && tip.Status == aix.SnapshotStatusPending {
@@ -305,7 +334,7 @@ func openAgent(ctx context.Context, inputCh <-chan string, entry agentEntry, las
 	if !ok {
 		return lastSessionID, nil
 	}
-	return runChat(ctx, inputCh, entry, resume, lastSessionID)
+	return runChat(ctx, inputCh, a, hooks, resume, lastSessionID)
 }
 
 // handlePending offers the three reasonable responses when a previous
@@ -323,7 +352,7 @@ func openAgent(ctx context.Context, inputCh <-chan string, entry agentEntry, las
 // snapshot directly so the caller can skip the resume / new prompt:
 // the user already committed to the choice by waiting, and re-asking
 // would be redundant.
-func handlePending(ctx context.Context, inputCh <-chan string, a *aix.Agent[any], pending *aix.SessionSnapshot[any]) (*aix.SessionSnapshot[any], bool) {
+func handlePending[State any](ctx context.Context, inputCh <-chan string, a *aix.Agent[State], pending *aix.SessionSnapshot[State]) (*aix.SessionSnapshot[State], bool) {
 	for {
 		fmt.Printf("\nThe last %s session is still running in the background (%s).\n",
 			style(a.Name(), ansiBold), style(shortID(pending.SnapshotID), ansiDim))
@@ -373,7 +402,7 @@ func handlePending(ctx context.Context, inputCh <-chan string, a *aix.Agent[any]
 // offers two paths so the demo stays focused: resume from the most
 // recent terminal snapshot (returns the snapshot pointer), or start
 // fresh (returns nil).
-func pickSession(ctx context.Context, inputCh <-chan string, a *aix.Agent[any], latest *aix.SessionSnapshot[any]) (*aix.SessionSnapshot[any], bool) {
+func pickSession[State any](ctx context.Context, inputCh <-chan string, a *aix.Agent[State], latest *aix.SessionSnapshot[State]) (*aix.SessionSnapshot[State], bool) {
 	if latest == nil || latest.Status != aix.SnapshotStatusCompleted {
 		fmt.Printf("\nStarting a new conversation with %s.\n", style(a.Name(), ansiBold))
 		return nil, true
@@ -408,15 +437,15 @@ func pickSession(ctx context.Context, inputCh <-chan string, a *aix.Agent[any], 
 // snapshot the user was just shown. Validating up front keeps the chat
 // from opening on a connection whose invocation already failed, which
 // would surface the error only after the user types a message.
-func resumeOption(ctx context.Context, a *aix.Agent[any], resume *aix.SessionSnapshot[any]) aix.InvocationOption[any] {
+func resumeOption[State any](ctx context.Context, a *aix.Agent[State], resume *aix.SessionSnapshot[State]) aix.InvocationOption[State] {
 	if resume.SessionID != "" {
 		tip, err := a.Store().GetLatestSnapshot(ctx, resume.SessionID)
 		if err == nil && tip != nil && tip.Status != aix.SnapshotStatusPending {
-			return aix.WithSessionID[any](resume.SessionID)
+			return aix.WithSessionID[State](resume.SessionID)
 		}
 		fmt.Println(style("(this conversation's session can't be resumed as a whole; continuing from the selected snapshot)", ansiDim))
 	}
-	return aix.WithSnapshotID[any](resume.SnapshotID)
+	return aix.WithSnapshotID[State](resume.SnapshotID)
 }
 
 // runChat opens the bidi connection (optionally resuming from a
@@ -427,8 +456,7 @@ func resumeOption(ctx context.Context, a *aix.Agent[any], resume *aix.SessionSna
 // detaches the connection, leaving a pending snapshot for the user to
 // observe. It returns the session ID the chat ran under (falling back to
 // prevSessionID) so the caller can offer to resume it later.
-func runChat(ctx context.Context, inputCh <-chan string, entry agentEntry, resume *aix.SessionSnapshot[any], prevSessionID string) (string, error) {
-	a := entry.agent
+func runChat[State any](ctx context.Context, inputCh <-chan string, a *aix.Agent[State], hooks agentHooks, resume *aix.SessionSnapshot[State], prevSessionID string) (string, error) {
 	prompter := &Prompter{ctx: ctx, inputCh: inputCh}
 	fmt.Printf("\n%s\n", style("=== Chatting with "+a.Name()+" ===", ansiBold, ansiCyan))
 	if resume != nil {
@@ -443,7 +471,7 @@ func runChat(ctx context.Context, inputCh <-chan string, entry agentEntry, resum
 	}
 	fmt.Println()
 
-	var opts []aix.InvocationOption[any]
+	var opts []aix.InvocationOption[State]
 	if resume != nil {
 		opts = append(opts, resumeOption(ctx, a, resume))
 	}
@@ -501,7 +529,7 @@ repl:
 			break
 		}
 		fmt.Println()
-		end, wrote, ok := streamReply(conn, entry, prompter)
+		end, wrote, ok := streamReply(conn, hooks, prompter)
 		if !ok {
 			// The stream errored or closed before the turn settled; the
 			// error was already reported. Output below reports the outcome.
@@ -610,7 +638,7 @@ repl:
 // It also reports whether any visible content (text or a tool call) was
 // printed, so the caller can space the turn footer correctly when a turn
 // produces nothing (e.g. an immediate failure).
-func streamReply(conn *aix.AgentConnection[any], entry agentEntry, p *Prompter) (end *aix.TurnEnd, wrote bool, ok bool) {
+func streamReply[State any](conn *aix.AgentConnection[State], hooks agentHooks, p *Prompter) (end *aix.TurnEnd, wrote bool, ok bool) {
 	for {
 		interrupts, e, w, sok := streamTurn(conn)
 		wrote = wrote || w
@@ -620,7 +648,7 @@ func streamReply(conn *aix.AgentConnection[any], entry agentEntry, p *Prompter) 
 		if len(interrupts) == 0 {
 			return e, wrote, true
 		}
-		resume := resolveInterrupts(entry, p, interrupts)
+		resume := resolveInterrupts(hooks, p, interrupts)
 		if resume == nil {
 			// Nothing could be resolved (no handler, or the handler declined
 			// every interrupt). Surface the interrupted turn as-is rather
@@ -651,7 +679,7 @@ func streamReply(conn *aix.AgentConnection[any], entry agentEntry, p *Prompter) 
 //
 // The spinner is stopped (and erased) the moment any visible content is about
 // to print, so the reply or tool line takes over the line it occupied.
-func streamTurn(conn *aix.AgentConnection[any]) (interrupts []*ai.Part, end *aix.TurnEnd, wrote bool, ok bool) {
+func streamTurn[State any](conn *aix.AgentConnection[State]) (interrupts []*ai.Part, end *aix.TurnEnd, wrote bool, ok bool) {
 	sp := startSpinner("Thinking")
 	stopSpinner := func() {
 		if sp != nil {
@@ -733,13 +761,13 @@ func formatToolInput(input any) string {
 // matching half of aix.ToolResume by part kind — a restart is a tool
 // request, a direct response is a tool response — so handlers never deal
 // with the wire shape. Returns nil when nothing could be resolved.
-func resolveInterrupts(entry agentEntry, p *Prompter, interrupts []*ai.Part) *aix.ToolResume {
-	if entry.onInterrupt == nil {
+func resolveInterrupts(hooks agentHooks, p *Prompter, interrupts []*ai.Part) *aix.ToolResume {
+	if hooks.onInterrupt == nil {
 		// An interruptible tool fired on an agent the CLI wasn't told how to
 		// resume. That's a wiring bug in the sample, not user input, so say
 		// so plainly instead of hanging on a prompt that never comes.
 		fmt.Printf("\n[%s paused on %d tool interrupt(s), but no interrupt handler is registered for it]\n",
-			entry.agent.Name(), len(interrupts))
+			hooks.name, len(interrupts))
 		return nil
 	}
 	// No separator needed here: the interrupting tool's request was already
@@ -747,7 +775,7 @@ func resolveInterrupts(entry agentEntry, p *Prompter, interrupts []*ai.Part) *ai
 	// sets the upcoming prompts apart from the reply.
 	resume := &aix.ToolResume{}
 	for _, interrupt := range interrupts {
-		part, err := entry.onInterrupt(p, interrupt)
+		part, err := hooks.onInterrupt(p, interrupt)
 		switch {
 		case err != nil:
 			fmt.Fprintf(os.Stderr, "Interrupt handler error: %v\n", err)
@@ -774,7 +802,7 @@ func resolveInterrupts(entry agentEntry, p *Prompter, interrupts []*ai.Part) *ai
 // detach highlighted in yellow. Each segment carries its own reset so the
 // yellow status doesn't bleed into the surrounding dim text. A pending
 // snapshot has no finalized messages yet, so its count is omitted.
-func summarizeLatest(ctx context.Context, a *aix.Agent[any], sessionID string) string {
+func summarizeLatest[State any](ctx context.Context, a *aix.Agent[State], sessionID string) string {
 	if sessionID == "" {
 		return ""
 	}
@@ -805,7 +833,7 @@ func summarizeLatest(ctx context.Context, a *aix.Agent[any], sessionID string) s
 // The status subscription is the optional SnapshotSubscriber capability of
 // the store contract. A store without it cannot stream background progress,
 // so we fall back to reading the snapshot once and returning it as-is.
-func waitForFinalize(ctx context.Context, a *aix.Agent[any], snapshotID string) (*aix.SessionSnapshot[any], error) {
+func waitForFinalize[State any](ctx context.Context, a *aix.Agent[State], snapshotID string) (*aix.SessionSnapshot[State], error) {
 	store := a.Store()
 	subscriber, ok := store.(aix.SnapshotSubscriber)
 	if !ok {

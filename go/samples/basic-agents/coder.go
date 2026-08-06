@@ -62,7 +62,7 @@ func defineCustomAgent(g *genkit.Genkit) *aix.Agent[any] {
 			}
 			return sess.Result(), nil
 		},
-		aix.WithSessionStore(mustStore(name)),
+		aix.WithSessionStore(mustStore[any](name)),
 		aix.WithDescription[any]("Concise code helper (custom per-turn loop)"),
 	)
 }

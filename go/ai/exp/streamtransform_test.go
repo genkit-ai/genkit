@@ -24,6 +24,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // TestStreamTransform_RedactsModelChunksOnWire verifies a stream transform that
@@ -277,7 +278,7 @@ func TestStreamTransform_ReshapesTurnEnd(t *testing.T) {
 func TestStreamTransform_ErrorFailsInvocationClosed(t *testing.T) {
 	transform := func(_ context.Context, c *AgentStreamChunk) (*AgentStreamChunk, error) {
 		if c.ModelChunk != nil {
-			return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape chunk")
+			return nil, status.Errorf(status.ErrPermissionDenied, "cannot shape chunk")
 		}
 		return c, nil
 	}

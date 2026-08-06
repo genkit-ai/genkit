@@ -111,7 +111,7 @@ func (o *genkitOptions) apply(gOpts *genkitOptions) error {
 }
 
 // WithPlugins provides a list of plugins to initialize when creating the Genkit instance.
-// Each plugin's [Plugin.Init] method will be called sequentially during [Init].
+// Each plugin's [api.Plugin.Init] method will be called sequentially during [Init].
 // This option can only be applied once.
 func WithPlugins(plugins ...api.Plugin) GenkitOption {
 	return &genkitOptions{Plugins: plugins}
@@ -830,12 +830,47 @@ func LookupMiddleware(g *Genkit, name string) *ai.MiddlewareDesc {
 //   - [ai.WithConfig]: Set generation parameters (temperature, max tokens, etc.)
 //
 // Prompt Content:
+//
+// Only [ai.WithSystem], [ai.WithPrompt], and [ai.WithMessagesTemplate] take
+// dotprompt templates. Everything else is content the caller already produced
+// and is used verbatim, so it may hold user data and literal braces. The first
+// two each fill a single message whose role is fixed, so a {{role}} marker in
+// either is an error; [ai.WithMessagesTemplate] is where turns with their own
+// roles belong.
+//
+// The ...Fn options take a function that declares its own input type. Genkit
+// converts whatever the caller supplied, so one function serves an in-process
+// call, the default from [ai.WithInputType], and the reflection API alike. An
+// input that cannot be converted fails with [ai.ErrInputTypeMismatch].
+//
 //   - [ai.WithPrompt]: Set the user prompt template (supports {{variable}} syntax)
-//   - [ai.WithPromptFn]: Set a function that generates the user prompt dynamically
+//   - [ai.WithPromptFn]: Set a function that generates the user prompt from the input
+//   - [ai.WithPromptParts]: Set fixed multi-part user content, such as text plus media
+//   - [ai.WithPromptPartsFn]: As above, derived from the input
 //   - [ai.WithSystem]: Set system instructions template
-//   - [ai.WithSystemFn]: Set a function that generates system instructions dynamically
+//   - [ai.WithSystemFn]: Set a function that generates system instructions from the input
+//   - [ai.WithSystemParts]: Set fixed multi-part system content, such as text plus media
+//   - [ai.WithSystemPartsFn]: As above, derived from the input
 //   - [ai.WithMessages]: Provide static conversation history
+//   - [ai.WithMessagesTemplate]: Provide the conversation as a multi-turn template
 //   - [ai.WithMessagesFn]: Provide a function that generates conversation history
+//
+// Setting any of the three makes the prompt responsible for the conversation
+// passed to [ai.Prompt.Execute]: it is no longer spliced in automatically, and
+// the prompt places it with {{history}} in the template or
+// [ai.HistoryFromContext] in the function. A prompt that sets none of them has
+// the caller's conversation used directly, between the system message and the
+// user prompt.
+//
+// Repeats merge by the rules in the [ai] package doc: the four system options
+// share one message and the four prompt options share another, so the last one
+// set in each group wins, while documents and messages accumulate. The one
+// refused combination is [ai.WithMessagesTemplate] alongside [ai.WithMessages]
+// or [ai.WithMessagesFn], which panics here.
+//
+// Context Documents:
+//   - [ai.WithDocs]: Attach a fixed set of context documents
+//   - [ai.WithDocsFn]: Select context documents from the input, e.g. via a retriever
 //
 // Input Schema:
 //   - [ai.WithInputType]: Set input schema from a Go type (provides default values)
@@ -1029,12 +1064,17 @@ func LookupDataPrompt[In, Out any](g *Genkit, name string) *ai.DataPrompt[In, Ou
 
 // GenerateWithRequest performs a model generation request using explicitly provided
 // [ai.GenerateActionOptions]. This function is typically used in conjunction with
-// prompts defined via [DefinePrompt], where [ai.prompt.Render] produces the
+// prompts defined via [DefinePrompt], where [ai.Prompt.Render] produces the
 // `actionOpts`. It allows fine-grained control over the request sent to the model.
 //
 // It accepts optional model middleware (`mw`) for intercepting/modifying the request/response,
 // and an optional streaming callback (`cb`) of type [ai.ModelStreamCallback] to receive
 // response chunks as they arrive.
+//
+// [ai.Prompt.Execute] attaches the conversation for the render; pairing Render
+// with this function does not, so a prompt that places the conversation itself
+// sees none unless the render context carries one. Pass it with
+// [ai.NewHistoryContext], which is how the agent runtime drives a prompt.
 //
 // Example (using options rendered from a prompt):
 //
@@ -1067,12 +1107,24 @@ func GenerateWithRequest(ctx context.Context, g *Genkit, actionOpts *ai.Generate
 //   - [ai.WithConfig]: Set generation parameters (temperature, max tokens, etc.)
 //
 // Prompting:
+//
+// Nothing here is templated: Generate has no prompt input to render against, so
+// content functions receive the zero value of their input type. Use
+// [DefinePrompt] for templates and input-driven content.
+//
 //   - [ai.WithPrompt]: Set the user prompt (supports format strings)
 //   - [ai.WithPromptFn]: Set a function that generates the user prompt dynamically
+//   - [ai.WithPromptParts]: Set fixed multi-part user content, such as text plus media
+//   - [ai.WithPromptPartsFn]: As above, from a function
 //   - [ai.WithSystem]: Set system instructions
 //   - [ai.WithSystemFn]: Set a function that generates system instructions dynamically
+//   - [ai.WithSystemParts]: Set fixed multi-part system content, such as text plus media
+//   - [ai.WithSystemPartsFn]: As above, from a function
 //   - [ai.WithMessages]: Provide conversation history
 //   - [ai.WithMessagesFn]: Provide a function that generates conversation history
+//
+// [ai.WithMessagesTemplate] is absent by design: compiling a template needs a
+// prompt, so it is a [ai.PromptOption] and passing it here does not compile.
 //
 // Tools and Resources:
 //   - [ai.WithTools]: Enable tools the model can call
@@ -1541,7 +1593,7 @@ func LoadPromptDirFromFS(g *Genkit, fsys fs.FS, dir, namespace string) {
 }
 
 // LoadPrompt loads a single `.prompt` file specified by `path` into the registry,
-// associating it with the given `namespace`, and returns the resulting [ai.prompt].
+// associating it with the given `namespace`, and returns the resulting [ai.Prompt].
 //
 // The `path` should be the full path to the `.prompt` file.
 // The `namespace` acts as a prefix to the prompt name (e.g., namespace "myApp" and
@@ -1629,8 +1681,8 @@ func DefineHelper(g *Genkit, name string, fn any) {
 	g.reg.RegisterHelper(name, fn)
 }
 
-// DefineFormats defines new [ai.Formatter]s and registers them in the registry,
-// each under the name returned by its Name method.
+// DefineFormats defines new formatters ([ai.Formatter]) and registers them in
+// the registry, each under the name returned by its Name method.
 // Formatters control how model responses are structured and parsed.
 //
 // Formatters can be used with [ai.WithOutputFormat] to inject specific formatting

@@ -30,8 +30,16 @@ import "github.com/firebase/genkit/go/ai"
 //		WithSessionStore(store),
 //	)
 //
-// To give the template a default render input, include [ai.WithInputType] among
-// the options. For an agent backed by a prompt already in the registry (e.g.
-// one defined via [ai.DefinePrompt] or loaded from a .prompt file), use
-// [DefinePromptAgent] instead, which takes no InlinePrompt.
+// Any option [genkit.DefinePrompt] accepts is valid here; see its documentation
+// for the full list. To give the template a default render input, include
+// [ai.WithInputType] among the options. For an agent backed by a prompt already
+// in the registry (e.g. one defined via [ai.DefinePrompt] or loaded from a
+// .prompt file), use [DefinePromptAgent] instead, which takes no InlinePrompt.
+//
+// The session's conversation is handed to the prompt on every turn, under the
+// usual placement rules: a prompt that sets [ai.WithMessages],
+// [ai.WithMessagesTemplate], or [ai.WithMessagesFn] must place it with
+// {{history}} or [ai.HistoryFromContext], which is what lets an agent trim or
+// summarize its own history. One that sets none of them, the common case, has
+// it placed between the system message and the user prompt.
 type InlinePrompt []ai.PromptOption
