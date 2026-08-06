@@ -568,16 +568,16 @@ scheduleQueries:
 }
 
 // ResolveAction dynamically creates a model action on demand.
-func (o *Ollama) ResolveAction(atype api.ActionType, name string) api.Action {
+func (o *Ollama) ResolveAction(atype api.ActionType, id string) api.Action {
 	if atype != api.ActionTypeModel {
 		return nil
 	}
 	supports := &defaultOllamaSupports
-	if cached, ok := o.cachedModelCapabilities(name, ""); ok {
+	if cached, ok := o.cachedModelCapabilities(id, ""); ok {
 		cachedSupports := cached.supports
 		supports = &cachedSupports
 	}
-	model := o.newModel(name, ai.ModelOptions{Supports: supports})
+	model := o.newModel(id, ai.ModelOptions{Supports: supports})
 	if action, ok := model.(api.Action); ok {
 		return action
 	}
