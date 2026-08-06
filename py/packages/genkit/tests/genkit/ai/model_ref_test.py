@@ -10,8 +10,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 from pydantic import BaseModel
 
-from genkit._core._typing import ModelInfo, Supports
-from genkit.model import ModelConfig, ModelRef, model_ref
+from genkit.model import ModelConfig, ModelInfo, ModelRef, Supports, model_ref
 
 
 class CustomConfig(BaseModel):
@@ -89,6 +88,19 @@ def test_model_ref_dataclass_value_equality() -> None:
     assert ref1 != 'm1'
 
 
+def test_model_ref_is_unhashable() -> None:
+    """ModelRef opts out of hashing so set/dict use doesn't fail only when config is set."""
+    ref = model_ref('m1', config_schema=CustomConfig, config=CustomConfig(temperature=0.5))
+    with pytest.raises(TypeError, match='unhashable type'):
+        hash(ref)
+
+
+def test_model_ref_invalid_config_type_raises() -> None:
+    """ModelRef raises TypeError when config is not an instance of config_schema."""
+    with pytest.raises(TypeError, match='config must be an instance of CustomConfig'):
+        model_ref('m1', config_schema=CustomConfig, config={'temperature': 0.7})  # type: ignore[arg-type]
+
+
 def test_model_ref_preserves_version_and_info_metadata() -> None:
     """model_ref() stamps version and ModelInfo metadata on the ModelRef instance."""
     info = ModelInfo(supports=Supports(multiturn=True, media=True))
@@ -103,5 +115,6 @@ def test_model_ref_preserves_version_and_info_metadata() -> None:
     assert ref.name == 'googleai/veo-2'
     assert ref.version == '001'
     assert ref.info is info
+    assert ref.info is not None
     assert ref.info.supports is not None
     assert ref.info.supports.multiturn is True
