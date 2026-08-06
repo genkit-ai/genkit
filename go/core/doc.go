@@ -178,9 +178,9 @@ from an API), implement [api.DynamicPlugin]:
 		}
 	}
 
-	func (p *DynamicModelPlugin) ResolveAction(atype api.ActionType, name string) api.Action {
+	func (p *DynamicModelPlugin) ResolveAction(atype api.ActionType, id string) api.Action {
 		// Create and return the action on demand
-		return createModel(name)
+		return createModel(id)
 	}
 
 # Background Actions
