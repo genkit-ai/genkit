@@ -18,7 +18,9 @@
 package tracing
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -411,22 +413,73 @@ type spanMetadata struct {
 	Metadata        map[string]string // additional custom metadata
 }
 
+// telemetryJSONString serializes a value for a span attribute without keeping
+// inline base64 media data in the exported trace. The media URI header and a
+// redaction marker are retained, while remote media URLs pass through intact.
+func telemetryJSONString(value any) string {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return base.JSONString(value)
+	}
+	if !bytes.Contains(raw, []byte("data:")) || !bytes.Contains(raw, []byte(";base64")) {
+		return string(raw)
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return base.JSONString(value)
+	}
+	return base.JSONString(redactMediaData(decoded))
+}
+
+func redactMediaData(value any) any {
+	switch value := value.(type) {
+	case string:
+		if redacted, ok := redactMediaDataURL(value); ok {
+			return redacted
+		}
+	case []any:
+		for i, item := range value {
+			value[i] = redactMediaData(item)
+		}
+	case map[string]any:
+		for key, item := range value {
+			value[key] = redactMediaData(item)
+		}
+	}
+	return value
+}
+
+func redactMediaDataURL(value string) (string, bool) {
+	metadata, _, ok := strings.Cut(value, ",")
+	if !ok {
+		return "", false
+	}
+	lowerMetadata := strings.ToLower(metadata)
+	if !strings.HasPrefix(lowerMetadata, "data:") || !strings.HasSuffix(lowerMetadata, ";base64") {
+		return "", false
+	}
+	return metadata + ",[redacted]", true
+}
+
 // attributes returns some information about the spanMetadata
 // as a slice of OpenTelemetry attributes.
 func (sm *spanMetadata) attributes() []attribute.KeyValue {
 	kvs := []attribute.KeyValue{
 		attribute.String("genkit:name", sm.Name),
 		attribute.String("genkit:state", string(sm.State)),
-		attribute.String("genkit:input", base.JSONString(sm.Input)),
+		attribute.String("genkit:input", telemetryJSONString(sm.Input)),
 		attribute.String("genkit:path", sm.Path),
 	}
 
 	if sm.Init != nil {
-		kvs = append(kvs, attribute.String("genkit:init", base.JSONString(sm.Init)))
+		kvs = append(kvs, attribute.String("genkit:init", telemetryJSONString(sm.Init)))
 	}
 
 	if sm.Output != nil {
-		kvs = append(kvs, attribute.String("genkit:output", base.JSONString(sm.Output)))
+		kvs = append(kvs, attribute.String("genkit:output", telemetryJSONString(sm.Output)))
 	}
 
 	if sm.Type != "" {
@@ -494,10 +547,10 @@ func (sm *spanMetadata) startAttributes() []attribute.KeyValue {
 // match attributes() so the end write reasserts them.
 func (sm *spanMetadata) inputAttributes() []attribute.KeyValue {
 	kvs := []attribute.KeyValue{
-		attribute.String("genkit:input", base.JSONString(sm.Input)),
+		attribute.String("genkit:input", telemetryJSONString(sm.Input)),
 	}
 	if sm.Init != nil {
-		kvs = append(kvs, attribute.String("genkit:init", base.JSONString(sm.Init)))
+		kvs = append(kvs, attribute.String("genkit:init", telemetryJSONString(sm.Init)))
 	}
 	return kvs
 }
