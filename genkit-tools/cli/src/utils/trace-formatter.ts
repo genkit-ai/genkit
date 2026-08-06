@@ -288,7 +288,10 @@ function renderSpanTree(
     const itemPrefix = childPrefix + (itemIsLast ? '   ' : '│  ');
 
     if (item.type === 'input') {
-      const sanitizedInput = parseAndSanitizeJson(item.data, true /* keepBase64 */);
+      const sanitizedInput = parseAndSanitizeJson(
+        item.data,
+        true /* keepBase64 */
+      );
       const compactInput = formatCompactValue(sanitizedInput, '', 'Input');
       if (compactInput.length > 0) {
         lines.push(`${childPrefix}${itemConnector}${compactInput[0]}`);
@@ -297,7 +300,10 @@ function renderSpanTree(
         }
       }
     } else if (item.type === 'output') {
-      const sanitizedOutput = parseAndSanitizeJson(item.data, true /* keepBase64 */);
+      const sanitizedOutput = parseAndSanitizeJson(
+        item.data,
+        true /* keepBase64 */
+      );
       const compactOutput = formatCompactValue(sanitizedOutput, '', 'Output');
       if (compactOutput.length > 0) {
         lines.push(`${childPrefix}${itemConnector}${compactOutput[0]}`);
