@@ -675,14 +675,13 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             return None
         try:
             doc = SnapshotDoc.model_validate(snap.to_dict())
-        except Exception:
-            # Don't treat a corrupt doc as missing — save_snapshot would otherwise
-            # mint a fresh checkpoint and advance the pointer over the bad leaf.
-            logger.warning(
-                "Snapshot document '%s' failed validation; treating as unreadable",
-                snap.reference.path,
-            )
-            return None
+        except Exception as e:
+            # Fail loud: returning None would look like "missing" and let
+            # save_snapshot overwrite the bad leaf as a brand-new checkpoint.
+            raise GenkitError(
+                status='DATA_LOSS',
+                message=f"FirestoreSessionStore: invalid snapshot document '{snap.reference.path}'.",
+            ) from e
         return await self._reconstruct_from(
             transaction,
             checkpoint_id=doc.checkpoint_id,
@@ -739,8 +738,11 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 return None
             try:
                 checkpoint_doc = SnapshotDoc.model_validate(checkpoint_snap.to_dict())
-            except Exception:
-                return None
+            except Exception as e:
+                raise GenkitError(
+                    status='DATA_LOSS',
+                    message=f"FirestoreSessionStore: invalid checkpoint document '{checkpoint_ref.path}'.",
+                ) from e
             if checkpoint_doc.snapshot_id != target_id:
                 logger.warning(
                     "Checkpoint document '%s' snapshotId mismatch (got '%s', expected '%s')",
@@ -763,8 +765,11 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 return None
             try:
                 seg_doc = SnapshotDoc.model_validate(seg_snap.to_dict())
-            except Exception:
-                return None
+            except Exception as e:
+                raise GenkitError(
+                    status='DATA_LOSS',
+                    message=f"FirestoreSessionStore: invalid segment document '{ref.path}'.",
+                ) from e
             state = apply_json_patch(doc=state, patch=patch_from_json(seg_doc.state_patch))
             target_doc = seg_doc
 

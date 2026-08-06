@@ -501,6 +501,40 @@ async def test_firestore_session_store_corrupt_pointer_returns_none() -> None:
 
 
 @pytest.mark.asyncio
+async def test_firestore_session_store_invalid_snapshot_doc_raises() -> None:
+    """Schema-invalid snapshot docs fail loud instead of looking like a miss."""
+    h = FakeStoreHarness()
+    h.docs[_snap_path('snap-bad')] = {
+        'snapshotId': 'snap-bad',
+        'sessionId': 'sess-1',
+        'createdAt': '2026-07-03T00:00:00Z',
+        'kind': 'not-a-kind',
+        'checkpointId': 'snap-bad',
+        'checkpointShardCount': 1,
+        'segmentPath': [],
+    }
+    before = dict(h.docs[_snap_path('snap-bad')])
+    store = h.store()
+
+    with pytest.raises(GenkitError) as exc_info:
+        await store.get_snapshot(snapshot_id='snap-bad')
+    assert exc_info.value.status == 'DATA_LOSS'
+
+    with pytest.raises(GenkitError) as exc_info:
+        await store.save_snapshot(
+            'snap-bad',
+            lambda _e: SessionSnapshot(
+                snapshot_id='snap-bad',
+                session_id='sess-1',
+                created_at='2026-07-03T00:00:01Z',
+                state=SessionState(session_id='sess-1'),
+            ),
+        )
+    assert exc_info.value.status == 'DATA_LOSS'
+    assert h.docs[_snap_path('snap-bad')] == before
+
+
+@pytest.mark.asyncio
 async def test_firestore_session_store_oversized_diff_promotes_to_checkpoint() -> None:
     """A patch larger than shard_size is stored as a sharded checkpoint."""
     h = FakeStoreHarness()
