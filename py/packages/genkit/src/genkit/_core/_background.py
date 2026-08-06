@@ -219,7 +219,6 @@ def define_background_model(
         ...     await asyncio.sleep(5)
         ...     op = await action.check(op)
     """
-    label = label or name
     action_key = make_action_key(ActionKind.BACKGROUND_MODEL, name)
 
     # Build model metadata
