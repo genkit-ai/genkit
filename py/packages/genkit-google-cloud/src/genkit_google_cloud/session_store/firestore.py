@@ -130,7 +130,8 @@ class SnapshotWriteMeta(BaseModel):
     kind: Literal['diff', 'checkpoint']
     checkpoint_id: str
     checkpoint_shard_count: int
-    segment_path: list[str] = Field(default_factory=list)
+    # [] means checkpoint; a missing field is corrupt, not an empty path.
+    segment_path: list[str]
     state_patch: list[dict[str, Any]] | None = None
 
 
@@ -145,7 +146,7 @@ class ParentChainMeta(BaseModel):
 
     checkpoint_id: str
     checkpoint_shard_count: int
-    segment_path: list[str] = Field(default_factory=list)
+    segment_path: list[str]
 
 
 class SnapshotDoc(BaseModel):
@@ -169,7 +170,8 @@ class SnapshotDoc(BaseModel):
     kind: Literal['diff', 'checkpoint']
     checkpoint_id: str
     checkpoint_shard_count: int
-    segment_path: list[str] = Field(default_factory=list)
+    # [] means checkpoint; a missing field is corrupt, not an empty path.
+    segment_path: list[str]
     state_patch: list[dict[str, Any]] | None = None
 
     def to_session_snapshot(self, state_raw: dict[str, Any] | SessionState | None = None) -> SessionSnapshot:
@@ -201,7 +203,7 @@ class PointerDoc(BaseModel):
     current_snapshot_id: str | None = None
     checkpoint_id: str | None = None
     checkpoint_shard_count: int | None = None
-    segment_path: list[str] = Field(default_factory=list)
+    segment_path: list[str]
     is_ambiguous: bool = False
     leaves: dict[str, str] = Field(default_factory=dict)
 

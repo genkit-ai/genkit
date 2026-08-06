@@ -493,7 +493,13 @@ async def test_firestore_session_store_corrupt_pointer_returns_none() -> None:
     h.docs[_shard_path('snap-live', 0)] = {
         'chunk': json.dumps({'sessionId': 'sess-corrupt'}).encode('utf-8'),
     }
-    h.docs[_pointer_path('sess-corrupt')] = {'currentSnapshotId': 'snap-deleted'}
+    # Structurally valid pointer whose leaf is gone; omit checkpoint meta so
+    # lookup falls through to snapshot-id reconstruct (None), not DATA_LOSS
+    # from missing shards.
+    h.docs[_pointer_path('sess-corrupt')] = {
+        'currentSnapshotId': 'snap-deleted',
+        'segmentPath': [],
+    }
 
     store = h.store()
     assert await store.get_snapshot(session_id='sess-corrupt') is None
@@ -532,6 +538,25 @@ async def test_firestore_session_store_invalid_snapshot_doc_raises() -> None:
         )
     assert exc_info.value.status == 'DATA_LOSS'
     assert h.docs[_snap_path('snap-bad')] == before
+
+
+@pytest.mark.asyncio
+async def test_firestore_session_store_missing_segment_path_raises() -> None:
+    """segmentPath is required on snapshot docs (empty list is ok; absent is not)."""
+    h = FakeStoreHarness()
+    h.docs[_snap_path('snap-no-seg')] = {
+        'snapshotId': 'snap-no-seg',
+        'sessionId': 'sess-1',
+        'createdAt': '2026-07-03T00:00:00Z',
+        'kind': 'checkpoint',
+        'checkpointId': 'snap-no-seg',
+        'checkpointShardCount': 1,
+    }
+    store = h.store()
+
+    with pytest.raises(GenkitError) as exc_info:
+        await store.get_snapshot(snapshot_id='snap-no-seg')
+    assert exc_info.value.status == 'DATA_LOSS'
 
 
 @pytest.mark.asyncio
