@@ -185,11 +185,9 @@ func (v *VertexAI) Init(ctx context.Context) []api.Action {
 	return []api.Action{}
 }
 
-// DefineModel defines an unknown model with the given name.
-// The second argument describes the capability of the model.
-// Use [IsDefinedModel] to determine if a model is already defined.
-// After [Init] is called, only the known models are defined.
-func (ga *GoogleAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
+// buildModel builds an unregistered Gemini model. A nil opts takes the
+// capabilities the plugin knows for that name.
+func (ga *GoogleAI) buildModel(name string, opts *ai.ModelOptions) (*ai.ModelAction, error) {
 	ga.mu.Lock()
 	defer ga.mu.Unlock()
 	if !ga.initted {
@@ -204,7 +202,7 @@ func (ga *GoogleAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOpt
 		var ok bool
 		modelOpts, ok := models[name]
 		if !ok {
-			return nil, fmt.Errorf("GoogleAI.DefineModel: called with unknown model %q and nil ModelOptions", name)
+			return nil, fmt.Errorf("GoogleAI: called with unknown model %q and nil ModelOptions", name)
 		}
 		opts = &modelOpts
 	}
@@ -212,16 +210,41 @@ func (ga *GoogleAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOpt
 	return newModel(ga.gclient, name, *opts), nil
 }
 
+// RegisterModel registers a model with g and returns it. The plugin supplies
+// the implementation; opts describes what the model supports, and a nil opts
+// takes the capabilities the plugin knows for that name, which makes an
+// unknown name with a nil opts an error.
+//
+// Registering a name that is already registered panics; [GoogleAI.Init]
+// registers every known model, so register a model before its first use or
+// guard with [GoogleAI.IsDefinedModel].
+func (ga *GoogleAI) RegisterModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
+	model, err := ga.buildModel(name, opts)
+	if err != nil {
+		return nil, err
+	}
+	genkit.RegisterAction(g, model)
+	return model, nil
+}
+
 // DefineModel defines an unknown model with the given name.
 // The second argument describes the capability of the model.
-// Use [IsDefinedModel] to determine if a model is already defined.
-// After [Init] is called, only the known models are defined.
+//
+// Deprecated: use [GoogleAI.RegisterModel], which also registers the model
+// with g so that generating by that name uses it. This method only builds the
+// model and ignores g, leaving it reachable through the returned value alone.
+func (ga *GoogleAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
+	return ga.buildModel(name, opts)
+}
+
+// buildModel builds an unregistered Gemini model. A nil opts takes the
+// capabilities the plugin knows for that name.
 //
 // Tuned Gemini endpoints are accepted in either the short form
 // `endpoints/ID` or the full resource path
 // `projects/PROJECT/locations/LOCATION/endpoints/ID`. When opts is nil the
 // caller gets the default Gemini capability set.
-func (v *VertexAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
+func (v *VertexAI) buildModel(name string, opts *ai.ModelOptions) (*ai.ModelAction, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if !v.initted {
@@ -239,7 +262,7 @@ func (v *VertexAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOpti
 			}
 			modelOpts, ok := models[name]
 			if !ok {
-				return nil, fmt.Errorf("VertexAI.DefineModel: called with unknown model %q and nil ModelOptions", name)
+				return nil, fmt.Errorf("VertexAI: called with unknown model %q and nil ModelOptions", name)
 			}
 			opts = &modelOpts
 		}
@@ -248,8 +271,32 @@ func (v *VertexAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOpti
 	return newModel(v.gclient, name, *opts), nil
 }
 
-// DefineEmbedder defines an embedder with a given name.
-func (ga *GoogleAI) DefineEmbedder(g *genkit.Genkit, name string, embedOpts *ai.EmbedderOptions) (ai.Embedder, error) {
+// RegisterModel registers a model with g and returns it; see
+// [GoogleAI.RegisterModel]. Tuned Gemini endpoints are accepted in either the
+// short form `endpoints/ID` or the full resource path
+// `projects/PROJECT/locations/LOCATION/endpoints/ID`, and take the default
+// Gemini capability set when opts is nil.
+func (v *VertexAI) RegisterModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
+	model, err := v.buildModel(name, opts)
+	if err != nil {
+		return nil, err
+	}
+	genkit.RegisterAction(g, model)
+	return model, nil
+}
+
+// DefineModel defines an unknown model with the given name.
+// The second argument describes the capability of the model.
+//
+// Deprecated: use [VertexAI.RegisterModel], which also registers the model
+// with g so that generating by that name uses it. This method only builds the
+// model and ignores g, leaving it reachable through the returned value alone.
+func (v *VertexAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
+	return v.buildModel(name, opts)
+}
+
+// buildEmbedder builds an unregistered embedder.
+func (ga *GoogleAI) buildEmbedder(name string, embedOpts *ai.EmbedderOptions) (*ai.EmbedderAction, error) {
 	ga.mu.Lock()
 	defer ga.mu.Unlock()
 	if !ga.initted {
@@ -258,8 +305,29 @@ func (ga *GoogleAI) DefineEmbedder(g *genkit.Genkit, name string, embedOpts *ai.
 	return newEmbedder(ga.gclient, name, embedOpts), nil
 }
 
+// RegisterEmbedder registers an embedder with g and returns it. Registering a
+// name that is already registered panics, so guard with
+// [GoogleAI.IsDefinedEmbedder] when in doubt.
+func (ga *GoogleAI) RegisterEmbedder(g *genkit.Genkit, name string, embedOpts *ai.EmbedderOptions) (ai.Embedder, error) {
+	embedder, err := ga.buildEmbedder(name, embedOpts)
+	if err != nil {
+		return nil, err
+	}
+	genkit.RegisterAction(g, embedder)
+	return embedder, nil
+}
+
 // DefineEmbedder defines an embedder with a given name.
-func (v *VertexAI) DefineEmbedder(g *genkit.Genkit, name string, embedOpts *ai.EmbedderOptions) (ai.Embedder, error) {
+//
+// Deprecated: use [GoogleAI.RegisterEmbedder], which also registers the
+// embedder with g so that embedding by that name uses it. This method only
+// builds the embedder and ignores g.
+func (ga *GoogleAI) DefineEmbedder(g *genkit.Genkit, name string, embedOpts *ai.EmbedderOptions) (ai.Embedder, error) {
+	return ga.buildEmbedder(name, embedOpts)
+}
+
+// buildEmbedder builds an unregistered embedder.
+func (v *VertexAI) buildEmbedder(name string, embedOpts *ai.EmbedderOptions) (*ai.EmbedderAction, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if !v.initted {
@@ -268,14 +336,55 @@ func (v *VertexAI) DefineEmbedder(g *genkit.Genkit, name string, embedOpts *ai.E
 	return newEmbedder(v.gclient, name, embedOpts), nil
 }
 
+// RegisterEmbedder registers an embedder with g and returns it; see
+// [GoogleAI.RegisterEmbedder].
+func (v *VertexAI) RegisterEmbedder(g *genkit.Genkit, name string, embedOpts *ai.EmbedderOptions) (ai.Embedder, error) {
+	embedder, err := v.buildEmbedder(name, embedOpts)
+	if err != nil {
+		return nil, err
+	}
+	genkit.RegisterAction(g, embedder)
+	return embedder, nil
+}
+
+// DefineEmbedder defines an embedder with a given name.
+//
+// Deprecated: use [VertexAI.RegisterEmbedder], which also registers the
+// embedder with g so that embedding by that name uses it. This method only
+// builds the embedder and ignores g.
+func (v *VertexAI) DefineEmbedder(g *genkit.Genkit, name string, embedOpts *ai.EmbedderOptions) (ai.Embedder, error) {
+	return v.buildEmbedder(name, embedOpts)
+}
+
+// isDefined reports whether an action of atype is registered with g under the
+// provider-prefixed name. The lookup deliberately does not resolve
+// dynamically: these plugins resolve actions on demand, so a resolving lookup
+// would register the very action the caller is checking for and answer true
+// for any name.
+func isDefined(g *genkit.Genkit, atype api.ActionType, provider, name string) bool {
+	return genkit.LookupAction(g, fmt.Sprintf("/%s/%s", atype, api.NewName(provider, name))) != nil
+}
+
+// IsDefinedModel reports whether the named model is defined, which is the
+// guard against registering one twice (see [GoogleAI.RegisterModel]).
+func (ga *GoogleAI) IsDefinedModel(g *genkit.Genkit, name string) bool {
+	return isDefined(g, api.ActionTypeModel, googleAIProvider, name)
+}
+
+// IsDefinedModel reports whether the named model is defined, which is the
+// guard against registering one twice (see [VertexAI.RegisterModel]).
+func (v *VertexAI) IsDefinedModel(g *genkit.Genkit, name string) bool {
+	return isDefined(g, api.ActionTypeModel, vertexAIProvider, name)
+}
+
 // IsDefinedEmbedder reports whether the named [Embedder] is defined by this plugin.
 func (ga *GoogleAI) IsDefinedEmbedder(g *genkit.Genkit, name string) bool {
-	return genkit.LookupEmbedder(g, api.NewName(googleAIProvider, name)) != nil
+	return isDefined(g, api.ActionTypeEmbedder, googleAIProvider, name)
 }
 
 // IsDefinedEmbedder reports whether the named [Embedder] is defined by this plugin.
 func (v *VertexAI) IsDefinedEmbedder(g *genkit.Genkit, name string) bool {
-	return genkit.LookupEmbedder(g, api.NewName(vertexAIProvider, name)) != nil
+	return isDefined(g, api.ActionTypeEmbedder, vertexAIProvider, name)
 }
 
 // GoogleAIModel returns the [ai.Model] with the given name.
