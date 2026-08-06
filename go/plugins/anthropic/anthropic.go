@@ -113,11 +113,15 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
 	// Trim before resolving, so a prefixed name still hits knownModels.
 	name = strings.TrimPrefix(name, provider+"/")
-	if opts == nil {
-		resolved := modelOptions(name)
-		opts = &resolved
+
+	var modelOpts ai.ModelOptions
+	if opts != nil {
+		modelOpts = *opts
+	} else {
+		modelOpts = modelOptions(name)
 	}
-	model := newModel(a.aclient, name, name, *opts)
+
+	model := newModel(a.aclient, name, name, modelOpts)
 	genkit.RegisterAction(g, model)
 	return model, nil
 }
