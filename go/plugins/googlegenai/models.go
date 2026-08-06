@@ -167,6 +167,7 @@ var (
 		gemini35Flash,
 		gemini35FlashLite,
 		gemini31ProPreview,
+		gemini31FlashLite,
 		gemini31FlashImage,
 		gemini31FlashLiteImage,
 		gemini3ProImage,

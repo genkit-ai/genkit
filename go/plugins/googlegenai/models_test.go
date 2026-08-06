@@ -101,24 +101,17 @@ func TestNewGeminiModelsResolveToRegisteredEntries(t *testing.T) {
 	}
 }
 
-// TestNewGeminiModelsProviderSplit pins the per-provider registration from the
-// ticket: GoogleAI gets all except gemini-3.1-flash-lite; VertexAI gets all four.
+// TestNewGeminiModelsProviderSplit pins that both backends register the same
+// Gemini models. gemini-3.1-flash-lite used to be withheld from Google AI, but
+// the Gemini API documents it as stable there, so the split is gone.
 func TestNewGeminiModelsProviderSplit(t *testing.T) {
 	for _, name := range newlyRegisteredGeminiModels {
 		if !slices.Contains(vertexAIModels, name) {
 			t.Errorf("vertexAIModels missing %q", name)
 		}
-	}
-
-	for _, name := range []string{gemini35Flash, gemini31FlashImage, gemini3ProImage} {
 		if !slices.Contains(googleAIModels, name) {
 			t.Errorf("googleAIModels missing %q", name)
 		}
-	}
-
-	// gemini-3.1-flash-lite is VertexAI-only per the ticket.
-	if slices.Contains(googleAIModels, gemini31FlashLite) {
-		t.Errorf("googleAIModels should not contain %q (VertexAI only)", gemini31FlashLite)
 	}
 }
 
