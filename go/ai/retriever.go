@@ -18,6 +18,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -36,7 +37,9 @@ type RetrieverFunc = func(context.Context, *RetrieverRequest) (*RetrieverRespons
 // options into it before calling the function (see [NewRetrieverAction]).
 type RetrieverActionFunc[Config any] = func(context.Context, *RetrieverRequest, Config) (*RetrieverResponse, error)
 
-// Retriever represents a document retriever.
+// Retriever represents a document retriever. It is the type to accept as an
+// argument and to look up by name; implementations are created with
+// [NewRetrieverAction], or [genkit.DefineRetrieverAction] in an application.
 type Retriever interface {
 	// Name returns the name of the retriever.
 	Name() string
@@ -50,16 +53,45 @@ type Retriever interface {
 // concrete type returned by [NewRetrieverAction]; pass it to [WithRetriever] to
 // retrieve with it, or return it from a plugin's Init for the framework to
 // register.
+//
+// It implements [Retriever] and [api.Action], so it can be passed anywhere
+// either is accepted. It also promotes [core.Action.Run], the typed
+// equivalent of [RetrieverAction.Retrieve].
 type RetrieverAction struct {
 	action[*RetrieverRequest, *RetrieverResponse, struct{}]
 }
 
-// RetrieverAction is a full registry action and can be passed anywhere an
-// [api.Action] is accepted as well as anywhere a [Retriever] is accepted.
+// Pinned here so that breaking either interface fails the build at the type
+// rather than at a call site.
 var (
 	_ api.Action = (*RetrieverAction)(nil)
 	_ Retriever  = (*RetrieverAction)(nil)
 )
+
+// Name returns the registry name of the retriever.
+func (r *RetrieverAction) Name() string { return r.action.Name() }
+
+// Register registers the retriever with reg, making it available to lookups
+// and to the Dev UI. A plugin that returns the retriever from its Init does
+// not need to call this.
+func (r *RetrieverAction) Register(reg api.Registry) { r.action.Register(reg) }
+
+// Desc returns the retriever's action descriptor: its name, schemas, and
+// metadata.
+func (r *RetrieverAction) Desc() api.ActionDesc { return r.action.Desc() }
+
+// RunJSON runs the retriever on a JSON-encoded [RetrieverRequest] and returns
+// a JSON-encoded [RetrieverResponse]. The framework uses it to serve
+// reflection and registry-driven calls; prefer [RetrieverAction.Retrieve].
+func (r *RetrieverAction) RunJSON(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (json.RawMessage, error) {
+	return r.action.RunJSON(ctx, input, cb)
+}
+
+// RunJSONWithTelemetry is [RetrieverAction.RunJSON] with the run's telemetry
+// returned alongside the output.
+func (r *RetrieverAction) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	return r.action.RunJSONWithTelemetry(ctx, input, cb)
+}
 
 // RetrieverArg is the interface for retriever arguments. It can either be the retriever action itself or a reference to be looked up.
 type RetrieverArg interface {
