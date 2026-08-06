@@ -6,6 +6,7 @@
 """Tests for the action module."""
 
 import pytest
+from pydantic import BaseModel
 
 from genkit import Message, ModelRequest, ModelResponse, ModelResponseChunk, ModelUsage
 from genkit._ai._model import text_from_content
@@ -19,7 +20,7 @@ from genkit._core._typing import (
     ToolRequest,
     ToolRequestPart,
 )
-from genkit.model import get_basic_usage_stats, model_action_metadata
+from genkit.model import ModelRef, get_basic_usage_stats, model_action_metadata, model_ref
 
 
 def test_message_wrapper_text() -> None:
@@ -380,9 +381,6 @@ def test_text_from_content_with_none_text() -> None:
 
 def test_model_ref_generic_construction() -> None:
     """Test ModelRef generic dataclass construction and properties."""
-    from pydantic import BaseModel
-
-    from genkit.model import ModelRef, model_ref
 
     class DummyConfig(BaseModel):
         temperature: float = 0.7
@@ -403,9 +401,6 @@ def test_model_ref_generic_construction() -> None:
 
 def test_model_ref_immutability() -> None:
     """Test that ModelRef instances are frozen and immutable."""
-    from pydantic import BaseModel
-
-    from genkit.model import model_ref
 
     class DummyConfig(BaseModel):
         pass
