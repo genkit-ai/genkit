@@ -254,6 +254,7 @@ def define_background_model(
     # Precedence: explicit label argument > info.label > fallback to model name
     effective_label = label or model_options.get('label') or name
     model_options['label'] = effective_label
+    label = effective_label
 
     if config_schema:
         model_options['customOptions'] = to_json_schema(config_schema)
