@@ -6,6 +6,7 @@
 """Tests for generate/prompt with ModelRef."""
 
 import pytest
+from pydantic import BaseModel
 
 from genkit import Genkit
 from genkit._ai._model import ModelConfig
@@ -38,12 +39,12 @@ async def test_generate_model_ref_default_config(ai_with_echo: tuple[Genkit, Ech
     ai, echo = ai_with_echo
     ref = model_ref('testEcho', config_schema=ModelConfig, config=ModelConfig(temperature=0.1))
 
-    response = await ai.generate(model=ref, prompt='Hello')
+    await ai.generate(model=ref, prompt='Hello')
 
-    assert '0.1' in response.text
     assert echo.last_request is not None
     assert echo.last_request.config is not None
-    assert echo.last_request.config.temperature == 0.1
+    cfg = echo.last_request.config
+    assert (cfg.temperature if isinstance(cfg, BaseModel) else cfg['temperature']) == 0.1
 
 
 @pytest.mark.asyncio

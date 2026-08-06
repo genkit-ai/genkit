@@ -30,7 +30,7 @@ from typing import Any, ClassVar, Generic, cast
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer
 from pydantic.alias_generators import to_camel
-from typing_extensions import TypeVar
+from typing_extensions import TypedDict, TypeVar
 
 from genkit._core._base import GenkitModel
 from genkit._core._extract_json import extract_json
@@ -70,6 +70,31 @@ ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
 # Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
 # Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
 ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True, default=BaseModel)
+# Unbounded so ModelRequest supports any config payload (BaseModel instances, dicts, custom options)
+# across action execution boundaries without forcing assumptions.
+ModelRequestConfigT = TypeVar('ModelRequestConfigT', covariant=True)
+
+
+class ModelConfigDict(TypedDict, total=False):
+    """Common knobs for dict-literal autocomplete on ai.generate(config={...})."""
+
+    version: str
+    api_version: str
+    apiVersion: str
+    temperature: float
+    max_output_tokens: int
+    maxOutputTokens: int
+    max_tokens: int
+    top_k: int
+    top_p: float
+    stop_sequences: list[str]
+    api_key: str
+    thinking: Any
+    budget_tokens: float
+    budgetTokens: int
+    betas: list[str]
+    speech_config: Any
+    number_of_images: int
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -229,7 +254,7 @@ class Document(DocumentData):
         return None
 
 
-class ModelRequest(GenkitModel, Generic[ConfigT]):
+class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
     """Hand-written model request with flat output fields and veneer types.
 
     Output config is inlined as flat fields (output_format, output_schema, etc.)
@@ -252,7 +277,7 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
     # Veneer types for IDE/typing (validators wrap MessageData->Message, DocumentData->Document)
     messages: list[Message]  # pyright: ignore[reportIncompatibleVariableOverride]
     docs: list[Document] | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
-    config: ConfigT | None = None
+    config: ModelRequestConfigT | None = None
     tools: list[ToolDefinition] | None = None
     tool_choice: ToolChoice | None = Field(default=None)
     # Flat output fields (no nested OutputConfig)

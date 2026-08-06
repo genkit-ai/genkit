@@ -27,7 +27,7 @@ import signal
 import socket
 import threading
 import uuid
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypeVar, cast, overload
 
@@ -76,6 +76,7 @@ from genkit._ai._prompt import (
     define_partial,
     define_schema,
     load_prompt_folder,
+    normalize_config,
     register_prompt_actions,
     resolve_model_arg,
     to_generate_action_options,
@@ -110,7 +111,7 @@ from genkit._core._middleware import (
     GenerateMiddleware,
     _validate_middleware_key_segment,
 )
-from genkit._core._model import Document, ModelRef
+from genkit._core._model import Document, ModelConfigDict, ModelRef, ModelRefConfigT
 from genkit._core._plugin import Plugin
 from genkit._core._protocols import SessionLike
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
@@ -985,7 +986,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -995,7 +996,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: dict[str, Any] | ModelRefConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type[OutputT],
@@ -1012,7 +1013,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1022,7 +1023,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: dict[str, Any] | ModelRefConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -1037,7 +1038,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: ModelRef[BaseModel] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1047,7 +1048,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: dict[str, Any] | BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -1080,7 +1081,7 @@ class Genkit:
             resume_respond=resume_respond,
             resume_restart=resume_restart,
             resume_metadata=resume_metadata,
-            config=config,
+            config=normalize_config(config),
             max_turns=max_turns,
             output_format=output_format,
             output_content_type=output_content_type,
@@ -1102,7 +1103,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1112,7 +1113,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: ModelRefConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type[OutputT],
@@ -1130,7 +1131,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1140,7 +1141,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: ModelRefConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -1156,7 +1157,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: ModelRef[BaseModel] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1166,7 +1167,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -1198,7 +1199,7 @@ class Genkit:
                 resume_respond=resume_respond,
                 resume_restart=resume_restart,
                 resume_metadata=resume_metadata,
-                config=config,
+                config=normalize_config(config),
                 max_turns=max_turns,
                 output_format=output_format,
                 output_content_type=output_content_type,
