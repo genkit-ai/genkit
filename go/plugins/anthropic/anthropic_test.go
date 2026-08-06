@@ -291,3 +291,28 @@ func TestDefineModelTwicePanics(t *testing.T) {
 	}()
 	a.DefineModel(g, name, nil)
 }
+
+// TestModelRef pins the name a ref carries and that the typed config rides
+// along, since the ref is how an application supplies config at the call site.
+// Both the bare ID and the already-prefixed name resolve to the same model,
+// so passing the name a sibling plugin would take is not a silent miss.
+func TestModelRef(t *testing.T) {
+	cfg := &anthropic.MessageNewParams{MaxTokens: 1024}
+
+	for _, name := range []string{"claude-opus-4-5", "anthropic/claude-opus-4-5"} {
+		ref := ModelRef(name, cfg)
+		if want := "anthropic/claude-opus-4-5"; ref.Name() != want {
+			t.Errorf("ModelRef(%q).Name() = %q, want %q", name, ref.Name(), want)
+		}
+		if ref.Config() != cfg {
+			t.Errorf("ModelRef(%q).Config() = %v, want the config it was built with", name, ref.Config())
+		}
+	}
+
+	// A nil config rides along as a typed nil rather than an untyped one. The
+	// config slot tolerates that: it marshals to JSON null and deserializes to
+	// the zero MessageNewParams, the same as googlegenai's refs.
+	if got := ModelRef("claude-opus-4-5", nil).Config(); got != (*anthropic.MessageNewParams)(nil) {
+		t.Errorf("Config() = %v for a nil config, want a typed nil", got)
+	}
+}
