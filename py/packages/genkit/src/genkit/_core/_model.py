@@ -69,7 +69,6 @@ OutputT = TypeVar('OutputT', default=object)
 # Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
 # Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
 ConfigT = TypeVar('ConfigT', bound=BaseModel, covariant=True)
-ModelRequestConfigT = TypeVar('ModelRequestConfigT', covariant=True)
 
 
 class ModelConfigDict(TypedDict, total=False):
@@ -251,7 +250,7 @@ class Document(DocumentData):
         return None
 
 
-class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
+class ModelRequest(GenkitModel, Generic[ConfigT]):
     """Hand-written model request with flat output fields and veneer types.
 
     Output config is inlined as flat fields (output_format, output_schema, etc.)
@@ -274,7 +273,7 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
     # Veneer types for IDE/typing (validators wrap MessageData->Message, DocumentData->Document)
     messages: list[Message]  # pyright: ignore[reportIncompatibleVariableOverride]
     docs: list[Document] | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
-    config: ModelRequestConfigT | None = None
+    config: ConfigT | None = None
     tools: list[ToolDefinition] | None = None
     tool_choice: ToolChoice | None = Field(default=None)
     # Flat output fields (no nested OutputConfig)

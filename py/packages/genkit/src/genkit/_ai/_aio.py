@@ -21,30 +21,19 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-import logging
 import os
 import signal
 import socket
 import threading
 import uuid
-from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from pathlib import Path
-from typing import Any, cast, overload
+from typing import Any, TypeVar, cast, overload
 
 import anyio
 import uvicorn
 from pydantic import BaseModel
-from typing_extensions import TypeVar
 
-from genkit._ai._agents._base import (
-    Agent,
-    define_agent,
-    define_custom_agent,
-    define_prompt_agent,
-)
-from genkit._ai._agents._runtime import AgentFn
-from genkit._ai._agents._session import SessionStore, StateT, get_current_session
-from genkit._ai._agents._types import ChunkTransform, StateTransform
 from genkit._ai._embedding import EmbedderFn, EmbedderOptions, EmbedderRef, define_embedder
 from genkit._ai._evaluator import (
     BatchEvaluatorFn,
@@ -77,9 +66,7 @@ from genkit._ai._prompt import (
     define_partial,
     define_schema,
     load_prompt_folder,
-    normalize_config,
     register_prompt_actions,
-    resolve_model_arg,
     to_generate_action_options,
 )
 from genkit._ai._resource import (
@@ -106,15 +93,14 @@ from genkit._core._dap import (
 )
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import GenkitError
-from genkit._core._logger import configure_logging, get_logger, resolve_level
+from genkit._core._logger import get_logger
 from genkit._core._middleware import (
     BaseMiddleware,
     GenerateMiddleware,
     _validate_middleware_key_segment,
 )
-from genkit._core._model import ConfigT, Document, ModelConfigDict, ModelRef
+from genkit._core._model import Document
 from genkit._core._plugin import Plugin
-from genkit._core._protocols import SessionLike
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
 from genkit._core._reflection_v2 import ReflectionServerV2
 from genkit._core._registry import Registry
@@ -135,13 +121,13 @@ from genkit._core._typing import (
 )
 
 from ._decorators import _FlowDecorator, _FlowDecoratorWithChunk
-from ._runtime import RuntimeManager, setup_signal_handlers
+from ._runtime import RuntimeManager
 
 logger = get_logger(__name__)
 
 # TypeVars for generic input/output typing
-InputT = TypeVar('InputT', default=dict[str, Any])
-OutputT = TypeVar('OutputT', default=object)
+InputT = TypeVar('InputT')
+OutputT = TypeVar('OutputT')
 ChunkT = TypeVar('ChunkT')
 
 R = TypeVar('R')
@@ -183,16 +169,10 @@ class Genkit:
         # Ensure the default generate action is registered for async usage.
         define_generate_action(self.registry)
         self._register_plugin_middleware(plugins)
-        configure_logging()
         # In dev mode, start the reflection server immediately in a background
         # daemon thread so it's available regardless of which web framework (or
         # none) the user chooses.
         if is_dev_environment():
-            # SIGINT (Ctrl+C) always hits handle_signal. SIGTERM inside the
-            # run_main wait loop is stolen by anyio (clean exit → atexit);
-            # elsewhere SIGTERM also goes through handle_signal. Both paths
-            # remove the runtime discovery files.
-            setup_signal_handlers()
             self._start_reflection_background()
 
         # Load prompts
@@ -471,15 +451,15 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ConfigT] | str | None = None,
-        config: ConfigT | dict[str, Any] | None = None,
+        model: str | None = None,
+        config: dict[str, object] | ModelConfig | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
         messages: str | list[Message] | None = None,
         output_format: str | None = None,
         output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
+        output_instructions: str | None = None,
         output_constrained: bool | None = None,
         max_turns: int | None = None,
         return_tool_requests: bool | None = None,
@@ -499,15 +479,15 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ConfigT] | str | None = None,
-        config: ConfigT | dict[str, Any] | None = None,
+        model: str | None = None,
+        config: dict[str, object] | ModelConfig | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
         messages: str | list[Message] | None = None,
         output_format: str | None = None,
         output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
+        output_instructions: str | None = None,
         output_constrained: bool | None = None,
         max_turns: int | None = None,
         return_tool_requests: bool | None = None,
@@ -527,15 +507,15 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ConfigT] | str | None = None,
-        config: ConfigT | dict[str, Any] | None = None,
+        model: str | None = None,
+        config: dict[str, object] | ModelConfig | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
         messages: str | list[Message] | None = None,
         output_format: str | None = None,
         output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
+        output_instructions: str | None = None,
         output_constrained: bool | None = None,
         max_turns: int | None = None,
         return_tool_requests: bool | None = None,
@@ -555,15 +535,15 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ConfigT] | str | None = None,
-        config: ConfigT | dict[str, Any] | None = None,
+        model: str | None = None,
+        config: dict[str, object] | ModelConfig | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
         messages: str | list[Message] | None = None,
         output_format: str | None = None,
         output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
+        output_instructions: str | None = None,
         output_constrained: bool | None = None,
         max_turns: int | None = None,
         return_tool_requests: bool | None = None,
@@ -572,8 +552,8 @@ class Genkit:
         tool_choice: ToolChoice | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
-        input_schema: type | dict[str, object] | str | None = None,
-        output_schema: type | dict[str, object] | str | None = None,
+        input_schema: dict[str, object] | str | None = None,
+        output_schema: dict[str, object] | str | None = None,
     ) -> ExecutablePrompt[Any, Any]: ...
 
     def define_prompt(
@@ -581,15 +561,15 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[BaseModel] | str | None = None,
-        config: BaseModel | dict[str, Any] | None = None,
+        model: str | None = None,
+        config: dict[str, object] | ModelConfig | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
         messages: str | list[Message] | None = None,
         output_format: str | None = None,
         output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
+        output_instructions: str | None = None,
         output_constrained: bool | None = None,
         max_turns: int | None = None,
         return_tool_requests: bool | None = None,
@@ -606,7 +586,7 @@ class Genkit:
             self.registry,
             variant=variant,
             model=model,
-            config=normalize_config(config),
+            config=config,
             description=description,
             input_schema=input_schema,
             system=system,
@@ -691,124 +671,6 @@ class Genkit:
             output_schema=output_schema,
         )
 
-    async def agent(self, name: str) -> Agent:
-        """Look up a registered agent by name."""
-        resolved = await self.registry.resolve_action(ActionKind.AGENT, name)
-        if resolved is None:
-            raise GenkitError(
-                status='NOT_FOUND',
-                message=f"Agent '{name}' not found in registry.",
-            )
-        if not isinstance(resolved, Agent):
-            raise GenkitError(
-                status='INTERNAL',
-                message=f"Registry entry '{name}' is not an Agent.",
-            )
-        return resolved
-
-    def define_custom_agent(
-        self,
-        name: str,
-        fn: AgentFn,
-        *,
-        store: SessionStore[StateT] | None = None,
-        state_transform: StateTransform | None = None,
-        chunk_transform: ChunkTransform | None = None,
-        state_schema: type[StateT] | None = None,
-        description: str | None = None,
-        metadata: dict[str, object] | None = None,
-    ) -> Agent[StateT]:
-        """Define and register an agent with full control over the turn loop.
-
-        fn receives (SessionRunner, ActionRunContext) and must call sess.run(handle_turn)
-        to process inputs, then return an AgentResult.
-
-        Pass ``state_schema`` (a Pydantic model) to type the custom state, so the
-        chat's ``state``, ``response.state``, and streamed ``chunk.custom`` come
-        back as that model instead of a dict.
-        """
-        return define_custom_agent(
-            registry=self.registry,
-            name=name,
-            fn=fn,
-            store=store,
-            state_transform=state_transform,
-            chunk_transform=chunk_transform,
-            state_schema=state_schema,
-            description=description,
-            metadata=metadata,
-        )
-
-    def define_agent(
-        self,
-        name: str,
-        *,
-        model: str | None = None,
-        system: str | list[Part] | None = None,
-        tools: Sequence[str | Tool] | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
-        max_turns: int | None = None,
-        description: str | None = None,
-        metadata: dict[str, object] | None = None,
-        store: SessionStore[StateT] | None = None,
-        state_transform: StateTransform | None = None,
-        chunk_transform: ChunkTransform | None = None,
-        state_schema: type[StateT] | None = None,
-    ) -> Agent[StateT]:
-        """Define a prompt-backed agent.
-
-        Each turn: attaches session history, calls generate with streaming,
-        updates session. Pass resume in AgentInput to resume from an interrupt.
-
-        Pass ``state_schema`` (a Pydantic model) to type the custom state tools
-        read and write — the chat's ``state``, ``response.state``, and streamed
-        ``chunk.custom`` come back as that model instead of a dict.
-        """
-        return define_agent(
-            registry=self.registry,
-            name=name,
-            model=model,
-            system=system,
-            tools=tools,
-            use=use,
-            config=config,
-            max_turns=max_turns,
-            description=description,
-            metadata=metadata,
-            store=store,
-            state_transform=state_transform,
-            chunk_transform=chunk_transform,
-            state_schema=state_schema,
-        )
-
-    def define_prompt_agent(
-        self,
-        name: str,
-        *,
-        store: SessionStore[StateT] | None = None,
-        state_transform: StateTransform | None = None,
-        chunk_transform: ChunkTransform | None = None,
-        state_schema: type[StateT] | None = None,
-        description: str | None = None,
-        metadata: dict[str, object] | None = None,
-    ) -> Agent[StateT]:
-        """Wire an already-registered prompt as an agent.
-
-        Looks up the prompt named `name` from the registry. Use when the prompt
-        is defined via ai.define_prompt() or loaded from a .prompt file.
-        """
-        return define_prompt_agent(
-            registry=self.registry,
-            name=name,
-            store=store,
-            state_transform=state_transform,
-            chunk_transform=chunk_transform,
-            state_schema=state_schema,
-            description=description,
-            metadata=metadata,
-        )
-
     def define_resource(
         self,
         *,
@@ -868,26 +730,7 @@ class Genkit:
                 sockets = [sock]
 
             app = create_reflection_asgi_app(registry=self.registry)
-            level = resolve_level()
-            is_debug = level <= logging.DEBUG
-            if level <= logging.DEBUG:
-                log_level = 'debug'
-            elif level <= logging.WARNING:
-                log_level = 'warning'
-            elif level <= logging.ERROR:
-                log_level = 'error'
-            else:
-                log_level = 'critical'
-
-            # Pass log_level explicitly so uvicorn's internal server engine doesn't default to INFO on startup.
-            config = uvicorn.Config(
-                app,
-                host=spec.host,
-                port=spec.port,
-                loop='asyncio',
-                access_log=is_debug,
-                log_level=log_level,
-            )
+            config = uvicorn.Config(app, host=spec.host, port=spec.port, loop='asyncio')
             server = ReflectionServer(config, ready=self._reflection_ready)
             async with RuntimeManager(spec, lazy_write=True) as runtime_manager:
                 server_task = asyncio.create_task(server.serve(sockets=sockets))
@@ -987,7 +830,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: ModelRef[ConfigT] | str | None = None,
+        model: str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -997,13 +840,13 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
+        config: dict[str, object] | ModelConfig | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type[OutputT],
         output_format: str | None = None,
         output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
+        output_instructions: str | None = None,
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
@@ -1014,7 +857,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: ModelRef[ConfigT] | str | None = None,
+        model: str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1024,13 +867,13 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
+        config: dict[str, object] | ModelConfig | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
         output_format: str | None = None,
         output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
+        output_instructions: str | None = None,
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
@@ -1039,7 +882,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: ModelRef[BaseModel] | str | None = None,
+        model: str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1049,13 +892,13 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
+        config: dict[str, object] | ModelConfig | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
         output_format: str | None = None,
         output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
+        output_instructions: str | None = None,
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
@@ -1082,7 +925,7 @@ class Genkit:
             resume_respond=resume_respond,
             resume_restart=resume_restart,
             resume_metadata=resume_metadata,
-            config=normalize_config(config),
+            config=config,
             max_turns=max_turns,
             output_format=output_format,
             output_content_type=output_content_type,
@@ -1104,7 +947,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: ModelRef[ConfigT] | str | None = None,
+        model: str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1114,13 +957,13 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
+        config: dict[str, object] | ModelConfig | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type[OutputT],
         output_format: str | None = None,
         output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
+        output_instructions: str | None = None,
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
@@ -1132,7 +975,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: ModelRef[ConfigT] | str | None = None,
+        model: str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1142,13 +985,13 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: ConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
+        config: dict[str, object] | ModelConfig | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
         output_format: str | None = None,
         output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
+        output_instructions: str | None = None,
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
@@ -1158,7 +1001,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: ModelRef[BaseModel] | str | None = None,
+        model: str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1168,13 +1011,13 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
+        config: dict[str, object] | ModelConfig | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
         output_format: str | None = None,
         output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
+        output_instructions: str | None = None,
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
@@ -1200,7 +1043,7 @@ class Genkit:
                 resume_respond=resume_respond,
                 resume_restart=resume_restart,
                 resume_metadata=resume_metadata,
-                config=normalize_config(config),
+                config=config,
                 max_turns=max_turns,
                 output_format=output_format,
                 output_content_type=output_content_type,
@@ -1327,7 +1170,7 @@ class Genkit:
                     dataset=dataset,
                     options=final_options,
                     eval_run_id=eval_run_id,
-                ),
+                )
             )
         ).response
 
@@ -1335,11 +1178,6 @@ class Genkit:
     def current_context() -> dict[str, Any] | None:
         """Get the current execution context, or None if not in an action."""
         return get_current_context()
-
-    @staticmethod
-    def current_session() -> SessionLike | None:
-        """Return the active agent session, or None if not inside a session."""
-        return get_current_session()
 
     async def run(
         self,
@@ -1385,79 +1223,30 @@ class Genkit:
 
         return await background_action.cancel(operation)
 
-    # Overload: output_schema=type[T] -> Operation[T]
-    @overload
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ConfigT] | str | None = None,
+        model: str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        config: ConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
-        max_turns: int | None = None,
-        context: dict[str, object] | None = None,
-        output_schema: type[OutputT],
-        output_format: str | None = None,
-        output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
-        output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
-        docs: list[Document] | None = None,
-    ) -> Operation[OutputT]: ...
-
-    # Overload: no output_schema, dict, or union -> Operation[Any]
-    @overload
-    async def generate_operation(
-        self,
-        *,
-        model: ModelRef[ConfigT] | str | None = None,
-        prompt: str | list[Part] | None = None,
-        system: str | list[Part] | None = None,
-        messages: list[Message] | None = None,
-        tools: Sequence[str | Tool] | None = None,
-        return_tool_requests: bool | None = None,
-        tool_choice: ToolChoice | None = None,
-        config: ConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
+        config: dict[str, object] | ModelConfig | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
         output_format: str | None = None,
         output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
+        output_instructions: str | None = None,
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
-    ) -> Operation[Any]: ...
-
-    async def generate_operation(
-        self,
-        *,
-        model: ModelRef[BaseModel] | str | None = None,
-        prompt: str | list[Part] | None = None,
-        system: str | list[Part] | None = None,
-        messages: list[Message] | None = None,
-        tools: Sequence[str | Tool] | None = None,
-        return_tool_requests: bool | None = None,
-        tool_choice: ToolChoice | None = None,
-        config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
-        max_turns: int | None = None,
-        context: dict[str, object] | None = None,
-        output_schema: type | dict | None = None,
-        output_format: str | None = None,
-        output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
-        output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
-        docs: list[Document] | None = None,
-    ) -> Operation[Any]:
+    ) -> Operation:
         """Generate content using a long-running model, returning an Operation to poll."""
         # Resolve the model and check for long_running support
-        model_name, _ = resolve_model_arg(model, config)
-        resolved_model = model_name or cast(str | None, self.registry.lookup_value('defaultModel', 'defaultModel'))
+        resolved_model = model or cast(str | None, self.registry.lookup_value('defaultModel', 'defaultModel'))
         if not resolved_model:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
