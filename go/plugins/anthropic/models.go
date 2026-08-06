@@ -64,6 +64,9 @@ func advancedModel(label string) ai.ModelOptions {
 // ListActions and ResolveAction; any model not listed here falls back to
 // defaultClaudeOpts and is still resolved dynamically from the Anthropic API.
 var knownModels = map[string]ai.ModelOptions{
+	"claude-fable-5":    advancedModel("Claude Fable 5"),
+	"claude-opus-5":     advancedModel("Claude Opus 5"),
+	"claude-sonnet-5":   advancedModel("Claude Sonnet 5"),
 	"claude-opus-4-8":   advancedModel("Claude Opus 4.8"),
 	"claude-opus-4-7":   advancedModel("Claude Opus 4.7"),
 	"claude-opus-4-6":   advancedModel("Claude Opus 4.6"),
