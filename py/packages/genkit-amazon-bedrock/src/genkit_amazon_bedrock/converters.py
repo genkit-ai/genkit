@@ -476,7 +476,7 @@ def _to_bedrock_tool_choice(tool_choice: str, tools: list[ToolDefinition]) -> di
     if tool_choice in ('required', 'any'):
         return {'any': {}}
     for tool in tools:
-        if tool is not None and tool.name == tool_choice:
+        if tool.name == tool_choice:
             return {'tool': {'name': tool_choice}}
     raise GenkitError(
         message=f'bedrock: tool_choice {tool_choice!r} does not match any declared tool',
@@ -502,10 +502,12 @@ def build_converse_request(model_id: str, request: ModelRequest[Any]) -> dict[st
     config = normalize_config(request.config)
     messages, system = convert_messages(request.messages)
 
-    tools = [tool for tool in (request.tools or []) if tool is not None] if request.tools else []
-    # When using tools, AWS Bedrock requires that the conversation doesn't
-    # end with an assistant message.
-    if request.tools and messages and messages[-1]['role'] == 'assistant':
+    tools = request.tools or []
+    tool_choice = _requested_tool_choice(request, config) if tools else ''
+    # "none" means omit toolConfig entirely — Bedrock has no none mode.
+    send_tool_config = bool(tools) and tool_choice != 'none'
+    # Bedrock rejects a trailing assistant message only when a toolConfig is sent.
+    if send_tool_config and messages and messages[-1]['role'] == 'assistant':
         messages = messages[:-1]
 
     kwargs: dict[str, Any] = {'modelId': model_id, 'messages': messages}
@@ -520,12 +522,8 @@ def build_converse_request(model_id: str, request: ModelRequest[Any]) -> dict[st
         # Forwarded verbatim (e.g. Claude extended thinking budgets).
         kwargs['additionalModelRequestFields'] = config.additional_model_request_fields
 
-    if request.tools:
-        tool_choice = _requested_tool_choice(request, config)
-        # "none" means omit toolConfig entirely — Bedrock has no none mode.
-        if tool_choice == 'none':
-            return kwargs
-        tool_config: dict[str, Any] = {'tools': [to_bedrock_tool(tool) for tool in request.tools]}
+    if send_tool_config:
+        tool_config: dict[str, Any] = {'tools': [to_bedrock_tool(tool) for tool in tools]}
         if tool_choice:
             tool_config['toolChoice'] = _to_bedrock_tool_choice(tool_choice, tools)
         kwargs['toolConfig'] = tool_config
