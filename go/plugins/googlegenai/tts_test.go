@@ -62,8 +62,8 @@ func TestTTSModelOptions(t *testing.T) {
 			if opts.Supports.Media {
 				t.Error("Media = true, want false")
 			}
-			if opts.Stage != ai.ModelStageUnstable {
-				t.Errorf("Stage = %v, want Unstable", opts.Stage)
+			if opts.Stage != ai.ModelStageStable {
+				t.Errorf("Stage = %v, want Stable", opts.Stage)
 			}
 			// ConfigSchema falls back to GenerateContentConfig, which carries the
 			// speechConfig field used to select voices.

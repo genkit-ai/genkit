@@ -81,19 +81,19 @@ var (
 var (
 	defaultGeminiOpts = ai.ModelOptions{
 		Supports:     &Multimodal,
-		Stage:        ai.ModelStageUnstable,
+		Stage:        ai.ModelStageStable,
 		ConfigSchema: geminiConfigSchema,
 	}
 
 	defaultImagenOpts = ai.ModelOptions{
 		Supports:     &Media,
-		Stage:        ai.ModelStageUnstable,
+		Stage:        ai.ModelStageStable,
 		ConfigSchema: imagenConfigSchema,
 	}
 
 	defaultVeoOpts = ai.ModelOptions{
 		Supports:     &VeoSupports,
-		Stage:        ai.ModelStageUnstable,
+		Stage:        ai.ModelStageStable,
 		ConfigSchema: veoConfigSchema,
 	}
 
@@ -257,19 +257,19 @@ var (
 			Label:    "Gemini 2.5 Flash Preview TTS",
 			Versions: []string{},
 			Supports: &TTSSupports,
-			Stage:    ai.ModelStageUnstable,
+			Stage:    ai.ModelStageStable,
 		},
 		gemini25ProPreviewTTS: {
 			Label:    "Gemini 2.5 Pro Preview TTS",
 			Versions: []string{},
 			Supports: &TTSSupports,
-			Stage:    ai.ModelStageUnstable,
+			Stage:    ai.ModelStageStable,
 		},
 		gemini31FlashTTSPreview: {
 			Label:    "Gemini 3.1 Flash TTS Preview",
 			Versions: []string{},
 			Supports: &TTSSupports,
-			Stage:    ai.ModelStageUnstable,
+			Stage:    ai.ModelStageStable,
 		},
 	}
 
@@ -311,13 +311,13 @@ var (
 			Label:    "Veo 3.1 Generate Preview",
 			Versions: []string{},
 			Supports: &VeoSupports,
-			Stage:    ai.ModelStageUnstable,
+			Stage:    ai.ModelStageStable,
 		},
 		veo31FastGeneratePreview: {
 			Label:    "Veo 3.1 Fast Generate Preview",
 			Versions: []string{},
 			Supports: &VeoSupports,
-			Stage:    ai.ModelStageUnstable,
+			Stage:    ai.ModelStageStable,
 		},
 	}
 
