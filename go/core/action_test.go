@@ -58,6 +58,25 @@ func TestActionRunJSON(t *testing.T) {
 	}
 }
 
+func TestNewStructuredActionUsesCustomOutputSchema(t *testing.T) {
+	outputSchema := map[string]any{"type": "string"}
+	a := NewStructuredAction(
+		"test/structured",
+		api.ActionTypeCustom,
+		nil,
+		nil,
+		outputSchema,
+		func(context.Context, int) (int, error) { return 1, nil },
+	)
+
+	if got := a.Desc().OutputSchema["type"]; got != "string" {
+		t.Fatalf("output schema type = %v, want string", got)
+	}
+	if _, err := a.Run(context.Background(), 0, nil); err == nil {
+		t.Fatal("Run() succeeded with output that does not match the custom schema")
+	}
+}
+
 // count streams the numbers from 0 to n-1, then returns n.
 func count(ctx context.Context, n int, cb func(context.Context, int) error) (int, error) {
 	if cb != nil {

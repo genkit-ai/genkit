@@ -78,6 +78,26 @@ func NewAction[In, Out any](
 		})
 }
 
+// NewStructuredAction creates a new non-streaming [Action] without registering it.
+// If either inputSchema or outputSchema is nil, it is inferred from the function's input or output type.
+func NewStructuredAction[In, Out any](
+	name string,
+	atype api.ActionType,
+	metadata map[string]any,
+	inputSchema map[string]any,
+	outputSchema map[string]any,
+	fn Func[In, Out],
+) *Action[In, Out, struct{}] {
+	action := newStreamingAction(name, atype, metadata, inputSchema,
+		func(ctx context.Context, in In, cb noStream) (Out, error) {
+			return fn(ctx, in)
+		})
+	if outputSchema != nil {
+		action.desc.OutputSchema = outputSchema
+	}
+	return action
+}
+
 // NewStreamingAction creates a new streaming [Action] without registering it.
 // If inputSchema is nil, it is inferred from the function's input api.
 func NewStreamingAction[In, Out, Stream any](

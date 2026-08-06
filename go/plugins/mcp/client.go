@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/firebase/genkit/go/core/logger"
@@ -80,8 +81,9 @@ type ServerRef struct {
 
 // GenkitMCPClient represents a client for interacting with MCP servers.
 type GenkitMCPClient struct {
-	options MCPClientOptions
-	server  *ServerRef
+	options            MCPClientOptions
+	server             *ServerRef
+	listToolsRequestID atomic.Uint64
 }
 
 // NewGenkitMCPClient creates a new GenkitMCPClient with the given options.
