@@ -101,7 +101,8 @@ func modelConfigSchemas[Config any](override map[string]any) (configSchema, inpu
 // stripped: a config is partial by nature (callers set only the fields they
 // want to override), so a struct field lacking omitempty must not become a
 // mandatory config key. An explicit override is the caller's contract and
-// passes through untouched.
+// passes through untouched, which is also what keeps the in-place strip safe:
+// it only ever reaches the fresh map [base.SchemaMapFor] allocates per call.
 func effectiveConfigSchema[Config any](override map[string]any) map[string]any {
 	if override != nil {
 		return override
