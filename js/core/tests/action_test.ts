@@ -361,6 +361,60 @@ describe('action', () => {
     );
   });
 
+  it('scrubs auth and secrets from context in telemetry', async () => {
+    const act = action(
+      {
+        name: 'scrubTest',
+        inputSchema: z.string(),
+        outputSchema: z.number(),
+        actionType: 'custom',
+      },
+      async (input) => {
+        return input.length;
+      }
+    );
+
+    await act.run('foo', {
+      context: {
+        auth: { token: 'super-secret' },
+        secrets: { dbPassword: 'password123' },
+        safeField: 'hello',
+        nestedField: { auth: 'this stays' },
+      },
+    });
+
+    const span = spanExporter.exportedSpans.find(
+      (s) => s.displayName === 'scrubTest'
+    );
+    assert.ok(span);
+
+    // The context attribute should exist but be stringified
+    const contextAttr = span.attributes['genkit:metadata:context'];
+    assert.ok(contextAttr, 'context should be exported in trace');
+
+    const parsedContext = JSON.parse(contextAttr as string);
+    assert.strictEqual(
+      parsedContext.auth,
+      '<redacted>',
+      'auth should be redacted'
+    );
+    assert.strictEqual(
+      parsedContext.secrets,
+      '<redacted>',
+      'secrets should be redacted'
+    );
+    assert.strictEqual(
+      parsedContext.safeField,
+      'hello',
+      'safe fields should be preserved'
+    );
+    assert.deepStrictEqual(
+      parsedContext.nestedField,
+      { auth: 'this stays' },
+      'nested fields should be preserved'
+    );
+  });
+
   it('records init in telemetry', async () => {
     const act = action(
       {

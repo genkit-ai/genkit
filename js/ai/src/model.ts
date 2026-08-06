@@ -276,6 +276,8 @@ export function defineModel<
 }
 
 /** Options for defining a background model that processes requests asynchronously. */
+import { BackgroundActionFnArg } from '@genkit-ai/core';
+
 export type DefineBackgroundModelOptions<
   CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
 > = DefineModelOptions<CustomOptionsSchema> & {
@@ -283,10 +285,12 @@ export type DefineBackgroundModelOptions<
     request: GenerateRequest<CustomOptionsSchema>
   ) => Promise<Operation<GenerateResponseData>>;
   check: (
-    operation: Operation<GenerateResponseData>
+    operation: Operation<GenerateResponseData>,
+    options?: BackgroundActionFnArg<unknown>
   ) => Promise<Operation<GenerateResponseData>>;
   cancel?: (
-    operation: Operation<GenerateResponseData>
+    operation: Operation<GenerateResponseData>,
+    options?: BackgroundActionFnArg<unknown>
   ) => Promise<Operation<GenerateResponseData>>;
 };
 
@@ -338,18 +342,18 @@ export function backgroundModel<
       });
       return response;
     },
-    async check(op) {
-      return options.check(op);
+    async check(op, opts) {
+      return options.check(op, opts);
     },
     cancel: options.cancel
-      ? async (op) => {
+      ? async (op, opts) => {
           if (!options.cancel) {
             throw new GenkitError({
               status: 'UNIMPLEMENTED',
               message: 'cancel not implemented',
             });
           }
-          return options.cancel(op);
+          return options.cancel(op, opts);
         }
       : undefined,
   }) as BackgroundModelAction<CustomOptionsSchema>;

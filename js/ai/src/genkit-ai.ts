@@ -20,6 +20,7 @@ import {
   run,
   z,
   type ActionContext,
+  type BackgroundActionRunOptions,
   type Operation,
 } from '@genkit-ai/core';
 import { type Registry } from '@genkit-ai/core/registry';
@@ -283,8 +284,11 @@ export class GenkitAI {
    * @param operation
    * @returns
    */
-  checkOperation<T>(operation: Operation<T>): Promise<Operation<T>> {
-    return checkOperation(this.registry, operation);
+  checkOperation<T>(
+    operation: Operation<T>,
+    options?: BackgroundActionRunOptions
+  ): Promise<Operation<T>> {
+    return checkOperation(this.registry, operation, options);
   }
 
   /**
@@ -293,8 +297,11 @@ export class GenkitAI {
    * @param operation
    * @returns
    */
-  cancelOperation<T>(operation: Operation<T>): Promise<Operation<T>> {
-    return cancelOperation(this.registry, operation);
+  cancelOperation<T>(
+    operation: Operation<T>,
+    options?: BackgroundActionRunOptions
+  ): Promise<Operation<T>> {
+    return cancelOperation(this.registry, operation, options);
   }
 
   /**

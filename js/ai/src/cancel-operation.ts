@@ -14,12 +14,17 @@
  * limitations under the License.
  */
 
-import { GenkitError, Operation } from '@genkit-ai/core';
+import {
+  BackgroundActionRunOptions,
+  GenkitError,
+  Operation,
+} from '@genkit-ai/core';
 import { Registry } from '@genkit-ai/core/registry';
 
 export async function cancelOperation<T = unknown>(
   registry: Registry,
-  operation: Operation<T>
+  operation: Operation<T>,
+  options?: BackgroundActionRunOptions
 ): Promise<Operation<T>> {
   if (!operation.action) {
     throw new GenkitError({
@@ -42,5 +47,5 @@ export async function cancelOperation<T = unknown>(
       message: `Background action ${operation.action} does not support cancellation.`,
     });
   }
-  return await backgroundAction.cancel(operation);
+  return await backgroundAction.cancel(operation, options);
 }
