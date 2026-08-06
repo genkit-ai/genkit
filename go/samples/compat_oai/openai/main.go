@@ -29,17 +29,20 @@ func main() {
 	if apiKey == "" {
 		log.Fatalf("no OPENAI_API_KEY environment variable set")
 	}
-	oai := &oai.OpenAI{
+	plugin := &oai.OpenAI{
 		APIKey: apiKey,
 	}
-	g := genkit.Init(ctx, genkit.WithPlugins(oai))
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
 
 	genkit.DefineFlow(g, "basic", func(ctx context.Context, subject string) (string, error) {
-		gpt4o := oai.Model(g, "gpt-4o")
+		// The ref carries the typed SDK config with the model name.
+		gpt4o := oai.ModelRef("gpt-4o", &openai.ChatCompletionNewParams{
+			Temperature: openai.Float(0.5),
+			MaxTokens:   openai.Int(100),
+		})
 
 		prompt := fmt.Sprintf("tell me a joke about %s", subject)
-		config := &openai.ChatCompletionNewParams{Temperature: openai.Float(0.5), MaxTokens: openai.Int(100)}
-		resp, err := genkit.Generate(ctx, g, ai.WithModel(gpt4o), ai.WithPrompt(prompt), ai.WithConfig(config))
+		resp, err := genkit.Generate(ctx, g, ai.WithModel(gpt4o), ai.WithPrompt(prompt))
 		if err != nil {
 			return "", err
 		}
@@ -47,10 +50,9 @@ func main() {
 	})
 
 	genkit.DefineFlow(g, "defined-model", func(ctx context.Context, subject string) (string, error) {
-		gpt4oMini := oai.Model(g, "gpt-4o-mini")
 		prompt := fmt.Sprintf("tell me a joke about %s", subject)
 		config := &openai.ChatCompletionNewParams{Temperature: openai.Float(0.5)}
-		resp, err := genkit.Generate(ctx, g, ai.WithModel(gpt4oMini), ai.WithPrompt(prompt), ai.WithConfig(config))
+		resp, err := genkit.Generate(ctx, g, ai.WithModelName("openai/gpt-4o-mini"), ai.WithPrompt(prompt), ai.WithConfig(config))
 		if err != nil {
 			return "", err
 		}
@@ -58,11 +60,11 @@ func main() {
 	})
 
 	genkit.DefineFlow(g, "media", func(ctx context.Context, subject string) (string, error) {
-		gpt4oMini := oai.Model(g, "gpt-4o-mini")
-		config := &openai.ChatCompletionNewParams{Temperature: openai.Float(0.5)}
+		gpt4oMini := oai.ModelRef("gpt-4o-mini", &openai.ChatCompletionNewParams{
+			Temperature: openai.Float(0.5),
+		})
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithModel(gpt4oMini),
-			ai.WithConfig(config),
 			ai.WithMessages(
 				ai.NewUserMessage(ai.NewTextPart("Hi, I'll provide you a quick request in the following message")),
 				ai.NewUserMessage(

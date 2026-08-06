@@ -28,6 +28,7 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai/dashscope"
+	"github.com/openai/openai-go"
 )
 
 func TestPluginRequiresAPIKey(t *testing.T) {
@@ -185,7 +186,9 @@ func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
 		}
 	}
 
-	config := map[string]any{"enable_thinking": true}
+	// The Genkit config speaks the plugin's camelCase contract; the handler
+	// above asserts it reaches the wire as enable_thinking.
+	config := map[string]any{"enableThinking": true}
 	t.Run("complete", func(t *testing.T) {
 		resp, err := genkit.Generate(ctx, g, ai.WithPrompt("Say hi."), ai.WithConfig(config))
 		if err != nil {
@@ -506,4 +509,96 @@ func TestPluginValidatesModelVersions(t *testing.T) {
 			t.Errorf("requests = %d, want no additional request for rejected version", requests)
 		}
 	})
+}
+
+// TestModelRefAndConfigSchema pins the call-site surface: the ref carries the
+// prefixed name and the typed config, and the registered models advertise the
+// camelCase config contract including the DashScope-specific fields.
+func TestModelRefAndConfigSchema(t *testing.T) {
+	cfg := &dashscope.ChatConfig{EnableThinking: openai.Ptr(true)}
+	for _, name := range []string{"qwen-plus", "dashscope/qwen-plus"} {
+		ref := dashscope.ModelRef(name, cfg)
+		if want := "dashscope/qwen-plus"; ref.Name() != want {
+			t.Errorf("ModelRef(%q).Name() = %q, want %q", name, ref.Name(), want)
+		}
+		if ref.Config() != cfg {
+			t.Errorf("ModelRef(%q).Config() = %v, want the config it was built with", name, ref.Config())
+		}
+	}
+
+	plugin := &dashscope.DashScope{APIKey: "test-key"}
+	g := genkit.Init(context.Background(), genkit.WithPlugins(plugin))
+
+	m := genkit.LookupModel(g, "dashscope/qwen-plus")
+	if m == nil {
+		t.Fatal("qwen-plus not registered by Init")
+	}
+	model := m.(api.Action).Desc().Metadata["model"].(map[string]any)
+	schema, ok := model["customOptions"].(map[string]any)
+	if !ok {
+		t.Fatalf("customOptions missing, got %v", model["customOptions"])
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("customOptions has no properties: %v", schema)
+	}
+	for _, key := range []string{"temperature", "maxOutputTokens", "stopSequences", "seed", "enableThinking", "thinkingBudget", "enableSearch", "version"} {
+		if props[key] == nil {
+			t.Errorf("config schema is missing the %q property", key)
+		}
+	}
+}
+
+// TestDynamicListingAndResolution pins the on-demand surface: models the
+// endpoint reports are listed with the plugin's config schema, and generating
+// with an uncurated name resolves it instead of failing with model-not-found.
+func TestDynamicListingAndResolution(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/compatible-mode/v1/models" {
+			_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"qwen-brand-new","object":"model"}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{
+			"id":"c1","object":"chat.completion","created":1,"model":"qwen-brand-new",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"resolved"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+		}`)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	plugin := &dashscope.DashScope{APIKey: "test-key", BaseURL: server.URL + "/compatible-mode/v1"}
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
+
+	var listed *api.ActionDesc
+	for _, desc := range plugin.ListActions(ctx) {
+		if desc.Name == "dashscope/qwen-brand-new" {
+			listed = &desc
+			break
+		}
+	}
+	if listed == nil {
+		t.Fatal("ListActions() does not include the endpoint's model")
+	}
+	model := listed.Metadata["model"].(map[string]any)
+	schema, ok := model["customOptions"].(map[string]any)
+	if !ok {
+		t.Fatalf("listed model has no customOptions: %v", model)
+	}
+	props, _ := schema["properties"].(map[string]any)
+	if props["enableThinking"] == nil {
+		t.Error("listed model schema is missing the plugin's enableThinking property")
+	}
+
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithModelName("dashscope/qwen-brand-new"),
+		ai.WithPrompt("hi"),
+	)
+	if err != nil {
+		t.Fatalf("Generate() with an uncurated model error = %v", err)
+	}
+	if got := resp.Text(); got != "resolved" {
+		t.Fatalf("Text() = %q, want %q", got, "resolved")
+	}
 }

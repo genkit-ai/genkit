@@ -23,7 +23,9 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai"
+	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/shared"
 )
 
 const (
@@ -42,6 +44,80 @@ const (
 	ModelKimiK27CodeHighspeed = "kimi-k2.7-code-highspeed"
 )
 
+// ChatConfig is the per-request config for Kimi models: the generation fields
+// the K-series accepts plus the Moonshot-specific controls. See
+// https://platform.kimi.ai/docs/api/chat.
+//
+// Moonshot documents temperature, topP, and the frequency and presence
+// penalties for the legacy moonshot-v1 family only, so the K-series models
+// this plugin serves do not take them and they are deliberately absent.
+type ChatConfig struct {
+	compat_oai.RequestConfig
+
+	// MaxOutputTokens is the maximum number of tokens to generate, sent as the
+	// API's max_completion_tokens; Moonshot deprecated max_tokens.
+	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
+	// StopSequences stop generation when produced by the model, up to five.
+	StopSequences []string `json:"stopSequences,omitempty"`
+	// LogProbs requests log probabilities for the output tokens.
+	LogProbs *bool `json:"logProbs,omitempty"`
+	// TopLogProbs is how many of the most likely tokens to return log
+	// probabilities for at each position, from 0 to 20; it requires LogProbs.
+	TopLogProbs *int `json:"topLogProbs,omitempty"`
+	// Thinking controls the reasoning mode of thinking-capable Kimi models,
+	// sent as the API's thinking field.
+	Thinking *ThinkingConfig `json:"thinking,omitempty"`
+	// ReasoningEffort adjusts how hard the Kimi K3 generation thinks: "low",
+	// "high", or "max".
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+}
+
+// ThinkingConfig configures the reasoning of thinking-capable Kimi models.
+type ThinkingConfig struct {
+	// Type turns thinking "enabled" or "disabled".
+	Type string `json:"type,omitempty"`
+	// Keep controls how much reasoning is preserved across turns, e.g. "all".
+	Keep string `json:"keep,omitempty"`
+}
+
+// ApplyToChatCompletion implements [compat_oai.ChatConfig]: the generation
+// fields land on their chat completion counterparts, reasoning effort on the
+// SDK's reasoning_effort, and thinking rides as Moonshot's extra request
+// field.
+func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams) {
+	c.ApplyVersion(params)
+
+	if c.MaxOutputTokens > 0 {
+		params.MaxCompletionTokens = openai.Int(int64(c.MaxOutputTokens))
+	}
+	if len(c.StopSequences) > 0 {
+		params.Stop = openai.ChatCompletionNewParamsStopUnion{OfStringArray: c.StopSequences}
+	}
+	if c.LogProbs != nil {
+		params.Logprobs = openai.Bool(*c.LogProbs)
+	}
+	if c.TopLogProbs != nil {
+		params.TopLogprobs = openai.Int(int64(*c.TopLogProbs))
+	}
+	if c.ReasoningEffort != "" {
+		params.ReasoningEffort = shared.ReasoningEffort(c.ReasoningEffort)
+	}
+	if c.Thinking != nil {
+		thinking := map[string]any{}
+		if c.Thinking.Type != "" {
+			thinking["type"] = c.Thinking.Type
+		}
+		if c.Thinking.Keep != "" {
+			thinking["keep"] = c.Thinking.Keep
+		}
+		// An all-zero ThinkingConfig adds nothing rather than sending an
+		// empty thinking object the API could reject.
+		if len(thinking) > 0 {
+			compat_oai.AddExtraFields(params, map[string]any{"thinking": thinking})
+		}
+	}
+}
+
 var supportedModels = map[string]ai.ModelOptions{
 	ModelKimiK3: {
 		Label: "Kimi K3",
@@ -53,7 +129,6 @@ var supportedModels = map[string]ai.ModelOptions{
 			ToolChoice: true,
 			Output:     []string{"text", "json"},
 		},
-		Versions: []string{ModelKimiK3},
 	},
 	ModelKimiK25: {
 		Label: "Kimi K2.5 (Deprecated)",
@@ -66,7 +141,6 @@ var supportedModels = map[string]ai.ModelOptions{
 			ToolChoice: true,
 			Output:     []string{"text", "json"},
 		},
-		Versions: []string{ModelKimiK25},
 	},
 	ModelKimiK26: {
 		Label: "Kimi K2.6",
@@ -78,7 +152,6 @@ var supportedModels = map[string]ai.ModelOptions{
 			ToolChoice: true,
 			Output:     []string{"text", "json"},
 		},
-		Versions: []string{ModelKimiK26},
 	},
 	ModelKimiK27Code: {
 		Label: "Kimi K2.7 Code",
@@ -90,7 +163,6 @@ var supportedModels = map[string]ai.ModelOptions{
 			ToolChoice: true,
 			Output:     []string{"text", "json"},
 		},
-		Versions: []string{ModelKimiK27Code},
 	},
 	ModelKimiK27CodeHighspeed: {
 		Label: "Kimi K2.7 Code Highspeed",
@@ -102,7 +174,6 @@ var supportedModels = map[string]ai.ModelOptions{
 			ToolChoice: true,
 			Output:     []string{"text", "json"},
 		},
-		Versions: []string{ModelKimiK27CodeHighspeed},
 	},
 }
 
@@ -161,27 +232,87 @@ func (k *Kimi) Init(ctx context.Context) []api.Action {
 	actions := k.openAICompatible.Init(ctx)
 
 	for model, modelOpts := range supportedModels {
-		actions = append(actions, k.DefineModel(model, modelOpts).(api.Action))
+		actions = append(actions, k.newModel(model, modelOpts))
 	}
 	return actions
 }
 
-// Model returns a registered Kimi model.
+// newModel creates a Kimi model without registering it.
+func (k *Kimi) newModel(id string, opts ai.ModelOptions) *ai.ModelAction {
+	return compat_oai.NewChatModel[ChatConfig](&k.openAICompatible, id, opts)
+}
+
+// modelOptions returns the ModelOptions for a Kimi model ID: curated
+// capabilities for a known model and the Kimi defaults for the rest.
+func modelOptions(id string) ai.ModelOptions {
+	if opts, ok := supportedModels[id]; ok {
+		return opts
+	}
+	return ai.ModelOptions{
+		Supports: &ai.ModelSupports{
+			Multiturn:  true,
+			Tools:      true,
+			SystemRole: true,
+			Media:      true,
+			ToolChoice: true,
+			Output:     []string{"text", "json"},
+		},
+		Versions: []string{},
+		Stage:    ai.ModelStageStable,
+	}
+}
+
+// ModelRef names a Kimi model and carries the config to generate with, so the
+// config is typed at the call site instead of an any the model checks at
+// runtime. A nil config leaves the request's config unset.
+//
+//	ai.WithModel(kimi.ModelRef(kimi.ModelKimiK3, &kimi.ChatConfig{
+//		ReasoningEffort: "high",
+//	}))
+//
+// id is the model ID, with or without the provider prefix.
+func ModelRef(id string, config *ChatConfig) ai.ModelRef {
+	return ai.NewModelRef(compat_oai.ActionName(provider, id), config)
+}
+
+// RegisterModel registers a Kimi model with g and returns it. The plugin
+// supplies the implementation; opts describes
+// what the model supports, and a nil opts takes the capabilities the plugin
+// resolves for that ID, curated for a known model and the Kimi defaults for
+// the rest.
+//
+// Registering an ID that is already registered panics; Init registers every
+// curated model and generating with an ID registers it on demand, so define
+// a model before its first use or guard with [IsDefinedModel]. name is the
+// model ID, bare or provider-prefixed.
+func (k *Kimi) RegisterModel(g *genkit.Genkit, id string, opts *ai.ModelOptions) (ai.Model, error) {
+	return compat_oai.RegisterChatModel[ChatConfig](g, &k.openAICompatible, id, opts, modelOptions)
+}
+
+// IsDefinedModel reports whether a model is already registered, which is the
+// guard against registering one twice (see [Kimi.RegisterModel]).
+func IsDefinedModel(g *genkit.Genkit, id string) bool {
+	return compat_oai.IsDefinedModel(g, provider, id)
+}
+
+// Model returns a previously registered model.
+//
+// Deprecated: Generation resolves a model from its name, so looking one up
+// first is rarely necessary: pass ai.WithModelName("kimi/kimi-k3") or, to
+// carry config with it, [ModelRef]. Use [genkit.LookupModel] when the action
+// itself is what you need.
 func (k *Kimi) Model(g *genkit.Genkit, id string) ai.Model {
-	return k.openAICompatible.Model(g, api.NewName(provider, id))
+	return genkit.LookupModel(g, compat_oai.ActionName(provider, id))
 }
 
-// DefineModel registers a Kimi model, including models not in the built-in list.
-func (k *Kimi) DefineModel(id string, opts ai.ModelOptions) ai.Model {
-	return k.openAICompatible.DefineModel(provider, id, opts)
-}
-
-// ListActions lists models exposed by the configured Kimi endpoint.
+// ListActions lists the models the configured Kimi endpoint exposes,
+// described by the plugin's config schema and capabilities.
 func (k *Kimi) ListActions(ctx context.Context) []api.ActionDesc {
-	return k.openAICompatible.ListActions(ctx)
+	return compat_oai.ListChatActions[ChatConfig](ctx, &k.openAICompatible, modelOptions)
 }
 
-// ResolveAction dynamically registers a model exposed by the Kimi endpoint.
-func (k *Kimi) ResolveAction(atype api.ActionType, name string) api.Action {
-	return k.openAICompatible.ResolveAction(atype, name)
+// ResolveAction dynamically builds a model exposed by the Kimi endpoint,
+// described by the plugin's config schema and capabilities.
+func (k *Kimi) ResolveAction(atype api.ActionType, id string) api.Action {
+	return compat_oai.ResolveChatAction[ChatConfig](&k.openAICompatible, atype, id, modelOptions)
 }

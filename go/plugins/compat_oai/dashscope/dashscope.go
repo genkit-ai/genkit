@@ -22,6 +22,7 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai"
+	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 )
 
@@ -35,6 +36,78 @@ const (
 	// and the package README.
 	defaultBaseURL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 )
+
+// ChatConfig is the per-request config for Qwen models served through
+// DashScope's OpenAI-compatible mode: the common generation fields plus the
+// DashScope-specific controls the mode accepts as extra request fields. See
+// https://www.alibabacloud.com/help/en/model-studio/use-qwen-by-calling-api.
+type ChatConfig struct {
+	compat_oai.RequestConfig
+
+	// Temperature controls the degree of randomness in token selection, from
+	// 0 to 2, exclusive of both ends.
+	Temperature *float64 `json:"temperature,omitempty"`
+	// TopP is the nucleus sampling threshold, from 0 to 1, exclusive of both
+	// ends.
+	TopP *float64 `json:"topP,omitempty"`
+	// MaxOutputTokens is the maximum number of tokens to generate, sent as the
+	// API's max_tokens.
+	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
+	// StopSequences stop generation when produced by the model.
+	StopSequences []string `json:"stopSequences,omitempty"`
+	// PresencePenalty penalizes tokens that have appeared at all, from -2.0 to
+	// 2.0. DashScope's compatible mode documents no frequency penalty.
+	PresencePenalty *float64 `json:"presencePenalty,omitempty"`
+	// Seed makes generation reproducible across calls when set.
+	Seed *int `json:"seed,omitempty"`
+	// EnableThinking turns the thinking mode of hybrid Qwen models on or off,
+	// sent as the API's enable_thinking.
+	EnableThinking *bool `json:"enableThinking,omitempty"`
+	// ThinkingBudget is the maximum number of tokens the model may think
+	// with, sent as the API's thinking_budget; it requires EnableThinking.
+	ThinkingBudget *int `json:"thinkingBudget,omitempty"`
+	// EnableSearch lets the model consult web search, sent as the API's
+	// enable_search.
+	EnableSearch *bool `json:"enableSearch,omitempty"`
+}
+
+// ApplyToChatCompletion implements [compat_oai.ChatConfig]: the generation
+// fields land on their chat completion counterparts and the DashScope controls
+// ride as the mode's extra request fields.
+func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams) {
+	c.ApplyVersion(params)
+
+	if c.Temperature != nil {
+		params.Temperature = openai.Float(*c.Temperature)
+	}
+	if c.TopP != nil {
+		params.TopP = openai.Float(*c.TopP)
+	}
+	if c.MaxOutputTokens > 0 {
+		params.MaxTokens = openai.Int(int64(c.MaxOutputTokens))
+	}
+	if len(c.StopSequences) > 0 {
+		params.Stop = openai.ChatCompletionNewParamsStopUnion{OfStringArray: c.StopSequences}
+	}
+	if c.PresencePenalty != nil {
+		params.PresencePenalty = openai.Float(*c.PresencePenalty)
+	}
+	if c.Seed != nil {
+		params.Seed = openai.Int(int64(*c.Seed))
+	}
+
+	extra := map[string]any{}
+	if c.EnableThinking != nil {
+		extra["enable_thinking"] = *c.EnableThinking
+	}
+	if c.ThinkingBudget != nil {
+		extra["thinking_budget"] = *c.ThinkingBudget
+	}
+	if c.EnableSearch != nil {
+		extra["enable_search"] = *c.EnableSearch
+	}
+	compat_oai.AddExtraFields(params, extra)
+}
 
 // Supported models: https://www.alibabacloud.com/help/en/model-studio/models
 // Confirmed against the live GET /compatible-mode/v1/models response for this workspace.
@@ -175,7 +248,7 @@ type DashScope struct {
 	// here are applied after the plugin defaults.
 	Opts []option.RequestOption
 
-	openAICompatible *compat_oai.OpenAICompatible
+	openAICompatible compat_oai.OpenAICompatible
 }
 
 // Name implements genkit.Plugin.
@@ -207,10 +280,6 @@ func (d *DashScope) Init(ctx context.Context) []api.Action {
 	}
 	opts = append(opts, d.Opts...)
 
-	if d.openAICompatible == nil {
-		d.openAICompatible = &compat_oai.OpenAICompatible{}
-	}
-
 	d.openAICompatible.Provider = provider
 	d.openAICompatible.Opts = opts
 	compatActions := d.openAICompatible.Init(ctx)
@@ -220,16 +289,87 @@ func (d *DashScope) Init(ctx context.Context) []api.Action {
 
 	// define default models
 	for model, modelOpts := range supportedModels {
-		actions = append(actions, d.DefineModel(model, modelOpts).(api.Action))
+		actions = append(actions, d.newModel(model, modelOpts))
 	}
 
 	return actions
 }
 
-func (d *DashScope) Model(g *genkit.Genkit, id string) ai.Model {
-	return d.openAICompatible.Model(g, api.NewName(provider, id))
+// newModel creates a Qwen model without registering it.
+func (d *DashScope) newModel(id string, opts ai.ModelOptions) *ai.ModelAction {
+	return compat_oai.NewChatModel[ChatConfig](&d.openAICompatible, id, opts)
 }
 
-func (d *DashScope) DefineModel(id string, opts ai.ModelOptions) ai.Model {
-	return d.openAICompatible.DefineModel(provider, id, opts)
+// modelOptions returns the ModelOptions for a Qwen model ID: curated
+// capabilities for a known model and the Qwen defaults for the rest.
+func modelOptions(id string) ai.ModelOptions {
+	if opts, ok := supportedModels[id]; ok {
+		return opts
+	}
+	return ai.ModelOptions{
+		Supports: &ai.ModelSupports{
+			Multiturn:  true,
+			Tools:      true,
+			SystemRole: true,
+			Media:      false,
+			Output:     []string{"text", "json"},
+		},
+		Versions: []string{},
+		Stage:    ai.ModelStageStable,
+	}
+}
+
+// ModelRef names a Qwen model and carries the config to generate with, so the
+// config is typed at the call site instead of an any the model checks at
+// runtime. A nil config leaves the request's config unset.
+//
+//	ai.WithModel(dashscope.ModelRef("qwen-plus", &dashscope.ChatConfig{
+//		EnableThinking: openai.Ptr(true),
+//	}))
+//
+// id is the model ID, with or without the provider prefix.
+func ModelRef(id string, config *ChatConfig) ai.ModelRef {
+	return ai.NewModelRef(compat_oai.ActionName(provider, id), config)
+}
+
+// RegisterModel registers a Qwen model with g and returns it. The plugin
+// supplies the implementation; opts describes
+// what the model supports, and a nil opts takes the capabilities the plugin
+// resolves for that ID, curated for a known model and the Qwen defaults for
+// the rest.
+//
+// Registering an ID that is already registered panics; Init registers every
+// curated model and generating with an ID registers it on demand, so define
+// a model before its first use or guard with [IsDefinedModel]. name is the
+// model ID, bare or provider-prefixed.
+func (d *DashScope) RegisterModel(g *genkit.Genkit, id string, opts *ai.ModelOptions) (ai.Model, error) {
+	return compat_oai.RegisterChatModel[ChatConfig](g, &d.openAICompatible, id, opts, modelOptions)
+}
+
+// IsDefinedModel reports whether a model is already registered, which is the
+// guard against registering one twice (see [DashScope.RegisterModel]).
+func IsDefinedModel(g *genkit.Genkit, id string) bool {
+	return compat_oai.IsDefinedModel(g, provider, id)
+}
+
+// Model returns a previously registered model.
+//
+// Deprecated: Generation resolves a model from its name, so looking one up
+// first is rarely necessary: pass ai.WithModelName("dashscope/qwen-plus") or,
+// to carry config with it, [ModelRef]. Use [genkit.LookupModel] when the
+// action itself is what you need.
+func (d *DashScope) Model(g *genkit.Genkit, id string) ai.Model {
+	return genkit.LookupModel(g, compat_oai.ActionName(provider, id))
+}
+
+// ListActions lists the models the configured DashScope endpoint exposes,
+// described by the plugin's config schema and capabilities.
+func (d *DashScope) ListActions(ctx context.Context) []api.ActionDesc {
+	return compat_oai.ListChatActions[ChatConfig](ctx, &d.openAICompatible, modelOptions)
+}
+
+// ResolveAction dynamically builds a model exposed by the DashScope endpoint,
+// described by the plugin's config schema and capabilities.
+func (d *DashScope) ResolveAction(atype api.ActionType, id string) api.Action {
+	return compat_oai.ResolveChatAction[ChatConfig](&d.openAICompatible, atype, id, modelOptions)
 }

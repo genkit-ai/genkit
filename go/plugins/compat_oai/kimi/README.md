@@ -40,21 +40,25 @@ Kimi's `reasoning_content` output is returned as Genkit reasoning parts and is
 available through `response.Reasoning()`. Reasoning parts are also preserved as
 `reasoning_content` during multi-turn and tool-call requests.
 
-Kimi-specific request fields are passed through when configuration is supplied
-as a map. For example, Kimi K2.6 thinking can be disabled per request:
+Models take a typed `kimi.ChatConfig`: the generation fields the K-series
+accepts plus the Kimi-specific controls (`thinking`, `reasoningEffort`).
+`kimi.ModelRef` carries the config with the model ID. For example, Kimi K2.6
+thinking can be disabled per request:
 
 ```go
 response, err := genkit.Generate(
     ctx,
     g,
+    ai.WithModel(kimi.ModelRef(kimi.ModelKimiK26, &kimi.ChatConfig{
+        Thinking: &kimi.ThinkingConfig{Type: "disabled"},
+    })),
     ai.WithPrompt("Answer concisely."),
-    ai.WithConfig(map[string]any{
-        "thinking": map[string]any{
-            "type": "disabled",
-        },
-    }),
 )
 ```
+
+Moonshot documents `temperature`, `topP`, and the frequency and presence
+penalties for the legacy `moonshot-v1` family only, so the config does not
+offer them, and `maxOutputTokens` reaches Moonshot as `max_completion_tokens`.
 
 ## Live tests
 

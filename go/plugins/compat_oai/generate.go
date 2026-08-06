@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"strings"
 
@@ -39,21 +40,6 @@ type ModelGenerator struct {
 	// Store any errors that occur during building
 	err error
 }
-
-// chatCompletionParamFields contains every field serialized by the OpenAI SDK.
-// Provider-specific config is passed through as an extra field only when the
-// SDK does not already model it.
-var chatCompletionParamFields = func() map[string]struct{} {
-	paramsType := reflect.TypeOf(openai.ChatCompletionNewParams{})
-	fields := make(map[string]struct{}, paramsType.NumField())
-	for i := 0; i < paramsType.NumField(); i++ {
-		name, _, _ := strings.Cut(paramsType.Field(i).Tag.Get("json"), ",")
-		if name != "" && name != "-" {
-			fields[name] = struct{}{}
-		}
-	}
-	return fields
-}()
 
 func (g *ModelGenerator) GetRequest() *openai.ChatCompletionNewParams {
 	return g.request
@@ -163,9 +149,29 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 	return g
 }
 
+// chatCompletionParamFields is the set of wire names the SDK's request params
+// model, used by the deprecated [ModelGenerator.WithConfig] to tell a
+// provider-specific key apart from one the SDK already carries.
+var chatCompletionParamFields = func() map[string]struct{} {
+	paramsType := reflect.TypeOf(openai.ChatCompletionNewParams{})
+	fields := make(map[string]struct{}, paramsType.NumField())
+	for i := range paramsType.NumField() {
+		name, _, _ := strings.Cut(paramsType.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			fields[name] = struct{}{}
+		}
+	}
+	return fields
+}()
+
 // WithConfig adds configuration parameters from the model request
 // see https://platform.openai.com/docs/api-reference/responses/create
 // for more details on openai's request fields
+//
+// Deprecated: use [ModelGenerator.WithParams], which takes the SDK request
+// params directly. A plugin with a config type of its own converts it once, in
+// its ApplyToChatCompletion, instead of leaving every request to a runtime
+// type switch that silently drops the keys it does not recognize.
 func (g *ModelGenerator) WithConfig(config any) *ModelGenerator {
 	// Return early if we already have an error
 	if g.err != nil {
@@ -187,9 +193,7 @@ func (g *ModelGenerator) WithConfig(config any) *ModelGenerator {
 		openaiConfig = *cfg
 	case map[string]any:
 		normalizedConfig := make(map[string]any, len(cfg))
-		for key, value := range cfg {
-			normalizedConfig[key] = value
-		}
+		maps.Copy(normalizedConfig, cfg)
 		for source, target := range map[string]string{
 			"frequencyPenalty": "frequency_penalty",
 			"logProbs":         "logprobs",
@@ -237,6 +241,24 @@ func (g *ModelGenerator) WithConfig(config any) *ModelGenerator {
 	// keep the original model in the updated config structure
 	openaiConfig.Model = g.request.Model
 	g.request = &openaiConfig
+	return g
+}
+
+// WithParams uses params as the base the request is built on, carrying the
+// request's config onto the wire. A model the params carry wins over the
+// generator's: that is how a config pins the exact version the request is
+// served by, matching the JS plugin's version handling. The generator's model
+// fills in otherwise, and the messages, tools, and tool choice Genkit manages
+// are set over the params by the other builders.
+func (g *ModelGenerator) WithParams(params openai.ChatCompletionNewParams) *ModelGenerator {
+	if g.err != nil {
+		return g
+	}
+
+	if params.Model == "" {
+		params.Model = g.request.Model
+	}
+	g.request = &params
 	return g
 }
 
