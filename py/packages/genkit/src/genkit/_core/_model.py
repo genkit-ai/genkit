@@ -74,7 +74,7 @@ ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True, de
 
 @dataclass(frozen=True, kw_only=True)
 class ModelRef(Generic[ModelRefConfigT]):
-    """Frozen reference to a model, optionally tied to a config schema."""
+    """Frozen reference to a model bound to a Pydantic config schema."""
 
     name: str
     config_schema: type[ModelRefConfigT]
