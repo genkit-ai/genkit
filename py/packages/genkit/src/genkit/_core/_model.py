@@ -69,7 +69,7 @@ OutputT = TypeVar('OutputT', default=object)
 ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
 # Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
 # Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
-ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True, default=BaseModel)
+ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
 # Unbounded so ModelRequest supports any config payload (BaseModel instances, dicts, custom options)
 # across action execution boundaries without forcing assumptions.
 ModelRequestConfigT = TypeVar('ModelRequestConfigT', covariant=True)

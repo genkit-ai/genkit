@@ -20,7 +20,7 @@
 import asyncio
 import os
 import weakref
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypedDict, TypeVar, cast
@@ -64,6 +64,7 @@ from genkit._core._model import (
     GenerateActionOptions,
     Message,
     ModelConfig,
+    ModelConfigDict,
     ModelRef,
 )
 from genkit._core._registry import Registry
@@ -102,6 +103,12 @@ def normalize_config(
         return None
     if isinstance(config, BaseModel):
         return config.model_dump(exclude_unset=True)
+    if isinstance(config, Mapping):
+        d = cast(dict[str, Any], config)
+        try:
+            return ModelConfig(**d).model_dump(exclude_none=True)
+        except Exception:
+            return dict(d)
     return dict(cast(Any, config))
 
 
@@ -121,7 +128,7 @@ def _get_concrete_schema(*candidates: object) -> type[BaseModel] | None:
 
 def resolve_model_arg(
     model: str | ModelRef[Any] | None,
-    config: dict[str, Any] | BaseModel | None,
+    config: BaseModel | ModelConfigDict | Mapping[str, Any] | None,
 ) -> tuple[str | None, dict[str, Any] | None]:
     """Resolve a ModelRef or string model argument to a wire name and merged config dict.
 
@@ -450,9 +457,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
                 else (self._config or {})
             )
             opt_config = opts.get('config')
-            override = (
-                opt_config.model_dump(exclude_none=True) if isinstance(opt_config, BaseModel) else (opt_config or {})
-            )
+            override = normalize_config(opt_config) or {}
             merged_config = {**base, **override} if base or override else None
         else:
             merged_config = self._config
