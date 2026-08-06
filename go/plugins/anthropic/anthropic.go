@@ -95,23 +95,10 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 	return []api.Action{}
 }
 
-// DefineModel registers a Claude model with g and returns it. opts describes
-// what the model supports; a nil opts takes the capabilities the plugin
-// resolves for that name, curated for a known model and the Claude defaults
-// for the rest.
-//
-// Most applications never need this. Every Claude model resolves on demand,
-// so naming one that was never defined is enough:
-//
-//	genkit.Generate(ctx, g, ai.WithModelName("anthropic/claude-opus-4-5"), ...)
-//
-// Reach for DefineModel only to pin capabilities that differ from the ones
-// the plugin resolves, which is what opts is for.
-//
-// Registering a name that is already registered panics, and generating with a
-// name registers it, so define a model before its first use or guard with
-// [IsDefinedModel]. name is the model ID, bare or provider-prefixed.
-func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
+// buildModel builds an unregistered Claude model. A nil opts takes the
+// capabilities the plugin resolves for that name, and name is the model ID,
+// bare or provider-prefixed.
+func (a *Anthropic) buildModel(name string, opts *ai.ModelOptions) *ai.ModelAction {
 	// Trim before resolving, so a prefixed name still hits knownModels.
 	name = strings.TrimPrefix(name, provider+"/")
 
@@ -122,9 +109,39 @@ func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOpt
 		modelOpts = modelOptions(name)
 	}
 
-	model := newModel(a.aclient, name, name, modelOpts)
+	return newModel(a.aclient, name, name, modelOpts)
+}
+
+// RegisterModel registers a Claude model with g and returns it. The plugin
+// supplies the implementation; opts describes what the model supports, and a
+// nil opts takes the capabilities the plugin resolves for that name, curated
+// for a known model and the Claude defaults for the rest.
+//
+// Most applications never need this. Every Claude model resolves on demand,
+// so naming one that was never registered is enough:
+//
+//	genkit.Generate(ctx, g, ai.WithModelName("anthropic/claude-opus-4-5"), ...)
+//
+// Reach for RegisterModel only to pin capabilities that differ from the ones
+// the plugin resolves, which is what opts is for.
+//
+// Registering a name that is already registered panics, and generating with a
+// name registers it, so register a model before its first use or guard with
+// [IsDefinedModel]. name is the model ID, bare or provider-prefixed.
+func (a *Anthropic) RegisterModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
+	model := a.buildModel(name, opts)
 	genkit.RegisterAction(g, model)
 	return model, nil
+}
+
+// DefineModel builds a Claude model and returns it, without registering it
+// with g.
+//
+// Deprecated: use [Anthropic.RegisterModel], which also registers the model
+// with g so that generating by that name uses it. This method only builds the
+// model and ignores g, leaving it reachable through the returned value alone.
+func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
+	return a.buildModel(name, opts), nil
 }
 
 // modelOptions returns the ModelOptions for a Claude model name. Known models
@@ -170,7 +187,7 @@ func Model(g *genkit.Genkit, name string) ai.Model {
 }
 
 // IsDefinedModel reports whether a model is already registered, which is the
-// guard against defining one twice (see [Anthropic.DefineModel]). The lookup
+// guard against registering one twice (see [Anthropic.RegisterModel]). The lookup
 // deliberately does not resolve dynamically: a resolving lookup would ask the
 // plugin to resolve the very model the caller is checking for, registering it
 // and answering true for any name the Anthropic API can serve.
