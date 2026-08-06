@@ -545,7 +545,8 @@ def test_trailing_assistant_message_kept_without_tools() -> None:
     assert [m['role'] for m in kwargs['messages']] == ['user', 'assistant']
 
 
-def test_trailing_assistant_dropped_even_under_tool_choice_none() -> None:
+def test_trailing_assistant_kept_under_tool_choice_none() -> None:
+    # No toolConfig is sent under "none", so the prefill has nothing to violate.
     request = ModelRequest(
         messages=[
             Message(role=Role.USER, content=[Part(root=TextPart(text='q'))]),
@@ -555,7 +556,8 @@ def test_trailing_assistant_dropped_even_under_tool_choice_none() -> None:
         config=BedrockConfig(tool_choice='none'),
     )
     kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
-    assert [m['role'] for m in kwargs['messages']] == ['user']
+    assert [m['role'] for m in kwargs['messages']] == ['user', 'assistant']
+    assert 'toolConfig' not in kwargs
 
 
 def test_additional_model_request_fields_forwarded_verbatim() -> None:
