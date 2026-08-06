@@ -43,9 +43,17 @@ type Operation[Out any] struct {
 	Metadata map[string]any `json:"metadata,omitempty"` // Additional metadata.
 }
 
+// action is an unexported alias of [Action] used as the embedded field in
+// [BackgroundAction]. Embedding through the alias promotes Action's methods
+// while leaving the field itself unexported, so the start action stays an
+// internal detail rather than public surface.
+type action[In, Out, Stream any] = Action[In, Out, Stream]
+
 // BackgroundAction is a background action that can be used to start, check, and cancel background operations.
+// It promotes the start action's methods (Name, Desc, Run, RunJSON), so it can
+// be used anywhere an [api.Action] is accepted.
 type BackgroundAction[In, Out any] struct {
-	*Action[In, *Operation[Out], struct{}]
+	*action[In, *Operation[Out], struct{}]
 
 	check  *Action[*Operation[Out], *Operation[Out], struct{}] // Sub-action that checks the status of a background operation.
 	cancel *Action[*Operation[Out], *Operation[Out], struct{}] // Sub-action that cancels a background operation.
@@ -82,7 +90,7 @@ func (b *BackgroundAction[In, Out]) SupportsCancel() bool {
 
 // Register registers the model with the given registry.
 func (b *BackgroundAction[In, Out]) Register(r api.Registry) {
-	b.Action.Register(r)
+	b.action.Register(r)
 	b.check.Register(r)
 	if b.cancel != nil {
 		b.cancel.Register(r)
@@ -200,7 +208,7 @@ func NewBackgroundActionOf[In, Out any](
 	}
 
 	return &BackgroundAction[In, Out]{
-		Action: startAction,
+		action: startAction,
 		check:  checkAction,
 		cancel: cancelAction,
 	}
@@ -253,7 +261,7 @@ func LookupBackgroundAction[In, Out any](r api.Registry, key string) *Background
 	cancelAction := ResolveActionFor[*Operation[Out], *Operation[Out], struct{}](r, api.ActionTypeCancelOperation, name)
 
 	return &BackgroundAction[In, Out]{
-		Action: startAction,
+		action: startAction,
 		check:  checkAction,
 		cancel: cancelAction,
 	}
