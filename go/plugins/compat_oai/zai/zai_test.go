@@ -26,7 +26,9 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/firebase/genkit/go/plugins/compat_oai/zai"
+	"github.com/openai/openai-go"
 )
 
 func TestPluginRegistersGLMModelsAndHandlesReasoning(t *testing.T) {
@@ -157,10 +159,12 @@ func TestPluginRegistersGLMModelsAndHandlesReasoning(t *testing.T) {
 		}
 	}
 
+	// The Genkit config speaks the plugin's camelCase contract; the handler
+	// above asserts it reaches the wire as clear_thinking.
 	config := map[string]any{
 		"thinking": map[string]any{
-			"type":           "enabled",
-			"clear_thinking": false,
+			"type":          "enabled",
+			"clearThinking": false,
 		},
 	}
 	t.Run("complete", func(t *testing.T) {
@@ -313,8 +317,8 @@ func TestPluginPreservesReasoningAcrossToolCalls(t *testing.T) {
 		ai.WithTools(lookup),
 		ai.WithConfig(map[string]any{
 			"thinking": map[string]any{
-				"type":           "enabled",
-				"clear_thinking": false,
+				"type":          "enabled",
+				"clearThinking": false,
 			},
 		}),
 	)
@@ -502,4 +506,159 @@ func TestPluginRequiresAPIKey(t *testing.T) {
 	}()
 
 	(&zai.ZAI{}).Init(context.Background())
+}
+
+// TestModelRefAndConfigSchema pins the call-site surface: the ref carries the
+// prefixed name and the typed config, and the registered models advertise the
+// camelCase config contract including the Z.ai-specific fields.
+func TestModelRefAndConfigSchema(t *testing.T) {
+	cfg := &zai.ChatConfig{Thinking: &zai.ThinkingConfig{Type: "enabled"}}
+	for _, name := range []string{zai.ModelGLM5, "zai/" + zai.ModelGLM5} {
+		ref := zai.ModelRef(name, cfg)
+		if want := "zai/" + zai.ModelGLM5; ref.Name() != want {
+			t.Errorf("ModelRef(%q).Name() = %q, want %q", name, ref.Name(), want)
+		}
+		if ref.Config() != cfg {
+			t.Errorf("ModelRef(%q).Config() = %v, want the config it was built with", name, ref.Config())
+		}
+	}
+
+	t.Setenv("ZAI_API_KEY", "test-key")
+	plugin := &zai.ZAI{}
+	g := genkit.Init(context.Background(), genkit.WithPlugins(plugin))
+
+	m := genkit.LookupModel(g, "zai/"+zai.ModelGLM5)
+	if m == nil {
+		t.Fatal("glm-5 not registered by Init")
+	}
+	model := m.(api.Action).Desc().Metadata["model"].(map[string]any)
+	schema, ok := model["customOptions"].(map[string]any)
+	if !ok {
+		t.Fatalf("customOptions missing, got %v", model["customOptions"])
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("customOptions has no properties: %v", schema)
+	}
+	for _, key := range []string{"temperature", "maxOutputTokens", "stopSequences", "thinking", "doSample", "version"} {
+		if props[key] == nil {
+			t.Errorf("config schema is missing the %q property", key)
+		}
+	}
+}
+
+// TestModelRefConfigReachesTheWire pins the whole typed path: a ModelRef
+// carrying a typed ChatConfig passes the framework's schema validation, the
+// common fields land on their snake_case wire names, and the Z.ai extras ride
+// along, all in one Generate call.
+func TestModelRefConfigReachesTheWire(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model       string         `json:"model"`
+			Temperature float64        `json:"temperature"`
+			MaxTokens   int            `json:"max_tokens"`
+			Thinking    map[string]any `json:"thinking"`
+			DoSample    *bool          `json:"do_sample"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		if body.Model != "glm-5-20260101" {
+			t.Errorf("model = %q, want the pinned version %q", body.Model, "glm-5-20260101")
+		}
+		if body.Temperature != 0.3 {
+			t.Errorf("temperature = %v, want 0.3", body.Temperature)
+		}
+		if body.MaxTokens != 512 {
+			t.Errorf("max_tokens = %v, want 512", body.MaxTokens)
+		}
+		if got := body.Thinking["type"]; got != "enabled" {
+			t.Errorf("thinking.type = %v, want enabled", got)
+		}
+		if body.DoSample == nil || *body.DoSample != true {
+			t.Errorf("do_sample = %v, want true", body.DoSample)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"glm-5",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"typed config works"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+		}`)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	plugin := &zai.ZAI{APIKey: "test-key", BaseURL: server.URL}
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
+
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithModel(zai.ModelRef(zai.ModelGLM5, &zai.ChatConfig{
+			RequestConfig:   compat_oai.RequestConfig{Version: "glm-5-20260101"},
+			Temperature:     openai.Ptr(0.3),
+			MaxOutputTokens: 512,
+			Thinking:        &zai.ThinkingConfig{Type: "enabled"},
+			DoSample:        openai.Ptr(true),
+		})),
+		ai.WithPrompt("hi"),
+	)
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if got := resp.Text(); got != "typed config works" {
+		t.Fatalf("Text() = %q, want %q", got, "typed config works")
+	}
+}
+
+// TestPerRequestAPIKey pins the credential override path: a typed config
+// carrying an APIKey authenticates that request alone with the override, the
+// plugin's key serves requests without one, and the key never appears in the
+// request body.
+func TestPerRequestAPIKey(t *testing.T) {
+	var auths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auths = append(auths, r.Header.Get("Authorization"))
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+		}
+		if strings.Contains(string(body), "override-key") || strings.Contains(string(body), "apiKey") {
+			t.Errorf("request body leaks the API key: %s", body)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"glm-5",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+		}`)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	plugin := &zai.ZAI{APIKey: "plugin-key", BaseURL: server.URL}
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
+
+	if _, err := genkit.Generate(ctx, g,
+		ai.WithModel(zai.ModelRef(zai.ModelGLM5, &zai.ChatConfig{
+			RequestConfig: compat_oai.RequestConfig{APIKey: "override-key"},
+		})),
+		ai.WithPrompt("hi"),
+	); err != nil {
+		t.Fatalf("Generate() with override error = %v", err)
+	}
+
+	if _, err := genkit.Generate(ctx, g,
+		ai.WithModel(zai.ModelRef(zai.ModelGLM5, nil)),
+		ai.WithPrompt("hi"),
+	); err != nil {
+		t.Fatalf("Generate() without override error = %v", err)
+	}
+
+	want := []string{"Bearer override-key", "Bearer plugin-key"}
+	if len(auths) != 2 || auths[0] != want[0] || auths[1] != want[1] {
+		t.Fatalf("Authorization headers = %v, want %v", auths, want)
+	}
 }

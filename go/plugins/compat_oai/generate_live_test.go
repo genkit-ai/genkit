@@ -16,7 +16,6 @@ package compat_oai_test
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -122,35 +121,15 @@ func TestGenerator_Stream(t *testing.T) {
 	}
 }
 
-func TestWithConfig(t *testing.T) {
+func TestWithParams(t *testing.T) {
 	tests := []struct {
 		name     string
-		config   any
-		err      error
+		params   openai.ChatCompletionNewParams
 		validate func(*testing.T, *openai.ChatCompletionNewParams)
 	}{
 		{
-			name:   "nil config",
-			config: nil,
-			validate: func(t *testing.T, request *openai.ChatCompletionNewParams) {
-				// For nil config, we expect config fields to be unset (not nil, but with its zero value)
-				if request.Temperature.Value != 0 {
-					t.Errorf("expecting empty in temperature, got: %v", request.Temperature.Value)
-				}
-				if request.MaxCompletionTokens.Value != 0 {
-					t.Errorf("expecting empty max completion tokens, got: %v", request.MaxCompletionTokens.Value)
-				}
-				if request.TopP.Value != 0 {
-					t.Errorf("expecting empty in topP, got: %v", request.TopP.Value)
-				}
-				if len(request.Stop.OfStringArray) != 0 {
-					t.Errorf("expecting empty stop reasons, got: %v", request.Stop)
-				}
-			},
-		},
-		{
-			name:   "empty openai config",
-			config: openai.ChatCompletionNewParams{},
+			name:   "empty params",
+			params: openai.ChatCompletionNewParams{},
 			validate: func(t *testing.T, request *openai.ChatCompletionNewParams) {
 				if request.Temperature.Value != 0 {
 					t.Errorf("expecting empty in temperature, got: %v", request.Temperature.Value)
@@ -167,8 +146,8 @@ func TestWithConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "valid config with all supported fields",
-			config: openai.ChatCompletionNewParams{
+			name: "params with all supported fields",
+			params: openai.ChatCompletionNewParams{
 				Temperature:         openai.Float(0.7),
 				MaxCompletionTokens: openai.Int(100),
 				TopP:                openai.Float(0.9),
@@ -177,50 +156,19 @@ func TestWithConfig(t *testing.T) {
 				},
 			},
 			validate: func(t *testing.T, request *openai.ChatCompletionNewParams) {
-				// Check that fields are present and have correct values
-				stopReasons := []string{"stop1, stop2"}
 				if request.Temperature.Value != 0.7 {
-					t.Errorf("expecting empty in temperature, got: %v", request.Temperature.Value)
+					t.Errorf("expecting 0.7 in temperature, got: %v", request.Temperature.Value)
 				}
 				if request.MaxCompletionTokens.Value != 100 {
-					t.Errorf("expecting empty max completion tokens, got: %v", request.MaxCompletionTokens.Value)
+					t.Errorf("expecting 100 max completion tokens, got: %v", request.MaxCompletionTokens.Value)
 				}
 				if request.TopP.Value != 0.9 {
-					t.Errorf("expecting empty in topP, got: %v", request.TopP.Value)
+					t.Errorf("expecting 0.9 in topP, got: %v", request.TopP.Value)
 				}
-				if slices.Equal(request.Stop.OfStringArray, stopReasons) {
-					t.Errorf("diff in stop reasons, got: %v, want: %v", request.Stop.OfStringArray, stopReasons)
-				}
-			},
-		},
-		{
-			name: "valid config as map",
-			config: map[string]any{
-				"temperature":           0.7,
-				"max_completion_tokens": 100,
-				"top_p":                 0.9,
-				"stop":                  []string{"stop1", "stop2"},
-			},
-			validate: func(t *testing.T, request *openai.ChatCompletionNewParams) {
-				stopReasons := []string{"stop1, stop2"}
-				if request.Temperature.Value != 0.7 {
-					t.Errorf("expecting empty in temperature, got: %v", request.Temperature.Value)
-				}
-				if request.MaxCompletionTokens.Value != 100 {
-					t.Errorf("expecting empty max completion tokens, got: %v", request.MaxCompletionTokens.Value)
-				}
-				if request.TopP.Value != 0.9 {
-					t.Errorf("expecting empty in topP, got: %v", request.TopP.Value)
-				}
-				if slices.Equal(request.Stop.OfStringArray, stopReasons) {
-					t.Errorf("diff in stop reasons, got: %v, want: %v", request.Stop.OfStringArray, stopReasons)
+				if !slices.Equal(request.Stop.OfStringArray, []string{"stop1", "stop2"}) {
+					t.Errorf("diff in stop reasons, got: %v, want: %v", request.Stop.OfStringArray, []string{"stop1", "stop2"})
 				}
 			},
-		},
-		{
-			name:   "invalid config type",
-			config: "not a config",
-			err:    fmt.Errorf("unexpected config type: string"),
 		},
 	}
 
@@ -240,17 +188,7 @@ func TestWithConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			generator := setupTestClient(t)
-			result, err := generator.WithMessages(messages).WithConfig(tt.config).Generate(context.Background(), req, nil)
-
-			if tt.err != nil {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				if got, want := err.Error(), tt.err.Error(); got != want {
-					t.Errorf("error message = %q, want %q", got, want)
-				}
-				return
-			}
+			result, err := generator.WithMessages(messages).WithParams(tt.params).Generate(context.Background(), req, nil)
 
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)

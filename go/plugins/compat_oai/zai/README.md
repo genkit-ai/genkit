@@ -39,19 +39,18 @@ response, err := genkit.Generate(
 ```
 
 GLM's `reasoning_content` output is returned as Genkit reasoning parts and is
-available through `response.Reasoning()`. Provider-specific fields such as
-`thinking` are passed through when configuration is supplied as a map:
+available through `response.Reasoning()`. Models take a typed `zai.ChatConfig`:
+the generation fields Z.ai accepts plus its own controls (`thinking`,
+`doSample`). `zai.ModelRef` carries the config with the model ID:
 
 ```go
 response, err := genkit.Generate(
     ctx,
     g,
+    ai.WithModel(zai.ModelRef(zai.ModelGLM51, &zai.ChatConfig{
+        Thinking: &zai.ThinkingConfig{Type: "disabled"},
+    })),
     ai.WithPrompt("Answer concisely."),
-    ai.WithConfig(map[string]any{
-        "thinking": map[string]any{
-            "type": "disabled",
-        },
-    }),
 )
 ```
 
