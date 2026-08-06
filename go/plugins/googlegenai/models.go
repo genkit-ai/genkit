@@ -104,11 +104,18 @@ var (
 )
 
 const (
-	gemini25Flash     = "gemini-2.5-flash"
-	gemini25FlashLite = "gemini-2.5-flash-lite"
+	gemini25Flash      = "gemini-2.5-flash"
+	gemini25FlashLite  = "gemini-2.5-flash-lite"
+	gemini25FlashImage = "gemini-2.5-flash-image"
 
 	gemini25Pro = "gemini-2.5-pro"
 
+	// Google AI names the omni model gemini-omni-flash; Vertex AI serves the
+	// same model as gemini-omni-flash-preview.
+	geminiOmniFlash        = "gemini-omni-flash"
+	geminiOmniFlashPreview = "gemini-omni-flash-preview"
+
+	gemini3FlashPreview    = "gemini-3-flash-preview"
 	gemini36Flash          = "gemini-3.6-flash"
 	gemini35Flash          = "gemini-3.5-flash"
 	gemini35FlashLite      = "gemini-3.5-flash-lite"
@@ -118,19 +125,34 @@ const (
 	gemini31FlashLiteImage = "gemini-3.1-flash-lite-image"
 	gemini3ProImage        = "gemini-3-pro-image"
 
+	// Google AI TTS names. Vertex AI serves the 2.5 pair without the
+	// "-preview-" infix, so the two backends need separate IDs.
 	gemini25FlashPreviewTTS = "gemini-2.5-flash-preview-tts"
 	gemini25ProPreviewTTS   = "gemini-2.5-pro-preview-tts"
+
+	// Vertex AI TTS names.
+	gemini25FlashTTS            = "gemini-2.5-flash-tts"
+	gemini25ProTTS              = "gemini-2.5-pro-tts"
+	gemini25FlashLitePreviewTTS = "gemini-2.5-flash-lite-preview-tts"
+
+	// Served under the same ID by both backends.
 	gemini31FlashTTSPreview = "gemini-3.1-flash-tts-preview"
 
 	imagen40FastGenerate001  = "imagen-4.0-fast-generate-001"
 	imagen40Generate001      = "imagen-4.0-generate-001"
 	imagen40UltraGenerate001 = "imagen-4.0-ultra-generate-001"
 
+	// Vertex AI serves Veo 3.1 as GA "-001" IDs; Google AI serves it as
+	// "-preview". Each backend has retired the other's spelling.
 	veo31Generate001         = "veo-3.1-generate-001"
 	veo31FastGenerate001     = "veo-3.1-fast-generate-001"
+	veo31LiteGenerate001     = "veo-3.1-lite-generate-001"
 	veo31GeneratePreview     = "veo-3.1-generate-preview"
 	veo31FastGeneratePreview = "veo-3.1-fast-generate-preview"
+	veo31LiteGeneratePreview = "veo-3.1-lite-generate-preview"
 
+	textembedding005             = "text-embedding-005"
+	textembedding004             = "text-embedding-004"
 	textmultilingualembedding002 = "text-multilingual-embedding-002"
 	multimodalembedding          = "multimodalembedding"
 	geminiEmbedding2             = "gemini-embedding-2"
@@ -143,7 +165,10 @@ var (
 	vertexAIModels = []string{
 		gemini25Flash,
 		gemini25FlashLite,
+		gemini25FlashImage,
 		gemini25Pro,
+		geminiOmniFlashPreview,
+		gemini3FlashPreview,
 		gemini36Flash,
 		gemini35Flash,
 		gemini35FlashLite,
@@ -153,16 +178,23 @@ var (
 		gemini31FlashLiteImage,
 		gemini3ProImage,
 
+		gemini25FlashTTS,
+		gemini25ProTTS,
+		gemini25FlashLitePreviewTTS,
 		gemini31FlashTTSPreview,
 
 		veo31Generate001,
 		veo31FastGenerate001,
+		veo31LiteGenerate001,
 	}
 
 	googleAIModels = []string{
 		gemini25Flash,
 		gemini25FlashLite,
+		gemini25FlashImage,
 		gemini25Pro,
+		geminiOmniFlash,
+		gemini3FlashPreview,
 		gemini36Flash,
 		gemini35Flash,
 		gemini35FlashLite,
@@ -185,6 +217,7 @@ var (
 
 		veo31GeneratePreview,
 		veo31FastGeneratePreview,
+		veo31LiteGeneratePreview,
 	}
 
 	supportedGeminiModels = map[string]ai.ModelOptions{
@@ -200,8 +233,32 @@ var (
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
 		},
+		gemini25FlashImage: {
+			Label:    "Gemini 2.5 Flash Image",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
 		gemini25Pro: {
 			Label:    "Gemini 2.5 Pro",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		geminiOmniFlash: {
+			Label:    "Gemini Omni Flash",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		geminiOmniFlashPreview: {
+			Label:    "Gemini Omni Flash",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini3FlashPreview: {
+			Label:    "Gemini 3 Flash Preview",
 			Versions: []string{},
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
@@ -266,6 +323,24 @@ var (
 			Supports: &TTSSupports,
 			Stage:    ai.ModelStageStable,
 		},
+		gemini25FlashTTS: {
+			Label:    "Gemini 2.5 Flash TTS",
+			Versions: []string{},
+			Supports: &TTSSupports,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini25ProTTS: {
+			Label:    "Gemini 2.5 Pro TTS",
+			Versions: []string{},
+			Supports: &TTSSupports,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini25FlashLitePreviewTTS: {
+			Label:    "Gemini 2.5 Flash Lite Preview TTS",
+			Versions: []string{},
+			Supports: &TTSSupports,
+			Stage:    ai.ModelStageStable,
+		},
 		gemini31FlashTTSPreview: {
 			Label:    "Gemini 3.1 Flash TTS Preview",
 			Versions: []string{},
@@ -320,9 +395,35 @@ var (
 			Supports: &VeoSupports,
 			Stage:    ai.ModelStageStable,
 		},
+		veo31LiteGenerate001: {
+			Label:    "Veo 3.1 Lite Generate 001",
+			Versions: []string{},
+			Supports: &VeoSupports,
+			Stage:    ai.ModelStageStable,
+		},
+		veo31LiteGeneratePreview: {
+			Label:    "Veo 3.1 Lite Generate Preview",
+			Versions: []string{},
+			Supports: &VeoSupports,
+			Stage:    ai.ModelStageStable,
+		},
 	}
 
 	embedderConfig = map[string]ai.EmbedderOptions{
+		textembedding005: {
+			Dimensions: 768,
+			Label:      "Text Embedding 005",
+			Supports: &ai.EmbedderSupports{
+				Input: []string{"text"},
+			},
+		},
+		textembedding004: {
+			Dimensions: 768,
+			Label:      "Text Embedding 004",
+			Supports: &ai.EmbedderSupports{
+				Input: []string{"text"},
+			},
+		},
 		textmultilingualembedding002: {
 			Dimensions: 768,
 			Label:      "Text Multilingual Embedding 002",
