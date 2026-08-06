@@ -17,7 +17,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
-	oai "github.com/firebase/genkit/go/plugins/compat_oai/anthropic"
+	"github.com/firebase/genkit/go/plugins/compat_oai/anthropic"
 	"github.com/firebase/genkit/go/plugins/server"
 	"github.com/openai/openai-go/option"
 )
@@ -25,15 +25,17 @@ import (
 func main() {
 	ctx := context.Background()
 
-	oai := oai.Anthropic{
+	plugin := anthropic.Anthropic{
 		Opts: []option.RequestOption{
 			option.WithAPIKey(os.Getenv("ANTHROPIC_API_KEY")),
 		},
 	}
-	g := genkit.Init(ctx, genkit.WithPlugins(&oai))
+	g := genkit.Init(ctx, genkit.WithPlugins(&plugin))
 
 	genkit.DefineFlow(g, "anthropic", func(ctx context.Context, subject string) (string, error) {
-		sonnet37 := oai.Model(g, "claude-3-7-sonnet-20250219")
+		sonnet37 := anthropic.ModelRef("claude-3-7-sonnet-20250219", &anthropic.ChatConfig{
+			MaxOutputTokens: 1024,
+		})
 
 		prompt := fmt.Sprintf("tell me a joke about %s", subject)
 		foo, err := genkit.Generate(ctx, g, ai.WithModel(sonnet37), ai.WithPrompt(prompt))

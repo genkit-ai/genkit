@@ -21,10 +21,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
@@ -32,7 +32,6 @@ import (
 	"github.com/firebase/genkit/go/internal/base"
 	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
-	"github.com/invopop/jsonschema"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
@@ -48,8 +47,11 @@ const (
 
 // defaultConfigSchema is the schema every Claude model advertises for its
 // config. Reflecting the SDK params struct is expensive and the result is
-// read-only, so it is built once and shared by every model of both plugins.
-var defaultConfigSchema = reflectConfigSchema(anthropic.MessageNewParams{})
+// read-only, so it is built on first use and shared by every model of both
+// plugins.
+var defaultConfigSchema = sync.OnceValue(func() map[string]any {
+	return pluginjsonschema.ReflectConfigSchema(anthropic.MessageNewParams{}, nil)
+})
 
 // metadataSignature extracts a reasoning signature from part metadata. It
 // handles both []byte (the value [ai.NewReasoningPart] stores) and string
@@ -104,7 +106,7 @@ func toAnthropicMediaBlock(p *ai.Part, kind string) (anthropic.ContentBlockParam
 // runs, so the request arrives with the config already typed.
 func NewModel(client anthropic.Client, provider, name, apiModel string, opts ai.ModelOptions) *ai.ModelAction {
 	if opts.ConfigSchema == nil {
-		opts.ConfigSchema = defaultConfigSchema
+		opts.ConfigSchema = defaultConfigSchema()
 	}
 	if opts.Label == "" {
 		opts.Label = fmt.Sprintf("%s - %s", providerLabel(provider), name)
@@ -130,46 +132,6 @@ func providerLabel(provider string) string {
 		return "Vertex AI"
 	}
 	return "Anthropic"
-}
-
-// reflectConfigSchema converts a config struct to a map[string]any.
-func reflectConfigSchema(config any) map[string]any {
-	r := jsonschema.Reflector{
-		DoNotReference:             true, // Prevent $ref usage
-		AllowAdditionalProperties:  false,
-		ExpandedStruct:             true,
-		RequiredFromJSONSchemaTags: true,
-	}
-	// The anthropic SDK uses a number of wrapper types for float, int, etc.
-	// By default, jsonschema will treat these as objects, but we want to
-	// treat them as their underlying primitive types.
-	r.Mapper = func(r reflect.Type) *jsonschema.Schema {
-		if r.Name() == "Opt[float64]" {
-			return &jsonschema.Schema{
-				Type: "number",
-			}
-		}
-		if r.Name() == "Opt[int64]" {
-			return &jsonschema.Schema{
-				Type: "integer",
-			}
-		}
-		if r.Name() == "Opt[string]" {
-			return &jsonschema.Schema{
-				Type: "string",
-			}
-		}
-		if r.Name() == "Opt[bool]" {
-			return &jsonschema.Schema{
-				Type: "boolean",
-			}
-		}
-		return nil
-	}
-	schema := r.Reflect(config)
-	result := base.SchemaAsMap(schema)
-
-	return result
 }
 
 // Generate function defines how a generate request is done in Anthropic models.

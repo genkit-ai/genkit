@@ -335,3 +335,48 @@ func TestPluginRequiresAPIKey(t *testing.T) {
 
 	(&kimi.Kimi{}).Init(context.Background())
 }
+
+// TestModelRefAndConfigSchema pins the call-site surface: the ref carries the
+// prefixed name and the typed config, and the registered models advertise the
+// camelCase config contract including the Kimi-specific fields.
+func TestModelRefAndConfigSchema(t *testing.T) {
+	cfg := &kimi.ChatConfig{ReasoningEffort: "high"}
+	for _, name := range []string{kimi.ModelKimiK3, "kimi/" + kimi.ModelKimiK3} {
+		ref := kimi.ModelRef(name, cfg)
+		if want := "kimi/" + kimi.ModelKimiK3; ref.Name() != want {
+			t.Errorf("ModelRef(%q).Name() = %q, want %q", name, ref.Name(), want)
+		}
+		if ref.Config() != cfg {
+			t.Errorf("ModelRef(%q).Config() = %v, want the config it was built with", name, ref.Config())
+		}
+	}
+
+	plugin := &kimi.Kimi{APIKey: "test-key"}
+	g := genkit.Init(context.Background(), genkit.WithPlugins(plugin))
+
+	m := genkit.LookupModel(g, "kimi/"+kimi.ModelKimiK3)
+	if m == nil {
+		t.Fatal("kimi-k3 not registered by Init")
+	}
+	model := m.(api.Action).Desc().Metadata["model"].(map[string]any)
+	schema, ok := model["customOptions"].(map[string]any)
+	if !ok {
+		t.Fatalf("customOptions missing, got %v", model["customOptions"])
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("customOptions has no properties: %v", schema)
+	}
+	for _, key := range []string{"maxOutputTokens", "stopSequences", "logProbs", "topLogProbs", "thinking", "reasoningEffort", "version"} {
+		if props[key] == nil {
+			t.Errorf("config schema is missing the %q property", key)
+		}
+	}
+	// Moonshot documents these for the legacy moonshot-v1 family only, so the
+	// K-series models this plugin serves must not advertise them.
+	for _, key := range []string{"temperature", "topP", "frequencyPenalty", "presencePenalty"} {
+		if props[key] != nil {
+			t.Errorf("config schema advertises %q, which the Kimi K-series does not take", key)
+		}
+	}
+}

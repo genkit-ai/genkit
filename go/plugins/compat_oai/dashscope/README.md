@@ -28,6 +28,23 @@ default endpoint above works fine for standard usage too.
 
 See https://help.aliyun.com/en/model-studio/base-url for the full reference.
 
+## Configuration
+
+Models take a typed `dashscope.ChatConfig`: the generation fields the
+compatible mode accepts plus the DashScope-specific controls (`seed`,
+`enableThinking`, `thinkingBudget`, `enableSearch`). `dashscope.ModelRef`
+carries the config with the model ID:
+
+```go
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModel(dashscope.ModelRef("qwen-plus", &dashscope.ChatConfig{
+        EnableThinking: openai.Ptr(true),
+        ThinkingBudget: openai.Ptr(2048),
+    })),
+    ai.WithPrompt("Explain mixture-of-experts models."),
+)
+```
+
 ## Tool Choice
 
 Qwen models support tool calling, but forced tool-choice modes (`required`/`none`)

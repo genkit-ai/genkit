@@ -215,53 +215,41 @@ func TestWithMessagesSkipsNilMessagesAndParts(t *testing.T) {
 	}
 }
 
-func TestWithConfigPreservesProviderSpecificFields(t *testing.T) {
-	g := newGen().WithConfig(map[string]any{
-		"maxOutputTokens": 123,
-		"model":           "must-not-override",
-		"temperature":     0.3,
-		"topP":            0.8,
+// TestWithParams pins how a request is built on top of the config's params:
+// a model the params carry pins the served model while an empty one falls
+// back to the generator's, SDK-modeled fields land on their wire names, and
+// provider-specific extra fields ride along.
+func TestWithParams(t *testing.T) {
+	if got := newGen().WithParams(openai.ChatCompletionNewParams{}).GetRequest().Model; got != "test-model" {
+		t.Errorf("model = %q for empty params, want the generator's %q", got, "test-model")
+	}
+
+	params := openai.ChatCompletionNewParams{
+		Model:       "test-model-2026-01-01",
+		Temperature: openai.Float(0.3),
+		TopP:        openai.Float(0.8),
+	}
+	params.SetExtraFields(map[string]any{
 		"thinking": map[string]any{
 			"type":           "enabled",
 			"clear_thinking": false,
 		},
 	})
+
+	g := newGen().WithParams(params)
 	if g.err != nil {
-		t.Fatalf("WithConfig() error = %v", g.err)
+		t.Fatalf("WithParams() error = %v", g.err)
 	}
 
-	data, err := json.Marshal(g.GetRequest())
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
-	}
-	var request map[string]any
-	if err := json.Unmarshal(data, &request); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
-	if got := request["model"]; got != "test-model" {
-		t.Errorf("model = %v, want %q", got, "test-model")
+	request := marshalParams(t, *g.GetRequest())
+	if got := request["model"]; got != "test-model-2026-01-01" {
+		t.Errorf("model = %v, want the pinned %q", got, "test-model-2026-01-01")
 	}
 	if got := request["temperature"]; got != 0.3 {
 		t.Errorf("temperature = %v, want 0.3", got)
 	}
 	if got := request["top_p"]; got != 0.8 {
 		t.Errorf("top_p = %v, want 0.8", got)
-	}
-	extraFields := g.GetRequest().ExtraFields()
-	if _, ok := extraFields["temperature"]; ok {
-		t.Error("temperature was added as an extra field")
-	}
-	if _, ok := extraFields["top_p"]; ok {
-		t.Error("top_p was added as an extra field")
-	}
-	if _, ok := extraFields["model"]; ok {
-		t.Error("model was added as an extra field")
-	}
-	if _, ok := request["topP"]; ok {
-		t.Error("request contains unconverted topP field")
-	}
-	if _, ok := request["maxOutputTokens"]; ok {
-		t.Error("request contains unsupported maxOutputTokens field")
 	}
 	thinking, ok := request["thinking"].(map[string]any)
 	if !ok {
@@ -272,20 +260,6 @@ func TestWithConfigPreservesProviderSpecificFields(t *testing.T) {
 	}
 	if got := thinking["clear_thinking"]; got != false {
 		t.Errorf("thinking.clear_thinking = %v, want false", got)
-	}
-	if _, ok := extraFields["thinking"]; !ok {
-		t.Error("thinking was not preserved as a provider-specific extra field")
-	}
-}
-
-func TestWithConfigIgnoresNilPointer(t *testing.T) {
-	var config *openai.ChatCompletionNewParams
-	g := newGen().WithConfig(config)
-	if g.err != nil {
-		t.Fatalf("WithConfig() error = %v", g.err)
-	}
-	if got := g.GetRequest().Model; got != "test-model" {
-		t.Errorf("model = %q, want %q", got, "test-model")
 	}
 }
 
@@ -435,5 +409,51 @@ func TestWithTools_StrictDoesNotMutateCallerSchema(t *testing.T) {
 	newGen().WithTools([]*ai.ToolDefinition{def})
 	if _, present := original["additionalProperties"]; present {
 		t.Errorf("caller schema was mutated: additionalProperties leaked into original input schema")
+	}
+}
+
+// TestWithConfigDeprecatedPath pins the behavior the released generator has,
+// which plugins built on this package still call: a camelCase map is rewritten
+// to the SDK's wire names, keys the SDK does not model ride as extra fields,
+// and the generator's model survives the config.
+func TestWithConfigDeprecatedPath(t *testing.T) {
+	client := openai.NewClient()
+	gen := NewModelGenerator(&client, "test-model").WithConfig(map[string]any{
+		"topP":             0.4,
+		"frequencyPenalty": 0.25,
+		"maxOutputTokens":  512,
+		"enable_search":    true,
+	})
+
+	if gen.err != nil {
+		t.Fatalf("WithConfig() error = %v", gen.err)
+	}
+	if got := gen.request.Model; got != "test-model" {
+		t.Errorf("model = %q, want the generator's %q", got, "test-model")
+	}
+	if got := gen.request.TopP.Or(0); got != 0.4 {
+		t.Errorf("top_p = %v, want 0.4", got)
+	}
+	if got := gen.request.FrequencyPenalty.Or(0); got != 0.25 {
+		t.Errorf("frequency_penalty = %v, want 0.25", got)
+	}
+	// maxOutputTokens is dropped by this path, as it always has been.
+	if gen.request.MaxTokens.Valid() {
+		t.Errorf("max_tokens = %v, want the key dropped", gen.request.MaxTokens)
+	}
+	if got := gen.request.ExtraFields()["enable_search"]; got != true {
+		t.Errorf("enable_search extra field = %v, want true", got)
+	}
+
+	// A typed SDK config passes through, and an unusable one errors.
+	gen = NewModelGenerator(&client, "test-model").WithConfig(openai.ChatCompletionNewParams{Seed: openai.Int(7)})
+	if gen.err != nil {
+		t.Fatalf("WithConfig(params) error = %v", gen.err)
+	}
+	if got := gen.request.Seed.Or(0); got != 7 {
+		t.Errorf("seed = %v, want 7", got)
+	}
+	if gen := NewModelGenerator(&client, "test-model").WithConfig("nonsense"); gen.err == nil {
+		t.Error("WithConfig(string) error = nil, want an unexpected-config-type error")
 	}
 }
