@@ -94,18 +94,30 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 	return []api.Action{}
 }
 
-// DefineModel defines an unknown model with the given name.
-// The second argument describes the capability of the model; a nil opts gets
-// the capabilities the plugin resolves for that name, curated for a known
-// model and the Claude defaults for the rest.
-// Use [IsDefinedModel] to determine if a model is already defined.
-// After [Init] is called, only the known models are defined.
+// DefineModel registers a Claude model with g and returns it. opts describes
+// what the model supports; a nil opts takes the capabilities the plugin
+// resolves for that name, curated for a known model and the Claude defaults
+// for the rest.
+//
+// Most applications never need this. Every Claude model resolves on demand,
+// so naming one that was never defined is enough:
+//
+//	genkit.Generate(ctx, g, ai.WithModelName("anthropic/claude-opus-4-5"), ...)
+//
+// Reach for DefineModel only to pin capabilities that differ from the ones
+// the plugin resolves, which is what opts is for.
+//
+// Registering a name that is already registered panics, and generating with a
+// name registers it, so define a model before its first use or guard with
+// [IsDefinedModel].
 func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
 	if opts == nil {
 		resolved := modelOptions(name)
 		opts = &resolved
 	}
-	return newModel(a.aclient, name, name, *opts), nil
+	model := newModel(a.aclient, name, name, *opts)
+	genkit.RegisterAction(g, model)
+	return model, nil
 }
 
 // modelOptions returns the ModelOptions for a Claude model name. Known models

@@ -17,11 +17,13 @@
 package anthropic
 
 import (
+	"context"
 	"slices"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/base"
 )
 
@@ -136,13 +138,22 @@ func TestNewModelDescriptor(t *testing.T) {
 
 // TestDefineModelNilOptions covers the nil ModelOptions path: the model gets
 // the capabilities the plugin resolves for its name rather than panicking or
-// advertising a model that supports nothing.
+// advertising a model that supports nothing. It also pins that DefineModel
+// registers, so the lookup helpers can find what it defined.
 func TestDefineModelNilOptions(t *testing.T) {
 	a := &Anthropic{}
+	g := genkit.Init(context.Background())
 
-	m, err := a.DefineModel(nil, "claude-opus-4-5", nil)
+	m, err := a.DefineModel(g, "claude-opus-4-5", nil)
 	if err != nil {
 		t.Fatalf("DefineModel() error = %v", err)
+	}
+
+	if !IsDefinedModel(g, "claude-opus-4-5") {
+		t.Error("IsDefinedModel() = false after DefineModel(), want the model registered")
+	}
+	if Model(g, "claude-opus-4-5") == nil {
+		t.Error("Model() = nil after DefineModel(), want the registered model")
 	}
 
 	model, ok := m.(*ai.ModelAction).Desc().Metadata["model"].(map[string]any)
@@ -226,4 +237,57 @@ func TestResolveModelID(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDefineModelThenResolve pins the ordinary path: a model defined before
+// its first use is the one generation resolves, and defining it does not make
+// the plugin resolve it a second time. Generate turns a name into an action
+// through the same resolving lookup Model uses, and the plugin's ResolveAction
+// would call the Anthropic API, which this fake key cannot reach, so the
+// caller's own capabilities coming back prove the registry short-circuited to
+// the defined model instead of resolving again.
+func TestDefineModelThenResolve(t *testing.T) {
+	a := &Anthropic{APIKey: "test-key"}
+	g := genkit.Init(context.Background(), genkit.WithPlugins(a))
+
+	const name = "claude-opus-4-5"
+	opts := ai.ModelOptions{
+		Label:    "Custom Claude",
+		Supports: &ai.ModelSupports{Multiturn: true, Tools: true},
+	}
+	if _, err := a.DefineModel(g, name, &opts); err != nil {
+		t.Fatalf("DefineModel() error = %v", err)
+	}
+
+	m := Model(g, name)
+	if m == nil {
+		t.Fatal("Model() = nil, want the model DefineModel registered")
+	}
+	model, ok := m.(*ai.ModelAction).Desc().Metadata["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("model metadata missing")
+	}
+	if model["label"] != "Custom Claude" {
+		t.Errorf("label = %v, want the capabilities DefineModel was given", model["label"])
+	}
+}
+
+// TestDefineModelTwicePanics pins what registering costs: the registry rejects
+// a duplicate key, so a name can only be defined once and [IsDefinedModel] is
+// the guard.
+func TestDefineModelTwicePanics(t *testing.T) {
+	a := &Anthropic{APIKey: "test-key"}
+	g := genkit.Init(context.Background())
+
+	const name = "claude-opus-4-1"
+	if _, err := a.DefineModel(g, name, nil); err != nil {
+		t.Fatalf("DefineModel() error = %v", err)
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Error("defining the same name twice did not panic, want the registry to reject it")
+		}
+	}()
+	a.DefineModel(g, name, nil)
 }
