@@ -18,6 +18,7 @@ package anthropic
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"regexp"
@@ -169,9 +170,12 @@ func Model(g *genkit.Genkit, name string) ai.Model {
 }
 
 // IsDefinedModel reports whether a model is already registered, which is the
-// guard against defining one twice (see [Anthropic.DefineModel]).
+// guard against defining one twice (see [Anthropic.DefineModel]). The lookup
+// deliberately does not resolve dynamically: a resolving lookup would ask the
+// plugin to resolve the very model the caller is checking for, registering it
+// and answering true for any name the Anthropic API can serve.
 func IsDefinedModel(g *genkit.Genkit, name string) bool {
-	return genkit.LookupModel(g, modelName(name)) != nil
+	return genkit.LookupAction(g, fmt.Sprintf("/%s/%s", api.ActionTypeModel, modelName(name))) != nil
 }
 
 // modelName builds the action name for a Claude model ID, taking the ID either

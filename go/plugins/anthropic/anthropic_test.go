@@ -18,6 +18,9 @@ package anthropic
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
 
@@ -348,5 +351,32 @@ func TestPrefixedNamesAreEquivalent(t *testing.T) {
 	}
 	if want := anthropicLabelPrefix + " - Claude Opus 4.5"; model["label"] != want {
 		t.Errorf("label = %v, want %q", model["label"], want)
+	}
+}
+
+// TestIsDefinedModelDoesNotResolve pins the guard semantics: checking whether
+// a model is defined must not itself resolve and register one. The plugin
+// resolves any name the Anthropic API can serve, so a resolving lookup would
+// answer true for every name and make the guarded DefineModel panic. The fake
+// endpoint serves the models list to make resolution reachable, which is
+// exactly what the guard must not trigger.
+func TestIsDefinedModelDoesNotResolve(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"id":"claude-opus-4-5-20251101","type":"model"}],"has_more":false}`)
+	}))
+	defer server.Close()
+
+	a := &Anthropic{APIKey: "test-key", BaseURL: server.URL}
+	g := genkit.Init(context.Background(), genkit.WithPlugins(a))
+
+	if IsDefinedModel(g, "claude-opus-4-5") {
+		t.Fatal("IsDefinedModel() = true for a model that was never defined")
+	}
+	if _, err := a.DefineModel(g, "claude-opus-4-5", nil); err != nil {
+		t.Fatalf("DefineModel() after the guard error = %v", err)
+	}
+	if !IsDefinedModel(g, "claude-opus-4-5") {
+		t.Error("IsDefinedModel() = false after DefineModel()")
 	}
 }
