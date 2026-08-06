@@ -1801,3 +1801,26 @@ def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
             'systemRole': True,
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_with_model_info_long_running(
+    setup_test: SetupFixture,
+) -> None:
+    """Verify generate_operation succeeds for a model defined with ModelInfo(supports=Supports(long_running=True))."""
+    ai, _, _, *_ = setup_test
+
+    async def my_model(request: ModelRequest) -> ModelResponse:
+        return ModelResponse(
+            message=Message(role='model', content=[TextPart(text='done')]),
+            operation=Operation(id='op123', done=False),
+        )
+
+    ai.define_model(
+        name='lr_model',
+        fn=my_model,
+        info=ModelInfo(supports=Supports(long_running=True)),
+    )
+
+    op = await ai.generate_operation(model='lr_model', prompt='test')
+    assert op is not None

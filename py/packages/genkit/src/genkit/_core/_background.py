@@ -221,7 +221,7 @@ def define_background_model(
         start: Function to start the background operation.
         check: Function to check operation status.
         cancel: Optional function to cancel operations.
-        label: Human-readable label (defaults to name).
+        label: Human-readable label (defaults to info.label, then model name).
         info: Model capability information.
         config_schema: Schema for model configuration options.
         metadata: Additional metadata for the model.
@@ -252,9 +252,8 @@ def define_background_model(
         model_options.update(info.model_dump(by_alias=True, exclude_none=True))
 
     # Precedence: explicit label argument > info.label > fallback to model name
-    effective_label = label or model_options.get('label') or name
-    model_options['label'] = effective_label
-    label = effective_label
+    label = label or model_options.get('label') or name
+    model_options['label'] = label
 
     if config_schema:
         model_options['customOptions'] = to_json_schema(config_schema)
@@ -292,7 +291,7 @@ def define_background_model(
         kind=ActionKind.BACKGROUND_MODEL,
         fn=wrapped_start,
         metadata=model_meta,
-        description=description or f'Background model: {effective_label}',
+        description=description or f'Background model: {label}',
     )
 
     # Register the check action
@@ -303,7 +302,7 @@ def define_background_model(
         kind=ActionKind.CHECK_OPERATION,
         fn=wrapped_check,
         metadata={'outputSchema': output_schema_meta},
-        description=f'Check operation status for {effective_label}',
+        description=f'Check operation status for {label}',
     )
 
     # Register the cancel action if provided
