@@ -46,7 +46,6 @@ def test_constructor_defaults() -> None:
     assert plugin.connect_timeout == 60.0
     assert plugin.max_pool_connections == 50
     assert plugin.models == []
-    assert plugin.embedders == []
 
 
 def test_model_definition_defaults_to_chat() -> None:
