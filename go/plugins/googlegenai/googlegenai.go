@@ -230,9 +230,11 @@ func (ga *GoogleAI) RegisterModel(g *genkit.Genkit, name string, opts *ai.ModelO
 // DefineModel defines an unknown model with the given name.
 // The second argument describes the capability of the model.
 //
-// Deprecated: use [GoogleAI.RegisterModel], which also registers the model
-// with g so that generating by that name uses it. This method only builds the
-// model and ignores g, leaving it reachable through the returned value alone.
+// Deprecated: use [GoogleAI.RegisterModel]. This method builds the model and
+// ignores g. Generation resolves a model from its name, so passing the result
+// to ai.WithModel contributes only that name and serves the request with a
+// model resolved from it instead; registering it with [genkit.RegisterAction]
+// is what makes these capabilities the ones used.
 func (ga *GoogleAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
 	return ga.buildModel(name, opts)
 }
@@ -288,9 +290,11 @@ func (v *VertexAI) RegisterModel(g *genkit.Genkit, name string, opts *ai.ModelOp
 // DefineModel defines an unknown model with the given name.
 // The second argument describes the capability of the model.
 //
-// Deprecated: use [VertexAI.RegisterModel], which also registers the model
-// with g so that generating by that name uses it. This method only builds the
-// model and ignores g, leaving it reachable through the returned value alone.
+// Deprecated: use [VertexAI.RegisterModel]. This method builds the model and
+// ignores g. Generation resolves a model from its name, so passing the result
+// to ai.WithModel contributes only that name and serves the request with a
+// model resolved from it instead; registering it with [genkit.RegisterAction]
+// is what makes these capabilities the ones used.
 func (v *VertexAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
 	return v.buildModel(name, opts)
 }
@@ -319,9 +323,10 @@ func (ga *GoogleAI) RegisterEmbedder(g *genkit.Genkit, name string, embedOpts *a
 
 // DefineEmbedder defines an embedder with a given name.
 //
-// Deprecated: use [GoogleAI.RegisterEmbedder], which also registers the
-// embedder with g so that embedding by that name uses it. This method only
-// builds the embedder and ignores g.
+// Deprecated: use [GoogleAI.RegisterEmbedder]. Like [GoogleAI.DefineModel],
+// this method builds the embedder and ignores g, so embedding by that name
+// serves the request with a different one unless the caller registers it with
+// [genkit.RegisterAction].
 func (ga *GoogleAI) DefineEmbedder(g *genkit.Genkit, name string, embedOpts *ai.EmbedderOptions) (ai.Embedder, error) {
 	return ga.buildEmbedder(name, embedOpts)
 }
@@ -349,9 +354,10 @@ func (v *VertexAI) RegisterEmbedder(g *genkit.Genkit, name string, embedOpts *ai
 
 // DefineEmbedder defines an embedder with a given name.
 //
-// Deprecated: use [VertexAI.RegisterEmbedder], which also registers the
-// embedder with g so that embedding by that name uses it. This method only
-// builds the embedder and ignores g.
+// Deprecated: use [VertexAI.RegisterEmbedder]. Like [VertexAI.DefineModel],
+// this method builds the embedder and ignores g, so embedding by that name
+// serves the request with a different one unless the caller registers it with
+// [genkit.RegisterAction].
 func (v *VertexAI) DefineEmbedder(g *genkit.Genkit, name string, embedOpts *ai.EmbedderOptions) (ai.Embedder, error) {
 	return v.buildEmbedder(name, embedOpts)
 }
