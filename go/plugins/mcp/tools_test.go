@@ -300,14 +300,89 @@ func TestToolOutputSchemaRejectsInvalidStructuredContent(t *testing.T) {
 	}
 }
 
-func TestGetOutputSchemaWithoutSchema(t *testing.T) {
+func TestValidateMCPToolResultPreservesOutputSchemaScope(t *testing.T) {
+	outputSchema := map[string]any{
+		"$defs": map[string]any{
+			"answer": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"value": map[string]any{"type": "string"},
+				},
+				"required": []string{"value"},
+			},
+		},
+		"$ref": "#/$defs/answer",
+	}
+	result := &mcp.CallToolResult{
+		StructuredContent: map[string]any{"value": "ok"},
+	}
+	if err := validateMCPToolResult(result, outputSchema); err != nil {
+		t.Fatalf("validateMCPToolResult() error = %v", err)
+	}
+}
+
+func TestValidateMCPToolResultAllowsToolErrors(t *testing.T) {
+	outputSchema := map[string]any{
+		"type":     "object",
+		"required": []string{"answer"},
+	}
+	result := mcp.NewToolResultError("expected tool failure")
+	if err := validateMCPToolResult(result, outputSchema); err != nil {
+		t.Fatalf("validateMCPToolResult() error = %v", err)
+	}
+}
+
+func TestToolWithRawOutputSchemaAcceptsUnionType(t *testing.T) {
+	data := []byte(`{
+		"name": "nullable",
+		"inputSchema": {"type": "object"},
+		"outputSchema": {"type": ["string", "null"]}
+	}`)
+	var decoded toolWithRawOutputSchema
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
 	client := &GenkitMCPClient{}
-	schema, err := client.getOutputSchema(mcp.NewTool("schema-less"))
+	schema, present, err := client.getOutputSchema(decoded.Tool)
 	if err != nil {
 		t.Fatalf("getOutputSchema() error = %v", err)
 	}
-	if schema != nil {
-		t.Fatalf("getOutputSchema() = %#v, want nil", schema)
+	if !present {
+		t.Fatal("getOutputSchema() reported the schema as absent")
+	}
+	types, ok := schema["type"].([]any)
+	if !ok || len(types) != 2 || types[0] != "string" || types[1] != "null" {
+		t.Fatalf("schema type = %#v, want [string null]", schema["type"])
+	}
+}
+
+func TestCreateToolPreservesEmptyOutputSchema(t *testing.T) {
+	client := &GenkitMCPClient{
+		options: MCPClientOptions{Name: "test"},
+		server:  &ServerRef{},
+	}
+	mcpTool := mcp.NewTool("anything",
+		mcp.WithRawOutputSchema(json.RawMessage(`{}`)),
+	)
+	tool, err := client.createTool(mcpTool)
+	if err != nil {
+		t.Fatalf("createTool() error = %v", err)
+	}
+	schema := tool.Definition().OutputSchema
+	if schema == nil || len(schema) != 0 {
+		t.Fatalf("output schema = %#v, want an explicit empty schema", schema)
+	}
+}
+
+func TestGetOutputSchemaWithoutSchema(t *testing.T) {
+	client := &GenkitMCPClient{}
+	schema, present, err := client.getOutputSchema(mcp.NewTool("schema-less"))
+	if err != nil {
+		t.Fatalf("getOutputSchema() error = %v", err)
+	}
+	if present || schema != nil {
+		t.Fatalf("getOutputSchema() = (%#v, %v), want (nil, false)", schema, present)
 	}
 }
 

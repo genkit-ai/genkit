@@ -16,6 +16,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -77,28 +78,32 @@ func (c *GenkitMCPClient) getInputSchema(mcpTool mcp.Tool) (map[string]any, erro
 	return out, nil
 }
 
-// getOutputSchema returns the MCP output schema as a generic map for Genkit
-func (c *GenkitMCPClient) getOutputSchema(mcpTool mcp.Tool) (map[string]any, error) {
-	if len(mcpTool.RawOutputSchema) > 0 {
+// getOutputSchema returns the MCP output schema as a generic map for Genkit.
+// The boolean distinguishes an omitted schema from an explicitly empty schema.
+func (c *GenkitMCPClient) getOutputSchema(mcpTool mcp.Tool) (map[string]any, bool, error) {
+	if mcpTool.RawOutputSchema != nil {
 		var out map[string]any
 		if err := json.Unmarshal(mcpTool.RawOutputSchema, &out); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal MCP output schema for tool %s: %w", mcpTool.Name, err)
+			return nil, false, fmt.Errorf("failed to unmarshal MCP output schema for tool %s: %w", mcpTool.Name, err)
 		}
-		return out, nil
+		if out == nil {
+			return nil, false, fmt.Errorf("MCP output schema for tool %s must be a JSON object", mcpTool.Name)
+		}
+		return out, true, nil
 	}
 	if mcpTool.OutputSchema.Type == "" {
-		return nil, nil
+		return nil, false, nil
 	}
 
 	var out map[string]any
 	schemaBytes, err := json.Marshal(mcpTool.OutputSchema)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal MCP output schema for tool %s: %w", mcpTool.Name, err)
+		return nil, false, fmt.Errorf("failed to marshal MCP output schema for tool %s: %w", mcpTool.Name, err)
 	}
 	if err := json.Unmarshal(schemaBytes, &out); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal MCP output schema for tool %s: %w", mcpTool.Name, err)
+		return nil, false, fmt.Errorf("failed to unmarshal MCP output schema for tool %s: %w", mcpTool.Name, err)
 	}
-	return out, nil
+	return out, true, nil
 }
 
 // createTool converts a single MCP tool to a Genkit tool
@@ -111,19 +116,18 @@ func (c *GenkitMCPClient) createTool(mcpTool mcp.Tool) (ai.Tool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get input schema for tool %s: %w", mcpTool.Name, err)
 	}
-	outputSchema, err := c.getOutputSchema(mcpTool)
+	outputSchema, hasOutputSchema, err := c.getOutputSchema(mcpTool)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get output schema for tool %s: %w", mcpTool.Name, err)
 	}
-	if len(outputSchema) > 0 {
+	if hasOutputSchema {
 		runTool := toolFunc
-		validationSchema := mcpToolResultSchema(outputSchema)
 		toolFunc = func(ctx *ai.ToolContext, input interface{}) (interface{}, error) {
 			output, err := runTool(ctx, input)
 			if err != nil {
 				return output, err
 			}
-			if err := base.ValidateValue(output, validationSchema); err != nil {
+			if err := validateMCPToolResult(output, outputSchema); err != nil {
 				return nil, core.NewError(core.INTERNAL, "invalid output from tool %q: %v", namespacedToolName, err)
 			}
 			return output, nil
@@ -134,22 +138,23 @@ func (c *GenkitMCPClient) createTool(mcpTool mcp.Tool) (ai.Tool, error) {
 	if len(inputSchema) > 0 {
 		opts = append(opts, ai.WithInputSchema(inputSchema))
 	}
-	if len(outputSchema) > 0 {
+	if hasOutputSchema {
 		opts = append(opts, ai.WithOutputSchema(outputSchema))
 	}
 	return ai.NewTool(namespacedToolName, mcpTool.Description, toolFunc, opts...), nil
 }
 
-// mcpToolResultSchema describes the protocol wrapper returned by MCP while
-// retaining the server's output schema for the nested structured content.
-func mcpToolResultSchema(outputSchema map[string]any) map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"structuredContent": outputSchema,
-		},
-		"required": []string{"structuredContent"},
+func validateMCPToolResult(output interface{}, outputSchema map[string]any) error {
+	result, ok := output.(*mcp.CallToolResult)
+	if !ok || result == nil {
+		return fmt.Errorf("expected *mcp.CallToolResult, got %T", output)
 	}
+	// MCP tool-level errors are model-visible results, not successful structured
+	// output. They commonly omit structuredContent and must not be schema-validated.
+	if result.IsError {
+		return nil
+	}
+	return base.ValidateValue(result.StructuredContent, outputSchema)
 }
 
 // getTools retrieves all tools from the MCP server by paginating through results
@@ -240,18 +245,23 @@ type toolWithRawOutputSchema struct {
 }
 
 func (t *toolWithRawOutputSchema) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	rawOutputSchema, hasOutputSchema := fields["outputSchema"]
+	delete(fields, "outputSchema")
+	toolData, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+
 	var tool mcp.Tool
-	if err := json.Unmarshal(data, &tool); err != nil {
+	if err := json.Unmarshal(toolData, &tool); err != nil {
 		return err
 	}
-	var raw struct {
-		OutputSchema json.RawMessage `json:"outputSchema"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	if len(raw.OutputSchema) > 0 && string(raw.OutputSchema) != "null" {
-		tool.RawOutputSchema = append(json.RawMessage(nil), raw.OutputSchema...)
+	if hasOutputSchema && !bytes.Equal(bytes.TrimSpace(rawOutputSchema), []byte("null")) {
+		tool.RawOutputSchema = append(json.RawMessage(nil), rawOutputSchema...)
 		tool.OutputSchema = mcp.ToolOutputSchema{}
 	}
 	t.Tool = tool
