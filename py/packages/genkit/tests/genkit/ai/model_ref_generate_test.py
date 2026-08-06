@@ -5,11 +5,15 @@
 
 """Tests for generate/prompt with ModelRef."""
 
+from typing import Any
+
 import pytest
 
 from genkit import Genkit
 from genkit._ai._model import ModelConfig
 from genkit._ai._testing import EchoModel, define_echo_model
+from genkit._core._model import Message, ModelRequest, ModelResponse
+from genkit._core._typing import ModelInfo, Operation, Role, Supports, TextPart
 from genkit.model import model_ref
 
 
@@ -84,3 +88,31 @@ async def test_define_prompt_with_model_ref(ai_with_echo: tuple[Genkit, EchoMode
 
     assert '0.2' in response.text
     assert echo.last_request is not None
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_with_model_ref(ai_with_echo: tuple[Genkit, EchoModel]) -> None:
+    """generate_operation accepts a ModelRef with typed output_schema and returns Operation."""
+    ai, echo = ai_with_echo
+
+    async def lro_model_fn(request: ModelRequest, ctx: Any) -> ModelResponse:
+        echo.last_request = request
+        return ModelResponse(
+            message=Message(role=Role.MODEL, content=[TextPart(text='Started')]),
+            operation=Operation(id='op-123', done=False),
+        )
+
+    ai.define_model(
+        name='lroEcho',
+        fn=lro_model_fn,
+        info=ModelInfo(supports=Supports(long_running=True)),
+    )
+
+    ref = model_ref('lroEcho', config_schema=ModelConfig, config=ModelConfig(temperature=0.3))
+    op = await ai.generate_operation(model=ref, prompt='Hello')
+
+    assert isinstance(op, Operation)
+    assert op.id == 'op-123'
+    assert echo.last_request is not None
+    cfg = echo.last_request.config
+    assert (cfg['temperature'] if isinstance(cfg, dict) else getattr(cfg, 'temperature', None)) == 0.3

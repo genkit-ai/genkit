@@ -1384,7 +1384,7 @@ class Genkit:
 
         return await background_action.cancel(operation)
 
-    # Overload: output_schema=type[T] -> Operation
+    # Overload: output_schema=type[T] -> Operation[T]
     @overload
     async def generate_operation(
         self,
@@ -1406,9 +1406,9 @@ class Genkit:
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
-    ) -> Operation: ...
+    ) -> Operation[OutputT]: ...
 
-    # Overload: no output_schema, dict, or union -> Operation
+    # Overload: no output_schema, dict, or union -> Operation[Any]
     @overload
     async def generate_operation(
         self,
@@ -1430,7 +1430,7 @@ class Genkit:
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
-    ) -> Operation: ...
+    ) -> Operation[Any]: ...
 
     async def generate_operation(
         self,
@@ -1452,7 +1452,7 @@ class Genkit:
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
-    ) -> Operation:
+    ) -> Operation[Any]:
         """Generate content using a long-running model, returning an Operation to poll."""
         # Resolve the model and check for long_running support
         model_name, _ = resolve_model_arg(model, config)
