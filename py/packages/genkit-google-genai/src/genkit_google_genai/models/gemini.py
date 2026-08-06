@@ -2082,7 +2082,7 @@ class GeminiModel:
 
     def _normalize_config_to_dict(
         self,
-        config: GeminiConfigSchema | ModelConfig | dict,
+        config: BaseModel | GeminiConfigSchema | ModelConfig | dict,
     ) -> dict[str, Any] | None:
         """Return the config as a snake_case dict for the rest of the pipeline.
 
