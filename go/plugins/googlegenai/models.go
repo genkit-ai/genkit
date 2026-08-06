@@ -109,7 +109,9 @@ const (
 
 	gemini25Pro = "gemini-2.5-pro"
 
+	gemini36Flash      = "gemini-3.6-flash"
 	gemini35Flash      = "gemini-3.5-flash"
+	gemini35FlashLite  = "gemini-3.5-flash-lite"
 	gemini31FlashLite  = "gemini-3.1-flash-lite"
 	gemini31FlashImage = "gemini-3.1-flash-image"
 	gemini3ProImage    = "gemini-3-pro-image"
@@ -143,7 +145,9 @@ var (
 		gemini25Flash,
 		gemini25FlashLite,
 		gemini25Pro,
+		gemini36Flash,
 		gemini35Flash,
+		gemini35FlashLite,
 		gemini31FlashLite,
 		gemini31FlashImage,
 		gemini3ProImage,
@@ -160,7 +164,9 @@ var (
 		gemini25Flash,
 		gemini25FlashLite,
 		gemini25Pro,
+		gemini36Flash,
 		gemini35Flash,
+		gemini35FlashLite,
 		gemini31FlashImage,
 		gemini3ProImage,
 
@@ -195,8 +201,20 @@ var (
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
 		},
+		gemini36Flash: {
+			Label:    "Gemini 3.6 Flash",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
 		gemini35Flash: {
 			Label:    "Gemini 3.5 Flash",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini35FlashLite: {
+			Label:    "Gemini 3.5 Flash Lite",
 			Versions: []string{},
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,

@@ -136,3 +136,35 @@ func TestGeminiEmbedding2Registered(t *testing.T) {
 		}
 	}
 }
+
+// TestGemini36And35LiteRegistered pins that the 3.6 Flash and 3.5 Flash Lite
+// entries are reachable on both backends. A model listed for a provider but
+// missing from supportedGeminiModels still resolves, silently, to the
+// unknown-model fallback: Unstable stage and no label.
+func TestGemini36And35LiteRegistered(t *testing.T) {
+	for _, name := range []string{gemini36Flash, gemini35FlashLite} {
+		if got := ClassifyModel(name); got != ModelTypeGemini {
+			t.Errorf("ClassifyModel(%q) = %v, want ModelTypeGemini", name, got)
+		}
+
+		for _, provider := range []string{googleAIProvider, vertexAIProvider} {
+			opts := GetModelOptions(name, provider)
+			if opts.Stage != ai.ModelStageStable {
+				t.Errorf("GetModelOptions(%q, %q).Stage = %q, want Stable (likely hit the unknown-model fallback)", name, provider, opts.Stage)
+			}
+			if opts.Supports == nil || !opts.Supports.Multiturn || !opts.Supports.Media {
+				t.Errorf("GetModelOptions(%q, %q): expected multimodal supports, got %+v", name, provider, opts.Supports)
+			}
+			if opts.ConfigSchema == nil {
+				t.Errorf("GetModelOptions(%q, %q): ConfigSchema is nil", name, provider)
+			}
+		}
+
+		if !slices.Contains(vertexAIModels, name) {
+			t.Errorf("vertexAIModels missing %q", name)
+		}
+		if !slices.Contains(googleAIModels, name) {
+			t.Errorf("googleAIModels missing %q", name)
+		}
+	}
+}
