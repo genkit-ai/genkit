@@ -144,7 +144,7 @@ async def test_botocore_errors_map_to_genkit_statuses(error: BotoCoreError, expe
     ],
 )
 @pytest.mark.asyncio
-async def test_client_errors_map_to_genkit_statuses(code, expected_status) -> None:
+async def test_client_errors_map_to_genkit_statuses(code: str, expected_status: str) -> None:
     error = ClientError({'Error': {'Code': code, 'Message': 'nope'}}, 'Converse')
     transport = FakeTransport(error=error)
     model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=transport)

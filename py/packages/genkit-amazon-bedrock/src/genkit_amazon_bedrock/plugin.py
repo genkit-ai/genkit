@@ -17,10 +17,9 @@
 """Amazon Bedrock plugin for Genkit.
 
 Registers Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama,
-Mistral, Cohere, and others), embedders (Titan, Cohere, Nova), image
-generators, and the Cohere reranker as Genkit actions. Text generation uses
-the Bedrock Converse and ConverseStream APIs; embeddings, image generation,
-and reranking use InvokeModel.
+Mistral, Cohere, and others) as Genkit model actions. Text generation uses the
+Bedrock Converse API, non-streaming; streaming, embedders, image generation,
+and reranking are not ported yet.
 
 Ported from the Go plugin (genkit-ai/aws-bedrock-go-plugin).
 """
@@ -81,7 +80,6 @@ class Bedrock(Plugin):
         max_pool_connections: int = DEFAULT_MAX_POOL_CONNECTIONS,
         session: 'boto3.session.Session | None' = None,
         models: list[ModelDefinition] | None = None,
-        embedders: list[str] | None = None,
     ) -> None:
         """Initializes the Bedrock plugin.
 
@@ -99,7 +97,6 @@ class Bedrock(Plugin):
                 credentials or advanced SDK wiring.
             models: Bedrock models to register. Models not listed can still be
                 resolved dynamically by namespaced name.
-            embedders: Embedding model IDs to register (Titan, Cohere, Nova).
         """
         self.region = region
         self.max_retries = max_retries
@@ -108,7 +105,6 @@ class Bedrock(Plugin):
         self.max_pool_connections = max_pool_connections
         self._session = session
         self.models = models or []
-        self.embedders = embedders or []
         self._transport = BedrockTransport(
             region=region,
             max_retries=max_retries,
@@ -154,7 +150,7 @@ class Bedrock(Plugin):
         if model_type not in ('chat', 'text'):
             # Image generation lands in a later slice.
             return None
-        return self._create_model_action(name, model_id)
+        return self._create_model_action(model_id)
 
     def _configured_model_type(self, model_id: str) -> str:
         for definition in self.models:
@@ -162,7 +158,7 @@ class Bedrock(Plugin):
                 return definition.type
         return 'chat'
 
-    def _create_model_action(self, name: str, model_id: str) -> Action:
+    def _create_model_action(self, model_id: str) -> Action:
         model_info = get_model_info(model_id)
 
         async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
