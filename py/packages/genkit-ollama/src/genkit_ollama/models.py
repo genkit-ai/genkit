@@ -586,7 +586,7 @@ class OllamaModel:
 
     @staticmethod
     def build_request_options(
-        config: BaseModel | ModelConfig | ollama_api.Options | dict[str, object] | None,
+        config: ModelConfig | ollama_api.Options | dict[str, object] | None,
     ) -> dict[str, Any]:
         """Build the sampler ``options`` mapping for the chat/generate APIs.
 
@@ -658,7 +658,7 @@ class OllamaModel:
 
     @staticmethod
     def build_request_kwargs(
-        config: BaseModel | ModelConfig | ollama_api.Options | dict[str, object] | None,
+        config: ModelConfig | ollama_api.Options | dict[str, object] | None,
     ) -> dict[str, Any]:
         """Extract top-level chat/generate kwargs from the config.
 
@@ -675,7 +675,7 @@ class OllamaModel:
         Returns:
             A dict with ``think``/``keep_alive`` entries that are not ``None``.
         """
-        if isinstance(config, BaseModel):
+        if isinstance(config, ModelConfig):
             snake = {to_snake(k): v for k, v in config.model_dump(exclude_none=True).items()}
             think: Any = snake.get('think')
             keep_alive: Any = snake.get('keep_alive')
@@ -695,7 +695,7 @@ class OllamaModel:
 
     @staticmethod
     def _thinking_requested(
-        config: BaseModel | ModelConfig | ollama_api.Options | dict[str, object] | None,
+        config: ModelConfig | ollama_api.Options | dict[str, object] | None,
     ) -> bool:
         """Whether the request explicitly enabled thinking.
 
