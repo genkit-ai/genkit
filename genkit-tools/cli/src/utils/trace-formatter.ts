@@ -15,7 +15,7 @@
  */
 
 import type { NestedSpanData, Part, TraceData } from '@genkit-ai/tools-common';
-import { MessageSchema, PartSchema } from '@genkit-ai/tools-common';
+import { MessageSchema } from '@genkit-ai/tools-common';
 import {
   formatDuration,
   getSpanStatus,
@@ -121,51 +121,20 @@ function formatMessageContent(
   }
 }
 
-/**
- * Formats an array of Parts or a single Part into an array of string
- * descriptions.
- */
-function formatPartsList(partsData: unknown): string[] | null {
-  const parseRes = z.array(PartSchema).safeParse(partsData);
-  if (parseRes.success && parseRes.data.length > 0) {
-    const formatted = parseRes.data
-      .map(formatPart)
-      .filter((p): p is FormattedPart => p !== null);
-    if (formatted.length > 0) {
-      return formatted.map((f) => f.text);
-    }
-  }
-  const singlePartRes = PartSchema.safeParse(partsData);
-  if (singlePartRes.success) {
-    const formatted = formatPart(singlePartRes.data);
-    if (formatted) return [formatted.text];
-  }
-  return null;
-}
-
-function hasMessagesOrParts(val: unknown): boolean {
+function hasMessages(val: unknown): boolean {
   if (!val || typeof val !== 'object') return false;
 
   // Try to parse array elements directly
   if (Array.isArray(val)) {
-    if (
-      val.some(
-        (item) =>
-          MessageSchema.safeParse(item).success ||
-          PartSchema.safeParse(item).success
-      )
-    ) {
+    if (val.some((item) => MessageSchema.safeParse(item).success)) {
       return true;
     }
   }
 
-  if (
-    MessageSchema.safeParse(val).success ||
-    PartSchema.safeParse(val).success
-  ) {
+  if (MessageSchema.safeParse(val).success) {
     return true;
   }
-  return Object.values(val).some(hasMessagesOrParts);
+  return Object.values(val).some(hasMessages);
 }
 
 /**
@@ -194,19 +163,7 @@ function formatCompactValue(
     }
   }
 
-  // 2. Matches PartSchema or array of PartSchema -> format as Parts
-  const partLines = formatPartsList(val);
-  if (partLines) {
-    if (keyName) {
-      return [
-        `${childPrefix}${keyName}:`,
-        ...partLines.map((l) => `${childPrefix}  ${l}`),
-      ];
-    }
-    return partLines.map((l) => `${childPrefix}${l}`);
-  }
-
-  // 3. Primitive (string, number, boolean)
+  // 2. Primitive (string, number, boolean)
   if (typeof val !== 'object') {
     const formatted = typeof val === 'string' ? val : String(val);
     if (keyName) {
@@ -237,7 +194,7 @@ function formatCompactValue(
       return lines;
     }
 
-    if (!hasMessagesOrParts(val)) {
+    if (!hasMessages(val)) {
       const yamlStr = YAML.stringify(val, {
         indent: 2,
         lineWidth: 0,
@@ -257,7 +214,7 @@ function formatCompactValue(
     return lines;
   }
 
-  // 5. Object -> Recurse on properties if it contains messages/parts
+  // 4. Object -> Recurse on properties if it contains messages
   const obj = val as Record<string, unknown>;
   const keys = Object.keys(obj);
   if (keys.length === 0) {
@@ -265,7 +222,7 @@ function formatCompactValue(
     return [];
   }
 
-  const containsSpecial = hasMessagesOrParts(obj);
+  const containsSpecial = hasMessages(obj);
 
   const lines: string[] = [];
   if (keyName) {
@@ -294,8 +251,7 @@ function formatCompactValue(
 function renderSpanTree(
   span: NestedSpanData,
   prefix: string = '',
-  isLast: boolean = true,
-  keepMedia: boolean = false
+  isLast: boolean = true
 ): string[] {
   const lines: string[] = [];
   const connector = isLast ? '└─ ' : '├─ ';
@@ -332,7 +288,7 @@ function renderSpanTree(
     const itemPrefix = childPrefix + (itemIsLast ? '   ' : '│  ');
 
     if (item.type === 'input') {
-      const sanitizedInput = parseAndSanitizeJson(item.data, keepMedia);
+      const sanitizedInput = parseAndSanitizeJson(item.data, true /* keepBase64 */);
       const compactInput = formatCompactValue(sanitizedInput, '', 'Input');
       if (compactInput.length > 0) {
         lines.push(`${childPrefix}${itemConnector}${compactInput[0]}`);
@@ -341,7 +297,7 @@ function renderSpanTree(
         }
       }
     } else if (item.type === 'output') {
-      const sanitizedOutput = parseAndSanitizeJson(item.data, keepMedia);
+      const sanitizedOutput = parseAndSanitizeJson(item.data, true /* keepBase64 */);
       const compactOutput = formatCompactValue(sanitizedOutput, '', 'Output');
       if (compactOutput.length > 0) {
         lines.push(`${childPrefix}${itemConnector}${compactOutput[0]}`);
@@ -350,9 +306,7 @@ function renderSpanTree(
         }
       }
     } else if (item.type === 'child') {
-      lines.push(
-        ...renderSpanTree(item.data, childPrefix, itemIsLast, keepMedia)
-      );
+      lines.push(...renderSpanTree(item.data, childPrefix, itemIsLast));
     }
   });
 
@@ -363,10 +317,7 @@ function renderSpanTree(
  * Formats a complete TraceData payload into a full execution tree string.
  * This sets up the trace metadata header and orchestrates rendering the root span tree.
  */
-export function formatTraceTree(
-  trace: TraceData,
-  keepMedia: boolean = false
-): string {
+export function formatTraceTree(trace: TraceData): string {
   const lines: string[] = [];
   lines.push(`Trace ID: ${trace.traceId}`);
   if (trace.displayName) lines.push(`Name:     ${trace.displayName}`);
@@ -380,7 +331,7 @@ export function formatTraceTree(
   const rootSpan = stackTraceSpans(trace);
   if (rootSpan) {
     lines.push('\nExecution Tree:');
-    lines.push(...renderSpanTree(rootSpan, '', true, keepMedia));
+    lines.push(...renderSpanTree(rootSpan, '', true));
   } else {
     lines.push('\nNo spans found in trace.');
   }
@@ -394,7 +345,7 @@ export function formatTraceTree(
  */
 export function cleanTraceJson(
   trace: TraceData,
-  keepMedia: boolean
+  keepBase64: boolean
 ): TraceData {
   const result: TraceData = JSON.parse(JSON.stringify(trace));
   if (result.spans) {
@@ -402,7 +353,7 @@ export function cleanTraceJson(
       const span = result.spans[spanId];
       if (span && span.attributes) {
         for (const [key, value] of Object.entries(span.attributes)) {
-          span.attributes[key] = parseAndSanitizeJson(value, keepMedia);
+          span.attributes[key] = parseAndSanitizeJson(value, keepBase64);
         }
       }
     }

@@ -40,7 +40,7 @@ describe('trace-formatter', () => {
         },
       } as unknown as TraceData;
 
-      // Without keepMedia = false (default)
+      // Without keepBase64 = false (default)
       const sanitized = cleanTraceJson(originalTrace, false);
 
       expect(sanitized.traceId).toBe('test-id');
@@ -61,7 +61,7 @@ describe('trace-formatter', () => {
       expect(typeof sanitized.spans).toBe('object');
     });
 
-    it('should deep clone and preserve base64 media data if keepMedia is true', () => {
+    it('should deep clone and preserve base64 media data if keepBase64 is true', () => {
       const rawImage =
         'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
       const originalTrace = {
