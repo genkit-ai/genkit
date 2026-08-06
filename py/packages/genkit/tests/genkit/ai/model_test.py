@@ -413,4 +413,4 @@ def test_model_ref_immutability() -> None:
     ref = model_ref('custom-model', config_schema=DummyConfig)
 
     with pytest.raises(AttributeError):
-        setattr(ref, 'name', 'changed')  # pyright: ignore[reportAttributeAccessIssue]
+        ref.name = 'changed'  # ty: ignore[invalid-assignment] # pyright: ignore[reportAttributeAccessIssue]
