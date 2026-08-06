@@ -17,6 +17,7 @@
 import {
   ActionFnArg,
   BackgroundAction,
+  BackgroundActionFnArg,
   GenkitError,
   MiddlewareWithOptions,
   Operation,
@@ -276,8 +277,6 @@ export function defineModel<
 }
 
 /** Options for defining a background model that processes requests asynchronously. */
-import { BackgroundActionFnArg } from '@genkit-ai/core';
-
 export type DefineBackgroundModelOptions<
   CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
 > = DefineModelOptions<CustomOptionsSchema> & {
