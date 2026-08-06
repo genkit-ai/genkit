@@ -44,6 +44,7 @@ const (
 	provider                       = "ollama"
 	modelCapabilitiesTimeout       = 5 * time.Second
 	capabilityFailureCacheLifetime = 30 * time.Second
+	maxConcurrentCapabilityQueries = 4
 )
 
 var (
@@ -92,7 +93,7 @@ type ollamaLocalModel struct {
 
 // ollamaShowResponse represents the response from POST /api/show.
 type ollamaShowResponse struct {
-	Capabilities *[]string `json:"capabilities"`
+	Capabilities []string `json:"capabilities"`
 }
 
 // getModelCapabilities calls POST /api/show to retrieve the model's capabilities.
@@ -125,7 +126,7 @@ func (o *Ollama) getModelCapabilities(ctx context.Context, modelName string) ([]
 	if showResp.Capabilities == nil {
 		return nil, fmt.Errorf("ollama /api/show response for %q omitted capabilities", modelName)
 	}
-	return *showResp.Capabilities, nil
+	return showResp.Capabilities, nil
 }
 
 func (o *Ollama) endpoint(path string) string {
@@ -189,8 +190,8 @@ func (o *Ollama) listLocalModels(ctx context.Context) ([]ollamaLocalModel, error
 }
 
 func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.ModelOptions) ai.Model {
-	// Check the init guard first under a brief lock — before any I/O — so
-	// that a forgotten Init() panics immediately rather than after a timeout.
+	// Check the init guard under a separate brief lock. The lock must be
+	// released before cachedModelCapabilities below, which acquires it again.
 	o.mu.Lock()
 	if !o.initted {
 		o.mu.Unlock()
@@ -440,14 +441,15 @@ func (o *Ollama) Init(ctx context.Context) []api.Action {
 }
 
 func (o *Ollama) cachedModelCapabilities(name, digest string) (modelCapabilitiesCacheEntry, bool) {
+	key := normalizeModelName(name)
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	entry, ok := o.capabilitiesCache[name]
+	entry, ok := o.capabilitiesCache[key]
 	if !ok || (digest != "" && entry.digest != digest) {
 		return modelCapabilitiesCacheEntry{}, false
 	}
 	if !entry.expires.IsZero() && time.Now().After(entry.expires) {
-		delete(o.capabilitiesCache, name)
+		delete(o.capabilitiesCache, key)
 		return modelCapabilitiesCacheEntry{}, false
 	}
 	return entry, true
@@ -461,14 +463,21 @@ func (o *Ollama) cacheModelSupports(name, digest string, supports *ai.ModelSuppo
 	if !detected {
 		expires = time.Now().Add(capabilityFailureCacheLifetime)
 	}
+	key := normalizeModelName(name)
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.capabilitiesCache == nil {
 		o.capabilitiesCache = make(map[string]modelCapabilitiesCacheEntry)
 	}
-	o.capabilitiesCache[name] = modelCapabilitiesCacheEntry{
+	o.capabilitiesCache[key] = modelCapabilitiesCacheEntry{
 		digest: digest, supports: *supports, detected: detected, expires: expires,
 	}
+}
+
+// normalizeModelName makes Ollama's implicit latest tag use the same cache key
+// as the explicit name returned by /api/tags.
+func normalizeModelName(name string) string {
+	return strings.TrimSuffix(name, ":latest")
 }
 
 // newModel creates an Ollama model without registering it in the Genkit registry.
@@ -507,15 +516,24 @@ func (o *Ollama) ListActions(ctx context.Context) []api.ActionDesc {
 
 	supports := make([]*ai.ModelSupports, len(filtered))
 	var wg sync.WaitGroup
+	querySlots := make(chan struct{}, maxConcurrentCapabilityQueries)
+
+scheduleQueries:
 	for i, m := range filtered {
 		if cached, ok := o.cachedModelCapabilities(m.Name, m.Digest); ok {
 			cachedSupports := cached.supports
 			supports[i] = &cachedSupports
 			continue
 		}
+		select {
+		case querySlots <- struct{}{}:
+		case <-ctx.Done():
+			break scheduleQueries
+		}
 		wg.Add(1)
 		go func(i int, m ollamaLocalModel) {
 			defer wg.Done()
+			defer func() { <-querySlots }()
 			capabilityCtx, cancel := o.modelCapabilitiesContext(ctx)
 			defer cancel()
 			caps, err := o.getModelCapabilities(capabilityCtx, m.Name)

@@ -19,6 +19,7 @@ package ollama
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -391,6 +392,54 @@ func TestDynamicPlugin(t *testing.T) {
 			}
 		})
 
+		t.Run("shares latest-tag capabilities with bare model names", func(t *testing.T) {
+			var showCalls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/tags":
+					_ = json.NewEncoder(w).Encode(ollamaTagsResponse{Models: []ollamaLocalModel{{
+						Name: "moondream:latest", Digest: "digest-1",
+					}}})
+				case "/api/show":
+					showCalls.Add(1)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"capabilities": []string{"completion", "vision"},
+					})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			o := newTestOllama(server.URL)
+			if actions := o.ListActions(t.Context()); len(actions) != 1 {
+				t.Fatalf("ListActions() returned %d actions, want 1", len(actions))
+			}
+
+			resolved := o.ResolveAction(api.ActionTypeModel, "moondream")
+			if resolved == nil {
+				t.Fatal("ResolveAction() returned nil")
+			}
+			resolvedSupports := modelSupportsMetadata(t, resolved.Desc())
+			if resolvedSupports["tools"] != false || resolvedSupports["media"] != true {
+				t.Errorf("resolved supports = %v, want detected tools=false and media=true", resolvedSupports)
+			}
+
+			g := genkit.Init(t.Context())
+			defined := o.DefineModel(g, ModelDefinition{Name: "moondream", Type: "chat"}, nil)
+			definedAction, ok := defined.(api.Action)
+			if !ok {
+				t.Fatal("defined model does not implement api.Action")
+			}
+			definedSupports := modelSupportsMetadata(t, definedAction.Desc())
+			if definedSupports["tools"] != false || definedSupports["media"] != true {
+				t.Errorf("defined supports = %v, want detected tools=false and media=true", definedSupports)
+			}
+			if got := showCalls.Load(); got != 1 {
+				t.Errorf("/api/show calls = %d, want 1", got)
+			}
+		})
+
 		t.Run("retries capability detection after a cached failure expires", func(t *testing.T) {
 			var showCalls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -476,6 +525,65 @@ func TestDynamicPlugin(t *testing.T) {
 			close(release)
 			if actions := <-result; len(actions) != 2 {
 				t.Fatalf("ListActions() returned %d actions, want 2", len(actions))
+			}
+		})
+
+		t.Run("bounds concurrent capability queries", func(t *testing.T) {
+			var active atomic.Int32
+			var peak atomic.Int32
+			release := make(chan struct{})
+			started := make(chan struct{}, maxConcurrentCapabilityQueries+1)
+			models := make([]ollamaLocalModel, maxConcurrentCapabilityQueries+2)
+			for i := range models {
+				models[i] = ollamaLocalModel{
+					Name: fmt.Sprintf("model-%d", i), Digest: fmt.Sprintf("digest-%d", i),
+				}
+			}
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/tags":
+					_ = json.NewEncoder(w).Encode(ollamaTagsResponse{Models: models})
+				case "/api/show":
+					current := active.Add(1)
+					for {
+						previous := peak.Load()
+						if current <= previous || peak.CompareAndSwap(previous, current) {
+							break
+						}
+					}
+					started <- struct{}{}
+					<-release
+					active.Add(-1)
+					_ = json.NewEncoder(w).Encode(map[string]any{"capabilities": []string{"completion"}})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			result := make(chan []api.ActionDesc, 1)
+			go func() { result <- newTestOllama(server.URL).ListActions(t.Context()) }()
+			for range maxConcurrentCapabilityQueries {
+				select {
+				case <-started:
+				case <-time.After(time.Second):
+					close(release)
+					t.Fatal("capability queries did not reach the concurrency limit")
+				}
+			}
+			select {
+			case <-started:
+				close(release)
+				t.Fatalf("more than %d capability queries ran concurrently", maxConcurrentCapabilityQueries)
+			case <-time.After(50 * time.Millisecond):
+			}
+			close(release)
+			if actions := <-result; len(actions) != len(models) {
+				t.Fatalf("ListActions() returned %d actions, want %d", len(actions), len(models))
+			}
+			if got := peak.Load(); got != maxConcurrentCapabilityQueries {
+				t.Errorf("peak concurrent queries = %d, want %d", got, maxConcurrentCapabilityQueries)
 			}
 		})
 
