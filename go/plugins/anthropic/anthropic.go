@@ -155,6 +155,11 @@ func (a *Anthropic) ListActions(ctx context.Context) []api.ActionDesc {
 }
 
 // Model returns a previously registered model.
+//
+// Deprecated: Generation resolves a model from its name, so looking one up
+// first is rarely necessary: pass ai.WithModelName("anthropic/claude-opus-4-5")
+// or, to carry config with it, [ModelRef]. Use [genkit.LookupModel] when the
+// action itself is what you need.
 func Model(g *genkit.Genkit, name string) ai.Model {
 	return genkit.LookupModel(g, modelName(name))
 }
