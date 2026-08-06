@@ -95,26 +95,66 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 	return []api.Action{}
 }
 
-// DefineModel defines an unknown model with the given name.
-// The second argument describes the capability of the model.
-// Use [IsDefinedModel] to determine if a model is already defined.
-// After [Init] is called, only the known models are defined.
-func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
-	return ant.DefineModel(a.aclient, provider, name, *opts), nil
+// buildModel builds an unregistered Claude model. A nil opts takes the
+// capabilities the plugin resolves for that ID, and id is the model ID,
+// bare or provider-prefixed.
+func (a *Anthropic) buildModel(id string, opts *ai.ModelOptions) *ai.ModelAction {
+	// Trim before resolving, so a prefixed id still hits knownModels.
+	id = strings.TrimPrefix(id, provider+"/")
+
+	var modelOpts ai.ModelOptions
+	if opts != nil {
+		modelOpts = *opts
+	} else {
+		modelOpts = modelOptions(id)
+	}
+
+	return newModel(a.aclient, id, id, modelOpts)
 }
 
-// modelOptions returns the ModelOptions for a Claude model name. Known models
-// (see knownModels) carry curated capabilities; any other model falls back to
-// defaultClaudeOpts. The returned options always carry a provider-prefixed
-// label. This is the single source of model capabilities shared by ListActions
+// RegisterModel registers a Claude model with g and returns it. The plugin
+// supplies the implementation; opts describes what the model supports, and a
+// nil opts takes the capabilities the plugin resolves for that ID, curated
+// for a known model and the Claude defaults for the rest.
+//
+// Most applications never need this. Every Claude model resolves on demand,
+// so naming one that was never registered is enough:
+//
+//	genkit.Generate(ctx, g, ai.WithModelName("anthropic/claude-opus-4-5"), ...)
+//
+// Reach for RegisterModel only to pin capabilities that differ from the ones
+// the plugin resolves, which is what opts is for.
+//
+// Registering an ID that is already registered panics, and generating with an
+// ID registers it, so register a model before its first use or guard with
+// [IsDefinedModel]. id is the model ID, bare or provider-prefixed.
+func (a *Anthropic) RegisterModel(g *genkit.Genkit, id string, opts *ai.ModelOptions) (ai.Model, error) {
+	model := a.buildModel(id, opts)
+	genkit.RegisterAction(g, model)
+	return model, nil
+}
+
+// DefineModel builds a Claude model and returns it, without registering it
+// with g.
+//
+// Deprecated: use [Anthropic.RegisterModel]. This method builds the model and
+// ignores g. Generation resolves a model from its name, so passing the result
+// to ai.WithModel contributes only that name and serves the request with a
+// model resolved from it instead; registering it with [genkit.RegisterAction]
+// is what makes these capabilities the ones used.
+func (a *Anthropic) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOptions) (ai.Model, error) {
+	return a.buildModel(id, opts), nil
+}
+
+// modelOptions returns the ModelOptions for a Claude model ID. Known models
+// (see knownModels) carry curated capabilities and labels; any other model
+// falls back to defaultClaudeOpts, whose label newModel fills in from the
+// ID. This is the single source of model capabilities shared by ListActions
 // and ResolveAction, mirroring the JS plugin's claudeModelReference.
-func modelOptions(name string) ai.ModelOptions {
-	opts, ok := knownModels[baseModelName(name)]
+func modelOptions(id string) ai.ModelOptions {
+	opts, ok := knownModels[baseModelName(id)]
 	if !ok {
 		opts = defaultClaudeOpts
-	}
-	if opts.Label == "" {
-		opts.Label = fmt.Sprintf("%s - %s", anthropicLabelPrefix, name)
 	}
 	return opts
 }
@@ -132,26 +172,40 @@ func (a *Anthropic) ListActions(ctx context.Context) []api.ActionDesc {
 	for _, name := range models {
 		// When listing discovered models, the Genkit action name and the
 		// Anthropic API model ID are identical.
-		model := newModel(a.aclient, name, name, modelOptions(name))
-		if action, ok := model.(api.Action); ok {
-			actions = append(actions, action.Desc())
-		}
+		actions = append(actions, newModel(a.aclient, name, name, modelOptions(name)).Desc())
 	}
 
 	return actions
 }
 
-// Model returns a previously registered model
-func Model(g *genkit.Genkit, name string) ai.Model {
-	return genkit.LookupModel(g, api.NewName(provider, name))
+// Model returns a previously registered model.
+//
+// Deprecated: Generation resolves a model from its name, so looking one up
+// first is rarely necessary: pass ai.WithModelName("anthropic/claude-opus-4-5")
+// or, to carry config with it, [ModelRef]. Use [genkit.LookupModel] when the
+// action itself is what you need.
+func Model(g *genkit.Genkit, id string) ai.Model {
+	return genkit.LookupModel(g, modelName(id))
 }
 
-// IsDefinedModel returns whether a model is already defined
-func IsDefinedModel(g *genkit.Genkit, name string) bool {
-	return genkit.LookupModel(g, api.NewName(provider, name)) != nil
+// IsDefinedModel reports whether a model is already registered, which is the
+// guard against registering one twice (see [Anthropic.RegisterModel]). The lookup
+// deliberately does not resolve dynamically: a resolving lookup would ask the
+// plugin to resolve the very model the caller is checking for, registering it
+// and answering true for any ID the Anthropic API can serve.
+func IsDefinedModel(g *genkit.Genkit, id string) bool {
+	return genkit.LookupAction(g, fmt.Sprintf("/%s/%s", api.ActionTypeModel, modelName(id))) != nil
 }
 
-// ResolveAction resolves an action with the given name
+// modelName builds the action name for a Claude model ID, taking the ID either
+// bare or already provider-prefixed. The prefix is applied by concatenation,
+// so without the trim an already-prefixed ID would double up and name a
+// model that resolves nowhere.
+func modelName(id string) string {
+	return api.NewName(provider, strings.TrimPrefix(id, provider+"/"))
+}
+
+// ResolveAction resolves an action with the given ID
 func (a *Anthropic) ResolveAction(atype api.ActionType, id string) api.Action {
 	switch atype {
 	case api.ActionTypeModel:
@@ -169,7 +223,7 @@ func (a *Anthropic) ResolveAction(atype api.ActionType, id string) api.Action {
 
 		// We register the model using the ID requested by the user, but
 		// use the resolved 'realID' (e.g. versioned) for actual API calls.
-		return newModel(a.aclient, id, realID, modelOptions(id)).(api.Action)
+		return newModel(a.aclient, id, realID, modelOptions(id))
 	}
 	return nil
 }
@@ -193,36 +247,15 @@ func (a *Anthropic) getModels(ctx context.Context) ([]string, error) {
 	return models, nil
 }
 
-// newModel creates a model wihout registering it
-func newModel(client anthropic.Client, name, apiModelName string, opts ai.ModelOptions) ai.Model {
-	config := &anthropic.MessageNewParams{}
-
-	meta := &ai.ModelOptions{
-		Label:        opts.Label,
-		Supports:     opts.Supports,
-		Versions:     opts.Versions,
-		ConfigSchema: ant.ConfigSchema(config),
-		Stage:        opts.Stage,
-	}
-
-	targetModel := name
-	if apiModelName != "" {
-		targetModel = apiModelName
-	}
-
-	fn := func(
-		ctx context.Context,
-		input *ai.ModelRequest,
-		cb func(context.Context, *ai.ModelResponseChunk) error,
-	) (*ai.ModelResponse, error) {
-		return ant.Generate(ctx, client, provider, targetModel, input, cb)
-	}
-
-	return ai.NewModel(api.NewName(provider, name), meta, fn)
+// newModel creates a model without registering it. name is the Genkit action
+// name and apiModelName is the model ID sent to the API, which differ when the
+// name is an alias for a dated release.
+func newModel(client anthropic.Client, name, apiModelName string, opts ai.ModelOptions) *ai.ModelAction {
+	return ant.NewModel(client, provider, name, apiModelName, opts)
 }
 
-func baseModelName(name string) string {
-	return dateSuffix.ReplaceAllString(name, "")
+func baseModelName(id string) string {
+	return dateSuffix.ReplaceAllString(id, "")
 }
 
 func resolveModelID(id string, availableModels []string) (string, bool) {
