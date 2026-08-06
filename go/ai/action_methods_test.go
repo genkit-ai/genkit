@@ -79,6 +79,14 @@ func TestPrimitiveMethodsForwardToEmbeddedAction(t *testing.T) {
 			input: `{"dataset":[{"testCaseId":"case-1","input":"x"}],"evalRunId":"run-1"}`,
 		},
 		{
+			name: "tool",
+			action: NewTool("test/tool", "a test tool", func(ctx *ToolContext, in string) (string, error) {
+				return in + "!", nil
+			}),
+			atype: api.ActionTypeToolV2,
+			input: `"hi"`,
+		},
+		{
 			name: "background model",
 			action: NewBackgroundModelAction("test/background", nil,
 				func(ctx context.Context, req *ModelRequest, _ any) (*ModelOperation, error) {

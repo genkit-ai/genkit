@@ -62,7 +62,8 @@ func (t ToolName) Name() string {
 // Internally, all tools use the v2 format (returning MultipartToolResponse).
 // For regular tools, RunRaw unwraps the Output field for backward compatibility.
 //
-// It implements [Tool], so it can be passed anywhere one is accepted. Unlike
+// It implements [Tool] and [api.Action], so it can be passed anywhere either
+// is accepted, including the action slice a plugin returns from Init. Unlike
 // the other primitives it holds its action in a named field rather than
 // embedding it, so its documented methods are its whole surface.
 type ToolAction[In, Out any] struct {
@@ -71,9 +72,12 @@ type ToolAction[In, Out any] struct {
 	registry  api.Registry // Registry for schema resolution. Set when registered.
 }
 
-// Pinned here so that breaking the interface fails the build at the type
+// Pinned here so that breaking either interface fails the build at the type
 // rather than at a call site.
-var _ Tool = (*ToolAction[any, any])(nil)
+var (
+	_ Tool       = (*ToolAction[any, any])(nil)
+	_ api.Action = (*ToolAction[any, any])(nil)
+)
 
 // ToolDef is the previous name for [ToolAction]. It was renamed because it
 // read as a sibling of [ToolDefinition], the wire type a tool advertises to
@@ -499,6 +503,23 @@ func (t *ToolAction[In, Out]) Register(r api.Registry) {
 		provider, id := api.ParseName(t.action.Name())
 		r.RegisterAction(api.NewKey(api.ActionTypeTool, provider, id), t.action)
 	}
+}
+
+// Desc returns the tool's action descriptor: its name, schemas, and metadata.
+func (t *ToolAction[In, Out]) Desc() api.ActionDesc { return t.action.Desc() }
+
+// RunJSON runs the tool on JSON-encoded input and returns the JSON-encoded
+// multipart response envelope, which is what the registry serves for this
+// tool. Prefer [ToolAction.RunRaw], which unwraps the envelope's output for a
+// regular tool.
+func (t *ToolAction[In, Out]) RunJSON(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (json.RawMessage, error) {
+	return t.action.RunJSON(ctx, input, cb)
+}
+
+// RunJSONWithTelemetry is [ToolAction.RunJSON] with the run's telemetry
+// returned alongside the output.
+func (t *ToolAction[In, Out]) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	return t.action.RunJSONWithTelemetry(ctx, input, cb)
 }
 
 // RunRaw runs this tool using the provided raw map format data (JSON parsed as map[string]any).
