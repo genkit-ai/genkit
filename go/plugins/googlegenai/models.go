@@ -109,12 +109,14 @@ const (
 
 	gemini25Pro = "gemini-2.5-pro"
 
-	gemini36Flash      = "gemini-3.6-flash"
-	gemini35Flash      = "gemini-3.5-flash"
-	gemini35FlashLite  = "gemini-3.5-flash-lite"
-	gemini31FlashLite  = "gemini-3.1-flash-lite"
-	gemini31FlashImage = "gemini-3.1-flash-image"
-	gemini3ProImage    = "gemini-3-pro-image"
+	gemini36Flash          = "gemini-3.6-flash"
+	gemini35Flash          = "gemini-3.5-flash"
+	gemini35FlashLite      = "gemini-3.5-flash-lite"
+	gemini31ProPreview     = "gemini-3.1-pro-preview"
+	gemini31FlashLite      = "gemini-3.1-flash-lite"
+	gemini31FlashImage     = "gemini-3.1-flash-image"
+	gemini31FlashLiteImage = "gemini-3.1-flash-lite-image"
+	gemini3ProImage        = "gemini-3-pro-image"
 
 	gemini25FlashPreviewTTS = "gemini-2.5-flash-preview-tts"
 	gemini25ProPreviewTTS   = "gemini-2.5-pro-preview-tts"
@@ -136,6 +138,7 @@ const (
 	textmultilingualembedding002      = "text-multilingual-embedding-002"
 	multimodalembedding               = "multimodalembedding"
 	geminiEmbedding2                  = "gemini-embedding-2"
+	geminiEmbedding001                = "gemini-embedding-001"
 )
 
 var (
@@ -148,9 +151,13 @@ var (
 		gemini36Flash,
 		gemini35Flash,
 		gemini35FlashLite,
+		gemini31ProPreview,
 		gemini31FlashLite,
 		gemini31FlashImage,
+		gemini31FlashLiteImage,
 		gemini3ProImage,
+
+		gemini31FlashTTSPreview,
 
 		imagen40FastGenerate001,
 		imagen40Generate001,
@@ -167,7 +174,9 @@ var (
 		gemini36Flash,
 		gemini35Flash,
 		gemini35FlashLite,
+		gemini31ProPreview,
 		gemini31FlashImage,
+		gemini31FlashLiteImage,
 		gemini3ProImage,
 
 		imagen40FastGenerate001,
@@ -219,6 +228,12 @@ var (
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
 		},
+		gemini31ProPreview: {
+			Label:    "Gemini 3.1 Pro Preview",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
 		gemini31FlashLite: {
 			Label:    "Gemini 3.1 Flash Lite",
 			Versions: []string{},
@@ -227,6 +242,12 @@ var (
 		},
 		gemini31FlashImage: {
 			Label:    "Gemini 3.1 Flash Image",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini31FlashLiteImage: {
+			Label:    "Gemini 3.1 Flash Lite Image",
 			Versions: []string{},
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
@@ -350,6 +371,13 @@ var (
 					"image",
 					"video",
 				},
+			},
+		},
+		geminiEmbedding001: {
+			Dimensions: 3072,
+			Label:      "Gemini Embedding 001",
+			Supports: &ai.EmbedderSupports{
+				Input: []string{"text"},
 			},
 		},
 		geminiEmbedding2: {
