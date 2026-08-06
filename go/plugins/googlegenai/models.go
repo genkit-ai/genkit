@@ -131,14 +131,10 @@ const (
 	veo31GeneratePreview     = "veo-3.1-generate-preview"
 	veo31FastGeneratePreview = "veo-3.1-fast-generate-preview"
 
-	textembeddinggecko003             = "textembedding-gecko@003"
-	textembeddinggecko002             = "textembedding-gecko@002"
-	textembeddinggecko001             = "textembedding-gecko@001"
-	textembeddinggeckomultilingual001 = "textembedding-gecko-multilingual@001"
-	textmultilingualembedding002      = "text-multilingual-embedding-002"
-	multimodalembedding               = "multimodalembedding"
-	geminiEmbedding2                  = "gemini-embedding-2"
-	geminiEmbedding001                = "gemini-embedding-001"
+	textmultilingualembedding002 = "text-multilingual-embedding-002"
+	multimodalembedding          = "multimodalembedding"
+	geminiEmbedding2             = "gemini-embedding-2"
+	geminiEmbedding001           = "gemini-embedding-001"
 )
 
 var (
@@ -159,10 +155,6 @@ var (
 
 		gemini31FlashTTSPreview,
 
-		imagen40FastGenerate001,
-		imagen40Generate001,
-		imagen40UltraGenerate001,
-
 		veo31Generate001,
 		veo31FastGenerate001,
 	}
@@ -179,6 +171,9 @@ var (
 		gemini31FlashLiteImage,
 		gemini3ProImage,
 
+		// Imagen is retired on Vertex AI (June 30, 2026) and retires on Google
+		// AI on August 17, 2026. Nano Banana (gemini-*-image, via
+		// generateContent) is the replacement on both.
 		imagen40FastGenerate001,
 		imagen40Generate001,
 		imagen40UltraGenerate001,
@@ -327,44 +322,16 @@ var (
 	}
 
 	embedderConfig = map[string]ai.EmbedderOptions{
-		textembeddinggecko003: {
-			Dimensions: 768,
-			Label:      "Google Gen AI - Text Embedding Gecko 003",
-			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
-			},
-		},
-		textembeddinggecko002: {
-			Dimensions: 768,
-			Label:      "Vertex AI - Text Embedding Gecko 002",
-			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
-			},
-		},
-		textembeddinggecko001: {
-			Dimensions: 768,
-			Label:      "Vertex AI - Text Embedding Gecko 001",
-			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
-			},
-		},
-		textembeddinggeckomultilingual001: {
-			Dimensions: 768,
-			Label:      "Vertex AI - Text Embedding Gecko Multilingual 001",
-			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
-			},
-		},
 		textmultilingualembedding002: {
 			Dimensions: 768,
-			Label:      "Vertex AI - Text Multilingual Embedding 001",
+			Label:      "Text Multilingual Embedding 002",
 			Supports: &ai.EmbedderSupports{
 				Input: []string{"text"},
 			},
 		},
 		multimodalembedding: {
 			Dimensions: 768,
-			Label:      "Google Gen AI - Text Embedding Gecko (Legacy)",
+			Label:      "Multimodal Embedding",
 			Supports: &ai.EmbedderSupports{
 				Input: []string{
 					"text",

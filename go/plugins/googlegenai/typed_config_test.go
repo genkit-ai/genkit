@@ -219,8 +219,8 @@ func TestEmbedderConfigSchema(t *testing.T) {
 	t.Parallel()
 	client := testClient(t)
 
-	opts := GetEmbedderOptions(textembeddinggecko003, vertexAIProvider)
-	desc := newEmbedder(client, textembeddinggecko003, &opts).Desc()
+	opts := GetEmbedderOptions(geminiEmbedding2, vertexAIProvider)
+	desc := newEmbedder(client, geminiEmbedding2, &opts).Desc()
 
 	for _, options := range []any{
 		genai.EmbedContentConfig{TaskType: "RETRIEVAL_DOCUMENT"},
