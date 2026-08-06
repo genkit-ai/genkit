@@ -288,9 +288,9 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         one is created lazily to match ``client``'s project/database and closed by
         :meth:`close`.
 
-        ``snapshot_path_prefix`` receives the per-call ``context`` dict (e.g. auth)
-        that ``get_snapshot`` / ``save_snapshot`` thread as a kwarg — not a wrapper
-        options object — so a tenant key can come straight from request context.
+        ``snapshot_path_prefix``: ``(context: dict | None) -> str``. Takes only the
+        request context (e.g. auth) so the lambda's args stay explicit and match
+        what tenancy actually needs.
 
         When ``reject_ambiguous_session`` is set, a ``session_id`` lookup on a
         forked history raises instead of returning the newest leaf.
