@@ -68,7 +68,7 @@ ModelUsage = GenerationUsage  # public name for GenerationUsage
 OutputT = TypeVar('OutputT', default=object)
 # Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
 # Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
-ConfigT = TypeVar('ConfigT', bound=BaseModel, covariant=True, default=BaseModel)
+ConfigT = TypeVar('ConfigT', bound=BaseModel, covariant=True)
 
 
 @dataclass(frozen=True, kw_only=True)
