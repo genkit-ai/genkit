@@ -1,6 +1,6 @@
 # Genkit Python SDK
 
-Build production-ready AI applications in Python with type-safe flows, structured outputs, and integrated observability.
+Build production-ready AI applications and agentic workflows in Python with type-safe flows, structured outputs, and integrated observability.
 
 ## Quick Start
 
