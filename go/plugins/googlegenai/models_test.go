@@ -5,10 +5,20 @@ package googlegenai
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 )
+
+// hitUnknownModelFallback reports whether GetModelOptions fell through to the
+// default options instead of finding a concrete map entry. Every model is
+// stable now, so the stage no longer distinguishes them; the label does. A
+// registered model carries its curated label ("Gemini 3.6 Flash") while the
+// fallback is labelled with the raw model ID.
+func hitUnknownModelFallback(opts ai.ModelOptions, name string) bool {
+	return strings.HasSuffix(opts.Label, name)
+}
 
 func TestImagen4ModelOptions(t *testing.T) {
 	tests := []struct {
@@ -70,8 +80,8 @@ var newlyRegisteredGeminiModels = []string{
 }
 
 // TestNewGeminiModelsResolveToRegisteredEntries verifies each model resolves to
-// its concrete map entry (Stable stage, multimodal supports, labelled) rather
-// than the unknown-model fallback (defaultGeminiOpts, which is Unstable).
+// its concrete map entry (curated label, multimodal supports) rather than the
+// unknown-model fallback (defaultGeminiOpts).
 func TestNewGeminiModelsResolveToRegisteredEntries(t *testing.T) {
 	for _, name := range newlyRegisteredGeminiModels {
 		if got := ClassifyModel(name); got != ModelTypeGemini {
@@ -79,8 +89,8 @@ func TestNewGeminiModelsResolveToRegisteredEntries(t *testing.T) {
 		}
 
 		opts := GetModelOptions(name, googleAIProvider)
-		if opts.Stage != ai.ModelStageStable {
-			t.Errorf("GetModelOptions(%q).Stage = %q, want Stable (likely hit the unknown-model fallback)", name, opts.Stage)
+		if hitUnknownModelFallback(opts, name) {
+			t.Errorf("GetModelOptions(%q).Label = %q, want a curated label (hit the unknown-model fallback)", name, opts.Label)
 		}
 		if opts.Supports == nil || !opts.Supports.Multiturn || !opts.Supports.Media {
 			t.Errorf("GetModelOptions(%q): expected multimodal supports, got %+v", name, opts.Supports)
@@ -137,20 +147,20 @@ func TestGeminiEmbedding2Registered(t *testing.T) {
 	}
 }
 
-// TestGemini36And35LiteRegistered pins that the 3.6 Flash and 3.5 Flash Lite
-// entries are reachable on both backends. A model listed for a provider but
-// missing from supportedGeminiModels still resolves, silently, to the
-// unknown-model fallback: Unstable stage and no label.
-func TestGemini36And35LiteRegistered(t *testing.T) {
-	for _, name := range []string{gemini36Flash, gemini35FlashLite} {
+// TestNewlyRegisteredModels pins that the models added from the backend audit
+// are reachable on both backends. A model listed for a provider but missing
+// from supportedGeminiModels still resolves, silently, to the unknown-model
+// fallback, which is labelled with the raw model ID.
+func TestNewlyRegisteredModels(t *testing.T) {
+	for _, name := range []string{gemini36Flash, gemini35FlashLite, gemini31ProPreview, gemini31FlashLiteImage} {
 		if got := ClassifyModel(name); got != ModelTypeGemini {
 			t.Errorf("ClassifyModel(%q) = %v, want ModelTypeGemini", name, got)
 		}
 
 		for _, provider := range []string{googleAIProvider, vertexAIProvider} {
 			opts := GetModelOptions(name, provider)
-			if opts.Stage != ai.ModelStageStable {
-				t.Errorf("GetModelOptions(%q, %q).Stage = %q, want Stable (likely hit the unknown-model fallback)", name, provider, opts.Stage)
+			if hitUnknownModelFallback(opts, name) {
+				t.Errorf("GetModelOptions(%q, %q).Label = %q, want a curated label (hit the unknown-model fallback)", name, provider, opts.Label)
 			}
 			if opts.Supports == nil || !opts.Supports.Multiturn || !opts.Supports.Media {
 				t.Errorf("GetModelOptions(%q, %q): expected multimodal supports, got %+v", name, provider, opts.Supports)
