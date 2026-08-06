@@ -137,9 +137,11 @@ func (a *Anthropic) RegisterModel(g *genkit.Genkit, name string, opts *ai.ModelO
 // DefineModel builds a Claude model and returns it, without registering it
 // with g.
 //
-// Deprecated: use [Anthropic.RegisterModel], which also registers the model
-// with g so that generating by that name uses it. This method only builds the
-// model and ignores g, leaving it reachable through the returned value alone.
+// Deprecated: use [Anthropic.RegisterModel]. This method builds the model and
+// ignores g. Generation resolves a model from its name, so passing the result
+// to ai.WithModel contributes only that name and serves the request with a
+// model resolved from it instead; registering it with [genkit.RegisterAction]
+// is what makes these capabilities the ones used.
 func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
 	return a.buildModel(name, opts), nil
 }
