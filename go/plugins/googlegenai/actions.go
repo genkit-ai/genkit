@@ -49,31 +49,31 @@ func listActions(ctx context.Context, client *genai.Client, provider string) []a
 	return actions
 }
 
-// ResolveAction resolves an action with the given name.
-func (ga *GoogleAI) ResolveAction(atype api.ActionType, name string) api.Action {
-	return resolveAction(ga.gclient, googleAIProvider, atype, name)
+// ResolveAction resolves an action with the given ID.
+func (ga *GoogleAI) ResolveAction(atype api.ActionType, id string) api.Action {
+	return resolveAction(ga.gclient, googleAIProvider, atype, id)
 }
 
-// ResolveAction resolves an action with the given name.
-func (v *VertexAI) ResolveAction(atype api.ActionType, name string) api.Action {
-	return resolveAction(v.gclient, vertexAIProvider, atype, name)
+// ResolveAction resolves an action with the given ID.
+func (v *VertexAI) ResolveAction(atype api.ActionType, id string) api.Action {
+	return resolveAction(v.gclient, vertexAIProvider, atype, id)
 }
 
 // resolveAction is the shared implementation for resolving actions.
-func resolveAction(client *genai.Client, provider string, atype api.ActionType, name string) api.Action {
-	mt := ClassifyModel(name)
+func resolveAction(client *genai.Client, provider string, atype api.ActionType, id string) api.Action {
+	mt := ClassifyModel(id)
 
 	switch atype {
 	case api.ActionTypeEmbedder:
-		opts := GetEmbedderOptions(name, provider)
-		return newEmbedder(client, name, &opts)
+		opts := GetEmbedderOptions(id, provider)
+		return newEmbedder(client, id, &opts)
 
 	case api.ActionTypeModel:
 		// Veo models should not be resolved as regular models
 		if mt == ModelTypeVeo {
 			return nil
 		}
-		return newModel(client, name, GetModelOptions(name, provider))
+		return newModel(client, id, GetModelOptions(id, provider))
 
 	// A background model is a bundle: registering it registers both its start
 	// and check actions, so the same value resolves either key. The registry
@@ -82,7 +82,7 @@ func resolveAction(client *genai.Client, provider string, atype api.ActionType, 
 		if mt != ModelTypeVeo {
 			return nil
 		}
-		return newVeoModel(client, name, GetModelOptions(name, provider))
+		return newVeoModel(client, id, GetModelOptions(id, provider))
 	}
 
 	return nil
