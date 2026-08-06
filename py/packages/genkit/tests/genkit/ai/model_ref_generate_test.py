@@ -83,7 +83,15 @@ async def test_generate_with_model_ref_accepts_matching_dict(ai_with_echo: tuple
     assert isinstance(cfg, dict)
     assert cfg['temperature'] == 0.3
     assert cfg['stopSequences'] == ['\n']
-    assert (cfg.get('customSetting') or cfg.get('custom_setting')) == 'special_val'
+    assert cfg['customSetting'] == 'special_val'
+
+    # Passing camelCase dict literal directly also works
+    await ai.generate(
+        model=ref,
+        prompt='Hello',
+        config={'customSetting': 'camel_val'},  # ty: ignore[invalid-key]
+    )
+    assert echo.last_request.config['customSetting'] == 'camel_val'
 
 
 @pytest.mark.asyncio
