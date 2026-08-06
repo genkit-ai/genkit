@@ -101,3 +101,28 @@ def test_model_ref_preserves_version_and_info_metadata() -> None:
     assert ref.info is info
     assert ref.info.supports is not None
     assert ref.info.supports.multiturn is True
+
+
+def test_prompt_config_keeps_plugin_specific_fields() -> None:
+    """PromptConfig preserves custom plugin-specific fields when normalizing config."""
+    from genkit._ai._prompt import PromptConfig, normalize_config
+
+    pc = PromptConfig(config=normalize_config(CustomConfig(temperature=0.7, safety_settings={'HARM': 'BLOCK'})))
+    dumped = pc.model_dump()['config']
+    assert dumped['safety_settings'] == {'HARM': 'BLOCK'}
+    assert dumped['temperature'] == 0.7
+
+
+def test_define_prompt_with_typed_model_ref() -> None:
+    """ai.define_prompt accepts a typed ModelRef instance."""
+    from genkit import Genkit
+
+    ai = Genkit()
+    ref = model_ref('gemini-pro-latest', config_schema=CustomConfig)
+    prompt = ai.define_prompt(
+        'test_prompt',
+        model=ref,
+        config=CustomConfig(temperature=0.5),
+        prompt='Hello',
+    )
+    assert prompt is not None
