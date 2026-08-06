@@ -242,7 +242,6 @@ def define_background_model(
         ...     await asyncio.sleep(5)
         ...     op = await action.check(op)
     """
-    label = label or name
     action_key = _make_action_key(ActionKind.BACKGROUND_MODEL, name)
 
     # Build model metadata matching JS structure
@@ -252,7 +251,10 @@ def define_background_model(
     if info:
         model_options.update(info.model_dump(by_alias=True, exclude_none=True))
 
-    model_options['label'] = label
+    # Precedence: explicit label argument > info.label > fallback to model name
+    effective_label = label or model_options.get('label') or name
+    model_options['label'] = effective_label
+
     if config_schema:
         model_options['customOptions'] = to_json_schema(config_schema)
 
@@ -289,7 +291,7 @@ def define_background_model(
         kind=ActionKind.BACKGROUND_MODEL,
         fn=wrapped_start,
         metadata=model_meta,
-        description=description or f'Background model: {label}',
+        description=description or f'Background model: {effective_label}',
     )
 
     # Register the check action
@@ -300,7 +302,7 @@ def define_background_model(
         kind=ActionKind.CHECK_OPERATION,
         fn=wrapped_check,
         metadata={'outputSchema': output_schema_meta},
-        description=f'Check operation status for {label}',
+        description=f'Check operation status for {effective_label}',
     )
 
     # Register the cancel action if provided

@@ -1787,7 +1787,6 @@ def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
 
     action = ai.define_background_model(
         name='bg_model',
-        label='Background Model',
         start=start_fn,
         check=check_fn,
         info=ModelInfo(
