@@ -15,13 +15,13 @@ import (
 // validates and deserializes the request's options into
 // [genai.EmbedContentConfig] before the embedder function runs; the config
 // schema is inferred from that type unless the caller overrides it.
-func newEmbedder(client *genai.Client, name string, embedOpts *ai.EmbedderOptions) *ai.EmbedderAction {
+func newEmbedder(client *genai.Client, id string, embedOpts *ai.EmbedderOptions) *ai.EmbedderAction {
 	provider := googleAIProvider
 	if client.ClientConfig().Backend == genai.BackendVertexAI {
 		provider = vertexAIProvider
 	}
 
-	return ai.NewEmbedderAction(api.NewName(provider, name), embedOpts, func(ctx context.Context, req *ai.EmbedRequest, embedConfig genai.EmbedContentConfig) (*ai.EmbedResponse, error) {
+	return ai.NewEmbedderAction(api.NewName(provider, id), embedOpts, func(ctx context.Context, req *ai.EmbedRequest, embedConfig genai.EmbedContentConfig) (*ai.EmbedResponse, error) {
 		var content []*genai.Content
 
 		for _, doc := range req.Input {
@@ -34,7 +34,7 @@ func newEmbedder(client *genai.Client, name string, embedOpts *ai.EmbedderOption
 			})
 		}
 
-		r, err := client.Models.EmbedContent(ctx, name, content, &embedConfig)
+		r, err := client.Models.EmbedContent(ctx, id, content, &embedConfig)
 		if err != nil {
 			return nil, err
 		}

@@ -69,13 +69,13 @@ func configToMap(config any) map[string]any {
 // request's config into that type before the model function runs, which
 // yields the request's own copy; the plugin passes that copy by pointer from
 // here down rather than copying the struct again at every hop.
-func newModel(client *genai.Client, name string, opts ai.ModelOptions) *ai.ModelAction {
+func newModel(client *genai.Client, id string, opts ai.ModelOptions) *ai.ModelAction {
 	provider := googleAIProvider
 	if client.ClientConfig().Backend == genai.BackendVertexAI {
 		provider = vertexAIProvider
 	}
 
-	mt := ClassifyModel(name)
+	mt := ClassifyModel(id)
 	if opts.ConfigSchema == nil {
 		opts.ConfigSchema = mt.configSchema()
 	}
@@ -83,9 +83,9 @@ func newModel(client *genai.Client, name string, opts ai.ModelOptions) *ai.Model
 	// Image generation reads only the request's text prompt, so imagen models
 	// skip the media-download middleware the generateContent path gets.
 	if mt == ModelTypeImagen {
-		return ai.NewModelAction(api.NewName(provider, name), &opts,
+		return ai.NewModelAction(api.NewName(provider, id), &opts,
 			func(ctx context.Context, input *ai.ModelRequest, config genai.GenerateImagesConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-				return generateImage(ctx, client, name, input, &config, cb)
+				return generateImage(ctx, client, id, input, &config, cb)
 			})
 	}
 
@@ -111,16 +111,16 @@ func newModel(client *genai.Client, name string, opts ai.ModelOptions) *ai.Model
 		})
 	}
 
-	return ai.NewModelAction(api.NewName(provider, name), &opts,
+	return ai.NewModelAction(api.NewName(provider, id), &opts,
 		func(ctx context.Context, input *ai.ModelRequest, config genai.GenerateContentConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			// The middleware wraps per call because it must run over the
 			// request while generate needs the per-request typed config.
 			if download != nil {
 				return download(func(ctx context.Context, input *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-					return generate(ctx, client, name, input, &config, cb)
+					return generate(ctx, client, id, input, &config, cb)
 				})(ctx, input, cb)
 			}
-			return generate(ctx, client, name, input, &config, cb)
+			return generate(ctx, client, id, input, &config, cb)
 		})
 }
 
