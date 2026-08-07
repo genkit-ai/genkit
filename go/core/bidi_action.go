@@ -73,7 +73,7 @@ type BidiAction[In, Out, Stream, Init any] struct {
 //
 // Experimental: bidirectional streaming is experimental and subject to change.
 type BidiActionOptions struct {
-	Description  string         // Human-readable description of the action. Metadata["description"] is used if empty.
+	Description  string         // Human-readable description of the action. Metadata["description"] is used if empty; see [ActionOptions].
 	Metadata     map[string]any // Arbitrary key-value data attached to the action descriptor.
 	InputSchema  map[string]any // JSON schema for messages streamed into the action. Inferred from In if nil.
 	OutputSchema map[string]any // JSON schema for the action's final output. Inferred from Out if nil.
