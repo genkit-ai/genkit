@@ -35,6 +35,13 @@ QUIET_LOGGERS = (
     'httpcore',
     'uvicorn.access',
     'uvicorn.error',
+    'opentelemetry',
+    'opentelemetry.sdk',
+    'opentelemetry.instrumentation',
+    # google-genai logs "AFC is enabled with max remote calls: N" at INFO on
+    # every tool-using generate — fine for debug, noisy in the shared TTY.
+    'google.genai',
+    'google_genai',
 )
 
 
