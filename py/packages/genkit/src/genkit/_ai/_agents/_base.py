@@ -69,7 +69,7 @@ from genkit._ai._tools import Tool
 from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction, BidiFn, get_current_context
 from genkit._core._error import GenkitError
 from genkit._core._middleware import BaseMiddleware
-from genkit._core._model import ModelConfig, ModelRef, ModelRefConfigT
+from genkit._core._model import ModelConfigDict, ModelRef, ModelRefConfigT
 from genkit._core._registry import Registry
 from genkit._core._trace._attrs import metadata_key
 from genkit._core._typing import (
@@ -326,7 +326,7 @@ def define_agent(
     system: str | list[Part] | None = None,
     tools: Sequence[str | Tool] | None = None,
     use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
-    config: ModelRefConfigT | ModelConfig | Mapping[str, Any] | None = None,
+    config: ModelRefConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
     max_turns: int | None = None,
     description: str | None = None,
     metadata: dict[str, object] | None = None,
