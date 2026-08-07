@@ -203,11 +203,10 @@ describe('Vertex AI Veo', () => {
       it('should apply apiKey override from options.context', async () => {
         mockFetchResponse({ name: 'operations/ctx-key', done: false });
 
-        const { start } = captureModelRunner(defaultRegionalClientOptions);
-        await await defineModel(modelName, defaultRegionalClientOptions).start(
-          request,
-          { context: { auth: { apiKey: 'context-api-key' } } }
-        );
+        const model = defineModel(modelName, defaultRegionalClientOptions);
+        await model.start(request, {
+          context: { auth: { apiKey: 'context-api-key' } },
+        });
 
         sinon.assert.calledOnce(fetchStub);
         const fetchArgs = fetchStub.lastCall.args;
