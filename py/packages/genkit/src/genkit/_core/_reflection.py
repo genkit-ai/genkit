@@ -251,11 +251,10 @@ def create_reflection_asgi_app(
                     serialized[key] = val.model_dump(by_alias=True, exclude_none=True, mode='json')
                 raw_values = serialized
             return JSONResponse(raw_values, headers={'x-genkit-version': version})
-        except Exception as e:
-            logger.error(f'Failed to list values: {type(e).__name__}: {e}')
-            logger.debug('Reflection /api/values failed', exc_info=e)
+        except Exception:
+            logger.exception('Reflection /api/values failed')
             return JSONResponse(
-                {'error': 'Failed to list values', 'detail': str(e)},
+                {'error': 'Failed to list values', 'detail': 'See Python process logs for the traceback.'},
                 status_code=500,
                 headers={'x-genkit-version': version},
             )
