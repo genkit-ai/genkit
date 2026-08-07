@@ -95,27 +95,30 @@ def resolve_model_name(
 
 
 def resolve_model_ref(*, model: ModelRef[Any], config: dict[str, Any]) -> ResolvedModel:
-    """Merge call-time config over a ModelRef's defaults into a wire ResolvedModel.
-
-    Call-time keys win; ref-only keys are kept. Matches generate()'s model-ref
-    config merge: version and ref defaults first, then the call-time override.
-    """
+    """Merge call-time config over a ModelRef's default config into a wire ResolvedModel."""
     merged: dict[str, Any] = {}
-    if model.version is not None:
-        merged['version'] = model.version
+
+    # 1. Start with defaults defined on the ModelRef (e.g. temperature=0.7)
     if model.config is not None:
         merged.update(normalize_config(config=model.config))
+
+    # 2. Call-time config overrides defaults (e.g. temperature=0.2, top_k=0.9)
     merged.update(config)
 
+    # 3. Find concrete Pydantic schema (e.g. GeminiConfig or ModelConfig)
     schema = concrete_config_schema(
         model.config_schema,
         type(model.config) if model.config is not None else None,
     )
+
+    # 4. Validate types against Pydantic schema & omit unset None fields
     if schema is not None and merged:
         return ResolvedModel(
             name=model.name,
             config=schema.model_validate(merged).model_dump(exclude_unset=True),
         )
+
+    # 5. Fallback for untyped/raw models
     return ResolvedModel(name=model.name, config=merged)
 
 
