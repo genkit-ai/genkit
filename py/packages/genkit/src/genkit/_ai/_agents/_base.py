@@ -23,6 +23,7 @@ from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import Any, Generic
 
 from opentelemetry import trace as trace_api
+from pydantic import BaseModel
 
 # Internal imports from sibling modules
 from genkit._ai._agents._client import AgentClient, part_roots
@@ -326,7 +327,7 @@ def define_agent(
     system: str | list[Part] | None = None,
     tools: Sequence[str | Tool] | None = None,
     use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
-    config: ModelRefConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
+    config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
     max_turns: int | None = None,
     description: str | None = None,
     metadata: dict[str, object] | None = None,

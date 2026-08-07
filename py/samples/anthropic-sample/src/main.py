@@ -16,8 +16,6 @@
 
 """Anthropic generation samples, including stable/beta API selection."""
 
-from typing import Any
-
 from genkit_anthropic import Anthropic
 from pydantic import BaseModel, Field
 
@@ -28,11 +26,6 @@ from genkit import ActionRunContext, Genkit, ModelResponse, ReasoningPart
 ai = Genkit(plugins=[Anthropic(api_version='beta')], model='anthropic/claude-opus-4-8')
 
 LIVE_TEST_MODEL = 'anthropic/claude-haiku-4-5'
-
-
-def _provider_config(**kwargs: Any) -> dict[str, Any]:
-    """Pass-through for Anthropic-only / camelCase knobs (not common ModelConfigDict keys)."""
-    return kwargs
 
 
 class TopicInput(BaseModel):
@@ -109,7 +102,7 @@ async def beta_plugin_default(data: TopicInput) -> str:
     response = await ai.generate(
         model=LIVE_TEST_MODEL,
         prompt=f'Write a one-line fact about {data.topic}.',
-        config=_provider_config(maxOutputTokens=64),
+        config={'maxOutputTokens': 64},
     )
     return response.text
 
@@ -120,7 +113,7 @@ async def stable_request_override(data: TopicInput) -> str:
     response = await ai.generate(
         model=LIVE_TEST_MODEL,
         prompt=f'Write a one-line fact about {data.topic}.',
-        config=_provider_config(apiVersion='stable', maxOutputTokens=64),
+        config={'apiVersion': 'stable', 'maxOutputTokens': 64},
     )
     return response.text
 
@@ -131,7 +124,7 @@ async def beta_without_default_headers(data: TopicInput) -> str:
     response = await ai.generate(
         model=LIVE_TEST_MODEL,
         prompt=f'Write a one-line fact about {data.topic}.',
-        config=_provider_config(apiVersion='beta', betas=[], maxOutputTokens=64),
+        config={'apiVersion': 'beta', 'betas': [], 'maxOutputTokens': 64},
     )
     return response.text
 
@@ -142,7 +135,7 @@ async def beta_plugin_default_stream(data: TopicInput, ctx: ActionRunContext) ->
     stream_response = ai.generate_stream(
         model=LIVE_TEST_MODEL,
         prompt=f'Write a short poem about {data.topic}.',
-        config=_provider_config(maxOutputTokens=64),
+        config={'maxOutputTokens': 64},
     )
     chunks: list[str] = []
     async for chunk in stream_response.stream:
@@ -163,7 +156,7 @@ async def haiku_opus_4_7(data: TopicInput) -> str:
     response = await ai.generate(
         model='anthropic/claude-opus-4-7',
         prompt=f'Write a haiku about {data.topic}.',
-        config=_provider_config(apiVersion='stable'),
+        config={'apiVersion': 'stable'},
     )
     return response.text
 
@@ -174,7 +167,7 @@ async def cat_opus_4_7(data: CatInput) -> Cat:
     response = await ai.generate(
         model='anthropic/claude-opus-4-7',
         prompt=f'Invent a cat named {data.name}.',
-        config=_provider_config(apiVersion='stable'),
+        config={'apiVersion': 'stable'},
         output_format='json',
         output_schema=Cat,
     )
@@ -190,7 +183,7 @@ async def haiku_opus_4_8(data: TopicInput) -> str:
     response = await ai.generate(
         model='anthropic/claude-opus-4-8',
         prompt=f'Write a haiku about {data.topic}.',
-        config=_provider_config(apiVersion='stable'),
+        config={'apiVersion': 'stable'},
     )
     return response.text
 
@@ -201,7 +194,7 @@ async def cat_opus_4_8(data: CatInput) -> Cat:
     response = await ai.generate(
         model='anthropic/claude-opus-4-8',
         prompt=f'Invent a cat named {data.name}.',
-        config=_provider_config(apiVersion='stable'),
+        config={'apiVersion': 'stable'},
         output_format='json',
         output_schema=Cat,
     )
@@ -219,11 +212,11 @@ async def thinking_tool_round_trip(data: WeatherInput, ctx: ActionRunContext) ->
             'Think through the request before and after the tool call, then answer in one concise sentence.'
         ),
         tools=['current_weather'],
-        config=_provider_config(
-            apiVersion='stable',
-            thinking={'type': 'adaptive', 'display': 'summarized'},
-            max_tokens=4096,
-        ),
+        config={
+            'apiVersion': 'stable',
+            'thinking': {'type': 'adaptive', 'display': 'summarized'},
+            'max_tokens': 4096,
+        },
         max_turns=3,
     )
 
@@ -259,10 +252,10 @@ async def thinking_budget_story(data: TopicInput, ctx: ActionRunContext) -> dict
     stream_response = ai.generate_stream(
         model='anthropic/claude-haiku-4-5',
         prompt=f'Tell me a very short story about {data.topic}.',
-        config=_provider_config(
-            thinking={'enabled': True, 'budgetTokens': 1024},
-            maxOutputTokens=2048,
-        ),
+        config={
+            'thinking': {'enabled': True, 'budgetTokens': 1024},
+            'maxOutputTokens': 2048,
+        },
     )
 
     streamed_reasoning: list[str] = []

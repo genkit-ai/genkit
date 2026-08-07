@@ -66,11 +66,7 @@ ModelUsage = GenerationUsage  # public name for GenerationUsage
 
 
 class ModelConfigDict(TypedDict, total=False):
-    """Common knobs for dict-literal autocomplete on config={...}.
-
-    Provider-specific keys still work at runtime; type them as Mapping[str, Any]
-    (or pass a Pydantic config) when the checker rejects the literal.
-    """
+    """Common knobs for dict-literal autocomplete on config={...}."""
 
     version: str
     temperature: float
