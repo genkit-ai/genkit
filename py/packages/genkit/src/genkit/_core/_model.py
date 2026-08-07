@@ -77,7 +77,7 @@ class ModelConfigDict(TypedDict, total=False):
     max_output_tokens: int
     top_k: int
     top_p: float
-    stop_sequences: list[str]
+    stop_sequences: Sequence[str]
     api_key: str
 
 
