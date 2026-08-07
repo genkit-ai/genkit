@@ -45,6 +45,7 @@ See Also:
     - Cloud Monitoring: https://cloud.google.com/monitoring
 """
 
+from .session_store.firestore import FirestoreSessionStore
 from .telemetry import add_gcp_telemetry, enable_google_cloud_telemetry
 
 
@@ -58,6 +59,7 @@ def package_name() -> str:
 
 
 __all__ = [
+    'FirestoreSessionStore',
     'add_gcp_telemetry',
     'enable_google_cloud_telemetry',
     'package_name',
