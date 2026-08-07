@@ -70,6 +70,7 @@ from genkit._core._typing import (
     FinishReason,
     MiddlewareRef,
     MultipartToolResponse,
+    Operation,
     Part,
     Role,
     TextPart,
@@ -683,10 +684,10 @@ async def _generate_action_turn(
     async def dispatch_model(
         params: ModelHookParams,
         ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
-    ) -> ModelResponse:
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse | Operation]],
+    ) -> ModelResponse | Operation:
         """Chain wrap_model middleware and call next_fn."""
-        runner: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]] = next_fn
+        runner: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse | Operation]] = next_fn
         for mw in reversed(middleware):
             _mw = mw
             _inner = runner
@@ -695,11 +696,15 @@ async def _generate_action_turn(
                 params: ModelHookParams,
                 c: GenerateMiddlewareContext,
                 _mw: MiddlewareDef = _mw,
-                _inner: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]] = _inner,
-            ) -> ModelResponse:
+                _inner: Callable[
+                    [ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse | Operation]
+                ] = _inner,
+            ) -> ModelResponse | Operation:
                 return await _mw.wrap_model(params, c, _inner)
 
-            runner = cast(Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]], run_next)
+            runner = cast(
+                Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse | Operation]], run_next
+            )
         return await runner(params, ctx)
 
     # if resolving the 'resume' option above generated a tool message, stream it.
@@ -730,7 +735,7 @@ async def _generate_action_turn(
         if request.docs:
             request = _augment_with_context(request)
 
-        async def next_fn(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
+        async def next_fn(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse | Operation:
             return (
                 await model.run(
                     input=params.request,
@@ -747,6 +752,11 @@ async def _generate_action_turn(
                 next_fn,
             )
 
+        # Background models return an Operation to poll, not a finished message.
+        # The tool loop below assumes response.message exists, so branch out first.
+        if isinstance(model_response, Operation):
+            return ModelResponse(operation=model_response, request=request)
+
         def message_parser(msg: Message) -> Any:  # noqa: ANN401
             if formatter is None:
                 return None
@@ -755,10 +765,10 @@ async def _generate_action_turn(
         # Extract schema_type for runtime Pydantic validation
         schema_type = turn_options.output.schema_type if turn_options.output else None
 
-        # Plugin returns ModelResponse directly. Framework sets request and
-        # any output format context (message_parser, schema_type) as private attrs.
+        # Attach the request to the response if the model plugin did not already include one.
         response = model_response
-        response.request = request
+        if response.request is None:
+            response.request = request
         if formatter:
             response._message_parser = message_parser
         if schema_type:
@@ -1079,11 +1089,17 @@ async def resolve_parameters(
         else cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
     )
     if not model:
-        raise Exception('No model configured.')
+        raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')
 
     model_action = await registry.resolve_model(model)
     if model_action is None:
-        raise Exception(f'Failed to to resolve model {model}')
+        message = f"Failed to resolve model '{model}'."
+        if isinstance(model, str) and '/' not in model:
+            message += ' Ensure the model name includes the plugin namespace.'
+        raise GenkitError(
+            status='NOT_FOUND',
+            message=message,
+        )
 
     # Resolve tools up front to fail fast on invalid caller-supplied tool names or
     # duplicate short names before running side effects or middleware.
