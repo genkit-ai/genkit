@@ -26,7 +26,7 @@ from collections.abc import Callable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Any, ClassVar, Generic, cast
+from typing import Any, ClassVar, Generic, TypedDict, cast
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer
 from pydantic.alias_generators import to_camel
@@ -63,6 +63,19 @@ from genkit._core._typing import (
 
 ModelConfig = GenerationCommonConfig  # public name for GenerationCommonConfig
 ModelUsage = GenerationUsage  # public name for GenerationUsage
+
+
+class ModelConfigDict(TypedDict, total=False):
+    """Common knobs for dict-literal autocomplete on config={...}."""
+
+    version: str
+    temperature: float
+    max_output_tokens: int
+    top_k: int
+    top_p: float
+    stop_sequences: Sequence[str]
+    api_key: str
+
 
 # TypeVars for generic types
 OutputT = TypeVar('OutputT', default=object)
