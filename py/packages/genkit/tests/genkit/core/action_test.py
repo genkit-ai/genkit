@@ -6,7 +6,8 @@
 """Tests for the action module."""
 
 import json
-from typing import cast
+from collections.abc import AsyncIterator, Callable
+from typing import Any, cast
 
 import pytest
 
@@ -14,7 +15,9 @@ from genkit._core._action import (
     Action,
     ActionKind,
     ActionRunContext,
+    BidiAction,
     DapQualifiedName,
+    _action_context,
     create_action_key,
     get_current_context,
     parse_action_key,
@@ -320,6 +323,111 @@ async def test_action_context_isolation_sequential_and_nested() -> None:
     assert child_ctx == {'auth': 'child_secret'}
     assert parent_ctx == {'auth': 'parent_secret'}  # Permanent override check
 
+    assert get_current_context() is None
+
+
+@pytest.mark.asyncio
+async def test_action_context_reset_on_exception() -> None:
+    """ContextVar is reset even when the action fn raises (#5555)."""
+
+    async def boom(_: None, ctx: ActionRunContext) -> None:
+        raise RuntimeError('explode')
+
+    action = Action(name='boom', kind=ActionKind.CUSTOM, fn=boom)
+
+    with pytest.raises(GenkitError, match='explode'):
+        await action.run(context={'auth': 'transient'})
+
+    assert get_current_context() is None
+    assert _action_context.get(None) is None
+
+
+@pytest.mark.asyncio
+async def test_action_explicit_empty_context_does_not_inherit() -> None:
+    """Passing context={} sets an empty bag instead of inheriting ambient (#5555)."""
+
+    async def get_context(_: None, ctx: ActionRunContext) -> dict[str, object]:
+        return dict(ctx.context)
+
+    action = Action(name='getContext', kind=ActionKind.TOOL, fn=get_context)
+
+    async def parent(_: None, ctx: ActionRunContext) -> dict[str, object]:
+        child = await action.run(context={})
+        return child.response  # type: ignore[return-value]
+
+    parent_action = Action(name='parent', kind=ActionKind.CUSTOM, fn=parent)
+    res = await parent_action.run(context={'auth': 'parent'})
+    assert res.response == {}
+
+
+@pytest.mark.asyncio
+async def test_stream_resets_action_context() -> None:
+    """stream() goes through run() and must not leave ambient context (#5555)."""
+
+    async def echo(_: None, ctx: ActionRunContext) -> dict[str, object]:
+        return dict(ctx.context)
+
+    action = Action(name='echo', kind=ActionKind.CUSTOM, fn=echo)
+    stream = action.stream(context={'auth': 'streamer'})
+    chunks = [c async for c in stream.stream]
+    assert chunks == []
+    assert await stream.response == {'auth': 'streamer'}
+    assert get_current_context() is None
+
+
+@pytest.mark.asyncio
+async def test_action_context_is_shallow_copied() -> None:
+    """Action.run must not mutate the caller's context dict."""
+
+    async def mutate(_: None, ctx: ActionRunContext) -> None:
+        ctx.context['mutated'] = True
+
+    action = Action(name='mutate', kind=ActionKind.CUSTOM, fn=mutate)
+    caller_ctx: dict[str, object] = {'auth': 'user1'}
+    await action.run(context=caller_ctx)
+    assert caller_ctx == {'auth': 'user1'}
+
+
+@pytest.mark.asyncio
+async def test_bidi_stream_context_isolation_sequential_and_nested() -> None:
+    """BidiAction.stream_bidi must isolate context like Action.run (#5555)."""
+
+    async def bidi_fn(
+        init: None,
+        inputs: AsyncIterator[Any],
+        send_chunk: Callable[[Any], None],
+    ) -> dict[str, object] | None:
+        # Drain the one-shot input stream; return ambient action context.
+        async for _ in inputs:
+            pass
+        return get_current_context()
+
+    bidi = BidiAction(name='bidiCtx', kind=ActionKind.CUSTOM, bidi_fn=bidi_fn)
+
+    conn1 = await bidi.stream_bidi(context={'auth': 'user1'})
+    await conn1.close()
+    assert await conn1.output() == {'auth': 'user1'}
+    assert get_current_context() is None
+
+    # Second session with no context must not see user1.
+    conn2 = await bidi.stream_bidi()
+    await conn2.close()
+    out2 = await conn2.output()
+    assert out2 is None or out2 == {}
+    assert get_current_context() is None
+
+    # Nested: parent action calls bidi with a different context and must keep its own.
+    async def parent_fn(_: None, ctx: ActionRunContext) -> tuple[dict[str, object], dict[str, object] | None]:
+        conn = await bidi.stream_bidi(context={'auth': 'child_secret'})
+        await conn.close()
+        child_out = await conn.output()
+        return dict(ctx.context), child_out
+
+    parent = Action(name='parentBidi', kind=ActionKind.CUSTOM, fn=parent_fn)
+    res = await parent.run(context={'auth': 'parent_secret'})
+    parent_ctx, child_ctx = res.response
+    assert parent_ctx == {'auth': 'parent_secret'}
+    assert child_ctx == {'auth': 'child_secret'}
     assert get_current_context() is None
 
 
