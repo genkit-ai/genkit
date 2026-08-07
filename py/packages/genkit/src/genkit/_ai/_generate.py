@@ -1079,11 +1079,17 @@ async def resolve_parameters(
         else cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
     )
     if not model:
-        raise Exception('No model configured.')
+        raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')
 
     model_action = await registry.resolve_model(model)
     if model_action is None:
-        raise Exception(f'Failed to to resolve model {model}')
+        message = f"Failed to resolve model '{model}'."
+        if isinstance(model, str) and '/' not in model:
+            message += ' Ensure the model name includes the plugin namespace.'
+        raise GenkitError(
+            status='NOT_FOUND',
+            message=message,
+        )
 
     # Resolve tools up front to fail fast on invalid caller-supplied tool names or
     # duplicate short names before running side effects or middleware.
