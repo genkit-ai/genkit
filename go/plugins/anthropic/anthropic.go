@@ -99,7 +99,7 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 // capabilities the plugin resolves for that ID, and id is the model ID,
 // bare or provider-prefixed.
 func (a *Anthropic) buildModel(id string, opts *ai.ModelOptions) *ai.ModelAction {
-	// Trim before resolving, so a prefixed id still hits knownModels.
+	// Trim before resolving, so a prefixed id still hits supportedModels.
 	id = strings.TrimPrefix(id, provider+"/")
 
 	var modelOpts ai.ModelOptions
@@ -147,14 +147,14 @@ func (a *Anthropic) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOptio
 }
 
 // modelOptions returns the ModelOptions for a Claude model ID. Known models
-// (see knownModels) carry curated capabilities and labels; any other model
-// falls back to defaultClaudeOpts, whose label newModel fills in from the
+// (see supportedModels) carry curated capabilities and labels; any other model
+// falls back to dynamicModelOptions, whose label newModel fills in from the
 // ID. This is the single source of model capabilities shared by ListActions
 // and ResolveAction, mirroring the JS plugin's claudeModelReference.
 func modelOptions(id string) ai.ModelOptions {
-	opts, ok := knownModels[baseModelName(id)]
+	opts, ok := supportedModels[baseModelName(id)]
 	if !ok {
-		opts = defaultClaudeOpts
+		opts = dynamicModelOptions
 	}
 	return opts
 }

@@ -88,8 +88,8 @@ func TestModelOptionsKnownVersionedModels(t *testing.T) {
 	}
 }
 
-// TestModelOptionsUnknownFallback verifies models not in knownModels fall back
-// to defaultClaudeOpts (no JSON output).
+// TestModelOptionsUnknownFallback verifies models not in supportedModels fall back
+// to dynamicModelOptions (no JSON output).
 func TestModelOptionsUnknownFallback(t *testing.T) {
 	const name = "claude-something-unreleased"
 	opts := modelOptions(name)
