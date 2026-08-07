@@ -21,8 +21,7 @@ from pathlib import Path
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
-from genkit import Genkit
-from genkit._core._action import ActionRunContext
+from genkit import ActionRunContext, Genkit
 
 ai = Genkit(
     plugins=[GoogleAI()],

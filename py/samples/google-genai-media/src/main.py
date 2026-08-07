@@ -23,10 +23,8 @@ from typing import Any, Literal
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
-from genkit import Genkit
-from genkit._core._background import lookup_background_action
-from genkit._core._typing import Operation, Part, Role, TextPart
-from genkit.model import Message, ModelRequest
+from genkit import Genkit, Part, Role, TextPart
+from genkit.model import Message, ModelRequest, Operation, lookup_background_action
 
 ai = Genkit(plugins=[GoogleAI()])
 

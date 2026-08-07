@@ -21,7 +21,7 @@ from genkit._ai._model import (
     model_action_metadata,
     model_ref,
 )
-from genkit._core._background import BackgroundAction
+from genkit._core._background import BackgroundAction, lookup_background_action
 from genkit._core._model import (
     GenerateActionOptions,
     Message,
@@ -60,6 +60,7 @@ __all__ = [
     # Error and operation
     'Error',
     'Operation',
+    'lookup_background_action',
     # Tool types
     'ToolRequest',
     'ToolDefinition',
