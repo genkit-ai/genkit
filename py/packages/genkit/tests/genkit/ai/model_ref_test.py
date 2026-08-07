@@ -89,6 +89,16 @@ def test_model_ref_dataclass_value_equality() -> None:
     assert ref1 != 'm1'
 
 
+def test_model_ref_version_equality() -> None:
+    """ModelRef instances with different versions compare as not equal."""
+    v1 = model_ref('m1', config_schema=CustomConfig, version='001')
+    v2 = model_ref('m1', config_schema=CustomConfig, version='001')
+    v3 = model_ref('m1', config_schema=CustomConfig, version='002')
+
+    assert v1 == v2
+    assert v1 != v3
+
+
 def test_model_ref_is_unhashable() -> None:
     """ModelRef opts out of hashing so set/dict use doesn't fail only when config is set."""
     ref = model_ref('m1', config_schema=CustomConfig, config=CustomConfig(temperature=0.5))
