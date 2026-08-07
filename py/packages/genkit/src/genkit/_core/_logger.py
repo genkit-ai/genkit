@@ -13,13 +13,20 @@ from structlog.typing import FilteringBoundLogger
 
 from genkit._core._environment import is_dev_environment
 
-# Libraries that log every HTTP request or poll. Under Dev UI, health checks
-# and span exports generate noise unless GENKIT_LOG=debug is explicitly set.
+# Libraries that log every HTTP hop. Under Dev UI those hops are health checks
+# and span exports — useful in GENKIT_LOG=debug, noise otherwise.
 QUIET_LOGGERS = (
     'httpx',
     'httpcore',
     'uvicorn.access',
     'uvicorn.error',
+    'opentelemetry',
+    'opentelemetry.sdk',
+    'opentelemetry.instrumentation',
+    # google-genai logs "AFC is enabled with max remote calls: N" at INFO on
+    # every tool-using generate — fine for debug, noisy in the shared TTY.
+    'google.genai',
+    'google_genai',
 )
 
 
