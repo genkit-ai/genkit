@@ -106,4 +106,35 @@ describe('background model', () => {
       'cancel without options should fall back to ambient context and create a trace'
     );
   });
+
+  it('should pass context to start via ai.generate', async () => {
+    let startOptionsReceived: any = null;
+
+    defineBackgroundModel(registry, {
+      name: 'test-background-model-2',
+      start: async (request, options) => {
+        startOptionsReceived = options;
+        return {
+          id: 'test-op-2',
+          action: '/background-model/test-background-model-2',
+        };
+      },
+      check: async (op) => op,
+    });
+
+    const testContext = { auth: { apiKey: 'secret-start-key' } };
+
+    await ai.generate({
+      model: 'test-background-model-2',
+      prompt: 'hello',
+      context: testContext,
+    });
+
+    assert.ok(startOptionsReceived, 'start should have received options');
+    assert.deepStrictEqual(startOptionsReceived?.context, testContext);
+    assert.ok(
+      startOptionsReceived?.trace?.traceId,
+      'start should receive trace info'
+    );
+  });
 });
