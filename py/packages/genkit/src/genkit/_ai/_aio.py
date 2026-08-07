@@ -27,7 +27,7 @@ import signal
 import socket
 import threading
 import uuid
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypeVar, cast, overload
 
@@ -66,7 +66,11 @@ from genkit._ai._model import (
     ModelFn,
     ModelResponse,
     ModelResponseChunk,
+    ResolvedModel,
     define_model,
+    normalize_config,
+    resolve_model_name,
+    resolve_model_ref,
 )
 from genkit._ai._prompt import (
     ExecutablePrompt,
@@ -109,7 +113,7 @@ from genkit._core._middleware import (
     GenerateMiddleware,
     _validate_middleware_key_segment,
 )
-from genkit._core._model import Document
+from genkit._core._model import Document, ModelRef, ModelRefConfigT
 from genkit._core._plugin import Plugin
 from genkit._core._protocols import SessionLike
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
@@ -468,8 +472,8 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: str | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
+        config: ModelRefConfigT | ModelConfig | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -496,8 +500,8 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: str | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
+        config: ModelRefConfigT | ModelConfig | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -524,8 +528,8 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: str | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
+        config: ModelRefConfigT | ModelConfig | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -552,8 +556,8 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: str | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
+        config: ModelRefConfigT | ModelConfig | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -578,8 +582,8 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: str | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        model: str | ModelRef[BaseModel] | None = None,
+        config: BaseModel | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -740,11 +744,11 @@ class Genkit:
         self,
         name: str,
         *,
-        model: str | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
         system: str | list[Part] | None = None,
         tools: Sequence[str | Tool] | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: ModelRefConfigT | ModelConfig | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         description: str | None = None,
         metadata: dict[str, object] | None = None,
@@ -984,7 +988,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: str | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -994,7 +998,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: ModelRefConfigT | ModelConfig | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type[OutputT],
@@ -1011,7 +1015,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: str | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1021,7 +1025,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: ModelRefConfigT | ModelConfig | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -1036,7 +1040,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: str | None = None,
+        model: str | ModelRef[BaseModel] | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1046,7 +1050,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: BaseModel | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -1068,8 +1072,16 @@ class Genkit:
         child_registry = self.registry.new_child()
         await register_tools(child_registry, tools)
         refs = register_middleware(child_registry, use)
+        normalized_config = normalize_config(config=config)
+        if isinstance(model, ModelRef):
+            resolved = resolve_model_ref(model=model, config=normalized_config)
+        else:
+            resolved = ResolvedModel(
+                name=resolve_model_name(model=model, registry=child_registry),
+                config=normalized_config,
+            )
         prompt_config = PromptConfig(
-            model=model,
+            model=resolved.name,
             prompt=prompt,
             system=system,
             messages=messages,
@@ -1079,7 +1091,7 @@ class Genkit:
             resume_respond=resume_respond,
             resume_restart=resume_restart,
             resume_metadata=resume_metadata,
-            config=config,
+            config=resolved.config,
             max_turns=max_turns,
             output_format=output_format,
             output_content_type=output_content_type,
@@ -1101,7 +1113,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: str | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1111,7 +1123,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: ModelRefConfigT | ModelConfig | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type[OutputT],
@@ -1129,7 +1141,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: str | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1139,7 +1151,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: ModelRefConfigT | ModelConfig | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -1155,7 +1167,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: str | None = None,
+        model: str | ModelRef[BaseModel] | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1165,7 +1177,7 @@ class Genkit:
         resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
         resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: BaseModel | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -1186,8 +1198,16 @@ class Genkit:
             child_registry = self.registry.new_child()
             await register_tools(child_registry, tools)
             refs = register_middleware(child_registry, use)
+            normalized_config = normalize_config(config=config)
+            if isinstance(model, ModelRef):
+                resolved = resolve_model_ref(model=model, config=normalized_config)
+            else:
+                resolved = ResolvedModel(
+                    name=resolve_model_name(model=model, registry=child_registry),
+                    config=normalized_config,
+                )
             prompt_config = PromptConfig(
-                model=model,
+                model=resolved.name,
                 prompt=prompt,
                 system=system,
                 messages=messages,
@@ -1197,7 +1217,7 @@ class Genkit:
                 resume_respond=resume_respond,
                 resume_restart=resume_restart,
                 resume_metadata=resume_metadata,
-                config=config,
+                config=resolved.config,
                 max_turns=max_turns,
                 output_format=output_format,
                 output_content_type=output_content_type,
@@ -1385,14 +1405,14 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: str | None = None,
+        model: ModelRef[ModelRefConfigT] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: ModelRefConfigT | ModelConfig | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -1404,19 +1424,25 @@ class Genkit:
         docs: list[Document] | None = None,
     ) -> Operation:
         """Generate content using a long-running model, returning an Operation to poll."""
-        # Resolve the model and check for long_running support
-        resolved_model = model or cast(str | None, self.registry.lookup_value('defaultModel', 'defaultModel'))
-        if not resolved_model:
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message='No model specified for generate_operation.',
+        # Normalize at the veneer, then check long_running on the wire name.
+        normalized_config = normalize_config(config=config)
+        if isinstance(model, ModelRef):
+            resolved = resolve_model_ref(model=model, config=normalized_config)
+        else:
+            resolved = ResolvedModel(
+                name=resolve_model_name(
+                    model=model,
+                    registry=self.registry,
+                    message='No model specified for generate_operation.',
+                ),
+                config=normalized_config,
             )
 
-        model_action = await self.registry.resolve_action(ActionKind.MODEL, resolved_model)
+        model_action = await self.registry.resolve_action(ActionKind.MODEL, resolved.name)
         if not model_action:
             raise GenkitError(
                 status='NOT_FOUND',
-                message=f"Model '{resolved_model}' not found.",
+                message=f"Model '{resolved.name}' not found.",
             )
 
         # Check if model supports long-running operations
@@ -1426,16 +1452,16 @@ class Genkit:
                 message=f"Model '{model_action.name}' does not support long running operations.",
             )
 
-        # Call generate
+        # Call generate with already-resolved wire name + config.
         response = await self.generate(
-            model=model,
+            model=resolved.name,
             prompt=prompt,
             system=system,
             messages=messages,
             tools=tools,
             return_tool_requests=return_tool_requests,
             tool_choice=tool_choice,
-            config=config,
+            config=resolved.config,
             max_turns=max_turns,
             context=context,
             output_schema=output_schema,

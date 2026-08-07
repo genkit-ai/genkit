@@ -43,9 +43,15 @@ from genkit._ai._generate import (
     tools_to_action_names,
 )
 from genkit._ai._model import (
+    ConfigArg,
+    ModelArg,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
+    ResolvedModel,
+    normalize_config,
+    resolve_model_name,
+    resolve_model_ref,
 )
 from genkit._ai._tools import Tool
 from genkit._core._action import (
@@ -59,7 +65,7 @@ from genkit._core._channel import Channel
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._middleware import BaseMiddleware, middleware_class_index
-from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfig
+from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfig, ModelRef
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
@@ -128,8 +134,8 @@ def resume_options_to_resume(
 class PromptGenerateOptions(TypedDict, total=False):
     """Runtime options for prompt execution (config, tools, messages, etc.)."""
 
-    model: str | None
-    config: dict[str, Any] | ModelConfig | None
+    model: ModelArg | None
+    config: ConfigArg | None
     messages: list[Message] | None
     docs: list[Document] | None
     tools: Sequence[str | Tool] | None
@@ -242,8 +248,8 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         self,
         registry: Registry,
         variant: str | None = None,
-        model: str | None = None,
-        config: dict[str, Any] | ModelConfig | None = None,
+        model: ModelArg | None = None,
+        config: ConfigArg | None = None,
         description: str | None = None,
         input_schema: type | dict[str, Any] | str | None = None,
         system: str | list[Part] | None = None,
@@ -370,7 +376,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
     def _prompt_config_for_call(self, opts: PromptGenerateOptions) -> PromptConfig:
         """Merge this prompt's definition with per-call ``opts`` into a :class:`PromptConfig`."""
         output_opts = opts.get('output') or {}
-        merged_config: dict[str, Any] | ModelConfig | None
+        merged_config: ConfigArg | None
         if opts.get('config') is not None:
             base = (
                 self._config.model_dump(exclude_none=True)
@@ -385,6 +391,17 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         else:
             merged_config = self._config
 
+        # Normalize at the veneer, then resolve into concrete wire shapes.
+        model_arg = opts.get('model') or self._model
+        normalized_config = normalize_config(config=merged_config)
+        if isinstance(model_arg, ModelRef):
+            resolved = resolve_model_ref(model=model_arg, config=normalized_config)
+        else:
+            resolved = ResolvedModel(
+                name=resolve_model_name(model=model_arg, registry=self._registry),
+                config=normalized_config,
+            )
+
         merged_metadata = (
             {**(self._metadata or {}), **(opts.get('metadata') or {})} if opts.get('metadata') else self._metadata
         )
@@ -393,14 +410,14 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             return opt_val if opt_val is not None else default
 
         return PromptConfig(
-            model=opts.get('model') or self._model,
+            model=resolved.name,
             prompt=self._prompt,
             system=self._system,
             messages=self._messages,
             tools=opts.get('tools') or self._tools,
             return_tool_requests=_or(opts.get('return_tool_requests'), self._return_tool_requests),
             tool_choice=opts.get('tool_choice') or self._tool_choice,
-            config=merged_config,
+            config=resolved.config,
             max_turns=_or(opts.get('max_turns'), self._max_turns),
             output_format=output_opts.get('format') or self._output_format,
             output_content_type=output_opts.get('content_type') or self._output_content_type,
