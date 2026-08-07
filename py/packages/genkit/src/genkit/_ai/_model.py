@@ -19,7 +19,8 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, cast
+from dataclasses import dataclass
+from typing import Any, TypeAlias, cast
 
 from pydantic import BaseModel
 
@@ -29,6 +30,7 @@ from genkit._core._action import (
     ActionRunContext,
     get_func_description,
 )
+from genkit._core._error import GenkitError
 from genkit._core._model import (
     Message,
     ModelConfig,
@@ -48,6 +50,73 @@ from genkit._core._typing import ActionMetadata, ModelInfo
 # Type alias for model functions (must be async)
 # Use ctx.send_chunk() for streaming
 ModelFn = Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse[Any]]]
+
+# Veneer-facing argument shapes. Internals resolve these into ResolvedModel.
+ModelArg: TypeAlias = str | ModelRef[BaseModel]
+ConfigArg: TypeAlias = BaseModel | Mapping[str, Any]
+
+
+@dataclass(frozen=True, kw_only=True)
+class ResolvedModel:
+    """Concrete wire model name + config dict after veneer normalization."""
+
+    name: str
+    config: dict[str, Any]
+
+
+def normalize_config(*, config: object) -> dict[str, Any]:
+    """Turn a Pydantic config, mapping, or None into a plain dict."""
+    if config is None:
+        return {}
+    if isinstance(config, BaseModel):
+        return config.model_dump(exclude_unset=True)
+    return dict(cast(Mapping[str, Any], config))
+
+
+def concrete_config_schema(*candidates: object) -> type[BaseModel] | None:
+    """Return the first concrete BaseModel subclass among candidates."""
+    for candidate in candidates:
+        if isinstance(candidate, type) and issubclass(candidate, BaseModel) and candidate is not BaseModel:
+            return candidate
+    return None
+
+
+def resolve_model_name(
+    *,
+    model: str | None,
+    registry: Registry,
+    message: str = 'No model configured.',
+) -> str:
+    """Return an explicit model name or the registry default; error if neither exists."""
+    name = model if model is not None else cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
+    if not name:
+        raise GenkitError(status='INVALID_ARGUMENT', message=message)
+    return name
+
+
+def resolve_model_ref(*, model: ModelRef[Any], config: dict[str, Any]) -> ResolvedModel:
+    """Merge call-time config over a ModelRef's defaults into a wire ResolvedModel.
+
+    Call-time keys win; ref-only keys are kept. Matches generate()'s model-ref
+    config merge: version and ref defaults first, then the call-time override.
+    """
+    merged: dict[str, Any] = {}
+    if model.version is not None:
+        merged['version'] = model.version
+    if model.config is not None:
+        merged.update(normalize_config(config=model.config))
+    merged.update(config)
+
+    schema = concrete_config_schema(
+        model.config_schema,
+        type(model.config) if model.config is not None else None,
+    )
+    if schema is not None and merged:
+        return ResolvedModel(
+            name=model.name,
+            config=schema.model_validate(merged).model_dump(exclude_unset=True),
+        )
+    return ResolvedModel(name=model.name, config=merged)
 
 
 def model_action_metadata(
