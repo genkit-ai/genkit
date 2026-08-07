@@ -16,6 +16,7 @@
 
 import {
   findProjectRoot,
+  forceStderr,
   logger,
   parseAndSanitizeJson,
   sanitizeBase64DataUrls,
@@ -39,6 +40,9 @@ const mockedFindProjectRoot = findProjectRoot as jest.MockedFunction<
   typeof findProjectRoot
 >;
 const mockedLogger = logger as jest.Mocked<typeof logger>;
+const mockedForceStderr = forceStderr as jest.MockedFunction<
+  typeof forceStderr
+>;
 const mockedRunWithManager = runWithManager as jest.MockedFunction<
   typeof runWithManager
 >;
@@ -60,6 +64,7 @@ describe('trace:get', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockedFindProjectRoot.mockResolvedValue(mockProjectRoot);
+    mockedForceStderr.mockImplementation(() => {});
     (stackTraceSpans as jest.MockedFunction<any>).mockImplementation(
       actualStackTraceSpans
     );
@@ -96,6 +101,7 @@ describe('trace:get', () => {
   it('should get and print trace details in tree format by default', async () => {
     await createCommand().parseAsync(['node', 'trace:get', 'test-trace-id']);
 
+    expect(mockedForceStderr).toHaveBeenCalled();
     expect(mockedFindProjectRoot).toHaveBeenCalled();
     expect(mockedRunWithManager).toHaveBeenCalled();
 

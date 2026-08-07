@@ -15,7 +15,11 @@
  */
 
 import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
-import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
+import {
+  findProjectRoot,
+  forceStderr,
+  logger,
+} from '@genkit-ai/tools-common/utils';
 import { yellow } from 'colorette';
 import { Command, Option } from 'commander';
 import { runWithManager } from '../utils/manager-utils';
@@ -42,41 +46,35 @@ export const traceGet = new Command('trace:get')
   )
   .option('--keep-base64', 'do not strip base64 data URLs in output', false)
   .action(async (traceId: string, options: TraceGetOptions) => {
-    const originalLogLevel = logger.level;
-    // Only allow warning and above, for output cleanliness
-    logger.level = 'warning';
+    // Redirect logging to stdout for clean JSON
+    forceStderr();
+    const projectRoot = await findProjectRoot();
 
-    try {
-      const projectRoot = await findProjectRoot();
-
-      const runAction = async (manager: BaseRuntimeManager) => {
-        try {
-          const response = await manager.getTrace({ traceId });
-          if (!response) {
-            logger.error(`Trace with ID '${traceId}' not found.`);
-            return;
-          }
-
-          const keepBase64 = !!options.keepBase64;
-          const processedTrace = cleanTraceJson(response, keepBase64);
-
-          if (options.format === 'json') {
-            console.log(JSON.stringify(processedTrace, undefined, 2));
-          } else {
-            console.log(
-              yellow(
-                'Hint: pass `--format json` flag to get trace data in JSON format\n'
-              )
-            );
-            console.log(formatTraceTree(processedTrace));
-          }
-        } catch (e) {
-          logger.error(`Error retrieving trace: ${e}`);
+    const runAction = async (manager: BaseRuntimeManager) => {
+      try {
+        const response = await manager.getTrace({ traceId });
+        if (!response) {
+          logger.error(`Trace with ID '${traceId}' not found.`);
+          return;
         }
-      };
 
-      await runWithManager(projectRoot, runAction);
-    } finally {
-      logger.level = originalLogLevel;
-    }
+        const keepBase64 = !!options.keepBase64;
+        const processedTrace = cleanTraceJson(response, keepBase64);
+
+        if (options.format === 'json') {
+          console.log(JSON.stringify(processedTrace, undefined, 2));
+        } else {
+          console.log(
+            yellow(
+              'Hint: pass `--format json` flag to get trace data in JSON format\n'
+            )
+          );
+          console.log(formatTraceTree(processedTrace));
+        }
+      } catch (e) {
+        logger.error(`Error retrieving trace: ${e}`);
+      }
+    };
+
+    await runWithManager(projectRoot, runAction);
   });
