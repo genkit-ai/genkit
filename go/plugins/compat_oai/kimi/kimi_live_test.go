@@ -39,7 +39,7 @@ func TestPluginLive(t *testing.T) {
 	g := genkit.Init(
 		ctx,
 		genkit.WithPlugins(plugin),
-		genkit.WithDefaultModel("kimi/"+kimi.ModelKimiK3),
+		genkit.WithDefaultModel("kimi/kimi-k3"),
 	)
 
 	t.Run("kimi k3 complete", func(t *testing.T) {
@@ -61,7 +61,7 @@ func TestPluginLive(t *testing.T) {
 		resp, err := genkit.Generate(
 			ctx,
 			g,
-			ai.WithModel(plugin.Model(g, kimi.ModelKimiK26)),
+			ai.WithModelName("kimi/kimi-k2.6"),
 			ai.WithPrompt("Explain briefly why the sky appears blue."),
 			ai.WithStreaming(func(_ context.Context, chunk *ai.ModelResponseChunk) error {
 				streamedReasoning.WriteString(chunk.Reasoning())

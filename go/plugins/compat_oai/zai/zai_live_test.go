@@ -35,7 +35,7 @@ func TestPluginLive(t *testing.T) {
 	g := genkit.Init(
 		ctx,
 		genkit.WithPlugins(plugin),
-		genkit.WithDefaultModel("zai/"+zai.ModelGLM51),
+		genkit.WithDefaultModel("zai/glm-5.1"),
 	)
 	config := map[string]any{
 		"thinking": map[string]any{

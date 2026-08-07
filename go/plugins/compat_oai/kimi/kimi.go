@@ -31,17 +31,6 @@ import (
 const (
 	provider       = "kimi"
 	defaultBaseURL = "https://api.moonshot.ai/v1"
-
-	// ModelKimiK3 is the latest Kimi flagship multimodal model.
-	ModelKimiK3 = "kimi-k3"
-	// ModelKimiK25 is the Kimi K2.5 multimodal model.
-	ModelKimiK25 = "kimi-k2.5"
-	// ModelKimiK26 is the Kimi K2.6 multimodal model.
-	ModelKimiK26 = "kimi-k2.6"
-	// ModelKimiK27Code is the Kimi K2.7 coding model.
-	ModelKimiK27Code = "kimi-k2.7-code"
-	// ModelKimiK27CodeHighspeed is the high-speed Kimi K2.7 coding model.
-	ModelKimiK27CodeHighspeed = "kimi-k2.7-code-highspeed"
 )
 
 // ChatConfig is the per-request config for Kimi models: the generation fields
@@ -118,63 +107,43 @@ func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams
 	}
 }
 
+// multimodal is the capability set every K-series Kimi model shares: text and
+// images in, text or JSON out, and tools. Moonshot's chat API takes
+// response_format json_schema, so structured output is generated natively
+// rather than coaxed through prompt instructions. See
+// https://platform.kimi.ai/docs/api/chat.
+var multimodal = ai.ModelSupports{
+	Multiturn:   true,
+	Tools:       true,
+	SystemRole:  true,
+	Media:       true,
+	ToolChoice:  true,
+	Output:      []string{"text", "json"},
+	Constrained: ai.ConstrainedSupportAll,
+}
+
+// supportedModels curates capabilities for well-known Kimi models. It is not
+// the set of usable models: any Kimi model resolves on demand and takes
+// [dynamicModelOptions], so an ID absent here still works. No versions are
+// declared, since Moonshot serves each model under one ID whose snapshot moves
+// underneath it, and an undeclared list leaves config version pinning
+// unconstrained.
+//
+// Catalog: https://platform.kimi.ai/docs/api/chat
 var supportedModels = map[string]ai.ModelOptions{
-	ModelKimiK3: {
-		Label: "Kimi K3",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      true,
-			ToolChoice: true,
-			Output:     []string{"text", "json"},
-		},
-	},
-	ModelKimiK25: {
-		Label: "Kimi K2.5 (Deprecated)",
-		Stage: ai.ModelStageDeprecated,
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      true,
-			ToolChoice: true,
-			Output:     []string{"text", "json"},
-		},
-	},
-	ModelKimiK26: {
-		Label: "Kimi K2.6",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      true,
-			ToolChoice: true,
-			Output:     []string{"text", "json"},
-		},
-	},
-	ModelKimiK27Code: {
-		Label: "Kimi K2.7 Code",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      true,
-			ToolChoice: true,
-			Output:     []string{"text", "json"},
-		},
-	},
-	ModelKimiK27CodeHighspeed: {
-		Label: "Kimi K2.7 Code Highspeed",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      true,
-			ToolChoice: true,
-			Output:     []string{"text", "json"},
-		},
-	},
+	"kimi-k3":                  {Label: "Kimi K3", Supports: &multimodal},
+	"kimi-k2.5":                {Label: "Kimi K2.5 (Deprecated)", Supports: &multimodal, Stage: ai.ModelStageDeprecated},
+	"kimi-k2.6":                {Label: "Kimi K2.6", Supports: &multimodal},
+	"kimi-k2.7-code":           {Label: "Kimi K2.7 Code", Supports: &multimodal},
+	"kimi-k2.7-code-highspeed": {Label: "Kimi K2.7 Code Highspeed", Supports: &multimodal},
+}
+
+// dynamicModelOptions is advertised for Kimi models that resolve dynamically
+// rather than appearing in supportedModels.
+var dynamicModelOptions = ai.ModelOptions{
+	Supports: &multimodal,
+	Versions: []string{},
+	Stage:    ai.ModelStageStable,
 }
 
 // Kimi configures the Moonshot AI Kimi plugin.
@@ -248,25 +217,14 @@ func modelOptions(id string) ai.ModelOptions {
 	if opts, ok := supportedModels[id]; ok {
 		return opts
 	}
-	return ai.ModelOptions{
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      true,
-			ToolChoice: true,
-			Output:     []string{"text", "json"},
-		},
-		Versions: []string{},
-		Stage:    ai.ModelStageStable,
-	}
+	return dynamicModelOptions
 }
 
 // ModelRef names a Kimi model and carries the config to generate with, so the
 // config is typed at the call site instead of an any the model checks at
 // runtime. A nil config leaves the request's config unset.
 //
-//	ai.WithModel(kimi.ModelRef(kimi.ModelKimiK3, &kimi.ChatConfig{
+//	ai.WithModel(kimi.ModelRef("kimi-k3", &kimi.ChatConfig{
 //		ReasoningEffort: "high",
 //	}))
 //
@@ -293,16 +251,6 @@ func (k *Kimi) RegisterModel(g *genkit.Genkit, id string, opts *ai.ModelOptions)
 // guard against registering one twice (see [Kimi.RegisterModel]).
 func IsDefinedModel(g *genkit.Genkit, id string) bool {
 	return compat_oai.IsDefinedModel(g, provider, id)
-}
-
-// Model returns a previously registered model.
-//
-// Deprecated: Generation resolves a model from its name, so looking one up
-// first is rarely necessary: pass ai.WithModelName("kimi/kimi-k3") or, to
-// carry config with it, [ModelRef]. Use [genkit.LookupModel] when the action
-// itself is what you need.
-func (k *Kimi) Model(g *genkit.Genkit, id string) ai.Model {
-	return genkit.LookupModel(g, compat_oai.ActionName(provider, id))
 }
 
 // ListActions lists the models the configured Kimi endpoint exposes,

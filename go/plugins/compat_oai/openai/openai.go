@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package openai provides a Genkit plugin for OpenAI's models and embedders.
 package openai
 
 import (
@@ -33,182 +34,231 @@ const provider = "openai"
 // TextEmbeddingConfig is the per-request config for OpenAI embedders.
 type TextEmbeddingConfig = compat_oai.EmbeddingConfig
 
-// Catalog: https://developers.openai.com/api/docs/models
-// Retirements: https://developers.openai.com/api/docs/deprecations
-//
-// supportedModels curates capabilities for well-known models. It is not the
-// set of usable models: any OpenAI model resolves on demand and takes
-// [compat_oai.DefaultModelOptions], so a name absent here still works. Model
-// IDs are spelled out rather than taken from the SDK's ChatModel constants,
-// which trail the catalog by whichever SDK version go.mod pins.
+// Capability sets shared by the entries below. Structured outputs
+// (response_format json_schema with strict) arrived with the gpt-4o-mini and
+// gpt-4o-2024-08-06 snapshots, so the models predating them advertise no
+// constrained generation and fall back to schema instructions in the prompt.
+// See https://developers.openai.com/api/docs/guides/structured-outputs.
+var (
+	textOnly = ai.ModelSupports{
+		Multiturn:   true,
+		Tools:       true,
+		SystemRole:  true,
+		Media:       false,
+		Output:      []string{"text", "json"},
+		Constrained: ai.ConstrainedSupportAll,
+	}
+	multimodal = ai.ModelSupports{
+		Multiturn:   true,
+		Tools:       true,
+		SystemRole:  true,
+		Media:       true,
+		ToolChoice:  true,
+		Output:      []string{"text", "json"},
+		Constrained: ai.ConstrainedSupportAll,
+	}
+	textOnlyLegacy = ai.ModelSupports{
+		Multiturn:  true,
+		Tools:      true,
+		SystemRole: true,
+		Media:      false,
+		Output:     []string{"text", "json"},
+	}
+	multimodalLegacy = ai.ModelSupports{
+		Multiturn:  true,
+		Tools:      true,
+		SystemRole: true,
+		Media:      true,
+		ToolChoice: true,
+		Output:     []string{"text", "json"},
+	}
+)
+
+// supportedModels curates capabilities for well-known OpenAI models. It is not
+// the set of usable models: any OpenAI model resolves on demand and takes
+// [dynamicModelOptions], so an ID absent here still works. Dated snapshots are
+// folded into Versions rather than registered as separate models. Model IDs are
+// spelled out rather than taken from the SDK's ChatModel constants, which trail
+// the catalog by whichever SDK version go.mod pins.
 //
 // Two kinds of model are deliberately absent. The "pro" tiers (gpt-5-pro,
 // gpt-5.2-pro, gpt-5.4-pro, gpt-5.5-pro, o1-pro, o3-pro) are served only by
 // the Responses API, and this plugin speaks Chat Completions. Audio, image,
 // realtime, transcription, and moderation models are not chat models.
-var (
-	supportedModels = map[string]ai.ModelOptions{
-		// GPT-5.6, the current frontier family. No dated snapshots yet; the
-		// bare gpt-5.6 alias routes to sol and resolves dynamically.
-		"gpt-5.6-sol": {
-			Label:    "OpenAI GPT-5.6 Sol",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"gpt-5.6-sol"},
-		},
-		"gpt-5.6-terra": {
-			Label:    "OpenAI GPT-5.6 Terra",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"gpt-5.6-terra"},
-		},
-		"gpt-5.6-luna": {
-			Label:    "OpenAI GPT-5.6 Luna",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"gpt-5.6-luna"},
-		},
+//
+// Catalog: https://developers.openai.com/api/docs/models
+// Retirements: https://developers.openai.com/api/docs/deprecations
+var supportedModels = map[string]ai.ModelOptions{
+	// GPT-5.6, the current frontier family. No dated snapshots yet; the
+	// bare gpt-5.6 alias routes to sol and resolves dynamically.
+	"gpt-5.6-sol": {
+		Label:    "OpenAI GPT-5.6 Sol",
+		Supports: &multimodal,
+		Versions: []string{"gpt-5.6-sol"},
+	},
+	"gpt-5.6-terra": {
+		Label:    "OpenAI GPT-5.6 Terra",
+		Supports: &multimodal,
+		Versions: []string{"gpt-5.6-terra"},
+	},
+	"gpt-5.6-luna": {
+		Label:    "OpenAI GPT-5.6 Luna",
+		Supports: &multimodal,
+		Versions: []string{"gpt-5.6-luna"},
+	},
 
-		"gpt-5.5": {
-			Label:    "OpenAI GPT-5.5",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"gpt-5.5", "gpt-5.5-2026-04-23"},
-		},
-		"gpt-5.4": {
-			Label:    "OpenAI GPT-5.4",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"gpt-5.4", "gpt-5.4-2026-03-05"},
-		},
-		"gpt-5.4-mini": {
-			Label:    "OpenAI GPT-5.4-mini",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"gpt-5.4-mini", "gpt-5.4-mini-2026-03-17"},
-		},
-		"gpt-5.4-nano": {
-			Label:    "OpenAI GPT-5.4-nano",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"gpt-5.4-nano", "gpt-5.4-nano-2026-03-17"},
-		},
-		"gpt-5.2": {
-			Label:    "OpenAI GPT-5.2",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"gpt-5.2", "gpt-5.2-2025-12-11"},
-		},
-		"gpt-5.1": {
-			Label:    "OpenAI GPT-5.1",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"gpt-5.1", "gpt-5.1-2025-11-13"},
-		},
+	"gpt-5.5": {
+		Label:    "OpenAI GPT-5.5",
+		Supports: &multimodal,
+		Versions: []string{"gpt-5.5", "gpt-5.5-2026-04-23"},
+	},
+	"gpt-5.4": {
+		Label:    "OpenAI GPT-5.4",
+		Supports: &multimodal,
+		Versions: []string{"gpt-5.4", "gpt-5.4-2026-03-05"},
+	},
+	"gpt-5.4-mini": {
+		Label:    "OpenAI GPT-5.4-mini",
+		Supports: &multimodal,
+		Versions: []string{"gpt-5.4-mini", "gpt-5.4-mini-2026-03-17"},
+	},
+	"gpt-5.4-nano": {
+		Label:    "OpenAI GPT-5.4-nano",
+		Supports: &multimodal,
+		Versions: []string{"gpt-5.4-nano", "gpt-5.4-nano-2026-03-17"},
+	},
+	"gpt-5.2": {
+		Label:    "OpenAI GPT-5.2",
+		Supports: &multimodal,
+		Versions: []string{"gpt-5.2", "gpt-5.2-2025-12-11"},
+	},
+	"gpt-5.1": {
+		Label:    "OpenAI GPT-5.1",
+		Supports: &multimodal,
+		Versions: []string{"gpt-5.1", "gpt-5.1-2025-11-13"},
+	},
 
-		// GPT-5. The dated snapshots shut down 2026-12-11; the aliases stay.
-		"gpt-5": {
-			Label:    "OpenAI GPT-5",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"gpt-5", "gpt-5-2025-08-07"},
-		},
-		"gpt-5-mini": {
-			Label:    "OpenAI GPT-5-mini",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"gpt-5-mini", "gpt-5-mini-2025-08-07"},
-		},
-		"gpt-5-nano": {
-			Label:    "OpenAI GPT-5-nano",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"gpt-5-nano", "gpt-5-nano-2025-08-07"},
-		},
+	// GPT-5. The dated snapshots shut down 2026-12-11; the aliases stay.
+	"gpt-5": {
+		Label:    "OpenAI GPT-5",
+		Supports: &multimodal,
+		Versions: []string{"gpt-5", "gpt-5-2025-08-07"},
+	},
+	"gpt-5-mini": {
+		Label:    "OpenAI GPT-5-mini",
+		Supports: &multimodal,
+		Versions: []string{"gpt-5-mini", "gpt-5-mini-2025-08-07"},
+	},
+	"gpt-5-nano": {
+		Label:    "OpenAI GPT-5-nano",
+		Supports: &multimodal,
+		Versions: []string{"gpt-5-nano", "gpt-5-nano-2025-08-07"},
+	},
 
-		"gpt-4.1": {
-			Label:    "OpenAI GPT-4.1",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"gpt-4.1", "gpt-4.1-2025-04-14"},
-		},
-		"gpt-4.1-mini": {
-			Label:    "OpenAI GPT-4.1-mini",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"gpt-4.1-mini", "gpt-4.1-mini-2025-04-14"},
-		},
-		// Shuts down 2026-10-23, replaced by gpt-5.6-luna.
-		"gpt-4.1-nano": {
-			Label:    "OpenAI GPT-4.1-nano",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"gpt-4.1-nano", "gpt-4.1-nano-2025-04-14"},
-		},
+	"gpt-4.1": {
+		Label:    "OpenAI GPT-4.1",
+		Supports: &multimodal,
+		Versions: []string{"gpt-4.1", "gpt-4.1-2025-04-14"},
+	},
+	"gpt-4.1-mini": {
+		Label:    "OpenAI GPT-4.1-mini",
+		Supports: &multimodal,
+		Versions: []string{"gpt-4.1-mini", "gpt-4.1-mini-2025-04-14"},
+	},
+	// Shuts down 2026-10-23, replaced by gpt-5.6-luna.
+	"gpt-4.1-nano": {
+		Label:    "OpenAI GPT-4.1-nano",
+		Supports: &multimodal,
+		Versions: []string{"gpt-4.1-nano", "gpt-4.1-nano-2025-04-14"},
+	},
 
-		"gpt-4o": {
-			Label:    "OpenAI GPT-4o",
-			Supports: &compat_oai.Multimodal,
-			// gpt-4o-2024-05-13 shuts down 2026-10-23.
-			Versions: []string{"gpt-4o", "gpt-4o-2024-11-20", "gpt-4o-2024-08-06", "gpt-4o-2024-05-13"},
-		},
-		"gpt-4o-mini": {
-			Label:    "OpenAI GPT-4o-mini",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"gpt-4o-mini", "gpt-4o-mini-2024-07-18"},
-		},
+	"gpt-4o": {
+		Label:    "OpenAI GPT-4o",
+		Supports: &multimodal,
+		// gpt-4o-2024-05-13 shuts down 2026-10-23.
+		Versions: []string{"gpt-4o", "gpt-4o-2024-11-20", "gpt-4o-2024-08-06", "gpt-4o-2024-05-13"},
+	},
+	"gpt-4o-mini": {
+		Label:    "OpenAI GPT-4o-mini",
+		Supports: &multimodal,
+		Versions: []string{"gpt-4o-mini", "gpt-4o-mini-2024-07-18"},
+	},
 
-		// Reasoning models. o1, o3-mini, and o4-mini shut down 2026-10-23;
-		// o3-2025-04-16 shuts down 2026-12-11.
-		"o3": {
-			Label:    "OpenAI o3",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"o3", "o3-2025-04-16"},
-		},
-		"o4-mini": {
-			Label:    "OpenAI o4-mini",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"o4-mini", "o4-mini-2025-04-16"},
-		},
-		"o3-mini": {
-			Label:    "OpenAI o3-mini",
-			Supports: &compat_oai.BasicText,
-			Versions: []string{"o3-mini", "o3-mini-2025-01-31"},
-		},
-		"o1": {
-			Label:    "OpenAI o1",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"o1", "o1-2024-12-17"},
-		},
+	// Reasoning models. o1, o3-mini, and o4-mini shut down 2026-10-23;
+	// o3-2025-04-16 shuts down 2026-12-11.
+	"o3": {
+		Label:    "OpenAI o3",
+		Supports: &multimodal,
+		Versions: []string{"o3", "o3-2025-04-16"},
+	},
+	"o4-mini": {
+		Label:    "OpenAI o4-mini",
+		Supports: &multimodal,
+		Versions: []string{"o4-mini", "o4-mini-2025-04-16"},
+	},
+	"o3-mini": {
+		Label:    "OpenAI o3-mini",
+		Supports: &textOnly,
+		Versions: []string{"o3-mini", "o3-mini-2025-01-31"},
+	},
+	"o1": {
+		Label:    "OpenAI o1",
+		Supports: &multimodal,
+		Versions: []string{"o1", "o1-2024-12-17"},
+	},
 
-		// Legacy models, all shutting down 2026-10-23 except
-		// gpt-3.5-turbo-1106 and -instruct, which go 2026-09-28.
-		"gpt-4-turbo": {
-			Label:    "OpenAI GPT-4-turbo",
-			Supports: &compat_oai.Multimodal,
-			Versions: []string{"gpt-4-turbo", "gpt-4-turbo-2024-04-09"},
-		},
-		"gpt-4": {
-			Label:    "OpenAI GPT-4",
-			Supports: &compat_oai.BasicText,
-			Versions: []string{"gpt-4", "gpt-4-0613"},
-		},
-		"gpt-3.5-turbo": {
-			Label:    "OpenAI GPT-3.5-turbo",
-			Supports: &compat_oai.BasicText,
-			Versions: []string{"gpt-3.5-turbo", "gpt-3.5-turbo-0125", "gpt-3.5-turbo-1106", "gpt-3.5-turbo-instruct"},
-		},
-	}
+	// Legacy models, all shutting down 2026-10-23 except
+	// gpt-3.5-turbo-1106 and -instruct, which go 2026-09-28.
+	"gpt-4-turbo": {
+		Label:    "OpenAI GPT-4-turbo",
+		Supports: &multimodalLegacy,
+		Versions: []string{"gpt-4-turbo", "gpt-4-turbo-2024-04-09"},
+	},
+	"gpt-4": {
+		Label:    "OpenAI GPT-4",
+		Supports: &textOnlyLegacy,
+		Versions: []string{"gpt-4", "gpt-4-0613"},
+	},
+	"gpt-3.5-turbo": {
+		Label:    "OpenAI GPT-3.5-turbo",
+		Supports: &textOnlyLegacy,
+		Versions: []string{"gpt-3.5-turbo", "gpt-3.5-turbo-0125", "gpt-3.5-turbo-1106", "gpt-3.5-turbo-instruct"},
+	},
+}
 
-	supportedEmbeddingModels = map[string]ai.EmbedderOptions{
-		"text-embedding-3-large": {
-			Dimensions: 3072,
-			Label:      "Open AI - Text Embedding 3 Large",
-			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
-			},
+// dynamicModelOptions is advertised for OpenAI models that resolve dynamically
+// rather than appearing in supportedModels.
+var dynamicModelOptions = ai.ModelOptions{
+	Supports: &multimodal,
+	Versions: []string{},
+	Stage:    ai.ModelStageStable,
+}
+
+// supportedEmbeddingModels curates capabilities for well-known OpenAI
+// embedders.
+var supportedEmbeddingModels = map[string]ai.EmbedderOptions{
+	"text-embedding-3-large": {
+		Dimensions: 3072,
+		Label:      "Open AI - Text Embedding 3 Large",
+		Supports: &ai.EmbedderSupports{
+			Input: []string{"text"},
 		},
-		"text-embedding-3-small": {
-			Dimensions: 1536,
-			Label:      "Open AI - Text Embedding 3 Small",
-			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
-			},
+	},
+	"text-embedding-3-small": {
+		Dimensions: 1536,
+		Label:      "Open AI - Text Embedding 3 Small",
+		Supports: &ai.EmbedderSupports{
+			Input: []string{"text"},
 		},
-		"text-embedding-ada-002": {
-			Dimensions: 1536,
-			Label:      "Open AI - Text Embedding ADA 002",
-			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
-			},
+	},
+	"text-embedding-ada-002": {
+		Dimensions: 1536,
+		Label:      "Open AI - Text Embedding ADA 002",
+		Supports: &ai.EmbedderSupports{
+			Input: []string{"text"},
 		},
-	}
-)
+	},
+}
 
 type OpenAI struct {
 	// APIKey is the API key for the OpenAI API. If empty, the values of the environment variable "OPENAI_API_KEY" will be consulted.
@@ -280,7 +330,7 @@ func modelOptions(id string) ai.ModelOptions {
 	if opts, ok := supportedModels[id]; ok {
 		return opts
 	}
-	return compat_oai.DefaultModelOptions()
+	return dynamicModelOptions
 }
 
 // ModelRef names an OpenAI model and carries the config to generate with, so

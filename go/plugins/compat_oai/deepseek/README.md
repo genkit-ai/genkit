@@ -28,7 +28,7 @@ plugin := &deepseek.DeepSeek{}
 g := genkit.Init(
     ctx,
     genkit.WithPlugins(plugin),
-    genkit.WithDefaultModel("deepseek/"+deepseek.ModelV4Flash),
+    genkit.WithDefaultModel("deepseek/deepseek-v4-flash"),
 )
 
 response, err := genkit.Generate(ctx, g, ai.WithPrompt("Explain mixture-of-experts models."))
@@ -46,7 +46,7 @@ Thinking is on by default, so turning it off is the common case:
 response, err := genkit.Generate(
     ctx,
     g,
-    ai.WithModel(deepseek.ModelRef(deepseek.ModelV4Flash, &deepseek.ChatConfig{
+    ai.WithModel(deepseek.ModelRef("deepseek-v4-flash", &deepseek.ChatConfig{
         Thinking: &deepseek.ThinkingConfig{Type: "disabled"},
     })),
     ai.WithPrompt("Answer concisely."),

@@ -30,25 +30,6 @@ import (
 const (
 	provider       = "zai"
 	defaultBaseURL = "https://api.z.ai/api/paas/v4"
-
-	ModelGLM51           = "glm-5.1"
-	ModelGLM5Turbo       = "glm-5-turbo"
-	ModelGLM5            = "glm-5"
-	ModelGLM47           = "glm-4.7"
-	ModelGLM47Flash      = "glm-4.7-flash"
-	ModelGLM47FlashX     = "glm-4.7-flashx"
-	ModelGLM46           = "glm-4.6"
-	ModelGLM45           = "glm-4.5"
-	ModelGLM45Air        = "glm-4.5-air"
-	ModelGLM45X          = "glm-4.5-x"
-	ModelGLM45AirX       = "glm-4.5-airx"
-	ModelGLM45Flash      = "glm-4.5-flash"
-	ModelGLM432B0414128K = "glm-4-32b-0414-128k"
-	ModelGLM5VTurbo      = "glm-5v-turbo"
-	ModelGLM46V          = "glm-4.6v"
-	ModelGLM46VFlash     = "glm-4.6v-flash"
-	ModelGLM46VFlashX    = "glm-4.6v-flashx"
-	ModelGLM45V          = "glm-4.5v"
 )
 
 // ChatConfig is the per-request config for GLM models: the generation fields
@@ -126,43 +107,67 @@ func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams
 	}
 }
 
+// Capability sets shared by the entries below. No GLM model advertises
+// ToolChoice, so the plugin always uses automatic tool selection and rejects a
+// forced tool choice before the request goes out. Nor is constrained
+// generation advertised: Z.ai's response_format takes text or json_object
+// only, not json_schema, so a schema reaches the model as prompt
+// instructions. See https://docs.z.ai/api-reference/llm/chat-completion.
+var (
+	textOnly = ai.ModelSupports{
+		Multiturn:  true,
+		Tools:      true,
+		SystemRole: true,
+		Media:      false,
+		ToolChoice: false,
+		Output:     []string{"text", "json"},
+	}
+	multimodal = ai.ModelSupports{
+		Multiturn:  true,
+		Tools:      true,
+		SystemRole: true,
+		Media:      true,
+		ToolChoice: false,
+		Output:     []string{"text", "json"},
+	}
+)
+
+// supportedModels curates capabilities for well-known GLM models. It is not
+// the set of usable models: any GLM model resolves on demand and takes
+// [dynamicModelOptions], so an ID absent here still works. No versions are
+// declared, since Z.ai serves dated snapshots the plugin cannot enumerate,
+// and an undeclared list leaves config version pinning unconstrained.
+//
+// Catalog: https://docs.z.ai/guides/llm/overview
 var supportedModels = map[string]ai.ModelOptions{
-	ModelGLM51:           newModelOptions(ModelGLM51, "Z.ai GLM 5.1", false),
-	ModelGLM5Turbo:       newModelOptions(ModelGLM5Turbo, "Z.ai GLM 5 Turbo", false),
-	ModelGLM5:            newModelOptions(ModelGLM5, "Z.ai GLM 5", false),
-	ModelGLM47:           newModelOptions(ModelGLM47, "Z.ai GLM 4.7", false),
-	ModelGLM47Flash:      newModelOptions(ModelGLM47Flash, "Z.ai GLM 4.7 Flash", false),
-	ModelGLM47FlashX:     newModelOptions(ModelGLM47FlashX, "Z.ai GLM 4.7 FlashX", false),
-	ModelGLM46:           newModelOptions(ModelGLM46, "Z.ai GLM 4.6", false),
-	ModelGLM45:           newModelOptions(ModelGLM45, "Z.ai GLM 4.5", false),
-	ModelGLM45Air:        newModelOptions(ModelGLM45Air, "Z.ai GLM 4.5 Air", false),
-	ModelGLM45X:          newModelOptions(ModelGLM45X, "Z.ai GLM 4.5 X", false),
-	ModelGLM45AirX:       newModelOptions(ModelGLM45AirX, "Z.ai GLM 4.5 AirX", false),
-	ModelGLM45Flash:      newModelOptions(ModelGLM45Flash, "Z.ai GLM 4.5 Flash", false),
-	ModelGLM432B0414128K: newModelOptions(ModelGLM432B0414128K, "Z.ai GLM 4 32B 128K", false),
-	ModelGLM5VTurbo:      newModelOptions(ModelGLM5VTurbo, "Z.ai GLM 5V Turbo", true),
-	ModelGLM46V:          newModelOptions(ModelGLM46V, "Z.ai GLM 4.6V", true),
-	ModelGLM46VFlash:     newModelOptions(ModelGLM46VFlash, "Z.ai GLM 4.6V Flash", true),
-	ModelGLM46VFlashX:    newModelOptions(ModelGLM46VFlashX, "Z.ai GLM 4.6V FlashX", true),
-	ModelGLM45V:          newModelOptions(ModelGLM45V, "Z.ai GLM 4.5V", true),
+	"glm-5.1":             {Label: "Z.ai GLM 5.1", Supports: &textOnly},
+	"glm-5-turbo":         {Label: "Z.ai GLM 5 Turbo", Supports: &textOnly},
+	"glm-5":               {Label: "Z.ai GLM 5", Supports: &textOnly},
+	"glm-4.7":             {Label: "Z.ai GLM 4.7", Supports: &textOnly},
+	"glm-4.7-flash":       {Label: "Z.ai GLM 4.7 Flash", Supports: &textOnly},
+	"glm-4.7-flashx":      {Label: "Z.ai GLM 4.7 FlashX", Supports: &textOnly},
+	"glm-4.6":             {Label: "Z.ai GLM 4.6", Supports: &textOnly},
+	"glm-4.5":             {Label: "Z.ai GLM 4.5", Supports: &textOnly},
+	"glm-4.5-air":         {Label: "Z.ai GLM 4.5 Air", Supports: &textOnly},
+	"glm-4.5-x":           {Label: "Z.ai GLM 4.5 X", Supports: &textOnly},
+	"glm-4.5-airx":        {Label: "Z.ai GLM 4.5 AirX", Supports: &textOnly},
+	"glm-4.5-flash":       {Label: "Z.ai GLM 4.5 Flash", Supports: &textOnly},
+	"glm-4-32b-0414-128k": {Label: "Z.ai GLM 4 32B 128K", Supports: &textOnly},
+
+	// Vision models.
+	"glm-5v-turbo":    {Label: "Z.ai GLM 5V Turbo", Supports: &multimodal},
+	"glm-4.6v":        {Label: "Z.ai GLM 4.6V", Supports: &multimodal},
+	"glm-4.6v-flash":  {Label: "Z.ai GLM 4.6V Flash", Supports: &multimodal},
+	"glm-4.6v-flashx": {Label: "Z.ai GLM 4.6V FlashX", Supports: &multimodal},
+	"glm-4.5v":        {Label: "Z.ai GLM 4.5V", Supports: &multimodal},
 }
 
-// newModelOptions builds the curated options entry for a GLM model. No
-// versions are declared: Z.ai serves dated snapshots the plugin cannot
-// enumerate, and an undeclared list leaves config version pinning
-// unconstrained.
-func newModelOptions(id, label string, media bool) ai.ModelOptions {
-	return ai.ModelOptions{
-		Label: label,
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      media,
-			ToolChoice: false,
-			Output:     []string{"text", "json"},
-		},
-	}
+// dynamicModelOptions is advertised for GLM models that resolve dynamically
+// rather than appearing in supportedModels.
+var dynamicModelOptions = ai.ModelOptions{
+	Supports: &textOnly,
+	Versions: []string{},
+	Stage:    ai.ModelStageStable,
 }
 
 // ZAI configures the Z.ai GLM plugin.
@@ -229,25 +234,14 @@ func modelOptions(id string) ai.ModelOptions {
 	if opts, ok := supportedModels[id]; ok {
 		return opts
 	}
-	return ai.ModelOptions{
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      false,
-			ToolChoice: false,
-			Output:     []string{"text", "json"},
-		},
-		Versions: []string{},
-		Stage:    ai.ModelStageStable,
-	}
+	return dynamicModelOptions
 }
 
 // ModelRef names a GLM model and carries the config to generate with, so the
 // config is typed at the call site instead of an any the model checks at
 // runtime. A nil config leaves the request's config unset.
 //
-//	ai.WithModel(zai.ModelRef(zai.ModelGLM5, &zai.ChatConfig{
+//	ai.WithModel(zai.ModelRef("glm-5", &zai.ChatConfig{
 //		Thinking: &zai.ThinkingConfig{Type: "enabled"},
 //	}))
 //
@@ -274,16 +268,6 @@ func (z *ZAI) RegisterModel(g *genkit.Genkit, id string, opts *ai.ModelOptions) 
 // guard against registering one twice (see [ZAI.RegisterModel]).
 func IsDefinedModel(g *genkit.Genkit, id string) bool {
 	return compat_oai.IsDefinedModel(g, provider, id)
-}
-
-// Model returns a previously registered model.
-//
-// Deprecated: Generation resolves a model from its name, so looking one up
-// first is rarely necessary: pass ai.WithModelName("zai/glm-5") or, to carry
-// config with it, [ModelRef]. Use [genkit.LookupModel] when the action itself
-// is what you need.
-func (z *ZAI) Model(g *genkit.Genkit, id string) ai.Model {
-	return genkit.LookupModel(g, compat_oai.ActionName(provider, id))
 }
 
 // ListActions lists the models the configured Z.ai endpoint exposes,

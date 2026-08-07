@@ -28,7 +28,7 @@ plugin := &zai.ZAI{}
 g := genkit.Init(
     ctx,
     genkit.WithPlugins(plugin),
-    genkit.WithDefaultModel("zai/"+zai.ModelGLM51),
+    genkit.WithDefaultModel("zai/glm-5.1"),
 )
 
 response, err := genkit.Generate(
@@ -47,7 +47,7 @@ the generation fields Z.ai accepts plus its own controls (`thinking`,
 response, err := genkit.Generate(
     ctx,
     g,
-    ai.WithModel(zai.ModelRef(zai.ModelGLM51, &zai.ChatConfig{
+    ai.WithModel(zai.ModelRef("glm-5.1", &zai.ChatConfig{
         Thinking: &zai.ThinkingConfig{Type: "disabled"},
     })),
     ai.WithPrompt("Answer concisely."),

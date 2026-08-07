@@ -76,7 +76,7 @@ func TestPluginConfigPrecedence(t *testing.T) {
 
 	ctx := context.Background()
 	plugin := &deepseek.DeepSeek{APIKey: "struct-key", BaseURL: right.URL}
-	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("deepseek/"+deepseek.ModelV4Pro))
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("deepseek/deepseek-v4-pro"))
 
 	if _, err := genkit.Generate(ctx, g, ai.WithPrompt("hi")); err != nil {
 		t.Fatalf("Generate() error = %v", err)
@@ -110,8 +110,8 @@ func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
 			t.Errorf("decode request: %v", err)
 			return
 		}
-		if body.Model != deepseek.ModelV4Pro {
-			t.Errorf("model = %q, want %q", body.Model, deepseek.ModelV4Pro)
+		if body.Model != "deepseek-v4-pro" {
+			t.Errorf("model = %q, want %q", body.Model, "deepseek-v4-pro")
 		}
 		if got := body.Thinking["type"]; got != "enabled" {
 			t.Errorf("thinking.type = %v, want %q", got, "enabled")
@@ -153,16 +153,16 @@ func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
 
 	ctx := context.Background()
 	plugin := &deepseek.DeepSeek{}
-	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("deepseek/"+deepseek.ModelV4Pro))
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("deepseek/deepseek-v4-pro"))
 
 	if plugin.Name() != "deepseek" {
 		t.Fatalf("Name() = %q, want %q", plugin.Name(), "deepseek")
 	}
 
-	for _, modelID := range []string{deepseek.ModelV4Flash, deepseek.ModelV4Pro} {
-		model := plugin.Model(g, modelID)
+	for _, modelID := range []string{"deepseek-v4-flash", "deepseek-v4-pro"} {
+		model := genkit.LookupModel(g, "deepseek/"+modelID)
 		if model == nil {
-			t.Errorf("Model(%q) = nil", modelID)
+			t.Errorf("LookupModel(%q) = nil", modelID)
 			continue
 		}
 		desc := model.(api.Action).Desc()
@@ -292,7 +292,7 @@ func TestPluginPreservesReasoningAcrossToolCalls(t *testing.T) {
 
 	ctx := context.Background()
 	plugin := &deepseek.DeepSeek{APIKey: "test-key", BaseURL: server.URL}
-	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("deepseek/"+deepseek.ModelV4Pro))
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("deepseek/deepseek-v4-pro"))
 
 	lookup := genkit.DefineTool(g, "lookup", "Looks up a value.",
 		func(_ *ai.ToolContext, input struct {
@@ -319,9 +319,9 @@ func TestPluginPreservesReasoningAcrossToolCalls(t *testing.T) {
 // camelCase config contract including the DeepSeek-specific fields.
 func TestModelRefAndConfigSchema(t *testing.T) {
 	cfg := &deepseek.ChatConfig{Thinking: &deepseek.ThinkingConfig{Type: "disabled"}}
-	for _, name := range []string{deepseek.ModelV4Pro, "deepseek/" + deepseek.ModelV4Pro} {
+	for _, name := range []string{"deepseek-v4-pro", "deepseek/deepseek-v4-pro"} {
 		ref := deepseek.ModelRef(name, cfg)
-		if want := "deepseek/" + deepseek.ModelV4Pro; ref.Name() != want {
+		if want := "deepseek/deepseek-v4-pro"; ref.Name() != want {
 			t.Errorf("ModelRef(%q).Name() = %q, want %q", name, ref.Name(), want)
 		}
 		if ref.Config() != cfg {
@@ -332,9 +332,9 @@ func TestModelRefAndConfigSchema(t *testing.T) {
 	plugin := &deepseek.DeepSeek{APIKey: "test-key"}
 	g := genkit.Init(context.Background(), genkit.WithPlugins(plugin))
 
-	m := genkit.LookupModel(g, "deepseek/"+deepseek.ModelV4Pro)
+	m := genkit.LookupModel(g, "deepseek/deepseek-v4-pro")
 	if m == nil {
-		t.Fatalf("%s not registered by Init", deepseek.ModelV4Pro)
+		t.Fatalf("%s not registered by Init", "deepseek-v4-pro")
 	}
 	model := m.(api.Action).Desc().Metadata["model"].(map[string]any)
 	schema, ok := model["customOptions"].(map[string]any)
@@ -400,7 +400,7 @@ func TestModelRefConfigReachesTheWire(t *testing.T) {
 	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
 
 	resp, err := genkit.Generate(ctx, g,
-		ai.WithModel(deepseek.ModelRef(deepseek.ModelV4Pro, &deepseek.ChatConfig{
+		ai.WithModel(deepseek.ModelRef("deepseek-v4-pro", &deepseek.ChatConfig{
 			RequestConfig:   compat_oai.RequestConfig{Version: "deepseek-v4-pro-0731"},
 			Temperature:     openai.Ptr(0.3),
 			MaxOutputTokens: 512,

@@ -105,108 +105,85 @@ func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams
 	}
 }
 
-// Supported models: https://docs.anthropic.com/en/docs/about-claude/models/all-models
-var supportedModels = map[string]ai.ModelOptions{
-	"claude-opus-4-1-20250805": {
-		Label: "Claude 4.1 Opus",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			ToolChoice: true,
-			SystemRole: true,
-			Media:      true,
-		},
-		Versions: []string{"claude-opus-4-1-latest", "claude-opus-4-1-20250805"},
-	},
-	"claude-sonnet-4-5-20250929": {
-		Label: "Claude 4.5 Sonnet",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			ToolChoice: true,
-			SystemRole: true,
-			Media:      true,
-		},
-		Versions: []string{"claude-sonnet-4-5-latest", "claude-sonnet-4-5-20250929"},
-	},
-	"claude-haiku-4-5-20251001": {
-		Label: "Claude 4.5 Haiku",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			ToolChoice: true,
-			SystemRole: true,
-			Media:      true,
-		},
-		Versions: []string{"claude-haiku-4-5-latest", "claude-haiku-4-5-20251001"},
-	},
-	"claude-3-7-sonnet-20250219": {
-		Label: "Claude 3.7 Sonnet",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			ToolChoice: true,
-			SystemRole: true,
-			Media:      true,
-		},
-		Versions: []string{"claude-3-7-sonnet-latest", "claude-3-7-sonnet-20250219"},
-	},
-	"claude-3-5-haiku-20241022": {
-		Label: "Claude 3.5 Haiku",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			ToolChoice: true,
-			SystemRole: true,
-			Media:      true,
-		},
-		Versions: []string{"claude-3-5-haiku-latest", "claude-3-5-haiku-20241022"},
-	},
-	"claude-3-5-sonnet-20240620": {
-		Label: "Claude 3.5 Sonnet",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			ToolChoice: true,
-			SystemRole: false, // NOTE: This model does not support system role
-			Media:      true,
-		},
-		Versions: []string{"claude-3-5-sonnet-20240620"},
-	},
-	"claude-3-opus-20240229": {
-		Label: "Claude 3 Opus",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			ToolChoice: true,
-			SystemRole: false, // NOTE: This model does not support system role
-			Media:      true,
-		},
-		Versions: []string{"claude-3-opus-latest", "claude-3-opus-20240229"},
-	},
-	"claude-3-haiku-20240307": {
-		Label: "Claude 3 Haiku",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			ToolChoice: true,
-			SystemRole: false, // NOTE: This model does not support system role
-			Media:      true,
-		},
-		Versions: []string{"claude-3-haiku-20240307"},
-	},
-}
-
-// defaultClaudeOpts is the capability set advertised for Claude models not in
-// the curated list.
-var defaultClaudeOpts = ai.ModelOptions{
-	Supports: &ai.ModelSupports{
+// Capability sets shared by the entries below. The Claude 3 generation
+// predates Anthropic's system-role support on the compatible endpoint. No
+// model advertises constrained generation: the compatible endpoint documents
+// response_format as ignored, so a schema reaches the model as prompt
+// instructions. Structured outputs are available on the native Claude API,
+// which the plugins/anthropic package speaks. See
+// https://platform.claude.com/docs/en/api/openai-sdk.
+var (
+	multimodal = ai.ModelSupports{
 		Multiturn:  true,
 		Tools:      true,
 		ToolChoice: true,
 		SystemRole: true,
 		Media:      true,
+		Output:     []string{"text", "json"},
+	}
+	multimodalNoSystemRole = ai.ModelSupports{
+		Multiturn:  true,
+		Tools:      true,
+		ToolChoice: true,
+		SystemRole: false,
+		Media:      true,
+		Output:     []string{"text", "json"},
+	}
+)
+
+// supportedModels curates capabilities for well-known Claude models. It is not
+// the set of usable models: any Claude model resolves on demand and takes
+// [dynamicModelOptions], so an ID absent here still works. Dated snapshots are
+// folded into Versions rather than registered as separate models.
+//
+// Catalog: https://docs.anthropic.com/en/docs/about-claude/models/all-models
+var supportedModels = map[string]ai.ModelOptions{
+	"claude-opus-4-1-20250805": {
+		Label:    "Claude 4.1 Opus",
+		Supports: &multimodal,
+		Versions: []string{"claude-opus-4-1-latest", "claude-opus-4-1-20250805"},
 	},
+	"claude-sonnet-4-5-20250929": {
+		Label:    "Claude 4.5 Sonnet",
+		Supports: &multimodal,
+		Versions: []string{"claude-sonnet-4-5-latest", "claude-sonnet-4-5-20250929"},
+	},
+	"claude-haiku-4-5-20251001": {
+		Label:    "Claude 4.5 Haiku",
+		Supports: &multimodal,
+		Versions: []string{"claude-haiku-4-5-latest", "claude-haiku-4-5-20251001"},
+	},
+	"claude-3-7-sonnet-20250219": {
+		Label:    "Claude 3.7 Sonnet",
+		Supports: &multimodal,
+		Versions: []string{"claude-3-7-sonnet-latest", "claude-3-7-sonnet-20250219"},
+	},
+	"claude-3-5-haiku-20241022": {
+		Label:    "Claude 3.5 Haiku",
+		Supports: &multimodal,
+		Versions: []string{"claude-3-5-haiku-latest", "claude-3-5-haiku-20241022"},
+	},
+	"claude-3-5-sonnet-20240620": {
+		Label:    "Claude 3.5 Sonnet",
+		Supports: &multimodalNoSystemRole,
+		Versions: []string{"claude-3-5-sonnet-20240620"},
+	},
+	"claude-3-opus-20240229": {
+		Label:    "Claude 3 Opus",
+		Supports: &multimodalNoSystemRole,
+		Versions: []string{"claude-3-opus-latest", "claude-3-opus-20240229"},
+	},
+	"claude-3-haiku-20240307": {
+		Label:    "Claude 3 Haiku",
+		Supports: &multimodalNoSystemRole,
+		Versions: []string{"claude-3-haiku-20240307"},
+	},
+}
+
+// dynamicModelOptions is advertised for Claude models that resolve dynamically
+// rather than appearing in supportedModels.
+var dynamicModelOptions = ai.ModelOptions{
+	Supports: &multimodal,
 	Versions: []string{},
 	Stage:    ai.ModelStageStable,
 }
@@ -264,7 +241,7 @@ func modelOptions(id string) ai.ModelOptions {
 	if opts, ok := supportedModels[id]; ok {
 		return opts
 	}
-	return defaultClaudeOpts
+	return dynamicModelOptions
 }
 
 // ModelRef names a Claude model and carries the config to generate with, so

@@ -30,11 +30,6 @@ import (
 const (
 	provider       = "deepseek"
 	defaultBaseURL = "https://api.deepseek.com"
-
-	// ModelV4Flash is the fast DeepSeek V4 model.
-	ModelV4Flash = "deepseek-v4-flash"
-	// ModelV4Pro is the most capable DeepSeek V4 model.
-	ModelV4Pro = "deepseek-v4-pro"
 )
 
 // ChatConfig is the per-request config for DeepSeek models: the generation
@@ -118,29 +113,39 @@ func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams
 	}
 }
 
-// Supported models: https://api-docs.deepseek.com/quick_start/pricing
-var supportedModels = map[string]ai.ModelOptions{
-	ModelV4Flash: newModelOptions("DeepSeek V4 Flash"),
-	ModelV4Pro:   newModelOptions("DeepSeek V4 Pro"),
+// textOnly is the capability set every DeepSeek model shares: text in, text
+// or JSON out, tools, and thinking. No constrained generation is advertised:
+// DeepSeek's response_format takes json_object only, not json_schema, so a
+// schema reaches the model as prompt instructions. See
+// https://api-docs.deepseek.com/guides/json_mode.
+var textOnly = ai.ModelSupports{
+	Multiturn:  true,
+	Tools:      true,
+	SystemRole: true,
+	Media:      false,
+	ToolChoice: true,
+	Output:     []string{"text", "json"},
 }
 
-// newModelOptions builds the curated options entry for a DeepSeek model. Both
-// V4 models take text and answer with text or JSON, call tools, and think, so
-// the entries differ only by label. No versions are declared: DeepSeek serves
-// each model under one ID whose snapshot moves underneath it, and an
-// undeclared list leaves config version pinning unconstrained.
-func newModelOptions(label string) ai.ModelOptions {
-	return ai.ModelOptions{
-		Label: label,
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      false,
-			ToolChoice: true,
-			Output:     []string{"text", "json"},
-		},
-	}
+// supportedModels curates capabilities for well-known DeepSeek models. It is
+// not the set of usable models: any DeepSeek model resolves on demand and
+// takes [dynamicModelOptions], so an ID absent here still works. No versions
+// are declared, since DeepSeek serves each model under one ID whose snapshot
+// moves underneath it, and an undeclared list leaves config version pinning
+// unconstrained.
+//
+// Catalog: https://api-docs.deepseek.com/quick_start/pricing
+var supportedModels = map[string]ai.ModelOptions{
+	"deepseek-v4-flash": {Label: "DeepSeek V4 Flash", Supports: &textOnly},
+	"deepseek-v4-pro":   {Label: "DeepSeek V4 Pro", Supports: &textOnly},
+}
+
+// dynamicModelOptions is advertised for DeepSeek models that resolve
+// dynamically rather than appearing in supportedModels.
+var dynamicModelOptions = ai.ModelOptions{
+	Supports: &textOnly,
+	Versions: []string{},
+	Stage:    ai.ModelStageStable,
 }
 
 // DeepSeek configures the DeepSeek plugin.
@@ -207,25 +212,14 @@ func modelOptions(id string) ai.ModelOptions {
 	if opts, ok := supportedModels[id]; ok {
 		return opts
 	}
-	return ai.ModelOptions{
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      false,
-			ToolChoice: true,
-			Output:     []string{"text", "json"},
-		},
-		Versions: []string{},
-		Stage:    ai.ModelStageStable,
-	}
+	return dynamicModelOptions
 }
 
 // ModelRef names a DeepSeek model and carries the config to generate with, so
 // the config is typed at the call site instead of an any the model checks at
 // runtime. A nil config leaves the request's config unset.
 //
-//	ai.WithModel(deepseek.ModelRef(deepseek.ModelV4Pro, &deepseek.ChatConfig{
+//	ai.WithModel(deepseek.ModelRef("deepseek-v4-pro", &deepseek.ChatConfig{
 //		Thinking: &deepseek.ThinkingConfig{Type: "disabled"},
 //	}))
 //
@@ -252,16 +246,6 @@ func (d *DeepSeek) RegisterModel(g *genkit.Genkit, id string, opts *ai.ModelOpti
 // guard against registering one twice (see [DeepSeek.RegisterModel]).
 func IsDefinedModel(g *genkit.Genkit, id string) bool {
 	return compat_oai.IsDefinedModel(g, provider, id)
-}
-
-// Model returns a previously registered model.
-//
-// Deprecated: Generation resolves a model from its name, so looking one up
-// first is rarely necessary: pass ai.WithModelName("deepseek/deepseek-v4-pro")
-// or, to carry config with it, [ModelRef]. Use [genkit.LookupModel] when the
-// action itself is what you need.
-func (d *DeepSeek) Model(g *genkit.Genkit, id string) ai.Model {
-	return genkit.LookupModel(g, compat_oai.ActionName(provider, id))
 }
 
 // ListActions lists the models the configured DeepSeek endpoint exposes,

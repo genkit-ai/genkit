@@ -76,7 +76,7 @@ func TestPluginConfigPrecedence(t *testing.T) {
 
 	ctx := context.Background()
 	plugin := &xai.XAI{APIKey: "struct-key", BaseURL: right.URL + "/v1"}
-	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("xai/"+xai.ModelGrok45))
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("xai/grok-4.5"))
 
 	if _, err := genkit.Generate(ctx, g, ai.WithPrompt("hi")); err != nil {
 		t.Fatalf("Generate() error = %v", err)
@@ -109,8 +109,8 @@ func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
 			t.Errorf("decode request: %v", err)
 			return
 		}
-		if body.Model != xai.ModelGrok43 {
-			t.Errorf("model = %q, want %q", body.Model, xai.ModelGrok43)
+		if body.Model != "grok-4.3" {
+			t.Errorf("model = %q, want %q", body.Model, "grok-4.3")
 		}
 		if body.ReasoningEffort != "high" {
 			t.Errorf("reasoning_effort = %q, want %q", body.ReasoningEffort, "high")
@@ -144,22 +144,22 @@ func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
 
 	ctx := context.Background()
 	plugin := &xai.XAI{}
-	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("xai/"+xai.ModelGrok43))
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("xai/grok-4.3"))
 
 	if plugin.Name() != "xai" {
 		t.Fatalf("Name() = %q, want %q", plugin.Name(), "xai")
 	}
 
 	for _, modelID := range []string{
-		xai.ModelGrok45,
-		xai.ModelGrok43,
-		xai.ModelGrok420Reasoning,
-		xai.ModelGrok420NonReasoning,
-		xai.ModelGrokBuild01,
+		"grok-4.5",
+		"grok-4.3",
+		"grok-4.20-0309-reasoning",
+		"grok-4.20-0309-non-reasoning",
+		"grok-build-0.1",
 	} {
-		model := plugin.Model(g, modelID)
+		model := genkit.LookupModel(g, "xai/"+modelID)
 		if model == nil {
-			t.Errorf("Model(%q) = nil", modelID)
+			t.Errorf("LookupModel(%q) = nil", modelID)
 			continue
 		}
 		desc := model.(api.Action).Desc()
@@ -289,7 +289,7 @@ func TestPluginHandlesToolCalls(t *testing.T) {
 
 	ctx := context.Background()
 	plugin := &xai.XAI{APIKey: "test-key", BaseURL: server.URL + "/v1"}
-	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("xai/"+xai.ModelGrok45))
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("xai/grok-4.5"))
 
 	lookup := genkit.DefineTool(g, "lookup", "Looks up a value.",
 		func(_ *ai.ToolContext, input struct {
@@ -320,9 +320,9 @@ func TestPluginHandlesToolCalls(t *testing.T) {
 // camelCase config contract including the xAI-specific fields.
 func TestModelRefAndConfigSchema(t *testing.T) {
 	cfg := &xai.ChatConfig{ReasoningEffort: "low"}
-	for _, name := range []string{xai.ModelGrok45, "xai/" + xai.ModelGrok45} {
+	for _, name := range []string{"grok-4.5", "xai/grok-4.5"} {
 		ref := xai.ModelRef(name, cfg)
-		if want := "xai/" + xai.ModelGrok45; ref.Name() != want {
+		if want := "xai/grok-4.5"; ref.Name() != want {
 			t.Errorf("ModelRef(%q).Name() = %q, want %q", name, ref.Name(), want)
 		}
 		if ref.Config() != cfg {
@@ -333,9 +333,9 @@ func TestModelRefAndConfigSchema(t *testing.T) {
 	plugin := &xai.XAI{APIKey: "test-key"}
 	g := genkit.Init(context.Background(), genkit.WithPlugins(plugin))
 
-	m := genkit.LookupModel(g, "xai/"+xai.ModelGrok45)
+	m := genkit.LookupModel(g, "xai/grok-4.5")
 	if m == nil {
-		t.Fatalf("%s not registered by Init", xai.ModelGrok45)
+		t.Fatalf("%s not registered by Init", "grok-4.5")
 	}
 	model := m.(api.Action).Desc().Metadata["model"].(map[string]any)
 	schema, ok := model["customOptions"].(map[string]any)
@@ -421,7 +421,7 @@ func TestModelRefConfigReachesTheWire(t *testing.T) {
 	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
 
 	resp, err := genkit.Generate(ctx, g,
-		ai.WithModel(xai.ModelRef(xai.ModelGrok45, &xai.ChatConfig{
+		ai.WithModel(xai.ModelRef("grok-4.5", &xai.ChatConfig{
 			RequestConfig:   compat_oai.RequestConfig{Version: "grok-4.5-latest"},
 			Temperature:     openai.Ptr(0.3),
 			MaxOutputTokens: 512,
@@ -471,7 +471,7 @@ func TestJSONConfigCarriesSearchParameters(t *testing.T) {
 
 	ctx := context.Background()
 	plugin := &xai.XAI{APIKey: "test-key", BaseURL: server.URL}
-	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("xai/"+xai.ModelGrok45))
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("xai/grok-4.5"))
 
 	if _, err := genkit.Generate(ctx, g,
 		ai.WithPrompt("What is new?"),
@@ -556,5 +556,52 @@ func TestDynamicListingAndResolution(t *testing.T) {
 	}
 	if got := resp.Text(); got != "resolved" {
 		t.Fatalf("Text() = %q, want %q", got, "resolved")
+	}
+}
+
+// TestConstrainedSupport pins the Grok 4 family carve-out. xAI documents that
+// structured outputs combined with tools is only available on Grok 4 family
+// models, so anything else must advertise no-tools rather than all, and a
+// model resolved dynamically takes the narrower value since it may not be
+// Grok 4. Claiming all where it does not hold would drop the schema
+// instructions Genkit injects into the prompt for a request carrying tools.
+func TestConstrainedSupport(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "test-key")
+
+	ctx := context.Background()
+	plugin := &xai.XAI{}
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
+
+	constrained := func(a api.Action) ai.ConstrainedSupport {
+		t.Helper()
+		supports := a.Desc().Metadata["model"].(map[string]any)["supports"].(map[string]any)
+		got, _ := supports["constrained"].(ai.ConstrainedSupport)
+		return got
+	}
+
+	for id, want := range map[string]ai.ConstrainedSupport{
+		"grok-4.5":                     ai.ConstrainedSupportAll,
+		"grok-4.3":                     ai.ConstrainedSupportAll,
+		"grok-4.20-0309-reasoning":     ai.ConstrainedSupportAll,
+		"grok-4.20-0309-non-reasoning": ai.ConstrainedSupportAll,
+		"grok-build-0.1":               ai.ConstrainedSupportNoTools,
+	} {
+		m := genkit.LookupModel(g, "xai/"+id)
+		if m == nil {
+			t.Errorf("LookupModel(%q) = nil", id)
+			continue
+		}
+		if got := constrained(m.(api.Action)); got != want {
+			t.Errorf("%s constrained = %q, want %q", id, got, want)
+		}
+	}
+
+	// A model xAI adds later may sit outside the Grok 4 family.
+	resolved := plugin.ResolveAction(api.ActionTypeModel, "grok-not-yet-released")
+	if resolved == nil {
+		t.Fatal("ResolveAction returned nil for an unknown model")
+	}
+	if got := constrained(resolved); got != ai.ConstrainedSupportNoTools {
+		t.Errorf("dynamic constrained = %q, want %q", got, ai.ConstrainedSupportNoTools)
 	}
 }

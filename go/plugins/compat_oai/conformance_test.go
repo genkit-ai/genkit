@@ -72,10 +72,10 @@ func TestConfigSchemaConformance(t *testing.T) {
 	models := []string{
 		"anthropic/claude-sonnet-4-5-20250929",
 		"dashscope/qwen-plus",
-		"deepseek/" + deepseek.ModelV4Pro,
-		"kimi/" + kimi.ModelKimiK3,
-		"xai/" + xai.ModelGrok45,
-		"zai/" + zai.ModelGLM51,
+		"deepseek/deepseek-v4-pro",
+		"kimi/kimi-k3",
+		"xai/grok-4.5",
+		"zai/glm-5.1",
 	}
 
 	for _, name := range models {

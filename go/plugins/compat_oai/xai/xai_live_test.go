@@ -36,7 +36,7 @@ func TestPluginLive(t *testing.T) {
 	g := genkit.Init(
 		ctx,
 		genkit.WithPlugins(plugin),
-		genkit.WithDefaultModel("xai/"+xai.ModelGrok45),
+		genkit.WithDefaultModel("xai/grok-4.5"),
 	)
 
 	t.Run("complete", func(t *testing.T) {
@@ -56,7 +56,7 @@ func TestPluginLive(t *testing.T) {
 	// reasoning_effort.
 	t.Run("reasoning effort", func(t *testing.T) {
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(xai.ModelRef(xai.ModelGrok43, &xai.ChatConfig{
+			ai.WithModel(xai.ModelRef("grok-4.3", &xai.ChatConfig{
 				MaxOutputTokens: 256,
 				ReasoningEffort: "low",
 			})),
@@ -73,7 +73,7 @@ func TestPluginLive(t *testing.T) {
 	// Exercises the search_parameters shape against the live API.
 	t.Run("live search", func(t *testing.T) {
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(xai.ModelRef(xai.ModelGrok45, &xai.ChatConfig{
+			ai.WithModel(xai.ModelRef("grok-4.5", &xai.ChatConfig{
 				SearchParameters: &xai.SearchParameters{
 					Mode:             "on",
 					ReturnCitations:  openai.Ptr(true),

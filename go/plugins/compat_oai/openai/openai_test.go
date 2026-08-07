@@ -368,3 +368,34 @@ func TestSupportedModelCatalog(t *testing.T) {
 		}
 	}
 }
+
+// TestConstrainedSupport pins which models advertise native structured output.
+// OpenAI gates response_format json_schema on the gpt-4o-mini and
+// gpt-4o-2024-08-06 snapshots and later, so the three models predating it must
+// stay unset: claiming support there would drop the schema instructions Genkit
+// injects into the prompt and leave nothing enforcing the schema.
+func TestConstrainedSupport(t *testing.T) {
+	// Models OpenAI released before Structured Outputs.
+	legacy := map[string]bool{"gpt-4-turbo": true, "gpt-4": true, "gpt-3.5-turbo": true}
+
+	for id, opts := range supportedModels {
+		got := opts.Supports.Constrained
+		want := ai.ConstrainedSupportAll
+		if legacy[id] {
+			want = ""
+		}
+		if got != want {
+			t.Errorf("%s constrained = %q, want %q", id, got, want)
+		}
+	}
+
+	for id := range legacy {
+		if _, ok := supportedModels[id]; !ok {
+			t.Errorf("%s is no longer in the catalog; drop it from this test", id)
+		}
+	}
+
+	if got := dynamicModelOptions.Supports.Constrained; got != ai.ConstrainedSupportAll {
+		t.Errorf("dynamic constrained = %q, want %q", got, ai.ConstrainedSupportAll)
+	}
+}

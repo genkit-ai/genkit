@@ -159,9 +159,9 @@ func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
 		{models: mediaModels, wantMedia: true},
 	} {
 		for _, modelID := range group.models {
-			model := plugin.Model(g, modelID)
+			model := genkit.LookupModel(g, "dashscope/"+modelID)
 			if model == nil {
-				t.Errorf("Model(%q) = nil", modelID)
+				t.Errorf("LookupModel(%q) = nil", modelID)
 				continue
 			}
 			desc := model.(api.Action).Desc()
@@ -477,7 +477,7 @@ func TestPluginValidatesModelVersions(t *testing.T) {
 	plugin := &dashscope.DashScope{APIKey: "test-key", BaseURL: server.URL + "/compatible-mode/v1"}
 	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("dashscope/qwen-plus"))
 
-	model := plugin.Model(g, "qwen-plus")
+	model := genkit.LookupModel(g, "dashscope/qwen-plus")
 	desc := model.(api.Action).Desc()
 	modelMetadata := desc.Metadata["model"].(map[string]any)
 	versions, _ := modelMetadata["versions"].([]string)

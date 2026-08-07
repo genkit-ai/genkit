@@ -48,8 +48,8 @@ func TestPluginRegistersKimiModelsAndHandlesReasoning(t *testing.T) {
 			t.Errorf("decode request: %v", err)
 			return
 		}
-		if body.Model != kimi.ModelKimiK26 {
-			t.Errorf("model = %q, want %q", body.Model, kimi.ModelKimiK26)
+		if body.Model != "kimi-k2.6" {
+			t.Errorf("model = %q, want %q", body.Model, "kimi-k2.6")
 		}
 
 		if body.Stream {
@@ -94,41 +94,41 @@ func TestPluginRegistersKimiModelsAndHandlesReasoning(t *testing.T) {
 	g := genkit.Init(
 		ctx,
 		genkit.WithPlugins(plugin),
-		genkit.WithDefaultModel("kimi/"+kimi.ModelKimiK26),
+		genkit.WithDefaultModel("kimi/kimi-k2.6"),
 	)
 
 	if plugin.Name() != "kimi" {
 		t.Fatalf("Name() = %q, want %q", plugin.Name(), "kimi")
 	}
 	for _, model := range []string{
-		kimi.ModelKimiK3,
-		kimi.ModelKimiK25,
-		kimi.ModelKimiK26,
-		kimi.ModelKimiK27Code,
-		kimi.ModelKimiK27CodeHighspeed,
+		"kimi-k3",
+		"kimi-k2.5",
+		"kimi-k2.6",
+		"kimi-k2.7-code",
+		"kimi-k2.7-code-highspeed",
 	} {
-		if plugin.Model(g, model) == nil {
-			t.Errorf("Model(%q) = nil", model)
+		if genkit.LookupModel(g, "kimi/"+model) == nil {
+			t.Errorf("LookupModel(%q) = nil", model)
 		}
 	}
 	for _, model := range []string{
-		kimi.ModelKimiK3,
-		kimi.ModelKimiK25,
-		kimi.ModelKimiK26,
-		kimi.ModelKimiK27Code,
-		kimi.ModelKimiK27CodeHighspeed,
+		"kimi-k3",
+		"kimi-k2.5",
+		"kimi-k2.6",
+		"kimi-k2.7-code",
+		"kimi-k2.7-code-highspeed",
 	} {
-		action := plugin.Model(g, model).(api.Action)
+		action := genkit.LookupModel(g, "kimi/"+model).(api.Action)
 		modelMetadata := action.Desc().Metadata["model"].(map[string]any)
 		supports := modelMetadata["supports"].(map[string]any)
 		if got := supports["media"]; got != true {
 			t.Errorf("%s media support = %v, want true", model, got)
 		}
 	}
-	k25Metadata := plugin.Model(g, kimi.ModelKimiK25).(api.Action).
+	k25Metadata := genkit.LookupModel(g, "kimi/kimi-k2.5").(api.Action).
 		Desc().Metadata["model"].(map[string]any)
 	if got := k25Metadata["stage"]; got != ai.ModelStageDeprecated {
-		t.Errorf("%s stage = %v, want %q", kimi.ModelKimiK25, got, ai.ModelStageDeprecated)
+		t.Errorf("%s stage = %v, want %q", "kimi-k2.5", got, ai.ModelStageDeprecated)
 	}
 
 	t.Run("complete", func(t *testing.T) {
@@ -203,8 +203,8 @@ func TestPluginPreservesReasoningAndConfigAcrossToolCalls(t *testing.T) {
 			t.Errorf("decode request: %v", err)
 			return
 		}
-		if body.Model != kimi.ModelKimiK26 {
-			t.Errorf("model = %q, want %q", body.Model, kimi.ModelKimiK26)
+		if body.Model != "kimi-k2.6" {
+			t.Errorf("model = %q, want %q", body.Model, "kimi-k2.6")
 		}
 		if got := body.Thinking["type"]; got != "enabled" {
 			t.Errorf("thinking.type = %v, want %q", got, "enabled")
@@ -282,7 +282,7 @@ func TestPluginPreservesReasoningAndConfigAcrossToolCalls(t *testing.T) {
 	g := genkit.Init(
 		ctx,
 		genkit.WithPlugins(plugin),
-		genkit.WithDefaultModel("kimi/"+kimi.ModelKimiK26),
+		genkit.WithDefaultModel("kimi/kimi-k2.6"),
 	)
 	lookup := genkit.DefineTool(
 		g,
@@ -341,9 +341,9 @@ func TestPluginRequiresAPIKey(t *testing.T) {
 // camelCase config contract including the Kimi-specific fields.
 func TestModelRefAndConfigSchema(t *testing.T) {
 	cfg := &kimi.ChatConfig{ReasoningEffort: "high"}
-	for _, name := range []string{kimi.ModelKimiK3, "kimi/" + kimi.ModelKimiK3} {
+	for _, name := range []string{"kimi-k3", "kimi/kimi-k3"} {
 		ref := kimi.ModelRef(name, cfg)
-		if want := "kimi/" + kimi.ModelKimiK3; ref.Name() != want {
+		if want := "kimi/kimi-k3"; ref.Name() != want {
 			t.Errorf("ModelRef(%q).Name() = %q, want %q", name, ref.Name(), want)
 		}
 		if ref.Config() != cfg {
@@ -354,7 +354,7 @@ func TestModelRefAndConfigSchema(t *testing.T) {
 	plugin := &kimi.Kimi{APIKey: "test-key"}
 	g := genkit.Init(context.Background(), genkit.WithPlugins(plugin))
 
-	m := genkit.LookupModel(g, "kimi/"+kimi.ModelKimiK3)
+	m := genkit.LookupModel(g, "kimi/kimi-k3")
 	if m == nil {
 		t.Fatal("kimi-k3 not registered by Init")
 	}

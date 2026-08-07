@@ -35,13 +35,13 @@ func TestPluginLive(t *testing.T) {
 	g := genkit.Init(
 		ctx,
 		genkit.WithPlugins(plugin),
-		genkit.WithDefaultModel("deepseek/"+deepseek.ModelV4Flash),
+		genkit.WithDefaultModel("deepseek/deepseek-v4-flash"),
 	)
 
 	// Thinking is on by default, so this also exercises turning it off.
 	t.Run("complete without thinking", func(t *testing.T) {
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(deepseek.ModelRef(deepseek.ModelV4Flash, &deepseek.ChatConfig{
+			ai.WithModel(deepseek.ModelRef("deepseek-v4-flash", &deepseek.ChatConfig{
 				Thinking: &deepseek.ThinkingConfig{Type: "disabled"},
 			})),
 			ai.WithPrompt("What is the capital of France? Answer with the city only."),
@@ -56,7 +56,7 @@ func TestPluginLive(t *testing.T) {
 
 	t.Run("thinking", func(t *testing.T) {
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(deepseek.ModelRef(deepseek.ModelV4Flash, &deepseek.ChatConfig{
+			ai.WithModel(deepseek.ModelRef("deepseek-v4-flash", &deepseek.ChatConfig{
 				Thinking: &deepseek.ThinkingConfig{Type: "enabled", ReasoningEffort: "low"},
 			})),
 			ai.WithPrompt("Is 91 a prime number? Answer yes or no."),

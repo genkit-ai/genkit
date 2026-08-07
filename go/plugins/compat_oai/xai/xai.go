@@ -31,20 +31,6 @@ import (
 const (
 	provider       = "xai"
 	defaultBaseURL = "https://api.x.ai/v1"
-
-	// ModelGrok45 is xAI's flagship Grok 4.5 model.
-	ModelGrok45 = "grok-4.5"
-	// ModelGrok43 is Grok 4.3, the long-context model xAI documents
-	// ChatConfig.ReasoningEffort for.
-	ModelGrok43 = "grok-4.3"
-	// ModelGrok420Reasoning is the reasoning variant of the Grok 4.20 line.
-	ModelGrok420Reasoning = "grok-4.20-0309-reasoning"
-	// ModelGrok420NonReasoning is the non-reasoning variant of the Grok 4.20
-	// line, which answers without a thinking pass.
-	ModelGrok420NonReasoning = "grok-4.20-0309-non-reasoning"
-	// ModelGrokBuild01 is the agentic coding model also served as
-	// "grok-code-fast-1".
-	ModelGrokBuild01 = "grok-build-0.1"
 )
 
 // ChatConfig is the per-request config for Grok models: the common generation
@@ -185,33 +171,60 @@ func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams
 	}
 }
 
+// Capability sets shared by the entries below. Every Grok model xAI serves
+// through chat completions takes text and images and answers with text or
+// JSON, and calls tools. They differ on constrained generation: xAI documents
+// that "structured outputs with tools is only available for supported Grok 4
+// family models", so anything outside that family advertises no-tools and
+// falls back to schema instructions in the prompt once a request carries
+// tools. See https://docs.x.ai/developers/model-capabilities/text/structured-outputs.
+var (
+	multimodal = ai.ModelSupports{
+		Multiturn:   true,
+		Tools:       true,
+		SystemRole:  true,
+		Media:       true,
+		ToolChoice:  true,
+		Output:      []string{"text", "json"},
+		Constrained: ai.ConstrainedSupportAll,
+	}
+	multimodalNoToolConstraint = ai.ModelSupports{
+		Multiturn:   true,
+		Tools:       true,
+		SystemRole:  true,
+		Media:       true,
+		ToolChoice:  true,
+		Output:      []string{"text", "json"},
+		Constrained: ai.ConstrainedSupportNoTools,
+	}
+)
+
+// supportedModels curates capabilities for well-known Grok models. It is not
+// the set of usable models: any Grok model resolves on demand and takes
+// [dynamicModelOptions], so an ID absent here still works. No versions are
+// declared, since xAI serves each model under floating aliases and dated
+// snapshots the plugin cannot enumerate, and an undeclared list leaves config
+// version pinning unconstrained.
+//
+// Catalog: https://docs.x.ai/docs/models
 var supportedModels = map[string]ai.ModelOptions{
-	ModelGrok45:              newModelOptions("Grok 4.5"),
-	ModelGrok43:              newModelOptions("Grok 4.3"),
-	ModelGrok420Reasoning:    newModelOptions("Grok 4.20 Reasoning"),
-	ModelGrok420NonReasoning: newModelOptions("Grok 4.20 Non-Reasoning"),
-	ModelGrokBuild01:         newModelOptions("Grok Build 0.1"),
+	"grok-4.5": {Label: "Grok 4.5", Supports: &multimodal},
+	// The long-context model xAI documents ChatConfig.ReasoningEffort for.
+	"grok-4.3":                     {Label: "Grok 4.3", Supports: &multimodal},
+	"grok-4.20-0309-reasoning":     {Label: "Grok 4.20 Reasoning", Supports: &multimodal},
+	"grok-4.20-0309-non-reasoning": {Label: "Grok 4.20 Non-Reasoning", Supports: &multimodal},
+	// The agentic coding model, also served as "grok-code-fast-1". Outside the
+	// Grok 4 family, so structured output and tools cannot be combined.
+	"grok-build-0.1": {Label: "Grok Build 0.1", Supports: &multimodalNoToolConstraint},
 }
 
-// newModelOptions builds the curated options entry for a Grok model. Every
-// model xAI currently serves through chat completions takes text and images
-// and answers with text, calls tools, and produces structured output, so the
-// entries differ only by label. No versions are declared: xAI serves each
-// model under floating aliases and dated snapshots the plugin cannot
-// enumerate, and an undeclared list leaves config version pinning
-// unconstrained.
-func newModelOptions(label string) ai.ModelOptions {
-	return ai.ModelOptions{
-		Label: label,
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      true,
-			ToolChoice: true,
-			Output:     []string{"text", "json"},
-		},
-	}
+// dynamicModelOptions is advertised for Grok models that resolve dynamically
+// rather than appearing in supportedModels. A model xAI adds later may sit
+// outside the Grok 4 family, so it takes the narrower constrained support.
+var dynamicModelOptions = ai.ModelOptions{
+	Supports: &multimodalNoToolConstraint,
+	Versions: []string{},
+	Stage:    ai.ModelStageStable,
 }
 
 // XAI configures the xAI Grok plugin.
@@ -278,25 +291,14 @@ func modelOptions(id string) ai.ModelOptions {
 	if opts, ok := supportedModels[id]; ok {
 		return opts
 	}
-	return ai.ModelOptions{
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      true,
-			ToolChoice: true,
-			Output:     []string{"text", "json"},
-		},
-		Versions: []string{},
-		Stage:    ai.ModelStageStable,
-	}
+	return dynamicModelOptions
 }
 
 // ModelRef names a Grok model and carries the config to generate with, so the
 // config is typed at the call site instead of an any the model checks at
 // runtime. A nil config leaves the request's config unset.
 //
-//	ai.WithModel(xai.ModelRef(xai.ModelGrok43, &xai.ChatConfig{
+//	ai.WithModel(xai.ModelRef("grok-4.3", &xai.ChatConfig{
 //		ReasoningEffort: "high",
 //	}))
 //
@@ -323,16 +325,6 @@ func (x *XAI) RegisterModel(g *genkit.Genkit, id string, opts *ai.ModelOptions) 
 // guard against registering one twice (see [XAI.RegisterModel]).
 func IsDefinedModel(g *genkit.Genkit, id string) bool {
 	return compat_oai.IsDefinedModel(g, provider, id)
-}
-
-// Model returns a previously registered model.
-//
-// Deprecated: Generation resolves a model from its name, so looking one up
-// first is rarely necessary: pass ai.WithModelName("xai/grok-4.5") or, to
-// carry config with it, [ModelRef]. Use [genkit.LookupModel] when the action
-// itself is what you need.
-func (x *XAI) Model(g *genkit.Genkit, id string) ai.Model {
-	return genkit.LookupModel(g, compat_oai.ActionName(provider, id))
 }
 
 // ListActions lists the models the configured xAI endpoint exposes, described

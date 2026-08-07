@@ -46,8 +46,45 @@ type MyPlugin struct {
     // define other plugin-specific fields
 }
 
+// Capability sets shared by the entries below.
+var (
+    textOnly = ai.ModelSupports{
+        Multiturn: true, Tools: true, SystemRole: true,
+        Media: false, ToolChoice: true,
+        Output: []string{"text", "json"},
+        Constrained: ai.ConstrainedSupportAll,
+    }
+    multimodal = ai.ModelSupports{
+        Multiturn: true, Tools: true, SystemRole: true,
+        Media: true, ToolChoice: true,
+        Output: []string{"text", "json"},
+        Constrained: ai.ConstrainedSupportAll,
+    }
+)
+
+// supportedModels curates capabilities for well-known models. It is not the
+// set of usable models: any model resolves on demand and takes
+// [dynamicModelOptions], so an ID absent here still works.
+//
+// Catalog: https://myprovider.example/docs/models
 var supportedModels = map[string]ai.ModelOptions{
-    // define supported models
+    "my-model":       {Label: "My Model", Supports: &textOnly},
+    "my-model-vision": {Label: "My Model Vision", Supports: &multimodal},
+}
+
+// dynamicModelOptions is advertised for models that resolve dynamically rather
+// than appearing in supportedModels.
+var dynamicModelOptions = ai.ModelOptions{
+    Supports: &multimodal,
+    Versions: []string{},
+    Stage:    ai.ModelStageStable,
+}
+
+func modelOptions(id string) ai.ModelOptions {
+    if opts, ok := supportedModels[id]; ok {
+        return opts
+    }
+    return dynamicModelOptions
 }
 
 func (p *MyPlugin) Name() string {
@@ -79,6 +116,31 @@ A typed config can also carry a per-request API key (`RequestConfig.APIKey` /
 alone. The key is a client credential: it never serializes, so it stays out of
 the advertised schema, recorded traces, and the request body, and it cannot be
 supplied through JSON or map configs.
+
+Every plugin in this directory lays its catalog out the same way, so the shape
+above transfers: named capability sets, a documented `supportedModels` map of
+one-line entries, a `dynamicModelOptions` fallback, and a `modelOptions` lookup.
+Where a provider publishes dated snapshots, fold them into the entry's
+`Versions` instead of registering a model per snapshot.
+
+`Constrained` is the one capability worth checking against the provider's docs
+rather than copying. Genkit sends `response_format` as `json_schema` whenever
+the request carries a schema, but it only skips injecting schema instructions
+into the prompt when the model advertises constrained support. Set
+`ConstrainedSupportAll` only where the provider documents `response_format`
+with `type: json_schema`; a provider offering `json_object` alone (DashScope,
+DeepSeek, Z.ai) or ignoring `response_format` outright (Anthropic's compatible
+endpoint) must leave it unset, or structured output loses the prompt
+instructions that were the only thing enforcing the schema. Use
+`ConstrainedSupportNoTools` where the provider supports schemas but not
+alongside tools, as xAI does outside the Grok 4 family.
+
+Model IDs are string literals rather than exported constants. An exported
+`ModelMyModel` outlives the model it names: the ID churns every few months,
+but the constant cannot be removed without a breaking change. The map key is
+already the single source of truth that `modelOptions` looks up, and a model on
+its way out is marked with `Stage: ai.ModelStageDeprecated`, which is data
+rather than API surface.
 
 Plugins declare their generation fields rather than inheriting them because
 providers disagree about which ones exist and what they are called: DeepSeek

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package dashscope provides a Genkit plugin for Alibaba Cloud's Qwen models,
+// served through DashScope's OpenAI-compatible mode.
 package dashscope
 
 import (
@@ -109,132 +111,101 @@ func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams
 	compat_oai.AddExtraFields(params, extra)
 }
 
-// Supported models: https://www.alibabacloud.com/help/en/model-studio/models
-// Confirmed against the live GET /compatible-mode/v1/models response for this workspace.
-// Dated snapshots are folded into Versions rather than registered as separate models,
-// mirroring the anthropic and openai subplugins.
+// Capability sets shared by the entries below. Forced tool-choice modes carry
+// model- and thinking-mode-specific restrictions on Qwen, so no model
+// advertises ToolChoice and tool selection is always automatic. Constrained
+// generation is likewise absent: DashScope's response_format takes
+// json_object only, not json_schema, so a schema reaches the model as prompt
+// instructions. See https://www.alibabacloud.com/help/en/model-studio/json-mode.
+var (
+	textOnly = ai.ModelSupports{
+		Multiturn:  true,
+		Tools:      true,
+		SystemRole: true,
+		Media:      false,
+		Output:     []string{"text", "json"},
+	}
+	multimodal = ai.ModelSupports{
+		Multiturn:  true,
+		Tools:      true,
+		SystemRole: true,
+		Media:      true,
+		Output:     []string{"text", "json"},
+	}
+)
+
+// supportedModels curates capabilities for well-known Qwen models. It is not
+// the set of usable models: any Qwen model resolves on demand and takes
+// [dynamicModelOptions], so an ID absent here still works. Dated snapshots are
+// folded into Versions rather than registered as separate models, matching the
+// anthropic and openai subplugins.
+//
+// Catalog: https://www.alibabacloud.com/help/en/model-studio/models
+// Confirmed against the live GET /compatible-mode/v1/models response.
 var supportedModels = map[string]ai.ModelOptions{
 	"qwen-flash": {
-		Label: "Qwen Flash",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      false,
-			Output:     []string{"text", "json"},
-		},
+		Label:    "Qwen Flash",
+		Supports: &textOnly,
 		Versions: []string{"qwen-flash", "qwen-flash-2025-07-28"},
 	},
 	"qwen-plus": {
-		Label: "Qwen Plus",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      false,
-			Output:     []string{"text", "json"},
-		},
+		Label:    "Qwen Plus",
+		Supports: &textOnly,
 		Versions: []string{"qwen-plus", "qwen-plus-2025-07-28", "qwen-plus-2025-09-11", "qwen-plus-2025-12-01"},
 	},
 	"qwen3.5-flash": {
-		Label: "Qwen 3.5 Flash",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      true,
-			Output:     []string{"text", "json"},
-		},
+		Label:    "Qwen 3.5 Flash",
+		Supports: &multimodal,
 		Versions: []string{"qwen3.5-flash", "qwen3.5-flash-2026-02-23"},
 	},
 	"qwen3.5-plus": {
-		Label: "Qwen 3.5 Plus",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      true,
-			Output:     []string{"text", "json"},
-		},
+		Label:    "Qwen 3.5 Plus",
+		Supports: &multimodal,
 		Versions: []string{"qwen3.5-plus", "qwen3.5-plus-2026-02-15"},
 	},
 	"qwen3.6-flash": {
-		Label: "Qwen 3.6 Flash",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      true,
-			Output:     []string{"text", "json"},
-		},
+		Label:    "Qwen 3.6 Flash",
+		Supports: &multimodal,
 		Versions: []string{"qwen3.6-flash", "qwen3.6-flash-2026-04-16"},
 	},
 	"qwen3.6-plus": {
-		Label: "Qwen 3.6 Plus",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      true,
-			Output:     []string{"text", "json"},
-		},
+		Label:    "Qwen 3.6 Plus",
+		Supports: &multimodal,
 		Versions: []string{"qwen3.6-plus", "qwen3.6-plus-2026-04-02"},
 	},
 	"qwen3.7-plus": {
-		Label: "Qwen 3.7 Plus",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      true,
-			Output:     []string{"text", "json"},
-		},
+		Label:    "Qwen 3.7 Plus",
+		Supports: &multimodal,
 		Versions: []string{"qwen3.7-plus", "qwen3.7-plus-2026-05-26"},
 	},
 	"qwen3.7-max": {
-		Label: "Qwen 3.7 Max",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      false,
-			Output:     []string{"text", "json"},
-		},
+		Label:    "Qwen 3.7 Max",
+		Supports: &textOnly,
 		Versions: []string{"qwen3.7-max", "qwen3.7-max-2026-06-08", "qwen3.7-max-2026-05-20"},
 	},
 	"qwen3-max": {
-		Label: "Qwen 3 Max",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      false,
-			Output:     []string{"text", "json"},
-		},
+		Label:    "Qwen 3 Max",
+		Supports: &textOnly,
 		Versions: []string{"qwen3-max", "qwen3-max-2026-01-23", "qwen3-max-2025-09-23", "qwen3-max-preview"},
 	},
 	"qwen3-vl-plus": {
-		Label: "Qwen 3 VL Plus",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      true,
-			Output:     []string{"text", "json"},
-		},
+		Label:    "Qwen 3 VL Plus",
+		Supports: &multimodal,
 		Versions: []string{"qwen3-vl-plus", "qwen3-vl-plus-2025-12-19", "qwen3-vl-plus-2025-09-23"},
 	},
 	"qwen3-coder-plus": {
-		Label: "Qwen 3 Coder Plus",
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      false,
-			Output:     []string{"text", "json"},
-		},
+		Label:    "Qwen 3 Coder Plus",
+		Supports: &textOnly,
 		Versions: []string{"qwen3-coder-plus", "qwen3-coder-plus-2025-07-22", "qwen3-coder-plus-2025-09-23"},
 	},
+}
+
+// dynamicModelOptions is advertised for Qwen models that resolve dynamically
+// rather than appearing in supportedModels.
+var dynamicModelOptions = ai.ModelOptions{
+	Supports: &textOnly,
+	Versions: []string{},
+	Stage:    ai.ModelStageStable,
 }
 
 // DashScope configures the Alibaba Cloud DashScope (Qwen) plugin.
@@ -306,17 +277,7 @@ func modelOptions(id string) ai.ModelOptions {
 	if opts, ok := supportedModels[id]; ok {
 		return opts
 	}
-	return ai.ModelOptions{
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			Tools:      true,
-			SystemRole: true,
-			Media:      false,
-			Output:     []string{"text", "json"},
-		},
-		Versions: []string{},
-		Stage:    ai.ModelStageStable,
-	}
+	return dynamicModelOptions
 }
 
 // ModelRef names a Qwen model and carries the config to generate with, so the
@@ -350,16 +311,6 @@ func (d *DashScope) RegisterModel(g *genkit.Genkit, id string, opts *ai.ModelOpt
 // guard against registering one twice (see [DashScope.RegisterModel]).
 func IsDefinedModel(g *genkit.Genkit, id string) bool {
 	return compat_oai.IsDefinedModel(g, provider, id)
-}
-
-// Model returns a previously registered model.
-//
-// Deprecated: Generation resolves a model from its name, so looking one up
-// first is rarely necessary: pass ai.WithModelName("dashscope/qwen-plus") or,
-// to carry config with it, [ModelRef]. Use [genkit.LookupModel] when the
-// action itself is what you need.
-func (d *DashScope) Model(g *genkit.Genkit, id string) ai.Model {
-	return genkit.LookupModel(g, compat_oai.ActionName(provider, id))
 }
 
 // ListActions lists the models the configured DashScope endpoint exposes,

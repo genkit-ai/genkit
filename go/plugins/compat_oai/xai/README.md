@@ -29,7 +29,7 @@ plugin := &xai.XAI{}
 g := genkit.Init(
     ctx,
     genkit.WithPlugins(plugin),
-    genkit.WithDefaultModel("xai/"+xai.ModelGrok45),
+    genkit.WithDefaultModel("xai/grok-4.5"),
 )
 
 response, err := genkit.Generate(ctx, g, ai.WithPrompt("Explain reinforcement learning."))
@@ -46,7 +46,7 @@ carries the config with the model ID:
 response, err := genkit.Generate(
     ctx,
     g,
-    ai.WithModel(xai.ModelRef(xai.ModelGrok43, &xai.ChatConfig{
+    ai.WithModel(xai.ModelRef("grok-4.3", &xai.ChatConfig{
         ReasoningEffort: "high",
     })),
     ai.WithPrompt("Work through this step by step."),
@@ -60,7 +60,7 @@ through as xAI documents them:
 response, err := genkit.Generate(
     ctx,
     g,
-    ai.WithModel(xai.ModelRef(xai.ModelGrok45, &xai.ChatConfig{
+    ai.WithModel(xai.ModelRef("grok-4.5", &xai.ChatConfig{
         SearchParameters: &xai.SearchParameters{
             Mode:            "on",
             ReturnCitations: openai.Ptr(true),

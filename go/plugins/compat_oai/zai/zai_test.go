@@ -51,8 +51,8 @@ func TestPluginRegistersGLMModelsAndHandlesReasoning(t *testing.T) {
 			t.Errorf("decode request: %v", err)
 			return
 		}
-		if body.Model != zai.ModelGLM51 {
-			t.Errorf("model = %q, want %q", body.Model, zai.ModelGLM51)
+		if body.Model != "glm-5.1" {
+			t.Errorf("model = %q, want %q", body.Model, "glm-5.1")
 		}
 		if got := body.Thinking["type"]; got != "enabled" {
 			t.Errorf("thinking.type = %v, want %q", got, "enabled")
@@ -103,7 +103,7 @@ func TestPluginRegistersGLMModelsAndHandlesReasoning(t *testing.T) {
 	g := genkit.Init(
 		ctx,
 		genkit.WithPlugins(plugin),
-		genkit.WithDefaultModel("zai/"+zai.ModelGLM51),
+		genkit.WithDefaultModel("zai/glm-5.1"),
 	)
 
 	if plugin.Name() != "zai" {
@@ -111,26 +111,26 @@ func TestPluginRegistersGLMModelsAndHandlesReasoning(t *testing.T) {
 	}
 
 	textModels := []string{
-		zai.ModelGLM51,
-		zai.ModelGLM5Turbo,
-		zai.ModelGLM5,
-		zai.ModelGLM47,
-		zai.ModelGLM47Flash,
-		zai.ModelGLM47FlashX,
-		zai.ModelGLM46,
-		zai.ModelGLM45,
-		zai.ModelGLM45Air,
-		zai.ModelGLM45X,
-		zai.ModelGLM45AirX,
-		zai.ModelGLM45Flash,
-		zai.ModelGLM432B0414128K,
+		"glm-5.1",
+		"glm-5-turbo",
+		"glm-5",
+		"glm-4.7",
+		"glm-4.7-flash",
+		"glm-4.7-flashx",
+		"glm-4.6",
+		"glm-4.5",
+		"glm-4.5-air",
+		"glm-4.5-x",
+		"glm-4.5-airx",
+		"glm-4.5-flash",
+		"glm-4-32b-0414-128k",
 	}
 	visionModels := []string{
-		zai.ModelGLM5VTurbo,
-		zai.ModelGLM46V,
-		zai.ModelGLM46VFlash,
-		zai.ModelGLM46VFlashX,
-		zai.ModelGLM45V,
+		"glm-5v-turbo",
+		"glm-4.6v",
+		"glm-4.6v-flash",
+		"glm-4.6v-flashx",
+		"glm-4.5v",
 	}
 	for _, group := range []struct {
 		models    []string
@@ -140,9 +140,9 @@ func TestPluginRegistersGLMModelsAndHandlesReasoning(t *testing.T) {
 		{models: visionModels, wantMedia: true},
 	} {
 		for _, modelName := range group.models {
-			model := plugin.Model(g, modelName)
+			model := genkit.LookupModel(g, "zai/"+modelName)
 			if model == nil {
-				t.Errorf("Model(%q) = nil", modelName)
+				t.Errorf("LookupModel(%q) = nil", modelName)
 				continue
 			}
 			modelMetadata := model.(api.Action).Desc().Metadata["model"].(map[string]any)
@@ -297,7 +297,7 @@ func TestPluginPreservesReasoningAcrossToolCalls(t *testing.T) {
 	g := genkit.Init(
 		ctx,
 		genkit.WithPlugins(plugin),
-		genkit.WithDefaultModel("zai/"+zai.ModelGLM51),
+		genkit.WithDefaultModel("zai/glm-5.1"),
 	)
 	lookup := genkit.DefineTool(
 		g,
@@ -348,7 +348,7 @@ func TestPluginShapesJSONAndVisionRequests(t *testing.T) {
 	}{
 		{
 			name:  "json output",
-			model: zai.ModelGLM51,
+			model: "glm-5.1",
 			options: []ai.GenerateOption{
 				ai.WithPrompt("Return a JSON object."),
 				ai.WithOutputFormat(ai.OutputFormatJSON),
@@ -366,7 +366,7 @@ func TestPluginShapesJSONAndVisionRequests(t *testing.T) {
 		},
 		{
 			name:  "vision input",
-			model: zai.ModelGLM5VTurbo,
+			model: "glm-5v-turbo",
 			options: []ai.GenerateOption{
 				ai.WithMessages(ai.NewUserMessage(
 					ai.NewMediaPart("image/png", imageDataURI),
@@ -475,7 +475,7 @@ func TestPluginRejectsUnsupportedToolChoice(t *testing.T) {
 	g := genkit.Init(
 		ctx,
 		genkit.WithPlugins(plugin),
-		genkit.WithDefaultModel("zai/"+zai.ModelGLM51),
+		genkit.WithDefaultModel("zai/glm-5.1"),
 	)
 
 	_, err := genkit.Generate(
@@ -513,9 +513,9 @@ func TestPluginRequiresAPIKey(t *testing.T) {
 // camelCase config contract including the Z.ai-specific fields.
 func TestModelRefAndConfigSchema(t *testing.T) {
 	cfg := &zai.ChatConfig{Thinking: &zai.ThinkingConfig{Type: "enabled"}}
-	for _, name := range []string{zai.ModelGLM5, "zai/" + zai.ModelGLM5} {
+	for _, name := range []string{"glm-5", "zai/glm-5"} {
 		ref := zai.ModelRef(name, cfg)
-		if want := "zai/" + zai.ModelGLM5; ref.Name() != want {
+		if want := "zai/glm-5"; ref.Name() != want {
 			t.Errorf("ModelRef(%q).Name() = %q, want %q", name, ref.Name(), want)
 		}
 		if ref.Config() != cfg {
@@ -527,7 +527,7 @@ func TestModelRefAndConfigSchema(t *testing.T) {
 	plugin := &zai.ZAI{}
 	g := genkit.Init(context.Background(), genkit.WithPlugins(plugin))
 
-	m := genkit.LookupModel(g, "zai/"+zai.ModelGLM5)
+	m := genkit.LookupModel(g, "zai/glm-5")
 	if m == nil {
 		t.Fatal("glm-5 not registered by Init")
 	}
@@ -594,7 +594,7 @@ func TestModelRefConfigReachesTheWire(t *testing.T) {
 	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
 
 	resp, err := genkit.Generate(ctx, g,
-		ai.WithModel(zai.ModelRef(zai.ModelGLM5, &zai.ChatConfig{
+		ai.WithModel(zai.ModelRef("glm-5", &zai.ChatConfig{
 			RequestConfig:   compat_oai.RequestConfig{Version: "glm-5-20260101"},
 			Temperature:     openai.Ptr(0.3),
 			MaxOutputTokens: 512,
@@ -642,7 +642,7 @@ func TestPerRequestAPIKey(t *testing.T) {
 	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
 
 	if _, err := genkit.Generate(ctx, g,
-		ai.WithModel(zai.ModelRef(zai.ModelGLM5, &zai.ChatConfig{
+		ai.WithModel(zai.ModelRef("glm-5", &zai.ChatConfig{
 			RequestConfig: compat_oai.RequestConfig{APIKey: "override-key"},
 		})),
 		ai.WithPrompt("hi"),
@@ -651,7 +651,7 @@ func TestPerRequestAPIKey(t *testing.T) {
 	}
 
 	if _, err := genkit.Generate(ctx, g,
-		ai.WithModel(zai.ModelRef(zai.ModelGLM5, nil)),
+		ai.WithModel(zai.ModelRef("glm-5", nil)),
 		ai.WithPrompt("hi"),
 	); err != nil {
 		t.Fatalf("Generate() without override error = %v", err)

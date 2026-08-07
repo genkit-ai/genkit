@@ -30,7 +30,7 @@ plugin := &kimi.Kimi{}
 g := genkit.Init(
     ctx,
     genkit.WithPlugins(plugin),
-    genkit.WithDefaultModel("kimi/"+kimi.ModelKimiK3),
+    genkit.WithDefaultModel("kimi/kimi-k3"),
 )
 
 response, err := genkit.Generate(ctx, g, ai.WithPrompt("Explain mixture-of-experts models."))
@@ -49,7 +49,7 @@ thinking can be disabled per request:
 response, err := genkit.Generate(
     ctx,
     g,
-    ai.WithModel(kimi.ModelRef(kimi.ModelKimiK26, &kimi.ChatConfig{
+    ai.WithModel(kimi.ModelRef("kimi-k2.6", &kimi.ChatConfig{
         Thinking: &kimi.ThinkingConfig{Type: "disabled"},
     })),
     ai.WithPrompt("Answer concisely."),
