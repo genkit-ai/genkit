@@ -85,10 +85,13 @@ def _first_media_url(response: Any) -> str | None:
 async def tts_speech_generator(input: SpeechInput) -> dict[str, str | None]:
     """Turn text into speech with one TTS call."""
 
+    tts_config: dict[str, Any] = {
+        'speech_config': {'voice_config': {'prebuilt_voice_config': {'voice_name': input.voice}}},
+    }
     response = await ai.generate(
         model='googleai/gemini-2.5-flash-preview-tts',
         prompt=input.text,
-        config={'speech_config': {'voice_config': {'prebuilt_voice_config': {'voice_name': input.voice}}}},
+        config=tts_config,
     )
     return {'model': 'googleai/gemini-2.5-flash-preview-tts', 'audio_url': _first_media_url(response)}
 
@@ -97,10 +100,11 @@ async def tts_speech_generator(input: SpeechInput) -> dict[str, str | None]:
 async def imagen_image_generator(input: ImageInput) -> dict[str, str | None]:
     """Generate one image with Imagen."""
 
+    imagen_config: dict[str, Any] = {'number_of_images': 1}
     response = await ai.generate(
         model='googleai/imagen-3.0-generate-002',
         prompt=input.prompt,
-        config={'number_of_images': 1},
+        config=imagen_config,
     )
     return {'model': 'googleai/imagen-3.0-generate-002', 'image_url': _first_media_url(response)}
 

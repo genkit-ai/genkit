@@ -104,10 +104,11 @@ async def test_thinking_enabled_budget_streaming(ai: Genkit) -> None:
 
 async def test_thinking_adaptive(ai: Genkit) -> None:
     """Adaptive thinking with display is accepted by Opus 4.7+ models."""
+    thinking_config: dict[str, Any] = {'thinking': {'adaptive': True, 'display': 'summarized'}}
     response = await ai.generate(
         model='anthropic/claude-opus-4-8',
         prompt='Write a one-sentence story about a robot.',
-        config={'thinking': {'adaptive': True, 'display': 'summarized'}},
+        config=thinking_config,
     )
 
     assert response.message is not None
@@ -116,10 +117,11 @@ async def test_thinking_adaptive(ai: Genkit) -> None:
 
 async def test_thinking_disabled(ai: Genkit) -> None:
     """Disabled thinking is accepted and yields no reasoning parts."""
+    thinking_config: dict[str, Any] = {'thinking': {'enabled': False}}
     response = await ai.generate(
         model='anthropic/claude-haiku-4-5',
         prompt='What is 2 + 2? Answer with just the number.',
-        config={'thinking': {'enabled': False}},
+        config=thinking_config,
     )
 
     assert response.message is not None
