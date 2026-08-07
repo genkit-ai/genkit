@@ -6,10 +6,12 @@
 """Tests for the action module."""
 
 import json
-from typing import cast
+from typing import Any, cast
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
+from genkit import Message, ModelRequest, Part, TextPart
 from genkit._core._action import (
     Action,
     ActionKind,
@@ -354,3 +356,31 @@ async def test_run_defaulted_input_arg_allows_none_with_ctx() -> None:
     assert (await action.run(input='Bob')).response == 'hi Bob'
     assert (await action.run(input=None)).response == 'hi world'
     assert (await action.run()).response == 'hi world'
+
+
+@pytest.mark.asyncio
+async def test_action_revalidates_bare_model_request_into_plugin_config() -> None:
+    """Bare ModelRequest with a dict config is re-parsed as ModelRequest[PluginConfig]."""
+
+    class PluginConfig(BaseModel):
+        model_config = ConfigDict(extra='allow')
+        api_key: str | None = None
+
+    seen: dict[str, Any] = {}
+
+    async def model_fn(request: ModelRequest[PluginConfig]) -> str:
+        seen['config'] = request.config
+        return 'ok'
+
+    action = Action(name='pluginModel', kind=ActionKind.MODEL, fn=model_fn)
+    # Mimic generate constructing a bare request that keeps the dict until Action runs.
+    request = ModelRequest(
+        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        config={'api_key': 'k'},
+    )
+    assert request.config == {'api_key': 'k'}
+
+    result = await action.run(input=request)
+    assert result.response == 'ok'
+    assert isinstance(seen['config'], PluginConfig)
+    assert seen['config'].api_key == 'k'
