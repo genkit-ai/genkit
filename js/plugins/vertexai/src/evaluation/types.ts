@@ -14,8 +14,13 @@
  * limitations under the License.
  */
 
+import type { protos } from '@google-cloud/aiplatform';
 import type { CommonPluginOptions } from '../common/types.js';
 
+/**
+ * Vertex AI Evaluation metrics. See API documentation for more information.
+ * https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/evaluation#parameter-list
+ */
 export enum VertexAIEvaluationMetricType {
   // Update genkit/docs/plugins/vertex-ai.md when modifying the list of enums
   BLEU = 'BLEU',
@@ -34,10 +39,39 @@ export enum VertexAIEvaluationMetricType {
  * for details on the possible values of `metricSpec` for each metric.
  * https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/evaluation#parameter-list
  */
-export type VertexAIEvaluationMetricConfig = {
-  type: VertexAIEvaluationMetricType;
-  metricSpec: any;
-};
+export type VertexAIEvaluationMetricConfig =
+  | {
+      type: VertexAIEvaluationMetricType.BLEU;
+      metricSpec: protos.google.cloud.aiplatform.v1.IBleuSpec;
+    }
+  | {
+      type: VertexAIEvaluationMetricType.ROUGE;
+      metricSpec: protos.google.cloud.aiplatform.v1.IRougeSpec;
+    }
+  | {
+      type: VertexAIEvaluationMetricType.FLUENCY;
+      metricSpec: protos.google.cloud.aiplatform.v1.IFluencySpec;
+    }
+  | {
+      type: VertexAIEvaluationMetricType.SAFETY;
+      metricSpec: protos.google.cloud.aiplatform.v1.ISafetySpec;
+    }
+  | {
+      type: VertexAIEvaluationMetricType.GROUNDEDNESS;
+      metricSpec: protos.google.cloud.aiplatform.v1.IGroundednessSpec;
+    }
+  | {
+      type: VertexAIEvaluationMetricType.SUMMARIZATION_QUALITY;
+      metricSpec: protos.google.cloud.aiplatform.v1.ISummarizationQualitySpec;
+    }
+  | {
+      type: VertexAIEvaluationMetricType.SUMMARIZATION_HELPFULNESS;
+      metricSpec: protos.google.cloud.aiplatform.v1.ISummarizationHelpfulnessSpec;
+    }
+  | {
+      type: VertexAIEvaluationMetricType.SUMMARIZATION_VERBOSITY;
+      metricSpec: protos.google.cloud.aiplatform.v1.ISummarizationVerbositySpec;
+    };
 
 export type VertexAIEvaluationMetric =
   | VertexAIEvaluationMetricType
