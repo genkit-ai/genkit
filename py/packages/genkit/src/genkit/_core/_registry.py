@@ -20,11 +20,11 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import warnings
 import weakref
 from collections.abc import Awaitable, Callable
 from typing import cast
 
-from dotpromptz.dotprompt import Dotprompt
 from pydantic import BaseModel
 from typing_extensions import Never, TypeVar
 
@@ -55,6 +55,17 @@ from genkit._core._typing import (
     EvalRequest,
     EvalResponse,
 )
+
+# Fires at import time for every genkit app; not actionable for app authors.
+# Must run before ``dotpromptz`` class bodies execute — this module is the
+# first importer on the common ``import genkit`` path.
+warnings.filterwarnings(
+    'ignore',
+    message='Field name "schema" .* shadows an attribute in parent',
+    category=UserWarning,
+    module=r'dotpromptz(\.|$)',
+)
+from dotpromptz.dotprompt import Dotprompt  # noqa: E402
 
 logger = get_logger(__name__)
 
