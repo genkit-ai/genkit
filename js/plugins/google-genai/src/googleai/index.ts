@@ -105,6 +105,7 @@ async function listActions(
     const apiKey = calculateApiKey(options?.apiKey, undefined);
     const allModels = await listModels(apiKey, {
       baseUrl: options?.baseUrl,
+      allowCustomBaseUrl: options?.allowCustomBaseUrl,
       apiVersion: options?.apiVersion,
     });
 

@@ -90,6 +90,16 @@ export interface GoogleAIPluginOptions {
    * Additional headers to send along with the request.
    */
   customHeaders?: Record<string, string>;
+  /**
+   * Allow per-request `baseUrl` overrides to point at an arbitrary host.
+   *
+   * Defaults to `false`. When `false`, a per-request `baseUrl` override is
+   * only honored if its host is the default Google endpoint or the host of
+   * the plugin-configured `baseUrl`. This prevents an attacker who can
+   * influence a request's config from redirecting the call (together with the
+   * `x-goog-api-key` header and the prompt body) to a host they control.
+   */
+  allowCustomBaseUrl?: boolean;
 }
 
 /**
@@ -128,6 +138,13 @@ export interface ClientOptions {
    * Base endpoint url. Defaults to "https://generativelanguage.googleapis.com"
    */
   baseUrl?: string;
+  /**
+   * When true, per-request `baseUrl` overrides may target any host. When
+   * false/undefined, overrides are restricted to the default Google endpoint
+   * or the plugin-configured `baseUrl` host. See
+   * {@link GoogleAIPluginOptions.allowCustomBaseUrl}.
+   */
+  allowCustomBaseUrl?: boolean;
   /**
    * Custom HTTP request headers.
    */
