@@ -281,7 +281,8 @@ export type DefineBackgroundModelOptions<
   CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
 > = DefineModelOptions<CustomOptionsSchema> & {
   start: (
-    request: GenerateRequest<CustomOptionsSchema>
+    request: GenerateRequest<CustomOptionsSchema>,
+    options?: BackgroundActionFnArg<unknown>
   ) => Promise<Operation<GenerateResponseData>>;
   check: (
     operation: Operation<GenerateResponseData>,
@@ -333,9 +334,9 @@ export function backgroundModel<
       },
     },
     use: middleware,
-    async start(request) {
+    async start(request, opts) {
       const startTimeMs = performance.now();
-      const response = await options.start(request);
+      const response = await options.start(request, opts);
       Object.assign(response, {
         latencyMs: performance.now() - startTimeMs,
       });
