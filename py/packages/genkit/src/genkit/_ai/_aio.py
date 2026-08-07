@@ -472,7 +472,7 @@ class Genkit:
         *,
         variant: str | None = None,
         model: ModelRef[ModelRefConfigT] | str | None = None,
-        config: ModelRefConfigT | ModelConfigDict | dict[str, Any] | None = None,
+        config: ModelRefConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
