@@ -109,7 +109,7 @@ func (b *BackgroundAction[In, Out]) Register(r api.Registry) {
 // which ones are required, is never a signature change; In is reserved for
 // future lifecycle functions typed on the action's input.
 type BackgroundActionOptions[In, Out any] struct {
-	Description  string         // Human-readable description of the action. Metadata["description"] is used if empty.
+	Description  string         // Human-readable description of the action. Metadata["description"] is used if empty; see [ActionOptions].
 	Metadata     map[string]any // Arbitrary key-value data attached to the action descriptor.
 	InputSchema  map[string]any // JSON schema for the start action's input. Inferred from In if nil.
 	OutputSchema map[string]any // JSON schema for the start action's output. Inferred if nil.

@@ -75,8 +75,12 @@ type ActionDef[In, Out, Stream any] = Action[In, Out, Stream]
 // cancel) carries them as typed options fields instead; holding those is
 // what makes such an options struct generic. See [BackgroundActionOptions].
 type ActionOptions struct {
-	// Description is a human-readable description of the action. When empty,
-	// Metadata["description"] is used if present.
+	// Description is the action's human-readable description and is the field
+	// tooling reads. When empty, Metadata["description"] is used if present,
+	// which is how the deprecated flat constructors supply one. The fallback
+	// is one-way: Metadata reaches the descriptor exactly as given, so a
+	// caller setting both to different strings gets Description on the
+	// descriptor and its own value left in the metadata map.
 	Description string
 	// Metadata is arbitrary key-value data attached to the action descriptor.
 	Metadata map[string]any

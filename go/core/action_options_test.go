@@ -56,6 +56,11 @@ func TestNewActionOf(t *testing.T) {
 		if got := a.Desc().Description; got != "explicit" {
 			t.Errorf("Description = %q, want %q", got, "explicit")
 		}
+		// The fallback is one-way: metadata reaches the descriptor as given,
+		// so the caller's key is never rewritten to match Description.
+		if got := a.Desc().Metadata["description"]; got != "from metadata" {
+			t.Errorf(`Metadata["description"] = %v, want %q`, got, "from metadata")
+		}
 	})
 
 	t.Run("description falls back to metadata", func(t *testing.T) {
