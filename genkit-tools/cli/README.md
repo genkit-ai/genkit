@@ -44,6 +44,8 @@ Available commands:
 
   evaluate a flow against configured evaluators using provided data as input
 
+**Parallelism tip:** for both `eval:run` (when your dataset already includes outputs) and `eval:flow`, setting `--batchSize` greater than 1 runs inference and evaluator actions in parallel (capped at 100). Higher values can speed up runs but may hit model/API rate limits or increase resource usage—tune according to your environment.
+
 - `config`
 
   set development environment configuration
