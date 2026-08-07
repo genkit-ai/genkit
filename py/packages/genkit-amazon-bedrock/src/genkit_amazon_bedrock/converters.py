@@ -588,7 +588,8 @@ def _coerce_map(value: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]
     return {key: _coerce_value(item, properties.get(key)) for key, item in value.items()}
 
 
-def _coerce_tool_input(name: str, value: Any, tools: list[ToolDefinition] | None) -> Any:  # noqa: ANN401
+def coerce_tool_input(name: str, value: Any, tools: list[ToolDefinition] | None) -> Any:  # noqa: ANN401
+    """Coerces a decoded tool input toward the named tool's declared schema."""
     if not isinstance(value, dict):
         return value
     for tool in tools or []:
@@ -605,19 +606,30 @@ def _reasoning_block_to_part(block: dict[str, Any]) -> Part | None:  # noqa: ANN
         signature = reasoning_text.get('signature')
         if not text and not signature:
             return None
-        return _bedrock_reasoning_part(text, signature, None)
+        return bedrock_reasoning_part(text, signature, None)
     redacted = block.get('redactedContent')
     if redacted is not None:
         if not redacted:
             return None
-        return _bedrock_reasoning_part('', None, redacted)
+        return bedrock_reasoning_part('', None, redacted)
     raise GenkitError(
         message=f'bedrock: unhandled reasoning content variant {sorted(block.keys())!r}',
         status='INTERNAL',
     )
 
 
-def _bedrock_reasoning_part(text: str, signature: str | None, redacted: bytes | None) -> Part:
+def bedrock_reasoning_part(text: str, signature: str | None, redacted: bytes | None) -> Part:
+    """Builds a reasoning part carrying the Bedrock replay metadata.
+
+    Args:
+        text: Reasoning text; empty for a redacted-only part.
+        signature: Signature string, replayed verbatim (it is a string on the
+            Converse wire, never bytes).
+        redacted: Redacted reasoning blob, stored base64-encoded.
+
+    Returns:
+        A Part wrapping a ReasoningPart.
+    """
     metadata: dict[str, Any] = {}
     if signature:
         # Also stored under the generic key so framework-level consumers see it.
@@ -653,7 +665,7 @@ def content_blocks_to_parts(
                         tool_request=ToolRequest(
                             ref=tool_use.get('toolUseId'),
                             name=tool_use.get('name') or '',
-                            input=_coerce_tool_input(tool_use.get('name') or '', tool_input, tools),
+                            input=coerce_tool_input(tool_use.get('name') or '', tool_input, tools),
                         )
                     )
                 )
