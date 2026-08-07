@@ -63,10 +63,11 @@ var (
 	// discovered Ollama models. All capabilities are enabled since local models
 	// vary widely and we can't query their capabilities individually.
 	defaultOllamaSupports = ai.ModelSupports{
-		Multiturn:  true,
-		Media:      true,
-		Tools:      true,
-		SystemRole: true,
+		Multiturn:   true,
+		Media:       true,
+		Tools:       true,
+		SystemRole:  true,
+		Constrained: ai.ConstrainedSupportNoTools,
 	}
 
 	// thinkingRegex matches <think> or <thinking> tags case-insensitively across multiple lines.
@@ -125,10 +126,11 @@ func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.M
 		modelOpts = ai.ModelOptions{
 			Label: model.Name,
 			Supports: &ai.ModelSupports{
-				Multiturn:  true,
-				SystemRole: true,
-				Media:      slices.Contains(mediaSupportedModels, model.Name),
-				Tools:      supportsTools,
+				Multiturn:   true,
+				SystemRole:  true,
+				Media:       slices.Contains(mediaSupportedModels, model.Name),
+				Tools:       supportsTools,
+				Constrained: ai.ConstrainedSupportNoTools,
 			},
 			Versions: []string{},
 		}
@@ -262,7 +264,7 @@ type ollamaModelRequest struct {
 	Model  string   `json:"model"`
 	Prompt string   `json:"prompt"`
 	Stream bool     `json:"stream"`
-	Format string   `json:"format,omitempty"`
+	Format any      `json:"format,omitempty"`
 }
 
 // Tool definition from Ollama API
@@ -413,13 +415,15 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 	}
 
 	if !isChatModel {
-		payload = ollamaModelRequest{
+		modelReq := ollamaModelRequest{
 			Model:  g.model.Name,
 			Prompt: concatMessages(input, []ai.Role{ai.RoleUser, ai.RoleModel, ai.RoleTool}),
 			System: concatMessages(input, []ai.Role{ai.RoleSystem}),
 			Images: images,
 			Stream: stream,
 		}
+		modelReq.Format = ollamaFormatValue(input.Output)
+		payload = modelReq
 	} else {
 		var messages []*ollamaMessage
 		// Translate all messages to ollama message format.
@@ -449,6 +453,7 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			}
 			chatReq.Tools = tools
 		}
+		chatReq.Format = ollamaFormatValue(input.Output)
 		payload = chatReq
 	}
 
@@ -494,10 +499,10 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 		} else {
 			response, err = translateModelResponse(body)
 		}
-		response.Request = input
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse response: %v", err)
 		}
+		response.Request = input
 		return response, nil
 	} else {
 		var chunks []*ai.ModelResponseChunk
@@ -541,6 +546,185 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 		return finalResponse, nil // Return the final merged response
 
 	}
+}
+
+// ollamaFormatValue returns the value for the Ollama API's format field when
+// native constrained output is active, or nil when the framework chose prompt
+// injection (e.g. tools are present or the caller opted out). Passing nil
+// leaves the format field absent from the request, which is correct in both
+// the prompt-injection case and plain text output.
+func ollamaFormatValue(output *ai.ModelOutputConfig) any {
+	if output == nil || !output.Constrained {
+		return nil
+	}
+	if len(output.Schema) > 0 {
+		return resolveSchemaRefs(output.Schema)
+	}
+	return ai.OutputFormatJSON
+}
+
+// resolveSchemaRefs returns a copy of schema with $ref pointers inlined from
+// the top-level $defs / definitions map where possible. Ollama's constrained
+// output engine does not resolve JSON Schema references itself, so schemas
+// supplied through WithOutputSchema or a registered schema can therefore be
+// flattened before forwarding. Schemas inferred from Go types are already
+// emitted without references.
+func resolveSchemaRefs(schema map[string]any) map[string]any {
+	defs, _ := schema["$defs"].(map[string]any)
+	definitions, _ := schema["definitions"].(map[string]any)
+	if len(defs) == 0 && len(definitions) == 0 {
+		return schema
+	}
+	visited := make(map[string]bool)
+	result, _ := inlineSchemaRefs(schema, defs, definitions, visited).(map[string]any)
+	if result == nil {
+		return schema
+	}
+	if !hasLocalRefsOutsideDefs(result) {
+		cloned := make(map[string]any, len(result))
+		for k, v := range result {
+			cloned[k] = v
+		}
+		result = cloned
+		delete(result, "$defs")
+		delete(result, "definitions")
+	}
+	return result
+}
+
+// inlineSchemaRefs recursively replaces $ref nodes with the definition they
+// reference. Annotation siblings are copied onto the resolved definition.
+// Structural siblings cannot be represented by a simple merge because modern
+// JSON Schema applies them together with the referenced schema, so those refs
+// are left intact. Non-map definitions, unknown refs, and cycles are also left
+// in place. visited tracks refs on the current DFS stack to terminate cycles.
+func inlineSchemaRefs(v any, defs, definitions map[string]any, visited map[string]bool) any {
+	switch node := v.(type) {
+	case map[string]any:
+		if ref, ok := node["$ref"].(string); ok {
+			def, found := schemaRefTarget(ref, defs, definitions)
+			defMap, isMap := def.(map[string]any)
+			if found && isMap && !visited[ref] && hasOnlyAnnotationSiblings(node) {
+				visited[ref] = true
+				resolved, _ := inlineSchemaRefs(defMap, defs, definitions, visited).(map[string]any)
+				delete(visited, ref)
+				if resolved == nil {
+					return node
+				}
+				// Annotation siblings describe the reference site and can safely
+				// be overlaid on the resolved definition.
+				if len(node) > 1 {
+					merged := make(map[string]any, len(resolved)+len(node))
+					for k, val := range resolved {
+						merged[k] = val
+					}
+					for k, val := range node {
+						if k != "$ref" {
+							merged[k] = inlineSchemaRefs(val, defs, definitions, visited)
+						}
+					}
+					return merged
+				}
+				return resolved
+			}
+			// Non-map def (boolean schema), unknown $ref, or cycle: leave in place.
+			return node
+		}
+		result := make(map[string]any, len(node))
+		for k, val := range node {
+			result[k] = inlineSchemaRefs(val, defs, definitions, visited)
+		}
+		return result
+	case []any:
+		result := make([]any, len(node))
+		for i, item := range node {
+			result[i] = inlineSchemaRefs(item, defs, definitions, visited)
+		}
+		return result
+	case []map[string]any:
+		result := make([]any, len(node))
+		for i, item := range node {
+			result[i] = inlineSchemaRefs(item, defs, definitions, visited)
+		}
+		return result
+	default:
+		return v
+	}
+}
+
+func schemaRefTarget(ref string, defs, definitions map[string]any) (any, bool) {
+	var encodedName string
+	var pool map[string]any
+	switch {
+	case strings.HasPrefix(ref, "#/$defs/"):
+		encodedName = strings.TrimPrefix(ref, "#/$defs/")
+		pool = defs
+	case strings.HasPrefix(ref, "#/definitions/"):
+		encodedName = strings.TrimPrefix(ref, "#/definitions/")
+		pool = definitions
+	default:
+		return nil, false
+	}
+	// Only direct entries in the definition maps are supported. A raw slash
+	// denotes a deeper JSON Pointer path; escaped slashes remain valid names.
+	if encodedName == "" || strings.Contains(encodedName, "/") {
+		return nil, false
+	}
+	name := strings.ReplaceAll(encodedName, "~1", "/")
+	name = strings.ReplaceAll(name, "~0", "~")
+	def, ok := pool[name]
+	return def, ok
+}
+
+func hasOnlyAnnotationSiblings(node map[string]any) bool {
+	for key := range node {
+		if key != "$ref" && key != "$defs" && key != "definitions" && !isSchemaAnnotation(key) {
+			return false
+		}
+	}
+	return true
+}
+
+func isSchemaAnnotation(key string) bool {
+	switch key {
+	case "description", "title", "default", "examples", "deprecated", "readOnly", "writeOnly":
+		return true
+	default:
+		return false
+	}
+}
+
+// hasLocalRefsOutsideDefs reports whether v still contains a local JSON Schema
+// reference outside the definition blocks. If any remain after inlining, keep
+// $defs / definitions attached so the schema does not contain dangling refs.
+func hasLocalRefsOutsideDefs(v any) bool {
+	switch node := v.(type) {
+	case map[string]any:
+		if ref, ok := node["$ref"].(string); ok && strings.HasPrefix(ref, "#/") {
+			return true
+		}
+		for key, val := range node {
+			if key == "$defs" || key == "definitions" {
+				continue
+			}
+			if hasLocalRefsOutsideDefs(val) {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range node {
+			if hasLocalRefsOutsideDefs(item) {
+				return true
+			}
+		}
+	case []map[string]any:
+		for _, item := range node {
+			if hasLocalRefsOutsideDefs(item) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // convertTools converts Genkit tool definitions to Ollama tool format

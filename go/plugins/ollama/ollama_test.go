@@ -21,10 +21,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/genkit"
 )
 
 var _ api.Plugin = (*Ollama)(nil)
@@ -298,6 +300,316 @@ func TestDynamicPlugin(t *testing.T) {
 			t.Errorf("newModel() name = %q, want %q", desc.Name, "ollama/test-model")
 		}
 	})
+}
+
+func TestDefaultSupports(t *testing.T) {
+	if defaultOllamaSupports.Constrained != ai.ConstrainedSupportNoTools {
+		t.Errorf("defaultOllamaSupports.Constrained = %q, want %q",
+			defaultOllamaSupports.Constrained, ai.ConstrainedSupportNoTools)
+	}
+}
+
+func TestDefineModelSupports(t *testing.T) {
+	t.Run("preserves nil Supports in custom options", func(t *testing.T) {
+		o := &Ollama{ServerAddress: "http://localhost:11434"}
+		g := genkit.Init(context.Background(), genkit.WithPlugins(o))
+		model := o.DefineModel(g, ModelDefinition{Name: "llama3.1", Type: "chat"}, &ai.ModelOptions{Label: "custom label"})
+		action, ok := model.(api.Action)
+		if !ok {
+			t.Fatal("DefineModel() result does not implement api.Action")
+		}
+
+		supports := modelSupportsFromAction(t, action)
+		if supports.Tools {
+			t.Error("Supports.Tools = true, want false when custom options omit Supports")
+		}
+		if supports.Constrained != "" {
+			t.Errorf("Supports.Constrained = %q, want empty legacy value", supports.Constrained)
+		}
+	})
+
+	t.Run("preserves explicit Supports", func(t *testing.T) {
+		o := &Ollama{ServerAddress: "http://localhost:11434"}
+		g := genkit.Init(context.Background(), genkit.WithPlugins(o))
+		explicit := &ai.ModelSupports{Multiturn: true, Tools: false, Constrained: ai.ConstrainedSupportNone}
+		model := o.DefineModel(g, ModelDefinition{Name: "llama3.1", Type: "chat"}, &ai.ModelOptions{
+			Label:    "custom label",
+			Supports: explicit,
+		})
+		action, ok := model.(api.Action)
+		if !ok {
+			t.Fatal("DefineModel() result does not implement api.Action")
+		}
+
+		supports := modelSupportsFromAction(t, action)
+		if supports.Tools {
+			t.Error("Supports.Tools = true, want explicit false")
+		}
+		if supports.Constrained != ai.ConstrainedSupportNone {
+			t.Errorf("Supports.Constrained = %q, want %q", supports.Constrained, ai.ConstrainedSupportNone)
+		}
+	})
+}
+
+func modelSupportsFromAction(t *testing.T, action api.Action) ai.ModelSupports {
+	t.Helper()
+	modelMeta, ok := action.Desc().Metadata["model"].(map[string]any)
+	if !ok {
+		t.Fatal("action metadata missing model map")
+	}
+	supports, ok := modelMeta["supports"].(map[string]any)
+	if !ok {
+		t.Fatal("action metadata missing supports map")
+	}
+	tools, ok := supports["tools"].(bool)
+	if !ok {
+		t.Fatalf("action metadata tools has type %T, want bool", supports["tools"])
+	}
+	constrained, ok := supports["constrained"].(ai.ConstrainedSupport)
+	if !ok {
+		t.Fatalf("action metadata constrained has type %T, want ai.ConstrainedSupport", supports["constrained"])
+	}
+	return ai.ModelSupports{
+		Tools:       tools,
+		Constrained: constrained,
+	}
+}
+
+func TestGenerate_StructuredOutput(t *testing.T) {
+	// chatResponse is a minimal valid Ollama /api/chat response.
+	chatResponse := `{"model":"llama3","created_at":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":"{\"answer\":\"42\"}"}}`
+	// generateResponse is a minimal valid Ollama /api/generate response.
+	generateResponse := `{"model":"llama3","created_at":"2024-01-01T00:00:00Z","response":"{\"answer\":\"42\"}"}`
+
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+	}
+	refSchema := map[string]any{
+		"$defs": map[string]any{
+			"Answer": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"answer": map[string]any{"type": "string"},
+				},
+			},
+		},
+		"$ref": "#/$defs/Answer",
+	}
+	flattenedRefSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+	}
+
+	tests := []struct {
+		name       string
+		modelType  string
+		output     *ai.ModelOutputConfig
+		tools      []*ai.ToolDefinition
+		wantFormat any // nil → format key must be absent; non-nil → format key must equal this value
+		mockBody   string
+	}{
+		{
+			name:       "chat model, schema-constrained JSON output",
+			modelType:  "chat",
+			output:     &ai.ModelOutputConfig{Format: "json", Schema: schema, Constrained: true},
+			wantFormat: schema,
+			mockBody:   chatResponse,
+		},
+		{
+			name:       "chat model, referenced schema is flattened",
+			modelType:  "chat",
+			output:     &ai.ModelOutputConfig{Format: "json", Schema: refSchema, Constrained: true},
+			wantFormat: flattenedRefSchema,
+			mockBody:   chatResponse,
+		},
+		{
+			// When Constrained=false the framework chose prompt injection; format must not be sent.
+			name:      "chat model, Format=json but Constrained=false → format absent",
+			modelType: "chat",
+			output:    &ai.ModelOutputConfig{Format: "json"},
+			mockBody:  chatResponse,
+		},
+		{
+			// Tools + JSON: ConstrainedSupportNoTools means framework sets Constrained=false.
+			// Plugin must not send format alongside tools.
+			name:      "chat model, tools present + Constrained=false → format absent",
+			modelType: "chat",
+			output:    &ai.ModelOutputConfig{Format: "json"},
+			tools: []*ai.ToolDefinition{
+				{Name: "mytool", Description: "a tool", InputSchema: map[string]any{"type": "object"}},
+			},
+			mockBody: chatResponse,
+		},
+		{
+			name:      "chat model, no output config → format absent",
+			modelType: "chat",
+			output:    nil,
+			mockBody:  chatResponse,
+		},
+		{
+			name:       "non-chat model, schema-constrained JSON output",
+			modelType:  "text",
+			output:     &ai.ModelOutputConfig{Format: "json", Schema: schema, Constrained: true},
+			wantFormat: schema,
+			mockBody:   generateResponse,
+		},
+		{
+			// Constrained=true but no schema: safety fallback sends "json" string.
+			name:       "chat model, Constrained=true without schema → format:\"json\"",
+			modelType:  "chat",
+			output:     &ai.ModelOutputConfig{Constrained: true},
+			wantFormat: "json",
+			mockBody:   chatResponse,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedBody map[string]any
+
+			wantPath := "/api/generate"
+			if tt.modelType == "chat" {
+				wantPath = "/api/chat"
+			}
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != wantPath {
+					t.Errorf("unexpected path: got %s, want %s", r.URL.Path, wantPath)
+				}
+				if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
+					t.Errorf("failed to decode request body: %v", err)
+				}
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(tt.mockBody))
+			}))
+			defer server.Close()
+
+			gen := &generator{
+				model:         ModelDefinition{Name: "llama3", Type: tt.modelType},
+				serverAddress: server.URL,
+				timeout:       5,
+			}
+			req := &ai.ModelRequest{
+				Messages: []*ai.Message{
+					{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("hello")}},
+				},
+				Output: tt.output,
+				Tools:  tt.tools,
+			}
+
+			_, err := gen.generate(context.Background(), req, nil)
+			if err != nil {
+				t.Fatalf("generate() error: %v", err)
+			}
+
+			gotFormat, hasFormat := capturedBody["format"]
+			if tt.wantFormat == nil {
+				if hasFormat {
+					t.Errorf("expected \"format\" key to be absent, got: %v", gotFormat)
+				}
+				return
+			}
+
+			if !hasFormat {
+				t.Fatalf("expected \"format\" key in request body, but it was absent")
+			}
+
+			switch want := tt.wantFormat.(type) {
+			case string:
+				if got, ok := gotFormat.(string); !ok || got != want {
+					t.Errorf("format = %v (%T), want string %q", gotFormat, gotFormat, want)
+				}
+			case map[string]any:
+				gotMap, ok := gotFormat.(map[string]any)
+				if !ok {
+					t.Fatalf("format = %v (%T), want map[string]any", gotFormat, gotFormat)
+				}
+				if !reflect.DeepEqual(gotMap, want) {
+					t.Errorf("format = %#v, want %#v", gotMap, want)
+				}
+			}
+		})
+	}
+}
+
+func TestGenerateStructuredOutputWiring(t *testing.T) {
+	refSchema := map[string]any{
+		"$defs": map[string]any{
+			"Answer": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"answer": map[string]any{"type": "string"},
+				},
+				"required": []any{"answer"},
+			},
+		},
+		"$ref": "#/$defs/Answer",
+	}
+	flattenedSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+		"required": []any{"answer"},
+	}
+
+	tests := []struct {
+		name       string
+		withTool   bool
+		wantFormat any
+	}{
+		{name: "framework enables native constrained output", wantFormat: flattenedSchema},
+		{name: "framework uses prompt injection when tools are present", withTool: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedBody map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
+					t.Errorf("failed to decode request body: %v", err)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"model":"llama3.1","message":{"role":"assistant","content":"{\"answer\":\"42\"}"},"done":true}`))
+			}))
+			defer server.Close()
+
+			o := &Ollama{ServerAddress: server.URL}
+			g := genkit.Init(t.Context(), genkit.WithPlugins(o))
+			model := o.DefineModel(g, ModelDefinition{Name: "llama3.1", Type: "chat"}, nil)
+
+			opts := []ai.GenerateOption{
+				ai.WithModel(model),
+				ai.WithPrompt("give me the answer"),
+				ai.WithOutputSchema(refSchema),
+			}
+			if tt.withTool {
+				tool := genkit.DefineTool(g, "noop", "does nothing",
+					func(*ai.ToolContext, struct{}) (string, error) { return "ok", nil })
+				opts = append(opts, ai.WithTools(tool))
+			}
+
+			if _, err := genkit.Generate(t.Context(), g, opts...); err != nil {
+				t.Fatalf("Generate() error: %v", err)
+			}
+
+			gotFormat, hasFormat := capturedBody["format"]
+			if tt.wantFormat == nil {
+				if hasFormat {
+					t.Fatalf("format = %#v, want field omitted", gotFormat)
+				}
+				return
+			}
+			if !hasFormat || !reflect.DeepEqual(gotFormat, tt.wantFormat) {
+				t.Fatalf("format = %#v, want %#v", gotFormat, tt.wantFormat)
+			}
+		})
+	}
 }
 
 func TestParseThinking(t *testing.T) {
