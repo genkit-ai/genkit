@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { GenkitError, z } from 'genkit';
+import { GenkitError, z, type ActionContext } from 'genkit';
 import { GoogleAuth } from 'google-auth-library';
 import {
   isMultiRegionalLocation,
@@ -364,6 +364,74 @@ export function calculateRequestOptions<T extends z.ZodObject<any, any, any>>(
   } else if (reqConfig?.apiKey && typeof reqConfig.apiKey == 'string') {
     // Regional or Global can still use APIKey for billing (not auth)
     newOptions.apiKey = reqConfig.apiKey;
+  }
+  return newOptions;
+}
+
+const VERTEX_API_VERSIONS = ['v1', 'v1beta1'] as const;
+function isVertexApiVersion(
+  value: unknown
+): value is (typeof VERTEX_API_VERSIONS)[number] {
+  return (
+    typeof value === 'string' &&
+    (VERTEX_API_VERSIONS as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * Applies connection-related overrides carried in the action run context
+ * (e.g. `options.context` on `start`/`check`/`cancel` for background models)
+ * on top of the given client options. This is the mechanism by which callers
+ * can supply per-call `apiKey`, `apiVersion`, and `location` overrides for
+ * calls (like `checkOperation`/`cancelOperation`) that don't have access to
+ * the original request's `config`.
+ *
+ * Context fields take precedence over whatever is already in `clientOptions`.
+ *
+ * @param clientOptions The base client options to apply overrides on top of.
+ * @param context The action run context (`options.context`), if any.
+ */
+export function applyContextOverrides(
+  clientOptions: ClientOptions,
+  context?: ActionContext
+): ClientOptions {
+  if (!context) {
+    return clientOptions;
+  }
+  let newOptions = { ...clientOptions };
+  if (context.apiVersion !== undefined) {
+    if (!isVertexApiVersion(context.apiVersion)) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: `context.apiVersion must be one of ${VERTEX_API_VERSIONS.join(', ')}, got: ${context.apiVersion}`,
+      });
+    }
+    newOptions.apiVersion = context.apiVersion;
+  }
+  if (
+    typeof context.location === 'string' &&
+    newOptions.kind != 'express' &&
+    newOptions.location != context.location
+  ) {
+    if (context.location == 'global') {
+      newOptions.location = 'global';
+      newOptions.kind = 'global';
+    } else if (isMultiRegionalLocation(context.location)) {
+      newOptions.kind = 'multi-regional';
+      newOptions.location = context.location;
+    } else {
+      newOptions.kind = 'regional';
+      newOptions.location = context.location;
+    }
+  }
+  const contextApiKey = context.auth?.apiKey;
+  if (typeof contextApiKey === 'string') {
+    if (newOptions.kind == 'express') {
+      newOptions.apiKey = calculateApiKey(newOptions.apiKey, contextApiKey);
+    } else {
+      // Regional or Global can still use APIKey for billing (not auth)
+      newOptions.apiKey = contextApiKey;
+    }
   }
   return newOptions;
 }

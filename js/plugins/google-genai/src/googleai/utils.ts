@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { GenerateRequest, GenkitError, z } from 'genkit';
+import { GenerateRequest, GenkitError, z, type ActionContext } from 'genkit';
 import process from 'process';
 import { extractMedia } from '../common/utils.js';
 import { ClientOptions, ImagenInstance, VeoImage, VeoVideo } from './types.js';
@@ -224,4 +224,40 @@ export function removeClientOptionOverrides<
   delete newConfig?.customHeaders;
 
   return newConfig;
+}
+
+/**
+ * Applies connection-related overrides carried in the action run context
+ * (e.g. `options.context` on `start`/`check`/`cancel` for background models)
+ * on top of the given client options. This is the mechanism by which callers
+ * can supply per-call `apiKey`, `apiVersion`, and `baseUrl` overrides for
+ * calls (like `checkOperation`/`cancelOperation`) that don't have access to
+ * the original request's `config`.
+ *
+ * Context fields take precedence over whatever is already in `clientOptions`.
+ *
+ * @param clientOptions The base client options to apply overrides on top of.
+ * @param context The action run context (`options.context`), if any.
+ */
+export function applyContextOverrides(
+  clientOptions: ClientOptions,
+  context?: ActionContext
+): ClientOptions {
+  if (!context) {
+    return clientOptions;
+  }
+
+  let newOptions = { ...clientOptions };
+
+  if (typeof context.auth?.apiKey === 'string') {
+    newOptions.apiKey = context.auth.apiKey;
+  }
+  if (typeof context.apiVersion === 'string') {
+    newOptions.apiVersion = context.apiVersion;
+  }
+  if (typeof context.baseUrl === 'string') {
+    newOptions.baseUrl = context.baseUrl;
+  }
+
+  return newOptions;
 }

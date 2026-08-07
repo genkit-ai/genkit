@@ -108,12 +108,12 @@ describe('Vertex AI Veo', () => {
       start: (
         request: GenerateRequest<typeof VeoConfigSchema>
       ) => Promise<Operation>;
-      check: (operation: Operation) => Promise<Operation>;
+      check: (operation: Operation, options?: any) => Promise<Operation>;
     } {
       const model = defineModel(modelName, clientOptions);
       return {
         start: (req) => model.start(req),
-        check: (op) => model.check(op),
+        check: (op, options) => model.check(op, options),
       };
     }
 
@@ -199,6 +199,23 @@ describe('Vertex AI Veo', () => {
         controller.abort();
         sinon.assert.calledOnce(abortSpy);
       });
+
+      it('should apply apiKey override from options.context', async () => {
+        mockFetchResponse({ name: 'operations/ctx-key', done: false });
+
+        const { start } = captureModelRunner(defaultRegionalClientOptions);
+        await await defineModel(modelName, defaultRegionalClientOptions).start(
+          request,
+          { context: { auth: { apiKey: 'context-api-key' } } }
+        );
+
+        sinon.assert.calledOnce(fetchStub);
+        const fetchArgs = fetchStub.lastCall.args;
+        assert.strictEqual(
+          fetchArgs[1].headers['x-goog-api-key'],
+          'context-api-key'
+        );
+      });
     });
 
     describe('check()', () => {
@@ -259,27 +276,34 @@ describe('Vertex AI Veo', () => {
         );
       });
 
-      it('should use clientOptions from operation metadata if available', async () => {
-        const opClientOptions: ClientOptions = {
-          kind: 'regional',
-          projectId: 'op-project',
-          location: 'europe-west1',
-          authClient: authMock as any,
-        };
-        const opWithClientOptions: Operation = {
-          ...pendingOp,
-          metadata: { clientOptions: opClientOptions },
-        };
+      it('should apply location override from options.context', async () => {
         mockFetchResponse({ name: operationId, done: true });
 
         const { check } = captureModelRunner(defaultRegionalClientOptions);
-        await check(opWithClientOptions);
+        await check(pendingOp, {
+          context: { location: 'europe-west1' },
+        });
 
         sinon.assert.calledOnce(fetchStub);
         const fetchArgs = fetchStub.lastCall.args;
         const url = fetchArgs[0];
         assert.ok(url.includes('europe-west1'));
-        assert.ok(url.includes('op-project'));
+      });
+
+      it('should apply apiKey override from options.context', async () => {
+        mockFetchResponse({ name: operationId, done: true });
+
+        const { check } = captureModelRunner(defaultRegionalClientOptions);
+        await check(pendingOp, {
+          context: { auth: { apiKey: 'context-api-key' } },
+        });
+
+        sinon.assert.calledOnce(fetchStub);
+        const fetchArgs = fetchStub.lastCall.args;
+        assert.strictEqual(
+          fetchArgs[1].headers['x-goog-api-key'],
+          'context-api-key'
+        );
       });
     });
   });

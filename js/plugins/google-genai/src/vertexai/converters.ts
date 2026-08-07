@@ -41,7 +41,6 @@ import {
 } from './imagen.js';
 import { LyriaConfigSchemaType } from './lyria.js';
 import {
-  ClientOptions,
   LyriaInstance,
   LyriaParameters,
   LyriaPredictRequest,
@@ -431,15 +430,11 @@ export function toVeoMedia(media: MediaPart['media']): VeoMedia {
 }
 
 export function fromVeoOperation(
-  fromOp: VeoOperation,
-  clientOpt?: ClientOptions
+  fromOp: VeoOperation
 ): Operation<GenerateResponseData> {
   const toOp: Operation<GenerateResponseData> = { id: fromOp.name };
   if (fromOp.done !== undefined) {
     toOp.done = fromOp.done;
-  }
-  if (clientOpt) {
-    toOp.metadata = { clientOptions: clientOpt };
   }
   if (fromOp.error) {
     toOp.error = { message: fromOp.error.message };
@@ -488,11 +483,4 @@ export function toVeoOperationRequest(
   return {
     operationName: op.id,
   };
-}
-
-export function toVeoClientOptions(
-  op: Operation<GenerateResponseData>,
-  clientOpt: ClientOptions
-): ClientOptions {
-  return op.metadata?.clientOptions ?? clientOpt;
 }
