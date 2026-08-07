@@ -846,7 +846,7 @@ class Genkit:
         async def _run_server() -> None:
             v2_url = os.environ.get('GENKIT_REFLECTION_V2_SERVER')
             if v2_url:
-                await logger.ainfo(f'Genkit Dev UI reflection v2 client connecting to {v2_url}')
+                await logger.adebug(f'Genkit Dev UI reflection v2 client connecting to {v2_url}')
                 server_v2 = ReflectionServerV2(self.registry, v2_url)
                 self._reflection_ready.set()
                 await server_v2.run_forever()
@@ -895,7 +895,7 @@ class Genkit:
                     return
 
                 runtime_manager.write_runtime_file()
-                await logger.ainfo(f'Genkit Dev UI reflection server running at {spec.url}')
+                await logger.adebug(f'Genkit Dev UI reflection server running at {spec.url}')
                 await server_task
 
         threading.Thread(
@@ -912,7 +912,7 @@ class Genkit:
             self.define_format(fmt)
 
         if not plugins:
-            logger.warning('No plugins provided to Genkit')
+            logger.debug('No plugins provided to Genkit')
         else:
             for plugin in plugins:
                 if isinstance(plugin, Plugin):  # pyright: ignore[reportUnnecessaryIsInstance]
@@ -931,22 +931,22 @@ class Genkit:
     def run_main(self, coro: Coroutine[Any, Any, T]) -> T | None:
         """Run the user's main coroutine, blocking in dev mode for the reflection server."""
         if not is_dev_environment():
-            logger.info('Running in production mode.')
             return run_loop(coro)
-
-        logger.info('Running in development mode.')
 
         async def dev_runner() -> T | None:
             user_result: T | None = None
             try:
                 user_result = await coro
                 logger.debug('User coroutine completed successfully.')
-            except Exception:
-                logger.exception('User coroutine failed')
+            except Exception as e:
+                # Script entrypoint failed — there's no Dev UI panel for this run,
+                # so keep a headline + a debug traceback.
+                logger.error('Startup failed: %s: %s', type(e).__name__, e)
+                logger.debug('Startup failure details', exc_info=True)
 
             # Block until Ctrl+C (SIGINT handled by anyio) or SIGTERM, keeping
             # the daemon reflection thread alive.
-            logger.info('Script done — Dev UI running. Press Ctrl+C to stop.')
+            logger.info('Dev UI ready. Press Ctrl+C to stop.')
             try:
                 async with anyio.create_task_group() as tg:
 
@@ -961,7 +961,7 @@ class Genkit:
             except anyio.get_cancelled_exc_class():
                 pass
 
-            logger.info('Dev UI server stopped.')
+            logger.debug('Dev UI server stopped.')
             return user_result
 
         return anyio.run(dev_runner)
