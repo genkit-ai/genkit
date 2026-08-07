@@ -47,7 +47,7 @@ from genkit._core._action import (
     ActionRunContext,
 )
 from genkit._core._error import GenkitError
-from genkit._core._logger import get_logger
+from genkit._core._logger import get_logger, is_debug_enabled
 from genkit._core._middleware import (
     BaseMiddleware,
     GenerateHookParams,
@@ -391,24 +391,57 @@ def _augment_with_context(
 # parameters (e.g. "data:audio/L16;codec=pcm;rate=24000;base64,").
 _DATA_URI_RE = re.compile(r'data:[^,]{0,200},(?=.{100})', re.ASCII)
 
+# Longest string kept intact when serializing a response for debug logs.
+_MAX_LOGGED_STR_LEN = 8192
 
-def _redact_data_uris(obj: Any) -> Any:  # noqa: ANN401
-    """Recursively truncate long ``data:`` URIs in a serialized dict/list.
+# Tighter limit inside subtrees carrying the provider's own payload.
+_PROVIDER_STR_LEN = 1024
+_PROVIDER_FIELDS = frozenset({'custom', 'raw'})
 
-    Replaces values like ``data:image/png;base64,iVBORw0KGgo...`` with
-    ``data:image/png;base64,...<12345 bytes>`` so debug logs stay readable
-    when requests contain inline images or other binary media.
+# Most list items kept when serializing a response for debug logs.
+_MAX_LOGGED_LIST_LEN = 100
+
+
+def _redact_large_values(obj: Any, limit: int = _MAX_LOGGED_STR_LEN) -> Any:  # noqa: ANN401
+    """Recursively shrink oversized values in a serialized dict/list.
+
+    Data URIs keep their media type and drop the payload
+    (``data:image/png;base64,...<12345 chars>``); other over-long strings keep
+    their leading characters; binary values collapse to their size; over-long
+    lists keep their leading items. ``custom`` and ``raw`` subtrees use
+    ``_PROVIDER_STR_LEN`` so a provider blob costs less than model output.
+
+    Args:
+        obj: Value from a ``model_dump()``, walked recursively.
+        limit: Longest string kept intact within this subtree.
+
+    Returns:
+        The value with oversized leaves replaced by a truncated form that
+        reports how much was dropped.
     """
     if isinstance(obj, str):
         m = _DATA_URI_RE.match(obj)
         if m:
-            return f'{m.group()}...<{len(obj) - m.end()} bytes>'
+            return f'{m.group()}...<{len(obj) - m.end()} chars>'
+        if len(obj) > limit:
+            return f'{obj[:limit]}...<{len(obj) - limit} chars>'
         return obj
+    if isinstance(obj, (bytes, bytearray, memoryview)):
+        return f'<{len(obj)} bytes>'
     if isinstance(obj, dict):
-        return {k: _redact_data_uris(v) for k, v in obj.items()}
+        return {
+            k: _redact_large_values(v, _PROVIDER_STR_LEN if k in _PROVIDER_FIELDS else limit) for k, v in obj.items()
+        }
     if isinstance(obj, list):
-        return [_redact_data_uris(v) for v in obj]
+        head = [_redact_large_values(v, limit) for v in obj[:_MAX_LOGGED_LIST_LEN]]
+        dropped = len(obj) - len(head)
+        return [*head, f'...<{dropped} more items>'] if dropped else head
     return obj
+
+
+def _loggable_response(response: ModelResponse) -> dict[str, Any]:
+    """Serialize a response for debug logging with oversized values shrunk."""
+    return _redact_large_values(response.model_dump())
 
 
 def raise_if_aborted(abort_signal: asyncio.Event) -> None:
@@ -764,10 +797,8 @@ async def _generate_action_turn(
         if schema_type:
             response._schema_type = schema_type
 
-        logger.debug(
-            'generate response',
-            response=_redact_data_uris(response.model_dump()),
-        )
+        if is_debug_enabled(logger):
+            logger.debug('generate response', response=_loggable_response(response))
 
         response.assert_valid()
         generated_msg = response.message

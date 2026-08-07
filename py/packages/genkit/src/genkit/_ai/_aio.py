@@ -173,6 +173,8 @@ class Genkit:
         prompt_dir: str | Path | None = None,
         reflection_server_spec: ServerSpec | None = None,
     ) -> None:
+        # Before anything that logs, so plugin initialization is covered too.
+        configure_logging()
         self.registry: Registry = Registry()
         self._reflection_server_spec: ServerSpec | None = reflection_server_spec
         self._reflection_ready = threading.Event()
@@ -180,7 +182,6 @@ class Genkit:
         # Ensure the default generate action is registered for async usage.
         define_generate_action(self.registry)
         self._register_plugin_middleware(plugins)
-        configure_logging()
         # In dev mode, start the reflection server immediately in a background
         # daemon thread so it's available regardless of which web framework (or
         # none) the user chooses.
