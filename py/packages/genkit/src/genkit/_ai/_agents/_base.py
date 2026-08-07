@@ -326,7 +326,7 @@ def define_agent(
     system: str | list[Part] | None = None,
     tools: Sequence[str | Tool] | None = None,
     use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
-    config: ModelRefConfigT | ModelConfigDict | dict[str, Any] | None = None,
+    config: ModelRefConfigT | ModelConfigDict | Mapping[str, Any] | None = None,
     max_turns: int | None = None,
     description: str | None = None,
     metadata: dict[str, object] | None = None,
