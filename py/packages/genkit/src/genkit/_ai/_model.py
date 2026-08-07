@@ -91,6 +91,14 @@ def normalize_config(*, config: object) -> dict[str, Any]:
     raise TypeError(f'Unsupported config type: {type(config).__name__}')
 
 
+def concrete_config_schema(*candidates: object) -> type[BaseModel] | None:
+    """Return the first concrete BaseModel subclass among candidates."""
+    for candidate in candidates:
+        if isinstance(candidate, type) and issubclass(candidate, BaseModel) and candidate is not BaseModel:
+            return candidate
+    return None
+
+
 def resolve_model_name(
     *,
     model: str | None,
@@ -105,19 +113,10 @@ def resolve_model_name(
 
 
 def resolve_model_ref(*, model: ModelRef[Any], config: dict[str, Any]) -> ResolvedModel:
-    """Merge a ModelRef's defaults with per-call config for the plugin request.
+    """Merge call-time config over a ModelRef's defaults into a wire ResolvedModel.
 
-    Precedence (lowest to highest): ``ref.version``, ``ref.config``, then
-    call-time ``config``. Each layer overwrites keys from the layers below.
-
-    The merged dict is forwarded to the plugin as-is — no schema validation or
-    key stripping at this layer. ``ModelRef`` typing catches config mistakes at
-    construction; at call time we still pass unknown keys through so plugins can
-    accept new provider options before the SDK schema is updated.
-
-    An explicitly set ``None`` clears a value inherited from a lower layer.
-    After merge, ``None`` values are removed so plugins see a missing key rather
-    than ``null``.
+    Call-time keys win; ref-only keys are kept. Matches generate()'s model-ref
+    config merge: version and ref defaults first, then the call-time override.
     """
     merged: dict[str, Any] = {}
     if model.version is not None:
@@ -125,7 +124,16 @@ def resolve_model_ref(*, model: ModelRef[Any], config: dict[str, Any]) -> Resolv
     if model.config is not None:
         merged.update(normalize_config(config=model.config))
     merged.update(config)
-    merged = {k: v for k, v in merged.items() if v is not None}
+
+    schema = concrete_config_schema(
+        model.config_schema,
+        type(model.config) if model.config is not None else None,
+    )
+    if schema is not None and merged:
+        return ResolvedModel(
+            name=model.name,
+            config=schema.model_validate(merged).model_dump(exclude_unset=True),
+        )
     return ResolvedModel(name=model.name, config=merged)
 
 
