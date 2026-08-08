@@ -53,7 +53,7 @@ function convertJsonSchemaNode(schema: Record<string, unknown>): unknown {
     return description ? `any, ${description}` : 'any';
   }
 
-  if (type === 'array') {
+  if (type === 'array' || isRecord(schema.items)) {
     return isRecord(schema.items) && Object.keys(schema.items).length > 0
       ? convertJsonSchemaNode(schema.items)
       : 'any';
@@ -129,7 +129,7 @@ function convertJsonSchemaObject(
 
 function scalarType(type: unknown): string | undefined {
   if (typeof type === 'string') return type;
-  if (!Array.isArray(type) || !type.includes('null')) return undefined;
+  if (!Array.isArray(type)) return undefined;
   const nonNullTypes = type.filter(
     (value): value is string => typeof value === 'string' && value !== 'null'
   );

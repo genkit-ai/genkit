@@ -99,6 +99,15 @@ describe('jsonSchemaToPicoschema', () => {
     expect(
       jsonSchemaToPicoschema({ type: 'array', items: { type: 'string' } })
     ).toBe('string');
+    expect(
+      jsonSchemaToPicoschema({
+        type: 'array',
+        items: { type: ['string'] },
+      })
+    ).toBe('string');
+    expect(jsonSchemaToPicoschema({ items: { type: 'string' } })).toBe(
+      'string'
+    );
     expect(jsonSchemaToPicoschema({ description: 'Anything goes' })).toBe(
       'any, Anything goes'
     );
