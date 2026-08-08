@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, ClassVar, Generic, cast
 
@@ -47,6 +48,7 @@ from genkit._core._typing import (
     MediaPart,
     MessageData,
     MiddlewareRef,
+    ModelInfo,
     ModelResponseChunk as ModelResponseChunkSchema,
     Operation,
     Part,
@@ -65,16 +67,32 @@ ModelUsage = GenerationUsage  # public name for GenerationUsage
 # TypeVars for generic types
 OutputT = TypeVar('OutputT', default=object)
 ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
+# Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
+# Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
+ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
 
 
-class ModelRef(BaseModel):
-    """Reference to a model with configuration."""
+@dataclass(frozen=True, kw_only=True)
+class ModelRef(Generic[ModelRefConfigT]):
+    """Frozen reference to a model tied to a config schema."""
 
     name: str
-    config_schema: object | None = None
-    info: object | None = None
+    config_schema: type[ModelRefConfigT]
+    info: ModelInfo | None = None
     version: str | None = None
-    config: dict[str, object] | None = None
+    config: ModelRefConfigT | None = None
+
+    # Explicitly opt out of hashing: Pydantic configs are unhashable, so an
+    # auto-generated __hash__ would fail once set.
+    __hash__ = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        # Catch dicts / wrong types at construction so plugins don't discover
+        # the mismatch later when they touch typed config fields.
+        if self.config is not None and not isinstance(self.config, self.config_schema):
+            raise TypeError(
+                f'config must be an instance of {self.config_schema.__name__}, got {type(self.config).__name__}'
+            )
 
 
 class Message(MessageData):

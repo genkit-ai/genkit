@@ -33,6 +33,7 @@ from genkit._core._model import (
     Message,
     ModelConfig,
     ModelRef,
+    ModelRefConfigT,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -67,16 +68,23 @@ def model_action_metadata(
 
 def model_ref(
     name: str,
+    *,
+    config_schema: type[ModelRefConfigT],
     namespace: str | None = None,
     info: ModelInfo | None = None,
     version: str | None = None,
-    config: dict[str, object] | None = None,
-) -> ModelRef:
+    config: ModelRefConfigT | None = None,
+) -> ModelRef[ModelRefConfigT]:
     """Create a ModelRef, optionally prefixing name with namespace."""
-    # Logic: if (options.namespace && !name.startsWith(options.namespace + '/'))
     final_name = f'{namespace}/{name}' if namespace and not name.startswith(f'{namespace}/') else name
 
-    return ModelRef(name=final_name, info=info, version=version, config=config)
+    return ModelRef(
+        name=final_name,
+        config_schema=config_schema,
+        info=info,
+        version=version,
+        config=config,
+    )
 
 
 def define_model(
