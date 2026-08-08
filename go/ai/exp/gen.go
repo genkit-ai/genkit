@@ -142,6 +142,8 @@ type ToolResume struct {
 	Respond []*ai.Part `json:"respond,omitempty"`
 	// Restart contains tool request parts to restart when resuming.
 	Restart []*ai.Part `json:"restart,omitempty"`
+	// Metadata contains additional context for resuming the generation.
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // AgentMetadata is the value placed under metadata["agent"] on an agent's

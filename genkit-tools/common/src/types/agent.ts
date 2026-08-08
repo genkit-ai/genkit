@@ -141,6 +141,7 @@ export const AgentInputSchema = z.object({
     .object({
       respond: z.array(ToolResponsePartSchema).optional(),
       restart: z.array(ToolRequestPartSchema).optional(),
+      metadata: z.record(z.any()).optional(),
     })
     .optional(),
 });
