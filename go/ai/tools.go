@@ -295,8 +295,31 @@ func applyStrictMetadata(metadata map[string]any, strict *bool) {
 	toolMeta[toolStrictKey] = *strict
 }
 
+// applyToolOutputSchema records a custom output schema as the tool's
+// advertised (original) output schema. The action's own output type stays the
+// multipart envelope; [ToolDef.Definition] surfaces the original schema to the
+// model and the Dev UI.
+func applyToolOutputSchema(metadata map[string]any, schema map[string]any) {
+	if schema != nil {
+		metadata["originalOutputSchema"] = schema
+	}
+}
+
+// requireAnyTypeParam panics unless the type parameter T is an interface type
+// (in practice 'any'). The tool constructors call it before honoring an
+// explicit schema option: the custom schema stands in for a type parameter of
+// 'any', and a concrete T would silently disagree with the advertised schema.
+// requirement is the leading clause of the panic message, e.g.
+// "WithInputSchema requires In".
+func requireAnyTypeParam[T any](ctor, name, requirement string) {
+	if typ := reflect.TypeFor[T](); typ.Kind() != reflect.Interface {
+		panic(fmt.Errorf("%s %q: %s to be of type 'any', but got %v", ctor, name, requirement, typ))
+	}
+}
+
 // DefineTool creates a new [ToolDef] and registers it.
-// Use [WithInputSchema] to provide a custom JSON schema instead of inferring from the type parameter.
+// Use [WithInputSchema] or [WithOutputSchema] to provide custom JSON schemas
+// instead of inferring them from the type parameters.
 func DefineTool[In, Out any](
 	r api.Registry,
 	name, description string,
@@ -308,17 +331,18 @@ func DefineTool[In, Out any](
 		opt.applyTool(toolOpts)
 	}
 
-	// If the user provided a custom input schema, enforce that In is 'any'
 	if toolOpts.InputSchema != nil {
-		typ := reflect.TypeFor[*In]()
-		if typ != nil && typ.Elem().Kind() != reflect.Interface {
-			panic(fmt.Errorf("ai.DefineTool %q: WithInputSchema requires In to be of type 'any', but got %v", name, typ.Elem()))
-		}
+		requireAnyTypeParam[In]("ai.DefineTool", name, "WithInputSchema requires In")
+	}
+	if toolOpts.OutputSchema != nil {
+		requireAnyTypeParam[Out]("ai.DefineTool", name, "WithOutputSchema and WithOutputSchemaName require Out")
 	}
 
 	metadata, wrappedFn := wrapToolFunc(name, description, fn)
+	applyToolOutputSchema(metadata, toolOpts.OutputSchema)
 	applyStrictMetadata(metadata, toolOpts.StrictSchema)
-	action := core.DefineAction(r, name, api.ActionTypeToolV2, metadata, toolOpts.InputSchema, wrappedFn)
+	action := core.NewActionOf(api.ActionTypeToolV2, name, &core.ActionOptions{Metadata: metadata, InputSchema: toolOpts.InputSchema}, wrappedFn)
+	action.Register(r)
 
 	// Also register under the "tool" action type for backward compatibility.
 	provider, id := api.ParseName(name)
@@ -340,26 +364,26 @@ func DefineToolWithInputSchema[Out any](
 }
 
 // NewTool creates a new [ToolDef]. It can be passed directly to [Generate].
-// Use [WithInputSchema] to provide a custom JSON schema instead of inferring from the type parameter.
+// Use [WithInputSchema] or [WithOutputSchema] to provide custom JSON schemas
+// instead of inferring them from the type parameters.
 func NewTool[In, Out any](name, description string, fn ToolFunc[In, Out], opts ...ToolOption) *ToolDef[In, Out] {
 	toolOpts := &toolOptions{}
 	for _, opt := range opts {
 		opt.applyTool(toolOpts)
 	}
 
-	// If the user provided a custom input schema, enforce that In is 'any'
 	if toolOpts.InputSchema != nil {
-		var zeroIn *In
-		typ := reflect.TypeOf(zeroIn)
-		if typ != nil && typ.Elem().Kind() != reflect.Interface {
-			panic(fmt.Errorf("ai.NewTool %q: WithInputSchema requires In to be of type 'any', but got %v", name, typ.Elem()))
-		}
+		requireAnyTypeParam[In]("ai.NewTool", name, "WithInputSchema requires In")
+	}
+	if toolOpts.OutputSchema != nil {
+		requireAnyTypeParam[Out]("ai.NewTool", name, "WithOutputSchema and WithOutputSchemaName require Out")
 	}
 
 	metadata, wrappedFn := wrapToolFunc(name, description, fn)
 	metadata["dynamic"] = true
+	applyToolOutputSchema(metadata, toolOpts.OutputSchema)
 	applyStrictMetadata(metadata, toolOpts.StrictSchema)
-	action := core.NewAction(name, api.ActionTypeToolV2, metadata, toolOpts.InputSchema, wrappedFn)
+	action := core.NewActionOf(api.ActionTypeToolV2, name, &core.ActionOptions{Metadata: metadata, InputSchema: toolOpts.InputSchema}, wrappedFn)
 	return &ToolDef[In, Out]{action: action, multipart: false}
 }
 
@@ -373,6 +397,9 @@ func NewToolWithInputSchema[Out any](name, description string, inputSchema map[s
 // DefineMultipartTool creates a new multipart [ToolDef] and registers it.
 // Multipart tools can return both output data and additional content parts (like media).
 // Use [WithInputSchema] to provide a custom JSON schema instead of inferring from the type parameter.
+// Use [WithOutputSchema] or [WithOutputSchemaName] to advertise the logical
+// output the tool produces (the envelope's output field); the wire format
+// stays the multipart response envelope.
 func DefineMultipartTool[In any](
 	r api.Registry,
 	name, description string,
@@ -385,14 +412,19 @@ func DefineMultipartTool[In any](
 	}
 
 	metadata, wrappedFn := wrapMultipartToolFunc(name, description, fn)
+	applyToolOutputSchema(metadata, toolOpts.OutputSchema)
 	applyStrictMetadata(metadata, toolOpts.StrictSchema)
-	action := core.DefineAction(r, name, api.ActionTypeToolV2, metadata, toolOpts.InputSchema, wrappedFn)
+	action := core.NewActionOf(api.ActionTypeToolV2, name, &core.ActionOptions{Metadata: metadata, InputSchema: toolOpts.InputSchema}, wrappedFn)
+	action.Register(r)
 	return &ToolDef[In, *MultipartToolResponse]{action: action, multipart: true, registry: r}
 }
 
 // NewMultipartTool creates a new multipart [ToolDef]. It can be passed directly to [Generate].
 // Multipart tools can return both output data and additional content parts (like media).
 // Use [WithInputSchema] to provide a custom JSON schema instead of inferring from the type parameter.
+// Use [WithOutputSchema] or [WithOutputSchemaName] to advertise the logical
+// output the tool produces (the envelope's output field); the wire format
+// stays the multipart response envelope.
 func NewMultipartTool[In any](name, description string, fn MultipartToolFunc[In], opts ...ToolOption) *ToolDef[In, *MultipartToolResponse] {
 	toolOpts := &toolOptions{}
 	for _, opt := range opts {
@@ -401,8 +433,9 @@ func NewMultipartTool[In any](name, description string, fn MultipartToolFunc[In]
 
 	metadata, wrappedFn := wrapMultipartToolFunc(name, description, fn)
 	metadata["dynamic"] = true
+	applyToolOutputSchema(metadata, toolOpts.OutputSchema)
 	applyStrictMetadata(metadata, toolOpts.StrictSchema)
-	action := core.NewAction(name, api.ActionTypeToolV2, metadata, toolOpts.InputSchema, wrappedFn)
+	action := core.NewActionOf(api.ActionTypeToolV2, name, &core.ActionOptions{Metadata: metadata, InputSchema: toolOpts.InputSchema}, wrappedFn)
 	return &ToolDef[In, *MultipartToolResponse]{action: action, multipart: true}
 }
 
@@ -475,7 +508,10 @@ func (t *ToolDef[In, Out]) Definition() *ToolDefinition {
 		}
 	}
 
-	// Use the original output schema if available (for non-multipart tools).
+	// Prefer the original output schema when present: the logical output the
+	// model consumes, as opposed to the action's wire-level output (for tools
+	// wrapping a plain function, and for multipart tools with a custom
+	// schema, that wire output is the multipart envelope).
 	outputSchema := desc.OutputSchema
 	if origSchema, ok := desc.Metadata["originalOutputSchema"].(map[string]any); ok {
 		outputSchema = origSchema

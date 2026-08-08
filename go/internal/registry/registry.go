@@ -222,6 +222,9 @@ func (r *Registry) LookupAction(key string) api.Action {
 // ResolveAction looks up an action by key. If the action is not found, it attempts dynamic resolution.
 // Returns the action if found, or nil if not found.
 // This method is safe to call concurrently and uses a single mutex to serialize all resolution operations.
+// The resolved action is registered and then the requested key is looked up
+// again, so a plugin may return an action bundle whose Register covers the
+// requested key among others (see [api.DynamicPlugin]).
 func (r *Registry) ResolveAction(key string) api.Action {
 	action := r.LookupAction(key)
 	if action != nil {

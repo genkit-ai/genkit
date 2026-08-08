@@ -41,7 +41,7 @@ type InterruptibleToolFunc[In, Out, Resume any] = func(ctx context.Context, inpu
 // such as a plain [context.Context] function signature and [tool.AttachParts].
 //
 // DEPRECATED(breaking): With breaking changes, Tool would not wrap ai.ToolDef.
-// It would be the primary tool type, backed directly by core.DefineAction,
+// It would be the primary tool type, backed directly by core.NewActionOf,
 // eliminating the inner field and all delegation methods below.
 type Tool[In, Out any] struct {
 	inner *ai.ToolDef[In, *ai.MultipartToolResponse] // DEPRECATED(breaking): remove wrapper; Tool owns the action directly.
@@ -65,6 +65,10 @@ func (t *Tool[In, Out]) Name() string { return t.inner.Name() }
 // [ai.NewTool] exposes (the real output type) rather than leaking the multipart
 // envelope to the model and Dev UI. Genkit infers schemas with DoNotReference,
 // so the result is fully inlined and needs no registry resolution.
+//
+// A custom schema from [ai.WithOutputSchema] or [ai.WithOutputSchemaName]
+// (which require Out to be 'any') passes through from the inner tool
+// untouched: with Out being 'any' there is no inferred schema to override it.
 func (t *Tool[In, Out]) Definition() *ai.ToolDefinition {
 	def := t.inner.Definition()
 	if schema := inferOutputSchema[Out](); schema != nil {
@@ -151,6 +155,23 @@ func (t *InterruptibleTool[In, Out, Resume]) Respond(part *ai.Part, output Out) 
 	return tool.Respond(part, output)
 }
 
+// requireAnyOutForSchemaOptions panics when an output schema option is
+// present and Out is a concrete type, mirroring [ai.NewTool]'s guard: the
+// custom schema stands in for an Out type parameter of 'any', and a concrete
+// Out would silently disagree with the advertised schema (this package's
+// [Tool.Definition] prefers the schema inferred from Out). With Out being
+// 'any', the option flows through the inner multipart tool untouched.
+func requireAnyOutForSchemaOptions[Out any](ctor, name string, opts []ai.ToolOption) {
+	for _, opt := range opts {
+		if _, ok := opt.(ai.OutputSchemaOption); ok {
+			if typ := reflect.TypeFor[Out](); typ.Kind() != reflect.Interface {
+				panic(fmt.Errorf("%s %q: WithOutputSchema and WithOutputSchemaName require Out to be of type 'any', but got %v", ctor, name, typ))
+			}
+			return
+		}
+	}
+}
+
 // DefineTool creates a new tool with a simple function signature and registers it.
 // The function receives a plain [context.Context] instead of [ai.ToolContext].
 // Use [tool.AttachParts] inside the function to return additional content parts.
@@ -172,7 +193,8 @@ func NewTool[In, Out any](
 	fn ToolFunc[In, Out],
 	opts ...ai.ToolOption,
 ) *Tool[In, Out] {
-	// DEPRECATED(breaking): Call core.NewAction directly instead of wrapping ai.NewMultipartTool.
+	requireAnyOutForSchemaOptions[Out]("exp.NewTool", name, opts)
+	// DEPRECATED(breaking): Call core.NewActionOf directly instead of wrapping ai.NewMultipartTool.
 	inner := ai.NewMultipartTool(name, description, wrapSimpleFunc(fn), opts...)
 	return &Tool[In, Out]{inner: inner}
 }
@@ -198,14 +220,15 @@ func NewInterruptibleTool[In, Out, Res any](
 	fn InterruptibleToolFunc[In, Out, Res],
 	opts ...ai.ToolOption,
 ) *InterruptibleTool[In, Out, Res] {
-	// DEPRECATED(breaking): Call core.NewAction directly instead of wrapping ai.NewMultipartTool.
+	requireAnyOutForSchemaOptions[Out]("exp.NewInterruptibleTool", name, opts)
+	// DEPRECATED(breaking): Call core.NewActionOf directly instead of wrapping ai.NewMultipartTool.
 	inner := ai.NewMultipartTool(name, description, wrapInterruptibleFunc(fn), opts...)
 	return &InterruptibleTool[In, Out, Res]{Tool: Tool[In, Out]{inner: inner}}
 }
 
 // DEPRECATED(breaking): wrapSimpleFunc exists to adapt our func(context.Context, In) (Out, error)
 // to ai.MultipartToolFunc[In] (which takes *ai.ToolContext). With breaking changes,
-// core.DefineAction would accept our function signature directly, and the ToolContext
+// core.NewActionOf would accept our function signature directly, and the ToolContext
 // adapter, resumed/originalInput extraction from ToolContext, and interrupt error
 // conversion would all be unnecessary.
 func wrapSimpleFunc[In, Out any](fn ToolFunc[In, Out]) ai.MultipartToolFunc[In] {
@@ -242,7 +265,7 @@ func wrapInterruptibleFunc[In, Out, Resume any](fn InterruptibleToolFunc[In, Out
 // via tool.AttachParts into the response. The simple and interruptible wrappers
 // differ only in how they build invoke, so they share this body.
 //
-// DEPRECATED(breaking): This bridging disappears once core.DefineAction accepts
+// DEPRECATED(breaking): This bridging disappears once core.NewActionOf accepts
 // the plain function signature directly (see wrapSimpleFunc).
 func runToolFunc[In, Out any](tc *ai.ToolContext, input In, invoke ToolFunc[In, Out]) (*ai.MultipartToolResponse, error) {
 	ctx := tc.Context

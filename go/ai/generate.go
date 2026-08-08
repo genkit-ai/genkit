@@ -119,7 +119,7 @@ type ModelOptions struct {
 
 // DefineGenerateAction defines a utility generate action.
 func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
-	return (*generateAction)(core.DefineStreamingAction(r, "generate", api.ActionTypeUtil, nil, nil,
+	a := core.NewStreamingActionOf(api.ActionTypeUtil, "generate", nil,
 		func(ctx context.Context, actionOpts *GenerateActionOptions, cb ModelStreamCallback) (resp *ModelResponse, err error) {
 			actionOptsBytes, _ := json.Marshal(actionOpts)
 			logger.FromContext(ctx).Debug("GenerateAction",
@@ -132,7 +132,9 @@ func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 			}()
 
 			return GenerateWithRequest(ctx, r, actionOpts, nil, cb)
-		}))
+		})
+	a.Register(r)
+	return (*generateAction)(a)
 }
 
 // NewModel creates a new [Model].
@@ -172,12 +174,7 @@ func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
 		},
 	}
 
-	inputSchema := core.InferSchemaMap(ModelRequest{})
-	if inputSchema != nil && opts.ConfigSchema != nil {
-		if props, ok := inputSchema["properties"].(map[string]any); ok {
-			props["config"] = opts.ConfigSchema
-		}
-	}
+	inputSchema := requestInputSchema(ModelRequest{}, "config", opts.ConfigSchema)
 
 	mws := []ModelMiddleware{
 		simulateSystemPrompt(opts, nil),
@@ -187,7 +184,10 @@ func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
 	}
 	fn = core.ChainMiddleware(mws...)(fn)
 
-	return &model{*core.NewStreamingAction(name, api.ActionTypeModel, metadata, inputSchema, fn)}
+	return &model{*core.NewStreamingActionOf(api.ActionTypeModel, name, &core.ActionOptions{
+		Metadata:    metadata,
+		InputSchema: inputSchema,
+	}, fn)}
 }
 
 // DefineModel creates a new [Model] and registers it.
@@ -257,7 +257,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			if _, ok := toolDefMap[t.Name()]; ok {
 				return nil, status.Errorf(status.ErrInvalidArgument, "ai.GenerateWithRequest: tool %q is contributed by middleware but already declared elsewhere", t.Name())
 			}
-			toolDefMap[t.Name()] = t.Definition()
+			toolDefMap[t.Name()] = nil // Reserves the name; the definition is captured after registration.
 			middlewareTools = append(middlewareTools, t)
 		}
 	}
@@ -265,8 +265,12 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		if !r.IsChild() {
 			r = r.NewChild()
 		}
+		// Definitions are captured only after registration: Definition resolves
+		// schema $refs (e.g. from WithOutputSchemaName) only once the tool has
+		// a registry.
 		for _, t := range middlewareTools {
 			t.Register(r)
+			toolDefMap[t.Name()] = t.Definition()
 		}
 	}
 	toolDefs := make([]*ToolDefinition, 0, len(toolDefMap))
