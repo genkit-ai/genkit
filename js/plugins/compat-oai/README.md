@@ -190,6 +190,8 @@ export const customModelFlow = ai.defineFlow(
 );
 ```
 
+> **Tip:** The same `baseURL` option works with any OpenAI-compatible multi-model gateway — for example [DaoXE](https://daoxe.com/?utm_source=github&utm_medium=organic&utm_campaign=genkit&utm_content=compat-oai) at `https://api.daoxe.com/v1`.
+
 ## Contributing
 
 Want to contribute to the project? That's awesome! Head over to our [Contribution Guidelines](https://github.com/genkit-ai/genkit/blob/main/CONTRIBUTING.md).
