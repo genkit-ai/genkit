@@ -29,13 +29,13 @@ func main() {
 	if apiKey == "" {
 		log.Fatalf("no OPENAI_API_KEY environment variable set")
 	}
-	oai := &oai.OpenAI{
+	openAIPlugin := &oai.OpenAI{
 		APIKey: apiKey,
 	}
-	g := genkit.Init(ctx, genkit.WithPlugins(oai))
+	g := genkit.Init(ctx, genkit.WithPlugins(openAIPlugin))
 
 	genkit.DefineFlow(g, "basic", func(ctx context.Context, subject string) (string, error) {
-		gpt4o := oai.Model(g, "gpt-4o")
+		gpt4o := openAIPlugin.Model(g, "gpt-4o")
 
 		prompt := fmt.Sprintf("tell me a joke about %s", subject)
 		config := &openai.ChatCompletionNewParams{Temperature: openai.Float(0.5), MaxTokens: openai.Int(100)}
@@ -47,7 +47,7 @@ func main() {
 	})
 
 	genkit.DefineFlow(g, "defined-model", func(ctx context.Context, subject string) (string, error) {
-		gpt4oMini := oai.Model(g, "gpt-4o-mini")
+		gpt4oMini := openAIPlugin.Model(g, "gpt-4o-mini")
 		prompt := fmt.Sprintf("tell me a joke about %s", subject)
 		config := &openai.ChatCompletionNewParams{Temperature: openai.Float(0.5)}
 		resp, err := genkit.Generate(ctx, g, ai.WithModel(gpt4oMini), ai.WithPrompt(prompt), ai.WithConfig(config))
@@ -58,7 +58,7 @@ func main() {
 	})
 
 	genkit.DefineFlow(g, "media", func(ctx context.Context, subject string) (string, error) {
-		gpt4oMini := oai.Model(g, "gpt-4o-mini")
+		gpt4oMini := openAIPlugin.Model(g, "gpt-4o-mini")
 		config := &openai.ChatCompletionNewParams{Temperature: openai.Float(0.5)}
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithModel(gpt4oMini),
@@ -73,6 +73,27 @@ func main() {
 			return "", err
 		}
 		return resp.Text(), nil
+	})
+
+	genkit.DefineFlow(g, "image-generation", func(ctx context.Context, prompt string) ([]string, error) {
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModel(oai.ImageModelRef("dall-e-3", &oai.ImageGenerationConfig{
+				Quality: openai.ImageGenerateParamsQualityHD,
+				Size:    openai.ImageGenerateParamsSize1024x1024,
+			})),
+			ai.WithPrompt(prompt),
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		images := make([]string, 0, len(resp.Message.Content))
+		for _, part := range resp.Message.Content {
+			if part.IsMedia() {
+				images = append(images, part.Text)
+			}
+		}
+		return images, nil
 	})
 
 	mux := http.NewServeMux()

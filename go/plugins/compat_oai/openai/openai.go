@@ -17,6 +17,7 @@ package openai
 import (
 	"context"
 	"os"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
@@ -28,6 +29,9 @@ import (
 )
 
 const provider = "openai"
+
+// ImageGenerationConfig contains configuration for OpenAI image generation models.
+type ImageGenerationConfig = compat_oai.ImageGenerationConfig
 
 type TextEmbeddingConfig struct {
 	Dimensions     int                                       `json:"dimensions,omitempty"`
@@ -157,7 +161,72 @@ var (
 			},
 		},
 	}
+
+	supportedImageModels = map[string]ai.ModelOptions{
+		openaiGo.ImageModelDallE3: {
+			Label:        "OpenAI DALL-E 3",
+			Supports:     &compat_oai.ImageGeneration,
+			ConfigSchema: imageConfigSchema(openaiGo.ImageModelDallE3),
+			Versions:     []string{openaiGo.ImageModelDallE3},
+		},
+		openaiGo.ImageModelGPTImage1: {
+			Label:        "OpenAI GPT Image 1",
+			Supports:     &compat_oai.ImageGeneration,
+			ConfigSchema: imageConfigSchema(openaiGo.ImageModelGPTImage1),
+			Versions:     []string{openaiGo.ImageModelGPTImage1},
+		},
+	}
 )
+
+func isImageModel(name string) bool {
+	return strings.Contains(name, "dall-e") || strings.Contains(name, "gpt-image")
+}
+
+func imageConfigSchema(name string) map[string]any {
+	properties := map[string]any{
+		"n": map[string]any{
+			"type":    "integer",
+			"minimum": 1,
+			"maximum": 10,
+			"default": 1,
+		},
+		"style": stringEnumSchema("vivid", "natural"),
+		"user":  map[string]any{"type": "string"},
+		"version": map[string]any{
+			"type": "string",
+		},
+	}
+	if strings.Contains(name, "gpt-image") {
+		properties["size"] = stringEnumSchema("1024x1024", "1536x1024", "1024x1536", "auto")
+		properties["background"] = stringEnumSchema("transparent", "opaque", "auto")
+		properties["moderation"] = stringEnumSchema("low", "auto")
+		properties["output_compression"] = map[string]any{
+			"type":    "integer",
+			"minimum": 1,
+			"maximum": 100,
+		}
+		properties["output_format"] = stringEnumSchema("png", "jpeg", "webp")
+		properties["quality"] = stringEnumSchema("low", "medium", "high")
+		delete(properties, "style")
+	} else {
+		properties["size"] = stringEnumSchema("1024x1024", "1792x1024", "1024x1792")
+		properties["quality"] = stringEnumSchema("standard", "hd")
+		properties["response_format"] = stringEnumSchema("b64_json", "url")
+		properties["response_format"].(map[string]any)["default"] = "b64_json"
+	}
+	return map[string]any{
+		"type":                 "object",
+		"properties":           properties,
+		"additionalProperties": false,
+	}
+}
+
+func stringEnumSchema(values ...string) map[string]any {
+	return map[string]any{
+		"type": "string",
+		"enum": values,
+	}
+}
 
 type OpenAI struct {
 	// APIKey is the API key for the OpenAI API. If empty, the values of the environment variable "OPENAI_API_KEY" will be consulted.
@@ -211,6 +280,11 @@ func (o *OpenAI) Init(ctx context.Context) []api.Action {
 		actions = append(actions, o.DefineModel(model, opts).(api.Action))
 	}
 
+	// define default image generation models
+	for model, opts := range supportedImageModels {
+		actions = append(actions, o.DefineImageModel(model, opts).(api.Action))
+	}
+
 	// define default embedders
 	for _, embedder := range supportedEmbeddingModels {
 		opts := &ai.EmbedderOptions{
@@ -233,6 +307,16 @@ func (o *OpenAI) DefineModel(id string, opts ai.ModelOptions) ai.Model {
 	return o.openAICompatible.DefineModel(provider, id, opts)
 }
 
+// DefineImageModel defines an OpenAI image generation model.
+func (o *OpenAI) DefineImageModel(id string, opts ai.ModelOptions) ai.Model {
+	return o.openAICompatible.DefineImageModel(provider, id, opts)
+}
+
+// ImageModelRef creates a model reference for an OpenAI image generation model.
+func ImageModelRef(name string, config *ImageGenerationConfig) ai.ModelRef {
+	return ai.NewModelRef(api.NewName(provider, name), config)
+}
+
 func (o *OpenAI) DefineEmbedder(id string, opts *ai.EmbedderOptions) ai.Embedder {
 	return o.openAICompatible.DefineEmbedder(provider, id, opts)
 }
@@ -242,9 +326,38 @@ func (o *OpenAI) Embedder(g *genkit.Genkit, name string) ai.Embedder {
 }
 
 func (o *OpenAI) ListActions(ctx context.Context) []api.ActionDesc {
-	return o.openAICompatible.ListActions(ctx)
+	descriptions := o.openAICompatible.ListActions(ctx)
+	for i := range descriptions {
+		name := strings.TrimPrefix(descriptions[i].Name, provider+"/")
+		if !isImageModel(name) {
+			continue
+		}
+		opts, ok := supportedImageModels[name]
+		if !ok {
+			opts = ai.ModelOptions{
+				Label:        "OpenAI - " + name,
+				Stage:        ai.ModelStageStable,
+				Supports:     &compat_oai.ImageGeneration,
+				ConfigSchema: imageConfigSchema(name),
+			}
+		}
+		descriptions[i] = o.DefineImageModel(name, opts).(api.Action).Desc()
+	}
+	return descriptions
 }
 
 func (o *OpenAI) ResolveAction(atype api.ActionType, name string) api.Action {
+	if atype == api.ActionTypeModel && isImageModel(name) {
+		opts, ok := supportedImageModels[name]
+		if !ok {
+			opts = ai.ModelOptions{
+				Label:        "OpenAI - " + name,
+				Stage:        ai.ModelStageStable,
+				Supports:     &compat_oai.ImageGeneration,
+				ConfigSchema: imageConfigSchema(name),
+			}
+		}
+		return o.DefineImageModel(name, opts).(api.Action)
+	}
 	return o.openAICompatible.ResolveAction(atype, name)
 }

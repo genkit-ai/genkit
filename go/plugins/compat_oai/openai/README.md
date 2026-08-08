@@ -39,6 +39,27 @@ resp, err = genkit.Generate(ctx, g,
 )
 ```
 
+### Generate an image
+
+The plugin registers `dall-e-3` and `gpt-image-1` as image generation models.
+Image responses are returned as Genkit media parts.
+
+```go
+model := oai.ImageModelRef("dall-e-3", &oai.ImageGenerationConfig{
+    Quality: openai.ImageGenerateParamsQualityHD,
+    Size:    openai.ImageGenerateParamsSize1024x1024,
+})
+
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModel(model),
+    ai.WithPrompt("A watercolor painting of a lighthouse at sunrise"),
+)
+if err != nil {
+    // handle error
+}
+imageURL := resp.Message.Content[0].Text
+```
+
 ## Running Tests
 
 First, set your OpenAI API key as an environment variable:
