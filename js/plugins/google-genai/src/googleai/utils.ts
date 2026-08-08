@@ -249,8 +249,8 @@ export function applyContextOverrides(
 
   let newOptions = { ...clientOptions };
 
-  if (typeof context.auth?.apiKey === 'string') {
-    newOptions.apiKey = context.auth.apiKey;
+  if (typeof context.secrets?.apiKey === 'string') {
+    newOptions.apiKey = context.secrets.apiKey;
   }
   if (typeof context.apiVersion === 'string') {
     newOptions.apiVersion = context.apiVersion;

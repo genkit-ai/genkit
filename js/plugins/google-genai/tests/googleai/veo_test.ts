@@ -389,7 +389,7 @@ describe('Google AI Veo', () => {
         const { start } = captureModelRunner({ apiKey: defaultApiKey });
 
         await start(request, {
-          context: { auth: { apiKey: 'context-api-key' } },
+          context: { secrets: { apiKey: 'context-api-key' } },
         });
 
         sinon.assert.calledOnce(fetchStub);
@@ -482,7 +482,7 @@ describe('Google AI Veo', () => {
         const { check } = captureModelRunner({ apiKey: defaultApiKey });
 
         await check(pendingOp, {
-          context: { auth: { apiKey: 'context-api-key' } },
+          context: { secrets: { apiKey: 'context-api-key' } },
         });
 
         sinon.assert.calledOnce(fetchStub);

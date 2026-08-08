@@ -205,7 +205,7 @@ describe('Vertex AI Veo', () => {
 
         const model = defineModel(modelName, defaultRegionalClientOptions);
         await model.start(request, {
-          context: { auth: { apiKey: 'context-api-key' } },
+          context: { secrets: { apiKey: 'context-api-key' } },
         });
 
         sinon.assert.calledOnce(fetchStub);
@@ -294,7 +294,7 @@ describe('Vertex AI Veo', () => {
 
         const { check } = captureModelRunner(defaultRegionalClientOptions);
         await check(pendingOp, {
-          context: { auth: { apiKey: 'context-api-key' } },
+          context: { secrets: { apiKey: 'context-api-key' } },
         });
 
         sinon.assert.calledOnce(fetchStub);

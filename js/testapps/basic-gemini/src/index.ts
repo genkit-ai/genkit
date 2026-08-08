@@ -799,11 +799,11 @@ ai.defineFlow('photo-move-veo', async (_, { sendChunk }) => {
 });
 
 // An example of overriding the apiKey used by a Veo background model at call
-// time via options.context.auth.apiKey, rather than relying on the
+// time via options.context.secrets.apiKey, rather than relying on the
 // plugin-configured apiKey (env var or plugin init option). This is useful
-// when per-request auth (e.g. from an authenticated HTTP caller) should be
-// used instead of a single, plugin-wide key. Because Veo is a background
-// model, the same context must be supplied on both the initial
+// when per-request credentials (e.g. from an authenticated HTTP caller)
+// should be used instead of a single, plugin-wide key. Because Veo is a
+// background model, the same context must be supplied on both the initial
 // ai.generate() call and every subsequent ai.checkOperation() call.
 ai.defineFlow('photo-move-veo-apikey-override', async (_, { sendChunk }) => {
   const startingImage = fs.readFileSync('woman.png', { encoding: 'base64' });
@@ -829,7 +829,7 @@ ai.defineFlow('photo-move-veo-apikey-override', async (_, { sendChunk }) => {
       seed: 42,
     },
     context: {
-      auth: {
+      secrets: {
         apiKey: process.env.CUSTOM_KEY,
       },
     },
@@ -842,7 +842,7 @@ ai.defineFlow('photo-move-veo-apikey-override', async (_, { sendChunk }) => {
   while (!operation.done) {
     sendChunk('check status of operation ' + operation.id);
     operation = await ai.checkOperation(operation, {
-      context: { auth: { apiKey: process.env.CUSTOM_KEY } },
+      context: { secrets: { apiKey: process.env.CUSTOM_KEY } },
     });
     await new Promise((resolve) => setTimeout(resolve, 5000));
   }
@@ -1192,8 +1192,8 @@ ai.defineFlow('deep-research', async (_, { sendChunk }) => {
 });
 
 // An example of overriding the apiKey used by the Deep Research background
-// model at call time via options.context.auth.apiKey, rather than relying
-// on the plugin-configured apiKey. Because Deep Research is also a
+// model at call time via options.context.secrets.apiKey, rather than
+// relying on the plugin-configured apiKey. Because Deep Research is also a
 // background model, the same context must be supplied on both the initial
 // ai.generate() call and every subsequent ai.checkOperation() call.
 ai.defineFlow('deep-research-apikey-override', async (_, { sendChunk }) => {
@@ -1202,7 +1202,7 @@ ai.defineFlow('deep-research-apikey-override', async (_, { sendChunk }) => {
     prompt:
       'Compare the differences between TCP and UDP protocols. Provide the answer in a markdown table focusing on reliability, connection type, and speed.',
     context: {
-      auth: {
+      secrets: {
         apiKey: process.env.CUSTOM_KEY,
       },
     },
@@ -1215,7 +1215,7 @@ ai.defineFlow('deep-research-apikey-override', async (_, { sendChunk }) => {
   while (!operation.done) {
     sendChunk('check status of operation ' + operation.id);
     operation = await ai.checkOperation(operation, {
-      context: { auth: { apiKey: process.env.CUSTOM_KEY } },
+      context: { secrets: { apiKey: process.env.CUSTOM_KEY } },
     });
     await new Promise((resolve) => setTimeout(resolve, 30000));
   }

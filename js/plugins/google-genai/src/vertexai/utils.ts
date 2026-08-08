@@ -424,7 +424,7 @@ export function applyContextOverrides(
       newOptions.location = context.location;
     }
   }
-  const contextApiKey = context.auth?.apiKey;
+  const contextApiKey = context.secrets?.apiKey;
   if (typeof contextApiKey === 'string') {
     if (newOptions.kind == 'express') {
       newOptions.apiKey = calculateApiKey(newOptions.apiKey, contextApiKey);

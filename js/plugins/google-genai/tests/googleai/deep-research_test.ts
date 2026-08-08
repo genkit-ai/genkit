@@ -298,7 +298,7 @@ describe('Deep Research', () => {
       const operation = await model.start(minimalRequest);
 
       await model.check!(operation, {
-        context: { auth: { apiKey: 'context-api-key' } },
+        context: { secrets: { apiKey: 'context-api-key' } },
       });
 
       // fetchStub should be called twice: once for start, once for check

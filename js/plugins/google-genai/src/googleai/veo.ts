@@ -198,7 +198,7 @@ export function defineModel(
     ...ref.info,
     configSchema: ref.configSchema,
     async start(request, options) {
-      // apiKey in config is deprecated in favor of options.context.auth.apiKey
+      // apiKey in config is deprecated in favor of options.context.secrets.apiKey
       const newClientOptions = applyContextOverrides(
         {
           ...clientOptions,
