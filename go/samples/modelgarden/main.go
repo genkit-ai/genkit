@@ -50,5 +50,59 @@ func main() {
 		return text, nil
 	})
 
+	// Vertex Model Garden - Claude Sonnet 4.6.
+	genkit.DefineFlow(g, "claudeSonnet46VertexModelGardenFlow", func(ctx context.Context, input string) (string, error) {
+		if input == "" {
+			input = "airplane food"
+		}
+		m := modelgarden.AnthropicModel(g, "claude-sonnet-4-6")
+		if m == nil {
+			return "", errors.New("claudeSonnet46VertexModelGardenFlow: failed to find model")
+		}
+		return genkit.GenerateText(ctx, g,
+			ai.WithModel(m),
+			ai.WithConfig(&anthropic.MessageNewParams{
+				MaxTokens: 1024,
+			}),
+			ai.WithPrompt("Share a joke about %s.", input),
+		)
+	})
+
+	// Vertex Model Garden - Claude Opus 4.6.
+	genkit.DefineFlow(g, "claudeOpus46VertexModelGardenFlow", func(ctx context.Context, input string) (string, error) {
+		if input == "" {
+			input = "airplane food"
+		}
+		m := modelgarden.AnthropicModel(g, "claude-opus-4-6")
+		if m == nil {
+			return "", errors.New("claudeOpus46VertexModelGardenFlow: failed to find model")
+		}
+		return genkit.GenerateText(ctx, g,
+			ai.WithModel(m),
+			ai.WithConfig(&anthropic.MessageNewParams{
+				MaxTokens: 1024,
+			}),
+			ai.WithPrompt("Share a joke about %s.", input),
+		)
+	})
+
+	// Vertex Model Garden - Claude Opus 4.7.
+	genkit.DefineFlow(g, "claudeOpus47VertexModelGardenFlow", func(ctx context.Context, input string) (string, error) {
+		if input == "" {
+			input = "airplane food"
+		}
+		m := modelgarden.AnthropicModel(g, "claude-opus-4-7")
+		if m == nil {
+			return "", errors.New("claudeOpus47VertexModelGardenFlow: failed to find model")
+		}
+		return genkit.GenerateText(ctx, g,
+			ai.WithModel(m),
+			ai.WithConfig(&anthropic.MessageNewParams{
+				MaxTokens: 1024,
+			}),
+			ai.WithPrompt("Share a joke about %s.", input),
+		)
+	})
+
 	<-ctx.Done()
 }
