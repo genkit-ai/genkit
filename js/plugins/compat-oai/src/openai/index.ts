@@ -54,6 +54,12 @@ import {
   openAIModelRef,
   SUPPORTED_GPT_MODELS,
 } from './gpt.js';
+import {
+  defineCompatOpenAIResponsesModel,
+  OpenAIResponsesConfigSchema,
+  openAIResponsesModelRef,
+  SUPPORTED_RESPONSES_MODELS,
+} from './responses/index.js';
 import { openAITranscriptionModelRef, SUPPORTED_STT_MODELS } from './stt.js';
 import { openAISpeechModelRef, SUPPORTED_TTS_MODELS } from './tts.js';
 import {
@@ -298,6 +304,28 @@ export type OpenAIPlugin = {
     config?: z.infer<typeof OpenAIChatCompletionConfigSchema>
   ): ModelReference<typeof OpenAIChatCompletionConfigSchema>;
   model(name: string, config?: any): ModelReference<z.ZodTypeAny>;
+  /**
+   * Returns a {@link ModelReference} that targets the OpenAI Responses API
+   * (`/v1/responses`). Use this for `gpt-5*`, `o1`, `o3`, `o4-mini`, or
+   * any model where you need built-in tools (`web_search_preview`,
+   * `file_search`, `code_interpreter`), reasoning summaries, or stateful
+   * `previousResponseId` chaining.
+   *
+   * The Chat Completions helper {@link OpenAIPlugin.model} remains
+   * available; the two helpers can be used side-by-side in the same
+   * Genkit instance.
+   */
+  responsesModel(
+    name:
+      | keyof typeof SUPPORTED_RESPONSES_MODELS
+      | (`gpt-${string}` & {})
+      | (`o${number}` & {}),
+    config?: z.infer<typeof OpenAIResponsesConfigSchema>
+  ): ModelReference<typeof OpenAIResponsesConfigSchema>;
+  responsesModel(
+    name: string,
+    config?: any
+  ): ModelReference<typeof OpenAIResponsesConfigSchema>;
   embedder(
     name:
       | keyof typeof SUPPORTED_EMBEDDING_MODELS
@@ -337,6 +365,16 @@ const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
     config,
   });
 }) as OpenAIPlugin['model'];
+
+const responsesModel = ((
+  name: string,
+  config?: any
+): ModelReference<typeof OpenAIResponsesConfigSchema> => {
+  return openAIResponsesModelRef({
+    name,
+    config,
+  });
+}) as OpenAIPlugin['responsesModel'];
 
 const embedder = ((
   name: string,
@@ -381,7 +419,68 @@ const embedder = ((
  */
 export const openAI: OpenAIPlugin = Object.assign(openAIPlugin, {
   model,
+  responsesModel,
   embedder,
 });
 
 export default openAI;
+
+/**
+ * Companion plugin that registers OpenAI Responses API models under the
+ * `openai-responses/` namespace.
+ *
+ * Lives as a separate plugin (mirroring the deepseek/xai pattern in this
+ * package) so that {@link openAIPlugin} stays bit-identical for users who
+ * only need Chat Completions and other compat providers (`deepseek`, `xai`,
+ * …) are unaffected. Use both side-by-side when you need access to
+ * `gpt-5*`, `o1`, `o3`, `o4-mini`, built-in tools (`web_search_preview`,
+ * `file_search`, `code_interpreter`), reasoning summaries, or stateful
+ * `previousResponseId` chaining.
+ *
+ * @example
+ * ```ts
+ * import { genkit } from 'genkit';
+ * import openAI, { openAIResponses } from '@genkit-ai/compat-oai/openai';
+ *
+ * const ai = genkit({ plugins: [openAI(), openAIResponses()] });
+ *
+ * const r = await ai.generate({
+ *   model: openAI.responsesModel('gpt-5-mini'),
+ *   prompt: '...',
+ *   config: { builtInTools: [{ type: 'web_search_preview' }] },
+ * });
+ * ```
+ */
+export function openAIResponses(options?: OpenAIPluginOptions): GenkitPluginV2 {
+  const pluginOptions = { name: 'openai-responses', ...options };
+  return openAICompatible({
+    name: 'openai-responses',
+    ...options,
+    initializer: async (client) => {
+      // Pre-register the curated SUPPORTED_RESPONSES_MODELS so they show
+      // up in the dev UI as concrete entries.
+      return Object.values(SUPPORTED_RESPONSES_MODELS).map((modelRef) =>
+        defineCompatOpenAIResponsesModel({
+          name: modelRef.name,
+          client,
+          pluginOptions,
+          modelRef,
+        })
+      );
+    },
+    resolver: async (
+      client: OpenAI,
+      _actionType: ActionType,
+      actionName: string
+    ) => {
+      // Anything resolved through this plugin is a Responses API model.
+      const modelRef = openAIResponsesModelRef({ name: actionName });
+      return defineCompatOpenAIResponsesModel({
+        name: modelRef.name,
+        client,
+        pluginOptions,
+        modelRef,
+      });
+    },
+  });
+}
