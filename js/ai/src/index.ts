@@ -96,6 +96,7 @@ export {
   type ToolRequestPart,
   type ToolResponsePart,
 } from './model.js';
+export { type OperationOptions } from './operation.js';
 export { type ToolRequest, type ToolResponse } from './parts.js';
 export { type GenkitPluginV2 } from './plugin.js';
 export {

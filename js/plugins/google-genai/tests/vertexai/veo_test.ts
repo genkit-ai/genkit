@@ -275,12 +275,13 @@ describe('Vertex AI Veo', () => {
         );
       });
 
-      it('should apply location override from options.context', async () => {
+      it('should apply location override from context.config', async () => {
         mockFetchResponse({ name: operationId, done: true });
 
         const { check } = captureModelRunner(defaultRegionalClientOptions);
+        // This is what checkOperation folds a top-level `config` into.
         await check(pendingOp, {
-          context: { location: 'europe-west1' },
+          context: { config: { location: 'europe-west1' } },
         });
 
         sinon.assert.calledOnce(fetchStub);

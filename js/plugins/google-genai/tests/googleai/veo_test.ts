@@ -493,15 +493,18 @@ describe('Google AI Veo', () => {
         );
       });
 
-      it('should apply apiVersion and baseUrl override from options.context', async () => {
+      it('should apply apiVersion and baseUrl override from context.config', async () => {
         mockFetchResponse({ name: operationId, done: true });
 
         const { check } = captureModelRunner({ apiKey: defaultApiKey });
 
+        // This is what checkOperation folds a top-level `config` into.
         await check(pendingOp, {
           context: {
-            apiVersion: 'v1context',
-            baseUrl: 'https://context.example.com',
+            config: {
+              apiVersion: 'v1config',
+              baseUrl: 'https://config.example.com',
+            },
           },
         });
 
@@ -510,8 +513,8 @@ describe('Google AI Veo', () => {
         const expectedUrl = getGoogleAIUrl({
           resourcePath: operationId,
           clientOptions: {
-            apiVersion: 'v1context',
-            baseUrl: 'https://context.example.com',
+            apiVersion: 'v1config',
+            baseUrl: 'https://config.example.com',
           },
         });
         assert.strictEqual(fetchArgs[0], expectedUrl);
