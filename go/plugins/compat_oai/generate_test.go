@@ -84,6 +84,48 @@ func newStubGen(t *testing.T, contentType, body string) *ModelGenerator {
 	return NewModelGenerator(&client, "test-model")
 }
 
+func TestOpenAICompatibleSnapshotsConfigAliasesAtInit(t *testing.T) {
+	aliases := map[string]string{"maxTokens": "max_tokens"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		if got := body["max_tokens"]; got != float64(64) {
+			t.Errorf("max_tokens = %v, want 64", got)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"chatcmpl-1",
+			"object":"chat.completion",
+			"created":1,
+			"model":"test-model",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]
+		}`)
+	}))
+	defer server.Close()
+
+	plugin := &OpenAICompatible{
+		Provider:      "snapshot",
+		APIKey:        "test-key",
+		BaseURL:       server.URL,
+		ConfigAliases: aliases,
+	}
+	plugin.Init(context.Background())
+	aliases["maxTokens"] = "changed_after_init"
+
+	model := plugin.DefineModel("snapshot", "test-model", ai.ModelOptions{})
+	_, err := model.Generate(context.Background(), &ai.ModelRequest{
+		Messages: []*ai.Message{ai.NewUserTextMessage("hello")},
+		Config:   map[string]any{"maxTokens": 64},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+}
+
 // Regression test for #4683: the streaming path used to leave Request as an
 // empty &ai.ModelRequest{}, so History() dropped every input message.
 func TestGeneratePreservesRequest(t *testing.T) {
@@ -275,6 +317,75 @@ func TestWithConfigPreservesProviderSpecificFields(t *testing.T) {
 	}
 	if _, ok := extraFields["thinking"]; !ok {
 		t.Error("thinking was not preserved as a provider-specific extra field")
+	}
+}
+
+func TestWithConfigAppliesProviderAliases(t *testing.T) {
+	g := newGen().
+		WithConfigAliases(map[string]string{
+			"reasoningEffort":  "reasoning_effort",
+			"webSearchOptions": "web_search_options",
+		}).
+		WithConfig(map[string]any{
+			"deferred":         true,
+			"reasoningEffort":  "high",
+			"webSearchOptions": map[string]any{"search_context_size": "high"},
+		})
+	if g.err != nil {
+		t.Fatalf("WithConfig() error = %v", g.err)
+	}
+
+	data, err := json.Marshal(g.GetRequest())
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var request map[string]any
+	if err := json.Unmarshal(data, &request); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got := request["reasoning_effort"]; got != "high" {
+		t.Errorf("reasoning_effort = %v, want high", got)
+	}
+	webSearch, ok := request["web_search_options"].(map[string]any)
+	if !ok {
+		t.Fatalf("web_search_options = %#v, want object", request["web_search_options"])
+	}
+	if got := webSearch["search_context_size"]; got != "high" {
+		t.Errorf("web_search_options.search_context_size = %v, want high", got)
+	}
+	if got := request["deferred"]; got != true {
+		t.Errorf("deferred = %v, want true", got)
+	}
+	for _, name := range []string{"reasoningEffort", "webSearchOptions"} {
+		if _, ok := request[name]; ok {
+			t.Errorf("request contains unconverted %s field", name)
+		}
+	}
+	for _, name := range []string{"reasoning_effort", "web_search_options"} {
+		if _, ok := g.GetRequest().ExtraFields()[name]; ok {
+			t.Errorf("SDK-supported field %s was retained as an extra", name)
+		}
+	}
+}
+
+func TestWithConfigPreservesIdentityAlias(t *testing.T) {
+	g := newGen().
+		WithConfigAliases(map[string]string{"deferred": "deferred"}).
+		WithConfig(map[string]any{"deferred": true})
+	if g.err != nil {
+		t.Fatalf("WithConfig() error = %v", g.err)
+	}
+
+	data, err := json.Marshal(g.GetRequest())
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var request map[string]any
+	if err := json.Unmarshal(data, &request); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got := request["deferred"]; got != true {
+		t.Errorf("deferred = %v, want true", got)
 	}
 }
 

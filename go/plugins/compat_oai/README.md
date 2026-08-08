@@ -61,6 +61,7 @@ export ANTHROPIC_API_KEY=<your-anthropic-key>
 export DASHSCOPE_API_KEY=<your-dashscope-key>
 export ZAI_API_KEY=<your-zai-key>
 export KIMI_API_KEY=<your-kimi-key>
+export XAI_API_KEY=<your-xai-key>
 ```
 
 Run all tests:
@@ -84,6 +85,9 @@ go test -v ./zai
 
 # Kimi tests
 go test -v ./kimi
+
+# xAI tests
+go test -v ./xai
 ```
 
 Note: Tests will be skipped if the required API keys are not set.
