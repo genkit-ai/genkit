@@ -84,6 +84,48 @@ func newStubGen(t *testing.T, contentType, body string) *ModelGenerator {
 	return NewModelGenerator(&client, "test-model")
 }
 
+func TestOpenAICompatibleSnapshotsConfigAliasesAtInit(t *testing.T) {
+	aliases := map[string]string{"maxTokens": "max_tokens"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		if got := body["max_tokens"]; got != float64(64) {
+			t.Errorf("max_tokens = %v, want 64", got)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"chatcmpl-1",
+			"object":"chat.completion",
+			"created":1,
+			"model":"test-model",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]
+		}`)
+	}))
+	defer server.Close()
+
+	plugin := &OpenAICompatible{
+		Provider:      "snapshot",
+		APIKey:        "test-key",
+		BaseURL:       server.URL,
+		ConfigAliases: aliases,
+	}
+	plugin.Init(context.Background())
+	aliases["maxTokens"] = "changed_after_init"
+
+	model := plugin.DefineModel("snapshot", "test-model", ai.ModelOptions{})
+	_, err := model.Generate(context.Background(), &ai.ModelRequest{
+		Messages: []*ai.Message{ai.NewUserTextMessage("hello")},
+		Config:   map[string]any{"maxTokens": 64},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+}
+
 // Regression test for #4683: the streaming path used to leave Request as an
 // empty &ai.ModelRequest{}, so History() dropped every input message.
 func TestGeneratePreservesRequest(t *testing.T) {
@@ -275,6 +317,54 @@ func TestWithConfigPreservesProviderSpecificFields(t *testing.T) {
 	}
 	if _, ok := extraFields["thinking"]; !ok {
 		t.Error("thinking was not preserved as a provider-specific extra field")
+	}
+}
+
+func TestWithConfigAppliesProviderAliases(t *testing.T) {
+	g := newGen().
+		WithConfigAliases(map[string]string{"maxTokens": "max_tokens"}).
+		WithConfig(map[string]any{"maxTokens": 8192})
+	if g.err != nil {
+		t.Fatalf("WithConfig() error = %v", g.err)
+	}
+
+	data, err := json.Marshal(g.GetRequest())
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var request map[string]any
+	if err := json.Unmarshal(data, &request); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got := request["max_tokens"]; got != float64(8192) {
+		t.Errorf("max_tokens = %v, want 8192", got)
+	}
+	if _, ok := request["maxTokens"]; ok {
+		t.Error("request contains unconverted maxTokens field")
+	}
+	if _, ok := g.GetRequest().ExtraFields()["max_tokens"]; ok {
+		t.Error("max_tokens was added as an extra field")
+	}
+}
+
+func TestWithConfigPreservesIdentityAlias(t *testing.T) {
+	g := newGen().
+		WithConfigAliases(map[string]string{"deferred": "deferred"}).
+		WithConfig(map[string]any{"deferred": true})
+	if g.err != nil {
+		t.Fatalf("WithConfig() error = %v", g.err)
+	}
+
+	data, err := json.Marshal(g.GetRequest())
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var request map[string]any
+	if err := json.Unmarshal(data, &request); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got := request["deferred"]; got != true {
+		t.Errorf("deferred = %v, want true", got)
 	}
 }
 

@@ -59,6 +59,7 @@ Set your API keys:
 export OPENAI_API_KEY=<your-openai-key>
 export ANTHROPIC_API_KEY=<your-anthropic-key>
 export DASHSCOPE_API_KEY=<your-dashscope-key>
+export DEEPSEEK_API_KEY=<your-deepseek-key>
 export ZAI_API_KEY=<your-zai-key>
 export KIMI_API_KEY=<your-kimi-key>
 ```
@@ -78,6 +79,9 @@ go test -v ./anthropic
 
 # DashScope tests
 go test -v ./dashscope
+
+# DeepSeek tests
+go test -v ./deepseek
 
 # Z.ai tests
 go test -v ./zai
