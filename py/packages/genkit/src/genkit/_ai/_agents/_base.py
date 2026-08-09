@@ -22,8 +22,6 @@ import json
 from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Generic
 
-from opentelemetry import trace as trace_api
-
 # Internal imports from sibling modules
 from genkit._ai._agents._client import AgentClient, part_roots
 from genkit._ai._agents._preamble import (
@@ -72,6 +70,7 @@ from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import ModelConfig
 from genkit._core._registry import Registry
 from genkit._core._trace._attrs import metadata_key
+from genkit._core._tracing import annotate
 from genkit._core._typing import (
     AgentAbortRequest,
     AgentAbortResponse,
@@ -248,9 +247,7 @@ def define_custom_agent(
 
         state = await session.state()
         if state.session_id:
-            span = trace_api.get_current_span()
-            if span.is_recording():
-                span.set_attribute(metadata_key('agent:sessionId'), state.session_id)
+            annotate(metadata_key('agent:sessionId'), state.session_id)
 
         rt = AgentRuntime(
             name=name,

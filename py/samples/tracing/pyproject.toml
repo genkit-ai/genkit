@@ -2,7 +2,11 @@
 name = "tracing"
 version = "0.2.0"
 requires-python = ">=3.10"
-dependencies = ["genkit", "genkit-google-genai"]
+dependencies = [
+  "genkit",
+  "genkit-google-genai",
+  "opentelemetry-exporter-otlp-proto-http",
+]
 
 [build-system]
 build-backend = "hatchling.build"

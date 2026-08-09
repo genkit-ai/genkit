@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Awaitable, Callable
 
 from pydantic import BaseModel, Field
@@ -55,10 +54,11 @@ class ToolApproval(BaseMiddleware[ToolApprovalConfig]):
             return await next_fn(params, ctx)
 
         tool_input = params.tool_request_part.tool_request.input
-        with run_in_new_span(
-            SpanMetadata(name=tool_name, type='action', subtype='tool', input=tool_input),
-        ) as span:
-            if tool_input is not None:
-                inp_json = tool_input.model_dump_json() if isinstance(tool_input, BaseModel) else json.dumps(tool_input)
-                span.set_attribute('genkit:input', inp_json)
+
+        async def work() -> MultipartToolResponse:
             raise Interrupt({'message': f'Tool not in approved list: {tool_name}'})
+
+        return await run_in_new_span(
+            SpanMetadata(name=tool_name, type='action', subtype='tool', input=tool_input),
+            work,
+        )

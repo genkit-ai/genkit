@@ -34,8 +34,9 @@ from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError
 from genkit._core._schema import to_json_schema
+from genkit._core._telemetry_handlers import current_span_ids
 from genkit._core._trace._suppress import suppress_telemetry
-from genkit._core._tracing import SpanMetadata, run_in_new_span
+from genkit._core._tracing import SpanMetadata, annotate_output, run_in_new_span
 
 # =============================================================================
 # Span attribute types and tracing helpers
@@ -753,10 +754,10 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
 
         trace_id = ''
         try:
-            with run_in_new_span(span_meta) as span:
-                # OpenTelemetry standard hex format.
-                trace_id = format(span.get_span_context().trace_id, '032x')
-                span_id = format(span.get_span_context().span_id, '016x')
+
+            async def work() -> ActionResponse[OutputT]:
+                nonlocal trace_id
+                trace_id, span_id = current_span_ids()
                 if on_trace_start:
                     await on_trace_start(trace_id, span_id)
 
@@ -765,13 +766,14 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 else:
                     output = await self._invoke(input, ctx)
                 output = cast(OutputT, _record_latency(output, start_time))
-                # Picked up by run_in_new_span's success branch and written as ``genkit:output``.
-                span_meta.output = output
+                annotate_output(output)
                 return ActionResponse(response=output, trace_id=trace_id, span_id=span_id)
+
+            return await run_in_new_span(span_meta, work)
         except GenkitError:
             raise
         except Exception as e:
-            # Wrap outside the with-block so we don't clobber ``genkit:error`` (which
+            # Wrap outside fn so we don't clobber ``genkit:error`` (which
             # ``run_in_new_span`` already set to ``str(original_e)``).
             raise GenkitError(
                 cause=e,

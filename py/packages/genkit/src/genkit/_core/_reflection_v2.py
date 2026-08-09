@@ -52,8 +52,8 @@ from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
 from genkit._core._reflection import as_agent_input_dict, resolve_agent_init
 from genkit._core._registry import Registry
+from genkit._core._telemetry_handlers import add_custom_exporter
 from genkit._core._trace._default_exporter import TraceServerExporter
-from genkit._core._tracing import add_custom_exporter
 from genkit._core._typing import (
     AgentInput,
     ReflectionCancelActionParams,

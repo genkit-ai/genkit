@@ -48,7 +48,7 @@ from genkit._core._logger import get_logger
 from genkit._core._model import GenerateActionOptions, Message, ModelResponse, ModelResponseChunk
 from genkit._core._registry import Registry
 from genkit._core._trace._attrs import metadata_key
-from genkit._core._tracing import SpanMetadata, run_in_new_span
+from genkit._core._tracing import SpanMetadata, annotate, annotate_output, run_in_new_span
 from genkit._core._typing import (
     AgentFinishReason,
     AgentInit,
@@ -164,7 +164,12 @@ class SessionRunner(Generic[StateT]):
                 input=inp,
             )
             try:
-                with run_in_new_span(span_meta) as span:
+
+                async def work(
+                    *,
+                    inp: Any = inp,  # noqa: ANN401
+                    turn_ctx: TurnContext = turn_ctx,
+                ) -> None:
                     turn_result = await fn(inp, turn_ctx)
                     finish_reason = turn_result.finish_reason if turn_result else None
                     self.last_turn_finish_reason = finish_reason
@@ -178,13 +183,15 @@ class SessionRunner(Generic[StateT]):
                     # (messages, artifacts, custom) so a trace can show what
                     # changed without reading the client response.
                     state = await self.session.state()
-                    span_meta.output = {
+                    annotate_output({
                         'state': state.model_dump(by_alias=True, exclude_none=True, mode='json'),
-                    }
+                    })
                     # Tag with the id this turn actually persisted under
                     # (server-managed only; omitted when nothing was written).
-                    if snapshot_id and span.is_recording():
-                        span.set_attribute(metadata_key('agent:snapshotId'), snapshot_id)
+                    if snapshot_id:
+                        annotate(metadata_key('agent:snapshotId'), snapshot_id)
+
+                await run_in_new_span(span_meta, work)
 
                 self.last_good_state = await self.session.state()
                 self.last_good_state_version = self.session.version

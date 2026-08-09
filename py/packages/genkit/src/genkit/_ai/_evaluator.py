@@ -16,7 +16,6 @@
 
 """Evaluator type definitions for the Genkit framework."""
 
-import json
 import traceback
 import uuid
 from collections.abc import Callable, Coroutine
@@ -29,7 +28,8 @@ from genkit._core._action import Action, ActionKind
 from genkit._core._logger import get_logger
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
-from genkit._core._tracing import SpanMetadata, run_in_new_span
+from genkit._core._telemetry_handlers import current_span_ids
+from genkit._core._tracing import SpanMetadata, annotate_output, run_in_new_span
 from genkit._core._typing import (
     ActionMetadata,
     BaseDataPoint,
@@ -140,25 +140,14 @@ def define_evaluator(
                 # Try to run with tracing, but fallback if tracing infrastructure fails
                 # (e.g., in environments with NonRecordingSpans like pre-commit)
                 try:
-                    with run_in_new_span(span_metadata) as span:
-                        span_id = format(span.get_span_context().span_id, '016x')
-                        trace_id = format(span.get_span_context().trace_id, '032x')
+
+                    async def work(*, datapoint: Any = datapoint) -> None:  # noqa: ANN401
+                        trace_id, span_id = current_span_ids()
                         try:
-                            input_json = (
-                                datapoint.model_dump_json(by_alias=True, exclude_none=True)
-                                if isinstance(datapoint, BaseModel)
-                                else json.dumps(datapoint)
-                            )
-                            span.set_attribute('genkit:input', input_json)
                             test_case_output = await fn(datapoint, req.options)
                             test_case_output.span_id = span_id
                             test_case_output.trace_id = trace_id
-                            output_json = (
-                                test_case_output.model_dump_json(by_alias=True, exclude_none=True)
-                                if isinstance(test_case_output, BaseModel)
-                                else json.dumps(test_case_output)
-                            )
-                            span.set_attribute('genkit:output', output_json)
+                            annotate_output(test_case_output)
                             eval_responses.append(test_case_output)
                         except Exception as e:
                             logger.debug(f'eval_stepper_fn error: {e!s}')
@@ -179,6 +168,8 @@ def define_evaluator(
                             )
                             # Raise to mark span as failed
                             raise e
+
+                    await run_in_new_span(span_metadata, work)
                 except (AttributeError, UnboundLocalError):
                     # Fallback: run without span
                     try:

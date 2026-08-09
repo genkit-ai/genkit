@@ -15,32 +15,55 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Telemetry and tracing functionality for the Genkit framework."""
+"""Telemetry dispatcher for the Genkit framework.
 
-import asyncio
+Composes registered telemetry handlers around span bodies. Work always runs
+inside ``fn`` (the innermost continuation). OpenTelemetry lives in
+``_telemetry_handlers`` / ``_trace/``; this module only composes the chain.
+
+Attribute visibility timing
+---------------------------
+1. Start-known facts must be on ``params.attributes`` / ``start_attributes``
+   **before** the renderer creates the span (live Dev UI snapshots at on_start).
+2. Mid-run facts go through ``annotate()`` (mirrored live via renderer flush).
+3. ``genkit:output`` via ``annotate_output`` during the body; ``genkit:state``
+   / error stamped by the renderer before span end.
+4. Do not mutate the pre-start attrs dict for live visibility after the span
+   has started — use ``annotate`` for mid-run.
+"""
+
+from __future__ import annotations
+
 import json
-import traceback
-from collections.abc import Generator
-from contextlib import contextmanager
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, TypeVar, cast, overload
 
-from opentelemetry import trace as trace_api
-from opentelemetry.instrumentation.logging import LoggingInstrumentor
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SpanExporter
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from ._base import GenkitModel
 from ._environment import is_dev_environment
-from ._error import GenkitError, GenkitInterrupt
-from ._logger import get_logger
-from ._trace._attrs import Attr, State, metadata_key
-from ._trace._default_exporter import create_span_processor, init_telemetry_server_exporter
+from ._telemetry_contract import (
+    SpanFrame,
+    SpanHookParams,
+    TelemetryHandler,
+    annotate_flush,
+    annotate_projector,
+    clear_genkit_telemetry_handlers,
+    current_frame,
+    frame_stack,
+    get_telemetry_handlers,
+    register_genkit_telemetry_handler,
+)
+from ._telemetry_gen_ai import is_model_span
+from ._telemetry_handlers import ensure_dev_telemetry, otel_ai_semantic_conventions, otel_renderer
+from ._trace._attrs import TYPE_FACT, Attr, metadata_key
 from ._trace._path import build_path
 
-logger = get_logger(__name__)
+T = TypeVar('T')
+
+initialized = False
 
 
 class SpanMetadata(GenkitModel):
@@ -48,12 +71,13 @@ class SpanMetadata(GenkitModel):
 
     Mapping from SpanMetadata to span attributes (see ``Attr`` for wire names):
       - name                 -> Attr.NAME (and span name)
-      - input / output       -> Attr.INPUT / Attr.OUTPUT (JSON-serialized)
+      - input                -> Attr.INPUT (JSON-serialized at start)
       - type                 -> Attr.TYPE
       - subtype              -> Attr.SUBTYPE
       - metadata[k]          -> metadata_key(k)
       - telemetry_labels[k]  -> <k> verbatim (caller-controlled keys)
 
+    Write ``genkit:output`` during the span body with :func:`annotate_output`.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
@@ -61,9 +85,7 @@ class SpanMetadata(GenkitModel):
     )
 
     name: str = Field(...)
-    state: Literal['success', 'error'] | None = None
     input: Any | None = Field(default=None)
-    output: Any | None = Field(default=None)
     init: Any | None = Field(default=None)
     is_root: bool | None = None
     metadata: dict[str, Any] | None = None
@@ -73,67 +95,70 @@ class SpanMetadata(GenkitModel):
     telemetry_labels: dict[str, str] | None = None
 
 
-tracer = trace_api.get_tracer('genkit-tracer', 'v1')
+# Qualified path of the active span; pushed so nested spans can build child paths.
+parent_path_context: ContextVar[str] = ContextVar('genkit_parent_path', default='')
 
 
-# Qualified ``genkit:path`` of the active span; pushed by ``run_in_new_span`` so
-# nested spans can build child paths.
-_parent_path_context: ContextVar[str] = ContextVar('genkit_parent_path', default='')
+def restore_default_telemetry_handlers() -> None:
+    """Reset the chain to the two default handlers (conventions, then renderer)."""
+    clear_genkit_telemetry_handlers()
+    register_genkit_telemetry_handler(otel_ai_semantic_conventions)
+    register_genkit_telemetry_handler(otel_renderer)
 
 
-@contextmanager
-def push_parent_path(path: str) -> Generator[None, None, None]:
-    """Push ``path`` as the active parent path for nested spans; restore on exit."""
-    token = _parent_path_context.set(path)
-    try:
-        yield
-    finally:
-        _parent_path_context.reset(token)
+def init_telemetry() -> None:
+    """Idempotent process setup: default handler chain + optional Dev UI export."""
+    global initialized
+    if initialized:
+        return
+    initialized = True
+    restore_default_telemetry_handlers()
+    if is_dev_environment():
+        ensure_dev_telemetry()
 
 
-def init_provider() -> TracerProvider:
-    """Inits and returns the tracer global provider."""
-    tracer_provider = trace_api.get_tracer_provider()
-
-    if tracer_provider is None or not isinstance(tracer_provider, TracerProvider):  # pyright: ignore[reportUnnecessaryComparison]
-        tracer_provider = TracerProvider()
-        trace_api.set_tracer_provider(tracer_provider)
-        # pyrefly: ignore[missing-attribute] - LoggingInstrumentor has instrument() method
-        LoggingInstrumentor().instrument(set_logging_format=True)
-        logger.debug('Creating a new global tracer provider for telemetry.')
-
-    if not isinstance(tracer_provider, TracerProvider):  # pyright: ignore[reportUnnecessaryIsInstance]
-        raise TypeError(
-            f'The current trace provider is not an instance of TracerProvider.  It is of type: {type(tracer_provider)}'
-        )
-
-    return tracer_provider
+def has_genkit_frame_above() -> bool:
+    """True when at least one Genkit frame is already on the stack."""
+    return bool(frame_stack.get())
 
 
-def add_custom_exporter(exporter: SpanExporter | None, name: str = 'last') -> None:
-    """Adds custom span exporter to current tracer provider.
+def is_subtree_root() -> bool:
+    """True when the current Genkit frame has no Genkit frame above it."""
+    return len(frame_stack.get()) <= 1
 
-    Args:
-        exporter: Custom or dedicated span exporter.
-        name: Name of the span exporter. Only for logging purposes.
+
+def write_span_attr(key: str, value: Any) -> None:  # noqa: ANN401
+    """Write one attr on the current Genkit frame and flush to the live span.
+
+    Does not invoke annotate projectors (so projectors can write derived attrs
+    without re-entering projection).
     """
-    current_provider = init_provider()
-
-    try:
-        if exporter is None:
-            logger.warn(f'{name} exporter is None')
-            return
-
-        processor = create_span_processor(exporter)
-        current_provider.add_span_processor(processor)
-        logger.debug(f'{name} exporter added successfully.')
-    except Exception:
-        logger.error(f'tracing.add_custom_exporter: failed to add exporter {name}')
-        logger.exception('Failed to add custom exporter')
+    frame = current_frame()
+    if frame is None:
+        return
+    frame.attrs[key] = value
+    flush = annotate_flush.get()
+    if flush is not None:
+        flush(key, value)
 
 
-if is_dev_environment():
-    add_custom_exporter(init_telemetry_server_exporter(), 'local_telemetry_server')
+def annotate(key: str, value: Any) -> None:  # noqa: ANN401
+    """Buffer a span attribute on the current Genkit frame.
+
+    Deep sites (interrupt / sessionId / snapshot / resumed) call this instead of
+    touching OpenTelemetry. While a renderer has a span open it installs a flush
+    callback so the write is also mirrored onto the live span for Dev UI.
+
+    If an enrichment handler installed an annotate projector for this span
+    (e.g. GenAI conventions), that runs after the write — annotate itself does
+    not know about any particular convention.
+    """
+    if current_frame() is None:
+        return
+    write_span_attr(key, value)
+    projector = annotate_projector.get()
+    if projector is not None:
+        projector()
 
 
 def _to_json_attr(value: object) -> str:
@@ -146,19 +171,25 @@ def _to_json_attr(value: object) -> str:
         return str(value)
 
 
+def annotate_output(value: Any) -> None:  # noqa: ANN401
+    """Write ``genkit:output`` on the current span (JSON-serialized)."""
+    annotate(Attr.OUTPUT, _to_json_attr(value))
+
+
 def start_attributes(
     metadata: SpanMetadata,
     *,
     qualified_path: str,
-) -> dict[str, str | bool]:
+) -> dict[str, Any]:
     """Attrs known when the span begins (identity/shape + input).
 
-    Live-trace export snapshots the span the instant it starts, so these have to
-    be on the span *before* start returns; otherwise Dev UI shows a blank
-    in-progress entry until the span ends. State/output are excluded — they
-    aren't known until the body finishes.
+    Put these on ``params.attributes`` before the renderer opens the span so
+    live on_start snapshots (Dev UI) already show input/path/type. State and
+    output stay out — they aren't known until the body finishes; write those
+    before end (renderer / annotate_output) and use ``annotate`` for mid-run
+    facts. See module docstring "Attribute visibility timing".
     """
-    attrs: dict[str, str | bool] = {}
+    attrs: dict[str, Any] = {}
     if metadata.telemetry_labels:
         attrs.update(metadata.telemetry_labels)
     attrs.update({
@@ -182,73 +213,127 @@ def start_attributes(
     return attrs
 
 
-@contextmanager
-def record_span_outcome(
-    span: trace_api.Span,
-    metadata: SpanMetadata,
-) -> Generator[None, None, None]:
-    """Write success or error attrs after the span body finishes."""
-    try:
-        yield
-    except GenkitInterrupt:
-        # HITL / tool pause — control flow, not a failed span. Stamp success so
-        # cloud telemetry has a known genkit:state; interrupt metadata already
-        # lives on the raise. Don't paint the span red.
-        if metadata.output is not None:
-            span.set_attribute(Attr.OUTPUT, _to_json_attr(metadata.output))
-        span.set_attribute(Attr.STATE, State.SUCCESS)
-        raise
-    except (asyncio.CancelledError, KeyboardInterrupt):
-        # Abort/timeout — unfinished work, not a win or a fail. Leave
-        # genkit:state absent (OTel stays UNSET) so cloud metrics don't count
-        # these as either. May log Unknown state until we have an aborted bucket.
-        raise
-    except Exception as e:
-        logger.debug(f'Error in run_in_new_span: {e!s}')
-        logger.debug(traceback.format_exc())
-        span.set_attribute(Attr.STATE, State.ERROR)
-        err_text = e.original_message if isinstance(e, GenkitError) else str(e)
-        span.set_attribute(Attr.ERROR, err_text)
-        span.set_status(status=trace_api.StatusCode.ERROR, description=str(e))
-        span.record_exception(e)
-        raise
-
-    if metadata.output is not None:
-        span.set_attribute(Attr.OUTPUT, _to_json_attr(metadata.output))
-    span.set_attribute(Attr.STATE, State.SUCCESS)
+def span_kind_from_attrs(attrs: dict[str, Any]) -> str:
+    """Model calls are client spans; everything else is internal."""
+    return 'client' if is_model_span(attrs) else 'internal'
 
 
-@contextmanager
-def run_in_new_span(
-    metadata: SpanMetadata,
-    links: list[trace_api.Link] | None = None,
-) -> Generator[trace_api.Span, None, None]:
-    """Starts a new span context under the current trace.
+async def dispatch(params: SpanHookParams, fn: Callable[[], Awaitable[Any]]) -> Any:  # noqa: ANN401
+    """Compose registered handlers into a chain and run it.
 
-    All Genkit-specific attributes are derived from ``metadata``; caller-controlled
-    passthrough attributes go via ``metadata.telemetry_labels``.
-
-    Args:
-        metadata: Span metadata. See :class:`SpanMetadata` for field routing.
-        links: Optional span links.
-
-    Yields:
-        The OpenTelemetry Span object.
+    Each handler's ``next_fn`` is the rest of the chain; ``fn`` is the innermost
+    async continuation and runs exactly once. Results and exceptions flow back
+    out through every handler.
     """
-    qualified_path = build_path(metadata.name, _parent_path_context.get(), metadata.type or '', metadata.subtype)
-    # Seed start-known attrs as span-start options so RealtimeSpanProcessor's
-    # on_start export already carries them for the Dev UI.
-    start_attrs = start_attributes(metadata, qualified_path=qualified_path)
+    chain: Callable[[], Awaitable[Any]] = fn
+    for handler in reversed(get_telemetry_handlers()):
+        next_fn = chain
 
-    with push_parent_path(qualified_path):
-        # record_span_outcome owns success/error attrs so control-flow
-        # GenkitInterrupt can re-raise without OTEL painting the span red.
-        with tracer.start_as_current_span(
-            name=metadata.name,
-            links=links,
-            attributes=start_attrs,
-            record_exception=False,
-            set_status_on_exception=False,
-        ) as span:
-            with record_span_outcome(span, metadata):
-                yield span
+        async def link(
+            h: TelemetryHandler = handler,
+            nxt: Callable[[], Awaitable[Any]] = next_fn,
+        ) -> Any:  # noqa: ANN401
+            return await h(params, nxt)
+
+        chain = link
+    return await chain()
+
+
+@overload
+async def run_in_new_span(
+    name: SpanMetadata,
+    attrs: Callable[[], Awaitable[T]],
+    fn: None = None,
+    *,
+    links: list[Any] | None = None,
+) -> T: ...
+
+
+@overload
+async def run_in_new_span(
+    name: str,
+    attrs: dict[str, Any],
+    fn: Callable[[], Awaitable[T]],
+    *,
+    links: list[Any] | None = None,
+) -> T: ...
+
+
+async def run_in_new_span(
+    name: str | SpanMetadata,
+    attrs: dict[str, Any] | Callable[[], Awaitable[T]] | None = None,
+    fn: Callable[[], Awaitable[T]] | None = None,
+    *,
+    links: list[Any] | None = None,
+) -> Any:  # noqa: ANN401
+    """Run ``fn`` inside a new Genkit span via the telemetry handler chain.
+
+    ``fn`` must be async (return an awaitable). Two call shapes:
+
+    * ``await run_in_new_span(name, attrs, fn)``
+    * ``await run_in_new_span(metadata, fn)`` — builds attrs/path from SpanMetadata.
+    """
+    if isinstance(name, SpanMetadata):
+        metadata = name
+        body = attrs if callable(attrs) else fn
+        if not callable(body):
+            raise TypeError('run_in_new_span(metadata, fn) requires a callable fn')
+        return await run_with_metadata(metadata, cast(Callable[[], Awaitable[Any]], body), links=links)
+
+    if fn is None:
+        raise TypeError('run_in_new_span(name, attrs, fn) requires a callable fn')
+    if attrs is None or callable(attrs):
+        raise TypeError('run_in_new_span(name, attrs, fn) requires an attrs dict')
+    return await run_dispatch(name, attrs, fn, links=links)
+
+
+async def run_with_metadata(
+    metadata: SpanMetadata,
+    fn: Callable[[], Awaitable[T]],
+    *,
+    links: list[Any] | None = None,
+) -> T:
+    if not has_genkit_frame_above() and metadata.is_root is None:
+        metadata.is_root = True
+
+    qualified_path = build_path(metadata.name, parent_path_context.get(), metadata.type or '', metadata.subtype)
+    metadata.path = qualified_path
+    span_attrs = start_attributes(metadata, qualified_path=qualified_path)
+    if metadata.type:
+        span_attrs[TYPE_FACT] = metadata.type
+
+    # Parent path must stay set across await so nested run_in_new_span sees it.
+    async def body_with_path() -> Any:  # noqa: ANN401
+        token = parent_path_context.set(qualified_path)
+        try:
+            return await fn()
+        finally:
+            parent_path_context.reset(token)
+
+    return await run_dispatch(metadata.name, span_attrs, body_with_path, links=links)
+
+
+async def run_dispatch(
+    name: str,
+    attrs: dict[str, Any],
+    fn: Callable[[], Awaitable[T]],
+    *,
+    links: list[Any] | None = None,
+) -> T:
+    if not has_genkit_frame_above() and Attr.IS_ROOT not in attrs:
+        attrs[Attr.IS_ROOT] = True
+
+    # Build params first: pydantic may copy ``attributes``, and the frame must
+    # share that same dict so handler start enrichment is visible to annotate().
+    params = SpanHookParams(
+        name=name,
+        attributes=attrs,
+        kind=span_kind_from_attrs(attrs),
+        links=links,
+    )
+    frame = SpanFrame(name=name, attrs=params.attributes)
+    frame_token = frame_stack.set((*frame_stack.get(), frame))
+    try:
+        return await dispatch(params, fn)
+    finally:
+        frame_stack.reset(frame_token)

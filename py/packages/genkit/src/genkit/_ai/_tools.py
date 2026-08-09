@@ -22,13 +22,14 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from typing import Any, cast
 
-from opentelemetry import trace as trace_api
 from pydantic import BaseModel
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._error import GenkitError, GenkitInterrupt
 from genkit._core._middleware import GenerateMiddlewareContext
 from genkit._core._registry import Registry
+from genkit._core._trace._attrs import metadata_key
+from genkit._core._tracing import annotate
 from genkit._core._typing import ToolDefinition, ToolRequest, ToolRequestPart, ToolResponse, ToolResponsePart
 
 
@@ -136,12 +137,10 @@ class Interrupt(GenkitInterrupt):  # noqa: N818 - public Genkit name; not rename
         super().__init__()
         self.metadata: dict[str, Any] = {} if metadata is None else metadata
         if self.metadata:
-            span = trace_api.get_current_span()
-            if span.is_recording():
-                try:
-                    span.set_attribute('genkit:metadata:interrupt', json.dumps(self.metadata))
-                except Exception:
-                    span.set_attribute('genkit:metadata:interrupt', str(self.metadata))
+            try:
+                annotate(metadata_key('interrupt'), json.dumps(self.metadata))
+            except Exception:
+                annotate(metadata_key('interrupt'), str(self.metadata))
 
 
 def _tool_response_part(
@@ -365,12 +364,10 @@ def _define_tool(
         # Record resumed metadata on the current span for observability.
         resumed_meta = _tool_resumed_metadata.get()
         if resumed_meta:
-            span = trace_api.get_current_span()
-            if span.is_recording():
-                try:
-                    span.set_attribute('genkit:metadata:resumed', json.dumps(resumed_meta))
-                except Exception:
-                    span.set_attribute('genkit:metadata:resumed', str(resumed_meta))
+            try:
+                annotate(metadata_key('resumed'), json.dumps(resumed_meta))
+            except Exception:
+                annotate(metadata_key('resumed'), str(resumed_meta))
 
         # Dynamic dispatch by arity; payload types follow the registered tool (not expressible here).
         match len(input_spec.args):

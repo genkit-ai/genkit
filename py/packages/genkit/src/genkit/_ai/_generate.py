@@ -65,7 +65,7 @@ from genkit._core._model import (
 )
 from genkit._core._protocols import RegistryLike, SessionLike
 from genkit._core._registry import Registry
-from genkit._core._tracing import SpanMetadata, run_in_new_span
+from genkit._core._tracing import SpanMetadata, annotate_output, run_in_new_span
 from genkit._core._typing import (
     FinishReason,
     MiddlewareRef,
@@ -455,7 +455,8 @@ async def generate_action(
     this wrapper because the action runtime already opens its own span.
     """
     span_name = 'generate'
-    with run_in_new_span(SpanMetadata(name=span_name, type='util', input=raw_request)) as span:
+
+    async def work() -> ModelResponse:
         result = await generate_with_request(
             registry=registry,
             raw_request=raw_request,
@@ -465,9 +466,10 @@ async def generate_action(
             current_turn=current_turn,
             context=context,
         )
-        with contextlib.suppress(Exception):
-            span.set_attribute('genkit:output', result.model_dump_json(by_alias=True, exclude_none=True))
+        annotate_output(result)
         return result
+
+    return await run_in_new_span(SpanMetadata(name=span_name, type='util', input=raw_request), work)
 
 
 async def generate_with_request(

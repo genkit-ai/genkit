@@ -28,17 +28,25 @@ from genkit._core._action import Action
 from genkit._core._error import GenkitError
 from genkit._core._trace._attrs import metadata_key
 from genkit._core._trace._realtime_processor import RealtimeSpanProcessor
-from genkit._core._tracing import SpanMetadata, _parent_path_context, run_in_new_span, start_attributes
+from genkit._core._tracing import (
+    SpanMetadata,
+    parent_path_context,
+    restore_default_telemetry_handlers,
+    run_in_new_span,
+    start_attributes,
+)
 
 
 @pytest.fixture(autouse=True)
 def _reset_parent_path() -> Generator[None, None, None]:
     """Each test starts with an empty parent-path context to keep paths independent."""
-    token = _parent_path_context.set('')
+    restore_default_telemetry_handlers()
+    token = parent_path_context.set('')
     try:
         yield
     finally:
-        _parent_path_context.reset(token)
+        parent_path_context.reset(token)
+        restore_default_telemetry_handlers()
 
 
 @pytest.fixture
@@ -64,14 +72,13 @@ def _by_name(spans: Sequence[ReadableSpan], name: str) -> ReadableSpan:
 
 
 def test_start_attributes_includes_input_excludes_outcome() -> None:
-    """Start-known attrs include input; state/output wait until the body finishes."""
+    """Start-known attrs include input; state/output are not start facts."""
     attrs = start_attributes(
         SpanMetadata(
             name='myTool',
             type='action',
             subtype='tool',
             input='in',
-            output='out',
             is_root=True,
             metadata={'key': 'value'},
         ),
@@ -156,9 +163,12 @@ def test_realtime_on_start_export_carries_identity_attrs(
         provider.shutdown()
 
 
-def test_writes_name_path_and_state_success(exporter: InMemorySpanExporter) -> None:
-    with run_in_new_span(SpanMetadata(name='hello', type='util')):
-        pass
+@pytest.mark.asyncio
+async def test_writes_name_path_and_state_success(exporter: InMemorySpanExporter) -> None:
+    async def work() -> None:
+        return None
+
+    await run_in_new_span(SpanMetadata(name='hello', type='util'), work)
 
     span = _by_name(exporter.get_finished_spans(), 'hello')
     attrs = dict(span.attributes or {})
@@ -169,12 +179,18 @@ def test_writes_name_path_and_state_success(exporter: InMemorySpanExporter) -> N
     assert attrs['genkit:qualifiedPath'] == '/{hello,t:util}'
 
 
-def test_writes_input_from_metadata(exporter: InMemorySpanExporter) -> None:
+@pytest.mark.asyncio
+async def test_writes_input_from_metadata(exporter: InMemorySpanExporter) -> None:
     class Payload(BaseModel):
         msg: str
 
-    with run_in_new_span(SpanMetadata(name='echo', type='action', subtype='tool', input=Payload(msg='hi'))):
-        pass
+    async def work() -> None:
+        return None
+
+    await run_in_new_span(
+        SpanMetadata(name='echo', type='action', subtype='tool', input=Payload(msg='hi')),
+        work,
+    )
 
     span = _by_name(exporter.get_finished_spans(), 'echo')
     attrs = dict(span.attributes or {})
@@ -183,19 +199,29 @@ def test_writes_input_from_metadata(exporter: InMemorySpanExporter) -> None:
     assert attrs['genkit:metadata:subtype'] == 'tool'
 
 
-def test_writes_init_from_metadata(exporter: InMemorySpanExporter) -> None:
-    with run_in_new_span(SpanMetadata(name='agentRun', type='action', init={'sessionId': 'session-123'})):
-        pass
+@pytest.mark.asyncio
+async def test_writes_init_from_metadata(exporter: InMemorySpanExporter) -> None:
+    async def work() -> None:
+        return None
+
+    await run_in_new_span(
+        SpanMetadata(name='agentRun', type='action', init={'sessionId': 'session-123'}),
+        work,
+    )
 
     span = _by_name(exporter.get_finished_spans(), 'agentRun')
     attrs = dict(span.attributes or {})
     assert attrs['genkit:init'] == '{"sessionId": "session-123"}'
 
 
-def test_writes_output_from_metadata_on_success(exporter: InMemorySpanExporter) -> None:
-    meta = SpanMetadata(name='answer', type='util')
-    with run_in_new_span(meta):
-        meta.output = {'result': 42}
+@pytest.mark.asyncio
+async def test_writes_output_via_annotate_on_success(exporter: InMemorySpanExporter) -> None:
+    from genkit._core._tracing import annotate_output
+
+    async def work() -> None:
+        annotate_output({'result': 42})
+
+    await run_in_new_span(SpanMetadata(name='answer', type='util'), work)
 
     span = _by_name(exporter.get_finished_spans(), 'answer')
     attrs = dict(span.attributes or {})
@@ -203,10 +229,13 @@ def test_writes_output_from_metadata_on_success(exporter: InMemorySpanExporter) 
     assert attrs['genkit:state'] == 'success'
 
 
-def test_records_error_attributes(exporter: InMemorySpanExporter) -> None:
+@pytest.mark.asyncio
+async def test_records_error_attributes(exporter: InMemorySpanExporter) -> None:
+    async def boom() -> None:
+        raise RuntimeError('boom')
+
     with pytest.raises(RuntimeError, match='boom'):
-        with run_in_new_span(SpanMetadata(name='broken', type='util')):
-            raise RuntimeError('boom')
+        await run_in_new_span(SpanMetadata(name='broken', type='util'), boom)
 
     span = _by_name(exporter.get_finished_spans(), 'broken')
     attrs = dict(span.attributes or {})
@@ -215,12 +244,18 @@ def test_records_error_attributes(exporter: InMemorySpanExporter) -> None:
     assert span.status.status_code == trace_api.StatusCode.ERROR
 
 
-def test_cancelled_span_leaves_state_unset(exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.asyncio
+async def test_cancelled_span_leaves_state_unset(
+    exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture
+) -> None:
     """Abort/timeout is unfinished work — neither success nor error."""
+
+    async def abort() -> None:
+        raise asyncio.CancelledError()
+
     with caplog.at_level(logging.DEBUG):
         with pytest.raises(asyncio.CancelledError):
-            with run_in_new_span(SpanMetadata(name='abortedTurn', type='util')):
-                raise asyncio.CancelledError()
+            await run_in_new_span(SpanMetadata(name='abortedTurn', type='util'), abort)
 
     span = _by_name(exporter.get_finished_spans(), 'abortedTurn')
     attrs = dict(span.attributes or {})
@@ -264,28 +299,37 @@ async def test_tool_interrupt_is_not_recorded_as_span_error(
     assert not any('Error in run_in_new_span' in r.message for r in caplog.records)
 
 
-def test_nested_path_inherits_parent_qualified_path(exporter: InMemorySpanExporter) -> None:
-    with run_in_new_span(SpanMetadata(name='outer', type='flow')):
-        with run_in_new_span(SpanMetadata(name='inner', type='flowStep')):
-            pass
+@pytest.mark.asyncio
+async def test_nested_path_inherits_parent_qualified_path(exporter: InMemorySpanExporter) -> None:
+    async def noop() -> None:
+        return None
+
+    async def outer() -> None:
+        await run_in_new_span(SpanMetadata(name='inner', type='flowStep'), noop)
+
+    await run_in_new_span(SpanMetadata(name='outer', type='flow'), outer)
 
     inner = _by_name(exporter.get_finished_spans(), 'inner')
     inner_attrs = dict(inner.attributes or {})
     assert inner_attrs['genkit:qualifiedPath'] == '/{outer,t:flow}/{inner,t:flowStep}'
 
 
-def test_metadata_metadata_dict_is_flattened_and_telemetry_labels_pass_through(
+@pytest.mark.asyncio
+async def test_metadata_metadata_dict_is_flattened_and_telemetry_labels_pass_through(
     exporter: InMemorySpanExporter,
 ) -> None:
-    with run_in_new_span(
+    async def work() -> None:
+        return None
+
+    await run_in_new_span(
         SpanMetadata(
             name='step',
             type='flowStep',
             metadata={'flow:name': 'pipeline', 'attempt': 2},
             telemetry_labels={'genkit:custom:tag': 'foo'},
-        )
-    ):
-        pass
+        ),
+        work,
+    )
 
     span = _by_name(exporter.get_finished_spans(), 'step')
     attrs = dict(span.attributes or {})

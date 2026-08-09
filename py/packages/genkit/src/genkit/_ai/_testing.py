@@ -370,9 +370,13 @@ async def test_models(ai: Genkit, models: list[str]) -> TestReport:
 
     report: TestReport = []
 
-    with run_in_new_span(SpanMetadata(name='testModels', type='testSuite')):
+    async def suite() -> None:
         for test_name, test_fn in tests.items():
-            with run_in_new_span(SpanMetadata(name=test_name, type='testCase')):
+
+            async def case(
+                test_name: str = test_name,
+                test_fn: Callable[[str], Awaitable[None]] = test_fn,
+            ) -> None:
                 case_report: TestCaseReport = {
                     'description': test_name,
                     'models': [],
@@ -406,4 +410,7 @@ async def test_models(ai: Genkit, models: list[str]) -> TestReport:
 
                 report.append(case_report)
 
+            await run_in_new_span(SpanMetadata(name=test_name, type='testCase'), case)
+
+    await run_in_new_span(SpanMetadata(name='testModels', type='testSuite'), suite)
     return report

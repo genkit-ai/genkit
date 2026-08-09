@@ -28,6 +28,9 @@ from genkit._core._compat import StrEnum
 PREFIX: Final[str] = 'genkit'
 METADATA_PREFIX: Final[str] = f'{PREFIX}:metadata:'
 
+# Dot-form fact key for handler transforms; Attr.TYPE keeps the colon form Dev UI reads.
+TYPE_FACT: Final[str] = f'{PREFIX}.type'
+
 
 class Attr(StrEnum):
     """Span attribute keys."""

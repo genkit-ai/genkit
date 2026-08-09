@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import logging
 import os
 import signal
@@ -115,7 +114,7 @@ from genkit._core._protocols import SessionLike
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
 from genkit._core._reflection_v2 import ReflectionServerV2
 from genkit._core._registry import Registry
-from genkit._core._tracing import SpanMetadata, run_in_new_span
+from genkit._core._tracing import SpanMetadata, annotate_output, init_telemetry, run_in_new_span
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
@@ -173,6 +172,7 @@ class Genkit:
         prompt_dir: str | Path | None = None,
         reflection_server_spec: ServerSpec | None = None,
     ) -> None:
+        init_telemetry()
         self.registry: Registry = Registry()
         self._reflection_server_spec: ServerSpec | None = reflection_server_spec
         self._reflection_ready = threading.Event()
@@ -1350,22 +1350,13 @@ class Genkit:
             raise TypeError('fn must be a coroutine function')
 
         span_metadata = SpanMetadata(name=name, type='flowStep', metadata=metadata)
-        with run_in_new_span(span_metadata) as span:
-            try:
-                result = await fn()
-                output = (
-                    result.model_dump_json(by_alias=True, exclude_none=True)
-                    if isinstance(result, BaseModel)
-                    else json.dumps(result)
-                )
-                span.set_attribute('genkit:output', output)
-                return result
-            except Exception:
-                # We catch all exceptions here to ensure they are captured by
-                # the trace span context manager before being re-raised.
-                # The run_in_new_span context manager handles recording
-                # the exception details.
-                raise
+
+        async def work() -> T:
+            result = await fn()
+            annotate_output(result)
+            return result
+
+        return await run_in_new_span(span_metadata, work)
 
     async def check_operation(self, operation: Operation) -> Operation:
         """Check the status of a long-running background operation."""
