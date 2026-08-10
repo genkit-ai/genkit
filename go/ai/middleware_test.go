@@ -24,8 +24,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // --- counter: a config whose BuildMiddleware tracks hook invocations ---
@@ -812,10 +812,9 @@ func TestWrapToolValidationErrorReturnedToModel(t *testing.T) {
 		return &Hooks{
 			WrapTool: func(ctx context.Context, params *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
 				resp, err := next(ctx, params)
-				var sve *core.SchemaValidationError
-				if errors.As(err, &sve) {
+				if errors.Is(err, status.ErrInvalidInput) {
 					return &MultipartToolResponse{
-						Content: []*Part{NewTextPart(fmt.Sprintf("Validation error: %v", sve))},
+						Content: []*Part{NewTextPart(fmt.Sprintf("Validation error: %v", err))},
 						Output:  "tool call failed; see content for details",
 					}, nil
 				}
