@@ -20,10 +20,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
 
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
 )
@@ -55,6 +57,62 @@ func TestActionRunJSON(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// TestActionInvalidInput pins how an action classifies input it refuses, on
+// both entry points: Run validates the typed value against the schema, and
+// RunJSON fails earlier, deserializing the bytes. Each is reported with
+// [status.ErrInvalidInput] so callers match a sentinel rather than the
+// deprecated *SchemaValidationError, and each keeps the underlying validation
+// error reachable through errors.Unwrap.
+func TestActionInvalidInput(t *testing.T) {
+	r := registry.New()
+	// Stricter than the Go type, so a valid int can still violate it.
+	a := defineStreamingAction(r, "test/inc", api.ActionTypeCustom, nil,
+		map[string]any{"type": "integer", "minimum": 10}, inc)
+
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{"Run rejects a value the schema refuses", func() error {
+			_, err := a.Run(context.Background(), 3, nil)
+			return err
+		}},
+		{"RunJSON rejects bytes that do not deserialize", func() error {
+			_, err := a.RunJSON(context.Background(), []byte(`"not a number"`), nil)
+			return err
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if !errors.Is(err, status.ErrInvalidInput) {
+				t.Errorf("errors.Is(err, ErrInvalidInput) = false, err = %v", err)
+			}
+			// The subtype classifies as its base, which is what reaches the wire.
+			if !errors.Is(err, status.ErrInvalidArgument) {
+				t.Error("errors.Is(err, ErrInvalidArgument) = false")
+			}
+			if got := status.Of(err); got != status.InvalidArgument {
+				t.Errorf("status.Of = %q, want %q", got, status.InvalidArgument)
+			}
+			// %w rather than %v, so the validation error stays matchable.
+			if errors.Unwrap(err) == nil {
+				t.Error("errors.Unwrap = nil, want the underlying validation error")
+			}
+			// The deprecated wrapper carried the same sentinel, so only its
+			// absence separates this from the path it replaced.
+			var sve *SchemaValidationError
+			if errors.As(err, &sve) {
+				t.Error("errors.As(*SchemaValidationError) = true, want the sentinel alone")
+			}
+		})
 	}
 }
 
