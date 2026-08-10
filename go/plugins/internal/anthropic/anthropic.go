@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -167,9 +168,43 @@ func reflectConfigSchema(config any) map[string]any {
 		return nil
 	}
 	schema := r.Reflect(config)
+	stripParamObjArtifact(schema)
+	applyConfigOverrides(schema, mncOverrides)
 	result := base.SchemaAsMap(schema)
 
 	return result
+}
+
+// rejectManagedConfig reports a config field that a Genkit primitive owns.
+//
+// Each one is overwritten while the request is built, so accepting it would
+// drop the caller's value on the floor: messages and the model unconditionally,
+// the system prompt whenever the request carries system messages, and the
+// output format whenever constrained generation is on. Failing with the option
+// to use instead beats a request that silently ignores half of what it was
+// given.
+//
+// These are hidden from the advertised schema (see mncOverrides), so this is
+// what a caller setting one in code sees. The objects they were removed from
+// are reopened so the value reaches here rather than failing validation as an
+// unknown property.
+func rejectManagedConfig(config *anthropic.MessageNewParams) error {
+	switch {
+	case len(config.Messages) > 0:
+		return errors.New("messages must be set using Genkit feature: ai.WithMessages() or ai.WithPrompt()")
+	case len(config.System) > 0:
+		return errors.New("system prompt must be set using Genkit feature: ai.WithSystem()")
+	case config.Model != "":
+		return errors.New("the model is chosen by the action; set it using Genkit feature: ai.WithModel() or ai.WithModelName()")
+	case config.OutputConfig.Format.Schema != nil || config.OutputConfig.Format.Type != "":
+		return errors.New("output format must be set using Genkit feature: ai.WithOutputType() or ai.WithOutputSchema(); the config-level output_config.effort field is unaffected")
+	}
+	for _, t := range config.Tools {
+		if t.OfTool != nil {
+			return errors.New("custom function tools must be set using Genkit feature: ai.WithTools(); the config-level tools field is reserved for server-side tools (web search, code execution, etc.)")
+		}
+	}
+	return nil
 }
 
 // Generate function defines how a generate request is done in Anthropic models.
@@ -284,6 +319,9 @@ func toAnthropicRequest(provider string, i *ai.ModelRequest, config anthropic.Me
 	messages := make([]anthropic.MessageParam, 0)
 
 	req := &config
+	if err := rejectManagedConfig(req); err != nil {
+		return nil, err
+	}
 
 	// max_tokens is required by the Anthropic API. Fall back to a conservative
 	// default that every Claude model accepts, mirroring the JS plugin's
@@ -328,8 +366,8 @@ func toAnthropicRequest(provider string, i *ai.ModelRequest, config anthropic.Me
 		})
 	}
 
-	// Only overwrite the config-provided system prompt when the request
-	// actually carries system messages, and never send an empty array.
+	// The config cannot carry a system prompt (rejectManagedConfig refuses
+	// one), so this only guards against sending an empty array.
 	if len(sysBlocks) > 0 {
 		req.System = sysBlocks
 	}
