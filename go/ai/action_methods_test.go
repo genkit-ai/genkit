@@ -19,9 +19,11 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -130,6 +132,92 @@ func TestPrimitiveMethodsForwardToEmbeddedAction(t *testing.T) {
 			}
 			if res == nil || len(res.Result) == 0 {
 				t.Error("RunJSONWithTelemetry() returned no result")
+			}
+		})
+	}
+}
+
+// A nil receiver reaches a forwarder whenever a caller holds an uninitialized
+// primitive, and dereferencing the embedded action would panic. Every
+// forwarder that can report an error returns INVALID_ARGUMENT instead, the way
+// Generate, Embed, Evaluate, Retrieve, and RunRawMultipart already do.
+func TestForwardersRejectNilReceivers(t *testing.T) {
+	ctx := context.Background()
+	in := json.RawMessage(`{}`)
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{"model RunJSON", func() error { var m *ModelAction; _, err := m.RunJSON(ctx, in, nil); return err }},
+		{"model RunJSONWithTelemetry", func() error {
+			var m *ModelAction
+			_, err := m.RunJSONWithTelemetry(ctx, in, nil)
+			return err
+		}},
+		{"embedder RunJSON", func() error { var e *EmbedderAction; _, err := e.RunJSON(ctx, in, nil); return err }},
+		{"embedder RunJSONWithTelemetry", func() error {
+			var e *EmbedderAction
+			_, err := e.RunJSONWithTelemetry(ctx, in, nil)
+			return err
+		}},
+		{"retriever RunJSON", func() error { var r *RetrieverAction; _, err := r.RunJSON(ctx, in, nil); return err }},
+		{"retriever RunJSONWithTelemetry", func() error {
+			var r *RetrieverAction
+			_, err := r.RunJSONWithTelemetry(ctx, in, nil)
+			return err
+		}},
+		{"evaluator RunJSON", func() error { var e *EvaluatorAction; _, err := e.RunJSON(ctx, in, nil); return err }},
+		{"evaluator RunJSONWithTelemetry", func() error {
+			var e *EvaluatorAction
+			_, err := e.RunJSONWithTelemetry(ctx, in, nil)
+			return err
+		}},
+		{"tool RunJSON", func() error {
+			var tl *ToolAction[any, any]
+			_, err := tl.RunJSON(ctx, in, nil)
+			return err
+		}},
+		{"tool RunJSONWithTelemetry", func() error {
+			var tl *ToolAction[any, any]
+			_, err := tl.RunJSONWithTelemetry(ctx, in, nil)
+			return err
+		}},
+		{"background RunJSON", func() error {
+			var b *BackgroundModelAction
+			_, err := b.RunJSON(ctx, in, nil)
+			return err
+		}},
+		{"background RunJSONWithTelemetry", func() error {
+			var b *BackgroundModelAction
+			_, err := b.RunJSONWithTelemetry(ctx, in, nil)
+			return err
+		}},
+		{"background Start", func() error {
+			var b *BackgroundModelAction
+			_, err := b.Start(ctx, &ModelRequest{})
+			return err
+		}},
+		{"background Check", func() error {
+			var b *BackgroundModelAction
+			_, err := b.Check(ctx, &ModelOperation{})
+			return err
+		}},
+		{"background Cancel", func() error {
+			var b *BackgroundModelAction
+			_, err := b.Cancel(ctx, &ModelOperation{})
+			return err
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.call()
+			if err == nil {
+				t.Fatal("got nil error, want an error on a nil receiver")
+			}
+			if !errors.Is(err, status.ErrInvalidArgument) {
+				t.Errorf("err = %v, want it to match status.ErrInvalidArgument", err)
 			}
 		})
 	}

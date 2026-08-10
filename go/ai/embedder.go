@@ -132,12 +132,18 @@ func (e *EmbedderAction) Desc() api.ActionDesc { return e.action.Desc() }
 // JSON-encoded [EmbedResponse]. The framework uses it to serve reflection and
 // registry-driven calls; prefer [EmbedderAction.Embed].
 func (e *EmbedderAction) RunJSON(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (json.RawMessage, error) {
+	if e == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "Embedder.RunJSON: embedder called on a nil embedder; check that all embedders are defined")
+	}
 	return e.action.RunJSON(ctx, input, cb)
 }
 
 // RunJSONWithTelemetry is [EmbedderAction.RunJSON] with the run's telemetry
 // returned alongside the output.
 func (e *EmbedderAction) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	if e == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "Embedder.RunJSONWithTelemetry: embedder called on a nil embedder; check that all embedders are defined")
+	}
 	return e.action.RunJSONWithTelemetry(ctx, input, cb)
 }
 

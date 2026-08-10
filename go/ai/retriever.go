@@ -84,12 +84,18 @@ func (r *RetrieverAction) Desc() api.ActionDesc { return r.action.Desc() }
 // a JSON-encoded [RetrieverResponse]. The framework uses it to serve
 // reflection and registry-driven calls; prefer [RetrieverAction.Retrieve].
 func (r *RetrieverAction) RunJSON(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (json.RawMessage, error) {
+	if r == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "Retriever.RunJSON: retriever called on a nil retriever; check that all retrievers are defined")
+	}
 	return r.action.RunJSON(ctx, input, cb)
 }
 
 // RunJSONWithTelemetry is [RetrieverAction.RunJSON] with the run's telemetry
 // returned alongside the output.
 func (r *RetrieverAction) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	if r == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "Retriever.RunJSONWithTelemetry: retriever called on a nil retriever; check that all retrievers are defined")
+	}
 	return r.action.RunJSONWithTelemetry(ctx, input, cb)
 }
 

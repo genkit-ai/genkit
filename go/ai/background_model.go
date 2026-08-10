@@ -86,11 +86,17 @@ func (b *BackgroundModelAction) Desc() api.ActionDesc { return b.backgroundActio
 // Start starts a background operation and returns it without waiting for
 // completion. Poll it with [BackgroundModelAction.Check].
 func (b *BackgroundModelAction) Start(ctx context.Context, req *ModelRequest) (*ModelOperation, error) {
+	if b == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "BackgroundModel.Start: start called on a nil background model; check that all background models are defined")
+	}
 	return b.backgroundAction.Start(ctx, req)
 }
 
 // Check returns the current state of a background operation.
 func (b *BackgroundModelAction) Check(ctx context.Context, op *ModelOperation) (*ModelOperation, error) {
+	if b == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "BackgroundModel.Check: check called on a nil background model; check that all background models are defined")
+	}
 	return b.backgroundAction.Check(ctx, op)
 }
 
@@ -98,6 +104,9 @@ func (b *BackgroundModelAction) Check(ctx context.Context, op *ModelOperation) (
 // the model does not support cancellation; see
 // [BackgroundModelAction.SupportsCancel].
 func (b *BackgroundModelAction) Cancel(ctx context.Context, op *ModelOperation) (*ModelOperation, error) {
+	if b == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "BackgroundModel.Cancel: cancel called on a nil background model; check that all background models are defined")
+	}
 	return b.backgroundAction.Cancel(ctx, op)
 }
 
@@ -109,12 +118,18 @@ func (b *BackgroundModelAction) SupportsCancel() bool { return b.backgroundActio
 // the JSON-encoded operation. The framework uses it to serve reflection and
 // registry-driven calls; prefer [BackgroundModelAction.Start].
 func (b *BackgroundModelAction) RunJSON(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (json.RawMessage, error) {
+	if b == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "BackgroundModel.RunJSON: model called on a nil background model; check that all background models are defined")
+	}
 	return b.backgroundAction.RunJSON(ctx, input, cb)
 }
 
 // RunJSONWithTelemetry is [BackgroundModelAction.RunJSON] with the run's
 // telemetry returned alongside the output.
 func (b *BackgroundModelAction) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	if b == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "BackgroundModel.RunJSONWithTelemetry: model called on a nil background model; check that all background models are defined")
+	}
 	return b.backgroundAction.RunJSONWithTelemetry(ctx, input, cb)
 }
 

@@ -513,12 +513,18 @@ func (t *ToolAction[In, Out]) Desc() api.ActionDesc { return t.action.Desc() }
 // tool. Prefer [ToolAction.RunRaw], which unwraps the envelope's output for a
 // regular tool.
 func (t *ToolAction[In, Out]) RunJSON(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (json.RawMessage, error) {
+	if t == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "ai.Tool.RunJSON: tool called on a nil tool; check that all tools are defined")
+	}
 	return t.action.RunJSON(ctx, input, cb)
 }
 
 // RunJSONWithTelemetry is [ToolAction.RunJSON] with the run's telemetry
 // returned alongside the output.
 func (t *ToolAction[In, Out]) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	if t == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "ai.Tool.RunJSONWithTelemetry: tool called on a nil tool; check that all tools are defined")
+	}
 	return t.action.RunJSONWithTelemetry(ctx, input, cb)
 }
 

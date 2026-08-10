@@ -134,12 +134,18 @@ func (m *ModelAction) Desc() api.ActionDesc { return m.action.Desc() }
 // JSON-encoded [ModelResponse]. The framework uses it to serve reflection and
 // registry-driven calls; prefer [ModelAction.Generate].
 func (m *ModelAction) RunJSON(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (json.RawMessage, error) {
+	if m == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "Model.RunJSON: model called on a nil model; check that all models are defined")
+	}
 	return m.action.RunJSON(ctx, input, cb)
 }
 
 // RunJSONWithTelemetry is [ModelAction.RunJSON] with the run's telemetry
 // returned alongside the output.
 func (m *ModelAction) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	if m == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "Model.RunJSONWithTelemetry: model called on a nil model; check that all models are defined")
+	}
 	return m.action.RunJSONWithTelemetry(ctx, input, cb)
 }
 

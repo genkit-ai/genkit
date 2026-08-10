@@ -124,12 +124,18 @@ func (e *EvaluatorAction) Desc() api.ActionDesc { return e.action.Desc() }
 // a JSON-encoded [EvaluatorResponse]. The framework uses it to serve
 // reflection and registry-driven calls; prefer [EvaluatorAction.Evaluate].
 func (e *EvaluatorAction) RunJSON(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (json.RawMessage, error) {
+	if e == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "Evaluator.RunJSON: evaluator called on a nil evaluator; check that all evaluators are defined")
+	}
 	return e.action.RunJSON(ctx, input, cb)
 }
 
 // RunJSONWithTelemetry is [EvaluatorAction.RunJSON] with the run's telemetry
 // returned alongside the output.
 func (e *EvaluatorAction) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	if e == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "Evaluator.RunJSONWithTelemetry: evaluator called on a nil evaluator; check that all evaluators are defined")
+	}
 	return e.action.RunJSONWithTelemetry(ctx, input, cb)
 }
 
