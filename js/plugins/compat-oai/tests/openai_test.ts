@@ -15,7 +15,15 @@
  * limitations under the License.
  */
 
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
 import { modelRef, type GenerateRequest } from 'genkit/model';
 import type OpenAI from 'openai';
 import {
@@ -23,6 +31,8 @@ import {
   defineCompatOpenAIModel,
   toOpenAIRequestBody,
 } from '../src/model';
+import { openAI } from '../src/openai/index';
+import { FakeOpenAIServer } from './fake_openai_server';
 
 describe('gptModel', () => {
   afterEach(() => {
@@ -126,6 +136,62 @@ describe('toOpenAiRequestBody for new GPT-4.1 variants', () => {
     expect(() =>
       toOpenAIRequestBody('gpt-4.1-nano', baseRequest)
     ).not.toThrow();
+  });
+});
+
+describe('listActions model filtering', () => {
+  let server: FakeOpenAIServer;
+  let previousBaseUrl: string | undefined;
+
+  beforeAll(async () => {
+    server = new FakeOpenAIServer();
+    await server.start();
+    // The openAI plugin does not accept a baseURL, so the fake server is
+    // injected the way a user would point the SDK at a proxy.
+    previousBaseUrl = process.env.OPENAI_BASE_URL;
+    process.env.OPENAI_BASE_URL = server.baseUrl;
+  });
+
+  afterAll(() => {
+    if (previousBaseUrl === undefined) {
+      delete process.env.OPENAI_BASE_URL;
+    } else {
+      process.env.OPENAI_BASE_URL = previousBaseUrl;
+    }
+    server.stop();
+  });
+
+  it('keeps current codex models and drops the legacy completion families', async () => {
+    const plugin = openAI({ apiKey: 'key' });
+    server.setNextResponse({
+      body: {
+        object: 'list',
+        data: [
+          'gpt-5-codex',
+          'gpt-5.1-codex-max',
+          'codex-mini-latest',
+          'gpt-4o',
+          'code-davinci-002',
+          'code-cushman-001',
+          'davinci-002',
+          'babbage-002',
+        ].map((id) => ({
+          id,
+          object: 'model',
+          created: 0,
+          owned_by: 'openai',
+        })),
+      },
+    });
+
+    const names = (await plugin.list!()).map((a) => a.name);
+
+    expect(names).toStrictEqual([
+      'openai/gpt-5-codex',
+      'openai/gpt-5.1-codex-max',
+      'openai/codex-mini-latest',
+      'openai/gpt-4o',
+    ]);
   });
 });
 
