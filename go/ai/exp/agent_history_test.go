@@ -41,7 +41,7 @@ func recordingModel(t *testing.T, r api.Registry, name string, replies ...string
 	ai.DefineGenerateAction(context.Background(), r)
 	var requests []*ai.ModelRequest
 	turn := 0
-	ai.DefineModel(r, name, &ai.ModelOptions{
+	defineTestModel(r, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
 	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		requests = append(requests, req)
@@ -310,7 +310,7 @@ func TestPromptAgent_StateReachesContentFunction(t *testing.T) {
 
 	// A tool is the write side: it reaches the live session from its context
 	// and updates the custom state, which the next turn's render sees.
-	bump := ai.DefineTool(reg, "bump", "increments the counter",
+	bump := defineTestTool(reg, "bump", "increments the counter",
 		func(tc *ai.ToolContext, _ struct{}) (string, error) {
 			sess := SessionFromContext[testState](tc)
 			if sess == nil {
@@ -326,7 +326,7 @@ func TestPromptAgent_StateReachesContentFunction(t *testing.T) {
 	// Calls bump once per turn, then answers on the pass that carries the
 	// tool's response.
 	var systemSeen []string
-	ai.DefineModel(reg, "test/statefn", &ai.ModelOptions{
+	defineTestModel(reg, "test/statefn", &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
 	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		for _, m := range req.Messages {
