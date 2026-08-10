@@ -65,7 +65,15 @@ import {
 
 export type OpenAIPluginOptions = Omit<PluginOptions, 'name' | 'baseURL'>;
 
-const UNSUPPORTED_MODEL_MATCHERS = ['babbage', 'davinci', 'codex'];
+/**
+ * Model ids this plugin cannot serve: the legacy completion-only families,
+ * including the original `code-*` (codex) models.
+ *
+ * Anchored on the leading segment rather than matched as a bare substring so
+ * that current models whose names merely contain a legacy word - `gpt-5-codex`,
+ * `gpt-5.1-codex-max`, `codex-mini-latest` - stay listed.
+ */
+const UNSUPPORTED_MODEL_MATCHERS = [/babbage/, /davinci/, /^code-/];
 
 function createResolver(pluginOptions: PluginOptions) {
   return async (client: OpenAI, actionType: ActionType, actionName: string) => {
@@ -125,7 +133,7 @@ function createResolver(pluginOptions: PluginOptions) {
 }
 
 function filterOpenAiModels(model: OpenAI.Model): boolean {
-  return !UNSUPPORTED_MODEL_MATCHERS.some((m) => model.id.includes(m));
+  return !UNSUPPORTED_MODEL_MATCHERS.some((m) => m.test(model.id));
 }
 
 const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
