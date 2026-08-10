@@ -481,3 +481,76 @@ async def test_converse_stream_without_a_stream_member_fails_loudly() -> None:
             pass
 
     assert excinfo.value.status == 'INTERNAL'
+
+
+class FakeStreamingBody:
+    """Stands in for botocore's StreamingBody; ``read`` is a blocking call."""
+
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+        self.read_threads: list[int] = []
+
+    def read(self) -> bytes:
+        self.read_threads.append(threading.get_ident())
+        return self._payload
+
+
+class FakeInvokeClient:
+    """Minimal bedrock-runtime stand-in for InvokeModel."""
+
+    def __init__(self, body: FakeStreamingBody | None) -> None:
+        self.body = body
+        self.calls: list[dict[str, Any]] = []
+
+    def invoke_model(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        return {'body': self.body} if self.body is not None else {}
+
+
+def invoking_transport(payload: bytes | None) -> tuple[BedrockTransport, FakeInvokeClient]:
+    client = FakeInvokeClient(FakeStreamingBody(payload) if payload is not None else None)
+    transport = make_transport(region='eu-west-1')
+    transport._client = client  # noqa: SLF001
+    return transport, client
+
+
+@pytest.mark.asyncio
+async def test_invoke_model_parses_the_response_body() -> None:
+    transport, client = invoking_transport(b'{"embedding": [1.0, 2.0]}')
+
+    result = await transport.invoke_model(modelId='m', body='{}')
+
+    assert result == {'embedding': [1.0, 2.0]}
+    assert client.calls == [{'modelId': 'm', 'body': '{}'}]
+
+
+@pytest.mark.asyncio
+async def test_invoke_model_reads_the_body_off_the_event_loop() -> None:
+    transport, client = invoking_transport(b'{}')
+
+    await transport.invoke_model(modelId='m')
+
+    # StreamingBody.read() is a blocking socket read; on the loop it stalls
+    # every other in-flight call.
+    assert client.body is not None
+    assert client.body.read_threads and threading.get_ident() not in client.body.read_threads
+
+
+@pytest.mark.asyncio
+async def test_invoke_model_rejects_a_non_json_body() -> None:
+    transport, _client = invoking_transport(b'<html>gateway timeout</html>')
+
+    with pytest.raises(GenkitError, match='not JSON') as excinfo:
+        await transport.invoke_model(modelId='m')
+
+    assert excinfo.value.status == 'INTERNAL'
+
+
+@pytest.mark.asyncio
+async def test_invoke_model_without_a_body_member_fails_loudly() -> None:
+    transport, _client = invoking_transport(None)
+
+    with pytest.raises(GenkitError, match='no body') as excinfo:
+        await transport.invoke_model(modelId='m')
+
+    assert excinfo.value.status == 'INTERNAL'

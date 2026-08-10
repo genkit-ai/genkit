@@ -18,13 +18,14 @@
 
 Registers Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama,
 Mistral, Cohere, and others) as Genkit model actions. Text generation uses the
-Bedrock Converse and ConverseStream APIs; embedders, image generation, and
-reranking are not supported yet.
+Bedrock Converse and ConverseStream APIs, and embedders use InvokeModel; image
+generation and reranking are not supported yet.
 """
 
 from typing import TYPE_CHECKING
 
 from genkit import ModelRequest, ModelResponse
+from genkit.embedder import EmbedRequest, EmbedResponse, embedder_action_metadata
 from genkit.model import model_action_metadata
 from genkit.plugin_api import (
     Action,
@@ -39,6 +40,7 @@ from genkit_amazon_bedrock.config import (
     BedrockConfig,
     ModelDefinition,
 )
+from genkit_amazon_bedrock.embedders import BedrockEmbedder, get_embedder_options, is_embedding_model
 from genkit_amazon_bedrock.model_info import get_model_info
 from genkit_amazon_bedrock.models import BedrockModel
 from genkit_amazon_bedrock.transport import BedrockTransport
@@ -76,6 +78,7 @@ class Bedrock(Plugin):
         total_timeout: float | None = DEFAULT_TOTAL_TIMEOUT,
         session: 'boto3.session.Session | None' = None,
         models: list[ModelDefinition] | None = None,
+        embedders: list[str] | None = None,
     ) -> None:
         """Initializes the Bedrock plugin.
 
@@ -101,6 +104,9 @@ class Bedrock(Plugin):
                 credentials or advanced SDK wiring.
             models: Bedrock models to register. Models not listed can still be
                 resolved dynamically by namespaced name.
+            embedders: Bedrock embedding model IDs to register, e.g.
+                ``amazon.titan-embed-text-v2:0``. As with models, unlisted IDs
+                still resolve dynamically.
         """
         self.region = region
         self.max_retries = max_retries
@@ -110,6 +116,7 @@ class Bedrock(Plugin):
         self.total_timeout = total_timeout
         self._session = session
         self.models = models or []
+        self.embedders = embedders or []
         self._transport = BedrockTransport(
             region=region,
             max_retries=max_retries,
@@ -145,13 +152,19 @@ class Bedrock(Plugin):
         Returns:
             Action object if resolvable, None otherwise.
         """
-        if action_type != ActionKind.MODEL:
-            return None
         prefix = f'{BEDROCK_PLUGIN_NAME}/'
         # Direct plugin.model() calls can pass any namespace; only ours resolves.
         if not name.startswith(prefix):
             return None
         model_id = name.removeprefix(prefix)
+        if action_type == ActionKind.EMBEDDER:
+            return self._create_embedder_action(model_id) if is_embedding_model(model_id) else None
+        if action_type != ActionKind.MODEL:
+            return None
+        if is_embedding_model(model_id):
+            # Embedding models speak InvokeModel, not Converse; resolving one
+            # as a chat model only defers the failure to call time.
+            return None
         model_type = self._configured_model_type(model_id)
         if model_type not in ('chat', 'text'):
             # Image generation lands in a later slice.
@@ -187,21 +200,42 @@ class Bedrock(Plugin):
             },
         )
 
-    async def list_actions(self) -> list[ActionMetadata]:
-        """List configured Bedrock models.
+    def _create_embedder_action(self, model_id: str) -> Action:
+        async def _embed(request: EmbedRequest) -> EmbedResponse:
+            embedder = BedrockEmbedder(model_id=model_id, transport=self._transport)
+            return await embedder.embed(request)
 
-        Only explicitly configured models are listed; the catalogue itself is
-        open-ended, and any model ID still resolves on demand.
+        return Action(
+            kind=ActionKind.EMBEDDER,
+            name=bedrock_name(model_id),
+            fn=_embed,
+            # Same helper as list_actions, so the two can never drift apart.
+            metadata=embedder_action_metadata(bedrock_name(model_id), get_embedder_options(model_id)).metadata,
+        )
+
+    async def list_actions(self) -> list[ActionMetadata]:
+        """List configured Bedrock models and embedders.
+
+        Only explicitly configured entries are listed, and only those ``resolve``
+        can serve: an ID in the wrong list would otherwise be advertised and then
+        answer 404. The catalogue itself is open-ended, and any model ID still
+        resolves on demand.
 
         Returns:
-            ActionMetadata for each configured chat model.
+            ActionMetadata for each configured chat model and embedder.
         """
-        return [
+        actions: list[ActionMetadata] = [
             model_action_metadata(
                 name=bedrock_name(definition.name),
                 info=get_model_info(definition.name, definition.type).model_dump(by_alias=True, exclude_none=True),
                 config_schema=BedrockConfig,
             )
             for definition in self.models
-            if definition.type in ('chat', 'text')
+            if definition.type in ('chat', 'text') and not is_embedding_model(definition.name)
         ]
+        actions.extend(
+            embedder_action_metadata(bedrock_name(model_id), get_embedder_options(model_id))
+            for model_id in self.embedders
+            if is_embedding_model(model_id)
+        )
+        return actions

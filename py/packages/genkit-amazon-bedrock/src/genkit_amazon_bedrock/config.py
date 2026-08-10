@@ -66,5 +66,6 @@ class ModelDefinition(BaseModel):
     name: str
     """Bedrock model ID, e.g. ``anthropic.claude-sonnet-4-5-20250929-v1:0``."""
 
-    type: Literal['chat', 'text', 'image', 'embedding'] = 'chat'
-    """Routes generate calls: chat/text via Converse, image via InvokeModel."""
+    type: Literal['chat', 'text', 'image'] = 'chat'
+    """Routes generate calls: chat/text via Converse, image via InvokeModel.
+    Embedders are configured separately, through ``Bedrock(embedders=...)``."""

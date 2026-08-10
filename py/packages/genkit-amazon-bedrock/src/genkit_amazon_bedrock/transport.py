@@ -24,6 +24,7 @@ matures without touching converters or models.
 """
 
 import asyncio
+import json
 import os
 import threading
 from collections.abc import AsyncGenerator
@@ -237,6 +238,34 @@ class BedrockTransport:
 
     def _converse_stream_sync(self, kwargs: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
         return self.client().converse_stream(**kwargs)
+
+    async def invoke_model(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+        """Calls the InvokeModel API on a worker thread.
+
+        Args:
+            kwargs: Keyword arguments passed verbatim to ``invoke_model``.
+
+        Returns:
+            The parsed JSON response body.
+
+        Raises:
+            GenkitError: INTERNAL when the response carries no body, or a body
+                that is not JSON.
+        """
+        return await asyncio.to_thread(self._invoke_model_sync, kwargs)
+
+    def _invoke_model_sync(self, kwargs: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
+        response = self.client().invoke_model(**kwargs)
+        body = response.get('body')
+        if body is None:
+            raise GenkitError(message='bedrock: invoke model response has no body', status='INTERNAL')
+        # Read and parse here, not on the loop: the body is a StreamingBody and
+        # read() is a blocking socket read.
+        raw = body.read()
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise GenkitError(message=f'bedrock: invoke model response is not JSON: {e}', status='INTERNAL') from e
 
     def _resolve_region(self, session: Any) -> str:  # noqa: ANN401
         # botocore only began reading AWS_REGION in 1.41, above this package's

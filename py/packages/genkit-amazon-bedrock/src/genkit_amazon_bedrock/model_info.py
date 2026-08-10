@@ -132,7 +132,7 @@ def strip_inference_profile_prefix(model_id: str) -> str:
 
 def get_model_info(
     model_name: str,
-    model_type: Literal['chat', 'text', 'image', 'embedding'] = 'chat',
+    model_type: Literal['chat', 'text', 'image'] = 'chat',
 ) -> ModelInfo:
     """Infers Genkit model info for a Bedrock model.
 
@@ -154,20 +154,6 @@ def get_model_info(
                 tool_choice=False,
                 system_role=False,
                 media=True,
-                constrained=Constrained.NONE,
-            ),
-        )
-
-    if model_type == 'embedding':
-        return ModelInfo(
-            label=model_name,
-            stage=Stage.STABLE,
-            supports=Supports(
-                multiturn=False,
-                tools=False,
-                tool_choice=False,
-                system_role=False,
-                media=False,
                 constrained=Constrained.NONE,
             ),
         )

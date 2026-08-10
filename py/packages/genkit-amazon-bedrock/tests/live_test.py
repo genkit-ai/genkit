@@ -19,7 +19,8 @@
 Opt-in: set ``BEDROCK_LIVE_TESTS=1`` plus working AWS credentials and a
 region (``AWS_REGION`` or ``~/.aws/config``). These call real models and
 incur cost. The Anthropic models additionally need the account's one-time
-use-case agreement (Bedrock console -> Model access).
+use-case agreement (Bedrock console -> Model access); the embedding models
+each need their own model-access grant, separate from the chat models.
 """
 
 import os
@@ -29,11 +30,25 @@ from genkit_amazon_bedrock.config import BedrockConfig
 from genkit_amazon_bedrock.converters import (
     REASONING_SIGNATURE_METADATA_KEY,
 )
+from genkit_amazon_bedrock.embedders import BedrockEmbedder
 from genkit_amazon_bedrock.models import BedrockModel
 from genkit_amazon_bedrock.transport import BedrockTransport
 
-from genkit import FinishReason, Message, ModelRequest, Part, Role, TextPart, ToolDefinition
-from genkit.plugin_api import ActionRunContext
+from genkit import (
+    DocumentPart,
+    FinishReason,
+    Media,
+    MediaPart,
+    Message,
+    ModelRequest,
+    Part,
+    Role,
+    TextPart,
+    ToolDefinition,
+)
+from genkit._core._typing import DocumentData
+from genkit.embedder import EmbedRequest
+from genkit.plugin_api import ActionRunContext, GenkitError
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -47,16 +62,44 @@ CLAUDE = 'us.anthropic.claude-sonnet-4-5-20250929-v1:0'
 NOVA = 'us.amazon.nova-lite-v1:0'
 DEEPSEEK = 'us.deepseek.r1-v1:0'
 
+TITAN_EMBED_V1 = 'amazon.titan-embed-text-v1'
+TITAN_EMBED_V2 = 'amazon.titan-embed-text-v2:0'
+TITAN_EMBED_IMAGE = 'amazon.titan-embed-image-v1'
+COHERE_EMBED = 'cohere.embed-english-v3'
+COHERE_EMBED_MULTI = 'cohere.embed-multilingual-v3'
+NOVA_EMBED = 'amazon.nova-2-multimodal-embeddings-v1:0'
 
-def make_model(model_id: str) -> BedrockModel:
-    transport = BedrockTransport(
+# Smallest PNG Titan accepts, ported from the Go plugin's live tests.
+PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAABjE+ibYAAAAASUVORK5CYII='
+PNG_1X1_DATA_URL = f'data:image/png;base64,{PNG_1X1}'
+
+
+def make_transport() -> BedrockTransport:
+    return BedrockTransport(
         region=os.environ.get('AWS_REGION'),
         max_retries=3,
         read_timeout=300.0,
         connect_timeout=60.0,
         max_pool_connections=10,
     )
-    return BedrockModel(model_id=model_id, transport=transport)
+
+
+def make_model(model_id: str) -> BedrockModel:
+    return BedrockModel(model_id=model_id, transport=make_transport())
+
+
+async def embed(model_id: str, documents: list[DocumentData]) -> list[list[float]]:
+    embedder = BedrockEmbedder(model_id=model_id, transport=make_transport())
+    response = await embedder.embed(EmbedRequest(input=documents))
+    return [embedding.embedding for embedding in response.embeddings]
+
+
+def text_doc(text: str) -> DocumentData:
+    return DocumentData(content=[DocumentPart(root=TextPart(text=text))])
+
+
+def image_doc(data_url: str = PNG_1X1_DATA_URL) -> DocumentData:
+    return DocumentData(content=[DocumentPart(root=MediaPart(media=Media(url=data_url)))])
 
 
 def text_request(text: str, **kwargs) -> ModelRequest:
@@ -277,3 +320,64 @@ async def test_deepseek_reasoning_sync_and_round_trip() -> None:
         config=config,
     )
     assert (await model.generate(follow_up)).finish_reason == FinishReason.STOP
+
+
+async def test_embed_titan_text_v1() -> None:
+    vectors = await embed(TITAN_EMBED_V1, [text_doc('a red apple'), text_doc('a green pear')])
+    assert len(vectors) == 2
+    assert all(len(vector) == 1536 for vector in vectors)
+
+
+async def test_embed_titan_text_v2() -> None:
+    vectors = await embed(TITAN_EMBED_V2, [text_doc('a red apple')])
+    assert len(vectors[0]) == 1024
+
+
+async def test_embed_titan_multimodal_text() -> None:
+    vectors = await embed(TITAN_EMBED_IMAGE, [text_doc('a red apple')])
+    assert len(vectors[0]) == 1024
+
+
+async def test_embed_titan_multimodal_image() -> None:
+    vectors = await embed(TITAN_EMBED_IMAGE, [image_doc()])
+    assert len(vectors[0]) == 1024
+
+
+async def test_embed_titan_multimodal_text_and_image() -> None:
+    document = DocumentData(
+        content=[
+            DocumentPart(root=TextPart(text='a white square')),
+            DocumentPart(root=MediaPart(media=Media(url=PNG_1X1_DATA_URL))),
+        ]
+    )
+    vectors = await embed(TITAN_EMBED_IMAGE, [document])
+    assert len(vectors) == 1
+    assert len(vectors[0]) == 1024
+
+
+async def test_embed_cohere_text_batch() -> None:
+    vectors = await embed(COHERE_EMBED, [text_doc('one'), text_doc('two'), text_doc('three')])
+    assert len(vectors) == 3
+    assert len({len(vector) for vector in vectors}) == 1
+    assert len(vectors[0]) > 0
+
+
+async def test_embed_cohere_multilingual() -> None:
+    vectors = await embed(COHERE_EMBED_MULTI, [text_doc('bonjour le monde')])
+    assert len(vectors[0]) > 0
+
+
+async def test_embed_cohere_rejects_an_image() -> None:
+    # Bedrock reports inputModalities [TEXT] for the Cohere v3 models, so this
+    # is refused locally rather than sent and rejected as a bad request.
+    with pytest.raises(GenkitError, match='text-only'):
+        await embed(COHERE_EMBED, [image_doc()])
+
+
+@pytest.mark.skipif(
+    os.environ.get('AWS_REGION') != 'us-east-1',
+    reason='amazon.nova-2-multimodal-embeddings-v1:0 is only offered in us-east-1',
+)
+async def test_embed_nova_2() -> None:
+    vectors = await embed(NOVA_EMBED, [text_doc('a red apple')])
+    assert len(vectors[0]) == 3072
