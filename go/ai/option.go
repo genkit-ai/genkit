@@ -866,14 +866,13 @@ type DocumentOption interface {
 
 // applyDocument accumulates documents: the fixed ones append in call order and
 // the [WithDocsFn] functions compose the same way.
-func (o *documentOptions) applyDocument(docOpts *documentOptions) {
-	docOpts.Documents = append(docOpts.Documents, o.Documents...)
-	docOpts.DocsFn = appendDocsFn(docOpts.DocsFn, o.DocsFn)
+func (o *documentOptions) applyDocument(opts *documentOptions) {
+	opts.Documents = append(opts.Documents, o.Documents...)
+	opts.DocsFn = appendDocsFn(opts.DocsFn, o.DocsFn)
 }
 
-// applyPrompt applies the option to the prompt options.
-func (o *documentOptions) applyPrompt(pOpts *promptOptions) {
-	o.applyDocument(&pOpts.documentOptions)
+func (o *documentOptions) applyPrompt(opts *promptOptions) {
+	o.applyDocument(&opts.documentOptions)
 }
 
 func (o *documentOptions) applyGenerate(opts *generateOptions) {
