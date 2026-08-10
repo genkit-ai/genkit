@@ -500,7 +500,7 @@ func ListTools(g *Genkit) []ai.Tool {
 }
 
 // DefineModelAction defines a custom model implementation, registers it
-// as a [core.Action] of type Model, and returns an [ai.Model] interface.
+// as a [core.Action] of type Model, and returns the concrete [ai.ModelAction].
 //
 // The `name` argument is the unique identifier for the model (e.g., "myProvider/myModel").
 // The `opts` argument provides metadata about the model's capabilities ([ai.ModelOptions]).
@@ -633,7 +633,8 @@ func LookupBackgroundModel(g *Genkit, name string) ai.BackgroundModel {
 }
 
 // DefineTool defines a tool that can be used by models during generation,
-// registers it as a [core.Action] of type Tool, and returns an [ai.Tool].
+// registers it as a [core.Action] of type Tool, and returns the concrete
+// [ai.ToolAction].
 // Tools allow models to interact with external systems or perform specific computations.
 //
 // The `name` is the identifier the model uses to request the tool. The `description`
@@ -682,7 +683,7 @@ func DefineTool[In, Out any](g *Genkit, name, description string, fn ai.ToolFunc
 }
 
 // DefineToolWithInputSchema defines a tool with a custom input schema that can be used by models during generation,
-// registers it as a [core.Action] of type Tool, and returns an [*ai.ToolAction].
+// registers it as a [core.Action] of type Tool, and returns the concrete [ai.ToolAction].
 //
 // This variant of [DefineTool] allows specifying a JSON Schema for the tool's input, providing more
 // control over input validation and model guidance. The input parameter to the tool function will be
@@ -724,7 +725,7 @@ func DefineTool[In, Out any](g *Genkit, name, description string, fn ai.ToolFunc
 //			// Implementation...
 //			return fmt.Sprintf("Weather in %s: 25°%s", city, unit), nil
 //		},
-//		ai.WithToolInputSchema(inputSchema),
+//		ai.WithInputSchema(inputSchema),
 //	)
 func DefineToolWithInputSchema[Out any](g *Genkit, name, description string, inputSchema map[string]any, fn ai.ToolFunc[any, Out]) *ai.ToolAction[any, Out] {
 	t := ai.NewTool(name, description, fn, ai.WithInputSchema(inputSchema))
@@ -733,7 +734,8 @@ func DefineToolWithInputSchema[Out any](g *Genkit, name, description string, inp
 }
 
 // DefineMultipartTool defines a multipart tool that can be used by models during generation,
-// registers it as a [core.Action] of type Tool, and returns an [*ai.ToolAction].
+// registers it as a [core.Action] of type Tool, and returns the concrete
+// [ai.ToolAction].
 // Unlike regular tools that return just an output value, multipart tools can return
 // both an output value and additional content parts (like images or other media).
 //
@@ -1464,7 +1466,8 @@ func Embed(ctx context.Context, g *Genkit, opts ...ai.EmbedderOption) (*ai.Embed
 }
 
 // DefineRetrieverAction defines a custom retriever implementation, registers it
-// as a [core.Action] of type Retriever, and returns an [ai.RetrieverAction].
+// as a [core.Action] of type Retriever, and returns the concrete
+// [ai.RetrieverAction].
 // Retrievers are used to find documents relevant to a given query, often by
 // performing similarity searches in a vector database.
 //
@@ -1508,9 +1511,9 @@ func LookupRetriever(g *Genkit, name string) ai.Retriever {
 }
 
 // DefineEmbedderAction defines a custom text embedding implementation,
-// registers it as a [core.Action] of type Embedder, and returns an
-// [ai.Embedder]. Embedders convert text documents or queries into numerical
-// vector representations (embeddings).
+// registers it as a [core.Action] of type Embedder, and returns the concrete
+// [ai.EmbedderAction]. Embedders convert text documents or queries into
+// numerical vector representations (embeddings).
 //
 // The `name` is the unique identifier for the embedder.
 // The `fn` function contains the logic to process an [ai.EmbedRequest] (containing documents or a query)
@@ -1564,8 +1567,8 @@ func LookupPlugin(g *Genkit, name string) api.Plugin {
 
 // DefineEvaluatorAction defines an evaluator that processes test cases
 // one by one, registers it as a [core.Action] of type Evaluator, and returns
-// an [ai.Evaluator]. Evaluators are used to assess the quality or performance
-// of AI models or flows based on a dataset of test cases.
+// the concrete [ai.EvaluatorAction]. Evaluators are used to assess the quality
+// or performance of AI models or flows based on a dataset of test cases.
 //
 // This variant calls the provided `fn` function for each individual test case
 // ([ai.EvaluatorCallbackRequest]) in the evaluation dataset.
@@ -1598,7 +1601,7 @@ func DefineEvaluator(g *Genkit, name string, opts *ai.EvaluatorOptions, fn ai.Ev
 
 // DefineBatchEvaluatorAction defines an evaluator that processes the
 // entire dataset at once, registers it as a [core.Action] of type Evaluator,
-// and returns an [ai.Evaluator].
+// and returns the concrete [ai.EvaluatorAction].
 //
 // This variant provides the full evaluation request ([ai.EvaluatorRequest]), including
 // the entire dataset, to the `fn` function. This allows for more flexible processing,
