@@ -134,7 +134,8 @@ type PartsFn = func(context.Context, any) ([]*Part, error)
 type DocsFn = func(context.Context, any) ([]*Document, error)
 
 // coerceFn adapts a typed content function to the untyped signature the option
-// structs store.
+// structs store. option names the option in the error, since a prompt can fill
+// several slots from functions and only one of them rejected the input.
 //
 // The raw value's Go type depends on how the prompt was invoked: an in-process
 // call with [WithInput] passes the value through as-is, while the reflection
@@ -142,14 +143,14 @@ type DocsFn = func(context.Context, any) ([]*Document, error)
 // both arrive as map[string]any. Converting here means content functions see
 // the same type whichever way they were reached. A nil raw value yields the
 // zero value of In, which is what [Generate] passes.
-func coerceFn[In, Out any](fn func(context.Context, In) (Out, error)) func(context.Context, any) (Out, error) {
+func coerceFn[In, Out any](option string, fn func(context.Context, In) (Out, error)) func(context.Context, any) (Out, error) {
 	return func(ctx context.Context, raw any) (Out, error) {
 		in, err := base.ConvertToExact[In](raw)
 		if err != nil {
 			var zero Out
 			// base cannot classify this itself: the same failure is only a
 			// caller's bad input once a content function disagrees with it.
-			return zero, status.Errorf(ErrInputTypeMismatch, "content function input: %w", err)
+			return zero, status.Errorf(ErrInputTypeMismatch, "%s input: %w", option, err)
 		}
 		return fn(ctx, in)
 	}
@@ -166,8 +167,8 @@ func staticPartsFn(parts []*Part) PartsFn {
 
 // textPartsFn adapts a string-returning content function to a [PartsFn]. An
 // empty string yields no parts and so no message, matching empty template text.
-func textPartsFn[In any](fn func(context.Context, In) (string, error)) PartsFn {
-	coerced := coerceFn(fn)
+func textPartsFn[In any](option string, fn func(context.Context, In) (string, error)) PartsFn {
+	coerced := coerceFn(option, fn)
 	return func(ctx context.Context, raw any) ([]*Part, error) {
 		text, err := coerced(ctx, raw)
 		if err != nil {
@@ -340,7 +341,7 @@ func WithMessagesTemplate(text string, args ...any) PromptOption {
 // [HistoryFromContext] instead, and can summarize or truncate them rather than
 // only prepend to them.
 func WithMessagesFn[In any](fn func(context.Context, In) ([]*Message, error)) CommonGenOption {
-	return &commonGenOptions{MessagesFn: coerceFn(fn)}
+	return &commonGenOptions{MessagesFn: coerceFn("WithMessagesFn", fn)}
 }
 
 // WithTools adds tools to use for the generate request. Repeating this option
@@ -590,7 +591,7 @@ func WithSystem(text string, args ...any) PromptingOption {
 // It shares one slot with [WithSystem], [WithSystemParts], and
 // [WithSystemPartsFn]: the last one set wins.
 func WithSystemFn[In any](fn func(context.Context, In) (string, error)) PromptingOption {
-	return &promptingOptions{SystemFn: textPartsFn(fn)}
+	return &promptingOptions{SystemFn: textPartsFn("WithSystemFn", fn)}
 }
 
 // WithSystemParts sets the content of the system prompt message.
@@ -616,7 +617,7 @@ func WithSystemParts(parts ...*Part) PromptingOption {
 // It shares one slot with [WithSystem], [WithSystemParts], and [WithSystemFn]:
 // the last one set wins.
 func WithSystemPartsFn[In any](fn func(context.Context, In) ([]*Part, error)) PromptingOption {
-	return &promptingOptions{SystemFn: coerceFn(fn)}
+	return &promptingOptions{SystemFn: coerceFn("WithSystemPartsFn", fn)}
 }
 
 // WithPrompt sets the user prompt message.
@@ -644,7 +645,7 @@ func WithPrompt(text string, args ...any) PromptingOption {
 // It shares one slot with [WithPrompt], [WithPromptParts], and
 // [WithPromptPartsFn]: the last one set wins.
 func WithPromptFn[In any](fn func(context.Context, In) (string, error)) PromptingOption {
-	return &promptingOptions{PromptFn: textPartsFn(fn)}
+	return &promptingOptions{PromptFn: textPartsFn("WithPromptFn", fn)}
 }
 
 // WithPromptParts sets the content of the user prompt message.
@@ -678,7 +679,7 @@ func WithPromptParts(parts ...*Part) PromptingOption {
 // It shares one slot with [WithPrompt], [WithPromptParts], and [WithPromptFn]:
 // the last one set wins.
 func WithPromptPartsFn[In any](fn func(context.Context, In) ([]*Part, error)) PromptingOption {
-	return &promptingOptions{PromptFn: coerceFn(fn)}
+	return &promptingOptions{PromptFn: coerceFn("WithPromptPartsFn", fn)}
 }
 
 // outputOptions are options for the output of a prompt or generate request.
@@ -915,7 +916,7 @@ func WithDocs(docs ...*Document) DocumentOption {
 // or [WithTextDocs], adds to the set rather than replacing it. The fixed
 // documents resolve first, then the computed ones, each in call order.
 func WithDocsFn[In any](fn func(context.Context, In) ([]*Document, error)) PromptOption {
-	return &promptOptions{documentOptions: documentOptions{DocsFn: coerceFn(fn)}}
+	return &promptOptions{documentOptions: documentOptions{DocsFn: coerceFn("WithDocsFn", fn)}}
 }
 
 // evaluatorOptions are options for providing a dataset to evaluate.

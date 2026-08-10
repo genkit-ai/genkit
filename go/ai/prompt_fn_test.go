@@ -1011,8 +1011,64 @@ func TestContentFnErrorPropagates(t *testing.T) {
 	if got := status.Of(err); got != status.InvalidArgument {
 		t.Errorf("status = %v, want %v", got, status.InvalidArgument)
 	}
-	if !strings.Contains(err.Error(), "content function input") {
-		t.Errorf("err = %v, want it to explain the input conversion failure", err)
+	if !strings.Contains(err.Error(), "WithPromptFn input") {
+		t.Errorf("err = %v, want it to name the option that rejected the input", err)
+	}
+}
+
+// TestContentFnErrorNamesItsOption covers a prompt filling several slots from
+// functions: the input can satisfy one and not another, so the error has to say
+// which one it was rather than reporting an anonymous content function.
+func TestContentFnErrorNamesItsOption(t *testing.T) {
+	type ticket struct {
+		Question string `json:"question"`
+	}
+	type query struct {
+		Terms []string `json:"terms"`
+	}
+
+	tests := []struct {
+		name string
+		opt  PromptOption
+		want string
+	}{
+		{"docs", WithDocsFn(func(ctx context.Context, q query) ([]*Document, error) {
+			return nil, nil
+		}), "WithDocsFn input"},
+		{"system", WithSystemFn(func(ctx context.Context, q query) (string, error) {
+			return "", nil
+		}), "WithSystemFn input"},
+		{"prompt parts", WithPromptPartsFn(func(ctx context.Context, q query) ([]*Part, error) {
+			return nil, nil
+		}), "WithPromptPartsFn input"},
+		{"messages", WithMessagesFn(func(ctx context.Context, q query) ([]*Message, error) {
+			return nil, nil
+		}), "WithMessagesFn input"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newTestRegistry(t)
+			m := defineFakeModel(t, r, fakeModelConfig{name: "test/named_" + tt.name})
+			// The user prompt takes the input the caller actually supplies, so
+			// only the slot under test can be the one that fails.
+			p := DefinePrompt(r, "named_"+tt.name, WithModel(m), WithInputType(ticket{}),
+				WithPromptFn(func(ctx context.Context, tk ticket) (string, error) {
+					return tk.Question, nil
+				}),
+				tt.opt)
+
+			_, err := p.Execute(context.Background(), WithInput(ticket{Question: "why"}))
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if !errors.Is(err, ErrInputTypeMismatch) {
+				t.Errorf("err = %v, want it to match ErrInputTypeMismatch", err)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("err = %v, want it to contain %q", err, tt.want)
+			}
+		})
 	}
 }
 
