@@ -274,9 +274,15 @@ export function toSttRequest(
     'base64'
   );
 
-  const contentType = (media.contentType ?? media.url.slice('data:'.length, media.url.indexOf(';'))).split(';')[0].trim();
+  const contentType = (
+    media.contentType ?? media.url.slice('data:'.length, media.url.indexOf(';'))
+  )
+    .split(';')[0]
+    .trim();
   const extension = FILE_TYPE_TO_FILE_NAME_EXTENSION[contentType] || '';
-  const mediaFile = new File([mediaBuffer], `input${extension}`, {type: contentType});
+  const mediaFile = new File([mediaBuffer], `input${extension}`, {
+    type: contentType,
+  });
   const {
     temperature,
     version: modelVersion,
