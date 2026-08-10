@@ -265,7 +265,7 @@ func (a *Action[In, Out, Stream]) runWithTelemetry(ctx context.Context, input In
 			var inputSchema map[string]any
 			inputSchema, err = ResolveSchema(a.registry, a.desc.InputSchema)
 			if err != nil {
-				return base.Zero[Out](), status.Errorf(status.ErrInvalidSchema, "invalid input schema for action %q: %v", a.desc.Key, err)
+				return base.Zero[Out](), status.Errorf(status.ErrInvalidSchema, "invalid input schema for action %q: %w", a.desc.Key, err)
 			}
 
 			var outputSchema map[string]any
@@ -327,7 +327,7 @@ func recordActionMetrics(ctx context.Context, name string, start time.Time, err 
 func (a *Action[In, Out, Stream]) resolveOutputSchema() (map[string]any, error) {
 	schema, err := ResolveSchema(a.registry, a.desc.OutputSchema)
 	if err != nil {
-		return nil, status.Errorf(status.ErrInvalidSchema, "invalid output schema for action %q: %v", a.desc.Key, err)
+		return nil, status.Errorf(status.ErrInvalidSchema, "invalid output schema for action %q: %w", a.desc.Key, err)
 	}
 	return schema, nil
 }
@@ -336,7 +336,7 @@ func (a *Action[In, Out, Stream]) resolveOutputSchema() (map[string]any, error) 
 // schema.
 func (a *Action[In, Out, Stream]) validateOutput(out Out, schema map[string]any) error {
 	if err := base.ValidateValue(out, schema); err != nil {
-		return status.Errorf(status.ErrInvalidOutput, "invalid output from action %q: %v", a.desc.Key, err)
+		return status.Errorf(status.ErrInvalidOutput, "invalid output from action %q: %w", a.desc.Key, err)
 	}
 	return nil
 }

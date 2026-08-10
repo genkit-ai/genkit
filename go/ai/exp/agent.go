@@ -1456,7 +1456,7 @@ func convertKeepText(cause error) *status.Error {
 		if cause == nil {
 			return nil
 		}
-		return status.Errorf(status.ErrInternal, "%s", cause)
+		return status.Errorf(status.ErrInternal, "%w", cause)
 	}
 	if !e.Public && e.Message != cause.Error() {
 		ne := *e

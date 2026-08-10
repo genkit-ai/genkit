@@ -271,13 +271,13 @@ func (b *BidiAction[In, Out, Stream, Init]) ConnectJSON(ctx context.Context, opt
 	}
 	inputSchema, err := ResolveSchema(b.registry, b.desc.InputSchema)
 	if err != nil {
-		return nil, status.Errorf(status.ErrInvalidSchema, "invalid input schema for action %q: %v", b.desc.Key, err)
+		return nil, status.Errorf(status.ErrInvalidSchema, "invalid input schema for action %q: %w", b.desc.Key, err)
 	}
 	// Compiled once per session: Send validates every inbound chunk, and
 	// recompiling the schema per chunk would dominate the streaming hot path.
 	compiledInput, err := base.CompileSchema(inputSchema)
 	if err != nil {
-		return nil, status.Errorf(status.ErrInvalidSchema, "invalid input schema for action %q: %v", b.desc.Key, err)
+		return nil, status.Errorf(status.ErrInvalidSchema, "invalid input schema for action %q: %w", b.desc.Key, err)
 	}
 	// Like RunBidiJSON, record init on the span only when the client actually
 	// supplied one; the zero value from an absent init is not meaningful.
@@ -316,11 +316,11 @@ func (b *BidiAction[In, Out, Stream, Init]) decodeInit(opts *api.BidiJSONOptions
 	}
 	schema, err := ResolveSchema(b.registry, b.desc.InitSchema)
 	if err != nil {
-		return init, false, status.Errorf(status.ErrInvalidSchema, "invalid init schema for action %q: %v", b.desc.Key, err)
+		return init, false, status.Errorf(status.ErrInvalidSchema, "invalid init schema for action %q: %w", b.desc.Key, err)
 	}
 	init, err = base.UnmarshalAndNormalize[Init](opts.Init, schema)
 	if err != nil {
-		return init, false, status.Errorf(status.ErrInvalidInput, "invalid init for action %q: %v", b.desc.Key, err)
+		return init, false, status.Errorf(status.ErrInvalidInput, "invalid init for action %q: %w", b.desc.Key, err)
 	}
 	return init, true, nil
 }
@@ -343,10 +343,10 @@ func (b *BidiAction[In, Out, Stream, Init]) validateInit(init Init) error {
 	}
 	schema, err := ResolveSchema(b.registry, b.desc.InitSchema)
 	if err != nil {
-		return status.Errorf(status.ErrInvalidSchema, "invalid init schema for action %q: %v", b.desc.Key, err)
+		return status.Errorf(status.ErrInvalidSchema, "invalid init schema for action %q: %w", b.desc.Key, err)
 	}
 	if err := base.ValidateValue(init, schema); err != nil {
-		return status.Errorf(status.ErrInvalidInput, "invalid init for action %q: %v", b.desc.Key, err)
+		return status.Errorf(status.ErrInvalidInput, "invalid init for action %q: %w", b.desc.Key, err)
 	}
 	return nil
 }
@@ -696,7 +696,7 @@ func (b *bidiJSONConn[In, Out, Stream]) Send(chunk json.RawMessage) error {
 		// the one-shot path, where invalid input fails the call): the error
 		// poisons the connection as its cancel cause so Output reports it,
 		// and is also returned for the transport to log or relay.
-		err = status.Errorf(status.ErrInvalidArgument, "invalid stream chunk for action %q: %v", b.key, err)
+		err = status.Errorf(status.ErrInvalidArgument, "invalid stream chunk for action %q: %w", b.key, err)
 		b.conn.cancel(err)
 		return err
 	}
