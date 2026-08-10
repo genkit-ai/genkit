@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -185,23 +184,28 @@ func reflectConfigSchema(config any) map[string]any {
 // given.
 //
 // These are hidden from the advertised schema (see mncOverrides), so this is
-// what a caller setting one in code sees. The objects they were removed from
-// are reopened so the value reaches here rather than failing validation as an
-// unknown property.
+// what a caller setting one in code sees. They are hidden by being replaced
+// with a permissive schema rather than deleted, so the value reaches here
+// rather than failing validation as an unknown property.
+//
+// Classified ErrInvalidArgument: the request is the caller's to fix, so this
+// reaches the dev UI and any HTTP transport as a 400 rather than a 500. Not
+// ErrInvalidInput, which means a value failed the action's input schema; these
+// pass the schema and are refused on what they mean.
 func rejectManagedConfig(config *anthropic.MessageNewParams) error {
 	switch {
 	case len(config.Messages) > 0:
-		return errors.New("messages must be set using Genkit feature: ai.WithMessages() or ai.WithPrompt()")
+		return status.Errorf(status.ErrInvalidArgument, "messages must be set using Genkit feature: ai.WithMessages() or ai.WithPrompt()")
 	case len(config.System) > 0:
-		return errors.New("system prompt must be set using Genkit feature: ai.WithSystem()")
+		return status.Errorf(status.ErrInvalidArgument, "system prompt must be set using Genkit feature: ai.WithSystem()")
 	case config.Model != "":
-		return errors.New("the model is chosen by the action; set it using Genkit feature: ai.WithModel() or ai.WithModelName()")
+		return status.Errorf(status.ErrInvalidArgument, "the model is chosen by the action; set it using Genkit feature: ai.WithModel() or ai.WithModelName()")
 	case config.OutputConfig.Format.Schema != nil || config.OutputConfig.Format.Type != "":
-		return errors.New("output format must be set using Genkit feature: ai.WithOutputType() or ai.WithOutputSchema(); the config-level output_config.effort field is unaffected")
+		return status.Errorf(status.ErrInvalidArgument, "output format must be set using Genkit feature: ai.WithOutputType() or ai.WithOutputSchema(); the config-level output_config.effort field is unaffected")
 	}
 	for _, t := range config.Tools {
 		if t.OfTool != nil {
-			return errors.New("custom function tools must be set using Genkit feature: ai.WithTools(); the config-level tools field is reserved for server-side tools (web search, code execution, etc.)")
+			return status.Errorf(status.ErrInvalidArgument, "custom function tools must be set using Genkit feature: ai.WithTools(); the config-level tools field is reserved for server-side tools (web search, code execution, etc.)")
 		}
 	}
 	return nil

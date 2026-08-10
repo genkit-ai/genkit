@@ -5,11 +5,13 @@ package anthropic
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // configProps returns the advertised config schema's property map.
@@ -133,6 +135,14 @@ func TestManagedConfigRejected(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.want) {
 				t.Errorf("error = %q, want it to name %s", err, tt.want)
+			}
+			// The caller's request is what is wrong, so this must reach the
+			// dev UI as a 400 rather than a 500.
+			if !errors.Is(err, status.ErrInvalidArgument) {
+				t.Errorf("error is not classified ErrInvalidArgument: %v", err)
+			}
+			if got := status.Of(err); got != status.InvalidArgument {
+				t.Errorf("status.Of = %q, want %q", got, status.InvalidArgument)
 			}
 		})
 	}

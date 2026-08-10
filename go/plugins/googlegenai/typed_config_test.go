@@ -5,12 +5,14 @@ package googlegenai
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 	"google.golang.org/genai"
 )
@@ -181,6 +183,14 @@ func TestHiddenConfigFieldsReachPluginErrors(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("error = %q, want it to mention %q", err, tt.wantErr)
+			}
+			// The caller's request is what is wrong, so this must reach the
+			// dev UI as a 400 rather than a 500.
+			if !errors.Is(err, status.ErrInvalidArgument) {
+				t.Errorf("error is not classified ErrInvalidArgument: %v", err)
+			}
+			if got := status.Of(err); got != status.InvalidArgument {
+				t.Errorf("status.Of = %q, want %q", got, status.InvalidArgument)
 			}
 		})
 	}

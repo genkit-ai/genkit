@@ -31,6 +31,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
@@ -336,30 +337,35 @@ func toGeminiRequest(input *ai.ModelRequest, config *genai.GenerateContentConfig
 
 	// Genkit primitive fields must be used instead of go-genai fields
 	// i.e.: system prompt, tools, cached content, response schema, etc
+	//
+	// Classified ErrInvalidArgument: the request is the caller's to fix, so
+	// these reach the dev UI and any HTTP transport as a 400 rather than a
+	// 500. Not ErrInvalidInput, which means a value failed the action's input
+	// schema; these pass the schema and are refused on what they mean.
 	if !isTTS && gcc.CandidateCount != 1 {
-		return nil, errors.New("multiple candidates is not supported")
+		return nil, status.Errorf(status.ErrInvalidArgument, "multiple candidates is not supported")
 	}
 	if isTTS && gcc.CandidateCount > 1 {
-		return nil, errors.New("multiple candidates is not supported")
+		return nil, status.Errorf(status.ErrInvalidArgument, "multiple candidates is not supported")
 	}
 	if gcc.SystemInstruction != nil {
-		return nil, errors.New("system instruction must be set using Genkit feature: ai.WithSystemPrompt()")
+		return nil, status.Errorf(status.ErrInvalidArgument, "system instruction must be set using Genkit feature: ai.WithSystemPrompt()")
 	}
 	if gcc.CachedContent != "" {
-		return nil, errors.New("cached content must be set using Genkit feature: ai.WithCacheTTL()")
+		return nil, status.Errorf(status.ErrInvalidArgument, "cached content must be set using Genkit feature: ai.WithCacheTTL()")
 	}
 	if gcc.ResponseSchema != nil {
-		return nil, errors.New("response schema must be set using Genkit feature: ai.WithTools() or ai.WithOuputType()")
+		return nil, status.Errorf(status.ErrInvalidArgument, "response schema must be set using Genkit feature: ai.WithTools() or ai.WithOuputType()")
 	}
 	if gcc.ResponseMIMEType != "" {
-		return nil, errors.New("response MIME type must be set using Genkit feature: ai.WithOuputType(), ai.WithOutputSchema(), ai.WithOutputSchemaByName()")
+		return nil, status.Errorf(status.ErrInvalidArgument, "response MIME type must be set using Genkit feature: ai.WithOuputType(), ai.WithOutputSchema(), ai.WithOutputSchemaByName()")
 	}
 	if gcc.ResponseJsonSchema != nil {
-		return nil, errors.New("response JSON schema must be set using Genkit feature: ai.WithOutputSchema()")
+		return nil, status.Errorf(status.ErrInvalidArgument, "response JSON schema must be set using Genkit feature: ai.WithOutputSchema()")
 	}
 	for _, t := range gcc.Tools {
 		if t != nil && len(t.FunctionDeclarations) > 0 {
-			return nil, errors.New("custom function tools must be set using Genkit feature: ai.WithTools(); the config-level tools field is reserved for built-in API tools (GoogleSearch, Retrieval, CodeExecution, etc.)")
+			return nil, status.Errorf(status.ErrInvalidArgument, "custom function tools must be set using Genkit feature: ai.WithTools(); the config-level tools field is reserved for built-in API tools (GoogleSearch, Retrieval, CodeExecution, etc.)")
 		}
 	}
 
