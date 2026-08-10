@@ -237,3 +237,108 @@ def test_normalize_config_dumps_pydantic() -> None:
     """normalize_config turns configs into plain dicts, using {} for None."""
     assert normalize_config(config=ModelConfig(temperature=0.5)) == {'temperature': 0.5}
     assert normalize_config(config=None) == {}
+
+
+@pytest.mark.asyncio
+async def test_model_ref_version_seeds_config(ai_with_echo: tuple[Genkit, EchoModel]) -> None:
+    """ref.version flows into config at lowest precedence (JS generate.ts parity)."""
+    ai, echo = ai_with_echo
+    ref = model_ref('testEcho', config_schema=ModelConfig, version='001')
+
+    await ai.generate(model=ref, prompt='Hello')
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'version') == '001'
+
+
+@pytest.mark.asyncio
+async def test_model_ref_version_overridden_by_call_config(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """Call-time config version beats ref.version."""
+    ai, echo = ai_with_echo
+    ref = model_ref('testEcho', config_schema=ModelConfig, version='001')
+
+    await ai.generate(model=ref, config={'version': '002'}, prompt='Hello')
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'version') == '002'
+
+
+@pytest.mark.asyncio
+async def test_unknown_config_keys_pass_through_to_plugin(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """Escape hatch: keys outside the ref schema reach the plugin untouched."""
+    ai, echo = ai_with_echo
+    ref = model_ref('testEcho', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
+
+    await ai.generate(model=ref, config={'thinking_config': {'budget': 8192}}, prompt='Hello')
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'temperature') == 0.7
+    assert _config_value(echo.last_request.config, 'thinking_config') == {'budget': 8192}
+
+
+@pytest.mark.asyncio
+async def test_explicit_none_clears_ref_default_via_generate(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """Explicitly-set None clears the ref default; plugin sees absence."""
+    ai, echo = ai_with_echo
+    ref = model_ref('testEcho', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
+
+    await ai.generate(model=ref, config=CustomConfig(temperature=None), prompt='Hello')
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'temperature') is None
+
+
+@pytest.mark.asyncio
+async def test_explicit_none_clears_default_via_prompt(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """The prompt path honors the same clearing rule as generate."""
+    ai, echo = ai_with_echo
+    ref = model_ref('testEcho', config_schema=CustomConfig)
+
+    prompt = ai.define_prompt(
+        name='clearingPrompt',
+        model=ref,
+        prompt='Hello',
+        config=CustomConfig(temperature=0.7),
+    )
+    await prompt(config=CustomConfig(temperature=None))
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'temperature') is None
+
+
+@pytest.mark.asyncio
+async def test_unset_fields_do_not_clobber_ref_defaults(
+    ai_with_echo: tuple[Genkit, EchoModel],
+) -> None:
+    """Unset != None: untouched fields on a typed config cannot clear defaults."""
+    ai, echo = ai_with_echo
+    ref = model_ref('testEcho', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
+
+    await ai.generate(model=ref, config=CustomConfig(top_k=40), prompt='Hello')
+
+    assert echo.last_request is not None
+    assert _config_value(echo.last_request.config, 'temperature') == 0.7
+    assert _config_value(echo.last_request.config, 'top_k') == 40
+
+
+def test_resolve_model_ref_strips_explicit_none() -> None:
+    """Post-merge None-strip: cleared keys are absent from the resolved config."""
+    ref = model_ref(
+        'gemini-pro-latest',
+        namespace='googleai',
+        config_schema=CustomConfig,
+        config=CustomConfig(temperature=0.7, top_k=40),
+    )
+
+    resolved = resolve_model_ref(model=ref, config={'temperature': None})
+
+    assert 'temperature' not in resolved.config
+    assert resolved.config['top_k'] == 40

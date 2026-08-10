@@ -378,15 +378,11 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         output_opts = opts.get('output') or {}
         merged_config: ConfigArg | None
         if opts.get('config') is not None:
-            base = (
-                self._config.model_dump(exclude_none=True)
-                if isinstance(self._config, BaseModel)
-                else (self._config or {})
-            )
-            opt_config = opts.get('config')
-            override = (
-                opt_config.model_dump(exclude_none=True) if isinstance(opt_config, BaseModel) else (opt_config or {})
-            )
+            # exclude_unset semantics via normalize_config: untouched fields are
+            # absent (cannot clobber defaults); an explicitly-set None survives
+            # the merge and clears the lower-precedence value downstream.
+            base = normalize_config(config=self._config)
+            override = normalize_config(config=opts.get('config'))
             merged_config = {**base, **override} if base or override else None
         else:
             merged_config = self._config
