@@ -446,9 +446,10 @@ export function fromVeoOperation(
     // the safety (RAI) filters, there are no videos to return. Surface the
     // filter reasons as an error instead of returning empty content.
     if (videos.length === 0 && fromOp.response.raiMediaFilteredCount) {
+      const reasons = fromOp.response.raiMediaFilteredReasons?.join('; ');
       toOp.error = {
         message:
-          fromOp.response.raiMediaFilteredReasons?.join('; ') ??
+          reasons ||
           'All generated videos were filtered out by safety filters.',
       };
     }
