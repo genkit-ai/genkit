@@ -18,11 +18,11 @@ import type { protos } from '@google-cloud/aiplatform';
 import { z, type Action, type Genkit } from 'genkit';
 import type { GoogleAuth } from 'google-auth-library';
 import { EvaluatorFactory } from './evaluator_factory.js';
-import type { VertexAIEvaluationMetricConfig } from './types';
 import {
-  VertexAIEvaluationMetric,
   VertexAIEvaluationMetricType,
-} from './types';
+  type VertexAIEvaluationMetric,
+  type VertexAIEvaluationMetricConfig,
+} from './types.js';
 
 function stringify(input: unknown) {
   return typeof input === 'string' ? input : JSON.stringify(input);
