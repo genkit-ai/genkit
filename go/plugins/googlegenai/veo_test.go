@@ -567,8 +567,8 @@ func TestResolveVeoActions(t *testing.T) {
 
 	t.Run("non-veo models do not resolve as background models", func(t *testing.T) {
 		for _, atype := range []api.ActionType{api.ActionTypeBackgroundModel, api.ActionTypeCheckOperation} {
-			if action := resolveAction(client, googleAIProvider, atype, "gemini-2.5-flash"); action != nil {
-				t.Errorf("resolveAction(%s, gemini-2.5-flash) = %v, want nil", atype, action)
+			if action := resolveAction(client, googleAIProvider, atype, "gemini-flash-latest"); action != nil {
+				t.Errorf("resolveAction(%s, gemini-flash-latest) = %v, want nil", atype, action)
 			}
 		}
 	})
