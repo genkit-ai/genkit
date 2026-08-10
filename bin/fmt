@@ -31,21 +31,18 @@ TOP_DIR=$(git rev-parse --show-toplevel)
 "${TOP_DIR}/bin/add_license"
 
 # Format all TOML files.
-"${TOP_DIR}/bin/format_toml_files"
-if [[ $? -ne 0 ]]; then
+if ! "${TOP_DIR}/bin/format_toml_files"; then
   exit 1
 fi
 
 # Format all Python code while organizing imports.
 uv run --directory "${TOP_DIR}/py" ruff check --select I --fix --preview --unsafe-fixes .
-uv run --directory "${TOP_DIR}/py" ruff format --preview .
-if [[ $? -ne 0 ]]; then
+if ! uv run --directory "${TOP_DIR}/py" ruff format --preview .; then
   exit 1
 fi
 
 # Format all Go code.
-go fmt -C "${TOP_DIR}/go" ./...
-if [[ $? -ne 0 ]]; then
+if ! go fmt -C "${TOP_DIR}/go" ./...; then
   exit 1
 fi
 

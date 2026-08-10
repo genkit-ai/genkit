@@ -21,6 +21,7 @@ import * as sinon from 'sinon';
 import { TextEncoder } from 'util';
 import { getGenkitClientHeader } from '../../src/common/utils.js';
 import {
+  TEST_ONLY,
   embedContent,
   generateContent,
   generateContentStream,
@@ -52,6 +53,7 @@ import { NOT_SUPPORTED_IN_EXPRESS_ERROR } from '../../src/vertexai/utils.js';
 
 describe('Vertex AI Client', () => {
   let fetchSpy: sinon.SinonStub;
+  let runInNewSpanSpy: sinon.SinonStub;
   let authMock: sinon.SinonStubbedInstance<GoogleAuth>;
 
   const regionalClientOptions: ClientOptions = {
@@ -73,17 +75,36 @@ describe('Vertex AI Client', () => {
     apiKey: 'test-api-key',
   };
 
+  const multiRegionalClientOptions: ClientOptions = {
+    kind: 'multi-regional',
+    projectId: 'test-project',
+    location: 'eu',
+    authClient: {} as GoogleAuth,
+  };
+
   const notSupportedInExpressErrorMessage = {
     message: NOT_SUPPORTED_IN_EXPRESS_ERROR.message,
   };
 
   beforeEach(() => {
+    sinon.restore();
     fetchSpy = sinon.stub(global, 'fetch');
+
+    runInNewSpanSpy = sinon
+      .stub(TEST_ONLY.tracingHooks, 'runInNewSpan')
+      .callsFake((async (...args: any[]) => {
+        const fn = args.pop();
+        const options = args[0];
+        return await fn(options.metadata);
+      }) as any);
+
     authMock = sinon.createStubInstance(GoogleAuth);
     authMock.getAccessToken.resolves('test-token');
     (regionalClientOptions as any).authClient =
       authMock as unknown as GoogleAuth;
     (globalClientOptions as any).authClient = authMock as unknown as GoogleAuth;
+    (multiRegionalClientOptions as any).authClient =
+      authMock as unknown as GoogleAuth;
   });
 
   afterEach(() => {
@@ -228,26 +249,26 @@ describe('Vertex AI Client', () => {
       it('should build URL for predictLongRunning', () => {
         const url = getVertexAIUrl({
           includeProjectAndLocation: true,
-          resourcePath: 'publishers/google/models/veo-2.0',
+          resourcePath: 'publishers/google/models/veo-3.1',
           resourceMethod: 'predictLongRunning',
           clientOptions: opts,
         });
         assert.strictEqual(
           url,
-          'https://us-east1-aiplatform.googleapis.com/v1beta1/projects/test-proj/locations/us-east1/publishers/google/models/veo-2.0:predictLongRunning'
+          'https://us-east1-aiplatform.googleapis.com/v1beta1/projects/test-proj/locations/us-east1/publishers/google/models/veo-3.1:predictLongRunning'
         );
       });
 
       it('should build URL for fetchPredictOperation', () => {
         const url = getVertexAIUrl({
           includeProjectAndLocation: true,
-          resourcePath: 'publishers/google/models/veo-2.0',
+          resourcePath: 'publishers/google/models/veo-3.1',
           resourceMethod: 'fetchPredictOperation',
           clientOptions: opts,
         });
         assert.strictEqual(
           url,
-          'https://us-east1-aiplatform.googleapis.com/v1beta1/projects/test-proj/locations/us-east1/publishers/google/models/veo-2.0:fetchPredictOperation'
+          'https://us-east1-aiplatform.googleapis.com/v1beta1/projects/test-proj/locations/us-east1/publishers/google/models/veo-3.1:fetchPredictOperation'
         );
       });
 
@@ -261,6 +282,45 @@ describe('Vertex AI Client', () => {
         assert.strictEqual(
           url,
           'https://us-east1-aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=10'
+        );
+      });
+
+      it('should respect apiVersion in options', () => {
+        const customOpts: ClientOptions = {
+          ...opts,
+          apiVersion: 'v1',
+        };
+        const url = getVertexAIUrl({
+          includeProjectAndLocation: true,
+          resourcePath: 'publishers/google/models/gemini-2.5-flash',
+          resourceMethod: 'generateContent',
+          clientOptions: customOpts,
+        });
+        assert.strictEqual(
+          url,
+          'https://us-east1-aiplatform.googleapis.com/v1/projects/test-proj/locations/us-east1/publishers/google/models/gemini-2.5-flash:generateContent'
+        );
+      });
+    });
+
+    describe('Multi-Regional', () => {
+      const opts: ClientOptions = {
+        kind: 'multi-regional',
+        projectId: 'test-proj',
+        location: 'eu',
+        authClient: {} as any,
+      };
+
+      it('should build URL for generateContent', () => {
+        const url = getVertexAIUrl({
+          includeProjectAndLocation: true,
+          resourcePath: 'publishers/google/models/gemini-3.5-flash',
+          resourceMethod: 'generateContent',
+          clientOptions: opts,
+        });
+        assert.strictEqual(
+          url,
+          'https://aiplatform.eu.rep.googleapis.com/v1beta1/projects/test-proj/locations/eu/publishers/google/models/gemini-3.5-flash:generateContent'
         );
       });
     });
@@ -330,7 +390,7 @@ describe('Vertex AI Client', () => {
         assert.throws(() => {
           return getVertexAIUrl({
             includeProjectAndLocation: true,
-            resourcePath: 'publishers/google/models/veo-2.0',
+            resourcePath: 'publishers/google/models/veo-3.1',
             resourceMethod: 'predictLongRunning',
             clientOptions: opts,
           });
@@ -387,6 +447,23 @@ describe('Vertex AI Client', () => {
           'https://aiplatform.googleapis.com/v1beta1/publishers/google/models/gemini-2.5-flash:generateContent?pageSize=10'
         );
       });
+
+      it('should respect apiVersion in options', () => {
+        const customOpts: ClientOptions = {
+          ...opts,
+          apiVersion: 'v1',
+        };
+        const url = getVertexAIUrl({
+          includeProjectAndLocation: true,
+          resourcePath: 'publishers/google/models/gemini-2.5-flash',
+          resourceMethod: 'generateContent',
+          clientOptions: customOpts,
+        });
+        assert.strictEqual(
+          url,
+          'https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash:generateContent'
+        );
+      });
     });
   });
 
@@ -405,6 +482,7 @@ describe('Vertex AI Client', () => {
       { name: 'Regional', options: regionalClientOptions },
       { name: 'Global', options: globalClientOptions },
       { name: 'Express', options: expressClientOptions },
+      { name: 'Multi-Regional', options: multiRegionalClientOptions },
     ];
 
     for (const testCase of testCases) {
@@ -412,7 +490,8 @@ describe('Vertex AI Client', () => {
         const currentOptions = testCase.options;
         const isExpress = currentOptions.kind === 'express';
         const location =
-          currentOptions.kind === 'regional'
+          currentOptions.kind === 'regional' ||
+          currentOptions.kind === 'multi-regional'
             ? currentOptions.location
             : 'global';
         const projectId =
@@ -441,10 +520,12 @@ describe('Vertex AI Client', () => {
           if (isExpress) {
             return `https://aiplatform.googleapis.com/v1beta1/${path}`;
           }
-          const domain =
-            currentOptions.kind === 'regional'
-              ? `${location}-aiplatform.googleapis.com`
-              : 'aiplatform.googleapis.com';
+          let domain = 'aiplatform.googleapis.com';
+          if (currentOptions.kind === 'regional') {
+            domain = `${location}-aiplatform.googleapis.com`;
+          } else if (currentOptions.kind === 'multi-regional') {
+            domain = `aiplatform.${location}.rep.googleapis.com`;
+          }
           return `https://${domain}/v1beta1/${path}`;
         };
 
@@ -462,10 +543,12 @@ describe('Vertex AI Client', () => {
             }
             url = `https://aiplatform.googleapis.com/v1beta1/${resourcePath}:${method}`;
           } else {
-            const domain =
-              currentOptions.kind === 'regional'
-                ? `${location}-aiplatform.googleapis.com`
-                : 'aiplatform.googleapis.com';
+            let domain = 'aiplatform.googleapis.com';
+            if (currentOptions.kind === 'regional') {
+              domain = `${location}-aiplatform.googleapis.com`;
+            } else if (currentOptions.kind === 'multi-regional') {
+              domain = `aiplatform.${location}.rep.googleapis.com`;
+            }
 
             let resourcePath;
             if (isTuned) {
@@ -501,6 +584,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'GET',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
               });
 
               if (!isExpress) {
@@ -541,8 +625,45 @@ describe('Vertex AI Client', () => {
             sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
               method: 'POST',
               headers: getExpectedHeaders(),
+              redirect: 'manual',
               body: JSON.stringify(request),
             });
+            sinon.assert.notCalled(runInNewSpanSpy);
+          });
+
+          it('should trace generateContent if experimental_debugTraces is true', async () => {
+            const mockResponse: GenerateContentResponse = { candidates: [] };
+            mockFetchResponse(mockResponse);
+
+            const optionsWithTrace: ClientOptions = {
+              ...currentOptions,
+              experimental_debugTraces: true,
+            };
+
+            const result = await generateContent(
+              model,
+              request,
+              optionsWithTrace
+            );
+            assert.deepStrictEqual(result, mockResponse);
+
+            sinon.assert.calledOnce(runInNewSpanSpy);
+
+            const traceMetadata = runInNewSpanSpy.firstCall.args[0].metadata;
+            assert.strictEqual(traceMetadata.name, 'httpRequest');
+
+            assert.deepStrictEqual(traceMetadata.input, {
+              apiEndpoint: getResourceUrl(model, 'generateContent'),
+              request: request,
+              model: model,
+              headers: {
+                ...getExpectedHeaders(),
+                ...(isExpress
+                  ? { 'x-goog-api-key': '<REDACTED> (12 characters)' }
+                  : { Authorization: '<REDACTED> (17 characters)' }),
+              },
+            });
+            assert.deepStrictEqual(traceMetadata.output, mockResponse);
           });
 
           it('should return GenerateContentResponse for tuned model', async () => {
@@ -566,6 +687,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             }
@@ -577,7 +699,15 @@ describe('Vertex AI Client', () => {
 
             await assert.rejects(
               generateContent(model, request, currentOptions),
-              /Failed to fetch from .* \[403 Forbidden\] Permission denied/
+              (err: any) => {
+                assert.strictEqual(err.name, 'GenkitError');
+                assert.strictEqual(err.status, 'UNKNOWN');
+                assert.match(
+                  err.message,
+                  /Error fetching from .* \[403 Forbidden\] Permission denied/
+                );
+                return true;
+              }
             );
           });
         });
@@ -599,8 +729,38 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
+              sinon.assert.notCalled(runInNewSpanSpy);
+            });
+
+            it('should trace embedContent if experimental_debugTraces is true', async () => {
+              const mockResponse: EmbedContentResponse = { predictions: [] };
+              mockFetchResponse(mockResponse);
+
+              const optionsWithTrace: ClientOptions = {
+                ...currentOptions,
+                experimental_debugTraces: true,
+              };
+
+              await embedContent(model, request, optionsWithTrace);
+
+              sinon.assert.calledOnce(runInNewSpanSpy);
+
+              const traceMetadata = runInNewSpanSpy.firstCall.args[0].metadata;
+              assert.strictEqual(traceMetadata.name, 'httpRequest');
+
+              assert.deepStrictEqual(traceMetadata.input, {
+                apiEndpoint: getResourceUrl(model, 'predict'),
+                request: request,
+                model: model,
+                headers: {
+                  ...getExpectedHeaders(),
+                  Authorization: '<REDACTED> (17 characters)', // embedContent only runs in Regional/Global mode in tests
+                },
+              });
+              assert.deepStrictEqual(traceMetadata.output, mockResponse);
             });
           } else {
             it('should throw with unsupported for Express', async () => {
@@ -628,6 +788,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             });
@@ -657,6 +818,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             });
@@ -675,17 +837,20 @@ describe('Vertex AI Client', () => {
             instances: [{ prompt: 'a video' }],
             parameters: {},
           };
-          const model = 'veo-2.0-generate-001';
+          const model = 'veo-3.1-generate-preview';
           if (!isExpress) {
             it('should return VeoOperation', async () => {
               const mockResponse: VeoOperation = { name: 'operations/123' };
               mockFetchResponse(mockResponse);
-              await veoPredict(model, request, currentOptions);
+              const result = await veoPredict(model, request, currentOptions);
+
+              assert.deepStrictEqual(result, mockResponse);
 
               const expectedUrl = getResourceUrl(model, 'predictLongRunning');
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             });
@@ -703,7 +868,7 @@ describe('Vertex AI Client', () => {
           const request: VeoOperationRequest = {
             operationName: 'operations/123',
           };
-          const model = 'veo-2.0-generate-001';
+          const model = 'veo-3.1-generate-preview';
           if (!isExpress) {
             it('should return VeoOperation', async () => {
               const mockResponse: VeoOperation = {
@@ -711,7 +876,13 @@ describe('Vertex AI Client', () => {
                 done: true,
               };
               mockFetchResponse(mockResponse);
-              await veoCheckOperation(model, request, currentOptions);
+              const result = await veoCheckOperation(
+                model,
+                request,
+                currentOptions
+              );
+
+              assert.deepStrictEqual(result, mockResponse);
 
               const expectedUrl = getResourceUrl(
                 model,
@@ -720,6 +891,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             });
@@ -769,8 +941,39 @@ describe('Vertex AI Client', () => {
             sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
               method: 'POST',
               headers: getExpectedHeaders(),
+              redirect: 'manual',
               body: JSON.stringify(request),
             });
+            sinon.assert.notCalled(runInNewSpanSpy);
+          });
+
+          it('should trace generateContentStream if experimental_debugTraces is true', async () => {
+            mockStream();
+
+            const optionsWithTrace: ClientOptions = {
+              ...currentOptions,
+              experimental_debugTraces: true,
+            };
+
+            await generateContentStream(model, request, optionsWithTrace);
+
+            sinon.assert.calledOnce(runInNewSpanSpy);
+
+            const traceMetadata = runInNewSpanSpy.firstCall.args[0].metadata;
+            assert.strictEqual(traceMetadata.name, 'httpRequest');
+
+            assert.deepStrictEqual(traceMetadata.input, {
+              apiEndpoint: getResourceUrl(model, 'streamGenerateContent'),
+              request: request,
+              model: model,
+              headers: {
+                ...getExpectedHeaders(),
+                ...(isExpress
+                  ? { 'x-goog-api-key': '<REDACTED> (12 characters)' }
+                  : { Authorization: '<REDACTED> (17 characters)' }),
+              },
+            });
+            assert.strictEqual(traceMetadata.output, '[Streaming Response]');
           });
 
           it('should process stream for tuned model', async () => {
@@ -791,6 +994,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             }
@@ -810,19 +1014,26 @@ describe('Vertex AI Client', () => {
         'text/html'
       );
 
-      await assert.rejects(
-        listModels(regionalClientOptions),
-        /Failed to fetch from .* \[504 Gateway Timeout\] <h1>Gateway Timeout<\/h1>/
-      );
+      await assert.rejects(listModels(regionalClientOptions), (err: any) => {
+        assert.strictEqual(err.name, 'GenkitError');
+        assert.strictEqual(err.status, 'UNKNOWN');
+        assert.match(
+          err.message,
+          /Error fetching from .* \[504 Gateway Timeout\] <h1>Gateway Timeout<\/h1>/
+        );
+        return true;
+      });
     });
 
     it('listModels should throw an error if fetch fails with empty response body', async () => {
       mockFetchResponse(null, false, 502, 'Bad Gateway');
 
-      await assert.rejects(
-        listModels(regionalClientOptions),
-        /Failed to fetch from .* \[502 Bad Gateway\] $/
-      );
+      await assert.rejects(listModels(regionalClientOptions), (err: any) => {
+        assert.strictEqual(err.name, 'GenkitError');
+        assert.strictEqual(err.status, 'UNKNOWN');
+        assert.match(err.message, /Error fetching from .* \[502 Bad Gateway\]/);
+        return true;
+      });
     });
 
     it('listModels should throw an error on network failure', async () => {
@@ -831,6 +1042,21 @@ describe('Vertex AI Client', () => {
         listModels(regionalClientOptions),
         /Failed to fetch from .* Network Error/
       );
+    });
+
+    it('should throw a resource exhausted error on 429', async () => {
+      const errorResponse = { error: { message: 'Too many requests' } };
+      mockFetchResponse(errorResponse, false, 429, 'Too Many Requests');
+
+      await assert.rejects(listModels(regionalClientOptions), (err: any) => {
+        assert.strictEqual(err.name, 'GenkitError');
+        assert.strictEqual(err.status, 'RESOURCE_EXHAUSTED');
+        assert.match(
+          err.message,
+          /Error fetching from .* \[429 Too Many Requests\] Too many requests/
+        );
+        return true;
+      });
     });
   });
 

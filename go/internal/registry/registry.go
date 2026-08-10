@@ -17,6 +17,7 @@
 package registry
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/google/dotprompt/go/dotprompt"
+	"github.com/invopop/jsonschema"
 )
 
 // This file implements registries of actions and other values.
@@ -31,12 +33,13 @@ import (
 // Registry holds all registered actions and associated types,
 // and provides methods to register, query, and look up actions.
 type Registry struct {
-	mu      sync.Mutex
-	parent  api.Registry // parent registry for hierarchical lookups
-	actions map[string]api.Action
-	plugins map[string]api.Plugin
-	values  map[string]any // Values can truly be anything.
-
+	mu        sync.RWMutex
+	resolveMu sync.RWMutex
+	parent    api.Registry
+	actions   map[string]api.Action
+	plugins   map[string]api.Plugin
+	schemas   map[string]map[string]any
+	values    map[string]any // Values can truly be anything.
 	dotprompt *dotprompt.Dotprompt
 }
 
@@ -46,10 +49,32 @@ func New() *Registry {
 		actions: map[string]api.Action{},
 		plugins: map[string]api.Plugin{},
 		values:  map[string]any{},
+		schemas: make(map[string]map[string]any),
 	}
 	r.dotprompt = dotprompt.NewDotprompt(&dotprompt.DotpromptOptions{
 		Helpers:  make(map[string]any),
 		Partials: make(map[string]string),
+		SchemaResolver: func(name string) (*jsonschema.Schema, error) {
+			s := r.LookupSchema(name)
+			if s == nil {
+				// Schema not found - return a reference schema with just the name.
+				// The caller (LoadPrompt) will detect this and store the name
+				// for lazy resolution at execution time.
+				return &jsonschema.Schema{
+					Ref: name,
+				}, nil
+			}
+			var schema jsonschema.Schema
+			schemaBytes, err := json.Marshal(s)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal schema map for %q: %w", name, err)
+			}
+			if err := json.Unmarshal(schemaBytes, &schema); err != nil {
+				slog.Error("failed to unmarshal schema from registry", "name", name, "error", err)
+				return nil, fmt.Errorf("failed to unmarshal schema(%q) from registry", name)
+			}
+			return &schema, nil
+		},
 	})
 	return r
 }
@@ -63,6 +88,7 @@ func (r *Registry) NewChild() api.Registry {
 		actions:   map[string]api.Action{},
 		plugins:   map[string]api.Plugin{},
 		values:    map[string]any{},
+		schemas:   make(map[string]map[string]any),
 		dotprompt: r.dotprompt,
 	}
 	return child
@@ -98,12 +124,42 @@ func (r *Registry) RegisterAction(key string, action api.Action) {
 	slog.Debug("RegisterAction", "key", key)
 }
 
+// RegisterSchema records a JSON schema (as a map[string]any) in the registry.
+// It panics if a schema with the same name is already registered.
+func (r *Registry) RegisterSchema(name string, schema map[string]any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.schemas[name]; ok {
+		panic(fmt.Sprintf("schema %q is already registered", name))
+	}
+	r.schemas[name] = schema
+	slog.Debug("RegisterSchema", "name", name)
+}
+
+// LookupSchema returns a JSON schema (as a map[string]any) for the given name.
+// It first checks the current registry, then falls back to the parent if not found.
+// Returns nil if the schema is not found in the registry hierarchy.
+func (r *Registry) LookupSchema(name string) map[string]any {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if schema, ok := r.schemas[name]; ok {
+		return schema
+	}
+
+	if r.parent != nil {
+		return r.parent.LookupSchema(name)
+	}
+
+	return nil
+}
+
 // LookupPlugin returns the plugin for the given name.
 // It first checks the current registry, then falls back to the parent if not found.
 // Returns nil if the plugin is not found in the registry hierarchy.
 func (r *Registry) LookupPlugin(name string) api.Plugin {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
 	if plugin, ok := r.plugins[name]; ok {
 		return plugin
@@ -132,8 +188,8 @@ func (r *Registry) RegisterValue(name string, value any) {
 // It first checks the current registry, then falls back to the parent if not found.
 // Returns nil if the value is not found in the registry hierarchy.
 func (r *Registry) LookupValue(name string) any {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
 	if value, ok := r.values[name]; ok {
 		return value
@@ -149,8 +205,8 @@ func (r *Registry) LookupValue(name string) any {
 // LookupAction returns the action for the given key.
 // It first checks the current registry, then falls back to the parent if not found.
 func (r *Registry) LookupAction(key string) api.Action {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
 	if action, ok := r.actions[key]; ok {
 		return action
@@ -165,36 +221,65 @@ func (r *Registry) LookupAction(key string) api.Action {
 
 // ResolveAction looks up an action by key. If the action is not found, it attempts dynamic resolution.
 // Returns the action if found, or nil if not found.
+// This method is safe to call concurrently and uses a single mutex to serialize all resolution operations.
 func (r *Registry) ResolveAction(key string) api.Action {
 	action := r.LookupAction(key)
-	if action == nil {
-		typ, provider, name := api.ParseKey(key)
-		if typ == "" || name == "" {
-			slog.Debug("ResolveAction: failed to parse action key", "key", key)
-			return nil
-		}
-		plugins := r.ListPlugins()
-		for _, plugin := range plugins {
-			if dp, ok := plugin.(api.DynamicPlugin); ok && dp.Name() == provider {
-				resolvedAction := dp.ResolveAction(typ, name)
-				if resolvedAction != nil {
-					resolvedAction.Register(r)
-				}
-				break
-			}
-		}
-		action = r.LookupAction(key)
+	if action != nil {
+		return action
 	}
-	return action
+
+	r.resolveMu.Lock()
+	defer r.resolveMu.Unlock()
+
+	action = r.LookupAction(key)
+	if action != nil {
+		return action
+	}
+
+	typ, provider, name := api.ParseKey(key)
+	if typ == "" || name == "" {
+		slog.Debug("ResolveAction: failed to parse action key", "key", key)
+		return nil
+	}
+
+	plugins := r.ListPlugins()
+	for _, plugin := range plugins {
+		if dp, ok := plugin.(api.DynamicPlugin); ok && dp.Name() == provider {
+			resolvedAction := dp.ResolveAction(typ, name)
+			if resolvedAction != nil {
+				resolvedAction.Register(r)
+			}
+			break
+		}
+	}
+
+	return r.LookupAction(key)
 }
 
 // ListActions returns a list of all registered actions.
 // This includes actions from both the current registry and its parent hierarchy.
 // Child registry actions take precedence over parent actions with the same key.
 func (r *Registry) ListActions() []api.Action {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var actions []api.Action
+
+	// recursively check all the registry parents
+	if r.parent != nil {
+		parentValues := r.parent.ListActions()
+		for _, pv := range parentValues {
+			found := false
+			for _, cv := range r.actions {
+				if pv.Name() == cv.Name() {
+					found = true
+					break
+				}
+			}
+			if !found {
+				actions = append(actions, pv)
+			}
+		}
+	}
 	for _, v := range r.actions {
 		actions = append(actions, v)
 	}
@@ -202,10 +287,30 @@ func (r *Registry) ListActions() []api.Action {
 }
 
 // ListPlugins returns a list of all registered plugins.
+// This includes plugins from both the current registry and its parent hierarchy.
+// Child registry plugins take precedence over parent plugins with the same key.
 func (r *Registry) ListPlugins() []api.Plugin {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var plugins []api.Plugin
+
+	// recursively check all the registry parents
+	if r.parent != nil {
+		parentValues := r.parent.ListPlugins()
+		for _, pv := range parentValues {
+			found := false
+			for _, cv := range r.plugins {
+				if pv.Name() == cv.Name() {
+					found = true
+					break
+				}
+			}
+			if !found {
+				plugins = append(plugins, pv)
+			}
+		}
+	}
+
 	for _, p := range r.plugins {
 		plugins = append(plugins, p)
 	}
@@ -216,8 +321,8 @@ func (r *Registry) ListPlugins() []api.Plugin {
 // This includes values from both the current registry and its parent hierarchy.
 // Child registry values take precedence over parent values with the same key.
 func (r *Registry) ListValues() map[string]any {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
 	allValues := make(map[string]any)
 
@@ -233,6 +338,8 @@ func (r *Registry) ListValues() map[string]any {
 
 // RegisterPartial adds the partial to the list of partials to the dotprompt instance
 func (r *Registry) RegisterPartial(name string, source string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.dotprompt == nil {
 		r.dotprompt = dotprompt.NewDotprompt(nil)
 	}
@@ -247,6 +354,8 @@ func (r *Registry) RegisterPartial(name string, source string) {
 
 // RegisterHelper adds a helper function to the dotprompt instance
 func (r *Registry) RegisterHelper(name string, fn any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.dotprompt == nil {
 		r.dotprompt = dotprompt.NewDotprompt(nil)
 	}
@@ -259,9 +368,9 @@ func (r *Registry) RegisterHelper(name string, fn any) {
 	r.dotprompt.Helpers[name] = fn
 }
 
-// Dotprompt returns the dotprompt instance.
+// Dotprompt returns a clone of the Dotprompt instance.
 func (r *Registry) Dotprompt() *dotprompt.Dotprompt {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.dotprompt
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.dotprompt.Clone()
 }

@@ -37,7 +37,7 @@ import {
 } from '@genkit-ai/checks';
 
 // Import any models you would like to use.
-import { gemini15Flash, googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 
 export const ai = genkit({
   plugins: [
@@ -53,7 +53,7 @@ export const poemFlow = ai.defineFlow(
   },
   async (topic) => {
     const { text } = await ai.generate({
-      model: gemini15Flash,
+      model: googleAI.model('gemini-2.5-flash'),
       prompt: `Write a poem on this topic: ${topic}`,
       // Add checks middleware to your generate calls.
       use: [
@@ -196,6 +196,6 @@ Run `genkit start -- tsx --watch src/index.ts` and open the Genkit UI, usually a
 
 # Genkit
 
-The sources for this package are in the main [Genkit](https://github.com/firebase/genkit) repository. Please file issues and pull requests against that repository.
+The sources for this package are in the main [Genkit](https://github.com/genkit-ai/genkit) repository. Please file issues and pull requests against that repository.
 
 Usage information and reference details can be found in the [official Genkit documentation](https://genkit.dev/docs/get-started/).

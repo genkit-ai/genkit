@@ -36,7 +36,12 @@ import {
   TaskTypeSchema,
   Tool,
   ToolConfig,
+  UrlContextTool,
 } from '../common/types.js';
+import {
+  CreateInteractionRequest,
+  GeminiInteraction,
+} from './interaction-types.js';
 
 // This makes it easier to import all types from one place.
 export {
@@ -45,6 +50,8 @@ export {
   HarmCategory,
   TaskTypeSchema,
   type Content,
+  type CreateInteractionRequest,
+  type GeminiInteraction,
   type GenerateContentCandidate,
   type GenerateContentRequest,
   type GenerateContentResponse,
@@ -60,6 +67,7 @@ export {
   type SafetySetting,
   type Tool,
   type ToolConfig,
+  type UrlContextTool,
 };
 
 export interface GoogleAIPluginOptions {
@@ -76,6 +84,12 @@ export interface GoogleAIPluginOptions {
   apiVersion?: string;
   baseUrl?: string;
   experimental_debugTraces?: boolean;
+  /** Use `responseSchema` field instead of `responseJsonSchema`. */
+  legacyResponseSchema?: boolean;
+  /**
+   * Additional headers to send along with the request.
+   */
+  customHeaders?: Record<string, string>;
 }
 
 /**
@@ -97,6 +111,10 @@ export interface ClientOptions {
    */
   timeout?: number;
   /**
+   * Api Key for Gemini API
+   */
+  apiKey?: string;
+  /**
    * Version of API endpoint to call (e.g. "v1" or "v1beta"). If not specified,
    * defaults to 'v1beta'.
    */
@@ -114,6 +132,10 @@ export interface ClientOptions {
    * Custom HTTP request headers.
    */
   customHeaders?: Headers | Record<string, string>;
+  /**
+   * Enables additional debug traces (e.g. raw model API call details).
+   */
+  experimental_debugTraces?: boolean;
 }
 
 /**
@@ -181,16 +203,23 @@ export declare interface VeoParameters {
   personGeneration?: string;
   durationSeconds?: number;
   enhancePrompt?: boolean;
+  resolution?: string;
+  seed?: number;
 }
 
 export declare interface VeoInstance {
   prompt: string;
   image?: VeoImage;
+  video?: VeoVideo;
 }
 
 export declare interface VeoImage {
   bytesBase64Encoded: string;
   mimeType: string;
+}
+
+export declare interface VeoVideo {
+  uri: string;
 }
 
 export declare interface VeoOperation {

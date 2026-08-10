@@ -80,6 +80,9 @@ func main() {
 		ai.WithMessages(systemMsg, userMsg),
 		ai.WithTools(weatherTool),
 		ai.WithToolChoice(ai.ToolChoiceAuto),
+		ai.WithConfig(&ollama.GenerateContentConfig{
+			Temperature: ollama.Ptr(0.5),
+		}),
 	)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)

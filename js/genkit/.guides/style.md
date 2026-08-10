@@ -1,0 +1,1 @@
+- Prefer destructuring generate calls e.g. `const {text} = await ai.generate(...)`

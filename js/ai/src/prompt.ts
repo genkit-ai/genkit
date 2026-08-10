@@ -18,6 +18,7 @@ import {
   GenkitError,
   defineActionAsync,
   getContext,
+  isAction,
   stripUndefinedProps,
   type Action,
   type ActionAsyncParams,
@@ -32,6 +33,7 @@ import { toJsonSchema } from '@genkit-ai/core/schema';
 import { SPAN_TYPE_ATTR, runInNewSpan } from '@genkit-ai/core/tracing';
 import { Message as DpMessage, PromptFunction } from 'dotprompt';
 import { existsSync, readFileSync, readdirSync } from 'fs';
+import type Handlebars from 'handlebars';
 import { basename, join, resolve } from 'path';
 import type { DocumentData } from './document.js';
 import {
@@ -48,6 +50,7 @@ import {
 import { Message } from './message.js';
 import {
   GenerateActionOptionsSchema,
+  MiddlewareRef,
   type GenerateActionOptions,
   type GenerateRequest,
   type GenerateRequestSchema,
@@ -127,7 +130,7 @@ export interface PromptConfig<
   metadata?: Record<string, any>;
   tools?: ToolArgument[];
   toolChoice?: ToolChoice;
-  use?: ModelMiddleware[];
+  use?: (ModelMiddleware | MiddlewareRef)[];
   context?: ActionContext;
 }
 
@@ -306,7 +309,8 @@ function definePromptAsync<
         let docs: DocumentData[] | undefined;
         if (typeof resolvedOptions.docs === 'function') {
           docs = await resolvedOptions.docs(input, {
-            state: session?.state,
+            state: session?.getCustom(),
+
             context: renderOptions?.context || getContext() || {},
           });
         } else {
@@ -438,6 +442,12 @@ function promptMetadata(options: PromptConfig<any, any, any>) {
         ? options.name.split('.')[0]
         : options.name,
       model: modelName(options.model),
+      tools: (options.tools ?? []).map(toolName).filter(Boolean) as string[],
+      toolChoice: options.toolChoice,
+      use: (options.use ?? []).map(toMiddlewareMetadata).filter(Boolean) as {
+        name: string;
+        config?: any;
+      }[],
     },
     type: 'prompt',
   };
@@ -533,7 +543,7 @@ async function renderSystemPrompt<
       role: 'system',
       content: normalizeParts(
         await options.system(input, {
-          state: session?.state,
+          state: session?.getCustom(),
           context: renderOptions?.context || getContext() || {},
         })
       ),
@@ -579,7 +589,7 @@ async function renderMessages<
     if (typeof options.messages === 'function') {
       messages.push(
         ...(await options.messages(input, {
-          state: session?.state,
+          state: session?.getCustom(),
           context: renderOptions?.context || getContext() || {},
           history: renderOptions?.messages,
         }))
@@ -595,7 +605,7 @@ async function renderMessages<
         input,
         context: {
           ...(renderOptions?.context || getContext()),
-          state: session?.state,
+          state: session?.getCustom(),
         },
         messages: renderOptions?.messages?.map((m) =>
           Message.parseData(m)
@@ -634,7 +644,7 @@ async function renderUserPrompt<
       role: 'user',
       content: normalizeParts(
         await options.prompt(input, {
-          state: session?.state,
+          state: session?.getCustom(),
           context: renderOptions?.context || getContext() || {},
         })
       ),
@@ -678,6 +688,35 @@ function modelName(
   return (modelArg as ModelAction).__action.name;
 }
 
+function toolName(tool: ToolArgument): string | undefined {
+  if (typeof tool === 'string') {
+    return tool;
+  }
+  if (isAction(tool)) {
+    return tool.__action.name;
+  }
+  if (isExecutablePrompt(tool)) {
+    return tool.ref.name;
+  }
+  return undefined;
+}
+
+function toMiddlewareMetadata(
+  middleware: any
+): { name: string; config?: any } | undefined {
+  if (typeof middleware === 'string') {
+    return { name: middleware };
+  }
+  if (
+    typeof middleware === 'object' &&
+    middleware !== null &&
+    middleware.name
+  ) {
+    return { name: middleware.name, config: middleware.config };
+  }
+  return undefined;
+}
+
 function normalizeParts(parts: string | Part | Part[]): Part[] {
   if (Array.isArray(parts)) return parts;
   if (typeof parts === 'string') {
@@ -706,7 +745,7 @@ async function renderDotpromptToParts<
     input,
     context: {
       ...(renderOptions?.context || getContext()),
-      state: session?.state,
+      state: session?.getCustom(),
     },
   });
   if (renderred.messages.length !== 1) {
@@ -837,6 +876,13 @@ function loadPrompt(
         type: 'prompt',
         prompt: {
           ...promptMetadata,
+          use: (Array.isArray(promptMetadata.raw?.['use'])
+            ? promptMetadata.raw?.['use']
+            : []
+          )
+            .map(toMiddlewareMetadata)
+            .filter(Boolean),
+          toolChoice: promptMetadata.raw?.['toolChoice'],
           template: parsedPrompt.template,
         },
       };
@@ -861,6 +907,7 @@ function loadPrompt(
         maxTurns: promptMetadata.raw?.['maxTurns'],
         toolChoice: promptMetadata.raw?.['toolChoice'],
         returnToolRequests: promptMetadata.raw?.['returnToolRequests'],
+        use: promptMetadata.raw?.['use'],
         messages: parsedPrompt.template,
       };
     })
@@ -874,7 +921,7 @@ export async function prompt<
 >(
   registry: Registry,
   name: string,
-  options?: { variant?: string; dir?: string }
+  options?: { variant?: string; dir?: string | null }
 ): Promise<ExecutablePrompt<I, O, CustomOptions>> {
   return await lookupPrompt<I, O, CustomOptions>(
     registry,

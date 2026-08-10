@@ -1,4 +1,6 @@
 /**
+ * @license
+ *
  * Copyright 2024 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,4 +16,32 @@
  * limitations under the License.
  */
 
-export { testModels } from '@genkit-ai/ai/testing';
+/**
+ * Testing utilities for Genkit apps and model plugins.
+ *
+ * - {@link mockModel} — a programmable mock model with typed call inspection,
+ *   for testing flows, prompts, and tools deterministically.
+ * - {@link echoModel} — a zero-config model that echoes the rendered request,
+ *   for asserting prompt/message assembly.
+ * - `testModels` — a conformance harness for model *plugin* authors.
+ *
+ * ```ts
+ * import { mockModel, echoModel, testModels } from 'genkit/testing';
+ * ```
+ *
+ * @module testing
+ */
+
+export {
+  echoModel,
+  mockModel,
+  testModels,
+  type EchoModelOptions,
+  type MockChunk,
+  type MockContext,
+  type MockModel,
+  type MockModelOptions,
+  type MockRespond,
+  type MockRespondFn,
+  type MockResponse,
+} from '@genkit-ai/ai/testing';

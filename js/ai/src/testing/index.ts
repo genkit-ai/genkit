@@ -14,4 +14,16 @@
  * limitations under the License.
  */
 
+export {
+  echoModel,
+  mockModel,
+  type EchoModelOptions,
+  type MockChunk,
+  type MockContext,
+  type MockModel,
+  type MockModelOptions,
+  type MockRespond,
+  type MockRespondFn,
+  type MockResponse,
+} from './mock-model.js';
 export { testModels } from './model-tester.js';

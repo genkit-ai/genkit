@@ -15,41 +15,27 @@
  */
 
 import { OperationSchema, z } from '@genkit-ai/core';
+import { DocumentDataSchema } from './document.js';
 import {
-  CustomPartSchema,
-  DataPartSchema,
-  DocumentDataSchema,
-  MediaPartSchema,
-  ReasoningPartSchema,
-  ResourcePartSchema,
-  TextPartSchema,
+  PartSchema,
   ToolRequestPartSchema,
   ToolResponsePartSchema,
-} from './document.js';
+  type Part,
+} from './parts.js';
+export { Part, PartSchema };
+
+/** Zod schema for a serializable reference to a registered generate middleware. */
+export const MiddlewareRefSchema: z.ZodTypeAny = z.object({
+  name: z.string(),
+  config: z.any().optional(),
+});
+/** A serializable reference to a registered generate middleware, identified by name and optional config. */
+export type MiddlewareRef = z.infer<typeof MiddlewareRefSchema>;
 
 //
 // IMPORTANT: Please keep type definitions in sync with
 //   genkit-tools/src/types/model.ts
 //
-
-/**
- * Zod schema of message part.
- */
-export const PartSchema = z.union([
-  TextPartSchema,
-  MediaPartSchema,
-  ToolRequestPartSchema,
-  ToolResponsePartSchema,
-  DataPartSchema,
-  CustomPartSchema,
-  ReasoningPartSchema,
-  ResourcePartSchema,
-]);
-
-/**
- * Message part.
- */
-export type Part = z.infer<typeof PartSchema>;
 
 /**
  * Zod schema of a message role.
@@ -130,6 +116,7 @@ export type ModelInfo = z.infer<typeof ModelInfoSchema>;
  */
 export const ToolDefinitionSchema = z.object({
   name: z.string(),
+  key: z.string().optional(),
   description: z.string(),
   inputSchema: z
     .record(z.any())
@@ -174,7 +161,7 @@ export const GenerationCommonConfigSchema = z
     version: z
       .string()
       .describe(
-        'A specific version of a model family, e.g. `gemini-2.0-flash` ' +
+        'A specific version of a model family, e.g. `gemini-2.5-flash` ' +
           'for the `googleai` family.'
       )
       .optional(),
@@ -199,6 +186,12 @@ export const GenerationCommonConfigSchema = z
       .max(5)
       .describe(
         'Set of character sequences (up to 5) that will stop output generation.'
+      )
+      .optional(),
+    apiKey: z
+      .string()
+      .describe(
+        'API Key to use for the model call, overrides API key provided in plugin config.'
       )
       .optional(),
   })
@@ -291,6 +284,7 @@ export const FinishReasonSchema = z.enum([
   'stop',
   'length',
   'blocked',
+  'aborted',
   'interrupted',
   'other',
   'unknown',
@@ -366,11 +360,14 @@ export const ModelResponseChunkSchema = z.object({
 });
 export type ModelResponseChunkData = z.infer<typeof ModelResponseChunkSchema>;
 
+/** Zod schema for a streaming response chunk from a generate call. Alias for {@link ModelResponseChunkSchema}. */
 export const GenerateResponseChunkSchema = ModelResponseChunkSchema;
+/** Data for a streaming response chunk from a generate call. */
 export type GenerateResponseChunkData = z.infer<
   typeof GenerateResponseChunkSchema
 >;
 
+/** Zod schema for output configuration within a generate action request. */
 export const GenerateActionOutputConfig = z.object({
   format: z.string().optional(),
   contentType: z.string().optional(),
@@ -379,15 +376,18 @@ export const GenerateActionOutputConfig = z.object({
   constrained: z.boolean().optional(),
 });
 
+/** Zod schema for the options passed to the internal generate action. */
 export const GenerateActionOptionsSchema = z.object({
   /** A model name (e.g. `vertexai/gemini-1.0-pro`). */
-  model: z.string(),
+  model: z.string().optional(),
   /** Retrieved documents to be used as context for this generation. */
   docs: z.array(DocumentDataSchema).optional(),
   /** Conversation history for multi-turn prompting when supported by the underlying model. */
   messages: z.array(MessageSchema),
   /** List of registered tool names for this generation if supported by the underlying model. */
   tools: z.array(z.string()).optional(),
+  /** List of registered resource names for this generation if supported by the underlying model. */
+  resources: z.array(z.string()).optional(),
   /** Tool calling mode. `auto` lets the model decide whether to use tools, `required` forces the model to choose a tool, and `none` forces the model not to use any tools. Defaults to `auto`.  */
   toolChoice: z.enum(['auto', 'required', 'none']).optional(),
   /** Configuration for the generation request. */
@@ -408,5 +408,8 @@ export const GenerateActionOptionsSchema = z.object({
   maxTurns: z.number().optional(),
   /** Custom step name for this generate call to display in trace views. Defaults to "generate". */
   stepName: z.string().optional(),
+  /** Middleware to apply to this generation. */
+  use: z.array(MiddlewareRefSchema).optional(),
 });
+/** Options passed to the internal generate action. */
 export type GenerateActionOptions = z.infer<typeof GenerateActionOptionsSchema>;

@@ -63,7 +63,7 @@ export function fromMcpPart(part: PromptMessage['content']): Part {
     case 'resource':
       return {
         resource: {
-          uri: part.uri as string,
+          uri: part.resource.uri,
         },
       };
     default:

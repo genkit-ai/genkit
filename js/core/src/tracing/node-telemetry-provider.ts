@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 
+import {
+  BatchLogRecordProcessor,
+  SimpleLogRecordProcessor,
+  type LogRecordProcessor,
+} from '@opentelemetry/sdk-logs';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import {
   BatchSpanProcessor,
@@ -24,7 +29,12 @@ import { logger } from '../logging.js';
 import type { TelemetryConfig } from '../telemetryTypes.js';
 import { setTelemetryProvider } from '../tracing.js';
 import { isDevEnv } from '../utils.js';
-import { TraceServerExporter, setTelemetryServerUrl } from './exporter.js';
+import {
+  LogServerExporter,
+  TraceServerExporter,
+  setTelemetryServerUrl,
+} from './exporter.js';
+import { RealtimeSpanProcessor } from './realtime-span-processor.js';
 
 let telemetrySDK: NodeSDK | null = null;
 let nodeOtelConfig: TelemetryConfig | null = null;
@@ -65,6 +75,19 @@ async function enableTelemetry(
     delete nodeOtelConfig.spanProcessor;
   }
   nodeOtelConfig.spanProcessors = processors;
+
+  // Add LogRecordProcessors
+  if (process.env.GENKIT_OTEL_ENABLE_LOGS === 'true') {
+    const enableRealTimeTelemetry =
+      process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true';
+    const logExporter = new LogServerExporter();
+    const logProcessor: LogRecordProcessor =
+      isDevEnv() || enableRealTimeTelemetry
+        ? new SimpleLogRecordProcessor(logExporter)
+        : new BatchLogRecordProcessor(logExporter);
+    nodeOtelConfig.logRecordProcessor = logProcessor;
+  }
+
   telemetrySDK = new NodeSDK(nodeOtelConfig);
   telemetrySDK.start();
   process.on('SIGTERM', async () => await cleanUpTracing());
@@ -89,9 +112,15 @@ async function cleanUpTracing(): Promise<void> {
  */
 function createTelemetryServerProcessor(): SpanProcessor {
   const exporter = new TraceServerExporter();
-  return isDevEnv()
-    ? new SimpleSpanProcessor(exporter)
-    : new BatchSpanProcessor(exporter);
+  // Use RealtimeSpanProcessor in dev environment (unless disabled), or when explicitly enabled
+  const enableRealTimeTelemetry =
+    process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true';
+  if (isDevEnv() && enableRealTimeTelemetry) {
+    return new RealtimeSpanProcessor(exporter);
+  } else if (isDevEnv()) {
+    return new SimpleSpanProcessor(exporter);
+  }
+  return new BatchSpanProcessor(exporter);
 }
 
 /** Flush metrics if present. */
@@ -103,10 +132,15 @@ function maybeFlushMetrics(): Promise<void> {
 }
 
 /**
- * Flushes all configured span processors.
+ * Flushes all configured span and log processors.
  */
 async function flushTracing() {
+  const promises: Promise<void>[] = [];
   if (nodeOtelConfig?.spanProcessors) {
-    await Promise.all(nodeOtelConfig.spanProcessors.map((p) => p.forceFlush()));
+    promises.push(...nodeOtelConfig.spanProcessors.map((p) => p.forceFlush()));
   }
+  if (nodeOtelConfig?.logRecordProcessor) {
+    promises.push(nodeOtelConfig.logRecordProcessor.forceFlush());
+  }
+  await Promise.all(promises);
 }

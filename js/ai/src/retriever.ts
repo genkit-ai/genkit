@@ -20,14 +20,8 @@ import { toJsonSchema } from '@genkit-ai/core/schema';
 import { Document, DocumentDataSchema, type DocumentData } from './document.js';
 import type { EmbedderInfo } from './embedder.js';
 
-export {
-  Document,
-  DocumentDataSchema,
-  type DocumentData,
-  type MediaPart,
-  type Part,
-  type TextPart,
-} from './document.js';
+export { Document, DocumentDataSchema, type DocumentData } from './document.js';
+export { type MediaPart, type Part, type TextPart } from './parts.js';
 
 /**
  * Retriever implementation function signature.
@@ -74,6 +68,7 @@ export const RetrieverInfoSchema = z.object({
     })
     .optional(),
 });
+/** Retriever metadata information. */
 export type RetrieverInfo = z.infer<typeof RetrieverInfoSchema>;
 
 /**
@@ -240,6 +235,7 @@ export function indexer<IndexerOptions extends z.ZodTypeAny>(
   return iwm;
 }
 
+/** Parameters for running a retrieval via the `retrieve` function. */
 export interface RetrieverParams<
   CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
 > {
@@ -354,7 +350,7 @@ export function retrieverRef<
   return { ...options };
 }
 
-// Reuse the same schema for both indexers and retrievers -- for now.
+/** Zod schema for indexer metadata. Reuses the same schema as {@link RetrieverInfoSchema}. */
 export const IndexerInfoSchema = RetrieverInfoSchema;
 
 /**
@@ -362,6 +358,7 @@ export const IndexerInfoSchema = RetrieverInfoSchema;
  */
 export type IndexerInfo = z.infer<typeof IndexerInfoSchema>;
 
+/** A reference to an indexer, including its name, optional config schema, and info. */
 export interface IndexerReference<CustomOptions extends z.ZodTypeAny> {
   name: string;
   configSchema?: CustomOptions;

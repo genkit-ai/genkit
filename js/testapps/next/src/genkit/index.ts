@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { gemini15Flash, googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { genkit } from 'genkit';
 import { disableOTelRootSpanDetection } from 'genkit/tracing';
 
@@ -22,5 +22,5 @@ disableOTelRootSpanDetection();
 
 export const ai = genkit({
   plugins: [googleAI()],
-  model: gemini15Flash,
+  model: googleAI.model('gemini-flash-latest'),
 });

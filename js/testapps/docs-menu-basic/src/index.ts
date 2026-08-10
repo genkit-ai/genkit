@@ -17,7 +17,7 @@
 // This sample is referenced by the genkit docs. Changes should be made to
 // both.
 import { startFlowServer } from '@genkit-ai/express';
-import { gemini15Flash, googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { genkit, z } from 'genkit';
 
 const ai = genkit({
@@ -33,7 +33,7 @@ export const menuSuggestionFlow = ai.defineFlow(
   async (subject) => {
     const llmResponse = await ai.generate({
       prompt: `Suggest an item for the menu of a ${subject} themed restaurant`,
-      model: gemini15Flash,
+      model: googleAI.model('gemini-flash-latest'),
       config: {
         temperature: 1,
       },

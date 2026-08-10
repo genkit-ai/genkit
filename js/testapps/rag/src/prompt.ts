@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-import { gemini15Flash } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { z } from 'genkit';
 import { ai } from './genkit.js';
 
 // Define a prompt that includes the retrieved context documents
 
 export const augmentedPrompt = ai.definePrompt({
-  model: gemini15Flash,
+  model: googleAI.model('gemini-flash-latest'),
   name: 'augmentedPrompt',
   input: {
     schema: z.object({

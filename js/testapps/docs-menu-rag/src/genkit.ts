@@ -15,7 +15,7 @@
  */
 
 import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
-import { textEmbedding004, vertexAI } from '@genkit-ai/vertexai';
+import { vertexAI } from '@genkit-ai/google-genai';
 import { genkit } from 'genkit';
 
 export const ai = genkit({
@@ -24,7 +24,7 @@ export const ai = genkit({
     devLocalVectorstore([
       {
         indexName: 'menuQA',
-        embedder: textEmbedding004,
+        embedder: vertexAI.embedder('gemini-embedding-001'),
       },
     ]),
   ],

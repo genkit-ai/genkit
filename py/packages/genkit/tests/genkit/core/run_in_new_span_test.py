@@ -1,0 +1,455 @@
+#!/usr/bin/env python3
+#
+# Copyright 2026 Google LLC
+# SPDX-License-Identifier: Apache-2.0
+
+"""Tests for the fattened ``run_in_new_span`` helper and Action delegation.
+
+Covers attributes ``run_in_new_span`` writes (name, path, qualifiedPath, input, output, state,
+error, metadata) plus a regression test that ``Action._run_with_telemetry`` records
+the original exception text in ``genkit:error`` rather than the wrapped GenkitError message.
+"""
+
+import asyncio
+import json
+import logging
+from collections.abc import Generator, Sequence
+
+import pytest
+from opentelemetry import trace as trace_api
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from pydantic import BaseModel
+
+from genkit import ActionKind, Genkit
+from genkit._ai._tools import Interrupt, ToolRunContext
+from genkit._core._action import Action
+from genkit._core._error import GenkitError
+from genkit._core._trace._attrs import metadata_key
+from genkit._core._trace._realtime_processor import RealtimeSpanProcessor
+from genkit._core._tracing import SpanMetadata, _parent_path_context, run_in_new_span, start_attributes
+
+
+@pytest.fixture(autouse=True)
+def _reset_parent_path() -> Generator[None, None, None]:
+    """Each test starts with an empty parent-path context to keep paths independent."""
+    token = _parent_path_context.set('')
+    try:
+        yield
+    finally:
+        _parent_path_context.reset(token)
+
+
+@pytest.fixture
+def exporter() -> Generator[InMemorySpanExporter, None, None]:
+    """Provide an in-memory span exporter wired into the global tracer provider."""
+    provider = trace_api.get_tracer_provider()
+    if not isinstance(provider, TracerProvider):
+        provider = TracerProvider()
+        trace_api.set_tracer_provider(provider)
+    exp = InMemorySpanExporter()
+    processor = SimpleSpanProcessor(exp)
+    provider.add_span_processor(processor)
+    try:
+        yield exp
+    finally:
+        exp.clear()
+
+
+def _by_name(spans: Sequence[ReadableSpan], name: str) -> ReadableSpan:
+    matches = [s for s in spans if s.name == name]
+    assert matches, f'no span named {name!r} in {[s.name for s in spans]}'
+    return matches[-1]
+
+
+def test_start_attributes_includes_input_excludes_outcome() -> None:
+    """Start-known attrs include input; state/output wait until the body finishes."""
+    attrs = start_attributes(
+        SpanMetadata(
+            name='myTool',
+            type='action',
+            subtype='tool',
+            input='in',
+            output='out',
+            is_root=True,
+            metadata={'key': 'value'},
+        ),
+        qualified_path='/{chatFlow,t:flow}/{myTool,t:action,s:tool}',
+    )
+    assert attrs == {
+        'genkit:name': 'myTool',
+        'genkit:path': '/{chatFlow,t:flow}/{myTool,t:action,s:tool}',
+        'genkit:qualifiedPath': '/{chatFlow,t:flow}/{myTool,t:action,s:tool}',
+        'genkit:type': 'action',
+        'genkit:metadata:subtype': 'tool',
+        'genkit:isRoot': True,
+        'genkit:metadata:key': 'value',
+        'genkit:input': '"in"',
+    }
+    for forbidden in ('genkit:state', 'genkit:output'):
+        assert forbidden not in attrs
+
+
+def test_start_attributes_json_input() -> None:
+    attrs = start_attributes(
+        SpanMetadata(name='echo', type='action', input={'msg': 'hi'}),
+        qualified_path='/{echo,t:action}',
+    )
+    assert attrs['genkit:input'] == '{"msg": "hi"}'
+
+
+def test_start_attributes_json_init() -> None:
+    attrs = start_attributes(
+        SpanMetadata(name='agentRun', type='action', init={'sessionId': 'session-123'}),
+        qualified_path='/{agentRun,t:action}',
+    )
+    assert attrs['genkit:init'] == '{"sessionId": "session-123"}'
+
+
+def test_realtime_on_start_export_carries_identity_attrs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RealtimeSpanProcessor.on_start must see name/type/path so Dev UI populates immediately."""
+    monkeypatch.setenv('GENKIT_ENV', 'dev')
+
+    class SnapshotExporter(InMemorySpanExporter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.snapshots: list[dict[str, object]] = []
+
+        def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+            for span in spans:
+                self.snapshots.append(dict(span.attributes or {}))
+            return super().export(spans)
+
+    provider = TracerProvider()
+    snap_exporter = SnapshotExporter()
+    processor = RealtimeSpanProcessor(snap_exporter)
+    provider.add_span_processor(processor)
+
+    tracer = provider.get_tracer('test_tracer')
+    meta = SpanMetadata(
+        name='liveAction',
+        type='action',
+        subtype='flow',
+        input={'prompt': 'hi'},
+        metadata={'flow:name': 'liveAction'},
+    )
+    start_attrs = start_attributes(meta, qualified_path='/{liveAction,t:action,s:flow}')
+
+    try:
+        with tracer.start_as_current_span('liveAction', attributes=start_attrs):
+            # on_start already fired; first snapshot is the live export.
+            assert snap_exporter.snapshots, 'expected RealtimeSpanProcessor on_start export'
+            start_attrs_snapshot = snap_exporter.snapshots[0]
+            assert start_attrs_snapshot['genkit:name'] == 'liveAction'
+            assert start_attrs_snapshot['genkit:type'] == 'action'
+            assert start_attrs_snapshot['genkit:metadata:subtype'] == 'flow'
+            assert start_attrs_snapshot['genkit:path'] == '/{liveAction,t:action,s:flow}'
+            assert start_attrs_snapshot['genkit:metadata:flow:name'] == 'liveAction'
+            assert start_attrs_snapshot['genkit:input'] == '{"prompt": "hi"}'
+            # Run-determined attrs must not leak into the start write.
+            assert 'genkit:state' not in start_attrs_snapshot
+            assert 'genkit:output' not in start_attrs_snapshot
+    finally:
+        provider.shutdown()
+
+
+def test_writes_name_path_and_state_success(exporter: InMemorySpanExporter) -> None:
+    with run_in_new_span(SpanMetadata(name='hello', type='util')):
+        pass
+
+    span = _by_name(exporter.get_finished_spans(), 'hello')
+    attrs = dict(span.attributes or {})
+    assert attrs['genkit:name'] == 'hello'
+    assert attrs['genkit:type'] == 'util'
+    assert attrs['genkit:state'] == 'success'
+    assert attrs['genkit:path'] == '/{hello,t:util}'
+    assert attrs['genkit:qualifiedPath'] == '/{hello,t:util}'
+
+
+def test_writes_input_from_metadata(exporter: InMemorySpanExporter) -> None:
+    class Payload(BaseModel):
+        msg: str
+
+    with run_in_new_span(SpanMetadata(name='echo', type='action', subtype='tool', input=Payload(msg='hi'))):
+        pass
+
+    span = _by_name(exporter.get_finished_spans(), 'echo')
+    attrs = dict(span.attributes or {})
+    assert attrs['genkit:input'] == '{"msg":"hi"}'
+    assert attrs['genkit:path'] == '/{echo,t:action,s:tool}'
+    assert attrs['genkit:metadata:subtype'] == 'tool'
+
+
+def test_writes_init_from_metadata(exporter: InMemorySpanExporter) -> None:
+    with run_in_new_span(SpanMetadata(name='agentRun', type='action', init={'sessionId': 'session-123'})):
+        pass
+
+    span = _by_name(exporter.get_finished_spans(), 'agentRun')
+    attrs = dict(span.attributes or {})
+    assert attrs['genkit:init'] == '{"sessionId": "session-123"}'
+
+
+def test_writes_output_from_metadata_on_success(exporter: InMemorySpanExporter) -> None:
+    meta = SpanMetadata(name='answer', type='util')
+    with run_in_new_span(meta):
+        meta.output = {'result': 42}
+
+    span = _by_name(exporter.get_finished_spans(), 'answer')
+    attrs = dict(span.attributes or {})
+    assert attrs['genkit:output'] == '{"result": 42}'
+    assert attrs['genkit:state'] == 'success'
+
+
+def test_records_error_attributes(exporter: InMemorySpanExporter) -> None:
+    with pytest.raises(RuntimeError, match='boom'):
+        with run_in_new_span(SpanMetadata(name='broken', type='util')):
+            raise RuntimeError('boom')
+
+    span = _by_name(exporter.get_finished_spans(), 'broken')
+    attrs = dict(span.attributes or {})
+    assert attrs['genkit:state'] == 'error'
+    assert attrs['genkit:error'] == 'boom'
+    assert span.status.status_code == trace_api.StatusCode.ERROR
+
+
+def test_cancelled_span_leaves_state_unset(exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture) -> None:
+    """Abort/timeout is unfinished work — neither success nor error."""
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(asyncio.CancelledError):
+            with run_in_new_span(SpanMetadata(name='abortedTurn', type='util')):
+                raise asyncio.CancelledError()
+
+    span = _by_name(exporter.get_finished_spans(), 'abortedTurn')
+    attrs = dict(span.attributes or {})
+    assert 'genkit:state' not in attrs
+    assert 'genkit:error' not in attrs
+    assert span.status.status_code != trace_api.StatusCode.ERROR
+    assert not any('Error in run_in_new_span' in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_tool_interrupt_is_not_recorded_as_span_error(
+    exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Tool interrupts are control flow — the tool span must not look like a failure.
+
+    Drives a real ``@ai.tool`` that raises ``Interrupt``. The carve-out only
+    works because Action wraps that into ``GenkitError`` *outside* the span
+    body; this locks that ordering so a future refactor can't silently undo it.
+    """
+    ai = Genkit()
+
+    @ai.tool(name='transfer')
+    async def transfer(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        raise Interrupt({'reason': 'needs_approval'})
+
+    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='transfer')
+    assert action is not None
+
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(GenkitError) as ei:
+            await action.run({'amount': 100})
+
+    assert isinstance(ei.value.cause, Interrupt)
+
+    span = _by_name(exporter.get_finished_spans(), 'transfer')
+    attrs = dict(span.attributes or {})
+    assert attrs['genkit:state'] == 'success'
+    assert 'genkit:error' not in attrs
+    assert span.status.status_code != trace_api.StatusCode.ERROR
+    assert json.loads(attrs['genkit:metadata:interrupt']) == {'reason': 'needs_approval'}
+    assert not any('Error in run_in_new_span' in r.message for r in caplog.records)
+
+
+def test_nested_path_inherits_parent_qualified_path(exporter: InMemorySpanExporter) -> None:
+    with run_in_new_span(SpanMetadata(name='outer', type='flow')):
+        with run_in_new_span(SpanMetadata(name='inner', type='flowStep')):
+            pass
+
+    inner = _by_name(exporter.get_finished_spans(), 'inner')
+    inner_attrs = dict(inner.attributes or {})
+    assert inner_attrs['genkit:qualifiedPath'] == '/{outer,t:flow}/{inner,t:flowStep}'
+
+
+def test_metadata_metadata_dict_is_flattened_and_telemetry_labels_pass_through(
+    exporter: InMemorySpanExporter,
+) -> None:
+    with run_in_new_span(
+        SpanMetadata(
+            name='step',
+            type='flowStep',
+            metadata={'flow:name': 'pipeline', 'attempt': 2},
+            telemetry_labels={'genkit:custom:tag': 'foo'},
+        )
+    ):
+        pass
+
+    span = _by_name(exporter.get_finished_spans(), 'step')
+    attrs = dict(span.attributes or {})
+    assert attrs['genkit:metadata:flow:name'] == 'pipeline'
+    assert attrs['genkit:metadata:attempt'] == '2'
+    # Raw telemetry_labels pass through without the genkit:metadata: prefix.
+    assert attrs['genkit:custom:tag'] == 'foo'
+
+
+@pytest.mark.asyncio
+async def test_action_span_metadata_uses_short_keys(exporter: InMemorySpanExporter) -> None:
+    """``Action.span_metadata`` uses short keys; ``run_in_new_span`` adds ``genkit:metadata:`` once.
+
+    Locks in the simplified contract introduced alongside this refactor: framework call
+    sites (e.g. ``_flow.py``, ``_resource.py``) pass short keys like ``flow:name``, and
+    the helper produces ``genkit:metadata:flow:name`` on the span.
+    """
+
+    async def noop() -> str:
+        return 'ok'
+
+    action = Action(
+        name='myFlow',
+        kind=ActionKind.FLOW,
+        fn=noop,
+        span_metadata={'flow:name': 'myFlow'},
+    )
+    await action.run()
+
+    span = _by_name(exporter.get_finished_spans(), 'myFlow')
+    attrs = dict(span.attributes or {})
+    assert attrs['genkit:metadata:flow:name'] == 'myFlow'
+    assert 'genkit:metadata:genkit:metadata:flow:name' not in attrs
+
+
+@pytest.mark.asyncio
+async def test_action_error_attribute_keeps_original_text(exporter: InMemorySpanExporter) -> None:
+    """Regression: the action span should record ``str(original_e)`` in ``genkit:error``,
+
+    not the wrapped GenkitError's ``"Error while running action ..."`` message. This
+    locks in the SoC contract: ``run_in_new_span`` records the exception it sees, and
+    ``_run_with_telemetry`` wraps GenkitError OUTSIDE the with-block so the wrap
+    doesn't clobber the recorded attribute.
+    """
+
+    async def kaboom(_: str | None) -> None:
+        raise ValueError('original boom')
+
+    action = Action(name='kaboomAction', kind=ActionKind.CUSTOM, fn=kaboom)
+
+    with pytest.raises(GenkitError):
+        await action.run()
+
+    span = _by_name(exporter.get_finished_spans(), 'kaboomAction')
+    attrs = dict(span.attributes or {})
+    assert attrs['genkit:error'] == 'original boom'
+    assert attrs['genkit:type'] == 'action'
+    assert attrs['genkit:metadata:subtype'] == 'custom'
+    assert attrs['genkit:state'] == 'error'
+
+
+@pytest.mark.asyncio
+async def test_action_context_telemetry_sanitizes_unserializable(exporter: InMemorySpanExporter) -> None:
+    """Verify that unserializable values in action context are dropped from tracing metadata.
+
+    Also verify that JSON-serializable values are kept.
+    """
+
+    class UnserializableObject:
+        def __repr__(self) -> str:
+            return 'Unserializable'
+
+    async def noop() -> str:
+        return 'ok'
+
+    action = Action(
+        name='sanitizedFlow',
+        kind=ActionKind.FLOW,
+        fn=noop,
+    )
+
+    # We pass a context dictionary with both serializable and unserializable values,
+    # including nested dictionaries and lists.
+    complex_context: dict[str, object] = {
+        'auth': {
+            'user_id': 123,
+            'token': 'secret_token',
+            'raw_connection': UnserializableObject(),  # should be dropped
+        },
+        'serializable_list': [1, 'two', {'nested_key': 'nested_val'}],
+        'unserializable_list': [1, UnserializableObject(), 3],  # UnserializableObject should be dropped, keeping [1, 3]
+        'top_level_unserializable': UnserializableObject(),  # should be dropped entirely
+    }
+
+    await action.run(context=complex_context)
+
+    span = _by_name(exporter.get_finished_spans(), 'sanitizedFlow')
+    attrs = dict(span.attributes or {})
+
+    # The context key is mapped under genkit:metadata:context
+    assert 'genkit:metadata:context' in attrs
+    context_attr = attrs['genkit:metadata:context']
+    assert isinstance(context_attr, str)
+    context_json = json.loads(context_attr)
+
+    # Assertions
+    assert context_json['auth']['user_id'] == 123
+    assert context_json['auth']['token'] == 'secret_token'
+    assert context_json['auth']['raw_connection'] == 'Unserializable'
+
+    assert context_json['serializable_list'] == [1, 'two', {'nested_key': 'nested_val'}]
+    assert context_json['unserializable_list'] == [1, 'Unserializable', 3]
+    assert context_json['top_level_unserializable'] == 'Unserializable'
+
+
+@pytest.mark.asyncio
+async def test_action_context_telemetry_circular_references(exporter: InMemorySpanExporter) -> None:
+    """Verify that circular references inside the context are proactively detected and dropped."""
+
+    async def noop() -> str:
+        return 'ok'
+
+    action = Action(
+        name='circularFlow',
+        kind=ActionKind.FLOW,
+        fn=noop,
+    )
+
+    # Setup a context dictionary with circular references
+    circular_context: dict[str, object] = {
+        'key': 'val',
+    }
+    circular_context['self'] = circular_context
+
+    await action.run(context=circular_context)
+
+    span = _by_name(exporter.get_finished_spans(), 'circularFlow')
+    attrs = dict(span.attributes or {})
+
+    assert 'genkit:metadata:context' in attrs
+    context_attr = attrs['genkit:metadata:context']
+    assert isinstance(context_attr, str)
+    context_json = json.loads(context_attr)
+
+    # 'key' is serializable, and 'self' circular reference should be safely cut off with '[Circular]'
+    assert context_json == {'key': 'val', 'self': '[Circular]'}
+
+
+def test_metadata_key_prevents_double_prefix() -> None:
+    assert metadata_key('flow:name') == 'genkit:metadata:flow:name'
+    assert metadata_key('genkit:metadata:flow:name') == 'genkit:metadata:flow:name'
+
+
+def test_start_attributes_precedence_over_telemetry_labels() -> None:
+    meta = SpanMetadata(
+        name='realName',
+        telemetry_labels={
+            'genkit:name': 'fakeName',
+            'genkit:path': 'fakePath',
+            'user:label': 'custom',
+        },
+    )
+    attrs = start_attributes(meta, qualified_path='/realPath')
+    assert attrs['genkit:name'] == 'realName'
+    assert attrs['genkit:path'] == '/realPath'
+    assert attrs['genkit:qualifiedPath'] == '/realPath'
+    assert attrs['user:label'] == 'custom'

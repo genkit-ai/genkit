@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { Channel } from '@genkit-ai/core/async';
+import { Channel, createTask } from '@genkit-ai/core/async';
 
 const __flowStreamDelimiter = '\n\n';
 
@@ -36,9 +36,11 @@ const __flowStreamDelimiter = '\n\n';
  * console.log(await response.output);
  * ```
  */
-export function streamFlow<O = any, S = any>({
+export function streamFlow<O = any, S = any, Init = any>({
   url,
   input,
+  init,
+  streamId,
   headers,
   abortSignal,
 }: {
@@ -46,6 +48,10 @@ export function streamFlow<O = any, S = any>({
   url: string;
   /** Flow input. */
   input?: any;
+  /** Initialization data for the action. */
+  init?: Init;
+  /** Stream ID to connect to. */
+  streamId?: string;
   /** A map of HTTP headers to be added to the HTTP call. */
   headers?: Record<string, string>;
   /** Abort signal to abort the request. */
@@ -53,15 +59,23 @@ export function streamFlow<O = any, S = any>({
 }): {
   readonly output: Promise<O>;
   readonly stream: AsyncIterable<S>;
+  readonly streamId: Promise<string | null>;
 } {
   const channel = new Channel<S>();
+  const streamIdTask = createTask<string | null>();
 
   const operationPromise = __flowRunEnvelope({
     url,
     input,
+    init,
     sendChunk: (c) => channel.send(c),
-    headers,
+    headers: streamId
+      ? { ...headers, 'x-genkit-stream-id': streamId }
+      : headers,
     abortSignal,
+    responseCallback: (response) => {
+      streamIdTask.resolve(response.headers.get('x-genkit-stream-id'));
+    },
   });
   operationPromise.then(
     () => channel.close(),
@@ -71,26 +85,32 @@ export function streamFlow<O = any, S = any>({
   return {
     output: operationPromise,
     stream: channel,
+    streamId: streamIdTask.promise,
   };
 }
 
 async function __flowRunEnvelope({
   url,
   input,
+  init,
   sendChunk,
   headers,
   abortSignal,
+  responseCallback,
 }: {
   url: string;
   input: any;
+  init?: any;
   sendChunk: (chunk: any) => void;
   headers?: Record<string, string>;
   abortSignal?: AbortSignal;
+  responseCallback?: (response: Response) => void;
 }) {
   const response = await fetch(url, {
     method: 'POST',
     body: JSON.stringify({
       data: input,
+      ...(init !== undefined && { init }),
     }),
     headers: {
       Accept: 'text/event-stream',
@@ -99,6 +119,12 @@ async function __flowRunEnvelope({
     },
     signal: abortSignal,
   });
+  if (responseCallback) {
+    responseCallback(response);
+  }
+  if (response.status === 204) {
+    throw new Error('NOT_FOUND: Stream not found.');
+  }
   if (response.status !== 200) {
     throw new Error(
       `Server returned: ${response.status}: ${await response.text()}`
@@ -158,9 +184,10 @@ async function __flowRunEnvelope({
  * console.log(await response);
  * ```
  */
-export async function runFlow<O = any>({
+export async function runFlow<O = any, Init = any>({
   url,
   input,
+  init,
   headers,
   abortSignal,
 }: {
@@ -168,6 +195,8 @@ export async function runFlow<O = any>({
   url: string;
   /** Flow input. */
   input?: any;
+  /** Initialization data for the action. */
+  init?: Init;
   /** A map of HTTP headers to be added to the HTTP call. */
   headers?: Record<string, string>;
   /** Abort signal to abort the request. */
@@ -177,6 +206,7 @@ export async function runFlow<O = any>({
     method: 'POST',
     body: JSON.stringify({
       data: input,
+      ...(init !== undefined && { init }),
     }),
     headers: {
       'Content-Type': 'application/json',

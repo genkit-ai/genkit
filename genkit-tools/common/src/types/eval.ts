@@ -134,6 +134,7 @@ export const EvalInputSchema = z.object({
   error: z.string().optional(),
   context: z.array(z.any()).optional(),
   reference: z.any().optional(),
+  custom: z.record(z.string(), z.any()).optional(),
   traceIds: z.array(z.string()),
 });
 export type EvalInput = z.infer<typeof EvalInputSchema>;
@@ -182,6 +183,15 @@ export const EvalRunKeySchema = z.object({
   createdAt: z.string(),
   actionConfig: z.any().optional(),
   metricSummaries: z.array(z.record(z.string(), z.any())).optional(),
+  metricsMetadata: z
+    .record(
+      z.string(),
+      z.object({
+        displayName: z.string(),
+        definition: z.string(),
+      })
+    )
+    .optional(),
 });
 export type EvalRunKey = z.infer<typeof EvalRunKeySchema>;
 export const EvalKeyAugmentsSchema = EvalRunKeySchema.pick({
@@ -198,6 +208,7 @@ export type EvalKeyAugments = z.infer<typeof EvalKeyAugmentsSchema>;
 export const EvalRunSchema = z.object({
   key: EvalRunKeySchema,
   results: z.array(EvalResultSchema),
+  /* deprecated, use key.metricsMetadata */
   metricsMetadata: z
     .record(
       z.string(),
@@ -251,7 +262,12 @@ export const DatasetSchemaSchema = z.object({
 });
 
 /** Type of dataset, useful for UI niceties. */
-export const DatasetTypeSchema = z.enum(['UNKNOWN', 'FLOW', 'MODEL']);
+export const DatasetTypeSchema = z.enum([
+  'UNKNOWN',
+  'FLOW',
+  'MODEL',
+  'EXECUTABLE_PROMPT',
+]);
 export type DatasetType = z.infer<typeof DatasetTypeSchema>;
 
 /**

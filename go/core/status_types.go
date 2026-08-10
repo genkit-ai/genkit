@@ -14,37 +14,44 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package status defines canonical status codes, names, and related types
-// inspired by gRPC status codes.
 package core
 
-import "net/http" // Import standard http package for status codes
+import "github.com/firebase/genkit/go/core/status"
 
 // StatusName defines the set of canonical status names.
-type StatusName string
+//
+// Deprecated: use [status.Name]. This is an alias for it, so the two are the
+// same type and values are interchangeable.
+type StatusName = status.Name
 
 // Constants for canonical status names.
+//
+// Deprecated: use the Go-cased constants in [github.com/firebase/genkit/go/core/status]
+// ([status.InvalidArgument], [status.NotFound], ...). These alias them, so the
+// values are identical and the wire format is unchanged.
 const (
-	OK                  StatusName = "OK"
-	CANCELLED           StatusName = "CANCELLED"
-	UNKNOWN             StatusName = "UNKNOWN"
-	INVALID_ARGUMENT    StatusName = "INVALID_ARGUMENT"
-	DEADLINE_EXCEEDED   StatusName = "DEADLINE_EXCEEDED"
-	NOT_FOUND           StatusName = "NOT_FOUND"
-	ALREADY_EXISTS      StatusName = "ALREADY_EXISTS"
-	PERMISSION_DENIED   StatusName = "PERMISSION_DENIED"
-	UNAUTHENTICATED     StatusName = "UNAUTHENTICATED"
-	RESOURCE_EXHAUSTED  StatusName = "RESOURCE_EXHAUSTED"
-	FAILED_PRECONDITION StatusName = "FAILED_PRECONDITION"
-	ABORTED             StatusName = "ABORTED"
-	OUT_OF_RANGE        StatusName = "OUT_OF_RANGE"
-	UNIMPLEMENTED       StatusName = "UNIMPLEMENTED"
-	INTERNAL            StatusName = "INTERNAL_SERVER_ERROR"
-	UNAVAILABLE         StatusName = "UNAVAILABLE"
-	DATA_LOSS           StatusName = "DATA_LOSS"
+	OK                  = status.OK
+	CANCELLED           = status.Cancelled
+	UNKNOWN             = status.Unknown
+	INVALID_ARGUMENT    = status.InvalidArgument
+	DEADLINE_EXCEEDED   = status.DeadlineExceeded
+	NOT_FOUND           = status.NotFound
+	ALREADY_EXISTS      = status.AlreadyExists
+	PERMISSION_DENIED   = status.PermissionDenied
+	UNAUTHENTICATED     = status.Unauthenticated
+	RESOURCE_EXHAUSTED  = status.ResourceExhausted
+	FAILED_PRECONDITION = status.FailedPrecondition
+	ABORTED             = status.Aborted
+	OUT_OF_RANGE        = status.OutOfRange
+	UNIMPLEMENTED       = status.Unimplemented
+	INTERNAL            = status.Internal
+	UNAVAILABLE         = status.Unavailable
+	DATA_LOSS           = status.DataLoss
 )
 
 // Constants for canonical status codes (integer values).
+//
+// Deprecated: use [status.Name.Code].
 const (
 	// CodeOK means not an error; returned on success.
 	CodeOK = 0
@@ -83,7 +90,9 @@ const (
 )
 
 // StatusNameToCode maps status names to their integer code values.
-// Exported for potential use elsewhere if needed.
+//
+// Deprecated: use [status.Name.Code], which is correct for every name rather
+// than only the ones present in this map.
 var StatusNameToCode = map[StatusName]int{
 	OK:                  CodeOK,
 	CANCELLED:           CodeCancelled,
@@ -104,44 +113,29 @@ var StatusNameToCode = map[StatusName]int{
 	DATA_LOSS:           CodeDataLoss,
 }
 
-// statusNameToHTTPCode maps status names to HTTP status codes.
-// Kept unexported as it's primarily used by the HTTPStatusCode function.
-var statusNameToHTTPCode = map[StatusName]int{
-	OK:                  http.StatusOK,                  // 200
-	CANCELLED:           499,                            // Client Closed Request (non-standard but common)
-	UNKNOWN:             http.StatusInternalServerError, // 500
-	INVALID_ARGUMENT:    http.StatusBadRequest,          // 400
-	DEADLINE_EXCEEDED:   http.StatusGatewayTimeout,      // 504
-	NOT_FOUND:           http.StatusNotFound,            // 404
-	ALREADY_EXISTS:      http.StatusConflict,            // 409
-	PERMISSION_DENIED:   http.StatusForbidden,           // 403
-	UNAUTHENTICATED:     http.StatusUnauthorized,        // 401
-	RESOURCE_EXHAUSTED:  http.StatusTooManyRequests,     // 429
-	FAILED_PRECONDITION: http.StatusBadRequest,          // 400
-	ABORTED:             http.StatusConflict,            // 409
-	OUT_OF_RANGE:        http.StatusBadRequest,          // 400
-	UNIMPLEMENTED:       http.StatusNotImplemented,      // 501
-	INTERNAL:            http.StatusInternalServerError, // 500
-	UNAVAILABLE:         http.StatusServiceUnavailable,  // 503
-	DATA_LOSS:           http.StatusInternalServerError, // 500
-}
-
 // HTTPStatusCode gets the corresponding HTTP status code for a given Genkit status name.
-func HTTPStatusCode(name StatusName) int {
-	if code, ok := statusNameToHTTPCode[name]; ok {
-		return code
-	}
+//
+// Deprecated: use [status.Name.HTTPCode].
+func HTTPStatusCode(name StatusName) int { return name.HTTPCode() }
 
-	return http.StatusInternalServerError
-}
+// StatusFromHTTPCode returns the canonical [StatusName] for an HTTP status
+// code, following the gRPC / Google API reverse mapping.
+//
+// Deprecated: use [status.FromHTTPCode].
+func StatusFromHTTPCode(code int) StatusName { return status.FromHTTPCode(code) }
 
 // Status represents a status condition, typically used in responses or errors.
+//
+// Deprecated: use [status.Error], which carries a status alongside the message
+// and participates in errors.Is and errors.As.
 type Status struct {
 	Name    StatusName `json:"name"`
 	Message string     `json:"message,omitempty"`
 }
 
 // NewStatus creates a new Status object.
+//
+// Deprecated: use [status.Errorf].
 func NewStatus(name StatusName, message string) *Status {
 	return &Status{
 		Name:    name,

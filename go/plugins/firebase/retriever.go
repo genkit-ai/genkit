@@ -17,6 +17,7 @@ package firebase
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"cloud.google.com/go/firestore"
@@ -26,10 +27,9 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 )
 
-type VectorType int
+const firestoreCollectionEnv = "FIRESTORE_COLLECTION"
 
-// Firestore collection environment variable key name
-const firestoreCollection = "FIRESTORE_COLLECTION"
+type VectorType int
 
 // TODO: in retriever options add field that controls the 32/64
 
@@ -141,14 +141,17 @@ func defineFirestoreRetriever(g *genkit.Genkit, cfg RetrieverOptions, client *fi
 	return genkit.DefineRetriever(g, api.NewName(provider, cfg.Name), retOpts, retrieve), nil
 }
 
-// resolveFirestoreCollection resolves the Firestore collection name from the environment if necessary
 func resolveFirestoreCollection(collectionName string) (string, error) {
 	if collectionName != "" {
 		return collectionName, nil
 	}
-	collectionName = os.Getenv(firestoreCollection)
+	collectionName = os.Getenv(firestoreCollectionEnv)
 	if collectionName == "" {
-		return "", fmt.Errorf("no Firestore collection provided; set %q env variable or pass the collection directly", firestoreCollection)
+		return "", fmt.Errorf("firebase: no Firestore collection provided. " +
+			"Pass the collection in RetrieverOptions: RetrieverOptions{Collection: \"my-collection\"}")
 	}
+	slog.Warn("Using FIRESTORE_COLLECTION environment variable is deprecated for retriever configuration. "+
+		"Use RetrieverOptions{Collection: \"my-collection\"} instead.",
+		"collection", collectionName)
 	return collectionName, nil
 }

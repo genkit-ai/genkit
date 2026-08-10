@@ -18,7 +18,7 @@
 import { genkit } from 'genkit';
 
 // Import the model plugins you want to use.
-import { googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 
 const ai = genkit({
   // Initialize and configure the model plugins.

@@ -8,9 +8,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -39,9 +40,15 @@ func setupLogCapture(t *testing.T) *bytes.Buffer {
 func TestNewEngagementTelemetry(t *testing.T) {
 	engTel := NewEngagementTelemetry()
 
-	assert.NotNil(t, engTel)
-	assert.NotNil(t, engTel.feedbackCounter)
-	assert.NotNil(t, engTel.acceptanceCounter)
+	if engTel == nil {
+		t.Fatal("engTel should not be nil")
+	}
+	if engTel.feedbackCounter == nil {
+		t.Error("feedbackCounter should not be nil")
+	}
+	if engTel.acceptanceCounter == nil {
+		t.Error("acceptanceCounter should not be nil")
+	}
 }
 
 func TestEngagementTelemetry_extractTraceName(t *testing.T) {
@@ -100,7 +107,9 @@ func TestEngagementTelemetry_extractTraceName(t *testing.T) {
 				attribute.String("genkit:path", tc.path),
 			}
 			result := engTel.extractTraceName(attrs)
-			assert.Equal(t, tc.expected, result)
+			if result != tc.expected {
+				t.Errorf("extractTraceName(%q) = %q, want %q", tc.path, result, tc.expected)
+			}
 		})
 	}
 }
@@ -134,12 +143,18 @@ func TestEngagementTelemetry_PipelineIntegration(t *testing.T) {
 	logOutput := logBuf.String()
 
 	// Verify engagement telemetry worked
-	assert.Contains(t, logOutput, "UserFeedback[myAction,t:action]")
-	assert.Contains(t, logOutput, "feedbackValue:positive")
+	if !strings.Contains(logOutput, "UserFeedback[myAction,t:action]") {
+		t.Error("logOutput should contain \"UserFeedback[myAction,t:action]\"")
+	}
+	if !strings.Contains(logOutput, "feedbackValue:positive") {
+		t.Error("logOutput should contain \"feedbackValue:positive\"")
+	}
 
 	// Verify the span was exported with normalized attributes (slash-based)
 	spans := f.waitAndGetSpans()
-	assert.Len(t, spans, 1)
+	if len(spans) != 1 {
+		t.Errorf("got %d spans, want 1", len(spans))
+	}
 	exportedSpan := spans[0]
 
 	// The exported span should have normalized attributes
@@ -150,13 +165,26 @@ func TestEngagementTelemetry_PipelineIntegration(t *testing.T) {
 	}
 
 	// The span will have normalized attributes (with slashes) for export
-	assert.Contains(t, attributeKeys, "genkit/metadata/subtype")
-	assert.Contains(t, attributeKeys, "genkit/path")
-	assert.Contains(t, attributeKeys, "genkit/metadata/feedbackValue")
+	if !slices.Contains(attributeKeys, "genkit/metadata/subtype") {
+		t.Error("attributeKeys should contain \"genkit/metadata/subtype\"")
+	}
+	if !slices.Contains(attributeKeys, "genkit/path") {
+		t.Error("attributeKeys should contain \"genkit/path\"")
+	}
+	if !slices.Contains(attributeKeys, "genkit/metadata/feedbackValue") {
+		t.Error("attributeKeys should contain \"genkit/metadata/feedbackValue\"")
+	}
+
 	// Verify all colon-based attributes were normalized to slash-based
-	assert.NotContains(t, attributeKeys, "genkit:metadata:subtype")
-	assert.NotContains(t, attributeKeys, "genkit:path")
-	assert.NotContains(t, attributeKeys, "genkit:metadata:feedbackValue")
+	if slices.Contains(attributeKeys, "genkit:metadata:subtype") {
+		t.Error("attributeKeys should NOT contain \"genkit:metadata:subtype\"")
+	}
+	if slices.Contains(attributeKeys, "genkit:path") {
+		t.Error("attributeKeys should NOT contain \"genkit:path\"")
+	}
+	if slices.Contains(attributeKeys, "genkit:metadata:feedbackValue") {
+		t.Error("attributeKeys should NOT contain \"genkit:metadata:feedbackValue\"")
+	}
 }
 
 func TestEngagementTelemetry_MetricCapture(t *testing.T) {
@@ -257,18 +285,23 @@ func TestEngagementTelemetry_MetricCapture(t *testing.T) {
 
 			// Wait for span to be processed
 			spans := f.waitAndGetSpans()
-			assert.Len(t, spans, 1)
+			if len(spans) != 1 {
+				t.Errorf("got %d spans, want 1", len(spans))
+			}
 
 			// Collect metrics using the manual reader
 			var resourceMetrics metricdata.ResourceMetrics
 			err := reader.Collect(ctx, &resourceMetrics)
-			assert.NoError(t, err)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
 			// Verify metrics
 			if tc.expectFeedbackMetrics {
 				feedbackMetric := findMetric(&resourceMetrics, "genkit/engagement/feedback")
-				assert.NotNil(t, feedbackMetric, "Expected feedback metric to be recorded")
-				if feedbackMetric != nil {
+				if feedbackMetric == nil {
+					t.Error("Expected feedback metric to be recorded")
+				} else {
 					verifyCounterMetric(t, feedbackMetric, map[string]interface{}{
 						"name":    tc.expectedName,
 						"value":   tc.expectedFeedbackValue,
@@ -280,8 +313,9 @@ func TestEngagementTelemetry_MetricCapture(t *testing.T) {
 
 			if tc.expectAcceptanceMetrics {
 				acceptanceMetric := findMetric(&resourceMetrics, "genkit/engagement/acceptance")
-				assert.NotNil(t, acceptanceMetric, "Expected acceptance metric to be recorded")
-				if acceptanceMetric != nil {
+				if acceptanceMetric == nil {
+					t.Error("Expected acceptance metric to be recorded")
+				} else {
 					verifyCounterMetric(t, acceptanceMetric, map[string]interface{}{
 						"name":   tc.expectedName,
 						"value":  tc.expectedAcceptanceValue,
@@ -294,8 +328,12 @@ func TestEngagementTelemetry_MetricCapture(t *testing.T) {
 				// Should have no engagement metrics
 				feedbackMetric := findMetric(&resourceMetrics, "genkit/engagement/feedback")
 				acceptanceMetric := findMetric(&resourceMetrics, "genkit/engagement/acceptance")
-				assert.Nil(t, feedbackMetric, "Should not have feedback metrics")
-				assert.Nil(t, acceptanceMetric, "Should not have acceptance metrics")
+				if feedbackMetric != nil {
+					t.Error("Should not have feedback metrics")
+				}
+				if acceptanceMetric != nil {
+					t.Error("Should not have acceptance metrics")
+				}
 			}
 		})
 	}
@@ -317,16 +355,23 @@ func findMetric(rm *metricdata.ResourceMetrics, name string) *metricdata.Metrics
 func verifyCounterMetric(t *testing.T, metric *metricdata.Metrics, expectedAttrs map[string]interface{}) {
 	// Verify it's a counter/sum metric
 	sum, ok := metric.Data.(metricdata.Sum[int64])
-	assert.True(t, ok, "Expected metric to be a Sum[int64]")
+	if !ok {
+		t.Errorf("Expected metric to be a Sum[int64], got %T", metric.Data)
+		return
+	}
 
 	// Should have exactly one data point for our test
-	assert.Len(t, sum.DataPoints, 1, "Expected exactly one data point")
+	if len(sum.DataPoints) != 1 {
+		t.Fatalf("got %d data points, want 1", len(sum.DataPoints))
+	}
 
 	if len(sum.DataPoints) > 0 {
 		dp := sum.DataPoints[0]
 
 		// Verify the value (should be 1 for counter)
-		assert.Equal(t, int64(1), dp.Value, "Expected counter value to be 1")
+		if got, want := dp.Value, int64(1); got != want {
+			t.Errorf("Value = %v, want %v", got, want)
+		}
 
 		// Verify attributes
 		for expectedKey, expectedValue := range expectedAttrs {
@@ -336,18 +381,28 @@ func verifyCounterMetric(t *testing.T, metric *metricdata.Metrics, expectedAttrs
 					found = true
 					switch v := expectedValue.(type) {
 					case string:
-						assert.Equal(t, v, attr.Value.AsString(), "Attribute %s mismatch", expectedKey)
+						if got, want := attr.Value.AsString(), v; got != want {
+							t.Errorf("Attribute %s = %q, want %q", expectedKey, got, want)
+						}
 					case bool:
-						assert.Equal(t, v, attr.Value.AsBool(), "Attribute %s mismatch", expectedKey)
+						if got, want := attr.Value.AsBool(), v; got != want {
+							t.Errorf("Attribute %s = %v, want %v", expectedKey, got, want)
+						}
 					case int64:
-						assert.Equal(t, v, attr.Value.AsInt64(), "Attribute %s mismatch", expectedKey)
+						if got, want := attr.Value.AsInt64(), v; got != want {
+							t.Errorf("Attribute %s = %v, want %v", expectedKey, got, want)
+						}
 					default:
-						assert.Equal(t, fmt.Sprintf("%v", v), attr.Value.AsString(), "Attribute %s mismatch", expectedKey)
+						if got, want := attr.Value.AsString(), fmt.Sprintf("%v", v); got != want {
+							t.Errorf("Attribute %s = %q, want %q", expectedKey, got, want)
+						}
 					}
 					break
 				}
 			}
-			assert.True(t, found, "Expected attribute %s not found", expectedKey)
+			if !found {
+				t.Errorf("Expected attribute %s not found", expectedKey)
+			}
 		}
 	}
 }
@@ -443,16 +498,23 @@ func TestEngagementTelemetry_ComprehensiveScenarios(t *testing.T) {
 
 			// Verify spans were processed
 			spans := f.waitAndGetSpans()
-			assert.Len(t, spans, 1)
+			if len(spans) != 1 {
+				t.Errorf("got %d spans, want 1", len(spans))
+			}
 
 			// Check logging behavior
 			if tc.expectLog {
-				assert.Contains(t, logOutput, tc.expectedText,
-					"Expected log containing %q but got: %q", tc.expectedText, logOutput)
+				if !strings.Contains(logOutput, tc.expectedText) {
+					t.Errorf("Expected log containing %q but got: %q", tc.expectedText, logOutput)
+				}
 			} else {
 				// Should not contain engagement logs
-				assert.NotContains(t, logOutput, "UserFeedback[", "Unexpected UserFeedback log")
-				assert.NotContains(t, logOutput, "UserAcceptance[", "Unexpected UserAcceptance log")
+				if strings.Contains(logOutput, "UserFeedback[") {
+					t.Error("Unexpected UserFeedback log")
+				}
+				if strings.Contains(logOutput, "UserAcceptance[") {
+					t.Error("Unexpected UserAcceptance log")
+				}
 			}
 		})
 	}

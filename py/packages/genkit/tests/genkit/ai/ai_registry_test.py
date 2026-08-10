@@ -15,24 +15,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the AI registry module.
-
-This module contains unit tests for the GenkitRegistry class and its associated
-functionality, ensuring proper registration and management of Genkit resources.
-"""
+"""Tests for the AI registry module."""
 
 import unittest
 
-from genkit.ai._registry import get_func_description
+import pytest
+
+from genkit import Genkit
+from genkit._core._dap import DapValue, DynamicActionProvider
+from genkit._core._flow import get_func_description
 
 
 class TestGetFuncDescription(unittest.TestCase):
-    """Test the get_func_description function."""
-
     def test_get_func_description_with_explicit_description(self) -> None:
-        """Test that explicit description takes precedence over docstring."""
-
-        def test_func():
+        def test_func() -> None:
             """This docstring should be ignored."""
             pass
 
@@ -40,9 +36,7 @@ class TestGetFuncDescription(unittest.TestCase):
         self.assertEqual(description, 'Explicit description')
 
     def test_get_func_description_with_docstring(self) -> None:
-        """Test that docstring is used when no explicit description is provided."""
-
-        def test_func():
+        def test_func() -> None:
             """This is the function's docstring."""
             pass
 
@@ -50,24 +44,132 @@ class TestGetFuncDescription(unittest.TestCase):
         self.assertEqual(description, "This is the function's docstring.")
 
     def test_get_func_description_without_docstring(self) -> None:
-        """Test that empty string is returned when no docstring is present."""
-
-        def test_func():
+        def test_func() -> None:
             pass
 
         description = get_func_description(test_func)
         self.assertEqual(description, '')
 
     def test_get_func_description_with_none_docstring(self) -> None:
-        """Test that empty string is returned when docstring is None."""
-
-        def test_func():
+        def test_func() -> None:
             pass
 
         test_func.__doc__ = None
 
         description = get_func_description(test_func)
         self.assertEqual(description, '')
+
+
+class TestDefineJsonSchema:
+    def test_define_json_schema_basic(self) -> None:
+        ai = Genkit()
+
+        schema = ai.define_json_schema(
+            'SimpleObject',
+            {
+                'type': 'object',
+                'properties': {
+                    'name': {'type': 'string'},
+                    'age': {'type': 'integer'},
+                },
+                'required': ['name'],
+            },
+        )
+
+        assert schema is not None
+        assert schema['type'] == 'object'
+        assert 'properties' in schema
+
+    def test_define_json_schema_complex(self) -> None:
+        ai = Genkit()
+
+        schema = ai.define_json_schema(
+            'Recipe',
+            {
+                'type': 'object',
+                'properties': {
+                    'title': {'type': 'string'},
+                    'ingredients': {
+                        'type': 'array',
+                        'items': {'type': 'string'},
+                    },
+                    'instructions': {'type': 'string'},
+                    'nutrition': {
+                        'type': 'object',
+                        'properties': {
+                            'calories': {'type': 'number'},
+                            'protein': {'type': 'number'},
+                        },
+                    },
+                },
+                'required': ['title', 'ingredients', 'instructions'],
+            },
+        )
+
+        assert schema is not None
+        assert schema['type'] == 'object'
+        properties: dict[str, object] = schema['properties']  # type: ignore[assignment]
+        assert isinstance(properties, dict)
+        assert 'ingredients' in properties
+        ingredients: dict[str, object] = properties['ingredients']  # type: ignore[assignment]
+        assert isinstance(ingredients, dict)
+        assert ingredients['type'] == 'array'
+
+    def test_define_json_schema_returns_same_schema(self) -> None:
+        ai = Genkit()
+
+        input_schema: dict[str, object] = {
+            'type': 'string',
+            'minLength': 1,
+        }
+
+        returned_schema = ai.define_json_schema('StringSchema', input_schema)
+        assert returned_schema is input_schema
+
+
+class TestDefineDynamicActionProvider:
+    @pytest.mark.asyncio
+    async def test_define_dap_with_string_config(self) -> None:
+        ai = Genkit()
+
+        async def dap_fn() -> DapValue:
+            return {}
+
+        dap = ai.define_dynamic_action_provider('my-dap', dap_fn)
+
+        assert isinstance(dap, DynamicActionProvider)
+
+    @pytest.mark.asyncio
+    async def test_define_dap_with_options(self) -> None:
+        ai = Genkit()
+
+        async def dap_fn() -> DapValue:
+            return {}
+
+        dap = ai.define_dynamic_action_provider(
+            'configured-dap',
+            dap_fn,
+            description='A configured DAP',
+            cache_ttl_millis=5000,
+            metadata={'custom': 'value'},
+        )
+
+        assert isinstance(dap, DynamicActionProvider)
+
+    @pytest.mark.asyncio
+    async def test_define_dap_returns_provider(self) -> None:
+        ai = Genkit()
+
+        async def dap_fn() -> DapValue:
+            return {}
+
+        result = ai.define_dynamic_action_provider('test-dap', dap_fn)
+
+        assert isinstance(result, DynamicActionProvider)
+        assert hasattr(result, 'get_action')
+        assert hasattr(result, 'list_action_metadata')
+        assert hasattr(result, 'invalidate_cache')
+        assert hasattr(result, 'list_action_metadata_by_key')
 
 
 if __name__ == '__main__':

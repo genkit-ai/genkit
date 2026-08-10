@@ -19,7 +19,7 @@
 import pytest
 from pydantic import ValidationError
 
-from genkit.core.status_types import Status, StatusCodes, http_status_code
+from genkit._core._error import Status, StatusCodes, http_status_code
 
 
 def test_status_codes_values() -> None:
@@ -48,9 +48,11 @@ def test_status_immutability() -> None:
     status = Status(name='OK')
 
     with pytest.raises(ValidationError):
+        # pyrefly: ignore[read-only] - Intentionally testing immutability
         status.name = 'NOT_FOUND'
 
     with pytest.raises(ValidationError):
+        # pyrefly: ignore[read-only] - Intentionally testing immutability
         status.message = 'New message'
 
 
@@ -58,19 +60,19 @@ def test_status_validation() -> None:
     """Tests that Status validates inputs correctly."""
     # Test invalid status name
     with pytest.raises(ValidationError):
-        Status(name='INVALID_STATUS')
+        Status(name='INVALID_STATUS')  # type: ignore[arg-type]
 
     # Test with invalid type for name
     with pytest.raises(ValidationError):
-        Status(name=123)
+        Status(name=123)  # type: ignore[arg-type]
 
     # Test with invalid type for message
     with pytest.raises(ValidationError):
-        Status(name='OK', message=123)
+        Status(name='OK', message=123)  # type: ignore[arg-type]
 
     # Test with extra fields
     with pytest.raises(ValidationError):
-        Status(name='OK', extra_field='value')
+        Status(name='OK', extra_field='value')  # type: ignore[call-arg]
 
 
 def test_http_status_code_mapping() -> None:
@@ -97,7 +99,7 @@ def test_http_status_code_mapping() -> None:
 def test_http_status_code_invalid_input() -> None:
     """Tests http_status_code function with invalid input."""
     with pytest.raises(KeyError):
-        http_status_code('INVALID_STATUS')
+        http_status_code('INVALID_STATUS')  # type: ignore[arg-type]
 
 
 def test_status_json_serialization() -> None:

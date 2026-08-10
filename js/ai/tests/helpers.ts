@@ -38,24 +38,29 @@ export type ProgrammableModel = ModelAction & {
   ) => Promise<GenerateResponseData>;
 
   lastRequest?: GenerateRequest;
+  requestCount: number;
 };
 
 export function defineProgrammableModel(
   registry: Registry,
-  info?: ModelInfo
+  info?: ModelInfo,
+  name?: string
 ): ProgrammableModel {
   const pm = defineModel(
     registry,
     {
-      ...info,
-      name: 'programmableModel',
+      apiVersion: 'v2',
+      ...(info as any),
+      name: name ?? 'programmableModel',
     },
-    async (request, streamingCallback) => {
+    async (request, { sendChunk }) => {
+      pm.requestCount++;
       pm.lastRequest = JSON.parse(JSON.stringify(request));
-      return pm.handleResponse(request, streamingCallback);
+      return pm.handleResponse(request, sendChunk);
     }
   ) as ProgrammableModel;
 
+  pm.requestCount = 0;
   return pm;
 }
 

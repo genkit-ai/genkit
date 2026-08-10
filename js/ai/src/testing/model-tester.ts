@@ -18,9 +18,9 @@ import { z } from '@genkit-ai/core';
 import type { Registry } from '@genkit-ai/core/registry';
 import { runInNewSpan } from '@genkit-ai/core/tracing';
 import * as assert from 'assert';
-import { generate } from '../generate';
-import type { ModelAction } from '../model';
-import { defineTool } from '../tool';
+import { generate } from '../generate.js';
+import type { ModelAction } from '../model.js';
+import { defineTool } from '../tool.js';
 
 const tests: Record<string, TestCase> = {
   'basic hi': async (registry: Registry, model: string) => {

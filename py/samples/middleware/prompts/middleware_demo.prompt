@@ -1,0 +1,15 @@
+---
+model: googleai/gemini-flash-latest
+input:
+  schema:
+    prompt: string
+output:
+  format: text
+use:
+  - name: retry
+    config:
+      max_retries: 1
+  - concise_reply_mw
+---
+
+{{prompt}}

@@ -19,7 +19,9 @@ package genkit
 import (
 	"context"
 	"testing"
+	"testing/fstest"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 )
 
@@ -47,6 +49,88 @@ func TestStreamFlow(t *testing.T) {
 	})
 }
 
+type csvTestFormatter struct{}
+
+func (csvTestFormatter) Name() string { return "csv" }
+
+func (csvTestFormatter) Handler(schema map[string]any) (ai.FormatHandler, error) {
+	return csvTestHandler{}, nil
+}
+
+// jsonNameFormatter collides with the built-in "json" format.
+type jsonNameFormatter struct{ csvTestFormatter }
+
+func (jsonNameFormatter) Name() string { return "json" }
+
+type csvTestHandler struct{}
+
+func (csvTestHandler) ParseMessage(m *ai.Message) (*ai.Message, error) { return m, nil }
+
+func (csvTestHandler) Instructions() string { return "Respond with CSV." }
+
+func (csvTestHandler) Config() ai.ModelOutputConfig {
+	return ai.ModelOutputConfig{Format: "csv", ContentType: "text/csv"}
+}
+
+func TestDefineFormats(t *testing.T) {
+	ctx := context.Background()
+	g := Init(ctx)
+
+	echo := DefineModel(g, "test/echo", &ai.ModelOptions{
+		Supports: &ai.ModelSupports{Multiturn: true},
+	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("a,b,c")}, nil
+	})
+
+	DefineFormats(g, csvTestFormatter{})
+
+	if !IsDefinedFormat(g, "csv") {
+		t.Fatal("IsDefinedFormat() = false, want true")
+	}
+
+	res, err := Generate(ctx, g,
+		ai.WithModel(echo),
+		ai.WithPrompt("list some letters"),
+		ai.WithOutputFormat("csv"),
+	)
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if res.Request.Output.Format != "csv" {
+		t.Errorf("output format = %q, want %q", res.Request.Output.Format, "csv")
+	}
+	if res.Request.Output.ContentType != "text/csv" {
+		t.Errorf("output content type = %q, want %q", res.Request.Output.ContentType, "text/csv")
+	}
+
+	t.Run("deprecated DefineFormat registers under the given name", func(t *testing.T) {
+		DefineFormat(g, "csv2", csvTestFormatter{})
+		if !IsDefinedFormat(g, "csv2") {
+			t.Error("IsDefinedFormat() = false, want true")
+		}
+	})
+
+	t.Run("deprecated DefineFormat tolerates a prefixed name", func(t *testing.T) {
+		DefineFormat(g, "/format/csv3", csvTestFormatter{})
+		if !IsDefinedFormat(g, "csv3") {
+			t.Error("IsDefinedFormat() = false, want true")
+		}
+		// IsDefinedFormat has to accept whatever DefineFormat accepted.
+		if !IsDefinedFormat(g, "/format/csv3") {
+			t.Error("IsDefinedFormat() = false for the prefixed name, want true")
+		}
+	})
+
+	t.Run("DefineFormats panics on a built-in name", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Error("DefineFormats() should panic when the name collides with a built-in")
+			}
+		}()
+		DefineFormats(g, jsonNameFormatter{})
+	})
+}
+
 // count streams the numbers from 0 to n-1, then returns n.
 func count(ctx context.Context, n int, cb func(context.Context, int) error) (int, error) {
 	if cb != nil {
@@ -57,4 +141,149 @@ func count(ctx context.Context, n int, cb func(context.Context, int) error) (int
 		}
 	}
 	return n, nil
+}
+
+func TestDefineSchemaWithType(t *testing.T) {
+	g := Init(context.Background())
+
+	type UserInfo struct {
+		Name string `json:"name"`
+		Age  int    `json:"age,omitempty"`
+	}
+
+	DefineSchemasFor(g, UserInfo{})
+
+	schema := g.reg.LookupSchema("UserInfo")
+	if schema == nil {
+		t.Fatal("Schema UserInfo not found")
+	}
+
+	if schema["type"] != "object" {
+		t.Errorf("Expected type object, got %v", schema["type"])
+	}
+
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("Properties not found or invalid type")
+	}
+
+	if _, ok := props["name"]; !ok {
+		t.Error("Property 'name' not found")
+	}
+	if _, ok := props["age"]; !ok {
+		t.Error("Property 'age' not found")
+	}
+
+	required, ok := schema["required"].([]any)
+	if !ok {
+		t.Fatal("Required fields not found or invalid type")
+	}
+	// jsonschema reflection makes fields required by default unless omitempty
+	foundName := false
+	for _, r := range required {
+		if r == "name" {
+			foundName = true
+			break
+		}
+	}
+	if !foundName {
+		t.Error("Expected 'name' to be required")
+	}
+}
+
+func TestDefineSchemaWithType_Error(t *testing.T) {
+	g := Init(context.Background())
+
+	// We expect a panic because DefineSchemaWithType panics on error
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("The code did not panic")
+		}
+	}()
+
+	type Invalid struct {
+		Foo func() `json:"foo"`
+	}
+
+	DefineSchemasFor(g, Invalid{})
+}
+
+func TestDefineSchemaFor(t *testing.T) {
+	g := Init(context.Background())
+
+	type Legacy struct {
+		Name string `json:"name"`
+	}
+	type LegacyPtr struct {
+		Name string `json:"name"`
+	}
+
+	DefineSchemaFor[Legacy](g)
+	DefineSchemaFor[*LegacyPtr](g)
+
+	for _, name := range []string{"Legacy", "LegacyPtr"} {
+		if g.reg.LookupSchema(name) == nil {
+			t.Errorf("Schema %s not found", name)
+		}
+	}
+}
+
+func TestWithPromptFS(t *testing.T) {
+	tests := []struct {
+		name       string
+		fsys       fstest.MapFS
+		promptDir  string
+		promptName string
+	}{
+		{
+			name: "with custom prompt directory",
+			fsys: fstest.MapFS{
+				"custom-prompts/test.prompt": &fstest.MapFile{
+					Data: []byte(`---
+model: googleai/gemini-2.5-flash
+input:
+  schema:
+    text: string
+---
+{{text}}`),
+				},
+			},
+			promptDir:  "custom-prompts",
+			promptName: "test",
+		},
+		{
+			name: "with default prompts directory",
+			fsys: fstest.MapFS{
+				"prompts/test.prompt": &fstest.MapFile{
+					Data: []byte(`---
+model: googleai/gemini-2.5-flash
+input:
+  schema:
+    text: string
+---
+{{text}}`),
+				},
+			},
+			promptDir:  "", // empty means use default
+			promptName: "test",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			var opts []GenkitOption
+			opts = append(opts, WithPromptFS(tt.fsys))
+			if tt.promptDir != "" {
+				opts = append(opts, WithPromptDir(tt.promptDir))
+			}
+
+			g := Init(ctx, opts...)
+
+			prompt := LookupPrompt(g, tt.promptName)
+			if prompt == nil {
+				t.Fatalf("Expected prompt %q to be loaded", tt.promptName)
+			}
+		})
+	}
 }

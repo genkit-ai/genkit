@@ -18,16 +18,23 @@ import type { Genkit } from 'genkit';
 import {
   GenkitMcpClient,
   McpClientOptions,
+  McpClientOptionsWithCache,
   McpServerConfig,
   McpStdioServerConfig,
 } from './client/client.js';
-import { GenkitMcpHost, McpHostOptions } from './client/index.js';
+import {
+  GenkitMcpHost,
+  McpHostOptions,
+  McpHostOptionsWithCache,
+} from './client/index.js';
 import { GenkitMcpServer } from './server.js';
 export {
   GenkitMcpClient,
   GenkitMcpHost,
   type McpClientOptions,
+  type McpClientOptionsWithCache,
   type McpHostOptions,
+  type McpHostOptionsWithCache,
   type McpServerConfig,
   type McpStdioServerConfig,
 };
@@ -63,8 +70,54 @@ export interface McpServerOptions {
  * @param options Configuration for the MCP Client Host, including the definitions of MCP servers to connect to.
  * @returns A new instance of GenkitMcpHost.
  */
-export function createMcpHost(options: McpHostOptions) {
-  return new GenkitMcpHost(options);
+export function createMcpHost<M extends boolean = false>(
+  options: McpHostOptions<M>
+) {
+  return new GenkitMcpHost<M>(options);
+}
+
+/**
+ * Creates an MCP Client Host that connects to one or more MCP servers.
+ * Each server is defined in the `mcpClients` option, where the key is a
+ * client-side name for the server and the value is the server's configuration.
+ *
+ * By default, all servers in the config will be attempted to connect unless
+ * their configuration includes `{disabled: true}`.
+ *
+ * ```ts
+ * const clientHost = defineMcpHost(ai, {
+ *   name: "my-mcp-client-host", // Name for the host itself
+ *   mcpServers: {
+ *     // Each key is a name for this client/server configuration
+ *     // Each value is an McpServerConfig object
+ *     gitToolServer: { command: "uvx", args: ["mcp-server-git"] },
+ *     customApiServer: { url: "http://localhost:1234/mcp" }
+ *   }
+ * });
+ * ```
+ *
+ * @param options Configuration for the MCP Client Host, including the definitions of MCP servers to connect to.
+ * @returns A new instance of GenkitMcpHost.
+ */
+export function defineMcpHost<M extends boolean = false>(
+  ai: Genkit,
+  options: McpHostOptionsWithCache<M>
+) {
+  const mcpHost = new GenkitMcpHost<M>(options);
+  const dap = ai.defineDynamicActionProvider(
+    {
+      name: options.name,
+      cacheConfig: {
+        ttlMillis: options.cacheTTLMillis,
+      },
+    },
+    async () => ({
+      tool: await mcpHost.getActiveTools(ai),
+      resource: await mcpHost.getActiveResources(ai),
+    })
+  );
+  mcpHost.dynamicActionProvider = dap;
+  return mcpHost;
 }
 
 /**
@@ -87,8 +140,59 @@ export function createMcpHost(options: McpHostOptions) {
  *                to the MCP server and its behavior.
  * @returns A new instance of GenkitMcpClient.
  */
-export function createMcpClient(options: McpClientOptions) {
-  return new GenkitMcpClient(options);
+export function createMcpClient<M extends boolean = false>(
+  options: McpClientOptions<M>
+) {
+  return new GenkitMcpClient<M>(options);
+}
+
+/**
+ * Defines an MCP Client that connects to a single MCP server.
+ * This is useful when you only need to interact with one MCP server,
+ * or if you want to manage client instances individually.
+ *
+ * ```ts
+ * const client = defineMcpClient(ai, {
+ *   name: "mySingleMcpClient", // A name for this client instance
+ *   command: "npx", // Example: Launching a local server
+ *   args: ["-y", "@modelcontextprotocol/server-everything", "/path/to/allowed/dir"],
+ * });
+ *
+ * // To get tools from this client:
+ * // const tools = await client.getActiveTools(ai);
+ *
+ * // Or in a generate call you can use:
+ * ai.generate({
+    prompt: `<a prompt requiring tools>`,
+    tools: ['mySingleMcpClient:tool/*'],
+  });
+ * ```
+ *
+ * @param options Configuration for the MCP Client, defining how it connects
+ *                to the MCP server and its behavior.
+ * @returns A new instance of GenkitMcpClient.
+ */
+export function defineMcpClient<M extends boolean = false>(
+  ai: Genkit,
+  options: McpClientOptionsWithCache<M>
+) {
+  const mcpClient = new GenkitMcpClient<M>(options);
+  const dap = ai.defineDynamicActionProvider(
+    {
+      name: options.name,
+      cacheConfig: {
+        ttlMillis: options.cacheTtlMillis,
+      },
+    },
+    async () => {
+      return {
+        tool: await mcpClient.getActiveTools(ai),
+        resource: await mcpClient.getActiveResources(ai),
+      };
+    }
+  );
+  mcpClient.dynamicActionProvider = dap;
+  return mcpClient;
 }
 
 /**

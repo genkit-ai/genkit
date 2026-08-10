@@ -47,6 +47,7 @@ type GenerateTelemetry struct {
 	inputAudio       metric.Int64Counter   // genkit/ai/generate/input/audio
 	outputCharacters metric.Int64Counter   // genkit/ai/generate/output/characters
 	outputTokens     metric.Int64Counter   // genkit/ai/generate/output/tokens
+	thinkingTokens   metric.Int64Counter   // genkit/ai/generate/thinking/tokens
 	outputImages     metric.Int64Counter   // genkit/ai/generate/output/images
 	outputVideos     metric.Int64Counter   // genkit/ai/generate/output/videos
 	outputAudio      metric.Int64Counter   // genkit/ai/generate/output/audio
@@ -65,6 +66,7 @@ func NewGenerateTelemetry() *GenerateTelemetry {
 	inputAudio, _ := meter.Int64Counter("genkit/ai/generate/input/audio", metric.WithDescription("Counts input audio files to a Genkit model."), metric.WithUnit("1"))
 	outputCharacters, _ := meter.Int64Counter("genkit/ai/generate/output/characters", metric.WithDescription("Counts output characters from a Genkit model."), metric.WithUnit("1"))
 	outputTokens, _ := meter.Int64Counter("genkit/ai/generate/output/tokens", metric.WithDescription("Counts output tokens from a Genkit model."), metric.WithUnit("1"))
+	thinkingTokens, _ := meter.Int64Counter("genkit/ai/generate/thinking/tokens", metric.WithDescription("Counts thinking tokens from a Genkit model."), metric.WithUnit("1"))
 	outputImages, _ := meter.Int64Counter("genkit/ai/generate/output/images", metric.WithDescription("Count output images from a Genkit model."), metric.WithUnit("1"))
 	outputVideos, _ := meter.Int64Counter("genkit/ai/generate/output/videos", metric.WithDescription("Count output videos from a Genkit model."), metric.WithUnit("1"))
 	outputAudio, _ := meter.Int64Counter("genkit/ai/generate/output/audio", metric.WithDescription("Count output audio files from a Genkit model."), metric.WithUnit("1"))
@@ -79,6 +81,7 @@ func NewGenerateTelemetry() *GenerateTelemetry {
 		inputAudio:       inputAudio,
 		outputCharacters: outputCharacters,
 		outputTokens:     outputTokens,
+		thinkingTokens:   thinkingTokens,
 		outputImages:     outputImages,
 		outputVideos:     outputVideos,
 		outputAudio:      outputAudio,
@@ -167,6 +170,7 @@ func (g *GenerateTelemetry) recordGenerateActionMetrics(modelName, featureName, 
 		g.inputAudio.Add(context.Background(), int64(usage.InputAudioFiles), opt)
 		g.outputTokens.Add(context.Background(), int64(usage.OutputTokens), opt)
 		g.outputCharacters.Add(context.Background(), int64(usage.OutputCharacters), opt)
+		g.thinkingTokens.Add(context.Background(), int64(usage.ThoughtsTokens), opt)
 		g.outputImages.Add(context.Background(), int64(usage.OutputImages), opt)
 		g.outputVideos.Add(context.Background(), int64(usage.OutputVideos), opt)
 		g.outputAudio.Add(context.Background(), int64(usage.OutputAudioFiles), opt)

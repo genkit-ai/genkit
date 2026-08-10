@@ -18,11 +18,16 @@ import { SSEClientTransportOptions } from '@modelcontextprotocol/sdk/client/sse.
 import { StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { GenkitMcpClient, McpClientOptions } from './client.js';
-import { GenkitMcpHost, McpHostOptions } from './host.js';
+import {
+  GenkitMcpHost,
+  McpHostOptions,
+  McpHostOptionsWithCache,
+} from './host.js';
 export { GenkitMcpClient, GenkitMcpHost };
 export type {
   McpClientOptions,
   McpHostOptions,
+  McpHostOptionsWithCache,
   SSEClientTransportOptions,
   StdioServerParameters,
   Transport,

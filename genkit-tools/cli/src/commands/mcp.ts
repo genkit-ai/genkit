@@ -14,24 +14,45 @@
  * limitations under the License.
  */
 
-import { findProjectRoot, forceStderr } from '@genkit-ai/tools-common/utils';
+import {
+  debugToFile,
+  findProjectRoot,
+  forceStderr,
+} from '@genkit-ai/tools-common/utils';
 import { Command } from 'commander';
 import { startMcpServer } from '../mcp/server';
-import { startManager } from '../utils/manager-utils';
 
 interface McpOptions {
   projectRoot?: string;
+  debug?: boolean | string;
+  explicitProjectRoot?: boolean;
+  timeout?: string;
 }
 
 /** Command to run MCP server. */
 export const mcp = new Command('mcp')
   .option('--project-root [projectRoot]', 'Project root')
+  .option('-d, --debug [path]', 'debug to file')
+  .option(
+    '--timeout [timeout]',
+    'Timeout for runtime to start (ms). Default 30000.'
+  )
+  .option(
+    '--explicitProjectRoot',
+    'Whether runtime dependent tools need projectRoot specified. Needed for use with Google Antigravity',
+    false
+  )
   .description('run MCP stdio server (EXPERIMENTAL, subject to change)')
   .action(async (options: McpOptions) => {
     forceStderr();
-    const manager = await startManager(
-      options.projectRoot ?? (await findProjectRoot()),
-      true
-    );
-    await startMcpServer(manager);
+    if (options.debug) {
+      debugToFile(
+        typeof options.debug === 'string' ? options.debug : undefined
+      );
+    }
+    await startMcpServer({
+      projectRoot: options.projectRoot ?? (await findProjectRoot()),
+      explicitProjectRoot: options.explicitProjectRoot ?? false,
+      timeout: options.timeout ? parseInt(options.timeout, 10) : undefined,
+    });
   });

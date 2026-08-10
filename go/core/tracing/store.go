@@ -17,11 +17,20 @@
 package tracing
 
 // Data is information about a trace.
+//
+// DisplayName, StartTime, and EndTime are derived from the trace's root
+// (parentless) span, so a batch that carries only child spans leaves them at
+// their zero values. They are omitempty for that reason: the telemetry server
+// only overwrites a stored trace's metadata when the incoming value is defined
+// (see the merge in genkit-tools' file trace store), so emitting a zero here
+// would clobber the real title/times a prior root-span save established. This
+// matters once spans are exported as they start (live traces), where child
+// spans can reach the server before the root span closes.
 type Data struct {
 	TraceID     string               `json:"traceId"`
-	DisplayName string               `json:"displayName"`
-	StartTime   Milliseconds         `json:"startTime"`
-	EndTime     Milliseconds         `json:"endTime"`
+	DisplayName string               `json:"displayName,omitempty"`
+	StartTime   Milliseconds         `json:"startTime,omitempty"`
+	EndTime     Milliseconds         `json:"endTime,omitempty"`
 	Spans       map[string]*SpanData `json:"spans"`
 }
 

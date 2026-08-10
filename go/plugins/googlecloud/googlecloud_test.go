@@ -9,8 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -184,13 +182,17 @@ func (f *testFixture) waitAndGetSpans() []sdktrace.ReadOnlySpan {
 
 func (f *testFixture) assertSpanCount(t *testing.T, expected int) []sdktrace.ReadOnlySpan {
 	spans := f.waitAndGetSpans()
-	assert.Len(t, spans, expected)
+	if len(spans) != expected {
+		t.Errorf("got %d spans, want %d", len(spans), expected)
+	}
 	return spans
 }
 
 func (f *testFixture) assertSpanExists(t *testing.T, name string) sdktrace.ReadOnlySpan {
 	span := f.mockExporter.GetSpanByName(name)
-	require.NotNil(t, span, "span '%s' should exist", name)
+	if span == nil {
+		t.Fatalf("span %q should exist", name)
+	}
 	return span
 }
 
@@ -205,8 +207,14 @@ func getAttrMap(span sdktrace.ReadOnlySpan) map[string]string {
 
 func assertAttr(t *testing.T, span sdktrace.ReadOnlySpan, key, expected string) {
 	attrMap := getAttrMap(span)
-	assert.Contains(t, attrMap, key)
-	assert.Equal(t, expected, attrMap[key])
+	got, ok := attrMap[key]
+	if !ok {
+		t.Errorf("attribute %q not found", key)
+		return
+	}
+	if got != expected {
+		t.Errorf("attribute %q = %q, want %q", key, got, expected)
+	}
 }
 
 // Tests
@@ -220,10 +228,18 @@ func TestNewAdjustingTraceExporter(t *testing.T) {
 		projectId:         "test-project",
 	}
 
-	assert.NotNil(t, adjuster)
-	assert.Equal(t, mockExporter, adjuster.exporter)
-	assert.Equal(t, "test-project", adjuster.projectId)
-	assert.False(t, adjuster.logInputAndOutput)
+	if adjuster == nil {
+		t.Fatal("adjuster should not be nil")
+	}
+	if got, want := adjuster.exporter, mockExporter; got != want {
+		t.Errorf("exporter = %v, want %v", got, want)
+	}
+	if got, want := adjuster.projectId, "test-project"; got != want {
+		t.Errorf("projectId = %q, want %q", got, want)
+	}
+	if adjuster.logInputAndOutput {
+		t.Error("logInputAndOutput should be false")
+	}
 }
 
 func TestAdjustingTraceExporter_ExportSpansWithRealTracer(t *testing.T) {
@@ -258,7 +274,9 @@ func TestAdjustingTraceExporter_FailedSpan(t *testing.T) {
 
 	// Verify
 	spans := f.assertSpanCount(t, 1)
-	assert.Equal(t, codes.Error, spans[0].Status().Code)
+	if got, want := spans[0].Status().Code, codes.Error; got != want {
+		t.Errorf("status code = %v, want %v", got, want)
+	}
 }
 
 func TestAdjustingTraceExporter_NormalizeLabels(t *testing.T) {
@@ -290,8 +308,12 @@ func TestAdjustingTraceExporter_Shutdown(t *testing.T) {
 	}
 
 	err := adjuster.Shutdown(context.Background())
-	require.NoError(t, err)
-	assert.True(t, mockExporter.shutdownCalled)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !mockExporter.shutdownCalled {
+		t.Error("shutdownCalled should be true")
+	}
 }
 
 func TestCompleteSpanProcessingPipeline(t *testing.T) {
@@ -325,5 +347,7 @@ func TestCompleteSpanProcessingPipeline(t *testing.T) {
 	assertAttr(t, generateSpan, "test/colon", "should-be-normalized")
 	assertAttr(t, generateSpan, "genkit/model", "gemini-pro")
 	assertAttr(t, featureSpan, "genkit/type", "feature")
-	assert.Equal(t, codes.Error, failedSpan.Status().Code)
+	if got, want := failedSpan.Status().Code, codes.Error; got != want {
+		t.Errorf("status code = %v, want %v", got, want)
+	}
 }

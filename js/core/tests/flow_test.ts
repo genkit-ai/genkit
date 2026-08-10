@@ -376,6 +376,7 @@ describe('flow', () => {
       assert.deepStrictEqual(spanExporter.exportedSpans[0].attributes, {
         'genkit:input': '"foo"',
         'genkit:isRoot': true,
+        'genkit:key': '/flow/testFlow',
         'genkit:metadata:subtype': 'flow',
         'genkit:name': 'testFlow',
         'genkit:output': '"bar foo"',
@@ -400,6 +401,7 @@ describe('flow', () => {
       assert.deepStrictEqual(spanExporter.exportedSpans[0].attributes, {
         'genkit:input': '"foo"',
         'genkit:isRoot': true,
+        'genkit:key': '/flow/testFlow',
         'genkit:metadata:subtype': 'flow',
         'genkit:metadata:context': '{}',
         'genkit:name': 'testFlow',
@@ -453,6 +455,7 @@ describe('flow', () => {
         'testAction'
       );
       assert.deepStrictEqual(spanExporter.exportedSpans[0].attributes, {
+        'genkit:key': '/tool/testAction',
         'genkit:metadata:subtype': 'tool',
         'genkit:name': 'testAction',
         'genkit:output': '"bar"',
@@ -475,6 +478,7 @@ describe('flow', () => {
       assert.deepStrictEqual(spanExporter.exportedSpans[2].attributes, {
         'genkit:input': '"foo"',
         'genkit:isRoot': true,
+        'genkit:key': '/flow/testFlow',
         'genkit:metadata:subtype': 'flow',
         'genkit:metadata:context': '{"user":"pavel"}',
         'genkit:name': 'testFlow',

@@ -17,12 +17,16 @@
 import { ToolPluginSubCommandsSchema } from '@genkit-ai/tools-common/plugin';
 import {
   RunCommandEvent,
+  detectRuntime,
+  findProjectRoot,
   logger,
   notifyAnalyticsIfFirstRun,
   record,
 } from '@genkit-ai/tools-common/utils';
 import { Command, program } from 'commander';
 import { config } from './commands/config';
+import { devTestModel } from './commands/dev-test-model';
+import { docsList, docsRead, docsSearch } from './commands/docs';
 import { evalExtractData } from './commands/eval-extract-data';
 import { evalFlow } from './commands/eval-flow';
 import { evalRun } from './commands/eval-run';
@@ -36,6 +40,9 @@ import {
   serverHarness,
 } from './commands/server-harness';
 import { start } from './commands/start';
+import { startFlutter } from './commands/start-flutter';
+import { traceGet } from './commands/trace-get';
+import { traceList } from './commands/trace-list';
 import { uiStart } from './commands/ui-start';
 import { uiStop } from './commands/ui-stop';
 import { detectCLIRuntime } from './utils/runtime-detector.js';
@@ -59,7 +66,14 @@ const commands: Command[] = [
   initAiTools,
   config,
   start,
+  startFlutter,
+  devTestModel,
   mcp,
+  docsList,
+  docsRead,
+  docsSearch,
+  traceGet,
+  traceList,
 ];
 
 /** Main entry point for CLI. */
@@ -69,13 +83,15 @@ export async function startCLI(): Promise<void> {
     .description('Genkit CLI')
     .version(version)
     .option('--no-update-notification', 'Do not show update notification')
-    .hook('preAction', async (_, actionCommand) => {
-      await notifyAnalyticsIfFirstRun();
-
+    .option(
+      '--non-interactive',
+      'Run in non-interactive mode. All interactions will use the default choice.'
+    )
+    .hook('preAction', async (command, actionCommand) => {
       // For now only record known command names, to avoid tools plugins causing
       // arbitrary text to get recorded. Once we launch tools plugins, we'll have
       // to give this more thought
-      const commandNames = commands.map((c) => c.name());
+      const commandNames = commands.map((c) => c.name()).concat('help');
       let commandName: string;
       if (commandNames.includes(actionCommand.name())) {
         commandName = actionCommand.name();
@@ -87,9 +103,23 @@ export async function startCLI(): Promise<void> {
       } else {
         commandName = 'unknown';
       }
+
+      if (
+        !process.argv.includes('--non-interactive') &&
+        commandName !== 'config'
+      ) {
+        await notifyAnalyticsIfFirstRun();
+      }
+
       const { isCompiledBinary } = detectCLIRuntime();
+      const projectRoot = await findProjectRoot();
+      const projectRuntime = await detectRuntime(projectRoot);
       await record(
-        new RunCommandEvent(commandName, isCompiledBinary ? 'binary' : 'node')
+        new RunCommandEvent(
+          commandName,
+          isCompiledBinary ? 'binary' : 'node',
+          projectRuntime
+        )
       );
     });
 
@@ -128,10 +158,11 @@ export async function startCLI(): Promise<void> {
       logger.info(program.help());
     })
   );
-  // Default action to catch unknown commands.
-  program.action(() => {
-    // print help
+  // Handle unknown commands.
+  program.on('command:*', (operands) => {
+    logger.error(`error: unknown command '${operands[0]}'`);
     logger.info(program.help());
+    process.exit(1);
   });
 
   await program.parseAsync();

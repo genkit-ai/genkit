@@ -1,6 +1,6 @@
 # OpenAI-Compatible Plugin Package
 
-This directory contains a package for building plugins that are compatible with the OpenAI API specification, along with plugins built on top of this package. 
+This directory contains a package for building plugins that are compatible with the OpenAI API specification, along with plugins built on top of this package.
 
 ## Package Overview
 
@@ -50,7 +50,7 @@ func (p *MyPlugin) Name() string {
 }
 ```
 
-See the `openai` and `anthropic` directories for complete implementations.
+See the `openai`, `anthropic`, and `dashscope` directories for complete implementations.
 
 ## Running Tests
 
@@ -58,6 +58,9 @@ Set your API keys:
 ```bash
 export OPENAI_API_KEY=<your-openai-key>
 export ANTHROPIC_API_KEY=<your-anthropic-key>
+export DASHSCOPE_API_KEY=<your-dashscope-key>
+export ZAI_API_KEY=<your-zai-key>
+export KIMI_API_KEY=<your-kimi-key>
 ```
 
 Run all tests:
@@ -72,6 +75,15 @@ go test -v ./openai
 
 # Anthropic tests
 go test -v ./anthropic
+
+# DashScope tests
+go test -v ./dashscope
+
+# Z.ai tests
+go test -v ./zai
+
+# Kimi tests
+go test -v ./kimi
 ```
 
 Note: Tests will be skipped if the required API keys are not set.

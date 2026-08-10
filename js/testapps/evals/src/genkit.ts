@@ -16,17 +16,7 @@
 
 import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
 import { GenkitMetric, genkitEval } from '@genkit-ai/evaluator';
-import {
-  gemini15Flash,
-  gemini15Pro,
-  googleAI,
-  textEmbeddingGecko001,
-} from '@genkit-ai/googleai';
-import { vertexAI } from '@genkit-ai/vertexai';
-import {
-  VertexAIEvaluationMetricType,
-  vertexAIEvaluation,
-} from '@genkit-ai/vertexai/evaluation';
+import { googleAI } from '@genkit-ai/google-genai';
 import { genkit } from 'genkit';
 import { langchain } from 'genkitx-langchain';
 
@@ -60,46 +50,27 @@ export const ai = genkit({
       metrics: [
         {
           type: GenkitMetric.MALICIOUSNESS,
-          judge: gemini15Pro,
+          judge: googleAI.model('gemini-2.5-pro'),
           judgeConfig: PERMISSIVE_SAFETY_SETTINGS,
         },
         {
           type: GenkitMetric.ANSWER_ACCURACY,
-          judge: gemini15Pro,
+          judge: googleAI.model('gemini-2.5-pro'),
           judgeConfig: PERMISSIVE_SAFETY_SETTINGS,
-        },
-      ],
-    }),
-    vertexAI({
-      location: 'us-central1',
-    }),
-    vertexAIEvaluation({
-      location: 'us-central1',
-      metrics: [
-        VertexAIEvaluationMetricType.BLEU,
-        VertexAIEvaluationMetricType.GROUNDEDNESS,
-        VertexAIEvaluationMetricType.SAFETY,
-        {
-          type: VertexAIEvaluationMetricType.ROUGE,
-          metricSpec: {
-            rougeType: 'rougeLsum',
-            useStemmer: true,
-            splitSummaries: 'true',
-          },
         },
       ],
     }),
     devLocalVectorstore([
       {
         indexName: 'pdfQA',
-        embedder: textEmbeddingGecko001,
+        embedder: googleAI.embedder('gemini-embedding-001'),
       },
     ]),
     langchain({
       evaluators: {
         criteria: ['coherence'],
         labeledCriteria: ['correctness'],
-        judge: gemini15Flash,
+        judge: googleAI.model('gemini-2.5-pro'),
       },
     }),
   ],

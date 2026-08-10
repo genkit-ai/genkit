@@ -79,7 +79,7 @@ func TestGetContentForCache_Invalid(t *testing.T) {
 			},
 		},
 	}
-	err := validateContextCacheRequest(req, "gemini-1.5-fash-001")
+	err := validateContextCacheRequest(req, "gemini-2.5-fash")
 	if err == nil {
 		t.Fatal("expecting error, system instructions are not supported with Context Cache")
 	}
@@ -89,7 +89,7 @@ func TestValidateContextCacheRequest_HasTools(t *testing.T) {
 	req := &ai.ModelRequest{
 		Tools: []*ai.ToolDefinition{{Name: "someTool"}},
 	}
-	err := validateContextCacheRequest(req, "gemini-1.5-flash-001")
+	err := validateContextCacheRequest(req, "gemini-2.5-flash")
 	if err == nil {
 		t.Fatal("expected error if Tools are present")
 	}
@@ -100,7 +100,7 @@ func TestValidateContextCacheRequest_HasTools(t *testing.T) {
 
 func TestValidateContextCacheRequest_Valid(t *testing.T) {
 	req := &ai.ModelRequest{}
-	err := validateContextCacheRequest(req, "gemini-1.5-flash-001")
+	err := validateContextCacheRequest(req, "gemini-2.5-flash")
 	if err != nil {
 		t.Fatalf("did not expect error, got: %v", err)
 	}

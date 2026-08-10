@@ -18,7 +18,7 @@ import type { EvaluatorAction, Genkit, ModelArgument, z } from 'genkit';
 import type { GenerationCommonConfigSchema } from 'genkit/model';
 import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
 import type { Criteria } from 'langchain/evaluation';
-import { langchainEvaluator } from './evaluators';
+import { langchainEvaluator } from './evaluators.js';
 
 export { GenkitTracer } from './tracing.js';
 

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { Formatter } from './types';
+import type { Formatter } from './types.js';
 
 export const textFormatter: Formatter<string, string> = {
   name: 'text',

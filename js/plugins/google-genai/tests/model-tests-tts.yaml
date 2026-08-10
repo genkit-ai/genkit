@@ -1,0 +1,113 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+- model: googleai/imagen-4.0-generate-001
+  supports:
+    - output-image
+- model: googleai/gemini-2.5-flash-preview-tts
+  tests:
+    - name: TTS Test
+      input:
+        messages:
+          - role: user
+            content:
+              - text: 'Hello world'
+        config:
+          responseModalities: ['AUDIO']
+      validators:
+        - valid-media:audio
+- model: googleai/gemini-2.5-pro
+  supports:
+    - tool-request
+    - structured-output
+    - multiturn
+    - system-role
+    - input-image-base64
+    - input-image-url
+    - input-video-youtube
+- model: googleai/gemini-3-pro-preview
+  supports:
+    - tool-request
+    - structured-output
+    - multiturn
+    - system-role
+    - input-image-base64
+    - input-image-url
+    - input-video-youtube
+  tests:
+    - name: Reasoning conformance
+      input:
+        messages:
+          - role: user
+            content:
+              - text: A banana farmer harvest 10 bananas but he eats 3 and sells 4. How many bananas are remaining?
+        config:
+          thinkingConfig:
+            thinkingBudget: 1024
+            includeThoughts: true
+      validators:
+        - reasoning
+
+    - name: Streaming conformance
+      stream: true
+      input:
+        messages:
+          - role: user
+            content: [{ text: 'Count to 10' }]
+      validators:
+        - text-not-empty
+
+    - name: Tool Response Conformance
+      input:
+        messages:
+          - role: user
+            content:
+              - text: 'What is the weather in New York? Use the tool.'
+          - role: model
+            content:
+              - toolRequest:
+                  name: weather
+                  input:
+                    city: New York
+                metadata:
+                  thoughtSignature: CvABAXLI2nxTZfKU3MkzLiGBrX62oq77vN2kHjT8pwwXRjtzbCqC07pPhIZ31sS+2kUFDh/kUY4SOvZzjjtP8UxI5GSFRWlX8yVDrDFo17RN/urwc1QuaMMzy66eQubpPRDEwfi6S5IKxZq0kRX6cSceB4NVCQAAAU8sYJwqWFL9CIaGac4lzF+34VvMWFLqdb40oe7/gw/KK1fqAeqDs+FJLksA+Q5qpHn3BETcqT0AuFe01IB2EVA7Us+/N3VGonw61F5cFNjHXO1jIYDybl3MXR9M5T5QB1a3EyicYXSX5/+bCmny1ka4kInbtzEqMMuv
+          - role: tool
+            content:
+              - toolResponse:
+                  name: weather
+                  output: '21C'
+        tools:
+          - name: weather
+            description: Get the weather for a city
+            inputSchema:
+              type: object
+              properties:
+                city:
+                  type: string
+              required:
+                - city
+      validators:
+        - text-includes:21
+
+- model: googleai/gemini-2.5-flash
+  supports:
+    - tool-request
+    - structured-output
+    - multiturn
+    - system-role
+    - input-image-base64
+    - input-image-url
+    - input-video-youtube

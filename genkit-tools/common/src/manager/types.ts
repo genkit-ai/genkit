@@ -16,13 +16,31 @@
 
 import type { GenkitError } from '../types/error';
 
-export type Runtime = 'nodejs' | 'go' | undefined;
+export type Runtime = 'nodejs' | 'go' | 'python' | 'dart' | undefined;
 
 export class GenkitToolsError extends Error {
   public data?: GenkitError;
 
   constructor(msg: string, options?: ErrorOptions) {
     super(msg, options);
+  }
+
+  formatError(): string {
+    let msg = this.message;
+    if (this.data) {
+      if (this.data?.message) {
+        msg += `\Genkit Error: ${this.data?.message}`;
+      }
+      if (this.data?.stack) {
+        msg += `\nStack Trace:\n${this.data?.stack}`;
+      }
+      if (this.data?.details) {
+        msg += `\nDetails:\n${JSON.stringify(this.data?.details)}`;
+      }
+    } else if (this.stack) {
+      msg += `\nStack Trace:\n${this.stack}`;
+    }
+    return msg;
   }
 }
 

@@ -1,0 +1,39 @@
+{
+  "name": "angular-ssr-sample",
+  "version": "0.0.1-dev.1",
+  "description": "Sample app to test Genkit with Angular SSR",
+  "scripts": {
+    "ng": "ng",
+    "start": "ng serve",
+    "build": "ng build",
+    "watch": "ng build --watch --configuration development",
+    "dev": "ng serve",
+    "serve:ssr:angular": "node dist/angular/server/server.mjs"
+  },
+  "private": true,
+  "dependencies": {
+    "@angular/common": "^20.3.0",
+    "@angular/compiler": "^20.3.0",
+    "@angular/core": "^20.3.0",
+    "@angular/forms": "^20.3.0",
+    "@angular/platform-browser": "^20.3.0",
+    "@angular/platform-server": "^20.3.0",
+    "@angular/router": "^20.3.0",
+    "@angular/ssr": "^20.3.1",
+    "@genkit-ai/express": "workspace:*",
+    "@genkit-ai/google-genai": "workspace:*",
+    "express": "^5.1.0",
+    "genkit": "workspace:*",
+    "rxjs": "~7.8.0",
+    "tslib": "^2.3.0",
+    "zone.js": "~0.15.0"
+  },
+  "devDependencies": {
+    "@angular/build": "^20.3.1",
+    "@angular/cli": "^20.3.1",
+    "@angular/compiler-cli": "^20.3.0",
+    "@types/express": "^5.0.1",
+    "@types/node": "^20.17.19",
+    "typescript": "~5.9.2"
+  }
+}

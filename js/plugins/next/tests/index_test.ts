@@ -16,6 +16,7 @@
 
 import { describe, expect, it } from '@jest/globals';
 import { UserFacingError, genkit, z } from 'genkit';
+import { InMemoryStreamManager } from 'genkit/beta';
 import { apiKey, type ApiKeyContext } from 'genkit/context';
 import { NextRequest } from 'next/server.js';
 import { appRoute } from '../src/index.js';
@@ -27,19 +28,22 @@ function chunks(
   | { type: 'comment' | 'invalid'; content: string }
   | { type: 'end' }
 > {
-  return text.split('\n\n').map((part) => {
-    if (part === 'END') {
-      return { type: 'end' };
-    }
-    const [command, ...rest] = part.split(':');
-    // Restore any additional :
-    const data = rest.join(':');
-    if (command === 'data' || command === 'error') {
-      // The split : also took out : from JSON
-      return { type: command, content: JSON.parse(data.trim()) };
-    }
-    return { type: command === '' ? 'comment' : 'invalid', content: data };
-  });
+  return text
+    .split('\n\n')
+    .filter((part) => part)
+    .map((part) => {
+      if (part === 'END') {
+        return { type: 'end' };
+      }
+      const [command, ...rest] = part.split(':');
+      // Restore any additional :
+      const data = rest.join(':');
+      if (command === 'data' || command === 'error') {
+        // The split : also took out : from JSON
+        return { type: command, content: JSON.parse(data.trim()) };
+      }
+      return { type: command === '' ? 'comment' : 'invalid', content: data };
+    });
 }
 
 describe('appRoute', () => {
@@ -286,5 +290,204 @@ describe('appRoute', () => {
         type: 'end',
       },
     ]);
+  });
+
+  it('passes init data to the action', async () => {
+    const ai = genkit({});
+    const flowWithInit = ai.defineFlow(
+      {
+        name: 'flowWithInit',
+        inputSchema: z.string(),
+        outputSchema: z.string(),
+      },
+      async (input) => `input: ${input}`
+    );
+    // Monkey-patch the run method to capture and return init data.
+    const originalRun = flowWithInit.run.bind(flowWithInit);
+    flowWithInit.run = async (input: any, options: any) => {
+      const result = await originalRun(input, options);
+      result.result = `input: ${input}, init: ${JSON.stringify(options?.init)}`;
+      return result;
+    };
+
+    const route = appRoute(flowWithInit);
+
+    // Non-streaming: init provided
+    const request = new NextRequest('http://localhost/api/data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        data: 'hello',
+        init: { sessionId: 'abc123', temperature: 0.7 },
+      }),
+    });
+    let response = await route(request);
+    expect(response.status).toEqual(200);
+    expect(await response.json()).toEqual({
+      result: 'input: hello, init: {"sessionId":"abc123","temperature":0.7}',
+    });
+
+    // Non-streaming: init not provided
+    const request2 = new NextRequest('http://localhost/api/data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: 'hello' }),
+    });
+    response = await route(request2);
+    expect(response.status).toEqual(200);
+    expect(await response.json()).toEqual({
+      result: 'input: hello, init: undefined',
+    });
+
+    // Streaming: init provided
+    const request3 = new NextRequest('http://localhost/api/data', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        accept: 'text/event-stream',
+      },
+      body: JSON.stringify({
+        data: 'hello',
+        init: { sessionId: 'abc123' },
+      }),
+    });
+    response = await route(request3);
+    expect(response.status).toEqual(200);
+    const parsed = chunks(await response.text());
+    const dataChunk = parsed.find((c) => c.type === 'data');
+    expect(dataChunk).toBeDefined();
+    expect((dataChunk as any).content.result).toEqual(
+      'input: hello, init: {"sessionId":"abc123"}'
+    );
+  });
+
+  it('validates init against initSchema and passes it to the action', async () => {
+    const ai = genkit({});
+    const flowWithInitSchema = ai.defineFlow(
+      {
+        name: 'flowWithInitSchema',
+        inputSchema: z.string(),
+        outputSchema: z.string(),
+        initSchema: z.object({ sessionId: z.string() }),
+      },
+      async (input, { init }) =>
+        `input: ${input}, sessionId: ${(init as { sessionId: string }).sessionId}`
+    );
+
+    const route = appRoute(flowWithInitSchema);
+
+    const request = new NextRequest('http://localhost/api/data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        data: 'hello',
+        init: { sessionId: 'abc123' },
+      }),
+    });
+    const response = await route(request);
+    expect(response.status).toEqual(200);
+    expect(await response.json()).toEqual({
+      result: 'input: hello, sessionId: abc123',
+    });
+  });
+
+  it('rejects init that does not conform to initSchema', async () => {
+    const ai = genkit({});
+    const flowWithInitSchema = ai.defineFlow(
+      {
+        name: 'flowWithInitSchema',
+        inputSchema: z.string(),
+        outputSchema: z.string(),
+        initSchema: z.object({ sessionId: z.string() }),
+      },
+      async (input, { init }) =>
+        `input: ${input}, sessionId: ${(init as { sessionId: string }).sessionId}`
+    );
+
+    const route = appRoute(flowWithInitSchema);
+
+    const request = new NextRequest('http://localhost/api/data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        data: 'hello',
+        // sessionId should be a string, not a number.
+        init: { sessionId: 123 },
+      }),
+    });
+    const response = await route(request);
+    expect(response.status).toEqual(400);
+    expect((await response.json()).error.status).toEqual('INVALID_ARGUMENT');
+  });
+
+  describe('durable streaming', () => {
+    const streamingFlow = ai.defineFlow(
+      {
+        name: 'streamingFlow',
+        inputSchema: z.string(),
+        outputSchema: z.string(),
+      },
+      async (input, { sendChunk }) => {
+        for (let i = 0; i < 10; i++) {
+          await new Promise((r) => {
+            sendChunk(i);
+            r(i);
+          });
+        }
+        return input;
+      }
+    );
+
+    it('supports durable streaming', async () => {
+      const route = appRoute(streamingFlow, {
+        streamManager: new InMemoryStreamManager(),
+      });
+      const request = new NextRequest('http://localhost/api/data', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          accept: 'text/event-stream',
+        },
+        body: JSON.stringify({ data: 'Hello, world!' }),
+      });
+      const response = await route(request);
+      const streamId = response.headers.get('x-genkit-stream-id');
+      expect(streamId).not.toBeNull();
+      await response.text();
+      const subRequest = new NextRequest('http://localhost/api/data', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          accept: 'text/event-stream',
+          'x-genkit-stream-id': streamId!,
+        },
+        body: JSON.stringify({ data: 'Hello, world!' }),
+      });
+      const subResponse = await route(subRequest);
+      const subChunks = chunks(await subResponse.text());
+      expect(subChunks.length).toEqual(12);
+      expect(subChunks[10]).toEqual({
+        type: 'data',
+        content: { result: 'Hello, world!' },
+      });
+      expect(subChunks[11]).toEqual({ type: 'end' });
+    });
+
+    it('returns 204 for unknown streamId', async () => {
+      const route = appRoute(streamingFlow, {
+        streamManager: new InMemoryStreamManager(),
+      });
+      const request = new NextRequest('http://localhost/api/data', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          accept: 'text/event-stream',
+          'x-genkit-stream-id': 'banana',
+        },
+        body: JSON.stringify({ data: 'Hello, world!' }),
+      });
+      const response = await route(request);
+      expect(response.status).toEqual(204);
+    });
   });
 });

@@ -28,7 +28,7 @@ jobs:
             target: linux-x64
           - os: ubuntu-24.04-arm
             target: linux-arm64
-          - os: macos-13  # x64/Intel
+          - os: macos-15-intel  # x64/Intel
             target: darwin-x64
           - os: macos-latest  # ARM64/M1
             target: darwin-arm64
@@ -44,7 +44,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -57,7 +57,7 @@ jobs:
           version: 10.11.0
       
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: 'pnpm'
@@ -112,7 +112,7 @@ jobs:
             target: linux-x64
           - os: ubuntu-24.04-arm
             target: linux-arm64
-          - os: macos-13
+          - os: macos-15-intel
             target: darwin-x64
           - os: macos-latest
             target: darwin-arm64
@@ -133,7 +133,7 @@ jobs:
           fi
       
       - name: Download binary artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: genkit-${{ matrix.target }}
           path: ./
@@ -146,20 +146,26 @@ jobs:
         shell: bash
         run: |
           echo "Testing genkit --help"
-          ./genkit-${{ matrix.target }}${{ steps.binary.outputs.ext }} --help
+          ./genkit-${{ matrix.target }}${STEPS_BINARY_OUTPUTS_EXT} --help
+        env:
+          STEPS_BINARY_OUTPUTS_EXT: ${{ steps.binary.outputs.ext }}
       
       - name: Test --version command
         shell: bash
         run: |
           echo "Testing genkit --version"
-          ./genkit-${{ matrix.target }}${{ steps.binary.outputs.ext }} --version
+          ./genkit-${{ matrix.target }}${STEPS_BINARY_OUTPUTS_EXT} --version
+        env:
+          STEPS_BINARY_OUTPUTS_EXT: ${{ steps.binary.outputs.ext }}
       
       - name: Verify UI commands exist
         shell: bash
         run: |
           echo "Verifying UI commands are available"
-          ./genkit-${{ matrix.target }}${{ steps.binary.outputs.ext }} ui:start --help
-          ./genkit-${{ matrix.target }}${{ steps.binary.outputs.ext }} ui:stop --help
+          ./genkit-${{ matrix.target }}${STEPS_BINARY_OUTPUTS_EXT} ui:start --help
+          ./genkit-${{ matrix.target }}${STEPS_BINARY_OUTPUTS_EXT} ui:stop --help
+        env:
+          STEPS_BINARY_OUTPUTS_EXT: ${{ steps.binary.outputs.ext }}
       
       - name: Test UI start functionality (Unix only)
         if: runner.os != 'Windows'

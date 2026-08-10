@@ -14,5 +14,11 @@
  * limitations under the License.
  */
 
-export { RuntimeManager } from './manager';
+export { BaseRuntimeManager, RuntimeManager } from './manager';
+export {
+  AppProcessStatus,
+  ProcessManager,
+  ProcessManagerStartOptions,
+  ProcessStatus,
+} from './process-manager';
 export * from './types';

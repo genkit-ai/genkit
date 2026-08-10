@@ -19,7 +19,7 @@ import { randomUUID } from 'crypto';
 import { createReadStream } from 'fs';
 import { readFile } from 'fs/promises';
 import { createInterface } from 'readline';
-import type { RuntimeManager } from '../manager';
+import type { BaseRuntimeManager } from '../manager';
 import {
   findToolsConfig,
   isEvalField,
@@ -323,13 +323,23 @@ async function readLines(fileName: string): Promise<string[]> {
 }
 
 export async function hasAction(params: {
-  manager: RuntimeManager;
+  manager: BaseRuntimeManager;
   actionRef: string;
 }): Promise<boolean> {
   const { manager, actionRef } = { ...params };
   const actionsRecord = await manager.listActions();
 
   return actionsRecord.hasOwnProperty(actionRef);
+}
+
+export async function getAction(params: {
+  manager: BaseRuntimeManager;
+  actionRef: string;
+}): Promise<Action | undefined> {
+  const { manager, actionRef } = { ...params };
+  const allActions = await manager.listActions();
+
+  return Object.values(allActions).find((action) => action.key === actionRef);
 }
 
 /** Helper function that maps string data to GenerateRequest */
@@ -351,7 +361,7 @@ export function getModelInput(data: any, modelConfig: any): GenerateRequest {
   } else {
     const maybeRequest = GenerateRequestSchema.safeParse(data);
     if (maybeRequest.success) {
-      return maybeRequest.data;
+      return { ...maybeRequest.data, config: modelConfig };
     } else {
       throw new Error(
         `Unable to parse model input as MessageSchema. Details: ${maybeRequest.error}`

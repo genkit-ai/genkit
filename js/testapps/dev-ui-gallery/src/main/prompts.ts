@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { gemini15Flash } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { z } from 'genkit';
 import { HelloFullNameSchema, HelloSchema } from '../common/types.js';
 import { ai } from '../genkit.js';
@@ -28,7 +28,7 @@ const template = 'Say hello to {{name}} in the voice of a {{persona}}.';
 
 export const codeDefinedPrompt = ai.definePrompt({
   name: promptName,
-  model: gemini15Flash,
+  model: googleAI.model('gemini-flash-latest'),
   input: {
     schema: HelloSchema,
   },
@@ -66,7 +66,7 @@ export const codeDefinedPrompt = ai.definePrompt({
 export const codeDefinedPromptVariant = ai.definePrompt({
   name: promptName,
   variant: 'jsonOutput',
-  model: gemini15Flash,
+  model: googleAI.model('gemini-flash-latest'),
   input: {
     schema: HelloSchema,
   },
@@ -100,7 +100,7 @@ export const promptFn = ai.definePrompt({
   input: {
     schema: HelloSchema,
   },
-  model: gemini15Flash,
+  model: googleAI.model('gemini-flash-latest'),
   messages: async (input) => [
     {
       role: 'user',

@@ -19,4 +19,4 @@
 
 This sample is used as the Genkit template in Project IDX, you can check it out in IDX!
 
-To run it locally, set a [Gemini API key](https://aistudio.google.com/app/apikey) in your environment with `export GOOGLE_GENAI_API_KEY=<>` and start the app with `npm install && npm run dev`
+To run it locally, set a [Gemini API key](https://aistudio.google.com/app/apikey) in your environment with `export GEMINI_API_KEY=<>` and start the app with `npm install && npm run dev`

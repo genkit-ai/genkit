@@ -130,7 +130,7 @@ var (
 
 	supportedEmbeddingModels = map[string]EmbedderRef{
 		openaiGo.EmbeddingModelTextEmbeddingAda002: {
-			Name:         "openai/text-embedding-ada-002",
+			Name:         "text-embedding-ada-002",
 			ConfigSchema: TextEmbeddingConfig{},
 			Dimensions:   1536,
 			Label:        "Open AI - Text Embedding ADA 002",
@@ -139,7 +139,7 @@ var (
 			},
 		},
 		openaiGo.EmbeddingModelTextEmbedding3Large: {
-			Name:         "openai/text-embedding-3-large",
+			Name:         "text-embedding-3-large",
 			ConfigSchema: TextEmbeddingConfig{},
 			Dimensions:   3072,
 			Label:        "Open AI - Text Embedding 3 Large",
@@ -148,7 +148,7 @@ var (
 			},
 		},
 		openaiGo.EmbeddingModelTextEmbedding3Small: {
-			Name:         "openai/text-embedding-3-small",
+			Name:         "text-embedding-3-small",
 			ConfigSchema: TextEmbeddingConfig{}, // Represents the configurable options
 			Dimensions:   1536,
 			Label:        "Open AI - Text Embedding 3 Small",

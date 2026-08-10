@@ -232,7 +232,7 @@ export async function showUpdateNotification(): Promise<void> {
       ? 'installer script'
       : 'your package manager';
     const updateCommand = isCompiledBinary
-      ? 'curl -sL cli.genkit.dev | uninstall=true bash'
+      ? 'curl -sL cli.genkit.dev | upgrade=true bash'
       : 'npm install -g genkit-cli';
 
     const updateNotificationMessage =

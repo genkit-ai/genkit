@@ -85,6 +85,45 @@ export interface ResourceAction
 }
 
 /**
+ * A reference to a resource in the form of a name or a ResourceAction.
+ */
+export type ResourceArgument = ResourceAction | string;
+
+export async function resolveResources(
+  registry: Registry,
+  resources?: ResourceArgument[]
+): Promise<ResourceAction[]> {
+  if (!resources || resources.length === 0) {
+    return [];
+  }
+
+  return await Promise.all(
+    resources.map(async (ref): Promise<ResourceAction> => {
+      if (typeof ref === 'string') {
+        return await lookupResourceByName(registry, ref);
+      } else if (isAction(ref)) {
+        return ref;
+      }
+      throw new Error('Resources must be strings, or actions');
+    })
+  );
+}
+
+export async function lookupResourceByName(
+  registry: Registry,
+  name: string
+): Promise<ResourceAction> {
+  const resource =
+    (await registry.lookupAction(name)) ||
+    (await registry.lookupAction(`/resource/${name}`)) ||
+    (await registry.lookupAction(`/dynamic-action-provider/${name}`));
+  if (!resource) {
+    throw new Error(`Resource ${name} not found`);
+  }
+  return resource as ResourceAction;
+}
+
+/**
  * Defines a resource.
  *
  * @param registry The registry to register the resource with.
@@ -99,6 +138,7 @@ export function defineResource(
 ): ResourceAction {
   const action = dynamicResource(opts, fn);
   action.matches = createMatcher(opts.uri, opts.template);
+  action.__action.metadata.dynamic = false;
   registry.registerAction('resource', action);
   return action;
 }
@@ -122,11 +162,28 @@ export type DynamicResourceAction = ResourceAction & {
  */
 export async function findMatchingResource(
   registry: Registry,
+  resources: ResourceAction[],
   input: ResourceInput
 ): Promise<ResourceAction | undefined> {
-  for (const actKeys of Object.keys(await registry.listResolvableActions())) {
-    if (actKeys.startsWith('/resource/')) {
-      const resource = (await registry.lookupAction(actKeys)) as ResourceAction;
+  // First look in any resources explicitly listed in the generate request
+  for (const res of resources) {
+    if (res.matches(input)) {
+      return res;
+    }
+  }
+
+  // Then search the registry
+  for (const registryKey of Object.keys(
+    await registry.listResolvableActions()
+  )) {
+    // We decided not to look in DAP actions because they might be slow.
+    // DAP actions with resources will only be found if they are listed in the
+    // resources section, and then they will be found above.
+    if (registryKey.startsWith('/resource/')) {
+      const resource = (await registry.lookupAction(
+        registryKey
+      )) as ResourceAction;
+
       if (resource.matches(input)) {
         return resource;
       }
@@ -137,7 +194,7 @@ export async function findMatchingResource(
 
 /** Checks whether provided object is a dynamic resource. */
 export function isDynamicResourceAction(t: unknown): t is ResourceAction {
-  return isAction(t) && !t.__registry;
+  return isAction(t) && t.__action?.metadata?.dynamic === true;
 }
 
 /**
@@ -154,6 +211,8 @@ export function resource(
 /**
  * Defines a dynamic resource. Dynamic resources are just like regular resources but will not be
  * registered in the Genkit registry and can be defined dynamically at runtime.
+ *
+ * @deprecated renamed to {@link resource}.
  */
 export function dynamicResource(
   opts: ResourceOptions,

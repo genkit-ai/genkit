@@ -20,6 +20,7 @@
 //
 
 import { z } from 'zod';
+import { MiddlewareRefSchema } from './middleware';
 import { GenerationCommonConfigSchema } from './model';
 
 /**
@@ -30,6 +31,7 @@ export const PromptFrontmatterSchema = z.object({
   variant: z.string().optional(),
   model: z.string().optional(),
   tools: z.array(z.string()).optional(),
+  use: z.array(MiddlewareRefSchema).optional(),
   candidates: z.number().optional(),
   config: GenerationCommonConfigSchema.passthrough().optional(),
   input: z

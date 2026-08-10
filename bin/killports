@@ -269,7 +269,7 @@ killports::kill_processes() {
   # Ask for confirmation unless force killing or skipping confirmation.
   if [[ $force_flag -eq 0 && $skip_confirm_flag -eq 0 ]]; then
     # Use line_count instead of array length.
-    read -p "Terminate these $line_count process(es) with signal $signal_to_use? [y/N]: " confirm
+    read -rp "Terminate these $line_count process(es) with signal $signal_to_use? [y/N]: " confirm
     # Convert confirmation to lowercase.
     confirm=${confirm,,}
     if [[ $confirm != "y" && $confirm != "yes" ]]; then

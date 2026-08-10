@@ -1,0 +1,28 @@
+---
+model: googleai/gemini-flash-latest
+config:
+  temperature: 1.0
+input:
+  schema:
+    query: string, The user's query or request
+use:
+  - name: genkit-middleware/retry
+    config:
+      maxRetries: 2
+  - name: genkit-middleware/fallback
+    config:
+      models:
+        - name: googleai/gemini-3.1-flash-preview
+        - name: googleai/gemini-3.1-pro-preview
+          config:
+            temperature: 2.0
+  - name: genkit-middleware/filesystem
+    config:
+      rootDirectory: .
+  - name: genkit-middleware/skills
+    config:
+      skillPaths:
+        - ./skills
+---
+
+{{query}}

@@ -15,7 +15,7 @@
  */
 
 import type { GoogleAuth } from 'google-auth-library';
-import type { IIndexDatapoint } from './types';
+import type { IIndexDatapoint } from './types.js';
 
 interface UpsertDatapointsParams {
   datapoints: IIndexDatapoint[];

@@ -24,8 +24,6 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/fakeembedder"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -159,9 +157,15 @@ func TestPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	require.Len(t, resp.Documents, 3)
-	require.Len(t, resp.Documents[0].Content, 1)
-	assert.Equal(t, "hello1", resp.Documents[0].Content[0].Text)
+	if len(resp.Documents) != 3 {
+		t.Fatalf("expected 3 documents, got %d", len(resp.Documents))
+	}
+	if len(resp.Documents[0].Content) != 1 {
+		t.Fatalf("expected 1 content part, got %d", len(resp.Documents[0].Content))
+	}
+	if got, want := resp.Documents[0].Content[0].Text, "hello1"; got != want {
+		t.Errorf("got content %q, want %q", got, want)
+	}
 
 	resp, err = retriever.Retrieve(ctx, &ai.RetrieverRequest{
 		Query: d1,
@@ -173,9 +177,15 @@ func TestPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	require.Len(t, resp.Documents, 1)
-	require.Len(t, resp.Documents[0].Content, 1)
-	assert.Equal(t, "hello2", resp.Documents[0].Content[0].Text)
+	if len(resp.Documents) != 1 {
+		t.Fatalf("expected 1 document, got %d", len(resp.Documents))
+	}
+	if len(resp.Documents[0].Content) != 1 {
+		t.Fatalf("expected 1 content part, got %d", len(resp.Documents[0].Content))
+	}
+	if got, want := resp.Documents[0].Content[0].Text, "hello2"; got != want {
+		t.Errorf("got content %q, want %q", got, want)
+	}
 
 }
 

@@ -18,7 +18,7 @@ import type {
   FindNeighborsResponse,
   INumericRestriction,
   IRestriction,
-} from './types';
+} from './types.js';
 
 interface QueryPublicEndpointParams {
   featureVector: number[];

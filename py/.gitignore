@@ -30,3 +30,7 @@ site/
 var/
 venv/
 wheels/
+.gemini/artifacts/
+
+*.bak
+release-manifest.json

@@ -21,6 +21,12 @@ import (
 	"strings"
 )
 
+// KeyFromName creates a new action key from an action type and a name string (which may include a provider).
+func KeyFromName(typ ActionType, name string) string {
+	provider, id := ParseName(name)
+	return NewKey(typ, provider, id)
+}
+
 // NewKey creates a new action key for the given type, provider, and name.
 func NewKey(typ ActionType, provider, id string) string {
 	if provider != "" {
@@ -36,8 +42,8 @@ func ParseKey(key string) (ActionType, string, string) {
 		// Return empty values if the key doesn't have the expected format
 		return "", "", ""
 	}
-	name := strings.Join(parts[3:], "/")
-	return ActionType(parts[1]), parts[2], name
+	id := strings.Join(parts[3:], "/")
+	return ActionType(parts[1]), parts[2], id
 }
 
 // NewName creates a new action name for the given provider and id.

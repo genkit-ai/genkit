@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-import { gemini15Flash } from '@genkit-ai/vertexai';
+import { vertexAI } from '@genkit-ai/google-genai';
 import { z } from 'genkit';
 import { ai } from './genkit.js';
 
 export const augmentedVideoPrompt = ai.definePrompt({
-  model: gemini15Flash,
+  model: vertexAI.model('gemini-2.5-flash'),
   name: 'augmentedVideoPrompt',
   input: {
     schema: z.object({
@@ -47,7 +47,7 @@ export const augmentedVideoPrompt = ai.definePrompt({
 
 // Define a prompt that includes the retrieved context documents
 export const augmentedMultimodalPrompt = ai.definePrompt({
-  model: gemini15Flash,
+  model: vertexAI.model('gemini-2.5-flash'),
   name: 'augmentedMultimodalPrompt',
   input: {
     schema: z.object({

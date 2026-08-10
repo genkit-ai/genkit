@@ -10,7 +10,8 @@
     "build:clean": "rimraf ./lib",
     "build:watch": "tsc --watch",
     "dev": "tsx --watch src/index.ts",
-    "genkit:dev": "genkit start -- tsx --watch src/index.ts"
+    "genkit:dev": "genkit start -- tsx --watch src/index.ts",
+    "genkit:dev2": "genkit start -- tsx --watch src/index-v2.ts"
   },
   "keywords": [],
   "author": "",
@@ -18,10 +19,10 @@
   "dependencies": {
     "@genkit-ai/dev-local-vectorstore": "workspace:*",
     "@genkit-ai/evaluator": "workspace:*",
-    "@genkit-ai/googleai": "workspace:*",
+    "@genkit-ai/google-genai": "workspace:*",
     "@genkit-ai/mcp": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.13.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "express": "^5.1.0",
     "genkit": "workspace:*",
     "genkitx-langchain": "workspace:*",
@@ -37,6 +38,6 @@
     "cross-env": "^7.0.3",
     "rimraf": "^6.0.1",
     "tsx": "^4.19.2",
-    "typescript": "^5.3.3"
+    "typescript": "^5.9.3"
   }
 }

@@ -27,10 +27,10 @@ jobs:
     name: Run formatting/linting tasks
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - uses: pnpm/action-setup@v3
+    - uses: actions/checkout@v5
+    - uses: pnpm/action-setup@v4
     - name: Set up node v20
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v6
       with:
         node-version: 20.x
         cache: pnpm

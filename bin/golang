@@ -40,8 +40,7 @@ if ! command -v "$go_tool" &>/dev/null; then
   export GOBIN
   GOPATH="$HOME/go" # or wherever your go path is set
   export GOPATH
-  go install "golang.org/dl/${go_tool}@latest"
-  if [ $? -ne 0 ]; then
+  if ! go install "golang.org/dl/${go_tool}@latest"; then
     echo "Failed to install Go version $go_version"
     exit 1
   fi

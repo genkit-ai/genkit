@@ -1,4 +1,6 @@
 /**
+ * @license
+ *
  * Copyright 2024 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,6 +14,17 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ */
+
+/**
+ * Logging utilities — the Genkit {@link logger} singleton for structured log
+ * output.
+ *
+ * ```ts
+ * import { logger } from 'genkit/logging';
+ * ```
+ *
+ * @module logging
  */
 
 export { logger } from '@genkit-ai/core/logging';

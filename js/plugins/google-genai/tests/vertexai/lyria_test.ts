@@ -15,7 +15,6 @@
  */
 
 import * as assert from 'assert';
-import { Genkit } from 'genkit';
 import { GenerateRequest } from 'genkit/model';
 import { GoogleAuth } from 'google-auth-library';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -37,20 +36,15 @@ import {
   RegionalClientOptions,
 } from '../../src/vertexai/types.js';
 
-const { GENERIC_MODEL, KNOWN_MODELS } = TEST_ONLY;
+const {
+  GENERIC_MODEL,
+  KNOWN_LYRIA_LEGACY_MODELS,
+  KNOWN_LYRIA_INTERACTIONS_MODELS,
+} = TEST_ONLY;
 
 describe('Vertex AI Lyria', () => {
-  let mockGenkit: sinon.SinonStubbedInstance<Genkit>;
   let fetchStub: sinon.SinonStub;
   let authMock: sinon.SinonStubbedInstance<GoogleAuth>;
-  let modelActionCallback: (
-    request: GenerateRequest<typeof LyriaConfigSchema>,
-    options: {
-      abortSignal?: AbortSignal;
-    }
-  ) => Promise<any>;
-
-  const modelName = 'lyria-test-model';
 
   const defaultRegionalClientOptions: RegionalClientOptions = {
     kind: 'regional',
@@ -60,17 +54,11 @@ describe('Vertex AI Lyria', () => {
   };
 
   beforeEach(() => {
-    mockGenkit = sinon.createStubInstance(Genkit);
     fetchStub = sinon.stub(global, 'fetch');
     authMock = sinon.createStubInstance(GoogleAuth);
 
     authMock.getAccessToken.resolves('test-token');
     defaultRegionalClientOptions.authClient = authMock as unknown as GoogleAuth;
-
-    mockGenkit.defineModel.callsFake((config: any, func: any) => {
-      modelActionCallback = func;
-      return { name: config.name } as any;
-    });
   });
 
   afterEach(() => {
@@ -97,12 +85,20 @@ describe('Vertex AI Lyria', () => {
   }
 
   describe('model()', () => {
-    it('should return a ModelReference for a known model', () => {
-      const knownModelName = Object.keys(KNOWN_MODELS)[0];
+    it('should return a ModelReference for a known legacy model', () => {
+      const knownModelName = Object.keys(KNOWN_LYRIA_LEGACY_MODELS)[0];
       const ref = model(knownModelName);
       assert.strictEqual(ref.name, `vertexai/${knownModelName}`);
       assert.ok(ref.info?.supports?.media);
       assert.deepStrictEqual(ref.info?.supports?.output, ['media']);
+    });
+
+    it('should return a ModelReference for a known lyria 3 model', () => {
+      const knownModelName = Object.keys(KNOWN_LYRIA_INTERACTIONS_MODELS)[0];
+      const ref = model(knownModelName);
+      assert.strictEqual(ref.name, `vertexai/${knownModelName}`);
+      assert.ok(ref.info?.supports?.media);
+      assert.deepStrictEqual(ref.info?.supports?.output, ['text', 'media']);
     });
 
     it('should return a ModelReference for an unknown model using generic info', () => {
@@ -110,10 +106,11 @@ describe('Vertex AI Lyria', () => {
       const ref = model(unknownModelName);
       assert.strictEqual(ref.name, `vertexai/${unknownModelName}`);
       assert.deepStrictEqual(ref.info, GENERIC_MODEL.info);
+      assert.deepStrictEqual(ref.info?.supports?.output, ['text', 'media']);
     });
 
     it('should apply config to a known model', () => {
-      const knownModelName = Object.keys(KNOWN_MODELS)[0];
+      const knownModelName = Object.keys(KNOWN_LYRIA_LEGACY_MODELS)[0];
       const config = { negativePrompt: 'noisy' };
       const ref = model(knownModelName, config);
       assert.strictEqual(ref.name, `vertexai/${knownModelName}`);
@@ -122,18 +119,14 @@ describe('Vertex AI Lyria', () => {
   });
 
   describe('defineModel()', () => {
-    beforeEach(() => {
-      defineModel(mockGenkit, modelName, defaultRegionalClientOptions);
-      sinon.assert.calledOnce(mockGenkit.defineModel);
-      const args = mockGenkit.defineModel.lastCall.args[0];
-      assert.strictEqual(args.name, `vertexai/${modelName}`);
-    });
-
     const prompt = 'A funky bass line';
     const minimalRequest: GenerateRequest<typeof LyriaConfigSchema> = {
       messages: [{ role: 'user', content: [{ text: prompt }] }],
       config: { sampleCount: 2 },
     };
+
+    // Test with a legacy model name so it hits the predict endpoint
+    const legacyModelName = Object.keys(KNOWN_LYRIA_LEGACY_MODELS)[0];
 
     const mockPrediction: LyriaPredictResponse = {
       predictions: [
@@ -148,10 +141,11 @@ describe('Vertex AI Lyria', () => {
       ],
     };
 
-    it('should call fetch with correct params and return lyria response', async () => {
+    it('should call fetch with correct params and return lyria response for legacy models', async () => {
       mockFetchResponse(mockPrediction);
 
-      const result = await modelActionCallback(minimalRequest, {});
+      const model = defineModel(legacyModelName, defaultRegionalClientOptions);
+      const result = await model.run(minimalRequest);
 
       sinon.assert.calledOnce(fetchStub);
       const fetchArgs = fetchStub.lastCall.args;
@@ -160,7 +154,7 @@ describe('Vertex AI Lyria', () => {
 
       const expectedUrl = getVertexAIUrl({
         includeProjectAndLocation: true,
-        resourcePath: `publishers/google/models/${modelName}`,
+        resourcePath: `publishers/google/models/${legacyModelName}`,
         resourceMethod: 'predict',
         clientOptions: defaultRegionalClientOptions,
       });
@@ -175,19 +169,105 @@ describe('Vertex AI Lyria', () => {
         mockPrediction,
         minimalRequest
       );
-      assert.deepStrictEqual(result, expectedResponse);
-      assert.strictEqual(result.candidates?.length, 2);
+      assert.deepStrictEqual(
+        result.result.candidates,
+        expectedResponse.candidates
+      );
+      assert.deepStrictEqual(result.result.usage, expectedResponse.usage);
+      assert.deepStrictEqual(result.result.custom, expectedResponse.custom);
+      assert.strictEqual(result.result.candidates?.length, 2);
       assert.strictEqual(
-        result.candidates[0].message.content[0].media?.url,
+        result.result.candidates[0].message.content[0].media?.url,
         'data:audio/wav;base64,base64audio1'
       );
     });
 
+    it('should call fetch with correct params and return interaction response for lyria-3 models', async () => {
+      const interactionResponse = {
+        id: '123',
+        status: 'completed',
+        outputs: [
+          { type: 'audio', mime_type: 'audio/mpeg', data: 'base64audio1' },
+          { type: 'text', text: 'Lyrics here' },
+        ],
+      };
+      mockFetchResponse(interactionResponse);
+
+      const lyria3ModelName = Object.keys(KNOWN_LYRIA_INTERACTIONS_MODELS)[0];
+      const model = defineModel(lyria3ModelName, defaultRegionalClientOptions);
+
+      const lyria3Request: GenerateRequest<typeof LyriaConfigSchema> = {
+        messages: [{ role: 'user', content: [{ text: prompt }] }],
+      };
+      const result = await model.run(lyria3Request);
+
+      sinon.assert.calledOnce(fetchStub);
+      const fetchArgs = fetchStub.lastCall.args;
+      const url = fetchArgs[0];
+      const options = fetchArgs[1];
+
+      const expectedUrl = getVertexAIUrl({
+        includeProjectAndLocation: true,
+        resourcePath: `interactions`,
+        clientOptions: defaultRegionalClientOptions,
+      });
+      assert.strictEqual(url, expectedUrl);
+      assert.strictEqual(options.method, 'POST');
+      assert.deepStrictEqual(options.headers, getExpectedHeaders());
+
+      assert.deepStrictEqual(JSON.parse(options.body), {
+        model: lyria3ModelName,
+        input: [
+          {
+            role: 'user',
+            content: [{ type: 'text', text: prompt }],
+          },
+        ],
+        response_modalities: ['audio', 'text'],
+      });
+      assert.strictEqual(result.result.message?.content.length, 2);
+      assert.strictEqual(
+        result.result.message?.content[0].media?.url,
+        'data:audio/mpeg;base64,base64audio1'
+      );
+      assert.strictEqual(result.result.message?.content[1].text, 'Lyrics here');
+    });
+
+    it('should handle location override', async () => {
+      mockFetchResponse(mockPrediction);
+      const request: GenerateRequest<typeof LyriaConfigSchema> = {
+        messages: [{ role: 'user', content: [{ text: prompt }] }],
+        config: { location: 'global' },
+      };
+      const model = defineModel(legacyModelName, defaultRegionalClientOptions);
+      await model.run(request);
+      sinon.assert.calledOnce(fetchStub);
+      const fetchArgs = fetchStub.lastCall.args;
+      const actualUrl = fetchArgs[0];
+      assert.ok(actualUrl.includes('aiplatform.googleapis.com'));
+      assert.ok(!actualUrl.includes('us-central1'));
+    });
+
     it('should throw if no predictions are returned', async () => {
       mockFetchResponse({ predictions: [] });
+      const model = defineModel(legacyModelName, defaultRegionalClientOptions);
       await assert.rejects(
-        modelActionCallback(minimalRequest, {}),
+        model.run(minimalRequest),
         /Model returned no predictions/
+      );
+    });
+
+    it('should throw if interaction fails', async () => {
+      mockFetchResponse({ status: 'failed' });
+      const model = defineModel(
+        Object.keys(KNOWN_LYRIA_INTERACTIONS_MODELS)[0],
+        defaultRegionalClientOptions
+      );
+      await assert.rejects(
+        model.run({
+          messages: [{ role: 'user', content: [{ text: prompt }] }],
+        }),
+        /Interaction failed/
       );
     });
 
@@ -195,8 +275,9 @@ describe('Vertex AI Lyria', () => {
       const errorBody = { error: { message: 'Quota exceeded', code: 429 } };
       mockFetchResponse(errorBody, 429);
 
+      const model = defineModel(legacyModelName, defaultRegionalClientOptions);
       await assert.rejects(
-        modelActionCallback(minimalRequest, {}),
+        model.run(minimalRequest),
         /Error fetching from .*predict.* Quota exceeded/
       );
     });
@@ -206,14 +287,13 @@ describe('Vertex AI Lyria', () => {
       const controller = new AbortController();
       const abortSignal = controller.signal;
 
-      // We need to re-register to pass the clientOptions with the signal
       const clientOptionsWithSignal = {
         ...defaultRegionalClientOptions,
         signal: abortSignal,
       };
-      defineModel(mockGenkit, modelName, clientOptionsWithSignal);
+      const model = defineModel(legacyModelName, clientOptionsWithSignal);
 
-      await modelActionCallback(minimalRequest, { abortSignal });
+      await model.run(minimalRequest, { abortSignal });
 
       sinon.assert.calledOnce(fetchStub);
       const fetchOptions = fetchStub.lastCall.args[1];

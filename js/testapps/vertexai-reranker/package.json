@@ -8,7 +8,8 @@
     "compile": "tsc",
     "build": "pnpm build:clean && pnpm compile",
     "build:clean": "rimraf ./lib",
-    "build:watch": "tsc --watch"
+    "build:watch": "tsc --watch",
+    "genkit:dev": "genkit start -- npx tsx --watch src/index.ts"
   },
   "keywords": [],
   "author": "",
@@ -25,6 +26,6 @@
   },
   "devDependencies": {
     "rimraf": "^6.0.1",
-    "typescript": "^5.5.2"
+    "typescript": "^5.9.3"
   }
 }

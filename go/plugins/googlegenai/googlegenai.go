@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 
 	"cloud.google.com/go/auth/credentials"
@@ -30,27 +29,6 @@ const (
 	vertexAILabelPrefix = "Vertex AI"
 )
 
-var (
-	defaultGeminiOpts = ai.ModelOptions{
-		Supports: &Multimodal,
-		Versions: []string{},
-		Stage:    ai.ModelStageUnstable,
-	}
-
-	defaultImagenOpts = ai.ModelOptions{
-		Supports: &Media,
-		Versions: []string{},
-		Stage:    ai.ModelStageUnstable,
-	}
-
-	defaultEmbedOpts = ai.EmbedderOptions{
-		Supports: &ai.EmbedderSupports{
-			Input: []string{"text"},
-		},
-		Dimensions: 768,
-	}
-)
-
 // GoogleAI is a Genkit plugin for interacting with the Google AI service.
 type GoogleAI struct {
 	APIKey string // API key to access the service. If empty, the values of the environment variables GEMINI_API_KEY or GOOGLE_API_KEY will be consulted, in that order.
@@ -62,8 +40,9 @@ type GoogleAI struct {
 
 // VertexAI is a Genkit plugin for interacting with the Google Vertex AI service.
 type VertexAI struct {
-	ProjectID string // Google Cloud project to use for Vertex AI. If empty, the value of the environment variable GOOGLE_CLOUD_PROJECT will be consulted.
-	Location  string // Location of the Vertex AI service. If empty, GOOGLE_CLOUD_LOCATION and GOOGLE_CLOUD_REGION environment variables will be consulted, in that order.
+	ProjectID  string // Google Cloud project to use for Vertex AI. If empty, the value of the environment variable GOOGLE_CLOUD_PROJECT will be consulted.
+	Location   string // Location of the Vertex AI service. If empty, GOOGLE_CLOUD_LOCATION and GOOGLE_CLOUD_REGION environment variables will be consulted, in that order. Accepts a regional location (e.g. "us-central1"), a multi-region location ("us" or "eu"), or "global".
+	APIVersion string // API version to use ("v1" or "v1beta1"). If empty, the genai SDK default (v1beta1) is used. Can be overridden per-request via config.HTTPOptions.APIVersion.
 
 	gclient *genai.Client // Client for the Vertex AI service.
 	mu      sync.Mutex    // Mutex to control access.
@@ -156,6 +135,13 @@ func (v *VertexAI) Init(ctx context.Context) []api.Action {
 			panic("Vertex AI requires setting GOOGLE_CLOUD_LOCATION or GOOGLE_CLOUD_REGION in the environment. You can get a location at https://cloud.google.com/vertex-ai/docs/general/locations")
 		}
 	}
+
+	switch v.APIVersion {
+	case "", "v1", "v1beta1":
+	default:
+		panic(fmt.Sprintf("Vertex AI APIVersion must be %q or %q, got %q", "v1", "v1beta1", v.APIVersion))
+	}
+
 	cred, err := credentials.DetectDefault(&credentials.DetectOptions{
 		Scopes: []string{"https://www.googleapis.com/auth/cloud-platform"},
 	})
@@ -180,11 +166,12 @@ func (v *VertexAI) Init(ctx context.Context) []api.Action {
 	// Project and Region values gets validated by genai SDK upon client creation
 	gc := genai.ClientConfig{
 		Backend:    genai.BackendVertexAI,
-		Project:    v.ProjectID,
-		Location:   v.Location,
+		Project:    projectID,
+		Location:   location,
 		HTTPClient: httpClient,
 		HTTPOptions: genai.HTTPOptions{
-			Headers: genkitClientHeader,
+			Headers:    genkitClientHeader,
+			APIVersion: v.APIVersion,
 		},
 	}
 
@@ -229,24 +216,33 @@ func (ga *GoogleAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOpt
 // The second argument describes the capability of the model.
 // Use [IsDefinedModel] to determine if a model is already defined.
 // After [Init] is called, only the known models are defined.
+//
+// Tuned Gemini endpoints are accepted in either the short form
+// `endpoints/ID` or the full resource path
+// `projects/PROJECT/locations/LOCATION/endpoints/ID`. When opts is nil the
+// caller gets the default Gemini capability set.
 func (v *VertexAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if !v.initted {
 		return nil, errors.New("VertexAI plugin not initialized")
 	}
-	models, err := listModels(vertexAIProvider)
-	if err != nil {
-		return nil, err
-	}
 
 	if opts == nil {
-		var ok bool
-		modelOpts, ok := models[name]
-		if !ok {
-			return nil, fmt.Errorf("VertexAI.DefineModel: called with unknown model %q and nil ModelOptions", name)
+		if isTunedGeminiName(name) {
+			defaults := GetModelOptions(name, vertexAIProvider)
+			opts = &defaults
+		} else {
+			models, err := listModels(vertexAIProvider)
+			if err != nil {
+				return nil, err
+			}
+			modelOpts, ok := models[name]
+			if !ok {
+				return nil, fmt.Errorf("VertexAI.DefineModel: called with unknown model %q and nil ModelOptions", name)
+			}
+			opts = &modelOpts
 		}
-		opts = &modelOpts
 	}
 
 	return newModel(v.gclient, name, *opts), nil
@@ -282,220 +278,34 @@ func (v *VertexAI) IsDefinedEmbedder(g *genkit.Genkit, name string) bool {
 	return genkit.LookupEmbedder(g, api.NewName(vertexAIProvider, name)) != nil
 }
 
-// GoogleAIModelRef creates a new ModelRef for a Google AI model with the given name and configuration.
-func GoogleAIModelRef(name string, config *genai.GenerateContentConfig) ai.ModelRef {
-	return ai.NewModelRef(googleAIProvider+"/"+name, config)
-}
-
-// VertexAIModelRef creates a new ModelRef for a Vertex AI model with the given name and configuration.
-func VertexAIModelRef(name string, config *genai.GenerateContentConfig) ai.ModelRef {
-	return ai.NewModelRef(vertexAIProvider+"/"+name, config)
-}
-
 // GoogleAIModel returns the [ai.Model] with the given name.
 // It returns nil if the model was not defined.
+//
+// Deprecated: Use genkit.LookupModel instead.
 func GoogleAIModel(g *genkit.Genkit, name string) ai.Model {
 	return genkit.LookupModel(g, api.NewName(googleAIProvider, name))
 }
 
 // VertexAIModel returns the [ai.Model] with the given name.
 // It returns nil if the model was not defined.
+//
+// Deprecated: Use genkit.LookupModel instead.
 func VertexAIModel(g *genkit.Genkit, name string) ai.Model {
 	return genkit.LookupModel(g, api.NewName(vertexAIProvider, name))
 }
 
 // GoogleAIEmbedder returns the [ai.Embedder] with the given name.
 // It returns nil if the embedder was not defined.
+//
+// Deprecated: Use genkit.LookupEmbedder instead.
 func GoogleAIEmbedder(g *genkit.Genkit, name string) ai.Embedder {
 	return genkit.LookupEmbedder(g, api.NewName(googleAIProvider, name))
 }
 
 // VertexAIEmbedder returns the [ai.Embedder] with the given name.
 // It returns nil if the embedder was not defined.
+//
+// Deprecated: Use genkit.LookupEmbedder instead.
 func VertexAIEmbedder(g *genkit.Genkit, name string) ai.Embedder {
 	return genkit.LookupEmbedder(g, api.NewName(vertexAIProvider, name))
-}
-
-// ListActions lists all the actions supported by the Google AI plugin.
-func (ga *GoogleAI) ListActions(ctx context.Context) []api.ActionDesc {
-	models, err := listGenaiModels(ctx, ga.gclient)
-	if err != nil {
-		return nil
-	}
-
-	actions := []api.ActionDesc{}
-
-	// Generative models.
-	for _, name := range models.gemini {
-		var opts ai.ModelOptions
-		if knownOpts, ok := supportedGeminiModels[name]; ok {
-			opts = knownOpts
-			opts.Label = fmt.Sprintf("%s - %s", googleAILabelPrefix, opts.Label)
-		} else {
-			opts = defaultGeminiOpts
-			opts.Label = fmt.Sprintf("%s - %s", googleAILabelPrefix, name)
-		}
-
-		model := newModel(ga.gclient, name, opts)
-		if actionDef, ok := model.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
-	}
-
-	// Imagen models.
-	for _, name := range models.imagen {
-		var opts ai.ModelOptions
-		if knownOpts, ok := supportedImagenModels[name]; ok {
-			opts = knownOpts
-			opts.Label = fmt.Sprintf("%s - %s", googleAILabelPrefix, opts.Label)
-		} else {
-			opts = defaultImagenOpts
-			opts.Label = fmt.Sprintf("%s - %s", googleAILabelPrefix, name)
-		}
-
-		model := newModel(ga.gclient, name, opts)
-		if actionDef, ok := model.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
-	}
-
-	// Embedders.
-	for _, e := range models.embedders {
-		var embedOpts ai.EmbedderOptions
-		if knownOpts, ok := googleAIEmbedderConfig[e]; ok {
-			embedOpts = knownOpts
-		} else {
-			embedOpts = defaultEmbedOpts
-			embedOpts.Label = fmt.Sprintf("%s - %s", googleAILabelPrefix, e)
-		}
-
-		embedder := newEmbedder(ga.gclient, e, &embedOpts)
-		if actionDef, ok := embedder.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
-	}
-
-	return actions
-}
-
-// ResolveAction resolves an action with the given name.
-func (ga *GoogleAI) ResolveAction(atype api.ActionType, name string) api.Action {
-	switch atype {
-	case api.ActionTypeEmbedder:
-		return newEmbedder(ga.gclient, name, &ai.EmbedderOptions{}).(api.Action)
-	case api.ActionTypeModel:
-		var supports *ai.ModelSupports
-		var config any
-
-		// TODO: Add veo case.
-		switch {
-		case strings.Contains(name, "imagen"):
-			supports = &Media
-			config = &genai.GenerateImagesConfig{}
-		default:
-			supports = &Multimodal
-			config = &genai.GenerateContentConfig{}
-		}
-
-		return newModel(ga.gclient, name, ai.ModelOptions{
-			Label:        fmt.Sprintf("%s - %s", googleAILabelPrefix, name),
-			Stage:        ai.ModelStageStable,
-			Versions:     []string{},
-			Supports:     supports,
-			ConfigSchema: configToMap(config),
-		}).(api.Action)
-	}
-	return nil
-}
-
-// ListActions lists all the actions supported by the Vertex AI plugin.
-func (v *VertexAI) ListActions(ctx context.Context) []api.ActionDesc {
-	models, err := listGenaiModels(ctx, v.gclient)
-	if err != nil {
-		return nil
-	}
-
-	actions := []api.ActionDesc{}
-
-	// Gemini generative models.
-	for _, name := range models.gemini {
-		var opts ai.ModelOptions
-		if knownOpts, ok := supportedGeminiModels[name]; ok {
-			opts = knownOpts
-			opts.Label = fmt.Sprintf("%s - %s", vertexAILabelPrefix, opts.Label)
-		} else {
-			opts = defaultGeminiOpts
-			opts.Label = fmt.Sprintf("%s - %s", vertexAILabelPrefix, name)
-		}
-
-		model := newModel(v.gclient, name, opts)
-		if actionDef, ok := model.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
-	}
-
-	// Imagen models.
-	for _, name := range models.imagen {
-		var opts ai.ModelOptions
-		if knownOpts, ok := supportedImagenModels[name]; ok {
-			opts = knownOpts
-			opts.Label = fmt.Sprintf("%s - %s", vertexAILabelPrefix, opts.Label)
-		} else {
-			opts = defaultImagenOpts
-			opts.Label = fmt.Sprintf("%s - %s", vertexAILabelPrefix, name)
-		}
-
-		model := newModel(v.gclient, name, opts)
-		if actionDef, ok := model.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
-	}
-
-	// Embedders.
-	for _, e := range models.embedders {
-		var embedOpts ai.EmbedderOptions
-		if knownOpts, ok := googleAIEmbedderConfig[e]; ok {
-			embedOpts = knownOpts
-		} else {
-			embedOpts = defaultEmbedOpts
-			embedOpts.Label = fmt.Sprintf("%s - %s", vertexAILabelPrefix, e)
-		}
-
-		embedder := newEmbedder(v.gclient, e, &embedOpts)
-		if actionDef, ok := embedder.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
-		}
-	}
-
-	return actions
-}
-
-// ResolveAction resolves an action with the given name.
-func (v *VertexAI) ResolveAction(atype api.ActionType, id string) api.Action {
-	switch atype {
-	case api.ActionTypeEmbedder:
-		return newEmbedder(v.gclient, id, &ai.EmbedderOptions{}).(api.Action)
-	case api.ActionTypeModel:
-		var supports *ai.ModelSupports
-		var config any
-
-		// TODO: Add veo case.
-		switch {
-		case strings.Contains(id, "imagen"):
-			supports = &Media
-			config = &genai.GenerateImagesConfig{}
-		default:
-			supports = &Multimodal
-			config = &genai.GenerateContentConfig{}
-		}
-
-		return newModel(v.gclient, id, ai.ModelOptions{
-			Label:        fmt.Sprintf("%s - %s", vertexAILabelPrefix, id),
-			Stage:        ai.ModelStageStable,
-			Versions:     []string{},
-			Supports:     supports,
-			ConfigSchema: configToMap(config),
-		}).(api.Action)
-	}
-	return nil
 }

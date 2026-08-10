@@ -58,6 +58,20 @@ export class PageViewEvent extends GAEvent {
   }
 }
 
+export class SelectContentEvent extends GAEvent {
+  name = 'select_content';
+  duration = 1;
+
+  constructor(content_type: string, content_id: string, page_title: string) {
+    super();
+    this.parameters = {
+      content_type,
+      content_id,
+      page_title,
+    };
+  }
+}
+
 export class FirstUsageEvent extends GAEvent {
   name = 'first_visit';
   duration = 1;
@@ -81,9 +95,13 @@ export class RunCommandEvent extends GAEvent {
   name = 'run_command';
   duration = 1; // Should we actually track command duration?
 
-  constructor(command: string, runtime_type: string) {
+  constructor(command: string, runtime_type: string, project_runtime?: string) {
     super();
-    this.stickyParameters = { command, runtime_type };
+    this.stickyParameters = {
+      command,
+      runtime_type,
+      ...(project_runtime && { project_runtime }),
+    };
   }
 }
 
@@ -118,9 +136,52 @@ export async function record(event: GAEvent): Promise<void> {
   await recordInternal(event, getSession());
 }
 
+/**
+ * Creates a ToolsRequestEvent with validated duration and optional action parameter.
+ */
+export function createToolsRequestEvent(
+  route: string,
+  durationMs: number,
+  status: string,
+  options?: { action?: string; project_runtime?: string }
+): ToolsRequestEvent {
+  const event = new ToolsRequestEvent(route);
+  event.duration = Math.max(1, durationMs);
+  event.parameters = {
+    ...event.parameters,
+    status,
+    ...(options?.action && { action: options.action }),
+    ...(options?.project_runtime && {
+      project_runtime: options.project_runtime,
+    }),
+  };
+  return event;
+}
+
+/**
+ * Fire-and-forget helper to record a request analytics event with error logging.
+ */
+export function recordRequestEvent(event: GAEvent): void {
+  record(event).catch((err) => {
+    logger.error(`Failed to send analytics ${err}`);
+  });
+}
+
+/**
+ * Extracts action type from a request action key.
+ */
+export function extractActionType(key?: unknown): string {
+  const keyStr = typeof key === 'string' ? key : '';
+  if (keyStr === '/util/generate' || keyStr === 'util/generate') {
+    return keyStr;
+  }
+  const splits = keyStr.split('/');
+  return splits.length > 1 ? splits[1] : 'unknown';
+}
+
 /** Displays a notification that analytics are in use. */
 export async function notifyAnalyticsIfFirstRun(): Promise<void> {
-  if (!isAnalyticsEnabled()) return;
+  if (isAnalyticsOptedOut()) return;
 
   if (configstore.get(NOTIFICATION_ACKED)) {
     return;
@@ -132,7 +193,7 @@ export async function notifyAnalyticsIfFirstRun(): Promise<void> {
     input: process.stdin,
     output: process.stdout,
   });
-  await readline.question('Press "Enter" to continue');
+  await readline.question('Press "Enter" to acknowledge and continue');
   readline.close();
 
   configstore.set(NOTIFICATION_ACKED, true);
@@ -169,7 +230,12 @@ const ANALYTICS_NOTIFICATION =
   'Genkit CLI and Developer UI use cookies and ' +
   'similar technologies from Google\nto deliver and enhance the quality of its ' +
   'services and to analyze usage.\n' +
-  'Learn more at https://policies.google.com/technologies/cookies';
+  'Learn more at https://policies.google.com/technologies/cookies\n' +
+  '\n' +
+  'If running in non-interactive environments set --non-interactive flag. Ex:\n' +
+  '  genkit start --non-interactive -- <cmd>\n' +
+  'To opt out of analytics run:\n' +
+  '  genkit config set analyticsOptOut true\n';
 const NOTIFICATION_ACKED = 'analytics_notification';
 const CONFIGSTORE_CLIENT_KEY = 'genkit-tools-ga-id';
 
@@ -217,14 +283,16 @@ function isValidateOnly(): boolean {
   return !!process.env['GENKIT_GA_VALIDATE'];
 }
 
-// For now, this is default false unless GENKIT_GA_DEBUG or GENKIT_GA_VALIDATE
-// are set. Once we have opt-out and we're ready for public preview this will
-// get updated.
+function isAnalyticsAcknowledged(): boolean {
+  return configstore.get(NOTIFICATION_ACKED) === true;
+}
+
+function isAnalyticsOptedOut(): boolean {
+  return getUserSettings()[ANALYTICS_OPT_OUT_CONFIG_TAG] === true;
+}
+
 function isAnalyticsEnabled(): boolean {
-  return (
-    !process.argv.includes('--non-interactive') &&
-    !getUserSettings()[ANALYTICS_OPT_OUT_CONFIG_TAG]
-  );
+  return isAnalyticsAcknowledged() && !isAnalyticsOptedOut();
 }
 
 async function recordInternal(

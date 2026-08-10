@@ -49,6 +49,13 @@ import (
 // Global sync.Once for showing logging setup instructions only once across all recovery attempts
 var showLoggingInstructionsOnce sync.Once
 
+// stderrLogger is a stable logger that always writes to stderr and is never
+// replaced by calls to slog.SetDefault. Use this for error paths to ensure
+// messages are visible even if the default logger is misconfigured.
+var stderrLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+	Level: slog.LevelInfo,
+}))
+
 // EnableGoogleCloudTelemetry enables comprehensive telemetry export to Google Cloud Observability suite.
 // This directly initializes telemetry without requiring plugin registration.
 //
@@ -241,25 +248,25 @@ func setupGCPLogger(projectID string, level slog.Leveler, credentials *google.Cr
 	}
 	// Set up error handling for async logging failures with recursive recovery
 	c.OnError = func(err error) {
-		fallbackHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-			Level: level,
-		})
-		slog.SetDefault(slog.New(fallbackHandler))
-		slog.Warn("Switched to stderr logging due to Google Cloud logging failure", "error", err)
-		slog.Error("Unable to send logs to Google Cloud", "error", err)
+		slog.SetDefault(stderrLogger)
+		stderrLogger.Warn("Unable to send logs to Google Cloud", "error", err)
 		if loggingDenied(err) {
 			showLoggingInstructionsOnce.Do(func() {
 				fmt.Fprint(os.Stderr, loggingDeniedHelpText(projectID))
 			})
 		}
+		// TODO: Reinitialize logger if possible
+		// For now, we left the code below commented out because re-initialization was causing the
+		// logger to swallow errors for some reason.
+		/*
+			stderrLogger.Error("Unable to send logs to Google Cloud. Re-initializing logger.")
+			// Assume the logger is compromised, and we need a new one
+			// Reinitialize the logger with a new instance with the same config
 
-		// Assume the logger is compromised, and we need a new one
-		// Reinitialize the logger with a new instance with the same config
-		if setupErr := setupGCPLogger(projectID, level, credentials); setupErr == nil {
-			slog.Info("Initialized a new GcpLogger")
-		} else {
-			slog.Error("Failed to reinitialize GCP logger", "error", setupErr)
-		}
+			if setupErr := setupGCPLogger(projectID, level, credentials); setupErr != nil {
+				stderrLogger.Error("Failed to reinitialize GCP logger", "error", setupErr)
+			}
+		*/
 	}
 	logger := c.Logger("genkit_log")
 	slog.SetDefault(slog.New(newHandler(level, logger.Log, projectID)))
@@ -279,17 +286,12 @@ func (e *AdjustingTraceExporter) ExportSpans(ctx context.Context, spans []sdktra
 	adjustedSpans := e.adjust(spans)
 	err := e.exporter.ExportSpans(ctx, adjustedSpans)
 	if err != nil {
-		slog.Error("Failed to export spans to Google Cloud Trace",
+		slog.Error("Unable to send telemetry to Google Cloud",
 			"error", err,
 			"span_count", len(adjustedSpans),
 			"project_id", e.projectId,
 			"error_type", fmt.Sprintf("%T", err))
-	} else {
-		slog.Debug("Successfully exported spans to Google Cloud Trace",
-			"span_count", len(adjustedSpans),
-			"project_id", e.projectId)
 	}
-
 	return err
 }
 

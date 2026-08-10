@@ -301,15 +301,20 @@ function defineOllamaModel(
         const reader = res.body.getReader();
         const textDecoder = new TextDecoder();
         let textResponse = '';
-        for await (const chunk of readChunks(reader)) {
-          const chunkText = textDecoder.decode(chunk);
-          const json = JSON.parse(chunkText);
-          const message = parseMessage(json, type);
-          streamingCallback({
-            index: 0,
-            content: message.content,
-          });
-          textResponse += message.content[0].text;
+        try {
+          for await (const chunk of readChunks(reader)) {
+            const chunkText = textDecoder.decode(chunk);
+            const json = JSON.parse(chunkText);
+            const message = parseMessage(json, type);
+            streamingCallback({
+              index: 0,
+              content: message.content,
+            });
+            textResponse += message.content[0].text;
+          }
+        } finally {
+          // Catch prevents unhandled promise rejection if the stream was already cleanly finalized
+          reader.cancel().catch(() => {});
         }
         message = {
           role: 'model',
@@ -430,21 +435,28 @@ function toOllamaRequest(
           toolResponses.push(c.toolResponse);
         }
       });
-      // Add tool responses, if any.
-      toolResponses.forEach((t) => {
-        messages.push({
-          role,
-          content:
-            typeof t.output === 'string' ? t.output : JSON.stringify(t.output),
+      if (toolResponses.length > 0) {
+        toolResponses.forEach((t) => {
+          messages.push({
+            role,
+            content:
+              typeof t.output === 'string'
+                ? t.output
+                : JSON.stringify(t.output),
+            tool_name: t.name,
+          });
         });
-      });
-      messages.push({
-        role: role,
-        content: toolRequests.length > 0 ? '' : messageText,
-        images: images.length > 0 ? images : undefined,
-        tool_calls:
-          toolRequests.length > 0 ? toOllamaToolCall(toolRequests) : undefined,
-      });
+      } else {
+        messages.push({
+          role: role,
+          content: toolRequests.length > 0 ? '' : messageText,
+          images: images.length > 0 ? images : undefined,
+          tool_calls:
+            toolRequests.length > 0
+              ? toOllamaToolCall(toolRequests)
+              : undefined,
+        });
+      }
     });
     request.messages = messages;
   } else {

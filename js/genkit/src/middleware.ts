@@ -1,4 +1,6 @@
 /**
+ * @license
+ *
  * Copyright 2024 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,9 +16,22 @@
  * limitations under the License.
  */
 
+/**
+ * Built-in model middleware — `retry`, `fallback`, `augmentWithContext`,
+ * `validateSupport`, and other middleware for enhancing model requests.
+ *
+ * ```ts
+ * import { retry, fallback } from 'genkit/model/middleware';
+ * ```
+ *
+ * @module model/middleware
+ */
+
 export {
   augmentWithContext,
   downloadRequestMedia,
+  fallback,
+  retry,
   simulateSystemPrompt,
   validateSupport,
   type AugmentWithContextOptions,

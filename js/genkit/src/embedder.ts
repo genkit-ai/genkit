@@ -1,4 +1,6 @@
 /**
+ * @license
+ *
  * Copyright 2024 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,9 +16,21 @@
  * limitations under the License.
  */
 
+/**
+ * Embedder types — reference helpers, schemas, and action types for building
+ * embedding model plugins.
+ *
+ * ```ts
+ * import { embedderRef, type EmbedderAction } from 'genkit/embedder';
+ * ```
+ *
+ * @module embedder
+ */
+
 export {
   EmbedderInfoSchema,
   embedderRef,
+  type EmbedRequest,
   type EmbedderAction,
   type EmbedderArgument,
   type EmbedderInfo,

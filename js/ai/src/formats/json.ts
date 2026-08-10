@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { extractJson } from '../extract';
-import type { Formatter } from './types';
+import { extractJson } from '../extract.js';
+import type { Formatter } from './types.js';
 
 export const jsonFormatter: Formatter<unknown, unknown> = {
   name: 'json',

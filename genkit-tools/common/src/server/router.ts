@@ -21,17 +21,24 @@ import {
   runNewEvaluation,
   validateSchema,
 } from '../eval';
-import type { RuntimeManager } from '../manager/manager';
+import type { BaseRuntimeManager } from '../manager/manager';
+import { AppProcessStatus } from '../manager/process-manager';
 import { GenkitToolsError, type RuntimeInfo } from '../manager/types';
+import { TraceDataSchema } from '../types';
 import type { Action } from '../types/action';
 import * as apis from '../types/apis';
+import { CancelActionRequestSchema } from '../types/apis';
 import type { EnvironmentVariable } from '../types/env';
 import * as evals from '../types/eval';
-import type { PromptFrontmatter } from '../types/prompt';
-import { logger } from '../utils';
-import { PageViewEvent, ToolsRequestEvent, record } from '../utils/analytics';
+import {
+  PageViewEvent,
+  SelectContentEvent,
+  createToolsRequestEvent,
+  record,
+  recordRequestEvent,
+} from '../utils/analytics';
 import { toolsPackage } from '../utils/package';
-import { fromMessages } from '../utils/prompt';
+import { toPromptFile } from '../utils/prompt';
 
 const t = initTRPC.create({
   errorFormatter(opts) {
@@ -50,33 +57,25 @@ const t = initTRPC.create({
   },
 });
 
+/**
+ * Schema for a dataset id supplied by an (unauthenticated) client. Dataset ids
+ * are used to build on-disk file paths, so they must be constrained to simple
+ * file-name-safe tokens to prevent path traversal. This mirrors the validation
+ * used when a dataset is created (see `generateDatasetId`).
+ */
+const DatasetIdSchema = z
+  .string()
+  .regex(
+    /^[A-Za-z][A-Za-z0-9_.-]{4,34}[A-Za-z0-9]$/,
+    'Invalid dataset id: must be 6-36 characters, alphanumeric with hyphens, dots and underscores, starting with a letter and ending with a letter or number.'
+  );
+
 const analyticsEventForRoute = (
   path: string,
-  input: unknown,
   durationMs: number,
   status: string
 ) => {
-  const event = new ToolsRequestEvent(path);
-  event.duration = durationMs;
-  event.parameters = {
-    ...event.parameters,
-    status,
-  };
-
-  switch (path) {
-    case 'runAction':
-      // set action type (flow, model, etc...)
-      const splits = (input as apis.RunActionRequest).key?.split('/');
-      event.parameters = {
-        ...event.parameters,
-        action: splits.length > 1 ? splits[1] : 'unknown',
-      };
-      break;
-    default:
-    // do nothing
-  }
-
-  return event;
+  return createToolsRequestEvent(path, durationMs, status);
 };
 
 const parseEnv = (environ: NodeJS.ProcessEnv): EnvironmentVariable[] => {
@@ -108,21 +107,17 @@ const loggedProcedure = t.procedure.use(async (opts) => {
 
   const analyticsEvent = analyticsEventForRoute(
     opts.path,
-    opts.rawInput,
     durationMs,
     result.ok ? 'success' : 'failure'
   );
 
-  // fire-and-forget
-  record(analyticsEvent).catch((err) => {
-    logger.error(`Failed to send analytics ${err}`);
-  });
+  recordRequestEvent(analyticsEvent);
 
   return result;
 });
 
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
-export const TOOLS_SERVER_ROUTER = (manager: RuntimeManager) =>
+export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
   t.router({
     /** Retrieves all runnable actions. */
     listActions: loggedProcedure
@@ -131,24 +126,17 @@ export const TOOLS_SERVER_ROUTER = (manager: RuntimeManager) =>
         return manager.listActions(input);
       }),
 
-    /** Runs an action. */
-    runAction: loggedProcedure
-      .input(apis.RunActionRequestSchema)
-      .mutation(async ({ input }) => {
-        return manager.runAction(input);
+    /** Retrieves all values. */
+    listValues: loggedProcedure
+      .input(apis.ListValuesRequestSchema)
+      .query(async ({ input }): Promise<Record<string, unknown>> => {
+        return manager.listValues(input);
       }),
 
     /** Generate a .prompt file from messages and model config. */
     createPrompt: loggedProcedure
       .input(apis.CreatePromptRequestSchema)
-      .mutation(async ({ input }) => {
-        const frontmatter: PromptFrontmatter = {
-          model: input.model.replace('/model/', ''),
-          config: input.config,
-          tools: input.tools?.map((toolDefinition) => toolDefinition.name),
-        };
-        return fromMessages(frontmatter, input.messages);
-      }),
+      .mutation(async ({ input }) => toPromptFile(input)),
 
     /** Retrieves all traces for a given environment (e.g. dev or prod). */
     listTraces: loggedProcedure
@@ -157,11 +145,26 @@ export const TOOLS_SERVER_ROUTER = (manager: RuntimeManager) =>
         return manager.listTraces(input);
       }),
 
+    /** Retrieves all logs. */
+    listLogs: loggedProcedure
+      .input(apis.ListLogsRequestSchema)
+      .query(async ({ input }) => {
+        return manager.listLogs(input);
+      }),
+
     /** Retrieves a trace for a given ID. */
     getTrace: loggedProcedure
       .input(apis.GetTraceRequestSchema)
       .query(async ({ input }) => {
         return manager.getTrace(input);
+      }),
+
+    /** Adds a trace to the trace store */
+    addTrace: loggedProcedure
+      .input(TraceDataSchema)
+      .output(z.void())
+      .mutation(async ({ input }) => {
+        return manager.addTrace(input);
       }),
 
     /** Retrieves all eval run keys */
@@ -214,7 +217,7 @@ export const TOOLS_SERVER_ROUTER = (manager: RuntimeManager) =>
 
     /** Retrieves an existing dataset */
     getDataset: loggedProcedure
-      .input(z.string())
+      .input(DatasetIdSchema)
       .output(evals.DatasetSchema)
       .query(async ({ input }) => {
         const response = await getDatasetStore().getDataset(input);
@@ -241,7 +244,7 @@ export const TOOLS_SERVER_ROUTER = (manager: RuntimeManager) =>
 
     /** Deletes an exsting dataset */
     deleteDataset: loggedProcedure
-      .input(z.string())
+      .input(DatasetIdSchema)
       .output(z.void())
       .mutation(async ({ input }) => {
         const response = await getDatasetStore().deleteDataset(input);
@@ -273,6 +276,19 @@ export const TOOLS_SERVER_ROUTER = (manager: RuntimeManager) =>
         await record(new PageViewEvent(input.pageTitle));
       }),
 
+    /** Send a select content analytics event */
+    sendSelectContent: t.procedure
+      .input(apis.SelectContentSchema)
+      .query(async ({ input }) => {
+        await record(
+          new SelectContentEvent(
+            input.contentType,
+            input.contentId,
+            input.pageTitle
+          )
+        );
+      }),
+
     /** Genkit Environment Information */
     getGenkitEnvironment: t.procedure.query(() => {
       return {
@@ -301,6 +317,30 @@ export const TOOLS_SERVER_ROUTER = (manager: RuntimeManager) =>
     getActiveRuntimes: t.procedure.query(() => {
       return manager.listRuntimes();
     }),
+
+    getAppProcessStatus: t.procedure.query((): AppProcessStatus => {
+      if (!manager.processManager) {
+        return { status: 'unconfigured' };
+      }
+      return manager.processManager.status();
+    }),
+
+    restartAppProcess: t.procedure.query(async () => {
+      await manager.processManager?.restart();
+      return true;
+    }),
+
+    killAppProcess: t.procedure.query(async () => {
+      await manager.processManager?.kill();
+      return true;
+    }),
+
+    /** Cancels a long-running action. */
+    cancelAction: loggedProcedure
+      .input(CancelActionRequestSchema)
+      .mutation(async ({ input }) => {
+        return manager.cancelAction(input);
+      }),
   });
 
 export type ToolsServerRouter = ReturnType<typeof TOOLS_SERVER_ROUTER>;

@@ -1,0 +1,66 @@
+<!--
+ Copyright 2026 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<main>
+  <h2>🍽️ Genkit Menu Generator</h2>
+  <p>
+    Enter a restaurant theme and generate a full themed menu with structured
+    output.
+  </p>
+
+  <div class="controls">
+    <label for="theme">Theme: </label>
+    <input
+      type="text"
+      id="theme"
+      [(ngModel)]="themeInput"
+      placeholder="pirate" />
+    <button (click)="run()" [disabled]="isLoading()">Generate</button>
+    <button (click)="stream()" [disabled]="isLoading()">Stream</button>
+  </div>
+
+  @if (error()) {
+  <p class="error">⚠️ {{ error() }}</p>
+  } @if (restaurantName()) {
+  <h3 class="restaurant-name">{{ restaurantName() }}</h3>
+  } @if (isLoading() && menuItems().length === 0) {
+  <p class="loading">Designing your menu...</p>
+  } @if (menuItems().length > 0) {
+  <div class="menu">
+    @for (item of menuItems(); track item.name) {
+    <div class="menu-card">
+      <span class="category-badge">{{ item.category }}</span>
+      <div class="card-body">
+        <div class="card-header">
+          <h4 class="dish-name">{{ item.name }}</h4>
+          <span class="dish-price">{{ item.price }}</span>
+        </div>
+        <p class="dish-desc">{{ item.description }}</p>
+      </div>
+    </div>
+    } @if (isLoading()) {
+    <div class="menu-card skeleton">
+      <span class="category-badge">...</span>
+      <div class="card-body">
+        <div class="card-header">
+          <h4 class="dish-name">Generating next dish...</h4>
+        </div>
+      </div>
+    </div>
+    }
+  </div>
+  }
+</main>

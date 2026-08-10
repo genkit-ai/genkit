@@ -14,7 +14,12 @@
  * limitations under the License.
  */
 
-import { GenkitError, stripUndefinedProps } from '@genkit-ai/core';
+import {
+  ActionRunOptions,
+  GenkitError,
+  stripUndefinedProps,
+  z,
+} from '@genkit-ai/core';
 import { logger } from '@genkit-ai/core/logging';
 import type { Registry } from '@genkit-ai/core/registry';
 import type {
@@ -25,7 +30,8 @@ import type {
   ToolRequestPart,
   ToolResponsePart,
 } from '../model.js';
-import { isPromptAction } from '../prompt.js';
+import { MultipartToolResponseSchema, ToolResponse } from '../parts.js';
+
 import {
   ToolInterruptError,
   isToolRequest,
@@ -33,6 +39,7 @@ import {
   type ToolAction,
   type ToolRunOptions,
 } from '../tool.js';
+import { type GenerateMiddlewareDef } from './middleware.js';
 
 export function toToolMap(tools: ToolAction[]): Record<string, ToolAction> {
   assertValidToolNames(tools);
@@ -84,11 +91,11 @@ export async function resolveToolRequest(
   rawRequest: GenerateActionOptions,
   part: ToolRequestPart,
   toolMap: Record<string, ToolAction>,
+  middleware: GenerateMiddlewareDef[] = [],
   runOptions?: ToolRunOptions
 ): Promise<{
   response?: ToolResponsePart;
   interrupt?: ToolRequestPart;
-  preamble?: GenerateActionOptions;
 }> {
   const tool = toolMap[part.toolRequest.name];
   if (!tool) {
@@ -99,32 +106,58 @@ export async function resolveToolRequest(
     });
   }
 
-  // if it's a prompt action, go ahead and render the preamble
-  if (isPromptAction(tool)) {
-    const preamble = await tool(part.toolRequest.input);
-    const response = {
-      toolResponse: {
-        name: part.toolRequest.name,
-        ref: part.toolRequest.ref,
-        output: `transferred to ${part.toolRequest.name}`,
-      },
-    };
+  const dispatch = async (
+    index: number,
+    req: ToolRequestPart,
+    ctx: ActionRunOptions<any>
+  ): Promise<ToolResponsePart | undefined> => {
+    if (index === middleware.length) {
+      return executeTool(req, ctx);
+    }
+    const currentMiddleware = middleware[index];
+    if (currentMiddleware.tool) {
+      return currentMiddleware.tool(req, ctx, async (modifiedReq, opts) =>
+        dispatch(index + 1, modifiedReq || req, opts || ctx)
+      );
+    } else {
+      return dispatch(index + 1, req, ctx);
+    }
+  };
 
-    return { preamble, response };
-  }
+  const executeTool = async (
+    req: ToolRequestPart,
+    ctx: ActionRunOptions<any>
+  ): Promise<ToolResponsePart> => {
+    // execute the tool and catch interrupts
+    const output = await tool(req.toolRequest.input, ctx as ToolRunOptions);
+    if (tool.__action.actionType === 'tool.v2') {
+      const multipartResponse = output as z.infer<
+        typeof MultipartToolResponseSchema
+      >;
+      return stripUndefinedProps({
+        toolResponse: {
+          name: req.toolRequest.name,
+          ref: req.toolRequest.ref,
+          output: multipartResponse.output,
+          content: multipartResponse.content,
+        } as ToolResponse,
+        metadata: multipartResponse.metadata,
+      });
+    } else {
+      return stripUndefinedProps({
+        toolResponse: {
+          name: req.toolRequest.name,
+          ref: req.toolRequest.ref,
+          output,
+        },
+      });
+    }
+  };
 
-  // otherwise, execute the tool and catch interrupts
+  const initialCtx = runOptions ?? toRunOptions(part);
   try {
-    const output = await tool(part.toolRequest.input, toRunOptions(part));
-    const response = stripUndefinedProps({
-      toolResponse: {
-        name: part.toolRequest.name,
-        ref: part.toolRequest.ref,
-        output,
-      },
-    });
-
-    return { response };
+    const dispatchResult = await dispatch(0, part, initialCtx);
+    return dispatchResult ? { response: dispatchResult } : {};
   } catch (e) {
     if (
       e instanceof ToolInterruptError ||
@@ -133,39 +166,36 @@ export async function resolveToolRequest(
     ) {
       const ie = e as ToolInterruptError;
       logger.debug(
-        `tool '${toolMap[part.toolRequest?.name].__action.name}' triggered an interrupt${ie.metadata ? `: ${JSON.stringify(ie.metadata)}` : ''}`
+        `tool '${tool.__action.name}' triggered an interrupt${ie.metadata ? `: ${JSON.stringify(ie.metadata)}` : ''}`
       );
-      const interrupt = {
-        toolRequest: part.toolRequest,
-        metadata: { ...part.metadata, interrupt: ie.metadata || true },
+      return {
+        interrupt: {
+          toolRequest: part.toolRequest,
+          metadata: { ...part.metadata, interrupt: ie.metadata || true },
+        },
       };
-
-      return { interrupt };
     }
-
     throw e;
   }
 }
 
 /**
  * resolveToolRequests is responsible for executing the tools requested by the model for a single turn. it
- * returns either a toolMessage to append or a revisedModelMessage when an interrupt occurs, and a transferPreamble
- * if a prompt tool is called
+ * returns either a toolMessage to append or a revisedModelMessage when an interrupt occurs.
  */
 export async function resolveToolRequests(
-  registry: Registry,
   rawRequest: GenerateActionOptions,
-  generatedMessage: MessageData
+  generatedMessage: MessageData,
+  tools: ToolAction[],
+  middleware: GenerateMiddlewareDef[] = []
 ): Promise<{
   revisedModelMessage?: MessageData;
   toolMessage?: MessageData;
-  transferPreamble?: GenerateActionOptions;
 }> {
-  const toolMap = toToolMap(await resolveTools(registry, rawRequest.tools));
+  const toolMap = toToolMap(tools);
 
   const responseParts: ToolResponsePart[] = [];
   let hasInterrupts = false;
-  let transferPreamble: GenerateActionOptions | undefined;
 
   const revisedModelMessage = {
     ...generatedMessage,
@@ -176,24 +206,13 @@ export async function resolveToolRequests(
     revisedModelMessage.content.map(async (part, i) => {
       if (!part.toolRequest) return; // skip non-tool-request parts
 
-      const { preamble, response, interrupt } = await resolveToolRequest(
+      const { response, interrupt } = await resolveToolRequest(
         rawRequest,
         part as ToolRequestPart,
-        toolMap
+        toolMap,
+        middleware
       );
 
-      if (preamble) {
-        if (transferPreamble) {
-          throw new GenkitError({
-            status: 'INVALID_ARGUMENT',
-            message: `Model attempted to transfer to multiple prompt tools.`,
-          });
-        }
-
-        transferPreamble = preamble;
-      }
-
-      // this happens for preamble or normal tools
       if (response) {
         responseParts.push(response!);
         revisedModelMessage.content.splice(
@@ -214,9 +233,12 @@ export async function resolveToolRequests(
     return { revisedModelMessage };
   }
 
+  if (responseParts.length === 0) {
+    return {};
+  }
+
   return {
     toolMessage: { role: 'tool', content: responseParts },
-    transferPreamble,
   };
 }
 
@@ -247,7 +269,8 @@ function findCorrespondingToolResponse(
 async function resolveResumedToolRequest(
   rawRequest: GenerateActionOptions,
   part: ToolRequestPart,
-  toolMap: Record<string, ToolAction>
+  toolMap: Record<string, ToolAction>,
+  middleware: GenerateMiddlewareDef[] = []
 ): Promise<{
   toolRequest?: ToolRequestPart;
   toolResponse?: ToolResponsePart;
@@ -296,18 +319,12 @@ async function resolveResumedToolRequest(
     part
   );
   if (restartRequest) {
-    const { response, interrupt, preamble } = await resolveToolRequest(
+    const { response, interrupt } = await resolveToolRequest(
       rawRequest,
       restartRequest,
-      toolMap
+      toolMap,
+      middleware
     );
-
-    if (preamble) {
-      throw new GenkitError({
-        status: 'INTERNAL',
-        message: `Prompt tool '${restartRequest.toolRequest.name}' executed inside 'restart' resolution. This should never happen.`,
-      });
-    }
 
     // if there's a new interrupt, return it
     if (interrupt) return { interrupt };
@@ -336,14 +353,16 @@ async function resolveResumedToolRequest(
 /** Amends message history to handle `resume` arguments. Returns the amended history. */
 export async function resolveResumeOption(
   registry: Registry,
-  rawRequest: GenerateActionOptions
+  rawRequest: GenerateActionOptions,
+  tools: ToolAction[],
+  middleware: GenerateMiddlewareDef[] = []
 ): Promise<{
   revisedRequest?: GenerateActionOptions;
   interruptedResponse?: GenerateResponseData;
   toolMessage?: MessageData;
 }> {
   if (!rawRequest.resume) return { revisedRequest: rawRequest }; // no-op if no resume option
-  const toolMap = toToolMap(await resolveTools(registry, rawRequest.tools));
+  const toolMap = toToolMap(tools);
 
   const messages = rawRequest.messages;
   const lastMessage = messages.at(-1);
@@ -368,7 +387,8 @@ export async function resolveResumeOption(
       const resolved = await resolveResumedToolRequest(
         rawRequest,
         part,
-        toolMap
+        toolMap,
+        middleware
       );
       if (resolved.interrupt) {
         interrupted = true;
@@ -423,9 +443,15 @@ export async function resolveResumeOption(
 
 export async function resolveRestartedTools(
   registry: Registry,
-  rawRequest: GenerateActionOptions
+  rawRequest: GenerateActionOptions,
+  middleware: GenerateMiddlewareDef[] = []
 ): Promise<ToolRequestPart[]> {
-  const toolMap = toToolMap(await resolveTools(registry, rawRequest.tools));
+  const tools = await resolveTools(registry, rawRequest.tools);
+  // rawRequest.tools only holds user-provided tools (treated as immutable). We must
+  // harvest active middleware tools here to ensure we can resolve tools dynamically
+  // injected by plugins.
+  tools.push(...middleware.flatMap((m) => m.tools || []));
+  const toolMap = toToolMap(tools);
   const lastMessage = rawRequest.messages.at(-1);
   if (!lastMessage || lastMessage.role !== 'model') return [];
 
@@ -438,7 +464,8 @@ export async function resolveRestartedTools(
       const { response, interrupt } = await resolveToolRequest(
         rawRequest,
         p,
-        toolMap
+        toolMap,
+        middleware
       );
 
       // this means that it interrupted *again* after the restart

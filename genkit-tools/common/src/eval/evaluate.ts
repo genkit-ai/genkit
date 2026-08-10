@@ -14,12 +14,14 @@
  * limitations under the License.
  */
 
+import * as clc from 'colorette';
 import { randomUUID } from 'crypto';
+import { z } from 'zod';
 import { getDatasetStore, getEvalStore } from '.';
-import type { RuntimeManager } from '../manager/manager';
+import type { BaseRuntimeManager } from '../manager/manager';
 import {
-  DatasetSchema,
-  GenerateResponseSchema,
+  GenerateActionOptions,
+  GenerateResponseData,
   type Action,
   type CandidateData,
   type Dataset,
@@ -50,7 +52,7 @@ interface InferenceRunState {
   testCaseId: string;
   input: any;
   reference?: any;
-  traceId?: string;
+  traceIds: string[];
   response?: any;
   evalError?: string;
 }
@@ -61,13 +63,15 @@ interface FullInferenceSample {
   reference?: any;
 }
 
-const SUPPORTED_ACTION_TYPES = ['flow', 'model'] as const;
+const SUPPORTED_ACTION_TYPES = ['flow', 'model', 'executable-prompt'] as const;
+type SupportedActionType = (typeof SUPPORTED_ACTION_TYPES)[number];
+const GENERATE_ACTION_UTIL = '/util/generate';
 
 /**
  * Starts a new evaluation run. Intended to be used via the reflection API.
  */
 export async function runNewEvaluation(
-  manager: RuntimeManager,
+  manager: BaseRuntimeManager,
   request: RunNewEvaluationRequest
 ): Promise<EvalRunKey> {
   const { dataSource, actionRef, evaluators } = request;
@@ -86,12 +90,12 @@ export async function runNewEvaluation(
 
   if (datasetId) {
     const datasetStore = await getDatasetStore();
-    logger.info(`Fetching dataset ${datasetId}...`);
+    logger.debug(`Fetching dataset ${datasetId}...`);
     const dataset = await datasetStore.getDataset(datasetId);
     if (dataset.length === 0) {
       throw new Error(`Dataset ${datasetId} is empty`);
     }
-    inferenceDataset = DatasetSchema.parse(dataset);
+    inferenceDataset = dataset as Dataset;
 
     const datasetMetadatas = await datasetStore.listDatasets();
     const targetDatasetMetadata = datasetMetadatas.find(
@@ -104,10 +108,10 @@ export async function runNewEvaluation(
       ...sample,
       testCaseId: sample.testCaseId ?? generateTestCaseId(),
     }));
-    inferenceDataset = DatasetSchema.parse(rawData);
+    inferenceDataset = rawData as Dataset;
   }
 
-  logger.info('Running inference...');
+  logger.debug('Running inference...');
   const evalDataset = await runInference({
     manager,
     actionRef,
@@ -136,7 +140,7 @@ export async function runNewEvaluation(
 
 /** Handles the Inference part of Inference-Evaluation cycle */
 export async function runInference(params: {
-  manager: RuntimeManager;
+  manager: BaseRuntimeManager;
   actionRef: string;
   inferenceDataset: Dataset;
   context?: string;
@@ -160,7 +164,7 @@ export async function runInference(params: {
 
 /** Handles the Evaluation part of Inference-Evaluation cycle */
 export async function runEvaluation(params: {
-  manager: RuntimeManager;
+  manager: BaseRuntimeManager;
   evaluatorActions: Action[];
   evalDataset: EvalInput[];
   augments?: EvalKeyAugments;
@@ -173,7 +177,7 @@ export async function runEvaluation(params: {
   }
   const evalRunId = randomUUID();
   const scores: Record<string, any> = {};
-  logger.info('Running evaluation...');
+  logger.debug('Running evaluation...');
 
   const runtime = manager.getMostRecentRuntime();
   const isNodeRuntime = runtime?.genkitVersion?.startsWith('nodejs') ?? false;
@@ -189,6 +193,8 @@ export async function runEvaluation(params: {
       },
     });
     scores[name] = response.result;
+    logger.debug(`Finished evaluator '${action.name}'`);
+    logger.info(`${clc.cyan('Trace ID:')} ${response.telemetry?.traceId}`);
   }
 
   const scoredResults = enrichResultsWithScoring(scores, evalDataset);
@@ -200,20 +206,20 @@ export async function runEvaluation(params: {
       evalRunId,
       createdAt: new Date().toISOString(),
       metricSummaries,
+      metricsMetadata: metadata,
       ...augments,
     },
     results: scoredResults,
-    metricsMetadata: metadata,
   };
 
-  logger.info('Finished evaluation, writing key...');
+  logger.debug('Finished evaluation, writing key...');
   const evalStore = await getEvalStore();
   await evalStore.save(evalRun);
   return evalRun;
 }
 
 export async function getAllEvaluatorActions(
-  manager: RuntimeManager
+  manager: BaseRuntimeManager
 ): Promise<Action[]> {
   const allActions = await manager.listActions();
   const allEvaluatorActions = [];
@@ -226,7 +232,7 @@ export async function getAllEvaluatorActions(
 }
 
 export async function getMatchingEvaluatorActions(
-  manager: RuntimeManager,
+  manager: BaseRuntimeManager,
   evaluators?: string[]
 ): Promise<Action[]> {
   if (!evaluators) {
@@ -245,7 +251,7 @@ export async function getMatchingEvaluatorActions(
 }
 
 async function bulkRunAction(params: {
-  manager: RuntimeManager;
+  manager: BaseRuntimeManager;
   actionRef: string;
   inferenceDataset: Dataset;
   context?: string;
@@ -253,7 +259,7 @@ async function bulkRunAction(params: {
 }): Promise<EvalInput[]> {
   const { manager, actionRef, inferenceDataset, context, actionConfig } =
     params;
-  const isModelAction = actionRef.startsWith('/model');
+  const actionType = getSupportedActionType(actionRef);
   if (inferenceDataset.length === 0) {
     throw new Error('Cannot run inference, no data provided');
   }
@@ -266,8 +272,8 @@ async function bulkRunAction(params: {
   const states: InferenceRunState[] = [];
   const evalInputs: EvalInput[] = [];
   for (const sample of fullInferenceDataset) {
-    logger.info(`Running inference '${actionRef}' ...`);
-    if (isModelAction) {
+    logger.debug(`Running inference '${actionRef}' ...`);
+    if (actionType === 'model') {
       states.push(
         await runModelAction({
           manager,
@@ -276,7 +282,7 @@ async function bulkRunAction(params: {
           modelConfig: actionConfig,
         })
       );
-    } else {
+    } else if (actionType === 'flow') {
       states.push(
         await runFlowAction({
           manager,
@@ -285,10 +291,21 @@ async function bulkRunAction(params: {
           context,
         })
       );
+    } else {
+      // executable-prompt action
+      states.push(
+        await runPromptAction({
+          manager,
+          actionRef,
+          sample,
+          context,
+          promptConfig: actionConfig,
+        })
+      );
     }
   }
 
-  logger.info(`Gathering evalInputs...`);
+  logger.debug(`Gathering evalInputs...`);
   for (const state of states) {
     evalInputs.push(await gatherEvalInput({ manager, actionRef, state }));
   }
@@ -296,7 +313,7 @@ async function bulkRunAction(params: {
 }
 
 async function runFlowAction(params: {
-  manager: RuntimeManager;
+  manager: BaseRuntimeManager;
   actionRef: string;
   sample: FullInferenceSample;
   context?: any;
@@ -311,14 +328,16 @@ async function runFlowAction(params: {
     });
     state = {
       ...sample,
-      traceId: runActionResponse.telemetry?.traceId,
+      traceIds: runActionResponse.telemetry?.traceId
+        ? [runActionResponse.telemetry?.traceId]
+        : [],
       response: runActionResponse.result,
     };
   } catch (e: any) {
     const traceId = e?.data?.details?.traceId;
     state = {
       ...sample,
-      traceId,
+      traceIds: traceId ? [traceId] : [],
       evalError: `Error when running inference. Details: ${e?.message ?? e}`,
     };
   }
@@ -326,7 +345,7 @@ async function runFlowAction(params: {
 }
 
 async function runModelAction(params: {
-  manager: RuntimeManager;
+  manager: BaseRuntimeManager;
   actionRef: string;
   sample: FullInferenceSample;
   modelConfig?: any;
@@ -341,14 +360,103 @@ async function runModelAction(params: {
     });
     state = {
       ...sample,
-      traceId: runActionResponse.telemetry?.traceId,
+      traceIds: runActionResponse.telemetry?.traceId
+        ? [runActionResponse.telemetry?.traceId]
+        : [],
       response: runActionResponse.result,
     };
   } catch (e: any) {
     const traceId = e?.data?.details?.traceId;
     state = {
       ...sample,
-      traceId,
+      traceIds: traceId ? [traceId] : [],
+      evalError: `Error when running inference. Details: ${e?.message ?? e}`,
+    };
+  }
+  return state;
+}
+
+async function runPromptAction(params: {
+  manager: BaseRuntimeManager;
+  actionRef: string;
+  sample: FullInferenceSample;
+  context?: any;
+  promptConfig?: any;
+}): Promise<InferenceRunState> {
+  const { manager, actionRef, sample, context, promptConfig } = { ...params };
+  const { model: modelFromConfig, ...restOfConfig } = promptConfig;
+  if (!modelFromConfig) {
+    throw new Error(
+      'Missing model: Please specific model for prompt evaluation'
+    );
+  }
+  const model = modelFromConfig.split('/model/').pop();
+  if (!model) {
+    throw new Error(`Improper model provided: ${modelFromConfig}`);
+  }
+  let state: InferenceRunState;
+  let renderedPrompt: {
+    result: GenerateActionOptions;
+    traceId: string;
+  };
+  // Step 1. Render the prompt with inputs
+  try {
+    const runActionResponse = await manager.runAction({
+      key: actionRef,
+      input: sample.input,
+      context: context ? JSON.parse(context) : undefined,
+    });
+
+    renderedPrompt = {
+      traceId: runActionResponse.telemetry?.traceId!,
+      result: runActionResponse.result as GenerateActionOptions,
+    };
+  } catch (e: any) {
+    if (e instanceof z.ZodError) {
+      state = {
+        ...sample,
+        traceIds: [],
+        evalError: `Error parsing prompt response. Details: ${JSON.stringify(e.format())}`,
+      };
+    } else {
+      const traceId = e?.data?.details?.traceId;
+      state = {
+        ...sample,
+        traceIds: traceId ? [traceId] : [],
+        evalError: `Error when rendering prompt. Details: ${e?.message ?? e}`,
+      };
+    }
+    return state;
+  }
+  // Step 2. Run rendered prompt on the model
+  try {
+    let modelInput = renderedPrompt.result;
+    // Override with runtime specific config
+    if (Object.keys(restOfConfig ?? {}).length > 0) {
+      modelInput = { ...modelInput, model, config: restOfConfig };
+    } else {
+      modelInput = { ...modelInput, model };
+    }
+    const runActionResponse = await manager.runAction({
+      key: GENERATE_ACTION_UTIL,
+      input: modelInput,
+    });
+    const traceIds = runActionResponse.telemetry?.traceId
+      ? [renderedPrompt.traceId, runActionResponse.telemetry?.traceId]
+      : [renderedPrompt.traceId];
+    state = {
+      ...sample,
+      traceIds: traceIds,
+      response: runActionResponse.result,
+    };
+  } catch (e: any) {
+    const traceId = e?.data?.details?.traceId;
+    const traceIds = traceId
+      ? [renderedPrompt.traceId, traceId]
+      : [renderedPrompt.traceId];
+    state = {
+      ...sample,
+      traceIds: traceIds.filter((t): t is string => !!t),
       evalError: `Error when running inference. Details: ${e?.message ?? e}`,
     };
   }
@@ -356,31 +464,46 @@ async function runModelAction(params: {
 }
 
 async function gatherEvalInput(params: {
-  manager: RuntimeManager;
+  manager: BaseRuntimeManager;
   actionRef: string;
   state: InferenceRunState;
 }): Promise<EvalInput> {
   const { manager, actionRef, state } = params;
 
+  const actionType = getSupportedActionType(actionRef);
   const extractors = await getEvalExtractors(actionRef);
-  const traceId = state.traceId;
-  if (!traceId) {
-    logger.warn('No traceId available...');
+  const traceIds = state.traceIds;
+
+  if (
+    traceIds.length === 0 ||
+    (actionType === 'executable-prompt' && traceIds.length < 2)
+  ) {
+    logger.warn('No valid traceId available...');
     return {
       ...state,
       error: state.evalError,
       testCaseId: state.testCaseId,
-      traceIds: [],
+      traceIds: traceIds,
     };
   }
 
+  // Only the last collected trace to be used for evaluation.
+  const traceId = traceIds.at(-1)!;
+  // Sleep to let traces persist.
+  await new Promise((resolve) => setTimeout(resolve, 2000));
   const trace = await manager.getTrace({
     traceId,
   });
 
-  const isModelAction = actionRef.startsWith('/model');
-  // Always use original input for models.
-  const input = isModelAction ? state.input : extractors.input(trace);
+  // Always use original input for models and prompts.
+  const input = actionType === 'flow' ? extractors.input(trace) : state.input;
+  let custom = undefined;
+  if (actionType === 'executable-prompt') {
+    const promptTrace = await manager.getTrace({
+      traceId: traceIds[0],
+    });
+    custom = { renderedPrompt: extractors.output(promptTrace) };
+  }
 
   const nestedSpan = stackTraceSpans(trace);
   if (!nestedSpan) {
@@ -389,7 +512,8 @@ async function gatherEvalInput(params: {
       input,
       error: `Unable to extract any spans from trace ${traceId}`,
       reference: state.reference,
-      traceIds: [traceId],
+      custom,
+      traceIds: traceIds,
     };
   }
 
@@ -400,13 +524,15 @@ async function gatherEvalInput(params: {
       error:
         getSpanErrorMessage(nestedSpan) ?? `Unknown error in trace ${traceId}`,
       reference: state.reference,
-      traceIds: [traceId],
+      custom,
+      traceIds: traceIds,
     };
   }
 
   const output = extractors.output(trace);
   const context = extractors.context(trace);
-  const error = isModelAction ? getErrorFromModelResponse(output) : undefined;
+  const error =
+    actionType === 'model' ? getErrorFromModelResponse(output) : undefined;
 
   return {
     // TODO Replace this with unified trace class
@@ -416,7 +542,8 @@ async function gatherEvalInput(params: {
     error,
     context: Array.isArray(context) ? context : [context],
     reference: state.reference,
-    traceIds: [traceId],
+    custom,
+    traceIds: traceIds,
   };
 }
 
@@ -434,7 +561,7 @@ function getSpanErrorMessage(span: SpanData): string | undefined {
 }
 
 function getErrorFromModelResponse(obj: any): string | undefined {
-  const response = GenerateResponseSchema.parse(obj);
+  const response = obj as GenerateResponseData;
 
   // Legacy response is present
   const hasLegacyResponse =
@@ -465,4 +592,17 @@ function isSupportedActionRef(actionRef: string) {
   return SUPPORTED_ACTION_TYPES.some((supportedType) =>
     actionRef.startsWith(`/${supportedType}`)
   );
+}
+
+function getSupportedActionType(actionRef: string): SupportedActionType {
+  if (actionRef.startsWith('/model')) {
+    return 'model';
+  }
+  if (actionRef.startsWith('/flow')) {
+    return 'flow';
+  }
+  if (actionRef.startsWith('/executable-prompt')) {
+    return 'executable-prompt';
+  }
+  throw new Error(`Unsupported action type: ${actionRef}`);
 }

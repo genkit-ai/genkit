@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
-import { z, type PluginProvider } from '@genkit-ai/core';
+import {
+  defineDynamicActionProvider,
+  z,
+  type PluginProvider,
+} from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
@@ -22,16 +26,20 @@ import { beforeEach, describe, it } from 'node:test';
 import {
   generate,
   generateStream,
+  normalizeMiddleware,
+  toGenerateActionOptions,
   toGenerateRequest,
   type GenerateOptions,
 } from '../../src/generate.js';
+import { generateMiddleware } from '../../src/generate/middleware.js';
 import {
   defineModel,
   type ModelAction,
   type ModelMiddleware,
+  type ModelMiddlewareWithOptions,
 } from '../../src/model.js';
 import { defineResource } from '../../src/resource.js';
-import { defineTool } from '../../src/tool.js';
+import { defineTool, tool } from '../../src/tool.js';
 
 initNodeFeatures();
 
@@ -69,6 +77,28 @@ describe('toGenerateRequest', () => {
     async ({ a, b }) => a + b
   );
 
+  defineDynamicActionProvider(
+    registry,
+    {
+      name: 'my-dap',
+    },
+    async () => {
+      return {
+        tool: [
+          tool(
+            {
+              name: 'dapJokeTool',
+              description: 'DAP joke tool',
+              inputSchema: z.object({ topic: z.string() }),
+              outputSchema: z.string(),
+            },
+            async ({ topic }) => `DAP joke about ${topic}`
+          ),
+        ],
+      };
+    }
+  );
+
   const testCases = [
     {
       should: 'translate a string prompt correctly',
@@ -82,6 +112,7 @@ describe('toGenerateRequest', () => {
         ],
         config: undefined,
         docs: undefined,
+        resources: [],
         tools: [],
         output: {},
       },
@@ -100,6 +131,7 @@ describe('toGenerateRequest', () => {
         ],
         config: undefined,
         docs: undefined,
+        resources: [],
         tools: [
           {
             name: 'tellAFunnyJoke',
@@ -116,6 +148,7 @@ describe('toGenerateRequest', () => {
               additionalProperties: true,
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
+            key: '/tool/tellAFunnyJoke',
           },
         ],
         output: {},
@@ -132,6 +165,7 @@ describe('toGenerateRequest', () => {
         messages: [{ role: 'user', content: [{ text: 'Add 10 and 5.' }] }],
         config: undefined,
         docs: undefined,
+        resources: [],
         tools: [
           {
             description: 'add two numbers together',
@@ -147,7 +181,10 @@ describe('toGenerateRequest', () => {
               $schema: 'http://json-schema.org/draft-07/schema#',
               type: 'number',
             },
-            metadata: { originalName: 'namespaced/add' },
+            key: '/tool/namespaced/add',
+            metadata: {
+              originalName: 'namespaced/add',
+            },
           },
         ],
         output: {},
@@ -167,6 +204,7 @@ describe('toGenerateRequest', () => {
         ],
         config: undefined,
         docs: undefined,
+        resources: [],
         tools: [
           {
             name: 'tellAFunnyJoke',
@@ -183,6 +221,40 @@ describe('toGenerateRequest', () => {
               additionalProperties: true,
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
+            key: '/tool/tellAFunnyJoke',
+          },
+        ],
+        output: {},
+      },
+    },
+    {
+      should: 'translate a string prompt correctly with a DAP tool',
+      prompt: {
+        model: 'vertexai/gemini-1.0-pro',
+        tools: ['my-dap:tool/dapJokeTool'],
+        prompt: 'Call DAP tool',
+      },
+      expectedOutput: {
+        messages: [{ role: 'user', content: [{ text: 'Call DAP tool' }] }],
+        config: undefined,
+        docs: undefined,
+        resources: [],
+        tools: [
+          {
+            name: 'dapJokeTool',
+            description: 'DAP joke tool',
+            inputSchema: {
+              $schema: 'http://json-schema.org/draft-07/schema#',
+              type: 'object',
+              properties: { topic: { type: 'string' } },
+              required: ['topic'],
+              additionalProperties: true,
+            },
+            outputSchema: {
+              $schema: 'http://json-schema.org/draft-07/schema#',
+              type: 'string',
+            },
+            key: '/dynamic-action-provider/my-dap:tool/dapJokeTool',
           },
         ],
         output: {},
@@ -219,6 +291,7 @@ describe('toGenerateRequest', () => {
         ],
         config: undefined,
         docs: undefined,
+        resources: [],
         tools: [],
         output: {},
       },
@@ -241,6 +314,7 @@ describe('toGenerateRequest', () => {
         ],
         config: undefined,
         docs: undefined,
+        resources: [],
         tools: [],
         output: {},
       },
@@ -258,6 +332,7 @@ describe('toGenerateRequest', () => {
         ],
         config: undefined,
         docs: [{ content: [{ text: 'context here' }] }],
+        resources: [],
         tools: [],
         output: {},
       },
@@ -303,6 +378,7 @@ describe('toGenerateRequest', () => {
         ],
         config: undefined,
         docs: undefined,
+        resources: [],
         tools: [],
         output: {
           constrained: true,
@@ -329,6 +405,21 @@ describe('toGenerateRequest', () => {
       }
     });
   }
+});
+
+describe('toGenerateActionOptions', () => {
+  const registry = new Registry();
+
+  it('should return action options with undefined model', async () => {
+    const options: GenerateOptions = {
+      prompt: 'hello',
+    };
+    const actionOptions = await toGenerateActionOptions(registry, options);
+    assert.strictEqual(actionOptions.model, undefined);
+    assert.deepStrictEqual(actionOptions.messages, [
+      { role: 'user', content: [{ text: 'hello' }] },
+    ]);
+  });
 });
 
 describe('generate', () => {
@@ -434,7 +525,7 @@ describe('generate', () => {
     );
   });
 
-  it('applies resources', async () => {
+  it('applies resources in the registry', async () => {
     defineResource(
       registry,
       { name: 'testResource', template: 'test://resource/{param}' },
@@ -592,6 +683,410 @@ describe('generate', () => {
     assert.deepEqual(
       response.messages.map((m) => m.content[0].text),
       ['Testing default step name', 'Testing default step name']
+    );
+  });
+
+  it('handles multipart tool responses', async () => {
+    defineTool(
+      registry,
+      {
+        name: 'multiTool',
+        description: 'a tool with multiple parts',
+        multipart: true,
+      },
+      async () => {
+        return {
+          output: 'main output',
+          content: [{ text: 'part 1' }],
+          metadata: { custom: 'data' },
+        };
+      }
+    );
+
+    let requestCount = 0;
+    defineModel(
+      registry,
+      { name: 'multi-tool-model', supports: { tools: true } },
+      async (input) => {
+        requestCount++;
+        return {
+          message: {
+            role: 'model',
+            content: [
+              requestCount == 1
+                ? {
+                    toolRequest: {
+                      name: 'multiTool',
+                      input: {},
+                    },
+                  }
+                : { text: 'done' },
+            ],
+          },
+          finishReason: 'stop',
+        };
+      }
+    );
+
+    const response = await generate(registry, {
+      model: 'multi-tool-model',
+      prompt: 'go',
+      tools: ['multiTool'],
+    });
+    assert.deepStrictEqual(response.messages, [
+      {
+        role: 'user',
+        content: [
+          {
+            text: 'go',
+          },
+        ],
+      },
+      {
+        role: 'model',
+        content: [
+          {
+            toolRequest: {
+              name: 'multiTool',
+              input: {},
+            },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'multiTool',
+              output: 'main output',
+              content: [
+                {
+                  text: 'part 1',
+                },
+              ],
+            },
+            metadata: { custom: 'data' },
+          },
+        ],
+      },
+      {
+        role: 'model',
+        content: [
+          {
+            text: 'done',
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('handles fallback tool responses', async () => {
+    defineTool(
+      registry,
+      {
+        name: 'fallbackTool',
+        description: 'a tool with fallback output',
+        multipart: true,
+      },
+      async () => {
+        return {
+          output: 'fallback output',
+          content: [{ text: 'part 1' }],
+        };
+      }
+    );
+
+    let requestCount = 0;
+    defineModel(
+      registry,
+      { name: 'fallback-tool-model', supports: { tools: true } },
+      async (input) => {
+        requestCount++;
+        return {
+          message: {
+            role: 'model',
+            content: [
+              requestCount == 1
+                ? {
+                    toolRequest: {
+                      name: 'fallbackTool',
+                      input: {},
+                    },
+                  }
+                : { text: 'done' },
+            ],
+          },
+          finishReason: 'stop',
+        };
+      }
+    );
+
+    const response = await generate(registry, {
+      model: 'fallback-tool-model',
+      prompt: 'go',
+      tools: ['fallbackTool'],
+    });
+    assert.deepStrictEqual(response.messages, [
+      {
+        role: 'user',
+        content: [
+          {
+            text: 'go',
+          },
+        ],
+      },
+      {
+        role: 'model',
+        content: [
+          {
+            toolRequest: {
+              name: 'fallbackTool',
+              input: {},
+            },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'fallbackTool',
+              output: 'fallback output',
+              content: [
+                {
+                  text: 'part 1',
+                },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        role: 'model',
+        content: [
+          {
+            text: 'done',
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('middleware can intercept streaming callback', async () => {
+    const registry = new Registry();
+    const echoModel = defineModel(
+      registry,
+      {
+        apiVersion: 'v2',
+        name: 'echoModel',
+        supports: { tools: true },
+      },
+      async (_, { sendChunk }) => {
+        if (sendChunk) {
+          sendChunk({ content: [{ text: 'chunk1' }] });
+          sendChunk({ content: [{ text: 'chunk2' }] });
+        }
+        return {
+          message: {
+            role: 'model',
+            content: [{ text: 'done' }],
+          },
+          finishReason: 'stop',
+        };
+      }
+    );
+
+    const interceptMiddleware: ModelMiddlewareWithOptions = async (
+      req,
+      opts,
+      next
+    ) => {
+      const originalOnChunk = opts!.onChunk;
+      return next(req, {
+        ...opts,
+        onChunk: (chunk) => {
+          if (originalOnChunk) {
+            const text = chunk.content?.[0]?.text;
+            originalOnChunk({
+              ...chunk,
+              content: [{ text: `intercepted: ${text}` }],
+            });
+          }
+        },
+      });
+    };
+
+    const { response, stream } = generateStream(registry, {
+      model: echoModel,
+      prompt: 'test',
+      use: [interceptMiddleware],
+    });
+
+    const streamed: any[] = [];
+    for await (const chunk of stream) {
+      streamed.push(chunk.content[0].text);
+    }
+
+    assert.deepStrictEqual(streamed, [
+      'intercepted: chunk1',
+      'intercepted: chunk2',
+    ]);
+    await response;
+  });
+
+  it('middleware can modify context', async () => {
+    const registry = new Registry();
+    const checkContextModel = defineModel(
+      registry,
+      {
+        apiVersion: 'v2',
+        name: 'checkContextModel',
+        supports: { context: true },
+      },
+      async (request, { context }) => {
+        return {
+          message: {
+            role: 'model',
+            content: [{ text: `Context: ${context?.myValue}` }],
+          },
+          finishReason: 'stop',
+        };
+      }
+    );
+
+    const contextMiddleware: ModelMiddlewareWithOptions = async (
+      req,
+      opts,
+      next
+    ) => {
+      return next(req, {
+        ...opts,
+        context: {
+          ...opts?.context,
+          myValue: 'foo',
+        },
+      });
+    };
+
+    const response = await generate(registry, {
+      model: checkContextModel,
+      prompt: 'test',
+      use: [contextMiddleware],
+    });
+
+    assert.strictEqual(response.text, 'Context: foo');
+  });
+
+  it('middleware can chain option modifications', async () => {
+    const registry = new Registry();
+    const checkContextModel = defineModel(
+      registry,
+      {
+        apiVersion: 'v2',
+        name: 'checkContextModel',
+        supports: { context: true },
+      },
+      async (request, { context }) => {
+        return {
+          message: {
+            role: 'model',
+            content: [{ text: `Context: ${JSON.stringify(context)}` }],
+          },
+          finishReason: 'stop',
+        };
+      }
+    );
+
+    const middleware1: ModelMiddlewareWithOptions = async (req, opts, next) => {
+      return next(req, {
+        ...opts,
+        context: {
+          ...opts?.context,
+          val: [...(opts?.context?.val ?? []), 'A'],
+        },
+      });
+    };
+
+    const middleware2: ModelMiddlewareWithOptions = async (req, opts, next) => {
+      return next(req, {
+        ...opts,
+        context: {
+          ...opts?.context,
+          val: [...(opts?.context?.val ?? []), 'B'],
+        },
+      });
+    };
+
+    const response = await generate(registry, {
+      model: checkContextModel,
+      prompt: 'test',
+      use: [middleware1, middleware2],
+    });
+
+    const context = JSON.parse(response.text.substring('Context: '.length));
+    assert.deepStrictEqual(context.val, ['A', 'B']);
+  });
+});
+
+describe('normalizeMiddleware', () => {
+  it('handles legacy functional middleware by wrapping it', async () => {
+    const registry = new Registry();
+    const legacyMw = async (req: any, next: any) => {
+      return next(req);
+    };
+
+    const refs = await normalizeMiddleware(registry, [legacyMw]);
+
+    assert.strictEqual(refs.length, 1);
+    assert.match(refs[0].name, /^dynamic-middleware-\d+-/);
+
+    const registered = await registry.lookupValue<any>(
+      'middleware',
+      refs[0].name
+    );
+    assert.ok(registered);
+  });
+
+  it('handles MiddlewareRef objects created by calling middleware', async () => {
+    const registry = new Registry();
+    const myMw = generateMiddleware({ name: 'myMw' }, () => ({}));
+
+    // Call it to get a MiddlewareRef
+    const refs = await normalizeMiddleware(registry, [myMw()]);
+
+    assert.strictEqual(refs.length, 1);
+    assert.strictEqual(refs[0].name, 'myMw');
+
+    const registered = await registry.lookupValue<any>('middleware', 'myMw');
+    assert.ok(registered);
+  });
+
+  it('handles MiddlewareRef objects', async () => {
+    const registry = new Registry();
+    const myMw = generateMiddleware({ name: 'myMw' }, () => ({}));
+    registry.registerValue('middleware', 'myMw', myMw);
+
+    const refs = await normalizeMiddleware(registry, [{ name: 'myMw' }]);
+
+    assert.strictEqual(refs.length, 1);
+    assert.strictEqual(refs[0].name, 'myMw');
+  });
+
+  it('throws when uncalled middleware definition is passed as a function', async () => {
+    const registry = new Registry();
+    const myMw = generateMiddleware({ name: 'myMw' }, () => ({}));
+
+    // Pass the definition function itself, which has .instantiate and .plugin
+    await assert.rejects(
+      async () => {
+        await normalizeMiddleware(registry, [myMw as any]);
+      },
+      {
+        name: 'GenkitError',
+        status: 'INVALID_ARGUMENT',
+      }
     );
   });
 });

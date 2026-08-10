@@ -19,7 +19,7 @@ import {
   FirebaseUserEngagementSchema,
   collectUserEngagement,
 } from '@genkit-ai/firebase/user_engagement';
-import { gemini15Flash, vertexAI } from '@genkit-ai/vertexai';
+import { vertexAI } from '@genkit-ai/google-genai';
 import { onCallGenkit, onRequest } from 'firebase-functions/https';
 import { genkit, z } from 'genkit';
 
@@ -55,7 +55,7 @@ const jokeFlow = ai.defineFlow(
 
     return await ai.run('call-llm', async () => {
       const llmResponse = await ai.generate({
-        model: gemini15Flash,
+        model: vertexAI.model('gemini-2.5-flash'),
         prompt: prompt,
       });
 

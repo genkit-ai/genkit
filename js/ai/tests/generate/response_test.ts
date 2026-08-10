@@ -244,4 +244,40 @@ describe('GenerateResponse', () => {
       assert.deepStrictEqual(response.toolRequests, [toolCall1, toolCall2]);
     });
   });
+
+  it('returns metadata for output conformance', () => {
+    const request: GenerateRequest = {
+      messages: [],
+      output: {
+        constrained: true,
+        format: 'json',
+        contentType: 'application/json',
+        schema: toJsonSchema({
+          schema: z.object({
+            name: z.string(),
+            age: z.number(),
+          }),
+        }),
+      },
+    };
+
+    const response = new GenerateResponse(
+      {
+        message: {
+          role: 'model',
+          content: [{ text: '{"name": "John", "age": "30"}' }],
+        },
+        finishReason: 'stop',
+      },
+      {
+        request,
+      }
+    );
+
+    assert.deepEqual(response.message?.metadata, {
+      generate: {
+        output: { contentType: 'application/json', format: 'json' },
+      },
+    });
+  });
 });

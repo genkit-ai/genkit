@@ -42,6 +42,19 @@ var (
 	outputDir  = flag.String("outdir", "", "directory to write to, or '-' for stdout")
 	noFormat   = flag.Bool("nofmt", false, "do not format output")
 	configFile = flag.String("config", "", "config filename")
+
+	// fieldOmitEmptyTag maps schemas (e.g., "ModelResponseChunk") to fields (e.g., "index")
+	// that should not receive the `omitempty` JSON tag.
+	fieldOmitEmptyTag = map[string]map[string]struct{}{
+		"ModelResponseChunk": {
+			"index": {}, // fields should be as defined in core/schemas.config
+		},
+		"Operation": {
+			"action": {},
+			"done":   {},
+			"id":     {},
+		},
+	}
 )
 
 func main() {
@@ -123,9 +136,14 @@ func run(infile, defaultPkgPath, configFile, outRoot string) error {
 
 	// Generate code by package.
 	for pkgPath, schemaMap := range schemasByPackage {
+		// Derive package name from path, with config override.
+		pkgName := path.Base(pkgPath)
+		if pc := cfg.configFor(pkgPath); pc != nil && pc.name != "" {
+			pkgName = pc.name
+		}
 		// Generate code for each type in the package.
 		gen := &generator{
-			pkgName: path.Base(pkgPath),
+			pkgName: pkgName,
 			schemas: schemaMap,
 			cfg:     cfg,
 		}
@@ -210,6 +228,11 @@ func adjustAdditionalProperties(x any) {
 					}
 				}
 			}
+			if k == "properties" {
+				if pm, ok := v.(map[string]any); ok && len(pm) == 0 {
+					delete(m, k)
+				}
+			}
 			// TODO: Fix this - causing schemagen issues
 			if k == "uniqueItems" {
 				delete(m, k)
@@ -241,7 +264,6 @@ func nameAnonymousTypes(schemas map[string]*Schema) {
 				nameFields(prefix+fname, fs.Properties)
 			}
 		}
-
 	}
 	for typeName, ts := range schemas {
 		nameFields(typeName, ts.Properties)
@@ -249,7 +271,7 @@ func nameAnonymousTypes(schemas map[string]*Schema) {
 }
 
 const license = `
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -285,7 +307,15 @@ func (g *generator) generate() ([]byte, error) {
 	g.pr("package %s\n\n", g.pkgName)
 
 	if pc := g.cfg.configFor(g.pkgName); pc != nil {
-		g.pr("import %q\n", pc.pkgPath)
+		if len(pc.imports) > 0 {
+			g.pr("import (\n")
+			for _, imp := range pc.imports {
+				g.pr("  %q\n", imp)
+			}
+			g.pr(")\n\n")
+		} else if pc.pkgPath != "" {
+			g.pr("import %q\n", pc.pkgPath)
+		}
 	}
 
 	// Sort the names so the output is deterministic.
@@ -349,6 +379,19 @@ func (g *generator) generateType(name string) (err error) {
 
 	switch typ {
 	case "object": // a JSONSchema object corresponds to a Go struct
+		if s.Properties == nil && s.AdditionalProperties != nil {
+			typ, err := g.typeExpr(s)
+			if err != nil {
+				return err
+			}
+			g.generateDoc(s, tcfg)
+			goName := tcfg.name
+			if goName == "" {
+				goName = adjustIdentifier(name)
+			}
+			g.pr("type %s %s\n\n", goName, typ)
+			return nil
+		}
 		if err := g.generateStruct(name, s, tcfg); err != nil {
 			return err
 		}
@@ -379,7 +422,7 @@ func (g *generator) generateStruct(name string, s *Schema, tcfg *itemConfig) err
 	if goName == "" {
 		goName = adjustIdentifier(name)
 	}
-	g.pr("type %s struct {\n", goName)
+	g.pr("type %s%s struct {\n", goName, tcfg.typeparams)
 	for _, field := range sortedKeys(s.Properties) {
 		fcfg := g.cfg.configFor(name + "." + field)
 		if fcfg == nil {
@@ -407,11 +450,33 @@ func (g *generator) generateStruct(name string, s *Schema, tcfg *itemConfig) err
 			}
 		}
 		g.generateDoc(fs, fcfg)
+
 		jsonTag := fmt.Sprintf(`json:"%s,omitempty"`, field)
-		g.pr(fmt.Sprintf("  %s %s `%s`\n", adjustIdentifier(field), typeExpr, jsonTag))
+		if skipOmitEmpty(goName, field) || fcfg.noOmitEmpty {
+			jsonTag = fmt.Sprintf(`json:"%s"`, field)
+		}
+		fieldName := fcfg.name
+		if fieldName == "" {
+			fieldName = adjustIdentifier(field)
+		}
+		g.pr("  %s %s `%s`\n", fieldName, typeExpr, jsonTag)
+	}
+	for _, f := range tcfg.fields {
+		g.pr("  %s %s\n", f.name, f.typeExpr)
 	}
 	g.pr("}\n\n")
 	return nil
+}
+
+// skipOmitEmpty determines whether a schema field should include the
+// `omitempty` JSON tag
+func skipOmitEmpty(schema, field string) bool {
+	fields, ok := fieldOmitEmptyTag[schema]
+	if !ok {
+		return false
+	}
+	_, ok = fields[field]
+	return ok
 }
 
 func (g *generator) generateStringEnum(name string, s *Schema, tcfg *itemConfig) error {
@@ -454,14 +519,21 @@ func (g *generator) generateDoc(s *Schema, ic *itemConfig) {
 // typeExpr returns a Go type expression denoting the type represented by the schema.
 func (g *generator) typeExpr(s *Schema) (string, error) {
 	// A reference to another type refers to that type by name. Use the name.
+	if s == nil {
+		return "any", nil
+	}
 	if s.Ref != "" {
-		name, ok := strings.CutPrefix(s.Ref, refPrefix)
-		if !ok {
-			return "", fmt.Errorf("ref %q does not begin with prefix %q", s.Ref, refPrefix)
+		s2, name, err := g.resolveRef(s.Ref)
+		if err != nil {
+			return "", err
+		}
+		// Nested refs (e.g. "#/$defs/Foo/properties/bar") don't correspond to a
+		// generated Go type; inline the resolved sub-schema's type instead.
+		if strings.Count(s.Ref, "/") > 2 {
+			return g.typeExpr(s2)
 		}
 		ic := g.cfg.configFor(name)
-		s2, ok := g.schemas[name]
-		if !ok {
+		if s2 == nil {
 			// If there is no schema, perhaps there is a config value.
 			if ic != nil && ic.name != "" {
 				return ic.name, nil
@@ -469,14 +541,23 @@ func (g *generator) typeExpr(s *Schema) (string, error) {
 			return "", fmt.Errorf("unknown type in reference: %q", name)
 		}
 		// Apply a config that changes the name.
-		if ic := g.cfg.configFor(name); ic != nil && ic.name != "" {
+		if ic != nil && ic.name != "" {
 			name = ic.name
 		}
+		// If the target type is generic, append its type-args so the
+		// reference is well-formed (e.g. `*SessionState[State]`). The
+		// referencing type is responsible for declaring matching
+		// typeparams; otherwise the generated code won't compile.
+		// Callers can override this with an explicit `type` directive.
+		var typeArgs string
+		if ic != nil {
+			typeArgs = typeParamArgs(ic.typeparams)
+		}
 		if s2.Enum != nil {
-			return name, nil
+			return name + typeArgs, nil
 		}
 		// If it's not an enum, it's a struct. Use a pointer to it.
-		return "*" + name, nil
+		return "*" + name + typeArgs, nil
 	}
 	// If there is no specified type, assume the schema represents any type.
 	if s.Type.Any() == nil {
@@ -528,6 +609,42 @@ func (g *generator) typeExpr(s *Schema) (string, error) {
 	}
 }
 
+// resolveRef resolves a JSON schema reference.
+// It handles simple references like "#/$defs/Action" and nested ones like
+// "#/$defs/ActionMetadata/properties/inputJsonSchema".
+func (g *generator) resolveRef(ref string) (*Schema, string, error) {
+	name, ok := strings.CutPrefix(ref, refPrefix)
+	if !ok {
+		return nil, "", fmt.Errorf("ref %q does not begin with prefix %q", ref, refPrefix)
+	}
+	parts := strings.Split(name, "/")
+	s, ok := g.schemas[parts[0]]
+	if !ok {
+		return nil, "", fmt.Errorf("unknown type in reference: %q", parts[0])
+	}
+	for i := 1; i < len(parts); i++ {
+		switch parts[i] {
+		case "properties":
+			if i+1 >= len(parts) {
+				return nil, "", fmt.Errorf("invalid ref (ends in properties): %q", ref)
+			}
+			s = s.Properties[parts[i+1]]
+			i++
+		case "additionalProperties":
+			s = s.AdditionalProperties
+		case "items":
+			s = s.Items
+		default:
+			return nil, "", fmt.Errorf("cannot handle ref segment %q in %q", parts[i], ref)
+		}
+		if s == nil {
+			return nil, "", fmt.Errorf("ref path not found: %q", ref)
+		}
+	}
+	// The caller mostly cares about the direct name in $defs (parts[0]).
+	return s, parts[0], nil
+}
+
 // adjustIdentifier returns name with the first letter capitalized
 // so it is exported, and makes other idiomatic Go adjustments.
 func adjustIdentifier(name string) string {
@@ -557,6 +674,33 @@ func sortedKeys[K cmp.Ordered, V any](m map[K]V) []K {
 	return keys
 }
 
+// typeParamArgs converts a Go type-parameter list like "[State any]" or
+// "[A any, B comparable]" into the matching type-argument list "[State]"
+// or "[A, B]". Returns "" for an empty input. Used to forward the
+// type-args of a generic target type onto a reference (e.g. turn a ref
+// to `SessionState` into `SessionState[State]` when SessionState has
+// `typeparams [State any]`).
+func typeParamArgs(typeparams string) string {
+	inner := strings.TrimSpace(typeparams)
+	if inner == "" {
+		return ""
+	}
+	inner = strings.TrimPrefix(inner, "[")
+	inner = strings.TrimSuffix(inner, "]")
+	var names []string
+	for _, clause := range strings.Split(inner, ",") {
+		fields := strings.Fields(strings.TrimSpace(clause))
+		if len(fields) == 0 {
+			continue
+		}
+		names = append(names, fields[0])
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return "[" + strings.Join(names, ", ") + "]"
+}
+
 // config is the configuration for a schema file.
 // It describes modifications to the defaults of the code generator.
 type config struct {
@@ -575,11 +719,21 @@ func (c config) configFor(name string) *itemConfig {
 // itemConfig is configuration for one item: a type, a field or a package.
 // Not all itemConfig fields apply to both, but using one type simplifies the parser.
 type itemConfig struct {
-	omit     bool
+	omit        bool
+	name        string
+	pkgPath     string
+	typeExpr    string
+	docLines    []string
+	fields      []extraField
+	typeparams  string   // Go type parameters (e.g., "[State any]")
+	noOmitEmpty bool     // omit the omitempty tag for this field
+	imports     []string // import paths for the package
+}
+
+// extraField represents an additional unexported field to add to a struct.
+type extraField struct {
 	name     string
-	pkgPath  string
 	typeExpr string
-	docLines []string
 }
 
 // parseConfigFile parses the config file.
@@ -597,11 +751,22 @@ type itemConfig struct {
 //	type EXPR
 //	    use EXPR for the type expression (for fields only)
 //	doc
-//	    doc is following lines until the line "."
+//	    doc is following lines until the line "."; leading whitespace
+//	    is preserved so godoc lists survive generation
 //	pkg
 //	    package path, relative to outdir (last component is package name)
 //	import
-//	    path of package to import (for packages only)
+//	    path of package to import (for packages only, may be repeated)
+//	typeparams PARAMS
+//	    Go type parameters to add to the type declaration (e.g., "[State any]").
+//	    References to this type from other generated fields are
+//	    automatically rewritten to include the matching type-args
+//	    (e.g., "*SessionState[State]"). The referencing type must
+//	    declare matching typeparams.
+//	noomitempty
+//	    don't add omitempty to this field's json tag
+//	field NAME TYPE
+//	    add an unexported field to the struct (for types only)
 func parseConfigFile(filename string) (config, error) {
 	c := config{
 		itemConfigs: map[string]*itemConfig{},
@@ -626,7 +791,10 @@ func parseConfigFile(filename string) (config, error) {
 			if line == "." {
 				docItem = nil
 			} else {
-				docItem.docLines = append(docItem.docLines, line)
+				// Keep leading whitespace: doc blocks may contain godoc
+				// lists, whose items and continuation lines must stay
+				// indented to render as lists.
+				docItem.docLines = append(docItem.docLines, strings.TrimRight(string(ln), " \t"))
 			}
 			continue
 		}
@@ -666,7 +834,19 @@ func parseConfigFile(filename string) (config, error) {
 			if len(words) < 3 {
 				return errf("need NAME import PATH")
 			}
-			ic.pkgPath = words[2]
+			ic.imports = append(ic.imports, words[2])
+		case "typeparams":
+			if len(words) < 3 {
+				return errf("need NAME typeparams PARAMS")
+			}
+			ic.typeparams = strings.Join(words[2:], " ")
+		case "noomitempty":
+			ic.noOmitEmpty = true
+		case "field":
+			if len(words) < 4 {
+				return errf("need NAME field FIELDNAME TYPE")
+			}
+			ic.fields = append(ic.fields, extraField{name: words[2], typeExpr: words[3]})
 		default:
 			return errf("unknown directive %q", words[1])
 		}

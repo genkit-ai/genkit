@@ -50,7 +50,7 @@ npm install
 1. Set up your Google AI API key:
 
 ```bash
-export GOOGLE_GENAI_API_KEY=your_api_key_here
+export GEMINI_API_KEY=your_api_key_here
 ```
 
 1. Start the development server:

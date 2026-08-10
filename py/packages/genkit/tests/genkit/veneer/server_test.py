@@ -6,9 +6,11 @@
 
 import json
 import os
+import pathlib
 import tempfile
 
-from genkit.ai._server import ServerSpec, create_runtime
+from genkit._ai._runtime import RuntimeManager
+from genkit._core._reflection import ServerSpec
 
 
 def test_server_spec() -> None:
@@ -29,29 +31,35 @@ def test_server_spec() -> None:
     assert spec.url == 'http://localhost:5000'
 
 
-def test_create_runtime() -> None:
-    """Test the create_runtime function.
+def test_runtime_manager() -> None:
+    """Test the RuntimeManager class.
 
-    Verifies that the create_runtime function correctly creates and
+    Verifies that the RuntimeManager class correctly creates and
     manages runtime metadata files, including cleanup on exit.
     """
     with tempfile.TemporaryDirectory() as temp_dir:
         spec = ServerSpec(port=3100)
 
-        # Test runtime file creation
-        runtime_path = create_runtime(temp_dir, spec)
-        assert runtime_path.exists()
+        # Test runtime file creation using context manager
+        runtime_path = None
+        with RuntimeManager(spec=spec, runtime_dir=temp_dir) as rm:
+            runtime_path = rm.write_runtime_file()
+            assert runtime_path.exists()
 
-        # Verify file content
-        content = json.loads(runtime_path.read_text(encoding='utf-8'))
-        assert isinstance(content, dict)
-        assert 'id' in content
-        assert 'pid' in content
-        assert content['reflectionServerUrl'] == 'http://localhost:3100'
-        assert 'timestamp' in content
+            # Verify file content
+            content = json.loads(runtime_path.read_text(encoding='utf-8'))
+            assert isinstance(content, dict)
+            assert 'pid' in content
+            assert content['reflectionServerUrl'] == 'http://localhost:3100'
+            assert 'timestamp' in content
+
+        # Verify cleanup on exit
+        assert runtime_path is not None
+        assert not runtime_path.exists()
 
         # Test directory creation
         new_dir = os.path.join(temp_dir, 'new_dir')
-        runtime_path = create_runtime(new_dir, spec)
-        assert os.path.exists(new_dir)
-        assert runtime_path.exists()
+        with RuntimeManager(spec=spec, runtime_dir=new_dir) as rm:
+            runtime_path = rm.write_runtime_file()
+            assert pathlib.Path(new_dir).exists()
+            assert runtime_path.exists()

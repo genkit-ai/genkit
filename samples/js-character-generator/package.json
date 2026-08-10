@@ -17,6 +17,6 @@
   },
   "dependencies": {
     "genkit": "^1.0.4",
-    "@genkit-ai/googleai": "^1.0.4"
+    "@genkit-ai/google-genai": "^1.0.4"
   }
 }

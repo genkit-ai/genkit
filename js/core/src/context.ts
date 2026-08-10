@@ -26,6 +26,11 @@ const contextAlsKey = 'core.auth.context';
 export interface ActionContext {
   /** Information about the currently authenticated user if provided. */
   auth?: Record<string, any>;
+  /**
+   * Safe place to pass non-auth operational secrets (e.g., custom database passwords or encryption keys).
+   * This namespace is actively scrubbed from telemetry traces.
+   */
+  secrets?: Record<string, unknown>;
   [additionalContext: string]: any;
 }
 

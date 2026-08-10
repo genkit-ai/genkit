@@ -16,8 +16,8 @@
 
 import type { ModelMiddleware } from 'genkit/model';
 import type { GoogleAuth } from 'google-auth-library';
-import { Guardrails } from './guardrails';
-import type { ChecksEvaluationMetric } from './metrics';
+import { Guardrails } from './guardrails.js';
+import type { ChecksEvaluationMetric } from './metrics.js';
 
 export function checksMiddleware(options: {
   auth: GoogleAuth;

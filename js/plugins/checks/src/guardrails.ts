@@ -16,7 +16,7 @@
 
 import { z } from 'genkit';
 import type { GoogleAuth } from 'google-auth-library';
-import { isConfig, type ChecksEvaluationMetric } from './metrics';
+import { isConfig, type ChecksEvaluationMetric } from './metrics.js';
 
 const GUARDRAILS_URL =
   'https://checks.googleapis.com/v1alpha/aisafety:classifyContent';

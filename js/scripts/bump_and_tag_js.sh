@@ -47,7 +47,6 @@ bump_version js/plugins/dev-local-vectorstore @genkit-ai/dev-local-vectorstore d
 bump_version js/plugins/evaluators @genkit-ai/evaluator evaluator-v
 bump_version js/plugins/firebase @genkit-ai/firebase firebase-v
 bump_version js/plugins/google-cloud @genkit-ai/google-cloud google-cloud-v
-bump_version js/plugins/googleai @genkit-ai/googleai googleai-v
 bump_version js/plugins/langchain genkitx-langchain
 bump_version js/plugins/next @genkit-ai/next next-v
 bump_version js/plugins/ollama genkitx-ollama
@@ -59,6 +58,10 @@ bump_version js/plugins/express @genkit-ai/express express-v
 bump_version js/plugins/cloud-sql-pg genkitx-cloud-sql-pg
 bump_version js/plugins/compat-oai @genkit-ai/compat-oai compat-oai-v
 bump_version js/plugins/google-genai @genkit-ai/google-genai google-genai-v
+bump_version js/plugins/middleware @genkit-ai/middleware middleware-v
+bump_version js/plugins/fetch @genkit-ai/fetch fetch-v
+bump_version js/plugins/fastify @genkit-ai/fastify fastify-v
+bump_version js/plugins/vercel-ai @genkit-ai/vercel-ai vercel-ai-v
 
 echo TAGS "${TAGS[*]}"
 

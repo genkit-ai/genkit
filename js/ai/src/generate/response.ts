@@ -67,6 +67,20 @@ export class GenerateResponse<O = unknown> implements ModelResponseData {
     const generatedMessage =
       response.message || response.candidates?.[0]?.message;
     if (generatedMessage) {
+      if (
+        options?.request?.output?.contentType ||
+        options?.request?.output?.format
+      ) {
+        generatedMessage.metadata = {
+          ...generatedMessage.metadata,
+          generate: {
+            output: {
+              contentType: options?.request?.output?.contentType,
+              format: options?.request?.output?.format,
+            },
+          },
+        };
+      }
       this.message = new Message<O>(generatedMessage, {
         parser: options?.parser,
       });

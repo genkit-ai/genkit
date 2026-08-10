@@ -16,7 +16,7 @@
 
 import type { Firestore } from 'firebase-admin/firestore';
 import { Document, DocumentDataSchema } from 'genkit';
-import type { DocumentIndexer, DocumentRetriever, Neighbor } from './types';
+import type { DocumentIndexer, DocumentRetriever, Neighbor } from './types.js';
 /**
  * Creates a Firestore Document Retriever.
  *

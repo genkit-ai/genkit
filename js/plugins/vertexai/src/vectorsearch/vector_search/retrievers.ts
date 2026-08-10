@@ -20,12 +20,12 @@ import {
   type RetrieverAction,
   type z,
 } from 'genkit';
-import { queryPublicEndpoint } from './query_public_endpoint';
+import { queryPublicEndpoint } from './query_public_endpoint.js';
 import {
   VertexAIVectorRetrieverOptionsSchema,
   type VertexVectorSearchOptions,
-} from './types';
-import { getProjectNumber } from './utils';
+} from './types.js';
+import { getProjectNumber } from './utils.js';
 
 const DEFAULT_K = 10;
 

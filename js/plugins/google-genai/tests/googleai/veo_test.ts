@@ -15,7 +15,7 @@
  */
 
 import * as assert from 'assert';
-import { Genkit, Operation } from 'genkit';
+import { Operation } from 'genkit';
 import { GenerateRequest, GenerateResponseData } from 'genkit/model';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
@@ -27,6 +27,7 @@ import {
   VeoConfig,
   VeoConfigSchema,
   defineModel,
+  listKnownModels,
   model,
 } from '../../src/googleai/veo.js';
 
@@ -40,13 +41,27 @@ describe('Google AI Veo', () => {
     });
   });
 
+  describe('listKnownModels()', () => {
+    it('should return an array of model actions', () => {
+      const models = listKnownModels();
+      assert.ok(Array.isArray(models));
+      assert.strictEqual(models.length, Object.keys(KNOWN_MODELS).length);
+      models.forEach((m) => {
+        assert.ok(m.__action.name.startsWith('googleai/veo-'));
+        assert.ok(m.start);
+        assert.ok(m.check);
+      });
+    });
+  });
+
   describe('model()', () => {
     it('should return a ModelReference for a known model', () => {
-      const modelName = 'veo-2.0-generate-001';
+      const modelName = 'veo-3.1-generate-preview';
       const ref = model(modelName);
       assert.strictEqual(ref.name, `googleai/${modelName}`);
       assert.ok(ref.info?.supports?.media);
-      assert.ok(ref.info?.supports?.longRunning);
+      // TODO: remove cast if we fix longRunning
+      assert.ok((ref.info?.supports as any).longRunning);
     });
 
     it('should return a ModelReference for an unknown model using generic info', () => {
@@ -57,7 +72,7 @@ describe('Google AI Veo', () => {
     });
 
     it('should apply config to a known model', () => {
-      const modelName = 'veo-2.0-generate-001';
+      const modelName = 'veo-3.1-generate-preview';
       const config: VeoConfig = { aspectRatio: '16:9' };
       const ref = model(modelName, config);
       assert.strictEqual(ref.name, `googleai/${modelName}`);
@@ -73,9 +88,9 @@ describe('Google AI Veo', () => {
     });
 
     it('should handle model name with prefix', () => {
-      const modelName = 'models/veo-2.0-generate-001';
+      const modelName = 'models/veo-3.1-generate-preview';
       const ref = model(modelName);
-      assert.strictEqual(ref.name, 'googleai/veo-2.0-generate-001');
+      assert.strictEqual(ref.name, 'googleai/veo-3.1-generate-preview');
     });
   });
 
@@ -91,12 +106,16 @@ describe('Google AI Veo', () => {
           aspectRatio: '16:9',
           personGeneration: 'allow_adult',
           durationSeconds: 7,
+          resolution: '4k',
+          seed: 42,
         },
       };
       const result = toVeoParameters(request);
       assert.strictEqual(result.aspectRatio, '16:9');
       assert.strictEqual(result.personGeneration, 'allow_adult');
       assert.strictEqual(result.durationSeconds, 7);
+      assert.strictEqual(result.resolution, '4k');
+      assert.strictEqual(result.seed, 42);
     });
 
     it('should omit null but keep false config parameters', () => {
@@ -175,7 +194,6 @@ describe('Google AI Veo', () => {
   });
 
   describe('defineModel()', () => {
-    let mockAi: sinon.SinonStubbedInstance<Genkit>;
     let fetchStub: sinon.SinonStub;
     let envStub: sinon.SinonStub;
 
@@ -183,7 +201,6 @@ describe('Google AI Veo', () => {
     const defaultApiKey = 'default-api-key';
 
     beforeEach(() => {
-      mockAi = sinon.createStubInstance(Genkit);
       fetchStub = sinon.stub(global, 'fetch');
       envStub = sinon.stub(process, 'env').value({});
     });
@@ -219,15 +236,13 @@ describe('Google AI Veo', () => {
       const baseUrl = defineOptions.baseUrl;
       const apiKey = defineOptions.apiKey;
 
-      defineModel(mockAi as any, name, { apiKey, apiVersion, baseUrl });
-      assert.ok(
-        mockAi.defineBackgroundModel.calledOnce,
-        'defineBackgroundModel should be called'
-      );
-      const callArgs = mockAi.defineBackgroundModel.firstCall.args;
-      assert.strictEqual(callArgs[0].name, `googleai/${name}`);
-      assert.strictEqual(callArgs[0].configSchema, VeoConfigSchema);
-      return { start: callArgs[0].start, check: callArgs[0].check };
+      const model = defineModel(name, { apiKey, apiVersion, baseUrl });
+      assert.strictEqual(model.__action.name, `googleai/${name}`);
+      assert.strictEqual(model.__configSchema, VeoConfigSchema);
+      return {
+        start: (req) => model.start(req),
+        check: (op) => model.check(op),
+      };
     }
 
     describe('start()', () => {
@@ -236,6 +251,8 @@ describe('Google AI Veo', () => {
         messages: [{ role: 'user', content: [{ text: prompt }] }],
         config: {
           aspectRatio: '16:9',
+          resolution: '4k',
+          seed: 123,
         },
       };
 
@@ -268,7 +285,7 @@ describe('Google AI Veo', () => {
         assert.strictEqual(fetchArgs[1].method, 'POST');
 
         const expectedVeoPredictRequest: VeoPredictRequest = {
-          instances: [{ prompt: prompt }], // NOTE: image key is omitted
+          instances: [{ prompt: prompt }],
           parameters: toVeoParameters(request),
         };
         assert.deepStrictEqual(
@@ -276,7 +293,45 @@ describe('Google AI Veo', () => {
           expectedVeoPredictRequest
         );
 
-        assert.deepStrictEqual(result, fromVeoOperation(mockOp));
+        const expectedOp = fromVeoOperation(mockOp);
+        assert.strictEqual(result.id, expectedOp.id);
+        assert.strictEqual(result.done, expectedOp.done);
+        assert.ok(result.action);
+      });
+
+      it('should handle video input', async () => {
+        const videoUrl = 'gs://test-bucket/test-video.mp4';
+        const requestWithVideo: GenerateRequest<typeof VeoConfigSchema> = {
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { text: prompt },
+                { media: { url: videoUrl, contentType: 'video/mp4' } },
+              ],
+            },
+          ],
+        };
+        const mockOp: VeoOperation = {
+          name: 'operations/start-video-123',
+          done: false,
+        };
+        mockFetchResponse(mockOp);
+
+        const { start } = captureModelRunner({ apiKey: defaultApiKey });
+        await start(requestWithVideo);
+
+        sinon.assert.calledOnce(fetchStub);
+        const fetchArgs = fetchStub.lastCall.args;
+        const body = JSON.parse(fetchArgs[1].body);
+
+        const expectedInstance = {
+          prompt: prompt,
+          video: {
+            uri: videoUrl,
+          },
+        };
+        assert.deepStrictEqual(body.instances[0], expectedInstance);
       });
 
       it('should handle custom apiVersion and baseUrl', async () => {
@@ -324,6 +379,28 @@ describe('Google AI Veo', () => {
           /Error fetching from .*models\/veo-test-model:predictLongRunning.* Invalid argument/
         );
       });
+
+      it('persists client options to metadata', async () => {
+        mockFetchResponse({ name: 'operations/start123', done: false });
+        const { start } = captureModelRunner({ apiKey: defaultApiKey });
+
+        const req: GenerateRequest<typeof VeoConfigSchema> = {
+          ...request,
+          config: {
+            apiKey: 'request-level-api-key',
+          },
+        };
+
+        const operation = await start(req);
+
+        assert.deepStrictEqual(operation.metadata?.clientOptions, {
+          apiVersion: undefined,
+          apiKey: 'request-level-api-key',
+          baseUrl: undefined,
+          customHeaders: undefined,
+          experimental_debugTraces: undefined,
+        });
+      });
     });
 
     describe('check()', () => {
@@ -362,7 +439,11 @@ describe('Google AI Veo', () => {
         assert.deepStrictEqual(fetchArgs[1].headers, expectedHeaders);
         assert.strictEqual(fetchArgs[1].method, 'GET');
 
-        assert.deepStrictEqual(result, fromVeoOperation(mockResponse));
+        const expectedOp = fromVeoOperation(mockResponse);
+        assert.strictEqual(result.id, expectedOp.id);
+        assert.strictEqual(result.done, expectedOp.done);
+        assert.deepStrictEqual(result.output, expectedOp.output);
+        assert.ok(result.action);
       });
 
       it('should handle custom apiVersion and baseUrl for check', async () => {
@@ -394,6 +475,30 @@ describe('Google AI Veo', () => {
         await assert.rejects(
           check(pendingOp),
           /Error fetching from .*operations\/check123.* Not found/
+        );
+      });
+
+      it('uses persisted options in check', async () => {
+        mockFetchResponse({ name: operationId, done: true });
+
+        const { check } = captureModelRunner({ apiKey: defaultApiKey });
+
+        const opWithMetadata: Operation = {
+          ...pendingOp,
+          metadata: {
+            clientOptions: {
+              apiKey: 'request-level-api-key',
+            },
+          },
+        };
+
+        await check(opWithMetadata);
+
+        sinon.assert.calledOnce(fetchStub);
+        const fetchArgs = fetchStub.lastCall.args;
+        assert.strictEqual(
+          fetchArgs[1].headers['x-goog-api-key'],
+          'request-level-api-key'
         );
       });
     });

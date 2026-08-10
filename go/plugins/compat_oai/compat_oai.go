@@ -17,7 +17,6 @@ package compat_oai
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/firebase/genkit/go/ai"
@@ -68,6 +67,14 @@ type OpenAICompatible struct {
 	// This will be used as a prefix for model names (e.g., "myprovider/model-name").
 	// Should be lowercase and match the plugin's Name() method.
 	Provider string
+
+	// API key to use with the desired plugin.
+	APIKey string
+
+	// Base URL to use for custom endpoints.
+	// This should be used if you are running through a proxy or
+	// using a non-official endpoint
+	BaseURL string
 }
 
 // Init implements genkit.Plugin.
@@ -76,6 +83,14 @@ func (o *OpenAICompatible) Init(ctx context.Context) []api.Action {
 	defer o.mu.Unlock()
 	if o.initted {
 		panic("compat_oai.Init already called")
+	}
+
+	if o.APIKey != "" {
+		o.Opts = append([]option.RequestOption{option.WithAPIKey(o.APIKey)}, o.Opts...)
+	}
+
+	if o.BaseURL != "" {
+		o.Opts = append([]option.RequestOption{option.WithBaseURL(o.BaseURL)}, o.Opts...)
 	}
 
 	// create client
@@ -99,19 +114,20 @@ func (o *OpenAICompatible) DefineModel(provider, id string, opts ai.ModelOptions
 		panic("OpenAICompatible.Init not called")
 	}
 
-	// Strip provider prefix if present to check against supportedModels
-	modelName := strings.TrimPrefix(id, provider+"/")
-
 	return ai.NewModel(api.NewName(provider, id), &opts, func(
 		ctx context.Context,
 		input *ai.ModelRequest,
 		cb func(context.Context, *ai.ModelResponseChunk) error,
 	) (*ai.ModelResponse, error) {
 		// Configure the response generator with input
-		generator := NewModelGenerator(o.client, modelName).WithMessages(input.Messages).WithConfig(input.Config).WithTools(input.Tools)
+		generator := NewModelGenerator(o.client, id).
+			WithMessages(input.Messages).
+			WithConfig(input.Config).
+			WithTools(input.Tools).
+			WithToolChoice(input.ToolChoice)
 
 		// Generate response
-		resp, err := generator.Generate(ctx, cb)
+		resp, err := generator.Generate(ctx, input, cb)
 		if err != nil {
 			return nil, err
 		}
@@ -197,7 +213,7 @@ func (o *OpenAICompatible) ListActions(ctx context.Context) []api.ActionDesc {
 					"systemRole":  true,
 					"tools":       true,
 					"toolChoice":  true,
-					"constrained": true,
+					"constrained": "all",
 				},
 			},
 			"versions": []string{},

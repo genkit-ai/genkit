@@ -22,6 +22,7 @@ export * from './tracing/exporter.js';
 export * from './tracing/instrumentation.js';
 export * from './tracing/types.js';
 
+const oTelInitializationKey = '__GENKIT_DISABLE_GENKIT_OTEL_INITIALIZATION';
 const instrumentationKey = '__GENKIT_TELEMETRY_INSTRUMENTED';
 const telemetryProviderKey = '__GENKIT_TELEMETRY_PROVIDER';
 
@@ -96,6 +97,9 @@ export function setTelemetryProvider(provider: TelemetryProvider) {
 export async function enableTelemetry(
   telemetryConfig: TelemetryConfig | Promise<TelemetryConfig>
 ) {
+  if (isOTelInitializationDisabled()) {
+    return;
+  }
   global[instrumentationKey] =
     telemetryConfig instanceof Promise ? telemetryConfig : Promise.resolve();
   return getTelemetryProvider().enableTelemetry(telemetryConfig);
@@ -108,4 +112,22 @@ export async function enableTelemetry(
  */
 export async function flushTracing() {
   return getTelemetryProvider().flushTracing();
+}
+
+function isOTelInitializationDisabled(): boolean {
+  return global[oTelInitializationKey] === true;
+}
+
+/**
+ * Disables Genkit's OTel initialization. This is useful when you want to
+ * control the OTel initialization yourself.
+ *
+ * This function attempts to control Genkit's internal OTel instrumentation behaviour,
+ * since internal implementation details are subject to change at any time consider
+ * this function "unstable" and subject to breaking changes as well.
+ *
+ * @hidden
+ */
+export function disableGenkitOTelInitialization() {
+  global[oTelInitializationKey] = true;
 }

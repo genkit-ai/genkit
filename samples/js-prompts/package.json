@@ -15,7 +15,7 @@
   "license": "ISC",
   "dependencies": {
     "genkit": "^1.0.4",
-    "@genkit-ai/googleai": "^1.0.4",
+    "@genkit-ai/google-genai": "^1.0.4",
     "@genkit-ai/express": "^1.0.4",
     "express": "^4.21.0",
     "zod": "^3.23.8"

@@ -99,7 +99,6 @@ func convertSpan(span sdktrace.ReadOnlySpan) *SpanData {
 		SpanID:                  sc.SpanID().String(),
 		TraceID:                 sc.TraceID().String(),
 		StartTime:               ToMilliseconds(span.StartTime()),
-		EndTime:                 ToMilliseconds(span.EndTime()),
 		Attributes:              attributesToMap(span.Attributes()),
 		DisplayName:             span.Name(),
 		Links:                   convertLinks(span.Links()),
@@ -107,6 +106,15 @@ func convertSpan(span sdktrace.ReadOnlySpan) *SpanData {
 		SpanKind:                strings.ToUpper(span.SpanKind().String()),
 		SameProcessAsParentSpan: BoolValue{!sc.IsRemote()},
 		Status:                  convertStatus(span.Status()),
+	}
+	// A span exported as it starts (live traces) has not ended yet. OpenTelemetry
+	// reports a zero end time for it, which ToMilliseconds would turn into a
+	// garbage (overflowed) value; leave EndTime at 0 instead. The telemetry
+	// server treats a falsy endTime as "in progress": it renders no duration and
+	// its span-merge keeps the completed span once the real end arrives, even if
+	// the start event is delivered out of order.
+	if et := span.EndTime(); !et.IsZero() {
+		sd.EndTime = ToMilliseconds(et)
 	}
 	if p := span.Parent(); p.HasSpanID() {
 		sd.ParentSpanID = p.SpanID().String()

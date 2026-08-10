@@ -5,10 +5,10 @@ package googlecloud
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -19,9 +19,15 @@ import (
 func TestNewPathTelemetry(t *testing.T) {
 	pathTel := NewPathTelemetry()
 
-	assert.NotNil(t, pathTel)
-	assert.NotNil(t, pathTel.pathCounter)
-	assert.NotNil(t, pathTel.pathLatencies)
+	if pathTel == nil {
+		t.Fatal("pathTel should not be nil")
+	}
+	if pathTel.pathCounter == nil {
+		t.Error("pathCounter should not be nil")
+	}
+	if pathTel.pathLatencies == nil {
+		t.Error("pathLatencies should not be nil")
+	}
 }
 
 // TestPathTelemetry_PipelineIntegration verifies that path telemetry
@@ -56,11 +62,15 @@ func TestPathTelemetry_PipelineIntegration(t *testing.T) {
 	logOutput := logBuf.String()
 
 	// Verify path telemetry processed the failing span
-	assert.Contains(t, logOutput, "Error[")
+	if !strings.Contains(logOutput, "Error[") {
+		t.Error("logOutput should contain \"Error[\"")
+	}
 
 	// Verify the span was exported
 	spans := f.waitAndGetSpans()
-	assert.Len(t, spans, 1)
+	if len(spans) != 1 {
+		t.Errorf("got %d spans, want 1", len(spans))
+	}
 }
 
 func TestPathTelemetry_MetricCapture(t *testing.T) {
@@ -171,18 +181,23 @@ func TestPathTelemetry_MetricCapture(t *testing.T) {
 
 			// Wait for span to be processed
 			spans := f.waitAndGetSpans()
-			assert.Len(t, spans, 1)
+			if len(spans) != 1 {
+				t.Errorf("got %d spans, want 1", len(spans))
+			}
 
 			// Collect metrics using the manual reader
 			var resourceMetrics metricdata.ResourceMetrics
 			err := reader.Collect(ctx, &resourceMetrics)
-			assert.NoError(t, err)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
 			// Verify counter metrics
 			if tc.expectCounterMetrics {
 				counterMetric := findMetric(&resourceMetrics, "genkit/feature/path/requests")
-				assert.NotNil(t, counterMetric, "Expected counter metric to be recorded")
-				if counterMetric != nil {
+				if counterMetric == nil {
+					t.Error("Expected counter metric to be recorded")
+				} else {
 					expectedAttrs := map[string]interface{}{
 						"featureName": tc.expectedFeatureName,
 						"status":      "failure",
@@ -198,8 +213,9 @@ func TestPathTelemetry_MetricCapture(t *testing.T) {
 			// Verify histogram metrics
 			if tc.expectHistogramMetrics {
 				histogramMetric := findMetric(&resourceMetrics, "genkit/feature/path/latency")
-				assert.NotNil(t, histogramMetric, "Expected histogram metric to be recorded")
-				if histogramMetric != nil {
+				if histogramMetric == nil {
+					t.Error("Expected histogram metric to be recorded")
+				} else {
 					expectedAttrs := map[string]interface{}{
 						"featureName": tc.expectedFeatureName,
 						"status":      "failure",
@@ -216,8 +232,12 @@ func TestPathTelemetry_MetricCapture(t *testing.T) {
 				// Should have no path metrics
 				counterMetric := findMetric(&resourceMetrics, "genkit/feature/path/requests")
 				histogramMetric := findMetric(&resourceMetrics, "genkit/feature/path/latency")
-				assert.Nil(t, counterMetric, "Should not have counter metrics")
-				assert.Nil(t, histogramMetric, "Should not have histogram metrics")
+				if counterMetric != nil {
+					t.Error("Should not have counter metrics")
+				}
+				if histogramMetric != nil {
+					t.Error("Should not have histogram metrics")
+				}
 			}
 		})
 	}
@@ -321,14 +341,19 @@ func TestPathTelemetry_ComprehensiveScenarios(t *testing.T) {
 
 			// Verify spans were processed
 			spans := f.waitAndGetSpans()
-			assert.Len(t, spans, 1)
+			if len(spans) != 1 {
+				t.Errorf("got %d spans, want 1", len(spans))
+			}
 
 			// Check logging behavior
 			if tc.expectLog {
-				assert.Contains(t, logOutput, tc.expectedText,
-					"Expected log containing %q but got: %q", tc.expectedText, logOutput)
+				if !strings.Contains(logOutput, tc.expectedText) {
+					t.Errorf("Expected log containing %q but got: %q", tc.expectedText, logOutput)
+				}
 			} else {
-				assert.NotContains(t, logOutput, "Error[", "Should not log errors for non-qualifying spans")
+				if strings.Contains(logOutput, "Error[") {
+					t.Error("Should not log errors for non-qualifying spans")
+				}
 			}
 		})
 	}
@@ -367,27 +392,43 @@ func TestPathTelemetry_LatencyVerification(t *testing.T) {
 	// Collect metrics
 	var resourceMetrics metricdata.ResourceMetrics
 	err := reader.Collect(ctx, &resourceMetrics)
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// Verify latency histogram
 	histogramMetric := findMetric(&resourceMetrics, "genkit/feature/path/latency")
-	assert.NotNil(t, histogramMetric, "Expected latency histogram metric")
+	if histogramMetric == nil {
+		t.Fatal("Expected latency histogram metric")
+	}
 
 	if histogramMetric != nil {
 		histogram, ok := histogramMetric.Data.(metricdata.Histogram[float64])
-		assert.True(t, ok, "Expected histogram type")
+		if !ok {
+			t.Errorf("Expected histogram type, got %T", histogramMetric.Data)
+		}
 
 		if len(histogram.DataPoints) > 0 {
 			dp := histogram.DataPoints[0]
 
 			// More specific latency assertions
-			assert.Equal(t, uint64(1), dp.Count, "Should have one measurement")
-			assert.GreaterOrEqual(t, dp.Sum, 2.0, "Should have at least 2ms latency due to sleep")
-			assert.Less(t, dp.Sum, 100.0, "Should be less than 100ms for test span")
+			if got, want := dp.Count, uint64(1); got != want {
+				t.Errorf("Count = %v, want %v", got, want)
+			}
+			if dp.Sum < 2.0 {
+				t.Errorf("Sum = %v, want >= 2.0", dp.Sum)
+			}
+			if dp.Sum >= 100.0 {
+				t.Errorf("Sum = %v, want < 100.0", dp.Sum)
+			}
 
 			// Verify histogram has reasonable structure
-			assert.NotEmpty(t, dp.BucketCounts, "Should have histogram buckets")
-			assert.NotEmpty(t, dp.Bounds, "Should have bucket boundaries")
+			if len(dp.BucketCounts) == 0 {
+				t.Error("Should have histogram buckets")
+			}
+			if len(dp.Bounds) == 0 {
+				t.Error("Should have bucket boundaries")
+			}
 
 			// At least one bucket should contain our measurement
 			hasNonZeroBucket := false
@@ -397,7 +438,9 @@ func TestPathTelemetry_LatencyVerification(t *testing.T) {
 					break
 				}
 			}
-			assert.True(t, hasNonZeroBucket, "At least one bucket should contain the measurement")
+			if !hasNonZeroBucket {
+				t.Error("At least one bucket should contain the measurement")
+			}
 		}
 	}
 }

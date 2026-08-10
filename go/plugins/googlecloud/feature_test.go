@@ -6,10 +6,10 @@ package googlecloud
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -42,7 +42,9 @@ func TestFeatureTelemetry_PipelineIntegration(t *testing.T) {
 
 	// Verify the span was exported
 	spans := f.waitAndGetSpans()
-	assert.Len(t, spans, 1)
+	if len(spans) != 1 {
+		t.Errorf("got %d spans, want 1", len(spans))
+	}
 }
 
 func TestFeatureTelemetry_MetricCapture(t *testing.T) {
@@ -170,18 +172,23 @@ func TestFeatureTelemetry_MetricCapture(t *testing.T) {
 
 			// Wait for span to be processed
 			spans := f.waitAndGetSpans()
-			assert.Len(t, spans, 1)
+			if len(spans) != 1 {
+				t.Errorf("got %d spans, want 1", len(spans))
+			}
 
 			// Collect metrics using the manual reader
 			var resourceMetrics metricdata.ResourceMetrics
 			err := reader.Collect(ctx, &resourceMetrics)
-			assert.NoError(t, err)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
 			// Verify counter metrics
 			if tc.expectCounterMetrics {
 				counterMetric := findMetric(&resourceMetrics, "genkit/feature/requests")
-				assert.NotNil(t, counterMetric, "Expected counter metric to be recorded")
-				if counterMetric != nil {
+				if counterMetric == nil {
+					t.Error("Expected counter metric to be recorded")
+				} else {
 					expectedAttrs := map[string]interface{}{
 						"name":   tc.expectedName,
 						"status": tc.expectedStatus,
@@ -197,8 +204,9 @@ func TestFeatureTelemetry_MetricCapture(t *testing.T) {
 			// Verify histogram metrics
 			if tc.expectHistogramMetrics {
 				histogramMetric := findMetric(&resourceMetrics, "genkit/feature/latency")
-				assert.NotNil(t, histogramMetric, "Expected histogram metric to be recorded")
-				if histogramMetric != nil {
+				if histogramMetric == nil {
+					t.Error("Expected histogram metric to be recorded")
+				} else {
 					expectedAttrs := map[string]interface{}{
 						"name":   tc.expectedName,
 						"status": tc.expectedStatus,
@@ -215,8 +223,12 @@ func TestFeatureTelemetry_MetricCapture(t *testing.T) {
 				// Should have no feature metrics
 				counterMetric := findMetric(&resourceMetrics, "genkit/feature/requests")
 				histogramMetric := findMetric(&resourceMetrics, "genkit/feature/latency")
-				assert.Nil(t, counterMetric, "Should not have counter metrics")
-				assert.Nil(t, histogramMetric, "Should not have histogram metrics")
+				if counterMetric != nil {
+					t.Error("Should not have counter metrics")
+				}
+				if histogramMetric != nil {
+					t.Error("Should not have histogram metrics")
+				}
 			}
 		})
 	}
@@ -302,7 +314,9 @@ func TestFeatureTelemetry_ComprehensiveScenarios(t *testing.T) {
 
 			// Verify spans were processed
 			spans := f.waitAndGetSpans()
-			assert.Len(t, spans, 1)
+			if len(spans) != 1 {
+				t.Errorf("got %d spans, want 1", len(spans))
+			}
 		})
 	}
 }
@@ -359,42 +373,63 @@ func TestFeatureTelemetry_InputOutputLogging(t *testing.T) {
 	logOutput := logBuf.String()
 
 	// Verify input/output logs are present - we explicitly enabled logInputOutput=true
-	assert.Contains(t, logOutput, "Input[", "Expected input log")
-	assert.Contains(t, logOutput, "Output[", "Expected output log")
-	assert.Contains(t, logOutput, "testFeature", "Expected feature name in logs")
+	if !strings.Contains(logOutput, "Input[") {
+		t.Error("Expected input log")
+	}
+	if !strings.Contains(logOutput, "Output[") {
+		t.Error("Expected output log")
+	}
+	if !strings.Contains(logOutput, "testFeature") {
+		t.Error("Expected feature name in logs")
+	}
 
 	// Verify spans were processed
 	spans := f.waitAndGetSpans()
-	assert.Len(t, spans, 1)
+	if len(spans) != 1 {
+		t.Errorf("got %d spans, want 1", len(spans))
+	}
 }
 
 // Helper function for histogram metric verification (reuses counter verification pattern)
 func verifyHistogramMetric(t *testing.T, metric *metricdata.Metrics, expectedAttrs map[string]interface{}) {
 	// Verify it's a histogram metric
 	histogram, ok := metric.Data.(metricdata.Histogram[float64])
-	assert.True(t, ok, "Expected metric to be a Histogram[float64]")
+	if !ok {
+		t.Errorf("Expected metric to be a Histogram[float64], got %T", metric.Data)
+		return
+	}
 
 	// Should have exactly one data point for our test
-	assert.Len(t, histogram.DataPoints, 1, "Expected exactly one data point")
+	if len(histogram.DataPoints) != 1 {
+		t.Fatalf("got %d data points, want 1", len(histogram.DataPoints))
+	}
 
 	if len(histogram.DataPoints) > 0 {
 		dp := histogram.DataPoints[0]
 
 		// Verify the count (should be 1 for our test)
-		assert.Equal(t, uint64(1), dp.Count, "Expected histogram count to be 1")
+		if got, want := dp.Count, uint64(1); got != want {
+			t.Errorf("Count = %v, want %v", got, want)
+		}
 
 		// Verify the latency value is reasonable for a test span
-		assert.Greater(t, dp.Sum, float64(0), "Expected histogram sum to be positive")
+		if dp.Sum <= 0 {
+			t.Errorf("Sum = %v, want > 0", dp.Sum)
+		}
 
 		// Verify we have bucket counts (histogram should have buckets)
-		assert.NotEmpty(t, dp.BucketCounts, "Expected histogram to have bucket counts")
+		if len(dp.BucketCounts) == 0 {
+			t.Error("Expected histogram to have bucket counts")
+		}
 
 		// Verify the sum of bucket counts equals the total count
 		var totalBucketCount uint64
 		for _, bucketCount := range dp.BucketCounts {
 			totalBucketCount += bucketCount
 		}
-		assert.Equal(t, dp.Count, totalBucketCount, "Sum of bucket counts should equal total count")
+		if totalBucketCount != dp.Count {
+			t.Errorf("Sum of bucket counts = %v, want %v", totalBucketCount, dp.Count)
+		}
 
 		// Verify attributes (reuse same pattern as counter verification)
 		for expectedKey, expectedValue := range expectedAttrs {
@@ -404,18 +439,28 @@ func verifyHistogramMetric(t *testing.T, metric *metricdata.Metrics, expectedAtt
 					found = true
 					switch v := expectedValue.(type) {
 					case string:
-						assert.Equal(t, v, attr.Value.AsString(), "Attribute %s mismatch", expectedKey)
+						if got, want := attr.Value.AsString(), v; got != want {
+							t.Errorf("Attribute %s = %q, want %q", expectedKey, got, want)
+						}
 					case bool:
-						assert.Equal(t, v, attr.Value.AsBool(), "Attribute %s mismatch", expectedKey)
+						if got, want := attr.Value.AsBool(), v; got != want {
+							t.Errorf("Attribute %s = %v, want %v", expectedKey, got, want)
+						}
 					case int64:
-						assert.Equal(t, v, attr.Value.AsInt64(), "Attribute %s mismatch", expectedKey)
+						if got, want := attr.Value.AsInt64(), v; got != want {
+							t.Errorf("Attribute %s = %v, want %v", expectedKey, got, want)
+						}
 					default:
-						assert.Equal(t, fmt.Sprintf("%v", v), attr.Value.AsString(), "Attribute %s mismatch", expectedKey)
+						if got, want := attr.Value.AsString(), fmt.Sprintf("%v", v); got != want {
+							t.Errorf("Attribute %s = %q, want %q", expectedKey, got, want)
+						}
 					}
 					break
 				}
 			}
-			assert.True(t, found, "Expected attribute %s not found", expectedKey)
+			if !found {
+				t.Errorf("Expected attribute %s not found", expectedKey)
+			}
 		}
 	}
 }
@@ -450,27 +495,43 @@ func TestFeatureTelemetry_LatencyVerification(t *testing.T) {
 	// Collect metrics
 	var resourceMetrics metricdata.ResourceMetrics
 	err := reader.Collect(ctx, &resourceMetrics)
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// Verify latency histogram
 	histogramMetric := findMetric(&resourceMetrics, "genkit/feature/latency")
-	assert.NotNil(t, histogramMetric, "Expected latency histogram metric")
+	if histogramMetric == nil {
+		t.Fatal("Expected latency histogram metric")
+	}
 
 	if histogramMetric != nil {
 		histogram, ok := histogramMetric.Data.(metricdata.Histogram[float64])
-		assert.True(t, ok, "Expected histogram type")
+		if !ok {
+			t.Errorf("Expected histogram type, got %T", histogramMetric.Data)
+		}
 
 		if len(histogram.DataPoints) > 0 {
 			dp := histogram.DataPoints[0]
 
 			// More specific latency assertions
-			assert.Equal(t, uint64(1), dp.Count, "Should have one measurement")
-			assert.GreaterOrEqual(t, dp.Sum, 1.0, "Should have at least 1ms latency due to sleep")
-			assert.Less(t, dp.Sum, 100.0, "Should be less than 100ms for test span")
+			if got, want := dp.Count, uint64(1); got != want {
+				t.Errorf("Count = %v, want %v", got, want)
+			}
+			if dp.Sum < 1.0 {
+				t.Errorf("Sum = %v, want >= 1.0", dp.Sum)
+			}
+			if dp.Sum >= 100.0 {
+				t.Errorf("Sum = %v, want < 100.0", dp.Sum)
+			}
 
 			// Verify histogram has reasonable structure
-			assert.NotEmpty(t, dp.BucketCounts, "Should have histogram buckets")
-			assert.NotEmpty(t, dp.Bounds, "Should have bucket boundaries")
+			if len(dp.BucketCounts) == 0 {
+				t.Error("Should have histogram buckets")
+			}
+			if len(dp.Bounds) == 0 {
+				t.Error("Should have bucket boundaries")
+			}
 
 			// At least one bucket should contain our measurement
 			hasNonZeroBucket := false
@@ -480,7 +541,9 @@ func TestFeatureTelemetry_LatencyVerification(t *testing.T) {
 					break
 				}
 			}
-			assert.True(t, hasNonZeroBucket, "At least one bucket should contain the measurement")
+			if !hasNonZeroBucket {
+				t.Error("At least one bucket should contain the measurement")
+			}
 		}
 	}
 }

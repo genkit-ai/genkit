@@ -16,18 +16,18 @@ Before running this sample, ensure you have the following:
 
 Clone this repository to your local machine and navigate to the project directory. Then, install the necessary dependencies:
 
-\`\`\`bash
+```bash
 pnpm install
-\`\`\`
+```
 
 ### Step 2: Set Up Environment Variables
 
-Create a \`.env\` file in the root directory and set the following variables. You can use the provided \`.env.example\` as a reference.
+Create a `.env` file in the root directory and set the following variables. You can use the provided `.env.example` as a reference.
 
-\`\`\`plaintext
+```plaintext
 PROJECT_ID=your_project_id_here
 LOCATION=your_location_here
-\`\`\`
+```
 
 These variables are required to configure the Vertex AI project and location for reranking.
 
@@ -35,9 +35,9 @@ These variables are required to configure the Vertex AI project and location for
 
 Start the Genkit server:
 
-\`\`\`bash
+```bash
 genkit start
-\`\`\`
+```
 
 This will launch the server that hosts the reranking flow.
 
@@ -55,9 +55,9 @@ This sample demonstrates how to use the Vertex AI plugin to rerank a predefined 
 
 ### Rerank Flow
 
-The \`rerankFlow\` function takes a query as input, reranks the predefined document content using the Vertex AI semantic reranker, and returns the documents sorted by relevance score.
+The `rerankFlow` function takes a query as input, reranks the predefined document content using the Vertex AI semantic reranker, and returns the documents sorted by relevance score.
 
-\`\`\`typescript
+```typescript
 export const rerankFlow = defineFlow(
 {
 name: 'rerankFlow',
@@ -88,15 +88,15 @@ const reranker = 'vertexai/reranker';
 
 }
 );
-\`\`\`
+```
 
 ### Running the Server
 
-The server is started using the \`startFlowsServer\` function, which sets up the Genkit server to handle flow requests.
+The server is started using the `startFlowsServer` function, which sets up the Genkit server to handle flow requests.
 
-\`\`\`typescript
+```typescript
 startFlowsServer();
-\`\`\`
+```
 
 ## License
 

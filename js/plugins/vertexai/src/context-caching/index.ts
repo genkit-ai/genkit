@@ -17,7 +17,7 @@ import type { CachedContent, StartChatParams } from '@google-cloud/vertexai';
 import {
   CachedContents,
   type ApiClient,
-} from '@google-cloud/vertexai/build/src/resources';
+} from '@google-cloud/vertexai/build/src/resources/index.js';
 import { GenkitError, type GenerateRequest, type z } from 'genkit';
 import { logger } from 'genkit/logging';
 import type { CacheConfigDetails } from './types.js';

@@ -63,3 +63,35 @@ export function stackTraceSpans(trace: TraceData): NestedSpanData | undefined {
 
   return bestRoot;
 }
+
+/** Extracts the display type/subtype of a span. */
+export function getSpanType(span: NestedSpanData): string {
+  const attrs = span.attributes || {};
+  const kind = span.spanKind;
+  let kindStr = 'span';
+  if (typeof kind === 'string') {
+    kindStr = kind.toLowerCase();
+  } else if (typeof kind === 'number') {
+    const kinds = ['internal', 'server', 'client', 'producer', 'consumer'];
+    kindStr = kinds[kind] || 'span';
+  }
+  return (
+    (attrs['genkit:metadata:subtype'] as string) ||
+    (attrs['genkit:type'] as string) ||
+    kindStr
+  );
+}
+
+/** Extracts the status icon ('✔', '✖', or '') of a span. */
+export function getSpanStatus(span: NestedSpanData): string {
+  const attrs = span.attributes || {};
+  const state = attrs['genkit:state'] as string;
+  if (state) {
+    if (state.toLowerCase() === 'success') return '✔';
+    if (state.toLowerCase() === 'error' || state.toLowerCase() === 'failed')
+      return '✖';
+  }
+  if (span.status?.code === 1 || span.status?.code === 0) return '✔';
+  if (span.status?.code === 2) return '✖';
+  return '';
+}

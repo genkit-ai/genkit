@@ -1,0 +1,34 @@
+---
+title: Search Grounding and URL Context
+description: read this to understand how to ground results on Google search or automatically ingest URLs in prompts to understand their contents
+---
+
+When using Gemini models, you can add configuration to automatically ground the prompt in Google search:
+
+```ts
+const {text} = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash'),
+  // this includes the "built-in" search grounding tool
+  config: {
+    tools: [
+      {googleSearch: {}},
+    ]
+  }
+})
+```
+
+If your prompt contains URLs that you want the model to read and understand, you can add the URL context tool:
+
+```ts
+const {text} = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash'),
+  // this includes the "built-in" url fetching tool
+  config: {
+    tools: [
+      {urlContext: {}},
+    ]
+  }
+})
+```
+
+You can use either or both of these tools to improve the "groundedness" of your generated model responses.

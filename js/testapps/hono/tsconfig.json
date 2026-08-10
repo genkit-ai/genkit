@@ -1,0 +1,15 @@
+{
+  "compileOnSave": true,
+  "include": ["src"],
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noImplicitReturns": true,
+    "outDir": "lib",
+    "sourceMap": true,
+    "strict": true,
+    "target": "ES2022",
+    "skipLibCheck": true,
+    "esModuleInterop": true
+  }
+}

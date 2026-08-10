@@ -25,6 +25,8 @@ import {
   GenerateContentRequest,
   GenerateContentResponse,
   GenerateContentStreamResult,
+  GoogleMaps,
+  GoogleMapsTool,
   GoogleSearchRetrieval,
   GoogleSearchRetrievalTool,
   GroundingMetadata,
@@ -42,6 +44,7 @@ import {
   ToolConfig,
   isCodeExecutionTool,
   isFunctionDeclarationsTool,
+  isGoogleMapsTool,
   isGoogleSearchRetrievalTool,
   isObject,
   isRetrievalTool,
@@ -55,6 +58,7 @@ export {
   TaskTypeSchema,
   isCodeExecutionTool,
   isFunctionDeclarationsTool,
+  isGoogleMapsTool,
   isGoogleSearchRetrievalTool,
   isObject,
   isRetrievalTool,
@@ -66,6 +70,8 @@ export {
   type GenerateContentRequest,
   type GenerateContentResponse,
   type GenerateContentStreamResult,
+  type GoogleMaps,
+  type GoogleMapsTool,
   type GoogleSearchRetrieval,
   type GoogleSearchRetrievalTool,
   type GroundingMetadata,
@@ -83,25 +89,50 @@ export {
 export interface VertexPluginOptions {
   /** The Vertex API key for express mode */
   apiKey?: string | false;
+  /** The api version (v1 or v1beta1). Default is v1beta1 if none is specified */
+  apiVersion?: 'v1' | 'v1beta1';
   /** The Google Cloud project id to call. */
   projectId?: string;
-  /** The Google Cloud region to call. */
+  /** The Google Cloud location/region to call. This can be 'global' or a multi-region like 'us' or 'eu' or any of the other locations like us-central1 etc. */
   location?: string;
   /** Provide custom authentication configuration for connecting to Vertex AI. */
   googleAuth?: GoogleAuthOptions;
   /** Enables additional debug traces (e.g. raw model API call details). */
   experimental_debugTraces?: boolean;
+  /** Use `responseSchema` field instead of `responseJsonSchema`. */
+  legacyResponseSchema?: boolean;
 }
 
 interface BaseClientOptions {
   /** timeout in milli seconds. time out value needs to be non negative. */
   timeout?: number;
   signal?: AbortSignal;
+  customHeaders?: Record<string, string>;
+  apiVersion?: 'v1' | 'v1beta1';
+  /** Enables additional debug traces (e.g. raw model API call details). */
+  experimental_debugTraces?: boolean;
 }
 
 export interface RegionalClientOptions extends BaseClientOptions {
   kind: 'regional';
   location: string;
+  projectId: string;
+  authClient: GoogleAuth;
+  apiKey?: string; // In addition to regular auth
+}
+
+export const MULTI_REGIONAL_LOCATIONS = ['eu', 'us'] as const;
+export type MultiRegionalLocations = (typeof MULTI_REGIONAL_LOCATIONS)[number];
+export function isMultiRegionalLocation(
+  loc?: string
+): loc is MultiRegionalLocations {
+  if (!loc) return false;
+  return MULTI_REGIONAL_LOCATIONS.includes(loc as MultiRegionalLocations);
+}
+
+export interface MultiRegionalClientOptions extends BaseClientOptions {
+  kind: 'multi-regional';
+  location: MultiRegionalLocations;
   projectId: string;
   authClient: GoogleAuth;
   apiKey?: string; // In addition to regular auth
@@ -123,6 +154,7 @@ export interface ExpressClientOptions extends BaseClientOptions {
 /** Resolved options for use with the client */
 export type ClientOptions =
   | RegionalClientOptions
+  | MultiRegionalClientOptions
   | GlobalClientOptions
   | ExpressClientOptions;
 
@@ -300,11 +332,21 @@ export declare interface VeoMedia {
   mimeType?: string;
 }
 
+export declare interface VeoReferenceImage {
+  image: VeoMedia;
+  referenceType: string;
+}
+
+export declare interface VeoMask extends VeoMedia {
+  mask: string;
+}
+
 export declare interface VeoInstance {
   prompt: string;
   image?: VeoMedia;
   lastFrame?: VeoMedia;
   video?: VeoMedia;
+  referenceImages?: VeoReferenceImage[];
 }
 
 export declare interface VeoParameters {

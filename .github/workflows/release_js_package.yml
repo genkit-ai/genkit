@@ -39,10 +39,10 @@ jobs:
     name: Run build tasks
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - uses: pnpm/action-setup@v3
+    - uses: actions/checkout@v5
+    - uses: pnpm/action-setup@v4
     - name: Set up node v20
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v6
       with:
         node-version: 20.x
         cache: 'pnpm'
@@ -57,7 +57,7 @@ jobs:
     - name: Validate working directory is clean
       run: .github/workflows/scripts/ensure-clean-working-tree.sh
     - name: Set up node v20
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v6
       with:
         node-version: 20.x
         cache: 'pnpm'
@@ -65,7 +65,9 @@ jobs:
     - name: release script
       shell: bash
       run: |
-          cd ${{ inputs.packageDir }}
-          pnpm publish --tag ${{ inputs.releaseTag }} --publish-branch ${{ steps.extract_branch.outputs.branch }} --access=public --registry https://wombat-dressing-room.appspot.com
+          cd ${INPUTS_PACKAGEDIR}
+          pnpm publish --tag ${{ inputs.releaseTag }} --publish-branch ${STEPS_EXTRACT_BRANCH_OUTPUTS_BRANCH} --access=public --registry https://wombat-dressing-room.appspot.com
       env:
         NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
+        INPUTS_PACKAGEDIR: ${{ inputs.packageDir }}
+        STEPS_EXTRACT_BRANCH_OUTPUTS_BRANCH: ${{ steps.extract_branch.outputs.branch }}

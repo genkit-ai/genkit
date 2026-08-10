@@ -18,8 +18,11 @@
 
 // important imports for this sample:
 import { vertexAI } from '@genkit-ai/vertexai';
-import { vertexAIRerankers } from '@genkit-ai/vertexai/rerankers';
-import { Document, genkit, z } from 'genkit';
+import {
+  vertexAIRerankers,
+  vertexRerankers,
+} from '@genkit-ai/vertexai/rerankers';
+import { Document, RankedDocument, genkit, z } from 'genkit';
 import { LOCATION, PROJECT_ID } from './config';
 
 // Configure Genkit with Vertex AI plugin
@@ -35,8 +38,9 @@ const ai = genkit({
     vertexAIRerankers({
       projectId: PROJECT_ID,
       location: LOCATION,
-      rerankers: ['vertexai/reranker'],
+      rerankers: ['semantic-ranker-default@latest'],
     }),
+    vertexRerankers(),
   ],
 });
 
@@ -58,10 +62,10 @@ const FAKE_DOCUMENT_CONTENT = [
   'movies',
 ];
 
-export const rerankFlow = ai.defineFlow(
+export const legacyRerankFlow = ai.defineFlow(
   {
-    name: 'rerankFlow',
-    inputSchema: z.object({ query: z.string() }),
+    name: 'legacyRerankFlow',
+    inputSchema: z.object({ query: z.string().default('geometry') }),
     outputSchema: z.array(
       z.object({
         text: z.string(),
@@ -73,15 +77,45 @@ export const rerankFlow = ai.defineFlow(
     const documents = FAKE_DOCUMENT_CONTENT.map((text) =>
       Document.fromText(text)
     );
-    const reranker = 'vertexai/reranker';
 
     const rerankedDocuments = await ai.rerank({
-      reranker,
+      reranker: 'vertexai/semantic-ranker-default@latest',
       query: Document.fromText(query),
       documents,
     });
 
     return rerankedDocuments.map((doc) => ({
+      text: doc.text,
+      score: doc.metadata.score,
+    }));
+  }
+);
+
+export const v2RerankFlow = ai.defineFlow(
+  {
+    name: 'v2RerankFlow',
+    inputSchema: z.object({ query: z.string().default('geometry') }),
+    outputSchema: z.array(
+      z.object({
+        text: z.string(),
+        score: z.number(),
+      })
+    ),
+  },
+  async ({ query }) => {
+    const documents = FAKE_DOCUMENT_CONTENT.map((text) =>
+      Document.fromText(text)
+    );
+    const response = await ai.rerank({
+      reranker: vertexRerankers.reranker('semantic-ranker-fast-004'),
+      documents,
+      query,
+      options: {
+        topN: 3,
+        ignoreRecordDetailsInResponse: true,
+      },
+    });
+    return response.map((doc: RankedDocument) => ({
       text: doc.text,
       score: doc.metadata.score,
     }));

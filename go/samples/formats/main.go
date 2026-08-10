@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"log"
+	"math"
 	"net/http"
 
 	"github.com/firebase/genkit/go/ai"
@@ -30,17 +31,31 @@ type StoryCharacter struct {
 	Age        int    `json:"age"`
 	Hometown   string `json:"hometown"`
 	Profession string `json:"profession"`
+	Gablorken  int    `json:"gablorken"`
 }
 
 func main() {
 	ctx := context.Background()
 	g := genkit.Init(ctx,
-		genkit.WithPlugins(&googlegenai.VertexAI{}),
-		genkit.WithDefaultModel("vertexai/gemini-2.0-flash"),
+		genkit.WithPlugins(&googlegenai.GoogleAI{}),
+		genkit.WithDefaultModel("googleai/gemini-flash-latest"),
+	)
+
+	var callback func(context.Context, *ai.ModelResponseChunk) error
+
+	gablorkenTool := genkit.DefineTool(g, "gablorken", "use when need to calculate a gablorken",
+		func(ctx *ai.ToolContext, input struct {
+			Value float64
+			Over  float64
+		},
+		) (float64, error) {
+			return math.Pow(input.Value, input.Over), nil
+		},
 	)
 
 	defaultPrompt := genkit.DefinePrompt(g, "defaultInstructions",
-		ai.WithPrompt("Generate a children's book story character about someone named {{name}}."),
+		ai.WithPrompt("Generate a children's book story character about someone named {{name}} and generate the gablorken of 2 over 3."),
+		ai.WithTools(gablorkenTool),
 		ai.WithOutputType([]StoryCharacter{}),
 		ai.WithOutputFormat(ai.OutputFormatJSONL),
 	)
@@ -51,13 +66,21 @@ func main() {
 			"{name: string, age: number, homeTown: string, profession: string}"),
 	)
 
-	genkit.DefineFlow(g, "defaultInstructionsFlow", func(ctx context.Context, _ any) ([]*StoryCharacter, error) {
-		resp, err := defaultPrompt.Execute(ctx, ai.WithInput(StoryCharacter{Name: "Willy the Pig"}))
+	genkit.DefineStreamingFlow(g, "defaultInstructionsFlow", func(ctx context.Context, _ any, cb func(context.Context, string) error) ([]*StoryCharacter, error) {
+		if cb != nil {
+			callback = func(ctx context.Context, c *ai.ModelResponseChunk) error {
+				return cb(ctx, c.Text())
+			}
+		}
+		resp, err := defaultPrompt.Execute(ctx,
+			ai.WithInput(StoryCharacter{Name: "Willy the Pig"}),
+			ai.WithStreaming(callback),
+		)
 		if err != nil {
 			return nil, err
 		}
 
-		var defaultCharacter StoryCharacter
+		var defaultCharacter []*StoryCharacter
 		if err := resp.Output(&defaultCharacter); err != nil {
 			return nil, err
 		}
@@ -67,12 +90,12 @@ func main() {
 			return nil, err
 		}
 
-		var customCharacter StoryCharacter
+		var customCharacter []*StoryCharacter
 		if err := resp.Output(&customCharacter); err != nil {
 			return nil, err
 		}
 
-		return []*StoryCharacter{&defaultCharacter, &customCharacter}, nil
+		return append(defaultCharacter, customCharacter...), nil
 	})
 
 	mux := http.NewServeMux()

@@ -15,162 +15,20 @@
  */
 
 import { z } from '@genkit-ai/core';
-import type { Embedding } from './embedder';
-
-const EmptyPartSchema = z.object({
-  text: z.never().optional(),
-  media: z.never().optional(),
-  toolRequest: z.never().optional(),
-  toolResponse: z.never().optional(),
-  data: z.unknown().optional(),
-  metadata: z.record(z.unknown()).optional(),
-  custom: z.record(z.unknown()).optional(),
-  reasoning: z.never().optional(),
-  resource: z.never().optional(),
-});
+import type { Embedding } from './embedder.js';
+import { PartSchema, type Part } from './parts.js';
 
 /**
- * Zod schema for a text part.
+ * Zod schema for the serializable data representation of a {@link Document}.
+ * Contains an array of content parts and optional metadata.
  */
-export const TextPartSchema = EmptyPartSchema.extend({
-  /** The text of the message. */
-  text: z.string(),
-});
-
-/**
- * Zod schema for a reasoning part.
- */
-export const ReasoningPartSchema = EmptyPartSchema.extend({
-  /** The reasoning text of the message. */
-  reasoning: z.string(),
-});
-
-/**
- * Text part.
- */
-export type TextPart = z.infer<typeof TextPartSchema>;
-
-/**
- * Zod schema of media.
- */
-export const MediaSchema = z.object({
-  /** The media content type. Inferred from data uri if not provided. */
-  contentType: z.string().optional(),
-  /** A `data:` or `https:` uri containing the media content.  */
-  url: z.string(),
-});
-
-/**
- * Zod schema of a media part.
- */
-export const MediaPartSchema = EmptyPartSchema.extend({
-  media: MediaSchema,
-});
-
-/**
- * Media part.
- */
-export type MediaPart = z.infer<typeof MediaPartSchema>;
-
-/**
- * Zod schema of a tool request.
- */
-export const ToolRequestSchema = z.object({
-  /** The call id or reference for a specific request. */
-  ref: z.string().optional(),
-  /** The name of the tool to call. */
-  name: z.string(),
-  /** The input parameters for the tool, usually a JSON object. */
-  input: z.unknown().optional(),
-});
-export type ToolRequest = z.infer<typeof ToolRequestSchema>;
-
-/**
- * Zod schema of a tool request part.
- */
-export const ToolRequestPartSchema = EmptyPartSchema.extend({
-  /** A request for a tool to be executed, usually provided by a model. */
-  toolRequest: ToolRequestSchema,
-});
-
-/**
- * Tool part.
- */
-export type ToolRequestPart = z.infer<typeof ToolRequestPartSchema>;
-
-/**
- * Zod schema of a tool response.
- */
-export const ToolResponseSchema = z.object({
-  /** The call id or reference for a specific request. */
-  ref: z.string().optional(),
-  /** The name of the tool. */
-  name: z.string(),
-  /** The output data returned from the tool, usually a JSON object. */
-  output: z.unknown().optional(),
-});
-export type ToolResponse = z.infer<typeof ToolResponseSchema>;
-
-/**
- * Zod schema of a tool response part.
- */
-export const ToolResponsePartSchema = EmptyPartSchema.extend({
-  /** A provided response to a tool call. */
-  toolResponse: ToolResponseSchema,
-});
-
-/**
- * Tool response part.
- */
-export type ToolResponsePart = z.infer<typeof ToolResponsePartSchema>;
-
-/**
- * Zod schema of a data part.
- */
-export const DataPartSchema = EmptyPartSchema.extend({
-  data: z.unknown(),
-});
-
-/**
- * Data part.
- */
-export type DataPart = z.infer<typeof DataPartSchema>;
-
-/**
- * Zod schema of a custom part.
- */
-export const CustomPartSchema = EmptyPartSchema.extend({
-  custom: z.record(z.any()),
-});
-
-/**
- * Custom part.
- */
-export type CustomPart = z.infer<typeof CustomPartSchema>;
-
-/**
- * Zod schema of a resource part.
- */
-export const ResourcePartSchema = EmptyPartSchema.extend({
-  resource: z.object({
-    uri: z.string(),
-  }),
-});
-
-/**
- * Resource part.
- */
-export type ResourcePart = z.infer<typeof ResourcePartSchema>;
-
-export const PartSchema = z.union([TextPartSchema, MediaPartSchema]);
-export type Part = z.infer<typeof PartSchema>;
-
-// We need both metadata and embedMetadata because they can
-// contain the same fields (e.g. video start/stop) with different values.
 export const DocumentDataSchema = z.object({
   content: z.array(PartSchema),
+  // We need both metadata and embedMetadata because they can
+  // contain the same fields (e.g. video start/stop) with different values.
   metadata: z.record(z.string(), z.any()).optional(),
 });
+/** Serializable data representation of a {@link Document}. */
 export type DocumentData = z.infer<typeof DocumentDataSchema>;
 
 function deepCopy<T>(value: T): T {
@@ -191,6 +49,13 @@ export class Document implements DocumentData {
   constructor(data: DocumentData) {
     this.content = deepCopy(data.content);
     this.metadata = deepCopy(data.metadata);
+  }
+
+  static fromParts(content: Part[], metadata?: Record<string, any>) {
+    return new Document({
+      content,
+      metadata,
+    });
   }
 
   static fromText(text: string, metadata?: Record<string, any>) {

@@ -18,7 +18,7 @@ import type { BigQuery, QueryRowsResponse } from '@google-cloud/bigquery';
 import { z } from 'genkit';
 import { logger } from 'genkit/logging';
 import { Document, DocumentDataSchema } from 'genkit/retriever';
-import type { DocumentIndexer, DocumentRetriever, Neighbor } from './types';
+import type { DocumentIndexer, DocumentRetriever, Neighbor } from './types.js';
 
 /**
  * Creates a BigQuery Document Retriever.

@@ -51,14 +51,14 @@ jobs:
     name: Version bump
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GENKIT_RELEASER_GITHUB_TOKEN }}
 
-      - uses: pnpm/action-setup@v3
+      - uses: pnpm/action-setup@v4
 
       - name: Set up node v20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20.x
           cache: 'pnpm'
@@ -71,7 +71,11 @@ jobs:
 
       - name: Bump and Tag
         run: |
-          js/scripts/bump_and_tag.sh ${{ inputs.packageDir }} ${{ inputs.packageName }} ${{ inputs.releaseType }} ${{ inputs.preid }}
+          js/scripts/bump_and_tag.sh ${INPUTS_PACKAGEDIR} ${INPUTS_PACKAGENAME} ${{ inputs.releaseType }} ${INPUTS_PREID}
+        env:
+          INPUTS_PACKAGEDIR: ${{ inputs.packageDir }}
+          INPUTS_PACKAGENAME: ${{ inputs.packageName }}
+          INPUTS_PREID: ${{ inputs.preid }}
 
       - name: Push
         shell: bash

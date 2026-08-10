@@ -15,8 +15,7 @@
  */
 
 import { defineFirestoreRetriever } from '@genkit-ai/firebase';
-import { gemini15Flash } from '@genkit-ai/googleai';
-import { textEmbedding004 } from '@genkit-ai/vertexai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { FieldValue } from '@google-cloud/firestore';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
@@ -63,7 +62,7 @@ export const pdfChatRetrieverFirebase = defineFirestoreRetriever(ai, {
   collection: 'pdf-qa',
   contentField: 'facts',
   vectorField: 'embedding',
-  embedder: textEmbedding004,
+  embedder: googleAI.embedder('gemini-embedding-001'),
   //distanceMeasure: 'COSINE', // optional
   //distanceResultField: 'vector_distance', // optional
   //distanceThreshold: 0.8,  // optional
@@ -125,7 +124,7 @@ export const pdfQAFirebase = ai.defineFlow(
       context: docs.map((d) => d.text).join('\n\n'),
     });
     const llmResponse = await ai.generate({
-      model: gemini15Flash,
+      model: googleAI.model('gemini-flash-latest'),
       prompt: augmentedPrompt,
     });
 
@@ -161,7 +160,7 @@ const indexConfig = {
   collection: 'pdf-qa',
   contentField: 'facts',
   vectorField: 'embedding',
-  embedder: textEmbedding004,
+  embedder: googleAI.embedder('gemini-embedding-001'),
 };
 
 const chunkingConfig = {

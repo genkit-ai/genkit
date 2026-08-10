@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { z } from 'genkit';
 import { genkit } from 'genkit/beta';
 
@@ -29,7 +29,7 @@ export const menuSuggestionFlow = ai.defineFlow(
   },
   async (restaurantTheme) => {
     const { text } = await ai.generate({
-      model: googleAI.model('gemini-2.0-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
     });
     return text;
@@ -51,7 +51,7 @@ export const menuSuggestionFlowWithSchema = ai.defineFlow(
   },
   async (restaurantTheme) => {
     const { output } = await ai.generate({
-      model: googleAI.model('gemini-2.0-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
@@ -72,7 +72,7 @@ export const menuSuggestionFlowMarkdown = ai.defineFlow(
   },
   async (restaurantTheme) => {
     const { output } = await ai.generate({
-      model: googleAI.model('gemini-2.0-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
@@ -94,7 +94,7 @@ export const menuSuggestionStreamingFlow = ai.defineFlow(
   },
   async (restaurantTheme, { sendChunk }) => {
     const response = await ai.generateStream({
-      model: googleAI.model('gemini-2.0-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
     });
 
@@ -121,33 +121,6 @@ const PrixFixeMenuSchema = z.object({
   dessert: z.string(),
 });
 
-export const complexMenuSuggestionFlow = ai.defineFlow(
-  {
-    name: 'complexMenuSuggestionFlow',
-    inputSchema: z.string(),
-    outputSchema: PrixFixeMenuSchema,
-  },
-  async (theme: string): Promise<z.infer<typeof PrixFixeMenuSchema>> => {
-    const chat = ai.chat({ model: googleAI.model('gemini-2.0-flash') });
-    await chat.send('What makes a good prix fixe menu?');
-    await chat.send(
-      'What are some ingredients, seasonings, and cooking techniques that ' +
-        `would work for a ${theme} themed menu?`
-    );
-    const { output } = await chat.send({
-      prompt:
-        `Based on our discussion, invent a prix fixe menu for a ${theme} ` +
-        'themed restaurant.',
-      output: {
-        schema: PrixFixeMenuSchema,
-      },
-    });
-    if (!output) {
-      throw new Error('No data generated.');
-    }
-    return output;
-  }
-);
 // [END ex10]
 
 // [START ex11]
@@ -178,7 +151,7 @@ Today's menu
       }
     );
     const { text } = await ai.generate({
-      model: googleAI.model('gemini-2.0-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       system: "Help the user answer questions about today's menu.",
       prompt: input,
       docs: [{ content: [{ text: menu }] }],

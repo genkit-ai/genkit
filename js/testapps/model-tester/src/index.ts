@@ -14,13 +14,8 @@
  * limitations under the License.
  */
 
-import { googleAI } from '@genkit-ai/googleai';
-import { vertexAI } from '@genkit-ai/vertexai';
-import {
-  claude3Sonnet,
-  llama31,
-  vertexAIModelGarden,
-} from '@genkit-ai/vertexai/modelgarden';
+import { googleAI, vertexAI } from '@genkit-ai/google-genai';
+import { vertexModelGarden } from '@genkit-ai/vertexai/modelgarden';
 import * as clc from 'colorette';
 import { genkit } from 'genkit';
 import { testModels } from 'genkit/testing';
@@ -33,9 +28,8 @@ export const ai = genkit({
     vertexAI({
       location: 'us-central1',
     }),
-    vertexAIModelGarden({
+    vertexModelGarden({
       location: 'us-central1',
-      models: [claude3Sonnet, llama31],
     }),
     ollama({
       models: [
@@ -51,12 +45,12 @@ export const ai = genkit({
 });
 
 testModels(ai.registry, [
-  'googleai/gemini-1.5-pro-latest',
-  'googleai/gemini-1.5-flash-latest',
-  'vertexai/gemini-1.5-pro',
-  'vertexai/gemini-1.5-flash',
-  'vertexai/claude-3-sonnet',
-  'vertexai/llama-3.1',
+  'googleai/gemini-2.5-pro',
+  'googleai/gemini-2.5-flash',
+  'vertexai/gemini-2.5-pro',
+  'vertexai/gemini-2.5-flash',
+  'vertex-model-garden/claude-sonnet-4@20250514',
+  'vertex-model-garden/meta/llama-4-maverick-17b-128e-instruct-maas',
   'ollama/gemma2',
   // 'openai/gpt-4o',
   // 'openai/gpt-4o-mini',

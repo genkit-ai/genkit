@@ -16,7 +16,7 @@
 
 // Import the Genkit core libraries and plugins.
 import { startFlowServer } from '@genkit-ai/express';
-import { googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { genkit, z } from 'genkit';
 
 const ai = genkit({
@@ -27,7 +27,7 @@ const ai = genkit({
 
 const simplePrompt = ai.defineFlow('simplePrompt', () =>
   ai.generate({
-    model: 'googleai/gemini-1.5-flash',
+    model: 'googleai/gemini-2.5-flash',
     prompt: 'You are a helpful AI assistant named Walt, say hello',
   })
 );
@@ -35,7 +35,7 @@ const simplePrompt = ai.defineFlow('simplePrompt', () =>
 const simpleTemplate = ai.defineFlow('simpleTemplate', () => {
   const name = 'Fred';
   return ai.generate({
-    model: 'googleai/gemini-1.5-flash',
+    model: 'googleai/gemini-2.5-flash',
     prompt: `You are a helpful AI assistant named Walt. Say hello to ${name}.`,
   });
 });
@@ -43,7 +43,7 @@ const simpleTemplate = ai.defineFlow('simpleTemplate', () => {
 const helloDotprompt = ai.definePrompt(
   {
     name: 'helloPrompt',
-    model: 'googleai/gemini-1.5-flash',
+    model: 'googleai/gemini-2.5-flash',
     input: {
       schema: z.object({ name: z.string() }),
     },
@@ -64,7 +64,7 @@ const outputSchema = z.object({
 const threeGreetingsPrompt = ai.definePrompt(
   {
     name: 'threeGreetingsPrompt',
-    model: 'googleai/gemini-1.5-flash',
+    model: 'googleai/gemini-2.5-flash',
     input: {
       schema: z.object({ name: z.string() }),
     },

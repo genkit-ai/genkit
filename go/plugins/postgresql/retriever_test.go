@@ -16,19 +16,24 @@ package postgresql
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestRetriever_Fail_WrongTypeOfOption(t *testing.T) {
 	ds := DocStore{}
 	res, err := ds.Retrieve(context.Background(), &ai.RetrieverRequest{Options: struct{}{}})
-	require.Nil(t, res)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "postgres.Retrieve options have type")
+	if res != nil {
+		t.Fatalf("Retrieve() res = %v, want nil", res)
+	}
+	if err == nil {
+		t.Fatal("Retrieve() expected error, got nil")
+	}
+	if want := "postgres.Retrieve options have type"; !strings.Contains(err.Error(), want) {
+		t.Errorf("Retrieve() error = %q, want it to contain %q", err.Error(), want)
+	}
 }
 
 func TestRetriever_Fail_EmbedReturnError(t *testing.T) {
@@ -36,6 +41,10 @@ func TestRetriever_Fail_EmbedReturnError(t *testing.T) {
 		config: &Config{Embedder: mockEmbedderFail{}},
 	}
 	res, err := ds.Retrieve(context.Background(), &ai.RetrieverRequest{})
-	require.Nil(t, res)
-	require.Error(t, err)
+	if res != nil {
+		t.Fatalf("Retrieve() res = %v, want nil", res)
+	}
+	if err == nil {
+		t.Fatal("Retrieve() expected error, got nil")
+	}
 }

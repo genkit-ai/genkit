@@ -3,9 +3,10 @@
   "scripts": {
     "preinstall": "npx only-allow pnpm",
     "build": "pnpm install && pnpm build:common && pnpm build:telemetry-server && pnpm build:cli",
-    "build:cli": "cd cli && pnpm build",
+    "build:cli": "pnpm build:md-context && cd cli && pnpm build",
     "build:telemetry-server": "cd telemetry-server && pnpm build",
     "build:common": "cd common && pnpm build && cd .. && pnpm export:schemas",
+    "build:md-context": "node scripts/build-md.js",
     "export:schemas": "npx tsx scripts/schema-exporter.ts .",
     "pack:all": "pnpm run pack:cli && pnpm run pack:telemetry-server && pnpm run pack:common",
     "pack:common": "cd common && pnpm pack --pack-destination ../../dist",
@@ -23,7 +24,11 @@
   "pnpm": {
     "overrides": {
       "cross-spawn": "^7.0.5"
-    }
+    },
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "protobufjs"
+    ]
   },
-  "packageManager": "pnpm@10.11.0+sha256.a69e9cb077da419d47d18f1dd52e207245b29cac6e076acedbeb8be3b1a67bd7"
+  "packageManager": "pnpm@10.26.0+sha512.3b3f6c725ebe712506c0ab1ad4133cf86b1f4b687effce62a9b38b4d72e3954242e643190fc51fa1642949c735f403debd44f5cb0edd657abe63a8b6a7e1e402"
 }

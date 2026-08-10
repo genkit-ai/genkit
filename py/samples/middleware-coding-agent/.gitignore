@@ -1,0 +1,4 @@
+__pycache__/
+
+# The agent edits files here in place; outputs are reproducible by re-running.
+workspace/

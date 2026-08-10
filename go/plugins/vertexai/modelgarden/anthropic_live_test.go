@@ -19,26 +19,24 @@ package modelgarden_test
 import (
 	"context"
 	"encoding/base64"
-	"flag"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/vertexai/modelgarden"
 )
 
-var (
-	provider  = flag.String("provider", "", "Modelgarden provider to test against")
-	projectID = flag.String("projectid", "", "Modelgarden project")
-	location  = flag.String("location", "us-east5", "Geographic location")
-)
-
 func TestAnthropicLive(t *testing.T) {
-	if *provider != "anthropic" {
-		t.Skipf("skipping Anthropic")
+	if _, ok := requireEnv("GOOGLE_CLOUD_PROJECT"); !ok {
+		t.Skip("GOOGLE_CLOUD_PROJECT not found in the environment")
+	}
+	if _, ok := requireEnv("GOOGLE_CLOUD_LOCATION"); !ok {
+		t.Skip("GOOGLE_CLOUD_LOCATION not found in the environment")
 	}
 
 	ctx := context.Background()
@@ -51,12 +49,12 @@ func TestAnthropicLive(t *testing.T) {
 		}
 	})
 
-	t.Run("model version ok", func(t *testing.T) {
+	t.Run("model ok", func(t *testing.T) {
 		m := modelgarden.AnthropicModel(g, "claude-opus-4")
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithConfig(&ai.GenerationCommonConfig{
-				Temperature: 1,
-				Version:     "claude-opus-4@20250514",
+			ai.WithConfig(&anthropic.MessageNewParams{
+				Temperature: anthropic.Float(1),
+				MaxTokens:   1024,
 			}),
 			ai.WithModel(m),
 			ai.WithSystem("talk to me like an evil pirate and say ARR several times but be very short"),
@@ -71,17 +69,40 @@ func TestAnthropicLive(t *testing.T) {
 		}
 	})
 
-	t.Run("model version nok", func(t *testing.T) {
+	t.Run("model without messages fails", func(t *testing.T) {
 		m := modelgarden.AnthropicModel(g, "claude-opus-4")
 		_, err := genkit.Generate(ctx, g,
-			ai.WithConfig(&ai.GenerationCommonConfig{
-				Temperature: 1,
-				Version:     "foo",
+			ai.WithConfig(&anthropic.MessageNewParams{
+				Temperature: anthropic.Float(1),
+				MaxTokens:   1024,
 			}),
 			ai.WithModel(m),
 		)
 		if err == nil {
-			t.Fatal("should have failed due wrong model version")
+			t.Fatal("should have failed due missing messages")
+		}
+	})
+
+	t.Run("opus 4.5", func(t *testing.T) {
+		m := modelgarden.AnthropicModel(g, "claude-opus-4-5")
+		if m == nil {
+			t.Fatal("claude-opus-4-5 model was not registered")
+		}
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithConfig(&anthropic.MessageNewParams{
+				Temperature: anthropic.Float(1),
+				MaxTokens:   1024,
+			}),
+			ai.WithModel(m),
+			ai.WithSystem("talk to me like an evil pirate and say ARR several times but be very short"),
+			ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("I'm a fish"))),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !strings.Contains(resp.Text(), "ARR") {
+			t.Fatalf("not a pirate :( :%s", resp.Text())
 		}
 	})
 
@@ -94,6 +115,10 @@ func TestAnthropicLive(t *testing.T) {
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithSystem("You are a professional image detective that talks like an evil pirate that loves animals, your task is to tell the name of the animal in the image but be very short"),
 			ai.WithModel(m),
+			ai.WithConfig(&anthropic.MessageNewParams{
+				Temperature: anthropic.Float(1),
+				MaxTokens:   1024,
+			}),
 			ai.WithMessages(
 				ai.NewUserMessage(
 					ai.NewTextPart("do you know which animal is in the image?"),
@@ -118,6 +143,10 @@ func TestAnthropicLive(t *testing.T) {
 		)
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithModel(m),
+			ai.WithConfig(&anthropic.MessageNewParams{
+				Temperature: anthropic.Float(1),
+				MaxTokens:   1024,
+			}),
 			ai.WithPrompt("tell me a joke"),
 			ai.WithTools(myJokeTool))
 		if err != nil {
@@ -132,13 +161,15 @@ func TestAnthropicLive(t *testing.T) {
 	t.Run("streaming", func(t *testing.T) {
 		m := modelgarden.AnthropicModel(g, "claude-opus-4")
 		out := ""
-		parts := 0
 
 		final, err := genkit.Generate(ctx, g,
 			ai.WithPrompt("Tell me a short story about a frog and a princess"),
+			ai.WithConfig(&anthropic.MessageNewParams{
+				Temperature: anthropic.Float(1),
+				MaxTokens:   1024,
+			}),
 			ai.WithModel(m),
 			ai.WithStreaming(func(ctx context.Context, c *ai.ModelResponseChunk) error {
-				parts++
 				out += c.Content[0].Text
 				return nil
 			}),
@@ -159,11 +190,55 @@ func TestAnthropicLive(t *testing.T) {
 			t.Fatalf("empty usage stats: %#v", *final.Usage)
 		}
 	})
+	t.Run("streaming with thinking", func(t *testing.T) {
+		m := modelgarden.AnthropicModel(g, "claude-opus-4")
+		out := ""
+
+		final, err := genkit.Generate(ctx, g,
+			ai.WithPrompt("Tell me a short story about a frog and a princess"),
+			ai.WithConfig(&anthropic.MessageNewParams{
+				Temperature: anthropic.Float(1),
+				Thinking: anthropic.ThinkingConfigParamUnion{
+					OfEnabled: &anthropic.ThinkingConfigEnabledParam{
+						BudgetTokens: 1024,
+					},
+				},
+				MaxTokens: 2048,
+			}),
+			ai.WithModel(m),
+			ai.WithStreaming(func(ctx context.Context, c *ai.ModelResponseChunk) error {
+				for _, p := range c.Content {
+					if p.IsText() {
+						out += p.Text
+					}
+				}
+				return nil
+			}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		out2 := ""
+		for _, p := range final.Message.Content {
+			if p.IsText() {
+				out2 += p.Text
+			}
+		}
+		if out != out2 {
+			t.Fatalf("streaming and final should contain the same text.\n\nstreaming: %s\n\nfinal: %s\n\n", out, out2)
+		}
+		if final.Reasoning() == "" {
+			t.Fatal("empty reasoning found")
+		}
+		if final.Usage.InputTokens == 0 || final.Usage.OutputTokens == 0 {
+			t.Fatalf("empty usage stats: %#v", *final.Usage)
+		}
+	})
 
 	t.Run("tools streaming", func(t *testing.T) {
 		m := modelgarden.AnthropicModel(g, "claude-opus-4")
 		out := ""
-		parts := 0
 
 		myStoryTool := genkit.DefineTool(
 			g,
@@ -177,9 +252,12 @@ func TestAnthropicLive(t *testing.T) {
 		final, err := genkit.Generate(ctx, g,
 			ai.WithPrompt("Tell me a short story about a frog and a fox, do no mention anything else, only the short story"),
 			ai.WithModel(m),
+			ai.WithConfig(&anthropic.MessageNewParams{
+				Temperature: anthropic.Float(1),
+				MaxTokens:   1024,
+			}),
 			ai.WithTools(myStoryTool),
 			ai.WithStreaming(func(ctx context.Context, c *ai.ModelResponseChunk) error {
-				parts++
 				out += c.Content[0].Text
 				return nil
 			}),
@@ -190,11 +268,13 @@ func TestAnthropicLive(t *testing.T) {
 
 		out2 := ""
 		for _, p := range final.Message.Content {
-			out2 += p.Text
+			if p.IsText() {
+				out2 += p.Text
+			}
 		}
 
 		if out != out2 {
-			t.Fatalf("streaming and final should contain the same text.\nstreaming: %s\nfinal:%s\n", out, out2)
+			t.Fatalf("streaming and final should contain the same text\n\nstreaming: %s\n\nfinal: %s\n\n", out, out2)
 		}
 		if final.Usage.InputTokens == 0 || final.Usage.OutputTokens == 0 {
 			t.Fatalf("empty usage stats: %#v", *final.Usage)
@@ -222,4 +302,13 @@ func fetchImgAsBase64() (string, error) {
 
 	base64string := base64.StdEncoding.EncodeToString(imageBytes)
 	return base64string, nil
+}
+
+func requireEnv(key string) (string, bool) {
+	value, ok := os.LookupEnv(key)
+	if !ok || value == "" {
+		return "", false
+	}
+
+	return value, true
 }

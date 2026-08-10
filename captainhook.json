@@ -21,7 +21,7 @@
             "allow-failure": true
           },
           "options": {
-            "max-size": "1M"
+            "max-size": "2M"
           }
         },
         {
@@ -41,6 +41,9 @@
           "run": "bin/fmt"
         },
         {
+          "run": "bin/lint"
+        },
+        {
           "run": "py/bin/run_python_tests_with_tox p"
         },
         {
@@ -51,6 +54,9 @@
         },
         {
           "run": "uv run --directory py liccheck"
+        },
+        {
+          "run": "py/bin/run_python_security_checks"
         },
         {
           "run": "bin/run_go_tests"
@@ -81,6 +87,9 @@
           "run": "bin/fmt"
         },
         {
+          "run": "bin/lint"
+        },
+        {
           "run": "py/bin/run_python_tests_with_tox p"
         },
         {
@@ -91,6 +100,9 @@
         },
         {
           "run": "uv run --directory py liccheck"
+        },
+        {
+          "run": "py/bin/run_python_security_checks"
         },
         {
           "run": "bin/run_go_tests"

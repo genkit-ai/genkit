@@ -90,10 +90,10 @@ type ArrayElement<ArrayType extends readonly unknown[]> =
 function fromMcpResourcePart(
   part: ArrayElement<ReadResourceResult['contents']>
 ): Part {
-  if (part.text) {
+  if ('text' in part && part.text) {
     return { text: part.text as string, metadata: part._meta };
   }
-  if (part.blob) {
+  if ('blob' in part && part.blob) {
     return {
       media: {
         contentType: part.mimeType,
@@ -104,7 +104,7 @@ function fromMcpResourcePart(
   }
   throw new GenkitError({
     status: 'UNIMPLEMENTED',
-    message: `Part type ${part.type} is not currently supported.`,
+    message: `Part type ${'type' in part ? part.type : 'unknown'} is not currently supported.`,
   });
 }
 

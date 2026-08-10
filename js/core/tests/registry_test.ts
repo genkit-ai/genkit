@@ -21,10 +21,11 @@ import {
   defineAction,
   runInActionRuntimeContext,
 } from '../src/action.js';
-import { initNodeAsyncContext } from '../src/node-async-context.js';
+import { defineDynamicActionProvider } from '../src/dynamic-action-provider.js';
+import { initNodeFeatures } from '../src/node.js';
 import { Registry } from '../src/registry.js';
 
-initNodeAsyncContext();
+initNodeFeatures();
 
 describe('registry class', () => {
   var registry: Registry;
@@ -344,6 +345,37 @@ describe('registry class', () => {
         },
       });
     });
+    it('expands actions from dynamic action providers', async () => {
+      const tool1 = action(
+        { name: 'fs/tool1', actionType: 'tool' },
+        async () => {}
+      );
+      const tool2 = action(
+        { name: 'fs/tool2', actionType: 'tool' },
+        async () => {}
+      );
+      const resource1 = action(
+        { name: 'abc/res1', actionType: 'resource' },
+        async () => {}
+      );
+      const resource2 = action(
+        { name: 'abc/res2', actionType: 'resource' },
+        async () => {}
+      );
+      const dap = defineDynamicActionProvider(registry, 'my-dap', async () => ({
+        tool: [tool1, tool2],
+        resource: [resource1, resource2],
+      }));
+
+      const resolvableActions = await registry.listResolvableActions();
+      assert.deepStrictEqual(resolvableActions, {
+        '/dynamic-action-provider/my-dap': dap.__action,
+        '/dynamic-action-provider/my-dap:tool/fs/tool1': tool1.__action,
+        '/dynamic-action-provider/my-dap:tool/fs/tool2': tool2.__action,
+        '/dynamic-action-provider/my-dap:resource/abc/res1': resource1.__action,
+        '/dynamic-action-provider/my-dap:resource/abc/res2': resource2.__action,
+      });
+    });
   });
 
   describe('lookupAction', () => {
@@ -412,19 +444,33 @@ describe('registry class', () => {
         { name: 'foo_something', actionType: 'model' },
         async () => null
       );
+      assert.strictEqual(
+        fooSomethingAction.__action.key,
+        '/model/foo_something'
+      );
       registry.registerAction('model', fooSomethingAction, {
         namespace: 'my-plugin',
       });
+
       const barSomethingAction = action(
         { name: 'my-plugin/bar_something', actionType: 'model' },
         async () => null
       );
+      assert.strictEqual(
+        barSomethingAction.__action.key,
+        '/model/my-plugin/bar_something'
+      );
       registry.registerAction('model', barSomethingAction, {
         namespace: 'my-plugin',
       });
+
       const barSubSomethingAction = action(
         { name: 'sub/bar_something', actionType: 'model' },
         async () => null
+      );
+      assert.strictEqual(
+        barSubSomethingAction.__action.key,
+        '/model/sub/bar_something'
       );
       registry.registerAction('model', barSubSomethingAction, {
         namespace: 'my-plugin',
@@ -435,12 +481,24 @@ describe('registry class', () => {
         fooSomethingAction
       );
       assert.strictEqual(
+        fooSomethingAction.__action.key,
+        '/model/my-plugin/foo_something'
+      );
+      assert.strictEqual(
         await registry.lookupAction('/model/my-plugin/bar_something'),
         barSomethingAction
       );
       assert.strictEqual(
+        barSomethingAction.__action.key,
+        '/model/my-plugin/bar_something'
+      );
+      assert.strictEqual(
         await registry.lookupAction('/model/my-plugin/sub/bar_something'),
         barSubSomethingAction
+      );
+      assert.strictEqual(
+        barSubSomethingAction.__action.key,
+        '/model/my-plugin/sub/bar_something'
       );
     });
 
@@ -574,6 +632,27 @@ describe('registry class', () => {
         await childRegistry.lookupAction('/model/foo'),
         fooAction
       );
+    });
+  });
+
+  describe('resolveActionNames', () => {
+    it('resolves dynamic actions from parent registry', async () => {
+      const tool1 = action(
+        { name: 'fs/tool1', actionType: 'tool' },
+        async () => {}
+      );
+      defineDynamicActionProvider(registry, 'my-dap', async () => ({
+        tool: [tool1],
+      }));
+
+      const childRegistry = new Registry(registry);
+
+      const resolved = await childRegistry.resolveActionNames(
+        '/dynamic-action-provider/my-dap:tool/fs/tool1'
+      );
+      assert.deepStrictEqual(resolved, [
+        '/dynamic-action-provider/my-dap:tool/fs/tool1',
+      ]);
     });
   });
 });

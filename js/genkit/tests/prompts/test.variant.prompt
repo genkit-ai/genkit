@@ -2,5 +2,7 @@
 description: a prompt variant in a file
 config: 
   temperature: 13
+tools: [toolA]
+use: [myMiddleware]
 ---
 Hello from a variant of the hello prompt

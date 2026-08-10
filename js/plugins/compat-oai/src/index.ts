@@ -17,8 +17,9 @@
 import { ActionMetadata } from 'genkit';
 import { ResolvableAction, genkitPluginV2 } from 'genkit/plugin';
 import { ActionType } from 'genkit/registry';
-import { OpenAI, type ClientOptions } from 'openai';
+import OpenAI, { type ClientOptions } from 'openai';
 import { compatOaiModelRef, defineCompatOpenAIModel } from './model.js';
+import { toModelName } from './utils.js';
 
 export {
   SpeechConfigSchema,
@@ -44,8 +45,15 @@ export {
   openAIModelRunner,
   type ModelRequestBuilder,
 } from './model.js';
+export {
+  TranslationConfigSchema,
+  compatOaiTranslationModelRef,
+  defineCompatOpenAITranslationModel,
+  type TranslationRequestBuilder,
+} from './translate.js';
 
-export interface PluginOptions extends Partial<ClientOptions> {
+export interface PluginOptions extends Partial<Omit<ClientOptions, 'apiKey'>> {
+  apiKey?: ClientOptions['apiKey'] | false;
   name: string;
   initializer?: (client: OpenAI) => Promise<ResolvableAction[]>;
   resolver?: (
@@ -110,40 +118,51 @@ export interface PluginOptions extends Partial<ClientOptions> {
  */
 export const openAICompatible = (options: PluginOptions) => {
   let listActionsCache;
+  var client: OpenAI;
+  function createClient() {
+    if (client) return client;
+    const { apiKey, ...restofOptions } = options;
+    client = new OpenAI({
+      ...restofOptions,
+      apiKey: apiKey === false ? 'placeholder' : apiKey,
+    });
+    return client;
+  }
   return genkitPluginV2({
     name: options.name,
     async init() {
       if (!options.initializer) {
         return [];
       }
-      const client = new OpenAI(options);
-      return await options.initializer(client);
+      return await options.initializer(createClient());
     },
     async resolve(actionType: ActionType, actionName: string) {
-      const client = new OpenAI(options);
       if (options.resolver) {
-        return await options.resolver(client, actionType, actionName);
+        return await options.resolver(createClient(), actionType, actionName);
       } else {
         if (actionType === 'model') {
           return defineCompatOpenAIModel({
-            name: actionName,
-            client,
+            name: toModelName(actionName, options.name),
+            client: createClient(),
+            pluginOptions: options,
             modelRef: compatOaiModelRef({
               name: actionName,
+              namespace: options.name,
             }),
           });
         }
         return undefined;
       }
     },
-    list: options.listActions
-      ? async () => {
-          if (listActionsCache) return listActionsCache;
-          const client = new OpenAI(options);
-          listActionsCache = await options.listActions!(client);
-          return listActionsCache;
-        }
-      : undefined,
+    list:
+      // Don't attempt to list models if apiKey set to false
+      options.listActions && options.apiKey !== false
+        ? async () => {
+            if (listActionsCache) return listActionsCache;
+            listActionsCache = await options.listActions!(createClient());
+            return listActionsCache;
+          }
+        : undefined,
   });
 };
 

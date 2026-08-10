@@ -18,8 +18,11 @@ package ai
 
 import (
 	"encoding/json"
-	"fmt"
+	"maps"
+	"slices"
 	"strings"
+
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // A Document is a piece of data that can be embedded, indexed, or retrieved.
@@ -42,6 +45,31 @@ type Part struct {
 	Resource     *ResourcePart  `json:"resource,omitempty"`     // valid for kind==partResource
 	Custom       map[string]any `json:"custom,omitempty"`       // valid for plugin-specific custom parts
 	Metadata     map[string]any `json:"metadata,omitempty"`     // valid for all kinds
+}
+
+// Clone returns a shallow copy of the Part with its own Metadata and Custom
+// maps. Callers can add or remove map keys without mutating the original.
+func (p *Part) Clone() *Part {
+	if p == nil {
+		return nil
+	}
+	cp := *p
+	cp.Custom = maps.Clone(p.Custom)
+	cp.Metadata = maps.Clone(p.Metadata)
+	return &cp
+}
+
+// Clone returns a shallow copy of the Message with its own Content slice
+// and Metadata map. Callers can replace parts or add metadata keys without
+// mutating the original.
+func (m *Message) Clone() *Message {
+	if m == nil {
+		return nil
+	}
+	cp := *m
+	cp.Content = slices.Clone(m.Content)
+	cp.Metadata = maps.Clone(m.Metadata)
+	return &cp
 }
 
 type PartKind int8
@@ -156,6 +184,21 @@ func (p *Part) IsInterrupt() bool {
 	return p != nil && p.IsToolRequest() && p.Metadata != nil && p.Metadata["interrupt"] != nil
 }
 
+// IsPartial reports whether the [Part] contains a partial tool response
+// streamed during tool execution (e.g., a progress update).
+func (p *Part) IsPartial() bool {
+	return p != nil && p.IsToolResponse() && p.Metadata != nil && p.Metadata["partial"] == true
+}
+
+// NewPartialToolResponsePart returns a [Part] containing a partial tool response.
+// Partial tool responses are streamed during tool execution for client-side
+// display (e.g., progress indicators) and are not included in conversation history.
+func NewPartialToolResponsePart(r *ToolResponse) *Part {
+	p := NewToolResponsePart(r)
+	p.Metadata = map[string]any{"partial": true}
+	return p
+}
+
 // IsCustom reports whether the [Part] contains custom plugin-specific data.
 func (p *Part) IsCustom() bool {
 	return p != nil && p.Kind == PartCustom
@@ -198,7 +241,7 @@ func (p *Part) IsResource() bool {
 // MarshalJSON is called by the JSON marshaler to write out a Part.
 func (p *Part) MarshalJSON() ([]byte, error) {
 	if p == nil {
-		return nil, fmt.Errorf("part is nil")
+		return nil, status.Errorf(ErrInvalidPart, "part is nil")
 	}
 
 	// This is not handled by the schema generator because
@@ -256,7 +299,7 @@ func (p *Part) MarshalJSON() ([]byte, error) {
 		}
 		return json.Marshal(v)
 	default:
-		return nil, fmt.Errorf("invalid part kind %v", p.Kind)
+		return nil, status.Errorf(ErrInvalidPart, "invalid part kind %v", p.Kind)
 	}
 }
 
@@ -291,6 +334,10 @@ func (p *Part) unmarshalPartFromSchema(s partSchema) {
 	case s.Custom != nil:
 		p.Kind = PartCustom
 		p.Custom = s.Custom
+	case s.Reasoning != "":
+		p.Kind = PartReasoning
+		p.Text = s.Reasoning
+		p.ContentType = "plain/text"
 	default:
 		p.Kind = PartText
 		p.Text = s.Text

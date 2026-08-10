@@ -52,6 +52,7 @@ export const SpanMetadataSchema = z.object({
   state: z.enum(['success', 'error']).optional(),
   input: z.any().optional(),
   output: z.any().optional(),
+  init: z.any().optional(),
   isRoot: z.boolean().optional(),
   metadata: z.record(z.string(), z.string()).optional(),
   path: z.string().optional(),
@@ -152,10 +153,42 @@ export const TraceDataSchema = z
   .openapi('TraceData');
 export type TraceData = z.infer<typeof TraceDataSchema>;
 
+export const SpantEventBaseSchema = z.object({
+  traceId: z.string(),
+  span: SpanDataSchema, // SpanData with endTime = 0
+});
+
+/**
+ * Schema for span start event - sent when a span begins execution
+ */
+export const SpanStartEventSchema = SpantEventBaseSchema.extend({
+  type: z.literal('span_start'),
+});
+export type SpanStartEvent = z.infer<typeof SpanStartEventSchema>;
+
+/**
+ * Schema for span end event - sent when a span completes
+ */
+export const SpanEndEventSchema = SpantEventBaseSchema.extend({
+  type: z.literal('span_end'),
+});
+export type SpanEndEvent = z.infer<typeof SpanEndEventSchema>;
+
+/**
+ * Union type for all trace events
+ */
+export const TraceEventSchema = z.union([
+  SpanStartEventSchema,
+  SpanEndEventSchema,
+]);
+export type TraceEvent = z.infer<typeof TraceEventSchema>;
+
 export const NestedSpanDataSchema = SpanDataSchema.extend({
   spans: z.lazy(() => z.array(SpanDataSchema)),
+  placeholder: z.boolean().optional(),
 });
 
 export type NestedSpanData = z.infer<typeof SpanDataSchema> & {
   spans?: SpanData[];
+  placeholder?: boolean;
 };

@@ -17,13 +17,16 @@
 package base
 
 import (
+	"encoding/json"
 	"fmt"
+	"reflect"
 )
 
-// ConvertJSONNumbers recursively traverses a data structure and a corresponding JSON schema.
-// It converts instances of float64 into int64 or float64 based on the schema's "type" property.
-func ConvertJSONNumbers(data any, schema map[string]any) (any, error) {
-	if data == nil || schema == nil {
+// NormalizeInput recursively traverses a data structure and performs normalization:
+// 1. Removes any fields with null values
+// 2. Converts instances of float64 into int64 or float64 based on the schema's "type" property
+func NormalizeInput(data any, schema map[string]any) (any, error) {
+	if data == nil {
 		return data, nil
 	}
 
@@ -31,9 +34,9 @@ func ConvertJSONNumbers(data any, schema map[string]any) (any, error) {
 	case float64:
 		return convertFloat64(d, schema)
 	case map[string]any:
-		return convertObjectNumbers(d, schema)
+		return normalizeObjectInput(d, schema)
 	case []any:
-		return convertArrayNumbers(d, schema)
+		return normalizeArrayInput(d, schema)
 	default:
 		return data, nil
 	}
@@ -41,6 +44,9 @@ func ConvertJSONNumbers(data any, schema map[string]any) (any, error) {
 
 // convertFloat64 converts a float64 to an int64 or float64 based on the schema's "type" property.
 func convertFloat64(f float64, schema map[string]any) (any, error) {
+	if schema == nil {
+		return f, nil // No schema specified, leave as float64
+	}
 	schemaType, ok := schema["type"].(string)
 	if !ok {
 		return f, nil // No type specified, leave as float64
@@ -60,45 +66,144 @@ func convertFloat64(f float64, schema map[string]any) (any, error) {
 	}
 }
 
-// convertObjectNumbers converts any float64s in the map values to int64 or float64 based on the schema's "type" property.
-func convertObjectNumbers(obj map[string]any, schema map[string]any) (map[string]any, error) {
-	props, ok := schema["properties"].(map[string]any)
-	if !ok {
-		return obj, nil // No properties to guide conversion
+// normalizeObjectInput normalizes map values by removing null fields and converting JSON numbers.
+func normalizeObjectInput(obj map[string]any, schema map[string]any) (map[string]any, error) {
+	var props map[string]any
+	if schema != nil {
+		props, _ = schema["properties"].(map[string]any)
 	}
 
-	newObj := make(map[string]any, len(obj))
+	// If no schema or no properties, just remove null fields and normalize recursively
+	if schema == nil || props == nil {
+		newObj := make(map[string]any)
+		for k, v := range obj {
+			if v != nil {
+				normalized, err := NormalizeInput(v, nil)
+				if err != nil {
+					return nil, err
+				}
+				newObj[k] = normalized
+			}
+		}
+		return newObj, nil
+	}
+
+	newObj := make(map[string]any)
 	for k, v := range obj {
-		newObj[k] = v // Copy original value
+		// Skip null values - this removes the field entirely
+		if v == nil {
+			continue
+		}
 
 		propSchema, ok := props[k].(map[string]any)
 		if !ok {
-			continue // No schema for this property
+			// No schema for this property, just keep it if not null
+			normalized, err := NormalizeInput(v, nil)
+			if err != nil {
+				return nil, err
+			}
+			newObj[k] = normalized
+			continue
 		}
 
-		converted, err := ConvertJSONNumbers(v, propSchema)
+		normalized, err := NormalizeInput(v, propSchema)
 		if err != nil {
 			return nil, err
 		}
-		newObj[k] = converted
+		newObj[k] = normalized
 	}
 	return newObj, nil
 }
 
-// convertArrayNumbers converts any float64s in the array values to int64 or float64 based on the schema's "type" property.
-func convertArrayNumbers(arr []any, schema map[string]any) ([]any, error) {
+// normalizeArrayInput normalizes array values by converting JSON numbers and handling null elements.
+func normalizeArrayInput(arr []any, schema map[string]any) ([]any, error) {
 	items, ok := schema["items"].(map[string]any)
 	if !ok {
-		return arr, nil // No items schema to guide conversion
+		// No items schema, just normalize each element
+		newArr := make([]any, len(arr))
+		for i, v := range arr {
+			normalized, err := NormalizeInput(v, nil)
+			if err != nil {
+				return nil, err
+			}
+			newArr[i] = normalized
+		}
+		return newArr, nil
 	}
 
 	newArr := make([]any, len(arr))
 	for i, v := range arr {
-		converted, err := ConvertJSONNumbers(v, items)
+		normalized, err := NormalizeInput(v, items)
 		if err != nil {
 			return nil, err
 		}
-		newArr[i] = converted
+		newArr[i] = normalized
 	}
 	return newArr, nil
+}
+
+// UnmarshalAndNormalize unmarshals JSON input, normalizes it according to the schema,
+// validates it, and converts it to the target type T.
+// For 'any' types, it preserves the actual types from the normalized data.
+// For structured types, it marshals and unmarshals to properly populate the fields.
+func UnmarshalAndNormalize[T any](input json.RawMessage, schema map[string]any) (T, error) {
+	return UnmarshalAndNormalizeWith[T](input, schema, nil)
+}
+
+// UnmarshalAndNormalizeWith is UnmarshalAndNormalize with an optional
+// precompiled schema: when compiled is non-nil, validation uses it instead of
+// recompiling schema, which matters on per-chunk streaming hot paths. schema
+// is still used for normalization and must describe the same schema.
+func UnmarshalAndNormalizeWith[T any](input json.RawMessage, schema map[string]any, compiled *CompiledSchema) (T, error) {
+	var zero T
+
+	if len(input) == 0 {
+		return zero, nil
+	}
+
+	var rawData any
+	if err := json.Unmarshal(input, &rawData); err != nil {
+		return zero, fmt.Errorf("failed to unmarshal input: %w", err)
+	}
+
+	normalized, err := NormalizeInput(rawData, schema)
+	if err != nil {
+		return zero, fmt.Errorf("invalid input: %w", err)
+	}
+
+	if compiled != nil {
+		err = compiled.ValidateValue(normalized)
+	} else {
+		err = ValidateValue(normalized, schema)
+	}
+	if err != nil {
+		return zero, err
+	}
+
+	// Check if T is 'any' type by comparing with a typed nil interface
+	if reflect.TypeOf(zero) == nil || reflect.TypeOf(zero).Kind() == reflect.Interface && reflect.TypeOf(zero).NumMethod() == 0 {
+		// Type T is 'any', use normalized value directly to preserve types
+		// Handle nil specially since it can't be type-asserted
+		if normalized == nil {
+			return zero, nil
+		}
+		result, ok := normalized.(T)
+		if !ok {
+			return zero, fmt.Errorf("failed to convert normalized input to target type")
+		}
+		return result, nil
+	}
+
+	// For structured types, marshal/unmarshal to properly populate fields
+	normalizedBytes, err := json.Marshal(normalized)
+	if err != nil {
+		return zero, fmt.Errorf("failed to marshal normalized input: %w", err)
+	}
+
+	var result T
+	if err := json.Unmarshal(normalizedBytes, &result); err != nil {
+		return zero, fmt.Errorf("failed to unmarshal normalized input: %w", err)
+	}
+
+	return result, nil
 }

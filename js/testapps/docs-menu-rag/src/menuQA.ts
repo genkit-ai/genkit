@@ -15,7 +15,7 @@
  */
 
 import { devLocalRetrieverRef } from '@genkit-ai/dev-local-vectorstore';
-import { gemini15Flash } from '@genkit-ai/vertexai';
+import { vertexAI } from '@genkit-ai/google-genai';
 import { z } from 'genkit';
 import { ai } from './genkit.js';
 
@@ -34,7 +34,7 @@ export const menuQAFlow = ai.defineFlow(
 
     // generate a response
     const llmResponse = await ai.generate({
-      model: gemini15Flash,
+      model: vertexAI.model('gemini-2.5-flash'),
       prompt: `
     You are acting as a helpful AI assistant that can answer 
     questions about the food available on the menu at Genkit Grub Pub.

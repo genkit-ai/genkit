@@ -1,4 +1,6 @@
 /**
+ * @license
+ *
  * Copyright 2024 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,9 +16,29 @@
  * limitations under the License.
  */
 
-import type { Action, ActionMetadata, BackgroundAction } from '@genkit-ai/core';
+/**
+ * Plugin authoring utilities — factory functions (`model`, `embedder`,
+ * `retriever`, etc.), plugin lifecycle types, and the v1/v2 plugin
+ * interfaces for building Genkit plugins.
+ *
+ * ```ts
+ * import { model, embedder, genkitPlugin } from 'genkit/plugin';
+ * ```
+ *
+ * @module plugin
+ */
+
+import type { GenerateMiddleware } from '@genkit-ai/ai';
+import { type GenkitPluginV2 } from '@genkit-ai/ai';
+import { type ModelAction } from '@genkit-ai/ai/model';
+import {
+  GenkitError,
+  type ActionMetadata,
+  type ResolvableAction,
+} from '@genkit-ai/core';
 import type { Genkit } from './genkit.js';
 import type { ActionType } from './registry.js';
+
 export { embedder, embedderActionMetadata } from '@genkit-ai/ai/embedder';
 export { evaluator } from '@genkit-ai/ai/evaluator';
 export {
@@ -26,7 +48,9 @@ export {
 } from '@genkit-ai/ai/model';
 export { reranker } from '@genkit-ai/ai/reranker';
 export { indexer, retriever } from '@genkit-ai/ai/retriever';
+export { type GenerateMiddleware, type GenkitPluginV2, type ResolvableAction };
 
+/** A v1 plugin provider returned by a {@link GenkitPlugin} factory function. */
 export interface PluginProvider {
   name: string;
   initializer: () => void | Promise<void>;
@@ -34,23 +58,13 @@ export interface PluginProvider {
   listActions?: () => Promise<ActionMetadata[]>;
 }
 
-export type ResolvableAction = Action | BackgroundAction;
-
-export interface GenkitPluginV2 {
-  version: 'v2';
-  name: string;
-  init?: () => ResolvableAction[] | Promise<ResolvableAction[]>;
-  resolve?: (
-    actionType: ActionType,
-    name: string
-  ) => ResolvableAction | undefined | Promise<ResolvableAction | undefined>;
-  list?: () => ActionMetadata[] | Promise<ActionMetadata[]>;
-}
-
+/** A v1 Genkit plugin factory function. Returns a {@link PluginProvider} when called with a Genkit instance. */
 export type GenkitPlugin = (genkit: Genkit) => PluginProvider;
 
+/** Initialization function called during plugin setup. */
 export type PluginInit = (genkit: Genkit) => void | Promise<void>;
 
+/** Optional resolver function for lazily-resolved plugin actions. */
 export type PluginActionResolver = (
   genkit: Genkit,
   action: ActionType,
@@ -85,12 +99,74 @@ export function genkitPlugin<T extends PluginInit>(
   });
 }
 
-export function genkitPluginV2(
-  options: Omit<GenkitPluginV2, 'version'>
-): GenkitPluginV2 {
-  return { ...options, version: 'v2' };
+/**
+ * Concrete implementation of a v2 plugin that wraps a {@link GenkitPluginV2} definition
+ * and provides default implementations for all optional hooks.
+ */
+export class GenkitPluginV2Instance implements Required<GenkitPluginV2> {
+  readonly version = 'v2';
+  readonly name: string;
+
+  private plugin: Omit<GenkitPluginV2, 'version' | 'model'>;
+
+  constructor(plugin: Omit<GenkitPluginV2, 'version' | 'model'>) {
+    this.name = plugin.name;
+    this.plugin = plugin;
+  }
+
+  init(): ResolvableAction[] | Promise<ResolvableAction[]> {
+    if (!this.plugin.init) {
+      return [];
+    }
+    return this.plugin.init();
+  }
+
+  list(): ActionMetadata[] | Promise<ActionMetadata[]> {
+    if (!this.plugin.list) {
+      return [];
+    }
+    return this.plugin.list();
+  }
+
+  middleware(): GenerateMiddleware<any, any>[] {
+    if (!this.plugin.middleware) {
+      return [];
+    }
+    return this.plugin.middleware();
+  }
+
+  resolve(
+    actionType: ActionType,
+    name: string
+  ): ResolvableAction | undefined | Promise<ResolvableAction | undefined> {
+    if (!this.plugin.resolve) {
+      return undefined;
+    }
+    return this.plugin.resolve(actionType, name);
+  }
+
+  async model(name: string): Promise<ModelAction> {
+    const model = await this.resolve('model', name);
+    if (!model) {
+      throw new GenkitError({
+        message: `Failed to resolve model ${name} for plugin ${this.name}`,
+        status: 'NOT_FOUND',
+      });
+    }
+    return model as ModelAction;
+  }
 }
 
+/**
+ * Creates a new v2 plugin instance from the provided options.
+ */
+export function genkitPluginV2(
+  options: Omit<GenkitPluginV2, 'version' | 'model'>
+): GenkitPluginV2Instance {
+  return new GenkitPluginV2Instance(options);
+}
+
+/** Checks whether the given plugin conforms to the v2 plugin interface. */
 export function isPluginV2(plugin: unknown): plugin is GenkitPluginV2 {
   return (plugin as GenkitPluginV2).version === 'v2';
 }

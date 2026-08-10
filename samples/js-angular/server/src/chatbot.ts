@@ -50,7 +50,7 @@ const datePicker = ai.defineTool(
 
 export const chatbotFlow = defineAgent(ai, {
   name: 'chatbotFlow',
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-flash-latest'),
   tools: [weatherTool, datePicker],
   returnToolRequests: true,
   systemPrompt:

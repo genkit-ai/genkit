@@ -14,10 +14,13 @@
  * limitations under the License.
  */
 
-import { gemini15Flash, googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { genkit, z } from 'genkit';
 
-const ai = genkit({ plugins: [googleAI()], model: gemini15Flash });
+const ai = genkit({
+  plugins: [googleAI()],
+  model: googleAI.model('gemini-flash-latest'),
+});
 
 const lookupUsers = ai.defineTool(
   {

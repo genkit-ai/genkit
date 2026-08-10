@@ -1,0 +1,30 @@
+{
+  "name": "testing-sample",
+  "version": "1.0.0",
+  "description": "Sample app demonstrating genkit/testing: unit-testing flows, prompts, tools, and streaming with mockModel / echoModel.",
+  "main": "lib/menu.js",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node lib/menu.js",
+    "compile": "tsc",
+    "build": "pnpm build:clean && pnpm compile",
+    "build:clean": "rimraf ./lib",
+    "test": "node --import tsx --test tests/*_test.ts",
+    "test:vitest": "vitest run",
+    "genkit:dev": "genkit start -- tsx --watch src/menu.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "genkit": "workspace:*",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.6"
+  }
+}

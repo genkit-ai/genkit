@@ -20,7 +20,6 @@ import {
   Operation,
   modelActionMetadata,
   z,
-  type Genkit,
 } from 'genkit';
 import {
   BackgroundModelAction,
@@ -29,6 +28,8 @@ import {
   type ModelInfo,
   type ModelReference,
 } from 'genkit/model';
+import { backgroundModel as pluginBackgroundModel } from 'genkit/plugin';
+import { isKnownKey } from '../common/utils.js';
 import { veoCheckOperation, veoPredict } from './client.js';
 import {
   ClientOptions,
@@ -43,6 +44,7 @@ import {
   checkModelName,
   extractText,
   extractVeoImage,
+  extractVeoVideo,
   extractVersion,
   modelName,
 } from './utils.js';
@@ -52,8 +54,10 @@ import {
  */
 export const VeoConfigSchema = z
   .object({
-    // NOTE: Documentation notes numberOfVideos parameter to pick the number of
-    // output videos, but this setting does not seem to work
+    apiKey: z
+      .string()
+      .describe('Override the API key provided at plugin initialization.')
+      .optional(),
     negativePrompt: z.string().optional(),
     aspectRatio: z
       .enum(['9:16', '16:9'])
@@ -68,9 +72,18 @@ export const VeoConfigSchema = z
     durationSeconds: z
       .number()
       .step(1)
-      .min(5)
+      .min(4) // Veo 3.1 supports 4s for some resolutions.
       .max(8)
-      .describe('Length of each output video in seconds, between 5 and 8.')
+      .describe('Length of each output video in seconds.')
+      .optional(),
+    resolution: z
+      .enum(['720p', '1080p', '4k'])
+      .describe('Resolution of the output video.')
+      .optional(),
+    seed: z
+      .number()
+      .int()
+      .describe('Random seed for the video generation.')
       .optional(),
     enhancePrompt: z
       .boolean()
@@ -110,11 +123,12 @@ function commonRef(
 const GENERIC_MODEL = commonRef('veo');
 
 const KNOWN_MODELS = {
-  'veo-3.0-generate-preview': commonRef('veo-3.0-generate-preview'),
-  'veo-3.0-fast-generate-preview': commonRef('veo-3.0-fast-generate-preview'),
-  'veo-2.0-generate-001': commonRef('veo-2.0-generate-001'),
+  'veo-3.1-lite-generate-preview': commonRef('veo-3.1-lite-generate-preview'),
+  'veo-3.1-generate-preview': commonRef('veo-3.1-generate-preview'),
+  'veo-3.1-fast-generate-preview': commonRef('veo-3.1-fast-generate-preview'),
 } as const;
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
+
 export type VeoModelName = `veo-${string}`;
 export function isVeoModelName(value?: string): value is VeoModelName {
   return !!value?.startsWith('veo-');
@@ -125,6 +139,11 @@ export function model(
   config: VeoConfig = {}
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
+    return KNOWN_MODELS[name].withConfig(config);
+  }
+
   return modelRef({
     name: `googleai/${name}`,
     config,
@@ -156,17 +175,16 @@ export function listActions(models: Model[]): ActionMetadata[] {
   );
 }
 
-export function defineKnownModels(ai: Genkit, options?: GoogleAIPluginOptions) {
-  for (const name of Object.keys(KNOWN_MODELS)) {
-    defineModel(ai, name, options);
-  }
+export function listKnownModels(options?: GoogleAIPluginOptions) {
+  return Object.keys(KNOWN_MODELS).map((name: string) =>
+    defineModel(name, options)
+  );
 }
 
 /**
  * Defines a new GoogleAI Veo model.
  */
 export function defineModel(
-  ai: Genkit,
   name: string,
   pluginOptions?: GoogleAIPluginOptions
 ): BackgroundModelAction<VeoConfigSchemaType> {
@@ -174,19 +192,30 @@ export function defineModel(
   const clientOptions: ClientOptions = {
     apiVersion: pluginOptions?.apiVersion,
     baseUrl: pluginOptions?.baseUrl,
+    customHeaders: pluginOptions?.customHeaders,
+    experimental_debugTraces: pluginOptions?.experimental_debugTraces,
   };
 
-  return ai.defineBackgroundModel({
+  return pluginBackgroundModel({
     name: ref.name,
     ...ref.info,
     configSchema: ref.configSchema,
     async start(request) {
-      const apiKey = calculateApiKey(pluginOptions?.apiKey, undefined);
+      const apiKey = calculateApiKey(
+        pluginOptions?.apiKey,
+        request.config?.apiKey
+      );
+      const newClientOptions: ClientOptions = {
+        ...clientOptions,
+        apiKey,
+      };
+
       const veoPredictRequest: VeoPredictRequest = {
         instances: [
           {
             prompt: extractText(request),
             image: extractVeoImage(request),
+            video: extractVeoVideo(request),
           },
         ],
         parameters: toVeoParameters(request),
@@ -196,19 +225,30 @@ export function defineModel(
         apiKey,
         extractVersion(ref),
         veoPredictRequest,
-        clientOptions
+        newClientOptions
       );
 
-      return fromVeoOperation(response);
+      return fromVeoOperation(response, newClientOptions);
     },
     async check(operation) {
-      const apiKey = calculateApiKey(pluginOptions?.apiKey, undefined);
+      const storedOptions = operation.metadata?.clientOptions as
+        | ClientOptions
+        | undefined;
+      const apiKey =
+        storedOptions?.apiKey ||
+        calculateApiKey(pluginOptions?.apiKey, undefined);
+
+      const checkOptions: ClientOptions = {
+        ...clientOptions,
+        ...storedOptions,
+      };
+
       const response = await veoCheckOperation(
         apiKey,
         operation.id,
-        clientOptions
+        checkOptions
       );
-      return fromVeoOperation(response);
+      return fromVeoOperation(response, checkOptions);
     },
   });
 }
@@ -238,11 +278,15 @@ function toVeoParameters(
 }
 
 function fromVeoOperation(
-  apiOp: VeoOperation
+  apiOp: VeoOperation,
+  clientOpt?: ClientOptions
 ): Operation<GenerateResponseData> {
   const res = { id: apiOp.name } as Operation<GenerateResponseData>;
   if (apiOp.done !== undefined) {
     res.done = apiOp.done;
+  }
+  if (clientOpt) {
+    res.metadata = { clientOptions: clientOpt };
   }
 
   if (apiOp.error) {
