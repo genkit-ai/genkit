@@ -172,7 +172,7 @@ async def test_generate_logs_nothing_at_default_level() -> None:
         await _generate_once()
 
     events = [entry['event'] for entry in entries]
-    assert 'generate response' not in events
+    assert events == []
 
 
 @pytest.mark.asyncio
