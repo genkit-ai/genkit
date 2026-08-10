@@ -18,6 +18,7 @@ package anthropic
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -135,6 +136,9 @@ func TestModelConfig(t *testing.T) {
 		// nothing at all.
 		{"camelCase field name", map[string]any{"maxTokens": 10}},
 		{"mistyped value", map[string]any{"temperature": "hot"}},
+		// The SDK's params struct decodes a bare scalar into a zero value
+		// rather than failing, so the schema is what refuses one.
+		{"scalar config", 123},
 	}
 	for _, tt := range rejected {
 		t.Run("rejects "+tt.name, func(t *testing.T) {
@@ -144,9 +148,19 @@ func TestModelConfig(t *testing.T) {
 		})
 	}
 
-	// Another provider's config never reaches the model function.
-	if _, err := base.ConvertToExact[anthropic.MessageNewParams](123); err == nil {
-		t.Error("expected an int config to be rejected as a type mismatch")
+	// Another provider's config never reaches the model function. Its fields
+	// are omitempty and the ones it sets overlap with Claude's, so it marshals
+	// to an object the schema accepts; the deserialization step is what refuses
+	// it, and without that the model function would run on an all-zero config.
+	type otherProviderConfig struct {
+		Temperature float64 `json:"temperature,omitempty"`
+	}
+	other := otherProviderConfig{Temperature: 1.0}
+	if err := validateConfig(t, desc.InputSchema, other); err != nil {
+		t.Fatalf("premise no longer holds, the schema rejects it on its own: %v", err)
+	}
+	if _, err := base.ConvertToExact[anthropic.MessageNewParams](other); !errors.Is(err, base.ErrTypeMismatch) {
+		t.Errorf("ConvertToExact(%T) error = %v, want one wrapping ErrTypeMismatch", other, err)
 	}
 }
 
