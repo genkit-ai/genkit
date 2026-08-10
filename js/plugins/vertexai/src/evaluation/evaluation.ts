@@ -98,6 +98,9 @@ function createBleuEvaluator(
       responseSchema: BleuResponseSchema,
     },
     (datapoint) => {
+      if (datapoint.reference === undefined) {
+        throw new Error('Reference is required for BLEU evaluation.');
+      }
       return {
         bleuInput: {
           metricSpec,
@@ -140,6 +143,9 @@ function createRougeEvaluator(
       responseSchema: RougeResponseSchema,
     },
     (datapoint) => {
+      if (datapoint.reference === undefined) {
+        throw new Error('Reference is required for ROUGE evaluation.');
+      }
       return {
         rougeInput: {
           metricSpec,
