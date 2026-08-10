@@ -648,7 +648,7 @@ ai.defineFlow('veo-photo-move', async (_, { sendChunk }) => {
 });
 
 // An example of overriding the region used by a Veo background model at
-// call time via options.context.location, rather than relying on the
+// call time via config overrides, rather than relying on the
 // plugin-configured location ('global', from the plugin init above). This
 // is useful when per-request routing (e.g. picking a region closer to the
 // caller, or a region where a specific model is available) should override
@@ -686,9 +686,12 @@ ai.defineFlow('veo-photo-move-location-override', async (_, { sendChunk }) => {
       personGeneration: 'allow_adult',
     },
     // The plugin is initialized with location: 'global' above; override it
-    // to 'us-central1' here to prove the context override takes effect.
+    // to 'us-central1' here to prove the override takes effect. On
+    // generate(), config overrides ride in context.config.
     context: {
-      location: 'us-central1',
+      config: {
+        location: 'us-central1',
+      },
     },
   });
 
@@ -698,8 +701,9 @@ ai.defineFlow('veo-photo-move-location-override', async (_, { sendChunk }) => {
 
   while (!operation.done) {
     sendChunk('check status of operation ' + operation.id);
+    // On checkOperation(), config overrides go in the top-level `config`.
     operation = await ai.checkOperation(operation, {
-      context: { location: 'us-central1' },
+      config: { location: 'us-central1' },
     });
     await new Promise((resolve) => setTimeout(resolve, 5000));
   }
