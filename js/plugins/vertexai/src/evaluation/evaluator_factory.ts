@@ -20,7 +20,7 @@ import type { BaseEvalDataPoint, Score } from 'genkit/evaluator';
 import { runInNewSpan } from 'genkit/tracing';
 import type { GoogleAuth } from 'google-auth-library';
 import { getGenkitClientHeader } from '../common/index.js';
-import type { VertexAIEvaluationMetricType } from './evaluation.js';
+import type { VertexAIEvaluationMetricType } from './types.js';
 
 export class EvaluatorFactory {
   constructor(

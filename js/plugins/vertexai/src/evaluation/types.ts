@@ -25,7 +25,7 @@ export enum VertexAIEvaluationMetricType {
   // Update genkit/docs/plugins/vertex-ai.md when modifying the list of enums
   BLEU = 'BLEU',
   ROUGE = 'ROUGE',
-  FLUENCY = 'FLEUNCY',
+  FLUENCY = 'FLUENCY',
   SAFETY = 'SAFETY',
   GROUNDEDNESS = 'GROUNDEDNESS',
   SUMMARIZATION_QUALITY = 'SUMMARIZATION_QUALITY',
