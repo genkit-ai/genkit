@@ -309,7 +309,7 @@ func applyToolOutputSchema(metadata map[string]any, schema map[string]any) {
 // (in practice 'any'). The tool constructors call it before honoring an
 // explicit schema option: the custom schema stands in for a type parameter of
 // 'any', and a concrete T would silently disagree with the advertised schema.
-// requirement is the leading clause of the panic message, e.g.
+// The requirement argument is the leading clause of the panic message, e.g.
 // "WithInputSchema requires In".
 func requireAnyTypeParam[T any](ctor, name, requirement string) {
 	if typ := reflect.TypeFor[T](); typ.Kind() != reflect.Interface {

@@ -475,7 +475,8 @@ func WithInputSchema(schema map[string]any) InputSchemaOption {
 }
 
 // WithInputSchemaName sets a pre-registered schema by name for the input.
-// The schema will be resolved lazily at execution time using [DefineSchema].
+// The schema is resolved from the registry at execution time; register it with
+// [github.com/firebase/genkit/go/genkit.DefineSchema].
 func WithInputSchemaName(name string) InputSchemaOption {
 	return &inputOptions{InputSchema: core.SchemaRef(name)}
 }
@@ -768,6 +769,7 @@ func WithOutputSchema(schema map[string]any) OutputSchemaOption {
 }
 
 // WithOutputSchemaName sets the schema name that will be resolved at execution time.
+// Register the schema with [github.com/firebase/genkit/go/genkit.DefineSchema].
 func WithOutputSchemaName(name string) OutputSchemaOption {
 	return &outputOptions{
 		OutputSchema: core.SchemaRef(name),
