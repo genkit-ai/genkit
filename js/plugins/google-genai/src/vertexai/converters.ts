@@ -441,12 +441,23 @@ export function fromVeoOperation(
   }
 
   if (fromOp.response) {
+    const videos = fromOp.response.videos ?? [];
+    // If the operation completed but every generated video was removed by
+    // the safety (RAI) filters, there are no videos to return. Surface the
+    // filter reasons as an error instead of returning empty content.
+    if (videos.length === 0 && fromOp.response.raiMediaFilteredCount) {
+      toOp.error = {
+        message:
+          fromOp.response.raiMediaFilteredReasons?.join('; ') ??
+          'All generated videos were filtered out by safety filters.',
+      };
+    }
     toOp.output = {
-      finishReason: 'stop',
+      finishReason: toOp.error ? 'blocked' : 'stop',
       raw: fromOp.response,
       message: {
         role: 'model',
-        content: fromOp.response.videos.map((veoMedia) => {
+        content: videos.map((veoMedia) => {
           if (veoMedia.bytesBase64Encoded) {
             return {
               media: {

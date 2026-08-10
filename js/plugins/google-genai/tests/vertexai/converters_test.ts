@@ -657,6 +657,49 @@ describe('Vertex AI Converters', () => {
         error: { message: 'Invalid argument' },
       });
     });
+
+    it('should not throw and should surface an error when all videos are filtered', () => {
+      // When every generated video is filtered by the safety (RAI) filters,
+      // the API returns a response with no `videos` array.
+      const veoOp: VeoOperation = {
+        name: 'operations/rai',
+        done: true,
+        response: {
+          raiMediaFilteredCount: 1,
+          raiMediaFilteredReasons: ['1 videos were filtered out.'],
+        },
+      };
+      const result = fromVeoOperation(veoOp);
+      assert.deepStrictEqual(result, {
+        id: 'operations/rai',
+        done: true,
+        error: { message: '1 videos were filtered out.' },
+        output: {
+          finishReason: 'blocked',
+          raw: veoOp.response,
+          message: {
+            role: 'model',
+            content: [],
+          },
+        },
+      });
+    });
+
+    it('should use a default message when videos are filtered with no reasons', () => {
+      const veoOp: VeoOperation = {
+        name: 'operations/rai2',
+        done: true,
+        response: {
+          raiMediaFilteredCount: 2,
+        },
+      };
+      const result = fromVeoOperation(veoOp);
+      assert.strictEqual(
+        result.error?.message,
+        'All generated videos were filtered out by safety filters.'
+      );
+      assert.strictEqual(result.output?.finishReason, 'blocked');
+    });
   });
 
   describe('toVeoModel', () => {
