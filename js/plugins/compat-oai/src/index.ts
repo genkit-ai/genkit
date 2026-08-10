@@ -46,6 +46,12 @@ export {
   type ModelRequestBuilder,
 } from './model.js';
 export {
+  ResponsesCommonConfigSchema,
+  compatOaiResponsesModelRef,
+  defineCompatOpenAIResponsesModel,
+  openAIResponsesModelRunner,
+} from './responses.js';
+export {
   TranslationConfigSchema,
   compatOaiTranslationModelRef,
   defineCompatOpenAITranslationModel,
