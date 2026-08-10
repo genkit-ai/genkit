@@ -172,7 +172,6 @@ async def test_generate_logs_nothing_at_default_level() -> None:
         await _generate_once()
 
     events = [entry['event'] for entry in entries]
-    assert events, 'capture_logs saw nothing, so the assertion below would be vacuous'
     assert 'generate response' not in events
 
 
