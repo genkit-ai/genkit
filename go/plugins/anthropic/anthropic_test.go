@@ -36,11 +36,13 @@ import (
 // stage. The set mirrors the JS plugin's ADVANCED entries in KNOWN_MODELS.
 func TestModelOptionsKnownModels(t *testing.T) {
 	advancedModels := []string{
+		"claude-fable-5",
+		"claude-opus-5",
+		"claude-sonnet-5",
 		"claude-opus-4-8",
 		"claude-opus-4-7",
 		"claude-opus-4-6",
 		"claude-opus-4-5",
-		"claude-opus-4-1",
 		"claude-sonnet-4-6",
 		"claude-sonnet-4-5",
 		"claude-haiku-4-5",
@@ -69,7 +71,6 @@ func TestModelOptionsKnownModels(t *testing.T) {
 func TestModelOptionsKnownVersionedModels(t *testing.T) {
 	advancedModels := []string{
 		"claude-opus-4-5-20251101",
-		"claude-opus-4-1-20250805",
 		"claude-sonnet-4-5-20250929",
 		"claude-haiku-4-5-20251001",
 	}
@@ -282,7 +283,7 @@ func TestRegisterModelTwicePanics(t *testing.T) {
 	a := &Anthropic{APIKey: "test-key"}
 	g := genkit.Init(context.Background())
 
-	const name = "claude-opus-4-1"
+	const name = "claude-haiku-4-5"
 	if _, err := a.RegisterModel(g, name, nil); err != nil {
 		t.Fatalf("RegisterModel() error = %v", err)
 	}

@@ -23,16 +23,15 @@ import (
 	"github.com/firebase/genkit/go/ai"
 )
 
-// Capability sets shared by the entries below, in widening order.
-// advancedClaudeSupports mirrors the JS plugin's ADVANCED_MODEL_INFO: capable
-// Claude models that additionally support JSON output.
+// Capability sets shared by the entries below. claudeSupports is what every
+// Claude model does; structuredClaudeSupports adds JSON output and native
+// constrained generation.
 //
-// Only structuredClaudeSupports advertises constrained generation, and only
-// the models on Anthropic's Structured Outputs list get it. That list is
-// narrower than the catalog, and the request path sends output_config solely
-// when the model claims support, so a model claiming it wrongly would have
-// output_config rejected while Genkit had already dropped the schema
-// instructions from the prompt. See
+// Only models on Anthropic's Structured Outputs list may claim Constrained.
+// That list is narrower than the catalog, and the request path sends
+// output_config solely when the model claims support, so a model claiming it
+// wrongly would have output_config rejected while Genkit had already dropped
+// the schema instructions from the prompt. See
 // https://platform.claude.com/docs/en/build-with-claude/structured-outputs.
 var (
 	claudeSupports = ai.ModelSupports{
@@ -41,14 +40,6 @@ var (
 		ToolChoice: true,
 		SystemRole: true,
 		Media:      true,
-	}
-	advancedClaudeSupports = ai.ModelSupports{
-		Multiturn:  true,
-		Tools:      true,
-		ToolChoice: true,
-		SystemRole: true,
-		Media:      true,
-		Output:     []string{"text", "json"},
 	}
 	structuredClaudeSupports = ai.ModelSupports{
 		Multiturn:   true,
@@ -61,23 +52,13 @@ var (
 	}
 )
 
-// advancedModel builds the ModelOptions for a known, JSON-capable Claude model
-// with the given display label. The label prefix is shared by every entry, so
-// it lives here rather than in each one.
-func advancedModel(label string) ai.ModelOptions {
-	return modelWith(&advancedClaudeSupports, label)
-}
-
-// structuredModel builds the ModelOptions for a Claude model that also appears
-// on Anthropic's Structured Outputs list, so it can be constrained natively.
+// structuredModel builds the ModelOptions for a Claude model on Anthropic's
+// Structured Outputs list, so it can be constrained natively. The label prefix
+// is shared by every entry, so it lives here rather than in each one.
 func structuredModel(label string) ai.ModelOptions {
-	return modelWith(&structuredClaudeSupports, label)
-}
-
-func modelWith(supports *ai.ModelSupports, label string) ai.ModelOptions {
 	return ai.ModelOptions{
 		Label:    anthropicLabelPrefix + " - " + label,
-		Supports: supports,
+		Supports: &structuredClaudeSupports,
 		Versions: []string{},
 		Stage:    ai.ModelStageStable,
 	}
@@ -90,17 +71,15 @@ func modelWith(supports *ai.ModelSupports, label string) ai.ModelOptions {
 // modelOptions.
 //
 // Catalog: https://docs.anthropic.com/en/docs/about-claude/models/all-models
+// Retirements: https://platform.claude.com/docs/en/about-claude/model-deprecations
 var supportedModels = map[string]ai.ModelOptions{
-	"claude-fable-5":  structuredModel("Claude Fable 5"),
-	"claude-opus-5":   structuredModel("Claude Opus 5"),
-	"claude-sonnet-5": structuredModel("Claude Sonnet 5"),
-	"claude-opus-4-8": structuredModel("Claude Opus 4.8"),
-	"claude-opus-4-7": structuredModel("Claude Opus 4.7"),
-	"claude-opus-4-6": structuredModel("Claude Opus 4.6"),
-	"claude-opus-4-5": structuredModel("Claude Opus 4.5"),
-	// Absent from Anthropic's Structured Outputs list, so JSON output here is
-	// produced from schema instructions in the prompt rather than natively.
-	"claude-opus-4-1":   advancedModel("Claude Opus 4.1"),
+	"claude-fable-5":    structuredModel("Claude Fable 5"),
+	"claude-opus-5":     structuredModel("Claude Opus 5"),
+	"claude-sonnet-5":   structuredModel("Claude Sonnet 5"),
+	"claude-opus-4-8":   structuredModel("Claude Opus 4.8"),
+	"claude-opus-4-7":   structuredModel("Claude Opus 4.7"),
+	"claude-opus-4-6":   structuredModel("Claude Opus 4.6"),
+	"claude-opus-4-5":   structuredModel("Claude Opus 4.5"),
 	"claude-sonnet-4-6": structuredModel("Claude Sonnet 4.6"),
 	"claude-sonnet-4-5": structuredModel("Claude Sonnet 4.5"),
 	"claude-haiku-4-5":  structuredModel("Claude Haiku 4.5"),
