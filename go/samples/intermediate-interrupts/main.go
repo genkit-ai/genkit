@@ -91,7 +91,7 @@ func main() {
 	paymentAgent := genkit.DefineFlow(g, "paymentAgent", func(ctx context.Context, request string) (string, error) {
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
-				ThinkingConfig: &genai.ThinkingConfig{ThinkingBudget: genai.Ptr[int32](0)},
+				ThinkingConfig: &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelMinimal},
 			})),
 			ai.WithSystem("You are a helpful payment assistant. When the user wants to transfer money, use the transferMoney tool. Always confirm the result with the user."),
 			ai.WithPrompt(request),
@@ -158,7 +158,7 @@ func main() {
 
 			resp, err = genkit.Generate(ctx, g,
 				ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
-					ThinkingConfig: &genai.ThinkingConfig{ThinkingBudget: genai.Ptr[int32](0)},
+					ThinkingConfig: &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelMinimal},
 				})),
 				ai.WithMessages(resp.History()...),
 				ai.WithTools(transferMoney),

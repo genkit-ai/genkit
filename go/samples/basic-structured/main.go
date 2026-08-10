@@ -116,7 +116,7 @@ func DefineSimpleJoke(g *genkit.Genkit) {
 			stream := genkit.GenerateStream(ctx, g,
 				ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 					ThinkingConfig: &genai.ThinkingConfig{
-						ThinkingBudget: genai.Ptr[int32](0),
+						ThinkingLevel: genai.ThinkingLevelMinimal,
 					},
 				})),
 				ai.WithPrompt("Share a long joke about %s.", input),
@@ -145,7 +145,7 @@ func DefineStructuredJoke(g *genkit.Genkit) {
 			stream := genkit.GenerateDataStream[*Joke](ctx, g,
 				ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 					ThinkingConfig: &genai.ThinkingConfig{
-						ThinkingBudget: genai.Ptr[int32](0),
+						ThinkingLevel: genai.ThinkingLevelMinimal,
 					},
 				})),
 				ai.WithPrompt("Share a long joke about %s.", input.Topic),
@@ -187,7 +187,7 @@ func DefineRecipe(g *genkit.Genkit) {
 			stream := genkit.GenerateDataStream[*Recipe](ctx, g,
 				ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 					ThinkingConfig: &genai.ThinkingConfig{
-						ThinkingBudget: genai.Ptr[int32](0),
+						ThinkingLevel: genai.ThinkingLevelMinimal,
 					},
 				})),
 				ai.WithSystem("You are an experienced chef. Come up with easy, creative recipes."),
