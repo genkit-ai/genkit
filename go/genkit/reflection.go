@@ -342,6 +342,24 @@ func wrapReflectionHandler(h func(w http.ResponseWriter, r *http.Request) error)
 	}
 }
 
+// attachTraceID records traceID on a reflection error, allocating the details
+// envelope when the error arrived without one.
+//
+// [core.ToReflectionError] fills in details only from a stack or trace the
+// error itself carried, and leaves the pointer nil otherwise. Every error that
+// was never classified reaches that case, which is any plain error returned by
+// a plugin or a user's own function, so the envelope cannot be assumed to
+// exist just because a trace ID is on hand to write into it.
+func attachTraceID(re *core.ReflectionError, traceID string) {
+	if traceID == "" {
+		return
+	}
+	if re.Details == nil {
+		re.Details = &core.ReflectionErrorDetails{}
+	}
+	re.Details.TraceID = &traceID
+}
+
 // handleRunAction looks up an action by name in the registry, runs it with the
 // provided JSON input, and writes back the JSON-marshaled request.
 func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.ResponseWriter, r *http.Request) error {
@@ -475,8 +493,8 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 			// Handle other errors
 			if stream {
 				refErr := core.ToReflectionError(err)
-				if resp != nil && resp.Telemetry.TraceID != "" {
-					refErr.Details.TraceID = &resp.Telemetry.TraceID
+				if resp != nil {
+					attachTraceID(&refErr, resp.Telemetry.TraceID)
 				}
 
 				reflectErr, err := json.Marshal(refErr)
@@ -493,8 +511,8 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 
 			// Non-streaming error
 			errorResponse := core.ToReflectionError(err)
-			if resp != nil && resp.Telemetry.TraceID != "" {
-				errorResponse.Details.TraceID = &resp.Telemetry.TraceID
+			if resp != nil {
+				attachTraceID(&errorResponse, resp.Telemetry.TraceID)
 			}
 
 			reflectErr, err := json.Marshal(errorResponse)
