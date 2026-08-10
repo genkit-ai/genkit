@@ -168,7 +168,7 @@ func DefineSimpleJokeWithInlinePrompt(g *genkit.Genkit) {
 		g, "joke.code",
 		ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 			ThinkingConfig: &genai.ThinkingConfig{
-				ThinkingBudget: genai.Ptr[int32](0),
+				ThinkingLevel: genai.ThinkingLevelMinimal,
 			},
 		})),
 		// Despite JokeRequest having defaults set in jsonschema tags, we can override it with values set in WithInputType.
@@ -227,7 +227,7 @@ func DefineStructuredJokeWithInlinePrompt(g *genkit.Genkit) {
 		g, "structured-joke.code",
 		ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 			ThinkingConfig: &genai.ThinkingConfig{
-				ThinkingBudget: genai.Ptr[int32](0),
+				ThinkingLevel: genai.ThinkingLevelMinimal,
 			},
 		})),
 		ai.WithPrompt("Share a long joke about {{topic}}."),
@@ -280,7 +280,7 @@ func DefineRecipeWithInlinePrompt(g *genkit.Genkit) {
 		g, "recipe.code",
 		ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 			ThinkingConfig: &genai.ThinkingConfig{
-				ThinkingBudget: genai.Ptr[int32](0),
+				ThinkingLevel: genai.ThinkingLevelMinimal,
 			},
 		})),
 		ai.WithSystem("You are an experienced chef. Come up with easy, creative recipes."),
@@ -363,7 +363,7 @@ func DefineAssistantWithInlinePrompt(g *genkit.Genkit) {
 			&middleware.Retry{MaxRetries: 2},
 			&middleware.Fallback{
 				Models: []ai.ModelRef{
-					googlegenai.ModelRef("googleai/gemini-3.1-flash-preview", nil),
+					googlegenai.ModelRef("googleai/gemini-3.5-flash", nil),
 					googlegenai.ModelRef("googleai/gemini-3.1-pro-preview", &genai.GenerateContentConfig{
 						Temperature: genai.Ptr[float32](2.0),
 					}),
