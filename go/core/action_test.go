@@ -63,9 +63,9 @@ func TestActionRunJSON(t *testing.T) {
 // TestActionInvalidInput pins how an action classifies input it refuses, on
 // both entry points: Run validates the typed value against the schema, and
 // RunJSON fails earlier, deserializing the bytes. Each is reported with
-// [status.ErrInvalidInput] so callers match a sentinel rather than the
-// deprecated *SchemaValidationError, and each keeps the underlying validation
-// error reachable through errors.Unwrap.
+// [status.ErrInvalidInput] so callers match a sentinel rather than a concrete
+// error type, and each keeps the underlying validation error reachable
+// through errors.Unwrap.
 func TestActionInvalidInput(t *testing.T) {
 	r := registry.New()
 	// Stricter than the Go type, so a valid int can still violate it.
@@ -105,12 +105,6 @@ func TestActionInvalidInput(t *testing.T) {
 			// %w rather than %v, so the validation error stays matchable.
 			if errors.Unwrap(err) == nil {
 				t.Error("errors.Unwrap = nil, want the underlying validation error")
-			}
-			// The deprecated wrapper carried the same sentinel, so only its
-			// absence separates this from the path it replaced.
-			var sve *SchemaValidationError
-			if errors.As(err, &sve) {
-				t.Error("errors.As(*SchemaValidationError) = true, want the sentinel alone")
 			}
 		})
 	}

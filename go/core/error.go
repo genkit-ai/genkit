@@ -147,27 +147,6 @@ func NewError(name StatusName, message string, args ...any) *GenkitError {
 	return ge
 }
 
-// SchemaValidationError is an error returned when action input fails parsing
-// or schema validation, e.g. when a model produces malformed tool arguments.
-//
-// Deprecated: match [status.ErrInvalidInput] with errors.Is instead.
-type SchemaValidationError struct {
-	*GenkitError
-}
-
-// Unwrap returns the underlying GenkitError so that errors.Is and errors.As
-// continue to match *GenkitError anywhere a SchemaValidationError is returned.
-func (e *SchemaValidationError) Unwrap() error { return e.GenkitError }
-
-// NewSchemaValidationError creates a SchemaValidationError for the given action key and validation error.
-//
-// Deprecated: use status.Errorf with [status.ErrInvalidInput].
-func NewSchemaValidationError(actionKey string, err error) *SchemaValidationError {
-	return &SchemaValidationError{
-		GenkitError: status.Errorf(status.ErrInvalidInput, "invalid input to action %q: %w", actionKey, err),
-	}
-}
-
 // ToReflectionError returns a JSON-serializable representation for reflection API responses.
 //
 // Deprecated: the reflection API's error envelope is internal to that boundary
