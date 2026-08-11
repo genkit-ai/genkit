@@ -497,7 +497,6 @@ func TestPartClone(t *testing.T) {
 		t.Error("mutating clone Data affected original")
 	}
 
-
 	// Go types in metadata (e.g. []byte) must be preserved, not string-ified.
 	sig, ok := cp.Metadata["sig"].([]byte)
 	if !ok {
