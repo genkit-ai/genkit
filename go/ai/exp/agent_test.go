@@ -31,6 +31,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -1009,7 +1010,7 @@ func defineLastGoodTestAgent(reg api.Registry, name string, opts ...AgentOption[
 						s.Counter = 999
 						return s
 					})
-					return nil, core.NewError(core.UNAVAILABLE, "model timeout")
+					return nil, status.Errorf(status.ErrUnavailable, "model timeout")
 				}
 				sess.AddMessages(ai.NewModelTextMessage("echo: " + text))
 				sess.UpdateCustom(func(s testState) testState {
@@ -1651,7 +1652,7 @@ func setupPromptTestRegistry(t *testing.T) *registry.Registry {
 	ctx := context.Background()
 
 	ai.ConfigureFormats(reg)
-	ai.DefineModel(reg, "test/echo", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
+	defineTestModel(reg, "test/echo", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			// Echo back the last user message text.
 			var text string
@@ -1701,7 +1702,7 @@ func TestPromptAgent_NamedPromptSharedAcrossAgents(t *testing.T) {
 
 	var mu sync.Mutex
 	var renderedSystems []string
-	ai.DefineModel(reg, "test/capture", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
+	defineTestModel(reg, "test/capture", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			mu.Lock()
 			for _, m := range req.Messages {
@@ -1765,7 +1766,7 @@ func TestDefinePromptAgent_DefaultAndNamed(t *testing.T) {
 
 	var mu sync.Mutex
 	var renderedSystems []string
-	ai.DefineModel(reg, "test/capture", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
+	defineTestModel(reg, "test/capture", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			mu.Lock()
 			for _, m := range req.Messages {
@@ -1908,7 +1909,7 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 	reg := setupPromptTestRegistry(t)
 
 	// Use a model that echoes all message count so we can verify history grows.
-	ai.DefineModel(reg, "test/history", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
+	defineTestModel(reg, "test/history", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			// Count total messages received (includes prompt-rendered + history).
 			var parts []string
@@ -2055,14 +2056,14 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 	ai.ConfigureFormats(reg)
 
 	// Define two tools so the model can call them across multiple rounds.
-	ai.DefineTool(reg, "greet", "returns a greeting",
+	defineTestTool(reg, "greet", "returns a greeting",
 		func(ctx *ai.ToolContext, input struct {
 			Name string `json:"name"`
 		}) (string, error) {
 			return "hello " + input.Name, nil
 		},
 	)
-	ai.DefineTool(reg, "farewell", "returns a farewell",
+	defineTestTool(reg, "farewell", "returns a farewell",
 		func(ctx *ai.ToolContext, input struct {
 			Name string `json:"name"`
 		}) (string, error) {
@@ -2074,7 +2075,7 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 	//   Round 1: request "greet" tool
 	//   Round 2: after seeing greet response, request "farewell" tool
 	//   Round 3: after seeing farewell response, return final text
-	ai.DefineModel(reg, "test/toolmodel", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true}},
+	defineTestModel(reg, "test/toolmodel", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			// Count tool responses to determine which round we're in.
 			toolResps := 0
@@ -2362,7 +2363,7 @@ func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
 	var modelCalls atomic.Int64
-	ai.DefineModel(reg, "test/reject", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
+	defineTestModel(reg, "test/reject", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			modelCalls.Add(1)
 			return &ai.ModelResponse{Message: ai.NewModelTextMessage("unexpected")}, nil
@@ -2440,8 +2441,9 @@ func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 
 func TestValidateResumeAgainstHistory(t *testing.T) {
 	// History spans two model messages (each carrying a tool request) plus a
-	// user message that must be ignored. The whole history is searched, not
-	// just the last turn.
+	// user message. Only the last model message is pending, so entries
+	// targeting "second" resolve and entries targeting the settled "first"
+	// do not.
 	history := []*ai.Message{
 		{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("hi")}},
 		{Role: ai.RoleModel, Content: []*ai.Part{
@@ -2450,6 +2452,7 @@ func TestValidateResumeAgainstHistory(t *testing.T) {
 		{Role: ai.RoleModel, Content: []*ai.Part{
 			ai.NewTextPart("thinking"),
 			ai.NewToolRequestPart(&ai.ToolRequest{Name: "second", Ref: "r2", Input: map[string]any{"b": "x"}}),
+			ai.NewToolRequestPart(&ai.ToolRequest{Name: "numeric", Ref: "r3", Input: map[string]any{"a": float64(1)}}),
 		}},
 	}
 
@@ -2467,9 +2470,21 @@ func TestValidateResumeAgainstHistory(t *testing.T) {
 	}{
 		{name: "nil resume", resume: nil},
 		{name: "empty resume", resume: &ToolResume{}},
-		{name: "respond matches first model message", resume: &ToolResume{Respond: respond("first", "r1")}},
-		{name: "respond matches a later model message", resume: &ToolResume{Respond: respond("second", "r2")}},
-		{name: "restart matches input exactly", resume: &ToolResume{Restart: restart("first", "r1", map[string]any{"a": float64(1)})}},
+		{name: "respond matches the pending model message", resume: &ToolResume{Respond: respond("second", "r2")}},
+		{name: "restart matches input exactly", resume: &ToolResume{Restart: restart("second", "r2", map[string]any{"b": "x"})}},
+		{
+			// Only the last model message is pending. "first" was issued and
+			// settled a turn earlier, so resume handling would never resolve
+			// it; saying so beats claiming it was never requested.
+			name:    "respond references a settled earlier turn",
+			resume:  &ToolResume{Respond: respond("first", "r1")},
+			wantErr: "from an earlier turn which is no longer pending",
+		},
+		{
+			name:    "restart references a settled earlier turn",
+			resume:  &ToolResume{Restart: restart("first", "r1", map[string]any{"a": float64(1)})},
+			wantErr: "from an earlier turn which is no longer pending",
+		},
 		{
 			name:    "respond references unknown tool",
 			resume:  &ToolResume{Respond: respond("ghost", "r1")},
@@ -2477,7 +2492,7 @@ func TestValidateResumeAgainstHistory(t *testing.T) {
 		},
 		{
 			name:    "respond references known tool with wrong ref",
-			resume:  &ToolResume{Respond: respond("first", "wrong")},
+			resume:  &ToolResume{Respond: respond("second", "wrong")},
 			wantErr: "not found in session history",
 		},
 		{
@@ -2487,14 +2502,14 @@ func TestValidateResumeAgainstHistory(t *testing.T) {
 		},
 		{
 			name:    "restart forges modified input",
-			resume:  &ToolResume{Restart: restart("first", "r1", map[string]any{"a": float64(2)})},
+			resume:  &ToolResume{Restart: restart("second", "r2", map[string]any{"b": "forged"})},
 			wantErr: "modified inputs",
 		},
 		{
 			// An int 1 normalizes to the same JSON shape as the stored float64
 			// 1, so a faithful restart is not mistaken for a forgery.
 			name:   "restart input matches across json number types",
-			resume: &ToolResume{Restart: restart("first", "r1", map[string]any{"a": 1})},
+			resume: &ToolResume{Restart: restart("numeric", "r3", map[string]any{"a": 1})},
 		},
 		{
 			// A kind-PartToolRequest part with a nil ToolRequest pointer (e.g.
@@ -2530,6 +2545,108 @@ func TestValidateResumeAgainstHistory(t *testing.T) {
 	}
 }
 
+// TestValidateResumeAgainstHistory_RecurringRefs covers the case where the same
+// tool name + ref appears in more than one model message. Refs are only made
+// unique within a single model response, so a multi-turn session routinely
+// reuses them. Validation must resolve against the newest occurrence: matching
+// the oldest rejects a legitimate restart of the pending interrupt and accepts
+// a restart whose input was forged from a stale turn.
+func TestValidateResumeAgainstHistory_RecurringRefs(t *testing.T) {
+	staleInput := map[string]any{"amount": float64(10)}
+	currentInput := map[string]any{"amount": float64(1000000)}
+
+	// Both model messages carry transfer/r1; only the last one is pending.
+	history := []*ai.Message{
+		{Role: ai.RoleModel, Content: []*ai.Part{
+			ai.NewToolRequestPart(&ai.ToolRequest{Name: "transfer", Ref: "r1", Input: staleInput}),
+		}},
+		{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("again")}},
+		{Role: ai.RoleModel, Content: []*ai.Part{
+			ai.NewToolRequestPart(&ai.ToolRequest{Name: "transfer", Ref: "r1", Input: currentInput}),
+		}},
+	}
+	restart := func(input any) *ToolResume {
+		return &ToolResume{Restart: []*ai.Part{
+			ai.NewToolRequestPart(&ai.ToolRequest{Name: "transfer", Ref: "r1", Input: input}),
+		}}
+	}
+
+	t.Run("restart matching the newest request is accepted", func(t *testing.T) {
+		if err := ValidateResumeAgainstHistory(restart(currentInput), history); err != nil {
+			t.Fatalf("legitimate restart of the pending interrupt rejected: %v", err)
+		}
+	})
+
+	t.Run("restart forged from a stale request is rejected", func(t *testing.T) {
+		err := ValidateResumeAgainstHistory(restart(staleInput), history)
+		if err == nil {
+			t.Fatal("restart carrying a stale turn's input was accepted, want INVALID_ARGUMENT")
+		}
+		if !strings.Contains(err.Error(), "modified inputs") {
+			t.Fatalf("error %q does not contain %q", err.Error(), "modified inputs")
+		}
+		if ge := core.AsGenkitError(err); ge.Status != core.INVALID_ARGUMENT {
+			t.Fatalf("expected status %q, got %q", core.INVALID_ARGUMENT, ge.Status)
+		}
+	})
+
+	t.Run("newest occurrence within a single message wins", func(t *testing.T) {
+		// A malformed model response repeating one ref still resolves to the
+		// most recent request, keeping the newest-first rule consistent.
+		oneMessage := []*ai.Message{
+			{Role: ai.RoleModel, Content: []*ai.Part{
+				ai.NewToolRequestPart(&ai.ToolRequest{Name: "transfer", Ref: "r1", Input: staleInput}),
+				ai.NewToolRequestPart(&ai.ToolRequest{Name: "transfer", Ref: "r1", Input: currentInput}),
+			}},
+		}
+		if err := ValidateResumeAgainstHistory(restart(currentInput), oneMessage); err != nil {
+			t.Fatalf("restart matching the last request in the message rejected: %v", err)
+		}
+	})
+
+	t.Run("respond still matches on name and ref alone", func(t *testing.T) {
+		resume := &ToolResume{Respond: []*ai.Part{
+			ai.NewToolResponsePart(&ai.ToolResponse{Name: "transfer", Ref: "r1", Output: "ok"}),
+		}}
+		if err := ValidateResumeAgainstHistory(resume, history); err != nil {
+			t.Fatalf("expected success, got error: %v", err)
+		}
+	})
+
+	t.Run("a trailing user message does not hide the pending response", func(t *testing.T) {
+		// Sending a turn message alongside a resume payload leaves a user
+		// message last. Validation still resolves against the pending model
+		// response so the combination keeps failing on generate's own
+		// precondition rather than being rejected here as a forgery.
+		withTurnMessage := append(append([]*ai.Message{}, history...),
+			&ai.Message{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("and also")}})
+		if err := ValidateResumeAgainstHistory(restart(currentInput), withTurnMessage); err != nil {
+			t.Fatalf("pending response hidden by a trailing user message: %v", err)
+		}
+		if err := ValidateResumeAgainstHistory(restart(staleInput), withTurnMessage); err == nil {
+			t.Fatal("stale input accepted when a user message trails history")
+		}
+	})
+
+	t.Run("a settled turn is rejected as stale, not as unknown", func(t *testing.T) {
+		// The tool ran to completion, so the last model message carries no
+		// tool requests at all and nothing is pending.
+		settled := append(append([]*ai.Message{}, history...),
+			&ai.Message{Role: ai.RoleTool, Content: []*ai.Part{
+				ai.NewToolResponsePart(&ai.ToolResponse{Name: "transfer", Ref: "r1", Output: "done"}),
+			}},
+			&ai.Message{Role: ai.RoleModel, Content: []*ai.Part{ai.NewTextPart("transferred")}},
+		)
+		err := ValidateResumeAgainstHistory(restart(currentInput), settled)
+		if err == nil {
+			t.Fatal("restart of an already-completed tool call accepted, want INVALID_ARGUMENT")
+		}
+		if !strings.Contains(err.Error(), "no longer pending") {
+			t.Fatalf("error %q does not contain %q", err.Error(), "no longer pending")
+		}
+	})
+}
+
 // TestPromptAgent_RejectsResumeForUnrequestedTool proves the resume validation
 // is wired into the prompt-backed loop: a caller cannot resume a tool the model
 // never requested, and the forged turn fails before the model is re-invoked.
@@ -2539,7 +2656,7 @@ func TestPromptAgent_RejectsResumeForUnrequestedTool(t *testing.T) {
 	ai.ConfigureFormats(reg)
 
 	var modelCalls atomic.Int32
-	ai.DefineModel(reg, "test/plain", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
+	defineTestModel(reg, "test/plain", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			modelCalls.Add(1)
 			return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("hello")}, nil
@@ -4932,7 +5049,7 @@ func TestAgent_StateTransform_ErrorFailsClientManagedOutputClosed(t *testing.T) 
 	reg := newTestRegistry(t)
 
 	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
-		return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape state")
+		return nil, status.Errorf(status.ErrPermissionDenied, "cannot shape state")
 	}
 
 	af := DefineCustomAgent(reg, "clientXformErr",
@@ -4955,6 +5072,9 @@ func TestAgent_StateTransform_ErrorFailsClientManagedOutputClosed(t *testing.T) 
 	if out.Error == nil || out.Error.Status != core.PERMISSION_DENIED {
 		t.Errorf("Error = %+v, want status %q from the transform", out.Error, core.PERMISSION_DENIED)
 	}
+	if !errors.Is(out.Error, status.ErrPermissionDenied) {
+		t.Errorf("Error = %+v, want it to match status.ErrPermissionDenied", out.Error)
+	}
 	// failedOutput shapes the last-good state through the same transform, which
 	// errors again here; the runtime omits state rather than leaking it.
 	if out.State != nil {
@@ -4972,7 +5092,7 @@ func TestAgent_StateTransform_ErrorFailsSnapshotReadClosed(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	transform := func(_ context.Context, s *SessionState[testState]) (*SessionState[testState], error) {
-		return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape state")
+		return nil, status.Errorf(status.ErrPermissionDenied, "cannot shape state")
 	}
 
 	af := DefineCustomAgent(reg, "snapXformErr",
@@ -5588,7 +5708,7 @@ func TestPromptAgent_ForwardsFinishReason(t *testing.T) {
 	ctx := context.Background()
 	reg := registry.New()
 	ai.ConfigureFormats(reg)
-	ai.DefineModel(reg, "test/length", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
+	defineTestModel(reg, "test/length", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return &ai.ModelResponse{
 				Request:      req,
@@ -5980,14 +6100,14 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 	reg := registry.New()
 	ai.ConfigureFormats(reg)
 
-	interruptTool := ai.DefineTool(reg, "interruptor", "always interrupts",
+	interruptTool := defineTestTool(reg, "interruptor", "always interrupts",
 		func(tc *ai.ToolContext, input any) (any, error) {
 			return nil, tc.Interrupt(&ai.InterruptOptions{
 				Metadata: map[string]any{"reason": "needs approval"},
 			})
 		},
 	)
-	ai.DefineModel(reg, "test/interrupt", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
+	defineTestModel(reg, "test/interrupt", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			return &ai.ModelResponse{
 				Request: req,
@@ -6984,10 +7104,13 @@ func TestPromptAgent_InlineMessages_DoesNotMutateSharedMetadata(t *testing.T) {
 	if _, ok := shared.Metadata[promptMessageKey]; ok {
 		t.Errorf("prompt message tag leaked into shared config message metadata: %v", shared.Metadata)
 	}
-	// The base message must still be filtered out of session history:
-	// 1 user message + 1 model reply = 2.
-	if got := len(response.State.Messages); got != 2 {
-		t.Errorf("expected 2 messages, got %d", got)
+	// The base message must still be filtered out of session history. This
+	// prompt declares its own conversation, so it owns the placement and
+	// never places the session's messages: what comes back is the reply
+	// alone. See TestPromptAgent_HistoryPlacement for the rule and the forms
+	// that do place it.
+	if got := len(response.State.Messages); got != 1 {
+		t.Errorf("expected 1 message, got %d", got)
 		for i, m := range response.State.Messages {
 			t.Logf("  msg[%d]: role=%s text=%s", i, m.Role, m.Text())
 		}

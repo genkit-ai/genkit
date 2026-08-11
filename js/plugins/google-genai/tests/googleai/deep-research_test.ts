@@ -263,7 +263,7 @@ describe('Deep Research', () => {
       assert.strictEqual(body.tools[0].name, 'myFunc');
     });
 
-    it('persists client options to metadata', async () => {
+    it('applies request-level apiKey and baseUrl overrides to start', async () => {
       const model = defineModel(
         'deep-research-pro-preview-12-2025',
         defaultPluginOptions
@@ -278,18 +278,16 @@ describe('Deep Research', () => {
         },
       };
 
-      const operation = await model.start(request);
+      await model.start(request);
 
-      assert.deepStrictEqual(operation.metadata?.clientOptions, {
-        apiVersion: undefined,
-        apiKey: 'request-api-key',
-        baseUrl: 'https://custom.url',
-        customHeaders: undefined,
-        experimental_debugTraces: undefined,
-      });
+      sinon.assert.calledOnce(fetchStub);
+      const url = fetchStub.lastCall.args[0] as string;
+      const options = fetchStub.lastCall.args[1];
+      assert.ok(url.startsWith('https://custom.url'));
+      assert.strictEqual(options.headers['x-goog-api-key'], 'request-api-key');
     });
 
-    it('uses persisted options in check', async () => {
+    it('applies apiKey override from options.context on check', async () => {
       const model = defineModel(
         'deep-research-pro-preview-12-2025',
         defaultPluginOptions
@@ -297,42 +295,18 @@ describe('Deep Research', () => {
       mockFetchResponse(mockInteractionResponse); // For start
       mockFetchResponse(mockInteractionResponse); // For check
 
-      const request: GenerateRequest<typeof DeepResearchConfigSchema> = {
-        ...minimalRequest,
-        config: {
-          apiKey: 'request-api-key',
-          baseUrl: 'https://custom.url',
-        },
-      };
+      const operation = await model.start(minimalRequest);
 
-      const operation = await model.start(request);
-
-      // Now call check with the operation that has metadata
-      await model.check!(operation);
+      await model.check!(operation, {
+        context: { secrets: { apiKey: 'context-api-key' } },
+      });
 
       // fetchStub should be called twice: once for start, once for check
       sinon.assert.calledTwice(fetchStub);
 
       const checkCall = fetchStub.getCall(1);
-      const url = checkCall.args[0] as string;
       const options = checkCall.args[1];
-
-      // Check URL uses custom base URL
-      assert.ok(url.startsWith('https://custom.url'));
-
-      // Check API Key header
-      // The client usually adds it to x-goog-api-key or key query param.
-      // We need to know how `client.ts` implements `getInteraction`.
-      // Assuming it adds it to headers or query params.
-      // Based on googleai/client.ts (which I haven't read, but assuming standard behavior):
-      // The `fetch` mock args[1] contains headers.
-      const headers = options.headers as any;
-      if (headers['x-goog-api-key']) {
-        assert.strictEqual(headers['x-goog-api-key'], 'request-api-key');
-      } else {
-        // Check query param if not in header (though likely in header)
-        assert.ok(url.includes('key=request-api-key'));
-      }
+      assert.strictEqual(options.headers['x-goog-api-key'], 'context-api-key');
     });
 
     it('maps usage statistics', async () => {

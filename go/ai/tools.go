@@ -57,16 +57,39 @@ func (t ToolName) Name() string {
 	return (string)(t)
 }
 
-// ToolDef is an action with functions specific to tools.
+// ToolAction is a tool backed by a registry action. It is the concrete type
+// returned by [NewTool] and [NewMultipartTool].
 // Internally, all tools use the v2 format (returning MultipartToolResponse).
 // For regular tools, RunRaw unwraps the Output field for backward compatibility.
-type ToolDef[In, Out any] struct {
+//
+// It implements [Tool] and [api.Action], so it can be passed anywhere either
+// is accepted, including the action slice a plugin returns from Init. Unlike
+// the other primitives it holds its action in a named field rather than
+// embedding it, so its documented methods are its whole surface.
+type ToolAction[In, Out any] struct {
 	action    api.Action   // The underlying action.
 	multipart bool         // Whether this is a multipart-only tool.
 	registry  api.Registry // Registry for schema resolution. Set when registered.
 }
 
-// Tool represents a tool that can be called by a model.
+// Pinned here so that breaking either interface fails the build at the type
+// rather than at a call site.
+var (
+	_ Tool       = (*ToolAction[any, any])(nil)
+	_ api.Action = (*ToolAction[any, any])(nil)
+)
+
+// ToolDef is the previous name for [ToolAction]. It was renamed because it
+// read as a sibling of [ToolDefinition], the wire type a tool advertises to
+// the model, which it is not.
+//
+// Deprecated: use [ToolAction].
+type ToolDef[In, Out any] = ToolAction[In, Out]
+
+// Tool represents a tool that can be called by a model. It is the type to
+// accept as an argument and to look up by name; implementations are created
+// with [NewTool] or [NewMultipartTool], or their [genkit.DefineTool] and
+// [genkit.DefineMultipartTool] counterparts in an application.
 type Tool interface {
 	// Name returns the name of the tool.
 	Name() string
@@ -138,56 +161,51 @@ type RespondOptions struct {
 	Metadata map[string]any
 }
 
-// RespondWithOption is a functional option for [ToolDef.RespondWith].
+// RespondWithOption is a functional option for [ToolAction.RespondWith].
 type RespondWithOption[Out any] interface {
-	applyRespondWith(*RespondOptions) error
+	applyRespondWith(*RespondOptions)
 }
 
-// applyRespondWith applies the option to the respond options.
-func (o *RespondOptions) applyRespondWith(opts *RespondOptions) error {
+// applyRespondWith applies the option to the respond options. Metadata is a
+// single-value slot, so the last [WithResponseMetadata] set wins.
+func (o *RespondOptions) applyRespondWith(opts *RespondOptions) {
 	if o.Metadata != nil {
-		if opts.Metadata != nil {
-			return errors.New("cannot set metadata more than once (WithResponseMetadata)")
-		}
 		opts.Metadata = o.Metadata
 	}
-	return nil
 }
 
-// WithResponseMetadata sets metadata for the response.
+// WithResponseMetadata sets metadata for the response. Repeating this option
+// replaces the metadata rather than merging it.
 func WithResponseMetadata[Out any](meta map[string]any) RespondWithOption[Out] {
 	return &RespondOptions{Metadata: meta}
 }
 
-// RestartWithOption is a functional option for [ToolDef.RestartWith].
+// RestartWithOption is a functional option for [ToolAction.RestartWith].
 type RestartWithOption[In any] interface {
-	applyRestartWith(*RestartOptions) error
+	applyRestartWith(*RestartOptions)
 }
 
-// applyRestartWith applies the option to the restart options.
-func (o *RestartOptions) applyRestartWith(opts *RestartOptions) error {
+// applyRestartWith applies the option to the restart options. The replacement
+// input and the resumed metadata are independent single-value slots, so the
+// last option to set each one wins.
+func (o *RestartOptions) applyRestartWith(opts *RestartOptions) {
 	if o.ReplaceInput != nil {
-		if opts.ReplaceInput != nil {
-			return errors.New("cannot set new input more than once (WithNewInput)")
-		}
 		opts.ReplaceInput = o.ReplaceInput
 	}
 	if o.ResumedMetadata != nil {
-		if opts.ResumedMetadata != nil {
-			return errors.New("cannot set resumed metadata more than once (WithResumedMetadata)")
-		}
 		opts.ResumedMetadata = o.ResumedMetadata
 	}
-	return nil
 }
 
 // WithNewInput sets a new input value to replace the original tool request input.
+// Repeating this option takes the last input set.
 func WithNewInput[In any](input In) RestartWithOption[In] {
 	return &RestartOptions{ReplaceInput: input}
 }
 
 // WithResumedMetadata sets metadata to pass to the resumed tool execution.
 // The metadata will be available in the tool's [ToolContext.Resumed] field.
+// Repeating this option replaces the metadata rather than merging it.
 func WithResumedMetadata[In any](meta map[string]any) RestartWithOption[In] {
 	return &RestartOptions{ResumedMetadata: meta}
 }
@@ -300,123 +318,77 @@ func applyStrictMetadata(metadata map[string]any, strict *bool) {
 	toolMeta[toolStrictKey] = *strict
 }
 
-// DefineTool creates a new [ToolDef] and registers it.
-// Use [WithInputSchema] to provide a custom JSON schema instead of inferring from the type parameter.
-func DefineTool[In, Out any](
-	r api.Registry,
-	name, description string,
-	fn ToolFunc[In, Out],
-	opts ...ToolOption,
-) *ToolDef[In, Out] {
-	toolOpts := &toolOptions{}
-	for _, opt := range opts {
-		if err := opt.applyTool(toolOpts); err != nil {
-			panic(fmt.Errorf("ai.DefineTool %q: %w", name, err))
-		}
+// applyToolOutputSchema records a custom output schema as the tool's
+// advertised (original) output schema. The action's own output type stays the
+// multipart envelope; [ToolAction.Definition] surfaces the original schema to the
+// model and the Dev UI.
+func applyToolOutputSchema(metadata map[string]any, schema map[string]any) {
+	if schema != nil {
+		metadata["originalOutputSchema"] = schema
 	}
-
-	// If the user provided a custom input schema, enforce that In is 'any'
-	if toolOpts.InputSchema != nil {
-		typ := reflect.TypeFor[*In]()
-		if typ != nil && typ.Elem().Kind() != reflect.Interface {
-			panic(fmt.Errorf("ai.DefineTool %q: WithInputSchema requires In to be of type 'any', but got %v", name, typ.Elem()))
-		}
-	}
-
-	metadata, wrappedFn := wrapToolFunc(name, description, fn)
-	applyStrictMetadata(metadata, toolOpts.StrictSchema)
-	action := core.DefineAction(r, name, api.ActionTypeToolV2, metadata, toolOpts.InputSchema, wrappedFn)
-
-	// Also register under the "tool" action type for backward compatibility.
-	provider, id := api.ParseName(name)
-	r.RegisterAction(api.NewKey(api.ActionTypeTool, provider, id), action)
-
-	return &ToolDef[In, Out]{action: action, multipart: false, registry: r}
 }
 
-// DefineToolWithInputSchema creates a new [ToolDef] with a custom input schema and registers it.
-//
-// Deprecated: Use [DefineTool] with [WithInputSchema] instead.
-func DefineToolWithInputSchema[Out any](
-	r api.Registry,
-	name, description string,
-	inputSchema map[string]any,
-	fn ToolFunc[any, Out],
-) *ToolDef[any, Out] {
-	return DefineTool(r, name, description, fn, WithInputSchema(inputSchema))
+// requireAnyTypeParam panics unless the type parameter T is an interface type
+// (in practice 'any'). The tool constructors call it before honoring an
+// explicit schema option: the custom schema stands in for a type parameter of
+// 'any', and a concrete T would silently disagree with the advertised schema.
+// The requirement argument is the leading clause of the panic message, e.g.
+// "WithInputSchema requires In".
+func requireAnyTypeParam[T any](ctor, name, requirement string) {
+	if typ := reflect.TypeFor[T](); typ.Kind() != reflect.Interface {
+		panic(fmt.Errorf("%s %q: %s to be of type 'any', but got %v", ctor, name, requirement, typ))
+	}
 }
 
-// NewTool creates a new [ToolDef]. It can be passed directly to [Generate].
-// Use [WithInputSchema] to provide a custom JSON schema instead of inferring from the type parameter.
-func NewTool[In, Out any](name, description string, fn ToolFunc[In, Out], opts ...ToolOption) *ToolDef[In, Out] {
+// NewTool creates a new [ToolAction]. It can be passed directly to [Generate].
+// Use [WithInputSchema] or [WithOutputSchema] to provide custom JSON schemas
+// instead of inferring them from the type parameters.
+func NewTool[In, Out any](name, description string, fn ToolFunc[In, Out], opts ...ToolOption) *ToolAction[In, Out] {
 	toolOpts := &toolOptions{}
 	for _, opt := range opts {
-		if err := opt.applyTool(toolOpts); err != nil {
-			panic(fmt.Errorf("ai.NewTool %q: %w", name, err))
-		}
+		opt.applyTool(toolOpts)
 	}
 
-	// If the user provided a custom input schema, enforce that In is 'any'
 	if toolOpts.InputSchema != nil {
-		var zeroIn *In
-		typ := reflect.TypeOf(zeroIn)
-		if typ != nil && typ.Elem().Kind() != reflect.Interface {
-			panic(fmt.Errorf("ai.NewTool %q: WithInputSchema requires In to be of type 'any', but got %v", name, typ.Elem()))
-		}
+		requireAnyTypeParam[In]("ai.NewTool", name, "WithInputSchema requires In")
+	}
+	if toolOpts.OutputSchema != nil {
+		requireAnyTypeParam[Out]("ai.NewTool", name, "WithOutputSchema and WithOutputSchemaName require Out")
 	}
 
 	metadata, wrappedFn := wrapToolFunc(name, description, fn)
 	metadata["dynamic"] = true
+	applyToolOutputSchema(metadata, toolOpts.OutputSchema)
 	applyStrictMetadata(metadata, toolOpts.StrictSchema)
-	action := core.NewAction(name, api.ActionTypeToolV2, metadata, toolOpts.InputSchema, wrappedFn)
-	return &ToolDef[In, Out]{action: action, multipart: false}
+	action := core.NewActionOf(api.ActionTypeToolV2, name, &core.ActionOptions{Metadata: metadata, InputSchema: toolOpts.InputSchema}, wrappedFn)
+	return &ToolAction[In, Out]{action: action, multipart: false}
 }
 
-// NewToolWithInputSchema creates a new [ToolDef] with a custom input schema. It can be passed directly to [Generate].
+// NewToolWithInputSchema creates a new [ToolAction] with a custom input schema. It can be passed directly to [Generate].
 //
 // Deprecated: Use [NewTool] with [WithInputSchema] instead.
-func NewToolWithInputSchema[Out any](name, description string, inputSchema map[string]any, fn ToolFunc[any, Out]) *ToolDef[any, Out] {
+func NewToolWithInputSchema[Out any](name, description string, inputSchema map[string]any, fn ToolFunc[any, Out]) *ToolAction[any, Out] {
 	return NewTool(name, description, fn, WithInputSchema(inputSchema))
 }
 
-// DefineMultipartTool creates a new multipart [ToolDef] and registers it.
+// NewMultipartTool creates a new multipart [ToolAction]. It can be passed directly to [Generate].
 // Multipart tools can return both output data and additional content parts (like media).
 // Use [WithInputSchema] to provide a custom JSON schema instead of inferring from the type parameter.
-func DefineMultipartTool[In any](
-	r api.Registry,
-	name, description string,
-	fn MultipartToolFunc[In],
-	opts ...ToolOption,
-) *ToolDef[In, *MultipartToolResponse] {
+// Use [WithOutputSchema] or [WithOutputSchemaName] to advertise the logical
+// output the tool produces (the envelope's output field); the wire format
+// stays the multipart response envelope.
+func NewMultipartTool[In any](name, description string, fn MultipartToolFunc[In], opts ...ToolOption) *ToolAction[In, *MultipartToolResponse] {
 	toolOpts := &toolOptions{}
 	for _, opt := range opts {
-		if err := opt.applyTool(toolOpts); err != nil {
-			panic(fmt.Errorf("ai.DefineMultipartTool %q: %w", name, err))
-		}
-	}
-
-	metadata, wrappedFn := wrapMultipartToolFunc(name, description, fn)
-	applyStrictMetadata(metadata, toolOpts.StrictSchema)
-	action := core.DefineAction(r, name, api.ActionTypeToolV2, metadata, toolOpts.InputSchema, wrappedFn)
-	return &ToolDef[In, *MultipartToolResponse]{action: action, multipart: true, registry: r}
-}
-
-// NewMultipartTool creates a new multipart [ToolDef]. It can be passed directly to [Generate].
-// Multipart tools can return both output data and additional content parts (like media).
-// Use [WithInputSchema] to provide a custom JSON schema instead of inferring from the type parameter.
-func NewMultipartTool[In any](name, description string, fn MultipartToolFunc[In], opts ...ToolOption) *ToolDef[In, *MultipartToolResponse] {
-	toolOpts := &toolOptions{}
-	for _, opt := range opts {
-		if err := opt.applyTool(toolOpts); err != nil {
-			panic(fmt.Errorf("ai.NewMultipartTool %q: %w", name, err))
-		}
+		opt.applyTool(toolOpts)
 	}
 
 	metadata, wrappedFn := wrapMultipartToolFunc(name, description, fn)
 	metadata["dynamic"] = true
+	applyToolOutputSchema(metadata, toolOpts.OutputSchema)
 	applyStrictMetadata(metadata, toolOpts.StrictSchema)
-	action := core.NewAction(name, api.ActionTypeToolV2, metadata, toolOpts.InputSchema, wrappedFn)
-	return &ToolDef[In, *MultipartToolResponse]{action: action, multipart: true}
+	action := core.NewActionOf(api.ActionTypeToolV2, name, &core.ActionOptions{Metadata: metadata, InputSchema: toolOpts.InputSchema}, wrappedFn)
+	return &ToolAction[In, *MultipartToolResponse]{action: action, multipart: true}
 }
 
 // wrapToolFunc wraps a regular tool function to return MultipartToolResponse.
@@ -472,12 +444,12 @@ func wrapMultipartToolFunc[In any](name, description string, fn MultipartToolFun
 }
 
 // Name returns the name of the tool.
-func (t *ToolDef[In, Out]) Name() string {
+func (t *ToolAction[In, Out]) Name() string {
 	return t.action.Name()
 }
 
 // Definition returns [ToolDefinition] for for this tool.
-func (t *ToolDef[In, Out]) Definition() *ToolDefinition {
+func (t *ToolAction[In, Out]) Definition() *ToolDefinition {
 	desc := t.action.Desc()
 
 	// Resolve the input schema if it contains a $ref.
@@ -488,7 +460,10 @@ func (t *ToolDef[In, Out]) Definition() *ToolDefinition {
 		}
 	}
 
-	// Use the original output schema if available (for non-multipart tools).
+	// Prefer the original output schema when present: the logical output the
+	// model consumes, as opposed to the action's wire-level output (for tools
+	// wrapping a plain function, and for multipart tools with a custom
+	// schema, that wire output is the multipart envelope).
 	outputSchema := desc.OutputSchema
 	if origSchema, ok := desc.Metadata["originalOutputSchema"].(map[string]any); ok {
 		outputSchema = origSchema
@@ -520,7 +495,7 @@ func (t *ToolDef[In, Out]) Definition() *ToolDefinition {
 }
 
 // Register registers the tool with the given registry.
-func (t *ToolDef[In, Out]) Register(r api.Registry) {
+func (t *ToolAction[In, Out]) Register(r api.Registry) {
 	t.registry = r
 	t.action.Register(r)
 	if !t.multipart {
@@ -530,8 +505,31 @@ func (t *ToolDef[In, Out]) Register(r api.Registry) {
 	}
 }
 
+// Desc returns the tool's action descriptor: its name, schemas, and metadata.
+func (t *ToolAction[In, Out]) Desc() api.ActionDesc { return t.action.Desc() }
+
+// RunJSON runs the tool on JSON-encoded input and returns the JSON-encoded
+// multipart response envelope, which is what the registry serves for this
+// tool. Prefer [ToolAction.RunRaw], which unwraps the envelope's output for a
+// regular tool.
+func (t *ToolAction[In, Out]) RunJSON(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (json.RawMessage, error) {
+	if t == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "ai.Tool.RunJSON: tool called on a nil tool; check that all tools are defined")
+	}
+	return t.action.RunJSON(ctx, input, cb)
+}
+
+// RunJSONWithTelemetry is [ToolAction.RunJSON] with the run's telemetry
+// returned alongside the output.
+func (t *ToolAction[In, Out]) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	if t == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "ai.Tool.RunJSONWithTelemetry: tool called on a nil tool; check that all tools are defined")
+	}
+	return t.action.RunJSONWithTelemetry(ctx, input, cb)
+}
+
 // RunRaw runs this tool using the provided raw map format data (JSON parsed as map[string]any).
-func (t *ToolDef[In, Out]) RunRaw(ctx context.Context, input any) (any, error) {
+func (t *ToolAction[In, Out]) RunRaw(ctx context.Context, input any) (any, error) {
 	resp, err := t.RunRawMultipart(ctx, input)
 	if err != nil {
 		return nil, err
@@ -541,7 +539,7 @@ func (t *ToolDef[In, Out]) RunRaw(ctx context.Context, input any) (any, error) {
 
 // RunRawMultipart runs this tool using the provided raw map format data (JSON parsed as map[string]any).
 // It returns the full multipart response.
-func (t *ToolDef[In, Out]) RunRawMultipart(ctx context.Context, input any) (*MultipartToolResponse, error) {
+func (t *ToolAction[In, Out]) RunRawMultipart(ctx context.Context, input any) (*MultipartToolResponse, error) {
 	if t == nil {
 		return nil, status.Errorf(status.ErrInvalidArgument, "ai.Tool.RunRawMultipart: tool called on a nil tool; check that all tools are defined")
 	}
@@ -593,19 +591,19 @@ func LookupTool(r api.Registry, name string) Tool {
 		}
 	}
 
-	return &ToolDef[any, any]{action: action, multipart: multipart, registry: r}
+	return &ToolAction[any, any]{action: action, multipart: multipart, registry: r}
 }
 
 // IsMultipart returns true if the tool is a multipart tool (tool.v2 only).
-func (t *ToolDef[In, Out]) IsMultipart() bool {
+func (t *ToolAction[In, Out]) IsMultipart() bool {
 	return t.multipart
 }
 
 // Respond creates a part for [WithToolResponses] to provide a resolved response for an interrupted tool call.
 // Returns nil if the part is not a tool request.
 //
-// Deprecated: Use [ToolDef.RespondWith] instead for strongly-typed options.
-func (t *ToolDef[In, Out]) Respond(toolReq *Part, output any, opts *RespondOptions) *Part {
+// Deprecated: Use [ToolAction.RespondWith] instead for strongly-typed options.
+func (t *ToolAction[In, Out]) Respond(toolReq *Part, output any, opts *RespondOptions) *Part {
 	if toolReq == nil || !toolReq.IsToolRequest() {
 		return nil
 	}
@@ -628,8 +626,8 @@ func (t *ToolDef[In, Out]) Respond(toolReq *Part, output any, opts *RespondOptio
 // Restart creates a part for [WithToolRestarts] to re-execute an interrupted tool call with additional context.
 // Returns nil if the part is not a tool request.
 //
-// Deprecated: Use [ToolDef.RestartWith] instead for strongly-typed options.
-func (t *ToolDef[In, Out]) Restart(p *Part, opts *RestartOptions) *Part {
+// Deprecated: Use [ToolAction.RestartWith] instead for strongly-typed options.
+func (t *ToolAction[In, Out]) Restart(p *Part, opts *RestartOptions) *Part {
 	if p == nil || !p.IsToolRequest() {
 		return nil
 	}
@@ -677,7 +675,7 @@ func (t *ToolDef[In, Out]) Restart(p *Part, opts *RestartOptions) *Part {
 // Example:
 //
 //	part, err := myTool.RespondWith(toolReq, output, WithResponseMetadata[MyOutput](meta))
-func (t *ToolDef[In, Out]) RespondWith(toolReq *Part, output Out, opts ...RespondWithOption[Out]) (*Part, error) {
+func (t *ToolAction[In, Out]) RespondWith(toolReq *Part, output Out, opts ...RespondWithOption[Out]) (*Part, error) {
 	if toolReq == nil {
 		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RespondWith: toolReq is nil")
 	}
@@ -690,9 +688,7 @@ func (t *ToolDef[In, Out]) RespondWith(toolReq *Part, output Out, opts ...Respon
 
 	cfg := &RespondOptions{}
 	for _, opt := range opts {
-		if err := opt.applyRespondWith(cfg); err != nil {
-			return nil, status.Errorf(status.ErrInvalidArgument, "ai.RespondWith: %w", err)
-		}
+		opt.applyRespondWith(cfg)
 	}
 
 	newToolResp := NewResponseForToolRequest(toolReq, output)
@@ -711,7 +707,7 @@ func (t *ToolDef[In, Out]) RespondWith(toolReq *Part, output Out, opts ...Respon
 // Example:
 //
 //	part, err := myTool.RestartWith(toolReq, WithNewInput(newInput), WithResumedMetadata[MyInput](meta))
-func (t *ToolDef[In, Out]) RestartWith(toolReq *Part, opts ...RestartWithOption[In]) (*Part, error) {
+func (t *ToolAction[In, Out]) RestartWith(toolReq *Part, opts ...RestartWithOption[In]) (*Part, error) {
 	if toolReq == nil {
 		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RestartWith: toolReq is nil")
 	}
@@ -724,9 +720,7 @@ func (t *ToolDef[In, Out]) RestartWith(toolReq *Part, opts ...RestartWithOption[
 
 	cfg := &RestartOptions{}
 	for _, opt := range opts {
-		if err := opt.applyRestartWith(cfg); err != nil {
-			return nil, status.Errorf(status.ErrInvalidArgument, "ai.RestartWith: %w", err)
-		}
+		opt.applyRestartWith(cfg)
 	}
 
 	newInput := toolReq.ToolRequest.Input

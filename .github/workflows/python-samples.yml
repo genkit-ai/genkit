@@ -41,6 +41,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   # ═══════════════════════════════════════════════════════════════════
   # Samples that do NOT need Ollama — just verify they install + import
@@ -48,6 +51,8 @@ jobs:
   build-samples:
     name: Build (${{ matrix.sample }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -71,22 +76,28 @@ jobs:
           - web-fastapi-bugbot
           - web-flask-hello
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Install uv and setup Python
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
           python-version: "3.12"
 
       - name: Install sample dependencies
+        env:
+          SAMPLE: ${{ matrix.sample }}
         run: |
           cd py
-          uv sync --package ${{ matrix.sample }}
+          uv sync --package "$SAMPLE"
 
       - name: Verify sample imports
+        env:
+          SAMPLE: ${{ matrix.sample }}
         run: |
-          cd py/samples/${{ matrix.sample }}
+          cd py/samples/"$SAMPLE"
           # Attempt to import the sample's main module.
           uv run python -c "
           import importlib, pathlib, sys
@@ -108,6 +119,8 @@ jobs:
   ollama-samples:
     name: Ollama (${{ matrix.sample }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -115,10 +128,12 @@ jobs:
           - sample: provider-ollama-hello
             models: "gemma3:1b"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Install uv and setup Python
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
           python-version: "3.12"
@@ -129,13 +144,17 @@ jobs:
           models: ${{ matrix.models }}
 
       - name: Install sample dependencies
+        env:
+          SAMPLE: ${{ matrix.sample }}
         run: |
           cd py
-          uv sync --package ${{ matrix.sample }}
+          uv sync --package "$SAMPLE"
 
       - name: Verify sample imports
+        env:
+          SAMPLE: ${{ matrix.sample }}
         run: |
-          cd py/samples/${{ matrix.sample }}
+          cd py/samples/"$SAMPLE"
           uv run python -c "
           import importlib, pathlib
           src = pathlib.Path('src')

@@ -190,6 +190,13 @@ var gvcOverrides = configOverrides{
 // and writes descriptions onto the remaining ones. Best-effort — paths that
 // no longer resolve (because the upstream SDK renamed or removed a field)
 // silently no-op rather than panicking.
+//
+// Hiding is a presentation choice, so an object that lost a property is
+// reopened with additionalProperties: true. The config schema is enforced by
+// input validation on every request, and a hidden field must still reach the
+// plugin's own check, which explains what to use instead (e.g. sending
+// systemInstruction should point at ai.WithSystemPrompt, not fail as an
+// unknown property).
 func applyConfigOverrides(schema *jsonschema.Schema, o configOverrides) {
 	if schema == nil || schema.Properties == nil {
 		return
@@ -200,7 +207,9 @@ func applyConfigOverrides(schema *jsonschema.Schema, o configOverrides) {
 		if len(steps) == 1 {
 			hideTop[steps[0]] = struct{}{}
 		}
-		deleteAtPath(schema, steps)
+		if parent := deleteAtPath(schema, steps); parent != nil {
+			parent.AdditionalProperties = jsonschema.TrueSchema
+		}
 	}
 	if len(hideTop) > 0 && len(schema.Required) > 0 {
 		kept := schema.Required[:0]
@@ -263,20 +272,26 @@ func schemaAtPath(schema *jsonschema.Schema, steps []string) *jsonschema.Schema 
 }
 
 // deleteAtPath removes the leaf property at the given path from its parent's
-// Properties. Silent no-op if the path doesn't resolve.
-func deleteAtPath(schema *jsonschema.Schema, steps []string) {
+// Properties and returns that parent. It returns nil when the path doesn't
+// resolve or the property was already absent, so callers can tell an actual
+// removal from a no-op.
+func deleteAtPath(schema *jsonschema.Schema, steps []string) *jsonschema.Schema {
 	if len(steps) == 0 {
-		return
+		return nil
 	}
 	leaf := steps[len(steps)-1]
 	if leaf == "[]" {
-		return
+		return nil
 	}
 	parent := schemaAtPath(schema, steps[:len(steps)-1])
 	if parent == nil || parent.Properties == nil {
-		return
+		return nil
+	}
+	if _, ok := parent.Properties.Get(leaf); !ok {
+		return nil
 	}
 	parent.Properties.Delete(leaf)
+	return parent
 }
 
 // overridesFor returns the overrides matching a given config struct value,

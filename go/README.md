@@ -160,6 +160,11 @@ input:
 ---
 {{role "system"}}
 You are {{personality}}. Keep responses concise.
+
+{{history}}
+
+{{role "user"}}
+If the question is ambiguous, ask one clarifying question instead of guessing.
 ```
 
 ```go
@@ -391,6 +396,40 @@ text, _ := genkit.GenerateText(ctx, g,
 fmt.Println(text)
 ```
 
+Options compose, so you can build a request up from several helpers. Options
+carrying multiple items (`ai.WithMessages`, `ai.WithTools`, `ai.WithDocs`,
+`ai.WithUse`) accumulate across repeats, while single-value options
+(`ai.WithConfig`, `ai.WithModelName`, `ai.WithSystem`) take the last one set.
+Repeating an option is how a request gets assembled in pieces, not a mistake to
+be reported:
+
+```go
+opts := []ai.GenerateOption{
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithSystem("You are a helpful assistant."),
+    ai.WithTools(searchTool, weatherTool),
+}
+
+if isAdmin {
+    // Appends to the tools above; the model sees all of them.
+    opts = append(opts, ai.WithTools(adminTools...))
+}
+if terse {
+    // Fills the same slot as the system prompt above, so this one wins.
+    opts = append(opts, ai.WithSystem("You are a terse assistant. One sentence."))
+}
+
+response, _ := genkit.Generate(ctx, g, append(opts, ai.WithPrompt("What should I pack for Tokyo?"))...)
+```
+
+What still fails is a combination no merge could make sense of, rather than a
+repeat. Tool names must be unique across the merged list, so the same tool from
+two helpers is rejected when the request runs, and `genkit.DefinePrompt` panics
+if given a conversation template alongside separately supplied messages, since
+the template already is the conversation. These rules cover a single options
+list; APIs that layer two lists, like a prompt's define-time options against
+`Execute`-time options, document their own precedence.
+
 ### Generate Structured Data
 
 Get type-safe JSON output that maps directly to your Go structs:
@@ -536,18 +575,24 @@ resp, _ := genkit.Generate(ctx, g,
     ai.WithTools(transferTool),
 )
 
-if resp.FinishReason == ai.FinishReasonInterrupted {
-    for _, interrupt := range resp.Interrupts() {
-        meta, _ := ai.InterruptAs[TransferInterrupt](interrupt)
+// Interrupts() yields nothing unless the tool paused for input.
+var restarts []*ai.Part
+for _, interrupt := range resp.Interrupts() {
+    meta, _ := ai.InterruptAs[TransferInterrupt](interrupt)
 
-        // Get user confirmation, then resume
-        part, _ := transferTool.RestartWith(interrupt)
-        resp, _ = genkit.Generate(ctx, g,
-            ai.WithMessages(resp.History()...),
-            ai.WithTools(transferTool),
-            ai.WithToolRestarts(part),
-        )
-    }
+    // Use meta to get user confirmation, then resume with their answer.
+    part, _ := transferTool.RestartWith(interrupt)
+    restarts = append(restarts, part)
+}
+
+// Collect every restart first, then resume once: generating inside the loop
+// would resume later interrupts against a history that already moved on.
+if len(restarts) > 0 {
+    resp, _ = genkit.Generate(ctx, g,
+        ai.WithMessages(resp.History()...),
+        ai.WithTools(transferTool),
+        ai.WithToolRestarts(restarts...),
+    )
 }
 ```
 
@@ -831,6 +876,44 @@ for result, err := range jokePrompt.ExecuteStream(ctx, JokeRequest{Topic: "cats"
 ```
 
 [See full example](samples/basic-prompts)
+
+### Build Prompts from Your Data
+
+Fill any part of a prompt with a Go function instead of a template. The function receives your input type, and what it returns is sent as written, so text from a user or a database never has to be escaped:
+
+```go
+type Ticket struct {
+    Question   string `json:"question"`
+    Screenshot string `json:"screenshot,omitempty"` // data URI, optional
+}
+
+supportPrompt := genkit.DefinePrompt(g, "support",
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithInputType(Ticket{}),
+    ai.WithSystem("You are a support agent. Answer in two sentences."),
+
+    // Text plus an image, assembled per request.
+    ai.WithPromptPartsFn(func(ctx context.Context, t Ticket) ([]*ai.Part, error) {
+        parts := []*ai.Part{ai.NewTextPart(t.Question)}
+        if t.Screenshot != "" {
+            parts = append(parts, ai.NewMediaPart("image/png", t.Screenshot))
+        }
+        return parts, nil
+    }),
+)
+
+// The braces below reach the model as typed, not as a template.
+resp, _ := supportPrompt.Execute(ctx, ai.WithInput(Ticket{
+    Question:   "Why does my {{template}} not render?",
+    Screenshot: screenshotDataURI,
+}))
+```
+
+Every slot has a function form: `WithSystemFn` and `WithPromptFn` for the single-message slots (with `WithSystemPartsFn` and `WithPromptPartsFn` for multi-part content), `WithMessagesFn` for the conversation, and `WithDocsFn` to attach retrieved documents.
+
+Each of the two single-message slots holds one message, so its text, parts, and function forms are four ways to write the same thing and the last one set wins. Documents and conversation messages accumulate instead.
+
+[See full example](samples/basic-prompt-content)
 
 ### Load Prompts from Files
 
@@ -1121,6 +1204,7 @@ Explore working examples to see Genkit in action:
 | [basic](samples/basic) | Simple text generation with streaming |
 | [basic-structured](samples/basic-structured) | Typed JSON output with `GenerateData` and `GenerateDataStream` |
 | [basic-prompts](samples/basic-prompts) | Prompt templates with Handlebars and `.prompt` files |
+| [basic-prompt-content](samples/basic-prompt-content) | Prompt content computed from your data, with media and retrieved docs |
 | [basic-agents](samples/basic-agents) | Multi-turn agents (inline, prompt-file, and custom-loop) with snapshots and background detach |
 | [basic-agents-server](samples/basic-agents-server) | Serving store-backed and stateless agents over HTTP |
 | [intermediate-interrupts](samples/intermediate-interrupts) | Human-in-the-loop with tool interrupts |
@@ -1128,6 +1212,7 @@ Explore working examples to see Genkit in action:
 | [basic-middleware/filesystem](samples/basic-middleware/filesystem) | Scoped filesystem tools for the model |
 | [basic-middleware/skills](samples/basic-middleware/skills) | On-demand loadable `SKILL.md` personas |
 | [prompts-embed](samples/prompts-embed) | Embed prompts in your binary |
+| [basic-errors](samples/basic-errors) | Classifying failures with sentinels and recovering with `errors.Is` |
 | [durable-streaming](samples/durable-streaming) | Reconnectable streams with replay |
 
 ---

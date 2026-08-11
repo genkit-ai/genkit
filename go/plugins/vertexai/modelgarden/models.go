@@ -50,8 +50,8 @@ func resolveVertexMaasEnv(projectID, location string) (string, string) {
 }
 
 // provider is the shared registration namespace for every Vertex AI Model
-// Garden plugin in this package (Anthropic, Llama). Their models are all
-// registered as "vertexai/<model>" so users see a single namespace.
+// Garden plugin in this package (Anthropic, Llama, Mistral). Their models
+// are all registered as "vertexai/<model>" so users see a single namespace.
 // Each plugin's own Name() ("vertex-model-garden-<plugin>") is distinct from
 // this registration prefix.
 //
@@ -195,6 +195,36 @@ var LlamaModels = map[string]ai.ModelOptions{
 	},
 	"meta/llama-3.3-70b-instruct-maas": {
 		Label:    "Llama 3.3 70B Instruct",
+		Supports: &internal.BasicText,
+	},
+}
+
+// MistralModels lists the Mistral and Codestral models available through Vertex
+// AI Model Garden as Model-as-a-Service (MaaS) endpoints. Capabilities match
+// the JS parity target (media: false, tools: true, systemRole: true). Keys are
+// the bare publisher model ids ("mistral-small-2503" rather than
+// "mistralai/mistral-small-2503"). Vertex serves Mistral via per-model
+// rawPredict URLs where the publisher lives in the URL path, not the model
+// field; the Mistral plugin's HTTP transport assembles those URLs. The
+// "mistralai/" prefix is still accepted by MistralModel as a convenience for
+// callers used to the publisher-qualified form.
+var MistralModels = map[string]ai.ModelOptions{
+	"mistral-medium-3": {
+		Label:    "Mistral Medium 3",
+		Supports: &internal.BasicText,
+	},
+	// NOTE: mistral-ocr-2505 intentionally not registered here. Vertex's
+	// OCR endpoint expects {document:{type, document_url|document_base64}},
+	// not the OpenAI chat-completions {messages:[{content:[{type:image_url,...}]}]}
+	// schema that the mistralVertexTransport rewrites to. Routing it through
+	// this plugin would 400 at Vertex. OCR support needs its own request/
+	// response path — track as a follow-up.
+	"mistral-small-2503": {
+		Label:    "Mistral Small 2503",
+		Supports: &internal.BasicText,
+	},
+	"codestral-2": {
+		Label:    "Codestral 2",
 		Supports: &internal.BasicText,
 	},
 }

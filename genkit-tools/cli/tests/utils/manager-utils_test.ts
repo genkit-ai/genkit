@@ -16,7 +16,10 @@
 
 import { RuntimeEvent } from '@genkit-ai/tools-common/manager';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
-import { waitForRuntime } from '../../src/utils/manager-utils';
+import {
+  waitForActionKeys,
+  waitForRuntime,
+} from '../../src/utils/manager-utils';
 
 describe('waitForRuntime', () => {
   let mockManager: any;
@@ -84,5 +87,104 @@ describe('waitForRuntime', () => {
       'Timeout waiting for runtime to be ready'
     );
     jest.useRealTimers();
+  });
+});
+
+describe('waitForActionKeys', () => {
+  let mockManager: any;
+
+  beforeEach(() => {
+    mockManager = {
+      listActions: jest.fn(),
+      listRuntimes: jest.fn().mockReturnValue([{}]),
+    };
+  });
+
+  it('resolves immediately when no keys are required', async () => {
+    await expect(waitForActionKeys(mockManager, [])).resolves.toBeUndefined();
+    expect(mockManager.listActions).not.toHaveBeenCalled();
+  });
+
+  it('resolves once all required actions are registered', async () => {
+    // First poll: action missing. Second poll: action present.
+    mockManager.listActions
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ '/flow/testFlow': {} });
+
+    await expect(
+      waitForActionKeys(mockManager, ['/flow/testFlow'], {
+        pollIntervalMs: 1,
+      })
+    ).resolves.toBeUndefined();
+    expect(mockManager.listActions).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps polling while listActions rejects, then resolves', async () => {
+    mockManager.listActions
+      .mockRejectedValueOnce(new Error('not ready'))
+      .mockResolvedValueOnce({ '/flow/testFlow': {} });
+
+    await expect(
+      waitForActionKeys(mockManager, ['/flow/testFlow'], {
+        pollIntervalMs: 1,
+      })
+    ).resolves.toBeUndefined();
+    expect(mockManager.listActions).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops early once the action list stabilizes without the target', async () => {
+    // The action list never contains the target and stops changing, so we
+    // should give up after the stability window rather than the full timeout.
+    mockManager.listActions.mockResolvedValue({ '/flow/other': {} });
+
+    const start = Date.now();
+    await expect(
+      waitForActionKeys(mockManager, ['/flow/missing'], {
+        pollIntervalMs: 1,
+        stableForMs: 20,
+        timeoutMs: 30000,
+      })
+    ).resolves.toBeUndefined();
+    // Should return around the stability window, well before the timeout.
+    expect(Date.now() - start).toBeLessThan(5000);
+  });
+
+  it('keeps waiting while the action list is still growing', async () => {
+    // The list keeps changing (still registering), so the stability window
+    // should keep resetting until the target finally appears.
+    mockManager.listActions
+      .mockResolvedValueOnce({ a: {} })
+      .mockResolvedValueOnce({ a: {}, b: {} })
+      .mockResolvedValueOnce({ a: {}, b: {}, c: {} })
+      .mockResolvedValue({ a: {}, b: {}, c: {}, '/flow/testFlow': {} });
+
+    await expect(
+      waitForActionKeys(mockManager, ['/flow/testFlow'], {
+        pollIntervalMs: 1,
+        stableForMs: 20,
+      })
+    ).resolves.toBeUndefined();
+    expect(mockManager.listActions).toHaveBeenCalledTimes(4);
+  });
+
+  it('stops early (does not wait for timeout) when the runtime disconnects', async () => {
+    // Runtime is present initially, then disconnects. The action is never
+    // registered. With a long timeout, the function should still return
+    // promptly instead of polling until the deadline.
+    mockManager.listRuntimes
+      .mockReturnValueOnce([{}]) // initial hasSeenRuntime check
+      .mockReturnValueOnce([{}]) // first loop iteration
+      .mockReturnValue([]); // subsequent iterations: disconnected
+    mockManager.listActions.mockResolvedValue({});
+
+    const start = Date.now();
+    await expect(
+      waitForActionKeys(mockManager, ['/flow/testFlow'], {
+        pollIntervalMs: 1,
+        timeoutMs: 30000,
+      })
+    ).resolves.toBeUndefined();
+    // Should return well before the 30s deadline.
+    expect(Date.now() - start).toBeLessThan(5000);
   });
 });

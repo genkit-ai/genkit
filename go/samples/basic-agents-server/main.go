@@ -123,7 +123,7 @@ func main() {
 
 	model := googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 		ThinkingConfig: &genai.ThinkingConfig{
-			ThinkingBudget: genai.Ptr[int32](0),
+			ThinkingLevel: genai.ThinkingLevelMinimal,
 		},
 	})
 

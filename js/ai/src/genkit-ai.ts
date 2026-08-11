@@ -43,6 +43,7 @@ import {
   type GenerateStreamResponse,
 } from './generate.js';
 import { GenerationCommonConfigSchema, type Part } from './model-types.js';
+import { type OperationOptions } from './operation.js';
 import { Session, getCurrentSession } from './session.js';
 
 /**
@@ -280,21 +281,49 @@ export class GenkitAI {
    * }
    * ```
    *
+   * Critical configuration (e.g. `baseUrl`) and secrets (e.g. `apiKey`) that
+   * can't be inferred from the operation can be supplied at call time. Config
+   * overrides go in the top-level `config`, secrets go in `context`:
+   *
+   * ```ts
+   * operation = await ai.checkOperation(operation, {
+   *   config: { baseUrl: '...' },
+   *   context: { secrets: { apiKey: '...' } },
+   * });
+   * ```
+   *
    * @param operation
    * @returns
    */
-  checkOperation<T>(operation: Operation<T>): Promise<Operation<T>> {
-    return checkOperation(this.registry, operation);
+  checkOperation<T>(
+    operation: Operation<T>,
+    options?: OperationOptions
+  ): Promise<Operation<T>> {
+    return checkOperation(this.registry, operation, options);
   }
 
   /**
    * Cancels a given operation. Returns a new operation which will contain the updated status.
    *
+   * Critical configuration (e.g. `baseUrl`) and secrets (e.g. `apiKey`) that
+   * can't be inferred from the operation can be supplied at call time. Config
+   * overrides go in the top-level `config`, secrets go in `context`:
+   *
+   * ```ts
+   * operation = await ai.cancelOperation(operation, {
+   *   config: { baseUrl: '...' },
+   *   context: { secrets: { apiKey: '...' } },
+   * });
+   * ```
+   *
    * @param operation
    * @returns
    */
-  cancelOperation<T>(operation: Operation<T>): Promise<Operation<T>> {
-    return cancelOperation(this.registry, operation);
+  cancelOperation<T>(
+    operation: Operation<T>,
+    options?: OperationOptions
+  ): Promise<Operation<T>> {
+    return cancelOperation(this.registry, operation, options);
   }
 
   /**

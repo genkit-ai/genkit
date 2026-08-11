@@ -38,11 +38,74 @@ func newToolTestRegistry(t *testing.T) *registry.Registry {
 	return reg
 }
 
+// Output schema options flow through to the inner tool when Out is 'any' and
+// panic under the exp constructors' own names (not the inner multipart type)
+// when Out is concrete, mirroring ai.NewTool's guard.
+func TestToolOutputSchemaOptions(t *testing.T) {
+	customSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+	}
+
+	t.Run("custom schema reaches the definition when Out is any", func(t *testing.T) {
+		tl := NewTool("t", "d",
+			func(ctx context.Context, input any) (any, error) { return nil, nil },
+			ai.WithOutputSchema(customSchema))
+
+		def := tl.Definition()
+		props, ok := def.OutputSchema["properties"].(map[string]any)
+		if !ok || props["answer"] == nil {
+			t.Errorf("OutputSchema = %v, want the custom schema, not the envelope", def.OutputSchema)
+		}
+	})
+
+	t.Run("interruptible tools carry the custom schema too", func(t *testing.T) {
+		tl := NewInterruptibleTool("t", "d",
+			func(ctx context.Context, input any, res *struct{}) (any, error) { return nil, nil },
+			ai.WithOutputSchema(customSchema))
+
+		def := tl.Definition()
+		props, ok := def.OutputSchema["properties"].(map[string]any)
+		if !ok || props["answer"] == nil {
+			t.Errorf("OutputSchema = %v, want the custom schema, not the envelope", def.OutputSchema)
+		}
+	})
+
+	for name, construct := range map[string]func(){
+		"NewTool": func() {
+			NewTool("t", "d",
+				func(ctx context.Context, input any) (string, error) { return "", nil },
+				ai.WithOutputSchema(map[string]any{"type": "string"}))
+		},
+		"NewInterruptibleTool": func() {
+			NewInterruptibleTool("t", "d",
+				func(ctx context.Context, input any, res *struct{}) (string, error) { return "", nil },
+				ai.WithOutputSchemaName("Answer"))
+		},
+	} {
+		t.Run(name+" panics for concrete Out", func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatal("expected panic for an output schema option with concrete Out")
+				}
+				err, ok := r.(error)
+				if !ok || !strings.Contains(err.Error(), "exp."+name) {
+					t.Errorf("panic = %v, want it to name exp.%s", r, name)
+				}
+			}()
+			construct()
+		})
+	}
+}
+
 // defineToolThenFinishModel defines "test/model": on the first turn it returns
 // reqs (typically tool requests), and once a tool response is in history it
 // returns the final text "done". This drives a single tool round per Generate.
 func defineToolThenFinishModel(reg *registry.Registry, reqs ...*ai.Part) {
-	ai.DefineModel(reg, "test/model",
+	defineTestModel(reg, "test/model",
 		&ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			for _, m := range req.Messages {
@@ -76,7 +139,7 @@ func TestDefineTool_PlainContext(t *testing.T) {
 	}))
 
 	var gotCity string
-	weather := DefineTool(reg, "getWeather", "fetches the weather",
+	weather := defineTestExpTool(reg, "getWeather", "fetches the weather",
 		func(ctx context.Context, in weatherIn) (string, error) {
 			gotCity = in.City
 			return "Sunny", nil
@@ -101,7 +164,7 @@ func TestDefineTool_PlainContext(t *testing.T) {
 // multipart response without changing the function signature.
 func TestTool_AttachParts(t *testing.T) {
 	reg := newToolTestRegistry(t)
-	shot := DefineTool(reg, "screenshot", "takes a screenshot",
+	shot := defineTestExpTool(reg, "screenshot", "takes a screenshot",
 		func(ctx context.Context, _ struct{}) (string, error) {
 			tool.AttachParts(ctx, ai.NewMediaPart("image/png", "pngbytes"))
 			return "captured", nil
@@ -174,7 +237,7 @@ func TestTool_OutputSchemaMatchesClassic(t *testing.T) {
 // when no streaming callback is wired (here, a direct RunRaw).
 func TestTool_SendPartialNoOpWithoutStreaming(t *testing.T) {
 	reg := newToolTestRegistry(t)
-	tl := DefineTool(reg, "noop", "streams when it can",
+	tl := defineTestExpTool(reg, "noop", "streams when it can",
 		func(ctx context.Context, _ struct{}) (string, error) {
 			tool.SendPartial(ctx, map[string]any{"progress": 50})
 			return "ok", nil
@@ -211,7 +274,7 @@ func TestDefineInterruptibleTool_TypedRoundTrip(t *testing.T) {
 	}))
 
 	var gotResume *confirmation
-	transfer := DefineInterruptibleTool(reg, "transfer", "transfers money",
+	transfer := defineTestInterruptibleTool(reg, "transfer", "transfers money",
 		func(ctx context.Context, in transferIn, res *confirmation) (string, error) {
 			if res == nil {
 				return "", tool.Interrupt(transferInterrupt{Reason: "large_amount", Amount: in.Amount})
@@ -302,7 +365,7 @@ func TestResume_NonObjectData_ReturnsClearError(t *testing.T) {
 // the tool runs.
 func TestInterrupt_NonObjectData_ReturnsClearError(t *testing.T) {
 	reg := newToolTestRegistry(t)
-	tl := DefineInterruptibleTool(reg, "bad", "interrupts with a scalar",
+	tl := defineTestInterruptibleTool(reg, "bad", "interrupts with a scalar",
 		func(ctx context.Context, _ struct{}, _ *struct{}) (string, error) {
 			return "", tool.Interrupt("not an object")
 		})
@@ -323,7 +386,7 @@ func TestSendPartial_StreamsPartialToolResponse(t *testing.T) {
 	reg := newToolTestRegistry(t)
 	defineToolThenFinishModel(reg, ai.NewToolRequestPart(&ai.ToolRequest{Name: "progressTool", Input: map[string]any{}}))
 
-	DefineTool(reg, "progressTool", "streams progress",
+	defineTestExpTool(reg, "progressTool", "streams progress",
 		func(ctx context.Context, _ struct{}) (string, error) {
 			tool.SendPartial(ctx, map[string]any{"progress": 50})
 			return "complete", nil
@@ -381,8 +444,8 @@ func TestConcurrentStreamingTools_NoDataRace(t *testing.T) {
 		}
 		return "ok", nil
 	}
-	DefineTool(reg, "toolA", "streams", streamer)
-	DefineTool(reg, "toolB", "streams", streamer)
+	defineTestExpTool(reg, "toolA", "streams", streamer)
+	defineTestExpTool(reg, "toolB", "streams", streamer)
 
 	for _, err := range ai.GenerateStream(context.Background(), reg,
 		ai.WithModelName("test/model"),

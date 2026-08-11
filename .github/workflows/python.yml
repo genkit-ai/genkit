@@ -23,6 +23,9 @@ on:
       - "genkit-tools/**"
       - ".github/workflows/python.yml"
 
+permissions:
+  contents: read
+
 # Cancel in-progress runs for the same PR
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -35,11 +38,15 @@ jobs:
   lint-and-format:
     name: Lint and Format
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Install uv and setup Python
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
           python-version: "3.12"
@@ -67,12 +74,16 @@ jobs:
   type-check:
     name: Type Check (${{ matrix.checker }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         checker: [ty, pyrefly, pyright]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         run: |
@@ -80,7 +91,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends build-essential libffi-dev cmake libjpeg-dev zlib1g-dev
 
       - name: Install uv and setup Python
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
           python-version: "3.12"
@@ -111,11 +122,15 @@ jobs:
   security-and-compliance:
     name: Security and Compliance
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Install uv and setup Python
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
           python-version: "3.12"
@@ -148,13 +163,17 @@ jobs:
   tests:
     name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     # No 'needs' - runs in parallel. If lint fails, concurrency will cancel this.
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
       fail-fast: false
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         run: |
@@ -162,7 +181,7 @@ jobs:
           sudo apt-get install -y build-essential libffi-dev cmake libjpeg-dev zlib1g-dev
 
       - name: Install uv and setup Python
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
@@ -176,8 +195,10 @@ jobs:
         run: ./py/bin/generate_schema_typing --ci
 
       - name: Run tests
+        env:
+          PY_VER: ${{ matrix.python-version }}
         run: |
-          uv run --python ${{ matrix.python-version }} --active --isolated --directory py \
+          uv run --python "$PY_VER" --active --isolated --directory py \
             pytest -xvs --log-level=DEBUG .
   # =============================================================================
   # Build verification (runs after tests pass)
@@ -185,13 +206,17 @@ jobs:
   build:
     name: Build Distributions
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     if: ${{ always() && !failure() && !cancelled() }}
     needs: [lint-and-format, type-check, security-and-compliance, tests]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
           python-version: "3.12"
@@ -221,7 +246,7 @@ jobs:
           done
 
       - name: Upload distributions
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: python-distributions
           path: py/dist/

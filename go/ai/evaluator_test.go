@@ -90,7 +90,7 @@ var testRequest = EvaluatorRequest{
 func TestSimpleEvaluator(t *testing.T) {
 	r := registry.New()
 
-	evaluator := DefineEvaluator(r, "test/testEvaluator", &evalOpts, testEvalFunc)
+	evaluator := defineEvaluator(r, "test/testEvaluator", &evalOpts, testEvalFunc)
 
 	resp, err := evaluator.Evaluate(context.Background(), &testRequest)
 	if err != nil {
@@ -117,14 +117,14 @@ func TestSimpleEvaluator(t *testing.T) {
 func TestOptionsRequired(t *testing.T) {
 	r := registry.New()
 
-	_ = DefineEvaluator(r, "test/testEvaluator", &evalOpts, testEvalFunc)
-	_ = DefineBatchEvaluator(r, "test/testBatchEvaluator", &evalOpts, testBatchEvalFunc)
+	_ = defineEvaluator(r, "test/testEvaluator", &evalOpts, testEvalFunc)
+	_ = defineBatchEvaluator(r, "test/testBatchEvaluator", &evalOpts, testBatchEvalFunc)
 }
 
 func TestFailingEvaluator(t *testing.T) {
 	r := registry.New()
 
-	evalAction := DefineEvaluator(r, "test/testEvaluator", &evalOpts, testFailingEvalFunc)
+	evalAction := defineEvaluator(r, "test/testEvaluator", &evalOpts, testFailingEvalFunc)
 
 	resp, err := evalAction.Evaluate(context.Background(), &testRequest)
 	if err != nil {
@@ -142,8 +142,8 @@ func TestFailingEvaluator(t *testing.T) {
 func TestLookupEvaluator(t *testing.T) {
 	r := registry.New()
 
-	DefineEvaluator(r, "test/testEvaluator", &evalOpts, testEvalFunc)
-	DefineBatchEvaluator(r, "test/testBatchEvaluator", &evalOpts, testBatchEvalFunc)
+	defineEvaluator(r, "test/testEvaluator", &evalOpts, testEvalFunc)
+	defineBatchEvaluator(r, "test/testBatchEvaluator", &evalOpts, testBatchEvalFunc)
 
 	if LookupEvaluator(r, "test/testEvaluator") == nil {
 		t.Errorf("LookupEvaluator(r, \"test/testEvaluator\") is nil")
@@ -156,7 +156,7 @@ func TestLookupEvaluator(t *testing.T) {
 func TestEvaluate(t *testing.T) {
 	r := registry.New()
 
-	evalAction := DefineEvaluator(r, "test/testEvaluator", &evalOpts, testEvalFunc)
+	evalAction := defineEvaluator(r, "test/testEvaluator", &evalOpts, testEvalFunc)
 
 	resp, err := Evaluate(context.Background(), r,
 		WithEvaluator(evalAction),
@@ -184,7 +184,7 @@ func TestEvaluate(t *testing.T) {
 func TestBatchEvaluator(t *testing.T) {
 	r := registry.New()
 
-	evalAction := DefineBatchEvaluator(r, "test/testBatchEvaluator", &evalOpts, testBatchEvalFunc)
+	evalAction := defineBatchEvaluator(r, "test/testBatchEvaluator", &evalOpts, testBatchEvalFunc)
 
 	resp, err := evalAction.Evaluate(context.Background(), &testRequest)
 	if err != nil {
@@ -249,7 +249,7 @@ func TestEvaluatorRefUsedWithEvaluate(t *testing.T) {
 	r := registry.New()
 
 	// Define evaluator that uses config
-	DefineEvaluator(r, "test/configEvaluator", &evalOpts, func(ctx context.Context, req *EvaluatorCallbackRequest) (*EvaluatorCallbackResponse, error) {
+	defineEvaluator(r, "test/configEvaluator", &evalOpts, func(ctx context.Context, req *EvaluatorCallbackRequest) (*EvaluatorCallbackResponse, error) {
 		score := Score{
 			Id:      "configScore",
 			Score:   1,

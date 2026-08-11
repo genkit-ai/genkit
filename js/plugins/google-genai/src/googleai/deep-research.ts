@@ -42,6 +42,7 @@ import {
   Model,
 } from './types.js';
 import {
+  applyContextOverrides,
   calculateApiKey,
   checkApiKey,
   checkModelName,
@@ -259,7 +260,7 @@ export function defineModel(
     name: ref.name,
     ...ref.info,
     configSchema: ref.configSchema,
-    async start(request) {
+    async start(request, options) {
       const {
         apiKey: apiKeyConfig,
         baseUrl,
@@ -277,13 +278,15 @@ export function defineModel(
         mcpServers,
         ...rest
       } = request.config || {};
-      const apiKey = calculateApiKey(pluginOptions?.apiKey, apiKeyConfig);
-      const newClientOptions: ClientOptions = {
-        ...clientOptions,
-        apiKey,
-        baseUrl: baseUrl || clientOptions.baseUrl,
-        apiVersion: apiVersion || clientOptions.apiVersion,
-      };
+      const newClientOptions = applyContextOverrides(
+        {
+          ...clientOptions,
+          apiKey: calculateApiKey(pluginOptions?.apiKey, apiKeyConfig),
+          baseUrl: baseUrl || clientOptions.baseUrl,
+          apiVersion: apiVersion || clientOptions.apiVersion,
+        },
+        options?.context
+      );
 
       const messages = structuredClone(request.messages);
       // Deep Research does not support system instructions, so we map them to
@@ -384,47 +387,47 @@ export function defineModel(
         ...rest,
       };
 
-      const response = await createInteraction(apiKey, req, newClientOptions);
+      const response = await createInteraction(
+        newClientOptions.apiKey,
+        req,
+        newClientOptions
+      );
 
-      return fromInteraction<ClientOptions>(response, newClientOptions);
+      return fromInteraction(response);
     },
-    async check(operation) {
-      const storedOptions = operation.metadata?.clientOptions as
-        | ClientOptions
-        | undefined;
-      const apiKey =
-        storedOptions?.apiKey ||
-        calculateApiKey(pluginOptions?.apiKey, undefined);
+    async check(operation, options) {
+      const checkOptions = applyContextOverrides(
+        {
+          ...clientOptions,
+          apiKey: calculateApiKey(pluginOptions?.apiKey, undefined),
+        },
+        options?.context
+      );
 
-      const checkOptions: ClientOptions = {
-        ...clientOptions,
-        ...storedOptions,
-      };
+      const response = await getInteraction(
+        checkOptions.apiKey,
+        operation.id,
+        checkOptions
+      );
 
-      const response = await getInteraction(apiKey, operation.id, checkOptions);
-
-      return fromInteraction<ClientOptions>(response, checkOptions);
+      return fromInteraction(response);
     },
-    async cancel(operation) {
-      const storedOptions = operation.metadata?.clientOptions as
-        | ClientOptions
-        | undefined;
-      const apiKey =
-        storedOptions?.apiKey ||
-        calculateApiKey(pluginOptions?.apiKey, undefined);
-
-      const cancelOptions: ClientOptions = {
-        ...clientOptions,
-        ...storedOptions,
-      };
+    async cancel(operation, options) {
+      const cancelOptions = applyContextOverrides(
+        {
+          ...clientOptions,
+          apiKey: calculateApiKey(pluginOptions?.apiKey, undefined),
+        },
+        options?.context
+      );
 
       const response = await cancelInteraction(
-        apiKey,
+        cancelOptions.apiKey,
         operation.id,
         cancelOptions
       );
 
-      return fromInteraction<ClientOptions>(response, cancelOptions);
+      return fromInteraction(response);
     },
   });
 }

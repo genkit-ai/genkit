@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -37,7 +38,10 @@ import (
 	"github.com/firebase/genkit/go/internal/base"
 )
 
-// Model represents a model that can generate content based on a request.
+// Model represents a model that can generate content based on a request. It
+// is the type to accept as an argument and to look up by name; implementations
+// are created with [NewModelAction], or [genkit.DefineModelAction] in an
+// application.
 type Model interface {
 	// Name returns the registry name of the model.
 	Name() string
@@ -71,6 +75,11 @@ type ToolConfig struct {
 // ModelFunc is a streaming function that takes in a ModelRequest and generates a ModelResponse, optionally streaming ModelResponseChunks.
 type ModelFunc = core.StreamingFunc[*ModelRequest, *ModelResponse, *ModelResponseChunk]
 
+// ModelActionFunc is a [ModelFunc] that additionally receives the
+// request's typed Config: the framework deserializes the request's raw config
+// into it before calling the function (see [NewModelAction]).
+type ModelActionFunc[Config any] = func(context.Context, *ModelRequest, Config, ModelStreamCallback) (*ModelResponse, error)
+
 // ModelStreamCallback is a stream callback of a ModelAction.
 type ModelStreamCallback = func(context.Context, *ModelResponseChunk) error
 
@@ -79,9 +88,65 @@ type ModelStreamCallback = func(context.Context, *ModelResponseChunk) error
 // Deprecated: Use [Middleware] interface with [WithUse] instead, which supports Generate, Model, and Tool hooks.
 type ModelMiddleware = core.Middleware[*ModelRequest, *ModelResponse, *ModelResponseChunk]
 
-// model is an action with functions specific to model generation such as Generate().
-type model struct {
-	core.Action[*ModelRequest, *ModelResponse, *ModelResponseChunk]
+// action is an unexported alias of [core.Action] used as the embedded field
+// in the ai primitives (ModelAction, EmbedderAction, EvaluatorAction).
+// Embedding via the alias promotes Action's methods without exporting the
+// field itself, so the containment stays an internal detail of each primitive.
+//
+// Each primitive redeclares the promoted methods that satisfy its interfaces,
+// forwarding to the embedded action. Promotion alone would compile, but godoc
+// cannot see through an alias into another package: a promoted method appears
+// in no documentation and no doc link to it resolves, so a reader would find
+// a model with one method that nonetheless claims to be an [api.Action].
+type action[In, Out, Stream any] = core.Action[In, Out, Stream]
+
+// ModelAction is a generative model backed by a registry action. It is the
+// concrete type returned by [NewModelAction]; pass it to [WithModel] to use it
+// for generation, or return it from a plugin's Init for the framework to
+// register.
+//
+// It implements [Model] and [api.Action], so it can be passed anywhere either
+// is accepted. It also promotes [core.Action.Run], the typed equivalent of
+// [ModelAction.Generate].
+type ModelAction struct {
+	action[*ModelRequest, *ModelResponse, *ModelResponseChunk]
+}
+
+// Pinned here so that breaking either interface fails the build at the type
+// rather than at a call site.
+var (
+	_ api.Action = (*ModelAction)(nil)
+	_ Model      = (*ModelAction)(nil)
+)
+
+// Name returns the registry name of the model.
+func (m *ModelAction) Name() string { return m.action.Name() }
+
+// Register registers the model with r, making it available to lookups and to
+// the Dev UI. A plugin that returns the model from its Init does not need to
+// call this.
+func (m *ModelAction) Register(r api.Registry) { m.action.Register(r) }
+
+// Desc returns the model's action descriptor: its name, schemas, and metadata.
+func (m *ModelAction) Desc() api.ActionDesc { return m.action.Desc() }
+
+// RunJSON runs the model on a JSON-encoded [ModelRequest] and returns a
+// JSON-encoded [ModelResponse]. The framework uses it to serve reflection and
+// registry-driven calls; prefer [ModelAction.Generate].
+func (m *ModelAction) RunJSON(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (json.RawMessage, error) {
+	if m == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "Model.RunJSON: model called on a nil model; check that all models are defined")
+	}
+	return m.action.RunJSON(ctx, input, cb)
+}
+
+// RunJSONWithTelemetry is [ModelAction.RunJSON] with the run's telemetry
+// returned alongside the output.
+func (m *ModelAction) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	if m == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "Model.RunJSONWithTelemetry: model called on a nil model; check that all models are defined")
+	}
+	return m.action.RunJSONWithTelemetry(ctx, input, cb)
 }
 
 // generateAction is the type for a utility model generation action that takes in a GenerateActionOptions instead of a ModelRequest.
@@ -115,11 +180,12 @@ type ModelOptions struct {
 	Stage        ModelStage     // Indicates the maturity stage of the model.
 	Supports     *ModelSupports // Capabilities of the model.
 	Versions     []string       // Available versions of the model.
+	Metadata     map[string]any // Arbitrary key-value data attached to the action descriptor.
 }
 
 // DefineGenerateAction defines a utility generate action.
 func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
-	return (*generateAction)(core.DefineStreamingAction(r, "generate", api.ActionTypeUtil, nil, nil,
+	a := core.NewStreamingActionOf(api.ActionTypeUtil, "generate", nil,
 		func(ctx context.Context, actionOpts *GenerateActionOptions, cb ModelStreamCallback) (resp *ModelResponse, err error) {
 			actionOptsBytes, _ := json.Marshal(actionOpts)
 			logger.FromContext(ctx).Debug("GenerateAction",
@@ -132,13 +198,37 @@ func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 			}()
 
 			return GenerateWithRequest(ctx, r, actionOpts, nil, cb)
-		}))
+		})
+	a.Register(r)
+	return (*generateAction)(a)
 }
 
-// NewModel creates a new [Model].
-func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
+// NewModelAction creates an unregistered [ModelAction]: return it from a
+// plugin's Init for the framework to register, or call
+// [ModelAction.Register] directly. Applications should define models with
+// [genkit.DefineModelAction].
+//
+// Config is the model's typed configuration; it is usually inferred from fn's
+// signature. The framework deserializes the request's raw config into Config
+// before calling fn: the exact Config type (or a pointer to it) and
+// map[string]any (from the Dev UI and other JSON callers) are accepted, and
+// mismatched types are rejected. The request's [ModelRequest.Config] is
+// normalized to the converted value, so it always matches the typed
+// parameter. The config's JSON schema is inferred from Config unless
+// [ModelOptions.ConfigSchema] overrides it.
+//
+// The config schema is enforced by input validation on every call, so if
+// Config's JSON marshaling diverges from its reflected schema (e.g. SDK
+// wrapper types like Opt[float64] that marshal to primitives but reflect as
+// objects), set [ModelOptions.ConfigSchema] explicitly or requests will be
+// rejected at the action boundary.
+func NewModelAction[Config any](
+	name string,
+	opts *ModelOptions,
+	fn ModelActionFunc[Config],
+) *ModelAction {
 	if name == "" {
-		panic("ai.NewModel: name is required")
+		panic("ai.NewModelAction: name is required")
 	}
 
 	if opts == nil {
@@ -150,54 +240,84 @@ func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
 		opts.Supports = &ModelSupports{}
 	}
 
-	metadata := map[string]any{
-		"type": api.ActionTypeModel,
-		"model": map[string]any{
-			"label": opts.Label,
-			"supports": map[string]any{
-				"media":       opts.Supports.Media,
-				"context":     opts.Supports.Context,
-				"multiturn":   opts.Supports.Multiturn,
-				"systemRole":  opts.Supports.SystemRole,
-				"tools":       opts.Supports.Tools,
-				"toolChoice":  opts.Supports.ToolChoice,
-				"constrained": opts.Supports.Constrained,
-				"output":      opts.Supports.Output,
-				"contentType": opts.Supports.ContentType,
-				"longRunning": opts.Supports.LongRunning,
-			},
-			"versions":      opts.Versions,
-			"stage":         opts.Stage,
-			"customOptions": opts.ConfigSchema,
-		},
-	}
+	configSchema, inputSchema := modelConfigSchemas[Config](opts.ConfigSchema)
+	metadata := modelActionMetadata(api.ActionTypeModel, opts, configSchema, opts.Metadata)
 
-	inputSchema := core.InferSchemaMap(ModelRequest{})
-	if inputSchema != nil && opts.ConfigSchema != nil {
-		if props, ok := inputSchema["properties"].(map[string]any); ok {
-			props["config"] = opts.ConfigSchema
+	typedFn := func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		// req.Config was normalized to the exact Config type by
+		// normalizeConfig below, so this hits the fast path.
+		cfg, err := resolveConfig[Config](req.Config)
+		if err != nil {
+			return nil, err
 		}
+		return fn(ctx, req, cfg, cb)
 	}
 
-	mws := []ModelMiddleware{
+	// normalizeConfig runs outermost so that the built-in wrappers and the
+	// model function all see the typed, converted config on the request.
+	rawFn := core.ChainMiddleware(
+		normalizeConfig[Config](name, opts.Versions),
 		simulateSystemPrompt(opts, nil),
 		augmentWithContext(opts, nil),
 		validateSupport(name, opts),
 		addAutomaticTelemetry(),
+	)(typedFn)
+
+	return &ModelAction{*core.NewStreamingActionOf(api.ActionTypeModel, name, &core.ActionOptions{
+		Metadata:    metadata,
+		InputSchema: inputSchema,
+	}, rawFn)}
+}
+
+// modelActionMetadata builds the descriptor metadata shared by model and
+// background-model actions: the caller metadata maps are merged in order,
+// then the reserved type and model keys are stamped over them so they cannot
+// be corrupted; registry discovery depends on them.
+func modelActionMetadata(actionType api.ActionType, opts *ModelOptions, configSchema map[string]any, callerMetadata ...map[string]any) map[string]any {
+	size := 2
+	for _, m := range callerMetadata {
+		size += len(m)
 	}
-	fn = core.ChainMiddleware(mws...)(fn)
-
-	return &model{*core.NewStreamingAction(name, api.ActionTypeModel, metadata, inputSchema, fn)}
+	metadata := make(map[string]any, size)
+	for _, m := range callerMetadata {
+		maps.Copy(metadata, m)
+	}
+	metadata["type"] = actionType
+	metadata["model"] = map[string]any{
+		"label": opts.Label,
+		"supports": map[string]any{
+			"media":       opts.Supports.Media,
+			"context":     opts.Supports.Context,
+			"multiturn":   opts.Supports.Multiturn,
+			"systemRole":  opts.Supports.SystemRole,
+			"tools":       opts.Supports.Tools,
+			"toolChoice":  opts.Supports.ToolChoice,
+			"constrained": opts.Supports.Constrained,
+			"output":      opts.Supports.Output,
+			"contentType": opts.Supports.ContentType,
+			"longRunning": opts.Supports.LongRunning,
+		},
+		"versions":      opts.Versions,
+		"stage":         opts.Stage,
+		"customOptions": configSchema,
+	}
+	return metadata
 }
 
-// DefineModel creates a new [Model] and registers it.
-func DefineModel(r api.Registry, name string, opts *ModelOptions, fn ModelFunc) Model {
-	m := NewModel(name, opts, fn)
-	m.Register(r)
-	return m
+// NewModel creates a new [Model].
+//
+// Deprecated: Use [NewModelAction], which passes the request's config to
+// fn as a typed value instead of leaving it type-erased on the request.
+func NewModel(name string, opts *ModelOptions, fn ModelFunc) Model {
+	if name == "" {
+		panic("ai.NewModel: name is required")
+	}
+	return NewModelAction(name, opts, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
+		return fn(ctx, req, cb)
+	})
 }
 
-// LookupModel looks up a [Model] registered by [DefineModel].
+// LookupModel looks up a registered [Model] by name.
 // It will try to resolve the model dynamically if the model is not found.
 // It returns nil if the model was not resolved.
 func LookupModel(r api.Registry, name string) Model {
@@ -205,9 +325,7 @@ func LookupModel(r api.Registry, name string) Model {
 	if action == nil {
 		return nil
 	}
-	return &model{
-		Action: *action,
-	}
+	return &ModelAction{*action}
 }
 
 // GenerateWithRequest is the central generation implementation for ai.Generate(), prompt.Execute(), and the GenerateAction direct call.
@@ -257,7 +375,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			if _, ok := toolDefMap[t.Name()]; ok {
 				return nil, status.Errorf(status.ErrInvalidArgument, "ai.GenerateWithRequest: tool %q is contributed by middleware but already declared elsewhere", t.Name())
 			}
-			toolDefMap[t.Name()] = t.Definition()
+			toolDefMap[t.Name()] = nil // Reserves the name; the definition is captured after registration.
 			middlewareTools = append(middlewareTools, t)
 		}
 	}
@@ -265,8 +383,12 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		if !r.IsChild() {
 			r = r.NewChild()
 		}
+		// Definitions are captured only after registration: Definition resolves
+		// schema $refs (e.g. from WithOutputSchemaName) only once the tool has
+		// a registry.
 		for _, t := range middlewareTools {
 			t.Register(r)
+			toolDefMap[t.Name()] = t.Definition()
 		}
 	}
 	toolDefs := make([]*ToolDefinition, 0, len(toolDefMap))
@@ -300,7 +422,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		// Native constrained output is enabled only when the user has
 		// requested it, the model supports it, and there's a JSON schema.
 		outputCfg.Constrained = opts.Output.JsonSchema != nil &&
-			opts.Output.Constrained && outputCfg.Constrained && m != nil && m.(*model).supportsConstrained(len(toolDefs) > 0)
+			opts.Output.Constrained && outputCfg.Constrained && m != nil && m.(*ModelAction).supportsConstrained(len(toolDefs) > 0)
 
 		// Add schema instructions to prompt when not using native constraints.
 		// This is a no-op for unstructured output requests.
@@ -551,6 +673,14 @@ func buildModelChain(mws []*Hooks, fn ModelFunc) ModelFunc {
 	return chain
 }
 
+// toolRanKey carries a per-call flag that the innermost runner sets when it
+// actually executes the tool, letting the engine attribute a hook that
+// short-circuits the call to the tool in traces. It rides the context rather
+// than ToolParams so that a WrapTool hook which rebuilds the params struct (to
+// rewrite the request, say) cannot silently lose it: every hook that derives
+// its context from the one it was handed keeps the flag.
+var toolRanKey = base.NewContextKey[*bool]()
+
 // buildToolRunner composes the WrapTool hooks from mws (outer-to-inner) into
 // a single function that executes a tool. The returned function is safe to
 // invoke from concurrent goroutines; each invocation threads its own params
@@ -570,6 +700,9 @@ func buildToolRunner(mws []*Hooks) func(ctx context.Context, tool Tool, req *Too
 		}
 	}
 	chain := func(ctx context.Context, params *ToolParams) (*MultipartToolResponse, error) {
+		if ran := toolRanKey.FromContext(ctx); ran != nil {
+			*ran = true
+		}
 		return params.Tool.RunRawMultipart(ctx, params.Request.Input)
 	}
 	for i := len(mws) - 1; i >= 0; i-- {
@@ -584,17 +717,41 @@ func buildToolRunner(mws []*Hooks) func(ctx context.Context, tool Tool, req *Too
 		}
 	}
 	return func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error) {
-		return chain(ctx, &ToolParams{Request: req, Tool: tool})
+		ran := false
+		resp, err := chain(toolRanKey.NewContext(ctx, &ran), &ToolParams{Request: req, Tool: tool})
+		if !ran {
+			return recordToolShortCircuit(ctx, tool.Name(), req.Input, resp, err)
+		}
+		return resp, err
 	}
+}
+
+// recordToolShortCircuit emits the tool-shaped span that core/action.go would
+// have created, attributing a WrapTool outcome (interrupt, cached response,
+// injected error) to the tool in traces even though the tool never ran. The
+// span wraps the already-known outcome and returns it unchanged, so it records
+// what the tool call resolved to rather than how long the hooks took to
+// resolve it.
+func recordToolShortCircuit(ctx context.Context, name string, input any, resp *MultipartToolResponse, err error) (*MultipartToolResponse, error) {
+	spanMeta := &tracing.SpanMetadata{
+		Name:            name,
+		Type:            "action",
+		Subtype:         "tool",
+		Metadata:        map[string]string{},
+		TelemetryLabels: tracing.TelemetryLabelsFromContext(ctx),
+	}
+	if flowName := core.FlowNameFromContext(ctx); flowName != "" {
+		spanMeta.Metadata["flow:name"] = flowName
+	}
+	return tracing.RunInNewSpan(ctx, spanMeta, input,
+		func(context.Context, any) (*MultipartToolResponse, error) { return resp, err })
 }
 
 // Generate generates a model response based on the provided options.
 func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*ModelResponse, error) {
 	genOpts := &generateOptions{}
 	for _, opt := range opts {
-		if err := opt.applyGenerate(genOpts); err != nil {
-			return nil, status.Errorf(status.ErrInvalidArgument, "ai.Generate: error applying options: %w", err)
-		}
+		opt.applyGenerate(genOpts)
 	}
 
 	if genOpts.OutputSchema != nil {
@@ -636,14 +793,20 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 		}
 	}
 
+	// Generate has no prompt input, so content functions get a nil raw input,
+	// which each turns into the zero value of its own type, and no text is
+	// compiled: there would be nothing to render it against.
 	messages := []*Message{}
-	if genOpts.SystemFn != nil {
-		system, err := genOpts.SystemFn(ctx, nil)
+	if genOpts.SystemText != nil {
+		messages = append(messages, NewSystemTextMessage(*genOpts.SystemText))
+	} else if genOpts.SystemFn != nil {
+		parts, err := genOpts.SystemFn(ctx, nil)
 		if err != nil {
 			return nil, err
 		}
-
-		messages = append(messages, NewSystemTextMessage(system))
+		if len(parts) > 0 {
+			messages = append(messages, &Message{Role: RoleSystem, Content: parts})
+		}
 	}
 	if genOpts.MessagesFn != nil {
 		msgs, err := genOpts.MessagesFn(ctx, nil)
@@ -653,13 +816,16 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 
 		messages = append(messages, msgs...)
 	}
-	if genOpts.PromptFn != nil {
-		prompt, err := genOpts.PromptFn(ctx, nil)
+	if genOpts.PromptText != nil {
+		messages = append(messages, NewUserTextMessage(*genOpts.PromptText))
+	} else if genOpts.PromptFn != nil {
+		parts, err := genOpts.PromptFn(ctx, nil)
 		if err != nil {
 			return nil, err
 		}
-
-		messages = append(messages, NewUserTextMessage(prompt))
+		if len(parts) > 0 {
+			messages = append(messages, &Message{Role: RoleUser, Content: parts})
+		}
 	}
 
 	if modelRef, ok := genOpts.Model.(ModelRef); ok && genOpts.Config == nil {
@@ -724,9 +890,19 @@ func GenerateText(ctx context.Context, r api.Registry, opts ...GenerateOption) (
 // If the response doesn't contain text output (e.g., contains tool requests
 // or interrupts instead), the output will be nil and no error is returned.
 // Check resp.Interrupts() or resp.ToolRequests() to handle these cases.
+//
+// The output format is JSON with a schema inferred from Out; an explicit
+// [WithOutputSchema] or [WithOutputSchemaName] overrides the schema while
+// extraction into Out keeps working. Overriding the format itself with a
+// non-JSON [WithOutputFormat] or [WithOutputEnums] breaks that extraction:
+// the response text will not parse into Out.
 func GenerateData[Out any](ctx context.Context, r api.Registry, opts ...GenerateOption) (*Out, *ModelResponse, error) {
 	var value Out
-	opts = append(opts, WithOutputType(value))
+	// Prepend the inferred output type so an explicit WithOutputSchema or
+	// WithOutputSchemaName passed by the caller wins the schema slot (last set
+	// wins). The typed Out still drives value extraction below, so structured
+	// output keeps working whether or not the caller overrode the schema.
+	opts = append([]GenerateOption{WithOutputType(value)}, opts...)
 
 	resp, err := Generate(ctx, r, opts...)
 	if err != nil {
@@ -791,7 +967,9 @@ func GenerateStream(ctx context.Context, r api.Registry, opts ...GenerateOption)
 			return nil
 		}
 
-		allOpts := append(slices.Clone(opts), WithStreaming(cb))
+		// Chain rather than set the callback so a caller-supplied
+		// WithStreaming still receives every chunk.
+		allOpts := append(slices.Clone(opts), withChainedStreaming(cb))
 
 		resp, err := Generate(ctx, r, allOpts...)
 		if done || errors.Is(err, errStop) {
@@ -816,6 +994,10 @@ func GenerateStream(ctx context.Context, r api.Registry, opts ...GenerateOption)
 // will not be called again.
 //
 // Otherwise the Chunk field of the passed [StreamValue] holds a streamed chunk.
+//
+// Like [GenerateData], the output format is JSON with a schema inferred from
+// Out; overriding the format with a non-JSON [WithOutputFormat] or
+// [WithOutputEnums] breaks typed extraction.
 func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...GenerateOption) iter.Seq2[*StreamValue[Out, Out], error] {
 	return func(yield func(*StreamValue[Out, Out], error) bool) {
 		done := false
@@ -843,10 +1025,12 @@ func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...Ge
 			return nil
 		}
 
-		// Prepend WithOutputType so the user can override the output format.
+		// Prepend WithOutputType so the user can override the output format,
+		// and chain the iterator callback so a caller-supplied WithStreaming
+		// still receives every chunk.
 		var value Out
 		allOpts := append([]GenerateOption{WithOutputType(value)}, opts...)
-		allOpts = append(allOpts, WithStreaming(cb))
+		allOpts = append(allOpts, withChainedStreaming(cb))
 
 		resp, err := Generate(ctx, r, allOpts...)
 		if done || errors.Is(err, errStop) {
@@ -876,21 +1060,21 @@ func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...Ge
 }
 
 // Generate applies the [Action] to provided request.
-func (m *model) Generate(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+func (m *ModelAction) Generate(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 	if m == nil {
 		return nil, status.Errorf(status.ErrInvalidArgument, "Model.Generate: generate called on a nil model; check that all models are defined")
 	}
 
-	return m.Action.Run(ctx, req, cb)
+	return m.Run(ctx, req, cb)
 }
 
 // supportsConstrained returns whether the model supports constrained output.
-func (m *model) supportsConstrained(hasTools bool) bool {
+func (m *ModelAction) supportsConstrained(hasTools bool) bool {
 	if m == nil {
 		return false
 	}
 
-	metadata := m.Action.Desc().Metadata
+	metadata := m.Desc().Metadata
 	if metadata == nil {
 		return false
 	}
@@ -1387,7 +1571,7 @@ func (m *Message) Text() string {
 // NewResume constructs a [GenerateActionResume] from Part slices.
 // This is useful when building [GenerateActionOptions] directly (e.g., from a
 // rendered prompt) and need to set the Resume field from [*Part] values
-// produced by [ToolDef.RestartWith] or [ToolDef.RespondWith].
+// produced by [ToolAction.RestartWith] or [ToolAction.RespondWith].
 func NewResume(restarts, responds []*Part) *GenerateActionResume {
 	return &GenerateActionResume{
 		Restart: restarts,
@@ -1509,14 +1693,14 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 					return nil, status.Errorf(ErrToolNotFound, "handleResumedToolRequest: tool %q not found", toolReq.Name)
 				}
 
-				toolDef := tool.Definition()
-				if len(toolDef.OutputSchema) > 0 {
+				toolDefinition := tool.Definition()
+				if len(toolDefinition.OutputSchema) > 0 {
 					outputBytes, err := json.Marshal(respondPart.ToolResponse.Output)
 					if err != nil {
 						return nil, status.Errorf(status.ErrInvalidArgument, "handleResumedToolRequest: failed to marshal tool output for validation: %w", err)
 					}
 
-					schemaBytes, err := json.Marshal(toolDef.OutputSchema)
+					schemaBytes, err := json.Marshal(toolDefinition.OutputSchema)
 					if err != nil {
 						return nil, status.Errorf(status.ErrInternal, "handleResumedToolRequest: tool %q has invalid output schema: %w", toolReq.Name, err)
 					}

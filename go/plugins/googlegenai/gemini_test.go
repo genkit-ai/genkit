@@ -21,8 +21,22 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/internal/base"
 	"google.golang.org/genai"
 )
+
+// toGeminiRequestFromRaw runs the two steps a real request goes through: the
+// framework deserializes the type-erased config into the model's config type,
+// then the plugin folds the request into it. The tests below set
+// [ai.ModelRequest.Config] the way callers do, so going through both keeps
+// them honest about what the model function actually receives.
+func toGeminiRequestFromRaw(input *ai.ModelRequest, cache *genai.CachedContent, modelName ...string) (*genai.GenerateContentConfig, error) {
+	config, err := base.ConvertToExact[genai.GenerateContentConfig](input.Config)
+	if err != nil {
+		return nil, err
+	}
+	return toGeminiRequest(input, &config, cache, modelName...)
+}
 
 func TestConvertRequest(t *testing.T) {
 	text := "hello"
@@ -122,7 +136,7 @@ func TestConvertRequest(t *testing.T) {
 		},
 	}
 	t.Run("convert request", func(t *testing.T) {
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -207,7 +221,7 @@ func TestConvertRequest(t *testing.T) {
 		req := ai.ModelRequest{
 			Config: badCfg,
 		}
-		_, err := toGeminiRequest(&req, nil)
+		_, err := toGeminiRequestFromRaw(&req, nil)
 		if err != nil {
 			t.Fatalf("expected nil, got: %v", err)
 		}
@@ -270,7 +284,7 @@ func TestConvertRequest(t *testing.T) {
 				req := ai.ModelRequest{
 					Config: tc.cfg,
 				}
-				_, err := toGeminiRequest(&req, nil)
+				_, err := toGeminiRequestFromRaw(&req, nil)
 				if err == nil {
 					t.Fatalf("expected an error: '%v' but got nil", tc.err)
 				}
@@ -283,7 +297,7 @@ func TestConvertRequest(t *testing.T) {
 				"temperature": "not a number", // This should fail map->struct conversion
 			},
 		}
-		_, err := toGeminiRequest(&req, nil)
+		_, err := toGeminiRequestFromRaw(&req, nil)
 		if err == nil {
 			t.Fatal("expected error for invalid config map")
 		}
@@ -304,7 +318,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -331,7 +345,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -356,7 +370,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -383,7 +397,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -423,7 +437,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -442,7 +456,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-2.5-flash")
+		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-2.5-flash")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -524,7 +538,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -568,7 +582,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -600,7 +614,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -640,7 +654,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -690,7 +704,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -737,7 +751,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -785,7 +799,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		if _, err := toGeminiRequest(req, nil); err == nil {
+		if _, err := toGeminiRequestFromRaw(req, nil); err == nil {
 			t.Fatal("expected error rejecting FunctionDeclarations in config tools, got nil")
 		}
 	})
@@ -811,7 +825,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -1436,4 +1450,53 @@ func TestToGeminiContents(t *testing.T) {
 			t.Errorf("contents[%d].Role = %q, want %q", i, contents[i].Role, want)
 		}
 	}
+}
+
+// TestCallerConfigNotMutated pins that folding a request into the config
+// leaves the caller's own config untouched. The framework hands the plugin a
+// shallow copy, so the two amendments that reach through it, the TTS default
+// voice and the built-in tools merge, have to clone before writing.
+func TestCallerConfigNotMutated(t *testing.T) {
+	t.Parallel()
+
+	t.Run("tts default voice", func(t *testing.T) {
+		caller := &genai.GenerateContentConfig{
+			SpeechConfig: &genai.SpeechConfig{LanguageCode: "en-US"},
+		}
+		req := &ai.ModelRequest{
+			Config:   caller,
+			Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hi"))},
+		}
+		if _, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview"); err != nil {
+			t.Fatal(err)
+		}
+		if caller.SpeechConfig.VoiceConfig != nil {
+			t.Error("the plugin's default voice was written into the caller's SpeechConfig")
+		}
+	})
+
+	t.Run("tools merge", func(t *testing.T) {
+		// Spare capacity is what an append would scribble into.
+		tools := make([]*genai.Tool, 1, 4)
+		tools[0] = &genai.Tool{GoogleSearch: &genai.GoogleSearch{}}
+		caller := &genai.GenerateContentConfig{Tools: tools}
+		req := &ai.ModelRequest{
+			Config:   caller,
+			Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hi"))},
+			Tools: []*ai.ToolDefinition{{
+				Name:        "myTool",
+				Description: "this is a dummy tool",
+				InputSchema: map[string]any{"type": "object"},
+			}},
+		}
+		if _, err := toGeminiRequestFromRaw(req, nil); err != nil {
+			t.Fatal(err)
+		}
+		if len(caller.Tools) != 1 {
+			t.Errorf("caller's Tools length = %d, want 1", len(caller.Tools))
+		}
+		if spare := tools[:cap(tools)]; spare[1] != nil {
+			t.Error("the converted tools were appended into the caller's backing array")
+		}
+	})
 }

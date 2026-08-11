@@ -17,6 +17,7 @@
 import {
   ActionFnArg,
   BackgroundAction,
+  BackgroundActionFnArg,
   GenkitError,
   MiddlewareWithOptions,
   Operation,
@@ -280,13 +281,16 @@ export type DefineBackgroundModelOptions<
   CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
 > = DefineModelOptions<CustomOptionsSchema> & {
   start: (
-    request: GenerateRequest<CustomOptionsSchema>
+    request: GenerateRequest<CustomOptionsSchema>,
+    options?: BackgroundActionFnArg<unknown>
   ) => Promise<Operation<GenerateResponseData>>;
   check: (
-    operation: Operation<GenerateResponseData>
+    operation: Operation<GenerateResponseData>,
+    options?: BackgroundActionFnArg<unknown>
   ) => Promise<Operation<GenerateResponseData>>;
   cancel?: (
-    operation: Operation<GenerateResponseData>
+    operation: Operation<GenerateResponseData>,
+    options?: BackgroundActionFnArg<unknown>
   ) => Promise<Operation<GenerateResponseData>>;
 };
 
@@ -330,26 +334,26 @@ export function backgroundModel<
       },
     },
     use: middleware,
-    async start(request) {
+    async start(request, opts) {
       const startTimeMs = performance.now();
-      const response = await options.start(request);
+      const response = await options.start(request, opts);
       Object.assign(response, {
         latencyMs: performance.now() - startTimeMs,
       });
       return response;
     },
-    async check(op) {
-      return options.check(op);
+    async check(op, opts) {
+      return options.check(op, opts);
     },
     cancel: options.cancel
-      ? async (op) => {
+      ? async (op, opts) => {
           if (!options.cancel) {
             throw new GenkitError({
               status: 'UNIMPLEMENTED',
               message: 'cancel not implemented',
             });
           }
-          return options.cancel(op);
+          return options.cancel(op, opts);
         }
       : undefined,
   }) as BackgroundModelAction<CustomOptionsSchema>;

@@ -117,6 +117,9 @@ export const flowBatchRun = new Command('flow:batchRun')
         }
       };
 
-      await runWithManager(projectRoot, runAction, { runtimeCommand });
+      await runWithManager(projectRoot, runAction, {
+        runtimeCommand,
+        waitForActionKeys: [`/flow/${flowName}`],
+      });
     }
   );

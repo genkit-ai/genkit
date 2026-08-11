@@ -48,6 +48,7 @@ import (
 	"github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -141,28 +142,28 @@ func setupHarness(t *testing.T) *harness {
 	ai.ConfigureFormats(reg)
 
 	pm := &programmableModel{}
-	ai.DefineModel(reg, "programmableModel",
+	defineTestModel(reg, "programmableModel",
 		&ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true}},
 		pm.generate)
 	ai.DefineGenerateAction(context.Background(), reg)
 
 	// --- Tools ---
 
-	testTool := ai.DefineTool(reg, "testTool", "A simple test tool",
+	testTool := defineTestTool(reg, "testTool", "A simple test tool",
 		func(tc *ai.ToolContext, _ struct{}) (string, error) {
 			return "tool called", nil
 		})
 
 	// interruptTool always pauses the turn, returning the tool request to the
 	// client for external resolution (resume.respond).
-	interruptTool := ai.DefineTool(reg, "interruptTool", "An interrupt tool",
+	interruptTool := defineTestTool(reg, "interruptTool", "An interrupt tool",
 		func(tc *ai.ToolContext, _ interruptIn) (interruptOut, error) {
 			return interruptOut{}, tc.Interrupt(&ai.InterruptOptions{})
 		})
 
 	// restartTool interrupts on first call and succeeds when restarted with
 	// resumed metadata (resume.restart).
-	restartTool := ai.DefineTool(reg, "restartTool", "A tool that requires confirmation before executing",
+	restartTool := defineTestTool(reg, "restartTool", "A tool that requires confirmation before executing",
 		func(tc *ai.ToolContext, in restartIn) (restartOut, error) {
 			if tc.Resumed == nil {
 				return restartOut{}, tc.Interrupt(&ai.InterruptOptions{
@@ -1126,4 +1127,18 @@ func toFloat(v any) float64 {
 	default:
 		return 0
 	}
+}
+
+// defineTestModel and defineTestTool register actions in one call, mirroring
+// the removed registry-taking ai.Define* helpers.
+func defineTestModel(r api.Registry, name string, opts *ai.ModelOptions, fn ai.ModelFunc) ai.Model {
+	m := ai.NewModel(name, opts, fn)
+	m.Register(r)
+	return m
+}
+
+func defineTestTool[In, Out any](r api.Registry, name, description string, fn ai.ToolFunc[In, Out], opts ...ai.ToolOption) *ai.ToolAction[In, Out] {
+	t := ai.NewTool(name, description, fn, opts...)
+	t.Register(r)
+	return t
 }

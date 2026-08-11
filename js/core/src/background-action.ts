@@ -70,9 +70,15 @@ export interface BackgroundAction<
     options?: RunOptions
   ): Promise<Operation<z.infer<O>>>;
 
-  check(operation: Operation<z.infer<O>>): Promise<Operation<z.infer<O>>>;
+  check(
+    operation: Operation<z.infer<O>>,
+    options?: RunOptions
+  ): Promise<Operation<z.infer<O>>>;
 
-  cancel(operation: Operation<z.infer<O>>): Promise<Operation<z.infer<O>>>;
+  cancel(
+    operation: Operation<z.infer<O>>,
+    options?: RunOptions
+  ): Promise<Operation<z.infer<O>>>;
 }
 
 export async function lookupBackgroundAction<
@@ -147,9 +153,10 @@ class BackgroundActionImpl<
   }
 
   async check(
-    operation: Operation<z.infer<O>>
+    operation: Operation<z.infer<O>>,
+    options?: RunOptions
   ): Promise<Operation<z.infer<O>>> {
-    return await this.checkAction(operation);
+    return await this.checkAction(operation, options);
   }
 
   get supportsCancel(): boolean {
@@ -157,12 +164,13 @@ class BackgroundActionImpl<
   }
 
   async cancel(
-    operation: Operation<z.infer<O>>
+    operation: Operation<z.infer<O>>,
+    options?: RunOptions
   ): Promise<Operation<z.infer<O>>> {
     if (!this.cancelAction) {
       return operation;
     }
-    return await this.cancelAction(operation);
+    return await this.cancelAction(operation, options);
   }
 }
 
@@ -212,8 +220,14 @@ export type BackgroundActionParams<
     input: z.infer<I>,
     options: BackgroundActionFnArg<z.infer<S>>
   ) => Promise<Operation<z.infer<O>>>;
-  check: (input: Operation<z.infer<O>>) => Promise<Operation<z.infer<O>>>;
-  cancel?: (input: Operation<z.infer<O>>) => Promise<Operation<z.infer<O>>>;
+  check: (
+    input: Operation<z.infer<O>>,
+    options: BackgroundActionFnArg<z.infer<S>>
+  ) => Promise<Operation<z.infer<O>>>;
+  cancel?: (
+    input: Operation<z.infer<O>>,
+    options: BackgroundActionFnArg<z.infer<S>>
+  ) => Promise<Operation<z.infer<O>>>;
   actionType: ActionType;
 
   description?: string;
@@ -315,8 +329,8 @@ export function backgroundAction<
         }),
       },
     },
-    async (input) => {
-      const operation = await config.check(input);
+    async (input, options) => {
+      const operation = await config.check(input, options);
       operation.action = `/${config.actionType}/${config.name}`;
       return operation;
     }
@@ -341,14 +355,14 @@ export function backgroundAction<
           }),
         },
       },
-      async (input) => {
+      async (input, options) => {
         if (!config.cancel) {
           throw new GenkitError({
             status: 'UNAVAILABLE',
             message: `${config.name} does not support cancellation.`,
           });
         }
-        const operation = await config.cancel(input);
+        const operation = await config.cancel(input, options);
         operation.action = `/${config.actionType}/${config.name}`;
         return operation;
       }

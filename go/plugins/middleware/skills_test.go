@@ -63,7 +63,7 @@ func setupSkillsDir(t *testing.T) string {
 func captureModel(t *testing.T, r *registry.Registry, name string) (ai.Model, *[]*ai.Message) {
 	t.Helper()
 	var captured []*ai.Message
-	m := ai.DefineModel(r, name, &ai.ModelOptions{
+	m := registerTestModel(r, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
 	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		captured = req.Messages
@@ -77,7 +77,7 @@ func captureModel(t *testing.T, r *registry.Registry, name string) (ai.Model, *[
 // messages.
 func toolCallingModel(t *testing.T, r *registry.Registry, name, toolName string, input map[string]any) ai.Model {
 	t.Helper()
-	return ai.DefineModel(r, name, &ai.ModelOptions{
+	return registerTestModel(r, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
 	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		for _, msg := range req.Messages {
@@ -106,7 +106,7 @@ func TestSkillsInjectsSystemPrompt(t *testing.T) {
 	m, captured := captureModel(t, r, "test/capture")
 
 	s := &Skills{SkillPaths: []string{skillsDir}}
-	ai.DefineMiddleware(r, "skills", s)
+	registerTestMiddleware(r, "skills", s)
 
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(s)); err != nil {
 		t.Fatal(err)
@@ -139,7 +139,7 @@ func TestSkillsRegistersUseSkillTool(t *testing.T) {
 	m := toolCallingModel(t, r, "test/toolcaller", useSkillToolName, map[string]any{"skillName": "python"})
 
 	s := &Skills{SkillPaths: []string{skillsDir}}
-	ai.DefineMiddleware(r, "skills", s)
+	registerTestMiddleware(r, "skills", s)
 
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("use python"), ai.WithUse(s))
 	if err != nil {
@@ -172,7 +172,7 @@ func TestSkillsUnknownSkillReturnsError(t *testing.T) {
 	m := toolCallingModel(t, r, "test/unknown", useSkillToolName, map[string]any{"skillName": "nonexistent"})
 
 	s := &Skills{SkillPaths: []string{skillsDir}}
-	ai.DefineMiddleware(r, "skills", s)
+	registerTestMiddleware(r, "skills", s)
 
 	_, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("use skill"), ai.WithUse(s))
 	if err == nil {
@@ -190,7 +190,7 @@ func TestSkillsPromptInjectionIsIdempotent(t *testing.T) {
 	m, captured := captureModel(t, r, "test/idempotent")
 
 	s := &Skills{SkillPaths: []string{skillsDir}}
-	ai.DefineMiddleware(r, "skills", s)
+	registerTestMiddleware(r, "skills", s)
 
 	// First call produces a system message with a single <skills> block.
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(s))
@@ -238,7 +238,7 @@ func TestSkillsNoopWhenNoSkillsFound(t *testing.T) {
 	// Point at an empty directory — no skills, so the middleware should
 	// leave the request untouched.
 	s := &Skills{SkillPaths: []string{t.TempDir()}}
-	ai.DefineMiddleware(r, "skills", s)
+	registerTestMiddleware(r, "skills", s)
 
 	if _, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(s)); err != nil {
 		t.Fatal(err)

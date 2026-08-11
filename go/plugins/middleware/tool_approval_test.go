@@ -18,28 +18,70 @@ package middleware
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func defineToolModel(t *testing.T, r *registry.Registry, name string, fn ai.ModelFunc) ai.Model {
 	t.Helper()
-	return ai.DefineModel(r, name, &ai.ModelOptions{
+	return registerTestModel(r, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
 	}, fn)
 }
 
 func defineTool(t *testing.T, r api.Registry, name string) ai.Tool {
 	t.Helper()
-	return ai.DefineTool(r, name, "test tool",
+	return registerTestTool(r, name, "test tool",
 		func(ctx *ai.ToolContext, input struct {
 			V string `json:"v"`
 		}) (string, error) {
 			return "result:" + input.V, nil
 		})
+}
+
+// spanCollector is a minimal sdktrace.SpanExporter that records finished
+// spans so a test can assert on them.
+type spanCollector struct {
+	mu    sync.Mutex
+	spans []sdktrace.ReadOnlySpan
+}
+
+func (c *spanCollector) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.spans = append(c.spans, spans...)
+	return nil
+}
+
+func (c *spanCollector) Shutdown(context.Context) error { return nil }
+
+// byName returns every recorded span with the given name.
+func (c *spanCollector) byName(name string) []sdktrace.ReadOnlySpan {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []sdktrace.ReadOnlySpan
+	for _, s := range c.spans {
+		if s.Name() == name {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// spanAttr returns the string value of the named span attribute, if present.
+func spanAttr(span sdktrace.ReadOnlySpan, key string) (string, bool) {
+	for _, kv := range span.Attributes() {
+		if string(kv.Key) == key {
+			return kv.Value.AsString(), true
+		}
+	}
+	return "", false
 }
 
 // twoToolModelHandler returns a model handler that requests two tools on the first call,
@@ -77,7 +119,7 @@ func TestToolApprovalAllowsApprovedTools(t *testing.T) {
 	alsoAllowed := defineTool(t, r, "alsoAllowed")
 
 	ta := &ToolApproval{AllowedTools: []string{"allowed", "alsoAllowed"}}
-	ai.DefineMiddleware(r, "toolApproval", ta)
+	registerTestMiddleware(r, "toolApproval", ta)
 
 	resp, err := ai.Generate(ctx, r,
 		ai.WithModel(m),
@@ -104,7 +146,7 @@ func TestToolApprovalInterruptsUnapprovedTools(t *testing.T) {
 	dangerous := defineTool(t, r, "dangerous")
 
 	ta := &ToolApproval{AllowedTools: []string{"safe"}}
-	ai.DefineMiddleware(r, "toolApproval", ta)
+	registerTestMiddleware(r, "toolApproval", ta)
 
 	resp, err := ai.Generate(ctx, r,
 		ai.WithModel(m),
@@ -138,6 +180,47 @@ func TestToolApprovalInterruptsUnapprovedTools(t *testing.T) {
 	}
 }
 
+// TestToolApprovalInterruptIsTracedOnce verifies the interrupt lands in the
+// trace as exactly one span named for the blocked tool. ToolApproval emits no
+// span of its own: the generate engine attributes a short-circuited tool call
+// to the tool, so hand-rolling one here would double-count it.
+func TestToolApprovalInterruptIsTracedOnce(t *testing.T) {
+	r := newTestRegistry(t)
+
+	m := defineToolModel(t, r, "test/twotools", twoToolModelHandler("safe", "dangerous"))
+	safe := defineTool(t, r, "safe")
+	dangerous := defineTool(t, r, "dangerous")
+
+	collector := &spanCollector{}
+	sp := sdktrace.NewSimpleSpanProcessor(collector)
+	tp := tracing.TracerProvider()
+	tp.RegisterSpanProcessor(sp)
+	t.Cleanup(func() { tp.UnregisterSpanProcessor(sp) })
+
+	ta := &ToolApproval{AllowedTools: []string{"safe"}}
+	if _, err := ai.Generate(ctx, r,
+		ai.WithModel(m),
+		ai.WithPrompt("go"),
+		ai.WithTools(safe, dangerous),
+		ai.WithUse(ta),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := collector.byName("dangerous")
+	if len(spans) != 1 {
+		t.Fatalf("got %d spans named %q, want exactly 1", len(spans), "dangerous")
+	}
+	const subtypeKey = "genkit:metadata:subtype"
+	subtype, ok := spanAttr(spans[0], subtypeKey)
+	if !ok {
+		t.Fatalf("span %q: missing attribute %q", "dangerous", subtypeKey)
+	}
+	if subtype != "tool" {
+		t.Errorf("span %q: %s = %q, want %q", "dangerous", subtypeKey, subtype, "tool")
+	}
+}
+
 func TestToolApprovalEmptyListInterruptsAll(t *testing.T) {
 	r := newTestRegistry(t)
 
@@ -164,7 +247,7 @@ func TestToolApprovalEmptyListInterruptsAll(t *testing.T) {
 	myTool := defineTool(t, r, "myTool")
 
 	ta := &ToolApproval{}
-	ai.DefineMiddleware(r, "toolApproval", ta)
+	registerTestMiddleware(r, "toolApproval", ta)
 
 	resp, err := ai.Generate(ctx, r,
 		ai.WithModel(m),
@@ -204,7 +287,7 @@ func TestToolApprovalResumedCallRuns(t *testing.T) {
 	needsApproval := defineTool(t, r, "needsApproval")
 
 	ta := &ToolApproval{} // deny all
-	ai.DefineMiddleware(r, "toolApproval", ta)
+	registerTestMiddleware(r, "toolApproval", ta)
 
 	resp, err := ai.Generate(ctx, r,
 		ai.WithModel(m),
@@ -268,7 +351,7 @@ func TestToolApprovalResumedWithoutApprovalInterrupts(t *testing.T) {
 	needsApproval := defineTool(t, r, "needsApproval")
 
 	ta := &ToolApproval{}
-	ai.DefineMiddleware(r, "toolApproval", ta)
+	registerTestMiddleware(r, "toolApproval", ta)
 
 	resp, err := ai.Generate(ctx, r,
 		ai.WithModel(m),

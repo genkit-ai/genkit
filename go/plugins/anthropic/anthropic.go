@@ -133,8 +133,8 @@ func (a *Anthropic) ListActions(ctx context.Context) []api.ActionDesc {
 		// When listing discovered models, the Genkit action name and the
 		// Anthropic API model ID are identical.
 		model := newModel(a.aclient, name, name, modelOptions(name))
-		if actionDef, ok := model.(api.Action); ok {
-			actions = append(actions, actionDef.Desc())
+		if action, ok := model.(api.Action); ok {
+			actions = append(actions, action.Desc())
 		}
 	}
 

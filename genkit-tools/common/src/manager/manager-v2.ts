@@ -74,6 +74,24 @@ interface ConnectedRuntime {
   info: RuntimeInfo;
 }
 
+/**
+ * Normalizes a raw `listActions` result before schema validation. Some runtimes
+ * (notably Go) serialize actions with an explicit `metadata: null`. The action
+ * metadata schema treats metadata as optional (undefined), so we drop null
+ * metadata to keep the exported schema, and the generated SDK types, unchanged.
+ */
+function normalizeListActionsResult(result: any): any {
+  if (!result || typeof result !== 'object' || !result.actions) {
+    return result;
+  }
+  for (const action of Object.values<any>(result.actions)) {
+    if (action && action.metadata === null) {
+      delete action.metadata;
+    }
+  }
+  return result;
+}
+
 export class RuntimeManagerV2 extends BaseRuntimeManager {
   private _port?: number;
   private wss?: WebSocketServer;
@@ -248,15 +266,25 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
         error.data = massagedData;
         pending.reject(error);
       } else {
-        let result = response.result;
-        if (pending.method === 'listActions') {
-          result = ReflectionListActionsResponseSchema.parse(result);
-        } else if (pending.method === 'listValues') {
-          result = ReflectionListValuesResponseSchema.parse(result);
-        } else if (pending.method === 'cancelAction') {
-          result = ReflectionCancelActionResponseSchema.parse(result);
+        try {
+          let result = response.result;
+          if (pending.method === 'listActions') {
+            result = ReflectionListActionsResponseSchema.parse(
+              normalizeListActionsResult(result)
+            );
+          } else if (pending.method === 'listValues') {
+            result = ReflectionListValuesResponseSchema.parse(result);
+          } else if (pending.method === 'cancelAction') {
+            result = ReflectionCancelActionResponseSchema.parse(result);
+          }
+          pending.resolve(result);
+        } catch (err) {
+          // Reject this specific request instead of letting the exception
+          // bubble up to the message handler, which would log a generic
+          // "Failed to parse WebSocket message" and leave the promise pending
+          // until it times out.
+          pending.reject(err);
         }
-        pending.resolve(result);
       }
       this.pendingRequests.delete(response.id);
     } else {

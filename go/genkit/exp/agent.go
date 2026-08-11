@@ -35,8 +35,13 @@ import (
 // persistence automatically.
 //
 // The prompt is defined inline via [aix.InlinePrompt] and registered under the
-// agent's name. To back the agent with a prompt already in the registry (e.g.
-// one from a .prompt file), use [DefinePromptAgent] instead.
+// agent's name; it accepts every option [genkit.DefinePrompt] does. To back the
+// agent with a prompt already in the registry (e.g. one from a .prompt file),
+// use [DefinePromptAgent] instead.
+//
+// Each turn hands the session's conversation to the prompt, so a prompt that
+// declares messages of its own places it (see [aix.InlinePrompt]); one that
+// declares none has it placed between the system message and the user prompt.
 //
 // The State type parameter is inferred from the typed agent options
 // (e.g. [aix.WithSessionStore], [aix.WithStateTransform]); pass an explicit
@@ -90,6 +95,13 @@ func DefineAgent[State any](
 // rather than a positional argument, so it composes with the other agent
 // options in one variadic. For full control over the per-turn loop, use
 // [DefineCustomAgent].
+//
+// Each turn hands the session's conversation to the prompt, so a prompt that
+// declares messages of its own places it with {{history}} or
+// [ai.HistoryFromContext] (see [aix.InlinePrompt] for the rule); one that
+// declares none has it placed between the system message and the user prompt.
+// A .prompt file's body is a multi-turn template, so {{history}} works in it
+// directly.
 //
 // The State type parameter is inferred from the typed agent options; pass an
 // explicit [State] only when no typed option provides it.
