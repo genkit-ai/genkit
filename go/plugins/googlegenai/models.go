@@ -77,23 +77,26 @@ var (
 	veoConfigSchema    = configToMap(genai.GenerateVideosConfig{})
 )
 
-// Default options for unknown models of each type.
+// Default options for unknown models of each type. Every catalog entry is
+// stable, but these are a guess at the capabilities of an ID the plugin does
+// not know, so they stay unstable: the stage is the only thing telling a
+// curated model apart from a typo the plugin served anyway.
 var (
 	defaultGeminiOpts = ai.ModelOptions{
 		Supports:     &Multimodal,
-		Stage:        ai.ModelStageStable,
+		Stage:        ai.ModelStageUnstable,
 		ConfigSchema: geminiConfigSchema,
 	}
 
 	defaultImagenOpts = ai.ModelOptions{
 		Supports:     &Media,
-		Stage:        ai.ModelStageStable,
+		Stage:        ai.ModelStageUnstable,
 		ConfigSchema: imagenConfigSchema,
 	}
 
 	defaultVeoOpts = ai.ModelOptions{
 		Supports:     &VeoSupports,
-		Stage:        ai.ModelStageStable,
+		Stage:        ai.ModelStageUnstable,
 		ConfigSchema: veoConfigSchema,
 	}
 

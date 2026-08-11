@@ -703,3 +703,25 @@ func TestWithEvaluatorName(t *testing.T) {
 		}
 	})
 }
+
+type withInputTypeQuery struct {
+	City string `json:"city"`
+}
+
+// TestWithInputTypeAppliesToTools pins that WithInputType reaches the tool
+// constructors, not just prompts. The tool constructors have accepted it since
+// before go/v1.9.0, so narrowing it to an option prompts alone can take would
+// break existing callers at compile time with no deprecation.
+func TestWithInputTypeAppliesToTools(t *testing.T) {
+	var _ ToolOption = WithInputType(withInputTypeQuery{})
+	var _ PromptOption = WithInputType(withInputTypeQuery{})
+
+	tl := NewTool("withInputTypeTool", "takes a typed input",
+		func(ctx *ToolContext, in any) (string, error) { return "ok", nil },
+		WithInputType(withInputTypeQuery{}))
+
+	props, ok := tl.Definition().InputSchema["properties"].(map[string]any)
+	if !ok || props["city"] == nil {
+		t.Errorf("InputSchema = %v, want the schema derived from withInputTypeQuery", tl.Definition().InputSchema)
+	}
+}

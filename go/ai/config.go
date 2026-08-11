@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/internal/base"
@@ -81,8 +82,26 @@ func normalizeConfig[Config any](model string, versions []string) ModelMiddlewar
 // wire name ("options" for embedders, retrievers, and evaluators; models go
 // through [modelConfigSchemas]).
 func actionConfigSchemas[Config any](override map[string]any, reqZero any, key string) (configSchema, inputSchema map[string]any) {
-	configSchema = effectiveConfigSchema[Config](override)
-	return configSchema, requestInputSchema(reqZero, key, nullableConfigSchema(configSchema))
+	configSchema, enforced := configSchemas[Config](override)
+	return configSchema, requestInputSchema(reqZero, key, nullableConfigSchema(enforced))
+}
+
+// configSchemas returns the config schema the action advertises and the one it
+// enforces on the wire. They are the same schema for an explicit override,
+// which is the caller's contract. They differ for an inferred one: enforcement
+// additionally tolerates the nulls a partial config marshals to, while the
+// advertised copy stays free of that noise for the dev UI.
+func configSchemas[Config any](override map[string]any) (advertised, enforced map[string]any) {
+	if override != nil {
+		return override, override
+	}
+	// Two independent builds rather than a deep copy: SchemaMapFor hands out a
+	// fresh map per call, and this only runs at define time for actions whose
+	// plugin declares no schema.
+	advertised = effectiveConfigSchema[Config](nil)
+	enforced = effectiveConfigSchema[Config](nil)
+	tolerateNulls(enforced)
+	return advertised, enforced
 }
 
 // modelConfigSchemas is [actionConfigSchemas] for the model config slot. It
@@ -91,9 +110,17 @@ func actionConfigSchemas[Config any](override map[string]any, reqZero any, key s
 // the raw value, and conversion drops it, so the schema must not reject it.
 // The property is added to the advertised schema as well, which is honest:
 // the key is accepted on the wire.
-func modelConfigSchemas[Config any](override map[string]any) (configSchema, inputSchema map[string]any) {
-	configSchema = withVersionProperty(effectiveConfigSchema[Config](override))
-	return configSchema, requestInputSchema(ModelRequest{}, "config", nullableConfigSchema(configSchema))
+//
+// versions is the model's supported version list. Only a model that declares
+// one gets the property: validateVersion rejects every value when the list is
+// empty, so advertising the key there offers a field that can only error.
+func modelConfigSchemas[Config any](override map[string]any, versions []string) (configSchema, inputSchema map[string]any) {
+	configSchema, enforced := configSchemas[Config](override)
+	if len(versions) > 0 {
+		configSchema = withVersionProperty(configSchema)
+		enforced = withVersionProperty(enforced)
+	}
+	return configSchema, requestInputSchema(ModelRequest{}, "config", nullableConfigSchema(enforced))
 }
 
 // effectiveConfigSchema returns the explicit override when set, otherwise the
@@ -132,6 +159,67 @@ func stripRequired(schema map[string]any) {
 	if extra, ok := schema["additionalProperties"].(map[string]any); ok {
 		stripRequired(extra)
 	}
+}
+
+// tolerateNulls widens every property of an inferred config schema, at every
+// depth, to also accept an explicit JSON null.
+//
+// A pointer, slice, or map field that lacks omitempty marshals to null when it
+// is unset, so enforcing the field's declared type would reject a partially
+// filled value of the config type itself: sending Config{Temperature: 0.5}
+// fails on `config.list: Invalid type. Expected: array, given: null`. That is
+// the same "a config is partial by nature" reasoning that strips "required",
+// applied to the fields that are present but empty.
+//
+// Every property is widened, not just the nilable ones, because the inferred
+// schema cannot tell a *string from a string. Widening costs nothing: null
+// decodes to the zero value for every Go kind, which is what omitting the
+// field would have produced. The precise alternative, reflecting over Config
+// to find the nilable fields, would have to walk config types that are known
+// to be recursive (see the googlegenai plugin's IgnoredTypes guard).
+func tolerateNulls(schema map[string]any) {
+	if schema == nil {
+		return
+	}
+	if props, ok := schema["properties"].(map[string]any); ok {
+		for name, sub := range props {
+			m, ok := sub.(map[string]any)
+			if !ok {
+				continue
+			}
+			tolerateNulls(m)
+			props[name] = allowNull(m)
+		}
+	}
+	if items, ok := schema["items"].(map[string]any); ok {
+		tolerateNulls(items)
+		schema["items"] = allowNull(items)
+	}
+	if extra, ok := schema["additionalProperties"].(map[string]any); ok {
+		tolerateNulls(extra)
+		schema["additionalProperties"] = allowNull(extra)
+	}
+}
+
+// allowNull returns schema widened to accept null, adding to its "type" when
+// it has one and wrapping it in an anyOf otherwise.
+func allowNull(schema map[string]any) map[string]any {
+	switch t := schema["type"].(type) {
+	case string:
+		if t != "null" {
+			schema["type"] = []any{t, "null"}
+		}
+		return schema
+	case []any:
+		if !slices.Contains(t, any("null")) {
+			schema["type"] = append(t, "null")
+		}
+		return schema
+	}
+	if len(schema) == 0 {
+		return schema // Already unconstrained, so null is in.
+	}
+	return nullableConfigSchema(schema)
 }
 
 // withVersionProperty returns schema with a string "version" property added

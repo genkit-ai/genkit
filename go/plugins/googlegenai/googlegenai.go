@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 
 	"cloud.google.com/go/auth/credentials"
@@ -28,6 +29,26 @@ const (
 	googleAILabelPrefix = "Google AI"
 	vertexAILabelPrefix = "Vertex AI"
 )
+
+// trimProvider drops a leading provider prefix from a model or embedder ID.
+// Callers reach for the spelling ai.WithModelName takes
+// ("googleai/gemini-flash-latest"), but the prefix is applied downstream by
+// concatenation, so without the trim it would double up and name an action
+// that resolves nowhere. The bare ID is also what the genai API expects.
+func trimProvider(provider, id string) string {
+	return strings.TrimPrefix(id, provider+"/")
+}
+
+// rejectBackgroundModel refuses IDs whose modality is served by a background
+// action. They deserialize a different config type and speak a different API
+// method, so building one as a plain model yields an action that advertises
+// video fields and can only fail at the API.
+func rejectBackgroundModel(provider, id string) error {
+	if ClassifyModel(id).ActionType() == api.ActionTypeBackgroundModel {
+		return fmt.Errorf("%s: %q is a background model; generate with it directly instead of defining it as a model", provider, id)
+	}
+	return nil
+}
 
 // GoogleAI is a Genkit plugin for interacting with the Google AI service.
 type GoogleAI struct {
@@ -232,6 +253,10 @@ func (ga *GoogleAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOptio
 	if !ga.initted {
 		return nil, errors.New("GoogleAI plugin not initialized")
 	}
+	id = trimProvider(googleAIProvider, id)
+	if err := rejectBackgroundModel(googleAIProvider, id); err != nil {
+		return nil, err
+	}
 	if opts != nil {
 		return newModel(ga.gclient, id, *opts), nil
 	}
@@ -265,6 +290,10 @@ func (v *VertexAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOption
 	if !v.initted {
 		return nil, errors.New("VertexAI plugin not initialized")
 	}
+	id = trimProvider(vertexAIProvider, id)
+	if err := rejectBackgroundModel(vertexAIProvider, id); err != nil {
+		return nil, err
+	}
 	if opts != nil {
 		return newModel(v.gclient, id, *opts), nil
 	}
@@ -295,6 +324,7 @@ func (ga *GoogleAI) DefineEmbedder(g *genkit.Genkit, id string, embedOpts *ai.Em
 	if !ga.initted {
 		return nil, errors.New("GoogleAI plugin not initialized")
 	}
+	id = trimProvider(googleAIProvider, id)
 	if embedOpts == nil {
 		opts := ga.catalog().embedderOptions(id)
 		embedOpts = &opts
@@ -312,6 +342,7 @@ func (v *VertexAI) DefineEmbedder(g *genkit.Genkit, id string, embedOpts *ai.Emb
 	if !v.initted {
 		return nil, errors.New("VertexAI plugin not initialized")
 	}
+	id = trimProvider(vertexAIProvider, id)
 	if embedOpts == nil {
 		opts := v.catalog().embedderOptions(id)
 		embedOpts = &opts
@@ -325,7 +356,7 @@ func (v *VertexAI) DefineEmbedder(g *genkit.Genkit, id string, embedOpts *ai.Emb
 // would register the very action the caller is checking for and answer true
 // for any ID.
 func isDefined(g *genkit.Genkit, atype api.ActionType, provider, id string) bool {
-	return genkit.LookupAction(g, fmt.Sprintf("/%s/%s", atype, api.NewName(provider, id))) != nil
+	return genkit.LookupAction(g, api.NewKey(atype, provider, trimProvider(provider, id))) != nil
 }
 
 // IsDefinedEmbedder reports whether the [Embedder] is defined by this plugin.

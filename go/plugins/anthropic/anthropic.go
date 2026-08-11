@@ -19,7 +19,6 @@ package anthropic
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"regexp"
@@ -214,7 +213,7 @@ func Model(g *genkit.Genkit, id string) ai.Model {
 // to register and which no ordering can defeat, leaving this a question about
 // registry state that applications do not need to ask.
 func IsDefinedModel(g *genkit.Genkit, id string) bool {
-	return genkit.LookupAction(g, fmt.Sprintf("/%s/%s", api.ActionTypeModel, modelName(id))) != nil
+	return genkit.LookupAction(g, api.KeyFromName(api.ActionTypeModel, modelName(id))) != nil
 }
 
 // modelName builds the action name for a Claude model ID, taking the ID either

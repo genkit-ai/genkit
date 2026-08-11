@@ -6,7 +6,6 @@ package googlegenai
 import (
 	"context"
 	"errors"
-	"maps"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,11 +17,9 @@ import (
 )
 
 // assertAdvertises checks that got, a model's advertised customOptions
-// metadata, is the curated config schema plus the framework-added string
-// "version" property (a version pinned through the config must stay
-// admissible on the wire). Asserting on got's shape rather than rebuilding
-// the framework's decoration keeps the plugin-owned part of the contract
-// pinned without mimicking framework internals.
+// metadata, is exactly the curated config schema. Asserting on got's shape
+// rather than rebuilding the framework's decoration keeps the plugin-owned
+// part of the contract pinned without mimicking framework internals.
 func assertAdvertises(t *testing.T, name string, got any, curated map[string]any) {
 	t.Helper()
 	schema, ok := got.(map[string]any)
@@ -33,15 +30,15 @@ func assertAdvertises(t *testing.T, name string, got any, curated map[string]any
 	if !ok {
 		t.Fatalf("%s customOptions has no properties map", name)
 	}
-	if !reflect.DeepEqual(props["version"], map[string]any{"type": "string"}) {
-		t.Errorf("%s customOptions properties.version = %v, want the framework-added string schema", name, props["version"])
+	// No googlegenai model declares Versions, and the version middleware
+	// rejects every value for a model that declares none, so the framework
+	// must not add the property here: it would be a dev UI field that only
+	// ever errors.
+	if _, ok := props["version"]; ok {
+		t.Errorf("%s customOptions advertises a version property, but the model declares no versions", name)
 	}
-	schema = maps.Clone(schema)
-	props = maps.Clone(props)
-	delete(props, "version")
-	schema["properties"] = props
 	if !reflect.DeepEqual(schema, curated) {
-		t.Errorf("%s customOptions is not the curated schema plus version", name)
+		t.Errorf("%s customOptions is not the curated schema", name)
 	}
 }
 

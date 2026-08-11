@@ -107,7 +107,7 @@ func NewModel(client anthropic.Client, provider, name, apiModel string, opts ai.
 		opts.ConfigSchema = defaultConfigSchema
 	}
 	if opts.Label == "" {
-		opts.Label = fmt.Sprintf("%s - %s", providerLabel(provider), name)
+		opts.Label = fmt.Sprintf("%s - %s", ProviderLabel(provider), name)
 	}
 	if apiModel == "" {
 		apiModel = name
@@ -123,9 +123,11 @@ func NewModel(client anthropic.Client, provider, name, apiModel string, opts ai.
 	})
 }
 
-// providerLabel is the display name Claude models are labeled with when the
-// caller supplies no label of its own.
-func providerLabel(provider string) string {
+// ProviderLabel is the display name Claude models are labeled with when the
+// caller supplies no label of its own. Callers that curate their own labels
+// use it to prefix them, so every Claude model names its provider the same way
+// whichever plugin serves it.
+func ProviderLabel(provider string) string {
 	if provider == "vertexai" {
 		return "Vertex AI"
 	}
@@ -294,12 +296,15 @@ func Generate(
 				return r, nil
 			}
 		}
-		if stream.Err() != nil {
-			return nil, stream.Err()
+		if err := stream.Err(); err != nil {
+			return nil, err
 		}
+		// The loop only returns from the message_stop case. Falling out of it
+		// means the stream ended early without one, and the SDK reports no
+		// error for a body that simply stops, so say so rather than returning
+		// a nil response the caller would dereference.
+		return nil, fmt.Errorf("anthropic stream ended without a message_stop event")
 	}
-
-	return nil, nil
 }
 
 func toAnthropicRole(role ai.Role) (anthropic.MessageParamRole, error) {

@@ -1499,4 +1499,41 @@ func TestCallerConfigNotMutated(t *testing.T) {
 			t.Error("the converted tools were appended into the caller's backing array")
 		}
 	})
+
+	// A config hoisted into a package var or a ModelRef is shared by every
+	// request, so writing the tool-calling mode through it would leak one
+	// request's allowed function names into the next and race between two in
+	// flight at once.
+	t.Run("tool choice", func(t *testing.T) {
+		caller := &genai.GenerateContentConfig{
+			ToolConfig: &genai.ToolConfig{
+				RetrievalConfig: &genai.RetrievalConfig{LanguageCode: "en-US"},
+			},
+		}
+		req := &ai.ModelRequest{
+			Config:     caller,
+			Messages:   []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hi"))},
+			ToolChoice: ai.ToolChoiceRequired,
+			Tools: []*ai.ToolDefinition{{
+				Name:        "myTool",
+				Description: "this is a dummy tool",
+				InputSchema: map[string]any{"type": "object"},
+			}},
+		}
+		got, err := toGeminiRequestFromRaw(req, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if caller.ToolConfig.FunctionCallingConfig != nil {
+			t.Errorf("the request's tool choice was written into the caller's ToolConfig: %+v",
+				caller.ToolConfig.FunctionCallingConfig)
+		}
+		// The clone still has to carry the caller's own settings forward.
+		if got.ToolConfig == nil || got.ToolConfig.FunctionCallingConfig == nil {
+			t.Fatalf("request ToolConfig lost the tool choice, got %+v", got.ToolConfig)
+		}
+		if got.ToolConfig.RetrievalConfig != caller.ToolConfig.RetrievalConfig {
+			t.Error("cloning the ToolConfig dropped the caller's RetrievalConfig")
+		}
+	})
 }

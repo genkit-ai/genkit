@@ -139,13 +139,18 @@ func toGeminiToolChoice(toolConfig *genai.ToolConfig, toolChoice ai.ToolChoice, 
 		}
 	}
 
-	// If a config already exists, just add as a parameter
+	// If a config already exists, add the calling mode to a clone of it. The
+	// caller's ToolConfig rides the request's shallow config copy, so amending
+	// it in place would write this request's mode and allowed names into a
+	// config hoisted into a package var or a ModelRef, and race with any
+	// concurrent request sharing it.
 	if toolConfig != nil {
-		toolConfig.FunctionCallingConfig = &genai.FunctionCallingConfig{
+		clone := *toolConfig
+		clone.FunctionCallingConfig = &genai.FunctionCallingConfig{
 			Mode:                 mode,
 			AllowedFunctionNames: toolNames,
 		}
-		return toolConfig, nil
+		return &clone, nil
 	}
 
 	return &genai.ToolConfig{

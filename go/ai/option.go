@@ -427,11 +427,10 @@ type InputOption interface {
 	applyInput(*inputOptions)
 }
 
-// InputSchemaOption is an [InputOption] that provides an explicit input
-// schema, inline or by name. Unlike the schema-inference options, it also
-// applies to the tool constructors, where an explicit schema stands in for an
-// In type parameter of 'any'; a tool whose input shape a Go type can express
-// should use the type parameter instead.
+// InputSchemaOption is an [InputOption] that also applies to the tool
+// constructors, where the input schema it supplies stands in for an In type
+// parameter of 'any'. A tool whose input shape a Go type can express should
+// use the type parameter instead.
 type InputSchemaOption interface {
 	InputOption
 	ToolOption
@@ -455,7 +454,11 @@ func (o *inputOptions) applyTool(opts *toolOptions)     { o.applyInput(&opts.inp
 // WithInputType uses the type provided to derive the input schema.
 // The inputted value may serve as the default input if no input is given at generation time depending on the action.
 // Only supports structs and map[string]any.
-func WithInputType(input any) InputOption {
+//
+// It applies to the tool constructors too, where the derived schema stands in
+// for an In type parameter of 'any'. Prefer the type parameter there: it is
+// the same schema plus a typed function signature.
+func WithInputType(input any) InputSchemaOption {
 	// Converting rather than marshaling by hand gives the default input the
 	// same Go types it would have arriving over the wire.
 	defaultInput, err := base.ConvertToExact[map[string]any](input)

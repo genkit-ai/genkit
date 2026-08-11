@@ -214,7 +214,7 @@ func NewBackgroundModelAction[Config any](
 		opts.Supports = &ModelSupports{}
 	}
 
-	configSchema, inputSchema := modelConfigSchemas[Config](opts.ConfigSchema)
+	configSchema, inputSchema := modelConfigSchemas[Config](opts.ConfigSchema, opts.Versions)
 
 	// The top-level Metadata wins over the embedded ModelOptions.Metadata on
 	// key conflicts.

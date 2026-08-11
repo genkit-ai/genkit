@@ -228,7 +228,10 @@ func generate(
 
 	}
 
-	if len(genaiResp.Candidates) == 0 {
+	// A stream that ends without yielding a chunk leaves genaiResp nil. The
+	// SDK only logs a scanner failure rather than surfacing it, so an empty or
+	// truncated 2xx body reaches here with no error to report.
+	if genaiResp == nil || len(genaiResp.Candidates) == 0 {
 		return nil, fmt.Errorf("no valid candidates found")
 	}
 

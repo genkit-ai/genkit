@@ -72,6 +72,10 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 	// Models must be defined manually
 	var actions []api.Action
 	for name, opts := range AnthropicModels {
+		// The catalog stores bare display names ("Claude Opus 4.6"). Prefix
+		// the provider so these sit alongside the other Vertex AI models in a
+		// picker instead of looking like they came from somewhere else.
+		opts.Label = fmt.Sprintf("%s - %s", ant.ProviderLabel(provider), opts.Label)
 		actions = append(actions, ant.NewModel(a.client, provider, name, name, opts))
 	}
 
@@ -84,7 +88,11 @@ func AnthropicModel(g *genkit.Genkit, id string) ai.Model {
 	return genkit.LookupModel(g, api.NewName(provider, id))
 }
 
-// DefineModel adds the model to the registry
+// DefineModel builds a Model Garden Claude model and returns it. It does not
+// register the model: generation resolves a model from its name, so passing
+// the result to ai.WithModel contributes only that name and serves the request
+// with a model resolved from it instead. Pass the result to
+// [genkit.RegisterAction] to make these capabilities the ones used.
 func (a *Anthropic) DefineModel(name string, opts *ai.ModelOptions) (ai.Model, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

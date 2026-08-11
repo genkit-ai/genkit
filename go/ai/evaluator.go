@@ -285,6 +285,11 @@ func NewEvaluatorAction[Config any](
 			if err != nil {
 				return nil, err
 			}
+			// The callback's Options slot is type-erased like the request's,
+			// so it takes the same guard: boxing a typed nil would make it
+			// compare non-nil while dereferences still panic, and would split
+			// this path's semantics from NewBatchEvaluatorAction's.
+			cfgAny := req.Options
 
 			var results []EvaluationResult
 			for _, datapoint := range req.Dataset {
@@ -303,7 +308,7 @@ func NewEvaluatorAction[Config any](
 
 						callbackRequest := EvaluatorCallbackRequest{
 							Input:   *input,
-							Options: cfg,
+							Options: cfgAny,
 						}
 
 						result, err := fn(ctx, &callbackRequest, cfg)
@@ -350,6 +355,12 @@ func NewEvaluatorAction[Config any](
 // Config is the evaluator's typed configuration; it is usually inferred from
 // fn's signature. See [NewEvaluatorAction] for how the request's options
 // are deserialized.
+//
+// [EvaluatorOptions.ConfigSchema] is enforced: it becomes the options slot of
+// the action's input schema and every request is validated against it, so a
+// schema narrower than what callers actually send now fails at the action
+// boundary. Batch evaluators did not validate options before; leave
+// ConfigSchema unset to accept anything.
 func NewBatchEvaluatorAction[Config any](
 	name string,
 	opts *EvaluatorOptions,

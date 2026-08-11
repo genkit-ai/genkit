@@ -240,7 +240,7 @@ func NewModelAction[Config any](
 		opts.Supports = &ModelSupports{}
 	}
 
-	configSchema, inputSchema := modelConfigSchemas[Config](opts.ConfigSchema)
+	configSchema, inputSchema := modelConfigSchemas[Config](opts.ConfigSchema, opts.Versions)
 	metadata := modelActionMetadata(api.ActionTypeModel, opts, configSchema, opts.Metadata)
 
 	typedFn := func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {

@@ -255,3 +255,50 @@ func TestIsDefinedEmbedderDoesNotResolve(t *testing.T) {
 		t.Fatalf("IsDefinedEmbedder(%q) = true for a resolvable but unregistered embedder", id)
 	}
 }
+
+// TestDefineModelTrimsProviderPrefix pins that the ID spelling
+// ai.WithModelName takes is accepted. The prefix is applied downstream by
+// concatenation, so an untrimmed ID would name "googleai/googleai/x", an
+// action no lookup reaches, while isDefined agreed with the broken key.
+func TestDefineModelTrimsProviderPrefix(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "test-key")
+
+	ga := &GoogleAI{}
+	g := genkit.Init(context.Background(), genkit.WithPlugins(ga))
+
+	opts := &ai.ModelOptions{Label: "Test model", Supports: &ai.ModelSupports{Multiturn: true}}
+	m, err := ga.DefineModel(g, "googleai/gemini-prefixed-test", opts)
+	if err != nil {
+		t.Fatalf("DefineModel() error = %v", err)
+	}
+	if got := m.Name(); got != "googleai/gemini-prefixed-test" {
+		t.Errorf("model name = %q, want the prefix applied once", got)
+	}
+
+	e, err := ga.DefineEmbedder(g, "googleai/embedding-prefixed-test", &ai.EmbedderOptions{Label: "Test embedder"})
+	if err != nil {
+		t.Fatalf("DefineEmbedder() error = %v", err)
+	}
+	if got := e.Name(); got != "googleai/embedding-prefixed-test" {
+		t.Errorf("embedder name = %q, want the prefix applied once", got)
+	}
+}
+
+// TestDefineModelRejectsBackgroundModel pins that a Veo ID cannot be built as
+// a plain model. Its modality speaks a different API method and deserializes a
+// different config type, so the result would advertise video fields on an
+// action that can only fail at the API.
+func TestDefineModelRejectsBackgroundModel(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "test-key")
+
+	ga := &GoogleAI{}
+	g := genkit.Init(context.Background(), genkit.WithPlugins(ga))
+
+	if _, err := ga.DefineModel(g, veo31GeneratePreview, nil); err == nil {
+		t.Errorf("DefineModel(%q) = nil error, want it refused as a background model", veo31GeneratePreview)
+	}
+	opts := &ai.ModelOptions{Label: "Test model", Supports: &ai.ModelSupports{Multiturn: true}}
+	if _, err := ga.DefineModel(g, veo31GeneratePreview, opts); err == nil {
+		t.Errorf("DefineModel(%q, opts) = nil error, want the modality checked before opts", veo31GeneratePreview)
+	}
+}

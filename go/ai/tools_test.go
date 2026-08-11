@@ -963,6 +963,21 @@ func TestToolWithOutputSchemaOptions(t *testing.T) {
 			WithOutputSchema(customSchema))
 	})
 
+	// The multipart constructor honors the same input schema option, so it
+	// needs the same guard: a concrete In would advertise the custom schema
+	// and then decode into a zero value, with no error anywhere.
+	t.Run("NewMultipartTool panics when In is not any", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for concrete In with a custom input schema")
+			}
+		}()
+
+		NewMultipartTool("badMultipartIn", "Concrete in",
+			func(ctx *ToolContext, input struct{ City string }) (*MultipartToolResponse, error) { return nil, nil },
+			WithInputSchema(customSchema))
+	})
+
 	t.Run("last output schema wins", func(t *testing.T) {
 		tl := NewTool("doubleOut", "Two output schemas",
 			func(ctx *ToolContext, input struct{}) (any, error) { return nil, nil },

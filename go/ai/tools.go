@@ -383,6 +383,13 @@ func NewMultipartTool[In any](name, description string, fn MultipartToolFunc[In]
 		opt.applyTool(toolOpts)
 	}
 
+	// Out is fixed to the multipart envelope, so only In can disagree with an
+	// explicit schema. WithOutputSchema describes the envelope's output field
+	// and carries no such constraint.
+	if toolOpts.InputSchema != nil {
+		requireAnyTypeParam[In]("ai.NewMultipartTool", name, "WithInputSchema requires In")
+	}
+
 	metadata, wrappedFn := wrapMultipartToolFunc(name, description, fn)
 	metadata["dynamic"] = true
 	applyToolOutputSchema(metadata, toolOpts.OutputSchema)
