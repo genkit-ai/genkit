@@ -21,11 +21,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/base"
 )
@@ -209,48 +211,54 @@ func TestModelConfigIsValidated(t *testing.T) {
 	}
 }
 
-func TestResolveModelID(t *testing.T) {
-	availableModels := []string{
-		"claude-opus-4-6",
-		"claude-opus-4-5-20251101",
-		"claude-opus-4-1-20250805",
-		"claude-opus-4-20250514",
-		"claude-sonnet-4-5-20250929",
-		"claude-sonnet-4-20250514",
-		"claude-haiku-4-5-20251001",
-	}
-
-	tests := []struct {
-		input    string
-		expected string
-		found    bool
-	}{
-		// Exact matches
-		{"claude-opus-4-6", "claude-opus-4-6", true},
-		{"claude-opus-4-1-20250805", "claude-opus-4-1-20250805", true},
-		{"claude-opus-4-20250514", "claude-opus-4-20250514", true},
-
-		// Aliases
-		{"claude-opus-4-5", "claude-opus-4-5-20251101", true},
-		{"claude-sonnet-4-5", "claude-sonnet-4-5-20250929", true},
-		{"claude-sonnet-4", "claude-sonnet-4-20250514", true},
-		{"claude-opus-4", "claude-opus-4-20250514", true},
-		{"claude-haiku-4-5", "claude-haiku-4-5-20251001", true},
-
-		// Non-existent
-		{"claude-2", "", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got, found := resolveModelID(tt.input, availableModels)
-			if found != tt.found {
-				t.Errorf("found = %v, want %v", found, tt.found)
+// TestResolveActionSendsTheIDItWasGiven pins that resolving a model is local
+// work. It used to list the catalog over the network to map an alias onto a
+// dated release, which put an API call on the path that answers a lookup, took
+// a context.Background() with no deadline or cancellation to make it, and
+// failed the lookup outright whenever that call failed. Anthropic resolves its
+// own aliases, so none of it bought anything.
+//
+// A dated ID still finds the curated entry for its alias, which is what
+// baseModelName is for and the reason this is not simply a passthrough.
+func TestResolveActionSendsTheIDItWasGiven(t *testing.T) {
+	a := &Anthropic{}
+	for _, id := range []string{
+		"claude-opus-4-5",          // an alias the API lists only in dated form
+		"claude-opus-4-5-20251101", // the dated release itself
+		"claude-not-yet-released",  // an ID no catalog knows
+	} {
+		t.Run(id, func(t *testing.T) {
+			action := a.ResolveAction(api.ActionTypeModel, id)
+			if action == nil {
+				t.Fatal("ResolveAction() = nil, want a model")
 			}
-			if got != tt.expected {
-				t.Errorf("got = %q, want %q", got, tt.expected)
+			if got := action.Desc().Name; got != provider+"/"+id {
+				t.Errorf("action name = %q, want the ID as given", got)
 			}
 		})
+	}
+
+	if got := a.ResolveAction(api.ActionTypeEmbedder, "anything"); got != nil {
+		t.Errorf("ResolveAction(embedder) = %v, want nil (models are all this plugin serves)", got)
+	}
+}
+
+// TestCuratedCapabilitiesSurviveADatedID pins the one thing the deleted
+// alias resolution has to keep doing: a request naming a dated release must
+// still be described by the curated entry keyed under its alias.
+func TestCuratedCapabilitiesSurviveADatedID(t *testing.T) {
+	a := &Anthropic{}
+	alias := a.modelOptions("claude-opus-4-5")
+	dated := a.modelOptions("claude-opus-4-5-20251101")
+
+	if alias.Label == "" {
+		t.Fatal("claude-opus-4-5 has no curated label; the test is checking nothing")
+	}
+	if dated.Label != alias.Label {
+		t.Errorf("dated label = %q, want the alias's %q", dated.Label, alias.Label)
+	}
+	if dated.Supports == nil || alias.Supports == nil || !reflect.DeepEqual(dated.Supports, alias.Supports) {
+		t.Errorf("dated supports = %+v, want the alias's %+v", dated.Supports, alias.Supports)
 	}
 }
 

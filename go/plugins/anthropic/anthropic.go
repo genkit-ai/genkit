@@ -158,27 +158,16 @@ func (a *Anthropic) ListActions(ctx context.Context) []api.ActionDesc {
 // ResolveAction builds the model named by a request. Models are the only
 // action type this plugin serves.
 //
-// The action keeps the ID the caller named, so the model resolves under the
-// name they used, while requests go to the dated release that ID resolves to.
+// The ID is passed through to the API untouched. Anthropic resolves an alias
+// like claude-opus-4-5 to its current dated release itself, so there is
+// nothing to look up and nothing to validate here: the API is the authority on
+// whether a model exists, and it answers when the request is made. Building an
+// action is local work either way.
 func (a *Anthropic) ResolveAction(atype api.ActionType, id string) api.Action {
 	if atype != api.ActionTypeModel {
 		return nil
 	}
-
-	models, err := a.discoveredModels(context.Background())
-	if err != nil {
-		slog.Error("unable to list anthropic models from Anthropic API", "error", err)
-		return nil
-	}
-
-	apiModelID, ok := resolveModelID(id, models)
-	if !ok {
-		// An ID the catalog does not name is still worth serving: it may be a
-		// model released since the last refresh, and the API is the authority
-		// on whether it exists.
-		apiModelID = id
-	}
-	return newModel(a.client, id, apiModelID, a.modelOptions(id))
+	return newModel(a.client, id, id, a.modelOptions(id))
 }
 
 // DefineModel builds a Claude model and returns it, without registering it
@@ -302,31 +291,4 @@ func modelName(id string) string {
 // the alias the curated catalog is keyed by.
 func baseModelName(id string) string {
 	return dateSuffix.ReplaceAllString(id, "")
-}
-
-// resolveModelID maps the ID a caller named onto one the API serves, reporting
-// whether anything matched.
-//
-// An exact match wins. Otherwise the ID is read as an alias and the newest
-// dated release behind it is chosen: those dates are -YYYYMMDD, fixed width
-// and most significant first, so the lexically greatest candidate is also the
-// most recent.
-func resolveModelID(id string, availableModels []string) (string, bool) {
-	for _, m := range availableModels {
-		if m == id {
-			return m, true
-		}
-	}
-
-	var newest string
-	prefix := id + "-"
-	for _, m := range availableModels {
-		if strings.HasPrefix(m, prefix) && baseModelName(m) == id && m > newest {
-			newest = m
-		}
-	}
-	if newest != "" {
-		return newest, true
-	}
-	return "", false
 }
