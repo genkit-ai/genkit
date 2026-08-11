@@ -24,10 +24,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from copy import deepcopy
-from functools import cached_property
+from functools import cached_property, lru_cache
 from typing import Any, ClassVar, Generic, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, ValidationError, field_validator, model_serializer
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypeVar
 
@@ -399,12 +399,19 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         return self.message.interrupts
 
 
+@lru_cache(maxsize=128)
+def _schema_adapter(schema_type: type[BaseModel]) -> TypeAdapter[BaseModel]:
+    """Cache one TypeAdapter per output schema class for partial chunk validation."""
+    return TypeAdapter(schema_type)
+
+
 class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
     """Streaming chunk with text, accumulated text, and output parsing."""
 
     # Field(exclude=True) means these fields are not included in serialization
     previous_chunks: list[ModelResponseChunk[Any]] = Field(default_factory=list, exclude=True)
     chunk_parser: Callable[[ModelResponseChunk[Any]], object] | None = Field(None, exclude=True)
+    schema_type: type[BaseModel] | None = Field(None, exclude=True)
 
     def __init__(
         self,
@@ -412,6 +419,7 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
         previous_chunks: list[ModelResponseChunk[Any]] | None = None,
         index: int | float | None = None,
         chunk_parser: Callable[[ModelResponseChunk[Any]], object] | None = None,
+        schema_type: type[BaseModel] | None = None,
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
         """Initialize from a chunk or keyword arguments."""
@@ -429,6 +437,7 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
             super().__init__(**kwargs)
         self.previous_chunks = previous_chunks or []
         self.chunk_parser = chunk_parser
+        self.schema_type = schema_type
 
     def __eq__(self, other: object) -> bool:
         """Check equality."""
@@ -471,11 +480,26 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
         return ''.join(parts) + self.text
 
     @cached_property
-    def output(self) -> OutputT:
-        """Parsed JSON output from accumulated text."""
-        if self.chunk_parser:
-            return cast(OutputT, self.chunk_parser(self))
-        return cast(OutputT, extract_json(self.accumulated_text))
+    def output(self) -> OutputT | None:
+        """Parsed output from accumulated text (None until parseable).
+
+        When an output schema type is known, the accumulated partial JSON is
+        validated into that Pydantic type using partial validation, so callers
+        get a real (possibly trailing-truncated) model instance. Until every
+        required field has started streaming, this returns None. Without a
+        schema type, returns the raw extracted JSON value.
+        """
+        parsed = self.chunk_parser(self) if self.chunk_parser else extract_json(self.accumulated_text)
+        if self.schema_type is not None and isinstance(parsed, dict):
+            try:
+                return cast(
+                    'OutputT | None',
+                    _schema_adapter(self.schema_type).validate_python(parsed, experimental_allow_partial=True),
+                )
+            except ValidationError:
+                # Not enough of the payload has streamed to satisfy the schema yet.
+                return None
+        return cast('OutputT | None', parsed)
 
 
 def text_from_message(msg: Message) -> str:
