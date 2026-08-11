@@ -58,11 +58,7 @@ if [[ ! -e "${dist_files[0]}" ]]; then
   echo "Error: No distribution files found in dist/" >&2
   exit 1
 fi
-TWINE_CHECK=$(uv run --directory "${TOP_DIR}"/py twine check "${dist_files[@]}")
-echo "$TWINE_CHECK"
-if echo "$TWINE_CHECK" | grep -q "FAIL"; then
+if ! uv run --directory "${TOP_DIR}"/py twine check "${dist_files[@]}"; then
   echo "Twine check failed."
   exit 1
-else
-  echo "Twine check passed."
 fi
