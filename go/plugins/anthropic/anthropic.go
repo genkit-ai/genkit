@@ -36,16 +36,34 @@ import (
 )
 
 const (
-	provider             = "anthropic"
+	// provider prefixes the action name of every model this plugin serves.
+	provider = "anthropic"
+	// anthropicLabelPrefix opens the dev UI label of every model this plugin
+	// describes.
 	anthropicLabelPrefix = "Anthropic"
 )
 
+// modelCacheTTL is how long a discovered model list is reused before the API
+// is asked again. Anthropic's catalog changes on the order of weeks, so this
+// trades staleness that resolves itself for a request on every listing.
+const modelCacheTTL = time.Hour
+
+// dateSuffix matches the -YYYYMMDD release date the API appends to a dated
+// model ID. It is what separates claude-opus-4-5-20251101 from the
+// claude-opus-4-5 alias pointing at it.
 var dateSuffix = regexp.MustCompile(`-\d{8}$`)
 
-// Anthropic is a Genkit plugin for interacting with the Anthropic services
+// Anthropic is a Genkit plugin for interacting with the Anthropic API.
 type Anthropic struct {
-	APIKey  string // If not provided, defaults to ANTHROPIC_API_KEY
-	BaseURL string // Optional. If not provided, defaults to ANTHROPIC_BASE_URL
+	// APIKey is the key requests are authenticated with. When empty, the
+	// ANTHROPIC_API_KEY environment variable is used, and [Anthropic.Init]
+	// panics if that is empty too.
+	APIKey string
+
+	// BaseURL overrides the API endpoint requests are sent to. When empty, the
+	// ANTHROPIC_BASE_URL environment variable is used, and failing that the
+	// SDK's own default.
+	BaseURL string
 
 	// Models overrides what the plugin knows about a Claude model, keyed by
 	// model ID, bare or provider-prefixed. Every Claude model already works
@@ -65,19 +83,24 @@ type Anthropic struct {
 	// [Anthropic.ResolveAction] builds to serve a request.
 	Models map[string]ai.ModelOptions
 
-	aclient     anthropic.Client // Anthropic client
-	mu          sync.Mutex       // Mutex to control access
-	initted     bool             // Whether the plugin has been initialized
-	models      []string         // Cached list of models
-	lastUpdated time.Time        // When the cache was last updated
+	client      anthropic.Client // set once by Init, read without the lock after
+	mu          sync.Mutex       // guards the three fields below
+	initted     bool             // whether Init has already run
+	models      []string         // model IDs from the most recent discovery
+	lastUpdated time.Time        // when models was last refreshed
 }
 
-// Name returns the name of the plugin
+// Name returns the plugin's name, which is also the provider prefix on the
+// action name of every model it serves.
 func (a *Anthropic) Name() string {
 	return provider
 }
 
-// Init initializes the Anthropic plugin and all known models
+// Init prepares the plugin to serve models and registers none: every Claude
+// model arrives through [Anthropic.ResolveAction] on first use.
+//
+// It panics when no API key is configured and when called twice, both being
+// setup mistakes rather than conditions an application can recover from.
 func (a *Anthropic) Init(ctx context.Context) []api.Action {
 	if a == nil {
 		a = &Anthropic{}
@@ -107,11 +130,55 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 		opts = append(opts, option.WithBaseURL(baseURL))
 	}
 
-	ac := anthropic.NewClient(opts...)
-	a.aclient = ac
+	a.client = anthropic.NewClient(opts...)
 	a.initted = true
 
 	return []api.Action{}
+}
+
+// ListActions describes every model the API currently advertises. A discovery
+// failure is reported as an empty catalog rather than an error, since the
+// interface has nowhere to return one.
+func (a *Anthropic) ListActions(ctx context.Context) []api.ActionDesc {
+	models, err := a.discoveredModels(ctx)
+	if err != nil {
+		slog.Error("unable to list anthropic models from Anthropic API", "error", err)
+		return nil
+	}
+
+	actions := []api.ActionDesc{}
+	for _, id := range models {
+		// A discovered model is named by the same ID the API serves it under,
+		// so the action name and the API model ID are identical here.
+		actions = append(actions, newModel(a.client, id, id, a.modelOptions(id)).Desc())
+	}
+	return actions
+}
+
+// ResolveAction builds the model named by a request. Models are the only
+// action type this plugin serves.
+//
+// The action keeps the ID the caller named, so the model resolves under the
+// name they used, while requests go to the dated release that ID resolves to.
+func (a *Anthropic) ResolveAction(atype api.ActionType, id string) api.Action {
+	if atype != api.ActionTypeModel {
+		return nil
+	}
+
+	models, err := a.discoveredModels(context.Background())
+	if err != nil {
+		slog.Error("unable to list anthropic models from Anthropic API", "error", err)
+		return nil
+	}
+
+	apiModelID, ok := resolveModelID(id, models)
+	if !ok {
+		// An ID the catalog does not name is still worth serving: it may be a
+		// model released since the last refresh, and the API is the authority
+		// on whether it exists.
+		apiModelID = id
+	}
+	return newModel(a.client, id, apiModelID, a.modelOptions(id))
 }
 
 // DefineModel builds a Claude model and returns it, without registering it
@@ -129,68 +196,14 @@ func (a *Anthropic) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOptio
 		return nil, errors.New("anthropic plugin not initialized")
 	}
 
-	// Trim before resolving, so a prefixed id still hits supportedModels.
+	// Trim before resolving, so a prefixed ID still hits supportedModels.
 	id = strings.TrimPrefix(id, provider+"/")
 
 	modelOpts := a.modelOptions(id)
 	if opts != nil {
 		modelOpts = *opts
 	}
-
-	return newModel(a.aclient, id, id, modelOpts), nil
-}
-
-// modelOptions returns the ModelOptions for a Claude model ID. Known models
-// (see supportedModels) carry curated capabilities and labels; any other model
-// falls back to dynamicModelOptions, whose label newModel fills in from the
-// ID. An entry in [Anthropic.Models] overlays whichever of the two applies.
-//
-// This is the single source of model capabilities shared by ListActions and
-// ResolveAction, mirroring the JS plugin's claudeModelReference, which is what
-// makes a caller's override authoritative no matter which path describes the
-// model first.
-//
-// The caller is responsible for trimming the provider prefix off id; Models is
-// keyed either way, so both forms are accepted there.
-func (a *Anthropic) modelOptions(id string) ai.ModelOptions {
-	opts, ok := supportedModels[baseModelName(id)]
-	if !ok {
-		opts = dynamicModelOptions
-	}
-	if override, ok := a.modelOverride(id); ok {
-		opts = internal.OverlayModelOptions(opts, override)
-	}
-	return opts
-}
-
-// modelOverride returns the caller's entry for a bare model ID, accepting the
-// key in either the bare or the provider-prefixed form the rest of the package
-// takes.
-func (a *Anthropic) modelOverride(id string) (ai.ModelOptions, bool) {
-	if opts, ok := a.Models[id]; ok {
-		return opts, true
-	}
-	opts, ok := a.Models[provider+"/"+id]
-	return opts, ok
-}
-
-// ListActions lists all the actions supported by the Anthropic plugin
-func (a *Anthropic) ListActions(ctx context.Context) []api.ActionDesc {
-	actions := []api.ActionDesc{}
-
-	models, err := a.getModels(ctx)
-	if err != nil {
-		slog.Error("unable to list anthropic models from Anthropic API", "error", err)
-		return nil
-	}
-
-	for _, name := range models {
-		// When listing discovered models, the Genkit action name and the
-		// Anthropic API model ID are identical.
-		actions = append(actions, newModel(a.aclient, name, name, a.modelOptions(name)).Desc())
-	}
-
-	return actions
+	return newModel(a.client, id, id, modelOpts), nil
 }
 
 // Model returns a previously registered model.
@@ -216,47 +229,51 @@ func IsDefinedModel(g *genkit.Genkit, id string) bool {
 	return genkit.LookupAction(g, api.KeyFromName(api.ActionTypeModel, modelName(id))) != nil
 }
 
-// modelName builds the action name for a Claude model ID, taking the ID either
-// bare or already provider-prefixed. The prefix is applied by concatenation,
-// so without the trim an already-prefixed ID would double up and name a
-// model that resolves nowhere.
-func modelName(id string) string {
-	return api.NewName(provider, strings.TrimPrefix(id, provider+"/"))
-}
-
-// ResolveAction resolves an action with the given ID
-func (a *Anthropic) ResolveAction(atype api.ActionType, id string) api.Action {
-	switch atype {
-	case api.ActionTypeModel:
-		models, err := a.getModels(context.Background())
-		if err != nil {
-			slog.Error("unable to list anthropic models from Anthropic API", "error", err)
-			return nil
-		}
-
-		realID, ok := resolveModelID(id, models)
-		if !ok {
-			// If not found, fall back to using id as is (legacy behavior, or for models not in list)
-			realID = id
-		}
-
-		// We register the model using the ID requested by the user, but
-		// use the resolved 'realID' (e.g. versioned) for actual API calls.
-		return newModel(a.aclient, id, realID, a.modelOptions(id))
+// modelOptions returns the capabilities to describe a Claude model with. A
+// known ID (see supportedModels) carries curated capabilities and a label; any
+// other falls back to dynamicModelOptions, whose label newModel fills in from
+// the ID. An entry in [Anthropic.Models] overlays whichever of the two applies.
+//
+// This is the one source of model capabilities, shared by ListActions and
+// ResolveAction, which is what makes a caller's entry authoritative no matter
+// which path describes the model first.
+//
+// The caller trims the provider prefix off id; Models is keyed either way, so
+// both forms are accepted there.
+func (a *Anthropic) modelOptions(id string) ai.ModelOptions {
+	opts, ok := supportedModels[baseModelName(id)]
+	if !ok {
+		opts = dynamicModelOptions
 	}
-	return nil
+	if override, ok := a.modelOverride(id); ok {
+		opts = internal.OverlayModelOptions(opts, override)
+	}
+	return opts
 }
 
-// getModels returns the list of available models, using a cache if available.
-func (a *Anthropic) getModels(ctx context.Context) ([]string, error) {
+// modelOverride returns the caller's entry for a bare model ID, accepting the
+// key in either the bare or the provider-prefixed form the rest of the package
+// takes.
+func (a *Anthropic) modelOverride(id string) (ai.ModelOptions, bool) {
+	if opts, ok := a.Models[id]; ok {
+		return opts, true
+	}
+	opts, ok := a.Models[provider+"/"+id]
+	return opts, ok
+}
+
+// discoveredModels returns the IDs the API advertises, from cache when it is
+// still fresh. Callers are on the request path, so a refresh is worth at most
+// one API round trip per modelCacheTTL.
+func (a *Anthropic) discoveredModels(ctx context.Context) ([]string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if !a.lastUpdated.IsZero() && time.Since(a.lastUpdated) < time.Hour {
+	if !a.lastUpdated.IsZero() && time.Since(a.lastUpdated) < modelCacheTTL {
 		return a.models, nil
 	}
 
-	models, err := listModels(ctx, &a.aclient)
+	models, err := listModels(ctx, &a.client)
 	if err != nil {
 		return nil, err
 	}
@@ -266,39 +283,50 @@ func (a *Anthropic) getModels(ctx context.Context) ([]string, error) {
 	return models, nil
 }
 
-// newModel creates a model without registering it. name is the Genkit action
-// name and apiModelName is the model ID sent to the API, which differ when the
-// name is an alias for a dated release.
-func newModel(client anthropic.Client, name, apiModelName string, opts ai.ModelOptions) *ai.ModelAction {
-	return ant.NewModel(client, provider, name, apiModelName, opts)
+// newModel builds a model action without registering it. name is the Genkit
+// action name and apiModelID is the model the request is sent to, which differ
+// when the name is an alias for a dated release.
+func newModel(client anthropic.Client, name, apiModelID string, opts ai.ModelOptions) *ai.ModelAction {
+	return ant.NewModel(client, provider, name, apiModelID, opts)
 }
 
+// modelName builds the action name for a Claude model ID, taking the ID either
+// bare or already provider-prefixed. The prefix is applied by concatenation,
+// so without the trim an already-prefixed ID would double up and name a model
+// that resolves nowhere.
+func modelName(id string) string {
+	return api.NewName(provider, strings.TrimPrefix(id, provider+"/"))
+}
+
+// baseModelName strips the release date off a dated model ID, mapping it onto
+// the alias the curated catalog is keyed by.
 func baseModelName(id string) string {
 	return dateSuffix.ReplaceAllString(id, "")
 }
 
+// resolveModelID maps the ID a caller named onto one the API serves, reporting
+// whether anything matched.
+//
+// An exact match wins. Otherwise the ID is read as an alias and the newest
+// dated release behind it is chosen: those dates are -YYYYMMDD, fixed width
+// and most significant first, so the lexically greatest candidate is also the
+// most recent.
 func resolveModelID(id string, availableModels []string) (string, bool) {
-	// First check for exact match
 	for _, m := range availableModels {
 		if m == id {
 			return m, true
 		}
 	}
 
-	var bestMatch string
+	var newest string
 	prefix := id + "-"
-
 	for _, m := range availableModels {
-		if strings.HasPrefix(m, prefix) && baseModelName(m) == id {
-			if m > bestMatch {
-				bestMatch = m
-			}
+		if strings.HasPrefix(m, prefix) && baseModelName(m) == id && m > newest {
+			newest = m
 		}
 	}
-
-	if bestMatch != "" {
-		return bestMatch, true
+	if newest != "" {
+		return newest, true
 	}
-
 	return "", false
 }
