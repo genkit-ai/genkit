@@ -337,6 +337,23 @@ describe('A2uiStreamParser', () => {
     assert.strictEqual(batches.length, 2);
   });
 
+  it('preserves forward-compatible top-level envelope keys', () => {
+    // The parser must not rebuild a fresh { version, <kind> } object; keys it
+    // does not inspect (anything the open-ended spec adds later) must survive.
+    const parser = new A2uiStreamParser({
+      catalog: basicCatalog,
+      surfaceId: fixedId,
+    });
+    const block =
+      '```a2ui\n' +
+      '[{ "createSurface": { "surfaceId": "SURFACE_ID", "catalogId": "c" }, "futureKey": "keepme" }]\n' +
+      '```\n';
+    const { batches } = collect(parser, [block]);
+    assert.strictEqual(batches.length, 1);
+    assert.strictEqual(batches[0].length, 1);
+    assert.strictEqual((batches[0][0] as any).futureKey, 'keepme');
+  });
+
   it('preserves prose/block order in segments (prose after a block)', () => {
     const parser = new A2uiStreamParser({
       catalog: basicCatalog,
