@@ -439,7 +439,7 @@ func TestResolveVeoActions(t *testing.T) {
 		{"resolved as check operation", api.ActionTypeCheckOperation},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			action := resolveAction(client, googleAIProvider, tc.atype, modelName)
+			action := resolveAction(client, catalog{provider: googleAIProvider}, tc.atype, modelName)
 			if action == nil {
 				t.Fatalf("resolveAction(%s, %q) = nil", tc.atype, modelName)
 			}
@@ -456,7 +456,7 @@ func TestResolveVeoActions(t *testing.T) {
 	}
 
 	t.Run("start action carries model metadata", func(t *testing.T) {
-		action := resolveAction(client, googleAIProvider, api.ActionTypeBackgroundModel, modelName)
+		action := resolveAction(client, catalog{provider: googleAIProvider}, api.ActionTypeBackgroundModel, modelName)
 		if action == nil {
 			t.Fatal("resolveAction returned nil")
 		}
@@ -469,7 +469,7 @@ func TestResolveVeoActions(t *testing.T) {
 
 	t.Run("non-veo models do not resolve as background models", func(t *testing.T) {
 		for _, atype := range []api.ActionType{api.ActionTypeBackgroundModel, api.ActionTypeCheckOperation} {
-			if action := resolveAction(client, googleAIProvider, atype, "gemini-flash-latest"); action != nil {
+			if action := resolveAction(client, catalog{provider: googleAIProvider}, atype, "gemini-flash-latest"); action != nil {
 				t.Errorf("resolveAction(%s, gemini-flash-latest) = %v, want nil", atype, action)
 			}
 		}

@@ -33,6 +33,28 @@ const (
 type GoogleAI struct {
 	APIKey string // API key to access the service. If empty, the values of the environment variables GEMINI_API_KEY or GOOGLE_API_KEY will be consulted, in that order.
 
+	// Models overrides what the plugin knows about a model, keyed by model ID.
+	// Every model the backend serves already works without an entry here:
+	// known IDs carry curated capabilities and the rest take the defaults for
+	// their kind. Supply an entry only to correct or extend what the plugin
+	// resolves, most often to describe a model released after this version of
+	// the plugin.
+	//
+	//	&googlegenai.GoogleAI{Models: map[string]ai.ModelOptions{
+	//		"gemini-flash-latest": {Supports: &ai.ModelSupports{Tools: true, Multiturn: true}},
+	//	}}
+	//
+	// Fields left at their zero value keep what the plugin resolves, so an
+	// entry can pin one capability without restating the label or the config
+	// schema. Gemini, Imagen and Veo IDs are all keyed the same way, and
+	// entries apply to the actions [GoogleAI.ListActions] advertises as well
+	// as the ones [GoogleAI.ResolveAction] builds to serve a request.
+	Models map[string]ai.ModelOptions
+
+	// Embedders overrides what the plugin knows about an embedder, keyed by
+	// embedder ID. It works exactly as Models does.
+	Embedders map[string]ai.EmbedderOptions
+
 	gclient *genai.Client // Client for the Google AI service.
 	mu      sync.Mutex    // Mutex to control access.
 	initted bool          // Whether the plugin has been initialized.
@@ -43,6 +65,17 @@ type VertexAI struct {
 	ProjectID  string // Google Cloud project to use for Vertex AI. If empty, the value of the environment variable GOOGLE_CLOUD_PROJECT will be consulted.
 	Location   string // Location of the Vertex AI service. If empty, GOOGLE_CLOUD_LOCATION and GOOGLE_CLOUD_REGION environment variables will be consulted, in that order. Accepts a regional location (e.g. "us-central1"), a multi-region location ("us" or "eu"), or "global".
 	APIVersion string // API version to use ("v1" or "v1beta1"). If empty, the genai SDK default (v1beta1) is used. Can be overridden per-request via config.HTTPOptions.APIVersion.
+
+	// Models overrides what the plugin knows about a model, keyed by model ID;
+	// see [GoogleAI.Models]. Tuned Gemini endpoints are keyed in either the
+	// short form `endpoints/ID` or the full resource path
+	// `projects/PROJECT/locations/LOCATION/endpoints/ID`, whichever form the
+	// request names them by.
+	Models map[string]ai.ModelOptions
+
+	// Embedders overrides what the plugin knows about an embedder, keyed by
+	// embedder ID; see [GoogleAI.Embedders].
+	Embedders map[string]ai.EmbedderOptions
 
 	gclient *genai.Client // Client for the Vertex AI service.
 	mu      sync.Mutex    // Mutex to control access.
@@ -185,181 +218,105 @@ func (v *VertexAI) Init(ctx context.Context) []api.Action {
 	return []api.Action{}
 }
 
-// buildModel builds an unregistered Gemini model. A nil opts takes the
-// capabilities the plugin knows for that ID.
-func (ga *GoogleAI) buildModel(id string, opts *ai.ModelOptions) (*ai.ModelAction, error) {
+// DefineModel defines an unknown model with the given ID.
+// The second argument describes the capability of the model.
+//
+// Deprecated: describe the model through [GoogleAI.Models] instead. This
+// method builds the model and ignores g, so the result carries only the
+// model's name: generation resolves a model from that name and serves the
+// request with the capabilities the plugin resolves, not the ones passed
+// here. An entry in Models reaches both paths.
+func (ga *GoogleAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOptions) (ai.Model, error) {
 	ga.mu.Lock()
 	defer ga.mu.Unlock()
 	if !ga.initted {
 		return nil, errors.New("GoogleAI plugin not initialized")
 	}
+	if opts != nil {
+		return newModel(ga.gclient, id, *opts), nil
+	}
+
+	c := ga.catalog()
 	models, err := listModels(googleAIProvider)
 	if err != nil {
 		return nil, err
 	}
-
-	if opts == nil {
-		var ok bool
-		modelOpts, ok := models[id]
-		if !ok {
-			return nil, fmt.Errorf("GoogleAI: called with unknown model %q and nil ModelOptions", id)
-		}
-		opts = &modelOpts
+	if _, known := models[id]; !known && !c.modelOverridden(id) {
+		return nil, fmt.Errorf("GoogleAI: called with unknown model %q and nil ModelOptions", id)
 	}
 
-	return newModel(ga.gclient, id, *opts), nil
-}
-
-// RegisterModel registers a model with g and returns it. The plugin supplies
-// the implementation; opts describes what the model supports, and a nil opts
-// takes the capabilities the plugin knows for that ID, which makes an
-// unknown ID with a nil opts an error.
-//
-// Registering an ID that is already registered panics; [GoogleAI.Init]
-// registers every known model, so register a model before its first use or
-// guard with [GoogleAI.IsDefinedModel].
-func (ga *GoogleAI) RegisterModel(g *genkit.Genkit, id string, opts *ai.ModelOptions) (ai.Model, error) {
-	model, err := ga.buildModel(id, opts)
-	if err != nil {
-		return nil, err
-	}
-	genkit.RegisterAction(g, model)
-	return model, nil
+	return newModel(ga.gclient, id, c.modelOptions(id)), nil
 }
 
 // DefineModel defines an unknown model with the given ID.
 // The second argument describes the capability of the model.
 //
-// Deprecated: use [GoogleAI.RegisterModel]. This method builds the model and
-// ignores g. Generation resolves a model from its name, so passing the result
-// to ai.WithModel contributes only that name and serves the request with a
-// model resolved from it instead; registering it with [genkit.RegisterAction]
-// is what makes these capabilities the ones used.
-func (ga *GoogleAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOptions) (ai.Model, error) {
-	return ga.buildModel(id, opts)
-}
-
-// buildModel builds an unregistered Gemini model. A nil opts takes the
-// capabilities the plugin knows for that ID.
+// Tuned Gemini endpoints are accepted in either the short form `endpoints/ID`
+// or the full resource path
+// `projects/PROJECT/locations/LOCATION/endpoints/ID`, and take the default
+// Gemini capability set when opts is nil.
 //
-// Tuned Gemini endpoints are accepted in either the short form
-// `endpoints/ID` or the full resource path
-// `projects/PROJECT/locations/LOCATION/endpoints/ID`. When opts is nil the
-// caller gets the default Gemini capability set.
-func (v *VertexAI) buildModel(id string, opts *ai.ModelOptions) (*ai.ModelAction, error) {
+// Deprecated: describe the model through [VertexAI.Models] instead; see
+// [GoogleAI.DefineModel] for why the result of this method is not what serves
+// the request.
+func (v *VertexAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOptions) (ai.Model, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if !v.initted {
 		return nil, errors.New("VertexAI plugin not initialized")
 	}
+	if opts != nil {
+		return newModel(v.gclient, id, *opts), nil
+	}
 
-	if opts == nil {
-		if isTunedGeminiName(id) {
-			defaults := GetModelOptions(id, vertexAIProvider)
-			opts = &defaults
-		} else {
-			models, err := listModels(vertexAIProvider)
-			if err != nil {
-				return nil, err
-			}
-			modelOpts, ok := models[id]
-			if !ok {
-				return nil, fmt.Errorf("VertexAI: called with unknown model %q and nil ModelOptions", id)
-			}
-			opts = &modelOpts
+	c := v.catalog()
+	if !isTunedGeminiName(id) && !c.modelOverridden(id) {
+		models, err := listModels(vertexAIProvider)
+		if err != nil {
+			return nil, err
+		}
+		if _, known := models[id]; !known {
+			return nil, fmt.Errorf("VertexAI: called with unknown model %q and nil ModelOptions", id)
 		}
 	}
 
-	return newModel(v.gclient, id, *opts), nil
+	return newModel(v.gclient, id, c.modelOptions(id)), nil
 }
 
-// RegisterModel registers a model with g and returns it; see
-// [GoogleAI.RegisterModel]. Tuned Gemini endpoints are accepted in either the
-// short form `endpoints/ID` or the full resource path
-// `projects/PROJECT/locations/LOCATION/endpoints/ID`, and take the default
-// Gemini capability set when opts is nil.
-func (v *VertexAI) RegisterModel(g *genkit.Genkit, id string, opts *ai.ModelOptions) (ai.Model, error) {
-	model, err := v.buildModel(id, opts)
-	if err != nil {
-		return nil, err
-	}
-	genkit.RegisterAction(g, model)
-	return model, nil
-}
-
-// DefineModel defines an unknown model with the given ID.
-// The second argument describes the capability of the model.
+// DefineEmbedder defines an embedder with a given ID.
 //
-// Deprecated: use [VertexAI.RegisterModel]. This method builds the model and
-// ignores g. Generation resolves a model from its name, so passing the result
-// to ai.WithModel contributes only that name and serves the request with a
-// model resolved from it instead; registering it with [genkit.RegisterAction]
-// is what makes these capabilities the ones used.
-func (v *VertexAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOptions) (ai.Model, error) {
-	return v.buildModel(id, opts)
-}
-
-// buildEmbedder builds an unregistered embedder.
-func (ga *GoogleAI) buildEmbedder(id string, embedOpts *ai.EmbedderOptions) (*ai.EmbedderAction, error) {
+// Deprecated: describe the embedder through [GoogleAI.Embedders] instead.
+// Like [GoogleAI.DefineModel], this method builds the embedder and ignores g,
+// so embedding by that name serves the request with the capabilities the
+// plugin resolves rather than the ones passed here.
+func (ga *GoogleAI) DefineEmbedder(g *genkit.Genkit, id string, embedOpts *ai.EmbedderOptions) (ai.Embedder, error) {
 	ga.mu.Lock()
 	defer ga.mu.Unlock()
 	if !ga.initted {
 		return nil, errors.New("GoogleAI plugin not initialized")
 	}
-	return newEmbedder(ga.gclient, id, embedOpts), nil
-}
-
-// RegisterEmbedder registers an embedder with g and returns it. Registering
-// an ID that is already registered panics, so guard with
-// [GoogleAI.IsDefinedEmbedder] when in doubt.
-func (ga *GoogleAI) RegisterEmbedder(g *genkit.Genkit, id string, embedOpts *ai.EmbedderOptions) (ai.Embedder, error) {
-	embedder, err := ga.buildEmbedder(id, embedOpts)
-	if err != nil {
-		return nil, err
+	if embedOpts == nil {
+		opts := ga.catalog().embedderOptions(id)
+		embedOpts = &opts
 	}
-	genkit.RegisterAction(g, embedder)
-	return embedder, nil
+	return newEmbedder(ga.gclient, id, embedOpts), nil
 }
 
 // DefineEmbedder defines an embedder with a given ID.
 //
-// Deprecated: use [GoogleAI.RegisterEmbedder]. Like [GoogleAI.DefineModel],
-// this method builds the embedder and ignores g, so embedding by that name
-// serves the request with a different one unless the caller registers it with
-// [genkit.RegisterAction].
-func (ga *GoogleAI) DefineEmbedder(g *genkit.Genkit, id string, embedOpts *ai.EmbedderOptions) (ai.Embedder, error) {
-	return ga.buildEmbedder(id, embedOpts)
-}
-
-// buildEmbedder builds an unregistered embedder.
-func (v *VertexAI) buildEmbedder(id string, embedOpts *ai.EmbedderOptions) (*ai.EmbedderAction, error) {
+// Deprecated: describe the embedder through [VertexAI.Embedders] instead; see
+// [GoogleAI.DefineEmbedder].
+func (v *VertexAI) DefineEmbedder(g *genkit.Genkit, id string, embedOpts *ai.EmbedderOptions) (ai.Embedder, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if !v.initted {
 		return nil, errors.New("VertexAI plugin not initialized")
 	}
-	return newEmbedder(v.gclient, id, embedOpts), nil
-}
-
-// RegisterEmbedder registers an embedder with g and returns it; see
-// [GoogleAI.RegisterEmbedder].
-func (v *VertexAI) RegisterEmbedder(g *genkit.Genkit, id string, embedOpts *ai.EmbedderOptions) (ai.Embedder, error) {
-	embedder, err := v.buildEmbedder(id, embedOpts)
-	if err != nil {
-		return nil, err
+	if embedOpts == nil {
+		opts := v.catalog().embedderOptions(id)
+		embedOpts = &opts
 	}
-	genkit.RegisterAction(g, embedder)
-	return embedder, nil
-}
-
-// DefineEmbedder defines an embedder with a given ID.
-//
-// Deprecated: use [VertexAI.RegisterEmbedder]. Like [VertexAI.DefineModel],
-// this method builds the embedder and ignores g, so embedding by that name
-// serves the request with a different one unless the caller registers it with
-// [genkit.RegisterAction].
-func (v *VertexAI) DefineEmbedder(g *genkit.Genkit, id string, embedOpts *ai.EmbedderOptions) (ai.Embedder, error) {
-	return v.buildEmbedder(id, embedOpts)
+	return newEmbedder(v.gclient, id, embedOpts), nil
 }
 
 // isDefined reports whether an action of atype is registered with g under the
@@ -371,24 +328,20 @@ func isDefined(g *genkit.Genkit, atype api.ActionType, provider, id string) bool
 	return genkit.LookupAction(g, fmt.Sprintf("/%s/%s", atype, api.NewName(provider, id))) != nil
 }
 
-// IsDefinedModel reports whether the model is defined, which is the
-// guard against registering one twice (see [GoogleAI.RegisterModel]).
-func (ga *GoogleAI) IsDefinedModel(g *genkit.Genkit, id string) bool {
-	return isDefined(g, api.ActionTypeModel, googleAIProvider, id)
-}
-
-// IsDefinedModel reports whether the model is defined, which is the
-// guard against registering one twice (see [VertexAI.RegisterModel]).
-func (v *VertexAI) IsDefinedModel(g *genkit.Genkit, id string) bool {
-	return isDefined(g, api.ActionTypeModel, vertexAIProvider, id)
-}
-
 // IsDefinedEmbedder reports whether the [Embedder] is defined by this plugin.
+//
+// Deprecated: this existed to guard a registration call that could panic on a
+// duplicate. Capabilities now come from [GoogleAI.Embedders], which nothing
+// has to register and which no ordering can defeat, leaving this a question
+// about registry state that applications do not need to ask.
 func (ga *GoogleAI) IsDefinedEmbedder(g *genkit.Genkit, id string) bool {
 	return isDefined(g, api.ActionTypeEmbedder, googleAIProvider, id)
 }
 
 // IsDefinedEmbedder reports whether the [Embedder] is defined by this plugin.
+//
+// Deprecated: see [GoogleAI.IsDefinedEmbedder]; capabilities now come from
+// [VertexAI.Embedders].
 func (v *VertexAI) IsDefinedEmbedder(g *genkit.Genkit, id string) bool {
 	return isDefined(g, api.ActionTypeEmbedder, vertexAIProvider, id)
 }
