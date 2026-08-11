@@ -48,7 +48,7 @@ func TestModelOptionsKnownModels(t *testing.T) {
 		"claude-haiku-4-5",
 	}
 	for _, name := range advancedModels {
-		opts := modelOptions(name)
+		opts := (&Anthropic{}).modelOptions(name)
 		if opts.Supports == nil {
 			t.Errorf("modelOptions(%q): Supports is nil", name)
 			continue
@@ -75,7 +75,7 @@ func TestModelOptionsKnownVersionedModels(t *testing.T) {
 		"claude-haiku-4-5-20251001",
 	}
 	for _, name := range advancedModels {
-		opts := modelOptions(name)
+		opts := (&Anthropic{}).modelOptions(name)
 		if opts.Supports == nil {
 			t.Errorf("modelOptions(%q): Supports is nil", name)
 			continue
@@ -93,7 +93,7 @@ func TestModelOptionsKnownVersionedModels(t *testing.T) {
 // to dynamicModelOptions (no JSON output).
 func TestModelOptionsUnknownFallback(t *testing.T) {
 	const name = "claude-something-unreleased"
-	opts := modelOptions(name)
+	opts := (&Anthropic{}).modelOptions(name)
 
 	if opts.Supports == nil {
 		t.Fatalf("modelOptions(%q): Supports is nil", name)
@@ -118,7 +118,7 @@ func TestNewModelDescriptor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			desc := newModel(anthropic.Client{}, tt.name, tt.name, modelOptions(tt.name)).Desc()
+			desc := newModel(anthropic.Client{}, tt.name, tt.name, (&Anthropic{}).modelOptions(tt.name)).Desc()
 
 			model, ok := desc.Metadata["model"].(map[string]any)
 			if !ok {
@@ -140,39 +140,50 @@ func TestNewModelDescriptor(t *testing.T) {
 	}
 }
 
-// TestRegisterModelNilOptions covers the nil ModelOptions path: the model gets
-// the capabilities the plugin resolves for its name rather than panicking or
-// advertising a model that supports nothing. It also pins that RegisterModel
-// registers, so the lookup helpers can find what it defined.
-func TestRegisterModelNilOptions(t *testing.T) {
-	a := &Anthropic{}
-	g := genkit.Init(context.Background())
+// TestModelsOverlaysCuratedCapabilities pins the merge rule: an entry replaces
+// only the fields it sets, so pinning one capability keeps the curated label
+// and config schema the model needs to work at all.
+func TestModelsOverlaysCuratedCapabilities(t *testing.T) {
+	a := &Anthropic{Models: map[string]ai.ModelOptions{
+		"claude-opus-4-5": {Supports: &ai.ModelSupports{Multiturn: true}},
+	}}
 
-	m, err := a.RegisterModel(g, "claude-opus-4-5", nil)
-	if err != nil {
-		t.Fatalf("RegisterModel() error = %v", err)
+	opts := a.modelOptions("claude-opus-4-5")
+	if opts.Supports == nil || opts.Supports.Tools {
+		t.Errorf("Supports = %+v, want the entry's value to replace the curated one wholesale", opts.Supports)
+	}
+	if want := anthropicLabelPrefix + " - Claude Opus 4.5"; opts.Label != want {
+		t.Errorf("Label = %q, want the curated %q kept by an entry that does not set one", opts.Label, want)
+	}
+	if opts.Stage != ai.ModelStageStable {
+		t.Errorf("Stage = %q, want the curated stage kept", opts.Stage)
 	}
 
-	if !IsDefinedModel(g, "claude-opus-4-5") {
-		t.Error("IsDefinedModel() = false after RegisterModel(), want the model registered")
+	// An unknown ID starts from the Claude defaults rather than nothing, so an
+	// entry describing a model this version never heard of is still complete.
+	b := &Anthropic{Models: map[string]ai.ModelOptions{
+		"claude-opus-9": {Label: "Claude Opus 9"},
+	}}
+	unknown := b.modelOptions("claude-opus-9")
+	if unknown.Label != "Claude Opus 9" {
+		t.Errorf("Label = %q, want the entry's", unknown.Label)
 	}
-	if Model(g, "claude-opus-4-5") == nil {
-		t.Error("Model() = nil after RegisterModel(), want the registered model")
+	if unknown.Supports == nil {
+		t.Error("Supports = nil, want the Claude defaults kept for a model the entry does not describe")
 	}
+}
 
-	model, ok := m.(*ai.ModelAction).Desc().Metadata["model"].(map[string]any)
-	if !ok {
-		t.Fatalf("model metadata missing")
-	}
-	if want := anthropicLabelPrefix + " - Claude Opus 4.5"; model["label"] != want {
-		t.Errorf("label = %v, want %q", model["label"], want)
-	}
-	supports, ok := model["supports"].(map[string]any)
-	if !ok {
-		t.Fatalf("supports metadata missing")
-	}
-	if supports["tools"] != true || supports["multiturn"] != true {
-		t.Errorf("supports = %v, want the curated Claude capabilities", supports)
+// TestModelsKeyAcceptsEitherForm pins that an entry is found under the bare ID
+// and the provider-prefixed one, matching every other model entry point in the
+// package.
+func TestModelsKeyAcceptsEitherForm(t *testing.T) {
+	for _, key := range []string{"claude-opus-4-5", "anthropic/claude-opus-4-5"} {
+		a := &Anthropic{Models: map[string]ai.ModelOptions{
+			key: {Label: "Custom Claude"},
+		}}
+		if got := a.modelOptions("claude-opus-4-5").Label; got != "Custom Claude" {
+			t.Errorf("keyed by %q: Label = %q, want the entry to be found", key, got)
+		}
 	}
 }
 
@@ -181,7 +192,7 @@ func TestRegisterModelNilOptions(t *testing.T) {
 // before it reaches the model function.
 func TestModelConfigIsValidated(t *testing.T) {
 	const name = "claude-opus-4-5"
-	inputSchema := newModel(anthropic.Client{}, name, name, modelOptions(name)).Desc().InputSchema
+	inputSchema := newModel(anthropic.Client{}, name, name, (&Anthropic{}).modelOptions(name)).Desc().InputSchema
 
 	req := func(config any) *ai.ModelRequest {
 		return &ai.ModelRequest{
@@ -243,57 +254,76 @@ func TestResolveModelID(t *testing.T) {
 	}
 }
 
-// TestRegisterModelThenResolve pins the ordinary path: a model defined before
-// its first use is the one generation resolves, and defining it does not make
-// the plugin resolve it a second time. Generate turns a name into an action
-// through the same resolving lookup Model uses, and the plugin's ResolveAction
-// would call the Anthropic API, which this fake key cannot reach, so the
-// caller's own capabilities coming back prove the registry short-circuited to
-// the defined model instead of resolving again.
-func TestRegisterModelThenResolve(t *testing.T) {
-	a := &Anthropic{APIKey: "test-key"}
+// modelsListServer serves the Anthropic models list so ResolveAction is
+// reachable without a real endpoint.
+func modelsListServer(t *testing.T) string {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"id":"claude-opus-4-5-20251101","type":"model"}],"has_more":false}`)
+	}))
+	t.Cleanup(server.Close)
+	return server.URL
+}
+
+// TestModelsOverrideReachesResolution is the reason capabilities live in plugin
+// config. Nothing registers the model up front: the first lookup drives the
+// plugin's ResolveAction, and the caller's entry is what describes what comes
+// back. No ordering makes this miss, which is what a registration call could
+// not promise, since resolving a name registers it and a later registration of
+// the same name would panic.
+func TestModelsOverrideReachesResolution(t *testing.T) {
+	const name = "claude-opus-4-5"
+	a := &Anthropic{
+		APIKey:  "test-key",
+		BaseURL: modelsListServer(t),
+		Models: map[string]ai.ModelOptions{
+			name: {Label: "Custom Claude", Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
+		},
+	}
 	g := genkit.Init(context.Background(), genkit.WithPlugins(a))
 
-	const name = "claude-opus-4-5"
-	opts := ai.ModelOptions{
-		Label:    "Custom Claude",
-		Supports: &ai.ModelSupports{Multiturn: true, Tools: true},
-	}
-	if _, err := a.RegisterModel(g, name, &opts); err != nil {
-		t.Fatalf("RegisterModel() error = %v", err)
+	if IsDefinedModel(g, name) {
+		t.Fatalf("IsDefinedModel(%q) = true before anything resolved it", name)
 	}
 
-	m := Model(g, name)
+	m := genkit.LookupModel(g, "anthropic/"+name)
 	if m == nil {
-		t.Fatal("Model() = nil, want the model RegisterModel registered")
+		t.Fatal("LookupModel() = nil, want the plugin to resolve the model")
 	}
 	model, ok := m.(*ai.ModelAction).Desc().Metadata["model"].(map[string]any)
 	if !ok {
 		t.Fatalf("model metadata missing")
 	}
 	if model["label"] != "Custom Claude" {
-		t.Errorf("label = %v, want the capabilities RegisterModel was given", model["label"])
+		t.Errorf("label = %v, want the entry's capabilities to describe the resolved model", model["label"])
 	}
 }
 
-// TestRegisterModelTwicePanics pins what registering costs: the registry rejects
-// a duplicate key, so a name can only be defined once and [IsDefinedModel] is
-// the guard.
-func TestRegisterModelTwicePanics(t *testing.T) {
-	a := &Anthropic{APIKey: "test-key"}
-	g := genkit.Init(context.Background())
-
-	const name = "claude-haiku-4-5"
-	if _, err := a.RegisterModel(g, name, nil); err != nil {
-		t.Fatalf("RegisterModel() error = %v", err)
+// TestModelsOverrideReachesListActions pins the other half: the actions the
+// plugin advertises carry the caller's entry too, so what the dev UI lists and
+// what serves a request agree.
+func TestModelsOverrideReachesListActions(t *testing.T) {
+	a := &Anthropic{
+		APIKey:  "test-key",
+		BaseURL: modelsListServer(t),
+		Models: map[string]ai.ModelOptions{
+			"claude-opus-4-5-20251101": {Label: "Custom Claude"},
+		},
 	}
+	genkit.Init(context.Background(), genkit.WithPlugins(a))
 
-	defer func() {
-		if recover() == nil {
-			t.Error("defining the same name twice did not panic, want the registry to reject it")
-		}
-	}()
-	a.RegisterModel(g, name, nil)
+	actions := a.ListActions(context.Background())
+	if len(actions) == 0 {
+		t.Fatal("ListActions() = empty, want the served model list")
+	}
+	model, ok := actions[0].Metadata["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("model metadata missing: %v", actions[0].Metadata)
+	}
+	if model["label"] != "Custom Claude" {
+		t.Errorf("label = %v, want the entry's label in the advertised action", model["label"])
+	}
 }
 
 // TestModelRef pins the name a ref carries and that the typed config rides
@@ -323,27 +353,22 @@ func TestModelRef(t *testing.T) {
 
 // TestPrefixedNamesAreEquivalent pins that the exported entry points take a
 // model ID either bare or provider-prefixed. The prefix is applied by
-// concatenation, so an untrimmed name would double up: RegisterModel would
-// register a key IsDefinedModel never checks, breaking the guard the
-// RegisterModel godoc points at.
+// concatenation, so an untrimmed name would double up and name a model that
+// resolves nowhere.
 func TestPrefixedNamesAreEquivalent(t *testing.T) {
-	a := &Anthropic{APIKey: "test-key"}
-	g := genkit.Init(context.Background())
-
-	if _, err := a.RegisterModel(g, "anthropic/claude-opus-4-5", nil); err != nil {
-		t.Fatalf("RegisterModel() error = %v", err)
-	}
+	a := &Anthropic{APIKey: "test-key", BaseURL: modelsListServer(t)}
+	g := genkit.Init(context.Background(), genkit.WithPlugins(a))
 
 	for _, name := range []string{"claude-opus-4-5", "anthropic/claude-opus-4-5"} {
-		if !IsDefinedModel(g, name) {
-			t.Errorf("IsDefinedModel(%q) = false, want the model defined under either form", name)
-		}
 		if Model(g, name) == nil {
-			t.Errorf("Model(%q) = nil, want the model defined under either form", name)
+			t.Errorf("Model(%q) = nil, want the model resolved under either form", name)
+		}
+		if !IsDefinedModel(g, name) {
+			t.Errorf("IsDefinedModel(%q) = false, want the resolved model found under either form", name)
 		}
 	}
 
-	// Defining by the prefixed name must resolve the curated capabilities, not
+	// Resolving by the prefixed name must find the curated capabilities, not
 	// the unknown-model defaults, which is why the trim precedes the lookup.
 	m := Model(g, "claude-opus-4-5")
 	model, ok := m.(*ai.ModelAction).Desc().Metadata["model"].(map[string]any)
@@ -355,36 +380,29 @@ func TestPrefixedNamesAreEquivalent(t *testing.T) {
 	}
 }
 
-// TestIsDefinedModelDoesNotResolve pins the guard semantics: checking whether
-// a model is defined must not itself resolve and register one. The plugin
-// resolves any name the Anthropic API can serve, so a resolving lookup would
-// answer true for every name and make the guarded RegisterModel panic. The fake
-// endpoint serves the models list to make resolution reachable, which is
-// exactly what the guard must not trigger.
+// TestIsDefinedModelDoesNotResolve pins that asking whether a model is defined
+// must not itself resolve and register one. The plugin resolves any name the
+// Anthropic API can serve, so a resolving lookup would answer true for every
+// name. The fake endpoint serves the models list to make resolution reachable,
+// which is exactly what this must not trigger.
 func TestIsDefinedModelDoesNotResolve(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"data":[{"id":"claude-opus-4-5-20251101","type":"model"}],"has_more":false}`)
-	}))
-	defer server.Close()
-
-	a := &Anthropic{APIKey: "test-key", BaseURL: server.URL}
+	a := &Anthropic{APIKey: "test-key", BaseURL: modelsListServer(t)}
 	g := genkit.Init(context.Background(), genkit.WithPlugins(a))
 
 	if IsDefinedModel(g, "claude-opus-4-5") {
-		t.Fatal("IsDefinedModel() = true for a model that was never defined")
+		t.Fatal("IsDefinedModel() = true for a model nothing has resolved yet")
 	}
-	if _, err := a.RegisterModel(g, "claude-opus-4-5", nil); err != nil {
-		t.Fatalf("RegisterModel() after the guard error = %v", err)
+	if genkit.LookupModel(g, "anthropic/claude-opus-4-5") == nil {
+		t.Fatal("LookupModel() = nil, want the plugin to resolve the model")
 	}
 	if !IsDefinedModel(g, "claude-opus-4-5") {
-		t.Error("IsDefinedModel() = false after RegisterModel()")
+		t.Error("IsDefinedModel() = false after the resolving lookup registered it")
 	}
 }
 
 // TestDefineModelDoesNotRegister pins the deprecated builder: it hands back a
-// model without touching the registry, which is what it has always done and
-// what separates it from RegisterModel.
+// model without touching the registry, which is why capabilities passed to it
+// never reach the model that serves a request.
 func TestDefineModelDoesNotRegister(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 
@@ -401,5 +419,18 @@ func TestDefineModelDoesNotRegister(t *testing.T) {
 	}
 	if IsDefinedModel(g, name) {
 		t.Errorf("IsDefinedModel(%q) = true after DefineModel(), want the deprecated builder to leave the registry alone", name)
+	}
+}
+
+// TestDefineModelRequiresInit pins the guard that was missing while
+// capabilities came from a registration call: an uninitialized plugin has no
+// client, so building a model from it would hand back one that fails much
+// later with an error pointing nowhere near the cause.
+func TestDefineModelRequiresInit(t *testing.T) {
+	a := &Anthropic{}
+	g := genkit.Init(context.Background())
+
+	if _, err := a.DefineModel(g, "claude-opus-4-5", nil); err == nil {
+		t.Error("DefineModel() error = nil on an uninitialized plugin, want it refused")
 	}
 }

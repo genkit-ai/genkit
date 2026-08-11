@@ -18,6 +18,7 @@ package anthropic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -31,6 +32,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/internal"
 	ant "github.com/firebase/genkit/go/plugins/internal/anthropic"
 )
 
@@ -45,6 +47,24 @@ var dateSuffix = regexp.MustCompile(`-\d{8}$`)
 type Anthropic struct {
 	APIKey  string // If not provided, defaults to ANTHROPIC_API_KEY
 	BaseURL string // Optional. If not provided, defaults to ANTHROPIC_BASE_URL
+
+	// Models overrides what the plugin knows about a Claude model, keyed by
+	// model ID, bare or provider-prefixed. Every Claude model already works
+	// without an entry here: known IDs carry curated capabilities and the rest
+	// take the Claude defaults. Supply an entry only to correct or extend what
+	// the plugin resolves, most often to describe a model released after this
+	// version of the plugin.
+	//
+	//	&anthropic.Anthropic{Models: map[string]ai.ModelOptions{
+	//		"claude-opus-4-5": {Supports: &ai.ModelSupports{Tools: true, Multiturn: true}},
+	//	}}
+	//
+	// Fields left at their zero value keep what the plugin resolves, so an
+	// entry can pin one capability without restating the label or the config
+	// schema. Entries apply everywhere a model is described: the actions
+	// [Anthropic.ListActions] advertises and the ones
+	// [Anthropic.ResolveAction] builds to serve a request.
+	Models map[string]ai.ModelOptions
 
 	aclient     anthropic.Client // Anthropic client
 	mu          sync.Mutex       // Mutex to control access
@@ -95,68 +115,64 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 	return []api.Action{}
 }
 
-// buildModel builds an unregistered Claude model. A nil opts takes the
-// capabilities the plugin resolves for that ID, and id is the model ID,
-// bare or provider-prefixed.
-func (a *Anthropic) buildModel(id string, opts *ai.ModelOptions) *ai.ModelAction {
-	// Trim before resolving, so a prefixed id still hits supportedModels.
-	id = strings.TrimPrefix(id, provider+"/")
-
-	var modelOpts ai.ModelOptions
-	if opts != nil {
-		modelOpts = *opts
-	} else {
-		modelOpts = modelOptions(id)
-	}
-
-	return newModel(a.aclient, id, id, modelOpts)
-}
-
-// RegisterModel registers a Claude model with g and returns it. The plugin
-// supplies the implementation; opts describes what the model supports, and a
-// nil opts takes the capabilities the plugin resolves for that ID, curated
-// for a known model and the Claude defaults for the rest.
-//
-// Most applications never need this. Every Claude model resolves on demand,
-// so naming one that was never registered is enough:
-//
-//	genkit.Generate(ctx, g, ai.WithModelName("anthropic/claude-opus-4-5"), ...)
-//
-// Reach for RegisterModel only to pin capabilities that differ from the ones
-// the plugin resolves, which is what opts is for.
-//
-// Registering an ID that is already registered panics, and generating with an
-// ID registers it, so register a model before its first use or guard with
-// [IsDefinedModel]. id is the model ID, bare or provider-prefixed.
-func (a *Anthropic) RegisterModel(g *genkit.Genkit, id string, opts *ai.ModelOptions) (ai.Model, error) {
-	model := a.buildModel(id, opts)
-	genkit.RegisterAction(g, model)
-	return model, nil
-}
-
 // DefineModel builds a Claude model and returns it, without registering it
 // with g.
 //
-// Deprecated: use [Anthropic.RegisterModel]. This method builds the model and
-// ignores g. Generation resolves a model from its name, so passing the result
-// to ai.WithModel contributes only that name and serves the request with a
-// model resolved from it instead; registering it with [genkit.RegisterAction]
-// is what makes these capabilities the ones used.
+// Deprecated: describe the model through [Anthropic.Models] instead. This
+// method builds the model and ignores g, so the result carries only the
+// model's name: generation resolves a model from that name and serves the
+// request with the capabilities the plugin resolves, not the ones passed
+// here. An entry in Models reaches both paths.
 func (a *Anthropic) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOptions) (ai.Model, error) {
-	return a.buildModel(id, opts), nil
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.initted {
+		return nil, errors.New("anthropic plugin not initialized")
+	}
+
+	// Trim before resolving, so a prefixed id still hits supportedModels.
+	id = strings.TrimPrefix(id, provider+"/")
+
+	modelOpts := a.modelOptions(id)
+	if opts != nil {
+		modelOpts = *opts
+	}
+
+	return newModel(a.aclient, id, id, modelOpts), nil
 }
 
 // modelOptions returns the ModelOptions for a Claude model ID. Known models
 // (see supportedModels) carry curated capabilities and labels; any other model
 // falls back to dynamicModelOptions, whose label newModel fills in from the
-// ID. This is the single source of model capabilities shared by ListActions
-// and ResolveAction, mirroring the JS plugin's claudeModelReference.
-func modelOptions(id string) ai.ModelOptions {
+// ID. An entry in [Anthropic.Models] overlays whichever of the two applies.
+//
+// This is the single source of model capabilities shared by ListActions and
+// ResolveAction, mirroring the JS plugin's claudeModelReference, which is what
+// makes a caller's override authoritative no matter which path describes the
+// model first.
+//
+// The caller is responsible for trimming the provider prefix off id; Models is
+// keyed either way, so both forms are accepted there.
+func (a *Anthropic) modelOptions(id string) ai.ModelOptions {
 	opts, ok := supportedModels[baseModelName(id)]
 	if !ok {
 		opts = dynamicModelOptions
 	}
+	if override, ok := a.modelOverride(id); ok {
+		opts = internal.OverlayModelOptions(opts, override)
+	}
 	return opts
+}
+
+// modelOverride returns the caller's entry for a bare model ID, accepting the
+// key in either the bare or the provider-prefixed form the rest of the package
+// takes.
+func (a *Anthropic) modelOverride(id string) (ai.ModelOptions, bool) {
+	if opts, ok := a.Models[id]; ok {
+		return opts, true
+	}
+	opts, ok := a.Models[provider+"/"+id]
+	return opts, ok
 }
 
 // ListActions lists all the actions supported by the Anthropic plugin
@@ -172,7 +188,7 @@ func (a *Anthropic) ListActions(ctx context.Context) []api.ActionDesc {
 	for _, name := range models {
 		// When listing discovered models, the Genkit action name and the
 		// Anthropic API model ID are identical.
-		actions = append(actions, newModel(a.aclient, name, name, modelOptions(name)).Desc())
+		actions = append(actions, newModel(a.aclient, name, name, a.modelOptions(name)).Desc())
 	}
 
 	return actions
@@ -188,11 +204,15 @@ func Model(g *genkit.Genkit, id string) ai.Model {
 	return genkit.LookupModel(g, modelName(id))
 }
 
-// IsDefinedModel reports whether a model is already registered, which is the
-// guard against registering one twice (see [Anthropic.RegisterModel]). The lookup
+// IsDefinedModel reports whether a model is already registered. The lookup
 // deliberately does not resolve dynamically: a resolving lookup would ask the
 // plugin to resolve the very model the caller is checking for, registering it
 // and answering true for any ID the Anthropic API can serve.
+//
+// Deprecated: this existed to guard a registration call that could panic on a
+// duplicate. Capabilities now come from [Anthropic.Models], which nothing has
+// to register and which no ordering can defeat, leaving this a question about
+// registry state that applications do not need to ask.
 func IsDefinedModel(g *genkit.Genkit, id string) bool {
 	return genkit.LookupAction(g, fmt.Sprintf("/%s/%s", api.ActionTypeModel, modelName(id))) != nil
 }
@@ -223,7 +243,7 @@ func (a *Anthropic) ResolveAction(atype api.ActionType, id string) api.Action {
 
 		// We register the model using the ID requested by the user, but
 		// use the resolved 'realID' (e.g. versioned) for actual API calls.
-		return newModel(a.aclient, id, realID, modelOptions(id))
+		return newModel(a.aclient, id, realID, a.modelOptions(id))
 	}
 	return nil
 }
