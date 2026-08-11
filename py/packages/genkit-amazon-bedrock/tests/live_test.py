@@ -36,6 +36,7 @@ from genkit_amazon_bedrock.converters import (
 from genkit_amazon_bedrock.embedders import BedrockEmbedder
 from genkit_amazon_bedrock.image import BedrockImageModel
 from genkit_amazon_bedrock.models import BedrockModel
+from genkit_amazon_bedrock.rerank import BedrockReranker, BedrockRerankOptions, RerankerRequest
 from genkit_amazon_bedrock.transport import BedrockTransport
 
 from genkit import (
@@ -76,6 +77,10 @@ NOVA_EMBED = 'amazon.nova-2-multimodal-embeddings-v1:0'
 
 NOVA_CANVAS = 'amazon.nova-canvas-v1:0'
 SD3 = 'stability.sd3-5-large-v1:0'
+
+COHERE_RERANK = 'cohere.rerank-v3-5:0'
+AMAZON_RERANK = 'amazon.rerank-v1:0'
+AMAZON_RERANK_REGIONS = ('us-west-2', 'eu-central-1', 'ap-northeast-1', 'ca-central-1')
 
 # Smallest PNG Titan accepts, ported from the Go plugin's live tests.
 PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAABjE+ibYAAAAASUVORK5CYII='
@@ -419,6 +424,52 @@ async def test_embed_cohere_rejects_an_image() -> None:
     # is refused locally rather than sent and rejected as a bad request.
     with pytest.raises(GenkitError, match='text-only'):
         await embed(COHERE_EMBED, [image_doc()])
+
+
+async def test_rerank_cohere() -> None:
+    reranker = BedrockReranker(model_id=COHERE_RERANK, transport=make_transport())
+    response = await reranker.rerank(
+        RerankerRequest(
+            query=text_doc('What is the capital of France?'),
+            documents=[
+                text_doc('The capital of France is Paris.'),
+                text_doc('The tallest mountain is Everest.'),
+                text_doc('Bananas are yellow.'),
+            ],
+            options=BedrockRerankOptions(top_n=2),
+        )
+    )
+
+    assert len(response.documents) == 2
+    top = [part.root for part in response.documents[0].content if isinstance(part.root, TextPart)]
+    assert top and 'Paris' in (top[0].text or '')
+    assert response.documents[0].metadata.score >= response.documents[1].metadata.score
+
+
+@pytest.mark.skipif(
+    os.environ.get('AWS_REGION') not in AMAZON_RERANK_REGIONS,
+    reason='amazon.rerank-v1:0 is offered in us-west-2, eu-central-1, ap-northeast-1 and ca-central-1 only',
+)
+async def test_rerank_amazon() -> None:
+    # The Amazon family takes the same body minus api_version, which its schema
+    # rejects outright, so this is the only wire check of that difference.
+    reranker = BedrockReranker(model_id=AMAZON_RERANK, transport=make_transport())
+    response = await reranker.rerank(
+        RerankerRequest(
+            query=text_doc('What is the capital of France?'),
+            documents=[
+                text_doc('The capital of France is Paris.'),
+                text_doc('The tallest mountain is Everest.'),
+                text_doc('Bananas are yellow.'),
+            ],
+            options=BedrockRerankOptions(top_n=2),
+        )
+    )
+
+    assert len(response.documents) == 2
+    top = [part.root for part in response.documents[0].content if isinstance(part.root, TextPart)]
+    assert top and 'Paris' in (top[0].text or '')
+    assert response.documents[0].metadata.score >= response.documents[1].metadata.score
 
 
 @pytest.mark.skipif(
