@@ -40,6 +40,43 @@ func TestConfigToMap_GenerateContentConfig(t *testing.T) {
 	checkDescriptions(t, "Gemini", schema, gccOverrides.descriptions)
 }
 
+// TestConfigToMap_HiddenFieldsStayValid checks that hiding a field only
+// removes it from the dev UI. The schema is enforced by input validation on
+// every request, so an object that lost a property must accept extra keys;
+// otherwise a config the plugin handles (candidateCount) or answers with a
+// pointer to the right primitive (systemInstruction) would be rejected as an
+// unknown property instead.
+func TestConfigToMap_HiddenFieldsStayValid(t *testing.T) {
+	schema := configToMap(genai.GenerateContentConfig{})
+
+	if schema["additionalProperties"] != true {
+		t.Errorf("root additionalProperties = %v, want true (systemInstruction et al. are hidden from it)", schema["additionalProperties"])
+	}
+	if toolItem := navigate(schema, "tools", "[]"); toolItem != nil {
+		if toolItem["additionalProperties"] != true {
+			t.Errorf("tools[] additionalProperties = %v, want true (functionDeclarations is hidden from it)", toolItem["additionalProperties"])
+		}
+	}
+
+	// Objects that kept every field stay strict, so typos are still caught.
+	if thinking := navigate(schema, "thinkingConfig"); thinking != nil {
+		if thinking["additionalProperties"] != false {
+			t.Errorf("thinkingConfig additionalProperties = %v, want false", thinking["additionalProperties"])
+		}
+	}
+	for _, name := range []string{"Imagen", "Veo"} {
+		var s map[string]any
+		if name == "Imagen" {
+			s = configToMap(genai.GenerateImagesConfig{})
+		} else {
+			s = configToMap(genai.GenerateVideosConfig{})
+		}
+		if s["additionalProperties"] != false {
+			t.Errorf("%s schema additionalProperties = %v, want false (it hides nothing)", name, s["additionalProperties"])
+		}
+	}
+}
+
 func TestConfigToMap_GenerateImagesConfig(t *testing.T) {
 	checkDescriptions(t, "Imagen", configToMap(genai.GenerateImagesConfig{}), gicOverrides.descriptions)
 }

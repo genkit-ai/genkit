@@ -163,7 +163,10 @@ class ActionRunner:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.exception('Error executing action')
+            # Dev UI already shows the error + stack from the reflection response.
+            # Dumping a full traceback here turns every playground failure into
+            # terminal noise.
+            logger.debug('Action failed: %s: %s', type(e).__name__, e, exc_info=True)
             self.queue.put_nowait(json.dumps({'error': get_reflection_json(e).model_dump(by_alias=True)}))
         finally:
             self.trace_ready.set()
@@ -204,7 +207,7 @@ def create_reflection_asgi_app(
         return JSONResponse({'status': 'OK'})
 
     async def terminate(_: Request) -> JSONResponse:
-        logger.info('Shutting down...')
+        logger.debug('Shutting down...')
         asyncio.get_running_loop().call_soon(os.kill, os.getpid(), signal.SIGTERM)
         return JSONResponse({'status': 'OK'})
 

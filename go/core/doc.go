@@ -34,17 +34,18 @@ provide:
 
 Define a non-streaming action:
 
-	action := core.DefineAction(registry, "myAction",
+	action := core.NewActionOf(api.ActionTypeCustom, "myAction", nil,
 		func(ctx context.Context, input string) (string, error) {
 			return "processed: " + input, nil
 		},
 	)
+	action.Register(registry)
 
 	result, err := action.Run(context.Background(), "hello")
 
 Define a streaming action that sends chunks during execution:
 
-	streamingAction := core.DefineStreamingAction(registry, "countdown",
+	streamingAction := core.NewStreamingActionOf(api.ActionTypeCustom, "countdown", nil,
 		func(ctx context.Context, start int, cb core.StreamCallback[string]) (string, error) {
 			for i := start; i > 0; i-- {
 				if cb != nil {
@@ -57,13 +58,14 @@ Define a streaming action that sends chunks during execution:
 			return "Liftoff!", nil
 		},
 	)
+	streamingAction.Register(registry)
 
 # Flows
 
 Flows are user-defined actions that orchestrate AI operations. They are the
 primary way application developers define business logic in Genkit:
 
-	flow := core.DefineFlow(registry, "myFlow",
+	flow := core.NewFlow("myFlow",
 		func(ctx context.Context, input string) (string, error) {
 			// Use Run to create traced sub-steps
 			result, err := core.Run(ctx, "step1", func() (string, error) {
@@ -75,10 +77,11 @@ primary way application developers define business logic in Genkit:
 			return result, nil
 		},
 	)
+	flow.Register(registry)
 
 Streaming flows can send intermediate results to callers:
 
-	streamingFlow := core.DefineStreamingFlow(registry, "generateReport",
+	streamingFlow := core.NewStreamingFlow("generateReport",
 		func(ctx context.Context, input Input, cb core.StreamCallback[Progress]) (Report, error) {
 			for i := 0; i < 100; i += 10 {
 				if cb != nil {
@@ -89,6 +92,7 @@ Streaming flows can send intermediate results to callers:
 			return Report{...}, nil
 		},
 	)
+	streamingFlow.Register(registry)
 
 # Traced Steps with Run
 
@@ -126,8 +130,8 @@ Chain multiple middleware together:
 
 Register JSON schemas for use in prompts and validation:
 
-	// Define a schema from a map
-	core.DefineSchema(registry, "Person", map[string]any{
+	// Register a schema from a map
+	registry.RegisterSchema("Person", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"name": map[string]any{"type": "string"},
@@ -136,8 +140,8 @@ Register JSON schemas for use in prompts and validation:
 		"required": []any{"name"},
 	})
 
-	// Define schemas from Go types (recommended)
-	core.DefineSchemasFor(registry, Person{}, Address{})
+	// Register a schema inferred from a Go type (recommended)
+	registry.RegisterSchema("Person", core.InferSchemaMap(Person{}))
 
 Schemas can be referenced in .prompt files by name.
 
@@ -156,8 +160,8 @@ and other capabilities. Implement the [api.Plugin] interface:
 
 	func (p *MyPlugin) Init(ctx context.Context) []api.Action {
 		// Initialize the plugin and return actions to register
-		model := ai.DefineModel(...)
-		tool := ai.DefineTool(...)
+		model := ai.NewModelAction(...)
+		tool := ai.NewTool(...)
 		return []api.Action{model, tool}
 	}
 
@@ -174,9 +178,9 @@ from an API), implement [api.DynamicPlugin]:
 		}
 	}
 
-	func (p *DynamicModelPlugin) ResolveAction(atype api.ActionType, name string) api.Action {
+	func (p *DynamicModelPlugin) ResolveAction(atype api.ActionType, id string) api.Action {
 		// Create and return the action on demand
-		return createModel(name)
+		return createModel(id)
 	}
 
 # Background Actions
@@ -184,16 +188,20 @@ from an API), implement [api.DynamicPlugin]:
 For long-running operations, use background actions that return immediately
 with an operation ID that can be polled for completion:
 
-	bgAction := core.DefineBackgroundAction(registry, "longTask",
-		func(ctx context.Context, input Input) (Output, error) {
+	bgAction := core.NewBackgroundActionOf(api.ActionTypeCustom, "longTask",
+		&core.BackgroundActionOptions[Input, Output]{
+			// Check polls operation status; omitting Cancel means the
+			// action does not support cancellation.
+			Check: func(ctx context.Context, op *core.Operation[Output]) (*core.Operation[Output], error) {
+				return checkOperationStatus(op)
+			},
+		},
+		func(ctx context.Context, input Input) (*core.Operation[Output], error) {
 			// Start the operation
 			return startLongOperation(input)
 		},
-		func(ctx context.Context, op *core.Operation[Output]) (*core.Operation[Output], error) {
-			// Check operation status
-			return checkOperationStatus(op)
-		},
 	)
+	bgAction.Register(registry)
 
 # Error Handling
 

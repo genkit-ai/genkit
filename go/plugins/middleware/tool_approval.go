@@ -21,8 +21,6 @@ import (
 	"slices"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core"
-	"github.com/firebase/genkit/go/core/tracing"
 )
 
 // ToolApproval is a middleware that interrupts tool execution unless the tool
@@ -73,22 +71,9 @@ func (t *ToolApproval) wrapTool(ctx context.Context, params *ai.ToolParams, next
 		return next(ctx, params)
 	}
 
-	// Emit a tool-shaped span so the interrupt is attributed to the tool in traces,
-	// mirroring the span that core/action.go would create if the tool had run.
-	spanMeta := &tracing.SpanMetadata{
-		Name:     name,
-		Type:     "action",
-		Subtype:  "tool",
-		Metadata: map[string]string{},
-	}
-	if flowName := core.FlowNameFromContext(ctx); flowName != "" {
-		spanMeta.Metadata["flow:name"] = flowName
-	}
-	_, err := tracing.RunInNewSpan(ctx, spanMeta, params.Request.Input,
-		func(ctx context.Context, _ any) (any, error) {
-			return nil, ai.NewToolInterruptError(map[string]any{
-				"message": "Tool not in approved list: " + name,
-			})
-		})
-	return nil, err
+	// No span is emitted here: the generate engine attributes a hook that
+	// short-circuits the tool to the tool itself in traces.
+	return nil, ai.NewToolInterruptError(map[string]any{
+		"message": "Tool not in approved list: " + name,
+	})
 }

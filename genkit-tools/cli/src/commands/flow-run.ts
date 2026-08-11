@@ -97,5 +97,8 @@ export const flowRun = new Command('flow:run')
       }
     };
 
-    await runWithManager(projectRoot, runAction, { runtimeCommand });
+    await runWithManager(projectRoot, runAction, {
+      runtimeCommand,
+      waitForActionKeys: [`/flow/${flowName}`],
+    });
   });

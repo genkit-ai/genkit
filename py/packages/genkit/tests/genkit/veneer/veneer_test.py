@@ -41,6 +41,7 @@ from genkit._core._typing import (
     EvalResponse,
     FinishReason,
     ModelInfo,
+    Operation,
     Part,
     Role,
     Score,
@@ -1570,13 +1571,18 @@ def test_define_model_with_info(setup_test: SetupFixture) -> None:
     action = ai.define_model(
         name='foo',
         fn=foo_model_fn,
-        info=ModelInfo(label='Foo Bar', supports=Supports(multiturn=True, tools=True)),
+        info=ModelInfo(
+            label='Foo Bar',
+            supports=Supports(multiturn=True, tools=True, system_role=True, long_running=True),
+        ),
     )
     assert action.metadata['model'] == {
         'label': 'Foo Bar',
         'supports': {
             'multiturn': True,
             'tools': True,
+            'systemRole': True,
+            'longRunning': True,
         },
     }
 
@@ -1767,3 +1773,54 @@ async def test_evaluate(setup_test: SetupFixture) -> None:
     assert response.root[1].test_case_id == 'case2'
     assert isinstance(response.root[1].evaluation, Score)
     assert response.root[1].evaluation.score is True
+
+
+def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
+    """Test that define_background_model correctly serializes info by alias and excludes None."""
+    ai, _, _, *_ = setup_test
+
+    async def start_fn(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+        return Operation(id='123', done=False)
+
+    async def check_fn(op: Operation) -> Operation:
+        return op
+
+    action = ai.define_background_model(
+        name='bg_model',
+        start=start_fn,
+        check=check_fn,
+        info=ModelInfo(
+            label='Background Model',
+            supports=Supports(multiturn=True, system_role=True),
+        ),
+    )
+    assert action.start_action.metadata['model'] == {
+        'label': 'Background Model',
+        'supports': {
+            'multiturn': True,
+            'systemRole': True,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_with_model_info_long_running(
+    setup_test: SetupFixture,
+) -> None:
+    """Verify generate_operation succeeds for a model defined with ModelInfo(supports=Supports(long_running=True))."""
+    ai, _, _, *_ = setup_test
+
+    async def my_model(request: ModelRequest) -> ModelResponse:
+        return ModelResponse(
+            message=Message(role='model', content=[TextPart(text='done')]),
+            operation=Operation(id='op123', done=False),
+        )
+
+    ai.define_model(
+        name='lr_model',
+        fn=my_model,
+        info=ModelInfo(supports=Supports(long_running=True)),
+    )
+
+    op = await ai.generate_operation(model='lr_model', prompt='test')
+    assert op is not None

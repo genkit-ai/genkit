@@ -547,9 +547,19 @@ export function action<
           subtype: config.actionType,
         });
         if (options?.context) {
-          setCustomMetadataAttributes({
-            context: JSON.stringify(options.context),
-          });
+          try {
+            const tracedContext: Record<string, unknown> = {
+              ...options.context,
+            };
+            if ('auth' in tracedContext) tracedContext.auth = '<redacted>';
+            if ('secrets' in tracedContext)
+              tracedContext.secrets = '<redacted>';
+            setCustomMetadataAttributes({
+              context: JSON.stringify(tracedContext),
+            });
+          } catch (e) {
+            // Safely ignore or log telemetry serialization errors to prevent crashing the action
+          }
         }
 
         traceId = span.spanContext().traceId;

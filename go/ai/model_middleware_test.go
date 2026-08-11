@@ -23,6 +23,8 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+
+	"github.com/firebase/genkit/go/core"
 )
 
 func TestValidateSupport(t *testing.T) {
@@ -254,7 +256,17 @@ func TestValidateSupport(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := validateSupport("test-model", tt.opts)(mockModelFunc)
+			// Version validation moved from validateSupport to
+			// normalizeConfig (it must see the raw, pre-conversion config),
+			// so chain both here the way model construction does.
+			var versions []string
+			if tt.opts != nil {
+				versions = tt.opts.Versions
+			}
+			handler := core.ChainMiddleware(
+				normalizeConfig[any]("test-model", versions),
+				validateSupport("test-model", tt.opts),
+			)(mockModelFunc)
 			_, err := handler(context.Background(), tt.input, nil)
 
 			if (err != nil) != tt.wantErr {

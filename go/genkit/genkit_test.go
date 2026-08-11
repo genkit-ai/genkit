@@ -18,11 +18,13 @@ package genkit
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"testing/fstest"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/api"
 )
 
 func TestStreamFlow(t *testing.T) {
@@ -208,6 +210,63 @@ func TestDefineSchemaWithType_Error(t *testing.T) {
 	DefineSchemasFor(g, Invalid{})
 }
 
+func TestDefineSchemasFor(t *testing.T) {
+	t.Run("registers multiple schemas at once", func(t *testing.T) {
+		g := Init(context.Background())
+
+		type User struct {
+			Name string `json:"name"`
+		}
+		type Order struct {
+			ID string `json:"id"`
+		}
+
+		DefineSchemasFor(g, User{}, &Order{})
+
+		for _, name := range []string{"User", "Order"} {
+			if g.reg.LookupSchema(name) == nil {
+				t.Errorf("Schema %s not found", name)
+			}
+		}
+	})
+
+	t.Run("panics on map value", func(t *testing.T) {
+		g := Init(context.Background())
+
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for map value")
+			}
+		}()
+
+		DefineSchemasFor(g, map[string]any{"type": "object"})
+	})
+
+	t.Run("panics on unnamed type", func(t *testing.T) {
+		g := Init(context.Background())
+
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for unnamed type")
+			}
+		}()
+
+		DefineSchemasFor(g, struct{ Name string }{})
+	})
+
+	t.Run("panics on nil value", func(t *testing.T) {
+		g := Init(context.Background())
+
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic for nil value")
+			}
+		}()
+
+		DefineSchemasFor(g, nil)
+	})
+}
+
 func TestDefineSchemaFor(t *testing.T) {
 	g := Init(context.Background())
 
@@ -226,6 +285,20 @@ func TestDefineSchemaFor(t *testing.T) {
 			t.Errorf("Schema %s not found", name)
 		}
 	}
+
+	t.Run("guard panic names DefineSchemaFor", func(t *testing.T) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("expected panic for map type")
+			}
+			if msg, ok := r.(string); !ok || !strings.HasPrefix(msg, "genkit.DefineSchemaFor:") {
+				t.Errorf("panic = %v, want it to name genkit.DefineSchemaFor", r)
+			}
+		}()
+
+		DefineSchemaFor[map[string]any](g)
+	})
 }
 
 func TestWithPromptFS(t *testing.T) {
@@ -285,5 +358,47 @@ input:
 				t.Fatalf("Expected prompt %q to be loaded", tt.promptName)
 			}
 		})
+	}
+}
+
+// pluginWithTool returns one of each primitive that a plugin is expected to be
+// able to ship, matching the plugin-authoring example in the core package
+// documentation.
+type pluginWithTool struct{}
+
+func (p *pluginWithTool) Name() string { return "toolplugin" }
+
+func (p *pluginWithTool) Init(ctx context.Context) []api.Action {
+	model := ai.NewModelAction("toolplugin/model", nil,
+		func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{Message: ai.NewModelTextMessage("ok")}, nil
+		})
+	tool := ai.NewTool("toolplugin/tool", "a tool shipped by a plugin",
+		func(ctx *ai.ToolContext, in string) (string, error) {
+			return in + "!", nil
+		})
+	return []api.Action{model, tool}
+}
+
+// A plugin ships tools the same way it ships models: by returning them in its
+// action slice. This is the shape the core package documentation prescribes,
+// and it only compiles because *ai.ToolAction satisfies api.Action.
+func TestPluginCanReturnTools(t *testing.T) {
+	g := Init(context.Background(), WithPlugins(&pluginWithTool{}))
+
+	if m := LookupModel(g, "toolplugin/model"); m == nil {
+		t.Error("LookupModel() = nil, want the model the plugin returned")
+	}
+
+	tool := LookupTool(g, "toolplugin/tool")
+	if tool == nil {
+		t.Fatal("LookupTool() = nil, want the tool the plugin returned")
+	}
+	out, err := tool.RunRaw(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("RunRaw() error: %v", err)
+	}
+	if out != "hi!" {
+		t.Errorf("RunRaw() = %v, want %q", out, "hi!")
 	}
 }

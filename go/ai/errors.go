@@ -54,6 +54,12 @@ var (
 	// not allow.
 	ErrInvalidPart = status.ErrInvalidArgument.Subtype("invalid part")
 
+	// ErrInputTypeMismatch means a prompt's input could not be interpreted as
+	// the type a content function declared, so the function was never called.
+	// The input may have come from [WithInput], the default recorded by
+	// [WithInputType], or the wire.
+	ErrInputTypeMismatch = status.ErrInvalidArgument.Subtype("input type mismatch")
+
 	// ErrUnresolvedToolRequest means a resumed generation left an interrupted
 	// tool request without a Respond or Restart directive.
 	ErrUnresolvedToolRequest = status.ErrInvalidArgument.Subtype("unresolved tool request")

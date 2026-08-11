@@ -20,11 +20,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
 	"github.com/google/go-cmp/cmp"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // newTestRegistry creates a fresh registry for testing with formats configured.
@@ -33,6 +36,20 @@ func newTestRegistry(t *testing.T) api.Registry {
 	r := registry.New()
 	ConfigureFormats(r)
 	return r
+}
+
+// childRegistry returns a per-test child of the package-level registry r. It
+// inherits r's fixtures (echoModel, gablorkenTool, the configured formats) by
+// lookup fallback, while anything the test defines lands in the child and is
+// discarded with it.
+//
+// Shadow r with it (`r := childRegistry(t)`) in any test that registers into
+// the package-level registry: r is built once per process, so a test that
+// registers directly into it panics on the second pass of `go test -count=N`,
+// which is how ordering and scheduling bugs get shaken out locally.
+func childRegistry(t *testing.T) api.Registry {
+	t.Helper()
+	return r.NewChild()
 }
 
 // fakeModelConfig holds configuration for creating a fake model.
@@ -70,7 +87,7 @@ func defineFakeModel(t *testing.T, r api.Registry, cfg fakeModelConfig) Model {
 			}, nil
 		}
 	}
-	return DefineModel(r, cfg.name, &ModelOptions{Supports: cfg.supports}, cfg.handler)
+	return defineModel(r, cfg.name, &ModelOptions{Supports: cfg.supports}, cfg.handler)
 }
 
 // echoModelHandler creates a handler that echoes back information about the request.
@@ -275,7 +292,7 @@ func assertNoPanic(t *testing.T, fn func()) {
 // defineFakeTool creates a simple tool for testing.
 func defineFakeTool(t *testing.T, r api.Registry, name, description string) Tool {
 	t.Helper()
-	return DefineTool(r, name, description,
+	return defineTool(r, name, description,
 		func(ctx *ToolContext, input struct {
 			Value string `json:"value"`
 		}) (string, error) {
@@ -283,10 +300,76 @@ func defineFakeTool(t *testing.T, r api.Registry, name, description string) Tool
 		})
 }
 
+// spanCollector is a minimal sdktrace.SpanExporter that records finished
+// spans so a test can assert on their attributes.
+type spanCollector struct {
+	mu    sync.Mutex
+	spans []sdktrace.ReadOnlySpan
+}
+
+func (c *spanCollector) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.spans = append(c.spans, spans...)
+	return nil
+}
+
+func (c *spanCollector) Shutdown(context.Context) error { return nil }
+
+// allByName returns every recorded span with the given name.
+func (c *spanCollector) allByName(name string) []sdktrace.ReadOnlySpan {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []sdktrace.ReadOnlySpan
+	for _, s := range c.spans {
+		if s.Name() == name {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// collectSpans registers an in-memory exporter on the global tracer provider
+// (the one tracing.RunInNewSpan writes through) for the duration of the test.
+// The SimpleSpanProcessor exports each span synchronously as it ends, so by
+// the time the call under test returns its spans are already recorded.
+func collectSpans(t *testing.T) *spanCollector {
+	t.Helper()
+	c := &spanCollector{}
+	sp := sdktrace.NewSimpleSpanProcessor(c)
+	tp := tracing.TracerProvider()
+	tp.RegisterSpanProcessor(sp)
+	t.Cleanup(func() { tp.UnregisterSpanProcessor(sp) })
+	return c
+}
+
+// spanAttr returns the string value of the named span attribute, if present.
+func spanAttr(span sdktrace.ReadOnlySpan, key string) (string, bool) {
+	for _, kv := range span.Attributes() {
+		if string(kv.Key) == key {
+			return kv.Value.AsString(), true
+		}
+	}
+	return "", false
+}
+
+// assertSpanAttr fails the test unless span carries key with value want.
+func assertSpanAttr(t *testing.T, span sdktrace.ReadOnlySpan, key, want string) {
+	t.Helper()
+	got, ok := spanAttr(span, key)
+	if !ok {
+		t.Errorf("span %q: missing attribute %q", span.Name(), key)
+		return
+	}
+	if got != want {
+		t.Errorf("span %q: %s = %q, want %q", span.Name(), key, got, want)
+	}
+}
+
 // defineFakeEmbedder creates a simple embedder for testing.
 func defineFakeEmbedder(t *testing.T, r api.Registry, name string) Embedder {
 	t.Helper()
-	return DefineEmbedder(r, name, nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
+	return defineEmbedder(r, name, nil, func(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
 		embeddings := make([]*Embedding, len(req.Input))
 		for i := range req.Input {
 			embeddings[i] = &Embedding{
@@ -300,7 +383,7 @@ func defineFakeEmbedder(t *testing.T, r api.Registry, name string) Embedder {
 // defineFakeRetriever creates a simple retriever for testing.
 func defineFakeRetriever(t *testing.T, r api.Registry, name string, docs []*Document) Retriever {
 	t.Helper()
-	return DefineRetriever(r, name, nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
+	return defineRetriever(r, name, nil, func(ctx context.Context, req *RetrieverRequest) (*RetrieverResponse, error) {
 		return &RetrieverResponse{Documents: docs}, nil
 	})
 }

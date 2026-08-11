@@ -88,18 +88,13 @@ def _remove_file(file_path: Path | None) -> bool:
     Returns:
         True if cleanup was successful or file didn't exist, False on error.
     """
-    # NOTE: Neither print nor logger appears to work during atexit, so print is intentional here.
+    # Logger is unreliable during atexit; only print on failure.
     if not file_path:
         return True
     try:
         if file_path.exists():
-            print(f'Removing file: {file_path}')  # noqa: T201 - atexit handler, logger unavailable
             file_path.unlink()
-            # Consider success if unlink didn't raise error
-            return True
-        else:
-            # Consider success if file already gone
-            return True
+        return True
     except Exception as e:
         print(f'Error deleting {file_path}: {e}')  # noqa: T201 - atexit handler, logger unavailable
         return False
@@ -158,7 +153,7 @@ def _create_and_write_runtime_file(runtime_dir: Path, spec: ServerSpec) -> Path:
     with Path(runtime_file_path).open('w', encoding='utf-8') as f:
         _ = f.write(metadata)
 
-    logger.info(f'Initialized runtime file: {runtime_file_path}')
+    logger.debug(f'Initialized runtime file: {runtime_file_path}')
     _ = sys.stdout.flush()
     _ = sys.stderr.flush()
     return runtime_file_path

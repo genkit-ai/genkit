@@ -37,6 +37,15 @@ type DynamicPlugin interface {
 	Plugin
 	// ListActions returns a list of action descriptors that the plugin is capable of resolving to [Action]s.
 	ListActions(ctx context.Context) []ActionDesc
-	// ResolveAction resolves an action type and name to a [Action].
-	ResolveAction(atype ActionType, name string) Action
+	// ResolveAction resolves an action type and ID to a [Action]. id is the
+	// bare action ID: the registry has already parsed the key and matched the
+	// provider to this plugin, so the prefix is gone by the time it arrives.
+	//
+	// The registry registers the returned action and then looks up the
+	// requested key, so the action's Register may cover sibling keys beyond
+	// the requested one. In particular, an action bundle (e.g. a background
+	// action, whose Register covers its start, check, and cancel actions) is
+	// the correct return value for a request for any of its component types;
+	// do not hand-roll a standalone action per component type.
+	ResolveAction(atype ActionType, id string) Action
 }

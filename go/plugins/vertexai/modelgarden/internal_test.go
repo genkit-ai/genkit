@@ -40,4 +40,11 @@ func TestDefineModel_NilOpts(t *testing.T) {
 			t.Fatalf("err = %v, want one mentioning nil ai.ModelOptions", err)
 		}
 	})
+	t.Run("Mistral", func(t *testing.T) {
+		m := &Mistral{initted: true}
+		_, err := m.DefineModel("mistral-test", nil)
+		if err == nil || !strings.Contains(err.Error(), "nil ai.ModelOptions") {
+			t.Fatalf("err = %v, want one mentioning nil ai.ModelOptions", err)
+		}
+	})
 }

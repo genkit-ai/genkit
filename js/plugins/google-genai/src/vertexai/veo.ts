@@ -27,13 +27,13 @@ import { isKnownKey } from '../common/utils.js';
 import { veoCheckOperation, veoPredict } from './client.js';
 import {
   fromVeoOperation,
-  toVeoClientOptions,
   toVeoModel,
   toVeoOperationRequest,
   toVeoPredictRequest,
 } from './converters.js';
 import { ClientOptions, Model, VertexPluginOptions } from './types.js';
 import {
+  applyContextOverrides,
   calculateRequestOptions,
   checkModelName,
   extractVersion,
@@ -218,8 +218,11 @@ export function defineModel(
     name: ref.name,
     ...ref.info,
     configSchema: ref.configSchema,
-    async start(request) {
-      const clientOpt = calculateRequestOptions(clientOptions, request.config);
+    async start(request, options) {
+      const clientOpt = applyContextOverrides(
+        calculateRequestOptions(clientOptions, request.config),
+        options?.context
+      );
       const veoPredictRequest = toVeoPredictRequest(request);
 
       const response = await veoPredict(
@@ -228,16 +231,19 @@ export function defineModel(
         clientOpt
       );
 
-      return fromVeoOperation(response, clientOpt);
+      return fromVeoOperation(response);
     },
-    async check(operation) {
-      const checkClientOptions = toVeoClientOptions(operation, clientOptions);
+    async check(operation, options) {
+      const checkClientOptions = applyContextOverrides(
+        clientOptions,
+        options?.context
+      );
       const response = await veoCheckOperation(
         toVeoModel(operation),
         toVeoOperationRequest(operation),
         checkClientOptions
       );
-      return fromVeoOperation(response, checkClientOptions);
+      return fromVeoOperation(response);
     },
   });
 }

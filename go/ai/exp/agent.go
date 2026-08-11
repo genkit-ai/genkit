@@ -259,9 +259,10 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 			TurnIndex:        s.turnIndex,
 		}
 		spanMeta := &tracing.SpanMetadata{
-			// Match the JS agent's turn span so cross-language traces line up:
-			// name "runTurn-N" (1-indexed) and type flowStep with no subtype
-			// (JS's run() sets only genkit:type, no genkit:metadata:subtype).
+			// The turn span's shape is fixed so traces from every SDK
+			// line up: name "runTurn-N" (1-indexed) and type flowStep
+			// with no subtype (genkit:type only, no
+			// genkit:metadata:subtype).
 			Name: fmt.Sprintf("runTurn-%d", s.turnIndex+1),
 			Type: "flowStep",
 		}
@@ -816,7 +817,7 @@ func DefinePromptAgent[State any](
 // [SessionRunner] for turn and state management; call [SessionRunner.Run]
 // to enter the per-turn loop.
 //
-// This is the agent counterpart of [core.NewStreamingAction]: use it when
+// This is the agent counterpart of [core.NewStreamingActionOf]: use it when
 // the agent must outlive or precede a registry (e.g. built in a library,
 // registered conditionally, or moved between registries). For the common
 // case, [DefineCustomAgent] creates and registers in one step.
@@ -863,7 +864,7 @@ func newCustomAgent[State any](
 	if cfg.description != "" {
 		metadata["description"] = cfg.description
 	}
-	action := core.NewBidiAction(name, api.ActionTypeAgent,
+	action := core.NewBidiActionOf(api.ActionTypeAgent, name,
 		&core.BidiActionOptions{Metadata: metadata},
 		func(
 			ctx context.Context,
@@ -1030,9 +1031,9 @@ type fnDoneResult[State any] struct {
 // keys under which an agent records its identifiers: the session ID on the
 // root action span, and the turn-end snapshot ID on each server-managed turn
 // span. They are the "genkit:metadata:"-prefixed forms of the
-// "agent:sessionId" / "agent:snapshotId" custom-metadata keys the JS agent
-// sets via setCustomMetadataAttributes; the prefix is inlined here because
-// Go's tracing package exposes no setCustomMetadataAttributes helper.
+// "agent:sessionId" / "agent:snapshotId" custom-metadata keys every agent
+// records; the prefix is inlined here because Go's tracing package exposes no
+// custom-metadata helper.
 const (
 	sessionIDSpanAttrKey  = "genkit:metadata:agent:sessionId"
 	snapshotIDSpanAttrKey = "genkit:metadata:agent:snapshotId"
@@ -1087,10 +1088,9 @@ func newAgentRuntime[State any](
 
 	// Tag the agent's root action span (the current span here, before any turn
 	// span is opened) with the session ID so traces from the same conversation
-	// can be correlated. Mirrors the JS agent, which calls
-	// setCustomMetadataAttributes({'agent:sessionId': ...}) once at the start of
-	// the action body. trace.SpanFromContext never returns nil (it yields a
-	// no-op span when none is active), so the SetAttributes is always safe.
+	// can be correlated. It is written once at the start of the action body.
+	// trace.SpanFromContext never returns nil (it yields a no-op span when none
+	// is active), so the SetAttributes is always safe.
 	trace.SpanFromContext(ctx).SetAttributes(
 		attribute.String(sessionIDSpanAttrKey, session.state.SessionID))
 
@@ -2473,6 +2473,90 @@ func (i *detachIntake) stopAndWait() {
 // excluded from session history after generation.
 const promptMessageKey = "_genkit_prompt"
 
+// sessionMessageKey marks the session's own messages on their way into the
+// prompt render. The prompt decides where they land, so afterwards this is the
+// only thing separating them from its scaffolding. [tagRenderedMessages] strips
+// it before the model sees anything.
+const sessionMessageKey = "_genkit_history"
+
+// taggedMessage returns a copy of m carrying key in its metadata. Copying
+// matters: Render may alias metadata from shared prompt config, so writing in
+// place would leak the tag into the registered prompt and race with concurrent
+// invocations.
+func taggedMessage(m *ai.Message, key string) *ai.Message {
+	tagged := *m
+	tagged.Metadata = maps.Clone(tagged.Metadata)
+	if tagged.Metadata == nil {
+		tagged.Metadata = make(map[string]any, 1)
+	}
+	tagged.Metadata[key] = true
+	return &tagged
+}
+
+// hasTag reports whether m carries key.
+func hasTag(m *ai.Message, key string) bool {
+	return m.Metadata != nil && m.Metadata[key] == true
+}
+
+// untaggedMessage returns m without key, copying only when it is present.
+func untaggedMessage(m *ai.Message, key string) *ai.Message {
+	if !hasTag(m, key) {
+		return m
+	}
+	stripped := *m
+	stripped.Metadata = maps.Clone(stripped.Metadata)
+	delete(stripped.Metadata, key)
+	if len(stripped.Metadata) == 0 {
+		stripped.Metadata = nil
+	}
+	return &stripped
+}
+
+// markSessionMessages copies the session's messages with [sessionMessageKey]
+// so the render can be handed them without the tag reaching session state.
+func markSessionMessages(history []*ai.Message) []*ai.Message {
+	marked := make([]*ai.Message, 0, len(history))
+	for _, m := range history {
+		if m == nil {
+			continue
+		}
+		marked = append(marked, taggedMessage(m, sessionMessageKey))
+	}
+	return marked
+}
+
+// tagRenderedMessages splits the render output in one pass: what came from the
+// session loses its marker, and everything else is tagged as the prompt's
+// scaffolding so it can be dropped from session history after generation.
+func tagRenderedMessages(messages []*ai.Message) []*ai.Message {
+	tagged := make([]*ai.Message, 0, len(messages))
+	for _, m := range messages {
+		if m == nil {
+			continue
+		}
+		if hasTag(m, sessionMessageKey) {
+			tagged = append(tagged, untaggedMessage(m, sessionMessageKey))
+			continue
+		}
+		tagged = append(tagged, taggedMessage(m, promptMessageKey))
+	}
+	return tagged
+}
+
+// turnSessionMessages reduces the generate response's full message list to what
+// the session should hold: everything except the prompt's scaffolding, which
+// leaves the placed conversation, the tool loop's messages, and the reply.
+func turnSessionMessages(full []*ai.Message) []*ai.Message {
+	msgs := make([]*ai.Message, 0, len(full))
+	for _, m := range full {
+		if m == nil || hasTag(m, promptMessageKey) {
+			continue
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs
+}
+
 // validateUserMessage rejects inputs the prompt-backed agent loop can't
 // safely consume: a non-user role would be appended to history under the
 // wrong speaker, and tool request / response parts belong on the
@@ -2498,12 +2582,21 @@ func validateUserMessage(m *ai.Message) error {
 }
 
 // ValidateResumeAgainstHistory ensures every restart and respond entry on a
-// resume payload references a tool request the model actually issued, so a
+// resume payload references a tool request that is actually pending, so a
 // caller cannot drive a tool the model never asked for and interrupted on.
 // For restart entries it additionally checks the input is unchanged from the
 // original request, preventing a client from forging tool inputs on the
-// interrupted call. The whole history is searched (every model message), not
-// just the last turn. On a violation it returns an INVALID_ARGUMENT error.
+// interrupted call.
+//
+// Only the most recent model message in history is searched, and within it
+// newest-first. Resume handling resolves exactly that response's tool
+// requests, so an entry aimed at an earlier turn does nothing downstream;
+// worse, because refs are only made unique within a single response, a tool
+// name + ref recurs across turns, and searching further back would let a
+// client validate a restart whose input was forged from an already-settled
+// call. An entry naming an earlier turn is rejected as stale, separately
+// from one naming a tool request that never existed. On a violation it
+// returns an INVALID_ARGUMENT error.
 //
 // The prompt-backed agent loop ([DefineAgent]) calls this automatically. A
 // custom agent ([DefineCustomAgent]) that accepts an [AgentInput.Resume] from
@@ -2519,41 +2612,69 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 		return nil
 	}
 
-	// Collect every tool request from all model messages in history.
-	var requests []*ai.ToolRequest
-	for _, msg := range history {
-		if msg == nil || msg.Role != ai.RoleModel {
-			continue
-		}
-		for _, p := range msg.Content {
-			if p.IsToolRequest() && p.ToolRequest != nil {
-				requests = append(requests, p.ToolRequest)
-			}
+	// The pending response is the last model message. Trailing non-model
+	// messages are skipped rather than treated as "nothing pending": a
+	// caller that sends a turn message alongside a resume payload leaves a
+	// user message last, and that combination must keep failing downstream
+	// on generate's own precondition instead of being rejected here.
+	pending := -1
+	for i := len(history) - 1; i >= 0; i-- {
+		if msg := history[i]; msg != nil && msg.Role == ai.RoleModel {
+			pending = i
+			break
 		}
 	}
-	find := func(name, ref string) *ai.ToolRequest {
-		for _, req := range requests {
-			if req.Name == name && req.Ref == ref {
-				return req
+
+	// findIn searches one model message's tool requests newest-first, so a
+	// malformed response repeating a name + ref resolves to its most recent
+	// occurrence.
+	findIn := func(idx int, name, ref string) *ai.ToolRequest {
+		if idx < 0 {
+			return nil
+		}
+		msg := history[idx]
+		if msg == nil || msg.Role != ai.RoleModel {
+			return nil
+		}
+		for j := len(msg.Content) - 1; j >= 0; j-- {
+			p := msg.Content[j]
+			if p.IsToolRequest() && p.ToolRequest != nil &&
+				p.ToolRequest.Name == name && p.ToolRequest.Ref == ref {
+				return p.ToolRequest
 			}
 		}
 		return nil
 	}
 
-	// Restart entries: name + ref must exist and the input must match the
-	// original request exactly. IsToolRequest only checks the part kind, so
-	// guard the pointer too: a hand-built NewToolRequestPart(nil) is kind
+	// unresolved renders the rejection for an entry that matches nothing in
+	// the pending response. Earlier turns are consulted only to pick the
+	// message: a caller replaying a settled payload should not be told the
+	// tool request never existed.
+	unresolved := func(field, name, ref string) error {
+		for i := pending - 1; i >= 0; i-- {
+			if findIn(i, name, ref) != nil {
+				return status.Errorf(status.ErrInvalidArgument,
+					"resume.%s references tool %q%s from an earlier turn which is no longer pending; only tool requests from the most recent model response can be resumed",
+					field, name, toolRefSuffix(ref))
+			}
+		}
+		return status.Errorf(status.ErrInvalidArgument,
+			"resume.%s references tool %q%s which was not found in session history",
+			field, name, toolRefSuffix(ref))
+	}
+
+	// Restart entries: name + ref must be pending and the input must match
+	// the original request exactly. IsToolRequest only checks the part kind,
+	// so guard the pointer too: a hand-built NewToolRequestPart(nil) is kind
 	// PartToolRequest with a nil ToolRequest.
 	for _, p := range resume.Restart {
 		if !p.IsToolRequest() || p.ToolRequest == nil {
 			continue
 		}
 		req := p.ToolRequest
-		match := find(req.Name, req.Ref)
+		match := findIn(pending, req.Name, req.Ref)
 		if match == nil {
-			return status.Errorf(status.ErrInvalidArgument,
-				"resume.restart references tool %q%s which was not found in session history",
-				req.Name, toolRefSuffix(req.Ref))
+			return unresolved("restart", req.Name, req.Ref)
 		}
 		if !jsonEqual(normalizeJSON(req.Input), normalizeJSON(match.Input)) {
 			return status.Errorf(status.ErrInvalidArgument,
@@ -2562,16 +2683,14 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 		}
 	}
 
-	// Respond entries: name + ref must match a tool request in history.
+	// Respond entries: name + ref must match a pending tool request.
 	for _, p := range resume.Respond {
 		if !p.IsToolResponse() || p.ToolResponse == nil {
 			continue
 		}
 		resp := p.ToolResponse
-		if find(resp.Name, resp.Ref) == nil {
-			return status.Errorf(status.ErrInvalidArgument,
-				"resume.respond references tool %q%s which was not found in session history",
-				resp.Name, toolRefSuffix(resp.Ref))
+		if findIn(pending, resp.Name, resp.Ref) == nil {
+			return unresolved("respond", resp.Name, resp.Ref)
 		}
 	}
 
@@ -2604,35 +2723,27 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 				return nil, err
 			}
 
-			actionOpts, err := prompt.Render(ctx, defaultInput)
+			// Hand the conversation to the render instead of splicing it
+			// in afterwards: a prompt-backed agent is a prompt, so where
+			// the conversation goes is the prompt's decision, which is
+			// what makes trimming or summarizing possible.
+			//
+			// This is the whole session, including this turn's message,
+			// since sess.Run has already stored it. Only the render sees
+			// the context: generation below runs on the original, so the
+			// conversation does not ride along into tools and prompts
+			// invoked inside the generate loop.
+			history := sess.Messages()
+			actionOpts, err := prompt.Render(ai.NewHistoryContext(ctx, markSessionMessages(history)), defaultInput)
 			if err != nil {
 				return nil, fmt.Errorf("prompt render: %w", err)
 			}
 
-			// Tag base messages so they can be filtered out of session
-			// history after generation. Tag copies rather than the
-			// rendered messages themselves: Render can alias message
-			// metadata from shared prompt config (e.g. messages
-			// registered via [ai.WithMessages]), so tagging in place
-			// would leak the tag into the registered prompt and race
-			// with concurrent invocations.
-			base := make([]*ai.Message, 0, len(actionOpts.Messages))
-			for _, m := range actionOpts.Messages {
-				if m == nil {
-					continue
-				}
-				tagged := *m
-				tagged.Metadata = maps.Clone(tagged.Metadata)
-				if tagged.Metadata == nil {
-					tagged.Metadata = make(map[string]any, 1)
-				}
-				tagged.Metadata[promptMessageKey] = true
-				base = append(base, &tagged)
-			}
-
-			// Append conversation history after the base messages.
-			history := sess.Messages()
-			actionOpts.Messages = append(base, history...)
+			// Whatever the render produced that did not come from the
+			// session is the prompt's own scaffolding (system message,
+			// template output, few-shot examples). Tag it so it can be
+			// filtered out of session history after generation.
+			actionOpts.Messages = tagRenderedMessages(actionOpts.Messages)
 
 			// If a resume payload was provided, validate that every
 			// restart / respond entry references a tool request the model
@@ -2659,19 +2770,18 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 				return nil, fmt.Errorf("generate: %w", err)
 			}
 
-			// Replace session messages with the full history minus base
-			// messages. This captures intermediate tool call/response
-			// messages from the tool loop, not just the final response.
+			// Replace session messages with the full history minus the
+			// prompt's scaffolding. This captures intermediate tool
+			// call/response messages from the tool loop, not just the
+			// final response, and it is what carries a resumed tool
+			// request's resolved content back into the session.
+			//
+			// It is the conversation the prompt actually placed, so a
+			// prompt that trims or summarizes its history trims the
+			// session too, rather than recompacting an ever-growing
+			// transcript every turn.
 			if modelResp.Request != nil {
-				history := modelResp.History()
-				msgs := make([]*ai.Message, 0, len(history))
-				for _, m := range history {
-					if m.Metadata != nil && m.Metadata[promptMessageKey] == true {
-						continue
-					}
-					msgs = append(msgs, m)
-				}
-				sess.SetMessages(msgs)
+				sess.SetMessages(turnSessionMessages(modelResp.History()))
 			} else if modelResp.Message != nil {
 				sess.AddMessages(modelResp.Message)
 			}
@@ -2828,8 +2938,8 @@ func (c *AgentConnection[State]) SendText(text string) error {
 }
 
 // SendResume sends a resume payload to continue an interrupted generation.
-// Construct the payload with [ai.ToolDef.RestartWith] or
-// [ai.ToolDef.RespondWith] parts.
+// Construct the payload with [ai.ToolAction.RestartWith] or
+// [ai.ToolAction.RespondWith] parts.
 func (c *AgentConnection[State]) SendResume(resume *ToolResume) error {
 	return c.conn.Send(&AgentInput{Resume: resume})
 }

@@ -282,11 +282,16 @@ func PromptWithMessageHistory(ctx context.Context, g *genkit.Genkit) {
 }
 
 func PromptWithExecuteOverrides(ctx context.Context, g *genkit.Genkit) {
-	// Define prompt with default settings.
+	// Define prompt with default settings. A prompt that declares a
+	// conversation of its own places the caller's messages: {{history}} is
+	// where the ones passed to Execute go. Written with WithMessages, the
+	// opening turn would be the whole conversation and the messages below
+	// would have nowhere to land.
 	helloPrompt := genkit.DefinePrompt(
 		g, "PromptWithExecuteOverrides",
 		ai.WithSystem("You are a helpful AI assistant named Walt."),
-		ai.WithMessages(ai.NewUserTextMessage("Hi, my name is Bob!")),
+		ai.WithMessagesTemplate(`{{role "user"}}Hi, my name is Bob!
+{{history}}`),
 	)
 
 	// Call the model and add additional messages from the user.
@@ -307,15 +312,18 @@ func PromptWithFunctions(ctx context.Context, g *genkit.Genkit) {
 		Theme    string
 	}
 
-	// Define prompt with system and prompt functions.
+	// Define prompt with system and prompt functions. Declaring the input type
+	// on the function is all it takes: Genkit converts whatever the caller
+	// passed, so the same function works for an in-process call, a default
+	// input, and a run from the Dev UI.
 	helloPrompt := genkit.DefinePrompt(
 		g, "PromptWithFunctions",
 		ai.WithInputType(HelloPromptInput{Theme: "pirate"}),
-		ai.WithSystemFn(func(ctx context.Context, input any) (string, error) {
-			return fmt.Sprintf("You are a helpful AI assistant named Walt. Talk in the style of: %s", input.(HelloPromptInput).Theme), nil
+		ai.WithSystemFn(func(ctx context.Context, input HelloPromptInput) (string, error) {
+			return fmt.Sprintf("You are a helpful AI assistant named Walt. Talk in the style of: %s", input.Theme), nil
 		}),
-		ai.WithPromptFn(func(ctx context.Context, input any) (string, error) {
-			return fmt.Sprintf("Hello, my name is %s", input.(HelloPromptInput).UserName), nil
+		ai.WithPromptFn(func(ctx context.Context, input HelloPromptInput) (string, error) {
+			return fmt.Sprintf("Hello, my name is %s", input.UserName), nil
 		}),
 	)
 

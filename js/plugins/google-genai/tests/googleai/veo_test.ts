@@ -227,9 +227,13 @@ describe('Google AI Veo', () => {
       } = {}
     ): {
       start: (
-        request: GenerateRequest
+        request: GenerateRequest,
+        options?: any
       ) => Promise<Operation<GenerateResponseData>>;
-      check: (operation: Operation) => Promise<Operation<GenerateResponseData>>;
+      check: (
+        operation: Operation,
+        options?: any
+      ) => Promise<Operation<GenerateResponseData>>;
     } {
       const name = defineOptions.name || modelName;
       const apiVersion = defineOptions.apiVersion;
@@ -240,8 +244,8 @@ describe('Google AI Veo', () => {
       assert.strictEqual(model.__action.name, `googleai/${name}`);
       assert.strictEqual(model.__configSchema, VeoConfigSchema);
       return {
-        start: (req) => model.start(req),
-        check: (op) => model.check(op),
+        start: (req, options) => model.start(req, options),
+        check: (op, options) => model.check(op, options),
       };
     }
 
@@ -380,26 +384,20 @@ describe('Google AI Veo', () => {
         );
       });
 
-      it('persists client options to metadata', async () => {
+      it('should apply apiKey override from options.context', async () => {
         mockFetchResponse({ name: 'operations/start123', done: false });
         const { start } = captureModelRunner({ apiKey: defaultApiKey });
 
-        const req: GenerateRequest<typeof VeoConfigSchema> = {
-          ...request,
-          config: {
-            apiKey: 'request-level-api-key',
-          },
-        };
-
-        const operation = await start(req);
-
-        assert.deepStrictEqual(operation.metadata?.clientOptions, {
-          apiVersion: undefined,
-          apiKey: 'request-level-api-key',
-          baseUrl: undefined,
-          customHeaders: undefined,
-          experimental_debugTraces: undefined,
+        await start(request, {
+          context: { secrets: { apiKey: 'context-api-key' } },
         });
+
+        sinon.assert.calledOnce(fetchStub);
+        const fetchArgs = fetchStub.lastCall.args;
+        assert.strictEqual(
+          fetchArgs[1].headers['x-goog-api-key'],
+          'context-api-key'
+        );
       });
     });
 
@@ -478,28 +476,48 @@ describe('Google AI Veo', () => {
         );
       });
 
-      it('uses persisted options in check', async () => {
+      it('should apply apiKey override from options.context', async () => {
         mockFetchResponse({ name: operationId, done: true });
 
         const { check } = captureModelRunner({ apiKey: defaultApiKey });
 
-        const opWithMetadata: Operation = {
-          ...pendingOp,
-          metadata: {
-            clientOptions: {
-              apiKey: 'request-level-api-key',
-            },
-          },
-        };
-
-        await check(opWithMetadata);
+        await check(pendingOp, {
+          context: { secrets: { apiKey: 'context-api-key' } },
+        });
 
         sinon.assert.calledOnce(fetchStub);
         const fetchArgs = fetchStub.lastCall.args;
         assert.strictEqual(
           fetchArgs[1].headers['x-goog-api-key'],
-          'request-level-api-key'
+          'context-api-key'
         );
+      });
+
+      it('should apply apiVersion and baseUrl override from context.config', async () => {
+        mockFetchResponse({ name: operationId, done: true });
+
+        const { check } = captureModelRunner({ apiKey: defaultApiKey });
+
+        // This is what checkOperation folds a top-level `config` into.
+        await check(pendingOp, {
+          context: {
+            config: {
+              apiVersion: 'v1config',
+              baseUrl: 'https://config.example.com',
+            },
+          },
+        });
+
+        sinon.assert.calledOnce(fetchStub);
+        const fetchArgs = fetchStub.lastCall.args;
+        const expectedUrl = getGoogleAIUrl({
+          resourcePath: operationId,
+          clientOptions: {
+            apiVersion: 'v1config',
+            baseUrl: 'https://config.example.com',
+          },
+        });
+        assert.strictEqual(fetchArgs[0], expectedUrl);
       });
     });
   });

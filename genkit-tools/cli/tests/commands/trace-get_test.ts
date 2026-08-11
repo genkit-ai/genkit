@@ -14,7 +14,14 @@
  * limitations under the License.
  */
 
-import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
+import {
+  findProjectRoot,
+  forceStderr,
+  logger,
+  parseAndSanitizeJson,
+  sanitizeBase64DataUrls,
+  stackTraceSpans,
+} from '@genkit-ai/tools-common/utils';
 import {
   afterEach,
   beforeEach,
@@ -33,9 +40,17 @@ const mockedFindProjectRoot = findProjectRoot as jest.MockedFunction<
   typeof findProjectRoot
 >;
 const mockedLogger = logger as jest.Mocked<typeof logger>;
+const mockedForceStderr = forceStderr as jest.MockedFunction<
+  typeof forceStderr
+>;
 const mockedRunWithManager = runWithManager as jest.MockedFunction<
   typeof runWithManager
 >;
+const {
+  stackTraceSpans: actualStackTraceSpans,
+  parseAndSanitizeJson: actualParseAndSanitizeJson,
+  sanitizeBase64DataUrls: actualSanitizeBase64DataUrls,
+} = jest.requireActual('@genkit-ai/tools-common/utils') as any;
 
 describe('trace:get', () => {
   const createCommand = () =>
@@ -49,6 +64,20 @@ describe('trace:get', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockedFindProjectRoot.mockResolvedValue(mockProjectRoot);
+    mockedForceStderr.mockImplementation(() => {});
+    (stackTraceSpans as jest.MockedFunction<any>).mockImplementation(
+      actualStackTraceSpans
+    );
+    (parseAndSanitizeJson as jest.MockedFunction<any>).mockImplementation(
+      actualParseAndSanitizeJson
+    );
+    (sanitizeBase64DataUrls as jest.MockedFunction<any>).mockImplementation(
+      actualSanitizeBase64DataUrls
+    );
+
+    // Reset option values on the commander object
+    traceGet.setOptionValue('format', undefined);
+    traceGet.setOptionValue('keepBase64', undefined);
 
     // Mock console.log to avoid spamming test output
     jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -69,20 +98,85 @@ describe('trace:get', () => {
     jest.restoreAllMocks();
   });
 
-  it('should get and print trace details', async () => {
+  it('should get and print trace details in tree format by default', async () => {
     await createCommand().parseAsync(['node', 'trace:get', 'test-trace-id']);
 
+    expect(mockedForceStderr).toHaveBeenCalled();
     expect(mockedFindProjectRoot).toHaveBeenCalled();
     expect(mockedRunWithManager).toHaveBeenCalled();
 
-    // Verify console.log was called with stringified trace
     expect(console.log).toHaveBeenCalledWith(
-      JSON.stringify(
-        { traceId: 'test-id', details: 'mock-trace' },
-        undefined,
-        2
-      )
+      expect.stringContaining('Trace ID: test-id')
     );
+  });
+
+  it('should print trace in json format when -f json is specified', async () => {
+    mockedRunWithManager.mockImplementation(async (projectRoot, fn) => {
+      const mockManager = {
+        getTrace: jest.fn<any>().mockResolvedValue({
+          traceId: 'test-id',
+          spans: {
+            s1: {
+              spanId: 's1',
+              attributes: {
+                'genkit:input': '{"query":"hello"}',
+                img: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+              },
+            },
+          },
+        }),
+      };
+      await fn(mockManager as any);
+    });
+
+    await createCommand().parseAsync([
+      'node',
+      'trace:get',
+      'test-trace-id',
+      '-f',
+      'json',
+    ]);
+
+    const loggedStr = (console.log as jest.Mock).mock.calls[0][0] as string;
+    const parsed = JSON.parse(loggedStr);
+    expect(parsed.spans.s1.attributes['genkit:input']).toEqual({
+      query: 'hello',
+    });
+    expect(parsed.spans.s1.attributes.img).toContain('base64 data');
+  });
+
+  it('should preserve base64 data when --keep-base64 is specified', async () => {
+    const rawImage =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    mockedRunWithManager.mockImplementation(async (projectRoot, fn) => {
+      const mockManager = {
+        getTrace: jest.fn<any>().mockResolvedValue({
+          traceId: 'test-id',
+          spans: {
+            s1: {
+              spanId: 's1',
+              attributes: {
+                img: rawImage,
+              },
+            },
+          },
+        }),
+      };
+      await fn(mockManager as any);
+    });
+
+    await createCommand().parseAsync([
+      'node',
+      'trace:get',
+      'test-trace-id',
+      '-f',
+      'json',
+      '--keep-base64',
+    ]);
+
+    const loggedStr = (console.log as jest.Mock).mock.calls[0][0] as string;
+    const parsed = JSON.parse(loggedStr);
+    expect(parsed.spans.s1.attributes.img).toEqual(rawImage);
   });
 
   it('should handle trace not found', async () => {

@@ -43,6 +43,12 @@
 //	curl -N -X POST http://localhost:8080/assistantPromptFlow \
 //	  -H "Content-Type: application/json" \
 //	  -d '{"data": "what files are in my current directory?"}'
+//
+// Test a multi-turn chat flow, where the conversation is passed per execution:
+//
+//	curl -N -X POST http://localhost:8080/chatPromptFlow \
+//	  -H "Content-Type: application/json" \
+//	  -d '{"data": {"question": "What did I just ask you?", "history": [{"role": "user", "text": "How do I read a file in Go?"}, {"role": "model", "text": "Use os.ReadFile."}]}}'
 package main
 
 import (
@@ -98,6 +104,26 @@ type AssistantRequest struct {
 	Query string `json:"query" jsonschema:"description=The user's query or request"`
 }
 
+// ChatRequest is the chat prompt's input: just the new question. The
+// conversation is deliberately not in here, since it is passed to Execute and
+// placed by the prompt itself.
+type ChatRequest struct {
+	Question string `json:"question" jsonschema:"description=The new question to answer"`
+}
+
+// ChatTurn is one exchange in the conversation the client keeps.
+type ChatTurn struct {
+	Role string `json:"role" jsonschema:"enum=user,enum=model"`
+	Text string `json:"text"`
+}
+
+// ChatSession is what the chat flows receive: the new question plus the
+// conversation it continues.
+type ChatSession struct {
+	Question string     `json:"question"`
+	History  []ChatTurn `json:"history,omitempty" jsonschema:"description=The conversation so far oldest first"`
+}
+
 func main() {
 	ctx := context.Background()
 
@@ -110,7 +136,7 @@ func main() {
 	// Define schemas for the expected input and output types so that the Dotprompt files can reference them.
 	// Alternatively, you can specify the JSON schema by hand in the Dotprompt metadata.
 	// Code-defined prompts do not need to have schemas defined in advance but they too can reference them.
-	genkit.DefineSchemasFor(g, JokeRequest{}, Joke{}, RecipeRequest{}, Recipe{}, AssistantRequest{})
+	genkit.DefineSchemasFor(g, JokeRequest{}, Joke{}, RecipeRequest{}, Recipe{}, AssistantRequest{}, ChatRequest{})
 
 	// TODO: Include partials and helpers.
 
@@ -123,6 +149,8 @@ func main() {
 	DefineRecipeWithDotprompt(g)
 	DefineAssistantWithInlinePrompt(g)
 	DefineAssistantWithDotprompt(g)
+	DefineChatWithInlinePrompt(g)
+	DefineChatWithDotprompt(g)
 
 	// Optionally, start a web server to make the flows callable via HTTP.
 	mux := http.NewServeMux()
@@ -140,7 +168,7 @@ func DefineSimpleJokeWithInlinePrompt(g *genkit.Genkit) {
 		g, "joke.code",
 		ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 			ThinkingConfig: &genai.ThinkingConfig{
-				ThinkingBudget: genai.Ptr[int32](0),
+				ThinkingLevel: genai.ThinkingLevelMinimal,
 			},
 		})),
 		// Despite JokeRequest having defaults set in jsonschema tags, we can override it with values set in WithInputType.
@@ -199,7 +227,7 @@ func DefineStructuredJokeWithInlinePrompt(g *genkit.Genkit) {
 		g, "structured-joke.code",
 		ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 			ThinkingConfig: &genai.ThinkingConfig{
-				ThinkingBudget: genai.Ptr[int32](0),
+				ThinkingLevel: genai.ThinkingLevelMinimal,
 			},
 		})),
 		ai.WithPrompt("Share a long joke about {{topic}}."),
@@ -252,7 +280,7 @@ func DefineRecipeWithInlinePrompt(g *genkit.Genkit) {
 		g, "recipe.code",
 		ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 			ThinkingConfig: &genai.ThinkingConfig{
-				ThinkingBudget: genai.Ptr[int32](0),
+				ThinkingLevel: genai.ThinkingLevelMinimal,
 			},
 		})),
 		ai.WithSystem("You are an experienced chef. Come up with easy, creative recipes."),
@@ -335,7 +363,7 @@ func DefineAssistantWithInlinePrompt(g *genkit.Genkit) {
 			&middleware.Retry{MaxRetries: 2},
 			&middleware.Fallback{
 				Models: []ai.ModelRef{
-					googlegenai.ModelRef("googleai/gemini-3.1-flash-preview", nil),
+					googlegenai.ModelRef("googleai/gemini-3.5-flash", nil),
 					googlegenai.ModelRef("googleai/gemini-3.1-pro-preview", &genai.GenerateContentConfig{
 						Temperature: genai.Ptr[float32](2.0),
 					}),
@@ -383,4 +411,82 @@ func DefineAssistantWithDotprompt(g *genkit.Genkit) {
 			return "", nil
 		},
 	)
+}
+
+// DefineChatWithInlinePrompt demonstrates the simplest multi-turn prompt: one that
+// declares no conversation of its own. The messages passed to Execute become the
+// whole middle of the request, between the system message and the user prompt, so
+// nothing has to say where they go.
+func DefineChatWithInlinePrompt(g *genkit.Genkit) {
+	chatPrompt := genkit.DefinePrompt(
+		g, "chat.code",
+		ai.WithModelName("googleai/gemini-flash-latest"),
+		ai.WithInputType(ChatRequest{}),
+		ai.WithSystem("You are a helpful AI assistant named Walt. Keep replies to a few sentences."),
+		ai.WithPrompt("{{question}}"),
+	)
+
+	genkit.DefineStreamingFlow(g, "chatPromptFlow",
+		func(ctx context.Context, session ChatSession, sendChunk core.StreamCallback[string]) (string, error) {
+			stream := chatPrompt.ExecuteStream(ctx,
+				ai.WithInput(ChatRequest{Question: session.Question}),
+				// Placed for us, because the prompt claims no conversation
+				// slot. A prompt that does claim one, as chat.prompt below
+				// does, decides where these land instead.
+				ai.WithMessages(chatMessages(session.History)...),
+			)
+			for result, err := range stream {
+				if err != nil {
+					return "", fmt.Errorf("chat error: %w", err)
+				}
+				if result.Done {
+					return result.Response.Text(), nil
+				}
+				sendChunk(ctx, result.Chunk.Text())
+			}
+			return "", nil
+		},
+	)
+}
+
+// DefineChatWithDotprompt demonstrates the other end: a prompt that does claim the
+// conversation slot. A .prompt file's body is a multi-turn template, which is what
+// ai.WithMessagesTemplate is in code, so chat.prompt can script an opening exchange
+// and then mark where the real conversation goes with {{history}}. Claiming the slot
+// means placing it: without the marker the caller's messages would be inserted before
+// the template's final user turn, and a template that ends elsewhere would drop them.
+func DefineChatWithDotprompt(g *genkit.Genkit) {
+	genkit.DefineStreamingFlow(g, "chatDotpromptFlow",
+		func(ctx context.Context, session ChatSession, sendChunk core.StreamCallback[string]) (string, error) {
+			chatPrompt := genkit.LookupPrompt(g, "chat")
+			stream := chatPrompt.ExecuteStream(ctx,
+				ai.WithInput(ChatRequest{Question: session.Question}),
+				ai.WithMessages(chatMessages(session.History)...),
+			)
+			for result, err := range stream {
+				if err != nil {
+					return "", fmt.Errorf("chat error: %w", err)
+				}
+				if result.Done {
+					return result.Response.Text(), nil
+				}
+				sendChunk(ctx, result.Chunk.Text())
+			}
+			return "", nil
+		},
+	)
+}
+
+// chatMessages converts the client's turns into Genkit messages. Message text is
+// used verbatim, so a user who typed {{#if}} is quoted rather than compiled.
+func chatMessages(turns []ChatTurn) []*ai.Message {
+	messages := make([]*ai.Message, 0, len(turns))
+	for _, t := range turns {
+		if t.Role == "model" {
+			messages = append(messages, ai.NewModelTextMessage(t.Text))
+			continue
+		}
+		messages = append(messages, ai.NewUserTextMessage(t.Text))
+	}
+	return messages
 }

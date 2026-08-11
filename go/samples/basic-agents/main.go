@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This sample demonstrates Genkit's agent APIs by defining five agents in
+// This sample demonstrates Genkit's agent APIs by defining six agents in
 // different styles and exposing all of them through a single CLI. Each agent
 // lives in its own file so the styles can be compared side by side:
 //
@@ -28,6 +28,12 @@
 //     mid-turn to ask the user for approval before moving money, then
 //     resumes the tool with their answer. This exercises the tool
 //     interrupt / resume flow through the same CLI.
+//   - "barista" (barista.go) is the typed-session-state agent: an
+//     Agent[BaristaOrder] whose system instruction is a function rather than
+//     a fixed string. A tool writes the running order into session state and
+//     the prompt reads it back, so each turn is told what the earlier ones
+//     established. It is also why the CLI's agent list is type-erased (see
+//     agentEntry): the agents in it no longer share one state type.
 //   - "orchestrator" (orchestrator.go) uses the experimental Agents
 //     middleware to delegate to specialized sub-agents (researcher,
 //     engineer) through per-agent tools, merging their artifacts into its
@@ -37,7 +43,7 @@
 // turn, renders tool calls inline as the agent makes them, and routes tool
 // interrupts to the right handler.
 //
-// The first four agents persist their conversation state to a per-agent
+// The first five agents persist their conversation state to a per-agent
 // FileSessionStore under ./.genkit/snapshots/<agent>/; the orchestrator does
 // too, while its sub-agents run statelessly per delegation.
 //
@@ -69,6 +75,11 @@
 // balance) or "send $120 to bob" (a large transfer) to see the tool
 // interrupt flow: the turn pauses, the CLI asks you to approve or adjust,
 // and the tool resumes with your answer.
+//
+// Tip: pick "barista", order a drink, then ask "what have I ordered?" on a
+// later turn. The answer comes from session state written by a tool and read
+// back into the system instruction, not from the model re-reading the
+// transcript. /back and re-pick the agent to see it survive a resume.
 package main
 
 import (
@@ -89,7 +100,7 @@ import (
 // pirate, coder, and orchestrator agents reference it directly; the chef and
 // banker agents set the same model in their .prompt frontmatter.
 var flashModel = googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
-	ThinkingConfig: &genai.ThinkingConfig{ThinkingBudget: genai.Ptr[int32](0)},
+	ThinkingConfig: &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelMinimal},
 })
 
 func main() {
@@ -110,11 +121,12 @@ func main() {
 	// only one that supplies an onInterrupt handler; the others leave it
 	// nil and the CLI streams them exactly as before.
 	agents := []agentEntry{
-		{agent: defineInlineAgent(g)},
-		{agent: definePromptAgent(g)},
-		{agent: defineCustomAgent(g)},
-		{agent: defineBankerAgent(g), onInterrupt: handleTransferInterrupt},
-		{agent: defineOrchestratorAgent(g)},
+		newEntry(defineInlineAgent(g), nil),
+		newEntry(definePromptAgent(g), nil),
+		newEntry(defineCustomAgent(g), nil),
+		newEntry(defineBankerAgent(g), handleTransferInterrupt),
+		newEntry(defineBaristaAgent(g), nil),
+		newEntry(defineOrchestratorAgent(g), nil),
 	}
 
 	if err := runCLI(ctx, agents); err != nil {
@@ -127,12 +139,16 @@ func main() {
 // ./.genkit/snapshots/, or exits the process on failure. Used during
 // agent setup where there's nowhere sensible to return an error.
 //
+// The store is typed by the agent's session state, so each agent gets a store
+// that reads and writes its own shape: mustStore[any] for the agents that keep
+// no custom state, mustStore[BaristaOrder] for the one that does.
+//
 // A dir per agent keeps each agent's snapshots on disk separately, which
 // is tidy for browsing but not required: resumes are resolved by session
 // ID (see SnapshotReader.GetLatestSnapshot), so one shared store would
 // work the same.
-func mustStore(agentName string) *localstore.FileSessionStore[any] {
-	store, err := localstore.NewFileSessionStore[any]("./.genkit/snapshots/" + agentName)
+func mustStore[State any](agentName string) *localstore.FileSessionStore[State] {
+	store, err := localstore.NewFileSessionStore[State]("./.genkit/snapshots/" + agentName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating store for %q: %v\n", agentName, err)
 		os.Exit(1)

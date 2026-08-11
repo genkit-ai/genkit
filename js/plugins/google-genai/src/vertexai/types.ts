@@ -380,7 +380,10 @@ export declare interface Operation {
 export declare interface VeoOperation extends Operation {
   response?: {
     raiMediaFilteredCount?: number;
-    videos: VeoMedia[];
+    raiMediaFilteredReasons?: string[];
+    // `videos` is omitted when every generated sample is filtered out by
+    // the safety (RAI) filters, so it must be treated as optional.
+    videos?: VeoMedia[];
   };
 }
 

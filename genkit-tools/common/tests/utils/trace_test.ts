@@ -16,7 +16,7 @@
 
 import { describe, expect, it } from '@jest/globals';
 import type { TraceData } from '../../src/types';
-import { stackTraceSpans } from '../../src/utils';
+import { getSpanStatus, stackTraceSpans } from '../../src/utils';
 import { BASE_FLOW_SPAN_ID, MockTrace } from './trace';
 
 const TEST_TRACE: TraceData = {
@@ -51,5 +51,31 @@ describe('trace utils', () => {
     const span = stackTraceSpans(TEST_TRACE);
 
     expect(span).toBeUndefined();
+  });
+
+  describe('getSpanStatus', () => {
+    it('returns checkmark for status code 0 (UNSET) or 1 (OK)', () => {
+      expect(getSpanStatus({ status: { code: 0 } } as any)).toBe('✔');
+      expect(getSpanStatus({ status: { code: 1 } } as any)).toBe('✔');
+    });
+
+    it('returns cross for status code 2 (ERROR)', () => {
+      expect(getSpanStatus({ status: { code: 2 } } as any)).toBe('✖');
+    });
+
+    it('prefers genkit:state attribute if present', () => {
+      expect(
+        getSpanStatus({
+          attributes: { 'genkit:state': 'success' },
+          status: { code: 2 },
+        } as any)
+      ).toBe('✔');
+      expect(
+        getSpanStatus({
+          attributes: { 'genkit:state': 'error' },
+          status: { code: 0 },
+        } as any)
+      ).toBe('✖');
+    });
   });
 });
