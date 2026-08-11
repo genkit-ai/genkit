@@ -135,7 +135,9 @@ async def test_abort_flips_pending_only() -> None:
     pending = await store.save_snapshot(pending_snap.snapshot_id, lambda _: pending_snap)
     assert pending is not None
 
-    assert await abort_snapshot_in_store(store=store, snapshot_id=pending.snapshot_id) == SnapshotStatus.ABORTED
+    # Abort returns the *previous* status (spec: tests/specs/agent.yaml) —
+    # 'pending' when this call performed the flip.
+    assert await abort_snapshot_in_store(store=store, snapshot_id=pending.snapshot_id) == SnapshotStatus.PENDING
     snap = await store.get_snapshot(snapshot_id=pending.snapshot_id)
     assert snap is not None and snap.status == SnapshotStatus.ABORTED
 

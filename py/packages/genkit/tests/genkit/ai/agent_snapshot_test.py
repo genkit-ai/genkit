@@ -222,7 +222,8 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
         await chat.send('too soon')
 
     status = await task.abort()
-    assert status == SnapshotStatus.ABORTED
+    # abort() returns the previous status: pending while the turn was running.
+    assert status == SnapshotStatus.PENDING
     # Aborting drops the optimistic prompt; the resume id still names the aborted
     # snapshot, so a bare send keeps failing until we reload.
     assert chat.messages == history_before_detach
@@ -260,7 +261,7 @@ async def test_load_chat_by_session_skips_aborted_leaf_to_last_resumable() -> No
     last_good_parent = chat.snapshot_id
 
     task = await chat.detach('slow background work')
-    assert await task.abort() == SnapshotStatus.ABORTED
+    assert await task.abort() == SnapshotStatus.PENDING  # previous status
     await asyncio.sleep(1.1)  # let the aborted background turn unwind
 
     reloaded = await agent.load_chat(session_id=session_id)

@@ -316,7 +316,10 @@ def assert_init_matches_state_management(
 ) -> None:
     """Raise ``AgentInitError`` when init does not match the agent's store mode."""
     if (init.snapshot_id or init.session_id) and store is None:
-        field = 'snapshot_id' if init.snapshot_id else 'session_id'
+        # Wire-facing errors use the wire (camelCase) field names — the
+        # conformance spec (tests/specs/agent.yaml) pins this wording across
+        # implementations.
+        field = 'snapshotId' if init.snapshot_id else 'sessionId'
         raise AgentInitError(
             status='FAILED_PRECONDITION',
             message=(
@@ -325,12 +328,11 @@ def assert_init_matches_state_management(
             ),
         )
     if init.state is not None and store is not None:
-        fields = seeded_init_fields(init.state)
         raise AgentInitError(
             status='FAILED_PRECONDITION',
             message=(
-                f"Cannot send {fields} to agent '{agent_name}': this agent uses a "
-                "server-managed store. Send 'snapshot_id' or 'session_id' instead."
+                f"Cannot send 'state' to agent '{agent_name}': this agent uses a "
+                "server-managed store. Send 'snapshotId' or 'sessionId' instead."
             ),
         )
 
@@ -356,11 +358,6 @@ async def load_session(
     """
     name = agent_name or 'agent'
 
-    if init.snapshot_id and init.session_id:
-        raise AgentInitError(
-            status='INVALID_ARGUMENT',
-            message=(f"Cannot send both 'snapshot_id' and 'session_id' to agent '{name}'. Provide exactly one."),
-        )
     assert_init_matches_state_management(init=init, store=store, agent_name=name)
 
     ctx = get_current_context()
@@ -372,6 +369,18 @@ async def load_session(
                 status='NOT_FOUND',
                 message=f'Snapshot {init.snapshot_id!r} not found',
             )
+        # When init carries both ids, snapshotId selects the snapshot and
+        # sessionId acts as an ownership guard: the snapshot must belong to that
+        # session (see tests/specs/agent.yaml). API misuse -> thrown error.
+        if init.session_id:
+            snap_session_id = snap.session_id or (snap.state.session_id if snap.state else None)
+            if snap_session_id != init.session_id:
+                raise AgentInitError(
+                    status='INVALID_ARGUMENT',
+                    message=(
+                        f'Snapshot {init.snapshot_id!r} does not belong to session {init.session_id!r}.'
+                    ),
+                )
         # A failed/aborted/pending snapshot is kept for inspection but isn't a
         # valid place to continue a conversation from.
         if snap.status != SnapshotStatus.COMPLETED:
@@ -780,6 +789,13 @@ class AgentRuntime:
                 async for item in client_inputs:
                     if item.detach:
                         is_detached = True
+                        # Stop chunk emission immediately: a detached run streams
+                        # no chunks to the connection (tests/specs/agent.yaml:
+                        # 'detached run emits no customPatch chunks'). Setting the
+                        # flag here — before the payload is queued — closes the
+                        # race where the background turn starts streaming before
+                        # the detach branch of run() marks the runtime detached.
+                        self.detached = True
                         # Forward the detach input's payload (if any) into the turn
                         # loop and close it *before* signaling detach. Doing it in
                         # this order means the turn is deterministically queued for
