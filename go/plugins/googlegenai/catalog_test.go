@@ -18,12 +18,42 @@ package googlegenai
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 )
+
+// useFakeADC points Application Default Credentials at a throwaway file.
+//
+// VertexAI.Init detects ADC unconditionally and panics when it finds none, so
+// a test that initializes that backend otherwise passes on a machine holding
+// gcloud credentials and fails everywhere else, CI included. Detection stops at
+// the first source it finds and GOOGLE_APPLICATION_CREDENTIALS is the first one
+// consulted, so this decides the answer either way rather than only filling a
+// gap.
+//
+// The file never authenticates anything: detection parses it, and none of the
+// construction that follows issues a request. A test that reaches the API is a
+// live test and takes real credentials.
+func useFakeADC(t *testing.T) {
+	t.Helper()
+	const creds = `{
+  "type": "authorized_user",
+  "client_id": "fake-client-id.apps.googleusercontent.com",
+  "client_secret": "fake-client-secret",
+  "refresh_token": "fake-refresh-token",
+  "quota_project_id": "test-project"
+}`
+	path := filepath.Join(t.TempDir(), "application_default_credentials.json")
+	if err := os.WriteFile(path, []byte(creds), 0o600); err != nil {
+		t.Fatalf("writing fake ADC: %v", err)
+	}
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", path)
+}
 
 // modelLabel reads the label an action advertises, which is where a caller's
 // entry shows up once the plugin has described the model.
@@ -113,7 +143,8 @@ func TestVeoOverrideReachesResolution(t *testing.T) {
 func TestVertexAIOverrideReachesResolution(t *testing.T) {
 	t.Setenv("GOOGLE_CLOUD_PROJECT", "test-project")
 	t.Setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
-	t.Setenv("GOOGLE_API_KEY", "test-key")
+	// The Vertex backend authenticates with ADC, not an API key.
+	useFakeADC(t)
 
 	const id = "gemini-not-yet-released"
 	v := &VertexAI{Models: map[string]ai.ModelOptions{
