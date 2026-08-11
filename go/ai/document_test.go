@@ -485,6 +485,19 @@ func TestPartClone(t *testing.T) {
 		t.Error("mutating clone Custom affected original")
 	}
 
+	// A map-shaped Data value is cloned too, so mutating the clone's top-level
+	// keys must not affect the original (data parts, e.g. A2UI envelopes, are
+	// commonly map[string]any and shared by reference before this).
+	cpData, _ := cp.Data.(map[string]any)
+	if cpData == nil {
+		t.Fatalf("clone Data type = %T, want map[string]any", cp.Data)
+	}
+	cpData["extra"] = true
+	if _, ok := orig.Data.(map[string]any)["extra"]; ok {
+		t.Error("mutating clone Data affected original")
+	}
+
+
 	// Go types in metadata (e.g. []byte) must be preserved, not string-ified.
 	sig, ok := cp.Metadata["sig"].([]byte)
 	if !ok {

@@ -1430,7 +1430,10 @@ func (c *ModelResponseChunk) Text() string {
 	}
 	var sb strings.Builder
 	for _, p := range c.Content {
-		if p.IsText() || p.IsData() {
+		// Data parts are deliberately excluded: their payload lives on Data (not
+		// Text), so they contribute no text (e.g. A2UI envelope JSON must not
+		// leak into Text()).
+		if p.IsText() {
 			sb.WriteString(p.Text)
 		}
 	}
@@ -1557,11 +1560,18 @@ func (m *Message) Text() string {
 		return ""
 	}
 	if len(m.Content) == 1 {
-		return m.Content[0].Text
+		// Fast path only applies to a text part; a lone data part carries its
+		// payload on Data (not Text) and must not be returned as message text.
+		if m.Content[0].IsText() {
+			return m.Content[0].Text
+		}
 	}
 	var sb strings.Builder
 	for _, p := range m.Content {
-		if p.IsText() || p.IsData() {
+		// Data parts are deliberately excluded: their payload lives on Data (not
+		// Text), so they contribute no text (e.g. A2UI envelope JSON must not
+		// leak into Text()).
+		if p.IsText() {
 			sb.WriteString(p.Text)
 		}
 	}

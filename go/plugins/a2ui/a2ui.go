@@ -42,7 +42,7 @@ const (
 	InstructionsNone = "none"
 )
 
-// Config is the configuration for the A2UI [Middleware]. Add it to a generate
+// Config is the configuration for the A2UI [ai.Middleware]. Add it to a generate
 // call with [github.com/firebase/genkit/go/ai.WithUse].
 //
 // Example:
@@ -140,8 +140,8 @@ func (c *Config) New(ctx context.Context) (*ai.Hooks, error) {
 			version:   version,
 			surfaceID: surfaceIDs.next,
 		})
-		if params.Callback != nil {
-			orig := params.Callback
+		origCallback := params.Callback
+		if origCallback != nil {
 			params.Callback = func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
 				transformed, err := transformChunk(chunk, streamParser)
 				if err != nil {
@@ -150,16 +150,34 @@ func (c *Config) New(ctx context.Context) (*ai.Hooks, error) {
 				if transformed == nil {
 					return nil
 				}
-				return orig(ctx, transformed)
+				return origCallback(ctx, transformed)
 			}
 		}
 
-		// 3) Run the downstream model, then transform the final message. The
-		//    final parse replays the same surface ids the stream minted.
+		// 3) Run the downstream model, then flush the stream parser so the last
+		//    withheld prose tail (the parser holds back up to a partial opening
+		//    fence) and any unterminated trailing block still reach the
+		//    streaming consumer. Without this, clients that render purely from
+		//    stream deltas would show truncated prose / miss a final block (the
+		//    aggregated message recovers it, but the stream would not).
 		resp, err := next(ctx, params)
 		if err != nil {
 			return resp, err
 		}
+		if origCallback != nil {
+			tail, err := streamParser.flush()
+			if err != nil {
+				return nil, err
+			}
+			if parts := partsFromSegments(tail); len(parts) > 0 {
+				if err := origCallback(ctx, &ai.ModelResponseChunk{Content: parts}); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		// 4) Transform the final message. The final parse replays the same
+		//    surface ids the stream minted.
 		surfaceIDs.reset()
 		return transformResponse(resp, catalog, validate, version, surfaceIDs.replayNext)
 	}
@@ -334,22 +352,25 @@ func transformResponse(resp *ai.ModelResponse, catalog *Catalog, validate Valida
 	var newContent []*ai.Part
 	for _, part := range resp.Message.Content {
 		if part.IsText() {
-			// Combine the streamed-push and final-flush segments so ordering
-			// (prose before/after a block) is preserved in the aggregated
-			// message too.
+			// Push each text part into the same parser without flushing, so a
+			// block that spans multiple text parts is not finalized early. The
+			// single flush below drains any trailing block once, after the loop.
 			pushed, err := parser.push(part.Text)
 			if err != nil {
 				return nil, err
 			}
-			flushed, err := parser.flush()
-			if err != nil {
-				return nil, err
-			}
-			newContent = append(newContent, partsFromSegments(append(pushed, flushed...))...)
+			newContent = append(newContent, partsFromSegments(pushed)...)
 		} else {
 			newContent = append(newContent, part)
 		}
 	}
+	// Flush once per message (not per text part): finalizes the last withheld
+	// prose tail and any unterminated trailing block, preserving ordering.
+	flushed, err := parser.flush()
+	if err != nil {
+		return nil, err
+	}
+	newContent = append(newContent, partsFromSegments(flushed)...)
 	newResp := *resp
 	msgCopy := resp.Message.Clone()
 	msgCopy.Content = newContent

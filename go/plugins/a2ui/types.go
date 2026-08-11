@@ -20,7 +20,7 @@
 // (https://a2ui.org/). An A2UI-enabled agent can stream not just prose, but
 // rich, interactive UI "surfaces" that a client renders incrementally.
 //
-// The whole server-side integration is the [Middleware], added to a
+// The whole server-side integration is the [ai.Middleware], added to a
 // [github.com/firebase/genkit/go/ai.Generate] call via
 // [github.com/firebase/genkit/go/ai.WithUse]. It injects the catalog's
 // capabilities into the system prompt, then intercepts model output (streamed

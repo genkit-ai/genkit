@@ -222,3 +222,88 @@ func TestParserMissingRootRejected(t *testing.T) {
 		t.Fatalf("expected root-required error, got %v", err)
 	}
 }
+
+// A block whose only envelope targets a real, pre-existing surface id (one the
+// model learned from a prior turn) is a genuine incremental update: the parser
+// must NOT prepend a createSurface (which would reset the surface and make the
+// client drop the update as "surface not found").
+func TestParserIncrementalUpdateToExplicitSurface(t *testing.T) {
+	p := newStreamParser(parserOptions{
+		catalog:   BasicCatalog(),
+		validate:  ValidateWarn,
+		surfaceID: fixedSurfaceID("s1"),
+	})
+	input := "```a2ui\n" +
+		`[{"updateComponents":{"surfaceId":"existing-surface","components":[{"id":"root","component":"Text","text":"patched"}]}}]` +
+		"\n```"
+	segs, err := p.push(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flushed, _ := p.flush()
+	_, batches := collect(append(segs, flushed...))
+	if len(batches) != 1 {
+		t.Fatalf("got %d batches, want 1", len(batches))
+	}
+	if len(batches[0]) != 1 {
+		t.Fatalf("got %d envelopes, want 1 (no synthesized createSurface)", len(batches[0]))
+	}
+	uc, ok := batches[0][0]["updateComponents"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected updateComponents to pass through, got %v", batches[0][0])
+	}
+	if uc["surfaceId"] != "existing-surface" {
+		t.Errorf("surfaceId = %v, want existing-surface", uc["surfaceId"])
+	}
+}
+
+// The "must contain root" rule is a full-render protocol rule, not a catalog
+// check. An incremental patch of an explicit existing surface may omit root,
+// even under strict validation.
+func TestParserRootlessIncrementalUpdateAllowed(t *testing.T) {
+	p := newStreamParser(parserOptions{
+		catalog:   BasicCatalog(),
+		validate:  ValidateStrict,
+		surfaceID: fixedSurfaceID("s1"),
+	})
+	input := "```a2ui\n" +
+		`[{"updateComponents":{"surfaceId":"existing-surface","components":[{"id":"subtitle","component":"Text","text":"patched"}]}}]` +
+		"\n```"
+	segs, err := p.push(input)
+	if err != nil {
+		t.Fatalf("rootless incremental update should not error, got %v", err)
+	}
+	flushed, _ := p.flush()
+	_, batches := collect(append(segs, flushed...))
+	if len(batches) != 1 || len(batches[0]) != 1 {
+		t.Fatalf("got batches %v, want a single 1-envelope batch", batches)
+	}
+	if _, ok := batches[0][0]["updateComponents"].(map[string]any); !ok {
+		t.Errorf("expected the update to pass through, got %v", batches[0][0])
+	}
+}
+
+// The parser preserves forward-compatible top-level envelope keys it does not
+// inspect, rather than rebuilding a fresh {version, <kind>} map.
+func TestParserPreservesUnknownEnvelopeKeys(t *testing.T) {
+	p := newStreamParser(parserOptions{
+		catalog:   BasicCatalog(),
+		validate:  ValidateWarn,
+		surfaceID: fixedSurfaceID("s1"),
+	})
+	input := "```a2ui\n" +
+		`[{"createSurface":{"surfaceId":"SURFACE_ID","catalogId":"c"},"futureKey":"keepme"}]` +
+		"\n```"
+	segs, err := p.push(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flushed, _ := p.flush()
+	_, batches := collect(append(segs, flushed...))
+	if len(batches) != 1 || len(batches[0]) != 1 {
+		t.Fatalf("got batches %v, want a single 1-envelope batch", batches)
+	}
+	if batches[0][0]["futureKey"] != "keepme" {
+		t.Errorf("futureKey = %v, want keepme (unknown keys must be preserved)", batches[0][0]["futureKey"])
+	}
+}

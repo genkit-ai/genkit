@@ -39,12 +39,13 @@ func newTestRegistry(t *testing.T) *registry.Registry {
 func echoModel(t *testing.T, r *registry.Registry, name, reply string) (ai.Model, *[]*ai.Message) {
 	t.Helper()
 	var captured []*ai.Message
-	m := ai.DefineModel(r, name, &ai.ModelOptions{
+	m := ai.NewModel(name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true},
 	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		captured = req.Messages
 		return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage(reply)}, nil
 	})
+	m.Register(r)
 	return m, &captured
 }
 
@@ -145,7 +146,7 @@ func TestMiddlewareTransformsStream(t *testing.T) {
 		"`\nBye.",
 	}
 	full := strings.Join(chunks, "")
-	m := ai.DefineModel(r, "test/stream", &ai.ModelOptions{
+	m := ai.NewModel("test/stream", &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true},
 	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		if cb != nil {
@@ -157,6 +158,7 @@ func TestMiddlewareTransformsStream(t *testing.T) {
 		}
 		return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage(full)}, nil
 	})
+	m.Register(r)
 
 	var streamedEnvelopes []Envelope
 	var streamedProse strings.Builder

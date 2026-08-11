@@ -49,7 +49,10 @@ type Part struct {
 }
 
 // Clone returns a shallow copy of the Part with its own Metadata and Custom
-// maps. Callers can add or remove map keys without mutating the original.
+// maps. Callers can add or remove map keys without mutating the original. When
+// Data holds a map[string]any (the common case for data parts, e.g. A2UI
+// envelopes), that top-level map is cloned too so callers can mutate its keys
+// without disturbing the original; nested values are still shared by reference.
 func (p *Part) Clone() *Part {
 	if p == nil {
 		return nil
@@ -57,6 +60,9 @@ func (p *Part) Clone() *Part {
 	cp := *p
 	cp.Custom = maps.Clone(p.Custom)
 	cp.Metadata = maps.Clone(p.Metadata)
+	if m, ok := p.Data.(map[string]any); ok {
+		cp.Data = maps.Clone(m)
+	}
 	return &cp
 }
 

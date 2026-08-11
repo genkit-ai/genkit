@@ -33,6 +33,13 @@ func Data(p *ai.Part) (string, []byte, error) {
 	}
 
 	uri := p.Text
+	if uri == "" {
+		// Data parts carry their payload on Data, not Text. A data part may hold
+		// a data URI string (e.g. "data:image/png;base64,...").
+		if s, ok := p.Data.(string); ok {
+			uri = s
+		}
+	}
 	if strings.HasPrefix(uri, "gs://") || strings.HasPrefix(uri, "http") {
 		if p.ContentType == "" {
 			return "", nil, errors.New("must supply contentType when using media from gs:// or http(s):// URLs")

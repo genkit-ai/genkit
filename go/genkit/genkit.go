@@ -353,6 +353,15 @@ func RegisterValue(g *Genkit, name string, value any) {
 	g.reg.RegisterValue(name, value)
 }
 
+// RegisterValueIfAbsent registers value under name only if nothing is already
+// registered under it in g's own registry, returning true if the value was
+// stored and false if an entry already existed. Unlike [RegisterValue] it never
+// panics on a duplicate, so it is safe for concurrent register-if-absent
+// callers (e.g. plugins seeding a shared resource) racing on the same key.
+func RegisterValueIfAbsent(g *Genkit, name string, value any) bool {
+	return g.reg.RegisterValueIfAbsent(name, value)
+}
+
 // LookupValue returns the value registered with g under name, or nil if none
 // is registered. It checks the current registry then falls back to the parent
 // hierarchy.

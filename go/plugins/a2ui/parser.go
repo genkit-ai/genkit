@@ -256,11 +256,6 @@ func (p *streamParser) finalizeBlock(raw string) ([]Envelope, error) {
 		return nil, nil
 	}
 
-	// Guarantee the block opens with a createSurface, so the client always has
-	// a surface before any update targets it. Models often emit only
-	// updateComponents/updateDataModel on a follow-up (e.g. a "refresh") turn;
-	// without this the renderer would drop those updates as "surface not
-	// found". Idempotent re-creation is fine — it resets the surface.
 	hasCreate := false
 	for _, e := range out {
 		if _, ok := e["createSurface"]; ok {
@@ -268,21 +263,105 @@ func (p *streamParser) finalizeBlock(raw string) ([]Envelope, error) {
 			break
 		}
 	}
-	if !hasCreate {
-		catalogID := ""
-		if p.opts.catalog != nil {
-			catalogID = p.opts.catalog.ID
+
+	if hasCreate {
+		// A full-surface render. Enforce the "must contain a root" protocol rule.
+		if msg := validateRoot(out); msg != "" {
+			return p.reject(msg)
 		}
-		create := Envelope{
-			"version": p.opts.version,
-			"createSurface": map[string]any{
-				"surfaceId": surfaceID,
-				"catalogId": catalogID,
-			},
-		}
-		out = append([]Envelope{create}, out...)
+		return out, nil
 	}
+
+	// Update-only batch. Two cases:
+	//
+	//  1. The model targeted the placeholder (or omitted the id), so
+	//     normalizeEnvelope swapped in our freshly-minted surfaceID. That's a
+	//     fresh render the model forgot to createSurface for — synthesize one so
+	//     the client has a surface before the updates land, and enforce the root
+	//     rule as for any full render.
+	//
+	//  2. The updates target an explicit, pre-existing surface id (one the model
+	//     learned from a prior turn, e.g. via a summarized action). That's a
+	//     genuine incremental update: do NOT synthesize a createSurface (that
+	//     would reset the surface and drop the update as "surface not found" if
+	//     ids disagreed), and do NOT require a root.
+	targetID := surfaceID
+	for _, e := range out {
+		if id := envelopeSurfaceID(e); id != "" {
+			targetID = id
+			break
+		}
+	}
+	isFreshRender := targetID == surfaceID
+	if !isFreshRender {
+		return out, nil
+	}
+
+	if msg := validateRoot(out); msg != "" {
+		return p.reject(msg)
+	}
+	// Guarantee the block opens with a createSurface, so the client always has
+	// a surface before any update targets it. Idempotent re-creation is fine —
+	// it resets the surface.
+	catalogID := ""
+	if p.opts.catalog != nil {
+		catalogID = p.opts.catalog.ID
+	}
+	create := Envelope{
+		"version": p.opts.version,
+		"createSurface": map[string]any{
+			"surfaceId": surfaceID,
+			"catalogId": catalogID,
+		},
+	}
+	out = append([]Envelope{create}, out...)
 	return out, nil
+}
+
+// envelopeSurfaceID reads the surface id an envelope targets, regardless of its
+// variant. Used to decide whether an update-only batch targets the
+// freshly-minted surface (a fresh render the model forgot to createSurface for)
+// or an explicit existing one (a genuine incremental update).
+func envelopeSurfaceID(e Envelope) string {
+	for _, key := range []string{"createSurface", "updateComponents", "updateDataModel", "deleteSurface"} {
+		if payload, ok := e[key].(map[string]any); ok {
+			if id, _ := payload["surfaceId"].(string); id != "" {
+				return id
+			}
+		}
+	}
+	return ""
+}
+
+// validateRoot enforces the "RE-RENDER THE WHOLE SURFACE" protocol rule for
+// full-surface renders: any updateComponents in the batch must contain a
+// component with id "root". Returns an error message, or "" if valid. Unlike
+// validateComponents this is a protocol check, not a catalog check, so it runs
+// regardless of whether a catalog is configured.
+func validateRoot(envelopes []Envelope) string {
+	for _, e := range envelopes {
+		uc, ok := e["updateComponents"].(map[string]any)
+		if !ok {
+			continue
+		}
+		arr, ok := uc["components"].([]any)
+		if !ok {
+			continue
+		}
+		hasRoot := false
+		for _, c := range arr {
+			if cm, ok := c.(map[string]any); ok {
+				if id, _ := cm["id"].(string); id == "root" {
+					hasRoot = true
+					break
+				}
+			}
+		}
+		if !hasRoot {
+			return `component list must contain a component id "root".`
+		}
+	}
+	return ""
 }
 
 // normalizeEnvelope validates a single envelope, substitutes the real surface
@@ -307,9 +386,23 @@ func (p *streamParser) normalizeEnvelope(env any, surfaceID string) (Envelope, e
 		}
 	}
 
+	// normalized copies the incoming envelope and stamps the version, preserving
+	// any forward-compatible top-level keys the middleware does not inspect. The
+	// A2UI protocol is "open-ended and versioned", so rebuilding a fresh
+	// {version, <kind>} map (as the JS parser historically did) would silently
+	// strip anything the spec adds later; copying keeps it intact.
+	normalized := func() Envelope {
+		out := make(Envelope, len(m)+1)
+		for k, v := range m {
+			out[k] = v
+		}
+		out["version"] = version
+		return out
+	}
+
 	if cs, ok := m["createSurface"].(map[string]any); ok {
 		swapSurfaceID(cs)
-		return Envelope{"version": version, "createSurface": cs}, nil
+		return normalized(), nil
 	}
 	if uc, ok := m["updateComponents"].(map[string]any); ok {
 		swapSurfaceID(uc)
@@ -318,15 +411,15 @@ func (p *streamParser) normalizeEnvelope(env any, surfaceID string) (Envelope, e
 				return p.rejectSingle(msg)
 			}
 		}
-		return Envelope{"version": version, "updateComponents": uc}, nil
+		return normalized(), nil
 	}
 	if ud, ok := m["updateDataModel"].(map[string]any); ok {
 		swapSurfaceID(ud)
-		return Envelope{"version": version, "updateDataModel": ud}, nil
+		return normalized(), nil
 	}
 	if ds, ok := m["deleteSurface"].(map[string]any); ok {
 		swapSurfaceID(ds)
-		return Envelope{"version": version, "deleteSurface": ds}, nil
+		return normalized(), nil
 	}
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -345,6 +438,12 @@ func (p *streamParser) rejectSingle(message string) (Envelope, error) {
 // validateComponents ensures every component references a known catalog
 // component. Returns an error message describing the first problem found, or ""
 // if valid.
+//
+// This checks component type names against the catalog only. It intentionally
+// does NOT enforce the "must contain a root" protocol rule — that applies only
+// to full-surface renders and is enforced at the batch level in finalizeBlock
+// (an incremental update to an existing surface may legitimately patch a subtree
+// without re-declaring root).
 func (p *streamParser) validateComponents(components any) string {
 	catalog := p.opts.catalog
 	if catalog == nil {
@@ -355,18 +454,6 @@ func (p *streamParser) validateComponents(components any) string {
 		return "updateComponents.components must be an array."
 	}
 	known := p.knownComponents
-	hasRoot := false
-	for _, c := range arr {
-		if cm, ok := c.(map[string]any); ok {
-			if id, _ := cm["id"].(string); id == "root" {
-				hasRoot = true
-				break
-			}
-		}
-	}
-	if !hasRoot {
-		return `component list must contain a component id "root".`
-	}
 	for _, c := range arr {
 		cm, ok := c.(map[string]any)
 		if !ok {

@@ -19,13 +19,14 @@ package a2ui
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/firebase/genkit/go/genkit"
 )
 
 // LoadCatalog registers an A2UI catalog in the Genkit registry under the key
-// `/a2ui-catalog/<id>` (using the catalog's own ID), so the [Middleware] can
+// `/a2ui-catalog/<id>` (using the catalog's own ID), so the [ai.Middleware] can
 // resolve it by id via [Config.CatalogID], and tooling such as the Dev UI can
 // enumerate catalogs (GET /api/values?type=a2ui-catalog). This mirrors the JS
 // and Dart plugins, keeping the catalog representation identical across
@@ -33,7 +34,10 @@ import (
 //
 // Re-registering the same id is idempotent (the existing registration is kept),
 // so calling it more than once, or registering the basic catalog twice, is
-// safe.
+// safe. Registering a different catalog under an existing id keeps the original
+// and logs a warning, so an edited catalog re-loaded under the same id is not
+// silently ignored. It uses a register-if-absent primitive, so concurrent
+// callers racing on the same id cannot panic.
 //
 // Example:
 //
@@ -51,10 +55,16 @@ func LoadCatalog(g *genkit.Genkit, catalog *Catalog) error {
 		return fmt.Errorf("a2ui: LoadCatalog: catalog %q has no components", catalog.ID)
 	}
 	key := catalogRegistryKey(catalog.ID)
-	if genkit.LookupValue(g, key) != nil {
-		return nil // already registered; idempotent
+	// Register-if-absent closes the check-then-register race against
+	// RegisterValue (which panics on a duplicate key): concurrent LoadCatalog
+	// calls for the same id all resolve to the same stored catalog, and the
+	// losers simply observe that an entry already existed.
+	if !genkit.RegisterValueIfAbsent(g, key, catalog) {
+		if existing, ok := genkit.LookupValue(g, key).(*Catalog); ok && existing != catalog {
+			slog.Warn("a2ui: LoadCatalog: a catalog is already registered under this id; keeping the existing one",
+				"id", catalog.ID)
+		}
 	}
-	genkit.RegisterValue(g, key, catalog)
 	return nil
 }
 
