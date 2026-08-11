@@ -16,14 +16,16 @@
 
 """Tests for the Amazon Bedrock plugin wiring."""
 
+import json
 from types import SimpleNamespace
 from typing import Any, cast
 
 import boto3.session
 import pytest
 from genkit_amazon_bedrock import Bedrock, BedrockConfig, ModelDefinition, bedrock_name
+from genkit_amazon_bedrock.transport import BedrockTransport
 
-from genkit import Document
+from genkit import Document, MediaPart, ModelRequest, ModelResponse
 from genkit.embedder import EmbedRequest
 from genkit.plugin_api import ActionKind, GenkitError
 
@@ -112,12 +114,48 @@ async def test_resolve_ignores_other_plugin_namespaces() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolve_skips_non_chat_model_definitions() -> None:
+async def test_resolve_returns_an_image_action_for_a_declared_image_model() -> None:
     plugin = Bedrock(
         region='us-east-1',
         models=[ModelDefinition(name='amazon.titan-image-generator-v1', type='image')],
     )
-    assert await plugin.resolve(ActionKind.MODEL, bedrock_name('amazon.titan-image-generator-v1')) is None
+    action = await plugin.resolve(ActionKind.MODEL, bedrock_name('amazon.titan-image-generator-v1'))
+
+    assert action is not None
+    assert action.metadata is not None
+    model_metadata = cast(dict[str, Any], action.metadata['model'])
+    # The open image schema: a strict one would reject every family-specific
+    # override at Genkit's request validation.
+    assert model_metadata['customOptions']['properties'] == {}
+    assert model_metadata['customOptions'].get('additionalProperties') is not False
+
+
+@pytest.mark.asyncio
+async def test_resolve_classifies_an_undeclared_image_model_id() -> None:
+    # Lazy resolution means an unlisted image ID would otherwise take the
+    # Converse path and only fail at call time.
+    plugin = Bedrock(region='us-east-1')
+    action = await plugin.resolve(ActionKind.MODEL, bedrock_name('amazon.nova-canvas-v1:0'))
+
+    assert action is not None
+    assert action.metadata is not None
+    model_metadata = cast(dict[str, Any], action.metadata['model'])
+    assert model_metadata['supports']['output'] == ['media']
+    assert model_metadata['customOptions']['properties'] == {}
+
+
+@pytest.mark.asyncio
+async def test_a_declared_chat_type_wins_over_id_classification() -> None:
+    plugin = Bedrock(
+        region='us-east-1',
+        models=[ModelDefinition(name='amazon.nova-canvas-v1:0', type='chat')],
+    )
+    action = await plugin.resolve(ActionKind.MODEL, bedrock_name('amazon.nova-canvas-v1:0'))
+
+    assert action is not None
+    assert action.metadata is not None
+    model_metadata = cast(dict[str, Any], action.metadata['model'])
+    assert model_metadata['customOptions']['properties'].get('toolChoice') is not None
 
 
 @pytest.mark.asyncio
@@ -133,7 +171,7 @@ async def test_text_type_routes_like_chat() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_actions_lists_configured_chat_models() -> None:
+async def test_list_actions_lists_configured_chat_and_image_models() -> None:
     plugin = Bedrock(
         region='us-east-1',
         models=[
@@ -142,8 +180,39 @@ async def test_list_actions_lists_configured_chat_models() -> None:
         ],
     )
     actions = await plugin.list_actions()
-    assert [a.name for a in actions] == ['bedrock/amazon.nova-lite-v1:0']
-    assert actions[0].action_type == ActionKind.MODEL
+
+    assert [a.name for a in actions] == [
+        'bedrock/amazon.nova-lite-v1:0',
+        'bedrock/amazon.titan-image-generator-v1',
+    ]
+    assert [a.action_type for a in actions] == [ActionKind.MODEL, ActionKind.MODEL]
+    assert actions[1].metadata is not None
+    image_metadata = cast(dict[str, Any], actions[1].metadata['model'])
+    assert image_metadata['supports']['output'] == ['media']
+    assert image_metadata['customOptions']['properties'] == {}
+
+
+@pytest.mark.asyncio
+async def test_a_chat_model_declared_as_an_image_model_is_not_listed() -> None:
+    plugin = Bedrock(
+        region='us-east-1',
+        models=[
+            ModelDefinition(name='amazon.nova-lite-v1:0'),
+            ModelDefinition(name='anthropic.claude-sonnet-4-5-20250929-v1:0', type='image'),
+        ],
+    )
+    listed = await plugin.list_actions()
+
+    # Listing it would advertise image metadata this model can never honour.
+    assert [a.name for a in listed] == ['bedrock/amazon.nova-lite-v1:0']
+
+    # It still resolves, so the caller reads why it cannot work, not a 404.
+    action = await plugin.resolve(ActionKind.MODEL, bedrock_name('anthropic.claude-sonnet-4-5-20250929-v1:0'))
+    assert action is not None
+    request = ModelRequest.model_validate({'messages': [{'role': 'user', 'content': [{'text': 'a reef'}]}]})
+    with pytest.raises(GenkitError, match='unsupported image generation model') as excinfo:
+        await action.run(request)
+    assert excinfo.value.status == 'UNIMPLEMENTED'
 
 
 @pytest.mark.asyncio
@@ -246,13 +315,18 @@ async def test_everything_listed_can_actually_resolve() -> None:
         region='us-east-1',
         models=[
             ModelDefinition(name='amazon.nova-lite-v1:0'),
+            ModelDefinition(name='amazon.nova-canvas-v1:0', type='image'),
             ModelDefinition(name='amazon.titan-embed-text-v2:0'),
         ],
         embedders=['cohere.embed-english-v3', 'amazon.nova-lite-v1:0'],
     )
     listed = await plugin.list_actions()
 
-    assert [a.name for a in listed] == ['bedrock/amazon.nova-lite-v1:0', 'bedrock/cohere.embed-english-v3']
+    assert [a.name for a in listed] == [
+        'bedrock/amazon.nova-lite-v1:0',
+        'bedrock/amazon.nova-canvas-v1:0',
+        'bedrock/cohere.embed-english-v3',
+    ]
     for metadata in listed:
         assert metadata.action_type is not None
         assert await plugin.resolve(ActionKind(metadata.action_type), metadata.name) is not None
@@ -269,3 +343,67 @@ async def test_resolve_and_list_publish_the_same_embedder_metadata() -> None:
     assert action is not None
     assert action.metadata is not None and listed[0].metadata is not None
     assert action.metadata['embedder'] == listed[0].metadata['embedder']
+
+
+class FakeImageTransport:
+    """Stands in for BedrockTransport; records the InvokeModel kwargs."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def invoke_model(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        return {'images': ['modern-image'], 'finish_reasons': ['SUCCESS']}
+
+
+@pytest.mark.asyncio
+async def test_image_config_survives_the_action_boundary() -> None:
+    # The unit tests call the image model directly; only this path proves a
+    # family-specific key survives Genkit's config handling on the way in.
+    plugin = Bedrock(
+        region='us-east-1',
+        models=[ModelDefinition(name='stability.sd3-5-large-v1:0', type='image')],
+    )
+    transport = FakeImageTransport()
+    plugin._transport = cast(BedrockTransport, transport)  # noqa: SLF001
+    action = await plugin.resolve(ActionKind.MODEL, bedrock_name('stability.sd3-5-large-v1:0'))
+    assert action is not None
+
+    # Validated from the wire shape, so the config goes through the same
+    # coercion a Dev UI or flow call would put it through.
+    request = ModelRequest.model_validate({
+        'messages': [{'role': 'user', 'content': [{'text': 'a coral reef'}]}],
+        'config': {'aspect_ratio': '16:9'},
+    })
+    response = cast(ModelResponse, (await action.run(request)).response)
+
+    assert json.loads(transport.calls[0]['body'])['aspect_ratio'] == '16:9'
+    assert response.message is not None
+    part = response.message.content[0].root
+    assert isinstance(part, MediaPart)
+    assert part.media.url == 'data:image/png;base64,modern-image'
+
+
+@pytest.mark.asyncio
+async def test_genkit_generic_config_never_reaches_the_image_body() -> None:
+    # The framework coerces a raw mapping into ModelConfig, so its own knobs
+    # arrive as declared fields; only this path proves they are dropped, and an
+    # api_key on an InvokeModel body would be a credential on the wire.
+    plugin = Bedrock(
+        region='us-east-1',
+        models=[ModelDefinition(name='stability.sd3-5-large-v1:0', type='image')],
+    )
+    transport = FakeImageTransport()
+    plugin._transport = cast(BedrockTransport, transport)  # noqa: SLF001
+    action = await plugin.resolve(ActionKind.MODEL, bedrock_name('stability.sd3-5-large-v1:0'))
+    assert action is not None
+
+    request = ModelRequest.model_validate({
+        'messages': [{'role': 'user', 'content': [{'text': 'a coral reef'}]}],
+        'config': {'aspect_ratio': '16:9', 'temperature': 0.9, 'api_key': 'SECRET-VALUE'},
+    })
+    await action.run(request)
+
+    body = transport.calls[0]['body']
+    assert json.loads(body) == {'prompt': 'a coral reef', 'output_format': 'png', 'aspect_ratio': '16:9'}
+    assert 'SECRET-VALUE' not in body

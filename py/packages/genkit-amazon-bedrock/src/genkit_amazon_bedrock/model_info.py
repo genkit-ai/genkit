@@ -153,7 +153,9 @@ def get_model_info(
                 tools=False,
                 tool_choice=False,
                 system_role=False,
-                media=True,
+                # Genkit reads media as an input capability; these take text only.
+                media=False,
+                output=['media'],
                 constrained=Constrained.NONE,
             ),
         )

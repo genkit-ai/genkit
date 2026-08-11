@@ -18,11 +18,11 @@
 
 Registers Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama,
 Mistral, Cohere, and others) as Genkit model actions. Text generation uses the
-Bedrock Converse and ConverseStream APIs, and embedders use InvokeModel; image
-generation and reranking are not supported yet.
+Bedrock Converse and ConverseStream APIs; embedders and image generation use
+InvokeModel. Reranking is not supported yet.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from genkit import ModelRequest, ModelResponse
 from genkit.embedder import EmbedRequest, EmbedResponse, embedder_action_metadata
@@ -38,6 +38,7 @@ from genkit.plugin_api import (
 from genkit_amazon_bedrock.config import (
     DEFAULT_TOTAL_TIMEOUT,
     BedrockConfig,
+    BedrockImageConfig,
     ModelDefinition,
 )
 from genkit_amazon_bedrock.embedders import (
@@ -46,6 +47,7 @@ from genkit_amazon_bedrock.embedders import (
     is_embedding_model,
     looks_like_embedding_model,
 )
+from genkit_amazon_bedrock.image import BedrockImageModel, is_image_model
 from genkit_amazon_bedrock.model_info import get_model_info
 from genkit_amazon_bedrock.models import BedrockModel
 from genkit_amazon_bedrock.transport import BedrockTransport
@@ -172,22 +174,28 @@ class Bedrock(Plugin):
             # Embedding models speak InvokeModel, not Converse; resolving one
             # as a chat model only defers the failure to call time.
             return None
-        model_type = self._configured_model_type(model_id)
-        if model_type not in ('chat', 'text'):
-            # Image generation lands in a later slice.
-            return None
-        return self._create_model_action(model_id)
+        declared = self._declared_model_type(model_id)
+        # Classifying undeclared IDs diverges from Go, which routes on the
+        # declared type alone: this plugin resolves lazily, so without it
+        # bedrock/amazon.nova-canvas-v1:0 would take the Converse path and fail
+        # at call time. Embedders already classify by ID the same way.
+        model_type = declared if declared is not None else ('image' if is_image_model(model_id) else 'chat')
+        return self._create_model_action(model_id, model_type)
 
-    def _configured_model_type(self, model_id: str) -> str:
+    def _declared_model_type(self, model_id: str) -> Literal['chat', 'text', 'image'] | None:
         for definition in self.models:
             if definition.name == model_id:
                 return definition.type
-        return 'chat'
+        return None
 
-    def _create_model_action(self, model_id: str) -> Action:
-        model_info = get_model_info(model_id)
+    def _create_model_action(self, model_id: str, model_type: Literal['chat', 'text', 'image'] = 'chat') -> Action:
+        model_info = get_model_info(model_id, model_type)
+        is_image = model_type == 'image'
 
         async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+            if is_image:
+                image_model = BedrockImageModel(model_id=model_id, transport=self._transport)
+                return await image_model.generate(request, ctx)
             model = BedrockModel(model_id=model_id, transport=self._transport)
             return await model.generate(request, ctx)
 
@@ -202,7 +210,7 @@ class Bedrock(Plugin):
                     'supports': (
                         model_info.supports.model_dump(by_alias=True, exclude_none=True) if model_info.supports else {}
                     ),
-                    'customOptions': to_json_schema(BedrockConfig),
+                    'customOptions': to_json_schema(BedrockImageConfig if is_image else BedrockConfig),
                 },
             },
         )
@@ -224,21 +232,25 @@ class Bedrock(Plugin):
         """List configured Bedrock models and embedders.
 
         Only explicitly configured entries are listed, and only those this
-        plugin can actually serve: an ID in the wrong list would otherwise be
-        advertised and then fail on use. The catalogue itself is open-ended, and
-        any model ID still resolves on demand.
+        plugin can actually serve: an ID in the wrong list, or a chat model
+        declared ``type='image'``, would otherwise be advertised and then fail
+        on use. Such a declaration still resolves, so the caller reads the
+        image path's reason rather than a generic model-not-found. The
+        catalogue itself is open-ended, and any model ID still resolves on
+        demand.
 
         Returns:
-            ActionMetadata for each configured chat model and embedder.
+            ActionMetadata for each configured model and embedder.
         """
         actions: list[ActionMetadata] = [
             model_action_metadata(
                 name=bedrock_name(definition.name),
                 info=get_model_info(definition.name, definition.type).model_dump(by_alias=True, exclude_none=True),
-                config_schema=BedrockConfig,
+                config_schema=BedrockImageConfig if definition.type == 'image' else BedrockConfig,
             )
             for definition in self.models
-            if definition.type in ('chat', 'text') and not looks_like_embedding_model(definition.name)
+            if not looks_like_embedding_model(definition.name)
+            and (definition.type != 'image' or is_image_model(definition.name))
         ]
         actions.extend(
             embedder_action_metadata(bedrock_name(model_id), get_embedder_options(model_id))

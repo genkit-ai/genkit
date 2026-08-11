@@ -105,7 +105,9 @@ def test_image_model_supports_media_output_only() -> None:
     info = get_model_info('amazon.titan-image-generator-v1', model_type='image')
     assert info.stage == Stage.STABLE
     assert info.supports is not None
-    assert info.supports.media is True
+    assert info.supports.output == ['media']
+    # media is Genkit's input flag, and these models take text prompts only.
+    assert info.supports.media is False
     assert info.supports.multiturn is False
     assert info.supports.tools is False
     assert info.supports.system_role is False
