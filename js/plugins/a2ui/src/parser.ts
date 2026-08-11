@@ -318,12 +318,17 @@ export class A2uiStreamParser {
       }
     };
 
+    // Copies the incoming envelope and stamps the version, preserving any
+    // forward-compatible top-level keys the middleware does not inspect. The
+    // A2UI protocol is "open-ended and versioned", so rebuilding a fresh
+    // { version, <kind> } object would silently strip anything the spec adds
+    // later; spreading keeps it intact. The Go parser does the same.
+    const normalized = (): A2uiEnvelope =>
+      ({ ...(env as object), version }) as A2uiEnvelope;
+
     if (e.createSurface) {
       swapSurfaceId(e.createSurface);
-      return {
-        version: version as SupportedVersion,
-        createSurface: e.createSurface,
-      };
+      return normalized();
     }
     if (e.updateComponents) {
       swapSurfaceId(e.updateComponents);
@@ -331,24 +336,15 @@ export class A2uiStreamParser {
         const err = this.validateComponents(e.updateComponents.components);
         if (err) return this.reject(err);
       }
-      return {
-        version: version as SupportedVersion,
-        updateComponents: e.updateComponents,
-      };
+      return normalized();
     }
     if (e.updateDataModel) {
       swapSurfaceId(e.updateDataModel);
-      return {
-        version: version as SupportedVersion,
-        updateDataModel: e.updateDataModel,
-      };
+      return normalized();
     }
     if (e.deleteSurface) {
       swapSurfaceId(e.deleteSurface);
-      return {
-        version: version as SupportedVersion,
-        deleteSurface: e.deleteSurface,
-      };
+      return normalized();
     }
     return this.reject(
       `unknown envelope type (keys: ${Object.keys(e).join(', ')}).`
