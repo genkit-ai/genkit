@@ -336,7 +336,7 @@ _action_context: ContextVar[dict[str, Any] | None] = ContextVar('context')
 _ = _action_context.set(None)
 
 
-class ActionRunContext:
+class ActionRunContext(Generic[ChunkT]):
     """Execution context for an action.
 
     Provides read-only access to action context (auth, metadata), streaming
@@ -395,7 +395,7 @@ class ActionRunContext:
         """
         return self._streaming_callback
 
-    def send_chunk(self, chunk: object) -> None:
+    def send_chunk(self, chunk: ChunkT) -> None:
         """Send a streaming chunk to the client.
 
         Args:

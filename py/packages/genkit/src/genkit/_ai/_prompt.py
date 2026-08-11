@@ -152,15 +152,15 @@ class ModelStreamResponse(Generic[OutputT]):
 
     def __init__(
         self,
-        channel: Channel[ModelResponseChunk, ModelResponse[OutputT]],
+        channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]],
         response_future: asyncio.Future[ModelResponse[OutputT]],
     ) -> None:
         """Initialize with streaming channel and response future."""
-        self._channel: Channel[ModelResponseChunk, ModelResponse[OutputT]] = channel
+        self._channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]] = channel
         self._response_future: asyncio.Future[ModelResponse[OutputT]] = response_future
 
     @property
-    def stream(self) -> AsyncIterable[ModelResponseChunk]:
+    def stream(self) -> AsyncIterable[ModelResponseChunk[OutputT]]:
         """Async iterable of response chunks.
 
         Returns:
@@ -191,7 +191,7 @@ class ModelStreamResponse(Generic[OutputT]):
     # Delegating to the underlying channel lets that work without forcing the
     # caller to remember the extra `.stream` hop, while `.stream` and `.response`
     # remain available for cases where you want both halves explicitly.
-    def __aiter__(self) -> AsyncIterator[ModelResponseChunk]:
+    def __aiter__(self) -> AsyncIterator[ModelResponseChunk[OutputT]]:
         return self._channel.__aiter__()
 
 
@@ -425,10 +425,10 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         **opts: Unpack[PromptGenerateOptions],
     ) -> ModelStreamResponse[OutputT]:
         """Stream the prompt execution, returning (stream, response_future)."""
-        channel: Channel[ModelResponseChunk, ModelResponse[OutputT]] = Channel(timeout=timeout)
+        channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]] = Channel(timeout=timeout)
         stream_opts: PromptGenerateOptions = {
             **opts,  # ty doesn't infer Unpack[TD] as TD in function body (PEP 692 gap)
-            'on_chunk': lambda c: channel.send(cast(ModelResponseChunk, c)),
+            'on_chunk': lambda c: channel.send(cast('ModelResponseChunk[OutputT]', c)),
         }
         resp = self._call_impl(input, stream_opts)
         response_future: asyncio.Future[ModelResponse[OutputT]] = asyncio.create_task(resp)
